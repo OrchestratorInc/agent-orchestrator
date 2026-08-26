@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -25,6 +26,8 @@ import (
 // APIDeps bundles every service the API layer's controllers depend on.
 type APIDeps struct {
 	Awake              controllers.AwakeService
+	// ReadyCheck is called by /readyz to verify durable dependencies.
+	ReadyCheck         func(context.Context) error
 	Agents             controllers.AgentCatalog
 	CodexAccounts      controllers.CodexAccountService
 	AgentAccounts      controllers.AgentAccountService
