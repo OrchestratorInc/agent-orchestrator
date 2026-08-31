@@ -90,6 +90,21 @@ const previousTabListeners = new Set<() => void>();
 const nextTabListeners = new Set<() => void>();
 const closeShellTerminalListeners = new Set<() => void>();
 const closeShellTerminalShortcutStates: boolean[] = [];
+const MESSAGE_DATE_FORMAT: Intl.DateTimeFormatOptions = {
+	month: "short",
+	day: "numeric",
+	year: "numeric",
+};
+const MESSAGE_TIME_FORMAT: Intl.DateTimeFormatOptions = {
+	hour: "2-digit",
+	minute: "2-digit",
+	hourCycle: "h23",
+};
+const UPDATED_CONTEXT_USED_TOKENS = 129_200;
+const INITIAL_CONTEXT_USAGE_PERCENT = 7;
+const UPDATED_CONTEXT_USAGE_PERCENT = 50;
+const messageDateFormatter = new Intl.DateTimeFormat(undefined, MESSAGE_DATE_FORMAT);
+const messageTimeFormatter = new Intl.DateTimeFormat(undefined, MESSAGE_TIME_FORMAT);
 type TerminalPaneTestProps = {
 	fontSize?: number;
 	focusRequested?: boolean;
@@ -499,7 +514,7 @@ describe("Chat message timestamps", () => {
 			</>,
 		);
 
-		expect(screen.getAllByLabelText(/^Sent \d{2}:\d{2}$/)).toHaveLength(2);
+		expect(screen.getAllByLabelText(`Sent ${messageTimeFormatter.format(new Date(today))}`)).toHaveLength(2);
 	});
 
 	it("labels yesterday and older messages with calendar dates", () => {
@@ -529,8 +544,10 @@ describe("Chat message timestamps", () => {
 			</>,
 		);
 
-		expect(screen.getByLabelText(/^Sent Yesterday · \d{2}:\d{2}$/)).toBeInTheDocument();
-		expect(screen.getByLabelText(/^Sent .+\d{4}$/)).toBeInTheDocument();
+		expect(
+			screen.getByLabelText(`Sent Yesterday · ${messageTimeFormatter.format(new Date(messages[0].createdAt))}`),
+		).toBeInTheDocument();
+		expect(screen.getByLabelText(`Sent ${messageDateFormatter.format(new Date(messages[1].createdAt))}`)).toBeInTheDocument();
 	});
 });
 
@@ -865,13 +882,19 @@ describe("ChatWorkspace timeline", () => {
 		const view = render(<ChatWorkspace snapshot={reported} />);
 		const composer = screen.getByLabelText("Message the agent").closest("form") as HTMLElement;
 		const gauge = within(composer).getByRole("progressbar", { name: "Context window used" });
-		expect(gauge).toHaveAttribute("aria-valuetext", "18,055 / 258,400 tokens (7%)");
+		expect(gauge).toHaveAttribute(
+			"aria-valuetext",
+			`${reported.usage.contextUsed.toLocaleString()} / ${reported.usage.contextWindow.toLocaleString()} tokens (${INITIAL_CONTEXT_USAGE_PERCENT}%)`,
+		);
 		gauge.focus();
 		fireEvent.click(gauge.querySelector("svg") as SVGSVGElement);
 		expect(gauge).toHaveFocus();
 
-		view.rerender(<ChatWorkspace snapshot={{ ...reported, usage: { ...reported.usage, contextUsed: 129_200 } }} />);
-		expect(within(composer).getByRole("progressbar", { name: "Context window used" })).toHaveAttribute("aria-valuetext", "129,200 / 258,400 tokens (50%)");
+		view.rerender(<ChatWorkspace snapshot={{ ...reported, usage: { ...reported.usage, contextUsed: UPDATED_CONTEXT_USED_TOKENS } }} />);
+		expect(within(composer).getByRole("progressbar", { name: "Context window used" })).toHaveAttribute(
+			"aria-valuetext",
+			`${UPDATED_CONTEXT_USED_TOKENS.toLocaleString()} / ${reported.usage.contextWindow.toLocaleString()} tokens (${UPDATED_CONTEXT_USAGE_PERCENT}%)`,
+		);
 	});
 
 	it("refreshes the owning workspace after renaming the primary chat tab", async () => {

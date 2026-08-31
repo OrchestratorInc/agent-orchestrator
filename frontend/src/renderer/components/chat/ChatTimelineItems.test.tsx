@@ -13,6 +13,19 @@ function render(ui: ReactElement) {
 	};
 }
 
+const MESSAGE_DATE_FORMAT: Intl.DateTimeFormatOptions = {
+	month: "short",
+	day: "numeric",
+	year: "numeric",
+};
+const MESSAGE_TIME_FORMAT: Intl.DateTimeFormatOptions = {
+	hour: "2-digit",
+	minute: "2-digit",
+	hourCycle: "h23",
+};
+const messageDateFormatter = new Intl.DateTimeFormat(undefined, MESSAGE_DATE_FORMAT);
+const messageTimeFormatter = new Intl.DateTimeFormat(undefined, MESSAGE_TIME_FORMAT);
+
 let nextFrame = 1;
 let frameTime = 0;
 let frames = new Map<number, FrameRequestCallback>();
@@ -286,14 +299,16 @@ describe("AssistantMessage streaming", () => {
 	});
 
 	it("shows the message timestamp on hover", () => {
+		const createdAt = new Date().toISOString();
+
 		render(
 			<AssistantMessage
-				message={message({ createdAt: new Date().toISOString(), text: "Timestamped answer", streaming: false })}
+				message={message({ createdAt, text: "Timestamped answer", streaming: false })}
 				showCopy
 			/>,
 		);
 
-		expect(screen.getByLabelText(/^Sent \d{2}:\d{2}$/)).toBeInTheDocument();
+		expect(screen.getByLabelText(`Sent ${messageTimeFormatter.format(new Date(createdAt))}`)).toBeInTheDocument();
 	});
 
 	it("labels yesterday and older messages by date", () => {
@@ -304,10 +319,10 @@ describe("AssistantMessage streaming", () => {
 			<AssistantMessage message={message({ createdAt: yesterday, streaming: false })} showCopy />,
 		);
 
-		expect(screen.getByLabelText(/^Sent Yesterday · \d{2}:\d{2}$/)).toBeInTheDocument();
+		expect(screen.getByLabelText(`Sent Yesterday · ${messageTimeFormatter.format(new Date(yesterday))}`)).toBeInTheDocument();
 		view.rerender(<AssistantMessage message={message({ createdAt: older, streaming: false })} showCopy />);
 		expect(screen.queryByLabelText(/^Sent Yesterday ·/)).toBeNull();
-		expect(screen.getByLabelText(/^Sent .+\d{4}$/)).toBeInTheDocument();
+		expect(screen.getByLabelText(`Sent ${messageDateFormatter.format(new Date(older))}`)).toBeInTheDocument();
 	});
 
 	it("survives StrictMode effect cleanup and keeps draining", () => {
