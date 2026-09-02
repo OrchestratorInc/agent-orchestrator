@@ -274,7 +274,7 @@ func (c *SessionsController) list(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, ListSessionsResponse{Sessions: sessionViews(sessions)})
+	envelope.WriteJSON(w, http.StatusOK, ListSessionsResponse{Sessions: sessionViews(r, sessions)})
 }
 
 func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
@@ -339,7 +339,7 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusCreated, SpawnSessionResponse{Session: sessionView(sess), PromptBytes: promptBytes, SystemPromptBytes: systemPromptBytes})
+	envelope.WriteJSON(w, http.StatusCreated, SpawnSessionResponse{Session: sessionView(r, sess), PromptBytes: promptBytes, SystemPromptBytes: systemPromptBytes})
 }
 
 // attachmentError carries a client-facing API error code + message for a
@@ -459,7 +459,7 @@ func (c *SessionsController) get(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(sess)})
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, sess)})
 }
 
 func (c *SessionsController) preview(w http.ResponseWriter, r *http.Request) {
@@ -504,7 +504,11 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	c.serveWorkspacePreviewFile(w, r, sess.Metadata.WorkspacePath, assetPath)
+	if rel, ok := previewutil.ArtifactEntryRelative(assetPath); ok {
+		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, rel)
+		return
+	}
+	c.serveRootedPreviewFile(w, r, sess.Metadata.WorkspacePath, assetPath)
 }
 
 // previewApp reaches only the running, session-owned managed preview process.
@@ -618,18 +622,33 @@ func (c *SessionsController) PreviewOrigin(w http.ResponseWriter, r *http.Reques
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "NO_PREVIEW_ENTRY", "No preview entry point found in session workspace", nil)
 		return true
 	}
-	asset := previewOriginAssetPath(entry, r.URL.Path)
-	c.serveWorkspacePreviewFile(w, r, sess.Metadata.WorkspacePath, asset)
+	asset := previewOriginAssetPath(entry.Path, r.URL.Path)
+	switch entry.Scope {
+	case previewutil.StoredEntryScopeArtifact:
+		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, asset)
+	default:
+		c.serveRootedPreviewFile(w, r, sess.Metadata.WorkspacePath, asset)
+	}
 	return true
 }
 
-func previewOriginEntry(sess domain.Session) (string, bool) {
-	if entry, ok := previewutil.StoredWorkspaceEntry(sess.Metadata.PreviewURL, sess.ID); ok {
-		if stored, exists := previewutil.EntryAtPath(sess.Metadata.WorkspacePath, entry); exists {
-			return stored.Path, true
+func previewOriginEntry(sess domain.Session) (previewutil.StoredEntry, bool) {
+	if entry, ok := previewutil.StoredEntryFromPreview(sess.Metadata.PreviewURL, sess.ID); ok {
+		switch entry.Scope {
+		case previewutil.StoredEntryScopeArtifact:
+			if _, exists := previewutil.EntryAtPath(sess.Metadata.ArtifactDir, entry.Path); exists {
+				return entry, true
+			}
+		default:
+			if _, exists := previewutil.EntryAtPath(sess.Metadata.WorkspacePath, entry.Path); exists {
+				return entry, true
+			}
 		}
 	}
-	return discoverPreviewEntry(sess.Metadata.WorkspacePath)
+	if entry, ok := discoverPreviewEntry(sess.Metadata.WorkspacePath); ok {
+		return previewutil.StoredEntry{Scope: previewutil.StoredEntryScopeWorkspace, Path: entry}, true
+	}
+	return previewutil.StoredEntry{}, false
 }
 
 func previewOriginAssetPath(entry, requestPath string) string {
@@ -651,8 +670,8 @@ func previewOriginAssetPath(entry, requestPath string) string {
 // serveWorkspacePreviewFile is the single serving path for both the legacy API
 // route and isolated preview origins. OpenRoot keeps symlink traversal and the
 // subsequent read on the same workspace-confined file handle.
-func (c *SessionsController) serveWorkspacePreviewFile(w http.ResponseWriter, r *http.Request, workspacePath, assetPath string) {
-	file, info, clean, err := previewutil.OpenWorkspaceFile(workspacePath, assetPath)
+func (c *SessionsController) serveRootedPreviewFile(w http.ResponseWriter, r *http.Request, rootPath, assetPath string) {
+	file, info, clean, err := previewutil.OpenWorkspaceFile(rootPath, assetPath)
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_FILE_NOT_FOUND", "Preview file not found", nil)
 		return
@@ -1144,7 +1163,7 @@ func (c *SessionsController) setPreview(w http.ResponseWriter, r *http.Request) 
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(updated)})
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, updated)})
 }
 
 // clearPreview resets a session's browser preview to empty (`ao preview
@@ -1162,7 +1181,7 @@ func (c *SessionsController) clearPreview(w http.ResponseWriter, r *http.Request
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(updated)})
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, updated)})
 }
 
 func (c *SessionsController) previewServerStatus(w http.ResponseWriter, r *http.Request) {
@@ -1429,7 +1448,7 @@ func (c *SessionsController) setMergePolicy(w http.ResponseWriter, r *http.Reque
 		OK:                 true,
 		SessionID:          sessionID(r),
 		TerminateOnPRMerge: in.TerminateOnPRMerge,
-		Session:            sessionView(sess),
+		Session:            sessionView(r, sess),
 	})
 }
 
@@ -1452,7 +1471,7 @@ func (c *SessionsController) setAutoInjectReviewPolicy(w http.ResponseWriter, r 
 		OK:               true,
 		SessionID:        sessionID(r),
 		AutoInjectReview: in.AutoInjectReview,
-		Session:          sessionView(sess),
+		Session:          sessionView(r, sess),
 	})
 }
 
@@ -1486,7 +1505,7 @@ func (c *SessionsController) setAutoInjectCIPolicy(w http.ResponseWriter, r *htt
 		OK:           true,
 		SessionID:    sessionID(r),
 		AutoInjectCI: autoInjectCI,
-		Session:      sessionView(sess),
+		Session:      sessionView(r, sess),
 	})
 }
 
@@ -1505,7 +1524,7 @@ func (c *SessionsController) setReviewer(w http.ResponseWriter, r *http.Request)
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(sess)})
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, sess)})
 }
 
 func (c *SessionsController) setAutoReview(w http.ResponseWriter, r *http.Request) {
@@ -1527,7 +1546,7 @@ func (c *SessionsController) setAutoReview(w http.ResponseWriter, r *http.Reques
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(sess)})
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, sess)})
 }
 
 func (c *SessionsController) restore(w http.ResponseWriter, r *http.Request) {
@@ -1540,7 +1559,7 @@ func (c *SessionsController) restore(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, RestoreSessionResponse{OK: true, SessionID: sessionID(r), RestoreMode: out.Mode, Session: sessionView(out.Session)})
+	envelope.WriteJSON(w, http.StatusOK, RestoreSessionResponse{OK: true, SessionID: sessionID(r), RestoreMode: out.Mode, Session: sessionView(r, out.Session)})
 }
 
 func (c *SessionsController) pin(w http.ResponseWriter, r *http.Request) {
@@ -1553,7 +1572,7 @@ func (c *SessionsController) pin(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(sess)})
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, sess)})
 }
 
 func (c *SessionsController) unpin(w http.ResponseWriter, r *http.Request) {
@@ -1566,7 +1585,7 @@ func (c *SessionsController) unpin(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(sess)})
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, sess)})
 }
 
 func (c *SessionsController) resumeAgent(w http.ResponseWriter, r *http.Request) {
@@ -1583,7 +1602,7 @@ func (c *SessionsController) resumeAgent(w http.ResponseWriter, r *http.Request)
 		OK:         true,
 		SessionID:  sessionID(r),
 		ResumeMode: out.Mode,
-		Session:    sessionView(out.Session),
+		Session:    sessionView(r, out.Session),
 	})
 }
 
@@ -1600,7 +1619,7 @@ func (c *SessionsController) exitAgent(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, ExitAgentResponse{
 		OK:        true,
 		SessionID: sessionID(r),
-		Session:   sessionView(out.Session),
+		Session:   sessionView(r, out.Session),
 	})
 }
 
@@ -2117,7 +2136,7 @@ func (c *SessionsController) listOrchestrators(w http.ResponseWriter, r *http.Re
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, ListSessionsResponse{Sessions: sessionViews(sessions)})
+	envelope.WriteJSON(w, http.StatusOK, ListSessionsResponse{Sessions: sessionViews(r, sessions)})
 }
 
 func (c *SessionsController) getOrchestrator(w http.ResponseWriter, r *http.Request) {
@@ -2134,7 +2153,7 @@ func (c *SessionsController) getOrchestrator(w http.ResponseWriter, r *http.Requ
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "SESSION_NOT_FOUND", "Unknown session", nil)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(sess)})
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, sess)})
 }
 
 func sessionID(r *http.Request) domain.SessionID {
@@ -2366,7 +2385,7 @@ func previewFileURL(r *http.Request, id domain.SessionID, entry string) (string,
 	return previewutil.FileURL("http://"+r.Host, id, entry)
 }
 
-func sessionView(s domain.Session) SessionView {
+func sessionView(r *http.Request, s domain.Session) SessionView {
 	terminalGeneration := s.Metadata.RuntimeLaunchID
 	view := SessionView{
 		Session:            s,
@@ -2382,7 +2401,8 @@ func sessionView(s domain.Session) SessionView {
 			at := s.Metadata.LatestUserPromptAt
 			return &at
 		}(),
-		PRs: sessionPRFacts(s.PRs),
+		PRs:           sessionPRFacts(s.PRs),
+		ArtifactFiles: sessionArtifactFiles(r, s),
 	}
 	if s.ActiveAgentSwitch != nil {
 		active := agentSwitchView(*s.ActiveAgentSwitch)
@@ -2416,10 +2436,30 @@ func agentSwitchViews(switches []domain.AgentSwitch) []AgentSwitchView {
 	return out
 }
 
-func sessionViews(sessions []domain.Session) []SessionView {
+func sessionViews(r *http.Request, sessions []domain.Session) []SessionView {
 	out := make([]SessionView, 0, len(sessions))
 	for _, s := range sessions {
-		out = append(out, sessionView(s))
+		out = append(out, sessionView(r, s))
+	}
+	return out
+}
+
+func sessionArtifactFiles(r *http.Request, s domain.Session) []SessionArtifactView {
+	out := make([]SessionArtifactView, 0, len(s.ArtifactFiles))
+	for _, artifact := range s.ArtifactFiles {
+		view := SessionArtifactView{
+			Path:      artifact.Path,
+			Name:      artifact.Name,
+			Kind:      artifact.Kind,
+			Size:      artifact.Size,
+			UpdatedAt: artifact.UpdatedAt,
+		}
+		if artifact.Kind == domain.SessionArtifactHTML {
+			if scoped, ok := previewutil.ArtifactEntryPath(artifact.Path); ok {
+				view.PreviewURL, _ = previewFileURL(r, s.ID, scoped)
+			}
+		}
+		out = append(out, view)
 	}
 	return out
 }
