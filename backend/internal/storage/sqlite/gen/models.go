@@ -685,6 +685,8 @@ type Session struct {
 	CodexActivityFacts               string
 	ClaudeActivityFacts              string
 	ProvisionSteps                   string
+	ArtifactDir                      string
+	SessionOutputType                string
 }
 
 type SessionCleanupFact struct {
