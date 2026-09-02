@@ -59,8 +59,9 @@ type fakeStore struct {
 	updateSessionErr error
 	deletePrepErr    error
 
-	createClientRequestErr error
-	promoteTaskErr         error
+	createClientRequestErr             error
+	promoteTaskErr                     error
+	updateBrowserCapabilityVerifierErr error
 	// agentSwitchStore is wired only by agent-switch tests so fakeLCM can model
 	// Lifecycle Manager's atomic ownership-boundary commands.
 	agentSwitchStore any
@@ -226,8 +227,8 @@ func (f *fakeStore) DeleteTaskPreparation(_ context.Context, id domain.SessionID
 }
 
 func (f *fakeStore) UpdateBrowserCapabilityVerifier(_ context.Context, id domain.SessionID, expected domain.SessionControllerOwner, verifier string) (bool, error) {
-	if f.updateSessionErr != nil {
-		return false, f.updateSessionErr
+	if f.updateBrowserCapabilityVerifierErr != nil {
+		return false, f.updateBrowserCapabilityVerifierErr
 	}
 	rec, ok := f.sessions[id]
 	if !ok || rec.ControllerOwner() != expected {
