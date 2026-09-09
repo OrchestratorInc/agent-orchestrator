@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Globe2, Loader2, PanelRight, Plus } from "lucide-react";
-import { useBlocker } from "@tanstack/react-router";
+import { Globe2, Loader2, PanelRight, Plus, RotateCw } from "lucide-react";
+import { useBlocker, useNavigate } from "@tanstack/react-router";
 import { motion, useReducedMotion } from "motion/react";
 import {
 	useCallback,
@@ -45,6 +45,7 @@ import {
 	interfaceTransitionOffersHistoryRecovery,
 } from "./SessionInterfaceSwitch";
 import { ShellTopbar } from "./ShellTopbar";
+import { DropdownMenuItem } from "./ui/dropdown-menu";
 import { SwitchAgentDialog } from "./SwitchAgentDialog";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
 import { TerminalSwitchAgentButton } from "./TerminalSwitchAgentButton";
@@ -84,6 +85,7 @@ import { useSettings } from "../hooks/useSettings";
 import { clearSwitchAgentState } from "../hooks/useSwitchAgent";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
+import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { sessionWorkspaceFilesQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { matchWorkspaceFilePath } from "../lib/workspace-file-path";
 import { aoBridge } from "../lib/bridge";
@@ -622,6 +624,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	const [chatLeaveLock, setChatLeaveLock] = useState<ChatLeaveLock>();
 	const chatLeaveRequestIdRef = useRef(0);
 	const pendingUnsafeDraftLeaveRef = useRef<PendingUnsafeDraftLeave | undefined>(undefined);
+	const restartDraftLeaveConfirmedRef = useRef(false);
 	const [unsafeDraftLeaveConfirmation, setUnsafeDraftLeaveConfirmation] = useState<{
 		sessionId: string;
 		boundaries: readonly ChatDraftBoundaryKind[];
@@ -678,6 +681,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 		disabled: chatDraftBoundaries.length === 0,
 		enableBeforeUnload: chatDraftBoundaries.length > 0,
 		shouldBlockFn: async () => {
+			// The user already confirmed discarding the draft before an orchestrator
+			// restart; do not ask a second time for the navigation it triggers.
+			if (restartDraftLeaveConfirmedRef.current) return false;
 			const decision = await confirmUnsafeDraftLeave();
 			if (decision.kind === "cancelled") return true;
 			if (decision.kind === "confirmed") {
@@ -698,6 +704,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	);
 	const queryClient = useQueryClient();
 	const { cloudEnabled } = useCloudGate();
+	const navigate = useNavigate();
+	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
+	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
 	const refreshWorkspaces = useCallback(
 		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
 		[queryClient],
@@ -1434,6 +1443,35 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	}, [availableReviewerTerminal, reviewerQuery.isFetched]);
 	const isOrchestrator = session ? isOrchestratorSession(session) : false;
 	const hasInspector = Boolean(session);
+	const isProjectRestarting = useUiStore((state) =>
+		session ? state.restartingProjectIds.has(session.workspaceId) : false,
+	);
+	// restartProjectOrchestrator retires the old orchestrator before it navigates,
+	// so the route blocker's draft prompt would arrive after the destructive
+	// step. Ask first, and only let the later navigation through unprompted once
+	// the user has already confirmed.
+	const restartOrchestrator = useCallback(async () => {
+		if (!session || session.cloud) return;
+		const draftDecision = await confirmUnsafeDraftLeave();
+		if (draftDecision.kind === "cancelled") return;
+		await restartProjectOrchestrator({
+			projectId: session.workspaceId,
+			queryClient,
+			navigate: (options) => {
+				// Reached only after the replacement spawned: a failed restart never
+				// navigates, so the draft and its attachments stay intact.
+				restartDraftLeaveConfirmedRef.current = true;
+				if (draftDecision.kind === "confirmed") {
+					discardCapturedPendingFileAttachments(draftDecision.pendingAttachments);
+				}
+				return Promise.resolve(navigate(options)).finally(() => {
+					restartDraftLeaveConfirmedRef.current = false;
+				});
+			},
+			setProjectRestarting,
+			setOrchestratorReplacementError,
+		});
+	}, [session, confirmUnsafeDraftLeave, queryClient, navigate, setProjectRestarting, setOrchestratorReplacementError]);
 	const sizing = useMemo(() => inspectorSizing(inspectorView), [inspectorView]);
 	const browserEntryWidthFloorRef = useRef<number | null>(null);
 
@@ -1948,16 +1986,37 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 			switchError={handoffSwitchError}
 		/>
 	) : null, [handoffAgentSwitch, handoffControlPresentation, handoffDialogOpen, handoffSwitchError, handleHandoffDialogOpenChange, session]);
+	// Manual counterpart to the health-banner restart on the board topbar: that
+	// one only appears once AO's own health check flags the orchestrator as
+	// stuck (restart_needed/duplicates). Project config changes
+	// (agentRules/orchestratorRules, including file-based rules read at spawn
+	// time) never trigger that health check, and resuming an existing
+	// conversation cannot pick up a changed system prompt at all (the
+	// underlying ACP session-load path keys off the conversation id, not
+	// content) — a fresh orchestrator session is the only way. This surfaces
+	// that fresh-spawn path from inside the session itself, since a user
+	// wanting to pick up a rules edit is looking at the orchestrator, not the
+	// board.
+	const restartMenuItem = useMemo(() =>
+		session && isOrchestrator && !session.cloud ? (
+			<DropdownMenuItem disabled={isProjectRestarting} onSelect={() => void restartOrchestrator()}>
+				<RotateCw aria-hidden="true" className="size-icon-lg" />
+				{t("shell.restart")}
+			</DropdownMenuItem>
+		) : null,
+		[isOrchestrator, isProjectRestarting, restartOrchestrator, session, t],
+	);
 	// Cloud sessions expose only the interface switch here; agent handoff is a
 	// local daemon feature. Hide the empty actions menu for harnesses without
 	// Chat, including when local settings identify one before transition status
 	// becomes available.
-	const sessionTabActions = useMemo(() => interfaceSwitchUnsupported ? null : (
+	const sessionTabActions = useMemo(() => interfaceSwitchUnsupported && !restartMenuItem ? null : (
 		<SessionActionsMenu inlineStatus={interfaceSwitchInlineStatus}>
 			{interfaceSwitchMenuItem}
-			{handoffMenuItem}
+			{restartMenuItem}
+			{interfaceSwitchUnsupported ? null : handoffMenuItem}
 		</SessionActionsMenu>
-	), [handoffMenuItem, interfaceSwitchInlineStatus, interfaceSwitchMenuItem, interfaceSwitchUnsupported]);
+	), [handoffMenuItem, interfaceSwitchInlineStatus, interfaceSwitchMenuItem, interfaceSwitchUnsupported, restartMenuItem]);
 	const sessionHeaderActions = (
 		<div
 			className="session-topbar-session-chrome flex shrink-0 items-center"

@@ -166,6 +166,22 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 	const actions = projectId ? (
 		<>
 			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />
+			{orchestrator && !orchestrator.cloud && workspace?.kind !== CLOUD_PROJECT_KIND ? (
+				// Manual counterpart to the health-banner restart below, which only
+				// appears once AO's health check flags the orchestrator. Project
+				// config changes (e.g. rules files read at spawn time) never trigger
+				// that check. Local only: restartProjectOrchestrator targets the
+				// local daemon, so cloud orchestrators have no replacement flow yet.
+				<TopbarButton
+					aria-label={t("shell.restart")}
+					disabled={isProjectRestarting || isProvisioning}
+					onClick={() => void restartOrchestrator()}
+					title={isProjectRestarting ? t("shell.restarting") : t("shell.restart")}
+					variant="icon"
+				>
+					<RotateCw className="size-icon-md" aria-hidden="true" />
+				</TopbarButton>
+			) : null}
 			{workspace && toProjectKind(workspace.kind) ? <span className="inline-flex">
 				<CueRunMenu
 					projectId={projectId}
