@@ -4345,6 +4345,7 @@ export interface components {
             };
             orchestrator?: components["schemas"]["RoleOverride"];
             orchestratorRules?: string;
+            orchestratorRulesFile?: string;
             postCreate?: string[];
             reviewers?: components["schemas"]["DomainReviewerConfig"][];
             sessionPrefix?: string;

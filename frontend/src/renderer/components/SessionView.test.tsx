@@ -12,7 +12,7 @@ import type { SessionInterfaceTransitionStatus } from "../hooks/useSessionInterf
 import { inspectorIsOpen, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
-import { setChatDraftBoundary } from "../lib/chat-draft-boundary";
+import { getChatDraftBoundaries, setChatDraftBoundary } from "../lib/chat-draft-boundary";
 import { chatDraftScopeKey } from "../lib/chat-drafts";
 import { useFileAttachments, type FileAttachment } from "../hooks/useFileAttachments";
 
@@ -53,6 +53,7 @@ const settingsState = vi.hoisted(() => ({
 	chatHarnesses: undefined as string[] | undefined,
 }));
 const reviewGetMock = vi.hoisted(() => vi.fn());
+const restartProjectOrchestratorMock = vi.hoisted(() => vi.fn());
 const inspectorVisibilityRenders = vi.hoisted(() => [] as boolean[]);
 const chatSurfaceRenders = vi.hoisted(() => [] as string[]);
 const chatSurfaceWorkState = vi.hoisted(() => ({
@@ -141,6 +142,10 @@ vi.mock("../lib/api-client", () => ({
 	},
 	apiErrorCode: (error: { code?: string }) => error.code,
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
+}));
+
+vi.mock("../lib/restart-orchestrator", () => ({
+	restartProjectOrchestrator: restartProjectOrchestratorMock,
 }));
 
 const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() => {
@@ -854,6 +859,7 @@ describe("SessionView", () => {
 		chatSurfaceWorkState.controllerBusy = false;
 		chatSurfaceWorkState.hasRunningTurn = false;
 		chatSurfaceWorkState.queuedTurnCount = 0;
+		restartProjectOrchestratorMock.mockReset().mockResolvedValue(undefined);
 		reviewGetMock.mockReset();
 		reviewGetMock.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/sessions/{sessionId}/workspace/files") {
@@ -1889,6 +1895,85 @@ describe("SessionView", () => {
 				historyPolicy: "strict",
 			}),
 		);
+	});
+
+	it("restarts the project orchestrator from an orchestrator session's actions menu", async () => {
+		render(<SessionView sessionId="sess-orch" />);
+
+		await chooseSessionAction("Restart");
+
+		expect(restartProjectOrchestratorMock).toHaveBeenCalledWith(
+			expect.objectContaining({ projectId: "proj-1" }),
+		);
+	});
+
+	it("does not offer a restart action from a worker session's actions menu", async () => {
+		render(<SessionView sessionId="sess-1" />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Session actions" }));
+
+		expect(screen.queryByRole("menuitem", { name: "Restart" })).not.toBeInTheDocument();
+	});
+
+	it("does not offer a restart action for a cloud orchestrator session", async () => {
+		const session = workerSession("sess-orch");
+		session.cloud = { orgId: "cloud-org" };
+		render(<SessionView sessionId="sess-orch" />);
+
+		const actions = screen.queryByRole("button", { name: "Session actions" });
+		if (actions) {
+			await userEvent.click(actions);
+			expect(screen.queryByRole("menuitem", { name: "Restart" })).not.toBeInTheDocument();
+		}
+		expect(restartProjectOrchestratorMock).not.toHaveBeenCalled();
+	});
+
+	it("asks about an unsafe draft before the orchestrator restart and aborts on cancel", async () => {
+		setChatDraftBoundary("sess-orch", "composer", "pending-attachments");
+		render(<SessionView sessionId="sess-orch" />);
+
+		await chooseSessionAction("Restart");
+		const dialog = await unsafeChatLeaveDialog();
+		expect(restartProjectOrchestratorMock).not.toHaveBeenCalled();
+		fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Discard unsafe Chat draft state?" })).not.toBeInTheDocument());
+		expect(restartProjectOrchestratorMock).not.toHaveBeenCalled();
+		setChatDraftBoundary("sess-orch", "composer", undefined);
+	});
+
+	it("restarts after the draft is confirmed and lets the replacement navigation through unprompted", async () => {
+		setChatDraftBoundary("sess-orch", "composer", "pending-attachments");
+		let blockedAfterReplacement: boolean | undefined;
+		restartProjectOrchestratorMock.mockImplementationOnce(async (options: { navigate: (o: unknown) => unknown }) => {
+			navigateMock.mockImplementationOnce(async () => {
+				blockedAfterReplacement = await routeBlockerState.options!.shouldBlockFn();
+			});
+			await options.navigate({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "proj-1", sessionId: "new" } });
+		});
+		render(<SessionView sessionId="sess-orch" />);
+
+		await chooseSessionAction("Restart");
+		await confirmUnsafeChatLeave();
+
+		await waitFor(() => expect(restartProjectOrchestratorMock).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(blockedAfterReplacement).toBe(false));
+		expect(screen.queryByRole("dialog", { name: "Discard unsafe Chat draft state?" })).not.toBeInTheDocument();
+		setChatDraftBoundary("sess-orch", "composer", undefined);
+	});
+
+	it("keeps the draft when the orchestrator restart fails", async () => {
+		setChatDraftBoundary("sess-orch", "composer", "pending-attachments");
+		// A failed restart never calls navigate, so nothing is discarded.
+		render(<SessionView sessionId="sess-orch" />);
+
+		await chooseSessionAction("Restart");
+		await confirmUnsafeChatLeave();
+
+		await waitFor(() => expect(restartProjectOrchestratorMock).toHaveBeenCalledTimes(1));
+		expect(navigateMock).not.toHaveBeenCalled();
+		expect(getChatDraftBoundaries("sess-orch")).toEqual(["pending-attachments"]);
+		setChatDraftBoundary("sess-orch", "composer", undefined);
 	});
 
 	it("keeps the policy dialog closed when an idle direct switch fails", async () => {
@@ -3135,20 +3220,30 @@ describe("SessionView", () => {
 		expect(screen.getByText(transition.errorDetail)).toBeInTheDocument();
 	});
 
-	it.each([
-		["worker", "sess-1"],
-		["orchestrator", "sess-orch"],
-	] as const)("removes the session actions menu for %s sessions when Chat UI is unsupported", (_label, sessionId) => {
+	it("removes the session actions menu for worker sessions when Chat UI is unsupported", () => {
 		interfaceTransitionState.status = { supported: false, targetMode: "chat", reasonCode: "CHAT_UNSUPPORTED" };
-		const session = workerSession(sessionId);
+		const session = workerSession("sess-1");
 		session.mode = "tui";
 		session.status = "idle";
 		session.activity = { state: "idle", lastActivityAt: "2026-08-06T00:00:00Z" };
 
-		render(<SessionView sessionId={sessionId} />);
+		render(<SessionView sessionId="sess-1" />);
 
 		// Nothing in the menu applies, so it must not render as an empty dropdown.
 		expect(screen.queryByRole("button", { name: "Session actions" })).not.toBeInTheDocument();
+	});
+
+	it("keeps only Restart in the actions menu for orchestrator sessions when Chat UI is unsupported", async () => {
+		interfaceTransitionState.status = { supported: false, targetMode: "chat", reasonCode: "CHAT_UNSUPPORTED" };
+		const session = workerSession("sess-orch");
+		session.mode = "tui";
+		session.status = "idle";
+		session.activity = { state: "idle", lastActivityAt: "2026-08-06T00:00:00Z" };
+
+		render(<SessionView sessionId="sess-orch" />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Session actions" }));
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Restart"]);
 	});
 
 	it.each([
