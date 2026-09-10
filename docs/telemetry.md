@@ -232,8 +232,18 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
 
 Separately from remote telemetry, the daemon can keep a local copy of
 operational events in Orchestrator.inc's SQLite database. While local telemetry is active, Orchestrator.inc
-periodically prunes records older than 30 days. This data stays under `~/.ao` on
-your machine.
+periodically prunes records older than 30 days by default. Set
+`AO_TELEMETRY_RETENTION` on the daemon to a Go duration such as `168h`, or a
+whole number of days such as `7`, to change this window (minimum 24 hours).
+Expired records are deleted in 5,000-row batches with pauses between batches.
+After each hourly sweep, incremental vacuum reclaims free database pages in
+256-page batches with pauses, stopping when fewer than 256 remain or SQLite
+cannot make further progress. This data stays under `~/.ao` on your
+machine; this setting does not change remote telemetry retention.
+
+The upgrade that enables incremental vacuum performs a one-time full database
+rewrite. Large databases can take longer to upgrade and require temporary free
+disk space for the rewrite.
 
 ## Signing in to AO Cloud
 
@@ -323,8 +333,8 @@ has no in-app opt-out. Turning
 desktop or daemon product telemetry off does not
 delete events already sent to PostHog, remove the local installation identifier,
 or delete existing local product-telemetry records. Automatic deletion of those
-local records older than 30 days resumes if daemon event capture is enabled
-again.
+local records older than the configured retention window (30 days by default)
+resumes if daemon event capture is enabled again.
 
 ## Questions or corrections
 

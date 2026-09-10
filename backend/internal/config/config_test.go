@@ -14,7 +14,7 @@ import (
 func TestLoadDefaults(t *testing.T) {
 	// Clear every recognised var so we observe pure defaults regardless of the
 	// surrounding environment.
-	for _, k := range []string{"AO_PORT", "AO_REQUEST_TIMEOUT", "AO_SHUTDOWN_TIMEOUT", "AO_RUN_FILE", "AO_DATA_DIR", "AO_AGENT", "AO_ALLOWED_ORIGINS", "AO_TELEMETRY_EVENTS", "AO_TELEMETRY_METRICS", "AO_TELEMETRY_REMOTE", "AO_TELEMETRY_POSTHOG_KEY", "AO_TELEMETRY_POSTHOG_HOST", "AO_TELEMETRY_DISABLED_EVENTS", "AO_TELEMETRY_APP_VERSION", "AO_HARNESS_UPDATE_CHECKS", "AO_HARNESS_UPDATE_INTERVAL"} {
+	for _, k := range []string{"AO_TELEMETRY_RETENTION", "AO_PORT", "AO_REQUEST_TIMEOUT", "AO_SHUTDOWN_TIMEOUT", "AO_RUN_FILE", "AO_DATA_DIR", "AO_AGENT", "AO_ALLOWED_ORIGINS", "AO_TELEMETRY_EVENTS", "AO_TELEMETRY_METRICS", "AO_TELEMETRY_REMOTE", "AO_TELEMETRY_POSTHOG_KEY", "AO_TELEMETRY_POSTHOG_HOST", "AO_TELEMETRY_DISABLED_EVENTS", "AO_TELEMETRY_APP_VERSION", "AO_HARNESS_UPDATE_CHECKS", "AO_HARNESS_UPDATE_INTERVAL"} {
 		t.Setenv(k, "")
 	}
 
@@ -753,4 +753,34 @@ func isScrubbedTelemetryEntry(entry string) bool {
 		}
 	}
 	return false
+}
+
+func TestLoadTelemetryRetention(t *testing.T) {
+	for _, tc := range []struct {
+		raw     string
+		want    time.Duration
+		invalid bool
+	}{
+		{"", 0, false}, {"7", 7 * 24 * time.Hour, false}, {"720h", 30 * 24 * time.Hour, false},
+		{"24h", 24 * time.Hour, false}, {"0", 0, true}, {"-1", 0, true},
+		{"23h", 0, true}, {"one day", 0, true}, {"106752", 0, true},
+		{"213504", 0, true}, {"9223372036854775807", 0, true},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			t.Setenv("AO_TELEMETRY_RETENTION", tc.raw)
+			cfg, err := Load()
+			if tc.invalid {
+				if err == nil {
+					t.Fatal("expected invalid retention error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Telemetry.LocalRetention != tc.want {
+				t.Fatalf("retention = %v, want %v", cfg.Telemetry.LocalRetention, tc.want)
+			}
+		})
+	}
 }

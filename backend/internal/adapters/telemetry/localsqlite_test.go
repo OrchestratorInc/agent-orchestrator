@@ -20,6 +20,8 @@ type fakeStore struct {
 	freelistCount  int64
 	vacuumCalled   bool
 	vacuumPages    int64
+	vacuumCalls    int
+	vacuumStalled  bool
 }
 
 func (f *fakeStore) CreateTelemetryEvent(_ context.Context, rec sqlitestore.TelemetryEventRecord) error {
@@ -55,6 +57,10 @@ func (f *fakeStore) IncrementalVacuum(_ context.Context, pages int64) error {
 	defer f.mu.Unlock()
 	f.vacuumCalled = true
 	f.vacuumPages = pages
+	f.vacuumCalls++
+	if !f.vacuumStalled {
+		f.freelistCount = max(0, f.freelistCount-pages)
+	}
 	return nil
 }
 
@@ -157,4 +163,22 @@ func TestCustomRetentionAccepted(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_ = s.Close(ctx)
+}
+
+func TestVacuumCatchesUpBeyondOneBatch(t *testing.T) {
+	store := &fakeStore{freelistCount: 2000}
+	s := testSink(store)
+	s.maybeVacuum()
+	if store.freelistCount >= localVacuumThreshold || store.vacuumCalls < 2 {
+		t.Fatalf("vacuum left %d free pages after %d calls", store.freelistCount, store.vacuumCalls)
+	}
+}
+
+func TestVacuumStopsWhenNoProgress(t *testing.T) {
+	store := &fakeStore{freelistCount: 2000, vacuumStalled: true}
+	s := testSink(store)
+	s.maybeVacuum()
+	if store.vacuumCalls != 1 {
+		t.Fatalf("vacuum calls = %d, want 1", store.vacuumCalls)
+	}
 }

@@ -446,7 +446,7 @@ func Load() (Config, error) {
 		d, err := time.ParseDuration(raw)
 		if err != nil {
 			days, derr := strconv.Atoi(raw)
-			if derr != nil {
+			if derr != nil || days < 1 || uint64(days) > uint64((1<<63-1)/(24*time.Hour)) {
 				return Config{}, fmt.Errorf("invalid AO_TELEMETRY_RETENTION %q: must be a Go duration (e.g. 720h) or a number of days", raw)
 			}
 			d = time.Duration(days) * 24 * time.Hour

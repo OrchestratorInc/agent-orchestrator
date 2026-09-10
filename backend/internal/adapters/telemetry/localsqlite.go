@@ -20,10 +20,13 @@ const (
 	localPruneBatchPause = 50 * time.Millisecond
 	localVacuumThreshold = int64(256)
 	localVacuumPages     = int64(256)
-
-	DefaultRetention = 30 * 24 * time.Hour
-	MinRetention     = 24 * time.Hour
 )
+
+// DefaultRetention is the default local telemetry retention period.
+const DefaultRetention = 30 * 24 * time.Hour
+
+// MinRetention is the shortest allowed retention period.
+const MinRetention = 24 * time.Hour
 
 type localStore interface {
 	CreateTelemetryEvent(ctx context.Context, rec sqlitestore.TelemetryEventRecord) error
@@ -32,6 +35,8 @@ type localStore interface {
 	IncrementalVacuum(ctx context.Context, pages int64) error
 }
 
+// LocalSQLiteSink persists telemetry events into the daemon's SQLite database
+// behind a small buffered worker so event emission stays best-effort.
 type LocalSQLiteSink struct {
 	store     localStore
 	log       *slog.Logger
@@ -49,6 +54,7 @@ type LocalSQLiteSink struct {
 	lastPrune time.Time
 }
 
+// NewLocalSQLiteSink starts a buffered SQLite-backed telemetry sink.
 func NewLocalSQLiteSink(store localStore, log *slog.Logger, retention time.Duration) *LocalSQLiteSink {
 	if retention < MinRetention {
 		retention = DefaultRetention
@@ -67,6 +73,7 @@ func NewLocalSQLiteSink(store localStore, log *slog.Logger, retention time.Durat
 	return s
 }
 
+// Emit enqueues an event for best-effort persistence.
 func (s *LocalSQLiteSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
 	s.queueMu.RLock()
 	if s.closed {
@@ -85,6 +92,7 @@ func (s *LocalSQLiteSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
 	}
 }
 
+// Close drains the worker until completion or context cancellation.
 func (s *LocalSQLiteSink) Close(ctx context.Context) error {
 	s.closeOnce.Do(func() {
 		s.queueMu.Lock()
@@ -173,12 +181,23 @@ func (s *LocalSQLiteSink) maybeVacuum() {
 		s.log.Warn("telemetry freelist check failed", "error", err)
 		return
 	}
-	if free < localVacuumThreshold {
-		return
+	for free >= localVacuumThreshold {
+		if err := s.store.IncrementalVacuum(context.Background(), localVacuumPages); err != nil {
+			s.log.Warn("telemetry vacuum failed", "error", err)
+			return
+		}
+		remaining, err := s.store.FreelistCount(context.Background())
+		if err != nil {
+			s.log.Warn("telemetry freelist check failed", "error", err)
+			return
+		}
+		// Stop if SQLite made no progress, rather than spinning indefinitely.
+		if remaining >= free {
+			return
+		}
+		free = remaining
+		if free >= localVacuumThreshold {
+			s.sleep(localPruneBatchPause)
+		}
 	}
-	if err := s.store.IncrementalVacuum(context.Background(), localVacuumPages); err != nil {
-		s.log.Warn("telemetry vacuum failed", "error", err)
-		return
-	}
-	s.log.Debug("telemetry vacuum reclaimed pages", "requested", localVacuumPages)
 }
