@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -676,7 +677,9 @@ type fakeAgent struct {
 	cancelCalls         int
 	customPrompt        func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error)
 	mode                string
-	modeNotFound        bool // SetSessionMode returns -32601
+	modeNotFound        bool     // SetSessionMode returns -32601
+	offeredModes        []string // when set, SetSessionMode rejects any other mode like claude-agent-acp
+	modeSets            []string // every mode id received over session/set_mode, in order
 	modeRequiresOption  SessionOption
 	configNotFound      bool // SetSessionConfigOption returns -32601
 	configErr           error
@@ -983,6 +986,13 @@ func (a *fakeAgent) SetSessionMode(_ context.Context, params acpsdk.SetSessionMo
 		a.mu.Unlock()
 		return acpsdk.SetSessionModeResponse{}, acpsdk.NewMethodNotFound("session/set_mode")
 	}
+	if len(a.offeredModes) > 0 && !slices.Contains(a.offeredModes, string(params.ModeId)) {
+		a.mu.Unlock()
+		return acpsdk.SetSessionModeResponse{}, acpsdk.NewInternalError(map[string]any{
+			"details": "Mode " + string(params.ModeId) + " is not available in this session",
+		})
+	}
+	a.modeSets = append(a.modeSets, string(params.ModeId))
 	a.mode = string(params.ModeId)
 	a.mu.Unlock()
 	return acpsdk.SetSessionModeResponse{}, nil
