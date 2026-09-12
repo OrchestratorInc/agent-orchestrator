@@ -23,7 +23,6 @@ func TestEmbeddedSkillFrontmatterIsValidYAML(t *testing.T) {
 	var frontmatter struct {
 		Name        string `yaml:"name"`
 		Description string `yaml:"description"`
-		Trigger     string `yaml:"trigger"`
 	}
 	if err := yaml.Unmarshal([]byte(parts[1]), &frontmatter); err != nil {
 		t.Fatalf("parse embedded SKILL.md frontmatter: %v", err)
@@ -33,9 +32,6 @@ func TestEmbeddedSkillFrontmatterIsValidYAML(t *testing.T) {
 	}
 	if strings.TrimSpace(frontmatter.Description) == "" {
 		t.Fatal("frontmatter description is empty")
-	}
-	if strings.TrimSpace(frontmatter.Trigger) == "" {
-		t.Fatal("frontmatter trigger is empty")
 	}
 }
 
@@ -98,34 +94,23 @@ func TestEmbeddedBrowserGuidanceKeepsNetworkCaptureOptional(t *testing.T) {
 	}
 }
 
-func TestEmbeddedSessionGuidanceDocumentsCanonicalInAppLinks(t *testing.T) {
-	body, err := files.ReadFile("using-ao/commands/session.md")
+func TestEmbeddedDeviceGuidanceKeepsControlScopedAndExplicit(t *testing.T) {
+	body, err := files.ReadFile("using-ao/commands/device.md")
 	if err != nil {
-		t.Fatalf("read embedded session guidance: %v", err)
+		t.Fatalf("read embedded device guidance: %v", err)
 	}
 	text := strings.Join(strings.Fields(string(body)), " ")
 	for _, required := range []string{
-		"ao://sessions/{project-id}/{session-id}",
-		"Never use display names as identity",
-		"Encode either ID with URL percent encoding",
-		"Do not append query strings, fragments, action names, credentials, authorities, or extra path segments",
-		"only inside a currently running AO desktop app",
-		"never sends a message, executes a command, or performs another action",
+		"`AO_SESSION_ID` and the launch-scoped `AO_DEVICE_CAPABILITY`",
+		"one AO session at a time",
+		"untrusted external content",
+		"`shutdown` powers it off",
+		"requires explicit `--yes` confirmation",
+		"missing Xcode must not disable Android",
 	} {
 		if !strings.Contains(text, required) {
-			t.Fatalf("session-link guidance missing %q:\n%s", required, body)
+			t.Fatalf("device guidance missing %q:\n%s", required, body)
 		}
-	}
-}
-
-func TestEmbeddedSpawnGuidanceListsOpenCodeV2(t *testing.T) {
-	body, err := files.ReadFile("using-ao/commands/spawn.md")
-	if err != nil {
-		t.Fatalf("read embedded spawn guidance: %v", err)
-	}
-	text := string(body)
-	if !strings.Contains(text, "`opencode`, `opencode-v2`") {
-		t.Fatalf("spawn guidance does not distinguish OpenCode 1 and 2:\n%s", text)
 	}
 }
 
@@ -149,11 +134,11 @@ func TestInstall_WritesSkillAndIsIdempotent(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(Dir(dataDir), "commands", "spawn.md")); err != nil {
 		t.Fatalf("commands/spawn.md missing: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(Dir(dataDir), "commands", "cue.md")); err != nil {
-		t.Fatalf("commands/cue.md missing: %v", err)
-	}
 	if _, err := os.Stat(filepath.Join(Dir(dataDir), "commands", "browser.md")); err != nil {
 		t.Fatalf("commands/browser.md missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(Dir(dataDir), "commands", "device.md")); err != nil {
+		t.Fatalf("commands/device.md missing: %v", err)
 	}
 
 	// A stale file inside the skill dir must not survive a reinstall (clobber).
@@ -183,23 +168,5 @@ func TestMaterialize_WritesIntoArbitraryDest(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dest, "commands", "spawn.md")); err != nil {
 		t.Fatalf("commands/spawn.md missing: %v", err)
-	}
-}
-
-func TestEmbeddedReportGuidanceDistinguishesDeliverablesFromDiagnostics(t *testing.T) {
-	body, err := files.ReadFile("using-ao/commands/report.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	guidance := strings.Join(strings.Fields(string(body)), " ")
-	for _, want := range []string{
-		"working material, not deliverables",
-		"Do not attach them unless requested or needed to explain an actionable failure",
-		"Summarize validation in the report note",
-		"not external publishing authorization",
-	} {
-		if !strings.Contains(guidance, want) {
-			t.Fatalf("report guidance missing %q", want)
-		}
 	}
 }
