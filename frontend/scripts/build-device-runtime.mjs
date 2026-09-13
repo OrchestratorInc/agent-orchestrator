@@ -24,8 +24,9 @@ signature.update(readFileSync(fileURLToPath(import.meta.url)));
 const expectedSignature = signature.digest("hex");
 const markerPath = join(outDir, ".ao-device-runtime.json");
 const agentEntry = join(outDir, "node_modules", "agent-device", "bin", "agent-device.mjs");
+const hubEntry = join(outDir, "node_modules", "expo-device-hub", "dist", "server", "cli.mjs");
 const aoRunner = join(outDir, "ao-device-runner.mjs");
-if (existsSync(markerPath) && existsSync(agentEntry) && existsSync(aoRunner)) {
+if (existsSync(markerPath) && existsSync(agentEntry) && existsSync(hubEntry) && existsSync(aoRunner)) {
 	const marker = JSON.parse(readFileSync(markerPath, "utf8"));
 	if (marker.signature === expectedSignature) process.exit(0);
 }
@@ -38,19 +39,23 @@ run(npm.command, npm.args, { cwd: outDir });
 
 for (const required of [
 	agentEntry,
+	hubEntry,
 	join(outDir, "node_modules", "agent-device", "LICENSE"),
+	join(outDir, "node_modules", "expo-device-hub", "LICENSE"),
+	join(outDir, "node_modules", "expo-device-hub", "vendor", "serve-sim", "LICENSE"),
+	join(outDir, "node_modules", "expo-device-hub", "vendor", "serve-emu", "LICENSE"),
 ]) {
 	if (!existsSync(required)) throw new Error(`device runtime is missing ${required}`);
 }
 
 const integrity = {};
-for (const file of [agentEntry, aoRunner]) {
+for (const file of [agentEntry, hubEntry, aoRunner]) {
 	integrity[file.slice(outDir.length + 1)] = createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 writeFileSync(join(outDir, "integrity.json"), `${JSON.stringify(integrity, null, 2)}\n`);
 writeFileSync(markerPath, `${JSON.stringify({
 	signature: expectedSignature,
-	packages: { "agent-device": "0.21.1" },
+	packages: { "agent-device": "0.21.1", "expo-device-hub": "0.9.0" },
 }, null, 2)}\n`);
 
 function run(command, args, options = {}) {

@@ -233,7 +233,14 @@ func testRuntime(t *testing.T) *Runtime {
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{node, filepath.Join(runtimeDir, "ao-device-runner.mjs")} {
+	for _, path := range []string{
+		node,
+		filepath.Join(runtimeDir, "ao-device-runner.mjs"),
+		filepath.Join(runtimeDir, "node_modules", "expo-device-hub", "dist", "server", "cli.mjs"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(path, []byte("test"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -243,6 +250,7 @@ func testRuntime(t *testing.T) *Runtime {
 		nodePath:   node,
 		stateDir:   filepath.Join(root, "state"),
 		goos:       "darwin",
+		goarch:     "arm64",
 		lookPath:   func(string) (string, error) { return "/tool", nil },
 	}
 }

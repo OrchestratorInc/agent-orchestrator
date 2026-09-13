@@ -2020,6 +2020,14 @@ async function requestLocalDevice(pathname: string, init: RequestInit = {}): Pro
 	if (!response.ok) {
 		throw new Error(typeof body?.message === "string" ? body.message : `Device request failed (${response.status})`);
 	}
+	const result = body?.result;
+	if (result && typeof result === "object" && !Array.isArray(result)) {
+		const streamBasePath = (result as Record<string, unknown>).streamBasePath;
+		if (typeof streamBasePath === "string" && streamBasePath.startsWith("/api/v1/devices/stream/")) {
+			(result as Record<string, unknown>).streamBaseUrl = `http://127.0.0.1:${status.port}${streamBasePath}`;
+			delete (result as Record<string, unknown>).streamBasePath;
+		}
+	}
 	return body;
 }
 

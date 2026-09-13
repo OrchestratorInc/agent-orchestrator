@@ -117,3 +117,27 @@ func TestLocalDevicesControllerRejectsUnknownCommandFields(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
+
+func TestDeviceStreamRouteAllowsOnlyPlatformSpecificHelperPaths(t *testing.T) {
+	tests := []struct {
+		name       string
+		access     devicesvc.StreamAccess
+		channel    string
+		wantSuffix string
+		websocket  bool
+		allowed    bool
+	}{
+		{name: "ios mjpeg", access: devicesvc.StreamAccess{Origin: "http://127.0.0.1:4000", DeviceID: "ios/device", Platform: domain.DevicePlatformIOS}, channel: "mjpeg", wantSuffix: "/vendor/serve-sim/helper/ios%2Fdevice/stream.mjpeg", allowed: true},
+		{name: "ios input", access: devicesvc.StreamAccess{Origin: "http://127.0.0.1:4000", DeviceID: "ios device", Platform: domain.DevicePlatformIOS}, channel: "input", wantSuffix: "/vendor/serve-sim/helper/ws?device=ios+device", websocket: true, allowed: true},
+		{name: "android input", access: devicesvc.StreamAccess{Origin: "http://127.0.0.1:4000", DeviceID: "emulator-5554", Platform: domain.DevicePlatformAndroid}, channel: "input", wantSuffix: "/vendor/serve-emu/ws?device=emulator-5554&frame-meta=1", websocket: true, allowed: true},
+		{name: "android arbitrary http", access: devicesvc.StreamAccess{Origin: "http://127.0.0.1:4000", DeviceID: "emulator-5554", Platform: domain.DevicePlatformAndroid}, channel: "api", allowed: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, websocket, allowed := deviceStreamRoute(test.access, test.channel)
+			if allowed != test.allowed || websocket != test.websocket || (test.allowed && !strings.HasSuffix(got, test.wantSuffix)) {
+				t.Fatalf("route = %q, websocket = %v, allowed = %v", got, websocket, allowed)
+			}
+		})
+	}
+}

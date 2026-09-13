@@ -4,7 +4,9 @@ package device
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -67,21 +69,30 @@ type Result struct {
 	Value      json.RawMessage          `json:"value,omitempty"`
 }
 
+// StreamAccess is the narrow capability behind the renderer's live-media URL.
+type StreamAccess struct {
+	Origin   string
+	DeviceID string
+	Platform domain.DevicePlatform
+}
+
 // Service owns daemon-scoped AO attachment policy.
 type Service struct {
-	sessions     sessionReader
-	runtime      ports.DeviceRuntime
-	authority    capabilityAuthority
-	desktopToken string
-	mu           sync.Mutex
-	bySession    map[domain.SessionID]domain.DeviceAttachment
-	owners       map[string]domain.SessionID
-	operations   map[domain.SessionID]*sync.Mutex
-	setupRuntime ports.DeviceSetupRuntime
-	setupStore   ports.DeviceSetupJobStore
-	setupJobs    map[domain.DevicePlatform]domain.DeviceSetup
-	setupCancels map[domain.DevicePlatform]context.CancelFunc
-	setupWG      sync.WaitGroup
+	sessions        sessionReader
+	runtime         ports.DeviceRuntime
+	authority       capabilityAuthority
+	desktopToken    string
+	mu              sync.Mutex
+	bySession       map[domain.SessionID]domain.DeviceAttachment
+	owners          map[string]domain.SessionID
+	operations      map[domain.SessionID]*sync.Mutex
+	streamTickets   map[string]StreamAccess
+	streamBySession map[domain.SessionID]string
+	setupRuntime    ports.DeviceSetupRuntime
+	setupStore      ports.DeviceSetupJobStore
+	setupJobs       map[domain.DevicePlatform]domain.DeviceSetup
+	setupCancels    map[domain.DevicePlatform]context.CancelFunc
+	setupWG         sync.WaitGroup
 }
 
 // Deps supplies the durable managed-setup boundaries.
@@ -101,7 +112,8 @@ func NewWithDeps(sessions sessionReader, runtime ports.DeviceRuntime, authority 
 	return &Service{
 		sessions: sessions, runtime: runtime, authority: authority, desktopToken: desktopToken,
 		bySession: make(map[domain.SessionID]domain.DeviceAttachment), owners: make(map[string]domain.SessionID),
-		operations:   make(map[domain.SessionID]*sync.Mutex),
+		operations:    make(map[domain.SessionID]*sync.Mutex),
+		streamTickets: make(map[string]StreamAccess), streamBySession: make(map[domain.SessionID]string),
 		setupRuntime: deps.SetupRuntime, setupStore: deps.SetupStore, setupJobs: make(map[domain.DevicePlatform]domain.DeviceSetup),
 		setupCancels: make(map[domain.DevicePlatform]context.CancelFunc),
 	}
@@ -126,6 +138,9 @@ func (s *Service) Close(ctx context.Context) error {
 	go func() { s.setupWG.Wait(); close(done) }()
 	select {
 	case <-done:
+		if closer, ok := s.runtime.(interface{ Close(context.Context) error }); ok {
+			return closer.Close(ctx)
+		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -200,6 +215,12 @@ func (s *Service) Execute(ctx context.Context, sessionID domain.SessionID, creds
 			return Result{}, apierr.Invalid("DEVICE_SHUTDOWN_CONFIRMATION_REQUIRED", "Device shutdown requires explicit confirmation", nil)
 		}
 		return s.shutdown(ctx, sessionID, command)
+	case "stream":
+		attachment, ok := s.attachment(sessionID)
+		if !ok {
+			return Result{}, apierr.Conflict("DEVICE_ATTACHMENT_REQUIRED", "Open a device first", nil)
+		}
+		return s.streamResult(ctx, sessionID, attachment, action)
 	case "screenshot", "ui-tree", "tap", "swipe", "fill", "type", "key", "back", "home":
 		return s.runAttached(ctx, sessionID, action, command)
 	default:
@@ -257,7 +278,7 @@ func (s *Service) open(ctx context.Context, sessionID domain.SessionID, command 
 	if existing, ok := s.bySession[sessionID]; ok {
 		s.mu.Unlock()
 		if existing.DeviceID == deviceID {
-			return Result{Action: actionName("open"), Attachment: &existing}, nil
+			return s.streamResult(ctx, sessionID, existing, "open")
 		}
 		return Result{}, apierr.Conflict("DEVICE_ATTACHMENT_EXISTS", "Close the current device before opening another", nil)
 	}
@@ -277,7 +298,43 @@ func (s *Service) open(ctx context.Context, sessionID domain.SessionID, command 
 		s.release(sessionID, deviceID)
 		return Result{}, mapRuntimeError(err)
 	}
-	return Result{Action: actionName("open"), Attachment: &attachment, Value: value}, nil
+	_ = value
+	return s.streamResult(ctx, sessionID, attachment, "open")
+}
+
+func (s *Service) streamResult(ctx context.Context, sessionID domain.SessionID, attachment domain.DeviceAttachment, action string) (Result, error) {
+	hub, ok := s.runtime.(interface {
+		HubOrigin(context.Context) (string, error)
+	})
+	if !ok {
+		return Result{}, apierr.Conflict("DEVICE_STREAM_UNAVAILABLE", "Embedded device streaming is unavailable", nil)
+	}
+	origin, err := hub.HubOrigin(ctx)
+	if err != nil {
+		return Result{}, mapRuntimeError(err)
+	}
+	ticketBytes := make([]byte, 32)
+	if _, err := rand.Read(ticketBytes); err != nil {
+		return Result{}, apierr.Internal("DEVICE_STREAM_UNAVAILABLE", "Could not create device stream access")
+	}
+	ticket := hex.EncodeToString(ticketBytes)
+	s.mu.Lock()
+	if old := s.streamBySession[sessionID]; old != "" {
+		delete(s.streamTickets, old)
+	}
+	s.streamBySession[sessionID] = ticket
+	s.streamTickets[ticket] = StreamAccess{Origin: origin, DeviceID: attachment.DeviceID, Platform: attachment.Platform}
+	s.mu.Unlock()
+	value, _ := json.Marshal(map[string]any{"streamBasePath": "/api/v1/devices/stream/" + ticket})
+	return Result{Action: actionName(action), Attachment: &attachment, Value: value}, nil
+}
+
+// ResolveStream validates a random, attachment-scoped media capability.
+func (s *Service) ResolveStream(ticket string) (StreamAccess, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	access, ok := s.streamTickets[ticket]
+	return access, ok
 }
 
 func (s *Service) close(ctx context.Context, sessionID domain.SessionID) (Result, error) {
@@ -366,6 +423,10 @@ func (s *Service) release(sessionID domain.SessionID, deviceID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.bySession, sessionID)
+	if ticket := s.streamBySession[sessionID]; ticket != "" {
+		delete(s.streamTickets, ticket)
+		delete(s.streamBySession, sessionID)
+	}
 	if s.owners[deviceID] == sessionID {
 		delete(s.owners, deviceID)
 	}

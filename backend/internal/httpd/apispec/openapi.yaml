@@ -1503,6 +1503,59 @@ paths:
       summary: Get local virtual-device capabilities and the session attachment
       tags:
       - devices
+  /api/v1/devices/stream/{ticket}/{channel}:
+    get:
+      operationId: streamDevice
+      parameters:
+      - description: Opaque device stream capability.
+        in: path
+        name: ticket
+        required: true
+        schema:
+          description: Opaque device stream capability.
+          type: string
+      - description: Allowlisted media or input channel.
+        in: path
+        name: channel
+        required: true
+        schema:
+          description: Allowlisted media or input channel.
+          enum:
+          - mjpeg
+          - avcc
+          - config
+          - health
+          - input
+          type: string
+      responses:
+        "200":
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unauthorized
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Gateway
+      summary: Stream allowlisted media or upgrade an input socket for an attached
+        virtual device
+      tags:
+      - devices
   /api/v1/endpoints:
     get:
       operationId: getEndpoints

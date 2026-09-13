@@ -216,6 +216,7 @@ func (a *API) Register(root chi.Router) {
 		a.codexAccounts.RegisterStreams(r)
 		a.sessions.RegisterStreams(r)
 		a.events.Register(r)
+		a.localDevices.RegisterStream(r)
 	})
 }
 

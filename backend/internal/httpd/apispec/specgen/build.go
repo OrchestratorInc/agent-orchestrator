@@ -745,6 +745,18 @@ func deviceOperations() []operation {
 			pathParams: []any{controllers.DeviceCredentialsHeaders{}}, reqBody: controllers.DeviceSetupCommandRequest{},
 			resps: append([]respUnit{{http.StatusOK, controllers.DeviceSetupCommandResponse{}}}, commonErrors...),
 		},
+		{
+			method: http.MethodGet, path: "/api/v1/devices/stream/{ticket}/{channel}", id: "streamDevice", tag: "devices",
+			summary:    "Stream allowlisted media or upgrade an input socket for an attached virtual device",
+			pathParams: []any{controllers.DeviceStreamParam{}},
+			resps: []respUnit{
+				{http.StatusOK, ""},
+				{http.StatusUnauthorized, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusBadGateway, envelope.APIError{}},
+			},
+			contentTypes: map[int]string{http.StatusOK: "application/octet-stream"},
+		},
 	}
 }
 

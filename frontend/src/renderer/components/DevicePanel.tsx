@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, CornerDownLeft, ExternalLink, House, Loader2, Power, RefreshCw, Smartphone, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type {
@@ -12,15 +12,7 @@ import type {
 import { aoBridge } from "../lib/bridge";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
-
-const SCREEN_REFRESH_MS = 1_000;
-const SWIPE_THRESHOLD_PX = 8;
-
-type ScreenGesture = {
-	pointerId: number;
-	startClientX: number;
-	startClientY: number;
-};
+import { DeviceStream, type DeviceStreamHandle } from "./DeviceStream";
 
 export function DevicePanel({ sessionId }: { sessionId: string }) {
 	const { t } = useTranslation();
@@ -29,15 +21,15 @@ export function DevicePanel({ sessionId }: { sessionId: string }) {
 	const [setups, setSetups] = useState<LocalDeviceSetup[]>([]);
 	const [licenses, setLicenses] = useState<Record<LocalDevicePlatform, boolean>>({ ios: false, android: false });
 	const [attachment, setAttachment] = useState<LocalDeviceAttachment>();
-	const [screen, setScreen] = useState<string>();
+	const [streamBaseUrl, setStreamBaseUrl] = useState<string>();
 	const [selectedId, setSelectedId] = useState("");
 	const [text, setText] = useState("");
 	const [error, setError] = useState<string>();
 	const [busy, setBusy] = useState(true);
-	const captureInFlight = useRef(false);
 	const actionInFlight = useRef(false);
-	const screenGesture = useRef<ScreenGesture | undefined>(undefined);
+	const streamRef = useRef<DeviceStreamHandle>(null);
 	const setupResumeInFlight = useRef(new Set<LocalDevicePlatform>());
+	const streamReady = useCallback(() => setBusy(false), []);
 
 	const load = useCallback(async () => {
 		setBusy(true);
@@ -68,6 +60,8 @@ export function DevicePanel({ sessionId }: { sessionId: string }) {
 	const command = useCallback(async (input: Omit<LocalDeviceCommand, "sessionId">) => {
 		setError(undefined);
 		const result = await aoBridge.device.command({ ...input, sessionId });
+		const nextStreamBaseUrl = result.result?.streamBaseUrl;
+		if (typeof nextStreamBaseUrl === "string") setStreamBaseUrl(nextStreamBaseUrl);
 		setAttachment((current) => {
 			if (!result.attachment) {
 				return input.action === "close" || input.action === "shutdown" ? undefined : current;
@@ -82,20 +76,6 @@ export function DevicePanel({ sessionId }: { sessionId: string }) {
 		});
 		return result;
 	}, [sessionId]);
-
-	const refreshScreen = useCallback(async () => {
-		if (!attachment || captureInFlight.current || actionInFlight.current) return;
-		captureInFlight.current = true;
-		try {
-			const result = await command({ action: "screenshot" });
-			const png = result.result?.pngBase64;
-			if (typeof png === "string" && png) setScreen(`data:image/png;base64,${png}`);
-		} catch (cause) {
-			setError(errorMessage(cause));
-		} finally {
-			captureInFlight.current = false;
-		}
-	}, [attachment, command]);
 
 	useEffect(() => void load(), [load]);
 	useEffect(() => {
@@ -120,13 +100,11 @@ export function DevicePanel({ sessionId }: { sessionId: string }) {
 		return () => window.clearInterval(timer);
 	}, [load, sessionId, setups]);
 	useEffect(() => {
-		if (!attachment) return;
-		void refreshScreen();
-		const timer = window.setInterval(() => void refreshScreen(), SCREEN_REFRESH_MS);
-		return () => window.clearInterval(timer);
-	}, [attachment, refreshScreen]);
+		if (!attachment || streamBaseUrl || actionInFlight.current) return;
+		void command({ action: "stream" }).catch((cause) => setError(errorMessage(cause)));
+	}, [attachment, command, streamBaseUrl]);
 
-	const run = useCallback(async (input: Omit<LocalDeviceCommand, "sessionId">, refresh = true) => {
+	const run = useCallback(async (input: Omit<LocalDeviceCommand, "sessionId">) => {
 		if (actionInFlight.current) return;
 		actionInFlight.current = true;
 		setBusy(true);
@@ -138,13 +116,12 @@ export function DevicePanel({ sessionId }: { sessionId: string }) {
 			actionInFlight.current = false;
 			setBusy(false);
 		}
-		if (refresh) void refreshScreen();
-	}, [command, refreshScreen]);
+	}, [command]);
 
 	const openSelected = async () => {
 		const selected = devices.find((item) => item.id === selectedId);
 		if (!selected) return;
-		setScreen(undefined);
+		setStreamBaseUrl(undefined);
 		await run({ action: "open", deviceId: selected.id, platform: selected.platform });
 	};
 
@@ -157,36 +134,6 @@ export function DevicePanel({ sessionId }: { sessionId: string }) {
 			if (result.setup.actionUrl) await aoBridge.app.openExternal(result.setup.actionUrl);
 			if (result.setup.cancelable) window.setTimeout(() => void load(), 300);
 		} catch (cause) { setError(errorMessage(cause)); }
-	};
-
-	const screenPoint = (image: HTMLImageElement, clientX: number, clientY: number) => {
-		const rect = image.getBoundingClientRect();
-		return {
-			x: Math.round((clientX - rect.left) * image.naturalWidth / rect.width),
-			y: Math.round((clientY - rect.top) * image.naturalHeight / rect.height),
-		};
-	};
-
-	const beginScreenGesture = (event: PointerEvent<HTMLImageElement>) => {
-		if (busy || actionInFlight.current) return;
-		event.currentTarget.setPointerCapture(event.pointerId);
-		screenGesture.current = { pointerId: event.pointerId, startClientX: event.clientX, startClientY: event.clientY };
-	};
-
-	const cancelScreenGesture = (event: PointerEvent<HTMLImageElement>) => {
-		if (screenGesture.current?.pointerId === event.pointerId) screenGesture.current = undefined;
-	};
-
-	const finishScreenGesture = (event: PointerEvent<HTMLImageElement>) => {
-		const gesture = screenGesture.current;
-		if (!gesture || gesture.pointerId !== event.pointerId || busy || actionInFlight.current) return;
-		screenGesture.current = undefined;
-		const distance = Math.hypot(event.clientX - gesture.startClientX, event.clientY - gesture.startClientY);
-		const from = screenPoint(event.currentTarget, gesture.startClientX, gesture.startClientY);
-		const to = screenPoint(event.currentTarget, event.clientX, event.clientY);
-		void run(distance < SWIPE_THRESHOLD_PX
-			? { action: "tap", x: to.x, y: to.y }
-			: { action: "swipe", x1: from.x, y1: from.y, x2: to.x, y2: to.y });
 	};
 
 	if (!attachment) {
@@ -228,23 +175,23 @@ export function DevicePanel({ sessionId }: { sessionId: string }) {
 		<div className="device-panel flex h-full min-h-0 flex-col" role="tabpanel" aria-label={t("device.title")}>
 			<div className="flex h-control-lg shrink-0 items-center gap-1 border-b border-border px-2">
 				<span className="min-w-0 flex-1 truncate text-xs font-medium">{attachment.name}</span>
-				<DeviceControl label={t("device.back")} disabled={busy} onClick={() => void run({ action: "back" })}><ArrowLeft /></DeviceControl>
-				<DeviceControl label={t("device.home")} disabled={busy} onClick={() => void run({ action: "home" })}><House /></DeviceControl>
-				<DeviceControl label={t("device.refresh")} disabled={busy} onClick={() => void refreshScreen()}><RefreshCw /></DeviceControl>
-				<DeviceControl label={t("device.shutdown")} disabled={busy} onClick={() => { setScreen(undefined); void run({ action: "shutdown", confirmed: true }, false); }}><Power /></DeviceControl>
-				<DeviceControl label={t("device.close")} disabled={busy} onClick={() => { setScreen(undefined); void run({ action: "close" }, false); }}><X /></DeviceControl>
+				<DeviceControl label={t("device.back")} disabled={busy || attachment.platform === "ios"} onClick={() => streamRef.current?.press("back")}><ArrowLeft /></DeviceControl>
+				<DeviceControl label={t("device.home")} disabled={busy} onClick={() => streamRef.current?.press("home")}><House /></DeviceControl>
+				<DeviceControl label={t("device.refresh")} disabled={busy} onClick={() => void run({ action: "stream" })}><RefreshCw /></DeviceControl>
+				<DeviceControl label={t("device.shutdown")} disabled={busy} onClick={() => { setStreamBaseUrl(undefined); void run({ action: "shutdown", confirmed: true }); }}><Power /></DeviceControl>
+				<DeviceControl label={t("device.close")} disabled={busy} onClick={() => { setStreamBaseUrl(undefined); void run({ action: "close" }); }}><X /></DeviceControl>
 			</div>
 			<div className="min-h-0 flex-1 overflow-auto bg-black/90 p-2">
-				{screen ? (
-					<img alt={t("device.screenAlt", { name: attachment.name })} className="mx-auto block max-h-full max-w-full cursor-crosshair touch-none select-none object-contain" draggable={false} onPointerCancel={cancelScreenGesture} onPointerDown={beginScreenGesture} onPointerUp={finishScreenGesture} src={screen} />
+				{streamBaseUrl ? (
+					<DeviceStream baseUrl={streamBaseUrl} onError={setError} onReady={streamReady} platform={attachment.platform} ref={streamRef} screenLabel={t("device.screenAlt", { name: attachment.name })} />
 				) : (
 					<div className="flex h-full items-center justify-center text-xs text-white/60"><Loader2 className="mr-2 animate-spin" />{t("device.loadingScreen")}</div>
 				)}
 			</div>
-			<form className="flex shrink-0 gap-1 border-t border-border p-2" onSubmit={(event) => { event.preventDefault(); if (!text) return; void run({ action: "type", text }).then(() => setText("")); }}>
+			<form className="flex shrink-0 gap-1 border-t border-border p-2" onSubmit={(event) => { event.preventDefault(); if (!text) return; streamRef.current?.sendText(text); setText(""); }}>
 				<input aria-label={t("device.textInput")} className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs" disabled={busy} onChange={(event) => setText(event.target.value)} placeholder={t("device.textPlaceholder")} value={text} />
 				<DeviceControl label={t("device.typeText")} disabled={busy || !text} type="submit"><CornerDownLeft /></DeviceControl>
-				<DeviceControl label={t("device.enter")} disabled={busy} onClick={() => void run({ action: "key", key: "enter" })}><CornerDownLeft /></DeviceControl>
+				<DeviceControl label={t("device.enter")} disabled={busy} onClick={() => streamRef.current?.press("enter")}><CornerDownLeft /></DeviceControl>
 			</form>
 			{error ? <div className="shrink-0 p-2"><DeviceError message={error} /></div> : null}
 		</div>

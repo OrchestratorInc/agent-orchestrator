@@ -217,7 +217,7 @@ func (r *Runtime) installAndroid(ctx context.Context, report func(ports.DeviceSe
 
 func (r *Runtime) ensureManagedJDK(ctx context.Context, downloads, staging string, report func(ports.DeviceSetupProgress)) (string, string, error) {
 	managed := filepath.Join(r.androidRoot(), "jdk")
-	if java := findNamedFile(managed, "java"); java != "" {
+	if java := findJavaFile(managed); java != "" {
 		return filepath.Dir(filepath.Dir(java)), "Temurin 21", nil
 	}
 	arch := "aarch64"
@@ -259,13 +259,13 @@ func (r *Runtime) ensureManagedJDK(ctx context.Context, downloads, staging strin
 	if err := untarGzipSafe(archive, jdkStage); err != nil {
 		return "", "", setupError("ARCHIVE_INVALID", "The downloaded Java runtime archive could not be extracted", "")
 	}
-	if findNamedFile(jdkStage, "java") == "" {
+	if findJavaFile(jdkStage) == "" {
 		return "", "", setupError("ARCHIVE_INVALID", "The Java runtime archive did not contain Java", "")
 	}
 	if err := replaceDir(jdkStage, managed); err != nil {
 		return "", "", err
 	}
-	java := findNamedFile(managed, "java")
+	java := findJavaFile(managed)
 	return filepath.Dir(filepath.Dir(java)), assets[0].Version.Semver, nil
 }
 
@@ -851,10 +851,10 @@ func untarGzipSafe(path, destination string) error {
 		}
 	}
 }
-func findNamedFile(root, name string) string {
+func findJavaFile(root string) string {
 	var found string
 	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err == nil && !info.IsDir() && info.Name() == name && filepath.Base(filepath.Dir(path)) == "bin" {
+		if err == nil && !info.IsDir() && info.Name() == "java" && filepath.Base(filepath.Dir(path)) == "bin" {
 			found = path
 			return filepath.SkipAll
 		}

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -39,6 +40,11 @@ type Runtime struct {
 	run        CommandRunner
 	lookPath   func(string) (string, error)
 	goos       string
+	goarch     string
+	hubMu      sync.Mutex
+	hubCmd     *exec.Cmd
+	hubLog     *os.File
+	hubOrigin  string
 }
 
 // New creates a local device runtime. Missing resources are reported as
@@ -58,6 +64,7 @@ func New(dataDir string) *Runtime {
 		run:        runCommand,
 		lookPath:   exec.LookPath,
 		goos:       runtime.GOOS,
+		goarch:     runtime.GOARCH,
 	}
 }
 
@@ -66,13 +73,18 @@ func (r *Runtime) Capabilities(context.Context) []domain.DevicePlatformCapabilit
 	if r.goos != "darwin" {
 		return unavailableBoth("HOST_PLATFORM_UNSUPPORTED", "Local virtual devices are currently available only on macOS")
 	}
-	if !regularFile(r.nodePath) || !regularFile(filepath.Join(r.runtimeDir, "ao-device-runner.mjs")) {
+	if !regularFile(r.nodePath) ||
+		!regularFile(filepath.Join(r.runtimeDir, "ao-device-runner.mjs")) ||
+		!regularFile(filepath.Join(r.runtimeDir, "node_modules", "expo-device-hub", "dist", "server", "cli.mjs")) {
 		return unavailableBoth("DEVICE_RUNTIME_UNAVAILABLE", "The AO desktop device runtime is not installed")
 	}
 	return []domain.DevicePlatformCapability{r.iosCapability(), r.androidCapability()}
 }
 
 func (r *Runtime) iosCapability() domain.DevicePlatformCapability {
+	if r.goarch != "arm64" {
+		return domain.DevicePlatformCapability{Platform: domain.DevicePlatformIOS, Code: "HOST_ARCH_UNSUPPORTED", Message: "Embedded iOS Simulator control currently requires an Apple Silicon Mac"}
+	}
 	if _, err := r.lookPath("xcrun"); err != nil {
 		return domain.DevicePlatformCapability{Platform: domain.DevicePlatformIOS, Code: "XCODE_REQUIRED", Message: "Install Xcode and its command-line tools to use iOS Simulator"}
 	}
@@ -137,6 +149,11 @@ func (r *Runtime) Execute(ctx context.Context, request ports.DeviceRuntimeReques
 	}
 	if err := os.MkdirAll(r.stateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create device state directory: %w", err)
+	}
+	if request.Action == "attach" {
+		if _, err := r.HubOrigin(ctx); err != nil {
+			return nil, err
+		}
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()

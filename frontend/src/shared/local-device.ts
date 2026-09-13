@@ -37,7 +37,7 @@ export type LocalDeviceInventory = {
 
 export type LocalDeviceCommand = {
 	sessionId: string;
-	action: "open" | "close" | "shutdown" | "screenshot" | "ui-tree" | "tap" | "swipe" | "fill" | "type" | "key" | "back" | "home";
+	action: "open" | "stream" | "close" | "shutdown" | "screenshot" | "ui-tree" | "tap" | "swipe" | "fill" | "type" | "key" | "back" | "home";
 	deviceId?: string;
 	platform?: LocalDevicePlatform;
 	interactiveOnly?: boolean;

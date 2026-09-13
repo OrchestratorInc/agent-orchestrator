@@ -43,7 +43,7 @@ try {
 			result = await client.devices.list(platform ? { platform } : undefined);
 			break;
 		case "attach": {
-			// AO renders the device from screenshots in its own panel. Keep platform
+			// AO renders the device through its embedded live stream. Keep platform
 			// boot in the background so no second native window opens outside AO.
 			if (platform === "ios" && device) await bootIOSInBackground(device);
 			await client.devices.boot({
@@ -52,15 +52,17 @@ try {
 				// its explicit headless flag for Android Emulator.
 				...(platform === "android" ? { headless: true } : {}),
 			});
-			// Establish the durable agent-device session without launching or
-			// foregrounding an app. This preserves the user's current device screen
-			// and lets a freshly created AO device start on its launcher.
-			await client.apps.open(targetSelection);
+			// Opening the human-facing device panel must not start an XCTest app.
+			// Agent automation establishes its richer session lazily on first use.
 			result = { attached: true };
 			break;
 		}
 		case "detach":
-			await client.sessions.close({ session });
+			try {
+				await client.sessions.close({ session });
+			} catch (error) {
+				if (normalizeAgentDeviceError(error).code !== "SESSION_NOT_FOUND") throw error;
+			}
 			result = { detached: true };
 			break;
 		case "shutdown":
@@ -69,21 +71,31 @@ try {
 			break;
 		case "ui-tree":
 		case "snapshot": {
-			const snapshot = await client.capture.snapshot({
+			const snapshot = await withAgentSession(() => client.capture.snapshot({
 				...sessionSelection,
 				interactiveOnly: request.interactiveOnly === true,
 				forceFull: true,
 				timeoutMs: 15_000,
-			});
+			}));
 			result = safeSnapshot(snapshot);
 			break;
 		}
 		case "screenshot": {
 			const file = path.join(stateDir, `ao-capture-${randomUUID()}.png`);
 			try {
-				// The screenshot API intentionally accepts a session, not device
-				// selectors. Passing platform/device is rejected as INVALID_ARGS.
-				await client.capture.screenshot({ ...sessionSelection, path: file, stabilize: false });
+				if (platform === "ios" && device) {
+					// Apple exposes screen capture directly through CoreSimulator. This is
+					// substantially faster than routing every display refresh through the
+					// XCTest automation session and does not foreground its helper app.
+					await execFileAsync("xcrun", ["simctl", "io", device, "screenshot", file], {
+						timeout: 15_000,
+						maxBuffer: 1024 * 1024,
+					});
+				} else {
+					// The agent-device screenshot API intentionally accepts a session, not
+					// device selectors. Passing platform/device is rejected as INVALID_ARGS.
+					await client.capture.screenshot({ ...sessionSelection, path: file, stabilize: false });
+				}
 				const bytes = await readFile(file);
 				result = { pngBase64: bytes.toString("base64"), size: bytes.length };
 			} finally {
@@ -95,38 +107,38 @@ try {
 			// AO immediately captures the resulting frame itself. agent-device's
 			// optional verification performs another accessibility capture and makes
 			// direct manipulation especially slow on iOS.
-			await client.interactions.press({ ...sessionSelection, ...target(request), verify: false });
+			await withAgentSession(() => client.interactions.press({ ...sessionSelection, ...target(request), verify: false }));
 			result = { completed: true };
 			break;
 		case "swipe":
-			await client.interactions.swipe({
+			await withAgentSession(() => client.interactions.swipe({
 				...sessionSelection,
 				from: { x: integer(request.x1, "x1"), y: integer(request.y1, "y1") },
 				to: { x: integer(request.x2, "x2"), y: integer(request.y2, "y2") },
-			});
+			}));
 			result = { completed: true };
 			break;
 		case "fill":
-			await client.interactions.fill({ ...sessionSelection, ...target(request), text: boundedText(request.text), verify: false });
+			await withAgentSession(() => client.interactions.fill({ ...sessionSelection, ...target(request), text: boundedText(request.text), verify: false }));
 			result = { completed: true };
 			break;
 		case "type":
-			await client.interactions.type({ ...sessionSelection, text: boundedText(request.text) });
+			await withAgentSession(() => client.interactions.type({ ...sessionSelection, text: boundedText(request.text) }));
 			result = { completed: true };
 			break;
 		case "key": {
 			const key = String(request.key ?? "").toLowerCase();
 			if (key !== "enter" && key !== "return") throw Object.assign(new Error("Only Enter and Return are supported"), { code: "UNSUPPORTED_OPERATION" });
-			await client.command.keyboard({ ...sessionSelection, action: key });
+			await withAgentSession(() => client.command.keyboard({ ...sessionSelection, action: key }));
 			result = { completed: true };
 			break;
 		}
 		case "back":
-			await client.command.back(sessionSelection);
+			await withAgentSession(() => client.command.back(sessionSelection));
 			result = { completed: true };
 			break;
 		case "home":
-			await client.command.home(sessionSelection);
+			await withAgentSession(() => client.command.home(sessionSelection));
 			result = { completed: true };
 			break;
 		default:
@@ -140,6 +152,19 @@ try {
 		error: { code: normalized.code, message: normalized.message, hint: normalized.hint },
 	})}\n`);
 	process.exitCode = 1;
+}
+
+async function withAgentSession(operation) {
+	try {
+		return await operation();
+	} catch (error) {
+		if (normalizeAgentDeviceError(error).code !== "SESSION_NOT_FOUND") throw error;
+		await client.apps.open(targetSelection);
+		// The XCTest host only establishes the private automation channel. Keep
+		// the screen on SpringBoard before running the requested agent action.
+		if (platform === "ios") await client.command.home(sessionSelection);
+		return operation();
+	}
 }
 
 async function bootIOSInBackground(udid) {

@@ -5,6 +5,7 @@
 	"description": "Pinned local virtual-device helpers packaged with the AO desktop app",
 	"license": "UNLICENSED",
 	"dependencies": {
-		"agent-device": "0.21.1"
+		"agent-device": "0.21.1",
+		"expo-device-hub": "0.9.0"
 	}
 }

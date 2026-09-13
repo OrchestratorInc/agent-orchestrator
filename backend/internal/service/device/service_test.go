@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -47,6 +48,10 @@ func (f *fakeDeviceRuntime) Execute(_ context.Context, request ports.DeviceRunti
 		return nil, f.fail
 	}
 	return json.RawMessage(`{"ok":true}`), nil
+}
+
+func (f *fakeDeviceRuntime) HubOrigin(context.Context) (string, error) {
+	return "http://127.0.0.1:43210", nil
 }
 
 func TestServiceRequiresSessionCapabilityOrDesktopCredential(t *testing.T) {
@@ -98,6 +103,32 @@ func TestServiceEnforcesExclusiveAttachmentAndReleasesOnClose(t *testing.T) {
 	}
 	if runtime.requests[0].Action != "attach" || runtime.requests[1].Action != "detach" || runtime.requests[2].Action != "attach" {
 		t.Fatalf("runtime requests = %#v", runtime.requests)
+	}
+}
+
+func TestServiceIssuesAndRevokesStreamCapabilities(t *testing.T) {
+	runtime := &fakeDeviceRuntime{}
+	service := New(fakeSessionReader{}, runtime, fakeAuthority{}, "")
+	credentials := Credentials{Agent: "token-s1"}
+	opened, err := service.Execute(context.Background(), "s1", credentials, Command{Action: "open", DeviceID: "ios-1", Platform: domain.DevicePlatformIOS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value struct {
+		StreamBasePath string `json:"streamBasePath"`
+	}
+	if err := json.Unmarshal(opened.Value, &value); err != nil || value.StreamBasePath == "" {
+		t.Fatalf("stream result = %s, err = %v", opened.Value, err)
+	}
+	ticket := value.StreamBasePath[strings.LastIndex(value.StreamBasePath, "/")+1:]
+	if access, ok := service.ResolveStream(ticket); !ok || access.DeviceID != "ios-1" || access.Origin != "http://127.0.0.1:43210" {
+		t.Fatalf("stream access = %#v, ok = %v", access, ok)
+	}
+	if _, err := service.Execute(context.Background(), "s1", credentials, Command{Action: "close"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := service.ResolveStream(ticket); ok {
+		t.Fatal("stream capability remained valid after close")
 	}
 }
 

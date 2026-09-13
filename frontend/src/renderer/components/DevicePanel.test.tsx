@@ -4,8 +4,25 @@ import { aoBridge } from "../lib/bridge";
 import type { LocalDeviceInventory } from "../../shared/local-device";
 import { DevicePanel } from "./DevicePanel";
 
+class FakeWebSocket extends EventTarget {
+	static OPEN = 1;
+	static instances: FakeWebSocket[] = [];
+	binaryType = "blob";
+	readyState = FakeWebSocket.OPEN;
+	sent: unknown[] = [];
+	constructor(readonly url: string) {
+		super();
+		FakeWebSocket.instances.push(this);
+		queueMicrotask(() => this.dispatchEvent(new Event("open")));
+	}
+	send(value: unknown) { this.sent.push(value); }
+	close() { this.readyState = 3; }
+}
+
 describe("DevicePanel", () => {
 	beforeEach(() => {
+		FakeWebSocket.instances = [];
+		vi.stubGlobal("WebSocket", FakeWebSocket);
 		vi.spyOn(aoBridge.device, "status").mockResolvedValue({
 			sessionId: "s1",
 			capabilities: [
@@ -56,15 +73,12 @@ describe("DevicePanel", () => {
 		await waitFor(() => expect(setup).toHaveBeenCalledWith({ sessionId: "s1", platform: "ios", action: "retry", licenseAccepted: true }), { timeout: 2_500 });
 	});
 
-	afterEach(() => vi.restoreAllMocks());
+	afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 	it("shows independent setup state and opens a selected device", async () => {
 		const command = vi.spyOn(aoBridge.device, "command").mockImplementation(async (input) => {
-			if (input.action === "screenshot") {
-				return { sessionId: "s1", action: input.action, attachment, result: { pngBase64: "cG5n" } };
-			}
 			if (input.action === "shutdown") return { sessionId: "s1", action: input.action };
-			return { sessionId: "s1", action: input.action, attachment };
+			return { sessionId: "s1", action: input.action, attachment, result: { streamBaseUrl: "http://127.0.0.1:3015/api/v1/devices/stream/ticket" } };
 		});
 		const attachment = { sessionId: "s1", deviceId: "ios-1", platform: "ios" as const, name: "iPhone 17" };
 		const view = render(<DevicePanel sessionId="s1" />);
@@ -74,9 +88,9 @@ describe("DevicePanel", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Open device" }));
 
 		await waitFor(() => expect(command).toHaveBeenCalledWith({ sessionId: "s1", action: "open", deviceId: "ios-1", platform: "ios" }));
-		expect(await screen.findByAltText("Live screen for iPhone 17")).toHaveAttribute("src", "data:image/png;base64,cG5n");
+		expect(await screen.findByAltText("Live screen for iPhone 17")).toHaveAttribute("src", "http://127.0.0.1:3015/api/v1/devices/stream/ticket/mjpeg");
 		fireEvent.click(screen.getByRole("button", { name: "Home" }));
-		await waitFor(() => expect(command).toHaveBeenCalledWith({ sessionId: "s1", action: "home" }));
+		await waitFor(() => expect(FakeWebSocket.instances[0]?.sent.length).toBeGreaterThan(2));
 		fireEvent.click(screen.getByRole("button", { name: "Power off device" }));
 		await waitFor(() => expect(command).toHaveBeenCalledWith({ sessionId: "s1", action: "shutdown", confirmed: true }));
 		view.unmount();
@@ -84,33 +98,30 @@ describe("DevicePanel", () => {
 
 	it("maps short pointer gestures to taps and drags to swipes", async () => {
 		const attachment = { sessionId: "s1", deviceId: "ios-1", platform: "ios" as const, name: "iPhone 17" };
-		const command = vi.spyOn(aoBridge.device, "command").mockImplementation(async (input) => ({
+		vi.spyOn(aoBridge.device, "command").mockImplementation(async (input) => ({
 			sessionId: "s1",
 			action: input.action,
 			attachment,
-			result: input.action === "screenshot" ? { pngBase64: "cG5n" } : undefined,
+			result: { streamBaseUrl: "http://127.0.0.1:3015/api/v1/devices/stream/ticket" },
 		}));
 		render(<DevicePanel sessionId="s1" />);
 		fireEvent.click(await screen.findByRole("button", { name: "Open device" }));
 		const image = await screen.findByAltText("Live screen for iPhone 17");
-		Object.defineProperties(image, {
-			naturalWidth: { configurable: true, value: 1_000 },
-			naturalHeight: { configurable: true, value: 2_000 },
-			setPointerCapture: { configurable: true, value: vi.fn() },
-		});
+		Object.defineProperty(image, "setPointerCapture", { configurable: true, value: vi.fn() });
 		vi.spyOn(image, "getBoundingClientRect").mockReturnValue({
 			bottom: 1_000, height: 1_000, left: 0, right: 500, top: 0, width: 500, x: 0, y: 0, toJSON: () => ({}),
 		});
 
 		fireEvent.pointerDown(image, { pointerId: 1, clientX: 100, clientY: 200 });
 		fireEvent.pointerUp(image, { pointerId: 1, clientX: 102, clientY: 202 });
-		await waitFor(() => expect(command).toHaveBeenCalledWith({ sessionId: "s1", action: "tap", x: 204, y: 404 }));
+		await waitFor(() => expect(FakeWebSocket.instances[0]?.sent.length).toBeGreaterThanOrEqual(4));
 
 		fireEvent.pointerDown(image, { pointerId: 2, clientX: 250, clientY: 700 });
 		fireEvent.pointerUp(image, { pointerId: 2, clientX: 250, clientY: 300 });
-		await waitFor(() => expect(command).toHaveBeenCalledWith({
-			sessionId: "s1", action: "swipe", x1: 500, y1: 1_400, x2: 500, y2: 600,
-		}));
+		await waitFor(() => expect(FakeWebSocket.instances[0]?.sent.length).toBeGreaterThanOrEqual(6));
+		const last = FakeWebSocket.instances[0]?.sent.at(-1) as Uint8Array;
+		expect(last[0]).toBe(0x03);
+		expect(JSON.parse(new TextDecoder().decode(last.subarray(1)))).toMatchObject({ type: "end", x: 0.5, y: 0.3 });
 	});
 
 	it("treats a stale daemon null inventory as an empty list", async () => {

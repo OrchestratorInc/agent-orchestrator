@@ -2,9 +2,12 @@ package controllers
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
+	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -30,6 +33,10 @@ type LocalDeviceService interface {
 // LocalDevicesController exposes session-scoped iOS Simulator and Android Emulator operations.
 type LocalDevicesController struct{ Svc LocalDeviceService }
 
+type localDeviceStreamService interface {
+	ResolveStream(string) (devicesvc.StreamAccess, bool)
+}
+
 // Register mounts the bounded local device API.
 func (c *LocalDevicesController) Register(r chi.Router) {
 	r.Get("/devices/status", c.status)
@@ -37,6 +44,126 @@ func (c *LocalDevicesController) Register(r chi.Router) {
 	r.Post("/devices/commands", c.execute)
 	r.Get("/devices/setup", c.setupStatus)
 	r.Post("/devices/setup", c.executeSetup)
+}
+
+// RegisterStream mounts the long-lived, capability-scoped media proxy outside
+// the ordinary REST timeout. Only fixed stream and input routes are mapped.
+func (c *LocalDevicesController) RegisterStream(r chi.Router) {
+	r.Get("/devices/stream/{ticket}/{channel}", c.stream)
+}
+
+func (c *LocalDevicesController) stream(w http.ResponseWriter, r *http.Request) {
+	streams, ok := c.Svc.(localDeviceStreamService)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	access, ok := streams.ResolveStream(chi.URLParam(r, "ticket"))
+	if !ok {
+		envelope.WriteAPIError(w, r, http.StatusUnauthorized, "unauthorized", "DEVICE_STREAM_EXPIRED", "Device stream access expired", nil)
+		return
+	}
+	upstream, websocketRoute, ok := deviceStreamRoute(access, chi.URLParam(r, "channel"))
+	if !ok {
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "DEVICE_STREAM_CHANNEL_NOT_FOUND", "Device stream channel was not found", nil)
+		return
+	}
+	if websocketRoute {
+		proxyDeviceWebSocket(w, r, upstream)
+		return
+	}
+	proxyDeviceHTTP(w, r, upstream)
+}
+
+func deviceStreamRoute(access devicesvc.StreamAccess, channel string) (string, bool, bool) {
+	device := url.PathEscape(access.DeviceID)
+	switch access.Platform {
+	case domain.DevicePlatformIOS:
+		base := access.Origin + "/vendor/serve-sim/helper/" + device
+		switch channel {
+		case "mjpeg":
+			return base + "/stream.mjpeg", false, true
+		case "avcc":
+			return base + "/stream.avcc", false, true
+		case "config":
+			return base + "/config", false, true
+		case "health":
+			return base + "/health", false, true
+		case "input":
+			return strings.Replace(access.Origin, "http://", "ws://", 1) + "/vendor/serve-sim/helper/ws?device=" + url.QueryEscape(access.DeviceID), true, true
+		}
+	case domain.DevicePlatformAndroid:
+		if channel == "input" {
+			return strings.Replace(access.Origin, "http://", "ws://", 1) + "/vendor/serve-emu/ws?device=" + url.QueryEscape(access.DeviceID) + "&frame-meta=1", true, true
+		}
+	}
+	return "", false, false
+}
+
+func proxyDeviceHTTP(w http.ResponseWriter, r *http.Request, upstream string) {
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstream, http.NoBody)
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadGateway, "bad_gateway", "DEVICE_STREAM_INVALID", "Invalid device stream", nil)
+		return
+	}
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadGateway, "bad_gateway", "DEVICE_STREAM_UNAVAILABLE", "Device stream unavailable", nil)
+		return
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		envelope.WriteAPIError(w, r, http.StatusBadGateway, "bad_gateway", "DEVICE_STREAM_UNAVAILABLE", "Device stream unavailable", nil)
+		return
+	}
+	if contentType := response.Header.Get("Content-Type"); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	w.Header().Set("Cache-Control", "no-store, no-transform")
+	w.WriteHeader(response.StatusCode)
+	_, _ = io.Copy(w, response.Body)
+}
+
+func proxyDeviceWebSocket(w http.ResponseWriter, r *http.Request, upstream string) {
+	client, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+	if err != nil {
+		return
+	}
+	defer func() { _ = client.Close(websocket.StatusNormalClosure, "device stream closed") }()
+	server, response, err := websocket.Dial(r.Context(), upstream, nil)
+	if response != nil && response.Body != nil {
+		_ = response.Body.Close()
+	}
+	if err != nil {
+		_ = client.Close(websocket.StatusTryAgainLater, "device helper unavailable")
+		return
+	}
+	defer func() { _ = server.Close(websocket.StatusNormalClosure, "device stream closed") }()
+	errCh := make(chan error, 2)
+	copyMessages := func(dst, src *websocket.Conn) {
+		for {
+			kind, reader, err := src.Reader(r.Context())
+			if err != nil {
+				errCh <- err
+				return
+			}
+			writer, err := dst.Writer(r.Context(), kind)
+			if err == nil {
+				_, err = io.Copy(writer, reader)
+				closeErr := writer.Close()
+				if err == nil {
+					err = closeErr
+				}
+			}
+			if err != nil {
+				errCh <- err
+				return
+			}
+		}
+	}
+	go copyMessages(server, client)
+	go copyMessages(client, server)
+	<-errCh
 }
 
 func (c *LocalDevicesController) setupStatus(w http.ResponseWriter, r *http.Request) {
