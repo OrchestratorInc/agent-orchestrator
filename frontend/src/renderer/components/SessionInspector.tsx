@@ -185,6 +185,7 @@ export const SessionInspector = memo(function SessionInspector({
 	const browserUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[session.id]?.browserUnseen) : false,
 	);
+	const devicesAvailable = useUiStore((state) => state.developerMode && state.virtualDevicesEnabled);
 	const filesChangedCount = useSessionWorkspaceFilesChangedCount(session?.id);
 	const setView = useCallback((next: InspectorView) => {
 		setInternalView(next);
@@ -195,9 +196,9 @@ export const SessionInspector = memo(function SessionInspector({
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
-	const availableViewDefs = reviewsAvailable
-		? VIEW_DEFS
-		: VIEW_DEFS.filter((entry) => entry.id !== "reviews");
+	const availableViewDefs = VIEW_DEFS.filter((entry) =>
+		(reviewsAvailable || entry.id !== "reviews") && (devicesAvailable || entry.id !== "device"),
+	);
 	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	useEffect(() => {
 		if (view === requestedView) return;
@@ -240,7 +241,7 @@ export const SessionInspector = memo(function SessionInspector({
 						/>
 					) : undefined
 				}
-				deviceView={session ? <DevicePanel sessionId={session.id} /> : undefined}
+				deviceView={session && devicesAvailable ? <DevicePanel sessionId={session.id} /> : undefined}
 				filesView={session ? <FilesView filesView={filesView} onOpenFiles={onOpenFiles} /> : undefined}
 				headerActions={<span aria-hidden="true" className="session-inspector-actions-spacer" />}
 				isVisible={isInspectorVisible}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, CornerDownLeft, ExternalLink, House, Loader2, Power, RefreshCw, Smartphone, X } from "lucide-react";
+import { ArrowLeft, CornerDownLeft, ExternalLink, House, Loader2, Power, RefreshCw, SendHorizontal, Smartphone, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type {
 	LocalDevice,
@@ -190,7 +190,7 @@ export function DevicePanel({ sessionId }: { sessionId: string }) {
 			</div>
 			<form className="flex shrink-0 gap-1 border-t border-border p-2" onSubmit={(event) => { event.preventDefault(); if (!text) return; streamRef.current?.sendText(text); setText(""); }}>
 				<input aria-label={t("device.textInput")} className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs" disabled={busy} onChange={(event) => setText(event.target.value)} placeholder={t("device.textPlaceholder")} value={text} />
-				<DeviceControl label={t("device.typeText")} disabled={busy || !text} type="submit"><CornerDownLeft /></DeviceControl>
+				<DeviceControl label={t("device.typeText")} disabled={busy || !text} type="submit"><SendHorizontal /></DeviceControl>
 				<DeviceControl label={t("device.enter")} disabled={busy} onClick={() => streamRef.current?.press("enter")}><CornerDownLeft /></DeviceControl>
 			</form>
 			{error ? <div className="shrink-0 p-2"><DeviceError message={error} /></div> : null}

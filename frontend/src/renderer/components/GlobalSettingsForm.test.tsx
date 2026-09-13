@@ -11,15 +11,6 @@ import { useUiStore } from "../stores/ui-store";
 import { useTelemetryPolicyStore } from "../stores/telemetry-policy-store";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { harnessSettingsSectionMock } = vi.hoisted(() => ({ harnessSettingsSectionMock: vi.fn() }));
-
-vi.mock("./settings/HarnessSettingsSection", () => ({
-	HarnessSettingsSection: (props: { focusAgentId?: string; hostId?: string; titleHidden?: boolean }) => {
-		harnessSettingsSectionMock(props);
-		return <div data-testid="harness-settings-section" />;
-	},
-}));
-
 const {
 	getUpdate,
 	setUpdate,
@@ -41,11 +32,9 @@ const {
 	getKeybindings,
 	setKeybindings,
 	setKeybindingRecording,
-	setMacDifferentialUpdates,
 	getTelemetryPolicy,
 	setTelemetryEvents,
 	onTelemetryPolicy,
-	isWindowsPlatform,
 } = vi.hoisted(() => ({
 	getUpdate: vi.fn(),
 	setUpdate: vi.fn(),
@@ -67,14 +56,12 @@ const {
 	getKeybindings: vi.fn(),
 	setKeybindings: vi.fn(),
 	setKeybindingRecording: vi.fn(),
-	setMacDifferentialUpdates: vi.fn().mockResolvedValue(undefined),
 	// agent-switch visibility initializes at module load, before beforeEach can
 	// install the per-test policy response. Preserve the bridge's Promise
 	// contract for that initial read as well.
 	getTelemetryPolicy: vi.fn().mockResolvedValue(undefined),
 	setTelemetryEvents: vi.fn(),
 	onTelemetryPolicy: vi.fn(),
-	isWindowsPlatform: vi.fn(() => true),
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -87,7 +74,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 
 vi.mock("../lib/platform", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../lib/platform")>();
-	return { ...actual, isWindowsPlatform };
+	return { ...actual, isWindowsPlatform: () => true };
 });
 
 vi.mock("../lib/bridge", () => ({
@@ -95,12 +82,7 @@ vi.mock("../lib/bridge", () => ({
 		app: { getVersion, openExternal },
 		clipboard: { writeText },
 		daemon: { getStatus: getDaemonStatus },
-		remotes: { list: vi.fn(async () => []) },
-		updateSettings: {
-			get: getUpdate,
-			set: setUpdate,
-			setMacDifferentialUpdates,
-		},
+		updateSettings: { get: getUpdate, set: setUpdate },
 		uiSettings: { get: getUiSettings, set: setUiSettings },
 		keybindings: {
 			get: getKeybindings,
@@ -120,12 +102,12 @@ vi.mock("../lib/bridge", () => ({
 	},
 }));
 
-function renderForm(section: GlobalSettingsSection = "all", focusAgentId?: string, hostId?: string) {
+function renderForm(section: GlobalSettingsSection = "all") {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	render(
 		<QueryClientProvider client={qc}>
 			<TooltipProvider>
-				<GlobalSettingsForm focusAgentId={focusAgentId} hostId={hostId} section={section} />
+				<GlobalSettingsForm section={section} />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -133,7 +115,6 @@ function renderForm(section: GlobalSettingsSection = "all", focusAgentId?: strin
 }
 
 beforeEach(async () => {
-	harnessSettingsSectionMock.mockReset();
 	for (const m of [
 		getUpdate,
 		setUpdate,
@@ -155,15 +136,12 @@ beforeEach(async () => {
 		getKeybindings,
 		setKeybindings,
 		setKeybindingRecording,
-		setMacDifferentialUpdates,
 		getTelemetryPolicy,
 		setTelemetryEvents,
 		onTelemetryPolicy,
-		isWindowsPlatform,
 	]) {
 		m.mockReset();
 	}
-	isWindowsPlatform.mockReturnValue(true);
 	getUpdate.mockResolvedValue({ enabled: true, channel: "latest", nightlyAck: false, feature: null });
 	setUpdate.mockResolvedValue(undefined);
 	getUiSettings.mockResolvedValue({ locale: "en", soundNotificationsEnabled: true, terminalShell: { kind: "auto" } });
@@ -188,7 +166,6 @@ beforeEach(async () => {
 	getKeybindings.mockResolvedValue({});
 	setKeybindings.mockImplementation(async (overrides) => overrides);
 	setKeybindingRecording.mockResolvedValue(undefined);
-	setMacDifferentialUpdates.mockResolvedValue(undefined);
 	getTelemetryPolicy.mockResolvedValue({ eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true });
 	setTelemetryEvents.mockResolvedValue({ eventsEnabled: true, consentGeneration: "generation-on", updatedAt: "2026-08-28T10:15:31.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true });
 	onTelemetryPolicy.mockReturnValue(() => undefined);
@@ -202,24 +179,16 @@ beforeEach(async () => {
 		saving: false,
 		saveError: false,
 	});
-	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false });
+	useUiStore.setState({ developerMode: false, virtualDevicesEnabled: false });
 	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
 	document.documentElement.lang = "en";
 });
 
 describe("GlobalSettingsForm", () => {
-	it("propagates a Harness focus target through the settings catalog", async () => {
-		renderForm("harness", "cursor");
-
-		expect(await screen.findByTestId("harness-settings-section")).toBeInTheDocument();
-		expect(harnessSettingsSectionMock).toHaveBeenCalledWith({ focusAgentId: "cursor", titleHidden: true });
-	});
-
 	it("keeps Browser in its dedicated settings page", async () => {
 		renderForm("general");
 		expect(await screen.findByLabelText("Settings")).toBeInTheDocument();
 		expect(document.querySelector('[data-section="browserProfiles"]')).not.toBeInTheDocument();
-		expect(document.querySelector('[data-section="remoteHosts"]')).not.toBeInTheDocument();
 	});
 
 	it("keeps download history inside the Browser settings page", async () => {
@@ -234,8 +203,7 @@ describe("GlobalSettingsForm", () => {
 		expect(await screen.findByLabelText("Settings")).toBeInTheDocument();
 		expect(screen.getByText("Appearance")).toBeInTheDocument();
 		expect(screen.getByText("Language")).toBeInTheDocument();
-		// UpdatesSection is lazy-loaded and can take longer than the default async query timeout.
-		expect(await screen.findByText("Updates", {}, { timeout: 5_000 })).toBeInTheDocument();
+		expect(await screen.findByText("Updates")).toBeInTheDocument();
 		expect(screen.getByText("Advanced")).toBeInTheDocument();
 		expect(screen.getByText("Report a problem")).toBeInTheDocument();
 		// Report form is inline — no dialog, fields directly present.
@@ -250,37 +218,20 @@ describe("GlobalSettingsForm", () => {
 
 		await user.click(toggle);
 		expect(window.localStorage.getItem("ao.developerMode")).toBe("true");
-		expect(setMacDifferentialUpdates).toHaveBeenCalledWith(true);
-		await user.click(await screen.findByLabelText("Updates channel", {}, { timeout: 5_000 }));
+		await user.click(screen.getByLabelText("Updates channel"));
 		expect(await screen.findByRole("menuitem", { name: "Feature Releases" })).toBeInTheDocument();
 	});
 
-	it("reveals the Diagnostics toggle only in Developer mode and persists it", async () => {
+	it("offers virtual devices only in developer mode and persists the opt-in", async () => {
 		const user = userEvent.setup();
-		renderForm("general");
-		await screen.findByRole("switch", { name: "Developer mode" });
-		expect(screen.queryByRole("switch", { name: "Diagnostics" })).not.toBeInTheDocument();
+		renderForm();
+		expect(screen.queryByRole("switch", { name: "Virtual devices" })).not.toBeInTheDocument();
 
-		await user.click(screen.getByRole("switch", { name: "Developer mode" }));
-		const toggle = await screen.findByRole("switch", { name: "Diagnostics" });
-		expect(toggle).toHaveAttribute("aria-checked", "false");
-
-		await user.click(toggle);
-		expect(window.localStorage.getItem("ao.diagnostics")).toBe("true");
-		expect(useUiStore.getState().diagnostics).toBe(true);
-	});
-
-	it("keeps Remote hosts in its own page and persists the enable switch", async () => {
-		const user = userEvent.setup();
-		useUiStore.getState().setDeveloperMode(true);
-		renderForm("remoteHosts");
-		const remoteHosts = await screen.findByRole("switch", { name: "Connect to remote hosts" });
-		expect(remoteHosts).toHaveAttribute("aria-checked", "false");
-		expect(screen.queryByRole("switch", { name: "Developer mode" })).not.toBeInTheDocument();
-
-		await user.click(remoteHosts);
-		expect(window.localStorage.getItem("ao.remoteHosts")).toBe("true");
-		expect(useUiStore.getState().remoteHosts).toBe(true);
+		await user.click(await screen.findByRole("switch", { name: "Developer mode" }));
+		const devicesToggle = await screen.findByRole("switch", { name: "Virtual devices" });
+		expect(devicesToggle).toHaveAttribute("aria-checked", "false");
+		await user.click(devicesToggle);
+		expect(window.localStorage.getItem("ao.virtualDevices.enabled")).toBe("true");
 	});
 
 	it("shows the available feature builds after choosing Feature Releases", async () => {
@@ -289,7 +240,7 @@ describe("GlobalSettingsForm", () => {
 		useUiStore.getState().setDeveloperMode(true);
 		renderForm();
 
-		await user.click(await screen.findByLabelText("Updates channel", {}, { timeout: 5_000 }));
+		await user.click(await screen.findByLabelText("Updates channel"));
 		await user.click(await screen.findByRole("menuitem", { name: "Feature Releases" }));
 		expect(await screen.findByText("No live feature releases.")).toBeInTheDocument();
 		expect(featListBuilds).toHaveBeenCalled();
@@ -355,7 +306,7 @@ describe("GlobalSettingsForm", () => {
 	it("selects Git Bash as the default Windows terminal", async () => {
 		const user = userEvent.setup();
 		renderForm();
-		const selector = await screen.findByLabelText("Terminal shell");
+		const selector = await screen.findByLabelText("Default terminal");
 
 		await user.click(selector);
 		await user.click(await screen.findByRole("menuitem", { name: "Git Bash" }));
@@ -367,7 +318,7 @@ describe("GlobalSettingsForm", () => {
 		const user = userEvent.setup();
 		renderForm();
 
-		await user.click(await screen.findByLabelText("Terminal shell"));
+		await user.click(await screen.findByLabelText("Default terminal"));
 		await user.click(await screen.findByRole("menuitem", { name: "Custom path" }));
 		await waitFor(() => expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "custom" } }));
 
@@ -556,10 +507,7 @@ describe("GlobalSettingsForm", () => {
 		expect(button).toBeDisabled();
 		expect(button).toHaveTextContent("Checking for updates…");
 		expect(button.querySelector("svg")).toHaveClass("animate-spin");
-		const statusLine = screen.getByTestId("update-status-line");
-		expect(statusLine).not.toHaveTextContent("Checking for updates…");
-		expect(statusLine.querySelector("svg")).toBeNull();
-		expect(statusLine).toHaveClass("min-h-5");
+		expect(screen.getByTestId("update-status-line")).toHaveTextContent("Checking for updates…");
 
 		act(() => finishCheck());
 		await waitFor(() => expect(button).toBeEnabled(), { timeout: 1_500 });
@@ -579,7 +527,7 @@ describe("GlobalSettingsForm", () => {
 		const requestId = updCheck.mock.calls[0]?.[0]?.requestId;
 		expect(requestId).toMatch(/^manual-update-/);
 		act(() => emit({ state: "not-available", checkedAt: Date.now() }));
-		expect(screen.getByTestId("update-status-line")).not.toHaveTextContent("Checking for updates…");
+		expect(screen.getByTestId("update-status-line")).toHaveTextContent("Checking for updates…");
 		expect(button).toBeDisabled();
 
 		act(() => emit({ state: "not-available", checkedAt: Date.now(), requestId }));
@@ -747,7 +695,7 @@ describe("GlobalSettingsForm", () => {
 		expect(screen.getByLabelText("What happened?")).toHaveValue("");
 	});
 
-	it("opens Discord support and lets Windows users choose an email provider", async () => {
+	it("opens Discord with an official invite and email with the support mailbox", async () => {
 		const user = userEvent.setup();
 		const open = vi.spyOn(window, "open").mockReturnValue(null);
 		getVersion.mockRejectedValue(new Error("version unavailable"));
@@ -771,29 +719,14 @@ describe("GlobalSettingsForm", () => {
 		expect(screen.queryByText("Discord draft copied.")).not.toBeInTheDocument();
 		await user.type(screen.getByLabelText("What happened?"), "The setup flow stalls after the first prompt.");
 		await user.click(screen.getByRole("button", { name: /copy & open email/i }));
-		await user.click(await screen.findByRole("menuitem", { name: "Gmail" }));
 
 		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
 		expect(writeText.mock.calls[0][0]).toContain("Daemon: unknown");
 		expect(writeText.mock.calls[1][0]).toContain("To: prasad@untrivial.ai");
 		expect(writeText.mock.calls[1][0]).toContain("AO feedback");
-		expect(openExternal).toHaveBeenCalledWith("https://discord.gg/WjKNa7EbB8");
-		expect(openExternal).toHaveBeenCalledWith(expect.stringContaining("https://mail.google.com/mail/"));
-		expect(open).not.toHaveBeenCalled();
-	});
-
-	it("keeps the direct system email handoff outside Windows", async () => {
-		const user = userEvent.setup();
-		isWindowsPlatform.mockReturnValue(false);
-		renderForm();
-
-		await user.type(await screen.findByLabelText("Title"), "Need help with setup");
-		await user.type(screen.getByLabelText("What happened?"), "The setup flow stalls after the first prompt.");
-		await user.click(screen.getByRole("button", { name: /copy & open email/i }));
-
-		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+		expect(openExternal).toHaveBeenCalledWith("https://discord.com/invite/UZv7JjxbwG");
 		expect(openExternal).toHaveBeenCalledWith(expect.stringContaining("mailto:prasad@untrivial.ai"));
-		expect(screen.queryByRole("menuitem", { name: "Gmail" })).not.toBeInTheDocument();
+		expect(open).not.toHaveBeenCalled();
 	});
 
 	it("keeps the report form to title and details while tailoring placeholder guidance", async () => {
@@ -842,7 +775,7 @@ describe("GlobalSettingsForm", () => {
 		});
 		renderForm();
 
-		const returnBtn = await screen.findByRole("button", { name: "Return to Stable" }, { timeout: 5_000 });
+		const returnBtn = await screen.findByRole("button", { name: "Return to Stable" });
 		await userEvent.click(returnBtn);
 
 		await waitFor(() => expect(updReturnHome).toHaveBeenCalledWith(expect.any(String)));

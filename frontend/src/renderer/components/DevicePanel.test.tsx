@@ -89,6 +89,8 @@ describe("DevicePanel", () => {
 
 		await waitFor(() => expect(command).toHaveBeenCalledWith({ sessionId: "s1", action: "open", deviceId: "ios-1", platform: "ios" }));
 		expect(await screen.findByAltText("Live screen for iPhone 17")).toHaveAttribute("src", "http://127.0.0.1:3015/api/v1/devices/stream/ticket/mjpeg");
+		expect(screen.getByRole("button", { name: "Type text" }).querySelector(".lucide-send-horizontal")).not.toBeNull();
+		expect(screen.getByRole("button", { name: "Press Enter" }).querySelector(".lucide-corner-down-left")).not.toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "Home" }));
 		await waitFor(() => expect(FakeWebSocket.instances[0]?.sent.length).toBeGreaterThan(2));
 		fireEvent.click(screen.getByRole("button", { name: "Power off device" }));
