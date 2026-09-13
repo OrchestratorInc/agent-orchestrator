@@ -63,6 +63,7 @@ describe("DevicePanel", () => {
 			if (input.action === "screenshot") {
 				return { sessionId: "s1", action: input.action, attachment, result: { pngBase64: "cG5n" } };
 			}
+			if (input.action === "shutdown") return { sessionId: "s1", action: input.action };
 			return { sessionId: "s1", action: input.action, attachment };
 		});
 		const attachment = { sessionId: "s1", deviceId: "ios-1", platform: "ios" as const, name: "iPhone 17" };
@@ -76,7 +77,40 @@ describe("DevicePanel", () => {
 		expect(await screen.findByAltText("Live screen for iPhone 17")).toHaveAttribute("src", "data:image/png;base64,cG5n");
 		fireEvent.click(screen.getByRole("button", { name: "Home" }));
 		await waitFor(() => expect(command).toHaveBeenCalledWith({ sessionId: "s1", action: "home" }));
+		fireEvent.click(screen.getByRole("button", { name: "Power off device" }));
+		await waitFor(() => expect(command).toHaveBeenCalledWith({ sessionId: "s1", action: "shutdown", confirmed: true }));
 		view.unmount();
+	});
+
+	it("maps short pointer gestures to taps and drags to swipes", async () => {
+		const attachment = { sessionId: "s1", deviceId: "ios-1", platform: "ios" as const, name: "iPhone 17" };
+		const command = vi.spyOn(aoBridge.device, "command").mockImplementation(async (input) => ({
+			sessionId: "s1",
+			action: input.action,
+			attachment,
+			result: input.action === "screenshot" ? { pngBase64: "cG5n" } : undefined,
+		}));
+		render(<DevicePanel sessionId="s1" />);
+		fireEvent.click(await screen.findByRole("button", { name: "Open device" }));
+		const image = await screen.findByAltText("Live screen for iPhone 17");
+		Object.defineProperties(image, {
+			naturalWidth: { configurable: true, value: 1_000 },
+			naturalHeight: { configurable: true, value: 2_000 },
+			setPointerCapture: { configurable: true, value: vi.fn() },
+		});
+		vi.spyOn(image, "getBoundingClientRect").mockReturnValue({
+			bottom: 1_000, height: 1_000, left: 0, right: 500, top: 0, width: 500, x: 0, y: 0, toJSON: () => ({}),
+		});
+
+		fireEvent.pointerDown(image, { pointerId: 1, clientX: 100, clientY: 200 });
+		fireEvent.pointerUp(image, { pointerId: 1, clientX: 102, clientY: 202 });
+		await waitFor(() => expect(command).toHaveBeenCalledWith({ sessionId: "s1", action: "tap", x: 204, y: 404 }));
+
+		fireEvent.pointerDown(image, { pointerId: 2, clientX: 250, clientY: 700 });
+		fireEvent.pointerUp(image, { pointerId: 2, clientX: 250, clientY: 300 });
+		await waitFor(() => expect(command).toHaveBeenCalledWith({
+			sessionId: "s1", action: "swipe", x1: 500, y1: 1_400, x2: 500, y2: 600,
+		}));
 	});
 
 	it("treats a stale daemon null inventory as an empty list", async () => {

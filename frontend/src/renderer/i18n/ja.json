@@ -543,6 +543,7 @@
 	"device.open": "デバイスを開く",
 	"device.refresh": "更新",
 	"device.screenAlt": "{{name}}のライブ画面",
+	"device.shutdown": "デバイスの電源を切る",
 	"device.setup": "{{platform}}を設定",
 	"device.acceptLicense": "ベンダーのライセンス条項に同意します。",
 	"device.viewTerms": "条項を表示",

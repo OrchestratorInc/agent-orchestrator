@@ -543,6 +543,7 @@
 	"device.open": "기기 열기",
 	"device.refresh": "새로고침",
 	"device.screenAlt": "{{name}} 실시간 화면",
+	"device.shutdown": "기기 전원 끄기",
 	"device.setup": "{{platform}} 설정",
 	"device.acceptLicense": "공급업체 라이선스 약관에 동의합니다.",
 	"device.viewTerms": "약관 보기",

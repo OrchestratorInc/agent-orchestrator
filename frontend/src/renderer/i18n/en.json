@@ -540,6 +540,7 @@
 	"device.open": "Open device",
 	"device.refresh": "Refresh",
 	"device.screenAlt": "Live screen for {{name}}",
+	"device.shutdown": "Power off device",
 	"device.setup": "Set up {{platform}}",
 	"device.acceptLicense": "I accept the vendor license terms.",
 	"device.viewTerms": "View terms",

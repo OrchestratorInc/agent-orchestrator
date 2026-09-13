@@ -546,6 +546,7 @@
 	"device.open": "Abrir dispositivo",
 	"device.refresh": "Actualizar",
 	"device.screenAlt": "Pantalla en vivo de {{name}}",
+	"device.shutdown": "Apagar dispositivo",
 	"device.setup": "Configurar {{platform}}",
 	"device.acceptLicense": "Acepto los términos de licencia del proveedor.",
 	"device.viewTerms": "Ver términos",

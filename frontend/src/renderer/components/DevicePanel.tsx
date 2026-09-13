@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { ArrowLeft, CornerDownLeft, ExternalLink, House, Loader2, Power, RefreshCw, Smartphone, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type {
@@ -13,7 +13,14 @@ import { aoBridge } from "../lib/bridge";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 
-const SCREEN_REFRESH_MS = 1_500;
+const SCREEN_REFRESH_MS = 1_000;
+const SWIPE_THRESHOLD_PX = 8;
+
+type ScreenGesture = {
+	pointerId: number;
+	startClientX: number;
+	startClientY: number;
+};
 
 export function DevicePanel({ sessionId }: { sessionId: string }) {
 	const { t } = useTranslation();
@@ -28,6 +35,8 @@ export function DevicePanel({ sessionId }: { sessionId: string }) {
 	const [error, setError] = useState<string>();
 	const [busy, setBusy] = useState(true);
 	const captureInFlight = useRef(false);
+	const actionInFlight = useRef(false);
+	const screenGesture = useRef<ScreenGesture | undefined>(undefined);
 	const setupResumeInFlight = useRef(new Set<LocalDevicePlatform>());
 
 	const load = useCallback(async () => {
@@ -75,7 +84,7 @@ export function DevicePanel({ sessionId }: { sessionId: string }) {
 	}, [sessionId]);
 
 	const refreshScreen = useCallback(async () => {
-		if (!attachment || captureInFlight.current) return;
+		if (!attachment || captureInFlight.current || actionInFlight.current) return;
 		captureInFlight.current = true;
 		try {
 			const result = await command({ action: "screenshot" });
@@ -118,15 +127,18 @@ export function DevicePanel({ sessionId }: { sessionId: string }) {
 	}, [attachment, refreshScreen]);
 
 	const run = useCallback(async (input: Omit<LocalDeviceCommand, "sessionId">, refresh = true) => {
+		if (actionInFlight.current) return;
+		actionInFlight.current = true;
 		setBusy(true);
 		try {
 			await command(input);
-			if (refresh) window.setTimeout(() => void refreshScreen(), 250);
 		} catch (cause) {
 			setError(errorMessage(cause));
 		} finally {
+			actionInFlight.current = false;
 			setBusy(false);
 		}
+		if (refresh) void refreshScreen();
 	}, [command, refreshScreen]);
 
 	const openSelected = async () => {
@@ -147,12 +159,34 @@ export function DevicePanel({ sessionId }: { sessionId: string }) {
 		} catch (cause) { setError(errorMessage(cause)); }
 	};
 
-	const tapScreen = (event: MouseEvent<HTMLImageElement>) => {
-		const image = event.currentTarget;
+	const screenPoint = (image: HTMLImageElement, clientX: number, clientY: number) => {
 		const rect = image.getBoundingClientRect();
-		const x = Math.round((event.clientX - rect.left) * image.naturalWidth / rect.width);
-		const y = Math.round((event.clientY - rect.top) * image.naturalHeight / rect.height);
-		void run({ action: "tap", x, y });
+		return {
+			x: Math.round((clientX - rect.left) * image.naturalWidth / rect.width),
+			y: Math.round((clientY - rect.top) * image.naturalHeight / rect.height),
+		};
+	};
+
+	const beginScreenGesture = (event: PointerEvent<HTMLImageElement>) => {
+		if (busy || actionInFlight.current) return;
+		event.currentTarget.setPointerCapture(event.pointerId);
+		screenGesture.current = { pointerId: event.pointerId, startClientX: event.clientX, startClientY: event.clientY };
+	};
+
+	const cancelScreenGesture = (event: PointerEvent<HTMLImageElement>) => {
+		if (screenGesture.current?.pointerId === event.pointerId) screenGesture.current = undefined;
+	};
+
+	const finishScreenGesture = (event: PointerEvent<HTMLImageElement>) => {
+		const gesture = screenGesture.current;
+		if (!gesture || gesture.pointerId !== event.pointerId || busy || actionInFlight.current) return;
+		screenGesture.current = undefined;
+		const distance = Math.hypot(event.clientX - gesture.startClientX, event.clientY - gesture.startClientY);
+		const from = screenPoint(event.currentTarget, gesture.startClientX, gesture.startClientY);
+		const to = screenPoint(event.currentTarget, event.clientX, event.clientY);
+		void run(distance < SWIPE_THRESHOLD_PX
+			? { action: "tap", x: to.x, y: to.y }
+			: { action: "swipe", x1: from.x, y1: from.y, x2: to.x, y2: to.y });
 	};
 
 	if (!attachment) {
@@ -197,11 +231,12 @@ export function DevicePanel({ sessionId }: { sessionId: string }) {
 				<DeviceControl label={t("device.back")} disabled={busy} onClick={() => void run({ action: "back" })}><ArrowLeft /></DeviceControl>
 				<DeviceControl label={t("device.home")} disabled={busy} onClick={() => void run({ action: "home" })}><House /></DeviceControl>
 				<DeviceControl label={t("device.refresh")} disabled={busy} onClick={() => void refreshScreen()}><RefreshCw /></DeviceControl>
+				<DeviceControl label={t("device.shutdown")} disabled={busy} onClick={() => { setScreen(undefined); void run({ action: "shutdown", confirmed: true }, false); }}><Power /></DeviceControl>
 				<DeviceControl label={t("device.close")} disabled={busy} onClick={() => { setScreen(undefined); void run({ action: "close" }, false); }}><X /></DeviceControl>
 			</div>
 			<div className="min-h-0 flex-1 overflow-auto bg-black/90 p-2">
 				{screen ? (
-					<img alt={t("device.screenAlt", { name: attachment.name })} className="mx-auto block max-h-full max-w-full cursor-crosshair object-contain" draggable={false} onClick={tapScreen} src={screen} />
+					<img alt={t("device.screenAlt", { name: attachment.name })} className="mx-auto block max-h-full max-w-full cursor-crosshair touch-none select-none object-contain" draggable={false} onPointerCancel={cancelScreenGesture} onPointerDown={beginScreenGesture} onPointerUp={finishScreenGesture} src={screen} />
 				) : (
 					<div className="flex h-full items-center justify-center text-xs text-white/60"><Loader2 className="mr-2 animate-spin" />{t("device.loadingScreen")}</div>
 				)}

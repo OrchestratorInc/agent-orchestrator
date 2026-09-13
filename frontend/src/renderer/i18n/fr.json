@@ -546,6 +546,7 @@
 	"device.open": "Ouvrir l’appareil",
 	"device.refresh": "Actualiser",
 	"device.screenAlt": "Écran en direct de {{name}}",
+	"device.shutdown": "Éteindre l’appareil",
 	"device.setup": "Configurer {{platform}}",
 	"device.acceptLicense": "J’accepte les conditions de licence du fournisseur.",
 	"device.viewTerms": "Voir les conditions",

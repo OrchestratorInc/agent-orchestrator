@@ -543,6 +543,7 @@
 	"device.open": "打开设备",
 	"device.refresh": "刷新",
 	"device.screenAlt": "{{name}} 的实时屏幕",
+	"device.shutdown": "关闭设备",
 	"device.setup": "设置 {{platform}}",
 	"device.acceptLicense": "我接受供应商许可条款。",
 	"device.viewTerms": "查看条款",

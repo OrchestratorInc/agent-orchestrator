@@ -543,6 +543,7 @@
 	"device.open": "Gerät öffnen",
 	"device.refresh": "Aktualisieren",
 	"device.screenAlt": "Live-Bildschirm für {{name}}",
+	"device.shutdown": "Gerät ausschalten",
 	"device.setup": "{{platform}} einrichten",
 	"device.acceptLicense": "Ich akzeptiere die Lizenzbedingungen des Anbieters.",
 	"device.viewTerms": "Bedingungen anzeigen",

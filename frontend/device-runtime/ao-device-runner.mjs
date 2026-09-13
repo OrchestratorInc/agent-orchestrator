@@ -52,12 +52,10 @@ try {
 				// its explicit headless flag for Android Emulator.
 				...(platform === "android" ? { headless: true } : {}),
 			});
-			// Opening a deterministic system app establishes the durable
-			// agent-device session used by AO's later capture/control requests.
-			await client.apps.open({
-				...targetSelection,
-				app: platform === "ios" ? "com.apple.Preferences" : "com.android.settings",
-			});
+			// Establish the durable agent-device session without launching or
+			// foregrounding an app. This preserves the user's current device screen
+			// and lets a freshly created AO device start on its launcher.
+			await client.apps.open(targetSelection);
 			result = { attached: true };
 			break;
 		}
@@ -94,7 +92,10 @@ try {
 			break;
 		}
 		case "tap":
-			await client.interactions.press({ ...sessionSelection, ...target(request), verify: true });
+			// AO immediately captures the resulting frame itself. agent-device's
+			// optional verification performs another accessibility capture and makes
+			// direct manipulation especially slow on iOS.
+			await client.interactions.press({ ...sessionSelection, ...target(request), verify: false });
 			result = { completed: true };
 			break;
 		case "swipe":
@@ -106,7 +107,7 @@ try {
 			result = { completed: true };
 			break;
 		case "fill":
-			await client.interactions.fill({ ...sessionSelection, ...target(request), text: boundedText(request.text), verify: true });
+			await client.interactions.fill({ ...sessionSelection, ...target(request), text: boundedText(request.text), verify: false });
 			result = { completed: true };
 			break;
 		case "type":
