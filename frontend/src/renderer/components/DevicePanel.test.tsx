@@ -137,4 +137,25 @@ describe("DevicePanel", () => {
 		expect(await screen.findByText("No virtual devices were found. Create one in Xcode or Android Studio, then refresh.")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Open device" })).toBeDisabled();
 	});
+
+	it("keeps a completed platform recoverable when live discovery fails", async () => {
+		vi.mocked(aoBridge.device.status).mockResolvedValue({
+			sessionId: "s1",
+			capabilities: [{ platform: "android", available: true }],
+		});
+		vi.mocked(aoBridge.device.list).mockResolvedValue({
+			sessionId: "s1",
+			devices: [],
+			errors: [{ platform: "android", available: false, code: "DEVICE_TOOLCHAIN_REQUIRED", message: "Android discovery needs to be refreshed." }],
+		});
+		vi.mocked(aoBridge.device.setupStatus).mockResolvedValue({
+			sessionId: "s1",
+			setups: [{ platform: "android", state: "succeeded", message: "Setup complete", progress: 100, licenseAccepted: true, cancelable: false, retryable: false }],
+		});
+
+		render(<DevicePanel sessionId="s1" />);
+
+		expect(await screen.findByText("Android discovery needs to be refreshed.")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Retry setup" })).toBeEnabled();
+	});
 });

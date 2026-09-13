@@ -45,6 +45,7 @@ type Runtime struct {
 	hubCmd     *exec.Cmd
 	hubLog     *os.File
 	hubOrigin  string
+	recoveryMu sync.Mutex
 }
 
 // New creates a local device runtime. Missing resources are reported as
@@ -113,6 +114,21 @@ func (r *Runtime) androidCapability() domain.DevicePlatformCapability {
 // List returns the helper's normalized inventory for one platform.
 func (r *Runtime) List(ctx context.Context, platform domain.DevicePlatform) ([]domain.Device, error) {
 	raw, err := r.Execute(ctx, ports.DeviceRuntimeRequest{Action: "list", Platform: platform})
+	if err != nil && platform == domain.DevicePlatformAndroid && r.managedAndroidInstalled() && isToolchainError(err) {
+		// agent-device keeps a daemon-scoped copy of its launch environment. If
+		// iOS starts that daemon before managed Android setup finishes, the old
+		// process cannot see the SDK that was subsequently installed. Recover it
+		// once through the helper's supported daemon lifecycle command, then let
+		// the next request launch with AO's now-complete managed environment.
+		r.recoveryMu.Lock()
+		raw, err = r.Execute(ctx, ports.DeviceRuntimeRequest{Action: "list", Platform: platform})
+		if err != nil && isToolchainError(err) {
+			if stopErr := r.stopAgentDeviceDaemon(ctx); stopErr == nil {
+				raw, err = r.Execute(ctx, ports.DeviceRuntimeRequest{Action: "list", Platform: platform})
+			}
+		}
+		r.recoveryMu.Unlock()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -200,15 +216,33 @@ func (r *Runtime) androidAVDDir() string { return filepath.Join(r.androidRoot(),
 
 func (r *Runtime) managedAndroidEnv() []string {
 	sdk := r.androidSDKDir()
-	if !regularFile(filepath.Join(sdk, "platform-tools", "adb")) {
-		return nil
-	}
 	path := strings.Join([]string{
 		filepath.Join(sdk, "platform-tools"), filepath.Join(sdk, "emulator"), os.Getenv("PATH"),
 	}, string(os.PathListSeparator))
 	return []string{
 		"ANDROID_HOME=" + sdk, "ANDROID_SDK_ROOT=" + sdk, "ANDROID_AVD_HOME=" + r.androidAVDDir(), "PATH=" + path,
 	}
+}
+
+func (r *Runtime) managedAndroidInstalled() bool {
+	return regularFile(filepath.Join(r.androidSDKDir(), "platform-tools", "adb")) &&
+		regularFile(filepath.Join(r.androidSDKDir(), "emulator", "emulator"))
+}
+
+func isToolchainError(err error) bool {
+	var runtimeErr *ports.DeviceRuntimeError
+	return errors.As(err, &runtimeErr) && runtimeErr.Code == "DEVICE_TOOLCHAIN_REQUIRED"
+}
+
+func (r *Runtime) stopAgentDeviceDaemon(ctx context.Context) error {
+	entry := filepath.Join(r.runtimeDir, "node_modules", "agent-device", "bin", "agent-device.mjs")
+	if !regularFile(entry) {
+		return errors.New("agent-device daemon command is unavailable")
+	}
+	stopCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	_, _, err := r.run(stopCtx, r.nodePath, []string{entry, "daemon", "stop", "--state-dir", r.stateDir}, nil, r.managedAndroidEnv())
+	return err
 }
 
 func normalizeError(code, _ string) error {

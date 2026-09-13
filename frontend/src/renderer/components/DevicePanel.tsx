@@ -137,6 +137,8 @@ export function DevicePanel({ sessionId }: { sessionId: string }) {
 	};
 
 	if (!attachment) {
+		const setupVisible = (setup: LocalDeviceSetup) =>
+			setup.state !== "succeeded" || capabilities.find((item) => item.platform === setup.platform)?.available === false;
 		return (
 			<div className="device-panel board-scrollbar h-full overflow-y-auto p-3" role="tabpanel" aria-label={t("device.title")}>
 				<div className="mb-3 flex items-center gap-2">
@@ -149,7 +151,7 @@ export function DevicePanel({ sessionId }: { sessionId: string }) {
 				<p className="mb-3 text-xs text-settings-muted">{t("device.description")}</p>
 				{error ? <DeviceError message={error} /> : null}
 				<div className="space-y-2">
-					{setups.filter((item) => item.state !== "succeeded").map((setup) => (
+					{setups.filter(setupVisible).map((setup) => (
 						<SetupCard capability={capabilities.find((item) => item.platform === setup.platform)} key={setup.platform} licenseAccepted={licenses[setup.platform]} onLicense={(value) => setLicenses((current) => ({ ...current, [setup.platform]: value }))} onSetup={(action) => void manageSetup(setup.platform, action)} setup={setup} />
 					))}
 					{devices.map((device) => (
@@ -211,12 +213,13 @@ function SetupCard({ capability, licenseAccepted, onLicense, onSetup, setup }: {
 	const active = setup.cancelable;
 	const waiting = setup.state === "awaiting_action";
 	const accepted = licenseAccepted || setup.licenseAccepted;
-	const failed = setup.state === "failed" || setup.state === "canceled" || setup.state === "interrupted";
+	const recovery = setup.state === "succeeded" && capability?.available === false;
+	const failed = recovery || setup.state === "failed" || setup.state === "canceled" || setup.state === "interrupted";
 	const platformName = setup.platform === "ios" ? "iOS" : "Android";
 	return (
 		<div className="rounded-md border border-border p-3 text-xs">
 			<div className="flex items-center justify-between gap-2"><strong>{t("device.setup", { platform: platformName })}</strong><span className="text-[11px] text-settings-muted">{waiting ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : `${setup.progress}%`}</span></div>
-			<p className="mt-1 text-settings-muted">{setup.error || setup.message || capability?.message}</p>
+			<p className="mt-1 text-settings-muted">{setup.error || (recovery ? capability.message : setup.message || capability?.message)}</p>
 			{setup.requiredBytes ? <p className="mt-1 text-[11px] text-settings-muted">{t("device.downloadSize", { size: formatBytes(setup.requiredBytes) })}</p> : null}
 			{active || waiting || setup.progress > 0 ? <div aria-label={t("device.setupProgress", { platform: platformName })} aria-valuemax={waiting ? undefined : 100} aria-valuemin={waiting ? undefined : 0} aria-valuenow={waiting ? undefined : setup.progress} className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted" role="progressbar"><div className={cn("h-full bg-primary transition-[width]", waiting && "w-full animate-pulse")} style={waiting ? undefined : { width: `${setup.progress}%` }} /></div> : null}
 			{!active ? <label className="mt-2 flex items-start gap-2"><input checked={accepted} className="mt-0.5" onChange={(event) => onLicense(event.target.checked)} type="checkbox" /><span>{t("device.acceptLicense")} {setup.licenseUrl ? <button className="text-primary hover:underline" onClick={(event) => { event.preventDefault(); void aoBridge.app.openExternal(setup.licenseUrl!); }} type="button">{t("device.viewTerms")} <ExternalLink className="inline size-3" /></button> : null}</span></label> : null}

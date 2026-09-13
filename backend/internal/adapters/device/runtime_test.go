@@ -65,6 +65,46 @@ func TestListFiltersUnexpectedHelperDevicesAndConfinesState(t *testing.T) {
 	if !strings.Contains(joined, "AGENT_DEVICE_STATE_DIR="+runtime.stateDir) || !strings.Contains(joined, "AGENT_DEVICE_DAEMON_IDLE_TIMEOUT_MS=300000") {
 		t.Fatalf("helper environment did not confine state: %s", joined)
 	}
+	if !strings.Contains(joined, "ANDROID_HOME="+runtime.androidSDKDir()) || !strings.Contains(joined, "ANDROID_AVD_HOME="+runtime.androidAVDDir()) {
+		t.Fatalf("helper environment must include future managed Android paths: %s", joined)
+	}
+}
+
+func TestAndroidListRestartsDaemonStartedBeforeManagedSetup(t *testing.T) {
+	runtime := testRuntime(t)
+	runtime.dataDir = t.TempDir()
+	for _, path := range []string{
+		filepath.Join(runtime.androidSDKDir(), "platform-tools", "adb"),
+		filepath.Join(runtime.androidSDKDir(), "emulator", "emulator"),
+		filepath.Join(runtime.runtimeDir, "node_modules", "agent-device", "bin", "agent-device.mjs"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("test"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var calls []string
+	runtime.run = func(_ context.Context, _ string, args []string, _ []byte, _ []string) ([]byte, []byte, error) {
+		if strings.HasSuffix(args[0], "agent-device.mjs") {
+			calls = append(calls, "stop")
+			return nil, nil, nil
+		}
+		calls = append(calls, "list")
+		if len(calls) < 4 {
+			return []byte(`{"ok":false,"error":{"code":"TOOL_MISSING","message":"adb not found"}}`), nil, errors.New("exit 1")
+		}
+		return []byte(`{"ok":true,"result":[{"id":"AO_Pixel_API_36","name":"AO Pixel API 36","platform":"android","kind":"emulator"}]}`), nil, nil
+	}
+
+	devices, err := runtime.List(context.Background(), domain.DevicePlatformAndroid)
+	if err != nil || len(devices) != 1 || devices[0].ID != "AO_Pixel_API_36" {
+		t.Fatalf("devices = %#v, err = %v", devices, err)
+	}
+	if got := strings.Join(calls, ","); got != "list,list,stop,list" {
+		t.Fatalf("calls = %q", got)
+	}
 }
 
 func TestExecuteRedactsHelperFailures(t *testing.T) {
