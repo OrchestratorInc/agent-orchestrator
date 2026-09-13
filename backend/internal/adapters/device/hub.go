@@ -51,7 +51,10 @@ func (r *Runtime) HubOrigin(ctx context.Context) (string, error) {
 	cmd := exec.Command(r.nodePath, entry,
 		"--host", "127.0.0.1", "--port", strconv.Itoa(port),
 		"--transport", "h264", "--max-dimension", "1000", "--video-fps", "30",
-		"--mjpeg-quality", "0.65", "--grpc-image-mode", "png",
+		// The hub defaults Android to gRPC screenshots, which requires a separate
+		// ffmpeg/libx264 installation. scrcpy streams H.264 directly from the
+		// AO-managed emulator and keeps the device runtime self-contained.
+		"--mjpeg-quality", "0.65", "--stream-source", "scrcpy", "--grpc-image-mode", "png",
 		"--hide-sidebar", "--hide-boot-device",
 	)
 	cmd.Env = mergeEnvironment(deviceHostEnv(), append(r.managedAndroidEnv(), r.managedJavaEnv()...))
