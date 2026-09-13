@@ -5676,8 +5676,9 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 		"existing confined loopback preview",
 		filepath.ToSlash(filepath.Join("skills", "using-ao", "commands", "device.md")),
 		"AO desktop Devices panel",
-		"use `ao device`",
-		"Do not use host computer-use/CUA tools",
+		"use only `ao device`",
+		"Never invoke `adb`, `emulator`, `agent-device`",
+		"or host CUA",
 	} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)

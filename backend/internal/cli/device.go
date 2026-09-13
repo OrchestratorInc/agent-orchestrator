@@ -352,7 +352,14 @@ func currentDeviceIdentity() (string, string, error) {
 	}
 	capability := strings.TrimSpace(os.Getenv("AO_DEVICE_CAPABILITY"))
 	if capability == "" {
-		return "", "", usageError{errors.New("ao device requires AO_DEVICE_CAPABILITY")}
+		// Device control initially shared the browser session credential before
+		// AO_DEVICE_CAPABILITY was added as an independently named scope. Existing
+		// long-running agents cannot have their process environment mutated, so
+		// retain that safe compatibility path until those generations rotate.
+		capability = strings.TrimSpace(os.Getenv("AO_BROWSER_CAPABILITY"))
+	}
+	if capability == "" {
+		return "", "", usageError{errors.New("ao device requires the owning session capability; restart this AO session instead of invoking adb or agent-device directly")}
 	}
 	return sessionID, capability, nil
 }

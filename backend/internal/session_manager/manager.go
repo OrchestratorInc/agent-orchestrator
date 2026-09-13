@@ -4110,7 +4110,8 @@ func (m *Manager) aoSkillPointer() string {
 		"Do not use Codex/host in-app browser connectors, `agent.browsers.get(\"iab\")`, or a browser MCP for the AO Browser panel: those are separate browser runtimes and cannot see or control AO's session-owned page. " +
 		"`ao browser` operates the same live page the user sees in that panel.\n\n" +
 		"## AO desktop Devices panel\n\n" +
-		"For an attached iOS Simulator or Android Emulator, read `" + deviceFile + "` and use `ao device`; it controls the same device shown to the user. Do not use host computer-use/CUA tools for AO-attached virtual devices."
+		"For attached iOS/Android devices, read `" + deviceFile + "`; use only `ao device` for the same panel. " +
+		"Never invoke `adb`, `emulator`, `agent-device`, private helpers/state, or host CUA; report AO errors."
 }
 
 func (m *Manager) workspaceProjectPrompt(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID) (string, error) {

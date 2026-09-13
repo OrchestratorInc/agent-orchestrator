@@ -103,6 +103,8 @@ func TestEmbeddedDeviceGuidanceKeepsControlScopedAndExplicit(t *testing.T) {
 	for _, required := range []string{
 		"`AO_SESSION_ID` and the launch-scoped `AO_DEVICE_CAPABILITY`",
 		"one AO session at a time",
+		"Never invoke those tools directly",
+		"create an alternate `AGENT_DEVICE_STATE_DIR`",
 		"untrusted external content",
 		"`shutdown` powers it off",
 		"requires explicit `--yes` confirmation",
