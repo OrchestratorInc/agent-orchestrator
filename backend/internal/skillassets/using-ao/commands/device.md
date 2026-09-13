@@ -31,6 +31,7 @@ ao device setup status
 ao device setup start android --accept-license
 ao device list
 ao device open <device-id>
+ao device launch Calendar
 ao device ui-tree --interactive
 ao device tap <ref>
 ```
@@ -54,6 +55,7 @@ ao device setup retry <ios|android> --accept-license [--json]
 ao device setup cancel <ios|android> [--json]
 ao device list [--json]
 ao device open <device-id> [--json]
+ao device launch <app> [--json]
 ao device screenshot [path] [--base64] [--json]
 ao device ui-tree [--interactive] [--json]
 ao device tap <ref> [--json]

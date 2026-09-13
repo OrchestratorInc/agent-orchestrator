@@ -145,6 +145,15 @@ func TestServiceValidatesActionsAndMapsRuntimeFailures(t *testing.T) {
 	if _, err := service.Execute(context.Background(), "s1", credentials, Command{Action: "key", Key: "escape"}); apiErrorCode(err) != "DEVICE_ACTION_UNSUPPORTED" {
 		t.Fatalf("key error = %v", err)
 	}
+	if _, err := service.Execute(context.Background(), "s1", credentials, Command{Action: "launch"}); apiErrorCode(err) != "INVALID_ARGUMENT" {
+		t.Fatalf("empty launch error = %v", err)
+	}
+	if _, err := service.Execute(context.Background(), "s1", credentials, Command{Action: "launch", Text: "Calendar"}); err != nil {
+		t.Fatalf("launch error = %v", err)
+	}
+	if got := runtime.requests[len(runtime.requests)-1]; got.Action != "launch" || got.Text != "Calendar" || got.DeviceID != "ios-1" {
+		t.Fatalf("launch runtime request = %#v", got)
+	}
 	runtime.fail = &ports.DeviceRuntimeError{Code: "DEVICE_NOT_FOUND", Message: "not found"}
 	if _, err := service.Execute(context.Background(), "s1", credentials, Command{Action: "home"}); apiErrorCode(err) != "DEVICE_NOT_FOUND" {
 		t.Fatalf("mapped runtime error = %v", err)

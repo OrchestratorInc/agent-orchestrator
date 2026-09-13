@@ -127,6 +127,7 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao device fill":            {},
 	"ao device home":            {},
 	"ao device key":             {},
+	"ao device launch":          {},
 	"ao device list":            {},
 	"ao device open":            {},
 	"ao device screenshot":      {},

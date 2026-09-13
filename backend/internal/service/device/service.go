@@ -221,7 +221,7 @@ func (s *Service) Execute(ctx context.Context, sessionID domain.SessionID, creds
 			return Result{}, apierr.Conflict("DEVICE_ATTACHMENT_REQUIRED", "Open a device first", nil)
 		}
 		return s.streamResult(ctx, sessionID, attachment, action)
-	case "screenshot", "ui-tree", "tap", "swipe", "fill", "type", "key", "back", "home":
+	case "screenshot", "ui-tree", "launch", "tap", "swipe", "fill", "type", "key", "back", "home":
 		return s.runAttached(ctx, sessionID, action, command)
 	default:
 		return Result{}, apierr.Invalid("DEVICE_ACTION_UNSUPPORTED", "Unsupported device action", nil)
@@ -438,6 +438,10 @@ func validateAction(request ports.DeviceRuntimeRequest) error {
 	}
 	validCoordinate := func(value *int) bool { return value != nil && *value >= 0 && *value <= 100000 }
 	switch request.Action {
+	case "launch":
+		if strings.TrimSpace(request.Text) == "" {
+			return apierr.Invalid("INVALID_ARGUMENT", "launch requires an app name or bundle identifier", nil)
+		}
 	case "tap", "fill":
 		if request.Ref == "" && (!validCoordinate(request.X) || !validCoordinate(request.Y)) {
 			return apierr.Invalid("INVALID_ARGUMENT", request.Action+" requires a ref or x and y coordinates", nil)

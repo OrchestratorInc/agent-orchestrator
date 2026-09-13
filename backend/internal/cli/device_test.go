@@ -97,6 +97,12 @@ func TestDeviceCLIUsesSessionCapabilityAndTypedActions(t *testing.T) {
 	if capture.body.Action != "tap" || capture.body.X == nil || *capture.body.X != 12 || capture.body.Y == nil || *capture.body.Y != 34 {
 		t.Fatalf("tap request = %#v", capture.body)
 	}
+	if _, _, err := executeCLI(t, deps, "device", "launch", "Calendar"); err != nil {
+		t.Fatal(err)
+	}
+	if capture.body.Action != "launch" || capture.body.Text != "Calendar" {
+		t.Fatalf("launch request = %#v", capture.body)
+	}
 }
 
 func TestDeviceScreenshotRefusesOverwrite(t *testing.T) {

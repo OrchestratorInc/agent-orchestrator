@@ -233,7 +233,7 @@ query values are redacted.
 Android Emulators. AO bundles the pinned MIT-licensed `agent-device` runtime;
 Apple's Xcode Simulator runtimes and the Android SDK/emulator remain host
 prerequisites and are detected independently. Use `status` and `list`, attach
-with `open <device-id>`, inspect with `ui-tree` or `screenshot`, interact with
+with `open <device-id>`, start apps with `launch <app>`, inspect with `ui-tree` or `screenshot`, interact with
 `tap`, `swipe`, `fill`, `type`, `key`, `back`, and `home`, then release AO's
 session lease with `close`. `shutdown` powers off a target and requires
 `--yes`. Device commands require the session id and capability injected into

@@ -214,6 +214,9 @@ func newDeviceCommand(ctx *commandContext) *cobra.Command {
 	}}
 	screenshot.Flags().BoolVar(&screenshotBase64, "base64", false, "print PNG bytes as base64 instead of writing a file")
 	root.AddCommand(screenshot)
+	root.AddCommand(&cobra.Command{Use: "launch <app>", Short: "Launch an app by name, bundle identifier, or package", Args: exactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return ctx.runDeviceAction(cmd, deviceCommandRequestDTO{Action: "launch", Text: args[0]}, jsonOutput)
+	}})
 
 	var interactive bool
 	tree := &cobra.Command{Use: "ui-tree", Short: "Capture the attached device accessibility tree", Args: noArgs, RunE: func(cmd *cobra.Command, _ []string) error {

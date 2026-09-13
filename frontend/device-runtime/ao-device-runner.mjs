@@ -103,6 +103,17 @@ try {
 			}
 			break;
 		}
+		case "launch": {
+			const app = boundedText(request.text).trim();
+			if (!app) throw Object.assign(new Error("launch requires an app name or bundle identifier"), { code: "INVALID_ARGS" });
+			const opened = await client.apps.open({ ...targetSelection, app });
+			result = {
+				completed: true,
+				...(typeof opened.appName === "string" ? { appName: opened.appName } : {}),
+				...(typeof opened.appBundleId === "string" ? { appBundleId: opened.appBundleId } : {}),
+			};
+			break;
+		}
 		case "tap":
 			// AO immediately captures the resulting frame itself. agent-device's
 			// optional verification performs another accessibility capture and makes
@@ -158,8 +169,20 @@ async function withAgentSession(operation) {
 	try {
 		return await operation();
 	} catch (error) {
-		if (normalizeAgentDeviceError(error).code !== "SESSION_NOT_FOUND") throw error;
-		await client.apps.open(targetSelection);
+		const code = normalizeAgentDeviceError(error).code;
+		// Before the first automation command there is no agent-device session to
+		// disambiguate the target. If another simulator happens to be booted,
+		// capture and interaction APIs report AMBIGUOUS_MATCH instead of
+		// SESSION_NOT_FOUND. Establish the session against AO's attached device in
+		// either case, then retry the original operation.
+		if (code !== "SESSION_NOT_FOUND" && code !== "AMBIGUOUS_MATCH") throw error;
+		await client.apps.open({
+			...targetSelection,
+			// iOS accessibility snapshots require an active XCTest app session.
+			// Bootstrap it through a built-in app, then return to SpringBoard below.
+			// This does not install or mutate any app on the simulator.
+			...(platform === "ios" ? { app: "com.apple.Preferences" } : {}),
+		});
 		// The XCTest host only establishes the private automation channel. Keep
 		// the screen on SpringBoard before running the requested agent action.
 		if (platform === "ios") await client.command.home(sessionSelection);
