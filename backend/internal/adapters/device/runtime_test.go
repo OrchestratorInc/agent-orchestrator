@@ -196,6 +196,10 @@ func TestRunStreamingStopsSilentCommand(t *testing.T) {
 func TestManagedAndroidCapabilityUsesAOOwnedSDKAndAVD(t *testing.T) {
 	runtime := testRuntime(t)
 	runtime.dataDir = t.TempDir()
+	archive, err := currentAndroidArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
 	paths := []string{filepath.Join(runtime.androidSDKDir(), "platform-tools", "adb"), filepath.Join(runtime.androidSDKDir(), "emulator", "emulator"), filepath.Join(runtime.androidAVDDir(), androidAVDName+".avd", "config.ini")}
 	for _, path := range paths {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -203,7 +207,7 @@ func TestManagedAndroidCapabilityUsesAOOwnedSDKAndAVD(t *testing.T) {
 		}
 		contents := []byte("test")
 		if filepath.Base(path) == "config.ini" {
-			contents = []byte("image.sysdir.1=system-images/android-36/google_apis_playstore/arm64-v8a/\n")
+			contents = []byte("image.sysdir.1=" + strings.ReplaceAll(androidSystemImage(archive.Arch), ";", "/") + "/\n")
 		}
 		if err := os.WriteFile(path, contents, 0o700); err != nil {
 			t.Fatal(err)
