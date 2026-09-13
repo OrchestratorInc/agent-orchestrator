@@ -5674,12 +5674,16 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 		"relative to the session workspace root",
 		"use `ao preview README.md`, not `../README.md`",
 		"existing confined loopback preview",
+		filepath.ToSlash(filepath.Join("skills", "using-ao", "commands", "device.md")),
+		"AO desktop Devices panel",
+		"use `ao device`",
+		"Do not use host computer-use/CUA tools",
 	} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
 		}
 	}
-	if words := len(strings.Fields(m.aoSkillPointer())); words > 220 {
+	if words := len(strings.Fields(m.aoSkillPointer())); words > 260 {
 		t.Fatalf("always-on AO skill pointer grew to %d words; keep details in routed command guides:\n%s", words, m.aoSkillPointer())
 	}
 	if strings.Contains(agent.lastLaunch.Prompt, "You are the human-facing orchestrator") {
@@ -5828,6 +5832,9 @@ func TestSystemPrompt_AppendsConfidentialityGuard(t *testing.T) {
 			}
 			if !strings.Contains(sp, "AO desktop Browser panel") || !strings.Contains(sp, "agent.browsers.get(\"iab\")") {
 				t.Fatalf("%s: system prompt missing AO browser routing guidance:\n%s", tc.name, sp)
+			}
+			if !strings.Contains(sp, "AO desktop Devices panel") || !strings.Contains(sp, "use `ao device`") || !strings.Contains(sp, "computer-use/CUA") {
+				t.Fatalf("%s: system prompt missing AO device routing guidance:\n%s", tc.name, sp)
 			}
 			if !strings.Contains(sp, "Static file targets passed to `ao preview`") ||
 				!strings.Contains(sp, "relative to the session workspace root") ||

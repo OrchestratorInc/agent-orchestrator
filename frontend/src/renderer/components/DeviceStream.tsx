@@ -28,11 +28,26 @@ export const DeviceStream = forwardRef<DeviceStreamHandle, Props>(function Devic
 	useEffect(() => {
 		let stopped = false;
 		let decoder: VideoDecoder | undefined;
+		let awaitingAndroidKeyframe = platform === "android";
+		let androidDecoderFailures = 0;
+		let lastAndroidKeyframeRequest = Number.NEGATIVE_INFINITY;
 		let decodeChain = Promise.resolve();
 		const streamAbort = new AbortController();
 		const socket = new WebSocket(`${baseUrl.replace(/^http/, "ws")}/input`);
 		socket.binaryType = "arraybuffer";
 		socketRef.current = socket;
+		const requestAndroidKeyframe = () => {
+			const now = performance.now();
+			if (now - lastAndroidKeyframeRequest < 400) return;
+			lastAndroidKeyframeRequest = now;
+			if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "reset-video", ack: false }));
+		};
+		const resetAndroidDecoder = () => {
+			const current = decoder;
+			decoder = undefined;
+			awaitingAndroidKeyframe = true;
+			if (current?.state !== "closed") current?.close();
+		};
 
 		if (platform === "ios") {
 			setIOSMJPEG(false);
@@ -48,12 +63,18 @@ export const DeviceStream = forwardRef<DeviceStreamHandle, Props>(function Devic
 				onReady();
 			});
 		} else {
-			socket.addEventListener("open", onReady);
+			socket.addEventListener("open", () => {
+				requestAndroidKeyframe();
+				onReady();
+			});
 			socket.addEventListener("message", (event) => {
 				if (typeof event.data === "string") {
 					try {
 						const message = JSON.parse(event.data) as { type?: string; ok?: boolean; error?: string };
-						if (message.type === "video-session") socket.send(JSON.stringify({ type: "reset-video", ack: false }));
+						if (message.type === "video-session") {
+							resetAndroidDecoder();
+							requestAndroidKeyframe();
+						}
 						if (message.ok === false && message.error) onError(`Android device control failed: ${message.error}`);
 					} catch { /* Ignore non-protocol diagnostics. */ }
 					return;
@@ -68,34 +89,63 @@ export const DeviceStream = forwardRef<DeviceStreamHandle, Props>(function Devic
 					if (!Decoder) throw new Error("This AO build does not support Android hardware video decoding.");
 					if (!decoder) {
 						const codec = avcCodec(parsed.data);
-						if (!codec) return;
-						decoder = new Decoder({
+						if (!codec) {
+							requestAndroidKeyframe();
+							return;
+						}
+						const nextDecoder = new Decoder({
 							output: (frame) => {
+								if (decoder !== nextDecoder) {
+									frame.close();
+									return;
+								}
 								const canvas = canvasRef.current;
 								if (canvas) {
 									canvas.width = frame.displayWidth;
 									canvas.height = frame.displayHeight;
 									canvas.getContext("2d")?.drawImage(frame, 0, 0);
 								}
+								androidDecoderFailures = 0;
 								frame.close();
 							},
 							error: (cause) => {
+								if (decoder !== nextDecoder) return;
 								decoder = undefined;
-								onError(`Android video decoder failed: ${cause.message}`);
-								if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "reset-video", ack: false }));
+								awaitingAndroidKeyframe = true;
+								androidDecoderFailures++;
+								requestAndroidKeyframe();
+								if (androidDecoderFailures >= 3) onError(`Android video decoder failed: ${cause.message}`);
 							},
 						});
-						decoder.configure({ codec, optimizeForLatency: true, hardwareAcceleration: "prefer-hardware" });
+						// Some Android emulator profiles are software-decodable but rejected
+						// when Chromium is forced onto VideoToolbox hardware decoding.
+						nextDecoder.configure({ codec, optimizeForLatency: true, hardwareAcceleration: "no-preference" });
+						decoder = nextDecoder;
 					}
 					if (decoder.state !== "configured") return;
+					if (awaitingAndroidKeyframe) {
+						if (!parsed.key) return;
+						awaitingAndroidKeyframe = false;
+					}
 					// Keep latency bounded under renderer load. A later keyframe catches
 					// the canvas up without tearing down the codec configuration.
-					if (decoder.decodeQueueSize > 8 && !parsed.key) return;
-					decoder.decode(new EncodedVideoChunk({
-						type: parsed.key ? "key" : "delta",
-						timestamp: parsed.timestamp,
-						data: parsed.data,
-					}));
+					if (decoder.decodeQueueSize > 8) {
+						awaitingAndroidKeyframe = true;
+						requestAndroidKeyframe();
+						return;
+					}
+					try {
+						decoder.decode(new EncodedVideoChunk({
+							type: parsed.key ? "key" : "delta",
+							timestamp: parsed.timestamp,
+							data: parsed.data,
+						}));
+					} catch (cause) {
+						resetAndroidDecoder();
+						androidDecoderFailures++;
+						requestAndroidKeyframe();
+						if (androidDecoderFailures >= 3) onError(`Android video decoder failed: ${errorMessage(cause)}`);
+					}
 				}).catch((cause) => onError(errorMessage(cause)));
 			});
 		}

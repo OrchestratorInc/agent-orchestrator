@@ -196,11 +196,16 @@ func TestRunStreamingStopsSilentCommand(t *testing.T) {
 func TestManagedAndroidCapabilityUsesAOOwnedSDKAndAVD(t *testing.T) {
 	runtime := testRuntime(t)
 	runtime.dataDir = t.TempDir()
-	for _, path := range []string{filepath.Join(runtime.androidSDKDir(), "platform-tools", "adb"), filepath.Join(runtime.androidSDKDir(), "emulator", "emulator"), filepath.Join(runtime.androidAVDDir(), androidAVDName+".avd", "config.ini")} {
+	paths := []string{filepath.Join(runtime.androidSDKDir(), "platform-tools", "adb"), filepath.Join(runtime.androidSDKDir(), "emulator", "emulator"), filepath.Join(runtime.androidAVDDir(), androidAVDName+".avd", "config.ini")}
+	for _, path := range paths {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte("test"), 0o700); err != nil {
+		contents := []byte("test")
+		if filepath.Base(path) == "config.ini" {
+			contents = []byte("image.sysdir.1=system-images/android-36/google_apis_playstore/arm64-v8a/\n")
+		}
+		if err := os.WriteFile(path, contents, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -210,6 +215,13 @@ func TestManagedAndroidCapabilityUsesAOOwnedSDKAndAVD(t *testing.T) {
 	plan, err := runtime.SetupPlan(context.Background(), domain.DevicePlatformAndroid)
 	if err != nil || !plan.Ready || plan.InstalledVersion != androidToolsVersion {
 		t.Fatalf("plan = %#v, %v", plan, err)
+	}
+	if err := os.WriteFile(paths[2], []byte("image.sysdir.1=system-images/android-36/default/arm64-v8a/\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plan, err = runtime.SetupPlan(context.Background(), domain.DevicePlatformAndroid)
+	if err != nil || plan.Ready {
+		t.Fatalf("legacy AOSP image plan = %#v, %v; want setup required", plan, err)
 	}
 }
 

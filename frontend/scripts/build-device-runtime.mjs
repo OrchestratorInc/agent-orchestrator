@@ -25,8 +25,11 @@ const expectedSignature = signature.digest("hex");
 const markerPath = join(outDir, ".ao-device-runtime.json");
 const agentEntry = join(outDir, "node_modules", "agent-device", "bin", "agent-device.mjs");
 const hubEntry = join(outDir, "node_modules", "expo-device-hub", "dist", "server", "cli.mjs");
+const scrcpyServer = join(outDir, "node_modules", "expo-device-hub", "vendor", "serve-emu", "vendor", "scrcpy-server-v4.0");
+const scrcpyServerURL = "https://github.com/Genymobile/scrcpy/releases/download/v4.0/scrcpy-server-v4.0";
+const scrcpyServerSHA256 = "84924bd564a1eb6089c872c7521f968058977f91f5ff02514a8c74aff3210f3a";
 const aoRunner = join(outDir, "ao-device-runner.mjs");
-if (existsSync(markerPath) && existsSync(agentEntry) && existsSync(hubEntry) && existsSync(aoRunner)) {
+if (existsSync(markerPath) && existsSync(agentEntry) && existsSync(hubEntry) && existsSync(scrcpyServer) && existsSync(aoRunner)) {
 	const marker = JSON.parse(readFileSync(markerPath, "utf8"));
 	if (marker.signature === expectedSignature) process.exit(0);
 }
@@ -36,10 +39,12 @@ mkdirSync(outDir, { recursive: true });
 for (const source of sources) cpSync(join(sourceDir, source), join(outDir, source));
 const npm = npmInvocation(["ci", "--omit=dev", "--ignore-scripts"]);
 run(npm.command, npm.args, { cwd: outDir });
+await downloadVerified(scrcpyServerURL, scrcpyServerSHA256, scrcpyServer);
 
 for (const required of [
 	agentEntry,
 	hubEntry,
+	scrcpyServer,
 	join(outDir, "node_modules", "agent-device", "LICENSE"),
 	join(outDir, "node_modules", "expo-device-hub", "LICENSE"),
 	join(outDir, "node_modules", "expo-device-hub", "vendor", "serve-sim", "LICENSE"),
@@ -49,7 +54,7 @@ for (const required of [
 }
 
 const integrity = {};
-for (const file of [agentEntry, hubEntry, aoRunner]) {
+for (const file of [agentEntry, hubEntry, scrcpyServer, aoRunner]) {
 	integrity[file.slice(outDir.length + 1)] = createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 writeFileSync(join(outDir, "integrity.json"), `${JSON.stringify(integrity, null, 2)}\n`);
@@ -62,4 +67,16 @@ function run(command, args, options = {}) {
 	const result = spawnSync(command, args, { stdio: "inherit", windowsHide: true, ...options });
 	if (result.error) throw result.error;
 	if (result.status !== 0) throw new Error(`${command} exited ${result.status}`);
+}
+
+async function downloadVerified(url, expectedSHA256, destination) {
+	const response = await fetch(url);
+	if (!response.ok) throw new Error(`download ${url}: HTTP ${response.status}`);
+	const contents = Buffer.from(await response.arrayBuffer());
+	const actualSHA256 = createHash("sha256").update(contents).digest("hex");
+	if (actualSHA256 !== expectedSHA256) {
+		throw new Error(`checksum mismatch for ${url}: got ${actualSHA256}`);
+	}
+	mkdirSync(dirname(destination), { recursive: true });
+	writeFileSync(destination, contents, { mode: 0o644 });
 }

@@ -31,6 +31,7 @@ import (
 const (
 	androidToolsVersion = "15859902"
 	androidAPILevel     = "36"
+	androidImageTag     = "google_apis_playstore"
 	androidAVDName      = "AO_Pixel_API_36"
 	androidRequired     = int64(12 << 30)
 	iosRequired         = int64(20 << 30)
@@ -70,13 +71,14 @@ func (r *Runtime) SetupPlan(ctx context.Context, platform domain.DevicePlatform)
 	available := availableBytes(ctx, r.dataDir)
 	switch platform {
 	case domain.DevicePlatformAndroid:
-		_, err := currentAndroidArchive()
+		archive, err := currentAndroidArchive()
 		if err != nil {
 			return ports.DeviceSetupPlan{}, err
 		}
+		image := androidSystemImage(archive.Arch)
 		ready := regularFile(filepath.Join(r.androidSDKDir(), "platform-tools", "adb")) &&
 			regularFile(filepath.Join(r.androidSDKDir(), "emulator", "emulator")) &&
-			regularFile(filepath.Join(r.androidAVDDir(), androidAVDName+".avd", "config.ini"))
+			androidAVDUsesImage(filepath.Join(r.androidAVDDir(), androidAVDName+".avd", "config.ini"), image)
 		return ports.DeviceSetupPlan{Ready: ready, State: stateForReady(ready), RequiredBytes: androidRequired,
 			AvailableBytes: available, LicenseURL: androidLicenseURL, InstalledVersion: androidToolsVersion,
 			Message: fmt.Sprintf("Android API %s · command-line tools %s · about %.1f GB", androidAPILevel, androidToolsVersion, float64(androidRequired)/(1<<30)),
@@ -181,7 +183,7 @@ func (r *Runtime) installAndroid(ctx context.Context, report func(ports.DeviceSe
 
 	env := r.androidInstallEnv(javaHome)
 	sdkmanager := filepath.Join(target, "bin", "sdkmanager")
-	image := "system-images;android-" + androidAPILevel + ";default;" + archive.Arch
+	image := androidSystemImage(archive.Arch)
 	packages := []string{"platform-tools", "emulator", "platforms;android-" + androidAPILevel, image}
 	report(ports.DeviceSetupProgress{State: domain.DeviceSetupInstalling, Stage: "android-packages", Message: "Installing Android emulator, platform tools, and system image", Progress: 28})
 	packageProgress := 28
@@ -213,6 +215,19 @@ func (r *Runtime) installAndroid(ctx context.Context, report func(ports.DeviceSe
 		return setupError("ANDROID_VERIFY_FAILED", "Android setup completed but its tools or virtual device could not be verified", "")
 	}
 	return nil
+}
+
+func androidSystemImage(arch string) string {
+	return "system-images;android-" + androidAPILevel + ";" + androidImageTag + ";" + arch
+}
+
+func androidAVDUsesImage(configPath, image string) bool {
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		return false
+	}
+	want := strings.ReplaceAll(image, ";", "/") + "/"
+	return strings.Contains(string(contents), "image.sysdir.1="+want)
 }
 
 func (r *Runtime) ensureManagedJDK(ctx context.Context, downloads, staging string, report func(ports.DeviceSetupProgress)) (string, string, error) {
