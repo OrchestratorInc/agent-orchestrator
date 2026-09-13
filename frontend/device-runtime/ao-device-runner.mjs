@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { createAgentDeviceClient, normalizeAgentDeviceError } from "agent-device";
 
 const MAX_STDIN_BYTES = 64 * 1024;
+const execFileAsync = promisify(execFile);
 const chunks = [];
 let size = 0;
 for await (const chunk of process.stdin) {
@@ -21,7 +24,17 @@ const session = String(request.session ?? "").trim();
 const platform = request.platform === "ios" || request.platform === "android" ? request.platform : undefined;
 const device = typeof request.deviceId === "string" && request.deviceId.trim() ? request.deviceId.trim() : undefined;
 const client = createAgentDeviceClient({ stateDir, session: session || undefined, responseLevel: "default" });
-const selection = { ...(session ? { session } : {}), ...(platform ? { platform } : {}), ...(device ? { device } : {}) };
+const sessionSelection = { ...(session ? { session } : {}) };
+// Stopped Android AVDs are selected by name, while running Android emulators
+// expose an adb serial. Apple inventory IDs are UDIDs. Once an app is opened,
+// the session itself is the authoritative target for captures/interactions.
+const targetSelection = {
+	...(session ? { session } : {}),
+	...(platform ? { platform } : {}),
+	...(device && platform === "ios" ? { udid: device } : {}),
+	...(device && platform === "android" && /^emulator-\d+$/.test(device) ? { serial: device } : {}),
+	...(device && platform === "android" && !/^emulator-\d+$/.test(device) ? { device } : {}),
+};
 
 try {
 	let result;
@@ -30,16 +43,21 @@ try {
 			result = await client.devices.list(platform ? { platform } : undefined);
 			break;
 		case "attach": {
-			await client.devices.boot(selection);
-			try {
-				await client.apps.open({ ...selection, foreground: true });
-			} catch {
-				await client.apps.open({
-					...selection,
-					app: platform === "ios" ? "com.apple.Preferences" : "com.android.settings",
-					foreground: true,
-				});
-			}
+			// AO renders the device from screenshots in its own panel. Keep platform
+			// boot in the background so no second native window opens outside AO.
+			if (platform === "ios" && device) await bootIOSInBackground(device);
+			await client.devices.boot({
+				...targetSelection,
+				// Apple simctl boot is already background-only; agent-device reserves
+				// its explicit headless flag for Android Emulator.
+				...(platform === "android" ? { headless: true } : {}),
+			});
+			// Opening a deterministic system app establishes the durable
+			// agent-device session used by AO's later capture/control requests.
+			await client.apps.open({
+				...targetSelection,
+				app: platform === "ios" ? "com.apple.Preferences" : "com.android.settings",
+			});
 			result = { attached: true };
 			break;
 		}
@@ -48,13 +66,13 @@ try {
 			result = { detached: true };
 			break;
 		case "shutdown":
-			await client.devices.shutdown(selection);
+			await client.devices.shutdown(targetSelection);
 			result = { shutdown: true };
 			break;
 		case "ui-tree":
 		case "snapshot": {
 			const snapshot = await client.capture.snapshot({
-				...selection,
+				...sessionSelection,
 				interactiveOnly: request.interactiveOnly === true,
 				forceFull: true,
 				timeoutMs: 15_000,
@@ -65,7 +83,9 @@ try {
 		case "screenshot": {
 			const file = path.join(stateDir, `ao-capture-${randomUUID()}.png`);
 			try {
-				await client.capture.screenshot({ ...selection, path: file, stabilize: false });
+				// The screenshot API intentionally accepts a session, not device
+				// selectors. Passing platform/device is rejected as INVALID_ARGS.
+				await client.capture.screenshot({ ...sessionSelection, path: file, stabilize: false });
 				const bytes = await readFile(file);
 				result = { pngBase64: bytes.toString("base64"), size: bytes.length };
 			} finally {
@@ -74,38 +94,38 @@ try {
 			break;
 		}
 		case "tap":
-			await client.interactions.press({ ...selection, ...target(request), verify: true });
+			await client.interactions.press({ ...sessionSelection, ...target(request), verify: true });
 			result = { completed: true };
 			break;
 		case "swipe":
 			await client.interactions.swipe({
-				...selection,
+				...sessionSelection,
 				from: { x: integer(request.x1, "x1"), y: integer(request.y1, "y1") },
 				to: { x: integer(request.x2, "x2"), y: integer(request.y2, "y2") },
 			});
 			result = { completed: true };
 			break;
 		case "fill":
-			await client.interactions.fill({ ...selection, ...target(request), text: boundedText(request.text), verify: true });
+			await client.interactions.fill({ ...sessionSelection, ...target(request), text: boundedText(request.text), verify: true });
 			result = { completed: true };
 			break;
 		case "type":
-			await client.interactions.type({ ...selection, text: boundedText(request.text) });
+			await client.interactions.type({ ...sessionSelection, text: boundedText(request.text) });
 			result = { completed: true };
 			break;
 		case "key": {
 			const key = String(request.key ?? "").toLowerCase();
 			if (key !== "enter" && key !== "return") throw Object.assign(new Error("Only Enter and Return are supported"), { code: "UNSUPPORTED_OPERATION" });
-			await client.command.keyboard({ ...selection, action: key });
+			await client.command.keyboard({ ...sessionSelection, action: key });
 			result = { completed: true };
 			break;
 		}
 		case "back":
-			await client.command.back(selection);
+			await client.command.back(sessionSelection);
 			result = { completed: true };
 			break;
 		case "home":
-			await client.command.home(selection);
+			await client.command.home(sessionSelection);
 			result = { completed: true };
 			break;
 		default:
@@ -119,6 +139,16 @@ try {
 		error: { code: normalized.code, message: normalized.message, hint: normalized.hint },
 	})}\n`);
 	process.exitCode = 1;
+}
+
+async function bootIOSInBackground(udid) {
+	try {
+		await execFileAsync("xcrun", ["simctl", "boot", udid], { timeout: 120_000, maxBuffer: 1024 * 1024 });
+	} catch (error) {
+		const output = `${error?.stdout ?? ""}\n${error?.stderr ?? ""}`.toLowerCase();
+		if (!output.includes("current state: booted") && !output.includes("already booted")) throw error;
+	}
+	await execFileAsync("xcrun", ["simctl", "bootstatus", udid, "-b"], { timeout: 120_000, maxBuffer: 1024 * 1024 });
 }
 
 function target(value) {
