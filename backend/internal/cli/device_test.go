@@ -48,7 +48,7 @@ func deviceCLIServer(t *testing.T, capture *deviceRequestCapture) *httptest.Serv
 		}
 		result := `{}`
 		if capture.body.Action == "screenshot" {
-			result = `{"pngBase64":"cG5n"}`
+			result = `{"pngBase64":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="}`
 		}
 		_, _ = io.WriteString(w, `{"sessionId":"ao-1","action":"`+capture.body.Action+`","result":`+result+`}`)
 	}))
@@ -114,10 +114,10 @@ func TestDeviceScreenshotRefusesOverwrite(t *testing.T) {
 	writeRunFileFor(t, cfg, server)
 	deps := Deps{ProcessAlive: func(int) bool { return true }}
 	path := filepath.Join(t.TempDir(), "capture.png")
-	if output, stderr, err := executeCLI(t, deps, "device", "screenshot", path); err != nil || strings.TrimSpace(output) != path {
+	if output, stderr, err := executeCLI(t, deps, "device", "screenshot", path); err != nil || !strings.Contains(output, path) || !strings.Contains(output, "Device pixel size: 1x1") {
 		t.Fatalf("screenshot err=%v stderr=%s stdout=%s", err, stderr, output)
 	}
-	if bytes, err := os.ReadFile(path); err != nil || string(bytes) != "png" {
+	if bytes, err := os.ReadFile(path); err != nil || len(bytes) < 8 || string(bytes[:8]) != "\x89PNG\r\n\x1a\n" {
 		t.Fatalf("screenshot bytes=%q err=%v", bytes, err)
 	}
 	if _, _, err := executeCLI(t, deps, "device", "screenshot", path); err == nil || !strings.Contains(err.Error(), "file exists") {

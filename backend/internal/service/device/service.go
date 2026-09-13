@@ -299,7 +299,18 @@ func (s *Service) open(ctx context.Context, sessionID domain.SessionID, command 
 		return Result{}, mapRuntimeError(err)
 	}
 	_ = value
-	return s.streamResult(ctx, sessionID, attachment, "open")
+	result, err := s.streamResult(ctx, sessionID, attachment, "open")
+	if err != nil {
+		// A booted device without a usable embedded stream is not an attachment.
+		// Roll back both the helper session and AO's lease so a transient hub
+		// failure cannot leave this device busy and block every later open.
+		_, _ = s.runtime.Execute(context.WithoutCancel(ctx), ports.DeviceRuntimeRequest{
+			Action: "detach", Session: helperSession(sessionID),
+		})
+		s.release(sessionID, deviceID)
+		return Result{}, err
+	}
+	return result, nil
 }
 
 func (s *Service) streamResult(ctx context.Context, sessionID domain.SessionID, attachment domain.DeviceAttachment, action string) (Result, error) {
@@ -312,6 +323,13 @@ func (s *Service) streamResult(ctx context.Context, sessionID domain.SessionID, 
 	origin, err := hub.HubOrigin(ctx)
 	if err != nil {
 		return Result{}, mapRuntimeError(err)
+	}
+	if preparer, ok := s.runtime.(interface {
+		PrepareStream(context.Context, domain.DevicePlatform, string) error
+	}); ok {
+		if err := preparer.PrepareStream(ctx, attachment.Platform, attachment.DeviceID); err != nil {
+			return Result{}, mapRuntimeError(err)
+		}
 	}
 	ticketBytes := make([]byte, 32)
 	if _, err := rand.Read(ticketBytes); err != nil {

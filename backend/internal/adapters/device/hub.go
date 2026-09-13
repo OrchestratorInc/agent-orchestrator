@@ -1,16 +1,21 @@
 package device
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -89,6 +94,69 @@ func hubHealthy(ctx context.Context, origin string) bool {
 	probeCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
 	defer cancel()
 	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, origin+"/api/devices?booted=1", http.NoBody)
+	if err != nil {
+		return false
+	}
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = response.Body.Close() }()
+	return response.StatusCode == http.StatusOK
+}
+
+// PrepareStream starts the selected simulator's serve-sim helper before AO
+// hands its stream URL to the renderer. expo-device-hub's browser client does
+// this itself, but AO intentionally embeds only the stream rather than that
+// client shell, so the daemon owns the equivalent lifecycle step.
+func (r *Runtime) PrepareStream(ctx context.Context, platform domain.DevicePlatform, deviceID string) error {
+	if platform != domain.DevicePlatformIOS {
+		return nil
+	}
+	origin, err := r.HubOrigin(ctx)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]string{"udid": deviceID})
+	if err != nil {
+		return fmt.Errorf("encode iOS stream request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, origin+"/vendor/serve-sim/grid/api/start", bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("create iOS stream request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return &ports.DeviceRuntimeError{Code: "DEVICE_RUNTIME_UNAVAILABLE", Message: "The iOS device stream could not start"}
+	}
+	defer func() { _ = response.Body.Close() }()
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+	var result struct {
+		OK bool `json:"ok"`
+	}
+	if readErr != nil || json.Unmarshal(body, &result) != nil || response.StatusCode != http.StatusOK || !result.OK {
+		return &ports.DeviceRuntimeError{Code: "DEVICE_RUNTIME_UNAVAILABLE", Message: "The iOS device stream could not start"}
+	}
+	healthURL := origin + "/vendor/serve-sim/helper/" + url.PathEscape(deviceID) + "/health"
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if hubRouteHealthy(ctx, healthURL) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return &ports.DeviceRuntimeError{Code: "DEVICE_RUNTIME_UNAVAILABLE", Message: "The iOS device stream did not become ready"}
+}
+
+func hubRouteHealthy(ctx context.Context, route string) bool {
+	probeCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, route, http.NoBody)
 	if err != nil {
 		return false
 	}

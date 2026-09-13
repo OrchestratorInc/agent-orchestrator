@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/png"
 	"net/http"
 	"net/url"
 	"os"
@@ -187,7 +189,11 @@ func newDeviceCommand(ctx *commandContext) *cobra.Command {
 		if len(args) == 1 {
 			path = args[0]
 		}
-		bytes, err := base64.StdEncoding.DecodeString(encoded)
+		pngBytes, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return errors.New("device screenshot response contained invalid PNG data")
+		}
+		config, err := png.DecodeConfig(bytes.NewReader(pngBytes))
 		if err != nil {
 			return errors.New("device screenshot response contained invalid PNG data")
 		}
@@ -199,7 +205,7 @@ func newDeviceCommand(ctx *commandContext) *cobra.Command {
 		if err != nil {
 			return fmt.Errorf("write screenshot: %w", err)
 		}
-		if _, err = file.Write(bytes); err != nil {
+		if _, err = file.Write(pngBytes); err != nil {
 			_ = file.Close()
 			return fmt.Errorf("write screenshot: %w", err)
 		}
@@ -207,9 +213,11 @@ func newDeviceCommand(ctx *commandContext) *cobra.Command {
 			return fmt.Errorf("close screenshot: %w", err)
 		}
 		if jsonOutput {
-			return writeJSON(cmd.OutOrStdout(), map[string]any{"path": path, "size": len(bytes)})
+			return writeJSON(cmd.OutOrStdout(), map[string]any{
+				"path": path, "size": len(pngBytes), "width": config.Width, "height": config.Height,
+			})
 		}
-		_, err = fmt.Fprintln(cmd.OutOrStdout(), path)
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s\nDevice pixel size: %dx%d. Use this coordinate space for ao device tap/swipe.\n", path, config.Width, config.Height)
 		return err
 	}}
 	screenshot.Flags().BoolVar(&screenshotBase64, "base64", false, "print PNG bytes as base64 instead of writing a file")

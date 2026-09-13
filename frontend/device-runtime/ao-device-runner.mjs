@@ -45,13 +45,14 @@ try {
 		case "attach": {
 			// AO renders the device through its embedded live stream. Keep platform
 			// boot in the background so no second native window opens outside AO.
-			if (platform === "ios" && device) await bootIOSInBackground(device);
-			await client.devices.boot({
-				...targetSelection,
-				// Apple simctl boot is already background-only; agent-device reserves
-				// its explicit headless flag for Android Emulator.
-				...(platform === "android" ? { headless: true } : {}),
-			});
+			if (platform === "ios" && device) {
+				// simctl bootstatus is the authoritative readiness fence. Calling the
+				// agent-device boot path again after it succeeds can race CoreSimulator
+				// and leave a newly selected simulator waiting until AO's timeout.
+				await bootIOSInBackground(device);
+			} else {
+				await client.devices.boot({ ...targetSelection, headless: true });
+			}
 			// Opening the human-facing device panel must not start an XCTest app.
 			// Agent automation establishes its richer session lazily on first use.
 			result = { attached: true };
@@ -94,7 +95,9 @@ try {
 				} else {
 					// The agent-device screenshot API intentionally accepts a session, not
 					// device selectors. Passing platform/device is rejected as INVALID_ARGS.
-					await client.capture.screenshot({ ...sessionSelection, path: file, stabilize: false });
+					// Keep the source PNG at native resolution. The CLI reports those native
+					// dimensions so agents can compensate if their image viewer scales it.
+					await client.capture.screenshot({ ...sessionSelection, path: file, scale: 1, stabilize: false });
 				}
 				const bytes = await readFile(file);
 				result = { pngBase64: bytes.toString("base64"), size: bytes.length };

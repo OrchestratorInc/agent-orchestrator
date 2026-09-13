@@ -27,8 +27,10 @@ func (fakeAuthority) Valid(id domain.SessionID, token, verifier string) bool {
 }
 
 type fakeDeviceRuntime struct {
-	requests []ports.DeviceRuntimeRequest
-	fail     error
+	requests    []ports.DeviceRuntimeRequest
+	prepared    []domain.DeviceAttachment
+	fail        error
+	prepareFail error
 }
 
 func (f *fakeDeviceRuntime) Capabilities(context.Context) []domain.DevicePlatformCapability {
@@ -52,6 +54,11 @@ func (f *fakeDeviceRuntime) Execute(_ context.Context, request ports.DeviceRunti
 
 func (f *fakeDeviceRuntime) HubOrigin(context.Context) (string, error) {
 	return "http://127.0.0.1:43210", nil
+}
+
+func (f *fakeDeviceRuntime) PrepareStream(_ context.Context, platform domain.DevicePlatform, deviceID string) error {
+	f.prepared = append(f.prepared, domain.DeviceAttachment{DeviceID: deviceID, Platform: platform})
+	return f.prepareFail
 }
 
 func TestServiceRequiresSessionCapabilityOrDesktopCredential(t *testing.T) {
@@ -124,11 +131,30 @@ func TestServiceIssuesAndRevokesStreamCapabilities(t *testing.T) {
 	if access, ok := service.ResolveStream(ticket); !ok || access.DeviceID != "ios-1" || access.Origin != "http://127.0.0.1:43210" {
 		t.Fatalf("stream access = %#v, ok = %v", access, ok)
 	}
+	if len(runtime.prepared) != 1 || runtime.prepared[0].DeviceID != "ios-1" || runtime.prepared[0].Platform != domain.DevicePlatformIOS {
+		t.Fatalf("prepared streams = %#v", runtime.prepared)
+	}
 	if _, err := service.Execute(context.Background(), "s1", credentials, Command{Action: "close"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := service.ResolveStream(ticket); ok {
 		t.Fatal("stream capability remained valid after close")
+	}
+}
+
+func TestServiceReleasesNewAttachmentWhenStreamPreparationFails(t *testing.T) {
+	runtime := &fakeDeviceRuntime{prepareFail: &ports.DeviceRuntimeError{Code: "DEVICE_RUNTIME_UNAVAILABLE", Message: "stream unavailable"}}
+	service := New(fakeSessionReader{}, runtime, fakeAuthority{}, "")
+	open := Command{Action: "open", DeviceID: "ios-1", Platform: domain.DevicePlatformIOS}
+	if _, err := service.Execute(context.Background(), "s1", Credentials{Agent: "token-s1"}, open); apiErrorCode(err) != "DEVICE_RUNTIME_UNAVAILABLE" {
+		t.Fatalf("first open error = %v", err)
+	}
+	if len(runtime.requests) != 2 || runtime.requests[0].Action != "attach" || runtime.requests[1].Action != "detach" {
+		t.Fatalf("rollback requests = %#v", runtime.requests)
+	}
+	runtime.prepareFail = nil
+	if _, err := service.Execute(context.Background(), "s2", Credentials{Agent: "token-s2"}, open); err != nil {
+		t.Fatalf("lease remained after stream failure: %v", err)
 	}
 }
 

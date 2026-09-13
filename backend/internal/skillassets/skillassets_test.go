@@ -109,6 +109,8 @@ func TestEmbeddedDeviceGuidanceKeepsControlScopedAndExplicit(t *testing.T) {
 		"`shutdown` powers it off",
 		"requires explicit `--yes` confirmation",
 		"missing Xcode must not disable Android",
+		"native device-pixel dimensions",
+		"never treat the viewer's displayed dimensions as device coordinates",
 	} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("device guidance missing %q:\n%s", required, body)

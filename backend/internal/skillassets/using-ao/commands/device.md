@@ -80,7 +80,10 @@ ao device shutdown [device-id] --yes [--json]
 ```
 
 `screenshot` writes a PNG with mode `0600` and refuses to overwrite an
-existing file. Use `--base64` only when inline bytes are necessary. Prefer
+existing file. It also prints the PNG's native device-pixel dimensions. Use
+that printed coordinate space for `tap` and `swipe`: an agent image viewer may
+resize the PNG, so never treat the viewer's displayed dimensions as device
+coordinates. Use `--base64` only when inline bytes are necessary. Prefer
 `ui-tree --interactive` before actions because its smaller result focuses on
 actionable controls. `fill` replaces a referenced field's value; `type`
 inserts text into the currently focused field.
