@@ -4111,7 +4111,7 @@ func (m *Manager) aoSkillPointer() string {
 		"`ao browser` operates the same live page the user sees in that panel.\n\n" +
 		"## AO desktop Devices panel\n\n" +
 		"For attached iOS/Android devices, read `" + deviceFile + "`; use only `ao device` for the same panel. " +
-		"Never invoke `adb`, `emulator`, `agent-device`, private helpers/state, or host CUA; report AO errors."
+		"Never invoke `adb`, `emulator`, `agent-device`, private helpers/state, or host computer-use/CUA; report AO errors."
 }
 
 func (m *Manager) workspaceProjectPrompt(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID) (string, error) {
