@@ -28,9 +28,12 @@ func (fakeAuthority) Valid(id domain.SessionID, token, verifier string) bool {
 
 type fakeDeviceRuntime struct {
 	requests    []ports.DeviceRuntimeRequest
+	listed      []domain.DevicePlatform
 	prepared    []domain.DeviceAttachment
 	fail        error
 	prepareFail error
+	attachValue json.RawMessage
+	devices     []domain.Device
 }
 
 func (f *fakeDeviceRuntime) Capabilities(context.Context) []domain.DevicePlatformCapability {
@@ -40,7 +43,11 @@ func (f *fakeDeviceRuntime) Capabilities(context.Context) []domain.DevicePlatfor
 	}
 }
 
-func (f *fakeDeviceRuntime) List(context.Context, domain.DevicePlatform) ([]domain.Device, error) {
+func (f *fakeDeviceRuntime) List(_ context.Context, platform domain.DevicePlatform) ([]domain.Device, error) {
+	f.listed = append(f.listed, platform)
+	if f.devices != nil {
+		return f.devices, nil
+	}
 	return []domain.Device{{ID: "ios-1", Name: "iPhone 17", Platform: domain.DevicePlatformIOS, Kind: domain.DeviceKindSimulator}}, nil
 }
 
@@ -48,6 +55,9 @@ func (f *fakeDeviceRuntime) Execute(_ context.Context, request ports.DeviceRunti
 	f.requests = append(f.requests, request)
 	if f.fail != nil {
 		return nil, f.fail
+	}
+	if request.Action == "attach" && len(f.attachValue) != 0 {
+		return f.attachValue, nil
 	}
 	return json.RawMessage(`{"ok":true}`), nil
 }
@@ -113,6 +123,48 @@ func TestServiceEnforcesExclusiveAttachmentAndReleasesOnClose(t *testing.T) {
 	}
 }
 
+func TestServiceOpenOnlyDiscoversSelectedPlatform(t *testing.T) {
+	runtime := &fakeDeviceRuntime{}
+	service := New(fakeSessionReader{}, runtime, fakeAuthority{}, "")
+	_, err := service.Execute(context.Background(), "s1", Credentials{Agent: "token-s1"}, Command{
+		Action: "open", DeviceID: "ios-1", Platform: domain.DevicePlatformIOS,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.listed) != 1 || runtime.listed[0] != domain.DevicePlatformIOS {
+		t.Fatalf("listed platforms = %#v", runtime.listed)
+	}
+}
+
+func TestServiceUsesRuntimeDeviceIDForAndroidStreamAndLease(t *testing.T) {
+	runtime := &fakeDeviceRuntime{
+		attachValue: json.RawMessage(`{"attached":true,"deviceId":"emulator-5554"}`),
+		devices: []domain.Device{{
+			ID: "AO_Pixel_API_36", Name: "AO Pixel API 36", Platform: domain.DevicePlatformAndroid, Kind: domain.DeviceKindEmulator,
+		}},
+	}
+	service := New(fakeSessionReader{}, runtime, fakeAuthority{}, "")
+	result, err := service.Execute(context.Background(), "s1", Credentials{Agent: "token-s1"}, Command{
+		Action: "open", DeviceID: "AO_Pixel_API_36", Platform: domain.DevicePlatformAndroid,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Attachment == nil || result.Attachment.DeviceID != "emulator-5554" {
+		t.Fatalf("attachment = %#v", result.Attachment)
+	}
+	if len(runtime.prepared) != 1 || runtime.prepared[0].DeviceID != "emulator-5554" {
+		t.Fatalf("prepared streams = %#v", runtime.prepared)
+	}
+	if _, err := service.Execute(context.Background(), "s1", Credentials{Agent: "token-s1"}, Command{Action: "close"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, busy := service.owners["emulator-5554"]; busy {
+		t.Fatal("runtime device lease remained after close")
+	}
+}
+
 func TestServiceIssuesAndRevokesStreamCapabilities(t *testing.T) {
 	runtime := &fakeDeviceRuntime{}
 	service := New(fakeSessionReader{}, runtime, fakeAuthority{}, "")
@@ -143,7 +195,10 @@ func TestServiceIssuesAndRevokesStreamCapabilities(t *testing.T) {
 }
 
 func TestServiceReleasesNewAttachmentWhenStreamPreparationFails(t *testing.T) {
-	runtime := &fakeDeviceRuntime{prepareFail: &ports.DeviceRuntimeError{Code: "DEVICE_RUNTIME_UNAVAILABLE", Message: "stream unavailable"}}
+	runtime := &fakeDeviceRuntime{
+		prepareFail: &ports.DeviceRuntimeError{Code: "DEVICE_RUNTIME_UNAVAILABLE", Message: "stream unavailable"},
+		attachValue: json.RawMessage(`{"attached":true,"deviceId":"runtime-ios-1"}`),
+	}
 	service := New(fakeSessionReader{}, runtime, fakeAuthority{}, "")
 	open := Command{Action: "open", DeviceID: "ios-1", Platform: domain.DevicePlatformIOS}
 	if _, err := service.Execute(context.Background(), "s1", Credentials{Agent: "token-s1"}, open); apiErrorCode(err) != "DEVICE_RUNTIME_UNAVAILABLE" {
@@ -151,6 +206,9 @@ func TestServiceReleasesNewAttachmentWhenStreamPreparationFails(t *testing.T) {
 	}
 	if len(runtime.requests) != 2 || runtime.requests[0].Action != "attach" || runtime.requests[1].Action != "detach" {
 		t.Fatalf("rollback requests = %#v", runtime.requests)
+	}
+	if _, busy := service.owners["runtime-ios-1"]; busy {
+		t.Fatal("runtime device lease remained after stream failure")
 	}
 	runtime.prepareFail = nil
 	if _, err := service.Execute(context.Background(), "s2", Credentials{Agent: "token-s2"}, open); err != nil {

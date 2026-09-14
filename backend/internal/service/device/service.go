@@ -263,11 +263,14 @@ func (s *Service) open(ctx context.Context, sessionID domain.SessionID, command 
 	if deviceID == "" || (command.Platform != domain.DevicePlatformIOS && command.Platform != domain.DevicePlatformAndroid) {
 		return Result{}, apierr.Invalid("INVALID_ARGUMENT", "open requires a deviceId and platform", nil)
 	}
-	inventory := s.list(ctx, sessionID)
+	devices, err := s.runtime.List(ctx, command.Platform)
+	if err != nil {
+		return Result{}, mapRuntimeError(err)
+	}
 	var selected *domain.Device
-	for i := range inventory.Devices {
-		if inventory.Devices[i].ID == deviceID && inventory.Devices[i].Platform == command.Platform {
-			selected = &inventory.Devices[i]
+	for i := range devices {
+		if devices[i].ID == deviceID && devices[i].Platform == command.Platform {
+			selected = &devices[i]
 			break
 		}
 	}
@@ -298,7 +301,20 @@ func (s *Service) open(ctx context.Context, sessionID domain.SessionID, command 
 		s.release(sessionID, deviceID)
 		return Result{}, mapRuntimeError(err)
 	}
-	_ = value
+	var attached struct {
+		DeviceID string `json:"deviceId"`
+	}
+	if json.Unmarshal(value, &attached) == nil {
+		runtimeDeviceID := strings.TrimSpace(attached.DeviceID)
+		if runtimeDeviceID != "" && runtimeDeviceID != deviceID {
+			s.mu.Lock()
+			delete(s.owners, deviceID)
+			attachment.DeviceID = runtimeDeviceID
+			s.bySession[sessionID] = attachment
+			s.owners[runtimeDeviceID] = sessionID
+			s.mu.Unlock()
+		}
+	}
 	result, err := s.streamResult(ctx, sessionID, attachment, "open")
 	if err != nil {
 		// A booted device without a usable embedded stream is not an attachment.
@@ -307,7 +323,7 @@ func (s *Service) open(ctx context.Context, sessionID domain.SessionID, command 
 		_, _ = s.runtime.Execute(context.WithoutCancel(ctx), ports.DeviceRuntimeRequest{
 			Action: "detach", Session: helperSession(sessionID),
 		})
-		s.release(sessionID, deviceID)
+		s.release(sessionID, attachment.DeviceID)
 		return Result{}, err
 	}
 	return result, nil

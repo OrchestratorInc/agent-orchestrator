@@ -50,12 +50,17 @@ try {
 				// agent-device boot path again after it succeeds can race CoreSimulator
 				// and leave a newly selected simulator waiting until AO's timeout.
 				await bootIOSInBackground(device);
+				result = { attached: true, deviceId: device };
 			} else {
-				await client.devices.boot({ ...targetSelection, headless: true });
+				const booted = await client.devices.boot({ ...targetSelection, headless: true });
+				// A stopped Android AVD is selected by name, but serve-emu addresses
+				// the running emulator by its adb serial (for example emulator-5554).
+				// Return the runtime identifier so AO routes both video and input to
+				// the device that was actually booted.
+				result = { attached: true, deviceId: booted.id };
 			}
 			// Opening the human-facing device panel must not start an XCTest app.
 			// Agent automation establishes its richer session lazily on first use.
-			result = { attached: true };
 			break;
 		}
 		case "detach":
