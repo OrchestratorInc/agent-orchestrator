@@ -93,7 +93,10 @@ func (r *Runtime) HubOrigin(ctx context.Context) (string, error) {
 func hubHealthy(ctx context.Context, origin string) bool {
 	probeCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
 	defer cancel()
-	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, origin+"/api/devices?booted=1", http.NoBody)
+	// Device discovery can take several seconds while an Android emulator is
+	// starting. The hub exposes /readyz specifically so process readiness does
+	// not depend on that expensive inventory operation.
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, origin+"/readyz", http.NoBody)
 	if err != nil {
 		return false
 	}

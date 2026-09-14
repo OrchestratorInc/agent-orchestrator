@@ -16,7 +16,7 @@ func TestPrepareStreamStartsSelectedIOSHelperAndWaitsForHealth(t *testing.T) {
 	var starts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/devices":
+		case r.Method == http.MethodGet && r.URL.Path == "/readyz":
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodPost && r.URL.Path == "/vendor/serve-sim/grid/api/start":
 			var request struct {
@@ -41,6 +41,29 @@ func TestPrepareStreamStartsSelectedIOSHelperAndWaitsForHealth(t *testing.T) {
 	}
 	if starts.Load() != 1 {
 		t.Fatalf("stream helper starts = %d, want 1", starts.Load())
+	}
+}
+
+func TestHubHealthyUsesLightweightReadinessRoute(t *testing.T) {
+	var inventoryCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/readyz":
+			_, _ = w.Write([]byte(`{"status":"ready"}`))
+		case "/api/devices":
+			inventoryCalls.Add(1)
+			http.Error(w, "inventory is still starting", http.StatusServiceUnavailable)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	if !hubHealthy(context.Background(), server.URL) {
+		t.Fatal("hub should be healthy while device inventory is unavailable")
+	}
+	if inventoryCalls.Load() != 0 {
+		t.Fatalf("inventory calls = %d, want 0", inventoryCalls.Load())
 	}
 }
 
