@@ -8442,6 +8442,7 @@ components:
         state:
           enum:
           - authorized
+          - configured
           - unauthorized
           - unknown
           - not_applicable
