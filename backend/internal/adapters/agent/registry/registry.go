@@ -21,6 +21,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/devin"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/fx"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/goose"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/grok"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kilocode"
@@ -73,6 +74,7 @@ func Constructors() []adapters.Adapter {
 		primeagent.New(),
 		autohand.New(),
 		unrealagent.New(),
+		fx.New(),
 	}
 }
 
