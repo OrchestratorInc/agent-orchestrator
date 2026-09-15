@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Download, LoaderCircle, LogIn, Search, TriangleAlert, X } from "lucide-react";
+import { BookOpen, Check, Copy, Download, LoaderCircle, LogIn, Search, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
@@ -511,8 +511,10 @@ export function HarnessSettingsSection({
 						);
 
 						const authSummary = authState?.error
-								? authState.error
-							: authStatus === "authorized"
+							? authState.error
+							: authStatus === "configured"
+								? t("settings.harness.configured")
+								: authStatus === "authorized"
 								? (isSetupAction ? t("settings.harness.configured") : t("settings.harness.loggedIn"))
 								: authPlan && !authPlan.available
 									? (authPlan.reason ?? t("settings.harness.authFailed"))
@@ -607,6 +609,12 @@ export function HarnessSettingsSection({
 							) : plan?.command ? (
 								<Button size="sm" variant="outline" onClick={() => void copyText(agentId, plan.command!)}>{copiedAgent === agentId ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{copiedAgent === agentId ? t("settings.harness.copied") : t("settings.harness.copyCommand")}</Button>
 							) : null}
+
+				{authPlan?.action === "instructions" && authPlan.documentationUrl ? (
+					<Button size="icon-sm" variant="ghost" aria-label={t("settings.harness.instructions")} title={t("settings.harness.instructions")} onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}>
+						<BookOpen aria-hidden="true" />
+					</Button>
+				) : null}
 
 				{!isInstalled && hasDiagnostics ? (
 				<div className="basis-full">

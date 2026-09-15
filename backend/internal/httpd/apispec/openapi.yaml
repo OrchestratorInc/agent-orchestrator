@@ -8442,7 +8442,6 @@ components:
         state:
           enum:
           - authorized
-          - configured
           - unauthorized
           - unknown
           - not_applicable
@@ -10755,6 +10754,7 @@ components:
           - pi
           - kimchi
           - omp
+          - fx
           - prime-agent
           - autohand
           - unreal-agent
@@ -11383,6 +11383,7 @@ components:
           - kimchi
           - prime-agent
           - omp
+          - fx
           - unreal-agent
           - cloudflared
           type: string
@@ -13569,6 +13570,7 @@ components:
           - pi
           - kimchi
           - omp
+          - fx
           - prime-agent
           - autohand
           - unreal-agent
@@ -13841,6 +13843,7 @@ components:
           enum:
           - claude-code
           - codex
+          - fx
           type: string
       required:
       - targetHarness
