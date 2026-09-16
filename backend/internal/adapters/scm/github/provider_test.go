@@ -588,6 +588,33 @@ func TestCIProjectionsUseLatestWorkflowRunAttempt(t *testing.T) {
 	}
 }
 
+func TestGitHubCIProjectionUsesOneEffectiveCheckSet(t *testing.T) {
+	pr := prWithCheckRuns("FAILURE",
+		workflowCheckRun("build", "CANCELLED", 301525012, 5585, 1, 9001),
+		workflowCheckRun("build", "SUCCESS", 301525012, 5586, 1, 9002),
+		workflowCheckRun("lint", "CANCELLED", 301525012, 5586, 1, 9003),
+	)
+
+	projection := githubCIProjectionFromGraphQL(pr)
+	if got := projection.summary(); got != domain.CIFailing {
+		t.Fatalf("summary = %q, want %q", got, domain.CIFailing)
+	}
+	checks := projection.scmChecks()
+	if len(checks) != 2 {
+		t.Fatalf("checks = %+v, want the current build and lint checks", checks)
+	}
+	failed := projection.failedSCMChecks()
+	if len(failed) != 1 || failed[0].ProviderID != "9003" {
+		t.Fatalf("failed checks = %+v, want only current lint cancellation", failed)
+	}
+	if got := projection.jobID("build"); got != 9002 {
+		t.Fatalf("build job id = %d, want current successful build job 9002", got)
+	}
+	if got := projection.jobID("lint"); got != 9003 {
+		t.Fatalf("lint job id = %d, want current cancelled lint job 9003", got)
+	}
+}
+
 func prWithCheckRuns(rollupState string, checks ...any) map[string]any {
 	return map[string]any{
 		"commits": map[string]any{"nodes": []any{
