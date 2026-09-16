@@ -232,10 +232,10 @@ func (p *Provider) fetchRESTPull(ctx context.Context, owner, repo string, number
 // risk reporting a broken PR as passing).
 const graphQLCheckContextLimit = 100
 
-// checkRunFields is the CheckRun selection every rollup query uses. The
-// workflow name and event identify which runs are reruns of the same check
-// (see latestCheckRuns).
-const checkRunFields = `name status conclusion detailsUrl url databaseId checkSuite{ workflowRun{ event workflow{ name } } }`
+// checkRunFields is the CheckRun selection every rollup query uses. Workflow
+// identity and run ordering distinguish a current cancellation from a
+// cancelled run superseded by a newer run of the same workflow/job.
+const checkRunFields = `name status conclusion detailsUrl url databaseId checkSuite{ workflowRun{ runNumber runAttempt workflow{ databaseId } } }`
 
 // prObservationQuery is the GraphQL query (derived from PR #28, credited
 // to @whoisasx) that pulls everything we need in one round trip:
@@ -333,7 +333,7 @@ func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
 		return domain.CIUnknown
 	}
 	contexts, _ := roll["contexts"].(map[string]any)
-	rawNodes := latestCheckRuns(nodes(contexts["nodes"]))
+	rawNodes := effectiveCheckNodes(contexts)
 	if len(rawNodes) == 0 {
 		// GitHub returns a top-level "state" on the rollup even when the
 		// nodes list is empty (e.g. SUCCESS / FAILURE / PENDING). Honor it
@@ -472,7 +472,7 @@ func mergeabilityFromGraphQL(pr map[string]any, rest restPull, ci domain.CIState
 func checksFromGraphQL(pr map[string]any, headSHA string) []ports.PRCheckObservation {
 	roll := statusRollup(pr)
 	contexts, _ := roll["contexts"].(map[string]any)
-	rawNodes := latestCheckRuns(nodes(contexts["nodes"]))
+	rawNodes := effectiveCheckNodes(contexts)
 	if len(rawNodes) == 0 {
 		return nil
 	}
@@ -561,7 +561,7 @@ func isBotAuthor(author map[string]any) bool {
 func jobIDForCheck(pr map[string]any, name string) int64 {
 	roll := statusRollup(pr)
 	contexts, _ := roll["contexts"].(map[string]any)
-	for _, n := range latestCheckRuns(nodes(contexts["nodes"])) {
+	for _, n := range effectiveCheckNodes(contexts) {
 		if str(n["__typename"]) != "CheckRun" {
 			continue
 		}
@@ -624,6 +624,62 @@ func statusRollup(pr map[string]any) map[string]any {
 		}
 	}
 	return nil
+}
+
+// effectiveCheckNodes removes older occurrences of the same GitHub Actions
+// job when GitHub retains multiple workflow runs for one commit. A cancellation
+// is still actionable when it belongs to the newest run (or when GitHub does
+// not provide workflow metadata), but a newer rerun of the same workflow/job
+// supersedes it.
+type workflowRunVersion struct {
+	number  int64
+	attempt int64
+}
+
+func effectiveCheckNodes(contexts map[string]any) []map[string]any {
+	raw := nodes(contexts["nodes"])
+	latest := make(map[string]workflowRunVersion)
+	for _, node := range raw {
+		key, version, ok := checkRunVersion(node)
+		if !ok {
+			continue
+		}
+		if current, exists := latest[key]; !exists || newerRunVersion(version, current) {
+			latest[key] = version
+		}
+	}
+	out := make([]map[string]any, 0, len(raw))
+	for _, node := range raw {
+		key, version, ok := checkRunVersion(node)
+		if ok && version != latest[key] {
+			continue
+		}
+		out = append(out, node)
+	}
+	return out
+}
+
+func checkRunVersion(node map[string]any) (string, workflowRunVersion, bool) {
+	var version workflowRunVersion
+	if str(node["__typename"]) != "CheckRun" {
+		return "", version, false
+	}
+	name := strings.TrimSpace(str(node["name"]))
+	suite, _ := node["checkSuite"].(map[string]any)
+	run, _ := suite["workflowRun"].(map[string]any)
+	workflow, _ := run["workflow"].(map[string]any)
+	workflowID := int64(num(workflow["databaseId"]))
+	version.number = int64(num(run["runNumber"]))
+	version.attempt = int64(num(run["runAttempt"]))
+	if name == "" || workflowID == 0 || version.number == 0 {
+		return "", version, false
+	}
+	return strconv.FormatInt(workflowID, 10) + "\x00" + name, version, true
+}
+
+func newerRunVersion(candidate, current workflowRunVersion) bool {
+	return candidate.number > current.number ||
+		(candidate.number == current.number && candidate.attempt > current.attempt)
 }
 
 // checkStatusFromGraphQL maps the (status, conclusion) tuple of one node

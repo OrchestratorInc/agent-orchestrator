@@ -578,6 +578,10 @@ func ciSummaryFromRollupState(pr map[string]any) domain.CIState {
 	if roll == nil {
 		return domain.CIUnknown
 	}
+	contexts, _ := roll["contexts"].(map[string]any)
+	if len(nodes(contexts["nodes"])) > 0 && !pageInfoHasMore(contexts) {
+		return ciSummaryFromGraphQL(pr)
+	}
 	return mapRollupState(str(roll["state"]))
 }
 
@@ -602,7 +606,7 @@ func scmContextsPaginated(pr map[string]any) bool {
 func scmChecksFromGraphQL(pr map[string]any) []ports.SCMCheckObservation {
 	roll := statusRollup(pr)
 	contexts, _ := roll["contexts"].(map[string]any)
-	rawNodes := latestCheckRuns(nodes(contexts["nodes"]))
+	rawNodes := effectiveCheckNodes(contexts)
 	out := make([]ports.SCMCheckObservation, 0, len(rawNodes))
 	for _, n := range rawNodes {
 		typ := str(n["__typename"])

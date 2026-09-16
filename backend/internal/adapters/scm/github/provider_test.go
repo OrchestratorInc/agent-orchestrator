@@ -513,6 +513,118 @@ func TestObserve_CIStates(t *testing.T) {
 	}
 }
 
+func TestCIProjectionsIgnoreSupersededCancelledWorkflowRun(t *testing.T) {
+	pr := prWithCheckRuns("FAILURE",
+		workflowCheckRun("build-test", "CANCELLED", 301525012, 5585, 1, 104658065945),
+		workflowCheckRun("build-test", "SUCCESS", 301525012, 5586, 1, 104658070883),
+	)
+
+	if got := ciSummaryFromGraphQL(pr); got != domain.CIPassing {
+		t.Fatalf("direct CI summary = %q, want %q", got, domain.CIPassing)
+	}
+	obs := scmObservationFromGraphQL(ports.SCMPRRef{}, pr)
+	if obs.CI.Summary != string(domain.CIPassing) {
+		t.Fatalf("observer CI summary = %q, want %q", obs.CI.Summary, domain.CIPassing)
+	}
+	if len(obs.CI.Checks) != 1 || obs.CI.Checks[0].ProviderID != "104658070883" {
+		t.Fatalf("observer checks = %+v, want only the newer successful occurrence", obs.CI.Checks)
+	}
+	if len(obs.CI.FailedChecks) != 0 {
+		t.Fatalf("observer failed checks = %+v, want none", obs.CI.FailedChecks)
+	}
+}
+
+func TestCIProjectionsKeepLatestCancelledWorkflowRun(t *testing.T) {
+	pr := prWithCheckRuns("FAILURE",
+		workflowCheckRun("build-test", "SUCCESS", 301525012, 5585, 1, 104658065945),
+		workflowCheckRun("build-test", "CANCELLED", 301525012, 5586, 1, 104658070883),
+	)
+
+	if got := ciSummaryFromGraphQL(pr); got != domain.CIFailing {
+		t.Fatalf("direct CI summary = %q, want %q", got, domain.CIFailing)
+	}
+	obs := scmObservationFromGraphQL(ports.SCMPRRef{}, pr)
+	if obs.CI.Summary != string(domain.CIFailing) {
+		t.Fatalf("observer CI summary = %q, want %q", obs.CI.Summary, domain.CIFailing)
+	}
+	if len(obs.CI.Checks) != 1 || obs.CI.Checks[0].ProviderID != "104658070883" {
+		t.Fatalf("observer checks = %+v, want only the newer cancelled occurrence", obs.CI.Checks)
+	}
+	if len(obs.CI.FailedChecks) != 1 || obs.CI.FailedChecks[0].ProviderID != "104658070883" {
+		t.Fatalf("observer failed checks = %+v, want the current cancellation", obs.CI.FailedChecks)
+	}
+}
+
+func TestCIProjectionsKeepSameNamedJobsFromDifferentWorkflows(t *testing.T) {
+	pr := prWithCheckRuns("FAILURE",
+		workflowCheckRun("build", "SUCCESS", 100, 20, 1, 9001),
+		workflowCheckRun("build", "CANCELLED", 200, 3, 1, 9002),
+	)
+
+	obs := scmObservationFromGraphQL(ports.SCMPRRef{}, pr)
+	if obs.CI.Summary != string(domain.CIFailing) {
+		t.Fatalf("observer CI summary = %q, want %q", obs.CI.Summary, domain.CIFailing)
+	}
+	if len(obs.CI.Checks) != 2 {
+		t.Fatalf("observer checks = %+v, want both workflows preserved", obs.CI.Checks)
+	}
+	if len(obs.CI.FailedChecks) != 1 || obs.CI.FailedChecks[0].ProviderID != "9002" {
+		t.Fatalf("observer failed checks = %+v, want cancellation from the second workflow", obs.CI.FailedChecks)
+	}
+}
+
+func TestCIProjectionsUseLatestWorkflowRunAttempt(t *testing.T) {
+	pr := prWithCheckRuns("FAILURE",
+		workflowCheckRun("lint", "CANCELLED", 301525012, 5586, 1, 9001),
+		workflowCheckRun("lint", "SUCCESS", 301525012, 5586, 2, 9002),
+	)
+
+	if got := ciSummaryFromGraphQL(pr); got != domain.CIPassing {
+		t.Fatalf("direct CI summary = %q, want %q", got, domain.CIPassing)
+	}
+	obs := scmObservationFromGraphQL(ports.SCMPRRef{}, pr)
+	if obs.CI.Summary != string(domain.CIPassing) || len(obs.CI.FailedChecks) != 0 {
+		t.Fatalf("observer CI = %+v, want passing with no failed checks", obs.CI)
+	}
+}
+
+func prWithCheckRuns(rollupState string, checks ...any) map[string]any {
+	return map[string]any{
+		"commits": map[string]any{"nodes": []any{
+			map[string]any{"commit": map[string]any{
+				"oid": "deadbeef",
+				"statusCheckRollup": map[string]any{
+					"state": rollupState,
+					"contexts": map[string]any{
+						"nodes":    checks,
+						"pageInfo": map[string]any{"hasNextPage": false},
+					},
+				},
+			}},
+		}},
+	}
+}
+
+func workflowCheckRun(name, conclusion string, workflowID, runNumber, runAttempt, checkID int) map[string]any {
+	return map[string]any{
+		"__typename": "CheckRun",
+		"name":       name,
+		"status":     "COMPLETED",
+		"conclusion": conclusion,
+		"detailsUrl": fmt.Sprintf("https://github.com/acme/repo/actions/runs/%d/job/%d", runNumber, checkID),
+		"databaseId": float64(checkID),
+		"checkSuite": map[string]any{
+			"workflowRun": map[string]any{
+				"runNumber":  float64(runNumber),
+				"runAttempt": float64(runAttempt),
+				"workflow": map[string]any{
+					"databaseId": float64(workflowID),
+				},
+			},
+		},
+	}
+}
+
 func TestObserve_LogTailOnFailure(t *testing.T) {
 	f := newFakeGH(t)
 	fx := basePRFixture()
@@ -1391,6 +1503,15 @@ func TestSCMBatchQueryRequestsStablePullRequestID(t *testing.T) {
 	if !strings.Contains(query, "number id url") {
 		t.Fatalf("batch query does not request the stable pull request id:\n%s", query)
 	}
+	if !strings.Contains(query, "checkSuite{ workflowRun{ runNumber runAttempt workflow{ databaseId } } }") {
+		t.Fatalf("batch query does not request workflow run identity:\n%s", query)
+	}
+}
+
+func TestPRObservationQueryRequestsWorkflowRunIdentity(t *testing.T) {
+	if !strings.Contains(prObservationQuery, "checkSuite{ workflowRun{ runNumber runAttempt workflow{ databaseId } } }") {
+		t.Fatalf("PR observation query does not request workflow run identity:\n%s", prObservationQuery)
+	}
 }
 
 func TestSCMObservationCarriesStableIDAndRequestedURLAlias(t *testing.T) {
@@ -1539,6 +1660,9 @@ func TestFetchPullRequestsFetchesRemainingCheckContexts(t *testing.T) {
 		case 2:
 			if !strings.Contains(string(body), `after:\"cursor-1\"`) && !strings.Contains(string(body), `after:"cursor-1"`) {
 				t.Fatalf("fallback query missing cursor, body=%s", body)
+			}
+			if !strings.Contains(string(body), "checkSuite") || !strings.Contains(string(body), "runAttempt") {
+				t.Fatalf("fallback query missing workflow run identity, body=%s", body)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"data": map[string]any{"repo": map[string]any{"pullRequest": map[string]any{
