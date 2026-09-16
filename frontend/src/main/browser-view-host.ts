@@ -148,6 +148,10 @@ export type BrowserAgentActivityState = {
   commandId?: string;
 };
 
+export type BrowserRuntimeState = {
+	connected: boolean;
+};
+
 export type BrowserDevToolsState = {
   viewId: string;
   open: boolean;

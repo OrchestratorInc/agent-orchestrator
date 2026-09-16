@@ -136,6 +136,7 @@ function setupBridge() {
 		})),
 		showProfileMenu: vi.fn(),
 		selectProfile: vi.fn(),
+		reconnectRuntime: vi.fn(async () => undefined),
 		historySuggestions: vi.fn(async () => []),
 		historyFavicon: vi.fn(async () => undefined),
 		captureScreenshot: vi.fn(async () => undefined),
@@ -167,6 +168,7 @@ function setupBridge() {
 			activityListeners.add(listener);
 			return () => activityListeners.delete(listener);
 		}),
+		onRuntimeState: vi.fn(() => () => undefined),
 		onProfileState: vi.fn((listener: ProfileListener) => {
 			profileListeners.add(listener);
 			return () => profileListeners.delete(listener);
