@@ -320,18 +320,6 @@ func (p *Provider) fetchJobLogTail(ctx context.Context, owner, repo string, jobI
 // Projection helpers
 // ---------------------------------------------------------------------------
 
-// ciSummaryFromGraphQL maps the per-PR status rollup onto domain.CIState.
-// If ANY visible context concluded failure-class we return CIFailing.
-// Otherwise any pending context wins over passing. An empty rollup is
-// CIUnknown. When the rollup is paginated (pageInfo.hasNextPage=true)
-// the verdict is conservative: a known failure is still safe — failures
-// don't get un-failed by more pages — but passing/pending/unknown
-// verdicts could hide a failing context on the next page, so we degrade
-// them all to CIUnknown rather than risk reporting a broken PR as ready.
-func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
-	return githubCIProjectionFromGraphQL(pr).summary()
-}
-
 // pageInfoHasMore reports whether the rollup contexts have a next page
 // the current request didn't fetch. We treat a missing pageInfo block
 // as "no more" (older API shapes that don't expose pagination simply
@@ -433,13 +421,6 @@ func mergeabilityFromGraphQL(pr map[string]any, rest restPull, ci domain.CIState
 	return domain.MergeUnknown
 }
 
-// checksFromGraphQL projects each context node into a PRCheckObservation.
-// StatusContext (commit-status) and CheckRun (Actions) are both flattened
-// into the same slice because downstream consumers don't distinguish.
-func checksFromGraphQL(pr map[string]any, headSHA string) []ports.PRCheckObservation {
-	return githubCIProjectionFromGraphQL(pr).prChecks(headSHA)
-}
-
 // commentsFromGraphQL flattens unresolved review threads into one comment
 // per node, dropping bot authors entirely (the spec keeps Resolved=false
 // always since we filter resolved threads out client-side).
@@ -491,52 +472,6 @@ func isBotAuthor(author map[string]any) bool {
 	return false
 }
 
-// jobIDForCheck looks up the Actions job ID for a check by name, so we
-// can call /actions/jobs/{job_id}/logs. StatusContext rows have no job
-// ID (they're commit statuses, not Actions runs); those return 0 and
-// the log fetch is skipped for them.
-func jobIDForCheck(pr map[string]any, name string) int64 {
-	return githubCIProjectionFromGraphQL(pr).jobID(name)
-}
-
-// latestCheckRuns drops check runs that a newer run of the same check
-// superseded on this commit. statusCheckRollup keeps every workflow run on the
-// SHA (one cancelled when the workflow re-ran, a failed attempt before a green
-// rerun) and GitHub's rollup state counts them, while GitHub's checks list and
-// `gh pr checks` show only the newest run per workflow, event and job. Check
-// run IDs grow, so the highest databaseId is the newest. A run without a
-// readable workflowRun (another app, or a token without Actions access) is
-// always kept: it can't be matched to its reruns.
-func latestCheckRuns(in []map[string]any) []map[string]any {
-	newest := map[string]float64{}
-	for _, n := range in {
-		if key := checkRunKey(n); key != "" {
-			newest[key] = max(newest[key], num(n["databaseId"]))
-		}
-	}
-	out := make([]map[string]any, 0, len(in))
-	for _, n := range in {
-		if key := checkRunKey(n); key != "" && num(n["databaseId"]) < newest[key] {
-			continue
-		}
-		out = append(out, n)
-	}
-	return out
-}
-
-func checkRunKey(n map[string]any) string {
-	if str(n["__typename"]) != "CheckRun" {
-		return ""
-	}
-	suite, _ := n["checkSuite"].(map[string]any)
-	run, _ := suite["workflowRun"].(map[string]any)
-	workflow, _ := run["workflow"].(map[string]any)
-	if workflow == nil {
-		return ""
-	}
-	return strings.Join([]string{str(workflow["name"]), str(run["event"]), str(n["name"])}, "\x00")
-}
-
 // statusRollup extracts the commits[0].commit.statusCheckRollup blob
 // from the GraphQL pullRequest payload. Nil when the PR has no commits
 // or GitHub hasn't computed the rollup yet.
@@ -585,9 +520,9 @@ func githubCIProjectionFromGraphQL(pr map[string]any) githubCIProjection {
 	}
 }
 
-// summary derives the direct-observation verdict. A paginated context list is
-// intentionally conservative: visible nodes may not represent the complete
-// check set.
+// summary maps the per-PR status rollup onto domain.CIState. A paginated
+// context list is intentionally conservative: visible nodes may not represent
+// the complete check set.
 func (p githubCIProjection) summary() domain.CIState {
 	if p.rollup == nil {
 		return domain.CIUnknown
@@ -632,6 +567,7 @@ func (p githubCIProjection) summaryWithRollupFallback() domain.CIState {
 	return mapRollupState(str(p.rollup["state"]))
 }
 
+// prChecks projects the normalized nodes into legacy PRCheckObservation rows.
 func (p githubCIProjection) prChecks(headSHA string) []ports.PRCheckObservation {
 	out := make([]ports.PRCheckObservation, 0, len(p.nodes))
 	for _, n := range p.nodes {
@@ -688,6 +624,8 @@ func (p githubCIProjection) failedSCMChecks() []ports.SCMCheckObservation {
 	return failedSCMChecks(p.scmChecks())
 }
 
+// jobID looks up an Actions job ID for log enrichment. Status contexts do not
+// have an Actions job ID, so they return zero and the log fetch is skipped.
 func (p githubCIProjection) jobID(name string) int64 {
 	for _, n := range p.nodes {
 		if str(n["__typename"]) == "CheckRun" && str(n["name"]) == name {

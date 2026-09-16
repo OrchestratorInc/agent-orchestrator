@@ -574,10 +574,6 @@ func scmObservationFromGraphQL(ref ports.SCMPRRef, pr map[string]any) ports.SCMO
 	return obs
 }
 
-func ciSummaryFromRollupState(pr map[string]any) domain.CIState {
-	return githubCIProjectionFromGraphQL(pr).summaryWithRollupFallback()
-}
-
 func scmContextsPaginated(pr map[string]any) bool {
 	return pageInfoHasMore(statusContexts(pr))
 }

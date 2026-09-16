@@ -519,7 +519,7 @@ func TestCIProjectionsIgnoreSupersededCancelledWorkflowRun(t *testing.T) {
 		workflowCheckRun("build-test", "SUCCESS", 301525012, 5586, 1, 104658070883),
 	)
 
-	if got := ciSummaryFromGraphQL(pr); got != domain.CIPassing {
+	if got := githubCIProjectionFromGraphQL(pr).summary(); got != domain.CIPassing {
 		t.Fatalf("direct CI summary = %q, want %q", got, domain.CIPassing)
 	}
 	obs := scmObservationFromGraphQL(ports.SCMPRRef{}, pr)
@@ -540,7 +540,7 @@ func TestCIProjectionsKeepLatestCancelledWorkflowRun(t *testing.T) {
 		workflowCheckRun("build-test", "CANCELLED", 301525012, 5586, 1, 104658070883),
 	)
 
-	if got := ciSummaryFromGraphQL(pr); got != domain.CIFailing {
+	if got := githubCIProjectionFromGraphQL(pr).summary(); got != domain.CIFailing {
 		t.Fatalf("direct CI summary = %q, want %q", got, domain.CIFailing)
 	}
 	obs := scmObservationFromGraphQL(ports.SCMPRRef{}, pr)
@@ -579,7 +579,7 @@ func TestCIProjectionsUseLatestWorkflowRunAttempt(t *testing.T) {
 		workflowCheckRun("lint", "SUCCESS", 301525012, 5586, 2, 9002),
 	)
 
-	if got := ciSummaryFromGraphQL(pr); got != domain.CIPassing {
+	if got := githubCIProjectionFromGraphQL(pr).summary(); got != domain.CIPassing {
 		t.Fatalf("direct CI summary = %q, want %q", got, domain.CIPassing)
 	}
 	obs := scmObservationFromGraphQL(ports.SCMPRRef{}, pr)
