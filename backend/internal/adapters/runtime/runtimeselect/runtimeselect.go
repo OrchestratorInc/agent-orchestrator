@@ -20,6 +20,7 @@ import (
 type Runtime interface {
 	ports.Runtime // Create, Destroy, IsAlive
 	ports.RuntimeChildInspector
+	ports.RuntimeProcessRootInspector
 	ports.FencedRuntimeProber
 	ports.Attacher
 	Interrupt(ctx context.Context, handle ports.RuntimeHandle) error

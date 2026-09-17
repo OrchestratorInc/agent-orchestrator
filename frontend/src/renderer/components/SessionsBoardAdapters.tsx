@@ -10,6 +10,7 @@ import {
 	type BoardPullRequestProgress,
 	type BoardSessionPresentation,
 	type BoardColumnLabels,
+	type BoardMemoryPresentation,
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
@@ -29,6 +30,7 @@ import type { WorkspaceSession } from "../types/workspace";
 import { canonicalTrackerIssueId } from "../types/workspace";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
 import type { SessionUsageSummary } from "../hooks/useSessionUsageSummaries";
+import { formatMemory, memoryTone, type SessionMemoryReading } from "../hooks/useSessionMemory";
 import {
 	clearTerminateSessionState,
 	useTerminateSessionState,
@@ -87,11 +89,13 @@ export function sessionsBoardLabels(t: TFunction): BoardColumnLabels {
 }
 
 export function BoardSessionCardAdapter({
+	memory,
 	onOpen,
 	onTerminate,
 	session,
 	usage,
 }: {
+	memory?: SessionMemoryReading;
 	onOpen: () => void;
 	onTerminate: () => void;
 	session: WorkspaceSession;
@@ -99,6 +103,7 @@ export function BoardSessionCardAdapter({
 }) {
 	return (
 		<DesktopSessionCard
+			memory={memory}
 			onOpen={onOpen}
 			onTerminate={onTerminate}
 			session={session}
@@ -147,6 +152,7 @@ function DesktopSessionCard({
 	branchAction,
 	footer,
 	interactive = true,
+	memory,
 	onOpen,
 	onTerminate,
 	session,
@@ -156,6 +162,7 @@ function DesktopSessionCard({
 	branchAction?: ReactNode;
 	footer?: ReactNode;
 	interactive?: boolean;
+	memory?: SessionMemoryReading;
 	onOpen?: () => void;
 	onTerminate?: () => void;
 	session: WorkspaceSession;
@@ -168,7 +175,7 @@ function DesktopSessionCard({
 	const termination = useTerminateSessionState(session.id);
 	const showTerminate = interactive && session.isTerminated !== true && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
-	const usagePresentation = toUsagePresentation(usage, t);
+	const usagePresentation = toUsagePresentation(usage, memory, t);
 	const translate: ProductUITranslator = (key, values) => t(key as MessageKey, values);
 
 	const terminationOverlay = showTerminate ? (
@@ -301,8 +308,36 @@ function pullRequestProgressLabel(
 // summary remains available from the hover tooltip and to screen readers.
 function toUsagePresentation(
 	usage: SessionUsageSummary | undefined,
+	memory: SessionMemoryReading | undefined,
 	t: TFunction,
 ): BoardUsagePresentation | undefined {
+	const tokens = toTokenPresentation(usage, t);
+	const memoryPresentation = toMemoryPresentation(memory, t);
+	if (!tokens && !memoryPresentation) {
+		return undefined;
+	}
+	return { accessibleLabel: "", compactLabel: "", ...tokens, memory: memoryPresentation };
+}
+
+function toMemoryPresentation(
+	memory: SessionMemoryReading | undefined,
+	t: TFunction,
+): BoardMemoryPresentation | undefined {
+	if (!memory) {
+		return undefined;
+	}
+	const compactLabel = formatMemory(memory.rssBytes);
+	return {
+		accessibleLabel: t("shell.memoryUsage", { size: compactLabel, count: memory.processCount }),
+		compactLabel,
+		tone: memoryTone(memory.rssBytes),
+	};
+}
+
+function toTokenPresentation(
+	usage: SessionUsageSummary | undefined,
+	t: TFunction,
+): Pick<BoardUsagePresentation, "accessibleLabel" | "compactLabel"> | undefined {
 	const processedTokens = usage?.processedTokens ?? null;
 	if (!usage) {
 		return undefined;

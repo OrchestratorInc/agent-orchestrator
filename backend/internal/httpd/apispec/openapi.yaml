@@ -8307,6 +8307,38 @@ paths:
       summary: Get detailed token and estimated cost usage for one session
       tags:
       - usage
+  /api/v1/usage/sessions/memory:
+    get:
+      operationId: listSessionMemory
+      parameters:
+      - description: Optional project id filter for dashboard cards.
+        in: query
+        name: projectId
+        schema:
+          description: Optional project id filter for dashboard cards.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSessionMemoryResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List resident memory of each live session's runtime process tree
+      tags:
+      - usage
 components:
   schemas:
     APIError:
@@ -11605,6 +11637,15 @@ components:
       - reviews
       - runs
       type: object
+    ListSessionMemoryResponse:
+      properties:
+        sessions:
+          items:
+            $ref: '#/components/schemas/SessionMemoryResponse'
+          type: array
+      required:
+      - sessions
+      type: object
     ListSessionPRsResponse:
       properties:
         prs:
@@ -12806,6 +12847,48 @@ components:
       required:
       - supported
       - targetMode
+      type: object
+    SessionMemoryProcessResponse:
+      properties:
+        command:
+          type: string
+        pid:
+          type: integer
+        ppid:
+          type: integer
+        rssBytes:
+          minimum: 0
+          type: integer
+      required:
+      - pid
+      - ppid
+      - rssBytes
+      - command
+      type: object
+    SessionMemoryResponse:
+      properties:
+        processCount:
+          minimum: 0
+          type: integer
+        processes:
+          items:
+            $ref: '#/components/schemas/SessionMemoryProcessResponse'
+          type: array
+        rssBytes:
+          description: Resident set size summed over the runtime process tree.
+          minimum: 0
+          type: integer
+        sampledAt:
+          format: date-time
+          type: string
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - rssBytes
+      - processCount
+      - sampledAt
+      - processes
       type: object
     SessionPRCISummary:
       properties:

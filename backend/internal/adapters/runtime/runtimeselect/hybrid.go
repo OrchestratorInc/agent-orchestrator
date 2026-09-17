@@ -24,6 +24,7 @@ type routedBackend interface {
 	ports.StyledTerminalOutputReader
 	ports.SupervisedProcessInspector
 	ports.ExactSupervisedProcessInspector
+	ports.RuntimeProcessRootInspector
 }
 
 type hybridRuntime struct {
@@ -38,6 +39,7 @@ var _ ports.RuntimeRestarter = (*hybridRuntime)(nil)
 var _ ports.StyledTerminalOutputReader = (*hybridRuntime)(nil)
 var _ ports.SupervisedProcessInspector = (*hybridRuntime)(nil)
 var _ ports.ExactSupervisedProcessInspector = (*hybridRuntime)(nil)
+var _ ports.RuntimeProcessRootInspector = (*hybridRuntime)(nil)
 
 func newHybridRuntime(legacy, direct routedBackend, log *slog.Logger, platform string) *hybridRuntime {
 	if log == nil {
@@ -151,6 +153,11 @@ func (r *hybridRuntime) Restart(ctx context.Context, handle ports.RuntimeHandle,
 	// Re-enter the normal creation policy so an unavailable replacement host
 	// can still recover the session on tmux and return its unprefixed handle.
 	return r.Create(ctx, cfg)
+}
+
+func (r *hybridRuntime) ProcessRootPIDs(ctx context.Context, handle ports.RuntimeHandle) ([]int, error) {
+	backend, raw := r.route(handle)
+	return backend.ProcessRootPIDs(ctx, raw)
 }
 
 func (r *hybridRuntime) route(handle ports.RuntimeHandle) (routedBackend, ports.RuntimeHandle) {

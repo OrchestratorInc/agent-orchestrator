@@ -400,3 +400,22 @@ type SourceCursorState struct {
 	LastErrorCode   string
 	UpdatedAt       time.Time
 }
+
+// SessionMemoryProcess is one process inside a session's runtime tree.
+type SessionMemoryProcess struct {
+	PID      int
+	PPID     int
+	RSSBytes uint64
+	Command  string
+}
+
+// SessionMemory is the resident memory of one live session's process tree,
+// sampled on request. It is transient by design: memory is a live reading,
+// not a durable session fact, so it is never persisted.
+type SessionMemory struct {
+	SessionID    SessionID
+	RSSBytes     uint64
+	ProcessCount int
+	SampledAt    time.Time
+	Processes    []SessionMemoryProcess
+}

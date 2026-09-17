@@ -21,6 +21,7 @@ const {
 	postMock,
 	workspaceQueryMock,
 	usageQueryMock,
+	memoryQueryMock,
 	boardActionsInPanelMock,
 } = vi.hoisted(() => ({
 	navigateMock: vi.fn(),
@@ -28,6 +29,7 @@ const {
 	postMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
 	usageQueryMock: vi.fn(),
+	memoryQueryMock: vi.fn(),
 	boardActionsInPanelMock: vi.fn(() => false),
 }));
 
@@ -50,6 +52,11 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 
 vi.mock("../hooks/useSessionUsageSummaries", () => ({
 	useSessionUsageSummaries: usageQueryMock,
+}));
+
+vi.mock("../hooks/useSessionMemory", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useSessionMemory")>()),
+	useSessionMemory: memoryQueryMock,
 }));
 
 vi.mock("../lib/api-client", () => ({
@@ -110,6 +117,7 @@ beforeEach(() => {
 	postMock.mockReset().mockResolvedValue({ data: {} });
 	workspaceQueryMock.mockReset().mockReturnValue({ data: [], isError: false });
 	usageQueryMock.mockReset().mockReturnValue({ data: new Map() });
+	memoryQueryMock.mockReset().mockReturnValue({ data: new Map(), isError: false });
 	window.localStorage.removeItem("ao.board.archive.layout");
 	boardActionsInPanelMock.mockReset().mockReturnValue(false);
 });
@@ -410,6 +418,42 @@ describe("SessionsBoard", () => {
 		const archive = await expandArchive();
 		expect(within(archive).getByText("$0.02")).toHaveAttribute("aria-hidden", "true");
 		expect(within(archive).getByText("$0.02 · 1,900 tokens")).toHaveClass("sr-only");
+	});
+
+	it("shows live memory on cards, escalates colour, and omits sessions without a reading", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				workspaceWithSessions([
+					boardSession({ id: "s-big", title: "big worker", status: "idle" }),
+					boardSession({ id: "s-small", title: "small worker", status: "idle" }),
+					boardSession({ id: "s-none", title: "unsampled worker", status: "idle" }),
+				]),
+			],
+			isError: false,
+			isSuccess: true,
+		});
+		memoryQueryMock.mockReturnValue({
+			isError: false,
+			data: new Map([
+				["s-big", { sessionId: "s-big", rssBytes: 2_254_857_830, processCount: 9, sampledAt: "2026-09-18T00:00:00Z", processes: [] }],
+				["s-small", { sessionId: "s-small", rssBytes: 641_728_512, processCount: 5, sampledAt: "2026-09-18T00:00:00Z", processes: [] }],
+			]),
+		});
+
+		renderBoard("p1");
+
+		const bigCard = screen.getByText("big worker").closest('[data-testid="board-session-card"]') as HTMLElement;
+		const bigChip = within(bigCard).getByTestId("session-memory");
+		expect(bigChip).toHaveAttribute("data-memory-tone", "critical");
+		expect(within(bigChip).getByText("2.1 GB")).toHaveAttribute("aria-hidden", "true");
+		expect(within(bigChip).getByText("2.1 GB memory across 9 processes")).toHaveClass("sr-only");
+
+		const smallCard = screen.getByText("small worker").closest('[data-testid="board-session-card"]') as HTMLElement;
+		expect(within(smallCard).getByTestId("session-memory")).toHaveAttribute("data-memory-tone", "default");
+		expect(within(smallCard).getByText("612 MB")).toBeInTheDocument();
+
+		const noneCard = screen.getByText("unsampled worker").closest('[data-testid="board-session-card"]') as HTMLElement;
+		expect(within(noneCard).queryByTestId("session-memory")).not.toBeInTheDocument();
 	});
 
 	it("shows cost by default and cost plus tokens on hover without a tab stop", async () => {

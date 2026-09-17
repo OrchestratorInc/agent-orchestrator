@@ -989,6 +989,10 @@ func (r *selectableRuntime) Create(_ context.Context, cfg ports.RuntimeConfig) (
 
 func (r *selectableRuntime) Destroy(context.Context, ports.RuntimeHandle) error { return nil }
 
+func (r *selectableRuntime) ProcessRootPIDs(context.Context, ports.RuntimeHandle) ([]int, error) {
+	return nil, nil
+}
+
 func (r *selectableRuntime) GetOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
 	return "", nil
 }

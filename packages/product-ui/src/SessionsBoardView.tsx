@@ -108,9 +108,18 @@ export type BoardPullRequestProgress = Record<BoardPullRequestState, number> & {
 	total: number;
 };
 
+export type BoardMemoryPresentation = {
+	accessibleLabel: string;
+	compactLabel: string;
+	/** default under 1 GB, warning from 1 GB, critical from 2 GB. */
+	tone: "default" | "warning" | "critical";
+};
+
 export type BoardUsagePresentation = {
 	accessibleLabel: string;
 	compactLabel: string;
+	/** Live resident memory of the session's process tree; absent when the session has no runtime. */
+	memory?: BoardMemoryPresentation;
 };
 
 export type BoardPullRequestLabels = {
@@ -451,8 +460,33 @@ export const SessionUsageMetricView = forwardRef<
 		{/* aria-label on a generic span is not reliably exposed, so the full
 		    label is real text placed off-screen and the compact form is hidden
 		    from assistive technology rather than read out twice. */}
-		<span className="sr-only">{usage.accessibleLabel}</span>
-		<span aria-hidden="true">{usage.compactLabel}</span>
+		{usage.memory ? (
+			<>
+				<span
+					className={cn(
+						"inline-flex items-center gap-1 tabular-nums",
+						usage.memory.tone === "critical"
+							? "text-destructive"
+							: usage.memory.tone === "warning"
+								? "text-warning"
+								: undefined,
+					)}
+					data-memory-tone={usage.memory.tone}
+					data-testid="session-memory"
+				>
+					<span aria-hidden="true" className="size-1.5 rounded-full bg-current opacity-75" />
+					<span className="sr-only">{usage.memory.accessibleLabel}</span>
+					<span aria-hidden="true">{usage.memory.compactLabel}</span>
+				</span>
+				{usage.compactLabel ? <span aria-hidden="true" className="text-border-strong">·</span> : null}
+			</>
+		) : null}
+		{usage.compactLabel ? (
+			<>
+				<span className="sr-only">{usage.accessibleLabel}</span>
+				<span aria-hidden="true">{usage.compactLabel}</span>
+			</>
+		) : null}
 	</span>
 ));
 SessionUsageMetricView.displayName = "SessionUsageMetricView";

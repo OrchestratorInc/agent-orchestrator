@@ -615,6 +615,32 @@ func (r *Runtime) IsAlive(ctx context.Context, handle ports.RuntimeHandle) (bool
 	return true, nil
 }
 
+// ProcessRootPIDs returns every pane leader pid of the session so memory
+// accounting can walk their descendants. A missing session yields no pids and
+// no error; a tmux probe failure is surfaced so callers do not read it as zero.
+func (r *Runtime) ProcessRootPIDs(ctx context.Context, handle ports.RuntimeHandle) ([]int, error) {
+	id, err := handleID(handle)
+	if err != nil {
+		return nil, err
+	}
+	out, err := r.runForSession(ctx, id, listPanePIDsArgs(id)...)
+	if err != nil {
+		if sessionMissingOutput(string(out)) || serverNotRunningOutput(string(out)) || serverSocketAbsentOutput(string(out)) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("tmux runtime: list pane pids %s: %w", id, err)
+	}
+	var ids []int
+	for _, line := range strings.Split(string(out), "\n") {
+		pid, convErr := strconv.Atoi(strings.TrimSpace(line))
+		if convErr != nil || pid <= 1 {
+			continue
+		}
+		ids = append(ids, pid)
+	}
+	return ids, nil
+}
+
 // IsChildAlive also detects exited panes retained by tmux's remain-on-exit.
 func (r *Runtime) IsChildAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
 	alive, err := r.IsAlive(ctx, handle)

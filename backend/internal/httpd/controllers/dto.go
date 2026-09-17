@@ -1607,6 +1607,29 @@ type ListCompactSessionUsageResponse struct {
 	Sessions []CompactSessionUsageResponse `json:"sessions"`
 }
 
+// SessionMemoryProcessResponse is one process in a session's runtime tree.
+type SessionMemoryProcessResponse struct {
+	PID      int    `json:"pid"`
+	PPID     int    `json:"ppid"`
+	RSSBytes uint64 `json:"rssBytes" minimum:"0"`
+	Command  string `json:"command"`
+}
+
+// SessionMemoryResponse is the resident memory of one live session's process
+// tree at sampledAt. Sessions without a live runtime are absent, never zero.
+type SessionMemoryResponse struct {
+	SessionID    domain.SessionID               `json:"sessionId"`
+	RSSBytes     uint64                         `json:"rssBytes" minimum:"0" description:"Resident set size summed over the runtime process tree."`
+	ProcessCount int                            `json:"processCount" minimum:"0"`
+	SampledAt    time.Time                      `json:"sampledAt"`
+	Processes    []SessionMemoryProcessResponse `json:"processes"`
+}
+
+// ListSessionMemoryResponse is the batch memory reading for the board.
+type ListSessionMemoryResponse struct {
+	Sessions []SessionMemoryResponse `json:"sessions"`
+}
+
 // UsageTotalsResponse is the canonical telemetry aggregate for one scope.
 //
 // Provider-specific counters are no longer projected here: they live verbatim

@@ -2,14 +2,17 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
 )
 
 // UsageSummaryService is the controller-facing compact usage read contract.
@@ -18,15 +21,22 @@ type UsageSummaryService interface {
 	Get(context.Context, domain.SessionID) (domain.SessionUsageSummary, error)
 }
 
+// SessionMemoryService samples resident memory per live session.
+type SessionMemoryService interface {
+	ListMemory(context.Context, domain.ProjectID) ([]domain.SessionMemory, error)
+}
+
 // UsageController owns compact dashboard usage routes.
 type UsageController struct {
-	Svc UsageSummaryService
-	Log *slog.Logger
+	Svc    UsageSummaryService
+	Log    *slog.Logger
+	Memory SessionMemoryService
 }
 
 // Register mounts usage routes on the supplied router.
 func (c *UsageController) Register(r chi.Router) {
 	r.Get("/usage/sessions", c.listSessions)
+	r.Get("/usage/sessions/memory", c.listMemory)
 	r.Get("/usage/sessions/{sessionId}", c.getSession)
 }
 
@@ -54,6 +64,33 @@ func (c *UsageController) listSessions(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	envelope.WriteJSON(w, http.StatusOK, ListCompactSessionUsageResponse{Sessions: out})
+}
+
+func (c *UsageController) listMemory(w http.ResponseWriter, r *http.Request) {
+	if c.Memory == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/usage/sessions/memory")
+		return
+	}
+	items, err := c.Memory.ListMemory(r.Context(), domain.ProjectID(r.URL.Query().Get("projectId")))
+	if err != nil {
+		if errors.Is(err, procmem.ErrUnsupported) {
+			err = apierr.NotImplemented("MEMORY_UNSUPPORTED", err.Error())
+		}
+		envelope.WriteError(w, r, err)
+		return
+	}
+	out := make([]SessionMemoryResponse, 0, len(items))
+	for _, item := range items {
+		procs := make([]SessionMemoryProcessResponse, 0, len(item.Processes))
+		for _, p := range item.Processes {
+			procs = append(procs, SessionMemoryProcessResponse{PID: p.PID, PPID: p.PPID, RSSBytes: p.RSSBytes, Command: p.Command})
+		}
+		out = append(out, SessionMemoryResponse{
+			SessionID: item.SessionID, RSSBytes: item.RSSBytes, ProcessCount: item.ProcessCount,
+			SampledAt: item.SampledAt, Processes: procs,
+		})
+	}
+	envelope.WriteJSON(w, http.StatusOK, ListSessionMemoryResponse{Sessions: out})
 }
 
 func (c *UsageController) getSession(w http.ResponseWriter, r *http.Request) {

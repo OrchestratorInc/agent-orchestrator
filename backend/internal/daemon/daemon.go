@@ -879,8 +879,14 @@ func Run() error {
 		Activity:           lcStack.LCM,
 		UsageHooks:         usageCollector,
 		UsageSummary:       usagesvc.NewSummaryReader(store),
-		Telemetry:          telemetrySink,
-		Mobile:             mc,
+		SessionMemory: usagesvc.NewMemoryReader(usagesvc.MemoryReaderDeps{
+			Store: store, Runtime: runtimeAdapter, CacheTTL: 2 * time.Second,
+			ChatHostPID: func(id domain.SessionID) (int, bool) {
+				return persistenthost.HostPID(cfg.DataDir, string(id))
+			},
+		}),
+		Telemetry: telemetrySink,
+		Mobile:    mc,
 		DevImport: devimportsvc.New(devimportsvc.Deps{
 			Store:         store,
 			TargetDataDir: cfg.DataDir,
