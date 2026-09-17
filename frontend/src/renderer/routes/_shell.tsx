@@ -710,7 +710,7 @@ function ShellLayout() {
 	);
 
 	const removeProject = useCallback(
-		async (projectId: string) => {
+		async (projectId: string, force = false) => {
 			const isLastWorkspace =
               workspaces.length === 1 && workspaces[0]?.id === projectId;
 			void addRendererExceptionStep("Project removal requested", {
@@ -763,7 +763,7 @@ function ShellLayout() {
 				return;
 			}
 			const { error } = await apiClient.DELETE("/api/v1/projects/{id}", {
-				params: { path: { id: projectId } },
+				params: { path: { id: projectId }, query: force ? { force: true } : undefined },
 			});
 			if (error) {
 				const failure = new Error(apiErrorMessage(error)) as Error & { code?: string };
