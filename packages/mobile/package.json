@@ -15,6 +15,7 @@
 		"test": "vitest run"
 	},
 	"dependencies": {
+		"@aoagents/cloud-client": "file:../cloud-client",
 		"@expo/ui": "~57.0.14",
 		"@expo/vector-icons": "^15.0.3",
 		"@fressh/react-native-xtermjs-webview": "^0.0.8",
@@ -55,7 +56,9 @@
 	"expo": {
 		"autolinking": {
 			"apple": {
-				"exclude": ["expo-in-app-updates"]
+				"exclude": [
+					"expo-in-app-updates"
+				]
 			}
 		}
 	},
