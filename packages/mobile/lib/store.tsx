@@ -125,7 +125,12 @@ export function usePRs() {
 	return useMemo(() => collectPRs(sessions), [sessions]);
 }
 
-/** The active environment's data source. Undefined until one is configured. */
+/**
+ * The active environment's data source. Undefined until one is configured.
+ *
+ * Deliberately has no consumers yet — Task 15 switches the store's existing
+ * readers over to it.
+ */
 export function useSessionSource(): SessionSource | undefined {
 	const { sessionSource } = useApp();
 	return sessionSource;

@@ -10,7 +10,13 @@ import type { SessionSource } from "./types";
 let cachedConfig: ServerConfig | undefined;
 let cachedSource: SessionSource | undefined;
 
-/** The source for the currently configured daemon, or undefined when unpaired. */
+/**
+ * The source for the currently configured daemon, or undefined when unpaired.
+ *
+ * Deliberately unconsumed for now — the store exposes it via useSessionSource
+ * but its existing polling/fetching/spawn paths still call the daemon
+ * functions directly. Task 15 switches those readers over to this source.
+ */
 export function sessionSourceForConfig(cfg: ServerConfig | null): SessionSource | undefined {
 	if (!cfg || !isConfigured(cfg)) {
 		cachedConfig = undefined;
