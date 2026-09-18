@@ -403,9 +403,9 @@ func sameDir(a, b string) bool {
 	return norm(a) == norm(b)
 }
 
-func truncate(s string, max int) string {
-	if len(s) <= max {
+func truncate(s string, limit int) string {
+	if len(s) <= limit {
 		return s
 	}
-	return s[:max] + "…"
+	return s[:limit] + "…"
 }

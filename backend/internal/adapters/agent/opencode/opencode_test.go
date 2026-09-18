@@ -417,9 +417,13 @@ func TestGetLaunchCommandBuildsArgv(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	configPath := filepath.Join(filepath.Dir(promptFile), "opencode.json")
+	overlay, err := PrepareACPConfigContent("", "follow AO rules", "sess/1",
+		ports.PermissionModeBypassPermissions)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []string{
-		"env", "OPENCODE_CONFIG=" + configPath,
+		"env", "OPENCODE_CONFIG_CONTENT=" + overlay,
 		"opencode",
 		"--dangerously-skip-permissions",
 		"--agent", "ao-sess-1",
@@ -428,48 +432,163 @@ func TestGetLaunchCommandBuildsArgv(t *testing.T) {
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
 	}
-	var config opencodeInlineConfig
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(data, &config); err != nil {
-		t.Fatal(err)
-	}
-	agent := config.Agent["ao-sess-1"]
+	agent := launchOverlayConfig(t, cmd).Agent["ao-sess-1"]
 	if agent.Mode != "primary" || agent.Prompt != "follow AO rules" {
 		t.Fatalf("agent config = %#v, want primary inline prompt", agent)
 	}
 }
 
-func TestGetLaunchCommandSystemPromptFileConfig(t *testing.T) {
+// AO must never point OPENCODE_CONFIG at a file of its own. That variable is
+// how a user selects their custom opencode config, and opencode resolves it in
+// a different layer than the inline overlay: replacing it dropped the user's
+// provider, model, MCP, plugin, and permission settings for the duration of a
+// Terminal session while Chat kept them.
+func TestGetLaunchCommandNeverReplacesUserConfigPath(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "opencode"}
-	promptFile := filepath.Join(t.TempDir(), "system.md")
 
 	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
-		SessionID:        "sess-2",
-		SystemPromptFile: promptFile,
+		SessionID:    "sess-1",
+		SystemPrompt: "follow AO rules",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	configPath := filepath.Join(filepath.Dir(promptFile), "opencode.json")
-	want := []string{"env", "OPENCODE_CONFIG=" + configPath, "opencode", "--agent", "ao-sess-2"}
-	if !reflect.DeepEqual(cmd, want) {
-		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
+	for _, arg := range cmd {
+		if strings.HasPrefix(arg, "OPENCODE_CONFIG=") {
+			t.Fatalf("argv assigns OPENCODE_CONFIG (%q), which evicts the user's own config", arg)
+		}
 	}
-	var config opencodeInlineConfig
-	data, err := os.ReadFile(configPath)
+}
+
+// The system prompt file backs adapters that need a path. opencode now carries
+// the prompt inline, so a file with no inline text must not fabricate an
+// overlay out of a file reference it can no longer resolve.
+func TestGetLaunchCommandWithoutInlinePromptAddsNoOverlay(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "opencode"}
+
+	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		SessionID:        "sess-2",
+		SystemPromptFile: filepath.Join(t.TempDir(), "system.md"),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(data, &config); err != nil {
+	if want := []string{"opencode"}; !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
+	}
+}
+
+// Interface-transition preflight builds a terminal target from the recomputed
+// system prompt alone, with no SystemPromptFile. The previous file-backed
+// config made that combination a hard error, so a Chat session could not even
+// preflight its way back to Terminal.
+func TestGetLaunchCommandAcceptsInlinePromptWithoutFile(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "opencode"}
+
+	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		SessionID: "sess-1", SystemPrompt: "follow AO rules",
+	})
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if got := launchOverlayConfig(t, cmd).Agent["ao-sess-1"].Prompt; got != "follow AO rules" {
+		t.Fatalf("agent prompt = %q, want the inline prompt", got)
+	}
+}
+
+// The handoff contract in ports.AgentInterfaceHandoff assumes a session keeps
+// its configuration across an interface switch. That only holds while both
+// surfaces render the overlay identically, so assert it directly rather than
+// trusting two call sites to stay in step.
+func TestTerminalAndChatOverlaysMatch(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "opencode"}
+	const systemPrompt = "follow AO rules"
+
+	for _, mode := range []ports.PermissionMode{
+		ports.PermissionModeDefault,
+		ports.PermissionModeAcceptEdits,
+		ports.PermissionModeAuto,
+		ports.PermissionModeBypassPermissions,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+				SessionID: "sess-1", SystemPrompt: systemPrompt, Permissions: mode,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			chat, err := PrepareACPConfigContent("", systemPrompt, "sess-1", mode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			terminal, ok := launchOverlay(cmd)
+			if !ok {
+				t.Fatalf("terminal argv carries no overlay: %#v", cmd)
+			}
+			if terminal != chat {
+				t.Fatalf("overlay differs across interfaces\nterminal: %s\n    chat: %s", terminal, chat)
+			}
+		})
+	}
+}
+
+// An inline overlay already in the environment belongs to the user or to a
+// project profile. Chat merges into it; Terminal must too, or a handoff would
+// still change configuration — just in the other direction.
+func TestGetLaunchCommandMergesInheritedOverlay(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "opencode"}
+	t.Setenv("OPENCODE_CONFIG_CONTENT", `{"model":"anthropic/claude-sonnet-5"}`)
+
+	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		SessionID: "sess-1", SystemPrompt: "follow AO rules",
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := config.Agent["ao-sess-2"].Prompt; got != "{file:./system.md}" {
-		t.Fatalf("agent prompt = %q, want file reference", got)
+	var config struct {
+		Model string                           `json:"model"`
+		Agent map[string]opencodeAgentSettings `json:"agent"`
 	}
+	overlay, ok := launchOverlay(cmd)
+	if !ok {
+		t.Fatalf("argv carries no overlay: %#v", cmd)
+	}
+	if err := json.Unmarshal([]byte(overlay), &config); err != nil {
+		t.Fatal(err)
+	}
+	if config.Model != "anthropic/claude-sonnet-5" {
+		t.Fatalf("inherited model = %q, want it preserved", config.Model)
+	}
+	if got := config.Agent["ao-sess-1"].Prompt; got != "follow AO rules" {
+		t.Fatalf("agent prompt = %q, want AO's standing instructions", got)
+	}
+}
+
+// launchOverlay returns the inline config AO assigned in the argv prefix.
+func launchOverlay(cmd []string) (string, bool) {
+	for _, arg := range cmd {
+		if value, ok := strings.CutPrefix(arg, "OPENCODE_CONFIG_CONTENT="); ok {
+			return value, true
+		}
+	}
+	return "", false
+}
+
+func launchOverlayConfig(t *testing.T, cmd []string) struct {
+	Agent map[string]opencodeAgentSettings `json:"agent"`
+} {
+	t.Helper()
+	var config struct {
+		Agent map[string]opencodeAgentSettings `json:"agent"`
+	}
+	overlay, ok := launchOverlay(cmd)
+	if !ok {
+		t.Fatalf("argv carries no overlay: %#v", cmd)
+	}
+	if err := json.Unmarshal([]byte(overlay), &config); err != nil {
+		t.Fatal(err)
+	}
+	return config
 }
 
 func TestGetLaunchCommandMapsPermissionModes(t *testing.T) {
@@ -850,7 +969,14 @@ func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
+	// Bypass also rides on the shared overlay so Terminal and Chat resolve the
+	// same permission config; the native flag stays as opencode's own signal.
+	overlay, err := PrepareACPConfigContent("", "", "", ports.PermissionModeBypassPermissions)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []string{
+		"env", "OPENCODE_CONFIG_CONTENT=" + overlay,
 		"opencode",
 		"--dangerously-skip-permissions",
 		"--session", "ses_abc123",
@@ -881,9 +1007,12 @@ func TestGetRestoreCommandReappliesSystemPromptConfig(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	configPath := filepath.Join(filepath.Dir(promptFile), "opencode.json")
+	overlay, err := PrepareACPConfigContent("", "restore AO rules", "sess-1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []string{
-		"env", "OPENCODE_CONFIG=" + configPath,
+		"env", "OPENCODE_CONFIG_CONTENT=" + overlay,
 		"opencode",
 		"--agent", "ao-sess-1",
 		"--session", "ses_abc123",
@@ -891,15 +1020,7 @@ func TestGetRestoreCommandReappliesSystemPromptConfig(t *testing.T) {
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
-	var config opencodeInlineConfig
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(data, &config); err != nil {
-		t.Fatal(err)
-	}
-	if got := config.Agent["ao-sess-1"].Prompt; got != "restore AO rules" {
+	if got := launchOverlayConfig(t, cmd).Agent["ao-sess-1"].Prompt; got != "restore AO rules" {
 		t.Fatalf("agent prompt = %q, want restore rules", got)
 	}
 }
@@ -924,7 +1045,12 @@ func TestGetRestoreCommandAppendsResumeTimePrompt(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
+	overlay, err := PrepareACPConfigContent("", "", "", ports.PermissionModeBypassPermissions)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []string{
+		"env", "OPENCODE_CONFIG_CONTENT=" + overlay,
 		"opencode",
 		"--dangerously-skip-permissions",
 		"--session", "ses_abc123",

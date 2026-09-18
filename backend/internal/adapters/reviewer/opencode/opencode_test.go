@@ -63,7 +63,7 @@ func TestReviewCommandUsesReadOnlyPermissionPolicy(t *testing.T) {
 		t.Fatalf("permissions = %q, want auto", agent.got.Permissions)
 	}
 	config := map[string]any{}
-	if err := json.Unmarshal([]byte(got.Env["OPENCODE_CONFIG_CONTENT"]), &config); err != nil {
+	if err := json.Unmarshal([]byte(reviewerOverlay(t, got.Argv)), &config); err != nil {
 		t.Fatalf("inline config is invalid JSON: %v", err)
 	}
 	permission := config["permission"].(map[string]any)
@@ -99,7 +99,7 @@ func TestReviewCommandKeepsSystemPromptFileOutOfVisiblePrompt(t *testing.T) {
 			ExternalDirectory map[string]string `json:"external_directory"`
 		} `json:"permission"`
 	}
-	if err := json.Unmarshal([]byte(got.Env["OPENCODE_CONFIG_CONTENT"]), &config); err != nil {
+	if err := json.Unmarshal([]byte(reviewerOverlay(t, got.Argv)), &config); err != nil {
 		t.Fatalf("reviewer config: %v", err)
 	}
 	wantPattern := filepath.ToSlash(taskPromptRoot) + "/**"
@@ -128,8 +128,10 @@ func TestReviewRestoreCommandUsesNativeSessionIDAndReadOnlyPolicy(t *testing.T) 
 	if !got.NativeResumed {
 		t.Fatal("ReviewRestoreCommand did not report native resume")
 	}
-	if strings.Join(got.Argv, " ") != "agent --session opencode-native-1" {
-		t.Fatalf("argv = %#v", got.Argv)
+	// The policy rides in the argv overlay, so the agent command follows the
+	// `env NAME=VALUE` prefix rather than starting the argv.
+	if got := strings.Join(got.Argv[2:], " "); got != "agent --session opencode-native-1" {
+		t.Fatalf("argv after the env prefix = %q", got)
 	}
 	if agent.gotRestore.Session.Metadata[ports.MetadataKeyAgentSessionID] != "opencode-native-1" {
 		t.Fatalf("restore metadata = %#v", agent.gotRestore.Session.Metadata)
@@ -138,7 +140,7 @@ func TestReviewRestoreCommandUsesNativeSessionIDAndReadOnlyPolicy(t *testing.T) 
 		t.Fatalf("restore permissions = %q, want auto", agent.gotRestore.Permissions)
 	}
 	var config map[string]any
-	if err := json.Unmarshal([]byte(got.Env["OPENCODE_CONFIG_CONTENT"]), &config); err != nil {
+	if err := json.Unmarshal([]byte(reviewerOverlay(t, got.Argv)), &config); err != nil {
 		t.Fatalf("reviewer config: %v", err)
 	}
 	permission := config["permission"].(map[string]any)
@@ -148,14 +150,14 @@ func TestReviewRestoreCommandUsesNativeSessionIDAndReadOnlyPolicy(t *testing.T) 
 }
 
 func TestBuildReviewerConfigLeavesOtherExternalPathsDenied(t *testing.T) {
-	configText, err := buildReviewerConfig("")
+	configText, err := json.Marshal(map[string]any{"permission": reviewerPermissions("")})
 	if err != nil {
-		t.Fatalf("buildReviewerConfig: %v", err)
+		t.Fatalf("encode reviewer permissions: %v", err)
 	}
 	var config struct {
 		Permission map[string]json.RawMessage `json:"permission"`
 	}
-	if err := json.Unmarshal([]byte(configText), &config); err != nil {
+	if err := json.Unmarshal(configText, &config); err != nil {
 		t.Fatalf("reviewer config: %v", err)
 	}
 	if _, ok := config.Permission["external_directory"]; ok {
@@ -204,10 +206,8 @@ func TestReviewCommandBuildsBothOpenCodeConfigSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReviewCommand: %v", err)
 	}
-	configPath := filepath.Join(promptDir, "opencode.json")
 	joinedArgv := strings.Join(spec.Argv, "\n")
 	for _, want := range []string{
-		"OPENCODE_CONFIG=" + configPath,
 		"--agent\nao-review-w1",
 		"--prompt\nRead the AO review task.",
 	} {
@@ -215,16 +215,29 @@ func TestReviewCommandBuildsBothOpenCodeConfigSources(t *testing.T) {
 			t.Fatalf("argv missing %q: %#v", want, spec.Argv)
 		}
 	}
-	generated, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("read generated opencode config: %v", err)
+	// One overlay must carry both the reviewer policy and the system role read
+	// from the AO-owned prompt file; a second source would overwrite the first.
+	var config struct {
+		Permission map[string]json.RawMessage `json:"permission"`
+		Agent      map[string]struct {
+			Prompt string `json:"prompt"`
+		} `json:"agent"`
 	}
-	if !strings.Contains(string(generated), `"prompt": "{file:./system.md}"`) {
-		t.Fatalf("generated prompt config = %s", generated)
+	overlay := reviewerOverlay(t, spec.Argv)
+	if err := json.Unmarshal([]byte(overlay), &config); err != nil {
+		t.Fatalf("reviewer overlay is invalid JSON: %v", err)
 	}
-	if !strings.Contains(spec.Env["OPENCODE_CONFIG_CONTENT"], `"external_directory"`) ||
-		!strings.Contains(spec.Env["OPENCODE_CONFIG_CONTENT"], `"permission"`) {
-		t.Fatalf("inline reviewer config = %s", spec.Env["OPENCODE_CONFIG_CONTENT"])
+	if _, ok := config.Permission["external_directory"]; !ok {
+		t.Fatalf("overlay lost the task-prompt exception: %s", overlay)
+	}
+	if _, ok := config.Permission["*"]; !ok {
+		t.Fatalf("overlay lost the read-only policy: %s", overlay)
+	}
+	if got := config.Agent["ao-review-w1"].Prompt; got != "review system prompt" {
+		t.Fatalf("agent prompt = %q, want the system prompt file contents", got)
+	}
+	if spec.Env["OPENCODE_CONFIG_CONTENT"] != "" {
+		t.Fatalf("policy must not travel in a second source: %q", spec.Env["OPENCODE_CONFIG_CONTENT"])
 	}
 }
 
@@ -288,11 +301,26 @@ func TestReviewCancelSendsDoubleEscapeInput(t *testing.T) {
 	}
 }
 
+// reviewerOverlay returns the single inline config the reviewer launch carries.
+// Policy and standing instructions share one overlay because the runtime
+// applies an argv assignment after the spec environment, so a split would let
+// the agent adapter's overlay replace the read-only policy.
+func reviewerOverlay(t *testing.T, argv []string) string {
+	t.Helper()
+	for _, arg := range argv {
+		if value, ok := strings.CutPrefix(arg, "OPENCODE_CONFIG_CONTENT="); ok {
+			return value
+		}
+	}
+	t.Fatalf("argv carries no reviewer overlay: %#v", argv)
+	return ""
+}
+
 func reviewerConfigBashPolicy(t *testing.T) map[string]string {
 	t.Helper()
-	configText, err := buildReviewerConfig("")
+	configText, err := json.Marshal(map[string]any{"permission": reviewerPermissions("")})
 	if err != nil {
-		t.Fatalf("buildReviewerConfig: %v", err)
+		t.Fatalf("encode reviewer permissions: %v", err)
 	}
 
 	var config struct {
@@ -300,7 +328,7 @@ func reviewerConfigBashPolicy(t *testing.T) map[string]string {
 			Bash map[string]string `json:"bash"`
 		} `json:"permission"`
 	}
-	if err := json.Unmarshal([]byte(configText), &config); err != nil {
+	if err := json.Unmarshal(configText, &config); err != nil {
 		t.Fatalf("reviewer config is invalid JSON: %v", err)
 	}
 	if len(config.Permission.Bash) == 0 {

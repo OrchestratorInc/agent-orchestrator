@@ -58,8 +58,8 @@ func defaultSpawnHost(ctx context.Context, sessionID, cwd string, argv []string,
 	// Translate a leading `env NAME=VALUE ...` prefix into real child env vars.
 	// Windows has no `env` binary and the pty-host execs argv[0] directly, so an
 	// adapter that emits `env KEY=value <bin>` (e.g. opencode, to set
-	// OPENCODE_CONFIG) would otherwise fail with "env: executable file not
-	// found". The assignments are added to the pty-host environment below, which
+	// OPENCODE_CONFIG_CONTENT) would otherwise fail with "env: executable file
+	// not found". The assignments are added to the pty-host environment below, which
 	// the ConPTY child inherits (host_conpty_windows.go passes os.Environ()).
 	envAssignments, argv := stripEnvAssignments(argv)
 

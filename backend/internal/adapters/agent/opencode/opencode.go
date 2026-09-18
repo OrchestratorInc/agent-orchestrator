@@ -11,8 +11,11 @@
 //     materializes using-ao under .opencode/skills/ so opencode's skill tool
 //     can discover it (the data-dir skill path alone is invisible to opencode).
 //   - Its CLI exposes only one approval flag (--dangerously-skip-permissions)
-//     and no system-prompt flag, so AO injects standing instructions by writing
-//     an AO-owned per-session config and selecting the generated agent.
+//     and no system-prompt flag, so AO injects standing instructions through an
+//     AO-owned per-session config overlay and selects the generated agent.
+//     Terminal and Chat build that overlay from the same function and deliver it
+//     through the same OPENCODE_CONFIG_CONTENT variable, so switching interfaces
+//     cannot change the configuration a session resolves.
 //
 // AO-managed sessions derive native session identity and display metadata from
 // the opencode plugin's reported events, mirroring the Codex adapter.
@@ -22,6 +25,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -97,20 +101,21 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 // GetLaunchCommand builds the argv to start a new interactive opencode session.
 // Shape:
 //
-//	[env OPENCODE_CONFIG=<ao-config>] opencode [--dangerously-skip-permissions] [--agent <ao-agent>] [--prompt <prompt>]
+//	[env OPENCODE_CONFIG_CONTENT=<ao-config>] opencode [--dangerously-skip-permissions] [--agent <ao-agent>] [--prompt <prompt>]
 //
 // The session runs in the worktree (cwd is set by the runtime, as for Claude
-// Code and Codex). opencode has no CLI flag to set a system prompt, so AO writes
-// an opencode config into the AO prompt artifact directory, points OPENCODE_CONFIG
-// at it, and selects the generated agent with --agent. The initial task prompt
-// is delivered via --prompt (its argument, so a leading "-" is not read as a flag).
+// Code and Codex). opencode has no CLI flag to set a system prompt, so AO passes
+// an inline config overlay through OPENCODE_CONFIG_CONTENT — the same overlay
+// the Chat driver uses — and selects the generated agent with --agent. The
+// initial task prompt is delivered via --prompt (its argument, so a leading "-"
+// is not read as a flag).
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
 	binary, err := p.opencodeBinary(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	envPrefix, agentName, err := opencodeConfigEnvPrefix(cfg.SystemPrompt, cfg.SystemPromptFile, cfg.SessionID)
+	envPrefix, agentName, err := opencodeConfigEnvPrefix(cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.SessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +133,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 }
 
 // GetRestoreCommand rebuilds the argv that continues an existing opencode
-// session: `[env OPENCODE_CONFIG=<ao-config>] opencode [--dangerously-skip-permissions] [--agent <ao-agent>] --session <agentSessionId> [--prompt <prompt>]`.
+// session: `[env OPENCODE_CONFIG_CONTENT=<ao-config>] opencode [--dangerously-skip-permissions] [--agent <ao-agent>] --session <agentSessionId> [--prompt <prompt>]`.
 // It re-applies the permission flag and the generated AO agent config (resume
 // otherwise reverts to configured defaults). ok is false when the plugin-derived
 // native session id has not landed yet, so callers fall back to fresh launch
@@ -150,7 +155,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 
-	envPrefix, agentName, err := opencodeConfigEnvPrefix(cfg.SystemPrompt, cfg.SystemPromptFile, cfg.Session.ID)
+	envPrefix, agentName, err := opencodeConfigEnvPrefix(cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.Session.ID)
 	if err != nil {
 		return nil, false, err
 	}
@@ -376,59 +381,90 @@ func appendPermissionFlags(cmd *[]string, permissions ports.PermissionMode) {
 	}
 }
 
-const opencodeConfigEnvVar = "OPENCODE_CONFIG"
-
-type opencodeInlineConfig struct {
-	Schema string                           `json:"$schema,omitempty"`
-	Agent  map[string]opencodeAgentSettings `json:"agent,omitempty"`
-}
+const opencodeConfigContentEnvVar = "OPENCODE_CONFIG_CONTENT"
 
 type opencodeAgentSettings struct {
 	Mode   string `json:"mode,omitempty"`
 	Prompt string `json:"prompt,omitempty"`
 }
 
-func opencodeConfigEnvPrefix(inlinePrompt, promptFile, sessionID string) ([]string, string, error) {
-	if inlinePrompt == "" && promptFile == "" {
-		return nil, "", nil
-	}
-	if promptFile == "" {
-		return nil, "", fmt.Errorf("opencode: system prompt file required to build agent config")
-	}
-	agentName := opencodeAOAgentName(sessionID)
-	prompt := inlinePrompt
-	if prompt == "" {
-		prompt = "{file:./" + filepath.Base(promptFile) + "}"
-	}
-	dir := filepath.Dir(promptFile)
-	configPath := filepath.Join(dir, "opencode.json")
-	config := opencodeInlineConfig{
-		Schema: "https://opencode.ai/config.json",
-		Agent: map[string]opencodeAgentSettings{
-			agentName: {
-				Mode:   "primary",
-				Prompt: prompt,
-			},
-		},
-	}
-	data, err := json.MarshalIndent(config, "", "  ")
+// opencodeConfigEnvPrefix renders AO's standing instructions and permission
+// choice as an `env OPENCODE_CONFIG_CONTENT=<json>` argv prefix. The returned
+// agent name is non-empty when the command must select AO's generated agent
+// with --agent.
+//
+// Terminal and Chat deliberately share PrepareACPConfigContent and the same
+// environment variable. opencode merges configuration rather than replacing it,
+// and the inline overlay and a custom OPENCODE_CONFIG path occupy different
+// layers of that merge, so pointing OPENCODE_CONFIG at an AO-generated file
+// (as this adapter once did) evicted the user's own file on Terminal while
+// Chat kept it. A session that changed interfaces then silently changed its
+// provider, model, MCP, plugin, or permission settings. Building both surfaces
+// from one function is what keeps a handoff configuration-preserving.
+//
+// The var must reach opencode as a process env var, not an argv flag. The tmux
+// runtime runs the argv through a shell, which execs `env`; the ConPTY runtime
+// strips the same prefix and applies the assignments itself.
+func opencodeConfigEnvPrefix(
+	permissions ports.PermissionMode,
+	inlinePrompt, promptFile, sessionID string,
+) ([]string, string, error) {
+	systemPrompt, err := opencodeSystemPromptText(inlinePrompt, promptFile)
 	if err != nil {
 		return nil, "", err
 	}
-	data = append(data, '\n')
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, "", fmt.Errorf("opencode: create prompt config dir: %w", err)
+	// Mirrors the Chat driver, which merges into the value already present in
+	// the session environment instead of discarding a user's inline config.
+	inherited := os.Getenv(opencodeConfigContentEnvVar)
+	content, err := PrepareACPConfigContent(inherited, systemPrompt, sessionID, permissions)
+	if err != nil {
+		return nil, "", err
 	}
-	if err := hookutil.AtomicWriteFile(configPath, data, 0o600); err != nil {
-		return nil, "", fmt.Errorf("opencode: write prompt config: %w", err)
+	if content == inherited {
+		// AO has nothing to add for this launch; leave the inherited
+		// environment untouched rather than restating it.
+		return nil, "", nil
 	}
-	return []string{"env", opencodeConfigEnvVar + "=" + configPath}, agentName, nil
+	agentName := ""
+	if strings.TrimSpace(systemPrompt) != "" {
+		agentName = opencodeAOAgentName(sessionID)
+	}
+	return []string{"env", opencodeConfigContentEnvVar + "=" + content}, agentName, nil
+}
+
+// opencodeSystemPromptText resolves the standing instructions to embed in the
+// overlay. Worker launches supply the text directly; reviewer launches supply
+// only the AO-owned prompt file, which the overlay can no longer reference by
+// path, so read it here. Mirrors kilocodeSystemPromptText in the Kilo adapter,
+// which bridges the same opencode-derived CLI.
+func opencodeSystemPromptText(inline, file string) (string, error) {
+	if strings.TrimSpace(inline) != "" {
+		return inline, nil
+	}
+	if strings.TrimSpace(file) == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(file)
+	if errors.Is(err, os.ErrNotExist) {
+		// Preflight builds an argv before the prompt artifact is written. A
+		// missing file is not a launch failure; the overlay simply carries no
+		// standing instructions yet.
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("opencode: read system prompt file: %w", err)
+	}
+	return strings.TrimSpace(string(data)), nil
 }
 
 // PrepareACPConfigContent merges AO's standing instructions and any explicit
 // bypass-permissions choice into OpenCode's inline runtime overlay. The user's
 // OPENCODE_CONFIG path remains untouched, preserving its normal global, custom,
 // project, provider, and credential configuration.
+//
+// Both interfaces build their overlay here — Chat through the ACP driver's
+// launch environment, Terminal through opencodeConfigEnvPrefix — so a session
+// resolves the same configuration on either side of an interface handoff.
 func PrepareACPConfigContent(
 	existing, systemPrompt, sessionID string,
 	permissions ports.PermissionMode,

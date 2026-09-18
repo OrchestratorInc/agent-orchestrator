@@ -54,21 +54,61 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	if err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
-	config, err := buildReviewerConfig(inv.TaskPromptRoot)
+	argv, err = withReviewerPolicy(argv, inv.TaskPromptRoot)
 	if err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
-	return ports.ReviewCommandSpec{
-		Argv: argv,
-		Env:  map[string]string{"OPENCODE_CONFIG_CONTENT": config},
-	}, nil
+	return ports.ReviewCommandSpec{Argv: argv}, nil
 }
 
-// buildReviewerConfig keeps OpenCode read-only while allowing it to read the
+// opencodeConfigContentPrefix is the argv assignment the opencode agent adapter
+// uses to deliver its inline config overlay.
+const opencodeConfigContentPrefix = "OPENCODE_CONFIG_CONTENT="
+
+// withReviewerPolicy folds the read-only reviewer policy into the single
+// OPENCODE_CONFIG_CONTENT overlay the agent adapter emits in argv.
+//
+// The policy used to travel in ReviewCommandSpec.Env while the agent adapter
+// carried its own config in a separate OpenCode variable. Both now use the
+// inline overlay, and the runtime applies an argv `env` assignment after the
+// spec environment — so leaving them split would let the agent's overlay
+// silently replace the policy that keeps a reviewer read-only.
+func withReviewerPolicy(argv []string, taskPromptRoot string) ([]string, error) {
+	policy := reviewerPermissions(taskPromptRoot)
+	for i, arg := range argv {
+		encoded, ok := strings.CutPrefix(arg, opencodeConfigContentPrefix)
+		if !ok {
+			continue
+		}
+		config := map[string]any{}
+		if strings.TrimSpace(encoded) != "" {
+			if err := json.Unmarshal([]byte(encoded), &config); err != nil {
+				return nil, fmt.Errorf("decode opencode overlay: %w", err)
+			}
+		}
+		config["permission"] = policy
+		merged, err := json.Marshal(config)
+		if err != nil {
+			return nil, fmt.Errorf("encode opencode reviewer config: %w", err)
+		}
+		out := append([]string(nil), argv...)
+		out[i] = opencodeConfigContentPrefix + string(merged)
+		return out, nil
+	}
+	// No overlay to merge into (no standing instructions for this launch), so
+	// the policy becomes the overlay.
+	config, err := json.Marshal(map[string]any{"permission": policy})
+	if err != nil {
+		return nil, fmt.Errorf("encode opencode reviewer config: %w", err)
+	}
+	return append([]string{"env", opencodeConfigContentPrefix + string(config)}, argv...), nil
+}
+
+// reviewerPermissions keeps OpenCode read-only while allowing it to read the
 // AO-owned task prompts outside the worker checkout. The exception is scoped
 // to the stable reviewer prompt root so a long-lived process can read future
 // request-scoped tasks; every other external path remains denied.
-func buildReviewerConfig(taskPromptRoot string) (string, error) {
+func reviewerPermissions(taskPromptRoot string) map[string]any {
 	permission := map[string]any{
 		"*":    "deny",
 		"read": "allow",
@@ -90,11 +130,7 @@ func buildReviewerConfig(taskPromptRoot string) (string, error) {
 		promptPattern := filepath.ToSlash(filepath.Join(taskPromptRoot, "**"))
 		permission["external_directory"] = map[string]string{promptPattern: "allow"}
 	}
-	data, err := json.Marshal(map[string]any{"permission": permission})
-	if err != nil {
-		return "", fmt.Errorf("encode opencode reviewer config: %w", err)
-	}
-	return string(data), nil
+	return permission
 }
 
 // ReviewMessage returns the centrally-authored task for an existing pane.
@@ -109,11 +145,10 @@ func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInv
 	if err != nil || !ok {
 		return cmd, ok, err
 	}
-	config, err := buildReviewerConfig(inv.TaskPromptRoot)
+	cmd.Argv, err = withReviewerPolicy(cmd.Argv, inv.TaskPromptRoot)
 	if err != nil {
 		return ports.ReviewCommandSpec{}, false, err
 	}
-	cmd.Env = map[string]string{"OPENCODE_CONFIG_CONTENT": config}
 	return cmd, true, nil
 }
 
