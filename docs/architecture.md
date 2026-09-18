@@ -329,9 +329,9 @@ and PR ownership also stay the same. Only the mode-owned controller changes.
 
 The generic coordinator lives in `session_manager`; providers opt in through the
 small `AgentInterfaceHandoff` capability only after their TUI resume id and Chat
-protocol id are proven to name the same native conversation. Claude Code and
-Codex currently satisfy that contract. Merely having a Chat/ACP driver is not
-enough to enable switching for another harness.
+protocol id are proven to name the same native conversation. Claude Code, Codex,
+and opencode currently satisfy that contract. Merely having a Chat/ACP driver is
+not enough to enable switching for another harness.
 
 The native ID handed over is the current Terminal conversation, which can differ
 from the last Chat provider (for example after replacing an orchestrator). This

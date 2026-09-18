@@ -170,7 +170,7 @@ surface (`npm run sqlc`, `npm run api`).
 - SessionView renders from the session's persisted mode: the existing terminal
   surface for TUI, or the durable Chat timeline/composer for Chat. Chat retains
   access to session-scoped worktree shells without creating an agent tmux pane.
-- Compatible Claude Code and Codex sessions expose an in-session “Open Chat” /
+- Compatible Claude Code, Codex, and opencode sessions expose an in-session “Open Chat” /
   “Open Terminal UI” action. Chat→TUI is the recovery path and always fences
   queued work before interrupting the active turn; a busy TUI→Chat switch offers
   the explicit finish-and-drain or stop-and-interrupt choice. Both directions

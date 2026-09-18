@@ -145,6 +145,118 @@ func TestLiveOpenCodeTUIToChatHandoff(t *testing.T) {
 	t.Logf("reverse handoff proven: TUI id %s replayed and answered %q over ACP", nativeID, marker)
 }
 
+// TestLiveOpenCodeChatToTUIHandoff is the forward direction: the id a Chat
+// conversation persists must be resumable by opencode's own terminal UI.
+//
+// Together with TestLiveOpenCodeTUIToChatHandoff this covers the bidirectional
+// claim ports.AgentInterfaceHandoff makes. One direction is not enough: an
+// adapter could expose an id that only its protocol surface understands, which
+// is exactly why the capability is opt-in rather than derived from having a
+// Chat driver.
+//
+// Run explicitly with AO_LIVE_OPENCODE_ACP=1.
+func TestLiveOpenCodeChatToTUIHandoff(t *testing.T) {
+	if os.Getenv("AO_LIVE_OPENCODE_ACP") != "1" {
+		t.Skip("set AO_LIVE_OPENCODE_ACP=1 to run against the local OpenCode account")
+	}
+
+	plugin := opencode.New()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	driver := New(plugin, nil)
+	if _, err := driver.Probe(ctx); err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+
+	marker := fmt.Sprintf("AOHANDOFF%d", time.Now().UnixNano())
+	workspace := t.TempDir()
+	dataDir := t.TempDir()
+
+	conversation, err := driver.Start(ctx, ports.ChatStartConfig{
+		SessionID: "live-opencode-chat-to-tui", DataDir: dataDir, WorkspacePath: workspace,
+		Env: envMap(), SystemPrompt: "Answer in one short sentence.",
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	answer := sendLiveTurn(ctx, t, conversation,
+		fmt.Sprintf("Reply with exactly this marker word and nothing else: %s", marker))
+	if !strings.Contains(answer, marker) {
+		t.Fatalf("Chat answer = %q, want the marker", truncate(answer, 500))
+	}
+
+	providerID := conversation.ProviderConversationID()
+	if strings.TrimSpace(providerID) == "" {
+		t.Fatal("Chat conversation persisted no provider id, so there is nothing to hand over")
+	}
+	t.Logf("Chat-created provider conversation id: %s", providerID)
+
+	// Release the Chat controller before the terminal opens the same native
+	// session: two live controllers over one conversation is the state the
+	// interface-transition saga exists to prevent.
+	if err := conversation.(ports.ChatProviderTerminator).Terminate(); err != nil {
+		t.Fatalf("Terminate: %v", err)
+	}
+
+	assertLiveTUIRestore(ctx, t, plugin, workspace, providerID, marker)
+}
+
+// assertLiveTUIRestore resumes a Chat-created native id in opencode's terminal
+// UI and waits for the Chat turn to reappear in its replay. Recovered from the
+// closed PR #3703, which proved this direction but not its reverse.
+func assertLiveTUIRestore(
+	ctx context.Context,
+	t *testing.T,
+	plugin *opencode.Plugin,
+	workspace, providerID, historyMarker string,
+) {
+	t.Helper()
+
+	nativeID, ok, err := plugin.NativeConversationID(
+		ctx, ports.SessionRef{}, domain.SessionModeChat, providerID,
+	)
+	if err != nil || !ok {
+		t.Fatalf("NativeConversationID(%q): id=%q ok=%v err=%v", providerID, nativeID, ok, err)
+	}
+	if nativeID != providerID {
+		t.Fatalf("native id = %q, want the Chat provider id %q", nativeID, providerID)
+	}
+
+	restore, resumable, err := plugin.GetRestoreCommand(ctx, ports.RestoreConfig{
+		Session: ports.SessionRef{
+			ID:            "live-opencode-tui-restore",
+			WorkspacePath: workspace,
+			Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: nativeID},
+		},
+	})
+	if err != nil {
+		t.Fatalf("GetRestoreCommand: %v", err)
+	}
+	if !resumable {
+		t.Fatal("GetRestoreCommand reported the ACP provider conversation as non-resumable")
+	}
+	if len(restore) < 3 || restore[len(restore)-2] != "--session" || restore[len(restore)-1] != providerID {
+		t.Fatalf("restore command = %#v, want trailing --session %q", restore, providerID)
+	}
+
+	// opencode's TUI requires a real terminal. Starting the adapter-produced
+	// command on AO's shared PTY path and finding the Chat turn in its replay
+	// proves the provider id names the same native session on both surfaces.
+	t.Chdir(workspace)
+	stream, err := ptyexec.Spawn(ctx, restore, liveTUIEnv(), 40, 120)
+	if err != nil {
+		t.Fatalf("start TUI restore: %v", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	output, err := readUntilNthOccurrence(stream, historyMarker, 1, 2*time.Minute)
+	if err != nil {
+		t.Fatalf("TUI did not replay the Chat turn: %v; output=%q", err, truncate(output, 2000))
+	}
+	t.Logf("forward handoff proven: Chat id %s replayed %q in the terminal UI", providerID, historyMarker)
+}
+
 // launchOpenCodeTUI runs the adapter-produced interactive command on AO's shared
 // PTY path and waits for the agent to echo the marker, which is the only signal
 // that a turn actually settled and a session was written.

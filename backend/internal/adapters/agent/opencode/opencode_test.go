@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -493,6 +494,52 @@ func TestGetLaunchCommandAcceptsInlinePromptWithoutFile(t *testing.T) {
 	}
 	if got := launchOverlayConfig(t, cmd).Agent["ao-sess-1"].Prompt; got != "follow AO rules" {
 		t.Fatalf("agent prompt = %q, want the inline prompt", got)
+	}
+}
+
+// A Terminal session may only hand its conversation over once the opencode
+// plugin has reported the native id. Without that report AO cannot prove which
+// native session the visible pane owns, so the switch must fail closed rather
+// than resume a conversation the user is not looking at.
+func TestNativeConversationIDRequiresReportedSessionForTUI(t *testing.T) {
+	p := New()
+
+	if id, ok, err := p.NativeConversationID(context.Background(), ports.SessionRef{
+		ID: "ao-session-1", Metadata: map[string]string{},
+	}, domain.SessionModeTUI, ""); err != nil || ok || id != "" {
+		t.Fatalf("unreported TUI native id = %q ok=%v err=%v", id, ok, err)
+	}
+
+	tuiID, ok, err := p.NativeConversationID(context.Background(), ports.SessionRef{
+		ID:       "ao-session-1",
+		Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "ses_abc123"},
+	}, domain.SessionModeTUI, "")
+	if err != nil || !ok || tuiID != "ses_abc123" {
+		t.Fatalf("reported TUI native id = %q ok=%v err=%v", tuiID, ok, err)
+	}
+
+	// Chat addresses the same native session through the id it persisted, so a
+	// round trip must name one conversation rather than two.
+	chatID, ok, err := p.NativeConversationID(context.Background(), ports.SessionRef{},
+		domain.SessionModeChat, tuiID)
+	if err != nil || !ok || chatID != tuiID {
+		t.Fatalf("Chat native id = %q ok=%v err=%v", chatID, ok, err)
+	}
+}
+
+// A Chat session with no persisted provider id has nothing to hand over.
+func TestNativeConversationIDRequiresProviderIDForChat(t *testing.T) {
+	p := New()
+
+	for _, providerID := range []string{"", "   "} {
+		id, ok, err := p.NativeConversationID(context.Background(), ports.SessionRef{
+			ID: "ao-session-1",
+			// A stale Terminal id must not stand in for the Chat identity.
+			Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "ses_stale"},
+		}, domain.SessionModeChat, providerID)
+		if err != nil || ok || id != "" {
+			t.Fatalf("Chat native id for %q = %q ok=%v err=%v", providerID, id, ok, err)
+		}
 	}
 }
 
