@@ -1335,6 +1335,8 @@
 	"shell.memoryColumnSession": "会话",
 	"shell.memoryColumnState": "状态",
 	"shell.memoryColumnRss": "内存",
+	"shell.memoryColumnProcess": "进程",
+	"shell.memoryColumnPid": "PID",
 	"shell.memoryColumnProcs": "RSS · 进程",
 	"shell.memoryColumnIdle": "空闲",
 	"shell.memoryEmpty": "没有可测量的运行中会话。",

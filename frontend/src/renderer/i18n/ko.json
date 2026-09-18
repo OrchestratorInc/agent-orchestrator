@@ -1938,6 +1938,8 @@
 	"shell.memoryColumnSession": "세션",
 	"shell.memoryColumnState": "상태",
 	"shell.memoryColumnRss": "메모리",
+	"shell.memoryColumnProcess": "프로세스",
+	"shell.memoryColumnPid": "PID",
 	"shell.memoryColumnProcs": "RSS · 프로세스",
 	"shell.memoryColumnIdle": "유휴",
 	"shell.memoryEmpty": "측정할 실행 중인 세션이 없습니다.",

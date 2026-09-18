@@ -1967,6 +1967,8 @@
 	"shell.memoryColumnSession": "Sessão",
 	"shell.memoryColumnState": "Estado",
 	"shell.memoryColumnRss": "Memória",
+	"shell.memoryColumnProcess": "Processo",
+	"shell.memoryColumnPid": "PID",
 	"shell.memoryColumnProcs": "RSS · proc.",
 	"shell.memoryColumnIdle": "Ociosa",
 	"shell.memoryEmpty": "Nenhuma sessão ativa para medir.",

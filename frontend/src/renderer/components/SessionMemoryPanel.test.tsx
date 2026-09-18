@@ -45,8 +45,13 @@ function session(id: string, title: string, activityState = "idle"): WorkspaceSe
 	};
 }
 
-function reading(sessionId: string, rssBytes: number, processCount: number) {
-	return { sessionId, rssBytes, processCount, sampledAt: "2026-09-18T00:00:00Z", processes: [] };
+function reading(
+	sessionId: string,
+	rssBytes: number,
+	processCount: number,
+	processes: { pid: number; ppid: number; rssBytes: number; command: string }[] = [],
+) {
+	return { sessionId, rssBytes, processCount, sampledAt: "2026-09-18T00:00:00Z", processes };
 }
 
 function renderButton() {
@@ -72,7 +77,13 @@ beforeEach(() => {
 		isError: false,
 		data: new Map([
 			["s-small", reading("s-small", 641_728_512, 5)],
-			["s-big", reading("s-big", 2_254_857_830, 9)],
+			[
+				"s-big",
+				reading("s-big", 2_254_857_830, 9, [
+					{ pid: 111, ppid: 1, rssBytes: 1_800_000_000, command: "claude" },
+					{ pid: 222, ppid: 111, rssBytes: 454_857_830, command: "go test" },
+				]),
+			],
 		]),
 	});
 });
@@ -109,6 +120,39 @@ describe("SessionMemoryButton", () => {
 				params: { path: { sessionId: "s-big" } },
 			}),
 		);
+	});
+
+	it("expands a row to show what is occupying its memory, and collapses on a second click", async () => {
+		renderButton();
+		await userEvent.click(screen.getByTestId("session-memory-button"));
+		const table = await screen.findByTestId("session-memory-table");
+		const bigRow = within(table).getAllByTestId("session-memory-row")[0];
+
+		expect(screen.queryByTestId("session-memory-process-row")).not.toBeInTheDocument();
+		await userEvent.click(bigRow);
+		const detail = await screen.findByTestId("session-memory-process-row");
+		expect(within(detail).getByText("claude")).toBeInTheDocument();
+		expect(within(detail).getByText("1.7 GB")).toBeInTheDocument();
+		expect(within(detail).getByText("111")).toBeInTheDocument();
+		expect(within(detail).getByText("go test")).toBeInTheDocument();
+
+		await userEvent.click(bigRow);
+		expect(screen.queryByTestId("session-memory-process-row")).not.toBeInTheDocument();
+	});
+
+	it("does not expand a row with no per-process reading, and kill does not toggle the row", async () => {
+		renderButton();
+		await userEvent.click(screen.getByTestId("session-memory-button"));
+		const table = await screen.findByTestId("session-memory-table");
+		const rows = within(table).getAllByTestId("session-memory-row");
+		const unsampledRow = rows[2];
+
+		await userEvent.click(unsampledRow);
+		expect(screen.queryByTestId("session-memory-process-row")).not.toBeInTheDocument();
+
+		const bigRow = rows[0];
+		await userEvent.click(within(bigRow).getByRole("button", { name: "Terminate big worker" }));
+		expect(screen.queryByTestId("session-memory-process-row")).not.toBeInTheDocument();
 	});
 
 	it("runs the existing cleanup route for the project", async () => {

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Activity, X } from "lucide-react";
+import { Activity, ChevronRight, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { formatTimeTerse } from "../lib/format-time";
@@ -113,6 +113,7 @@ export function SessionMemoryPanel({
 	);
 	const rows = useMemo(() => toRows(sessions, memory.data), [sessions, memory.data]);
 	const total = rows.reduce((sum, row) => sum + (row.reading?.rssBytes ?? 0), 0);
+	const [expandedSessionId, setExpandedSessionId] = useState<string | undefined>();
 	const terminate = useTerminateSession();
 	const cleanup = useMutation({
 		mutationFn: async () => {
@@ -168,7 +169,16 @@ export function SessionMemoryPanel({
 						</thead>
 						<tbody>
 							{rows.map((row) => (
-								<MemoryTableRow key={row.session.id} largest={largest} onTerminate={() => terminate.mutate(row.session)} row={row} />
+								<MemoryTableRow
+									isExpanded={expandedSessionId === row.session.id}
+									key={row.session.id}
+									largest={largest}
+									onTerminate={() => terminate.mutate(row.session)}
+									onToggle={() =>
+										setExpandedSessionId((current) => (current === row.session.id ? undefined : row.session.id))
+									}
+									row={row}
+								/>
 							))}
 						</tbody>
 					</table>
@@ -182,12 +192,16 @@ export function SessionMemoryPanel({
 }
 
 function MemoryTableRow({
+	isExpanded,
 	largest,
 	onTerminate,
+	onToggle,
 	row,
 }: {
+	isExpanded: boolean;
 	largest: number;
 	onTerminate: () => void;
+	onToggle: () => void;
 	row: MemoryRow;
 }) {
 	const { t } = useTranslation();
@@ -201,11 +215,30 @@ function MemoryTableRow({
 			: formatTimeTerse(session.activity.lastActivityAt);
 	const tone = reading ? memoryTone(reading.rssBytes) : "default";
 	const width = reading && largest > 0 ? `${Math.max(2, Math.round((reading.rssBytes / largest) * 100))}%` : "0%";
+	const canExpand = Boolean(reading && reading.processes.length > 0);
 	return (
-		<tr className="border-t border-border hover:bg-interactive-hover" data-testid="session-memory-row">
+		<>
+		<tr
+			aria-expanded={canExpand ? isExpanded : undefined}
+			className={cn("border-t border-border", canExpand && "cursor-pointer hover:bg-interactive-hover")}
+			data-testid="session-memory-row"
+			onClick={canExpand ? onToggle : undefined}
+		>
 			<td className="max-w-0 px-4 py-2 align-middle">
-				<div className="truncate font-medium" title={session.title}>{session.title}</div>
-				<div className="truncate font-mono text-2xs text-passive">{session.id}</div>
+				<div className="flex items-center gap-1.5">
+					<ChevronRight
+						aria-hidden="true"
+						className={cn(
+							"size-icon-2xs shrink-0 text-passive transition-transform",
+							canExpand ? "opacity-100" : "opacity-0",
+							isExpanded && "rotate-90",
+						)}
+					/>
+					<div className="min-w-0">
+						<div className="truncate font-medium" title={session.title}>{session.title}</div>
+						<div className="truncate font-mono text-2xs text-passive">{session.id}</div>
+					</div>
+				</div>
 			</td>
 			<td className="whitespace-nowrap px-4 py-2 align-middle text-2xs text-muted-foreground">{activity?.label ?? "—"}</td>
 			<td className="px-4 py-2 align-middle">
@@ -232,7 +265,7 @@ function MemoryTableRow({
 				)}
 			</td>
 			<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums text-muted-foreground">{idle}</td>
-			<td className="whitespace-nowrap px-2 py-2 text-right align-middle">
+			<td className="whitespace-nowrap px-2 py-2 text-right align-middle" onClick={(event) => event.stopPropagation()}>
 				<SessionTerminationPopover
 					onConfirm={() => {
 						setConfirmOpen(false);
@@ -253,6 +286,52 @@ function MemoryTableRow({
 						</Button>
 					}
 				/>
+			</td>
+		</tr>
+		{isExpanded && reading ? <ProcessBreakdownRow processes={reading.processes} /> : null}
+		</>
+	);
+}
+
+/** btop's core affordance: expand a session to see exactly what is holding its memory. */
+function ProcessBreakdownRow({ processes }: { processes: SessionMemoryReading["processes"] }) {
+	const { t } = useTranslation();
+	const sorted = [...processes].sort((a, b) => b.rssBytes - a.rssBytes);
+	const largestProcess = sorted[0]?.rssBytes ?? 0;
+	return (
+		<tr className="border-t border-border bg-foreground/[0.02]" data-testid="session-memory-process-row">
+			<td className="p-0" colSpan={6}>
+				<table className="w-full border-collapse text-2xs">
+					<thead>
+						<tr className="text-passive">
+							<th className="py-1.5 pl-11 pr-2 text-left font-medium">{t("shell.memoryColumnProcess")}</th>
+							<th className="w-[28%] px-2 py-1.5 text-left font-medium" />
+							<th className="px-2 py-1.5 text-right font-medium">{t("shell.memoryColumnRss")}</th>
+							<th className="px-4 py-1.5 text-right font-medium">{t("shell.memoryColumnPid")}</th>
+						</tr>
+					</thead>
+					<tbody>
+						{sorted.map((process) => {
+							const width = largestProcess > 0 ? `${Math.max(2, Math.round((process.rssBytes / largestProcess) * 100))}%` : "0%";
+							return (
+								<tr key={process.pid}>
+									<td className="truncate py-1 pl-11 pr-2 font-mono text-muted-foreground" title={process.command}>
+										{process.command || "?"}
+									</td>
+									<td className="px-2 py-1">
+										<div className="h-1 w-full overflow-hidden rounded-sm bg-foreground/[0.06]">
+											<div className="h-full rounded-sm bg-accent-strong/70" style={{ width }} />
+										</div>
+									</td>
+									<td className="whitespace-nowrap px-2 py-1 text-right font-mono tabular-nums text-foreground">
+										{formatMemory(process.rssBytes)}
+									</td>
+									<td className="whitespace-nowrap px-4 py-1 text-right font-mono tabular-nums text-passive">{process.pid}</td>
+								</tr>
+							);
+						})}
+					</tbody>
+				</table>
 			</td>
 		</tr>
 	);

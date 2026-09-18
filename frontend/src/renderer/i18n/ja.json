@@ -1938,6 +1938,8 @@
 	"shell.memoryColumnSession": "セッション",
 	"shell.memoryColumnState": "状態",
 	"shell.memoryColumnRss": "メモリ",
+	"shell.memoryColumnProcess": "プロセス",
+	"shell.memoryColumnPid": "PID",
 	"shell.memoryColumnProcs": "RSS · プロセス",
 	"shell.memoryColumnIdle": "待機",
 	"shell.memoryEmpty": "計測できる実行中のセッションはありません。",

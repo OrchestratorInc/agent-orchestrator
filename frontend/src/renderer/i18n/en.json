@@ -1489,6 +1489,8 @@
 	"shell.memoryColumnSession": "Session",
 	"shell.memoryColumnState": "State",
 	"shell.memoryColumnRss": "Memory",
+	"shell.memoryColumnProcess": "Process",
+	"shell.memoryColumnPid": "PID",
 	"shell.memoryColumnProcs": "RSS · procs",
 	"shell.memoryColumnIdle": "Idle",
 	"shell.memoryEmpty": "No live sessions to measure.",
