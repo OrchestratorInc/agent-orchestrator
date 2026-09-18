@@ -6,6 +6,7 @@ import type {
   CreateGitHubProjectInput,
   CreateGitHubScratchProjectInput,
   CreateGitHubScratchProjectResponse,
+  CreateOrganizationInput,
   CreateProjectInput,
   CreateSessionInput,
   CurrentAccount,
@@ -19,12 +20,15 @@ import type {
   GitHubUserAuthorizationStart,
   GitHubUserConnection,
   IdempotentRequestOptions,
+  OrganizationMembership,
   PaginationOptions,
   Project,
   ProjectPage,
   PutAgentProviderConnectionInput,
   RedactedProviderConnection,
   RequestOptions,
+  ResumeSessionResponse,
+  RestoreSessionResponse,
   Session,
   SessionPage,
   SessionPullRequests,
@@ -53,6 +57,7 @@ import type {
   WorkerTerminalOutputResponse,
   WorkerTransportRequest,
   WorkerTurn,
+  WakePausedSessionsResponse,
   WorkspaceDiff,
   WorkspaceEntryPage,
   WorkspaceFile,
@@ -117,6 +122,17 @@ export class CloudClient {
 
   getCurrentAccount(options: RequestOptions = {}): Promise<CurrentAccount> {
     return this.request("/api/cloud/v1/me", options);
+  }
+
+  createOrganization(
+    input: CreateOrganizationInput,
+    options: RequestOptions = {},
+  ): Promise<{ organization: OrganizationMembership }> {
+    return this.request("/api/cloud/v1/orgs", {
+      method: "POST",
+      body: input,
+      signal: options.signal,
+    });
   }
 
   async listAgents(
@@ -341,6 +357,41 @@ export class CloudClient {
     return this.request(
       this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}`),
       { method: "DELETE", signal: options.signal },
+    );
+  }
+
+  wakeSessions(
+    orgId: string,
+    options: RequestOptions = {},
+  ): Promise<WakePausedSessionsResponse> {
+    return this.request(this.orgPath(orgId, "/sessions/wake"), {
+      method: "POST",
+      signal: options.signal,
+    });
+  }
+
+  resumeSession(
+    orgId: string,
+    sessionId: string,
+    options: RequestOptions = {},
+  ): Promise<ResumeSessionResponse> {
+    return this.request(
+      this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/resume`),
+      { method: "POST", signal: options.signal },
+    );
+  }
+
+  restoreSession(
+    orgId: string,
+    sessionId: string,
+    options: RequestOptions = {},
+  ): Promise<RestoreSessionResponse> {
+    return this.request(
+      this.orgPath(
+        orgId,
+        `/sessions/${encodeURIComponent(sessionId)}/restore`,
+      ),
+      { method: "POST", signal: options.signal },
     );
   }
 

@@ -20,6 +20,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create an organization owned by the authenticated account. */
+        post: operations["createOrganization"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/github/user": {
         parameters: {
             query?: never;
@@ -269,6 +286,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/wake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Wake every paused sandbox in the organization. */
+        post: operations["wakePausedSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}": {
         parameters: {
             query?: never;
@@ -283,6 +319,46 @@ export interface paths {
         put?: never;
         post?: never;
         delete: operations["deleteSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume one paused session's sandbox. */
+        post: operations["resumeSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Un-terminate a previously deleted session and queue a fresh sandbox provision. */
+        post: operations["restoreSession"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -964,6 +1040,9 @@ export interface components {
             user: components["schemas"]["CurrentUser"];
             organizations: components["schemas"]["OrganizationMembership"][];
         };
+        CreateOrganizationInput: {
+            displayName: string;
+        };
         /** @enum {string} */
         AgentCapability: "interface.chat" | "interface.tui" | "model.catalog" | "model.custom" | "attachments" | "browser.preview" | "review.execute" | "session.resume";
         /** @enum {string} */
@@ -1507,6 +1586,26 @@ export interface components {
                 desiredState: "deleted";
             };
         };
+        WakePausedSessionsResponse: {
+            /** Format: int64 */
+            woken: number;
+        };
+        ResumeSessionResponse: {
+            session: {
+                /** Format: uuid */
+                id: string;
+                sandboxProvider: string;
+                desiredState: string;
+                observedState: string;
+            };
+        };
+        RestoreSessionResponse: {
+            session: {
+                /** Format: uuid */
+                id: string;
+                restored: boolean;
+            };
+        };
         Session: {
             /** Format: uuid */
             id: string;
@@ -1524,10 +1623,15 @@ export interface components {
             status: components["schemas"]["SessionStatus"];
             capabilities?: components["schemas"]["AgentCapability"][];
             runtimeConnected: boolean;
+            sandboxProvider?: string;
+            desiredState?: string;
+            observedState?: string;
             runtimeState?: string;
             runtimeError?: string;
             activeTurn?: components["schemas"]["Turn"];
             isTerminated: boolean;
+            /** Format: int64 */
+            workerEpoch?: number;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -2033,6 +2137,33 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    createOrganization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateOrganizationInput"];
+            };
+        };
+        responses: {
+            /** @description Organization created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        organization: components["schemas"]["OrganizationMembership"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getGitHubUserConnection: {
         parameters: {
             query?: never;
@@ -2510,6 +2641,29 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    wakePausedSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Wake was requested for this tenant's idle-paused sandboxes. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WakePausedSessionsResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getSession: {
         parameters: {
             query?: never;
@@ -2555,6 +2709,54 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeleteSessionResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    resumeSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resume was requested; the reconciler owns the provider and worker transitions. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResumeSessionResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    restoreSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Restore was accepted; the sandbox provisions and rehydrates asynchronously. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreSessionResponse"];
                 };
             };
             default: components["responses"]["Error"];

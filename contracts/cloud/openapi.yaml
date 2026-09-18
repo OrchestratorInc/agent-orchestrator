@@ -40,6 +40,30 @@ paths:
                 $ref: "#/components/schemas/CurrentAccount"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs:
+    post:
+      operationId: createOrganization
+      tags: [Account]
+      summary: Create an organization owned by the authenticated account.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrganizationInput"
+      responses:
+        "201":
+          description: Organization created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [organization]
+                properties:
+                  organization:
+                    $ref: "#/components/schemas/OrganizationMembership"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/github/user:
     get:
       operationId: getGitHubUserConnection
@@ -396,6 +420,22 @@ paths:
                     $ref: "#/components/schemas/Session"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/wake:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    post:
+      operationId: wakePausedSessions
+      tags: [Sessions]
+      summary: Wake every paused sandbox in the organization.
+      responses:
+        "202":
+          description: Wake was requested for this tenant's idle-paused sandboxes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WakePausedSessionsResponse"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -426,6 +466,40 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DeleteSessionResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/resume:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: resumeSession
+      tags: [Sessions]
+      summary: Resume one paused session's sandbox.
+      responses:
+        "202":
+          description: Resume was requested; the reconciler owns the provider and worker transitions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResumeSessionResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/restore:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: restoreSession
+      tags: [Sessions]
+      summary: Un-terminate a previously deleted session and queue a fresh sandbox provision.
+      responses:
+        "202":
+          description: Restore was accepted; the sandbox provisions and rehydrates asynchronously.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestoreSessionResponse"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/children:
@@ -1646,6 +1720,15 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/OrganizationMembership"
+    CreateOrganizationInput:
+      type: object
+      additionalProperties: false
+      required: [displayName]
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 80
     AgentCapability:
       type: string
       enum:
@@ -2807,6 +2890,48 @@ components:
             desiredState:
               type: string
               const: deleted
+    WakePausedSessionsResponse:
+      type: object
+      additionalProperties: false
+      required: [woken]
+      properties:
+        woken:
+          type: integer
+          format: int64
+    ResumeSessionResponse:
+      type: object
+      additionalProperties: false
+      required: [session]
+      properties:
+        session:
+          type: object
+          additionalProperties: false
+          required: [id, sandboxProvider, desiredState, observedState]
+          properties:
+            id:
+              type: string
+              format: uuid
+            sandboxProvider:
+              type: string
+            desiredState:
+              type: string
+            observedState:
+              type: string
+    RestoreSessionResponse:
+      type: object
+      additionalProperties: false
+      required: [session]
+      properties:
+        session:
+          type: object
+          additionalProperties: false
+          required: [id, restored]
+          properties:
+            id:
+              type: string
+              format: uuid
+            restored:
+              type: boolean
     Session:
       type: object
       additionalProperties: false
@@ -2860,6 +2985,12 @@ components:
             $ref: "#/components/schemas/AgentCapability"
         runtimeConnected:
           type: boolean
+        sandboxProvider:
+          type: string
+        desiredState:
+          type: string
+        observedState:
+          type: string
         runtimeState:
           type: string
         runtimeError:
@@ -2868,6 +2999,9 @@ components:
           $ref: "#/components/schemas/Turn"
         isTerminated:
           type: boolean
+        workerEpoch:
+          type: integer
+          format: int64
         createdAt:
           type: string
           format: date-time

@@ -74,6 +74,139 @@ describe("CloudClient", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("DELETE");
   });
 
+  it("resumes a paused session", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse(
+          {
+            session: {
+              id: "a9dc6493-bd04-4c03-bb45-55733ed83784",
+              sandboxProvider: "fly",
+              desiredState: "running",
+              observedState: "paused",
+            },
+          },
+          202,
+        ),
+    );
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(
+      client.resumeSession(
+        "4165753c-c6ad-4ac2-8f12-e0cbb24d9750",
+        "a9dc6493-bd04-4c03-bb45-55733ed83784",
+      ),
+    ).resolves.toEqual({
+      session: {
+        id: "a9dc6493-bd04-4c03-bb45-55733ed83784",
+        sandboxProvider: "fly",
+        desiredState: "running",
+        observedState: "paused",
+      },
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/4165753c-c6ad-4ac2-8f12-e0cbb24d9750/sessions/a9dc6493-bd04-4c03-bb45-55733ed83784/resume",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+  });
+
+  it("restores a terminated session's sandbox", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse(
+          {
+            session: {
+              id: "a9dc6493-bd04-4c03-bb45-55733ed83784",
+              restored: true,
+            },
+          },
+          202,
+        ),
+    );
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(
+      client.restoreSession(
+        "4165753c-c6ad-4ac2-8f12-e0cbb24d9750",
+        "a9dc6493-bd04-4c03-bb45-55733ed83784",
+      ),
+    ).resolves.toEqual({
+      session: { id: "a9dc6493-bd04-4c03-bb45-55733ed83784", restored: true },
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/4165753c-c6ad-4ac2-8f12-e0cbb24d9750/sessions/a9dc6493-bd04-4c03-bb45-55733ed83784/restore",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+  });
+
+  it("wakes every paused sandbox in the organization", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse({ woken: 3 }, 202),
+    );
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(
+      client.wakeSessions("4165753c-c6ad-4ac2-8f12-e0cbb24d9750"),
+    ).resolves.toEqual({ woken: 3 });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/4165753c-c6ad-4ac2-8f12-e0cbb24d9750/sessions/wake",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+  });
+
+  it("creates an organization for the authenticated account", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse(
+          {
+            organization: {
+              id: "4165753c-c6ad-4ac2-8f12-e0cbb24d9750",
+              slug: "acme",
+              displayName: "Acme",
+              role: "owner",
+            },
+          },
+          201,
+        ),
+    );
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(
+      client.createOrganization({ displayName: "Acme" }),
+    ).resolves.toEqual({
+      organization: {
+        id: "4165753c-c6ad-4ac2-8f12-e0cbb24d9750",
+        slug: "acme",
+        displayName: "Acme",
+        role: "owner",
+      },
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      displayName: "Acme",
+    });
+  });
+
   it("updates editable project settings on the project resource", async () => {
     const project = {
       id: "project one",
