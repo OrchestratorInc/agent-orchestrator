@@ -22,8 +22,9 @@ export function createLocalSessionSource(cfg: ServerConfig): SessionSource {
 		listProjects: () => getProjects(cfg),
 		listSessions: async () => (await getSessions(cfg)).sessions,
 		createSession: async (options) => {
+			if (!options.projectId) throw new Error("Pick a project first");
 			const session = await delegateTask(cfg, {
-				projectId: options.projectId ?? "",
+				projectId: options.projectId,
 				brief: options.prompt ?? "",
 				agent: options.harness,
 				model: options.model,

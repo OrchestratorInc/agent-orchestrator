@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@react-native-async-storage/async-storage", () => ({
 	default: { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() },
@@ -26,6 +26,10 @@ import { createLocalSessionSource } from "./local";
 const cfg: ServerConfig = { ...DEFAULT_CONFIG, host: "10.0.0.2", password: "pw" };
 
 describe("createLocalSessionSource", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
 	it("identifies as the local environment", () => {
 		expect(createLocalSessionSource(cfg).kind).toBe("local");
 	});
@@ -45,6 +49,7 @@ describe("createLocalSessionSource", () => {
 			sessions: [{ id: "s1" }], orchestrators: [], orchestratorId: null, stats: {}, projects: [],
 		});
 		expect(await createLocalSessionSource(cfg).listSessions()).toEqual([{ id: "s1" }]);
+		expect(getSessions).toHaveBeenCalledWith(cfg);
 	});
 
 	it("spawns through delegateTask and returns the new session id", async () => {
@@ -56,6 +61,13 @@ describe("createLocalSessionSource", () => {
 		expect(delegateTask).toHaveBeenCalledWith(cfg, expect.objectContaining({
 			projectId: "p1", brief: "fix the build", mode: "chat",
 		}));
+	});
+
+	it("refuses to spawn without a resolved project", async () => {
+		await expect(
+			createLocalSessionSource(cfg).createSession({ prompt: "x" }),
+		).rejects.toThrow("Pick a project first");
+		expect(delegateTask).not.toHaveBeenCalled();
 	});
 
 	it("deletes a session by killing it", async () => {
