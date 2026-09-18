@@ -29,6 +29,8 @@ import {
 	type SpawnOptions,
 } from "./api";
 import { isConfigured, loadConfig, machineIdentity, type ServerConfig } from "./config";
+import { sessionSourceForConfig } from "./environment/resolve";
+import type { SessionSource } from "./environment/types";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
 import { pollIntervalFor } from "./pollInterval";
 import type { Endpoint } from "./endpoints";
@@ -56,6 +58,8 @@ export type { SpawnOptions } from "./api";
 type AppState = {
 	config: ServerConfig | null;
 	configured: boolean;
+	/** The active environment's data source. Undefined until one is configured. */
+	sessionSource: SessionSource | undefined;
 	/** Every way the active machine says it can be reached, for telling a
 	 *  rotated tunnel hostname apart from being simply out of range. */
 	activeEndpoints: Endpoint[];
@@ -119,6 +123,12 @@ export function useVisibleSessions(): DashboardSession[] {
 export function usePRs() {
 	const sessions = useVisibleSessions();
 	return useMemo(() => collectPRs(sessions), [sessions]);
+}
+
+/** The active environment's data source. Undefined until one is configured. */
+export function useSessionSource(): SessionSource | undefined {
+	const { sessionSource } = useApp();
+	return sessionSource;
 }
 
 // Provider --------------------------------------------------------------------
@@ -564,10 +574,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// dependency list below without ever busting it.
 	const getLastSyncAt = useCallback(() => lastSyncAtRef.current, []);
 
+	const sessionSource = useMemo(() => sessionSourceForConfig(config), [config]);
+
 	const value = useMemo<AppState>(
 		() => ({
 			config,
 			configured: !!config && isConfigured(config),
+			sessionSource,
 			activeEndpoints,
 			projects,
 			projectsKnown,
@@ -597,6 +610,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		}),
 		[
 			config,
+			sessionSource,
 			projects,
 			projectsKnown,
 			sessions,
