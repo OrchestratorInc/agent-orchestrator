@@ -35,6 +35,13 @@ export function createTokenProvider(deps: TokenProviderDeps): TokenProvider {
 			// Sign-out happened while this was in flight; drop the result.
 			if (startedAt !== generation) return null;
 			await deps.write(next);
+			// A sign-out that landed while the write above was in flight may have
+			// already run clear(); this write would then be the last writer and
+			// would resurrect the signed-out session. Re-check and undo.
+			if (startedAt !== generation) {
+				await deps.clear();
+				return null;
+			}
 			return next;
 		} catch {
 			if (startedAt === generation) await deps.clear();

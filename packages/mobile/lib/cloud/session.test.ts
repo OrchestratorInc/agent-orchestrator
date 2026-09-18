@@ -71,4 +71,31 @@ describe("createTokenProvider", () => {
 		expect(await pending).toBeNull();
 		expect(stored()).toBeNull();
 	});
+
+	// A refresh whose fetch already returned, but whose write to storage is still
+	// in flight when sign-out runs, must not leave the signed-out keystore holding
+	// the new tokens: the write would be the last writer and resurrect the session.
+	it("discards a refresh whose write completes after sign-out", async () => {
+		let stored: CloudTokens | null = stale;
+		let releaseWrite: () => void = () => {};
+		const provider = createTokenProvider({
+			read: async () => stored,
+			write: (t) => new Promise<void>((resolve) => {
+				releaseWrite = () => { stored = t; resolve(); };
+			}),
+			clear: async () => { stored = null; },
+			refresh: async () => fresh,
+			now: () => 0,
+		});
+
+		const pending = provider.getToken();
+		// Let refresh() resolve and the write() call begin before signing out.
+		await Promise.resolve();
+		await Promise.resolve();
+		await provider.signOut();
+		releaseWrite();
+
+		expect(await pending).toBeNull();
+		expect(stored).toBeNull();
+	});
 });
