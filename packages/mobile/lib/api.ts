@@ -793,6 +793,19 @@ export type SpawnAttachmentInput = {
 	data: string;
 };
 
+// An options object rather than four optional positionals: `spawn(a, b, c, d)`
+// with every argument optional and same-typed is where call-site mistakes live.
+export type SpawnOptions = {
+	/** Falls back to the active project, or the only project. */
+	projectId?: string;
+	prompt?: string;
+	harness?: string;
+	model?: string;
+	attachments?: SpawnAttachmentInput[];
+	/** Mobile defaults to Chat; TUI remains an explicit compatibility choice. */
+	mode?: SessionMode;
+};
+
 export async function getSession(cfg: ServerConfig, id: string): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}`);
 	const data = await res.json();

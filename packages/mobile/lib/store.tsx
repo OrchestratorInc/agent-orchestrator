@@ -26,6 +26,7 @@ import {
 	type ProjectInfo,
 	type SessionMode,
 	type SpawnAttachmentInput,
+	type SpawnOptions,
 } from "./api";
 import { isConfigured, loadConfig, machineIdentity, type ServerConfig } from "./config";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
@@ -50,18 +51,7 @@ const ACTIVE_PROJECT_KEY = "ao.activeProject";
 // tracks its own terminal mux connection separately.
 export type ConnStatus = "closed" | "connecting" | "open";
 
-// An options object rather than four optional positionals: `spawn(a, b, c, d)`
-// with every argument optional and same-typed is where call-site mistakes live.
-export type SpawnOptions = {
-	/** Falls back to the active project, or the only project. */
-	projectId?: string;
-	prompt?: string;
-	harness?: string;
-	model?: string;
-	attachments?: SpawnAttachmentInput[];
-	/** Mobile defaults to Chat; TUI remains an explicit compatibility choice. */
-	mode?: SessionMode;
-};
+export type { SpawnOptions } from "./api";
 
 type AppState = {
 	config: ServerConfig | null;

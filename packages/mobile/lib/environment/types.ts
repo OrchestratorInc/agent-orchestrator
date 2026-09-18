@@ -1,7 +1,6 @@
-import type { DashboardSession, ProjectInfo } from "../api";
-import type { SpawnOptions } from "../store";
+import type { DashboardSession, ProjectInfo, SpawnOptions } from "../api";
 import type { ConversationPage, SendMessageInput, SendMessageResult } from "../chat/api";
-import type { ConversationEvent } from "../chat/api";
+import type { ConversationEvent } from "../chat/sse";
 
 /** Which environment a source speaks for. */
 export type EnvironmentKind = "local" | "cloud";
