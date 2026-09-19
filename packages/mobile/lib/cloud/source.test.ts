@@ -21,7 +21,7 @@ function fullSession(id: string) {
 	};
 }
 
-function clientStub(overrides: Record<string, unknown> = {}) {
+function clientStub<T extends Record<string, unknown> = Record<string, never>>(overrides: T = {} as T) {
 	return {
 		listProjects: vi.fn(async () => ({ items: [], page: { hasMore: false } })),
 		listSessions: vi.fn(async () => ({ items: [], page: { hasMore: false } })),
@@ -85,9 +85,77 @@ describe("createCloudSessionSource", () => {
 
 	it("throws naming the task that will implement unbuilt methods", async () => {
 		const source = createCloudSessionSource({ client: clientStub() as never, orgId: "o1" });
-		await expect(source.getConversationPage("s1")).rejects.toThrow(/Task 12/);
 		await expect(source.sendMessage("s1", { text: "hi" } as never)).rejects.toThrow(/Task 13/);
 		await expect(source.cancelTurn("s1", "t1")).rejects.toThrow(/Task 13/);
-		expect(() => source.subscribeEvents("s1", () => {})).toThrow(/Task 12/);
+	});
+
+	it("builds a conversation snapshot from a cloud transcript replay", async () => {
+		const client = clientStub({
+			getSession: vi.fn(async () => ({ session: fullSession("s1") })),
+			replayEvents: vi.fn(async () => ({
+				events: [
+					{ sessionId: "s1", sequence: 1, type: "chat.user_message", payload: { text: "hi" }, createdAt: "2026-09-01T00:00:00Z" },
+					{ sessionId: "s1", sequence: 2, type: "chat.assistant_delta", payload: { text: "hello", turnId: "t1", attempt: 1, stream: "stdout" }, createdAt: "2026-09-01T00:00:01Z" },
+				],
+				hasMore: false,
+				nextAfter: 2,
+			})),
+		});
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
+		const page = await source.getConversationPage("s1");
+
+		expect(client.getSession).toHaveBeenCalledWith("o1", "s1");
+		expect(client.replayEvents).toHaveBeenCalledWith("o1", "s1", {});
+		expect(page).toMatchObject({
+			conversationId: "s1",
+			sessionId: "s1",
+			harness: "claude-code",
+			mode: "chat",
+			controller: { state: "ready" },
+			latestSequence: 2,
+			oldestSequence: 1,
+			hasMoreBefore: false,
+			turns: [],
+			settings: {},
+		});
+		expect(page.items).toMatchObject([
+			{ role: "user", text: "hi" },
+			{ role: "assistant", text: "hello", streaming: true },
+		]);
+	});
+
+	it("falls back to the cursor for latest/oldest sequence on an empty replay", async () => {
+		const client = clientStub({
+			getSession: vi.fn(async () => ({ session: fullSession("s1") })),
+			replayEvents: vi.fn(async () => ({ events: [], hasMore: false, nextAfter: 5 })),
+		});
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
+		const page = await source.getConversationPage("s1");
+		expect(page.latestSequence).toBe(5);
+		expect(page.oldestSequence).toBe(5);
+		expect(page.items).toEqual([]);
+	});
+
+	it("subscribes by polling the transcript and forwards each event to the listener", async () => {
+		vi.useFakeTimers();
+		const client = clientStub({
+			replayEvents: vi.fn(async () => ({
+				events: [{ sessionId: "s1", sequence: 1, type: "chat.user_message", payload: { text: "hi" }, createdAt: "2026-09-01T00:00:00Z" }],
+				hasMore: false,
+				nextAfter: 1,
+			})),
+		});
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
+		const listener = vi.fn();
+		const unsubscribe = source.subscribeEvents("s1", listener);
+
+		await vi.advanceTimersByTimeAsync(0);
+		expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+			seq: 1, sessionId: "s1", type: "chat.user_message",
+		}));
+
+		unsubscribe();
+		await vi.advanceTimersByTimeAsync(5_000);
+		vi.useRealTimers();
 	});
 });
