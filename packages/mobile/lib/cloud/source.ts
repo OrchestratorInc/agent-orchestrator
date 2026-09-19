@@ -82,11 +82,25 @@ export function createCloudSessionSource(input: {
 				settings: {},
 			};
 		},
-		sendMessage: async () => {
-			throw new Error("Cloud message sending arrives in Task 13.");
+		sendMessage: async (id, input) => {
+			// The composer's clientMessageId is already a per-message unique id,
+			// so it doubles as the idempotency key: a retry after a dropped
+			// response cannot post the message twice.
+			await client.sendMessage(orgId, id, input.text, { idempotencyKey: input.clientMessageId });
+			// The wire response is `{ event: UserMessageEvent }`, not a turn — the
+			// control plane does not hand back a turn id for the message just
+			// posted. Reporting a turnId here would be a guess the UI could
+			// mistake for a real turn (e.g. treating it as cancellable), so it is
+			// left undefined; nothing in mobile reads the immediate sendMessage
+			// return value today (useConversation's `deliver` discards it and
+			// relies on the polled transcript instead), so this is safe.
+			return { duplicate: false };
 		},
-		cancelTurn: async () => {
-			throw new Error("Cloud turn cancellation arrives in Task 13.");
+		cancelTurn: async (id, turnId) => {
+			// Keyed by the turn id, not freshly generated per call, so a retried
+			// cancel of the same turn is idempotent instead of firing a second
+			// distinct request.
+			await client.cancelTurn(orgId, id, turnId, { idempotencyKey: `cancel-${turnId}` });
 		},
 		subscribeEvents: (id, listener) => {
 			const controller = new AbortController();

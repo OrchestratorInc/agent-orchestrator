@@ -83,10 +83,30 @@ describe("createCloudSessionSource", () => {
 		expect(client.deleteSession).toHaveBeenCalledWith("o1", "s1");
 	});
 
-	it("throws naming the task that will implement unbuilt methods", async () => {
-		const source = createCloudSessionSource({ client: clientStub() as never, orgId: "o1" });
-		await expect(source.sendMessage("s1", { text: "hi" } as never)).rejects.toThrow(/Task 13/);
-		await expect(source.cancelTurn("s1", "t1")).rejects.toThrow(/Task 13/);
+	it("sends a message with the client's id as the idempotency key", async () => {
+		const sendMessage = vi.fn(async () => ({ event: { sessionId: "s1", sequence: 3, type: "chat.user_message", payload: { text: "hi" }, createdAt: "2026-09-01T00:00:00Z" } }));
+		const source = createCloudSessionSource({
+			client: clientStub({ sendMessage }) as never, orgId: "o1",
+		});
+		const result = await source.sendMessage("s1", { text: "hi", clientMessageId: "cm-1" });
+		expect(sendMessage).toHaveBeenCalledWith("o1", "s1", "hi", expect.objectContaining({ idempotencyKey: "cm-1" }));
+		// The wire response is a user-message event, not a turn: there is no
+		// honest turnId to report here, so it stays undefined rather than
+		// inventing one that would make the UI believe a turn exists.
+		expect(result).toEqual({ duplicate: false });
+	});
+
+	it("cancels a turn with a key stable across retries of the same cancel", async () => {
+		const cancelTurn = vi.fn(async (_orgId: string, _sessionId: string, _turnId: string, options: { idempotencyKey: string }) => ({ ok: true }));
+		const source = createCloudSessionSource({
+			client: clientStub({ cancelTurn }) as never, orgId: "o1",
+		});
+		await source.cancelTurn("s1", "t1");
+		expect(cancelTurn).toHaveBeenCalledWith("o1", "s1", "t1", expect.objectContaining({ idempotencyKey: expect.any(String) }));
+		const firstKey = cancelTurn.mock.calls[0]?.[3].idempotencyKey;
+
+		await source.cancelTurn("s1", "t1");
+		expect(cancelTurn.mock.calls[1]?.[3].idempotencyKey).toBe(firstKey);
 	});
 
 	it("builds a conversation snapshot from a cloud transcript replay", async () => {
