@@ -10,18 +10,28 @@ export type OnboardingInput = {
 	configured: boolean | null;
 	// Whether the user has dismissed onboarding. `null` means "not loaded yet".
 	skipped: boolean | null;
+	// Whether the user is signed into the cloud environment. `null` means "not
+	// loaded yet". Optional — a caller with no cloud awareness (or a
+	// local-only build) can omit it entirely, which behaves as if cloud were
+	// never signed into.
+	cloudSignedIn?: boolean | null;
 };
 
 /**
  * Should the app take the user to onboarding?
  *
- * Both inputs are read asynchronously (config from AsyncStorage + SecureStore,
- * the flag from AsyncStorage), so either can still be `null` on the first
- * render. Redirecting on incomplete state would yank a paired user onto the
- * welcome screen for a frame on every cold start, so unknown means "do nothing
- * yet" rather than "assume false".
+ * Both `configured` and `skipped` are read asynchronously (config from
+ * AsyncStorage + SecureStore, the flag from AsyncStorage), so either can
+ * still be `null` on the first render. Redirecting on incomplete state would
+ * yank a paired user onto the welcome screen for a frame on every cold start,
+ * so unknown means "do nothing yet" rather than "assume false". The same
+ * applies to `cloudSignedIn`: a signed-in cloud user never needs onboarding
+ * regardless of the local pairing state, but a still-loading auth state must
+ * not bounce them onto the welcome screen for a frame either.
  */
-export function shouldOnboard({ configured, skipped }: OnboardingInput): boolean {
+export function shouldOnboard({ configured, skipped, cloudSignedIn }: OnboardingInput): boolean {
 	if (configured === null || skipped === null) return false;
+	if (cloudSignedIn === null) return false;
+	if (cloudSignedIn === true) return false;
 	return !configured && !skipped;
 }

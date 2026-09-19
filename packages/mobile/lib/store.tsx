@@ -29,7 +29,7 @@ import {
 	type SpawnOptions,
 } from "./api";
 import { isConfigured, loadConfig, machineIdentity, type ServerConfig } from "./config";
-import { sessionSourceForConfig } from "./environment/resolve";
+import { resolveSessionSource } from "./environment/resolve";
 import type { SessionSource } from "./environment/types";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
 import { pollIntervalFor } from "./pollInterval";
@@ -579,7 +579,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// dependency list below without ever busting it.
 	const getLastSyncAt = useCallback(() => lastSyncAtRef.current, []);
 
-	const sessionSource = useMemo(() => sessionSourceForConfig(config), [config]);
+	// The environment switcher (task 15b) will thread real environment/cloud
+	// state through here; until then this always resolves the local source,
+	// matching prior behavior.
+	const sessionSource = useMemo(
+		() => resolveSessionSource({ environment: "local", cfg: config }),
+		[config],
+	);
 
 	const value = useMemo<AppState>(
 		() => ({
