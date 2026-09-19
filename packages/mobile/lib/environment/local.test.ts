@@ -74,4 +74,10 @@ describe("createLocalSessionSource", () => {
 		await createLocalSessionSource(cfg).deleteSession("s1");
 		expect(killSession).toHaveBeenCalledWith(cfg, "s1");
 	});
+
+	it("rejects resumeSession for local sessions", async () => {
+		await expect(
+			createLocalSessionSource(cfg).resumeSession("s1"),
+		).rejects.toThrow("resumeSession is not supported for the local environment");
+	});
 });

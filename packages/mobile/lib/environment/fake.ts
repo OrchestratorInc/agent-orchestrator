@@ -18,6 +18,9 @@ export function createFakeSessionSource(overrides: Partial<SessionSource> = {}):
 		sendMessage: async () => ({ duplicate: false }),
 		cancelTurn: async () => {},
 		subscribeEvents: () => () => {},
+		resumeSession: async () => {
+			throw new Error("createFakeSessionSource: resumeSession not overridden");
+		},
 		...overrides,
 	};
 }

@@ -204,4 +204,12 @@ describe("createCloudSessionSource", () => {
 		await vi.advanceTimersByTimeAsync(5_000);
 		vi.useRealTimers();
 	});
+
+	it("resumes a paused session with the bound org id", async () => {
+		const resumeSession = vi.fn(async () => ({ session: { id: "s1", desiredState: "active" } }));
+		const client = clientStub({ resumeSession });
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
+		await source.resumeSession("s1");
+		expect(resumeSession).toHaveBeenCalledWith("o1", "s1");
+	});
 });

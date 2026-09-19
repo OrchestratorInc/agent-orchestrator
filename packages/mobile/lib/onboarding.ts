@@ -36,3 +36,41 @@ export function shouldOnboard({ configured, skipped, cloudSignedIn }: Onboarding
 	if (cloudSignedIn === true) return false;
 	return !configured && !skipped;
 }
+
+/**
+ * The raw state `OnboardingGate.tsx` actually holds, before it has been
+ * interpreted into an `OnboardingInput`.
+ *
+ * `config` is the loaded `ServerConfig | null` (null until the store's first
+ * load resolves); `cloud` is the cloud auth state the gate reads from
+ * `useCloudAuth()` — also `null` while it is still loading, never a value the
+ * gate invents.
+ */
+export type OnboardingGateState = {
+	config: { host: string } | null;
+	skipped: boolean | null;
+	cloud: { signedIn: boolean | null } | null;
+};
+
+/**
+ * Turns the gate's raw state into `shouldOnboard`'s input.
+ *
+ * This is the one place that gets to decide what "configured" or
+ * "cloudSignedIn" mean from what the gate holds — moved out of the component
+ * so a test can call it with the gate's exact fresh-install shape (no config,
+ * no skip flag yet, cloud auth not wired up) and catch a regression like the
+ * one this function exists to prevent: passing `cloudSignedIn: null` for a
+ * gate that has no cloud auth at all, which silently defers onboarding
+ * forever instead of running it for a fresh, unpaired install.
+ */
+export function deriveOnboardingInput(state: OnboardingGateState): OnboardingInput {
+	return {
+		configured: state.config === null ? null : state.config.host.trim().length > 0,
+		skipped: state.skipped,
+		// No cloud auth wired in at all (`state.cloud === null`) is definitively
+		// "not signed in", not "still loading" — a device with no cloud auth
+		// concept must still be onboardable. Once cloud auth exists, its own
+		// `signedIn` may legitimately be `null` while it loads.
+		cloudSignedIn: state.cloud === null ? false : state.cloud.signedIn,
+	};
+}

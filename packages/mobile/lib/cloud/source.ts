@@ -96,6 +96,13 @@ export function createCloudSessionSource(input: {
 			// relies on the polled transcript instead), so this is safe.
 			return { duplicate: false };
 		},
+		// Returns 202 with a body (ResumeSessionResponse), not 204 — the
+		// reconciler owns the actual provider/worker transition from here, so
+		// the response body is discarded and the caller relies on the polled
+		// lifecycle stage (cloudLifecycleStage) to see it land.
+		resumeSession: async (id) => {
+			await client.resumeSession(orgId, id);
+		},
 		cancelTurn: async (id, turnId) => {
 			// Keyed by the turn id, not freshly generated per call, so a retried
 			// cancel of the same turn is idempotent instead of firing a second

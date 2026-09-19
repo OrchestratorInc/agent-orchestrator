@@ -38,5 +38,12 @@ export function createLocalSessionSource(cfg: ServerConfig): SessionSource {
 		sendMessage: (id, input) => sendConversationMessage(cfg, id, input),
 		cancelTurn: (id, turnId) => cancelQueuedConversationTurn(cfg, id, turnId),
 		subscribeEvents: (id, listener) => subscribeConversationEvents(id, listener),
+		// A local session never reports the cloud lifecycle stage that makes
+		// `isResumable` true, so nothing in the UI should ever call this for a
+		// local session. Throwing rather than silently no-opping surfaces a
+		// wiring bug immediately instead of hiding it as a tap that does nothing.
+		resumeSession: async () => {
+			throw new Error("resumeSession is not supported for the local environment");
+		},
 	};
 }
