@@ -28,10 +28,11 @@ export function OnboardingGate() {
 		// `config` is null until the store's first load resolves; `shouldOnboard`
 		// treats that as "not known yet" and declines to act.
 		const configured = config === null ? null : config.host.trim().length > 0;
-		// cloudSignedIn: null — this gate doesn't know about cloud auth state
-		// yet; null means "unknown, do nothing yet" so this preserves today's
-		// local-only behavior. 15b replaces this with real cloud auth state.
-		if (!shouldOnboard({ configured, skipped, cloudSignedIn: null })) return;
+		// cloudSignedIn: false — this gate has no cloud auth wired in yet, so
+		// the user is definitively not signed in to cloud (not "unknown"; null
+		// would defer forever and silently kill onboarding). 15b replaces this
+		// with real cloud auth state.
+		if (!shouldOnboard({ configured, skipped, cloudSignedIn: false })) return;
 		// Don't fight the user if they've already navigated somewhere deliberately
 		// (e.g. straight to the scanner from a deep link).
 		if (pathname !== "/") return;

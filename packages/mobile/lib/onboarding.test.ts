@@ -56,4 +56,14 @@ describe("shouldOnboard", () => {
 	it("waits on cloudSignedIn even when configured and skipped are both known", () => {
 		expect(shouldOnboard({ configured: true, skipped: true, cloudSignedIn: null })).toBe(false);
 	});
+
+	// Regression: OnboardingGate.tsx has no cloud auth wired in, so it is
+	// definitively not signed in to cloud, not "still loading" — it must pass
+	// `cloudSignedIn: false`, not `null`. Passing `null` here silently kills
+	// onboarding entirely, since every call from that gate would then defer
+	// forever. This mirrors the exact values OnboardingGate.tsx passes for a
+	// fresh, unpaired install.
+	it("onboards a fresh install using OnboardingGate's actual call shape", () => {
+		expect(shouldOnboard({ configured: false, skipped: false, cloudSignedIn: false })).toBe(true);
+	});
 });
