@@ -95,4 +95,12 @@ describe("kanbanColumnForStatus", () => {
 	it("falls back to building for an unknown status", () => {
 		expect(kanbanColumnForStatus("something_new")).toBe("building");
 	});
+
+	// Deliberate, not incidental: the daemon buckets no_signal into Building too
+	// (backend/pkg/contract/kanban.go:184-189, grouped under "Building" alongside
+	// DisplayWorking/DisplayBlocked/DisplayExited), so falling through to the
+	// default here keeps both boards grouping it the same way.
+	it("places no_signal in building, matching the daemon's grouping", () => {
+		expect(kanbanColumnForStatus("no_signal")).toBe("building");
+	});
 });

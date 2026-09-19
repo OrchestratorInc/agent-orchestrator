@@ -9,9 +9,11 @@
 		"start:perf": "expo start --dev-client --no-dev --minify",
 		"android": "expo run:android",
 		"ios": "expo run:ios",
+		"pretypecheck": "npm --prefix ../cloud-client run build",
 		"typecheck": "tsc --noEmit",
 		"build": "npm run typecheck",
 		"postinstall": "patch-package",
+		"pretest": "npm --prefix ../cloud-client run build",
 		"test": "vitest run"
 	},
 	"dependencies": {
