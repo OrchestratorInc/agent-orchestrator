@@ -123,12 +123,18 @@ export async function pollCloudEvents(options: PollOptions): Promise<void> {
 	const interval = options.intervalMs ?? 2000;
 	let cursor = options.after;
 	while (!options.signal.aborted) {
-		// Set when a page reports more is waiting (a backlog page capped at the
-		// server's eventPageLimit). Catching up must not idle for a full
-		// interval between pages -- at 100 events/page and a 2s interval, a
-		// 14k-event backlog would otherwise trickle in for minutes before
-		// reaching the live tail.
-		let hasMore = false;
+		// Set only when a page reports more is waiting *and* the cursor actually
+		// moved forward (a backlog page capped at the server's eventPageLimit).
+		// Catching up must not idle for a full interval between pages -- at 100
+		// events/page and a 2s interval, a 14k-event backlog would otherwise
+		// trickle in for minutes before reaching the live tail. But hasMore
+		// alone is not enough: if the server ever reports hasMore without the
+		// cursor advancing, treating that as progress spins this loop against a
+		// live server at round-trip rate, ignoring intervalMs entirely. A
+		// non-advancing cursor is "caught up" for pacing purposes even though
+		// the server claims otherwise.
+		let advanced = false;
+		const previousCursor = cursor;
 		try {
 			const page = await options.client.replayEvents(options.orgId, options.sessionId, {
 				after: cursor,
@@ -138,7 +144,7 @@ export async function pollCloudEvents(options: PollOptions): Promise<void> {
 			// when the page is empty -- so this always advances monotonically and
 			// never regresses on an empty page.
 			cursor = page.nextAfter;
-			hasMore = page.hasMore;
+			advanced = page.hasMore && page.nextAfter > previousCursor;
 			if (page.events.length > 0) {
 				options.onEvents(page.events, cursor);
 			}
@@ -147,7 +153,7 @@ export async function pollCloudEvents(options: PollOptions): Promise<void> {
 			// Transient failure: fall through to the wait below and retry.
 		}
 		if (options.signal.aborted) return;
-		if (hasMore) continue;
+		if (advanced) continue;
 		await new Promise<void>((resolve) => {
 			const timer = setTimeout(resolve, interval);
 			options.signal.addEventListener(

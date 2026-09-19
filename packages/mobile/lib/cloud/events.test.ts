@@ -217,4 +217,31 @@ describe("pollCloudEvents", () => {
 		await run;
 		vi.useRealTimers();
 	});
+
+	// hasMore alone is not enough to justify skipping the sleep: if the
+	// server ever reports hasMore: true without the cursor actually
+	// advancing, treating that as "more to fetch" spins the loop against a
+	// live server at round-trip rate forever, ignoring intervalMs entirely.
+	it("falls through to the interval sleep when hasMore is true but the cursor does not advance", async () => {
+		vi.useFakeTimers();
+		const replayEvents = vi.fn(async () => ({ events: [], hasMore: true, nextAfter: 0 }));
+		const client = { replayEvents } as unknown as import("@aoagents/cloud-client").CloudClient;
+		const controller = new AbortController();
+		const run = pollCloudEvents({
+			client, orgId: "o1", sessionId: "s1", after: 0, signal: controller.signal, intervalMs: 1_000,
+			onEvents: () => {},
+		});
+
+		await vi.advanceTimersByTimeAsync(0);
+		expect(replayEvents).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(999);
+		expect(replayEvents).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(replayEvents).toHaveBeenCalledTimes(2);
+
+		controller.abort();
+		await vi.advanceTimersByTimeAsync(0);
+		await run;
+		vi.useRealTimers();
+	});
 });
