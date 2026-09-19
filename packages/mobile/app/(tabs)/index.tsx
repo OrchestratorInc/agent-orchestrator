@@ -97,6 +97,24 @@ export default function FleetScreen() {
 
 	const keyboardLayout = workerDockKeyboardLayout(keyboardHeight, insets.bottom, keyboardVisible);
 
+	// The persisted environment choice hasn't loaded yet. Rendering either
+	// empty state here would guess — and for a returning cloud user, the local
+	// one guesses wrong: "no desktop paired" for someone who deliberately
+	// chose not to use one. Same convention as `shouldShowLoading` for
+	// `config` in lib/configLoading.ts: unresolved means "still working out
+	// what to show", not "assume the common case".
+	if (environment === null) {
+		return (
+			<View style={styles.screen}>
+				<View style={{ height: insets.top }} />
+				<ScreenHeader title="Workers" />
+				<View style={styles.center}>
+					<ActivityIndicator color={t.blue} />
+				</View>
+			</View>
+		);
+	}
+
 	// The cloud environment reads and renders a session board entirely
 	// separately from the local one below — it must never fall through to the
 	// local `configured`/`error`/`sessions` state, none of which the cloud poll

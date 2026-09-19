@@ -61,12 +61,20 @@ type AppState = {
 	config: ServerConfig | null;
 	configured: boolean;
 	/**
-	 * Which environment is active. Defaults to "local" (matching every
-	 * pre-cloud install) until the persisted choice loads, so nothing ever
-	 * renders a cloud-shaped screen for a frame before it is known — see
-	 * loadEnvironment's own local fallback.
+	 * Which environment is active, or `null` while the persisted choice is
+	 * still loading.
+	 *
+	 * `null` is a genuine third state, not a stand-in for "local" — the same
+	 * shape `OnboardingInput` uses for exactly the same reason. Defaulting
+	 * this to `"local"` while unresolved silently overloads "local" to mean
+	 * both "confirmed local" and "not loaded yet": a returning cloud user
+	 * would render the local empty state (and, with `config` also still
+	 * null, the "no desktop paired" screen) for a frame on every cold start.
+	 * Consumers must treat `null` as "don't know yet, render neither
+	 * environment's empty state" — see `shouldShowLoading` in
+	 * lib/configLoading.ts for the equivalent convention around `config`.
 	 */
-	environment: EnvironmentKind;
+	environment: EnvironmentKind | null;
 	setEnvironment: (kind: EnvironmentKind) => void;
 	/** The active environment's data source. Undefined until one is configured. */
 	sessionSource: SessionSource | undefined;
@@ -146,7 +154,7 @@ export function useSessionSource(): SessionSource | undefined {
 	return sessionSource;
 }
 
-export function useEnvironment(): { environment: EnvironmentKind; setEnvironment: (kind: EnvironmentKind) => void } {
+export function useEnvironment(): { environment: EnvironmentKind | null; setEnvironment: (kind: EnvironmentKind) => void } {
 	const { environment, setEnvironment } = useApp();
 	return { environment, setEnvironment };
 }
@@ -155,12 +163,11 @@ export function useEnvironment(): { environment: EnvironmentKind; setEnvironment
 
 export function AppProvider({ children }: { children: ReactNode }) {
 	const cloudAuth = useCloudAuth();
-	// Starts "local" — identical to every install before cloud existed — and
-	// stays there until the persisted choice loads. Loading asynchronously
-	// (rather than defaulting to some "unknown" state) means there is no
-	// third render state for consumers to handle, and a user who never
-	// touches cloud never sees anything but "local" in this field.
-	const [environment, setEnvironmentState] = useState<EnvironmentKind>("local");
+	// `null` until the persisted choice loads — a genuine third state, not a
+	// stand-in for "local" (see AppState's `environment` doc comment above).
+	// Consumers must not render either environment's empty state while this
+	// is null.
+	const [environment, setEnvironmentState] = useState<EnvironmentKind | null>(null);
 	useEffect(() => {
 		let cancelled = false;
 		loadEnvironment().then((kind) => {
@@ -170,6 +177,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			cancelled = true;
 		};
 	}, []);
+	// Updates state synchronously so a user toggling the switcher sees the
+	// change immediately, rather than waiting on the AsyncStorage round trip
+	// saveEnvironment makes underneath.
 	const setEnvironment = useCallback((kind: EnvironmentKind) => {
 		setEnvironmentState(kind);
 		void saveEnvironment(kind);

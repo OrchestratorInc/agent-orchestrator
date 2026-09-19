@@ -70,6 +70,20 @@ export default function PRsScreen() {
 		setRefreshing(false);
 	};
 
+	// See app/(tabs)/index.tsx's matching branch: the persisted environment
+	// choice hasn't loaded yet, so neither empty state below is safe to guess.
+	if (environment === null) {
+		return (
+			<View style={styles.screen}>
+				<View style={{ height: insets.top }} />
+				<ScreenHeader title="Pull Requests" />
+				<View style={styles.center}>
+					<ActivityIndicator color={t.blue} />
+				</View>
+			</View>
+		);
+	}
+
 	if (environment === "cloud") {
 		return (
 			<View style={styles.screen}>

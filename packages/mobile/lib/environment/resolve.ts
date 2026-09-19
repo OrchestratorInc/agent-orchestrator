@@ -42,11 +42,21 @@ function resetCache(): void {
  * production yet.
  */
 export function resolveSessionSource(input: {
-	environment: EnvironmentKind;
+	// `null` means the persisted choice hasn't loaded yet — see
+	// lib/environment/store.tsx's loadEnvironment and lib/store.tsx's
+	// AppProvider. It must not be treated as "local": that would render the
+	// local empty state for a returning cloud user for a frame on every cold
+	// start, which is the bug this parameter exists to prevent.
+	environment: EnvironmentKind | null;
 	cfg: ServerConfig | null;
 	cloud?: CloudResolveInput;
 }): SessionSource | undefined {
 	const { environment, cfg, cloud } = input;
+
+	if (environment === null) {
+		resetCache();
+		return undefined;
+	}
 
 	if (environment === "local") {
 		if (!cfg || !isConfigured(cfg)) {

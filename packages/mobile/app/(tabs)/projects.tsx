@@ -67,6 +67,20 @@ export default function ProjectsScreen() {
 		router.push({ pathname: "/project/[id]", params: { id: row.project.id } });
 	};
 
+	// See app/(tabs)/index.tsx's matching branch: the persisted environment
+	// choice hasn't loaded yet, so neither empty state below is safe to guess.
+	if (environment === null) {
+		return (
+			<View style={styles.screen}>
+				<View style={{ height: insets.top }} />
+				<ScreenHeader title="Projects" />
+				<View style={styles.center}>
+					<ActivityIndicator color={t.blue} />
+				</View>
+			</View>
+		);
+	}
+
 	if (environment === "cloud") {
 		return (
 			<View style={styles.screen}>

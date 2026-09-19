@@ -148,4 +148,31 @@ describe("resolveSessionSource", () => {
 		// Stable from here on, same unchanged config.
 		expect(resolveSessionSource({ environment: "local", cfg })).toBe(secondLocal);
 	});
+
+	// The persisted environment choice loading asynchronously (lib/store.tsx)
+	// means `environment` can legitimately be `null` for a render or more.
+	// `null` must resolve to "not ready" on its own — never fall through to
+	// the local branch, which is exactly the bug this covers: a returning
+	// cloud user would otherwise see the local empty state before the real
+	// choice loads.
+	describe("unresolved environment", () => {
+		it("returns undefined even with a fully configured local daemon", () => {
+			const cfg: ServerConfig = { ...DEFAULT_CONFIG, host: "10.0.0.2", password: "pw" };
+			expect(resolveSessionSource({ environment: null, cfg })).toBeUndefined();
+		});
+
+		it("returns undefined even with a signed-in cloud session", () => {
+			const cloud = { client: fakeClient, signedIn: true, orgId: "org1" };
+			expect(resolveSessionSource({ environment: null, cfg: null, cloud })).toBeUndefined();
+		});
+
+		it("does not resurrect a source cached before the environment reset to null", () => {
+			const cfg: ServerConfig = { ...DEFAULT_CONFIG, host: "10.0.0.2", password: "pw" };
+			expect(resolveSessionSource({ environment: "local", cfg })?.kind).toBe("local");
+			expect(resolveSessionSource({ environment: null, cfg })).toBeUndefined();
+			// Resolving again afterwards still works — the reset does not wedge
+			// the memo.
+			expect(resolveSessionSource({ environment: "local", cfg })?.kind).toBe("local");
+		});
+	});
 });
