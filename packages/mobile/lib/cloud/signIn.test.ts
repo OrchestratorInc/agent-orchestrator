@@ -18,7 +18,7 @@ function fakeJwt(exp: number): string {
 // JWT with base64url-encoded payload to test url-safe character handling.
 function fakeJwtWithBase64Url(exp: number): string {
 	const header = "eyJhbGciOiJub25lIn0";  // {"alg":"none"}, no padding
-	const payloadStr = JSON.stringify({ exp, test: "base64url" });
+	const payloadStr = JSON.stringify({ exp, t: "?>?>" });
 	const standard = btoa(payloadStr);
 	// Convert to base64url: replace + with -, / with _, remove padding
 	const urlSafe = standard.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
@@ -180,6 +180,11 @@ describe("exchangeWorkOSCode", () => {
 
 	it("decodes JWT with base64url-encoded payload and padding", async () => {
 		// Test base64url conversion: - to +, _ to /, and padding restoration
+		const payloadStr = JSON.stringify({ exp: 1700000000, t: "?>?>" });
+		const standardBase64 = btoa(payloadStr);
+		// Verify the payload actually contains characters that need conversion
+		expect(standardBase64).toMatch(/[\+\/]/);
+
 		const jwt = fakeJwtWithBase64Url(1700000000);
 		const fetchImpl = vi.fn(async () => new Response(
 			JSON.stringify({ access_token: jwt, refresh_token: "refresh-1" }),
