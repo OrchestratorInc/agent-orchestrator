@@ -8848,6 +8848,18 @@ components:
       required:
       - switch
       type: object
+    AppMemoryResponse:
+      properties:
+        processCount:
+          minimum: 0
+          type: integer
+        rssBytes:
+          minimum: 0
+          type: integer
+      required:
+      - rssBytes
+      - processCount
+      type: object
     AttachmentInput:
       properties:
         data:
@@ -11639,10 +11651,14 @@ components:
       type: object
     ListSessionMemoryResponse:
       properties:
+        app:
+          $ref: '#/components/schemas/AppMemoryResponse'
         sessions:
           items:
             $ref: '#/components/schemas/SessionMemoryResponse'
           type: array
+        system:
+          $ref: '#/components/schemas/SystemMemoryResponse'
       required:
       - sessions
       type: object
@@ -13909,6 +13925,18 @@ components:
           type: string
       required:
       - targetHarness
+      type: object
+    SystemMemoryResponse:
+      properties:
+        availableBytes:
+          minimum: 0
+          type: integer
+        totalBytes:
+          minimum: 0
+          type: integer
+      required:
+      - totalBytes
+      - availableBytes
       type: object
     SystemRequirement:
       properties:

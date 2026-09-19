@@ -10,11 +10,10 @@ import {
 	type BoardPullRequestProgress,
 	type BoardSessionPresentation,
 	type BoardColumnLabels,
-	type BoardMemoryPresentation,
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Check, Copy, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "lucide-react";
+import { Check, Copy, GitBranch, LoaderCircle, Pause, Play, RotateCcw, Trash2 } from "lucide-react";
 import type { MessageKey } from "../i18n";
 import { aoBridge } from "../lib/bridge";
 import { formatTimeCompact } from "../lib/format-time";
@@ -28,9 +27,9 @@ import {
 import { agentLabel } from "../lib/agent-options";
 import type { WorkspaceSession } from "../types/workspace";
 import { canonicalTrackerIssueId } from "../types/workspace";
+import { canPauseAgent, useAgentPause } from "../hooks/useAgentPause";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
 import type { SessionUsageSummary } from "../hooks/useSessionUsageSummaries";
-import { formatMemory, memoryTone, type SessionMemoryReading } from "../hooks/useSessionMemory";
 import {
 	clearTerminateSessionState,
 	useTerminateSessionState,
@@ -89,13 +88,11 @@ export function sessionsBoardLabels(t: TFunction): BoardColumnLabels {
 }
 
 export function BoardSessionCardAdapter({
-	memory,
 	onOpen,
 	onTerminate,
 	session,
 	usage,
 }: {
-	memory?: SessionMemoryReading;
 	onOpen: () => void;
 	onTerminate: () => void;
 	session: WorkspaceSession;
@@ -103,7 +100,6 @@ export function BoardSessionCardAdapter({
 }) {
 	return (
 		<DesktopSessionCard
-			memory={memory}
 			onOpen={onOpen}
 			onTerminate={onTerminate}
 			session={session}
@@ -152,7 +148,6 @@ function DesktopSessionCard({
 	branchAction,
 	footer,
 	interactive = true,
-	memory,
 	onOpen,
 	onTerminate,
 	session,
@@ -162,7 +157,6 @@ function DesktopSessionCard({
 	branchAction?: ReactNode;
 	footer?: ReactNode;
 	interactive?: boolean;
-	memory?: SessionMemoryReading;
 	onOpen?: () => void;
 	onTerminate?: () => void;
 	session: WorkspaceSession;
@@ -175,8 +169,49 @@ function DesktopSessionCard({
 	const termination = useTerminateSessionState(session.id);
 	const showTerminate = interactive && session.isTerminated !== true && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
-	const usagePresentation = toUsagePresentation(usage, memory, t);
+	const usagePresentation = toUsagePresentation(usage, t);
 	const translate: ProductUITranslator = (key, values) => t(key as MessageKey, values);
+	const pause = useAgentPause(session);
+	const showPause = interactive && canPauseAgent(session);
+
+	// A paused agent stays visible so the play button is the card's obvious
+	// way back; the pause button only appears on hover like the trash can.
+	const pauseButton = showPause ? (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<button
+					aria-label={
+						pause.paused
+							? t("shell.resumeAgentNamed", { title: session.title })
+							: t("shell.pauseAgentNamed", { title: session.title })
+					}
+					className={cn(
+						"inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-[color,background-color,opacity] hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+						pause.paused || pause.isPending
+							? "opacity-100"
+							: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",
+					)}
+					data-testid="session-pause"
+					data-paused={pause.paused ? "true" : "false"}
+					disabled={pause.isPending}
+					onClick={(event) => {
+						event.stopPropagation();
+						pause.toggle();
+					}}
+					type="button"
+				>
+					{pause.isPending ? (
+						<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
+					) : pause.paused ? (
+						<Play className="size-icon-sm" aria-hidden="true" />
+					) : (
+						<Pause className="size-icon-sm" aria-hidden="true" />
+					)}
+				</button>
+			</TooltipTrigger>
+			<TooltipContent side="bottom">{pause.paused ? t("shell.resumeAgent") : t("shell.pauseAgent")}</TooltipContent>
+		</Tooltip>
+	) : null;
 
 	const terminationOverlay = showTerminate ? (
 		<Tooltip>
@@ -234,7 +269,7 @@ function DesktopSessionCard({
 			action={action}
 			branchAction={branchAction}
 			branchIcon={<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />}
-			error={termination.error ?? undefined}
+			error={termination.error ?? retryStatus.error?.message ?? pause.error?.message ?? undefined}
 			externalLink={ProductExternalLink}
 			footer={footer}
 			interactive={interactive}
@@ -246,7 +281,14 @@ function DesktopSessionCard({
 					t("shell.lastMessageAt", { time: formatTimeCompact(timestamp) }),
 			}}
 			onOpen={onOpen}
-			overlay={terminationOverlay}
+			overlay={
+				pauseButton || terminationOverlay ? (
+					<span className="inline-flex items-center">
+						{pauseButton}
+						{terminationOverlay}
+					</span>
+				) : undefined
+			}
 			prs={summaries.map((pr) => ({
 				commentCount: pr.review.unresolvedBy.reduce((count, reviewer) => count + reviewer.count, 0),
 				number: pr.number,
@@ -308,36 +350,8 @@ function pullRequestProgressLabel(
 // summary remains available from the hover tooltip and to screen readers.
 function toUsagePresentation(
 	usage: SessionUsageSummary | undefined,
-	memory: SessionMemoryReading | undefined,
 	t: TFunction,
 ): BoardUsagePresentation | undefined {
-	const tokens = toTokenPresentation(usage, t);
-	const memoryPresentation = toMemoryPresentation(memory, t);
-	if (!tokens && !memoryPresentation) {
-		return undefined;
-	}
-	return { accessibleLabel: "", compactLabel: "", ...tokens, memory: memoryPresentation };
-}
-
-function toMemoryPresentation(
-	memory: SessionMemoryReading | undefined,
-	t: TFunction,
-): BoardMemoryPresentation | undefined {
-	if (!memory) {
-		return undefined;
-	}
-	const compactLabel = formatMemory(memory.rssBytes);
-	return {
-		accessibleLabel: t("shell.memoryUsage", { size: compactLabel, count: memory.processCount }),
-		compactLabel,
-		tone: memoryTone(memory.rssBytes),
-	};
-}
-
-function toTokenPresentation(
-	usage: SessionUsageSummary | undefined,
-	t: TFunction,
-): Pick<BoardUsagePresentation, "accessibleLabel" | "compactLabel"> | undefined {
 	const processedTokens = usage?.processedTokens ?? null;
 	if (!usage) {
 		return undefined;

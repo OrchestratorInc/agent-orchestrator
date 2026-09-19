@@ -21,7 +21,6 @@ const {
 	postMock,
 	workspaceQueryMock,
 	usageQueryMock,
-	memoryQueryMock,
 	boardActionsInPanelMock,
 } = vi.hoisted(() => ({
 	navigateMock: vi.fn(),
@@ -29,7 +28,6 @@ const {
 	postMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
 	usageQueryMock: vi.fn(),
-	memoryQueryMock: vi.fn(),
 	boardActionsInPanelMock: vi.fn(() => false),
 }));
 
@@ -52,11 +50,6 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 
 vi.mock("../hooks/useSessionUsageSummaries", () => ({
 	useSessionUsageSummaries: usageQueryMock,
-}));
-
-vi.mock("../hooks/useSessionMemory", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../hooks/useSessionMemory")>()),
-	useSessionMemory: memoryQueryMock,
 }));
 
 vi.mock("../lib/api-client", () => ({
@@ -117,12 +110,53 @@ beforeEach(() => {
 	postMock.mockReset().mockResolvedValue({ data: {} });
 	workspaceQueryMock.mockReset().mockReturnValue({ data: [], isError: false });
 	usageQueryMock.mockReset().mockReturnValue({ data: new Map() });
-	memoryQueryMock.mockReset().mockReturnValue({ data: new Map(), isError: false });
 	window.localStorage.removeItem("ao.board.archive.layout");
 	boardActionsInPanelMock.mockReset().mockReturnValue(false);
 });
 
 describe("SessionsBoard", () => {
+	it("retries an unverified session without opening or terminating it", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({ id: "unverified", title: "Unverified task", status: "unknown", displayStatus: "Working", statusReadiness: "unavailable" })])],
+			isSuccess: true, isError: false,
+		});
+		const client = renderBoard("p1");
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+		expect(screen.queryByText("Working")).not.toBeInTheDocument();
+		expect(screen.getByText("Unable to verify")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Retry status check" }));
+		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
+			params: { path: { sessionId: "unverified" } },
+		}));
+		await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["workspaces"] }));
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("pauses a running agent from the card and resumes an exited one", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([
+				boardSession({ id: "running", title: "Running task", status: "working", activity: { state: "active", lastActivityAt: "2026-01-01T00:00:00Z" } }),
+				boardSession({ id: "paused", title: "Paused task", status: "exited", activity: { state: "exited", lastActivityAt: "2026-01-01T00:00:00Z" } }),
+			])],
+			isSuccess: true, isError: false,
+		});
+		renderBoard("p1");
+		const pauseButton = screen.getByRole("button", { name: "Pause agent for Running task" });
+		expect(pauseButton).toHaveAttribute("data-paused", "false");
+		await userEvent.click(pauseButton);
+		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/exit-agent", {
+			params: { path: { sessionId: "running" } },
+		}));
+
+		const playButton = screen.getByRole("button", { name: "Resume agent for Paused task" });
+		expect(playButton).toHaveAttribute("data-paused", "true");
+		await userEvent.click(playButton);
+		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
+			params: { path: { sessionId: "paused" } },
+		}));
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
 	it("uses the last human message time rather than generic session updatedAt", () => {
 		const presentation = toBoardSessionPresentation(
 			boardSession({
@@ -420,42 +454,6 @@ describe("SessionsBoard", () => {
 		expect(within(archive).getByText("$0.02 · 1,900 tokens")).toHaveClass("sr-only");
 	});
 
-	it("shows live memory on cards, escalates colour, and omits sessions without a reading", () => {
-		workspaceQueryMock.mockReturnValue({
-			data: [
-				workspaceWithSessions([
-					boardSession({ id: "s-big", title: "big worker", status: "idle" }),
-					boardSession({ id: "s-small", title: "small worker", status: "idle" }),
-					boardSession({ id: "s-none", title: "unsampled worker", status: "idle" }),
-				]),
-			],
-			isError: false,
-			isSuccess: true,
-		});
-		memoryQueryMock.mockReturnValue({
-			isError: false,
-			data: new Map([
-				["s-big", { sessionId: "s-big", rssBytes: 2_254_857_830, processCount: 9, sampledAt: "2026-09-18T00:00:00Z", processes: [] }],
-				["s-small", { sessionId: "s-small", rssBytes: 641_728_512, processCount: 5, sampledAt: "2026-09-18T00:00:00Z", processes: [] }],
-			]),
-		});
-
-		renderBoard("p1");
-
-		const bigCard = screen.getByText("big worker").closest('[data-testid="board-session-card"]') as HTMLElement;
-		const bigChip = within(bigCard).getByTestId("session-memory");
-		expect(bigChip).toHaveAttribute("data-memory-tone", "critical");
-		expect(within(bigChip).getByText("2.1 GB")).toHaveAttribute("aria-hidden", "true");
-		expect(within(bigChip).getByText("2.1 GB memory across 9 processes")).toHaveClass("sr-only");
-
-		const smallCard = screen.getByText("small worker").closest('[data-testid="board-session-card"]') as HTMLElement;
-		expect(within(smallCard).getByTestId("session-memory")).toHaveAttribute("data-memory-tone", "default");
-		expect(within(smallCard).getByText("612 MB")).toBeInTheDocument();
-
-		const noneCard = screen.getByText("unsampled worker").closest('[data-testid="board-session-card"]') as HTMLElement;
-		expect(within(noneCard).queryByTestId("session-memory")).not.toBeInTheDocument();
-	});
-
 	it("shows cost by default and cost plus tokens on hover without a tab stop", async () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [
@@ -500,6 +498,8 @@ describe("SessionsBoard", () => {
 		expect(within(card).getByText("$1.24 · 12,400 tokens")).toHaveClass("sr-only");
 
 		within(card).getByRole("button", { name: "keyboard worker" }).focus();
+		await userEvent.tab();
+		expect(within(card).getByRole("button", { name: "Pause agent for keyboard worker" })).toHaveFocus();
 		await userEvent.tab();
 		expect(within(card).getByRole("button", { name: "Terminate keyboard worker" })).toHaveFocus();
 

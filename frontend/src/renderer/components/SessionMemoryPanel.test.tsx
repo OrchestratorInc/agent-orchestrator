@@ -4,10 +4,11 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toKanbanColumn } from "@aoagents/product-ui";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
-import { SessionMemoryButton } from "./SessionMemoryPanel";
+import { AppMemoryIndicator } from "./SessionMemoryPanel";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { memoryQueryMock, postMock, workspaceQueryMock } = vi.hoisted(() => ({
+const { appMemoryMock, memoryQueryMock, postMock, workspaceQueryMock } = vi.hoisted(() => ({
+	appMemoryMock: vi.fn(),
 	memoryQueryMock: vi.fn(),
 	postMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
@@ -16,6 +17,7 @@ const { memoryQueryMock, postMock, workspaceQueryMock } = vi.hoisted(() => ({
 vi.mock("../hooks/useSessionMemory", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../hooks/useSessionMemory")>()),
 	useSessionMemory: memoryQueryMock,
+	useAppMemory: appMemoryMock,
 }));
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
@@ -29,6 +31,8 @@ vi.mock("../lib/api-client", () => ({
 }));
 
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
+
+const GIB = 1024 ** 3;
 
 function session(id: string, title: string, activityState = "idle"): WorkspaceSession {
 	return {
@@ -56,13 +60,15 @@ function reading(
 
 function renderButton() {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	return render(
+	const tree = () => (
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
-				<SessionMemoryButton projectId="p1" />
+				<AppMemoryIndicator />
 			</TooltipProvider>
-		</QueryClientProvider>,
+		</QueryClientProvider>
 	);
+	const result = render(tree());
+	return { ...result, rerender: () => result.rerender(tree()) };
 }
 
 beforeEach(() => {
@@ -73,6 +79,10 @@ beforeEach(() => {
 		sessions: [session("s-small", "small worker"), session("s-big", "big worker"), session("s-none", "unsampled worker")],
 	} as WorkspaceSummary;
 	workspaceQueryMock.mockReset().mockReturnValue({ data: [workspace], isError: false, isSuccess: true });
+	appMemoryMock.mockReset().mockReturnValue({
+		isError: false,
+		data: { app: { rssBytes: 4 * GIB, processCount: 20 }, system: { totalBytes: 32 * GIB, availableBytes: 20 * GIB } },
+	});
 	memoryQueryMock.mockReset().mockReturnValue({
 		isError: false,
 		data: new Map([
@@ -88,18 +98,46 @@ beforeEach(() => {
 	});
 });
 
-describe("SessionMemoryButton", () => {
+describe("AppMemoryIndicator", () => {
 	it("hides itself when nothing was sampled or the daemon cannot measure", () => {
-		memoryQueryMock.mockReturnValue({ isError: true, data: undefined });
+		appMemoryMock.mockReturnValue({ isError: true, data: undefined });
 		renderButton();
-		expect(screen.queryByTestId("session-memory-button")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("app-memory-indicator")).not.toBeInTheDocument();
 	});
 
-	it("shows the total and opens a panel sorted largest first with a working kill", async () => {
+	it("colours the percent by pressure against host RAM", () => {
+		const { rerender } = renderButton();
+		const button = screen.getByTestId("app-memory-indicator");
+		expect(button).toHaveTextContent("13%");
+		expect(button).toHaveAttribute("data-memory-tone", "default");
+		expect(button).toHaveAttribute("aria-label", "AO is using 4.0 GB of 32.0 GB (13%)");
+
+		appMemoryMock.mockReturnValue({
+			isError: false,
+			data: { app: { rssBytes: 10 * GIB, processCount: 20 }, system: { totalBytes: 32 * GIB, availableBytes: 8 * GIB } },
+		});
+		rerender();
+		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("data-memory-tone", "warning");
+
+		appMemoryMock.mockReturnValue({
+			isError: false,
+			data: { app: { rssBytes: 20 * GIB, processCount: 20 }, system: { totalBytes: 32 * GIB, availableBytes: 2 * GIB } },
+		});
+		rerender();
+		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("data-memory-tone", "critical");
+	});
+
+	it("falls back to the absolute size where host RAM is unreadable", () => {
+		appMemoryMock.mockReturnValue({ isError: false, data: { app: { rssBytes: 4 * GIB, processCount: 20 } } });
 		renderButton();
-		const button = screen.getByTestId("session-memory-button");
-		expect(button).toHaveTextContent("2.7 GB");
-		expect(button).toHaveAttribute("aria-label", "2.7 GB memory used by 2 sessions");
+		const button = screen.getByTestId("app-memory-indicator");
+		expect(button).toHaveTextContent("4.0 GB");
+		expect(button).toHaveAttribute("data-memory-tone", "unknown");
+	});
+
+	it("opens a panel sorted largest first with a working kill", async () => {
+		renderButton();
+		const button = screen.getByTestId("app-memory-indicator");
 
 		await userEvent.click(button);
 		const table = await screen.findByTestId("session-memory-table");
@@ -124,7 +162,7 @@ describe("SessionMemoryButton", () => {
 
 	it("expands a row to show what is occupying its memory, and collapses on a second click", async () => {
 		renderButton();
-		await userEvent.click(screen.getByTestId("session-memory-button"));
+		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		const table = await screen.findByTestId("session-memory-table");
 		const bigRow = within(table).getAllByTestId("session-memory-row")[0];
 
@@ -142,7 +180,7 @@ describe("SessionMemoryButton", () => {
 
 	it("does not expand a row with no per-process reading, and kill does not toggle the row", async () => {
 		renderButton();
-		await userEvent.click(screen.getByTestId("session-memory-button"));
+		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		const table = await screen.findByTestId("session-memory-table");
 		const rows = within(table).getAllByTestId("session-memory-row");
 		const unsampledRow = rows[2];
@@ -155,12 +193,37 @@ describe("SessionMemoryButton", () => {
 		expect(screen.queryByTestId("session-memory-process-row")).not.toBeInTheDocument();
 	});
 
-	it("runs the existing cleanup route for the project", async () => {
+	it("runs the existing cleanup route across every project", async () => {
 		renderButton();
-		await userEvent.click(screen.getByTestId("session-memory-button"));
-		await userEvent.click(await screen.findByRole("button", { name: "Clean up terminated" }));
+		await userEvent.click(screen.getByTestId("app-memory-indicator"));
+		await userEvent.click(await screen.findByRole("button", { name: "Delete terminated workspaces" }));
 		await waitFor(() =>
-			expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/cleanup", { params: { query: { project: "p1" } } }),
+			expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/cleanup", { params: { query: {} } }),
+		);
+	});
+
+	it("pauses a running agent and resumes an exited one from its row", async () => {
+		const workspace: WorkspaceSummary = {
+			id: "p1",
+			name: "radic",
+			sessions: [session("s-big", "big worker"), session("s-small", "small worker", "exited")],
+		} as WorkspaceSummary;
+		workspaceQueryMock.mockReturnValue({ data: [workspace], isError: false, isSuccess: true });
+		renderButton();
+		await userEvent.click(screen.getByTestId("app-memory-indicator"));
+		const table = await screen.findByTestId("session-memory-table");
+
+		await userEvent.click(within(table).getByRole("button", { name: "Pause agent for big worker" }));
+		await waitFor(() =>
+			expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/exit-agent", {
+				params: { path: { sessionId: "s-big" } },
+			}),
+		);
+		await userEvent.click(within(table).getByRole("button", { name: "Resume agent for small worker" }));
+		await waitFor(() =>
+			expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
+				params: { path: { sessionId: "s-small" } },
+			}),
 		);
 	});
 });

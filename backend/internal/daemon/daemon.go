@@ -884,6 +884,15 @@ func Run() error {
 			ChatHostPID: func(id domain.SessionID) (int, bool) {
 				return persistenthost.HostPID(cfg.DataDir, string(id))
 			},
+			// The desktop shell spawns an app-owned daemon, so its parent is
+			// the Electron main process and that tree is the rest of AO.
+			AppRootPIDs: func() []int {
+				roots := []int{os.Getpid()}
+				if os.Getenv("AO_OWNER") == "app" {
+					roots = append(roots, os.Getppid())
+				}
+				return roots
+			},
 		}),
 		Telemetry: telemetrySink,
 		Mobile:    mc,

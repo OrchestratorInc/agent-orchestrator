@@ -27,6 +27,9 @@ type MemoryReaderDeps struct {
 	ChatHostPID func(sessionID domain.SessionID) (int, bool)
 	Snapshot    func(context.Context) (*procmem.Table, error)
 	Now         func() time.Time
+	// AppRootPIDs names AO's own processes (daemon, desktop shell). Nil means
+	// AppMemory counts sessions only.
+	AppRootPIDs func() []int
 	// CacheTTL bounds how often the process table is re-read while several
 	// clients poll. Zero disables caching.
 	CacheTTL time.Duration
@@ -99,6 +102,45 @@ func (r *MemoryReader) ListMemory(ctx context.Context, projectID domain.ProjectI
 		})
 	}
 	return out, nil
+}
+
+// SystemMemory reports the host's total and available RAM, for scaling the
+// memory panel's total bar. ErrUnsupported on platforms procmem can't read.
+func (r *MemoryReader) SystemMemory(context.Context) (domain.SystemMemory, error) {
+	sys, err := procmem.ReadSystem()
+	if err != nil {
+		return domain.SystemMemory{}, err
+	}
+	return domain.SystemMemory{TotalBytes: sys.TotalBytes, AvailableBytes: sys.AvailableBytes}, nil
+}
+
+// AppMemory sums AO's own processes and every live session tree. Roots are
+// deduplicated by Table.Tree, so a session that happens to be a daemon
+// descendant is counted once.
+func (r *MemoryReader) AppMemory(ctx context.Context) (domain.AppMemory, error) {
+	if r == nil || r.deps.Store == nil || r.deps.Runtime == nil {
+		return domain.AppMemory{}, fmt.Errorf("session memory reader is unavailable")
+	}
+	recs, err := r.deps.Store.ListAllSessions(ctx)
+	if err != nil {
+		return domain.AppMemory{}, err
+	}
+	table, err := r.table(ctx)
+	if err != nil {
+		return domain.AppMemory{}, err
+	}
+	var roots []int
+	if r.deps.AppRootPIDs != nil {
+		roots = append(roots, r.deps.AppRootPIDs()...)
+	}
+	for _, rec := range recs {
+		if rec.IsTerminated {
+			continue
+		}
+		roots = append(roots, r.rootPIDs(ctx, rec)...)
+	}
+	tree := table.Tree(roots...)
+	return domain.AppMemory{RSSBytes: tree.RSSBytes, ProcessCount: len(tree.Processes)}, nil
 }
 
 // rootPIDs names where a session's process tree starts: the runtime handle

@@ -3,6 +3,8 @@ import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 
 export type SessionMemoryReading = components["schemas"]["SessionMemoryResponse"];
+export type SystemMemoryReading = components["schemas"]["SystemMemoryResponse"];
+export type AppMemoryReading = components["schemas"]["AppMemoryResponse"];
 
 export const sessionMemoryQueryRoot = ["session-memory"] as const;
 export const sessionMemoryQueryKey = (projectId?: string) =>
@@ -11,12 +13,18 @@ export const sessionMemoryQueryKey = (projectId?: string) =>
 /** Memory is a live reading, so the board keeps it fresh like a process monitor. */
 export const sessionMemoryRefetchIntervalMs = 5_000;
 
-export async function fetchSessionMemory(projectId?: string): Promise<SessionMemoryReading[]> {
+type SessionMemoryResponse = {
+	sessions: SessionMemoryReading[];
+	system?: SystemMemoryReading;
+	app?: AppMemoryReading;
+};
+
+export async function fetchSessionMemory(projectId?: string): Promise<SessionMemoryResponse> {
 	const { data, error } = await apiClient.GET("/api/v1/usage/sessions/memory", {
 		params: { query: projectId ? { projectId } : {} },
 	});
 	if (error) throw error;
-	return data?.sessions ?? [];
+	return { sessions: data?.sessions ?? [], system: data?.system, app: data?.app };
 }
 
 export function sessionMemoryQueryOptions(projectId?: string) {
@@ -26,13 +34,42 @@ export function sessionMemoryQueryOptions(projectId?: string) {
 		refetchInterval: sessionMemoryRefetchIntervalMs,
 		// 501 on Windows is permanent for the run; do not hammer the daemon.
 		retry: false,
-		select: (items: SessionMemoryReading[]) =>
-			new Map(items.map((item) => [item.sessionId, item] as const)),
 	};
 }
 
 export function useSessionMemory(projectId?: string) {
-	return useQuery(sessionMemoryQueryOptions(projectId));
+	return useQuery({
+		...sessionMemoryQueryOptions(projectId),
+		select: (data: SessionMemoryResponse) =>
+			new Map(data.sessions.map((item) => [item.sessionId, item] as const)),
+	});
+}
+
+/** Host RAM for the panel's total bar. Shares the session-memory query, so
+ * mounting both hooks costs one fetch, not two. Absent where unsupported. */
+export function useSystemMemory(projectId?: string) {
+	return useQuery({
+		...sessionMemoryQueryOptions(projectId),
+		select: (data: SessionMemoryResponse) => data.system,
+	});
+}
+
+/** Everything AO runs, app-wide, for the topbar indicator. Same query as the
+ * sessions so the indicator and the panel it opens never disagree. */
+export function useAppMemory() {
+	return useQuery({
+		...sessionMemoryQueryOptions(),
+		select: (data: SessionMemoryResponse) => ({ app: data.app, system: data.system }),
+	});
+}
+
+export type MemoryPressure = { pct: number; tone: MemoryTone };
+
+/** Share of host RAM held by AO. A quarter is worth a glance; half is the
+ * point where the next session launch starts swapping. */
+export function memoryPressure(usedBytes: number, totalBytes: number): MemoryPressure {
+	const pct = totalBytes > 0 ? Math.min(100, Math.round((usedBytes / totalBytes) * 100)) : 0;
+	return { pct, tone: pct >= 50 ? "critical" : pct >= 25 ? "warning" : "default" };
 }
 
 const GIB = 1024 ** 3;

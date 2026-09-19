@@ -6,7 +6,6 @@ import { getAgentActivityView } from "../lib/session-presentation";
 import { TopbarActionError, TopbarButton } from "./TopbarButton";
 import { OrchestratorActivityIndicator } from "./OrchestratorActivityIndicator";
 import { OrchestratorIcon } from "./icons";
-import { SessionMemoryButton } from "./SessionMemoryPanel";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export function ProjectBoardActions({ actions, placement, quiet = false, style }: {
@@ -74,8 +73,7 @@ export function ProjectBoardActions({ actions, placement, quiet = false, style }
 			{canCreateAsTui ? <TopbarButton disabled={busy} onClick={() => openOrchestrator("tui")} style={style}>{t("newTask.createAsTui")}</TopbarButton> : null}
 		</div>
 	) : null;
-	const memoryButton = header && actions.projectId ? <SessionMemoryButton projectId={actions.projectId} style={style} /> : null;
-	return header ? <>{feedback}{memoryButton}{newTaskButton}{orchestratorButton}</> : <>
+	return header ? <>{feedback}{newTaskButton}{orchestratorButton}</> : <>
 		<div className="mt-5 flex items-center gap-2">{orchestratorButton}{newTaskButton}</div>
 		{feedback}
 	</>;

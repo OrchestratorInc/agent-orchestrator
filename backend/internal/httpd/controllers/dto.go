@@ -1628,6 +1628,24 @@ type SessionMemoryResponse struct {
 // ListSessionMemoryResponse is the batch memory reading for the board.
 type ListSessionMemoryResponse struct {
 	Sessions []SessionMemoryResponse `json:"sessions"`
+	// System is host RAM for the panel's total bar. Absent where the
+	// platform can't be read.
+	System *SystemMemoryResponse `json:"system,omitempty"`
+	// App is the resident memory of everything AO runs (daemon, desktop
+	// shell, every live session), for the topbar pressure indicator.
+	App *AppMemoryResponse `json:"app,omitempty"`
+}
+
+// AppMemoryResponse is AO's own resident memory at sample time.
+type AppMemoryResponse struct {
+	RSSBytes     uint64 `json:"rssBytes" minimum:"0"`
+	ProcessCount int    `json:"processCount" minimum:"0"`
+}
+
+// SystemMemoryResponse is the host's total and available RAM at sample time.
+type SystemMemoryResponse struct {
+	TotalBytes     uint64 `json:"totalBytes" minimum:"0"`
+	AvailableBytes uint64 `json:"availableBytes" minimum:"0"`
 }
 
 // UsageTotalsResponse is the canonical telemetry aggregate for one scope.

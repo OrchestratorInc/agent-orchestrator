@@ -118,3 +118,38 @@ func TestListMemoryUnsupportedPassesThrough(t *testing.T) {
 		t.Fatalf("err = %v, want ErrUnsupported", err)
 	}
 }
+
+func TestAppMemorySumsAppRootsAndSessionsOnce(t *testing.T) {
+	recs := []domain.SessionRecord{
+		{ID: "s-a", Metadata: domain.SessionMetadata{RuntimeHandleID: "a"}},
+		{ID: "s-b", Metadata: domain.SessionMetadata{RuntimeHandleID: "b"}, IsTerminated: true},
+	}
+	var snapshots int
+	reader := newTestMemoryReader(t, recs, &snapshots)
+	// The tmux server (100) already contains session a (200 → 300) and the
+	// terminated session's shell (400); every pid must count exactly once.
+	reader.deps.AppRootPIDs = func() []int { return []int{100} }
+	app, err := reader.AppMemory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := uint64(900+3000+1600000+2500) * 1024
+	if app.RSSBytes != want || app.ProcessCount != 4 {
+		t.Fatalf("app = %+v, want %d bytes across 4 processes", app, want)
+	}
+}
+
+func TestAppMemoryWithoutAppRootsCountsLiveSessionsOnly(t *testing.T) {
+	recs := []domain.SessionRecord{
+		{ID: "s-a", Metadata: domain.SessionMetadata{RuntimeHandleID: "a"}},
+		{ID: "s-b", Metadata: domain.SessionMetadata{RuntimeHandleID: "b"}, IsTerminated: true},
+	}
+	var snapshots int
+	app, err := newTestMemoryReader(t, recs, &snapshots).AppMemory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := uint64(3000+1600000) * 1024; app.RSSBytes != want || app.ProcessCount != 2 {
+		t.Fatalf("app = %+v, want %d bytes across 2 processes", app, want)
+	}
+}

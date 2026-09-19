@@ -24,6 +24,12 @@ type UsageSummaryService interface {
 // SessionMemoryService samples resident memory per live session.
 type SessionMemoryService interface {
 	ListMemory(context.Context, domain.ProjectID) ([]domain.SessionMemory, error)
+	// SystemMemory reports host RAM for the panel's total bar. Returns
+	// procmem.ErrUnsupported where the platform can't be read; callers omit
+	// the bar rather than fail the whole request.
+	SystemMemory(context.Context) (domain.SystemMemory, error)
+	// AppMemory is everything AO runs, for the topbar pressure indicator.
+	AppMemory(context.Context) (domain.AppMemory, error)
 }
 
 // UsageController owns compact dashboard usage routes.
@@ -90,7 +96,15 @@ func (c *UsageController) listMemory(w http.ResponseWriter, r *http.Request) {
 			SampledAt: item.SampledAt, Processes: procs,
 		})
 	}
-	envelope.WriteJSON(w, http.StatusOK, ListSessionMemoryResponse{Sessions: out})
+	var system *SystemMemoryResponse
+	if sys, sysErr := c.Memory.SystemMemory(r.Context()); sysErr == nil {
+		system = &SystemMemoryResponse{TotalBytes: sys.TotalBytes, AvailableBytes: sys.AvailableBytes}
+	}
+	var app *AppMemoryResponse
+	if a, appErr := c.Memory.AppMemory(r.Context()); appErr == nil {
+		app = &AppMemoryResponse{RSSBytes: a.RSSBytes, ProcessCount: a.ProcessCount}
+	}
+	envelope.WriteJSON(w, http.StatusOK, ListSessionMemoryResponse{Sessions: out, System: system, App: app})
 }
 
 func (c *UsageController) getSession(w http.ResponseWriter, r *http.Request) {

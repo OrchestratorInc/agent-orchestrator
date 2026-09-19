@@ -23,7 +23,6 @@ import {
 	useSessionUsageSummaries,
 	type SessionUsageSummary,
 } from "../hooks/useSessionUsageSummaries";
-import { useSessionMemory } from "../hooks/useSessionMemory";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
@@ -80,7 +79,6 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 	const columns: KanbanColumnView[] = boardKanbanColumnOrder.map((column) => getKanbanColumnView(column, t));
 	const workspaceQuery = useWorkspaceQuery();
 	const liveUsageBySession = useSessionUsageSummaries(projectId).data ?? emptyUsageBySession;
-	const memoryBySession = useSessionMemory(projectId).data;
 	// Evaluated at render so platform mocks in tests can flip the in-panel chrome.
 	const boardActionsInPanel = usesBoardActionsInPanel();
 	/** Bell lives in the board action row when the shell topbar does not host it. */
@@ -241,7 +239,6 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 						labels={boardLabels}
 							renderSessionCard={(session) => (
 								<BoardSessionCardAdapter
-								memory={memoryBySession?.get(session.id)}
 								onOpen={() => openSession(session)}
 									onTerminate={() => terminateSession.mutate(session)}
 									session={session}

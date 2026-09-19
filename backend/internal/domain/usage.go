@@ -419,3 +419,18 @@ type SessionMemory struct {
 	SampledAt    time.Time
 	Processes    []SessionMemoryProcess
 }
+
+// SystemMemory is the host's total and available RAM at sample time, used to
+// scale the memory panel's total bar. Zero TotalBytes means the reading is
+// unsupported on this platform.
+type SystemMemory struct {
+	TotalBytes     uint64
+	AvailableBytes uint64
+}
+
+// AppMemory is the resident memory of everything AO runs: the daemon, the
+// desktop shell when the daemon is app-owned, and every live session tree.
+type AppMemory struct {
+	RSSBytes     uint64
+	ProcessCount int
+}
