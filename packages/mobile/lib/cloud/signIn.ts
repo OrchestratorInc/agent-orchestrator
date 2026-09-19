@@ -20,9 +20,12 @@ async function errorMessage(response: Response, fallback: string): Promise<strin
  */
 type LocalAuthResponse = { token: string; expiresAt: string };
 
-function parseAbsoluteExpiry(value: string, now: () => number): number {
+function parseAbsoluteExpiry(value: string): number {
 	const parsed = Date.parse(value);
-	return Number.isFinite(parsed) ? parsed : now() + 3_600_000;
+	if (!Number.isFinite(parsed)) {
+		throw new Error("The server's response could not be understood.");
+	}
+	return parsed;
 }
 
 async function localAuth(
@@ -40,7 +43,7 @@ async function localAuth(
 		throw new Error(await errorMessage(response, `Sign-in failed (${response.status}).`));
 	}
 	const data = (await response.json()) as LocalAuthResponse;
-	return { accessToken: data.token, expiresAt: parseAbsoluteExpiry(data.expiresAt, now) };
+	return { accessToken: data.token, expiresAt: parseAbsoluteExpiry(data.expiresAt) };
 }
 
 /** Dev-only email/password sign-in against a loopback control plane. */
@@ -90,17 +93,20 @@ export function buildWorkOSAuthUrl(input: {
  * decoding the access token instead of trusting a response field that does
  * not exist.
  */
-function decodeJwtExpiryMs(token: string): number | null {
+function decodeJwtExpiryMs(token: string): number {
 	try {
 		const payload = token.split(".")[1];
-		if (!payload) return null;
+		if (!payload) throw new Error("Missing JWT payload segment.");
 		const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
 		const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
 		const json = atob(padded);
 		const parsed = JSON.parse(json) as { exp?: unknown };
-		return typeof parsed.exp === "number" ? parsed.exp * 1000 : null;
+		if (typeof parsed.exp !== "number") {
+			throw new Error("JWT exp claim is missing or not a number.");
+		}
+		return parsed.exp * 1000;
 	} catch {
-		return null;
+		throw new Error("The server's response could not be understood.");
 	}
 }
 
@@ -126,6 +132,6 @@ export async function exchangeWorkOSCode(
 	return {
 		accessToken: body.access_token,
 		refreshToken: body.refresh_token,
-		expiresAt: decodeJwtExpiryMs(body.access_token) ?? now() + 3_600_000,
+		expiresAt: decodeJwtExpiryMs(body.access_token),
 	};
 }

@@ -15,6 +15,16 @@ function fakeJwt(exp: number): string {
 	return `${header}.${payload}.sig`;
 }
 
+// JWT with base64url-encoded payload to test url-safe character handling.
+function fakeJwtWithBase64Url(exp: number): string {
+	const header = "eyJhbGciOiJub25lIn0";  // {"alg":"none"}, no padding
+	const payloadStr = JSON.stringify({ exp, test: "base64url" });
+	const standard = btoa(payloadStr);
+	// Convert to base64url: replace + with -, / with _, remove padding
+	const urlSafe = standard.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+	return `${header}.${urlSafe}.sig`;
+}
+
 describe("signInWithLocalAuth", () => {
 	it("posts credentials and maps the response to stored tokens", async () => {
 		const fetchImpl = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(
@@ -49,6 +59,21 @@ describe("signInWithLocalAuth", () => {
 		await expect(
 			signInWithLocalAuth("http://127.0.0.1:8081", "a@b.c", "nope", { fetchImpl, now: () => 0 }),
 		).rejects.toThrow("The email or password is incorrect.");
+	});
+
+	it("throws when expiresAt is not a valid RFC3339 timestamp", async () => {
+		const fetchImpl = async () => new Response(
+			JSON.stringify({
+				token: "tok",
+				expiresAt: "not-a-timestamp",
+				user: { id: "u1", email: "dev@example.com", displayName: "Dev", authProvider: "local" },
+				organizations: [],
+			}),
+			{ status: 200, headers: { "content-type": "application/json" } },
+		);
+		await expect(
+			signInWithLocalAuth("http://127.0.0.1:8081", "dev@example.com", "pass", { fetchImpl, now: () => 0 }),
+		).rejects.toThrow("could not be understood");
 	});
 });
 
@@ -130,16 +155,17 @@ describe("exchangeWorkOSCode", () => {
 		});
 	});
 
-	it("falls back to a one-hour expiry when the access token cannot be decoded", async () => {
+	it("throws when the access token cannot be decoded", async () => {
 		const fetchImpl = async () => new Response(
 			JSON.stringify({ access_token: "not-a-jwt" }),
 			{ status: 200, headers: { "content-type": "application/json" } },
 		);
-		const tokens = await exchangeWorkOSCode(
-			{ clientId: "client_123", code: "auth-code", codeVerifier: "verifier" },
-			{ fetchImpl, now: () => 1_000_000 },
-		);
-		expect(tokens).toEqual({ accessToken: "not-a-jwt", refreshToken: undefined, expiresAt: 1_000_000 + 3_600_000 });
+		await expect(
+			exchangeWorkOSCode(
+				{ clientId: "client_123", code: "auth-code", codeVerifier: "verifier" },
+				{ fetchImpl, now: () => 1_000_000 },
+			),
+		).rejects.toThrow("could not be understood");
 	});
 
 	it("throws a readable error when the exchange is rejected", async () => {
@@ -150,5 +176,51 @@ describe("exchangeWorkOSCode", () => {
 		await expect(
 			exchangeWorkOSCode({ clientId: "client_123", code: "bad", codeVerifier: "verifier" }, { fetchImpl }),
 		).rejects.toThrow("The authorization code is invalid or has expired.");
+	});
+
+	it("decodes JWT with base64url-encoded payload and padding", async () => {
+		// Test base64url conversion: - to +, _ to /, and padding restoration
+		const jwt = fakeJwtWithBase64Url(1700000000);
+		const fetchImpl = vi.fn(async () => new Response(
+			JSON.stringify({ access_token: jwt, refresh_token: "refresh-1" }),
+			{ status: 200, headers: { "content-type": "application/json" } },
+		));
+		const tokens = await exchangeWorkOSCode(
+			{ clientId: "client_123", code: "auth-code", codeVerifier: "verifier" },
+			{ fetchImpl },
+		);
+		expect(tokens.expiresAt).toBe(1700000000000);
+	});
+
+	it("throws when JWT exp claim is missing", async () => {
+		const header = btoa(JSON.stringify({ alg: "none" }));
+		const payload = btoa(JSON.stringify({ sub: "user123" }));  // no exp claim
+		const invalidJwt = `${header}.${payload}.sig`;
+		const fetchImpl = async () => new Response(
+			JSON.stringify({ access_token: invalidJwt }),
+			{ status: 200, headers: { "content-type": "application/json" } },
+		);
+		await expect(
+			exchangeWorkOSCode(
+				{ clientId: "client_123", code: "auth-code", codeVerifier: "verifier" },
+				{ fetchImpl },
+			),
+		).rejects.toThrow("could not be understood");
+	});
+
+	it("throws when JWT exp claim is not a number", async () => {
+		const header = btoa(JSON.stringify({ alg: "none" }));
+		const payload = btoa(JSON.stringify({ exp: "1700000000" }));  // string instead of number
+		const invalidJwt = `${header}.${payload}.sig`;
+		const fetchImpl = async () => new Response(
+			JSON.stringify({ access_token: invalidJwt }),
+			{ status: 200, headers: { "content-type": "application/json" } },
+		);
+		await expect(
+			exchangeWorkOSCode(
+				{ clientId: "client_123", code: "auth-code", codeVerifier: "verifier" },
+				{ fetchImpl },
+			),
+		).rejects.toThrow("could not be understood");
 	});
 });
