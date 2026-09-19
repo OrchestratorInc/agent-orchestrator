@@ -8,7 +8,7 @@ import { orchestratorProjectSections, type OrchestratorProjectRow } from "../../
 import { ProjectCard } from "../../lib/project-card";
 import { StaleBanner } from "../../lib/StaleBanner";
 import { useApp } from "../../lib/store";
-import { UnpairedState } from "../../lib/UnpairedState";
+import { CloudUnreadyState, UnpairedState } from "../../lib/UnpairedState";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
@@ -23,6 +23,7 @@ export default function ProjectsScreen() {
 	const insets = useSafeAreaInsets();
 	const router = useRouter();
 	const {
+		environment,
 		configured,
 		loading,
 		error,
@@ -65,6 +66,16 @@ export default function ProjectsScreen() {
 		haptics.select();
 		router.push({ pathname: "/project/[id]", params: { id: row.project.id } });
 	};
+
+	if (environment === "cloud") {
+		return (
+			<View style={styles.screen}>
+				<View style={{ height: insets.top }} />
+				<ScreenHeader title="Projects" />
+				<CloudUnreadyState />
+			</View>
+		);
+	}
 
 	if (!configured) {
 		return (

@@ -22,7 +22,8 @@ import { NativeHeaderButton } from "../lib/native-header-button";
 import { openGitHub } from "../lib/openGitHub";
 import { getPushStatus, openNotificationSettings, registerForPush, unregisterFromPush } from "../lib/push";
 import { describePushToggle, describeRegisterFailure, type PushStatus } from "../lib/pushStatus";
-import { useApp } from "../lib/store";
+import { useCloudAuth } from "../lib/cloud/authStore";
+import { useApp, useEnvironment } from "../lib/store";
 import {
 	describeSoftwareUpdateRow,
 	describeStoreRow,
@@ -54,6 +55,7 @@ export default function SettingsScreen() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const { reloadConfig } = useApp();
+	const { environment } = useEnvironment();
 	const scrollRef = useRef<ScrollView>(null);
 	const [cfg, setCfg] = useState<ServerConfig>(DEFAULT_CONFIG);
 	const [loaded, setLoaded] = useState(false);
@@ -82,6 +84,19 @@ export default function SettingsScreen() {
 				contentContainerStyle={styles.content}
 				keyboardShouldPersistTaps="handled"
 			>
+				<SettingsSection
+					title="Environment"
+					footer={
+						environment === "local"
+							? "Drive the agents running on your paired computer."
+							: "Drive the agents running in your AO Cloud workspace."
+					}
+				>
+					<SettingsCard>
+						<EnvironmentRow />
+					</SettingsCard>
+				</SettingsSection>
+
 				<SettingsSection title="Desktop" footer={paired ? `${cfg.host}:${cfg.httpPort}` : "Pair this phone with AO on your computer."}>
 					<SettingsCard>
 						<CardRow
@@ -147,6 +162,59 @@ function SettingsCard({ children }: { children: ReactNode }) {
 					{row}
 				</View>
 			))}
+		</View>
+	);
+}
+
+/**
+ * Switches which environment's data the board, projects and PRs tabs show.
+ *
+ * Choosing Cloud while signed out sends the user to sign in first rather than
+ * flipping the switch and leaving the tabs to render CloudUnreadyState's
+ * sign-in prompt — the switch itself should never silently land on a
+ * half-configured state the user then has to diagnose.
+ */
+function EnvironmentRow() {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const router = useRouter();
+	const { environment, setEnvironment } = useEnvironment();
+	const cloudAuth = useCloudAuth();
+
+	function choose(next: "local" | "cloud") {
+		if (next === environment) return;
+		haptics.select();
+		if (next === "cloud" && cloudAuth.signedIn !== true) {
+			router.push("/sheets/cloud-signin");
+			return;
+		}
+		setEnvironment(next);
+	}
+
+	return (
+		<View style={styles.inlineChoices}>
+			{(["local", "cloud"] as const).map((option) => {
+				const selected = environment === option;
+				return (
+					<Pressable
+						key={option}
+						accessibilityRole="button"
+						accessibilityState={{ selected }}
+						onPress={() => choose(option)}
+						style={({ pressed }) => [styles.inlineChoice, pressed && { opacity: 0.6 }]}
+					>
+						<Feather
+							name={option === "local" ? "monitor" : "cloud"}
+							size={16}
+							color={selected ? t.textPrimary : t.textTertiary}
+						/>
+						<Text style={[styles.inlineChoiceLabel, selected && { color: t.textPrimary, fontWeight: "700" }]}>
+							{option === "local" ? "Local" : "Cloud"}
+						</Text>
+						{selected ? <Feather name="check" size={16} color={t.textPrimary} /> : null}
+					</Pressable>
+				);
+			})}
 		</View>
 	);
 }

@@ -29,8 +29,10 @@ import {
 	type SpawnOptions,
 } from "./api";
 import { isConfigured, loadConfig, machineIdentity, type ServerConfig } from "./config";
+import { useCloudAuth } from "./cloud/authStore";
+import { loadEnvironment, saveEnvironment } from "./environment/store";
 import { resolveSessionSource } from "./environment/resolve";
-import type { SessionSource } from "./environment/types";
+import type { EnvironmentKind, SessionSource } from "./environment/types";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
 import { pollIntervalFor } from "./pollInterval";
 import type { Endpoint } from "./endpoints";
@@ -58,6 +60,14 @@ export type { SpawnOptions } from "./api";
 type AppState = {
 	config: ServerConfig | null;
 	configured: boolean;
+	/**
+	 * Which environment is active. Defaults to "local" (matching every
+	 * pre-cloud install) until the persisted choice loads, so nothing ever
+	 * renders a cloud-shaped screen for a frame before it is known — see
+	 * loadEnvironment's own local fallback.
+	 */
+	environment: EnvironmentKind;
+	setEnvironment: (kind: EnvironmentKind) => void;
 	/** The active environment's data source. Undefined until one is configured. */
 	sessionSource: SessionSource | undefined;
 	/** Every way the active machine says it can be reached, for telling a
@@ -136,9 +146,35 @@ export function useSessionSource(): SessionSource | undefined {
 	return sessionSource;
 }
 
+export function useEnvironment(): { environment: EnvironmentKind; setEnvironment: (kind: EnvironmentKind) => void } {
+	const { environment, setEnvironment } = useApp();
+	return { environment, setEnvironment };
+}
+
 // Provider --------------------------------------------------------------------
 
 export function AppProvider({ children }: { children: ReactNode }) {
+	const cloudAuth = useCloudAuth();
+	// Starts "local" — identical to every install before cloud existed — and
+	// stays there until the persisted choice loads. Loading asynchronously
+	// (rather than defaulting to some "unknown" state) means there is no
+	// third render state for consumers to handle, and a user who never
+	// touches cloud never sees anything but "local" in this field.
+	const [environment, setEnvironmentState] = useState<EnvironmentKind>("local");
+	useEffect(() => {
+		let cancelled = false;
+		loadEnvironment().then((kind) => {
+			if (!cancelled) setEnvironmentState(kind);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+	const setEnvironment = useCallback((kind: EnvironmentKind) => {
+		setEnvironmentState(kind);
+		void saveEnvironment(kind);
+	}, []);
+
 	const [config, setConfig] = useState<ServerConfig | null>(null);
 	// Whether resolution has finished at least once. Distinguishes "no config
 	// yet" from "no machine paired" — identical as state, opposite to the user.
@@ -579,18 +615,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// dependency list below without ever busting it.
 	const getLastSyncAt = useCallback(() => lastSyncAtRef.current, []);
 
-	// The environment switcher (task 15b) will thread real environment/cloud
-	// state through here; until then this always resolves the local source,
-	// matching prior behavior.
 	const sessionSource = useMemo(
-		() => resolveSessionSource({ environment: "local", cfg: config }),
-		[config],
+		() =>
+			resolveSessionSource({
+				environment,
+				cfg: config,
+				cloud: {
+					client: cloudAuth.client,
+					signedIn: cloudAuth.signedIn === true,
+					orgId: cloudAuth.orgId,
+				},
+			}),
+		[environment, config, cloudAuth.client, cloudAuth.signedIn, cloudAuth.orgId],
 	);
 
 	const value = useMemo<AppState>(
 		() => ({
 			config,
 			configured: !!config && isConfigured(config),
+			environment,
+			setEnvironment,
 			sessionSource,
 			activeEndpoints,
 			projects,
@@ -621,6 +665,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		}),
 		[
 			config,
+			environment,
+			setEnvironment,
 			sessionSource,
 			projects,
 			projectsKnown,

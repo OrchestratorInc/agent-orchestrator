@@ -8,7 +8,7 @@ import { tunnelMayHaveRotated } from "../../lib/staleTunnel";
 import { haptics } from "../../lib/haptics";
 import { StaleBanner } from "../../lib/StaleBanner";
 import { useApp } from "../../lib/store";
-import { UnpairedState } from "../../lib/UnpairedState";
+import { CloudUnreadyState, UnpairedState } from "../../lib/UnpairedState";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useTabScrollToTop } from "../../lib/useTabScrollToTop";
@@ -32,7 +32,7 @@ export default function FleetScreen() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { configured, loading, error, errorStatus, connection, config, refresh, sessions, projects, notificationsUnread, activeEndpoints } =
+	const { environment, configured, loading, error, errorStatus, connection, config, refresh, sessions, projects, notificationsUnread, activeEndpoints } =
 		useApp();
 	const [refreshing, setRefreshing] = useState(false);
 	const [query, setQuery] = useState("");
@@ -96,6 +96,20 @@ export default function FleetScreen() {
 	}, [refresh]);
 
 	const keyboardLayout = workerDockKeyboardLayout(keyboardHeight, insets.bottom, keyboardVisible);
+
+	// The cloud environment reads and renders a session board entirely
+	// separately from the local one below — it must never fall through to the
+	// local `configured`/`error`/`sessions` state, none of which the cloud poll
+	// (still local-daemon-only, see lib/store.tsx) ever populates.
+	if (environment === "cloud") {
+		return (
+			<View style={styles.screen}>
+				<View style={{ height: insets.top }} />
+				<ScreenHeader title="Workers" />
+				<CloudUnreadyState />
+			</View>
+		);
+	}
 
 	if (!configured) {
 		return (

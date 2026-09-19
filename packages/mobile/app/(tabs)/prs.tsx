@@ -11,7 +11,7 @@ import { ProjectSwitcher } from "../../lib/ProjectSwitcher";
 import { prLifecycle, prListSections, type PRListFilter } from "../../lib/prView";
 import { StaleBanner } from "../../lib/StaleBanner";
 import { useApp, usePRs } from "../../lib/store";
-import { UnpairedState } from "../../lib/UnpairedState";
+import { CloudUnreadyState, UnpairedState } from "../../lib/UnpairedState";
 import { usePRSummaries } from "../../lib/usePRSummaries";
 import { useTabScrollToTop } from "../../lib/useTabScrollToTop";
 import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
@@ -35,7 +35,7 @@ export default function PRsScreen() {
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
 	const router = useRouter();
-	const { configured, loading, error, errorStatus, connection, config, refresh, notificationsUnread } = useApp();
+	const { environment, configured, loading, error, errorStatus, connection, config, refresh, notificationsUnread } = useApp();
 	const prs = usePRs();
 	const [filter, setFilter] = useState<Filter>("open");
 	const [refreshing, setRefreshing] = useState(false);
@@ -69,6 +69,16 @@ export default function PRsScreen() {
 		await refresh();
 		setRefreshing(false);
 	};
+
+	if (environment === "cloud") {
+		return (
+			<View style={styles.screen}>
+				<View style={{ height: insets.top }} />
+				<ScreenHeader title="Pull Requests" />
+				<CloudUnreadyState />
+			</View>
+		);
+	}
 
 	if (!configured) {
 		return (

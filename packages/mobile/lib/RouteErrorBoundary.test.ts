@@ -30,6 +30,7 @@ const sheetRoutes = [
 	"spawn.tsx",
 	"sheets/agent.tsx",
 	"sheets/chat-settings.tsx",
+	"sheets/cloud-signin.tsx",
 	"sheets/composer-picker.tsx",
 	"sheets/connect.tsx",
 	"sheets/conversation-actions.tsx",

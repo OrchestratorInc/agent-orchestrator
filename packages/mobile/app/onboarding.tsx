@@ -58,6 +58,17 @@ export default function OnboardingScreen() {
 						onPress={() => router.push("/pair?from=onboarding")}
 						style={styles.cta}
 					/>
+					<Pressable
+						accessibilityRole="button"
+						onPress={() => {
+							haptics.tap();
+							router.push("/sheets/cloud-signin?from=onboarding");
+						}}
+						hitSlop={8}
+						style={styles.cloudAlt}
+					>
+						<Text style={styles.cloudAltText}>Use AO Cloud instead</Text>
+					</Pressable>
 				</View>
 
 				<View style={styles.how}>
@@ -120,6 +131,8 @@ const makeStyles = (t: Theme) =>
 		maxWidth: 330,
 	},
 	cta: { marginTop: 32, alignSelf: "center", width: "100%", maxWidth: 300 },
+	cloudAlt: { marginTop: 16, alignSelf: "center", paddingVertical: 6 },
+	cloudAltText: { color: t.textTertiary, fontSize: 14, fontWeight: "600" },
 	how: {},
 	howLabel: {
 		color: t.textTertiary,

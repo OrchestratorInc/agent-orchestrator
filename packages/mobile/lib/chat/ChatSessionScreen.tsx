@@ -17,11 +17,11 @@ import {
 	View,
 } from "react-native";
 import { restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
-import { cloudLifecycleStage } from "../cloud/lifecycle";
+import { cloudLifecycleStage, isResumable } from "../cloud/lifecycle";
 import { haptics } from "../haptics";
 import { headerActionStyle } from "../headerAction";
 import { deferRouteContent, resetHeaderRightForSwap } from "../headerRightSwap";
-import { useApp } from "../store";
+import { useApp, useSessionSource } from "../store";
 import {
 	mobileInterfaceTransitionIsActive,
 	mobileInterfaceTransitionIsBusy,
@@ -89,6 +89,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		},
 	), [session.id]);
 	const { config, projects, refresh: refreshBoard, setActiveProject, setWorkerPinned, renameWorker, kill } = useApp();
+	const sessionSource = useSessionSource();
 	const conversation = useMobileConversation(config, session.id);
 	const interfaceSwitch = useInterfaceTransition(config, session.id, refreshBoard);
 	const [menuOpen, setMenuOpen] = useState(false);
@@ -278,6 +279,28 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		} finally { setResuming(false); }
 	}, [config, conversation.refresh, refreshBoard, resuming, session.id, terminated]);
 
+	const [cloudResuming, setCloudResuming] = useState(false);
+	const resumeCloudSandbox = useCallback(async () => {
+		// Guards a repeat tap while the previous resume is still in flight —
+		// the control plane call is not obviously idempotent, and a second tap
+		// before the first banner state change lands must not fire twice.
+		if (cloudResuming) return;
+		setCloudResuming(true);
+		try {
+			// A cloud session only reaches this screen when the active
+			// environment is cloud, so the source the store hands back here is
+			// the cloud source — this never needs a client or org id of its own.
+			if (!sessionSource) throw new Error("No cloud session source available");
+			await sessionSource.resumeSession(session.id);
+			await refreshBoard();
+			await conversation.refresh();
+		} catch (cause) {
+			Alert.alert("Could not resume sandbox", cause instanceof Error ? cause.message : String(cause));
+		} finally {
+			setCloudResuming(false);
+		}
+	}, [cloudResuming, sessionSource, refreshBoard, conversation.refresh, session.id]);
+
 	const startInterfaceSwitch = useCallback(
 		async (policy: "drain" | "interrupt") => {
 			setMenuOpen(false);
@@ -466,7 +489,17 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				dismissed={dismissedBanners}
 				onDismiss={dismissBanner}
 			/>
-			{cloudLifecycleBanner(cloudStage) ? <DismissibleBanner copy={cloudLifecycleBanner(cloudStage)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="warning" icon="cloud" /> : null}
+			{cloudLifecycleBanner(cloudStage) ? (
+				<DismissibleBanner
+					copy={cloudLifecycleBanner(cloudStage)}
+					dismissed={dismissedBanners}
+					onDismiss={dismissBanner}
+					tone="warning"
+					icon="cloud"
+					action={isResumable(cloudStage) ? (cloudResuming ? "Resuming…" : "Resume") : undefined}
+					onPress={isResumable(cloudStage) && !cloudResuming ? () => void resumeCloudSandbox() : undefined}
+				/>
+			) : null}
 			{conversation.error ? <DismissibleBanner copy={errorBanner("load", conversation.error)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="wifi-off" action="Retry" onPress={() => void conversation.refresh()} /> : null}
 			{quota ? <DismissibleBanner copy={quotaBanner(quota)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone={quota.severity === "critical" ? "danger" : "warning"} icon="alert-triangle" action="Details" onPress={() => setMenuOpen(true)} /> : null}
 			{conversation.actionError && conversation.actionError !== conversation.error ? <DismissibleBanner copy={errorBanner("action", conversation.actionError)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="alert-circle" /> : null}
