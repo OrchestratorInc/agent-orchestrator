@@ -280,7 +280,15 @@ export function TurnSettingsBar({
 										key={mode}
 										active={mode === (settings.approvalMode ?? "default")}
 										radio
-										onSelect={() => onChange({ ...settings, approvalMode: mode })}
+										onSelect={() => {
+											if (
+												approvalChangeNeedsRestart(harness, settings.approvalMode, mode) &&
+												!window.confirm("Restart chat with the new permission mode?")
+											) {
+												return;
+											}
+											onChange({ ...settings, approvalMode: mode });
+										}}
 										className={cn("text-xs")}
 									>
 										<span
@@ -889,11 +897,28 @@ function choiceIsEnabled(choice: ChatConfigOption["choices"][number] | undefined
 
 /**
  * Whether a provider catalog replaces AO's own approval control. A `mode` option
- * that offers only execution modes (OpenCode's build/plan) is not one: taking it
- * for an approval catalog leaves the session with no permission control at all.
+ * that offers only execution modes (OpenCode's build/plan, Cursor's agent/plan/ask)
+ * is not one: taking it for an approval catalog leaves the session with no
+ * permission control at all.
  */
 export function hasProviderPermissionMode(options: ChatConfigOption[]): boolean {
 	return Boolean(partitionConfigOptions(options).mode);
+}
+
+/** Cursor (and similar) bake auto/bypass into process flags; confirm before restart. */
+export function approvalChangeNeedsRestart(
+	harness: string | undefined,
+	from: ApprovalMode | undefined,
+	to: ApprovalMode,
+): boolean {
+	if (harness !== "cursor") return false;
+	const current = from ?? "default";
+	if (current === to) return false;
+	return isProcessBoundApproval(current) || isProcessBoundApproval(to);
+}
+
+function isProcessBoundApproval(mode: ApprovalMode): boolean {
+	return mode === "auto" || mode === "bypass-permissions";
 }
 
 function partitionConfigOptions(options: ChatConfigOption[]): {

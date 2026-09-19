@@ -1371,6 +1371,73 @@ describe("Cursor's live Agent/Plan/Ask mode catalog", () => {
 		expect(screen.queryByRole("button", { name: "Mode" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("switch", { name: "Plan Mode" })).not.toBeInTheDocument();
 	});
+
+	it("keeps AO Approvals beside Cursor execution modes when chooseSettings is wired", async () => {
+		const onChange = vi.fn();
+		const user = userEvent.setup();
+		const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+		render(
+			<TurnSettingsBar
+				harness="cursor"
+				models={[]}
+				settings={{ approvalMode: "default" }}
+				configOptions={[CURSOR_MODELS, CURSOR_MODES]}
+				onChange={onChange}
+				onChangeConfigOption={vi.fn()}
+			/>,
+		);
+
+		expect(screen.getByRole("button", { name: "Model mode for the next turn" })).toHaveTextContent("Agent");
+		const approvals = screen.getByRole("button", { name: "Approval policy for the next turn" });
+		expect(approvals).toHaveTextContent("Default approvals");
+		await user.click(approvals);
+		await user.click(screen.getByRole("menuitemradio", { name: "Auto-approve" }));
+		expect(confirmSpy).toHaveBeenCalledWith("Restart chat with the new permission mode?");
+		expect(onChange).toHaveBeenCalledWith({ approvalMode: "auto" });
+		confirmSpy.mockRestore();
+	});
+
+	it("applies default↔accept-edits without a restart confirmation", async () => {
+		const onChange = vi.fn();
+		const user = userEvent.setup();
+		const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+		render(
+			<TurnSettingsBar
+				harness="cursor"
+				models={[]}
+				settings={{ approvalMode: "default" }}
+				configOptions={[CURSOR_MODES]}
+				onChange={onChange}
+				onChangeConfigOption={vi.fn()}
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+		await user.click(screen.getByRole("menuitemradio", { name: "Accept edits" }));
+		expect(confirmSpy).not.toHaveBeenCalled();
+		expect(onChange).toHaveBeenCalledWith({ approvalMode: "accept-edits" });
+		confirmSpy.mockRestore();
+	});
+
+	it("cancels a process-bound approval change when the restart confirm is declined", async () => {
+		const onChange = vi.fn();
+		const user = userEvent.setup();
+		const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+		render(
+			<TurnSettingsBar
+				harness="cursor"
+				models={[]}
+				settings={{ approvalMode: "default" }}
+				onChange={onChange}
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+		await user.click(screen.getByRole("menuitemradio", { name: "Bypass permissions" }));
+		expect(confirmSpy).toHaveBeenCalled();
+		expect(onChange).not.toHaveBeenCalled();
+		confirmSpy.mockRestore();
+	});
 });
 
 describe("OpenCode's live permission tiers", () => {
