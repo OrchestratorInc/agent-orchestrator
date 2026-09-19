@@ -11,10 +11,11 @@ export type OnboardingInput = {
 	// Whether the user has dismissed onboarding. `null` means "not loaded yet".
 	skipped: boolean | null;
 	// Whether the user is signed into the cloud environment. `null` means "not
-	// loaded yet". Optional — a caller with no cloud awareness (or a
-	// local-only build) can omit it entirely, which behaves as if cloud were
-	// never signed into.
-	cloudSignedIn?: boolean | null;
+	// loaded yet". Required (not optional) so that a caller which gains real
+	// cloud auth state later and forgets to thread it through fails to
+	// typecheck, rather than silently keeping the old "cloud doesn't exist"
+	// behavior and bouncing a signed-in cloud user onto the welcome screen.
+	cloudSignedIn: boolean | null;
 };
 
 /**
