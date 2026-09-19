@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner } from "./conversationBanners";
+import { cloudLifecycleBanner, controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner } from "./conversationBanners";
 
 describe("conversation banners", () => {
 	it("headlines tool servers by count and keeps the raw error out", () => {
@@ -34,5 +34,20 @@ describe("conversation banners", () => {
 		expect(rolledBackBanner(2)?.title).toBe("2 turns were rolled back");
 		expect(rolledBackBanner(0)).toBeUndefined();
 		expect(errorBanner("action", "boom")).toMatchObject({ title: "That didn't work", body: "boom" });
+	});
+
+	it("says nothing for a local session or a connected cloud one", () => {
+		expect(cloudLifecycleBanner(undefined)).toBeUndefined();
+		expect(cloudLifecycleBanner("connected")).toBeUndefined();
+	});
+
+	it("surfaces a paused cloud sandbox with a hint that it self-paused", () => {
+		const copy = cloudLifecycleBanner("paused_by_coder");
+		expect(copy).toMatchObject({ key: "cloud:paused_by_coder", title: "Paused — tap to resume" });
+		expect(copy?.body).toMatch(/paused after a period of inactivity/);
+	});
+
+	it("gives every in-flight stage a title with no resume hint", () => {
+		expect(cloudLifecycleBanner("resuming_workspace")).toMatchObject({ title: "Resuming workspace…", body: undefined });
 	});
 });

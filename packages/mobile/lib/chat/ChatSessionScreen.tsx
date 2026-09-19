@@ -17,6 +17,7 @@ import {
 	View,
 } from "react-native";
 import { restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
+import { cloudLifecycleStage } from "../cloud/lifecycle";
 import { haptics } from "../haptics";
 import { headerActionStyle } from "../headerAction";
 import { deferRouteContent, resetHeaderRightForSwap } from "../headerRightSwap";
@@ -38,7 +39,7 @@ import { ChatTimeline } from "./ChatTimeline";
 import { ConversationTitle } from "./ConversationTitle";
 import { chatSheetRoute } from "./chatSheetRegistry";
 import { quotaWarning } from "./conversationChrome";
-import { controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
+import { cloudLifecycleBanner, controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { conversationMarkers } from "./timelineModel";
 import { brokenMcpServers, can } from "./types";
@@ -114,6 +115,13 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	const keyboardVisible = useKeyboardState((state) => state.isVisible);
 	const turnOptionsRequestedFor = useRef<string | undefined>(undefined);
 	const terminated = "projectName" in session ? Boolean(session.isTerminal) : Boolean(session.isTerminated);
+	// Undefined for a local daemon session (no `cloud` field) and for a cloud
+	// session already connected — both cases leave this screen exactly as it
+	// was before cloud environments existed.
+	// Orchestrator links have no sandbox lifecycle of their own; only a
+	// DashboardSession (worker) can carry cloud fields.
+	const cloudStage = "projectName" in session ? undefined : cloudLifecycleStage(session);
+	const cloudComposerLocked = cloudStage !== undefined && cloudStage !== "connected";
 	const interfaceTransitionActive = mobileInterfaceTransitionIsActive(interfaceSwitch.transition);
 	const interfaceTransitionNotice =
 		!interfaceTransitionActive &&
@@ -458,6 +466,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				dismissed={dismissedBanners}
 				onDismiss={dismissBanner}
 			/>
+			{cloudLifecycleBanner(cloudStage) ? <DismissibleBanner copy={cloudLifecycleBanner(cloudStage)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="warning" icon="cloud" /> : null}
 			{conversation.error ? <DismissibleBanner copy={errorBanner("load", conversation.error)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="wifi-off" action="Retry" onPress={() => void conversation.refresh()} /> : null}
 			{quota ? <DismissibleBanner copy={quotaBanner(quota)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone={quota.severity === "critical" ? "danger" : "warning"} icon="alert-triangle" action="Details" onPress={() => setMenuOpen(true)} /> : null}
 			{conversation.actionError && conversation.actionError !== conversation.error ? <DismissibleBanner copy={errorBanner("action", conversation.actionError)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="alert-circle" /> : null}
@@ -495,7 +504,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				configOptions={conversation.configOptions}
 				models={conversation.models}
 				steerUnavailable={steerUnsupported}
-				disabled={interfaceTransitionActive}
+				disabled={interfaceTransitionActive || cloudComposerLocked}
 				pending={mobileInterfaceTransitionIsBusy(interfaceSwitch.transition) || conversation.pendingSends.some((item) => item.state === "sending")}
 				interrupting={conversation.pendingActions.includes("interrupt")}
 				onSend={conversation.send}

@@ -1,3 +1,4 @@
+import { isResumable, stageLabel, type CloudLifecycleStage } from "../cloud/lifecycle";
 import { resetLabel } from "./conversationChrome";
 import type { McpServer } from "./types";
 
@@ -71,6 +72,21 @@ export function rolledBackBanner(count: number): BannerCopy | undefined {
 		key: `rolledback:${count}`,
 		title: count === 1 ? "1 turn was rolled back" : `${count} turns were rolled back`,
 		body: `The agent no longer remembers ${count === 1 ? "it" : "them"}.`,
+	};
+}
+
+/**
+ * The cloud sandbox's lifecycle stage, in the same banner slot as the daemon's
+ * own status banners. Undefined for a local session (no `cloud` field, see
+ * cloud/lifecycle.ts) and for a cloud session that has already connected —
+ * there is nothing to say once the agent is reachable.
+ */
+export function cloudLifecycleBanner(stage: CloudLifecycleStage | undefined): BannerCopy | undefined {
+	if (!stage || stage === "connected") return undefined;
+	return {
+		key: `cloud:${stage}`,
+		title: stageLabel(stage),
+		body: isResumable(stage) ? "The sandbox paused after a period of inactivity." : undefined,
 	};
 }
 
