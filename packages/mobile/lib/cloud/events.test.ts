@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ClientEvent } from "@aoagents/cloud-client";
-import { pollCloudEvents, toConversationItems } from "./events";
+import { fetchConversationReplay, pollCloudEvents, toConversationItems } from "./events";
 
 const userEvent: ClientEvent = {
 	sessionId: "s1", sequence: 1, type: "chat.user_message",
@@ -63,6 +63,47 @@ describe("toConversationItems", () => {
 		expect(items).toHaveLength(2);
 		expect(items[0]).toMatchObject({ text: "Hi ", streaming: false });
 		expect(items[1]).toMatchObject({ text: "again", streaming: true });
+	});
+
+	// The only reference to an open assistant bubble must not be dropped
+	// while it is still streaming, even if a user message interleaves with no
+	// intervening turn-ending event -- otherwise that bubble spins forever.
+	it("settles an open assistant message when a user message interleaves before any turn end", () => {
+		const interleavedUser = {
+			sessionId: "s1", sequence: 4, type: "chat.user_message",
+			payload: { text: "meanwhile" }, createdAt: "2026-09-01T00:00:03Z",
+		} as ClientEvent;
+		const items = toConversationItems([deltaOne, interleavedUser]);
+		expect(items).toHaveLength(2);
+		expect(items[0]).toMatchObject({ role: "assistant", text: "Hi ", streaming: false });
+		expect(items[1]).toMatchObject({ role: "user", text: "meanwhile" });
+	});
+});
+
+describe("fetchConversationReplay", () => {
+	it("pages to the end, accumulating events across pages", async () => {
+		const pages = [
+			{ events: [userEvent], hasMore: true, nextAfter: 1 },
+			{ events: [deltaOne], hasMore: true, nextAfter: 2 },
+			{ events: [deltaTwo], hasMore: false, nextAfter: 3 },
+		];
+		const client = makeReplayClient(pages);
+		const result = await fetchConversationReplay(client, "o1", "s1");
+		expect(client.replayEvents).toHaveBeenCalledTimes(3);
+		expect(client.replayEvents).toHaveBeenNthCalledWith(1, "o1", "s1", { after: 0 });
+		expect(client.replayEvents).toHaveBeenNthCalledWith(2, "o1", "s1", { after: 1 });
+		expect(client.replayEvents).toHaveBeenNthCalledWith(3, "o1", "s1", { after: 2 });
+		expect(result.events).toEqual([userEvent, deltaOne, deltaTwo]);
+		expect(result.latestSequence).toBe(3);
+	});
+
+	it("terminates rather than looping forever when a page claims more without advancing the cursor", async () => {
+		const replayEvents = vi.fn(async () => ({ events: [userEvent], hasMore: true, nextAfter: 0 }));
+		const client = { replayEvents } as unknown as import("@aoagents/cloud-client").CloudClient;
+		const result = await fetchConversationReplay(client, "o1", "s1");
+		expect(replayEvents).toHaveBeenCalledTimes(1);
+		expect(result.events).toEqual([userEvent]);
+		expect(result.latestSequence).toBe(0);
 	});
 });
 
@@ -147,6 +188,33 @@ describe("pollCloudEvents", () => {
 		await run;
 		expect(clearSpy).toHaveBeenCalled();
 		clearSpy.mockRestore();
+		vi.useRealTimers();
+	});
+
+	// A backlog page is capped at the server's page limit and reports
+	// hasMore; catching up must not idle a full interval between pages, or a
+	// large backlog trickles in for minutes before reaching the live tail.
+	it("polls again immediately when a page reports more is waiting, without sleeping the interval", async () => {
+		vi.useFakeTimers();
+		const client = makeReplayClient([
+			{ events: [userEvent], hasMore: true, nextAfter: 1 },
+			{ events: [deltaOne], hasMore: true, nextAfter: 2 },
+			{ events: [deltaTwo], hasMore: false, nextAfter: 3 },
+		]);
+		const controller = new AbortController();
+		const run = pollCloudEvents({
+			client, orgId: "o1", sessionId: "s1", after: 0, signal: controller.signal, intervalMs: 10_000,
+			onEvents: () => {},
+		});
+
+		// All three catch-up pages resolve without any fake-timer advance,
+		// because none of the hasMore ticks sleep.
+		await vi.advanceTimersByTimeAsync(0);
+		expect(client.replayEvents).toHaveBeenCalledTimes(3);
+
+		controller.abort();
+		await vi.advanceTimersByTimeAsync(0);
+		await run;
 		vi.useRealTimers();
 	});
 });

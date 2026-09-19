@@ -17,6 +17,10 @@ export function toConversationItems(events: ClientEvent[]): ConversationItem[] {
 	for (const event of events) {
 		switch (event.type) {
 			case "chat.user_message":
+				// A user message can interleave before a turn-ending event ever
+				// arrives; settle whatever assistant bubble was open rather than
+				// dropping the only reference to it while it is still streaming.
+				if (open) open.streaming = false;
 				open = undefined;
 				items.push({
 					kind: "message",
@@ -64,6 +68,32 @@ export function toConversationItems(events: ClientEvent[]): ConversationItem[] {
 	return items;
 }
 
+/**
+ * Pages a cloud transcript to its end, since a single `replayEvents` call is
+ * server-limited (`eventPageLimit`, currently 100) and reports `hasMore` when
+ * there is more. A conversation snapshot must show the *live* tail, not
+ * whatever the first page happened to contain, so this keeps requesting with
+ * the returned `nextAfter` until the server says there is no more.
+ *
+ * Guarded against a page that claims `hasMore: true` without advancing the
+ * cursor: that would otherwise re-request the same page forever, hanging the
+ * app on a server bug rather than just returning what was fetched so far.
+ */
+export async function fetchConversationReplay(
+	client: CloudClient,
+	orgId: string,
+	sessionId: string,
+): Promise<{ events: ClientEvent[]; latestSequence: number }> {
+	const events: ClientEvent[] = [];
+	let cursor = 0;
+	for (;;) {
+		const page = await client.replayEvents(orgId, sessionId, { after: cursor });
+		events.push(...page.events);
+		if (!page.hasMore || page.nextAfter <= cursor) return { events, latestSequence: page.nextAfter };
+		cursor = page.nextAfter;
+	}
+}
+
 export type PollOptions = {
 	client: CloudClient;
 	orgId: string;
@@ -93,6 +123,12 @@ export async function pollCloudEvents(options: PollOptions): Promise<void> {
 	const interval = options.intervalMs ?? 2000;
 	let cursor = options.after;
 	while (!options.signal.aborted) {
+		// Set when a page reports more is waiting (a backlog page capped at the
+		// server's eventPageLimit). Catching up must not idle for a full
+		// interval between pages -- at 100 events/page and a 2s interval, a
+		// 14k-event backlog would otherwise trickle in for minutes before
+		// reaching the live tail.
+		let hasMore = false;
 		try {
 			const page = await options.client.replayEvents(options.orgId, options.sessionId, {
 				after: cursor,
@@ -102,6 +138,7 @@ export async function pollCloudEvents(options: PollOptions): Promise<void> {
 			// when the page is empty -- so this always advances monotonically and
 			// never regresses on an empty page.
 			cursor = page.nextAfter;
+			hasMore = page.hasMore;
 			if (page.events.length > 0) {
 				options.onEvents(page.events, cursor);
 			}
@@ -110,6 +147,7 @@ export async function pollCloudEvents(options: PollOptions): Promise<void> {
 			// Transient failure: fall through to the wait below and retry.
 		}
 		if (options.signal.aborted) return;
+		if (hasMore) continue;
 		await new Promise<void>((resolve) => {
 			const timer = setTimeout(resolve, interval);
 			options.signal.addEventListener(

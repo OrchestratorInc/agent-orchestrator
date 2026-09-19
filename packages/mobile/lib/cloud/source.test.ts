@@ -105,7 +105,7 @@ describe("createCloudSessionSource", () => {
 		const page = await source.getConversationPage("s1");
 
 		expect(client.getSession).toHaveBeenCalledWith("o1", "s1");
-		expect(client.replayEvents).toHaveBeenCalledWith("o1", "s1", {});
+		expect(client.replayEvents).toHaveBeenCalledWith("o1", "s1", { after: 0 });
 		expect(page).toMatchObject({
 			conversationId: "s1",
 			sessionId: "s1",
@@ -122,6 +122,32 @@ describe("createCloudSessionSource", () => {
 			{ role: "user", text: "hi" },
 			{ role: "assistant", text: "hello", streaming: true },
 		]);
+	});
+
+	// A single replayEvents call is capped at the server's page limit; opening
+	// a conversation longer than that must still show its live tail, not just
+	// whatever the first page happened to contain.
+	it("pages a multi-page transcript to the end before building the snapshot", async () => {
+		const pages = [
+			{ events: [{ sessionId: "s1", sequence: 1, type: "chat.user_message", payload: { text: "one" }, createdAt: "2026-09-01T00:00:00Z" }], hasMore: true, nextAfter: 1 },
+			{ events: [{ sessionId: "s1", sequence: 2, type: "chat.user_message", payload: { text: "two" }, createdAt: "2026-09-01T00:00:01Z" }], hasMore: true, nextAfter: 2 },
+			{ events: [{ sessionId: "s1", sequence: 3, type: "chat.user_message", payload: { text: "three" }, createdAt: "2026-09-01T00:00:02Z" }], hasMore: false, nextAfter: 3 },
+		];
+		let call = 0;
+		const client = clientStub({
+			getSession: vi.fn(async () => ({ session: fullSession("s1") })),
+			replayEvents: vi.fn(async () => pages[call++]),
+		});
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
+		const page = await source.getConversationPage("s1");
+
+		expect(client.replayEvents).toHaveBeenCalledTimes(3);
+		expect(client.replayEvents).toHaveBeenNthCalledWith(1, "o1", "s1", { after: 0 });
+		expect(client.replayEvents).toHaveBeenNthCalledWith(2, "o1", "s1", { after: 1 });
+		expect(client.replayEvents).toHaveBeenNthCalledWith(3, "o1", "s1", { after: 2 });
+		expect(page.items.map((item) => (item.kind === "message" ? item.text : undefined))).toEqual(["one", "two", "three"]);
+		expect(page.latestSequence).toBe(3);
+		expect(page.oldestSequence).toBe(1);
 	});
 
 	it("falls back to the cursor for latest/oldest sequence on an empty replay", async () => {

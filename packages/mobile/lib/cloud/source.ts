@@ -2,7 +2,7 @@ import type { CloudClient } from "@aoagents/cloud-client";
 import type { DashboardSession, ProjectInfo } from "../api";
 import type { ConversationEvent } from "../chat/sse";
 import type { SessionSource } from "../environment/types";
-import { pollCloudEvents, toConversationItems } from "./events";
+import { fetchConversationReplay, pollCloudEvents, toConversationItems } from "./events";
 import { toDashboardSession, toProjectInfo } from "./mapping";
 
 /** How often the cloud transcript is polled for new events. Matches the
@@ -57,11 +57,13 @@ export function createCloudSessionSource(input: {
 		},
 		deleteSession: async (id) => { await client.deleteSession(orgId, id); },
 		getConversationPage: async (id) => {
-			const [{ session }, page] = await Promise.all([
+			const [{ session }, { events, latestSequence }] = await Promise.all([
 				client.getSession(orgId, id),
-				client.replayEvents(orgId, id, {}),
+				// A single replayEvents call is capped at the server's page limit
+				// and reports hasMore; paging to the end here is required so this
+				// shows the live tail of a long conversation, not just its start.
+				fetchConversationReplay(client, orgId, id),
 			]);
-			const sequences = page.events.map((event) => event.sequence);
 			return {
 				conversationId: id,
 				sessionId: id,
@@ -70,13 +72,13 @@ export function createCloudSessionSource(input: {
 				// controller mode; cloud sessions are always Chat (see mapping.ts).
 				mode: "chat" as const,
 				controller: { state: "ready" as const },
-				latestSequence: page.nextAfter,
-				oldestSequence: sequences.length > 0 ? Math.min(...sequences) : page.nextAfter,
-				// No backward pagination yet: a fresh replay from zero is the whole
+				latestSequence,
+				oldestSequence: events.length > 0 ? events[0].sequence : latestSequence,
+				// No backward pagination yet: a full forward replay is the whole
 				// transcript the control plane will hand back today.
 				hasMoreBefore: false,
 				turns: [],
-				items: toConversationItems(page.events),
+				items: toConversationItems(events),
 				settings: {},
 			};
 		},
