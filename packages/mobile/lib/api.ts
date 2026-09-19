@@ -91,6 +91,19 @@ export type DashboardSession = {
 	isTerminated?: boolean;
 	isPinned?: boolean;
 	pinnedAt?: string | null;
+	/** Whether the cloud worker has a current control-plane connection. Cloud sessions only. */
+	runtimeConnected?: boolean;
+	/**
+	 * Sandbox lifecycle for a cloud-hosted session (control-plane intent vs. what the
+	 * sandbox provider actually observes). Absent for local-daemon sessions, which have
+	 * no sandbox to track. Mirrors desktop's WorkspaceSession["cloud"] shape so
+	 * cloud-lifecycle.ts (Task 14) can read it identically on both platforms.
+	 */
+	cloud?: {
+		sandboxProvider?: string;
+		desiredState?: string;
+		observedState?: string;
+	};
 };
 
 export type OrchestratorLink = {
