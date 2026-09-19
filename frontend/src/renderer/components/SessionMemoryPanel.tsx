@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Activity, ChevronRight, Loader2, Pause, Play, Trash2, X } from "lucide-react";
+import { ChevronRight, Loader2, Pause, Play, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { formatTimeTerse } from "../lib/format-time";
@@ -21,7 +21,6 @@ import {
 } from "../hooks/useSessionMemory";
 import { isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
 import { SessionTerminationPopover } from "./SessionTerminationPopover";
-import { TopbarButton } from "./TopbarButton";
 import { Button } from "./ui/button";
 import {
 	Dialog,
@@ -42,14 +41,20 @@ export type MemoryRow = {
 	projectName?: string;
 };
 
+/** True once the daemon has produced an app-wide reading; gates the archive bar. */
+export function useHasAppMemory(): boolean {
+	const memory = useAppMemory();
+	return !memory.isError && (memory.data?.app?.rssBytes ?? 0) > 0;
+}
+
 /**
- * Topbar indicator: AO's share of host RAM as a percent, colored by pressure,
- * with the btop-style panel behind it. It reads only the memory query so the
- * shell topbar keeps its identity while sessions stream updates; the panel
- * subscribes to sessions only while open. Where host RAM can't be read the
- * indicator falls back to the absolute size with no color.
+ * Archive-bar indicator: a status dot plus AO's share of host RAM as a
+ * percent, colored by pressure, with the btop-style panel behind it. It
+ * reads only the memory query so the board keeps its identity while sessions
+ * stream updates; the panel subscribes to sessions only while open. Where
+ * host RAM can't be read it falls back to the absolute size with no color.
  */
-export function AppMemoryIndicator({ style }: { style?: React.CSSProperties }) {
+export function AppMemoryIndicator() {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const memory = useAppMemory();
@@ -66,27 +71,28 @@ export function AppMemoryIndicator({ style }: { style?: React.CSSProperties }) {
 		<>
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<span className="inline-flex" style={style}>
-						<TopbarButton
-							aria-label={label}
+					<button
+						aria-label={label}
+						className="inline-flex h-7 items-center gap-1.5 rounded-sm px-2 font-mono text-2xs tabular-nums text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						data-memory-tone={pressure?.tone ?? "unknown"}
+						data-testid="app-memory-indicator"
+						onClick={() => setOpen(true)}
+						type="button"
+					>
+						<span
+							aria-hidden="true"
 							className={cn(
-								"topbar-control--labeled font-mono tabular-nums",
-								pressure?.tone === "critical" && "text-destructive",
-								pressure?.tone === "warning" && "text-warning",
-								pressure?.tone === "default" && "text-success",
+								"size-1.5 shrink-0 rounded-full",
+								pressure?.tone === "critical" && "bg-destructive",
+								pressure?.tone === "warning" && "bg-warning",
+								pressure?.tone === "default" && "bg-success",
+								!pressure && "bg-passive",
 							)}
-							data-memory-tone={pressure?.tone ?? "unknown"}
-							data-priority="secondary"
-							data-testid="app-memory-indicator"
-							onClick={() => setOpen(true)}
-							variant="secondary"
-						>
-							<Activity className="size-icon-md" aria-hidden="true" />
-							<span data-compact-label="">{pressure ? `${pressure.pct}%` : formatMemory(app.rssBytes)}</span>
-						</TopbarButton>
-					</span>
+						/>
+						<span>{pressure ? `${pressure.pct}%` : formatMemory(app.rssBytes)}</span>
+					</button>
 				</TooltipTrigger>
-				<TooltipContent side="bottom">{label}</TooltipContent>
+				<TooltipContent side="top">{label}</TooltipContent>
 			</Tooltip>
 			{open ? <SessionMemoryPanel onOpenChange={setOpen} open /> : null}
 		</>

@@ -16,6 +16,7 @@ vi.mock("motion/react", async (importOriginal) => {
 });
 
 const {
+	appMemoryMock,
 	navigateMock,
 	notificationShowMock,
 	postMock,
@@ -23,6 +24,7 @@ const {
 	usageQueryMock,
 	boardActionsInPanelMock,
 } = vi.hoisted(() => ({
+	appMemoryMock: vi.fn(),
 	navigateMock: vi.fn(),
 	notificationShowMock: vi.fn(),
 	postMock: vi.fn(),
@@ -50,6 +52,11 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 
 vi.mock("../hooks/useSessionUsageSummaries", () => ({
 	useSessionUsageSummaries: usageQueryMock,
+}));
+
+vi.mock("../hooks/useSessionMemory", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useSessionMemory")>()),
+	useAppMemory: appMemoryMock,
 }));
 
 vi.mock("../lib/api-client", () => ({
@@ -110,6 +117,7 @@ beforeEach(() => {
 	postMock.mockReset().mockResolvedValue({ data: {} });
 	workspaceQueryMock.mockReset().mockReturnValue({ data: [], isError: false });
 	usageQueryMock.mockReset().mockReturnValue({ data: new Map() });
+	appMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 	window.localStorage.removeItem("ao.board.archive.layout");
 	boardActionsInPanelMock.mockReset().mockReturnValue(false);
 });
@@ -155,6 +163,26 @@ describe("SessionsBoard", () => {
 			params: { path: { sessionId: "paused" } },
 		}));
 		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("shows AO memory pressure in the archive bar even with nothing archived", async () => {
+		const GIB = 1024 ** 3;
+		appMemoryMock.mockReturnValue({
+			isError: false,
+			data: { app: { rssBytes: 12 * GIB, processCount: 20 }, system: { totalBytes: 32 * GIB, availableBytes: 8 * GIB } },
+		});
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({ id: "live", title: "Live task", status: "working" })])],
+			isSuccess: true, isError: false,
+		});
+		renderBoard("p1");
+		expect(screen.queryByRole("button", { name: /archive/i })).not.toBeInTheDocument();
+		const indicator = screen.getByTestId("app-memory-indicator");
+		expect(indicator).toHaveTextContent("38%");
+		expect(indicator).toHaveAttribute("data-memory-tone", "warning");
+		expect(indicator).toHaveAttribute("aria-label", "AO is using 12.0 GB of 32.0 GB (38%)");
+		await userEvent.click(indicator);
+		expect(await screen.findByTestId("session-memory-table")).toBeInTheDocument();
 	});
 
 	it("uses the last human message time rather than generic session updatedAt", () => {
@@ -941,13 +969,16 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 
 		const archiveButton = screen.getByRole("button", { name: /archive/i });
-		expect(archiveButton).toHaveClass(archiveToggleHeightClassName, "w-full", "py-0");
+		// The bar row owns the fixed height (it also hosts the memory indicator);
+		// the toggle fills it and stretches over the remaining width.
+		expect(archiveButton.parentElement).toHaveClass(archiveToggleHeightClassName);
+		expect(archiveButton).toHaveClass("h-full", "flex-1", "py-0");
 		const archiveLabel = within(archiveButton).getByText("Archive");
 		expect(archiveLabel).not.toHaveClass("font-mono", "uppercase");
 		expect(archiveLabel).toHaveClass("text-2xs", "font-medium");
 		// Expanded archive overlays the board instead of shrinking lanes (which would
 		// force a persistent Needs You column scrollbar gutter).
-		expect(archiveButton.parentElement).toHaveClass("absolute", "inset-x-0", "bottom-0", "bg-background");
+		expect(archiveButton.parentElement?.parentElement).toHaveClass("absolute", "inset-x-0", "bottom-0", "bg-background");
 		expect(screen.getByTestId("board")).toHaveClass("relative");
 		expect(screen.getByTestId("board").querySelector(":scope > .min-h-0.flex-1")).toHaveClass(
 			archiveToggleOffsetClassName,

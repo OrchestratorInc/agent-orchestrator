@@ -40,6 +40,7 @@ import { DaemonStartupLoader } from "./DaemonStartupLoader";
 import { useBoardPresentation } from "../hooks/useBoardPresentation";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { ProjectBoardActions } from "./ProjectBoardActions";
+import { AppMemoryIndicator, useHasAppMemory } from "./SessionMemoryPanel";
 import {
 	ArchivedSessionCardAdapter,
 	BoardSessionCardAdapter,
@@ -126,7 +127,9 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 		hasProjects: workspaces.length > 0,
 		hasWorkerSessions: liveSessions.length > 0,
 	});
-	const hasArchive = archived.length > 0;
+	const hasMemory = useHasAppMemory();
+	// The bar hosts the memory indicator too, so it stays up with an empty archive.
+	const hasArchive = archived.length > 0 || hasMemory;
 	const terminateSession = useTerminateSession();
 	const activeProjectIdRef = useRef(projectId);
 	activeProjectIdRef.current = projectId;
@@ -350,6 +353,7 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 					archiveAria: t("shell.archiveSessionsAria", { count: sessions.length }),
 					archivedSessions: t("shell.archivedSessions"),
 				}}
+				trailing={<AppMemoryIndicator />}
 				renderSessionCard={(session) => (
 					<ArchivedSessionCardAdapter
 						isRestoreDisabled={restoringSessionId !== undefined}
