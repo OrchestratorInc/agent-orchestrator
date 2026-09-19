@@ -32,6 +32,7 @@ import { isConfigured, loadConfig, machineIdentity, type ServerConfig } from "./
 import { useCloudAuth } from "./cloud/authStore";
 import { loadEnvironment, saveEnvironment } from "./environment/store";
 import { resolveSessionSource } from "./environment/resolve";
+import { shouldPollLocal } from "./environment/shouldPoll";
 import type { EnvironmentKind, SessionSource } from "./environment/types";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
 import { pollIntervalFor } from "./pollInterval";
@@ -442,6 +443,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		// A config change (unpair / re-pair / new host) restarts polling; reset the
 		// connected gate so the first open of the new session is a real transition.
 		openRef.current = false;
+		// Cloud has no daemon to poll, and nothing on that path consumes the
+		// result (see lib/cloud/source.ts) — without this a paired-but-asleep
+		// Mac would get hammered with failing requests forever while the user
+		// is on Cloud. `null` (environment not loaded yet) also does not poll;
+		// see shouldPollLocal's doc comment.
+		if (!shouldPollLocal(environment)) {
+			setConnection("closed");
+			return;
+		}
 		if (!config || !isConfigured(config)) {
 			setConnection("closed");
 			// Not simply false: until resolution has finished this is "still
@@ -499,7 +509,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// boundary instead of one whole request-timeout later.
 			stopped = true;
 		};
-	}, [config, fetchAll, appActive, reloadConfig, configResolved]);
+	}, [config, fetchAll, appActive, reloadConfig, configResolved, environment]);
 
 	const setActiveProject = useCallback((id: string) => {
 		setChosenProjectId(id);

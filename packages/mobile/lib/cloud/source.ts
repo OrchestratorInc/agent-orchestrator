@@ -111,6 +111,15 @@ export function createCloudSessionSource(input: {
 		},
 		subscribeEvents: (id, listener) => {
 			const controller = new AbortController();
+			// KNOWN GAP — do not wire this into useConversation until it's fixed.
+			// `after: 0` is hardcoded with no cursor persisted across calls, so a
+			// fresh subscribeEvents() (e.g. on remount or a reconnect) replays the
+			// *entire* transcript as "new" events. Unlike the local path, which
+			// persists a poll cursor (see lib/chat/conversationPoll.ts), there is
+			// no equivalent here. The real fix needs a SessionSource redesign to
+			// carry a resumable cursor and is out of scope for this pass — see
+			// item 7 of .superpowers/sdd/2026-09-19-mobile-cloud-environments/
+			// final-fix-report.md.
 			void pollCloudEvents({
 				client,
 				orgId,

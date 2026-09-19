@@ -23,6 +23,7 @@
   "scripts": {
     "generate": "openapi-typescript ../../contracts/cloud/openapi.yaml -o src/schema.ts",
     "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
     "prepack": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run"

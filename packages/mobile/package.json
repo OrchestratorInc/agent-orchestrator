@@ -5,9 +5,13 @@
 	"description": "Expo mobile supervisor for Agent Orchestrator",
 	"main": "expo-router/entry",
 	"scripts": {
+		"eas-build-pre-install": "npm --prefix ../cloud-client install && npm --prefix ../cloud-client run build",
+		"prestart": "npm --prefix ../cloud-client run build",
 		"start": "expo start",
 		"start:perf": "expo start --dev-client --no-dev --minify",
+		"preandroid": "npm --prefix ../cloud-client run build",
 		"android": "expo run:android",
+		"preios": "npm --prefix ../cloud-client run build",
 		"ios": "expo run:ios",
 		"pretypecheck": "npm --prefix ../cloud-client run build",
 		"typecheck": "tsc --noEmit",

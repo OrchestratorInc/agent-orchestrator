@@ -6,6 +6,7 @@ import { resolveOrg } from "./org";
 import { registerWithLocalAuth, signInWithLocalAuth, type RegisterLocalAuthInput } from "./signIn";
 import { createTokenProvider } from "./session";
 import { clearTokens, readTokens, writeTokens } from "./tokens";
+import { wrapUnauthorized } from "./unauthorized";
 
 /**
  * The cloud environment's live auth state: whether a session is stored, and
@@ -78,7 +79,24 @@ export function CloudAuthProvider({
 		[],
 	);
 
-	const client = useMemo(() => createMobileCloudClient({ baseUrl, tokens }), [baseUrl, tokens]);
+	// Called from inside the wrapped client (see wrapUnauthorized) whenever any
+	// cloud call 401s. A local-auth session has no refresh token, so an
+	// expired one 401s forever otherwise: `signedIn` would stay `true` while
+	// resolveSessionSource keeps handing out a live cloud source that can
+	// never succeed, and CloudUnreadyState would claim "you're signed in"
+	// with no way to recover short of reinstalling. Dropping to signed-out
+	// here sends the user back to the sign-in prompt instead.
+	const handleUnauthorized = useCallback(() => {
+		generationRef.current += 1;
+		void tokens.signOut();
+		setSignedIn(false);
+		setOrgId(null);
+	}, [tokens]);
+
+	const client = useMemo(
+		() => wrapUnauthorized(createMobileCloudClient({ baseUrl, tokens }), handleUnauthorized),
+		[baseUrl, tokens, handleUnauthorized],
+	);
 
 	const resolveSession = useCallback(
 		async (generation: number) => {

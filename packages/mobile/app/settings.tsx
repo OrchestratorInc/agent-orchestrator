@@ -87,13 +87,21 @@ export default function SettingsScreen() {
 				<SettingsSection
 					title="Environment"
 					footer={
-						environment === "local"
-							? "Drive the agents running on your paired computer."
-							: "Drive the agents running in your AO Cloud workspace."
+						environment === null
+							? undefined
+							: environment === "local"
+								? "Drive the agents running on your paired computer."
+								: "Drive the agents running in your AO Cloud workspace."
 					}
 				>
 					<SettingsCard>
 						<EnvironmentRow />
+					</SettingsCard>
+				</SettingsSection>
+
+				<SettingsSection title="Cloud account" footer="Sign out to remove this device's AO Cloud credential.">
+					<SettingsCard>
+						<CloudAccountRow />
 					</SettingsCard>
 				</SettingsSection>
 
@@ -216,6 +224,65 @@ function EnvironmentRow() {
 				);
 			})}
 		</View>
+	);
+}
+
+/**
+ * The signed-in AO Cloud account, with the only way this device's stored
+ * bearer token gets removed: `authStore.signOut` has no other caller, so
+ * without this row a cloud credential can be stored but never revoked or
+ * switched.
+ *
+ * Hidden interactivity rather than hidden entirely when signed out — there's
+ * still something true to report ("Not signed in"), matching ConnectionTestRow's
+ * disabled-when-inapplicable pattern above.
+ */
+function CloudAccountRow() {
+	const cloudAuth = useCloudAuth();
+	const [email, setEmail] = useState<string | null>(null);
+	const [signingOut, setSigningOut] = useState(false);
+
+	useEffect(() => {
+		if (cloudAuth.signedIn !== true) {
+			setEmail(null);
+			return;
+		}
+		let cancelled = false;
+		cloudAuth.client
+			.getCurrentAccount()
+			.then((account) => { if (!cancelled) setEmail(account.user.email); })
+			.catch(() => {}); // Best-effort label; the row still works without it.
+		return () => { cancelled = true; };
+	}, [cloudAuth.signedIn, cloudAuth.client]);
+
+	function confirmSignOut() {
+		Alert.alert(
+			"Sign out of AO Cloud?",
+			"This device's saved credential will be removed. You'll need to sign in again to see cloud sessions.",
+			[
+				{ text: "Cancel", style: "cancel" },
+				{
+					text: "Sign out",
+					style: "destructive",
+					onPress: async () => {
+						setSigningOut(true);
+						try { await cloudAuth.signOut(); } finally { setSigningOut(false); }
+					},
+				},
+			],
+		);
+	}
+
+	const signedIn = cloudAuth.signedIn === true;
+	return (
+		<CardRow
+			icon="cloud"
+			label="AO Cloud account"
+			value={signedIn ? (signingOut ? "Signing out…" : (email ?? "Signed in")) : "Not signed in"}
+			disabled={!signedIn}
+			loading={signingOut}
+			onPress={signedIn ? () => { haptics.warning(); confirmSignOut(); } : undefined}
+		/>
 	);
 }
 
