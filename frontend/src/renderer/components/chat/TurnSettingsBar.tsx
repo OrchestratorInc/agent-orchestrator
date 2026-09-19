@@ -78,6 +78,14 @@ const TRIGGER_CLASS =
 	"h-7 gap-1 bg-transparent rounded-lg px-3 text-[12px]! leading-none text-muted-foreground hover:bg-white/5 hover:text-foreground data-[state=open]:bg-white/5 data-[state=open]:text-foreground";
 const CHAT_MENU_CLASS = "chat-settings-menu text-[12px]!";
 
+/** Confirm before Cursor process-bound approval changes that restart the agent. */
+export const CURSOR_APPROVAL_RESTART_CONFIRM =
+	"Changing this permission mode restarts the Cursor agent for this chat. Continue?";
+
+/** Why process-bound Cursor approval options stay unavailable mid-turn. */
+export const CURSOR_APPROVAL_RESTART_BUSY =
+	"Changing this permission mode restarts the Cursor agent. Unavailable while the agent is working.";
+
 export function TurnSettingsBar({
 	models,
 	settings,
@@ -95,6 +103,7 @@ export function TurnSettingsBar({
 	configPending,
 	error,
 	disabled,
+	agentBusy,
 	children,
 }: {
 	models: ChatModel[];
@@ -126,6 +135,11 @@ export function TurnSettingsBar({
 	configPending?: boolean;
 	error?: string;
 	disabled?: boolean;
+	/**
+	 * True while a turn is running. Cursor process-bound approval changes restart the
+	 * agent, so those options stay unavailable until the turn finishes.
+	 */
+	agentBusy?: boolean;
 	/** Inline controls on the right model row, before the mode/approval picker — queue vs steer. */
 	children?: ReactNode;
 }) {
@@ -272,37 +286,52 @@ export function TurnSettingsBar({
 						) : showApprovalMode && onChange ? (
 							<Picker
 								label={approvalLabel}
-													title="Approval policy for the next turn"
-													disabled={optionDisabled}
+								title="Approval policy for the next turn"
+								disabled={optionDisabled}
 							>
-								{approvalOrder.filter((mode) => !approvalModes || approvalModes.includes(mode)).map((mode) => (
-									<OptionMenuItem
-										key={mode}
-										active={mode === (settings.approvalMode ?? "default")}
-										radio
-										onSelect={() => {
-											if (
-												approvalChangeNeedsRestart(harness, settings.approvalMode, mode) &&
-												!window.confirm("Restart chat with the new permission mode?")
-											) {
-												return;
-											}
-											onChange({ ...settings, approvalMode: mode });
-										}}
-										className={cn("text-xs")}
-									>
-										<span
+								{approvalOrder.map((mode) => {
+									const needsRestart = approvalChangeNeedsRestart(
+										harness,
+										settings.approvalMode,
+										mode,
+									);
+									const restartBlocked = needsRestart && Boolean(agentBusy);
+									if (approvalModes && !approvalModes.includes(mode)) return null;
+									return (
+										<OptionMenuItem
+											key={mode}
+											active={mode === (settings.approvalMode ?? "default")}
+											radio
+											disabled={restartBlocked}
+											title={restartBlocked ? CURSOR_APPROVAL_RESTART_BUSY : undefined}
+											onSelect={() => {
+												if (restartBlocked) return;
+												if (
+													needsRestart &&
+													!window.confirm(CURSOR_APPROVAL_RESTART_CONFIRM)
+												) {
+													return;
+												}
+												onChange({ ...settings, approvalMode: mode });
+											}}
 											className={cn(
-														"text-xs",
-												mode === (settings.approvalMode ?? "default")
-													? "text-foreground"
-													: "text-muted-foreground",
+												"text-xs",
+												restartBlocked && "pointer-events-auto cursor-not-allowed opacity-50",
 											)}
 										>
-											{approvalCopy[mode].label}
-										</span>
-									</OptionMenuItem>
-								))}
+											<span
+												className={cn(
+													"text-xs",
+													mode === (settings.approvalMode ?? "default")
+														? "text-foreground"
+														: "text-muted-foreground",
+												)}
+											>
+												{approvalCopy[mode].label}
+											</span>
+										</OptionMenuItem>
+									);
+								})}
 								{rememberAction}
 							</Picker>
 						) : null}

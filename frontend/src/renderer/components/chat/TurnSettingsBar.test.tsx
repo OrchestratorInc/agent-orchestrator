@@ -2,7 +2,12 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatConfigOption } from "../../types/conversation";
-import { hasProviderPermissionMode, TurnSettingsBar } from "./TurnSettingsBar";
+import {
+	CURSOR_APPROVAL_RESTART_BUSY,
+	CURSOR_APPROVAL_RESTART_CONFIRM,
+	hasProviderPermissionMode,
+	TurnSettingsBar,
+} from "./TurnSettingsBar";
 
 const OPTIONS: ChatConfigOption[] = [
 	{
@@ -1392,7 +1397,7 @@ describe("Cursor's live Agent/Plan/Ask mode catalog", () => {
 		expect(approvals).toHaveTextContent("Default approvals");
 		await user.click(approvals);
 		await user.click(screen.getByRole("menuitemradio", { name: "Auto-approve" }));
-		expect(confirmSpy).toHaveBeenCalledWith("Restart chat with the new permission mode?");
+		expect(confirmSpy).toHaveBeenCalledWith(CURSOR_APPROVAL_RESTART_CONFIRM);
 		expect(onChange).toHaveBeenCalledWith({ approvalMode: "auto" });
 		confirmSpy.mockRestore();
 	});
@@ -1436,6 +1441,37 @@ describe("Cursor's live Agent/Plan/Ask mode catalog", () => {
 		await user.click(screen.getByRole("menuitemradio", { name: "Bypass permissions" }));
 		expect(confirmSpy).toHaveBeenCalled();
 		expect(onChange).not.toHaveBeenCalled();
+		confirmSpy.mockRestore();
+	});
+
+	it("disables Cursor process-bound approval options while the agent is working", async () => {
+		const onChange = vi.fn();
+		const user = userEvent.setup();
+		const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+		render(
+			<TurnSettingsBar
+				harness="cursor"
+				models={[]}
+				settings={{ approvalMode: "default" }}
+				onChange={onChange}
+				agentBusy
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+		const auto = screen.getByRole("menuitemradio", { name: "Auto-approve" });
+		const bypass = screen.getByRole("menuitemradio", { name: "Bypass permissions" });
+		const acceptEdits = screen.getByRole("menuitemradio", { name: "Accept edits" });
+		expect(auto).toHaveAttribute("aria-disabled", "true");
+		expect(bypass).toHaveAttribute("aria-disabled", "true");
+		expect(auto).toHaveAttribute("title", CURSOR_APPROVAL_RESTART_BUSY);
+		expect(bypass).toHaveAttribute("title", CURSOR_APPROVAL_RESTART_BUSY);
+		expect(acceptEdits).not.toHaveAttribute("aria-disabled", "true");
+		await user.click(auto);
+		expect(confirmSpy).not.toHaveBeenCalled();
+		expect(onChange).not.toHaveBeenCalled();
+		await user.click(acceptEdits);
+		expect(onChange).toHaveBeenCalledWith({ approvalMode: "accept-edits" });
 		confirmSpy.mockRestore();
 	});
 });
