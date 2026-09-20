@@ -142,6 +142,9 @@ export type WorkspaceSession = {
 	lastUserMessageAt?: string;
 	isPinned?: boolean;
 	pinnedAt?: string;
+	/** Set while the agent was stopped on purpose and can be resumed in place. */
+	pausedAt?: string;
+	pauseReason?: "user" | "idle" | "pressure";
 	/** Raw agent lifecycle activity from the daemon. */
 	activity?: SessionActivity;
 	activeAgentSwitch?: AgentSwitchSummary;

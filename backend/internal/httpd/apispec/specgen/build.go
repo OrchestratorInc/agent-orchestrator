@@ -414,6 +414,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSessionMemoryProcessResponse":     "SessionMemoryProcessResponse",
 	"ControllersSystemMemoryResponse":             "SystemMemoryResponse",
 	"ControllersAppMemoryResponse":                "AppMemoryResponse",
+	"ControllersExitAgentRequest":                 "ExitAgentRequest",
 	"ControllersListCompactSessionUsageResponse":  "ListCompactSessionUsageResponse",
 	"ControllersUsageTotalsResponse":              "UsageTotalsResponse",
 	"ControllersUsageModelResponse":               "UsageModelResponse",
@@ -2487,7 +2488,9 @@ func sessionOperations() []operation {
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/exit-agent", id: "exitAgent", tag: "sessions",
 			summary:    "Exit the agent while preserving its AO session",
 			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.ExitAgentRequest{}, optionalReqBody: true,
 			resps: []respUnit{
+				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusOK, controllers.ExitAgentResponse{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},

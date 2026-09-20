@@ -353,7 +353,7 @@ func (f *fakeSessionService) Restore(_ context.Context, id domain.SessionID) (se
 	return sessionsvc.RestoreOutcome{Session: s, Mode: sessionsvc.RestoreModeView("native")}, nil
 }
 
-func (f *fakeSessionService) ExitAgent(_ context.Context, id domain.SessionID) (sessionsvc.ExitAgentOutcome, error) {
+func (f *fakeSessionService) ExitAgent(_ context.Context, id domain.SessionID, _ domain.SessionPauseReason) (sessionsvc.ExitAgentOutcome, error) {
 	s := f.sessions[id]
 	s.Activity.State = domain.ActivityExited
 	s.Status = domain.StatusExited

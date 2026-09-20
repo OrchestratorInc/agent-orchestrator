@@ -145,7 +145,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed
+    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
+    paused_at, pause_reason
 FROM sessions WHERE id = ?
 `
 
@@ -209,6 +210,8 @@ type GetSessionRow struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	PausedAt                         sql.NullTime
+	PauseReason                      string
 }
 
 func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessionRow, error) {
@@ -274,6 +277,8 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.IsTaskPreparation,
 		&i.AutomationRunID,
 		&i.AutomationLaunchCompleted,
+		&i.PausedAt,
+		&i.PauseReason,
 	)
 	return i, err
 }
@@ -291,7 +296,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed
+    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
+    paused_at, pause_reason
 FROM sessions WHERE automation_run_id = ?
 `
 
@@ -355,6 +361,8 @@ type GetSessionByAutomationRunIDRow struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	PausedAt                         sql.NullTime
+	PauseReason                      string
 }
 
 func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRunID *domain.AutomationRunID) (GetSessionByAutomationRunIDRow, error) {
@@ -420,6 +428,8 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.IsTaskPreparation,
 		&i.AutomationRunID,
 		&i.AutomationLaunchCompleted,
+		&i.PausedAt,
+		&i.PauseReason,
 	)
 	return i, err
 }
@@ -581,7 +591,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed
+    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
+    paused_at, pause_reason
 FROM sessions ORDER BY project_id, num
 `
 
@@ -645,6 +656,8 @@ type ListAllSessionsRow struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	PausedAt                         sql.NullTime
+	PauseReason                      string
 }
 
 func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, error) {
@@ -716,6 +729,8 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.IsTaskPreparation,
 			&i.AutomationRunID,
 			&i.AutomationLaunchCompleted,
+			&i.PausedAt,
+			&i.PauseReason,
 		); err != nil {
 			return nil, err
 		}
@@ -743,7 +758,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed
+    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
+    paused_at, pause_reason
 FROM sessions WHERE project_id IS ? ORDER BY num
 `
 
@@ -807,6 +823,8 @@ type ListSessionsByProjectRow struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	PausedAt                         sql.NullTime
+	PauseReason                      string
 }
 
 func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.ProjectID) ([]ListSessionsByProjectRow, error) {
@@ -878,6 +896,8 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.IsTaskPreparation,
 			&i.AutomationRunID,
 			&i.AutomationLaunchCompleted,
+			&i.PausedAt,
+			&i.PauseReason,
 		); err != nil {
 			return nil, err
 		}
@@ -1224,6 +1244,30 @@ type SetSessionAutoReviewParams struct {
 
 func (q *Queries) SetSessionAutoReview(ctx context.Context, arg SetSessionAutoReviewParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSessionAutoReview, arg.AutoReviewEnabled, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSessionPaused = `-- name: SetSessionPaused :execrows
+UPDATE sessions SET paused_at = ?, pause_reason = ?, updated_at = ? WHERE id = ?
+`
+
+type SetSessionPausedParams struct {
+	PausedAt    sql.NullTime
+	PauseReason string
+	UpdatedAt   time.Time
+	ID          domain.SessionID
+}
+
+func (q *Queries) SetSessionPaused(ctx context.Context, arg SetSessionPausedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionPaused,
+		arg.PausedAt,
+		arg.PauseReason,
+		arg.UpdatedAt,
+		arg.ID,
+	)
 	if err != nil {
 		return 0, err
 	}

@@ -36,6 +36,7 @@ const GIB = 1024 ** 3;
 
 function session(id: string, title: string, activityState = "idle"): WorkspaceSession {
 	return {
+		pausedAt: activityState === "exited" ? "2026-09-18T00:00:00Z" : undefined,
 		id,
 		title,
 		workspaceId: "p1",

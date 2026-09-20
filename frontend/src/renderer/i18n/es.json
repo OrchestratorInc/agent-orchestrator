@@ -1781,6 +1781,7 @@
 	"displayStatus.working": "Trabajando",
 	"displayStatus.blocked": "Bloqueado",
 	"displayStatus.exited": "Finalizado",
+	"displayStatus.paused": "En pausa",
 	"displayStatus.noSignal": "Sin señal",
 	"displayStatus.awaitingPr": "Esperando PR",
 	"displayStatus.fixingCiFailures": "Corrigiendo fallos de CI",

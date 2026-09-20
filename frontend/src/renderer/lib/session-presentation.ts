@@ -87,6 +87,9 @@ export function getSessionStatusDotView(
 	const className =
 		closedWithoutMerge
 			? getSessionStatusView("exited", t).dotClassName
+			// A deliberate pause is rest, not failure: same neutral dot as idle.
+			: session.displayStatus === "Paused"
+				? getSessionStatusView("idle", t).dotClassName
 			: toneStatus === "idle" || toneStatus === "merged"
 				? getSessionStatusView(toneStatus, t).dotClassName
 				: getAttentionZoneView(toneStatus, t).dotClassName;

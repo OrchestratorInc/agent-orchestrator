@@ -144,7 +144,8 @@ describe("SessionsBoard", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([
 				boardSession({ id: "running", title: "Running task", status: "working", activity: { state: "active", lastActivityAt: "2026-01-01T00:00:00Z" } }),
-				boardSession({ id: "paused", title: "Paused task", status: "exited", activity: { state: "exited", lastActivityAt: "2026-01-01T00:00:00Z" } }),
+				boardSession({ id: "paused", title: "Paused task", status: "exited", displayStatus: "Paused", pausedAt: "2026-01-01T00:00:00Z", pauseReason: "user", activity: { state: "exited", lastActivityAt: "2026-01-01T00:00:00Z" } }),
+				boardSession({ id: "crashed", title: "Crashed task", status: "exited", displayStatus: "Exited", activity: { state: "exited", lastActivityAt: "2026-01-01T00:00:00Z" } }),
 			])],
 			isSuccess: true, isError: false,
 		});
@@ -158,6 +159,10 @@ describe("SessionsBoard", () => {
 
 		const playButton = screen.getByRole("button", { name: "Resume agent for Paused task" });
 		expect(playButton).toHaveAttribute("data-paused", "true");
+		expect(screen.getByText("Paused")).toBeInTheDocument();
+		// A crash is not a pause: no pause or play button, and it still says Exited.
+		expect(screen.queryByRole("button", { name: /agent for Crashed task/ })).not.toBeInTheDocument();
+		expect(screen.getByText("Exited")).toBeInTheDocument();
 		await userEvent.click(playButton);
 		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
 			params: { path: { sessionId: "paused" } },

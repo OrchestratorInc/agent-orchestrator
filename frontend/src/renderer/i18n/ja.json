@@ -1753,6 +1753,7 @@
 	"displayStatus.working": "作業中",
 	"displayStatus.blocked": "ブロック中",
 	"displayStatus.exited": "終了済み",
+	"displayStatus.paused": "一時停止中",
 	"displayStatus.noSignal": "シグナルなし",
 	"displayStatus.awaitingPr": "PR待ち",
 	"displayStatus.fixingCiFailures": "CIエラーを修正中",

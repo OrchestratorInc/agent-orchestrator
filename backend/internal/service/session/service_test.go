@@ -2568,7 +2568,7 @@ func (f *fakeCommander) ResumeAgentWithMode(_ context.Context, id domain.Session
 	}
 	return f.restoreResult, nil
 }
-func (f *fakeCommander) ExitAgent(_ context.Context, id domain.SessionID) (domain.SessionRecord, error) {
+func (f *fakeCommander) ExitAgent(_ context.Context, id domain.SessionID, _ ...sessionmanager.ExitAgentOptions) (domain.SessionRecord, error) {
 	f.exited = append(f.exited, id)
 	if f.restoreErr != nil {
 		return domain.SessionRecord{}, f.restoreErr
@@ -3853,7 +3853,7 @@ func TestExitAgentPreservesSessionAndMapsExitedReadModel(t *testing.T) {
 	fc := &fakeCommander{restoreResult: sessionmanager.RestoreResult{Session: rec}}
 	svc := &Service{manager: fc, store: st}
 
-	got, err := svc.ExitAgent(context.Background(), "mer-1")
+	got, err := svc.ExitAgent(context.Background(), "mer-1", domain.SessionPauseUser)
 	if err != nil {
 		t.Fatalf("ExitAgent: %v", err)
 	}

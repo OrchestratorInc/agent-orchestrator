@@ -839,6 +839,12 @@ type RestoreSessionResponse struct {
 	Session     SessionView                `json:"session"`
 }
 
+// ExitAgentRequest is the optional body of POST /api/v1/sessions/{sessionId}/exit-agent.
+type ExitAgentRequest struct {
+	// Reason records who decided to pause; defaults to user.
+	Reason domain.SessionPauseReason `json:"reason,omitempty" enum:"user,idle,pressure"`
+}
+
 // ExitAgentResponse is the body of POST /api/v1/sessions/{sessionId}/exit-agent.
 type ExitAgentResponse struct {
 	OK        bool             `json:"ok"`

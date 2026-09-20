@@ -192,6 +192,7 @@ const (
 	DisplayWorking    DisplayStatus = "Working"
 	DisplayBlocked    DisplayStatus = "Blocked"
 	DisplayExited     DisplayStatus = "Exited"
+	DisplayPaused     DisplayStatus = "Paused"
 	DisplayNoSignal   DisplayStatus = "No signal"
 	DisplayAwaitingPR DisplayStatus = "Awaiting PR"
 	// Validating.
@@ -295,6 +296,8 @@ func buildingDisplayStatus(session KanbanSessionFacts, now time.Time, noSignalGr
 		return DisplayWorking
 	case session.Activity == ActivityBlocked || session.Activity == ActivityWaitingInput:
 		return DisplayBlocked
+	case session.Activity == ActivityExited && session.Paused:
+		return DisplayPaused
 	case session.Activity == ActivityExited:
 		return DisplayExited
 	case silentPastGrace(session.SessionFacts, now, noSignalGrace):
@@ -314,6 +317,8 @@ func validatingDisplayStatus(session KanbanSessionFacts, pr KanbanPRFacts, now t
 	switch {
 	case session.Activity == ActivityBlocked || session.Activity == ActivityWaitingInput:
 		return DisplayBlocked
+	case session.Activity == ActivityExited && session.Paused:
+		return DisplayPaused
 	case session.Activity == ActivityExited:
 		return DisplayExited
 	case silentPastGrace(session.SessionFacts, now, noSignalGrace):
@@ -355,6 +360,8 @@ func inReviewDisplayStatus(session KanbanSessionFacts, pr KanbanPRFacts, now tim
 	switch {
 	case session.Activity == ActivityBlocked || session.Activity == ActivityWaitingInput:
 		return DisplayBlocked
+	case session.Activity == ActivityExited && session.Paused:
+		return DisplayPaused
 	case session.Activity == ActivityExited:
 		return DisplayExited
 	case silentPastGrace(session.SessionFacts, now, noSignalGrace):

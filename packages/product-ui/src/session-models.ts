@@ -57,6 +57,7 @@ export const DISPLAY_STATUSES = [
 	"Working",
 	"Blocked",
 	"Exited",
+	"Paused",
 	"No signal",
 	"Awaiting PR",
 	"Fixing CI failures",

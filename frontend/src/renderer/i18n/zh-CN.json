@@ -1788,6 +1788,7 @@
 	"displayStatus.working": "工作中",
 	"displayStatus.blocked": "已阻塞",
 	"displayStatus.exited": "已退出",
+	"displayStatus.paused": "已暂停",
 	"displayStatus.noSignal": "无信号",
 	"displayStatus.awaitingPr": "等待 PR",
 	"displayStatus.fixingCiFailures": "正在修复 CI 失败",

@@ -1753,6 +1753,7 @@
 	"displayStatus.working": "In Arbeit",
 	"displayStatus.blocked": "Blockiert",
 	"displayStatus.exited": "Beendet",
+	"displayStatus.paused": "Pausiert",
 	"displayStatus.noSignal": "Kein Signal",
 	"displayStatus.awaitingPr": "Wartet auf PR",
 	"displayStatus.fixingCiFailures": "CI-Fehler werden behoben",

@@ -220,6 +220,10 @@ type SessionRecord struct {
 	// the row rather than discarded with it, because the user is already looking
 	// at the session by the time the start can fail.
 	ProvisionError string `json:"provisionError,omitempty"`
+	// PausedAt marks a deliberately exited agent (as opposed to one that
+	// crashed); cleared on resume. PauseReason says who decided.
+	PausedAt    *time.Time         `json:"pausedAt,omitempty"`
+	PauseReason SessionPauseReason `json:"pauseReason,omitempty"`
 }
 
 // SessionProvisionState is a session's start-up progress.
@@ -255,6 +259,31 @@ func (s SessionProvisionState) WithDefault() SessionProvisionState {
 func (s SessionProvisionState) IsProvisioning() bool {
 	return s == SessionProvisionProvisioning
 }
+
+// SessionPauseReason records who paused an agent.
+type SessionPauseReason string
+
+const (
+	// SessionPauseUser is a pause the user asked for.
+	SessionPauseUser SessionPauseReason = "user"
+	// SessionPauseIdle is the idle policy pausing an inactive agent.
+	SessionPauseIdle SessionPauseReason = "idle"
+	// SessionPausePressure is a pause taken to relieve host memory.
+	SessionPausePressure SessionPauseReason = "pressure"
+)
+
+// Valid reports whether the reason is one AO knows how to present.
+func (r SessionPauseReason) Valid() bool {
+	switch r {
+	case SessionPauseUser, SessionPauseIdle, SessionPausePressure:
+		return true
+	}
+	return false
+}
+
+// IsPaused reports whether the agent was deliberately stopped and can be
+// resumed in place.
+func (s SessionRecord) IsPaused() bool { return s.PausedAt != nil && !s.IsTerminated }
 
 // IsStandalone reports whether the session has no registered project owner.
 func (s SessionRecord) IsStandalone() bool { return s.ProjectID == "" }
@@ -309,7 +338,7 @@ type Session struct {
 	// important current fact about the session at the stage it sits in. It is
 	// derived after the column, from the facts that column reads, and ships in
 	// renderable form so clients print it without a mapping table of their own.
-	DisplayStatus     DisplayStatus `json:"displayStatus" enum:"Working,Blocked,Exited,No signal,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review failed,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
+	DisplayStatus     DisplayStatus `json:"displayStatus" enum:"Working,Blocked,Exited,Paused,No signal,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review failed,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
 	TerminalHandleID  string        `json:"terminalHandleId,omitempty"`
 	ActiveAgentSwitch *AgentSwitch  `json:"-"`
 	// PRs are the session's attributed pull requests (one session can own many).

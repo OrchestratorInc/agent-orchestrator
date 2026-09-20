@@ -85,7 +85,7 @@ type SessionService interface {
 	SpawnOrchestrator(ctx context.Context, projectID domain.ProjectID, clean bool, requestedMode domain.SessionMode, approval domain.PermissionMode) (domain.Session, error)
 	Get(ctx context.Context, id domain.SessionID) (domain.Session, error)
 	Restore(ctx context.Context, id domain.SessionID) (sessionsvc.RestoreOutcome, error)
-	ExitAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ExitAgentOutcome, error)
+	ExitAgent(ctx context.Context, id domain.SessionID, reason domain.SessionPauseReason) (sessionsvc.ExitAgentOutcome, error)
 	ResumeAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ResumeAgentOutcome, error)
 	SwitchAgent(ctx context.Context, id domain.SessionID, in sessionsvc.SwitchAgentInput) (domain.AgentSwitch, error)
 	RecoverAgentSwitch(ctx context.Context, id domain.SessionID, switchID domain.AgentSwitchID) (domain.AgentSwitch, error)
@@ -1403,7 +1403,19 @@ func (c *SessionsController) exitAgent(w http.ResponseWriter, r *http.Request) {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/exit-agent")
 		return
 	}
-	out, err := c.Svc.ExitAgent(r.Context(), sessionID(r))
+	var in ExitAgentRequest
+	if err := decodeJSONStrict(r, &in); err != nil && !errors.Is(err, io.EOF) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if in.Reason == "" {
+		in.Reason = domain.SessionPauseUser
+	}
+	if !in.Reason.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PAUSE_REASON", "reason must be user, idle or pressure", nil)
+		return
+	}
+	out, err := c.Svc.ExitAgent(r.Context(), sessionID(r), in.Reason)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return

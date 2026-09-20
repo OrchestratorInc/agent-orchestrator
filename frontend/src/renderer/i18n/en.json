@@ -1952,6 +1952,7 @@
 	"displayStatus.working": "Working",
 	"displayStatus.blocked": "Blocked",
 	"displayStatus.exited": "Exited",
+	"displayStatus.paused": "Paused",
 	"displayStatus.noSignal": "No signal",
 	"displayStatus.awaitingPr": "Awaiting PR",
 	"displayStatus.fixingCiFailures": "Fixing CI failures",

@@ -1753,6 +1753,7 @@
 	"displayStatus.working": "작업 중",
 	"displayStatus.blocked": "차단됨",
 	"displayStatus.exited": "종료됨",
+	"displayStatus.paused": "일시 중지됨",
 	"displayStatus.noSignal": "신호 없음",
 	"displayStatus.awaitingPr": "PR 대기 중",
 	"displayStatus.fixingCiFailures": "CI 오류 수정 중",

@@ -2524,10 +2524,37 @@ func (m *Manager) relaunchRestoredSession(ctx context.Context, rec domain.Sessio
 	return result, nil
 }
 
+// ExitAgentOptions qualifies a deliberate agent stop.
+type ExitAgentOptions struct {
+	// Reason is recorded on the session so a paused agent is never mistaken
+	// for a crashed one. Empty means user.
+	Reason domain.SessionPauseReason
+}
+
+// sessionPauseStore is the optional store capability that records pause
+// intent; a store without it still exits the agent, just unlabeled.
+type sessionPauseStore interface {
+	SetSessionPaused(ctx context.Context, id domain.SessionID, pausedAt *time.Time, reason domain.SessionPauseReason, updatedAt time.Time) (bool, error)
+}
+
+func (m *Manager) setPaused(ctx context.Context, id domain.SessionID, pausedAt *time.Time, reason domain.SessionPauseReason) error {
+	store, ok := m.store.(sessionPauseStore)
+	if !ok {
+		return nil
+	}
+	_, err := store.SetSessionPaused(ctx, id, pausedAt, reason, m.clock())
+	return err
+}
+
 // ExitAgent stops only the current agent controller. The AO session, worktree,
 // terminal identity, and provider-native conversation remain available for an
-// exact ResumeAgentWithMode call.
-func (m *Manager) ExitAgent(ctx context.Context, id domain.SessionID) (domain.SessionRecord, error) {
+// exact ResumeAgentWithMode call. The pause intent is written before the
+// controller stops so the activity change that follows already carries it.
+func (m *Manager) ExitAgent(ctx context.Context, id domain.SessionID, opts ...ExitAgentOptions) (domain.SessionRecord, error) {
+	reason := domain.SessionPauseUser
+	if len(opts) > 0 && opts[0].Reason.Valid() {
+		reason = opts[0].Reason
+	}
 	if err := m.beginAgentOperation(ctx, id, agentOperationExit); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			err = ErrAgentExitInProgress
@@ -2554,7 +2581,12 @@ func (m *Manager) ExitAgent(ctx context.Context, id domain.SessionID) (domain.Se
 	if rec.Activity.State == domain.ActivityExited {
 		return domain.SessionRecord{}, fmt.Errorf("exit agent %s: %w", id, ErrAgentExited)
 	}
+	pausedAt := m.clock()
+	if err := m.setPaused(ctx, id, &pausedAt, reason); err != nil {
+		return domain.SessionRecord{}, fmt.Errorf("exit agent %s: record pause: %w", id, err)
+	}
 	if err := m.stopAgentController(ctx, rec); err != nil {
+		_ = m.setPaused(ctx, id, nil, "")
 		return domain.SessionRecord{}, fmt.Errorf("exit agent %s: %w", id, err)
 	}
 	if err := m.recordAgentExited(ctx, rec); err != nil {
@@ -2691,6 +2723,14 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 		if mode != domain.SessionModeChat || m.chat == nil {
 			return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrAgentNotExited)
 		}
+	}
+	// Clear the pause before relaunching: the launch itself is the CDC event
+	// subscribers see, and it must not still say paused.
+	if rec.PausedAt != nil {
+		if err := m.setPaused(ctx, id, nil, ""); err != nil {
+			return RestoreResult{}, fmt.Errorf("resume agent %s: clear pause: %w", id, err)
+		}
+		rec.PausedAt, rec.PauseReason = nil, ""
 	}
 	return m.resumeAgentRecordWithPolicy(ctx, "resume agent", rec, false, false)
 }

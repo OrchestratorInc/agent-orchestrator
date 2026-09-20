@@ -1781,6 +1781,7 @@
 	"displayStatus.working": "En cours",
 	"displayStatus.blocked": "Bloqué",
 	"displayStatus.exited": "Terminé",
+	"displayStatus.paused": "En pause",
 	"displayStatus.noSignal": "Aucun signal",
 	"displayStatus.awaitingPr": "En attente de PR",
 	"displayStatus.fixingCiFailures": "Correction des échecs CI",
