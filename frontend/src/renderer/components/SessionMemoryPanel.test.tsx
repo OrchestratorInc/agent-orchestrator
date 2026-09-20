@@ -27,6 +27,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: { POST: (...args: unknown[]) => postMock(...args) },
+	apiErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 }));
 
@@ -243,6 +244,7 @@ describe("AppMemoryIndicator", () => {
 		await waitFor(() =>
 			expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/exit-agent", {
 				params: { path: { sessionId: "s-big" } },
+				body: { policy: "drain" },
 			}),
 		);
 		await userEvent.click(within(table).getByRole("button", { name: "Resume agent for small worker" }));

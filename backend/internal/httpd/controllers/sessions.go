@@ -85,7 +85,7 @@ type SessionService interface {
 	SpawnOrchestrator(ctx context.Context, projectID domain.ProjectID, clean bool, requestedMode domain.SessionMode, approval domain.PermissionMode) (domain.Session, error)
 	Get(ctx context.Context, id domain.SessionID) (domain.Session, error)
 	Restore(ctx context.Context, id domain.SessionID) (sessionsvc.RestoreOutcome, error)
-	ExitAgent(ctx context.Context, id domain.SessionID, reason domain.SessionPauseReason) (sessionsvc.ExitAgentOutcome, error)
+	ExitAgent(ctx context.Context, id domain.SessionID, reason domain.SessionPauseReason, policy domain.SessionInterfaceTransitionPolicy) (sessionsvc.ExitAgentOutcome, error)
 	ResumeAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ResumeAgentOutcome, error)
 	SwitchAgent(ctx context.Context, id domain.SessionID, in sessionsvc.SwitchAgentInput) (domain.AgentSwitch, error)
 	RecoverAgentSwitch(ctx context.Context, id domain.SessionID, switchID domain.AgentSwitchID) (domain.AgentSwitch, error)
@@ -1415,7 +1415,14 @@ func (c *SessionsController) exitAgent(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PAUSE_REASON", "reason must be user, idle or pressure", nil)
 		return
 	}
-	out, err := c.Svc.ExitAgent(r.Context(), sessionID(r), in.Reason)
+	if in.Policy == "" {
+		in.Policy = domain.SessionInterfaceTransitionDrain
+	}
+	if !in.Policy.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PAUSE_POLICY", "policy must be drain or interrupt", nil)
+		return
+	}
+	out, err := c.Svc.ExitAgent(r.Context(), sessionID(r), in.Reason, in.Policy)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return

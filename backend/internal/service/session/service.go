@@ -664,13 +664,13 @@ func (s *Service) Restore(ctx context.Context, id domain.SessionID) (RestoreOutc
 
 // ExitAgent stops only the agent controller while preserving the AO session,
 // worktree, terminal identity, and provider-native conversation.
-func (s *Service) ExitAgent(ctx context.Context, id domain.SessionID, reason domain.SessionPauseReason) (ExitAgentOutcome, error) {
+func (s *Service) ExitAgent(ctx context.Context, id domain.SessionID, reason domain.SessionPauseReason, policy domain.SessionInterfaceTransitionPolicy) (ExitAgentOutcome, error) {
 	manager, ok := s.manager.(exitAgentCommander)
 	if !ok {
 		return ExitAgentOutcome{}, apierr.Conflict(
 			"AGENT_EXIT_UNSUPPORTED", "This build cannot exit an agent independently", nil)
 	}
-	rec, err := manager.ExitAgent(ctx, id, sessionmanager.ExitAgentOptions{Reason: reason})
+	rec, err := manager.ExitAgent(ctx, id, sessionmanager.ExitAgentOptions{Reason: reason, Policy: policy})
 	if err != nil {
 		return ExitAgentOutcome{}, toAPIError(err)
 	}
@@ -1177,6 +1177,9 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrAgentExitInProgress):
 		return apierr.Conflict("AGENT_EXIT_IN_PROGRESS",
 			"The agent is already exiting", nil)
+	case errors.Is(err, sessionmanager.ErrAgentPauseDrainBlocked):
+		return apierr.Conflict("AGENT_PAUSE_DRAIN_BLOCKED",
+			"The agent is still mid-turn; pause now to interrupt it", nil)
 	case errors.Is(err, sessionmanager.ErrInterfaceTransitionInProgress):
 		return apierr.Conflict("INTERFACE_TRANSITION_IN_PROGRESS",
 			"This session is already switching interfaces", nil)

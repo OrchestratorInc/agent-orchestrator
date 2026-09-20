@@ -20,6 +20,7 @@ import {
 	type SystemMemoryReading,
 } from "../hooks/useSessionMemory";
 import { isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
+import { AgentPausePopover } from "./AgentPausePopover";
 import { SessionTerminationPopover } from "./SessionTerminationPopover";
 import { Button } from "./ui/button";
 import {
@@ -371,23 +372,7 @@ function MemoryTableRow({
 			<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums text-muted-foreground">{idle}</td>
 			<td className="whitespace-nowrap px-2 py-2 text-right align-middle" onClick={(event) => event.stopPropagation()}>
 				{canPauseAgent(session) ? (
-					<Button
-						aria-label={pause.paused ? t("shell.resumeAgentNamed", { title: session.title }) : t("shell.pauseAgentNamed", { title: session.title })}
-						className="text-muted-foreground hover:text-foreground"
-						disabled={pause.isPending}
-						onClick={pause.toggle}
-						size="icon-sm"
-						title={pause.paused ? t("shell.resumeAgent") : t("shell.pauseAgent")}
-						variant="ghost"
-					>
-						{pause.isPending ? (
-							<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
-						) : pause.paused ? (
-							<Play className="size-icon-sm" aria-hidden="true" />
-						) : (
-							<Pause className="size-icon-sm" aria-hidden="true" />
-						)}
-					</Button>
+					<PauseRowButton pause={pause} session={session} />
 				) : null}
 				<SessionTerminationPopover
 					onConfirm={() => {
@@ -414,6 +399,46 @@ function MemoryTableRow({
 		</tr>
 		{isExpanded && reading ? <ProcessBreakdownRow processes={reading.processes} /> : null}
 		</>
+	);
+}
+
+/** Pause or play for one row; mid-turn it asks drain vs interrupt like the card. */
+function PauseRowButton({ pause, session }: { pause: ReturnType<typeof useAgentPause>; session: WorkspaceSession }) {
+	const { t } = useTranslation();
+	const [open, setOpen] = useState(false);
+	const needsPolicy = !pause.paused && (session.activity?.state === "active" || pause.drainBlocked);
+	const button = (
+		<Button
+			aria-label={pause.paused ? t("shell.resumeAgentNamed", { title: session.title }) : t("shell.pauseAgentNamed", { title: session.title })}
+			className="text-muted-foreground hover:text-foreground"
+			disabled={pause.isPending}
+			onClick={() => (needsPolicy ? setOpen(true) : pause.toggle())}
+			size="icon-sm"
+			title={pause.isDraining ? t("shell.pausingAfterTurn") : pause.paused ? t("shell.resumeAgent") : t("shell.pauseAgent")}
+			variant="ghost"
+		>
+			{pause.isPending ? (
+				<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
+			) : pause.paused ? (
+				<Play className="size-icon-sm" aria-hidden="true" />
+			) : (
+				<Pause className="size-icon-sm" aria-hidden="true" />
+			)}
+		</Button>
+	);
+	if (!needsPolicy) return button;
+	return (
+		<AgentPausePopover
+			blocked={pause.drainBlocked}
+			onChoose={(policy) => {
+				setOpen(false);
+				pause.toggle(policy);
+			}}
+			onOpenChange={setOpen}
+			open={open}
+			session={session}
+			trigger={button}
+		/>
 	);
 }
 

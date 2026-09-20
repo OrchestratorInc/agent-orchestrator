@@ -64,6 +64,7 @@ vi.mock("../hooks/useSessionMemory", async (importOriginal) => ({
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: { POST: (...args: unknown[]) => postMock(...args) },
+	apiErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 }));
 
@@ -147,7 +148,7 @@ describe("SessionsBoard", () => {
 	it("pauses a running agent from the card and resumes an exited one", async () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([
-				boardSession({ id: "running", title: "Running task", status: "working", activity: { state: "active", lastActivityAt: "2026-01-01T00:00:00Z" } }),
+				boardSession({ id: "running", title: "Running task", status: "idle", activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" } }),
 				boardSession({ id: "paused", title: "Paused task", status: "exited", displayStatus: "Paused", pausedAt: "2026-01-01T00:00:00Z", pauseReason: "user", activity: { state: "exited", lastActivityAt: "2026-01-01T00:00:00Z" } }),
 				boardSession({ id: "crashed", title: "Crashed task", status: "exited", displayStatus: "Exited", activity: { state: "exited", lastActivityAt: "2026-01-01T00:00:00Z" } }),
 			])],
@@ -165,6 +166,7 @@ describe("SessionsBoard", () => {
 		await userEvent.click(pauseButton);
 		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/exit-agent", {
 			params: { path: { sessionId: "running" } },
+			body: { policy: "drain" },
 		}));
 		expect(await screen.findByRole("status")).toHaveTextContent("Paused · freed 612 MB");
 
@@ -199,6 +201,44 @@ describe("SessionsBoard", () => {
 		expect(indicator).toHaveAttribute("aria-label", "AO is using 12.0 GB of 32.0 GB (38%) · 8.0 GB free");
 		await userEvent.click(indicator);
 		expect(await screen.findByTestId("session-memory-table")).toBeInTheDocument();
+	});
+
+	it("asks drain or interrupt before pausing an agent mid-turn", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([
+				boardSession({ id: "busy", title: "Busy task", status: "working", activity: { state: "active", lastActivityAt: "2026-01-01T00:00:00Z" } }),
+			])],
+			isSuccess: true, isError: false,
+		});
+		renderBoard("p1");
+		await userEvent.click(screen.getByRole("button", { name: "Pause agent for Busy task" }));
+		expect(postMock).not.toHaveBeenCalled();
+		const dialog = await screen.findByRole("dialog", { name: "Pause Busy task?" });
+		await userEvent.click(within(dialog).getByRole("button", { name: "Pause now" }));
+		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/exit-agent", {
+			params: { path: { sessionId: "busy" } },
+			body: { policy: "interrupt" },
+		}));
+	});
+
+	it("offers only interrupt after the daemon refused a drained pause", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([
+				boardSession({ id: "busy", title: "Busy task", status: "working", activity: { state: "active", lastActivityAt: "2026-01-01T00:00:00Z" } }),
+			])],
+			isSuccess: true, isError: false,
+		});
+		postMock.mockResolvedValueOnce({ error: { code: "AGENT_PAUSE_DRAIN_BLOCKED", message: "mid-turn" } });
+		renderBoard("p1");
+		await userEvent.click(screen.getByRole("button", { name: "Pause agent for Busy task" }));
+		let dialog = await screen.findByRole("dialog", { name: "Pause Busy task?" });
+		await userEvent.click(within(dialog).getByRole("button", { name: "Pause after this turn" }));
+		await screen.findByRole("alert");
+
+		await userEvent.click(screen.getByRole("button", { name: "Pause agent for Busy task" }));
+		dialog = await screen.findByRole("dialog", { name: "Pause Busy task?" });
+		expect(within(dialog).queryByRole("button", { name: "Pause after this turn" })).not.toBeInTheDocument();
+		expect(within(dialog).getByRole("button", { name: "Pause now" })).toBeInTheDocument();
 	});
 
 	it("uses the last human message time rather than generic session updatedAt", () => {

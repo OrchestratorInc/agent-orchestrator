@@ -11100,6 +11100,11 @@ components:
       type: object
     ExitAgentRequest:
       properties:
+        policy:
+          enum:
+          - drain
+          - interrupt
+          type: string
         reason:
           enum:
           - user

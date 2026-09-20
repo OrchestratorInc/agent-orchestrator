@@ -3853,7 +3853,7 @@ func TestExitAgentPreservesSessionAndMapsExitedReadModel(t *testing.T) {
 	fc := &fakeCommander{restoreResult: sessionmanager.RestoreResult{Session: rec}}
 	svc := &Service{manager: fc, store: st}
 
-	got, err := svc.ExitAgent(context.Background(), "mer-1", domain.SessionPauseUser)
+	got, err := svc.ExitAgent(context.Background(), "mer-1", domain.SessionPauseUser, domain.SessionInterfaceTransitionDrain)
 	if err != nil {
 		t.Fatalf("ExitAgent: %v", err)
 	}

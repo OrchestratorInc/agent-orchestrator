@@ -39,7 +39,11 @@ var (
 	ErrAgentExited                   = errors.New("session: agent exited")
 	ErrAgentNotExited                = errors.New("session: agent has not exited")
 	ErrAgentExitInProgress           = errors.New("session: agent exit is already in progress")
-	ErrIncompleteHandle              = errors.New("session: incomplete teardown handle")
+	// ErrAgentPauseDrainBlocked means a drained pause could not prove the
+	// agent finished its turn (it is waiting on a decision, or idleness could
+	// not be verified); the caller may retry with an interrupt.
+	ErrAgentPauseDrainBlocked = errors.New("session: agent is still mid-turn; pause with interrupt to stop now")
+	ErrIncompleteHandle       = errors.New("session: incomplete teardown handle")
 	// ErrProjectNotResolvable means the spawn's project has no usable repo
 	// (unregistered, archived, or missing a path). The API maps it to a 400.
 	ErrProjectNotResolvable = errors.New("session: project repo not resolvable")
@@ -2529,6 +2533,34 @@ type ExitAgentOptions struct {
 	// Reason is recorded on the session so a paused agent is never mistaken
 	// for a crashed one. Empty means user.
 	Reason domain.SessionPauseReason
+	// Policy decides what happens to a turn in flight: drain waits for it to
+	// finish (the default), interrupt sends Ctrl-C first. Both then stop the
+	// controller exactly as before.
+	Policy domain.SessionInterfaceTransitionPolicy
+}
+
+// quiesceForExit applies the pause policy to a running turn before the
+// controller is stopped. An idle or exited agent needs nothing.
+func (m *Manager) quiesceForExit(ctx context.Context, rec domain.SessionRecord, policy domain.SessionInterfaceTransitionPolicy) error {
+	if rec.Activity.State != domain.ActivityActive && policy != domain.SessionInterfaceTransitionInterrupt {
+		return nil
+	}
+	if !policy.Valid() {
+		policy = domain.SessionInterfaceTransitionDrain
+	}
+	lastInputAt, release := m.beginTerminalInputDrain(rec)
+	if release != nil {
+		defer release()
+	}
+	err := m.prepareSourceHandoff(ctx, rec, policy, lastInputAt)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, errDrainDecisionPending), errors.Is(err, errDrainQuiescenceUnverified), errors.Is(err, errDrainDraftPresent):
+		return fmt.Errorf("%w: %w", ErrAgentPauseDrainBlocked, err)
+	default:
+		return err
+	}
 }
 
 // sessionPauseStore is the optional store capability that records pause
@@ -2552,8 +2584,14 @@ func (m *Manager) setPaused(ctx context.Context, id domain.SessionID, pausedAt *
 // controller stops so the activity change that follows already carries it.
 func (m *Manager) ExitAgent(ctx context.Context, id domain.SessionID, opts ...ExitAgentOptions) (domain.SessionRecord, error) {
 	reason := domain.SessionPauseUser
-	if len(opts) > 0 && opts[0].Reason.Valid() {
-		reason = opts[0].Reason
+	policy := domain.SessionInterfaceTransitionDrain
+	if len(opts) > 0 {
+		if opts[0].Reason.Valid() {
+			reason = opts[0].Reason
+		}
+		if opts[0].Policy.Valid() {
+			policy = opts[0].Policy
+		}
 	}
 	if err := m.beginAgentOperation(ctx, id, agentOperationExit); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
@@ -2580,6 +2618,9 @@ func (m *Manager) ExitAgent(ctx context.Context, id domain.SessionID, opts ...Ex
 	}
 	if rec.Activity.State == domain.ActivityExited {
 		return domain.SessionRecord{}, fmt.Errorf("exit agent %s: %w", id, ErrAgentExited)
+	}
+	if err := m.quiesceForExit(ctx, rec, policy); err != nil {
+		return domain.SessionRecord{}, fmt.Errorf("exit agent %s: %w", id, err)
 	}
 	pausedAt := m.clock()
 	if err := m.setPaused(ctx, id, &pausedAt, reason); err != nil {

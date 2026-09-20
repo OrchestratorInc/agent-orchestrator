@@ -37,6 +37,7 @@ import {
 } from "../hooks/useTerminateSession";
 import { cn } from "../lib/utils";
 import { AgentAvatar } from "./AgentAvatar";
+import { AgentPausePopover } from "./AgentPausePopover";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionTerminationPopover } from "./SessionTerminationPopover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -172,6 +173,7 @@ function DesktopSessionCard({
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const [confirmOpen, setConfirmOpen] = useState(false);
+	const [pauseOpen, setPauseOpen] = useState(false);
 	const summaries = sessionPRDisplaySummaries(session, useSessionScmSummary(session.id).data);
 	const termination = useTerminateSessionState(session.id);
 	const showTerminate = interactive && session.isTerminated !== true && onTerminate;
@@ -188,40 +190,66 @@ function DesktopSessionCard({
 
 	// A paused agent stays visible so the play button is the card's obvious
 	// way back; the pause button only appears on hover like the trash can.
+	// Mid-turn the pause needs a decision (finish the turn, or stop now), so the
+	// button opens a popover instead of firing. Idle or paused fires directly.
+	const needsPausePolicy = !pause.paused && (session.activity?.state === "active" || pause.drainBlocked);
+	const pauseTrigger = (
+		<button
+			aria-label={
+				pause.paused
+					? t("shell.resumeAgentNamed", { title: session.title })
+					: t("shell.pauseAgentNamed", { title: session.title })
+			}
+			className={cn(
+				"inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-[color,background-color,opacity] hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+				pause.paused || pause.isPending
+					? "opacity-100"
+					: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",
+			)}
+			data-testid="session-pause"
+			data-paused={pause.paused ? "true" : "false"}
+			disabled={pause.isPending}
+			onClick={(event) => {
+				event.stopPropagation();
+				if (needsPausePolicy) {
+					setPauseOpen(true);
+					return;
+				}
+				pause.toggle();
+			}}
+			type="button"
+		>
+			{pause.isPending ? (
+				<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
+			) : pause.paused ? (
+				<Play className="size-icon-sm" aria-hidden="true" />
+			) : (
+				<Pause className="size-icon-sm" aria-hidden="true" />
+			)}
+		</button>
+	);
 	const pauseButton = showPause ? (
 		<Tooltip>
 			<TooltipTrigger asChild>
-				<button
-					aria-label={
-						pause.paused
-							? t("shell.resumeAgentNamed", { title: session.title })
-							: t("shell.pauseAgentNamed", { title: session.title })
-					}
-					className={cn(
-						"inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-[color,background-color,opacity] hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-						pause.paused || pause.isPending
-							? "opacity-100"
-							: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",
-					)}
-					data-testid="session-pause"
-					data-paused={pause.paused ? "true" : "false"}
-					disabled={pause.isPending}
-					onClick={(event) => {
-						event.stopPropagation();
-						pause.toggle();
-					}}
-					type="button"
-				>
-					{pause.isPending ? (
-						<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
-					) : pause.paused ? (
-						<Play className="size-icon-sm" aria-hidden="true" />
+				<span className="inline-flex">
+					{needsPausePolicy ? (
+						<AgentPausePopover
+							blocked={pause.drainBlocked}
+							onChoose={(policy) => {
+								setPauseOpen(false);
+								pause.toggle(policy);
+							}}
+							onOpenChange={setPauseOpen}
+							open={pauseOpen}
+							session={session}
+							trigger={pauseTrigger}
+						/>
 					) : (
-						<Pause className="size-icon-sm" aria-hidden="true" />
+						pauseTrigger
 					)}
-				</button>
+				</span>
 			</TooltipTrigger>
-			<TooltipContent side="bottom">{pauseLabel}</TooltipContent>
+			<TooltipContent side="bottom">{pause.isDraining ? t("shell.pausingAfterTurn") : pauseLabel}</TooltipContent>
 		</Tooltip>
 	) : null;
 
@@ -282,7 +310,13 @@ function DesktopSessionCard({
 			branchAction={branchAction}
 			branchIcon={<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />}
 			error={termination.error ?? retryStatus.error?.message ?? pause.error?.message ?? undefined}
-			notice={pause.freedBytes ? t("shell.pauseFreed", { size: formatMemory(pause.freedBytes) }) : undefined}
+			notice={
+				pause.isDraining
+					? t("shell.pausingAfterTurn")
+					: pause.freedBytes
+						? t("shell.pauseFreed", { size: formatMemory(pause.freedBytes) })
+						: undefined
+			}
 			externalLink={ProductExternalLink}
 			footer={footer}
 			interactive={interactive}
