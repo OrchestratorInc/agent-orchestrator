@@ -39,7 +39,8 @@ export type CloudAuthState = {
 	/** The last sign-in/registration failure, cleared on the next attempt. */
 	error: string | null;
 	busy: boolean;
-	signInWithWorkOS(): Promise<void>;
+	/** True after a completed sign-in; false when the auth browser is dismissed. */
+	signInWithWorkOS(): Promise<boolean>;
 	signInLocal(email: string, password: string): Promise<void>;
 	registerLocal(input: RegisterLocalAuthInput): Promise<void>;
 	signOut(): Promise<void>;
@@ -162,7 +163,7 @@ export function CloudAuthProvider({
 		[baseUrl, resolveSession],
 	);
 
-	const signInWithWorkOS = useCallback(async () => {
+	const signInWithWorkOS = useCallback(async (): Promise<boolean> => {
 		setBusy(true);
 		setError(null);
 		try {
@@ -181,10 +182,11 @@ export function CloudAuthProvider({
 				exchange: ({ code, codeVerifier }) =>
 					exchangeWorkOSCode({ clientId: WORKOS_CLIENT_ID, code, codeVerifier }),
 			});
-			if (!issued) return;
+			if (!issued) return false;
 			await writeTokens(issued);
 			generationRef.current += 1;
 			await resolveSession(generationRef.current);
+			return true;
 		} catch (e) {
 			const message = e instanceof Error ? e.message : "Sign-in failed.";
 			setError(message);

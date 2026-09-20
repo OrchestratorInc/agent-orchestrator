@@ -2,6 +2,8 @@ import { Feather } from "@expo/vector-icons";
 import { useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useCloudAuth } from "./cloud/authStore";
+import { CLOUD_BASE_URL } from "./cloud/config";
+import { localAuthAvailable } from "./cloud/localAuthAvailable";
 import { haptics } from "./haptics";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
@@ -9,18 +11,7 @@ import { SheetScreen } from "./ui";
 
 type Mode = "sign-in" | "register";
 
-/**
- * Sign in to (or register on) AO Cloud with email and password.
- *
- * The control plane's production sign-in is WorkOS (see lib/cloud/signIn.ts's
- * buildWorkOSAuthUrl/exchangeWorkOSCode), which needs an in-app browser and a
- * deep-link callback this pass does not add — neither expo-web-browser nor
- * expo-crypto (for the PKCE verifier) is installed, and wiring an unverified
- * OAuth redirect blind, with no device to test it on, is worse than not
- * offering it. Email/password against the same control plane
- * (lib/cloud/signIn.ts's signInWithLocalAuth/registerWithLocalAuth) is real
- * today and is what this sheet uses.
- */
+/** Sign in to AO Cloud through hosted AuthKit or a local development server. */
 export function CloudSignInSheet({ onDone, onClose }: { onDone: () => void; onClose: () => void }) {
 	const t = useTheme();
 	const s = useThemedStyles(makeStyles);
@@ -31,6 +22,7 @@ export function CloudSignInSheet({ onDone, onClose }: { onDone: () => void; onCl
 	const [displayName, setDisplayName] = useState("");
 	const [submitting, setSubmitting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const showLocalAuth = localAuthAvailable(CLOUD_BASE_URL);
 
 	const trimmedEmail = email.trim();
 	const canSubmit =
@@ -38,6 +30,19 @@ export function CloudSignInSheet({ onDone, onClose }: { onDone: () => void; onCl
 		trimmedEmail.length > 0 &&
 		password.length > 0 &&
 		(mode === "sign-in" || displayName.trim().length > 0);
+
+	async function submitHosted() {
+		if (submitting) return;
+		setSubmitting(true);
+		setError(null);
+		try {
+			if (await cloudAuth.signInWithWorkOS()) onDone();
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : "That didn't work.");
+		} finally {
+			setSubmitting(false);
+		}
+	}
 
 	async function submit() {
 		if (!canSubmit) return;
@@ -71,67 +76,88 @@ export function CloudSignInSheet({ onDone, onClose }: { onDone: () => void; onCl
 	return (
 		<SheetScreen
 			title="Sign in to AO Cloud"
-			subtitle="Email and password sign-in against your AO Cloud account."
+			subtitle="Continue through AO Cloud's secure sign-in page."
 		>
 			<View style={{ paddingTop: 8, gap: 14 }}>
-				<View style={s.row}>
-					{(["sign-in", "register"] as const).map((option) => {
-						const selected = option === mode;
-						return (
-							<Pressable
-								key={option}
-								accessibilityRole="button"
-								accessibilityState={{ selected }}
-								onPress={() => {
-									haptics.select();
-									setMode(option);
-									setError(null);
-								}}
-								style={[s.chip, selected && { borderColor: t.blue }]}
-							>
-								<Text style={[s.chipText, selected && { color: t.blue }]}>
-									{option === "sign-in" ? "Sign in" : "Create account"}
-								</Text>
-							</Pressable>
-						);
-					})}
-				</View>
+				<Pressable
+					accessibilityRole="button"
+					disabled={submitting}
+					onPress={() => {
+						haptics.tap();
+						void submitHosted();
+					}}
+					style={[s.submit, submitting && s.submitDisabled]}
+				>
+					{submitting ? <ActivityIndicator color={t.onAccent} /> : <Text style={s.submitText}>Continue with AO Cloud</Text>}
+				</Pressable>
 
-				{mode === "register" ? (
-					<TextInput
-						value={displayName}
-						onChangeText={setDisplayName}
-						placeholder="Your name"
-						placeholderTextColor={t.textFaint}
-						autoCapitalize="words"
-						editable={!submitting}
-						style={s.input}
-					/>
+				{showLocalAuth ? (
+					<>
+						<View style={s.divider}>
+							<View style={s.dividerLine} />
+							<Text style={s.dividerText}>Development server</Text>
+							<View style={s.dividerLine} />
+						</View>
+						<View style={s.row}>
+							{(["sign-in", "register"] as const).map((option) => {
+								const selected = option === mode;
+								return (
+									<Pressable
+										key={option}
+										accessibilityRole="button"
+										accessibilityState={{ selected }}
+										onPress={() => {
+											haptics.select();
+											setMode(option);
+											setError(null);
+										}}
+										style={[s.chip, selected && { borderColor: t.blue }]}
+									>
+										<Text style={[s.chipText, selected && { color: t.blue }]}>
+											{option === "sign-in" ? "Sign in" : "Create account"}
+										</Text>
+									</Pressable>
+								);
+							})}
+						</View>
+
+						{mode === "register" ? (
+							<TextInput
+								value={displayName}
+								onChangeText={setDisplayName}
+								placeholder="Your name"
+								placeholderTextColor={t.textFaint}
+								autoCapitalize="words"
+								editable={!submitting}
+								style={s.input}
+							/>
+						) : null}
+						<TextInput
+							value={email}
+							onChangeText={setEmail}
+							placeholder="you@example.com"
+							placeholderTextColor={t.textFaint}
+							autoCapitalize="none"
+							autoCorrect={false}
+							keyboardType="email-address"
+							textContentType="username"
+							editable={!submitting}
+							style={s.input}
+						/>
+						<TextInput
+							value={password}
+							onChangeText={setPassword}
+							placeholder="Password"
+							placeholderTextColor={t.textFaint}
+							autoCapitalize="none"
+							autoCorrect={false}
+							secureTextEntry
+							textContentType={mode === "sign-in" ? "password" : "newPassword"}
+							editable={!submitting}
+							style={s.input}
+						/>
+					</>
 				) : null}
-				<TextInput
-					value={email}
-					onChangeText={setEmail}
-					placeholder="you@example.com"
-					placeholderTextColor={t.textFaint}
-					autoCapitalize="none"
-					autoCorrect={false}
-					keyboardType="email-address"
-					textContentType="username"
-					editable={!submitting}
-					style={s.input}
-				/>
-				<TextInput
-					value={password}
-					onChangeText={setPassword}
-					placeholder="Password"
-					placeholderTextColor={t.textFaint}
-					autoCapitalize="none"
-					autoCorrect={false}
-					secureTextEntry
-					textContentType={mode === "sign-in" ? "password" : "newPassword"}
-					editable={!submitting}
-					style={s.input}
-				/>
 
 				{error ? (
 					<View accessibilityRole="alert" style={s.error}>
@@ -140,21 +166,23 @@ export function CloudSignInSheet({ onDone, onClose }: { onDone: () => void; onCl
 					</View>
 				) : null}
 
-				<Pressable
-					accessibilityRole="button"
-					disabled={!canSubmit}
-					onPress={() => {
-						haptics.tap();
-						void submit();
-					}}
-					style={[s.submit, !canSubmit && s.submitDisabled]}
-				>
-					{submitting ? (
-						<ActivityIndicator color={t.onAccent} />
-					) : (
-						<Text style={s.submitText}>{mode === "sign-in" ? "Sign in" : "Create account"}</Text>
-					)}
-				</Pressable>
+				{showLocalAuth ? (
+					<Pressable
+						accessibilityRole="button"
+						disabled={!canSubmit}
+						onPress={() => {
+							haptics.tap();
+							void submit();
+						}}
+						style={[s.submit, !canSubmit && s.submitDisabled]}
+					>
+						{submitting ? (
+							<ActivityIndicator color={t.onAccent} />
+						) : (
+							<Text style={s.submitText}>{mode === "sign-in" ? "Sign in" : "Create account"}</Text>
+						)}
+					</Pressable>
+				) : null}
 
 				<Pressable accessibilityRole="button" onPress={onClose} disabled={submitting}>
 					<Text style={s.later}>Cancel</Text>
@@ -167,6 +195,9 @@ export function CloudSignInSheet({ onDone, onClose }: { onDone: () => void; onCl
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		row: { flexDirection: "row", gap: 8 },
+		divider: { flexDirection: "row", alignItems: "center", gap: 10 },
+		dividerLine: { flex: 1, height: 1, backgroundColor: t.borderDefault },
+		dividerText: { color: t.textTertiary, fontSize: 12 },
 		chip: {
 			paddingVertical: 7,
 			paddingHorizontal: 12,
