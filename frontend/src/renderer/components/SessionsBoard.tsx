@@ -129,8 +129,8 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 		hasWorkerSessions: liveSessions.length > 0,
 	});
 	const hasMemory = useHasAppMemory();
-	// Per-session readings feed only the pause tooltip ("frees 612 MB"); the
-	// card itself shows no memory chip.
+	// Per-session readings feed each card's resource chip and the pause
+	// tooltip ("frees 612 MB").
 	const memoryBySession = useSessionMemory(projectId).data;
 	// The bar hosts the memory indicator too, so it stays up with an empty archive.
 	const hasArchive = archived.length > 0 || hasMemory;
@@ -246,7 +246,7 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 						labels={boardLabels}
 							renderSessionCard={(session) => (
 								<BoardSessionCardAdapter
-								memoryBytes={memoryBySession?.get(session.id)?.rssBytes}
+								memory={memoryBySession?.get(session.id)}
 								onOpen={() => openSession(session)}
 									onTerminate={() => terminateSession.mutate(session)}
 									session={session}

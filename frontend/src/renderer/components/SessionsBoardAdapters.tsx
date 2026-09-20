@@ -28,7 +28,7 @@ import { agentLabel } from "../lib/agent-options";
 import type { WorkspaceSession } from "../types/workspace";
 import { canonicalTrackerIssueId } from "../types/workspace";
 import { canPauseAgent, useAgentPause } from "../hooks/useAgentPause";
-import { formatMemory } from "../hooks/useSessionMemory";
+import { formatCPU, formatMemory, type SessionMemoryReading } from "../hooks/useSessionMemory";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
 import type { SessionUsageSummary } from "../hooks/useSessionUsageSummaries";
 import {
@@ -90,14 +90,14 @@ export function sessionsBoardLabels(t: TFunction): BoardColumnLabels {
 }
 
 export function BoardSessionCardAdapter({
-	memoryBytes,
+	memory,
 	onOpen,
 	onTerminate,
 	session,
 	usage,
 }: {
-	/** Live RSS of the session's process tree, for the pause tooltip. */
-	memoryBytes?: number;
+	/** Live reading of the session's process tree: the card's resource chip and the pause tooltip. */
+	memory?: SessionMemoryReading;
 	onOpen: () => void;
 	onTerminate: () => void;
 	session: WorkspaceSession;
@@ -105,7 +105,7 @@ export function BoardSessionCardAdapter({
 }) {
 	return (
 		<DesktopSessionCard
-			memoryBytes={memoryBytes}
+			memory={memory}
 			onOpen={onOpen}
 			onTerminate={onTerminate}
 			session={session}
@@ -154,7 +154,7 @@ function DesktopSessionCard({
 	branchAction,
 	footer,
 	interactive = true,
-	memoryBytes,
+	memory,
 	onOpen,
 	onTerminate,
 	session,
@@ -164,7 +164,7 @@ function DesktopSessionCard({
 	branchAction?: ReactNode;
 	footer?: ReactNode;
 	interactive?: boolean;
-	memoryBytes?: number;
+	memory?: SessionMemoryReading;
 	onOpen?: () => void;
 	onTerminate?: () => void;
 	session: WorkspaceSession;
@@ -179,6 +179,8 @@ function DesktopSessionCard({
 	const showTerminate = interactive && session.isTerminated !== true && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
 	const usagePresentation = toUsagePresentation(usage, t);
+	const resourcePresentation = toResourcePresentation(memory, t);
+	const memoryBytes = memory?.rssBytes;
 	const translate: ProductUITranslator = (key, values) => t(key as MessageKey, values);
 	const pause = useAgentPause(session, memoryBytes);
 	const showPause = interactive && canPauseAgent(session);
@@ -328,6 +330,7 @@ function DesktopSessionCard({
 					t("shell.lastMessageAt", { time: formatTimeCompact(timestamp) }),
 			}}
 			onOpen={onOpen}
+			resource={resourcePresentation}
 			overlay={
 				pauseButton || terminationOverlay ? (
 					<span className="inline-flex items-center">
@@ -395,6 +398,20 @@ function pullRequestProgressLabel(
 
 // Keep the board metric scannable by showing cost only. The full cost/token
 // summary remains available from the hover tooltip and to screen readers.
+/** "1.4 GB · 82%": what this session costs the machine right now. */
+function toResourcePresentation(
+	memory: SessionMemoryReading | undefined,
+	t: TFunction,
+): BoardUsagePresentation | undefined {
+	if (!memory || memory.rssBytes <= 0) return undefined;
+	const size = formatMemory(memory.rssBytes);
+	const cpu = formatCPU(memory.cpuPercent);
+	return {
+		accessibleLabel: t("shell.sessionResourceAria", { size, cpu }),
+		compactLabel: `${size} · ${cpu}`,
+	};
+}
+
 function toUsagePresentation(
 	usage: SessionUsageSummary | undefined,
 	t: TFunction,

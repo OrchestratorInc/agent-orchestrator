@@ -10,7 +10,7 @@ vi.mock("../lib/api-client", () => ({
 	apiErrorMessage: (_error: unknown, fallback = "Request failed") => fallback,
 }));
 
-import { settingsQueryKey, useSettings, useUpdateAutoPause, useUpdateMemoryBudget } from "./useSettings";
+import { settingsQueryKey, useSettings, useUpdateAutoPause, useUpdateMemoryReserve } from "./useSettings";
 
 function wrapper(client: QueryClient) {
 	return ({ children }: { children: ReactNode }) => (
@@ -36,13 +36,13 @@ describe("auto-pause setting", () => {
 		await waitFor(() => expect(result.current.settings?.autoPauseIdleMinutes).toBe(0));
 	});
 
-	it("patches the memory budget in bytes and refetches", async () => {
+	it("patches the memory reserve in bytes and refetches", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const invalidate = vi.spyOn(client, "invalidateQueries");
-		const { result } = renderHook(() => useUpdateMemoryBudget(), { wrapper: wrapper(client) });
+		const { result } = renderHook(() => useUpdateMemoryReserve(), { wrapper: wrapper(client) });
 		act(() => result.current.update(8 * 1024 ** 3));
 		await waitFor(() =>
-			expect(patchMock).toHaveBeenCalledWith("/api/v1/settings/memory-budget", { body: { bytes: 8 * 1024 ** 3 } }),
+			expect(patchMock).toHaveBeenCalledWith("/api/v1/settings/memory-reserve", { body: { bytes: 8 * 1024 ** 3 } }),
 		);
 		await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: settingsQueryKey }));
 	});

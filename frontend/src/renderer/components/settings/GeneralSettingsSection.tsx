@@ -13,7 +13,7 @@ import { SettingsInputRow, SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
-import { useSettings, useUpdateAutoPause, useUpdateCloudOffering, useUpdateMemoryBudget, useUpdateSessionInterface } from "../../hooks/useSettings";
+import { useSettings, useUpdateAutoPause, useUpdateCloudOffering, useUpdateMemoryReserve, useUpdateSessionInterface } from "../../hooks/useSettings";
 import { formatMemory, useAppMemory } from "../../hooks/useSessionMemory";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
@@ -97,31 +97,30 @@ function AutoPauseRow() {
 	);
 }
 
-/** Memory budget: what AO may hold before the board reads as under pressure. */
+/** Memory reserve: a warning line, not a wall. Below it AO holds
+ * agent-requested spawns and says so; nothing running is touched. */
 const GIB = 1024 ** 3;
-const memoryBudgetChoicesGiB = [2, 4, 8, 16, 32] as const;
+const memoryReserveChoicesGiB = [1, 2, 4, 8] as const;
 
-function MemoryBudgetRow() {
+function MemoryReserveRow() {
 	const { t } = useTranslation();
 	const { settings, isLoading, error } = useSettings();
-	const { update, saving, error: saveError } = useUpdateMemoryBudget();
+	const { update, saving, error: saveError } = useUpdateMemoryReserve();
 	const memory = useAppMemory().data;
-	const current = settings?.memoryBudgetBytes ?? 0;
+	const current = settings?.memoryReserveBytes ?? 0;
 	const totalBytes = memory?.system?.totalBytes;
-	const choices = memoryBudgetChoicesGiB.filter((gib) => totalBytes === undefined || gib * GIB <= totalBytes).map((gib) => gib * GIB);
+	const choices = memoryReserveChoicesGiB.filter((gib) => totalBytes === undefined || gib * GIB < totalBytes).map((gib) => gib * GIB);
 	const values = current === 0 || choices.includes(current) ? choices : [...choices, current].sort((a, b) => a - b);
 	const options = [
-		{ value: "0", label: t("settings.memoryBudget.auto") },
+		{ value: "0", label: t("settings.memoryReserve.default") },
 		...values.map((bytes) => ({ value: String(bytes), label: formatMemory(bytes) })),
 	] satisfies SettingsOption<string>[];
-	const autoBytes = memory?.budget?.auto ? memory.budget.bytes : undefined;
-	const note =
-		saveError ?? error ?? (autoBytes ? t("settings.memoryBudget.helpAuto", { size: formatMemory(autoBytes) }) : t("settings.memoryBudget.help"));
+	const note = saveError ?? error ?? t("settings.memoryReserve.help");
 	return (
 		<div className="flex w-full flex-col">
-			<SettingsRow className="rounded-none" label={t("settings.memoryBudget.label")}>
+			<SettingsRow className="rounded-none" label={t("settings.memoryReserve.label")}>
 				<SettingsOptionMenu
-					aria-label={t("settings.memoryBudget.label")}
+					aria-label={t("settings.memoryReserve.label")}
 					value={String(current)}
 					options={options}
 					onChange={(value) => update(Number(value))}
@@ -289,7 +288,7 @@ export function GeneralSettingsSection({
 			{/* Sessions */}
 			<SettingsSection title={t("settings.sessions")} grouped>
 				<SessionInterfaceRow />
-				<MemoryBudgetRow />
+				<MemoryReserveRow />
 				<AutoPauseRow />
 				{isWindowsPlatform() ? <TerminalShellRows /> : null}
 				<SettingsRow label={t("settings.terminalCopyOnSelect")}>

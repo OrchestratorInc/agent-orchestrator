@@ -29,8 +29,8 @@ export interface Settings {
 	cloudControlPlaneUrl: string;
 	/** Minutes an agent may sit idle before AO pauses it; 0 is off. */
 	autoPauseIdleMinutes: number;
-	/** Memory budget AO is measured against; 0 means Auto (¼ of RAM, 2–16 GB). */
-	memoryBudgetBytes: number;
+	/** Free host RAM AO keeps in hand before it stops auto-starting sessions; 0 means the 2 GB default. */
+	memoryReserveBytes: number;
 }
 
 export function useSettings() {
@@ -57,7 +57,7 @@ export function useSettings() {
 				cloudEnabled: data?.cloudEnabled ?? false,
 				cloudControlPlaneUrl: data?.cloudControlPlaneUrl ?? "",
 				autoPauseIdleMinutes: data?.autoPauseIdleMinutes ?? 0,
-				memoryBudgetBytes: data?.memoryBudgetBytes ?? 0,
+				memoryReserveBytes: data?.memoryReserveBytes ?? 0,
 			};
 		},
 	});
@@ -111,11 +111,11 @@ export function useUpdateAutoPause() {
 	};
 }
 
-export function useUpdateMemoryBudget() {
+export function useUpdateMemoryReserve() {
 	const queryClient = useQueryClient();
 	const mutation = useMutation({
 		mutationFn: async (bytes: number) => {
-			const { data, error } = await apiClient.PATCH("/api/v1/settings/memory-budget", {
+			const { data, error } = await apiClient.PATCH("/api/v1/settings/memory-reserve", {
 				body: { bytes },
 			});
 			if (error) throw error;

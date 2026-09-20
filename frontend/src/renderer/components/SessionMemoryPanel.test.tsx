@@ -55,9 +55,41 @@ function reading(
 	sessionId: string,
 	rssBytes: number,
 	processCount: number,
-	processes: { pid: number; ppid: number; rssBytes: number; command: string }[] = [],
+	processes: { pid: number; ppid: number; rssBytes: number; cpuPercent: number; command: string }[] = [],
+	cpuPercent = 0,
 ) {
-	return { sessionId, rssBytes, processCount, sampledAt: "2026-09-18T00:00:00Z", processes };
+	return { sessionId, rssBytes, processCount, cpuPercent, sampledAt: "2026-09-18T00:00:00Z", processes };
+}
+
+/** A 32 GB host with the given amount free; swap idle, cores idle unless said otherwise. */
+function host(availableGiB: number, extra: Partial<{ swapBytesPerSec: number; load1: number }> = {}) {
+	return {
+		totalBytes: 32 * GIB,
+		availableBytes: availableGiB * GIB,
+		swapTotalBytes: 8 * GIB,
+		swapUsedBytes: 0,
+		swapBytesPerSec: 0,
+		cpuCount: 8,
+		load1: 0.5,
+		...extra,
+	};
+}
+
+function appReading(availableGiB: number, extra: Partial<{ swapBytesPerSec: number; load1: number }> = {}) {
+	return {
+		isError: false,
+		data: {
+			app: {
+				rssBytes: 2 * GIB,
+				processCount: 20,
+				cpuPercent: 12,
+				own: reading("ao", 300 * 1024 ** 2, 3, [{ pid: 7, ppid: 1, rssBytes: 300 * 1024 ** 2, cpuPercent: 1, command: "ao daemon" }]),
+			},
+			system: host(availableGiB, extra),
+			reserve: { bytes: 2 * GIB, auto: true },
+			liveCount: 2,
+		},
+	};
 }
 
 function renderButton() {
@@ -81,14 +113,7 @@ beforeEach(() => {
 		sessions: [session("s-small", "small worker"), session("s-big", "big worker"), session("s-none", "unsampled worker")],
 	} as WorkspaceSummary;
 	workspaceQueryMock.mockReset().mockReturnValue({ data: [workspace], isError: false, isSuccess: true });
-	appMemoryMock.mockReset().mockReturnValue({
-		isError: false,
-		data: {
-			app: { rssBytes: 2 * GIB, processCount: 20 },
-			system: { totalBytes: 32 * GIB, availableBytes: 20 * GIB },
-			budget: { bytes: 8 * GIB, auto: true },
-		},
-	});
+	appMemoryMock.mockReset().mockReturnValue(appReading(20));
 	memoryQueryMock.mockReset().mockReturnValue({
 		isError: false,
 		data: new Map([
@@ -96,9 +121,9 @@ beforeEach(() => {
 			[
 				"s-big",
 				reading("s-big", 2_254_857_830, 9, [
-					{ pid: 111, ppid: 1, rssBytes: 1_800_000_000, command: "claude" },
-					{ pid: 222, ppid: 111, rssBytes: 454_857_830, command: "go test" },
-				]),
+					{ pid: 111, ppid: 1, rssBytes: 1_800_000_000, cpuPercent: 80.4, command: "claude" },
+					{ pid: 222, ppid: 111, rssBytes: 454_857_830, cpuPercent: 1.6, command: "go test" },
+				], 82),
 			],
 		]),
 	});
@@ -111,43 +136,54 @@ describe("AppMemoryIndicator", () => {
 		expect(screen.queryByTestId("app-memory-indicator")).not.toBeInTheDocument();
 	});
 
-	it("colours by AO's share of its budget and by host headroom", () => {
+	it("says a phrase and a count, never a number, and keeps the figures for the tooltip", () => {
 		const { rerender } = renderButton();
 		const button = screen.getByTestId("app-memory-indicator");
-		expect(button).toHaveTextContent("2.0 GB");
+		expect(button).toHaveTextContent("Running comfortably");
+		expect(button).toHaveTextContent("2 sessions");
+		expect(button).not.toHaveTextContent("GB");
 		expect(button).toHaveAttribute("data-memory-tone", "default");
-		expect(button).toHaveAttribute("aria-label", "AO is using 2.0 GB of its 8.0 GB budget (auto, 25%) · 20.0 GB free");
+		expect(button).toHaveAttribute("aria-label", "Running comfortably · 20.0 GB free of 32.0 GB (63%) · AO holds 2.0 GB · load 0.06 per core");
 
-		appMemoryMock.mockReturnValue({
-			isError: false,
-			data: {
-				app: { rssBytes: 7 * GIB, processCount: 20 },
-				system: { totalBytes: 32 * GIB, availableBytes: 20 * GIB },
-				budget: { bytes: 8 * GIB, auto: false },
-			},
-		});
+		// A fifth free: getting tight.
+		appMemoryMock.mockReturnValue(appReading(6));
 		rerender();
 		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("data-memory-tone", "warning");
-		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("aria-label", "AO is using 7.0 GB of its 8.0 GB budget (88%) · 20.0 GB free");
+		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("Machine is getting busy");
 
-		// Well within budget, but the host is almost out of memory.
-		appMemoryMock.mockReturnValue({
-			isError: false,
-			data: {
-				app: { rssBytes: 2 * GIB, processCount: 20 },
-				system: { totalBytes: 32 * GIB, availableBytes: 1 * GIB },
-				budget: { bytes: 8 * GIB, auto: true },
-			},
-		});
+		// Under a tenth free and under the reserve: red says what to do, and auto-start is on hold.
+		appMemoryMock.mockReturnValue(appReading(1));
 		rerender();
 		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("data-memory-tone", "critical");
+		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("Low memory. Pause or stop a session to recover.");
+		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("below 2.0 GB reserve · auto-start on hold");
 	});
 
-	it("falls back to the absolute size where host RAM is unreadable", () => {
-		appMemoryMock.mockReturnValue({ isError: false, data: { app: { rssBytes: 4 * GIB, processCount: 20 } } });
+	it("is red the moment the host swaps, and only yellow when the cores are pinned", () => {
+		appMemoryMock.mockReturnValue(appReading(20, { swapBytesPerSec: 8 * 1024 ** 2 }));
+		const { rerender } = renderButton();
+		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("data-memory-reason", "swap");
+		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("Swapping to disk. Pause or stop a session now.");
+
+		appMemoryMock.mockReturnValue(appReading(20, { load1: 12 }));
+		rerender();
+		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("data-memory-tone", "warning");
+		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("CPU is pinned");
+	});
+
+	it("offers to pause idle sessions only while red", () => {
+		const { rerender } = renderButton();
+		expect(screen.queryByTestId("memory-pressure-suggestion")).not.toBeInTheDocument();
+		appMemoryMock.mockReturnValue(appReading(1));
+		rerender();
+		expect(screen.getByTestId("memory-pressure-suggestion")).toHaveTextContent("Pause 3 idle sessions, frees 2.7 GB");
+	});
+
+	it("goes grey and says so where the host cannot be read", () => {
+		appMemoryMock.mockReturnValue({ isError: false, data: { app: { rssBytes: 4 * GIB, processCount: 20, cpuPercent: 0 }, liveCount: 1 } });
 		renderButton();
 		const button = screen.getByTestId("app-memory-indicator");
-		expect(button).toHaveTextContent("4.0 GB");
+		expect(button).toHaveTextContent("Memory not readable on this platform");
 		expect(button).toHaveAttribute("data-memory-tone", "unknown");
 	});
 
@@ -164,7 +200,13 @@ describe("AppMemoryIndicator", () => {
 			expect.stringContaining("unsampled worker"),
 		]);
 		expect(within(rows[0]).getByText("2.1 GB")).toBeInTheDocument();
+		expect(within(rows[0]).getByText("82%")).toBeInTheDocument();
 		expect(within(rows[2]).getByText("—", { selector: "td span" })).toBeInTheDocument();
+		// AO's own processes are pinned last so the totals add up, with no pause or kill.
+		const own = within(table).getByTestId("session-memory-own-row");
+		expect(own).toHaveTextContent("AO itself (daemon and app)");
+		expect(own).toHaveTextContent("300 MB");
+		expect(within(own).queryByRole("button")).not.toBeInTheDocument();
 
 		await userEvent.click(within(rows[0]).getByRole("button", { name: "Terminate big worker" }));
 		const confirm = await screen.findByRole("dialog", { name: "Terminate big worker?" });
@@ -187,6 +229,7 @@ describe("AppMemoryIndicator", () => {
 		const detail = await screen.findByTestId("session-memory-process-row");
 		expect(within(detail).getByText("claude")).toBeInTheDocument();
 		expect(within(detail).getByText("1.7 GB")).toBeInTheDocument();
+		expect(within(detail).getByText("80%")).toBeInTheDocument();
 		expect(within(detail).getByText("111")).toBeInTheDocument();
 		expect(within(detail).getByText("go test")).toBeInTheDocument();
 
@@ -226,15 +269,8 @@ describe("AppMemoryIndicator", () => {
 		expect(screen.getAllByTestId("session-memory-row")[0]).not.toHaveAttribute("data-highlighted");
 	});
 
-	it("highlights the biggest session when AO is under pressure", async () => {
-		appMemoryMock.mockReturnValue({
-			isError: false,
-			data: {
-				app: { rssBytes: 10 * GIB, processCount: 20 },
-				system: { totalBytes: 32 * GIB, availableBytes: 8 * GIB },
-				budget: { bytes: 8 * GIB, auto: true },
-			},
-		});
+	it("highlights the biggest session when the host is under pressure", async () => {
+		appMemoryMock.mockReturnValue(appReading(6));
 		renderButton();
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		await screen.findByTestId("session-memory-table");

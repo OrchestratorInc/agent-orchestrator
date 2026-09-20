@@ -236,6 +236,8 @@ export type SessionCardViewProps = {
 	prs?: BoardPullRequestPresentation[];
 	renderAvatar: (provider: string) => ReactNode;
 	renderUsage?: (usage: BoardUsagePresentation) => ReactNode;
+	/** Live cost on the machine (memory, CPU), shown before token usage. */
+	resource?: BoardUsagePresentation;
 	session: BoardSessionPresentation;
 	translate?: ProductUITranslator;
 	usage?: BoardUsagePresentation;
@@ -256,6 +258,7 @@ export function SessionCardView({
 	prs = [],
 	renderAvatar,
 	renderUsage = (usage) => <SessionUsageMetricView usage={usage} />,
+	resource,
 	session,
 	translate,
 	usage,
@@ -396,6 +399,8 @@ export function SessionCardView({
 					</span>
 				</div>
 				<div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap text-2xs text-muted-foreground">
+					{resource ? <SessionUsageMetricView data-testid="session-resource" usage={resource} /> : null}
+					{resource ? <span aria-hidden="true" className="text-border-strong">·</span> : null}
 					{usage ? renderUsage(usage) : null}
 					{usage ? <span aria-hidden="true" className="text-border-strong">·</span> : null}
 					<span className="tabular-nums text-muted-foreground" title={labels.updatedAt(session.updatedAt)}>

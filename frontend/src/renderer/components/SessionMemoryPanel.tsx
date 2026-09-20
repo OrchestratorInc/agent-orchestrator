@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { ChevronRight, Loader2, Pause, Play, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
@@ -10,6 +11,7 @@ import { useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery
 import { useTerminateSession, useTerminateSessionState } from "../hooks/useTerminateSession";
 import { canPauseAgent, useAgentPause } from "../hooks/useAgentPause";
 import {
+	formatCPU,
 	formatMemory,
 	memoryPressure,
 	memoryTone,
@@ -17,6 +19,7 @@ import {
 	useAppMemory,
 	useSessionMemory,
 	useSystemMemory,
+	type MemoryPressure,
 	type SessionMemoryReading,
 	type SystemMemoryReading,
 } from "../hooks/useSessionMemory";
@@ -43,18 +46,73 @@ export type MemoryRow = {
 	projectName?: string;
 };
 
+/**
+ * Shown beside the light only while it is red and there is something cheap
+ * to do about it: idle, unpaused workers. One click runs the same sweep the
+ * panel offers. AO's pause exits the agent process (the session, worktree and
+ * conversation stay), so unlike a SIGSTOP it really does give the memory
+ * back. It subscribes to sessions only while mounted, so the bar stays quiet
+ * in the normal case.
+ */
+function MemoryPressureSuggestion() {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const workspaces = useWorkspaceQuery().data ?? [];
+	const readings = useSessionMemory().data;
+	const idle = workspaces
+		.flatMap((workspace) => workspace.sessions)
+		.filter((session) => canPauseAgent(session) && !session.pausedAt && session.activity?.state === "idle");
+	const frees = idle.reduce((sum, session) => sum + (readings?.get(session.id)?.rssBytes ?? 0), 0);
+	const pauseIdle = useMutation({
+		mutationFn: async () => {
+			const { error } = await apiClient.POST("/api/v1/sessions/pause-idle", { params: { query: {} } });
+			if (error) throw new Error(apiErrorMessage(error, t("shell.memoryPauseIdleFailed")));
+		},
+		onSettled: () => {
+			void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+			void queryClient.invalidateQueries({ queryKey: sessionMemoryQueryRoot });
+		},
+	});
+	if (idle.length === 0) return null;
+	return (
+		<button
+			className="mr-3 inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-2xs text-warning transition-colors hover:bg-warning/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-60"
+			data-testid="memory-pressure-suggestion"
+			disabled={pauseIdle.isPending}
+			onClick={() => pauseIdle.mutate()}
+			type="button"
+		>
+			{pauseIdle.isPending
+				? t("shell.memoryPauseIdleRunning")
+				: t("shell.memoryPressureSuggest", { count: idle.length, size: formatMemory(frees) })}
+		</button>
+	);
+}
+
 /** True once the daemon has produced an app-wide reading; gates the archive bar. */
 export function useHasAppMemory(): boolean {
 	const memory = useAppMemory();
 	return !memory.isError && (memory.data?.app?.rssBytes ?? 0) > 0;
 }
 
+/** The four words the light says. Red tells you what to do; the rest just nudge. */
+export function pressurePhrase(pressure: MemoryPressure | undefined, t: TFunction): string {
+	if (!pressure) return t("shell.memoryBarUnknown");
+	if (pressure.tone === "critical") {
+		return pressure.reason === "swap" ? t("shell.memoryBarSwapping") : t("shell.memoryBarLow");
+	}
+	if (pressure.tone === "warning") {
+		return pressure.reason === "cpu" ? t("shell.memoryBarBusyCpu") : t("shell.memoryBarBusy");
+	}
+	return t("shell.memoryBarComfortable");
+}
+
 /**
- * Archive-bar indicator: a status dot plus AO's share of host RAM as a
- * percent, colored by pressure, with the btop-style panel behind it. It
- * reads only the memory query so the board keeps its identity while sessions
- * stream updates; the panel subscribes to sessions only while open. Where
- * host RAM can't be read it falls back to the absolute size with no color.
+ * Archive-bar light: a dot, a short phrase and the live session count. No
+ * number by default; the tooltip and the panel behind it carry the figures.
+ * It reads only the memory query so the board keeps its identity while
+ * sessions stream updates; the panel subscribes to sessions only while open.
+ * Where the host can't be read the dot is grey and the phrase says so.
  */
 export function AppMemoryIndicator() {
 	const { t } = useTranslation();
@@ -62,27 +120,33 @@ export function AppMemoryIndicator() {
 	const memory = useAppMemory();
 	const app = memory.data?.app;
 	const system = memory.data?.system;
-	const budget = memory.data?.budget;
+	const reserve = memory.data?.reserve;
 	if (memory.isError || !app || app.rssBytes === 0) {
 		return null;
 	}
-	const pressure = system && budget ? memoryPressure(app.rssBytes, system, budget.bytes) : undefined;
-	const label = system && budget
-		? t(budget.auto ? "shell.memoryAppUsageAuto" : "shell.memoryAppUsage", {
-			used: formatMemory(app.rssBytes),
-			budget: formatMemory(budget.bytes),
-			pct: pressure?.pct ?? 0,
+	const pressure = system ? memoryPressure(system, reserve?.bytes) : undefined;
+	const phrase = pressurePhrase(pressure, t);
+	const detail = system && pressure
+		? t("shell.memoryBarDetail", {
 			free: formatMemory(system.availableBytes),
+			total: formatMemory(system.totalBytes),
+			freePct: pressure.freePct,
+			used: formatMemory(app.rssBytes),
+			load: pressure.cpuLoad.toFixed(2),
 		})
 		: t("shell.memoryAppUsageNoTotal", { used: formatMemory(app.rssBytes) });
+	const hold = pressure?.belowReserve && reserve ? t("shell.memoryBarBelowReserve", { size: formatMemory(reserve.bytes) }) : undefined;
+	const count = memory.data?.liveCount ?? 0;
 	return (
 		<>
+			{pressure?.tone === "critical" ? <MemoryPressureSuggestion /> : null}
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<button
-						aria-label={label}
-						className="inline-flex items-center gap-1.5 font-mono text-2xs tabular-nums text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:underline"
+						aria-label={`${phrase} · ${detail}`}
+						className="inline-flex items-center gap-2 text-2xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:underline"
 						data-memory-tone={pressure?.tone ?? "unknown"}
+						data-memory-reason={pressure?.reason}
 						data-testid="app-memory-indicator"
 						onClick={() => setOpen(true)}
 						type="button"
@@ -91,16 +155,20 @@ export function AppMemoryIndicator() {
 							aria-hidden="true"
 							className={cn(
 								"size-1.5 shrink-0 rounded-full",
-								pressure?.tone === "critical" && "bg-destructive",
+								pressure?.tone === "critical" && "animate-status-pulse bg-destructive",
 								pressure?.tone === "warning" && "bg-warning",
 								pressure?.tone === "default" && "bg-success",
 								!pressure && "bg-passive",
 							)}
 						/>
-						<span>{formatMemory(app.rssBytes)}</span>
+						<span className={cn(pressure?.tone === "critical" && "text-destructive", pressure?.tone === "warning" && "text-warning")}>
+							{phrase}
+						</span>
+						{hold ? <span className="text-passive">{hold}</span> : null}
+						<span className="font-mono tabular-nums text-passive">{t("shell.memoryBarSessions", { count })}</span>
 					</button>
 				</TooltipTrigger>
-				<TooltipContent side="top">{label}</TooltipContent>
+				<TooltipContent side="top">{detail}</TooltipContent>
 			</Tooltip>
 			{open ? <SessionMemoryPanel onOpenChange={setOpen} open /> : null}
 		</>
@@ -108,31 +176,36 @@ export function AppMemoryIndicator() {
 }
 
 /** btop's mem widget: one bar for the whole host, not one per row. The tick
- * marks where AO's budget sits on the machine. */
-export function SystemMemoryBar({ budgetBytes, system }: { budgetBytes?: number; system: SystemMemoryReading }) {
+ * marks the user's reserve: below it auto-started spawns wait. */
+export function SystemMemoryBar({ reserveBytes, system }: { reserveBytes?: number; system: SystemMemoryReading }) {
 	const { t } = useTranslation();
 	const used = system.totalBytes - system.availableBytes;
 	const usedPct = system.totalBytes > 0 ? Math.min(100, Math.round((used / system.totalBytes) * 100)) : 0;
-	const budgetPct = budgetBytes && system.totalBytes > 0 ? Math.min(100, (budgetBytes / system.totalBytes) * 100) : undefined;
+	const reservePct = reserveBytes && system.totalBytes > 0 ? Math.min(100, (reserveBytes / system.totalBytes) * 100) : undefined;
+	const swap = system.swapTotalBytes > 0
+		? t("shell.memorySystemSwap", { used: formatMemory(system.swapUsedBytes), total: formatMemory(system.swapTotalBytes) })
+		: undefined;
 	return (
 		<div className="flex items-center gap-3 border-b border-border px-4 py-2">
 			<div className="relative h-1.5 flex-1 rounded-sm bg-foreground/[0.06]">
 				<div
-					className={cn("h-full rounded-sm", usedPct >= 90 ? "bg-destructive" : usedPct >= 75 ? "bg-warning" : "bg-accent-strong")}
+					className={cn("h-full rounded-sm", usedPct > 90 ? "bg-destructive" : usedPct > 75 ? "bg-warning" : "bg-accent-strong")}
 					style={{ width: `${usedPct}%` }}
 				/>
-				{budgetPct !== undefined ? (
+				{reservePct !== undefined ? (
 					<span
 						aria-hidden="true"
 						className="absolute -top-0.5 h-2.5 w-px bg-foreground/50"
-						data-testid="session-memory-budget-tick"
-						style={{ left: `${budgetPct}%` }}
-						title={t("shell.memoryBudgetTick", { size: formatMemory(budgetBytes ?? 0) })}
+						data-testid="session-memory-reserve-tick"
+						style={{ right: `${reservePct}%` }}
+						title={t("shell.memoryReserveTick", { size: formatMemory(reserveBytes ?? 0) })}
 					/>
 				) : null}
 			</div>
 			<span className="whitespace-nowrap font-mono text-2xs tabular-nums text-muted-foreground">
 				{t("shell.memorySystemBar", { used: formatMemory(used), total: formatMemory(system.totalBytes), free: formatMemory(system.availableBytes) })}
+				{swap ? ` · ${swap}` : null}
+				{system.cpuCount > 0 ? ` · ${t("shell.memorySystemLoad", { load: system.load1.toFixed(1), cores: system.cpuCount })}` : null}
 			</span>
 		</div>
 	);
@@ -166,9 +239,7 @@ export function SessionMemoryPanel({
 	const system = useSystemMemory(projectId).data;
 	const appMemory = useAppMemory().data;
 	const app = appMemory?.app;
-	const pressure = app && appMemory?.system && appMemory.budget
-		? memoryPressure(app.rssBytes, appMemory.system, appMemory.budget.bytes)
-		: undefined;
+	const pressure = appMemory?.system ? memoryPressure(appMemory.system, appMemory.reserve?.bytes) : undefined;
 	const underPressure = pressure !== undefined && pressure.tone !== "default";
 	// Includes the project's orchestrator session, not just worker sessions: it
 	// has its own process tree and is why the topbar pill can read nonzero
@@ -187,6 +258,9 @@ export function SessionMemoryPanel({
 		[sessions, memory.data, projectId, projectNames],
 	);
 	const total = rows.reduce((sum, row) => sum + (row.reading?.rssBytes ?? 0), 0);
+	// Each row's bar is its share of everything AO holds, AO's own processes
+	// included: it answers "which one is the pig", nothing else.
+	const shareOf = app?.rssBytes && app.rssBytes > 0 ? app.rssBytes : total;
 	const [expandedSessionId, setExpandedSessionId] = useState<string | undefined>();
 	const terminate = useTerminateSession();
 	const cleanup = useMutation({
@@ -259,7 +333,7 @@ export function SessionMemoryPanel({
 						</Button>
 					</DialogClose>
 				</div>
-				{system ? <SystemMemoryBar budgetBytes={appMemory?.budget?.bytes} system={system} /> : null}
+				{system ? <SystemMemoryBar reserveBytes={appMemory?.reserve?.bytes} system={system} /> : null}
 				<div className={cn(settingsDialogBodyClass, "gap-0 p-0")}>
 					{cleanup.isError || pauseIdle.isError ? (
 						<p className="border-b border-border px-4 py-2 text-2xs text-destructive" role="alert">
@@ -278,7 +352,9 @@ export function SessionMemoryPanel({
 						onToggle={(sessionId) =>
 							setExpandedSessionId((current) => (current === sessionId ? undefined : sessionId))
 						}
+						own={app?.own}
 						rows={rows}
+						shareOfBytes={shareOf}
 					/>
 				</div>
 			</DialogContent>
@@ -293,7 +369,9 @@ export function MemoryTable({
 	highlightSessionId,
 	onTerminate,
 	onToggle,
+	own,
 	rows,
+	shareOfBytes,
 }: {
 	emptyLabel: string;
 	expandedSessionId?: string;
@@ -301,12 +379,17 @@ export function MemoryTable({
 	highlightSessionId?: string;
 	onTerminate: (session: WorkspaceSession) => void;
 	onToggle: (sessionId: string) => void;
+	/** AO's own daemon and shell, pinned last and not pausable, so the totals add up. */
+	own?: SessionMemoryReading;
 	rows: MemoryRow[];
+	/** Denominator for each row's share bar; defaults to the rows' sum. */
+	shareOfBytes?: number;
 }) {
 	const { t } = useTranslation();
-	if (rows.length === 0) {
+	if (rows.length === 0 && !own) {
 		return <p className="px-4 py-6 text-center text-xs text-passive">{emptyLabel}</p>;
 	}
+	const denominator = shareOfBytes ?? rows.reduce((sum, row) => sum + (row.reading?.rssBytes ?? 0), 0);
 	// The orchestrator manages tasks, it isn't one: mixed into one sorted-by-size
 	// list it reads as a peer task the user never started. Group it apart.
 	const taskRows = rows.filter((row) => !isOrchestratorSession(row.session));
@@ -320,6 +403,7 @@ export function MemoryTable({
 			onTerminate={() => onTerminate(row.session)}
 			onToggle={() => onToggle(row.session.id)}
 			row={row}
+			shareOfBytes={denominator}
 		/>
 	);
 	return (
@@ -329,6 +413,7 @@ export function MemoryTable({
 					<th className="px-4 py-2 text-left font-medium">{t("shell.memoryColumnSession")}</th>
 					<th className="px-4 py-2 text-left font-medium">{t("shell.memoryColumnState")}</th>
 					<th className="px-4 py-2 text-right font-medium">{t("shell.memoryColumnRss")}</th>
+					<th className="px-4 py-2 text-right font-medium">{t("shell.memoryColumnCpu")}</th>
 					<th className="px-4 py-2 text-right font-medium">{t("shell.memoryColumnProcs")}</th>
 					<th className="px-4 py-2 text-right font-medium">{t("shell.memoryColumnIdle")}</th>
 					<th className="px-4 py-2" />
@@ -339,16 +424,75 @@ export function MemoryTable({
 				{taskRows.map(renderRow)}
 				{showGroupLabels ? <MemoryGroupRow label={t("shell.memoryGroupOrchestrator")} /> : null}
 				{orchestratorRows.map(renderRow)}
+				{own ? (
+					<>
+						<MemoryGroupRow label={t("shell.memoryGroupApp")} />
+						<OwnMemoryRow reading={own} shareOfBytes={denominator} />
+					</>
+				) : null}
 			</tbody>
 		</table>
 	);
 }
 
+const columnCount = 7;
+
 function MemoryGroupRow({ label }: { label: string }) {
 	return (
 		<tr className="border-t border-border">
-			<td className="px-4 pb-1 pt-3 text-2xs font-medium text-passive" colSpan={6}>{label}</td>
+			<td className="px-4 pb-1 pt-3 text-2xs font-medium text-passive" colSpan={columnCount}>{label}</td>
 		</tr>
+	);
+}
+
+/** The thin bar under a name: this row's slice of what AO holds. */
+function ShareBar({ rssBytes, shareOfBytes }: { rssBytes: number; shareOfBytes: number }) {
+	const pct = shareOfBytes > 0 ? Math.min(100, (rssBytes / shareOfBytes) * 100) : 0;
+	const tone = memoryTone(rssBytes);
+	return (
+		<div className="mt-1 h-0.5 w-full max-w-[12rem] rounded-sm bg-foreground/[0.06]" data-testid="session-memory-share">
+			<div
+				className={cn("h-full rounded-sm", tone === "critical" ? "bg-destructive" : tone === "warning" ? "bg-warning" : "bg-accent-strong")}
+				style={{ width: `${pct}%` }}
+			/>
+		</div>
+	);
+}
+
+/** AO's daemon and desktop shell: real cost, but not a session, so no pause or kill. */
+function OwnMemoryRow({ reading, shareOfBytes }: { reading: SessionMemoryReading; shareOfBytes: number }) {
+	const { t } = useTranslation();
+	const [expanded, setExpanded] = useState(false);
+	const canExpand = reading.processes.length > 0;
+	return (
+		<>
+			<tr
+				aria-expanded={canExpand ? expanded : undefined}
+				className={cn("border-t border-border", canExpand && "cursor-pointer hover:bg-interactive-hover")}
+				data-testid="session-memory-own-row"
+				onClick={canExpand ? () => setExpanded((open) => !open) : undefined}
+			>
+				<td className="max-w-0 px-4 py-2 align-middle">
+					<div className="flex items-center gap-1.5">
+						<ChevronRight
+							aria-hidden="true"
+							className={cn("size-icon-2xs shrink-0 text-passive transition-transform", canExpand ? "opacity-100" : "opacity-0", expanded && "rotate-90")}
+						/>
+						<div className="min-w-0">
+							<div className="truncate font-medium">{t("shell.memoryOwnRow")}</div>
+							<ShareBar rssBytes={reading.rssBytes} shareOfBytes={shareOfBytes} />
+						</div>
+					</div>
+				</td>
+				<td className="whitespace-nowrap px-4 py-2 align-middle text-2xs text-muted-foreground">—</td>
+				<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs font-medium tabular-nums">{formatMemory(reading.rssBytes)}</td>
+				<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums text-muted-foreground">{formatCPU(reading.cpuPercent)}</td>
+				<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums text-muted-foreground">{reading.processCount}</td>
+				<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums text-muted-foreground">—</td>
+				<td className="px-2 py-2" />
+			</tr>
+			{expanded ? <ProcessBreakdownRow processes={reading.processes} /> : null}
+		</>
 	);
 }
 
@@ -358,12 +502,14 @@ function MemoryTableRow({
 	onTerminate,
 	onToggle,
 	row,
+	shareOfBytes,
 }: {
 	isExpanded: boolean;
 	isHighlighted?: boolean;
 	onTerminate: () => void;
 	onToggle: () => void;
 	row: MemoryRow;
+	shareOfBytes: number;
 }) {
 	const { t } = useTranslation();
 	const [confirmOpen, setConfirmOpen] = useState(false);
@@ -402,6 +548,7 @@ function MemoryTableRow({
 							{row.projectName ? `${row.projectName} · ` : null}
 							{session.id}
 						</div>
+						{reading ? <ShareBar rssBytes={reading.rssBytes} shareOfBytes={shareOfBytes} /> : null}
 					</div>
 				</div>
 			</td>
@@ -414,6 +561,9 @@ function MemoryTableRow({
 				) : (
 					<span className="text-passive">—</span>
 				)}
+			</td>
+			<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums text-muted-foreground">
+				{reading ? formatCPU(reading.cpuPercent) : "—"}
 			</td>
 			<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums text-muted-foreground">
 				{reading?.processCount ?? "—"}
@@ -497,12 +647,13 @@ function ProcessBreakdownRow({ processes }: { processes: SessionMemoryReading["p
 	const sorted = [...processes].sort((a, b) => b.rssBytes - a.rssBytes);
 	return (
 		<tr className="border-t border-border bg-foreground/[0.02]" data-testid="session-memory-process-row">
-			<td className="p-0" colSpan={6}>
+			<td className="p-0" colSpan={columnCount}>
 				<table className="w-full border-collapse text-2xs">
 					<thead>
 						<tr className="text-passive">
 							<th className="py-1.5 pl-11 pr-2 text-left font-medium">{t("shell.memoryColumnProcess")}</th>
 							<th className="px-2 py-1.5 text-right font-medium">{t("shell.memoryColumnRss")}</th>
+							<th className="px-2 py-1.5 text-right font-medium">{t("shell.memoryColumnCpu")}</th>
 							<th className="px-4 py-1.5 text-right font-medium">{t("shell.memoryColumnPid")}</th>
 						</tr>
 					</thead>
@@ -514,6 +665,9 @@ function ProcessBreakdownRow({ processes }: { processes: SessionMemoryReading["p
 								</td>
 								<td className="whitespace-nowrap px-2 py-1.5 text-right font-mono tabular-nums text-foreground">
 									{formatMemory(process.rssBytes)}
+								</td>
+								<td className="whitespace-nowrap px-2 py-1.5 text-right font-mono tabular-nums text-muted-foreground">
+									{formatCPU(process.cpuPercent)}
 								</td>
 								<td className="whitespace-nowrap px-4 py-1.5 text-right font-mono tabular-nums text-passive">{process.pid}</td>
 							</tr>

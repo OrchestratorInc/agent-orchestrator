@@ -5,7 +5,7 @@ import { apiClient } from "../lib/api-client";
 export type SessionMemoryReading = components["schemas"]["SessionMemoryResponse"];
 export type SystemMemoryReading = components["schemas"]["SystemMemoryResponse"];
 export type AppMemoryReading = components["schemas"]["AppMemoryResponse"];
-export type MemoryBudgetReading = components["schemas"]["MemoryBudgetResponse"];
+export type MemoryReserveReading = components["schemas"]["MemoryReserveResponse"];
 
 export const sessionMemoryQueryRoot = ["session-memory"] as const;
 export const sessionMemoryQueryKey = (projectId?: string) =>
@@ -18,7 +18,7 @@ type SessionMemoryResponse = {
 	sessions: SessionMemoryReading[];
 	system?: SystemMemoryReading;
 	app?: AppMemoryReading;
-	budget?: MemoryBudgetReading;
+	reserve?: MemoryReserveReading;
 };
 
 export async function fetchSessionMemory(projectId?: string): Promise<SessionMemoryResponse> {
@@ -26,7 +26,7 @@ export async function fetchSessionMemory(projectId?: string): Promise<SessionMem
 		params: { query: projectId ? { projectId } : {} },
 	});
 	if (error) throw error;
-	return { sessions: data?.sessions ?? [], system: data?.system, app: data?.app, budget: data?.budget };
+	return { sessions: data?.sessions ?? [], system: data?.system, app: data?.app, reserve: data?.reserve };
 }
 
 export function sessionMemoryQueryOptions(projectId?: string) {
@@ -56,37 +56,67 @@ export function useSystemMemory(projectId?: string) {
 	});
 }
 
-/** Everything AO runs, app-wide, for the topbar indicator. Same query as the
- * sessions so the indicator and the panel it opens never disagree. */
+/** Everything AO runs, app-wide, for the status bar. Same query as the
+ * sessions so the bar and the panel it opens never disagree. */
 export function useAppMemory() {
 	return useQuery({
 		...sessionMemoryQueryOptions(),
-		select: (data: SessionMemoryResponse) => ({ app: data.app, system: data.system, budget: data.budget }),
+		select: (data: SessionMemoryResponse) => ({
+			app: data.app,
+			system: data.system,
+			reserve: data.reserve,
+			// Sessions with a live runtime: a paused one has none, so it is not counted.
+			liveCount: data.sessions.length,
+		}),
 	});
 }
 
-export type MemoryPressure = { pct: number; freePct: number; tone: MemoryTone };
+/** Why the light is the colour it is: the worst of memory, swap and CPU. */
+export type PressureReason = "memory" | "swap" | "cpu";
+export type MemoryPressure = {
+	tone: MemoryTone;
+	reason: PressureReason;
+	/** Share of host RAM the kernel could still hand out. */
+	freePct: number;
+	/** One-minute load per core; above 1 work is queueing. */
+	cpuLoad: number;
+	/** Whether pages are actively moving to or from swap. */
+	swapping: boolean;
+	/** Free RAM sits under the user's reserve: auto-started spawns are on hold. */
+	belowReserve: boolean;
+};
 
-/** AO's use measured against its budget (what the user lets it hold), with the
- * host's own headroom as an override: a machine about to swap is red whoever
- * is holding the memory. Three quarters of the budget is worth a glance;
- * over budget is a problem. */
-export function memoryPressure(
-	usedBytes: number,
-	system: { totalBytes: number; availableBytes: number },
-	budgetBytes: number,
-): MemoryPressure {
-	const { totalBytes, availableBytes } = system;
-	const pct = budgetBytes > 0 ? Math.round((usedBytes / budgetBytes) * 100) : 0;
+/** Actively swapping means more than this much moving per second: a few stray
+ * pages are normal, a megabyte a second is the frozen-cursor signal. */
+const SWAPPING_BYTES_PER_SEC = 1024 ** 2;
+
+/**
+ * The light reads the whole machine's headroom, never AO's share: the OS's
+ * "available" already accounts for everyone else, and a host about to swap
+ * is red whoever holds the memory. Over a quarter free is green; under a
+ * tenth, or actively swapping, is red. CPU pinned for a while only ever
+ * makes it yellow: slow is not the same as frozen.
+ */
+export function memoryPressure(system: SystemMemoryReading, reserveBytes?: number): MemoryPressure {
+	const { totalBytes, availableBytes, swapBytesPerSec, cpuCount, load1 } = system;
 	const freePct = totalBytes > 0 ? Math.round((availableBytes / totalBytes) * 100) : 100;
-	const budgetTone: MemoryTone = pct > 100 ? "critical" : pct >= 75 ? "warning" : "default";
-	const hostTone: MemoryTone = freePct < 7 ? "critical" : freePct < 15 ? "warning" : "default";
-	return { pct, freePct, tone: worseTone(budgetTone, hostTone) };
-}
-
-const toneRank: Record<MemoryTone, number> = { default: 0, warning: 1, critical: 2 };
-function worseTone(a: MemoryTone, b: MemoryTone): MemoryTone {
-	return toneRank[a] >= toneRank[b] ? a : b;
+	const cpuLoad = cpuCount > 0 ? load1 / cpuCount : 0;
+	const swapping = swapBytesPerSec >= SWAPPING_BYTES_PER_SEC;
+	const belowReserve = reserveBytes !== undefined && reserveBytes > 0 && availableBytes < reserveBytes;
+	let tone: MemoryTone = "default";
+	let reason: PressureReason = "memory";
+	if (swapping) {
+		tone = "critical";
+		reason = "swap";
+	} else if (freePct < 10) {
+		tone = "critical";
+	} else if (freePct < 25) {
+		tone = "warning";
+	} else if (cpuLoad >= 1) {
+		tone = "warning";
+		reason = "cpu";
+	}
+	return { tone, reason, freePct, cpuLoad, swapping, belowReserve };
 }
 
 const GIB = 1024 ** 3;
@@ -106,4 +136,10 @@ export function formatMemory(rssBytes: number): string {
 	if (rssBytes >= GIB) return `${(rssBytes / GIB).toFixed(1)} GB`;
 	if (rssBytes >= MIB) return `${Math.round(rssBytes / MIB)} MB`;
 	return `${Math.max(1, Math.round(rssBytes / 1024))} KB`;
+}
+
+/** Whole percent of one core; a tenth below one percent so "0%" never lies. */
+export function formatCPU(percent: number): string {
+	if (percent >= 1 || percent === 0) return `${Math.round(percent)}%`;
+	return `${percent.toFixed(1)}%`;
 }

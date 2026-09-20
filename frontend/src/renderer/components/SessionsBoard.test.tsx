@@ -156,9 +156,11 @@ describe("SessionsBoard", () => {
 		});
 		sessionMemoryMock.mockReturnValue({
 			isError: false,
-			data: new Map([["running", { sessionId: "running", rssBytes: 641_728_512, processCount: 3, sampledAt: "", processes: [] }]]),
+			data: new Map([["running", { sessionId: "running", rssBytes: 641_728_512, processCount: 3, cpuPercent: 82.4, sampledAt: "", processes: [] }]]),
 		});
 		renderBoard("p1");
+		// The card says what the session costs the machine right now.
+		expect(screen.getByTestId("session-resource")).toHaveTextContent("612 MB · 82%");
 		const pauseButton = screen.getByRole("button", { name: "Pause agent for Running task" });
 		expect(pauseButton).toHaveAttribute("data-paused", "false");
 		await userEvent.hover(pauseButton);
@@ -188,9 +190,10 @@ describe("SessionsBoard", () => {
 		appMemoryMock.mockReturnValue({
 			isError: false,
 			data: {
-				app: { rssBytes: 12 * GIB, processCount: 20 },
-				system: { totalBytes: 32 * GIB, availableBytes: 8 * GIB },
-				budget: { bytes: 8 * GIB, auto: true },
+				app: { rssBytes: 12 * GIB, processCount: 20, cpuPercent: 40 },
+				system: { totalBytes: 32 * GIB, availableBytes: 2 * GIB, swapTotalBytes: 0, swapUsedBytes: 0, swapBytesPerSec: 0, cpuCount: 8, load1: 1 },
+				reserve: { bytes: 2 * GIB, auto: true },
+				liveCount: 1,
 			},
 		});
 		workspaceQueryMock.mockReturnValue({
@@ -200,9 +203,10 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		expect(screen.queryByRole("button", { name: /archive/i })).not.toBeInTheDocument();
 		const indicator = screen.getByTestId("app-memory-indicator");
-		expect(indicator).toHaveTextContent("12.0 GB");
+		expect(indicator).toHaveTextContent("Low memory. Pause or stop a session to recover.");
+		expect(indicator).toHaveTextContent("1 session");
 		expect(indicator).toHaveAttribute("data-memory-tone", "critical");
-		expect(indicator).toHaveAttribute("aria-label", "AO is using 12.0 GB of its 8.0 GB budget (auto, 150%) · 8.0 GB free");
+		expect(indicator).toHaveAttribute("aria-label", "Low memory. Pause or stop a session to recover. · 2.0 GB free of 32.0 GB (6%) · AO holds 12.0 GB · load 0.13 per core");
 		await userEvent.click(indicator);
 		expect(await screen.findByTestId("session-memory-table")).toBeInTheDocument();
 	});
