@@ -135,3 +135,28 @@ export async function exchangeWorkOSCode(
 		expiresAt: decodeJwtExpiryMs(body.access_token),
 	};
 }
+
+/** Rotates a WorkOS access/refresh token pair. Public client: no client secret. */
+export async function refreshWorkOSTokens(
+	input: { clientId: string; refreshToken: string },
+	{ fetchImpl = fetch }: Deps = {},
+): Promise<CloudTokens> {
+	const response = await fetchImpl("https://api.workos.com/user_management/authenticate", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			client_id: input.clientId,
+			grant_type: "refresh_token",
+			refresh_token: input.refreshToken,
+		}),
+	});
+	if (!response.ok) {
+		throw new Error(await errorMessage(response, `Session refresh failed (${response.status}).`));
+	}
+	const body = (await response.json()) as { access_token: string; refresh_token: string };
+	return {
+		accessToken: body.access_token,
+		refreshToken: body.refresh_token,
+		expiresAt: decodeJwtExpiryMs(body.access_token),
+	};
+}

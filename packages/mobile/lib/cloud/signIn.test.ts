@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	buildWorkOSAuthUrl,
 	exchangeWorkOSCode,
+	refreshWorkOSTokens,
 	registerWithLocalAuth,
 	signInWithLocalAuth,
 } from "./signIn";
@@ -227,5 +228,35 @@ describe("exchangeWorkOSCode", () => {
 				{ fetchImpl },
 			),
 		).rejects.toThrow("could not be understood");
+	});
+});
+
+describe("refreshWorkOSTokens", () => {
+	it("rotates the WorkOS refresh token without a client secret", async () => {
+		const fetchImpl = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(
+			JSON.stringify({ access_token: fakeJwt(1_800_000_000), refresh_token: "refresh-2" }),
+			{ status: 200, headers: { "content-type": "application/json" } },
+		));
+
+		const tokens = await refreshWorkOSTokens(
+			{ clientId: "client_123", refreshToken: "refresh-1" },
+			{ fetchImpl },
+		);
+
+		expect(fetchImpl).toHaveBeenCalledWith(
+			"https://api.workos.com/user_management/authenticate",
+			expect.objectContaining({ method: "POST" }),
+		);
+		const [, init] = fetchImpl.mock.calls[0]!;
+		expect(JSON.parse(init!.body as string)).toEqual({
+			client_id: "client_123",
+			grant_type: "refresh_token",
+			refresh_token: "refresh-1",
+		});
+		expect(tokens).toEqual({
+			accessToken: fakeJwt(1_800_000_000),
+			refreshToken: "refresh-2",
+			expiresAt: 1_800_000_000_000,
+		});
 	});
 });

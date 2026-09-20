@@ -1,12 +1,23 @@
 import type { CloudClient } from "@aoagents/cloud-client";
+import * as Crypto from "expo-crypto";
+import * as WebBrowser from "expo-web-browser";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createMobileCloudClient } from "./client";
-import { CLOUD_BASE_URL } from "./config";
+import { CLOUD_BASE_URL, WORKOS_CLIENT_ID, WORKOS_REDIRECT_URI } from "./config";
 import { resolveOrg } from "./org";
-import { registerWithLocalAuth, signInWithLocalAuth, type RegisterLocalAuthInput } from "./signIn";
+import { createPkcePair, toBase64Url } from "./pkce";
+import {
+	buildWorkOSAuthUrl,
+	exchangeWorkOSCode,
+	refreshWorkOSTokens,
+	registerWithLocalAuth,
+	signInWithLocalAuth,
+	type RegisterLocalAuthInput,
+} from "./signIn";
 import { createTokenProvider } from "./session";
 import { clearTokens, readTokens, writeTokens } from "./tokens";
 import { wrapUnauthorized } from "./unauthorized";
+import { runWorkOSSignIn } from "./workosFlow";
 
 /**
  * The cloud environment's live auth state: whether a session is stored, and
@@ -28,6 +39,7 @@ export type CloudAuthState = {
 	/** The last sign-in/registration failure, cleared on the next attempt. */
 	error: string | null;
 	busy: boolean;
+	signInWithWorkOS(): Promise<void>;
 	signInLocal(email: string, password: string): Promise<void>;
 	registerLocal(input: RegisterLocalAuthInput): Promise<void>;
 	signOut(): Promise<void>;
@@ -64,16 +76,7 @@ export function CloudAuthProvider({
 				read: readTokens,
 				write: writeTokens,
 				clear: clearTokens,
-				// WorkOS sign-in (the only kind that yields a refresh token) has no
-				// screen wired up yet — see signIn.ts's exchangeWorkOSCode, which
-				// nothing here calls. A local-auth session (the only kind this
-				// provider issues) never carries a refreshToken, so
-				// createTokenProvider's refreshOnce short-circuits to sign-out
-				// before this ever runs. It exists only so a WorkOS token minted
-				// some other way doesn't hang forever on first expiry.
-				refresh: async () => {
-					throw new Error("This session can't be refreshed. Sign in again.");
-				},
+				refresh: (refreshToken) => refreshWorkOSTokens({ clientId: WORKOS_CLIENT_ID, refreshToken }),
 				now: Date.now,
 			}),
 		[],
@@ -159,6 +162,38 @@ export function CloudAuthProvider({
 		[baseUrl, resolveSession],
 	);
 
+	const signInWithWorkOS = useCallback(async () => {
+		setBusy(true);
+		setError(null);
+		try {
+			const issued = await runWorkOSSignIn({
+				createPkce: createPkcePair,
+				makeState: () =>
+					toBase64Url(btoa(String.fromCharCode(...Crypto.getRandomBytes(32)))),
+				authUrl: ({ challenge, state }) =>
+					buildWorkOSAuthUrl({
+						clientId: WORKOS_CLIENT_ID,
+						redirectUri: WORKOS_REDIRECT_URI,
+						codeChallenge: challenge,
+						state,
+					}),
+				openAuth: (url) => WebBrowser.openAuthSessionAsync(url, WORKOS_REDIRECT_URI),
+				exchange: ({ code, codeVerifier }) =>
+					exchangeWorkOSCode({ clientId: WORKOS_CLIENT_ID, code, codeVerifier }),
+			});
+			if (!issued) return;
+			await writeTokens(issued);
+			generationRef.current += 1;
+			await resolveSession(generationRef.current);
+		} catch (e) {
+			const message = e instanceof Error ? e.message : "Sign-in failed.";
+			setError(message);
+			throw e;
+		} finally {
+			setBusy(false);
+		}
+	}, [resolveSession]);
+
 	const registerLocal = useCallback(
 		async (input: RegisterLocalAuthInput) => {
 			setBusy(true);
@@ -188,8 +223,8 @@ export function CloudAuthProvider({
 	}, [tokens]);
 
 	const value = useMemo<CloudAuthState>(
-		() => ({ signedIn, orgId, client, baseUrl, error, busy, signInLocal, registerLocal, signOut }),
-		[signedIn, orgId, client, baseUrl, error, busy, signInLocal, registerLocal, signOut],
+		() => ({ signedIn, orgId, client, baseUrl, error, busy, signInWithWorkOS, signInLocal, registerLocal, signOut }),
+		[signedIn, orgId, client, baseUrl, error, busy, signInWithWorkOS, signInLocal, registerLocal, signOut],
 	);
 
 	return <CloudAuthContext.Provider value={value}>{children}</CloudAuthContext.Provider>;
