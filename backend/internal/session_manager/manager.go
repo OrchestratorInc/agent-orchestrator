@@ -3240,6 +3240,12 @@ func (m *Manager) reconcileLive(ctx context.Context, rec domain.SessionRecord) e
 			}
 		}
 	}
+	// A paused agent's runtime is dead on purpose. Relaunching it here would
+	// undo the pause on every daemon restart; the user resumes it themselves.
+	if rec.IsPaused() {
+		m.logger.Debug("reconcile: leaving paused agent stopped", "sessionID", rec.ID)
+		return nil
+	}
 	// Legacy Scratch sessions were intentionally one-shot. Standalone sessions
 	// also use the plain-directory workspace adapter, but unlike Scratch they
 	// are durable and must be relaunched after the daemon restarts.

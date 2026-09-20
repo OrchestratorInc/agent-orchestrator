@@ -123,3 +123,46 @@ func TestExitAgentDrainReportsBlockedWhenAgentWaitsOnADecision(t *testing.T) {
 		t.Fatalf("a blocked drain must leave the controller running, got teardown %v", runtime.destroyedIDs)
 	}
 }
+
+func TestReconcileLive_LeavesPausedAgentStopped(t *testing.T) {
+	st := newFakeStore()
+	st.projects["p1"] = domain.ProjectRecord{ID: "p1", Config: testRoleAgents()}
+	rt := &fakeRuntime{aliveByHandle: map[string]bool{}} // dead on purpose: the agent was paused
+	ws := &fakeWorkspace{stashRef: "refs/ao/preserved/s1"}
+	lcm := &fakeLCM{store: st}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: rt, Agents: fakeAgents{}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: lcm, LookPath: lookPath})
+
+	pausedAt := time.Unix(1000, 0)
+	rec := domain.SessionRecord{
+		ID:          "s1",
+		ProjectID:   "p1",
+		Harness:     domain.HarnessClaudeCode,
+		Activity:    domain.Activity{State: domain.ActivityExited},
+		PausedAt:    &pausedAt,
+		PauseReason: domain.SessionPauseUser,
+		Metadata: domain.SessionMetadata{
+			Branch: "ao/s1/root", WorkspacePath: "/wt/s1", RuntimeHandleID: "s1", AgentSessionID: "agent-s1",
+		},
+	}
+	st.sessions[rec.ID] = rec
+
+	if err := m.reconcileLive(context.Background(), rec); err != nil {
+		t.Fatalf("reconcileLive: %v", err)
+	}
+	if rt.created != 0 {
+		t.Fatalf("a paused agent was relaunched on boot: Create calls = %d", rt.created)
+	}
+	if lcm.terminated["s1"] != 0 {
+		t.Fatalf("a paused agent was terminated on boot: MarkTerminated = %d", lcm.terminated["s1"])
+	}
+	after := st.sessions["s1"]
+	if after.PausedAt == nil || after.IsTerminated || after.Activity.State != domain.ActivityExited {
+		t.Fatalf("paused session after reconcile = %+v", after)
+	}
+	for _, c := range ws.calls {
+		if c == "ForceDestroy:s1" {
+			t.Fatalf("worktree destroyed for a paused session; calls = %v", ws.calls)
+		}
+	}
+}
