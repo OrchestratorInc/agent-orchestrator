@@ -13,4 +13,15 @@ describe("WORKOS_REDIRECT_URI", () => {
 	it("does not use the generic scheme that pairing links share", () => {
 		expect(WORKOS_REDIRECT_URI.startsWith("aomobile://")).toBe(false);
 	});
+
+	it("is registered alongside the pairing scheme in Expo config", async () => {
+		const appConfig = (await import("../../app.json")) as unknown as {
+			default: { expo: { scheme: string | string[] } };
+		};
+		const registered = appConfig.default.expo.scheme;
+		const schemes = Array.isArray(registered) ? registered : [registered];
+
+		expect(schemes).toContain("aomobile");
+		expect(schemes).toContain("aoagents.ao");
+	});
 });
