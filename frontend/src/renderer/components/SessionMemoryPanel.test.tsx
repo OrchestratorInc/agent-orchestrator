@@ -82,7 +82,7 @@ beforeEach(() => {
 	workspaceQueryMock.mockReset().mockReturnValue({ data: [workspace], isError: false, isSuccess: true });
 	appMemoryMock.mockReset().mockReturnValue({
 		isError: false,
-		data: { app: { rssBytes: 4 * GIB, processCount: 20 }, system: { totalBytes: 32 * GIB, availableBytes: 20 * GIB } },
+		data: { app: { rssBytes: 2 * GIB, processCount: 20 }, system: { totalBytes: 32 * GIB, availableBytes: 20 * GIB } },
 	});
 	memoryQueryMock.mockReset().mockReturnValue({
 		isError: false,
