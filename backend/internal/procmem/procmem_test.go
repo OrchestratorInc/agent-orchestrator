@@ -50,3 +50,38 @@ func TestParseRejectsMalformedRow(t *testing.T) {
 		t.Fatal("expected parse error")
 	}
 }
+
+func TestParseReadsOptionalCPUTime(t *testing.T) {
+	tbl, err := Parse(`
+  300   200 1600000 01:02:03 claude
+  310   300 410000 2-00:00:30.50 go build
+  320   300 88000 node
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tbl.byPID[300]; got.CPUSeconds != 3723 || got.Command != "claude" {
+		t.Fatalf("300 = %+v", got)
+	}
+	if got := tbl.byPID[310]; got.CPUSeconds != 2*86400+30.5 || got.Command != "go build" {
+		t.Fatalf("310 = %+v", got)
+	}
+	if got := tbl.byPID[320]; got.CPUSeconds != 0 || got.Command != "node" {
+		t.Fatalf("320 = %+v", got)
+	}
+	if tree := tbl.Tree(300); tree.CPUSeconds != 3723+2*86400+30.5 {
+		t.Fatalf("tree cpu = %v", tree.CPUSeconds)
+	}
+}
+
+func TestCPUPercentIsRateBetweenSnapshots(t *testing.T) {
+	prev, _ := Parse("300 200 100 00:00:10 claude\n")
+	cur, _ := Parse("300 200 100 00:00:14 claude\n310 300 100 00:00:01 node\n")
+	// 4s of claude plus 1s of a brand-new node over a 5s gap: one full core.
+	if got := CPUPercent(cur.Tree(300).Processes, prev, 5); got != 100 {
+		t.Fatalf("cpu = %v, want 100", got)
+	}
+	if got := CPUPercent(cur.Tree(300).Processes, nil, 5); got != 0 {
+		t.Fatalf("first sample cpu = %v, want 0", got)
+	}
+}

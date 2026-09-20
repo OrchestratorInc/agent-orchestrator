@@ -13,5 +13,5 @@ UPDATE app_settings SET cloud_offering = ?, updated_at = ? WHERE id = 1;
 -- name: SetAutoPauseIdleMinutes :exec
 UPDATE app_settings SET auto_pause_idle_minutes = ?, updated_at = ? WHERE id = 1;
 
--- name: SetMemoryBudgetBytes :exec
-UPDATE app_settings SET memory_budget_bytes = ?, updated_at = ? WHERE id = 1;
+-- name: SetMemoryReserveBytes :exec
+UPDATE app_settings SET memory_reserve_bytes = ?, updated_at = ? WHERE id = 1;

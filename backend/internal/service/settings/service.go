@@ -21,7 +21,7 @@ type Store interface {
 	SetDefaultSessionMode(ctx context.Context, mode domain.SessionMode, now time.Time) error
 	SetCloudOffering(ctx context.Context, enabled bool, now time.Time) error
 	SetAutoPauseIdleMinutes(ctx context.Context, minutes int, now time.Time) error
-	SetMemoryBudgetBytes(ctx context.Context, bytes int64, now time.Time) error
+	SetMemoryReserveBytes(ctx context.Context, bytes int64, now time.Time) error
 }
 
 // Snapshot is the current preference set.
@@ -31,36 +31,27 @@ type Snapshot struct {
 	CloudOffering bool
 	// AutoPauseIdleMinutes exits agents idle this long; zero is off.
 	AutoPauseIdleMinutes int
-	// MemoryBudgetBytes is what the user lets AO hold; zero means Auto.
-	MemoryBudgetBytes int64
-	UpdatedAt         time.Time
+	// MemoryReserveBytes is how much host RAM the user wants kept free. Below
+	// it AO stops auto-starting sessions and says so. Zero means the default.
+	MemoryReserveBytes int64
+	UpdatedAt          time.Time
 }
 
-// MinMemoryBudgetBytes is the smallest explicit budget accepted: below half a
-// gigabyte the daemon alone would read as over budget.
-const MinMemoryBudgetBytes = 512 << 20
+// MinMemoryReserveBytes is the smallest explicit reserve accepted; below a
+// quarter of a gigabyte the line would sit inside normal jitter.
+const MinMemoryReserveBytes = 256 << 20
 
-// AutoMemoryBudget is the budget used when none is set: a quarter of host
-// RAM, never below 2 GiB (a laptop still gets one real session) and never
-// above 16 GiB (a workstation does not get a free pass to eat itself).
-func AutoMemoryBudget(totalBytes uint64) uint64 {
-	const lo, hi = 2 << 30, 16 << 30
-	budget := totalBytes / 4
-	if budget < lo {
-		return lo
-	}
-	if budget > hi {
-		return hi
-	}
-	return budget
-}
+// DefaultMemoryReserveBytes is the line used when none is set: two
+// gigabytes free is where a laptop stops feeling responsive.
+const DefaultMemoryReserveBytes = 2 << 30
 
-// ResolveMemoryBudget returns the effective budget and whether it is Auto.
-func (s Snapshot) ResolveMemoryBudget(totalBytes uint64) (bytes uint64, auto bool) {
-	if s.MemoryBudgetBytes > 0 {
-		return uint64(s.MemoryBudgetBytes), false
+// ResolveMemoryReserve returns the effective reserve and whether it is the
+// default rather than a user choice.
+func (s Snapshot) ResolveMemoryReserve() (bytes uint64, auto bool) {
+	if s.MemoryReserveBytes > 0 {
+		return uint64(s.MemoryReserveBytes), false
 	}
-	return AutoMemoryBudget(totalBytes), true
+	return DefaultMemoryReserveBytes, true
 }
 
 // Offering reports which AO offerings this daemon exposes to clients. It is
@@ -178,12 +169,12 @@ func (s *Service) SetAutoPauseIdleMinutes(ctx context.Context, minutes int) (Sna
 	return s.store.GetAppSettings(ctx)
 }
 
-// SetMemoryBudgetBytes sets the memory budget; zero restores Auto.
-func (s *Service) SetMemoryBudgetBytes(ctx context.Context, bytes int64) (Snapshot, error) {
-	if bytes < 0 || (bytes > 0 && bytes < MinMemoryBudgetBytes) {
-		return Snapshot{}, fmt.Errorf("memory budget must be zero (auto) or at least %d bytes", MinMemoryBudgetBytes)
+// SetMemoryReserveBytes sets the memory reserve; zero restores the default.
+func (s *Service) SetMemoryReserveBytes(ctx context.Context, bytes int64) (Snapshot, error) {
+	if bytes < 0 || (bytes > 0 && bytes < MinMemoryReserveBytes) {
+		return Snapshot{}, fmt.Errorf("memory reserve must be zero (default) or at least %d bytes", MinMemoryReserveBytes)
 	}
-	if err := s.store.SetMemoryBudgetBytes(ctx, bytes, s.now()); err != nil {
+	if err := s.store.SetMemoryReserveBytes(ctx, bytes, s.now()); err != nil {
 		return Snapshot{}, err
 	}
 	return s.store.GetAppSettings(ctx)

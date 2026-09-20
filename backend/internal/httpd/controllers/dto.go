@@ -1637,10 +1637,11 @@ type ListCompactSessionUsageResponse struct {
 
 // SessionMemoryProcessResponse is one process in a session's runtime tree.
 type SessionMemoryProcessResponse struct {
-	PID      int    `json:"pid"`
-	PPID     int    `json:"ppid"`
-	RSSBytes uint64 `json:"rssBytes" minimum:"0"`
-	Command  string `json:"command"`
+	PID        int     `json:"pid"`
+	PPID       int     `json:"ppid"`
+	RSSBytes   uint64  `json:"rssBytes" minimum:"0"`
+	CPUPercent float64 `json:"cpuPercent" minimum:"0" description:"Share of one core used since the previous sample; zero on the first."`
+	Command    string  `json:"command"`
 }
 
 // SessionMemoryResponse is the resident memory of one live session's process
@@ -1649,6 +1650,7 @@ type SessionMemoryResponse struct {
 	SessionID    domain.SessionID               `json:"sessionId"`
 	RSSBytes     uint64                         `json:"rssBytes" minimum:"0" description:"Resident set size summed over the runtime process tree."`
 	ProcessCount int                            `json:"processCount" minimum:"0"`
+	CPUPercent   float64                        `json:"cpuPercent" minimum:"0" description:"Share of one core the whole tree used since the previous sample; zero on the first."`
 	SampledAt    time.Time                      `json:"sampledAt"`
 	Processes    []SessionMemoryProcessResponse `json:"processes"`
 }
@@ -1662,28 +1664,42 @@ type ListSessionMemoryResponse struct {
 	// App is the resident memory of everything AO runs (daemon, desktop
 	// shell, every live session), for the topbar pressure indicator.
 	App *AppMemoryResponse `json:"app,omitempty"`
-	// Budget is what the user lets AO hold; pressure is measured against it.
-	// Absent where host RAM cannot be read.
-	Budget *MemoryBudgetResponse `json:"budget,omitempty"`
+	// Reserve is how much host RAM the user wants kept free; below it AO
+	// holds new auto-started sessions. Absent where host RAM cannot be read.
+	Reserve *MemoryReserveResponse `json:"reserve,omitempty"`
 }
 
-// MemoryBudgetResponse is the effective memory budget at sample time.
-type MemoryBudgetResponse struct {
+// MemoryReserveResponse is the effective memory reserve at sample time.
+type MemoryReserveResponse struct {
 	Bytes uint64 `json:"bytes" minimum:"0"`
-	// Auto reports that no explicit budget is set and Bytes was derived from host RAM.
+	// Auto reports that no explicit reserve is set and Bytes is the default.
 	Auto bool `json:"auto"`
 }
 
-// AppMemoryResponse is AO's own resident memory at sample time.
+// AppMemoryResponse is everything AO runs at sample time, with AO's own
+// daemon and shell broken out so the panel can pin them as an unpausable row.
 type AppMemoryResponse struct {
-	RSSBytes     uint64 `json:"rssBytes" minimum:"0"`
-	ProcessCount int    `json:"processCount" minimum:"0"`
+	RSSBytes     uint64  `json:"rssBytes" minimum:"0"`
+	ProcessCount int     `json:"processCount" minimum:"0"`
+	CPUPercent   float64 `json:"cpuPercent" minimum:"0"`
+	// Own is the daemon and desktop shell alone, without any session.
+	Own *SessionMemoryResponse `json:"own,omitempty"`
 }
 
-// SystemMemoryResponse is the host's total and available RAM at sample time.
+// SystemMemoryResponse is the host's headroom at sample time. The pressure
+// light reads this, never AO's share: a machine about to swap is red whoever
+// holds the memory.
 type SystemMemoryResponse struct {
 	TotalBytes     uint64 `json:"totalBytes" minimum:"0"`
-	AvailableBytes uint64 `json:"availableBytes" minimum:"0"`
+	AvailableBytes uint64 `json:"availableBytes" minimum:"0" description:"What the kernel would hand out without swapping (MemAvailable)."`
+	SwapTotalBytes uint64 `json:"swapTotalBytes" minimum:"0"`
+	SwapUsedBytes  uint64 `json:"swapUsedBytes" minimum:"0"`
+	// SwapBytesPerSec is how fast pages moved to or from swap since the
+	// previous sample. Sustained non-zero is the frozen-cursor signal.
+	SwapBytesPerSec float64 `json:"swapBytesPerSec" minimum:"0"`
+	CPUCount        int     `json:"cpuCount" minimum:"0"`
+	// Load1 is the one-minute load average; over cpuCount means work is queueing.
+	Load1 float64 `json:"load1" minimum:"0"`
 }
 
 // UsageTotalsResponse is the canonical telemetry aggregate for one scope.
@@ -2855,8 +2871,9 @@ type SettingsResponse struct {
 	// AutoPauseIdleMinutes is how long an agent may sit idle before AO pauses
 	// it (exits the process, keeps the session). Zero means off.
 	AutoPauseIdleMinutes int `json:"autoPauseIdleMinutes" minimum:"0"`
-	// MemoryBudgetBytes is the user's memory budget for AO; zero means Auto.
-	MemoryBudgetBytes int64 `json:"memoryBudgetBytes" minimum:"0"`
+	// MemoryReserveBytes is how much host RAM to keep free; zero means the
+	// default (2 GiB).
+	MemoryReserveBytes int64 `json:"memoryReserveBytes" minimum:"0"`
 }
 
 // AgentInstallerCatalogResponse is the body of GET /api/v1/agents/installers.
@@ -2869,10 +2886,10 @@ type UpdateSessionInterfaceRequest struct {
 	DefaultSessionMode string `json:"defaultSessionMode" enum:"chat,tui"`
 }
 
-// UpdateMemoryBudgetRequest sets how much memory AO may hold before the
-// board reads as under pressure.
-type UpdateMemoryBudgetRequest struct {
-	// Bytes is the budget; zero restores Auto (a quarter of host RAM, 2–16 GiB).
+// UpdateMemoryReserveRequest sets how much host RAM AO keeps free before it
+// stops auto-starting sessions.
+type UpdateMemoryReserveRequest struct {
+	// Bytes is the reserve; zero restores the default (2 GiB).
 	Bytes *int64 `json:"bytes" minimum:"0"`
 }
 

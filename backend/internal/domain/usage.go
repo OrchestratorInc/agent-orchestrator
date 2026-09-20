@@ -403,10 +403,11 @@ type SourceCursorState struct {
 
 // SessionMemoryProcess is one process inside a session's runtime tree.
 type SessionMemoryProcess struct {
-	PID      int
-	PPID     int
-	RSSBytes uint64
-	Command  string
+	PID        int
+	PPID       int
+	RSSBytes   uint64
+	CPUPercent float64
+	Command    string
 }
 
 // SessionMemory is the resident memory of one live session's process tree,
@@ -416,21 +417,38 @@ type SessionMemory struct {
 	SessionID    SessionID
 	RSSBytes     uint64
 	ProcessCount int
-	SampledAt    time.Time
-	Processes    []SessionMemoryProcess
+	// CPUPercent is the tree's share of one core since the previous sample;
+	// zero on the first sample, when there is nothing to compare against.
+	CPUPercent float64
+	SampledAt  time.Time
+	Processes  []SessionMemoryProcess
 }
 
-// SystemMemory is the host's total and available RAM at sample time, used to
-// scale the memory panel's total bar. Zero TotalBytes means the reading is
+// SystemMemory is the host's headroom at sample time: RAM, swap, swapping
+// rate and CPU load. It is what the pressure light reads; AO's own share is
+// deliberately not part of it. Zero TotalBytes means the reading is
 // unsupported on this platform.
 type SystemMemory struct {
 	TotalBytes     uint64
 	AvailableBytes uint64
+	SwapTotalBytes uint64
+	SwapUsedBytes  uint64
+	// SwapBytesPerSec is how fast pages moved to or from swap since the
+	// previous sample. Sustained non-zero is the frozen-cursor signal.
+	SwapBytesPerSec float64
+	CPUCount        int
+	// Load1 is the one-minute load average; divided by CPUCount, above one
+	// means work is queueing.
+	Load1 float64
 }
 
 // AppMemory is the resident memory of everything AO runs: the daemon, the
 // desktop shell when the daemon is app-owned, and every live session tree.
+// Own is the daemon and shell alone, so the panel can pin AO's own cost as a
+// row the user cannot pause.
 type AppMemory struct {
 	RSSBytes     uint64
 	ProcessCount int
+	CPUPercent   float64
+	Own          SessionMemory
 }

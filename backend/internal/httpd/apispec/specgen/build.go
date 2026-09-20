@@ -416,8 +416,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersAppMemoryResponse":                "AppMemoryResponse",
 	"ControllersExitAgentRequest":                 "ExitAgentRequest",
 	"ControllersUpdateAutoPauseRequest":           "UpdateAutoPauseRequest",
-	"ControllersUpdateMemoryBudgetRequest":        "UpdateMemoryBudgetRequest",
-	"ControllersMemoryBudgetResponse":             "MemoryBudgetResponse",
+	"ControllersUpdateMemoryReserveRequest":       "UpdateMemoryReserveRequest",
+	"ControllersMemoryReserveResponse":            "MemoryReserveResponse",
 	"ControllersPauseIdleSessionsQuery":           "PauseIdleSessionsQuery",
 	"ControllersPauseIdleFailedSession":           "PauseIdleFailedSession",
 	"ControllersPauseIdleSessionsResponse":        "PauseIdleSessionsResponse",
@@ -889,9 +889,9 @@ func shellTerminalOperations() []operation {
 			},
 		},
 		{
-			method: http.MethodPatch, path: "/api/v1/settings/memory-budget", id: "updateMemoryBudget", tag: "settings",
-			summary: "Set the memory budget AO is measured against (zero restores Auto)",
-			reqBody: controllers.UpdateMemoryBudgetRequest{},
+			method: http.MethodPatch, path: "/api/v1/settings/memory-reserve", id: "updateMemoryReserve", tag: "settings",
+			summary: "Set how much host RAM AO keeps free before it stops auto-starting sessions (zero restores the default)",
+			reqBody: controllers.UpdateMemoryReserveRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},

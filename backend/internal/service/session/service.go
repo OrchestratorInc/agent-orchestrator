@@ -207,6 +207,15 @@ type Service struct {
 	titleRefinementSlots   chan struct{}
 	titleRefinementMu      sync.Mutex
 	titleRefinementCancels map[domain.SessionID]context.CancelFunc
+	// autoSpawnGate runs before a spawn an agent asked for (one with a
+	// parent session). A user clicking New is never gated: they can see the
+	// machine; an orchestrator fanning out workers cannot.
+	autoSpawnGate func(ctx context.Context) error
+}
+
+// SetAutoSpawnGate installs the check run before agent-requested spawns.
+func (s *Service) SetAutoSpawnGate(gate func(ctx context.Context) error) {
+	s.autoSpawnGate = gate
 }
 
 // SetChatProviderPreserver wires the live Chat lifetime observation after both
@@ -314,6 +323,11 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 		if cfg.Harness == "" {
 			return domain.Session{}, 0, 0, apierr.Invalid("HARNESS_REQUIRED", "harness is required for a standalone session", nil)
+		}
+	}
+	if cfg.ParentSessionID != "" && s.autoSpawnGate != nil {
+		if err := s.autoSpawnGate(ctx); err != nil {
+			return domain.Session{}, 0, 0, err
 		}
 	}
 	if s.agentReadiness != nil && cfg.Harness != "" {

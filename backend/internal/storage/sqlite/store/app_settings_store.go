@@ -27,9 +27,9 @@ type AppSettings struct {
 	CloudOffering bool
 	// AutoPauseIdleMinutes exits agents idle this long; zero is off.
 	AutoPauseIdleMinutes int
-	// MemoryBudgetBytes is what the user lets AO hold; zero means Auto.
-	MemoryBudgetBytes int64
-	UpdatedAt         time.Time
+	// MemoryReserveBytes is how much host RAM to keep free; zero means the default.
+	MemoryReserveBytes int64
+	UpdatedAt          time.Time
 }
 
 // GetAppSettings reads the preference row.
@@ -41,26 +41,26 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 	return AppSettings{
 		// Normalized on read: a value written by a build that knows a mode this
 		// one does not must still resolve to something dispatchable.
-		DefaultSessionMode: domain.NormalizeSessionMode(row.DefaultSessionMode),
+		DefaultSessionMode:   domain.NormalizeSessionMode(row.DefaultSessionMode),
 		CloudOffering:        row.CloudOffering,
 		AutoPauseIdleMinutes: int(row.AutoPauseIdleMinutes),
-		MemoryBudgetBytes:    row.MemoryBudgetBytes,
+		MemoryReserveBytes:   row.MemoryReserveBytes,
 		UpdatedAt:            row.UpdatedAt,
 	}, nil
 }
 
-// SetMemoryBudgetBytes persists the memory budget; zero means Auto.
-func (s *Store) SetMemoryBudgetBytes(ctx context.Context, bytes int64, now time.Time) error {
+// SetMemoryReserveBytes persists the memory reserve; zero means the default.
+func (s *Store) SetMemoryReserveBytes(ctx context.Context, bytes int64, now time.Time) error {
 	if bytes < 0 {
-		return fmt.Errorf("memory budget must not be negative: %d", bytes)
+		return fmt.Errorf("memory reserve must not be negative: %d", bytes)
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := s.qw.SetMemoryBudgetBytes(ctx, gen.SetMemoryBudgetBytesParams{
-		MemoryBudgetBytes: bytes,
-		UpdatedAt:         now,
+	if err := s.qw.SetMemoryReserveBytes(ctx, gen.SetMemoryReserveBytesParams{
+		MemoryReserveBytes: bytes,
+		UpdatedAt:          now,
 	}); err != nil {
-		return fmt.Errorf("set memory budget: %w", err)
+		return fmt.Errorf("set memory reserve: %w", err)
 	}
 	return nil
 }

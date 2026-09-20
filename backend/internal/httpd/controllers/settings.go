@@ -18,7 +18,7 @@ type SettingsService interface {
 	SetDefaultSessionMode(ctx context.Context, mode domain.SessionMode) (settingssvc.Snapshot, error)
 	SetCloudOffering(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
 	SetAutoPauseIdleMinutes(ctx context.Context, minutes int) (settingssvc.Snapshot, error)
-	SetMemoryBudgetBytes(ctx context.Context, bytes int64) (settingssvc.Snapshot, error)
+	SetMemoryReserveBytes(ctx context.Context, bytes int64) (settingssvc.Snapshot, error)
 	ChatHarnesses(candidates []domain.AgentHarness) []domain.AgentHarness
 	Offering() settingssvc.Offering
 }
@@ -38,24 +38,24 @@ func (c *SettingsController) Register(r chi.Router) {
 	r.Patch("/settings/session-interface", c.setSessionInterface)
 	r.Patch("/settings/cloud-offering", c.setCloudOffering)
 	r.Patch("/settings/auto-pause", c.setAutoPause)
-	r.Patch("/settings/memory-budget", c.setMemoryBudget)
+	r.Patch("/settings/memory-reserve", c.setMemoryReserve)
 }
 
-func (c *SettingsController) setMemoryBudget(w http.ResponseWriter, r *http.Request) {
+func (c *SettingsController) setMemoryReserve(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
-		apispec.NotImplemented(w, r, "PATCH", "/api/v1/settings/memory-budget")
+		apispec.NotImplemented(w, r, "PATCH", "/api/v1/settings/memory-reserve")
 		return
 	}
-	var req UpdateMemoryBudgetRequest
+	var req UpdateMemoryReserveRequest
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
-	if req.Bytes == nil || *req.Bytes < 0 || (*req.Bytes > 0 && *req.Bytes < settingssvc.MinMemoryBudgetBytes) {
+	if req.Bytes == nil || *req.Bytes < 0 || (*req.Bytes > 0 && *req.Bytes < settingssvc.MinMemoryReserveBytes) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
-			"MEMORY_BUDGET_INVALID", "bytes must be zero (auto) or at least 512 MiB", nil)
+			"MEMORY_RESERVE_INVALID", "bytes must be zero (default) or at least 256 MiB", nil)
 		return
 	}
-	snapshot, err := c.Svc.SetMemoryBudgetBytes(r.Context(), *req.Bytes)
+	snapshot, err := c.Svc.SetMemoryReserveBytes(r.Context(), *req.Bytes)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -165,6 +165,6 @@ func (c *SettingsController) response(snapshot settingssvc.Snapshot) SettingsRes
 		CloudEnabled:         offering.CloudEnabled(snapshot),
 		CloudControlPlaneURL: offering.CloudControlPlaneURL,
 		AutoPauseIdleMinutes: snapshot.AutoPauseIdleMinutes,
-		MemoryBudgetBytes:    snapshot.MemoryBudgetBytes,
+		MemoryReserveBytes:   snapshot.MemoryReserveBytes,
 	}
 }

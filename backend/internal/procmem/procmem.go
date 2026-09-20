@@ -22,13 +22,17 @@ type Process struct {
 	PID      int
 	PPID     int
 	RSSBytes uint64
-	Command  string
+	// CPUSeconds is the process's total user+system CPU time so far. Two
+	// snapshots apart give a rate; one alone says nothing about now.
+	CPUSeconds float64
+	Command    string
 }
 
 // Tree is the memory reading for one root and all of its descendants.
 type Tree struct {
-	RSSBytes  uint64
-	Processes []Process
+	RSSBytes   uint64
+	CPUSeconds float64
+	Processes  []Process
 }
 
 // Table is a snapshot of every process, indexed for tree walks.
@@ -53,15 +57,16 @@ func Snapshot(ctx context.Context, run Runner) (*Table, error) {
 	if run == nil {
 		run = execRunner
 	}
-	// rss= is KiB on both Linux and macOS ps.
-	out, err := run(ctx, "ps", "-axo", "pid=,ppid=,rss=,comm=")
+	// rss= is KiB and time= is cumulative CPU time on both Linux and macOS ps.
+	out, err := run(ctx, "ps", "-axo", "pid=,ppid=,rss=,time=,comm=")
 	if err != nil {
 		return nil, fmt.Errorf("procmem: ps: %w", err)
 	}
 	return Parse(string(out))
 }
 
-// Parse builds a Table from `ps -axo pid=,ppid=,rss=,comm=` output.
+// Parse builds a Table from `ps -axo pid=,ppid=,rss=,time=,comm=` output.
+// The time column is optional so a table without it still parses.
 func Parse(out string) (*Table, error) {
 	t := &Table{byPID: map[int]Process{}, children: map[int][]int{}}
 	sc := bufio.NewScanner(strings.NewReader(out))
@@ -77,9 +82,14 @@ func Parse(out string) (*Table, error) {
 			return nil, fmt.Errorf("procmem: malformed ps row %q", sc.Text())
 		}
 		p := Process{PID: pid, PPID: ppid, RSSBytes: rssKiB * 1024}
-		if len(fields) > 3 {
-			p.Command = strings.Join(fields[3:], " ")
+		rest := fields[3:]
+		if len(rest) > 0 {
+			if secs, ok := parseCPUTime(rest[0]); ok {
+				p.CPUSeconds = secs
+				rest = rest[1:]
+			}
 		}
+		p.Command = strings.Join(rest, " ")
 		t.byPID[pid] = p
 		t.children[ppid] = append(t.children[ppid], pid)
 	}
@@ -103,6 +113,7 @@ func (t *Table) Tree(roots ...int) Tree {
 		}
 		seen[pid] = true
 		tree.RSSBytes += p.RSSBytes
+		tree.CPUSeconds += p.CPUSeconds
 		tree.Processes = append(tree.Processes, p)
 		for _, child := range t.children[pid] {
 			walk(child)
@@ -112,4 +123,50 @@ func (t *Table) Tree(roots ...int) Tree {
 		walk(root)
 	}
 	return tree
+}
+
+// parseCPUTime reads ps's TIME column: [[dd-]hh:]mm:ss[.cc] on both Linux
+// and macOS. Anything else (a command name, say) is reported as not a time.
+func parseCPUTime(s string) (float64, bool) {
+	days := 0.0
+	if d, rest, ok := strings.Cut(s, "-"); ok {
+		n, err := strconv.Atoi(d)
+		if err != nil {
+			return 0, false
+		}
+		days, s = float64(n), rest
+	}
+	parts := strings.Split(s, ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return 0, false
+	}
+	var secs float64
+	for _, part := range parts {
+		n, err := strconv.ParseFloat(part, 64)
+		if err != nil || n < 0 {
+			return 0, false
+		}
+		secs = secs*60 + n
+	}
+	return days*86400 + secs, true
+}
+
+// CPUPercent is the share of one core a set of processes used between two
+// snapshots: the growth in their CPU time over the wall-clock gap. Processes
+// absent from prev started inside the gap, so their whole CPU time counts.
+// Without a previous snapshot there is no rate, only a lifetime total, so the
+// answer is zero rather than a misleading spike.
+func CPUPercent(procs []Process, prev *Table, elapsed float64) float64 {
+	if prev == nil || elapsed <= 0 {
+		return 0
+	}
+	var delta float64
+	for _, p := range procs {
+		before := 0.0
+		if q, ok := prev.byPID[p.PID]; ok && q.CPUSeconds <= p.CPUSeconds {
+			before = q.CPUSeconds
+		}
+		delta += p.CPUSeconds - before
+	}
+	return delta / elapsed * 100
 }

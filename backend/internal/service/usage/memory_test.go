@@ -153,3 +153,63 @@ func TestAppMemoryWithoutAppRootsCountsLiveSessionsOnly(t *testing.T) {
 		t.Fatalf("app = %+v, want %d bytes across 2 processes", app, want)
 	}
 }
+
+func TestListMemoryReportsCPUAsRateBetweenSamples(t *testing.T) {
+	recs := []domain.SessionRecord{{ID: "s-a", Metadata: domain.SessionMetadata{RuntimeHandleID: "a"}}}
+	tables := []string{
+		"200 100 3000 00:00:10 bash\n300 200 1600000 00:01:00 claude\n",
+		"200 100 3000 00:00:10 bash\n300 200 1600000 00:01:04 claude\n",
+	}
+	now := time.Unix(1000, 0)
+	var calls int
+	r := NewMemoryReader(MemoryReaderDeps{
+		Store:   memStore{recs: recs},
+		Runtime: memRuntime{roots: map[string][]int{"a": {200}}},
+		Snapshot: func(context.Context) (*procmem.Table, error) {
+			calls++
+			return procmem.Parse(tables[calls-1])
+		},
+		Now: func() time.Time { return now },
+	})
+	first, err := r.ListMemory(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first[0].CPUPercent != 0 {
+		t.Fatalf("first sample cpu = %v, want 0 (no rate yet)", first[0].CPUPercent)
+	}
+	now = now.Add(8 * time.Second)
+	second, err := r.ListMemory(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 4s of CPU over 8s: half a core, all of it claude's.
+	if second[0].CPUPercent != 50 || second[0].Processes[1].CPUPercent != 50 || second[0].Processes[0].CPUPercent != 0 {
+		t.Fatalf("second sample = %+v, want 50%% on claude", second[0])
+	}
+}
+
+func TestSystemMemoryDerivesSwapRateFromCounters(t *testing.T) {
+	now := time.Unix(1000, 0)
+	pages := uint64(100)
+	r := NewMemoryReader(MemoryReaderDeps{Store: memStore{}, Runtime: memRuntime{}, Now: func() time.Time { return now }})
+	r.ReadSystem = func() (procmem.System, error) {
+		return procmem.System{TotalBytes: 16 << 30, AvailableBytes: 4 << 30, SwapTotalBytes: 8 << 30, SwapUsedBytes: 1 << 30, SwapPages: pages, CPUCount: 8, Load1: 2.5}, nil
+	}
+	first, err := r.SystemMemory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.SwapBytesPerSec != 0 || first.SwapUsedBytes != 1<<30 || first.CPUCount != 8 || first.Load1 != 2.5 {
+		t.Fatalf("first = %+v", first)
+	}
+	pages += 1024 // 4 MiB in 2s
+	now = now.Add(2 * time.Second)
+	second, err := r.SystemMemory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.SwapBytesPerSec != 2<<20 {
+		t.Fatalf("swap rate = %v, want 2 MiB/s", second.SwapBytesPerSec)
+	}
+}

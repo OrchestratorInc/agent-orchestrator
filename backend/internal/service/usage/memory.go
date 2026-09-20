@@ -42,6 +42,14 @@ type MemoryReader struct {
 	mu       sync.Mutex
 	cached   *procmem.Table
 	cachedAt time.Time
+	// prev is the snapshot before cached, kept so CPU is a rate between two
+	// samples rather than a lifetime average.
+	prev   *procmem.Table
+	prevAt time.Time
+	// lastSystem is the previous host reading, for the swap rate.
+	lastSystem   procmem.System
+	lastSystemAt time.Time
+	ReadSystem   func() (procmem.System, error)
 }
 
 // NewMemoryReader constructs a memory reader.
@@ -52,7 +60,7 @@ func NewMemoryReader(deps MemoryReaderDeps) *MemoryReader {
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
-	return &MemoryReader{deps: deps}
+	return &MemoryReader{deps: deps, ReadSystem: procmem.ReadSystem}
 }
 
 // ListMemory returns one reading per live session that has a runtime. Sessions
@@ -74,7 +82,7 @@ func (r *MemoryReader) ListMemory(ctx context.Context, projectID domain.ProjectI
 	if err != nil {
 		return nil, err
 	}
-	table, err := r.table(ctx)
+	table, prev, elapsed, err := r.table(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -92,27 +100,54 @@ func (r *MemoryReader) ListMemory(ctx context.Context, projectID domain.ProjectI
 		if len(tree.Processes) == 0 {
 			continue
 		}
-		procs := make([]domain.SessionMemoryProcess, 0, len(tree.Processes))
-		for _, p := range tree.Processes {
-			procs = append(procs, domain.SessionMemoryProcess{PID: p.PID, PPID: p.PPID, RSSBytes: p.RSSBytes, Command: p.Command})
-		}
-		out = append(out, domain.SessionMemory{
-			SessionID: rec.ID, RSSBytes: tree.RSSBytes, ProcessCount: len(procs),
-			SampledAt: sampledAt, Processes: procs,
-		})
+		reading := treeReading(tree, prev, elapsed)
+		reading.SessionID, reading.SampledAt = rec.ID, sampledAt
+		out = append(out, reading)
 	}
 	return out, nil
 }
 
-// SystemMemory reports the host's total and available RAM, for scaling the
-// memory panel's total bar. ErrUnsupported on platforms procmem can't read.
+// treeReading costs one process tree against the previous snapshot.
+func treeReading(tree procmem.Tree, prev *procmem.Table, elapsed float64) domain.SessionMemory {
+	procs := make([]domain.SessionMemoryProcess, 0, len(tree.Processes))
+	for _, p := range tree.Processes {
+		procs = append(procs, domain.SessionMemoryProcess{
+			PID: p.PID, PPID: p.PPID, RSSBytes: p.RSSBytes, Command: p.Command,
+			CPUPercent: procmem.CPUPercent([]procmem.Process{p}, prev, elapsed),
+		})
+	}
+	return domain.SessionMemory{
+		RSSBytes: tree.RSSBytes, ProcessCount: len(procs),
+		CPUPercent: procmem.CPUPercent(tree.Processes, prev, elapsed), Processes: procs,
+	}
+}
+
+// SystemMemory reports the host's headroom: RAM, swap, swapping rate since
+// the last call, and load. ErrUnsupported on platforms procmem can't read.
 func (r *MemoryReader) SystemMemory(context.Context) (domain.SystemMemory, error) {
-	sys, err := procmem.ReadSystem()
+	sys, err := r.ReadSystem()
 	if err != nil {
 		return domain.SystemMemory{}, err
 	}
-	return domain.SystemMemory{TotalBytes: sys.TotalBytes, AvailableBytes: sys.AvailableBytes}, nil
+	now := r.deps.Now()
+	r.mu.Lock()
+	last, lastAt := r.lastSystem, r.lastSystemAt
+	r.lastSystem, r.lastSystemAt = sys, now
+	r.mu.Unlock()
+	out := domain.SystemMemory{
+		TotalBytes: sys.TotalBytes, AvailableBytes: sys.AvailableBytes,
+		SwapTotalBytes: sys.SwapTotalBytes, SwapUsedBytes: sys.SwapUsedBytes,
+		CPUCount: sys.CPUCount, Load1: sys.Load1,
+	}
+	if gap := now.Sub(lastAt).Seconds(); !lastAt.IsZero() && gap > 0 && sys.SwapPages >= last.SwapPages {
+		out.SwapBytesPerSec = float64(sys.SwapPages-last.SwapPages) * swapPageBytes / gap
+	}
+	return out, nil
 }
+
+// swapPageBytes is the kernel page size vmstat counts in. 4 KiB everywhere
+// AO runs; a 16 KiB kernel would under-report by four, still the right shape.
+const swapPageBytes = 4096
 
 // AppMemory sums AO's own processes and every live session tree. Roots are
 // deduplicated by Table.Tree, so a session that happens to be a daemon
@@ -125,14 +160,15 @@ func (r *MemoryReader) AppMemory(ctx context.Context) (domain.AppMemory, error) 
 	if err != nil {
 		return domain.AppMemory{}, err
 	}
-	table, err := r.table(ctx)
+	table, prev, elapsed, err := r.table(ctx)
 	if err != nil {
 		return domain.AppMemory{}, err
 	}
-	var roots []int
+	var own []int
 	if r.deps.AppRootPIDs != nil {
-		roots = append(roots, r.deps.AppRootPIDs()...)
+		own = append(own, r.deps.AppRootPIDs()...)
 	}
+	roots := append([]int(nil), own...)
 	for _, rec := range recs {
 		if rec.IsTerminated {
 			continue
@@ -140,7 +176,12 @@ func (r *MemoryReader) AppMemory(ctx context.Context) (domain.AppMemory, error) 
 		roots = append(roots, r.rootPIDs(ctx, rec)...)
 	}
 	tree := table.Tree(roots...)
-	return domain.AppMemory{RSSBytes: tree.RSSBytes, ProcessCount: len(tree.Processes)}, nil
+	ownReading := treeReading(table.Tree(own...), prev, elapsed)
+	ownReading.SampledAt = r.deps.Now()
+	return domain.AppMemory{
+		RSSBytes: tree.RSSBytes, ProcessCount: len(tree.Processes),
+		CPUPercent: procmem.CPUPercent(tree.Processes, prev, elapsed), Own: ownReading,
+	}, nil
 }
 
 // rootPIDs names where a session's process tree starts: the runtime handle
@@ -167,20 +208,25 @@ func (r *MemoryReader) rootPIDs(ctx context.Context, rec domain.SessionRecord) [
 	return roots
 }
 
-func (r *MemoryReader) table(ctx context.Context) (*procmem.Table, error) {
+// table returns the current snapshot, the one before it, and the seconds
+// between them, so callers can turn CPU time into a rate.
+func (r *MemoryReader) table(ctx context.Context) (cur, prev *procmem.Table, elapsed float64, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.deps.Now()
-	if r.cached != nil && r.deps.CacheTTL > 0 && now.Sub(r.cachedAt) < r.deps.CacheTTL {
-		return r.cached, nil
-	}
-	table, err := r.deps.Snapshot(ctx)
-	if err != nil {
-		if errors.Is(err, procmem.ErrUnsupported) {
-			return nil, err
+	if r.cached == nil || r.deps.CacheTTL == 0 || now.Sub(r.cachedAt) >= r.deps.CacheTTL {
+		table, err := r.deps.Snapshot(ctx)
+		if err != nil {
+			if errors.Is(err, procmem.ErrUnsupported) {
+				return nil, nil, 0, err
+			}
+			return nil, nil, 0, fmt.Errorf("sample process memory: %w", err)
 		}
-		return nil, fmt.Errorf("sample process memory: %w", err)
+		r.prev, r.prevAt = r.cached, r.cachedAt
+		r.cached, r.cachedAt = table, now
 	}
-	r.cached, r.cachedAt = table, now
-	return table, nil
+	if r.prev != nil {
+		elapsed = r.cachedAt.Sub(r.prevAt).Seconds()
+	}
+	return r.cached, r.prev, elapsed, nil
 }

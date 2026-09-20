@@ -33,8 +33,8 @@ type SessionMemoryService interface {
 	AppMemory(context.Context) (domain.AppMemory, error)
 }
 
-// MemoryBudgetSource reads the user's memory budget preference.
-type MemoryBudgetSource interface {
+// MemoryReserveSource reads the user's memory reserve preference.
+type MemoryReserveSource interface {
 	Get(ctx context.Context) (settingssvc.Snapshot, error)
 }
 
@@ -43,9 +43,8 @@ type UsageController struct {
 	Svc    UsageSummaryService
 	Log    *slog.Logger
 	Memory SessionMemoryService
-	// Budget is optional: without it the response carries no budget and the
-	// client falls back to plain size with no colour.
-	Budget MemoryBudgetSource
+	// Reserve is optional: without it the response carries no reserve line.
+	Reserve MemoryReserveSource
 }
 
 // Register mounts usage routes on the supplied router.
@@ -96,31 +95,43 @@ func (c *UsageController) listMemory(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]SessionMemoryResponse, 0, len(items))
 	for _, item := range items {
-		procs := make([]SessionMemoryProcessResponse, 0, len(item.Processes))
-		for _, p := range item.Processes {
-			procs = append(procs, SessionMemoryProcessResponse{PID: p.PID, PPID: p.PPID, RSSBytes: p.RSSBytes, Command: p.Command})
-		}
-		out = append(out, SessionMemoryResponse{
-			SessionID: item.SessionID, RSSBytes: item.RSSBytes, ProcessCount: item.ProcessCount,
-			SampledAt: item.SampledAt, Processes: procs,
-		})
+		out = append(out, sessionMemoryResponse(item))
 	}
 	var system *SystemMemoryResponse
 	if sys, sysErr := c.Memory.SystemMemory(r.Context()); sysErr == nil {
-		system = &SystemMemoryResponse{TotalBytes: sys.TotalBytes, AvailableBytes: sys.AvailableBytes}
+		system = &SystemMemoryResponse{
+			TotalBytes: sys.TotalBytes, AvailableBytes: sys.AvailableBytes,
+			SwapTotalBytes: sys.SwapTotalBytes, SwapUsedBytes: sys.SwapUsedBytes, SwapBytesPerSec: sys.SwapBytesPerSec,
+			CPUCount: sys.CPUCount, Load1: sys.Load1,
+		}
 	}
 	var app *AppMemoryResponse
 	if a, appErr := c.Memory.AppMemory(r.Context()); appErr == nil {
-		app = &AppMemoryResponse{RSSBytes: a.RSSBytes, ProcessCount: a.ProcessCount}
-	}
-	var budget *MemoryBudgetResponse
-	if c.Budget != nil && system != nil {
-		if snapshot, err := c.Budget.Get(r.Context()); err == nil {
-			bytes, auto := snapshot.ResolveMemoryBudget(system.TotalBytes)
-			budget = &MemoryBudgetResponse{Bytes: bytes, Auto: auto}
+		app = &AppMemoryResponse{RSSBytes: a.RSSBytes, ProcessCount: a.ProcessCount, CPUPercent: a.CPUPercent}
+		if a.Own.ProcessCount > 0 {
+			own := sessionMemoryResponse(a.Own)
+			app.Own = &own
 		}
 	}
-	envelope.WriteJSON(w, http.StatusOK, ListSessionMemoryResponse{Sessions: out, System: system, App: app, Budget: budget})
+	var reserve *MemoryReserveResponse
+	if c.Reserve != nil && system != nil {
+		if snapshot, err := c.Reserve.Get(r.Context()); err == nil {
+			bytes, auto := snapshot.ResolveMemoryReserve()
+			reserve = &MemoryReserveResponse{Bytes: bytes, Auto: auto}
+		}
+	}
+	envelope.WriteJSON(w, http.StatusOK, ListSessionMemoryResponse{Sessions: out, System: system, App: app, Reserve: reserve})
+}
+
+func sessionMemoryResponse(item domain.SessionMemory) SessionMemoryResponse {
+	procs := make([]SessionMemoryProcessResponse, 0, len(item.Processes))
+	for _, p := range item.Processes {
+		procs = append(procs, SessionMemoryProcessResponse{PID: p.PID, PPID: p.PPID, RSSBytes: p.RSSBytes, CPUPercent: p.CPUPercent, Command: p.Command})
+	}
+	return SessionMemoryResponse{
+		SessionID: item.SessionID, RSSBytes: item.RSSBytes, ProcessCount: item.ProcessCount, CPUPercent: item.CPUPercent,
+		SampledAt: item.SampledAt, Processes: procs,
+	}
 }
 
 func (c *UsageController) getSession(w http.ResponseWriter, r *http.Request) {
