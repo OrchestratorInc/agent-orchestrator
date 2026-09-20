@@ -73,7 +73,7 @@ export function AppMemoryIndicator() {
 				<TooltipTrigger asChild>
 					<button
 						aria-label={label}
-						className="inline-flex h-7 items-center gap-1.5 rounded-sm px-2 font-mono text-2xs tabular-nums text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						className="inline-flex items-center gap-1.5 font-mono text-2xs tabular-nums text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:underline"
 						data-memory-tone={pressure?.tone ?? "unknown"}
 						data-testid="app-memory-indicator"
 						onClick={() => setOpen(true)}
