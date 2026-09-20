@@ -150,7 +150,10 @@ export function SessionMemoryPanel({
 	const workspace = projectId ? workspaces.find((w) => w.id === projectId) : undefined;
 	const memory = useSessionMemory(projectId);
 	const system = useSystemMemory(projectId).data;
-	const app = useAppMemory().data?.app;
+	const appMemory = useAppMemory().data;
+	const app = appMemory?.app;
+	const pressure = app && appMemory?.system ? memoryPressure(app.rssBytes, appMemory.system) : undefined;
+	const underPressure = pressure !== undefined && pressure.tone !== "default";
 	// Includes the project's orchestrator session, not just worker sessions: it
 	// has its own process tree and is why the topbar pill can read nonzero
 	// with an empty board. Omitting it here made the panel's total silently
@@ -190,6 +193,11 @@ export function SessionMemoryPanel({
 							{t("shell.memoryPanelSummary", { size: formatMemory(total), count: rows.filter((row) => row.reading).length, processes })}
 							{app ? ` · ${t("shell.memoryPanelApp", { size: formatMemory(app.rssBytes) })}` : null}
 						</DialogDescription>
+						{underPressure && rows[0]?.reading ? (
+							<p className="mt-0.5 text-2xs text-warning" data-testid="session-memory-hint">
+								{t("shell.memoryHint", { title: rows[0].session.title, size: formatMemory(rows[0].reading.rssBytes) })}
+							</p>
+						) : null}
 					</div>
 					<Button
 						disabled={cleanup.isPending}
@@ -215,6 +223,7 @@ export function SessionMemoryPanel({
 					<MemoryTable
 						emptyLabel={t("shell.memoryEmpty")}
 						expandedSessionId={expandedSessionId}
+						highlightSessionId={underPressure ? rows[0]?.session.id : undefined}
 						onTerminate={(session) => terminate.mutate(session)}
 						onToggle={(sessionId) =>
 							setExpandedSessionId((current) => (current === sessionId ? undefined : sessionId))
@@ -231,12 +240,15 @@ export function SessionMemoryPanel({
 export function MemoryTable({
 	emptyLabel,
 	expandedSessionId,
+	highlightSessionId,
 	onTerminate,
 	onToggle,
 	rows,
 }: {
 	emptyLabel: string;
 	expandedSessionId?: string;
+	/** The row the pressure hint points at. */
+	highlightSessionId?: string;
 	onTerminate: (session: WorkspaceSession) => void;
 	onToggle: (sessionId: string) => void;
 	rows: MemoryRow[];
@@ -253,6 +265,7 @@ export function MemoryTable({
 	const renderRow = (row: MemoryRow) => (
 		<MemoryTableRow
 			isExpanded={expandedSessionId === row.session.id}
+			isHighlighted={highlightSessionId === row.session.id}
 			key={row.session.id}
 			onTerminate={() => onTerminate(row.session)}
 			onToggle={() => onToggle(row.session.id)}
@@ -291,11 +304,13 @@ function MemoryGroupRow({ label }: { label: string }) {
 
 function MemoryTableRow({
 	isExpanded,
+	isHighlighted,
 	onTerminate,
 	onToggle,
 	row,
 }: {
 	isExpanded: boolean;
+	isHighlighted?: boolean;
 	onTerminate: () => void;
 	onToggle: () => void;
 	row: MemoryRow;
@@ -316,7 +331,8 @@ function MemoryTableRow({
 		<>
 		<tr
 			aria-expanded={canExpand ? isExpanded : undefined}
-			className={cn("border-t border-border", canExpand && "cursor-pointer hover:bg-interactive-hover")}
+			className={cn("border-t border-border", canExpand && "cursor-pointer hover:bg-interactive-hover", isHighlighted && "bg-warning/10")}
+			data-highlighted={isHighlighted ? "true" : undefined}
 			data-testid="session-memory-row"
 			onClick={canExpand ? onToggle : undefined}
 		>

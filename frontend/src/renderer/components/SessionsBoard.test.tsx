@@ -17,6 +17,7 @@ vi.mock("motion/react", async (importOriginal) => {
 
 const {
 	appMemoryMock,
+	sessionMemoryMock,
 	navigateMock,
 	notificationShowMock,
 	postMock,
@@ -25,6 +26,7 @@ const {
 	boardActionsInPanelMock,
 } = vi.hoisted(() => ({
 	appMemoryMock: vi.fn(),
+	sessionMemoryMock: vi.fn(),
 	navigateMock: vi.fn(),
 	notificationShowMock: vi.fn(),
 	postMock: vi.fn(),
@@ -57,6 +59,7 @@ vi.mock("../hooks/useSessionUsageSummaries", () => ({
 vi.mock("../hooks/useSessionMemory", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../hooks/useSessionMemory")>()),
 	useAppMemory: appMemoryMock,
+	useSessionMemory: sessionMemoryMock,
 }));
 
 vi.mock("../lib/api-client", () => ({
@@ -118,6 +121,7 @@ beforeEach(() => {
 	workspaceQueryMock.mockReset().mockReturnValue({ data: [], isError: false });
 	usageQueryMock.mockReset().mockReturnValue({ data: new Map() });
 	appMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
+	sessionMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 	window.localStorage.removeItem("ao.board.archive.layout");
 	boardActionsInPanelMock.mockReset().mockReturnValue(false);
 });
@@ -149,13 +153,20 @@ describe("SessionsBoard", () => {
 			])],
 			isSuccess: true, isError: false,
 		});
+		sessionMemoryMock.mockReturnValue({
+			isError: false,
+			data: new Map([["running", { sessionId: "running", rssBytes: 641_728_512, processCount: 3, sampledAt: "", processes: [] }]]),
+		});
 		renderBoard("p1");
 		const pauseButton = screen.getByRole("button", { name: "Pause agent for Running task" });
 		expect(pauseButton).toHaveAttribute("data-paused", "false");
+		await userEvent.hover(pauseButton);
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("Pause agent · frees 612 MB");
 		await userEvent.click(pauseButton);
 		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/exit-agent", {
 			params: { path: { sessionId: "running" } },
 		}));
+		expect(await screen.findByRole("status")).toHaveTextContent("Paused · freed 612 MB");
 
 		const playButton = screen.getByRole("button", { name: "Resume agent for Paused task" });
 		expect(playButton).toHaveAttribute("data-paused", "true");

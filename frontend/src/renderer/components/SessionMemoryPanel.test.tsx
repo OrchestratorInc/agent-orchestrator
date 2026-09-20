@@ -208,6 +208,26 @@ describe("AppMemoryIndicator", () => {
 		);
 	});
 
+	it("points at the biggest session only under pressure", async () => {
+		renderButton();
+		await userEvent.click(screen.getByTestId("app-memory-indicator"));
+		await screen.findByTestId("session-memory-table");
+		expect(screen.queryByTestId("session-memory-hint")).not.toBeInTheDocument();
+		expect(screen.getAllByTestId("session-memory-row")[0]).not.toHaveAttribute("data-highlighted");
+	});
+
+	it("highlights the biggest session when AO is under pressure", async () => {
+		appMemoryMock.mockReturnValue({
+			isError: false,
+			data: { app: { rssBytes: 10 * GIB, processCount: 20 }, system: { totalBytes: 32 * GIB, availableBytes: 8 * GIB } },
+		});
+		renderButton();
+		await userEvent.click(screen.getByTestId("app-memory-indicator"));
+		await screen.findByTestId("session-memory-table");
+		expect(screen.getByTestId("session-memory-hint")).toHaveTextContent("Biggest: big worker · 2.1 GB");
+		expect(screen.getAllByTestId("session-memory-row")[0]).toHaveAttribute("data-highlighted", "true");
+	});
+
 	it("pauses a running agent and resumes an exited one from its row", async () => {
 		const workspace: WorkspaceSummary = {
 			id: "p1",

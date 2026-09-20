@@ -220,6 +220,8 @@ export type SessionCardViewProps = {
 	branchAction?: ReactNode;
 	branchIcon?: ReactNode;
 	error?: string;
+	/** Transient confirmation line (e.g. what a pause freed); same slot as error. */
+	notice?: string;
 	externalLink: ExternalLinkComponent;
 	footer?: ReactNode;
 	interactive?: boolean;
@@ -244,6 +246,7 @@ export function SessionCardView({
 	branchAction,
 	branchIcon,
 	error,
+	notice,
 	externalLink,
 	footer,
 	interactive = true,
@@ -412,6 +415,10 @@ export function SessionCardView({
 			{error ? (
 				<div className="border-t border-border px-3.5 py-1.5 text-2xs text-destructive" role="alert">
 					{error}
+				</div>
+			) : notice ? (
+				<div className="border-t border-border px-3.5 py-1.5 text-2xs text-muted-foreground" role="status">
+					{notice}
 				</div>
 			) : null}
 			{footer}

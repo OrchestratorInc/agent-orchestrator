@@ -28,6 +28,7 @@ import { agentLabel } from "../lib/agent-options";
 import type { WorkspaceSession } from "../types/workspace";
 import { canonicalTrackerIssueId } from "../types/workspace";
 import { canPauseAgent, useAgentPause } from "../hooks/useAgentPause";
+import { formatMemory } from "../hooks/useSessionMemory";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
 import type { SessionUsageSummary } from "../hooks/useSessionUsageSummaries";
 import {
@@ -88,11 +89,14 @@ export function sessionsBoardLabels(t: TFunction): BoardColumnLabels {
 }
 
 export function BoardSessionCardAdapter({
+	memoryBytes,
 	onOpen,
 	onTerminate,
 	session,
 	usage,
 }: {
+	/** Live RSS of the session's process tree, for the pause tooltip. */
+	memoryBytes?: number;
 	onOpen: () => void;
 	onTerminate: () => void;
 	session: WorkspaceSession;
@@ -100,6 +104,7 @@ export function BoardSessionCardAdapter({
 }) {
 	return (
 		<DesktopSessionCard
+			memoryBytes={memoryBytes}
 			onOpen={onOpen}
 			onTerminate={onTerminate}
 			session={session}
@@ -148,6 +153,7 @@ function DesktopSessionCard({
 	branchAction,
 	footer,
 	interactive = true,
+	memoryBytes,
 	onOpen,
 	onTerminate,
 	session,
@@ -157,6 +163,7 @@ function DesktopSessionCard({
 	branchAction?: ReactNode;
 	footer?: ReactNode;
 	interactive?: boolean;
+	memoryBytes?: number;
 	onOpen?: () => void;
 	onTerminate?: () => void;
 	session: WorkspaceSession;
@@ -171,8 +178,13 @@ function DesktopSessionCard({
 	const keepTerminateVisible = session.status === "merged";
 	const usagePresentation = toUsagePresentation(usage, t);
 	const translate: ProductUITranslator = (key, values) => t(key as MessageKey, values);
-	const pause = useAgentPause(session);
+	const pause = useAgentPause(session, memoryBytes);
 	const showPause = interactive && canPauseAgent(session);
+	const pauseLabel = pause.paused
+		? t("shell.resumeAgent")
+		: memoryBytes
+			? t("shell.pauseAgentFrees", { size: formatMemory(memoryBytes) })
+			: t("shell.pauseAgent");
 
 	// A paused agent stays visible so the play button is the card's obvious
 	// way back; the pause button only appears on hover like the trash can.
@@ -209,7 +221,7 @@ function DesktopSessionCard({
 					)}
 				</button>
 			</TooltipTrigger>
-			<TooltipContent side="bottom">{pause.paused ? t("shell.resumeAgent") : t("shell.pauseAgent")}</TooltipContent>
+			<TooltipContent side="bottom">{pauseLabel}</TooltipContent>
 		</Tooltip>
 	) : null;
 
@@ -270,6 +282,7 @@ function DesktopSessionCard({
 			branchAction={branchAction}
 			branchIcon={<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />}
 			error={termination.error ?? retryStatus.error?.message ?? pause.error?.message ?? undefined}
+			notice={pause.freedBytes ? t("shell.pauseFreed", { size: formatMemory(pause.freedBytes) }) : undefined}
 			externalLink={ProductExternalLink}
 			footer={footer}
 			interactive={interactive}

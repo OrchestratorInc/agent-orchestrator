@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
@@ -20,13 +21,19 @@ export function canPauseAgent(session: WorkspaceSession): boolean {
 	return isAgentPaused(session) || session.activity?.state !== "exited";
 }
 
-/** Pause (exit-agent) or resume (resume-agent) one session's agent. */
-export function useAgentPause(session: WorkspaceSession) {
+/** How long "Freed 612 MB" stays on the card after a pause. */
+export const pauseFreedNoticeMs = 4_000;
+
+/** Pause (exit-agent) or resume (resume-agent) one session's agent.
+ * `memoryBytes` is the reading at click time, reported back as what the
+ * pause freed. */
+export function useAgentPause(session: WorkspaceSession, memoryBytes?: number) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const paused = isAgentPaused(session);
+	const [freedBytes, setFreedBytes] = useState<number | undefined>();
 	const mutation = useMutation({
-		mutationFn: async () => {
+		mutationFn: async (): Promise<number | undefined> => {
 			const path = paused
 				? "/api/v1/sessions/{sessionId}/resume-agent"
 				: "/api/v1/sessions/{sessionId}/exit-agent";
@@ -34,11 +41,18 @@ export function useAgentPause(session: WorkspaceSession) {
 			if (error) {
 				throw new Error(apiErrorMessage(error, paused ? t("session.resumeFailed") : t("session.pauseFailed")));
 			}
+			return paused ? undefined : memoryBytes;
 		},
+		onSuccess: (freed) => setFreedBytes(freed),
 		onSettled: () => {
 			void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 			void queryClient.invalidateQueries({ queryKey: sessionMemoryQueryRoot });
 		},
 	});
-	return { paused, toggle: () => mutation.mutate(), isPending: mutation.isPending, error: mutation.error };
+	useEffect(() => {
+		if (freedBytes === undefined) return;
+		const timer = setTimeout(() => setFreedBytes(undefined), pauseFreedNoticeMs);
+		return () => clearTimeout(timer);
+	}, [freedBytes]);
+	return { paused, toggle: () => mutation.mutate(), isPending: mutation.isPending, error: mutation.error, freedBytes };
 }

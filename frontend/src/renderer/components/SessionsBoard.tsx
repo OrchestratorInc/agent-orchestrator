@@ -40,6 +40,7 @@ import { DaemonStartupLoader } from "./DaemonStartupLoader";
 import { useBoardPresentation } from "../hooks/useBoardPresentation";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { ProjectBoardActions } from "./ProjectBoardActions";
+import { useSessionMemory } from "../hooks/useSessionMemory";
 import { AppMemoryIndicator, useHasAppMemory } from "./SessionMemoryPanel";
 import {
 	ArchivedSessionCardAdapter,
@@ -128,6 +129,9 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 		hasWorkerSessions: liveSessions.length > 0,
 	});
 	const hasMemory = useHasAppMemory();
+	// Per-session readings feed only the pause tooltip ("frees 612 MB"); the
+	// card itself shows no memory chip.
+	const memoryBySession = useSessionMemory(projectId).data;
 	// The bar hosts the memory indicator too, so it stays up with an empty archive.
 	const hasArchive = archived.length > 0 || hasMemory;
 	const terminateSession = useTerminateSession();
@@ -242,6 +246,7 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 						labels={boardLabels}
 							renderSessionCard={(session) => (
 								<BoardSessionCardAdapter
+								memoryBytes={memoryBySession?.get(session.id)?.rssBytes}
 								onOpen={() => openSession(session)}
 									onTerminate={() => terminateSession.mutate(session)}
 									session={session}
