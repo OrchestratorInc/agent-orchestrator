@@ -178,7 +178,7 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		expect(screen.queryByRole("button", { name: /archive/i })).not.toBeInTheDocument();
 		const indicator = screen.getByTestId("app-memory-indicator");
-		expect(indicator).toHaveTextContent("38%");
+		expect(indicator).toHaveTextContent("12.0 GB");
 		expect(indicator).toHaveAttribute("data-memory-tone", "critical");
 		expect(indicator).toHaveAttribute("aria-label", "AO is using 12.0 GB of 32.0 GB (38%) · 8.0 GB free");
 		await userEvent.click(indicator);

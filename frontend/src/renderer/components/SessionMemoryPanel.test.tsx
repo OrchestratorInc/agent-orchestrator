@@ -112,7 +112,7 @@ describe("AppMemoryIndicator", () => {
 		});
 		const { rerender } = renderButton();
 		const button = screen.getByTestId("app-memory-indicator");
-		expect(button).toHaveTextContent("6%");
+		expect(button).toHaveTextContent("2.0 GB");
 		expect(button).toHaveAttribute("data-memory-tone", "default");
 		expect(button).toHaveAttribute("aria-label", "AO is using 2.0 GB of 32.0 GB (6%) · 20.0 GB free");
 

@@ -94,7 +94,7 @@ export function AppMemoryIndicator() {
 								!pressure && "bg-passive",
 							)}
 						/>
-						<span>{pressure ? `${pressure.pct}%` : formatMemory(app.rssBytes)}</span>
+						<span>{formatMemory(app.rssBytes)}</span>
 					</button>
 				</TooltipTrigger>
 				<TooltipContent side="top">{label}</TooltipContent>
