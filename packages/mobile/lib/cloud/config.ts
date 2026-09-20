@@ -12,4 +12,8 @@ export const CLOUD_BASE_URL =
 
 // Confirmed against cloud/internal/httpapi/server.go:323 — router.Route("/api/cloud/v1", ...).
 export const CLOUD_API_PREFIX = "/api/cloud/v1";
-export const WORKOS_REDIRECT_URI = "aomobile://callback";
+// The bundle identifier, not the app's generic `aomobile` scheme: WorkOS warns
+// that a generic scheme can be claimed by another app on the device, and this
+// project's dev build already captures `aomobile://`. Pairing keeps the old
+// scheme (see lib/pairingCode.ts); both are registered in app.json.
+export const WORKOS_REDIRECT_URI = "aoagents.ao://callback";
