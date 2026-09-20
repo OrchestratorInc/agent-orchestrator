@@ -946,6 +946,25 @@ type CleanupSkippedSession struct {
 	Reason    string           `json:"reason"`
 }
 
+// PauseIdleSessionsQuery is the query string accepted by POST /api/v1/sessions/pause-idle.
+type PauseIdleSessionsQuery struct {
+	Project     string `query:"project,omitempty" description:"Project id filter. When omitted, sweep every project."`
+	IdleMinutes int    `query:"idleMinutes,omitempty" minimum:"0" description:"Pause only agents idle at least this long. Zero or omitted pauses every idle agent."`
+}
+
+// PauseIdleFailedSession is one session the sweep selected but could not pause.
+type PauseIdleFailedSession struct {
+	SessionID domain.SessionID `json:"sessionId"`
+	Reason    string           `json:"reason"`
+}
+
+// PauseIdleSessionsResponse is the body of POST /api/v1/sessions/pause-idle.
+type PauseIdleSessionsResponse struct {
+	OK     bool                     `json:"ok"`
+	Paused []domain.SessionID       `json:"paused"`
+	Failed []PauseIdleFailedSession `json:"failed"`
+}
+
 // CleanupSessionsResponse is the body of POST /api/v1/sessions/cleanup.
 type CleanupSessionsResponse struct {
 	OK bool `json:"ok"`
@@ -1643,6 +1662,16 @@ type ListSessionMemoryResponse struct {
 	// App is the resident memory of everything AO runs (daemon, desktop
 	// shell, every live session), for the topbar pressure indicator.
 	App *AppMemoryResponse `json:"app,omitempty"`
+	// Budget is what the user lets AO hold; pressure is measured against it.
+	// Absent where host RAM cannot be read.
+	Budget *MemoryBudgetResponse `json:"budget,omitempty"`
+}
+
+// MemoryBudgetResponse is the effective memory budget at sample time.
+type MemoryBudgetResponse struct {
+	Bytes uint64 `json:"bytes" minimum:"0"`
+	// Auto reports that no explicit budget is set and Bytes was derived from host RAM.
+	Auto bool `json:"auto"`
 }
 
 // AppMemoryResponse is AO's own resident memory at sample time.
@@ -2823,6 +2852,11 @@ type SettingsResponse struct {
 	// CloudControlPlaneURL is the cloud control plane base URL; empty when no
 	// control plane is configured.
 	CloudControlPlaneURL string `json:"cloudControlPlaneUrl"`
+	// AutoPauseIdleMinutes is how long an agent may sit idle before AO pauses
+	// it (exits the process, keeps the session). Zero means off.
+	AutoPauseIdleMinutes int `json:"autoPauseIdleMinutes" minimum:"0"`
+	// MemoryBudgetBytes is the user's memory budget for AO; zero means Auto.
+	MemoryBudgetBytes int64 `json:"memoryBudgetBytes" minimum:"0"`
 }
 
 // AgentInstallerCatalogResponse is the body of GET /api/v1/agents/installers.
@@ -2833,6 +2867,19 @@ type AgentInstallerCatalogResponse struct {
 // UpdateSessionInterfaceRequest changes the default interface for new sessions.
 type UpdateSessionInterfaceRequest struct {
 	DefaultSessionMode string `json:"defaultSessionMode" enum:"chat,tui"`
+}
+
+// UpdateMemoryBudgetRequest sets how much memory AO may hold before the
+// board reads as under pressure.
+type UpdateMemoryBudgetRequest struct {
+	// Bytes is the budget; zero restores Auto (a quarter of host RAM, 2–16 GiB).
+	Bytes *int64 `json:"bytes" minimum:"0"`
+}
+
+// UpdateAutoPauseRequest sets the idle auto-pause threshold.
+type UpdateAutoPauseRequest struct {
+	// IdleMinutes pauses agents idle this long; zero turns auto-pause off.
+	IdleMinutes *int `json:"idleMinutes" minimum:"0"`
 }
 
 // UpdateCloudOfferingRequest flips the user's cloud toggle.

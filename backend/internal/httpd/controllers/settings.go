@@ -17,6 +17,8 @@ type SettingsService interface {
 	Get(ctx context.Context) (settingssvc.Snapshot, error)
 	SetDefaultSessionMode(ctx context.Context, mode domain.SessionMode) (settingssvc.Snapshot, error)
 	SetCloudOffering(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
+	SetAutoPauseIdleMinutes(ctx context.Context, minutes int) (settingssvc.Snapshot, error)
+	SetMemoryBudgetBytes(ctx context.Context, bytes int64) (settingssvc.Snapshot, error)
 	ChatHarnesses(candidates []domain.AgentHarness) []domain.AgentHarness
 	Offering() settingssvc.Offering
 }
@@ -35,6 +37,52 @@ func (c *SettingsController) Register(r chi.Router) {
 	r.Get("/settings", c.get)
 	r.Patch("/settings/session-interface", c.setSessionInterface)
 	r.Patch("/settings/cloud-offering", c.setCloudOffering)
+	r.Patch("/settings/auto-pause", c.setAutoPause)
+	r.Patch("/settings/memory-budget", c.setMemoryBudget)
+}
+
+func (c *SettingsController) setMemoryBudget(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "PATCH", "/api/v1/settings/memory-budget")
+		return
+	}
+	var req UpdateMemoryBudgetRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	if req.Bytes == nil || *req.Bytes < 0 || (*req.Bytes > 0 && *req.Bytes < settingssvc.MinMemoryBudgetBytes) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"MEMORY_BUDGET_INVALID", "bytes must be zero (auto) or at least 512 MiB", nil)
+		return
+	}
+	snapshot, err := c.Svc.SetMemoryBudgetBytes(r.Context(), *req.Bytes)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, c.response(snapshot))
+}
+
+func (c *SettingsController) setAutoPause(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "PATCH", "/api/v1/settings/auto-pause")
+		return
+	}
+	var req UpdateAutoPauseRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	if req.IdleMinutes == nil || *req.IdleMinutes < 0 {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"AUTO_PAUSE_INVALID", "idleMinutes must be zero (off) or a positive number of minutes", nil)
+		return
+	}
+	snapshot, err := c.Svc.SetAutoPauseIdleMinutes(r.Context(), *req.IdleMinutes)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, c.response(snapshot))
 }
 
 func (c *SettingsController) get(w http.ResponseWriter, r *http.Request) {
@@ -116,5 +164,7 @@ func (c *SettingsController) response(snapshot settingssvc.Snapshot) SettingsRes
 		CloudOffering:        snapshot.CloudOffering,
 		CloudEnabled:         offering.CloudEnabled(snapshot),
 		CloudControlPlaneURL: offering.CloudControlPlaneURL,
+		AutoPauseIdleMinutes: snapshot.AutoPauseIdleMinutes,
+		MemoryBudgetBytes:    snapshot.MemoryBudgetBytes,
 	}
 }

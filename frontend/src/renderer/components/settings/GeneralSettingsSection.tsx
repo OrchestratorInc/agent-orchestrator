@@ -13,7 +13,8 @@ import { SettingsInputRow, SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
-import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface } from "../../hooks/useSettings";
+import { useSettings, useUpdateAutoPause, useUpdateCloudOffering, useUpdateMemoryBudget, useUpdateSessionInterface } from "../../hooks/useSettings";
+import { formatMemory, useAppMemory } from "../../hooks/useSessionMemory";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
 import { isWindowsPlatform } from "../../lib/platform";
@@ -58,6 +59,78 @@ function SessionInterfaceRow() {
 					{note}
 				</p>
 			) : null}
+		</div>
+	);
+}
+
+/** Auto-pause: exit idle agents after a while, keeping their sessions. Off by default. */
+const autoPauseChoices = [0, 15, 30, 60, 120] as const;
+
+function AutoPauseRow() {
+	const { t } = useTranslation();
+	const { settings, isLoading, error } = useSettings();
+	const { update, saving, error: saveError } = useUpdateAutoPause();
+	const current = settings?.autoPauseIdleMinutes ?? 0;
+	const values = autoPauseChoices.includes(current as (typeof autoPauseChoices)[number])
+		? [...autoPauseChoices]
+		: [...autoPauseChoices, current].sort((a, b) => a - b);
+	const options = values.map((minutes) => ({
+		value: String(minutes),
+		label: minutes === 0 ? t("settings.autoPause.off") : t("settings.autoPause.minutes", { count: minutes }),
+	})) satisfies SettingsOption<string>[];
+	const note = saveError ?? error ?? t("settings.autoPause.help");
+	return (
+		<div className="flex w-full flex-col">
+			<SettingsRow className="rounded-none" label={t("settings.autoPause.label")}>
+				<SettingsOptionMenu
+					aria-label={t("settings.autoPause.label")}
+					value={String(current)}
+					options={options}
+					onChange={(value) => update(Number(value))}
+					disabled={isLoading || saving}
+				/>
+			</SettingsRow>
+			<p className={cn("px-3 pt-0 pb-4 text-xs leading-relaxed", saveError || error ? "text-destructive" : "text-muted-foreground")}>
+				{note}
+			</p>
+		</div>
+	);
+}
+
+/** Memory budget: what AO may hold before the board reads as under pressure. */
+const GIB = 1024 ** 3;
+const memoryBudgetChoicesGiB = [2, 4, 8, 16, 32] as const;
+
+function MemoryBudgetRow() {
+	const { t } = useTranslation();
+	const { settings, isLoading, error } = useSettings();
+	const { update, saving, error: saveError } = useUpdateMemoryBudget();
+	const memory = useAppMemory().data;
+	const current = settings?.memoryBudgetBytes ?? 0;
+	const totalBytes = memory?.system?.totalBytes;
+	const choices = memoryBudgetChoicesGiB.filter((gib) => totalBytes === undefined || gib * GIB <= totalBytes).map((gib) => gib * GIB);
+	const values = current === 0 || choices.includes(current) ? choices : [...choices, current].sort((a, b) => a - b);
+	const options = [
+		{ value: "0", label: t("settings.memoryBudget.auto") },
+		...values.map((bytes) => ({ value: String(bytes), label: formatMemory(bytes) })),
+	] satisfies SettingsOption<string>[];
+	const autoBytes = memory?.budget?.auto ? memory.budget.bytes : undefined;
+	const note =
+		saveError ?? error ?? (autoBytes ? t("settings.memoryBudget.helpAuto", { size: formatMemory(autoBytes) }) : t("settings.memoryBudget.help"));
+	return (
+		<div className="flex w-full flex-col">
+			<SettingsRow className="rounded-none" label={t("settings.memoryBudget.label")}>
+				<SettingsOptionMenu
+					aria-label={t("settings.memoryBudget.label")}
+					value={String(current)}
+					options={options}
+					onChange={(value) => update(Number(value))}
+					disabled={isLoading || saving}
+				/>
+			</SettingsRow>
+			<p className={cn("px-3 pt-0 pb-4 text-xs leading-relaxed", saveError || error ? "text-destructive" : "text-muted-foreground")}>
+				{note}
+			</p>
 		</div>
 	);
 }
@@ -216,6 +289,8 @@ export function GeneralSettingsSection({
 			{/* Sessions */}
 			<SettingsSection title={t("settings.sessions")} grouped>
 				<SessionInterfaceRow />
+				<MemoryBudgetRow />
+				<AutoPauseRow />
 				{isWindowsPlatform() ? <TerminalShellRows /> : null}
 				<SettingsRow label={t("settings.terminalCopyOnSelect")}>
 					<Switch

@@ -187,7 +187,11 @@ describe("SessionsBoard", () => {
 		const GIB = 1024 ** 3;
 		appMemoryMock.mockReturnValue({
 			isError: false,
-			data: { app: { rssBytes: 12 * GIB, processCount: 20 }, system: { totalBytes: 32 * GIB, availableBytes: 8 * GIB } },
+			data: {
+				app: { rssBytes: 12 * GIB, processCount: 20 },
+				system: { totalBytes: 32 * GIB, availableBytes: 8 * GIB },
+				budget: { bytes: 8 * GIB, auto: true },
+			},
 		});
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([boardSession({ id: "live", title: "Live task", status: "working" })])],
@@ -198,7 +202,7 @@ describe("SessionsBoard", () => {
 		const indicator = screen.getByTestId("app-memory-indicator");
 		expect(indicator).toHaveTextContent("12.0 GB");
 		expect(indicator).toHaveAttribute("data-memory-tone", "critical");
-		expect(indicator).toHaveAttribute("aria-label", "AO is using 12.0 GB of 32.0 GB (38%) · 8.0 GB free");
+		expect(indicator).toHaveAttribute("aria-label", "AO is using 12.0 GB of its 8.0 GB budget (auto, 150%) · 8.0 GB free");
 		await userEvent.click(indicator);
 		expect(await screen.findByTestId("session-memory-table")).toBeInTheDocument();
 	});

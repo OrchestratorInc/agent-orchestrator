@@ -20,6 +20,8 @@ type Store interface {
 	GetAppSettings(ctx context.Context) (Snapshot, error)
 	SetDefaultSessionMode(ctx context.Context, mode domain.SessionMode, now time.Time) error
 	SetCloudOffering(ctx context.Context, enabled bool, now time.Time) error
+	SetAutoPauseIdleMinutes(ctx context.Context, minutes int, now time.Time) error
+	SetMemoryBudgetBytes(ctx context.Context, bytes int64, now time.Time) error
 }
 
 // Snapshot is the current preference set.
@@ -27,7 +29,38 @@ type Snapshot struct {
 	DefaultSessionMode domain.SessionMode
 	// CloudOffering is the user's cloud toggle (Settings, Developer Mode).
 	CloudOffering bool
-	UpdatedAt     time.Time
+	// AutoPauseIdleMinutes exits agents idle this long; zero is off.
+	AutoPauseIdleMinutes int
+	// MemoryBudgetBytes is what the user lets AO hold; zero means Auto.
+	MemoryBudgetBytes int64
+	UpdatedAt         time.Time
+}
+
+// MinMemoryBudgetBytes is the smallest explicit budget accepted: below half a
+// gigabyte the daemon alone would read as over budget.
+const MinMemoryBudgetBytes = 512 << 20
+
+// AutoMemoryBudget is the budget used when none is set: a quarter of host
+// RAM, never below 2 GiB (a laptop still gets one real session) and never
+// above 16 GiB (a workstation does not get a free pass to eat itself).
+func AutoMemoryBudget(totalBytes uint64) uint64 {
+	const lo, hi = 2 << 30, 16 << 30
+	budget := totalBytes / 4
+	if budget < lo {
+		return lo
+	}
+	if budget > hi {
+		return hi
+	}
+	return budget
+}
+
+// ResolveMemoryBudget returns the effective budget and whether it is Auto.
+func (s Snapshot) ResolveMemoryBudget(totalBytes uint64) (bytes uint64, auto bool) {
+	if s.MemoryBudgetBytes > 0 {
+		return uint64(s.MemoryBudgetBytes), false
+	}
+	return AutoMemoryBudget(totalBytes), true
 }
 
 // Offering reports which AO offerings this daemon exposes to clients. It is
@@ -128,6 +161,29 @@ func (s *Service) SetDefaultSessionMode(ctx context.Context, mode domain.Session
 // new reads; nothing about running sessions changes.
 func (s *Service) SetCloudOffering(ctx context.Context, enabled bool) (Snapshot, error) {
 	if err := s.store.SetCloudOffering(ctx, enabled, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	return s.store.GetAppSettings(ctx)
+}
+
+// SetAutoPauseIdleMinutes sets how long an agent may sit idle before AO
+// pauses it; zero turns the policy off.
+func (s *Service) SetAutoPauseIdleMinutes(ctx context.Context, minutes int) (Snapshot, error) {
+	if minutes < 0 {
+		return Snapshot{}, fmt.Errorf("auto-pause minutes must not be negative: %d", minutes)
+	}
+	if err := s.store.SetAutoPauseIdleMinutes(ctx, minutes, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	return s.store.GetAppSettings(ctx)
+}
+
+// SetMemoryBudgetBytes sets the memory budget; zero restores Auto.
+func (s *Service) SetMemoryBudgetBytes(ctx context.Context, bytes int64) (Snapshot, error) {
+	if bytes < 0 || (bytes > 0 && bytes < MinMemoryBudgetBytes) {
+		return Snapshot{}, fmt.Errorf("memory budget must be zero (auto) or at least %d bytes", MinMemoryBudgetBytes)
+	}
+	if err := s.store.SetMemoryBudgetBytes(ctx, bytes, s.now()); err != nil {
 		return Snapshot{}, err
 	}
 	return s.store.GetAppSettings(ctx)

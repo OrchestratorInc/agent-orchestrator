@@ -24,9 +24,19 @@ func (s settingsStore) GetAppSettings(ctx context.Context) (settingssvc.Snapshot
 	}
 	return settingssvc.Snapshot{
 		DefaultSessionMode: row.DefaultSessionMode,
-		CloudOffering:      row.CloudOffering,
-		UpdatedAt:          row.UpdatedAt,
+		CloudOffering:        row.CloudOffering,
+		AutoPauseIdleMinutes: row.AutoPauseIdleMinutes,
+		MemoryBudgetBytes:    row.MemoryBudgetBytes,
+		UpdatedAt:            row.UpdatedAt,
 	}, nil
+}
+
+func (s settingsStore) SetMemoryBudgetBytes(ctx context.Context, bytes int64, now time.Time) error {
+	return s.store.SetMemoryBudgetBytes(ctx, bytes, now)
+}
+
+func (s settingsStore) SetAutoPauseIdleMinutes(ctx context.Context, minutes int, now time.Time) error {
+	return s.store.SetAutoPauseIdleMinutes(ctx, minutes, now)
 }
 
 func (s settingsStore) SetDefaultSessionMode(

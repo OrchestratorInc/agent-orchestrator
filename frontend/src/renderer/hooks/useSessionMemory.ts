@@ -5,6 +5,7 @@ import { apiClient } from "../lib/api-client";
 export type SessionMemoryReading = components["schemas"]["SessionMemoryResponse"];
 export type SystemMemoryReading = components["schemas"]["SystemMemoryResponse"];
 export type AppMemoryReading = components["schemas"]["AppMemoryResponse"];
+export type MemoryBudgetReading = components["schemas"]["MemoryBudgetResponse"];
 
 export const sessionMemoryQueryRoot = ["session-memory"] as const;
 export const sessionMemoryQueryKey = (projectId?: string) =>
@@ -17,6 +18,7 @@ type SessionMemoryResponse = {
 	sessions: SessionMemoryReading[];
 	system?: SystemMemoryReading;
 	app?: AppMemoryReading;
+	budget?: MemoryBudgetReading;
 };
 
 export async function fetchSessionMemory(projectId?: string): Promise<SessionMemoryResponse> {
@@ -24,7 +26,7 @@ export async function fetchSessionMemory(projectId?: string): Promise<SessionMem
 		params: { query: projectId ? { projectId } : {} },
 	});
 	if (error) throw error;
-	return { sessions: data?.sessions ?? [], system: data?.system, app: data?.app };
+	return { sessions: data?.sessions ?? [], system: data?.system, app: data?.app, budget: data?.budget };
 }
 
 export function sessionMemoryQueryOptions(projectId?: string) {
@@ -59,22 +61,27 @@ export function useSystemMemory(projectId?: string) {
 export function useAppMemory() {
 	return useQuery({
 		...sessionMemoryQueryOptions(),
-		select: (data: SessionMemoryResponse) => ({ app: data.app, system: data.system }),
+		select: (data: SessionMemoryResponse) => ({ app: data.app, system: data.system, budget: data.budget }),
 	});
 }
 
 export type MemoryPressure = { pct: number; freePct: number; tone: MemoryTone };
 
-/** AO's share of host RAM, colored by the worse of two signals: how much of
- * the machine AO holds (a tenth is worth a glance, a quarter is a problem),
- * and how little the host has left regardless of who holds it. */
-export function memoryPressure(usedBytes: number, system: { totalBytes: number; availableBytes: number }): MemoryPressure {
+/** AO's use measured against its budget (what the user lets it hold), with the
+ * host's own headroom as an override: a machine about to swap is red whoever
+ * is holding the memory. Three quarters of the budget is worth a glance;
+ * over budget is a problem. */
+export function memoryPressure(
+	usedBytes: number,
+	system: { totalBytes: number; availableBytes: number },
+	budgetBytes: number,
+): MemoryPressure {
 	const { totalBytes, availableBytes } = system;
-	const pct = totalBytes > 0 ? Math.min(100, Math.round((usedBytes / totalBytes) * 100)) : 0;
+	const pct = budgetBytes > 0 ? Math.round((usedBytes / budgetBytes) * 100) : 0;
 	const freePct = totalBytes > 0 ? Math.round((availableBytes / totalBytes) * 100) : 100;
-	const shareTone: MemoryTone = pct >= 25 ? "critical" : pct >= 10 ? "warning" : "default";
+	const budgetTone: MemoryTone = pct > 100 ? "critical" : pct >= 75 ? "warning" : "default";
 	const hostTone: MemoryTone = freePct < 7 ? "critical" : freePct < 15 ? "warning" : "default";
-	return { pct, freePct, tone: worseTone(shareTone, hostTone) };
+	return { pct, freePct, tone: worseTone(budgetTone, hostTone) };
 }
 
 const toneRank: Record<MemoryTone, number> = { default: 0, warning: 1, critical: 2 };

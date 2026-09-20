@@ -21,18 +21,23 @@ describe("memoryPressure", () => {
 	const GIB = 1024 ** 3;
 	const host = (totalGiB: number, availableGiB: number) => ({ totalBytes: totalGiB * GIB, availableBytes: availableGiB * GIB });
 
-	it("colours by AO's share of the machine: a tenth is a glance, a quarter a problem", () => {
-		expect(memoryPressure(1 * GIB, host(16, 10))).toMatchObject({ pct: 6, tone: "default" });
-		expect(memoryPressure(1.6 * GIB, host(16, 10))).toMatchObject({ pct: 10, tone: "warning" });
-		expect(memoryPressure(4 * GIB, host(16, 10))).toMatchObject({ pct: 25, tone: "critical" });
+	it("colours by AO's share of its budget: three quarters is a glance, over budget a problem", () => {
+		expect(memoryPressure(2 * GIB, host(32, 20), 8 * GIB)).toMatchObject({ pct: 25, tone: "default" });
+		expect(memoryPressure(6 * GIB, host(32, 20), 8 * GIB)).toMatchObject({ pct: 75, tone: "warning" });
+		expect(memoryPressure(9 * GIB, host(32, 20), 8 * GIB)).toMatchObject({ pct: 113, tone: "critical" });
 	});
 
-	it("escalates when the host is nearly full even if AO's share is small", () => {
-		expect(memoryPressure(1 * GIB, host(16, 2))).toMatchObject({ pct: 6, freePct: 13, tone: "warning" });
-		expect(memoryPressure(1 * GIB, host(16, 1))).toMatchObject({ pct: 6, freePct: 6, tone: "critical" });
+	it("does not care about machine size when the budget is the same", () => {
+		expect(memoryPressure(3 * GIB, host(8, 3), 4 * GIB).tone).toBe("warning");
+		expect(memoryPressure(3 * GIB, host(64, 50), 4 * GIB).tone).toBe("warning");
 	});
 
-	it("reports zero without a readable total", () => {
-		expect(memoryPressure(1 * GIB, host(0, 0))).toMatchObject({ pct: 0, tone: "default" });
+	it("escalates when the host is nearly full even if AO is within budget", () => {
+		expect(memoryPressure(1 * GIB, host(16, 2), 4 * GIB)).toMatchObject({ pct: 25, freePct: 13, tone: "warning" });
+		expect(memoryPressure(1 * GIB, host(16, 1), 4 * GIB)).toMatchObject({ pct: 25, freePct: 6, tone: "critical" });
+	});
+
+	it("reports zero without a budget", () => {
+		expect(memoryPressure(1 * GIB, host(0, 0), 0)).toMatchObject({ pct: 0, tone: "default" });
 	});
 });

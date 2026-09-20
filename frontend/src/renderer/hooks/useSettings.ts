@@ -27,6 +27,10 @@ export interface Settings {
 	cloudEnabled: boolean;
 	/** Cloud control plane base URL; empty when cloud is not configured. */
 	cloudControlPlaneUrl: string;
+	/** Minutes an agent may sit idle before AO pauses it; 0 is off. */
+	autoPauseIdleMinutes: number;
+	/** Memory budget AO is measured against; 0 means Auto (¼ of RAM, 2–16 GB). */
+	memoryBudgetBytes: number;
 }
 
 export function useSettings() {
@@ -52,6 +56,8 @@ export function useSettings() {
 				cloudOffering: data?.cloudOffering ?? false,
 				cloudEnabled: data?.cloudEnabled ?? false,
 				cloudControlPlaneUrl: data?.cloudControlPlaneUrl ?? "",
+				autoPauseIdleMinutes: data?.autoPauseIdleMinutes ?? 0,
+				memoryBudgetBytes: data?.memoryBudgetBytes ?? 0,
 			};
 		},
 	});
@@ -80,6 +86,46 @@ export function useUpdateSessionInterface() {
 
 	return {
 		update: (mode: SessionMode) => mutation.mutate(mode),
+		saving: mutation.isPending,
+		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
+	};
+}
+
+export function useUpdateAutoPause() {
+	const queryClient = useQueryClient();
+	const mutation = useMutation({
+		mutationFn: async (idleMinutes: number) => {
+			const { data, error } = await apiClient.PATCH("/api/v1/settings/auto-pause", {
+				body: { idleMinutes },
+			});
+			if (error) throw error;
+			return data;
+		},
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
+	});
+
+	return {
+		update: (idleMinutes: number) => mutation.mutate(idleMinutes),
+		saving: mutation.isPending,
+		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
+	};
+}
+
+export function useUpdateMemoryBudget() {
+	const queryClient = useQueryClient();
+	const mutation = useMutation({
+		mutationFn: async (bytes: number) => {
+			const { data, error } = await apiClient.PATCH("/api/v1/settings/memory-budget", {
+				body: { bytes },
+			});
+			if (error) throw error;
+			return data;
+		},
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
+	});
+
+	return {
+		update: (bytes: number) => mutation.mutate(bytes),
 		saving: mutation.isPending,
 		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
 	};

@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -94,6 +95,7 @@ type SessionService interface {
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
 	RollbackSpawn(ctx context.Context, id domain.SessionID) (sessionsvc.RollbackOutcome, error)
 	Cleanup(ctx context.Context, project domain.ProjectID) (sessionsvc.CleanupOutcome, error)
+	PauseIdle(ctx context.Context, in sessionsvc.PauseIdleInput) (sessionsvc.PauseIdleOutcome, error)
 	Rename(ctx context.Context, id domain.SessionID, displayName string) error
 	SetPreview(ctx context.Context, id domain.SessionID, previewURL string) (domain.Session, error)
 	SetTerminateOnPRMerge(ctx context.Context, id domain.SessionID, terminate bool) (domain.Session, error)
@@ -172,6 +174,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/sessions", c.list)
 	r.Post("/sessions", c.spawn)
 	r.Post("/sessions/cleanup", c.cleanup)
+	r.Post("/sessions/pause-idle", c.pauseIdle)
 	r.Get("/sessions/{sessionId}", c.get)
 	r.Get("/sessions/{sessionId}/preview", c.preview)
 	r.Post("/sessions/{sessionId}/preview", c.setPreview)
@@ -1432,6 +1435,37 @@ func (c *SessionsController) exitAgent(w http.ResponseWriter, r *http.Request) {
 		SessionID: sessionID(r),
 		Session:   sessionView(out.Session),
 	})
+}
+
+func (c *SessionsController) pauseIdle(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/pause-idle")
+		return
+	}
+	idleMinutes := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("idleMinutes")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_IDLE_MINUTES", "idleMinutes must be a non-negative integer", nil)
+			return
+		}
+		idleMinutes = n
+	}
+	out, err := c.Svc.PauseIdle(r.Context(), sessionsvc.PauseIdleInput{
+		Project: domain.ProjectID(r.URL.Query().Get("project")),
+		IdleFor: time.Duration(idleMinutes) * time.Minute,
+		Reason:  domain.SessionPauseUser,
+	})
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	failed := make([]PauseIdleFailedSession, 0, len(out.Failed))
+	for id, reason := range out.Failed {
+		failed = append(failed, PauseIdleFailedSession{SessionID: id, Reason: reason})
+	}
+	sort.Slice(failed, func(i, j int) bool { return failed[i].SessionID < failed[j].SessionID })
+	envelope.WriteJSON(w, http.StatusOK, PauseIdleSessionsResponse{OK: true, Paused: out.Paused, Failed: failed})
 }
 
 func (c *SessionsController) switchAgent(w http.ResponseWriter, r *http.Request) {

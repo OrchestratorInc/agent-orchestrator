@@ -14,7 +14,7 @@ import (
 
 const getAppSettings = `-- name: GetAppSettings :one
 
-SELECT id, default_session_mode, updated_at, cloud_offering FROM app_settings WHERE id = 1
+SELECT id, default_session_mode, updated_at, cloud_offering, auto_pause_idle_minutes, memory_budget_bytes FROM app_settings WHERE id = 1
 `
 
 // Daemon-owned user preferences. One row, seeded by migration 0042, so a read
@@ -27,8 +27,24 @@ func (q *Queries) GetAppSettings(ctx context.Context) (AppSetting, error) {
 		&i.DefaultSessionMode,
 		&i.UpdatedAt,
 		&i.CloudOffering,
+		&i.AutoPauseIdleMinutes,
+		&i.MemoryBudgetBytes,
 	)
 	return i, err
+}
+
+const setAutoPauseIdleMinutes = `-- name: SetAutoPauseIdleMinutes :exec
+UPDATE app_settings SET auto_pause_idle_minutes = ?, updated_at = ? WHERE id = 1
+`
+
+type SetAutoPauseIdleMinutesParams struct {
+	AutoPauseIdleMinutes int64
+	UpdatedAt            time.Time
+}
+
+func (q *Queries) SetAutoPauseIdleMinutes(ctx context.Context, arg SetAutoPauseIdleMinutesParams) error {
+	_, err := q.db.ExecContext(ctx, setAutoPauseIdleMinutes, arg.AutoPauseIdleMinutes, arg.UpdatedAt)
+	return err
 }
 
 const setCloudOffering = `-- name: SetCloudOffering :exec
@@ -56,5 +72,19 @@ type SetDefaultSessionModeParams struct {
 
 func (q *Queries) SetDefaultSessionMode(ctx context.Context, arg SetDefaultSessionModeParams) error {
 	_, err := q.db.ExecContext(ctx, setDefaultSessionMode, arg.DefaultSessionMode, arg.UpdatedAt)
+	return err
+}
+
+const setMemoryBudgetBytes = `-- name: SetMemoryBudgetBytes :exec
+UPDATE app_settings SET memory_budget_bytes = ?, updated_at = ? WHERE id = 1
+`
+
+type SetMemoryBudgetBytesParams struct {
+	MemoryBudgetBytes int64
+	UpdatedAt         time.Time
+}
+
+func (q *Queries) SetMemoryBudgetBytes(ctx context.Context, arg SetMemoryBudgetBytesParams) error {
+	_, err := q.db.ExecContext(ctx, setMemoryBudgetBytes, arg.MemoryBudgetBytes, arg.UpdatedAt)
 	return err
 }

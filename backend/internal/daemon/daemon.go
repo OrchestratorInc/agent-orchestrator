@@ -954,6 +954,8 @@ func Run() error {
 	if usagePipeline != nil {
 		usageDone = usagePipeline.Start(ctx)
 	}
+	// Idle auto-pause: off until the user sets a threshold in Settings.
+	go runAutoPause(ctx, settingsSvc, sessionSvc, autoPauseInterval, log)
 	// ponytail: 5s tolerates a brief frontend restart; tune if dev hot-reload trips it.
 	const supervisorGrace = 5 * time.Second
 

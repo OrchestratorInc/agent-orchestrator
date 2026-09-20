@@ -13,6 +13,7 @@ import {
 	formatMemory,
 	memoryPressure,
 	memoryTone,
+	sessionMemoryQueryRoot,
 	useAppMemory,
 	useSessionMemory,
 	useSystemMemory,
@@ -61,14 +62,15 @@ export function AppMemoryIndicator() {
 	const memory = useAppMemory();
 	const app = memory.data?.app;
 	const system = memory.data?.system;
+	const budget = memory.data?.budget;
 	if (memory.isError || !app || app.rssBytes === 0) {
 		return null;
 	}
-	const pressure = system ? memoryPressure(app.rssBytes, system) : undefined;
-	const label = system
-		? t("shell.memoryAppUsage", {
+	const pressure = system && budget ? memoryPressure(app.rssBytes, system, budget.bytes) : undefined;
+	const label = system && budget
+		? t(budget.auto ? "shell.memoryAppUsageAuto" : "shell.memoryAppUsage", {
 			used: formatMemory(app.rssBytes),
-			total: formatMemory(system.totalBytes),
+			budget: formatMemory(budget.bytes),
 			pct: pressure?.pct ?? 0,
 			free: formatMemory(system.availableBytes),
 		})
@@ -105,18 +107,29 @@ export function AppMemoryIndicator() {
 	);
 }
 
-/** btop's mem widget: one bar for the whole host, not one per row. */
-export function SystemMemoryBar({ system }: { system: SystemMemoryReading }) {
+/** btop's mem widget: one bar for the whole host, not one per row. The tick
+ * marks where AO's budget sits on the machine. */
+export function SystemMemoryBar({ budgetBytes, system }: { budgetBytes?: number; system: SystemMemoryReading }) {
 	const { t } = useTranslation();
 	const used = system.totalBytes - system.availableBytes;
 	const usedPct = system.totalBytes > 0 ? Math.min(100, Math.round((used / system.totalBytes) * 100)) : 0;
+	const budgetPct = budgetBytes && system.totalBytes > 0 ? Math.min(100, (budgetBytes / system.totalBytes) * 100) : undefined;
 	return (
 		<div className="flex items-center gap-3 border-b border-border px-4 py-2">
-			<div className="h-1.5 flex-1 overflow-hidden rounded-sm bg-foreground/[0.06]">
+			<div className="relative h-1.5 flex-1 rounded-sm bg-foreground/[0.06]">
 				<div
 					className={cn("h-full rounded-sm", usedPct >= 90 ? "bg-destructive" : usedPct >= 75 ? "bg-warning" : "bg-accent-strong")}
 					style={{ width: `${usedPct}%` }}
 				/>
+				{budgetPct !== undefined ? (
+					<span
+						aria-hidden="true"
+						className="absolute -top-0.5 h-2.5 w-px bg-foreground/50"
+						data-testid="session-memory-budget-tick"
+						style={{ left: `${budgetPct}%` }}
+						title={t("shell.memoryBudgetTick", { size: formatMemory(budgetBytes ?? 0) })}
+					/>
+				) : null}
 			</div>
 			<span className="whitespace-nowrap font-mono text-2xs tabular-nums text-muted-foreground">
 				{t("shell.memorySystemBar", { used: formatMemory(used), total: formatMemory(system.totalBytes), free: formatMemory(system.availableBytes) })}
@@ -153,7 +166,9 @@ export function SessionMemoryPanel({
 	const system = useSystemMemory(projectId).data;
 	const appMemory = useAppMemory().data;
 	const app = appMemory?.app;
-	const pressure = app && appMemory?.system ? memoryPressure(app.rssBytes, appMemory.system) : undefined;
+	const pressure = app && appMemory?.system && appMemory.budget
+		? memoryPressure(app.rssBytes, appMemory.system, appMemory.budget.bytes)
+		: undefined;
 	const underPressure = pressure !== undefined && pressure.tone !== "default";
 	// Includes the project's orchestrator session, not just worker sessions: it
 	// has its own process tree and is why the topbar pill can read nonzero
@@ -184,6 +199,26 @@ export function SessionMemoryPanel({
 		onSettled: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
 	});
 	const processes = rows.reduce((sum, row) => sum + (row.reading?.processCount ?? 0), 0);
+	// Bulk pause: every idle, unpaused worker in scope. Freed is summed from the
+	// readings held at click time, since the daemon only names who it paused.
+	const [pauseIdleResult, setPauseIdleResult] = useState<{ count: number; freedBytes: number } | undefined>();
+	const pauseIdle = useMutation({
+		mutationFn: async () => {
+			const before = new Map(rows.map((row) => [row.session.id, row.reading?.rssBytes ?? 0] as const));
+			const { data, error } = await apiClient.POST("/api/v1/sessions/pause-idle", {
+				params: { query: projectId ? { project: projectId } : {} },
+			});
+			if (error) throw new Error(apiErrorMessage(error, t("shell.memoryPauseIdleFailed")));
+			const paused = data?.paused ?? [];
+			return { count: paused.length, freedBytes: paused.reduce((sum, id) => sum + (before.get(id) ?? 0), 0) };
+		},
+		onSuccess: (result) => setPauseIdleResult(result),
+		onSettled: () => {
+			void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+			void queryClient.invalidateQueries({ queryKey: sessionMemoryQueryRoot });
+		},
+	});
+	const idleCount = rows.filter((row) => canPauseAgent(row.session) && !row.session.pausedAt && row.session.activity?.state === "idle").length;
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className={cn(settingsDialogContentClass, "w-[min(56rem,calc(100vw-var(--space-8)))]")} showCloseButton={false}>
@@ -201,6 +236,16 @@ export function SessionMemoryPanel({
 						) : null}
 					</div>
 					<Button
+						data-testid="session-memory-pause-idle"
+						disabled={pauseIdle.isPending || idleCount === 0}
+						onClick={() => pauseIdle.mutate()}
+						size="sm"
+						title={idleCount === 0 ? t("shell.memoryPauseIdleNone") : undefined}
+						variant="outline"
+					>
+						{pauseIdle.isPending ? t("shell.memoryPauseIdleRunning") : t("shell.memoryPauseIdle")}
+					</Button>
+					<Button
 						disabled={cleanup.isPending}
 						onClick={() => cleanup.mutate()}
 						size="sm"
@@ -214,11 +259,15 @@ export function SessionMemoryPanel({
 						</Button>
 					</DialogClose>
 				</div>
-				{system ? <SystemMemoryBar system={system} /> : null}
+				{system ? <SystemMemoryBar budgetBytes={appMemory?.budget?.bytes} system={system} /> : null}
 				<div className={cn(settingsDialogBodyClass, "gap-0 p-0")}>
-					{cleanup.isError ? (
+					{cleanup.isError || pauseIdle.isError ? (
 						<p className="border-b border-border px-4 py-2 text-2xs text-destructive" role="alert">
-							{cleanup.error.message}
+							{cleanup.error?.message ?? pauseIdle.error?.message}
+						</p>
+					) : pauseIdleResult ? (
+						<p className="border-b border-border px-4 py-2 text-2xs text-muted-foreground" role="status">
+							{t("shell.memoryPauseIdleDone", { count: pauseIdleResult.count, size: formatMemory(pauseIdleResult.freedBytes) })}
 						</p>
 					) : null}
 					<MemoryTable

@@ -353,6 +353,10 @@ func (f *fakeSessionService) Restore(_ context.Context, id domain.SessionID) (se
 	return sessionsvc.RestoreOutcome{Session: s, Mode: sessionsvc.RestoreModeView("native")}, nil
 }
 
+func (f *fakeSessionService) PauseIdle(_ context.Context, _ sessionsvc.PauseIdleInput) (sessionsvc.PauseIdleOutcome, error) {
+	return sessionsvc.PauseIdleOutcome{}, nil
+}
+
 func (f *fakeSessionService) ExitAgent(_ context.Context, id domain.SessionID, _ domain.SessionPauseReason, _ domain.SessionInterfaceTransitionPolicy) (sessionsvc.ExitAgentOutcome, error) {
 	s := f.sessions[id]
 	s.Activity.State = domain.ActivityExited
