@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import type { TFunction } from "i18next";
 import { ChevronRight, Loader2, Pause, Play, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
@@ -19,7 +18,6 @@ import {
 	useAppMemory,
 	useSessionMemory,
 	useSystemMemory,
-	type MemoryPressure,
 	type SessionMemoryReading,
 	type SystemMemoryReading,
 } from "../hooks/useSessionMemory";
@@ -95,24 +93,19 @@ export function useHasAppMemory(): boolean {
 	return !memory.isError && (memory.data?.app?.rssBytes ?? 0) > 0;
 }
 
-/** The four words the light says. Red tells you what to do; the rest just nudge. */
-export function pressurePhrase(pressure: MemoryPressure | undefined, t: TFunction): string {
-	if (!pressure) return t("shell.memoryBarUnknown");
-	if (pressure.tone === "critical") {
-		return pressure.reason === "swap" ? t("shell.memoryBarSwapping") : t("shell.memoryBarLow");
-	}
-	if (pressure.tone === "warning") {
-		return pressure.reason === "cpu" ? t("shell.memoryBarBusyCpu") : t("shell.memoryBarBusy");
-	}
-	return t("shell.memoryBarComfortable");
+/** Rate of swapping, for the bar: whole megabytes per second. */
+function formatRate(bytesPerSec: number): string {
+	return `${formatMemory(bytesPerSec)}/s`;
 }
 
 /**
- * Archive-bar light: a dot, a short phrase and the live session count. No
- * number by default; the tooltip and the panel behind it carry the figures.
- * It reads only the memory query so the board keeps its identity while
- * sessions stream updates; the panel subscribes to sessions only while open.
- * Where the host can't be read the dot is grey and the phrase says so.
+ * Archive-bar light: a dot, free host RAM, and the live session count. The
+ * swap rate appears only while swapping and the load only while the cores
+ * are pinned, so the bar says more only when there is more to say; the
+ * tooltip and the panel carry the rest. It reads only the memory query so the
+ * board keeps its identity while sessions stream updates; the panel
+ * subscribes to sessions only while open. Where the host can't be read the
+ * dot is grey and only AO's own size shows.
  */
 export function AppMemoryIndicator() {
 	const { t } = useTranslation();
@@ -125,7 +118,7 @@ export function AppMemoryIndicator() {
 		return null;
 	}
 	const pressure = system ? memoryPressure(system, reserve?.bytes) : undefined;
-	const phrase = pressurePhrase(pressure, t);
+	const headline = system ? t("shell.memoryBarFree", { free: formatMemory(system.availableBytes) }) : formatMemory(app.rssBytes);
 	const detail = system && pressure
 		? t("shell.memoryBarDetail", {
 			free: formatMemory(system.availableBytes),
@@ -135,7 +128,10 @@ export function AppMemoryIndicator() {
 			load: pressure.cpuLoad.toFixed(2),
 		})
 		: t("shell.memoryAppUsageNoTotal", { used: formatMemory(app.rssBytes) });
-	const hold = pressure?.belowReserve && reserve ? t("shell.memoryBarBelowReserve", { size: formatMemory(reserve.bytes) }) : undefined;
+	const extras: string[] = [];
+	if (system && pressure?.swapping) extras.push(t("shell.memoryBarSwap", { rate: formatRate(system.swapBytesPerSec) }));
+	if (pressure && pressure.cpuLoad >= 1) extras.push(t("shell.memoryBarLoad", { load: pressure.cpuLoad.toFixed(1) }));
+	if (pressure?.belowReserve && reserve) extras.push(t("shell.memoryBarBelowReserve", { size: formatMemory(reserve.bytes) }));
 	const count = memory.data?.liveCount ?? 0;
 	return (
 		<>
@@ -143,8 +139,8 @@ export function AppMemoryIndicator() {
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<button
-						aria-label={`${phrase} · ${detail}`}
-						className="inline-flex items-center gap-2 text-2xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:underline"
+						aria-label={detail}
+						className="inline-flex items-center gap-2 font-mono text-2xs tabular-nums text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:underline"
 						data-memory-tone={pressure?.tone ?? "unknown"}
 						data-memory-reason={pressure?.reason}
 						data-testid="app-memory-indicator"
@@ -162,10 +158,12 @@ export function AppMemoryIndicator() {
 							)}
 						/>
 						<span className={cn(pressure?.tone === "critical" && "text-destructive", pressure?.tone === "warning" && "text-warning")}>
-							{phrase}
+							{headline}
 						</span>
-						{hold ? <span className="text-passive">{hold}</span> : null}
-						<span className="font-mono tabular-nums text-passive">{t("shell.memoryBarSessions", { count })}</span>
+						{extras.map((extra) => (
+							<span className="text-passive" key={extra}>· {extra}</span>
+						))}
+						<span className="text-passive">· {t("shell.memoryBarSessions", { count })}</span>
 					</button>
 				</TooltipTrigger>
 				<TooltipContent side="top">{detail}</TooltipContent>

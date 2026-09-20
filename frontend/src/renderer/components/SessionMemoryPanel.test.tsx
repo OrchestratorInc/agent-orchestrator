@@ -136,39 +136,36 @@ describe("AppMemoryIndicator", () => {
 		expect(screen.queryByTestId("app-memory-indicator")).not.toBeInTheDocument();
 	});
 
-	it("says a phrase and a count, never a number, and keeps the figures for the tooltip", () => {
+	it("shows free RAM and a count, coloured by headroom, with the rest in the tooltip", () => {
 		const { rerender } = renderButton();
 		const button = screen.getByTestId("app-memory-indicator");
-		expect(button).toHaveTextContent("Running comfortably");
-		expect(button).toHaveTextContent("2 sessions");
-		expect(button).not.toHaveTextContent("GB");
+		expect(button).toHaveTextContent("20.0 GB free· 2 sessions");
 		expect(button).toHaveAttribute("data-memory-tone", "default");
-		expect(button).toHaveAttribute("aria-label", "Running comfortably · 20.0 GB free of 32.0 GB (63%) · AO holds 2.0 GB · load 0.06 per core");
+		expect(button).toHaveAttribute("aria-label", "20.0 GB free of 32.0 GB (63%) · AO holds 2.0 GB · load 0.06 per core");
 
 		// A fifth free: getting tight.
 		appMemoryMock.mockReturnValue(appReading(6));
 		rerender();
 		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("data-memory-tone", "warning");
-		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("Machine is getting busy");
+		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("6.0 GB free· 2 sessions");
 
-		// Under a tenth free and under the reserve: red says what to do, and auto-start is on hold.
+		// Under a tenth free and under the reserve: red, and the reserve line appears.
 		appMemoryMock.mockReturnValue(appReading(1));
 		rerender();
 		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("data-memory-tone", "critical");
-		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("Low memory. Pause or stop a session to recover.");
-		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("below 2.0 GB reserve · auto-start on hold");
+		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("1.0 GB free· below 2.0 GB reserve· 2 sessions");
 	});
 
-	it("is red the moment the host swaps, and only yellow when the cores are pinned", () => {
+	it("adds the swap rate only while swapping and the load only while the cores are pinned", () => {
 		appMemoryMock.mockReturnValue(appReading(20, { swapBytesPerSec: 8 * 1024 ** 2 }));
 		const { rerender } = renderButton();
 		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("data-memory-reason", "swap");
-		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("Swapping to disk. Pause or stop a session now.");
+		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("20.0 GB free· swap 8 MB/s· 2 sessions");
 
 		appMemoryMock.mockReturnValue(appReading(20, { load1: 12 }));
 		rerender();
 		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("data-memory-tone", "warning");
-		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("CPU is pinned");
+		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("20.0 GB free· load 1.5· 2 sessions");
 	});
 
 	it("offers to pause idle sessions only while red", () => {
@@ -176,14 +173,14 @@ describe("AppMemoryIndicator", () => {
 		expect(screen.queryByTestId("memory-pressure-suggestion")).not.toBeInTheDocument();
 		appMemoryMock.mockReturnValue(appReading(1));
 		rerender();
-		expect(screen.getByTestId("memory-pressure-suggestion")).toHaveTextContent("Pause 3 idle sessions, frees 2.7 GB");
+		expect(screen.getByTestId("memory-pressure-suggestion")).toHaveTextContent("Pause 3 idle · 2.7 GB");
 	});
 
-	it("goes grey and says so where the host cannot be read", () => {
+	it("goes grey and falls back to AO's own size where the host cannot be read", () => {
 		appMemoryMock.mockReturnValue({ isError: false, data: { app: { rssBytes: 4 * GIB, processCount: 20, cpuPercent: 0 }, liveCount: 1 } });
 		renderButton();
 		const button = screen.getByTestId("app-memory-indicator");
-		expect(button).toHaveTextContent("Memory not readable on this platform");
+		expect(button).toHaveTextContent("4.0 GB· 1 session");
 		expect(button).toHaveAttribute("data-memory-tone", "unknown");
 	});
 

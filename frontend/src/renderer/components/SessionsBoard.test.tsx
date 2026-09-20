@@ -203,10 +203,9 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		expect(screen.queryByRole("button", { name: /archive/i })).not.toBeInTheDocument();
 		const indicator = screen.getByTestId("app-memory-indicator");
-		expect(indicator).toHaveTextContent("Low memory. Pause or stop a session to recover.");
-		expect(indicator).toHaveTextContent("1 session");
+		expect(indicator).toHaveTextContent("2.0 GB free· 1 session");
 		expect(indicator).toHaveAttribute("data-memory-tone", "critical");
-		expect(indicator).toHaveAttribute("aria-label", "Low memory. Pause or stop a session to recover. · 2.0 GB free of 32.0 GB (6%) · AO holds 12.0 GB · load 0.13 per core");
+		expect(indicator).toHaveAttribute("aria-label", "2.0 GB free of 32.0 GB (6%) · AO holds 12.0 GB · load 0.13 per core");
 		await userEvent.click(indicator);
 		expect(await screen.findByTestId("session-memory-table")).toBeInTheDocument();
 	});
