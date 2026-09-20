@@ -63,13 +63,23 @@ export function useAppMemory() {
 	});
 }
 
-export type MemoryPressure = { pct: number; tone: MemoryTone };
+export type MemoryPressure = { pct: number; freePct: number; tone: MemoryTone };
 
-/** Share of host RAM held by AO. A quarter is worth a glance; half is the
- * point where the next session launch starts swapping. */
-export function memoryPressure(usedBytes: number, totalBytes: number): MemoryPressure {
+/** AO's share of host RAM, colored by the worse of two signals: how much of
+ * the machine AO holds (a tenth is worth a glance, a quarter is a problem),
+ * and how little the host has left regardless of who holds it. */
+export function memoryPressure(usedBytes: number, system: { totalBytes: number; availableBytes: number }): MemoryPressure {
+	const { totalBytes, availableBytes } = system;
 	const pct = totalBytes > 0 ? Math.min(100, Math.round((usedBytes / totalBytes) * 100)) : 0;
-	return { pct, tone: pct >= 50 ? "critical" : pct >= 25 ? "warning" : "default" };
+	const freePct = totalBytes > 0 ? Math.round((availableBytes / totalBytes) * 100) : 100;
+	const shareTone: MemoryTone = pct >= 25 ? "critical" : pct >= 10 ? "warning" : "default";
+	const hostTone: MemoryTone = freePct < 7 ? "critical" : freePct < 15 ? "warning" : "default";
+	return { pct, freePct, tone: worseTone(shareTone, hostTone) };
+}
+
+const toneRank: Record<MemoryTone, number> = { default: 0, warning: 1, critical: 2 };
+function worseTone(a: MemoryTone, b: MemoryTone): MemoryTone {
+	return toneRank[a] >= toneRank[b] ? a : b;
 }
 
 const GIB = 1024 ** 3;

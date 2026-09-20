@@ -1931,7 +1931,7 @@
 	"shell.usageProcessedCompact": "{{count}} 처리됨",
 	"shell.usageTokens": "토큰 {{count}}개",
 	"shell.memoryPanelTitle": "세션 메모리",
-	"shell.memoryAppUsage": "AO가 {{total}} 중 {{used}} 사용 중 ({{pct}}%)",
+	"shell.memoryAppUsage": "AO가 {{total}} 중 {{used}} 사용 중 ({{pct}}%) · {{free}} 여유",
 	"shell.memoryAppUsageNoTotal": "AO가 {{used}} 사용 중",
 	"shell.memoryPanelApp": "AO 전체 {{size}}",
 	"shell.memoryPanelSummary": "{{count}}개 세션에서 {{size}} · {{processes}}개 프로세스",

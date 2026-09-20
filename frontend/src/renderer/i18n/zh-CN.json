@@ -1328,7 +1328,7 @@
 	"shell.usageProcessedCompact": "{{count}} 已处理",
 	"shell.usageTokens": "{{count}} 个令牌",
 	"shell.memoryPanelTitle": "会话内存",
-	"shell.memoryAppUsage": "AO 正在使用 {{used}} / {{total}}（{{pct}}%）",
+	"shell.memoryAppUsage": "AO 正在使用 {{used}} / {{total}}（{{pct}}%）· 剩余 {{free}}",
 	"shell.memoryAppUsageNoTotal": "AO 正在使用 {{used}}",
 	"shell.memoryPanelApp": "AO 整体 {{size}}",
 	"shell.memoryPanelSummary": "{{count}} 个会话共 {{size}} · {{processes}} 个进程",

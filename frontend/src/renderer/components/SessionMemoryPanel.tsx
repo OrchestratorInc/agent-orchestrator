@@ -63,9 +63,14 @@ export function AppMemoryIndicator() {
 	if (memory.isError || !app || app.rssBytes === 0) {
 		return null;
 	}
-	const pressure = system ? memoryPressure(app.rssBytes, system.totalBytes) : undefined;
+	const pressure = system ? memoryPressure(app.rssBytes, system) : undefined;
 	const label = system
-		? t("shell.memoryAppUsage", { used: formatMemory(app.rssBytes), total: formatMemory(system.totalBytes), pct: pressure?.pct ?? 0 })
+		? t("shell.memoryAppUsage", {
+			used: formatMemory(app.rssBytes),
+			total: formatMemory(system.totalBytes),
+			pct: pressure?.pct ?? 0,
+			free: formatMemory(system.availableBytes),
+		})
 		: t("shell.memoryAppUsageNoTotal", { used: formatMemory(app.rssBytes) });
 	return (
 		<>

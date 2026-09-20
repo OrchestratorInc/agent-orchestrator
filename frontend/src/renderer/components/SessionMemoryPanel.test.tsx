@@ -105,23 +105,28 @@ describe("AppMemoryIndicator", () => {
 		expect(screen.queryByTestId("app-memory-indicator")).not.toBeInTheDocument();
 	});
 
-	it("colours the percent by pressure against host RAM", () => {
+	it("colours the percent by AO's share and by host headroom", () => {
+		appMemoryMock.mockReturnValue({
+			isError: false,
+			data: { app: { rssBytes: 2 * GIB, processCount: 20 }, system: { totalBytes: 32 * GIB, availableBytes: 20 * GIB } },
+		});
 		const { rerender } = renderButton();
 		const button = screen.getByTestId("app-memory-indicator");
-		expect(button).toHaveTextContent("13%");
+		expect(button).toHaveTextContent("6%");
 		expect(button).toHaveAttribute("data-memory-tone", "default");
-		expect(button).toHaveAttribute("aria-label", "AO is using 4.0 GB of 32.0 GB (13%)");
+		expect(button).toHaveAttribute("aria-label", "AO is using 2.0 GB of 32.0 GB (6%) · 20.0 GB free");
 
 		appMemoryMock.mockReturnValue({
 			isError: false,
-			data: { app: { rssBytes: 10 * GIB, processCount: 20 }, system: { totalBytes: 32 * GIB, availableBytes: 8 * GIB } },
+			data: { app: { rssBytes: 4 * GIB, processCount: 20 }, system: { totalBytes: 32 * GIB, availableBytes: 20 * GIB } },
 		});
 		rerender();
 		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("data-memory-tone", "warning");
 
+		// Same small share, but the host is almost out of memory.
 		appMemoryMock.mockReturnValue({
 			isError: false,
-			data: { app: { rssBytes: 20 * GIB, processCount: 20 }, system: { totalBytes: 32 * GIB, availableBytes: 2 * GIB } },
+			data: { app: { rssBytes: 2 * GIB, processCount: 20 }, system: { totalBytes: 32 * GIB, availableBytes: 1 * GIB } },
 		});
 		rerender();
 		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("data-memory-tone", "critical");

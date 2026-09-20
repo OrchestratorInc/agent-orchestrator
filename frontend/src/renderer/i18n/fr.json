@@ -1960,7 +1960,7 @@
 	"shell.usageProcessedCompact": "{{count}} traités",
 	"shell.usageTokens": "{{count}} jetons",
 	"shell.memoryPanelTitle": "Mémoire des sessions",
-	"shell.memoryAppUsage": "AO utilise {{used}} sur {{total}} ({{pct}} %)",
+	"shell.memoryAppUsage": "AO utilise {{used}} sur {{total}} ({{pct}} %) · {{free}} libres",
 	"shell.memoryAppUsageNoTotal": "AO utilise {{used}}",
 	"shell.memoryPanelApp": "{{size}} pour tout AO",
 	"shell.memoryPanelSummary": "{{size}} sur {{count}} sessions · {{processes}} processus",

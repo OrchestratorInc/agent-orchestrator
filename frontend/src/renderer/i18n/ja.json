@@ -1931,7 +1931,7 @@
 	"shell.usageProcessedCompact": "{{count}} 処理済み",
 	"shell.usageTokens": "{{count}} トークン",
 	"shell.memoryPanelTitle": "セッションメモリ",
-	"shell.memoryAppUsage": "AO は {{total}} 中 {{used}} を使用中（{{pct}}%）",
+	"shell.memoryAppUsage": "AO は {{total}} 中 {{used}} を使用中（{{pct}}%）· 空き {{free}}",
 	"shell.memoryAppUsageNoTotal": "AO は {{used}} を使用中",
 	"shell.memoryPanelApp": "AO 全体で {{size}}",
 	"shell.memoryPanelSummary": "{{count}} セッションで {{size}} · {{processes}} プロセス",

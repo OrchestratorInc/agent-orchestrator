@@ -1931,7 +1931,7 @@
 	"shell.usageProcessedCompact": "{{count}} verarbeitet",
 	"shell.usageTokens": "{{count}} Tokens",
 	"shell.memoryPanelTitle": "Sitzungsspeicher",
-	"shell.memoryAppUsage": "AO belegt {{used}} von {{total}} ({{pct}} %)",
+	"shell.memoryAppUsage": "AO belegt {{used}} von {{total}} ({{pct}} %) · {{free}} frei",
 	"shell.memoryAppUsageNoTotal": "AO belegt {{used}}",
 	"shell.memoryPanelApp": "{{size}} für ganz AO",
 	"shell.memoryPanelSummary": "{{size}} über {{count}} Sitzungen · {{processes}} Prozesse",

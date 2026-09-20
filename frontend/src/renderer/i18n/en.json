@@ -1482,7 +1482,7 @@
 	"shell.usageProcessedCompact": "{{count}} processed",
 	"shell.usageTokens": "{{count}} tokens",
 	"shell.memoryPanelTitle": "Session memory",
-	"shell.memoryAppUsage": "AO is using {{used}} of {{total}} ({{pct}}%)",
+	"shell.memoryAppUsage": "AO is using {{used}} of {{total}} ({{pct}}%) · {{free}} free",
 	"shell.memoryAppUsageNoTotal": "AO is using {{used}}",
 	"shell.memoryPanelApp": "{{size}} for all of AO",
 	"shell.memoryPanelSummary": "{{size}} across {{count}} sessions · {{processes}} processes",
