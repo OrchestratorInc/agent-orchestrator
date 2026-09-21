@@ -143,8 +143,8 @@ export function AppMemoryIndicator() {
 	if (memory.isError || !app || app.rssBytes === 0) {
 		return null;
 	}
-	const word = state ? t(`shell.memoryState.${state}`) : t("shell.memoryState.unknown");
 	const fix = suggestionLabel(suggestion, t);
+	const word = state ? t(`shell.memoryState.${state}`) : t("shell.memoryState.unknown");
 	const detail = system
 		? t("shell.memoryBarDetail", {
 			free: formatMemory(system.availableBytes),
@@ -158,7 +158,7 @@ export function AppMemoryIndicator() {
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<button
-						aria-label={detail}
+						aria-label={`${word} · ${detail}`}
 						className="inline-flex items-center gap-2 font-mono text-2xs tabular-nums text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:underline"
 						data-memory-state={state ?? "unknown"}
 						data-testid="app-memory-indicator"
@@ -166,8 +166,7 @@ export function AppMemoryIndicator() {
 						type="button"
 					>
 						<span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", state ? stateDot[state] : "bg-passive")} />
-						<span className={state ? stateText[state] : undefined}>{word}</span>
-						<span className="text-passive">· {t("shell.memoryBarAO", { size: formatMemory(app.rssBytes) })}</span>
+						<span className={state ? stateText[state] : undefined}>{formatMemory(app.rssBytes)}</span>
 						{fix ? <span className={state ? stateText[state] : undefined}>· {fix}</span> : null}
 					</button>
 				</TooltipTrigger>
@@ -178,35 +177,42 @@ export function AppMemoryIndicator() {
 	);
 }
 
-/** One stacked bar for the whole machine: AO sessions, AO app, everyone else, free. */
-function StackedMemoryBar({ appBytes, sessionsBytes, system }: { appBytes: number; sessionsBytes: number; system: SystemMemoryReading }) {
+/** One bar for the machine: AO's share and what is still available. Total,
+ * in use and everyone else stay on hover; they are context, not the answer. */
+function MachineBar({ appBytes, system }: { appBytes: number; system: SystemMemoryReading }) {
 	const { t } = useTranslation();
 	const total = system.totalBytes || 1;
-	const inUse = Math.max(0, system.totalBytes - system.availableBytes);
-	const other = Math.max(0, inUse - sessionsBytes - appBytes);
 	const pct = (bytes: number) => `${Math.min(100, (bytes / total) * 100)}%`;
-	const legend = [
-		{ key: "sessions", label: t("shell.memoryLegendSessions"), bytes: sessionsBytes, className: "bg-accent-strong" },
-		{ key: "app", label: t("shell.memoryLegendApp"), bytes: appBytes, className: "bg-accent-strong/50" },
-		{ key: "other", label: t("shell.memoryLegendOther"), bytes: other, className: "bg-foreground/25" },
-		{ key: "free", label: t("shell.memoryLegendFree"), bytes: system.availableBytes, className: "bg-foreground/[0.06]" },
-	];
+	const inUse = Math.max(0, system.totalBytes - system.availableBytes);
+	const detail = t("shell.memoryMachineDetail", {
+		total: formatMemory(system.totalBytes),
+		inUse: formatMemory(inUse),
+		other: formatMemory(Math.max(0, inUse - appBytes)),
+		pressure: system.pressureRaw.toFixed(1),
+	});
 	return (
-		<div className="settings-row-bar h-auto flex-col items-stretch gap-2 py-3" data-testid="session-memory-stacked">
-			<div className="flex h-2 w-full overflow-hidden rounded-sm bg-foreground/[0.06]">
-				{legend.slice(0, 3).map((part) => (
-					<div className={cn("h-full transition-[width] duration-500", part.className)} key={part.key} style={{ width: pct(part.bytes) }} />
-				))}
-			</div>
-			<div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs tabular-nums text-settings-muted">
-				{legend.map((part) => (
-					<span className="inline-flex items-center gap-1.5" key={part.key}>
-						<span aria-hidden="true" className={cn("size-1.5 rounded-full", part.className)} />
-						{part.label} <span className="text-settings-label">{formatMemory(part.bytes)}</span>
-					</span>
-				))}
-			</div>
-		</div>
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<div className="settings-row-bar h-auto flex-col items-stretch gap-2 py-3" data-testid="session-memory-stacked" tabIndex={0}>
+					<div className="flex h-2 w-full overflow-hidden rounded-sm bg-foreground/[0.06]">
+						<div className="h-full bg-accent-strong transition-[width] duration-500" style={{ width: pct(appBytes) }} />
+						<div className="h-full flex-1" />
+						<div className="h-full bg-success/60 transition-[width] duration-500" style={{ width: pct(system.availableBytes) }} />
+					</div>
+					<div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs tabular-nums text-settings-muted">
+						<span className="inline-flex items-center gap-1.5">
+							<span aria-hidden="true" className="size-1.5 rounded-full bg-accent-strong" />
+							{t("shell.memoryLegendAO")} <span className="text-settings-label">{formatMemory(appBytes)}</span>
+						</span>
+						<span className="inline-flex items-center gap-1.5">
+							<span aria-hidden="true" className="size-1.5 rounded-full bg-success/60" />
+							{t("shell.memoryLegendAvailable")} <span className="text-settings-label">{formatMemory(system.availableBytes)}</span>
+						</span>
+					</div>
+				</div>
+			</TooltipTrigger>
+			<TooltipContent side="bottom">{detail}</TooltipContent>
+		</Tooltip>
 	);
 }
 
@@ -291,12 +297,14 @@ export function SessionMemoryPanel({
 	const system = appMemory?.system;
 	const history = usePressureHistory(system, app?.own?.sampledAt);
 	const { state, suggestion, facts, stopIdle } = useSuggestion(projectId);
+	// Orchestrators are listed too: they hold memory like any session, and
+	// leaving them out made the rows add up to less than AO's total.
 	const sessions = useMemo(
 		() =>
 			workspaces
 				.filter((workspace) => !projectId || workspace.id === projectId)
 				.flatMap((workspace) => workspace.sessions)
-				.filter((session) => session.isTerminated !== true && !isOrchestratorSession(session)),
+				.filter((session) => session.isTerminated !== true),
 		[workspaces, projectId],
 	);
 	// Rows with a reading are the live ones; a paused agent has no process
@@ -312,14 +320,13 @@ export function SessionMemoryPanel({
 		return ordered;
 	}, [sessions, readings]);
 	const paused = sessions.filter((session) => isAgentPaused(session));
-	const sessionsBytes = live.reduce((sum, row) => sum + row.rssBytes, 0);
 	const largest = largestSession(facts);
 	const maxBytes = Math.max(app?.own?.rssBytes ?? 0, ...live.map((row) => row.rssBytes), 1);
 	const [expanded, setExpanded] = useState<string | undefined>();
 	const [pauseTarget, setPauseTarget] = useState<string | undefined>();
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className={cn(settingsDialogContentClass, "w-[min(52rem,calc(100vw-var(--space-8)))]")} showCloseButton={false}>
+			<DialogContent className={settingsDialogContentClass} showCloseButton={false}>
 				<div className={cn(settingsDialogHeaderClass, "flex h-auto flex-row items-center justify-between border-b-0 pb-3")}>
 					<div className="min-w-0 flex-1">
 						<DialogTitle className="text-lg font-semibold leading-6 text-settings-label">{t("shell.memoryPanelTitle")}</DialogTitle>
@@ -335,7 +342,7 @@ export function SessionMemoryPanel({
 					<section className="flex w-full flex-col items-stretch gap-(--size-settings-section-inner-gap)">
 						<h2 className="text-xs font-medium leading-4 text-settings-muted">{t("shell.memorySectionMachine")}</h2>
 						<div className="settings-grouped-rows flex w-full flex-col">
-							{system && app ? <StackedMemoryBar appBytes={app.own?.rssBytes ?? 0} sessionsBytes={sessionsBytes} system={system} /> : null}
+							{system && app ? <MachineBar appBytes={app.rssBytes} system={system} /> : null}
 							{state ? (
 								<SuggestionLine
 									onPauseLargest={setPauseTarget}
@@ -390,16 +397,8 @@ export function SessionMemoryPanel({
 						<section className="flex w-full flex-col items-stretch gap-(--size-settings-section-inner-gap)">
 							<h2 className="text-xs font-medium leading-4 text-settings-muted">{t("shell.memoryPressureGraph")}</h2>
 							<div className="settings-grouped-rows flex w-full flex-col">
-								<div className="settings-row-bar h-auto items-start gap-6 py-3">
+								<div className="settings-row-bar h-auto items-start py-3">
 									<PressureGraph history={history} source={system.pressureSource} />
-									<dl className="grid shrink-0 grid-cols-[auto_auto] gap-x-4 gap-y-0.5 font-mono text-xs tabular-nums text-settings-muted">
-										<dt>{t("shell.memoryMachineTotal")}</dt>
-										<dd className="text-right text-settings-label">{formatMemory(system.totalBytes)}</dd>
-										<dt>{t("shell.memoryMachineInUse")}</dt>
-										<dd className="text-right text-settings-label">{formatMemory(system.totalBytes - system.availableBytes)}</dd>
-										<dt>{t("shell.memoryMachineAO")}</dt>
-										<dd className="text-right text-settings-label">{app ? formatMemory(app.rssBytes) : "—"}</dd>
-									</dl>
 								</div>
 							</div>
 						</section>
@@ -421,11 +420,11 @@ function GroupRow({ label }: { label: string }) {
 /** Memory cell: the number over a bar scaled to the biggest row, so "which one is the pig" reads at a glance. */
 function MemoryCell({ bytes, maxBytes, tone }: { bytes: number; maxBytes: number; tone: ChipTone }) {
 	return (
-		<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-xs tabular-nums">
+		<td className="whitespace-nowrap px-3 py-2 text-right align-middle font-mono text-xs tabular-nums">
 			<span className={cn("font-medium", tone === "critical" ? "text-destructive" : tone === "warning" ? "text-warning" : "text-settings-label")}>
 				{formatMemory(bytes)}
 			</span>
-			<div className="ml-auto mt-1 h-0.5 w-24 rounded-sm bg-foreground/[0.06]" data-testid="session-memory-share">
+			<div className="ml-auto mt-1 h-0.5 w-16 rounded-sm bg-foreground/[0.06]" data-testid="session-memory-share">
 				<div
 					className={cn("h-full rounded-sm transition-[width] duration-500", tone === "critical" ? "bg-destructive" : tone === "warning" ? "bg-warning" : "bg-accent-strong")}
 					style={{ width: `${Math.min(100, (bytes / maxBytes) * 100)}%` }}
@@ -489,7 +488,7 @@ function SessionRow({
 				data-testid="session-memory-row"
 				onClick={canExpand ? onToggle : undefined}
 			>
-				<td className="max-w-0 px-4 py-2 align-middle">
+				<td className="w-full max-w-0 px-4 py-2 align-middle">
 					<div className="flex items-center gap-1.5">
 						<ChevronRight
 							aria-hidden="true"
@@ -497,7 +496,9 @@ function SessionRow({
 						/>
 						<div className="min-w-0">
 							<div className="truncate text-sm font-medium text-settings-label" title={session.title}>{session.title}</div>
-							<div className="truncate text-xs text-settings-muted">{working ? t("shell.memoryRowWorking") : t("shell.memoryRowIdle")}</div>
+							<div className="truncate text-xs text-settings-muted">
+								{isOrchestratorSession(session) ? t("shell.memoryRowOrchestrator") : working ? t("shell.memoryRowWorking") : t("shell.memoryRowIdle")}
+							</div>
 						</div>
 					</div>
 				</td>

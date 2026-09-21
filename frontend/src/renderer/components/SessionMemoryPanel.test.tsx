@@ -140,24 +140,25 @@ describe("AppMemoryIndicator", () => {
 		expect(screen.queryByTestId("app-memory-indicator")).not.toBeInTheDocument();
 	});
 
-	it("reads the state word, AO's size, and the fix; grey means nothing to do", () => {
+	it("reads a dot and AO's size, plus the fix; grey means nothing to do", () => {
 		const { rerender } = renderButton();
 		const button = screen.getByTestId("app-memory-indicator");
-		expect(button).toHaveTextContent("Fine· AO 2.1 GB");
+		expect(button).toHaveTextContent("2.1 GB");
+		expect(button).not.toHaveTextContent("Fine");
 		expect(button).toHaveAttribute("data-memory-state", "fine");
-		expect(button).toHaveAttribute("aria-label", "21.5 GB free of 34.4 GB · AO holds 2.1 GB · pressure 0.0");
+		expect(button).toHaveAttribute("aria-label", "Fine · 21.5 GB free of 34.4 GB · AO holds 2.1 GB · pressure 0.0");
 
 		// Stalling on memory, AO holds most of what is in use, two sessions idle for hours: stop them.
 		appMemoryMock.mockReturnValue(appReading(3, 12, 20));
 		rerender();
 		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("data-memory-state", "tight_soon");
-		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("Getting tight· AO 21.5 GB· Stop 3 idle · frees 2.9 GB");
+		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("21.5 GB· Stop 3 idle · frees 2.9 GB");
 
 		// Tight, but AO is a sliver of what is in use: say so, offer nothing.
 		appMemoryMock.mockReturnValue(appReading(1, 40, 2));
 		rerender();
 		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("data-memory-state", "tight");
-		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("Tight· AO 2.1 GB· not AO");
+		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("2.1 GB· not AO");
 	});
 
 	it("points at the biggest session when nothing is idle", () => {
@@ -169,14 +170,14 @@ describe("AppMemoryIndicator", () => {
 		workspaceQueryMock.mockReturnValue({ data: [workspace], isError: false, isSuccess: true });
 		appMemoryMock.mockReturnValue(appReading(1, 40, 20));
 		renderButton();
-		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("Tight· AO 21.5 GB· Pause big worker");
+		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("21.5 GB· Pause big worker");
 	});
 
 	it("goes grey and falls back to AO's own size where the host cannot be read", () => {
 		appMemoryMock.mockReturnValue({ isError: false, data: { app: { rssBytes: 4 * GIB, processCount: 20, cpuPercent: 0 }, liveCount: 1 } });
 		renderButton();
 		const button = screen.getByTestId("app-memory-indicator");
-		expect(button).toHaveTextContent("Memory unreadable· AO 4.3 GB");
+		expect(button).toHaveTextContent("4.3 GB");
 		expect(button).toHaveAttribute("data-memory-state", "unknown");
 	});
 
@@ -184,9 +185,9 @@ describe("AppMemoryIndicator", () => {
 		renderButton();
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		const table = await screen.findByTestId("session-memory-table");
-		expect(screen.getByTestId("session-memory-stacked")).toHaveTextContent("AO sessions 2.9 GB");
-		expect(screen.getByTestId("session-memory-stacked")).toHaveTextContent("AO app 310 MB");
-		expect(screen.getByTestId("session-memory-stacked")).toHaveTextContent("Free 21.5 GB");
+		expect(screen.getByTestId("session-memory-stacked")).toHaveTextContent("AO 2.1 GB");
+		expect(screen.getByTestId("session-memory-stacked")).toHaveTextContent("Available 21.5 GB");
+		expect(screen.getByTestId("session-memory-stacked")).not.toHaveTextContent("Other");
 		// Fine: no suggestion, every row grey.
 		expect(screen.queryByTestId("session-memory-suggestion")).not.toBeInTheDocument();
 		const rows = within(table).getAllByTestId("session-memory-row");

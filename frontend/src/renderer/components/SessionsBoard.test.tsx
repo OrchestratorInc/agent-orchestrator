@@ -204,9 +204,9 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		expect(screen.queryByRole("button", { name: /archive/i })).not.toBeInTheDocument();
 		const indicator = screen.getByTestId("app-memory-indicator");
-		expect(indicator).toHaveTextContent("Tight· AO 12.9 GB");
+		expect(indicator).toHaveTextContent("12.9 GB");
 		expect(indicator).toHaveAttribute("data-memory-state", "tight");
-		expect(indicator).toHaveAttribute("aria-label", "2.1 GB free of 34.4 GB · AO holds 12.9 GB · pressure 35.0");
+		expect(indicator).toHaveAttribute("aria-label", "Tight · 2.1 GB free of 34.4 GB · AO holds 12.9 GB · pressure 35.0");
 		await userEvent.click(indicator);
 		expect(await screen.findByTestId("session-memory-stacked")).toBeInTheDocument();
 	});
