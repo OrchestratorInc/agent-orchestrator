@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
-import { CalendarClock, Folder, LayoutDashboard, Plus, Trash2 } from "lucide-react";
+import { CalendarClock, Folder, LayoutDashboard, LoaderCircle, Pause, Play, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { animate, LayoutGroup, motion, useMotionValue, useReducedMotion } from "motion/react";
 import { NotificationCenter } from "./NotificationCenter";
@@ -35,6 +35,9 @@ import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
 import { StatusPill } from "./StatusPill";
 import { TopbarActionError, TopbarButton, topbarHeaderClass, topbarProjectLabelClass } from "./TopbarButton";
 import { SessionTerminationPopover } from "./SessionTerminationPopover";
+import { AgentPausePopover } from "./AgentPausePopover";
+import { canPauseAgent, useAgentPause } from "../hooks/useAgentPause";
+import { useSessionMemory } from "../hooks/useSessionMemory";
 import { TopbarOpenEditorButton } from "./TopbarOpenEditorButton";
 import {
 	agentSwitchStatusVisual,
@@ -284,6 +287,7 @@ export function ShellTopbar({
 								style={noDragStyle}
 							>
 								{sessionAction ? <div className="inline-flex shrink-0 items-center">{sessionAction}</div> : null}
+								{canPauseAgent(session) ? <TopbarPauseButton key={`pause-${session.id}`} session={session} /> : null}
 								{sessionIsActive(session) ? (
 									<TopbarKillButton
 										key={session.id}
@@ -352,6 +356,62 @@ export function ShellTopbar({
 
 // Confirmation is modal, but teardown progress is not: confirming closes the
 // dialog and returns to the project's orchestrator while the daemon finishes.
+/** Pause (exit the agent, keep the session) or resume it, from the session
+ * page itself. Mid-turn it asks drain vs interrupt, like the card. */
+export function TopbarPauseButton({ session }: { session: WorkspaceSession }) {
+	const { t } = useTranslation();
+	const [open, setOpen] = useState(false);
+	const memory = useSessionMemory(session.workspaceId).data?.get(session.id);
+	const pause = useAgentPause(session, memory?.rssBytes);
+	const needsPolicy = !pause.paused && (session.activity?.state === "active" || pause.drainBlocked);
+	const label = pause.paused ? t("shell.resumeAgent") : pause.isDraining ? t("shell.pausingAfterTurn") : t("shell.pauseAgent");
+	const trigger = (
+		<TopbarButton
+			aria-label={pause.paused ? t("shell.resumeAgentNamed", { title: session.title }) : t("shell.pauseAgentNamed", { title: session.title })}
+			data-paused={pause.paused ? "true" : "false"}
+			data-testid="topbar-pause"
+			disabled={pause.isPending}
+			onClick={() => (needsPolicy ? setOpen(true) : pause.toggle())}
+			variant="icon"
+		>
+			{pause.isPending ? (
+				<LoaderCircle className="size-icon-md animate-spin" aria-hidden="true" />
+			) : pause.paused ? (
+				<Play className="size-icon-md" aria-hidden="true" />
+			) : (
+				<Pause className="size-icon-md" aria-hidden="true" />
+			)}
+		</TopbarButton>
+	);
+	return (
+		<div className="inline-flex items-center gap-1.5" style={noDragStyle}>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<span className="inline-flex">
+						{needsPolicy ? (
+							<AgentPausePopover
+								blocked={pause.drainBlocked}
+								onChoose={(policy) => {
+									setOpen(false);
+									pause.toggle(policy);
+								}}
+								onOpenChange={setOpen}
+								open={open}
+								session={session}
+								trigger={trigger}
+							/>
+						) : (
+							trigger
+						)}
+					</span>
+				</TooltipTrigger>
+				<TooltipContent side="bottom">{label}</TooltipContent>
+			</Tooltip>
+			{pause.error?.message ? <TopbarActionError>{pause.error.message}</TopbarActionError> : null}
+		</div>
+	);
+}
+
 // Mutation-cache state is filtered by worker ID so rapid route switches never
 // carry another worker's Killing/error state into the current topbar.
 export function TopbarKillButton({
