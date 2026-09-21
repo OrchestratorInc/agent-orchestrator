@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { publishCloudBoardResult, selectBoardState, type BoardState } from "./boardSelection";
+import {
+	assertLocalEnvironment,
+	dispatchCurrentCloudBoardRequest,
+	publishCloudBoardResult,
+	selectBoardState,
+	type BoardState,
+	type CloudBoardRequest,
+} from "./boardSelection";
 
 const local: BoardState<string, string> = {
 	projects: ["local-project"],
@@ -81,5 +88,31 @@ describe("publishCloudBoardResult", () => {
 		loading: false,
 		error: "Timed out",
 	});
+	});
+});
+
+describe("dispatchCurrentCloudBoardRequest", () => {
+	it("uses the new source when a retained refresh callback runs after a source switch", async () => {
+		let current: CloudBoardRequest<string> | undefined = { source: "old-org", generation: 1 };
+		const loaded: string[] = [];
+		const retainedRefresh = () => dispatchCurrentCloudBoardRequest(
+			() => current,
+			async (request) => { loaded.push(request.source); },
+		);
+
+		current = { source: "new-org", generation: 2 };
+		await retainedRefresh();
+
+		expect(loaded).toEqual(["new-org"]);
+	});
+});
+
+describe("assertLocalEnvironment", () => {
+	it("rejects retained Local actions while Cloud is active", () => {
+		expect(() => assertLocalEnvironment("cloud")).toThrow("Local actions are unavailable outside the Local environment.");
+	});
+
+	it("allows Local actions in the Local environment", () => {
+		expect(() => assertLocalEnvironment("local")).not.toThrow();
 	});
 });

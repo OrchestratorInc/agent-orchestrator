@@ -34,6 +34,8 @@ export type CloudAuthState = {
 	/** The account's resolved org, or null while sign-in/org resolution is
 	 *  still in flight — see resolveSessionSource's CloudResolveInput. */
 	orgId: string | null;
+	/** Increments whenever the authenticated account session changes. */
+	sessionEpoch: number;
 	client: CloudClient;
 	baseUrl: string;
 	/** The last sign-in/registration failure, cleared on the next attempt. */
@@ -65,11 +67,17 @@ export function CloudAuthProvider({
 	const [orgId, setOrgId] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
+	const [sessionEpoch, setSessionEpoch] = useState(0);
 	// Bumped on sign-in/sign-out so a resolution kicked off before either one
 	// (the mount-time read, or an org lookup still in flight) cannot land its
 	// result after the state it was resolving has moved on — the same
 	// generation-counter guard lib/cloud/session.ts uses for token refresh.
 	const generationRef = useRef(0);
+	const advanceSessionEpoch = useCallback(() => {
+		generationRef.current += 1;
+		setSessionEpoch(generationRef.current);
+		return generationRef.current;
+	}, []);
 
 	const tokens = useMemo(
 		() =>
@@ -91,11 +99,11 @@ export function CloudAuthProvider({
 	// with no way to recover short of reinstalling. Dropping to signed-out
 	// here sends the user back to the sign-in prompt instead.
 	const handleUnauthorized = useCallback(() => {
-		generationRef.current += 1;
+		advanceSessionEpoch();
 		void tokens.signOut();
 		setSignedIn(false);
 		setOrgId(null);
-	}, [tokens]);
+	}, [advanceSessionEpoch, tokens]);
 
 	const client = useMemo(
 		() => wrapUnauthorized(createMobileCloudClient({ baseUrl, tokens }), handleUnauthorized),
@@ -150,8 +158,7 @@ export function CloudAuthProvider({
 			try {
 				const issued = await signInWithLocalAuth(baseUrl, email, password);
 				await writeTokens(issued);
-				generationRef.current += 1;
-				await resolveSession(generationRef.current);
+				await resolveSession(advanceSessionEpoch());
 			} catch (e) {
 				const message = e instanceof Error ? e.message : "Sign-in failed.";
 				setError(message);
@@ -160,7 +167,7 @@ export function CloudAuthProvider({
 				setBusy(false);
 			}
 		},
-		[baseUrl, resolveSession],
+		[advanceSessionEpoch, baseUrl, resolveSession],
 	);
 
 	const signInWithWorkOS = useCallback(async (): Promise<boolean> => {
@@ -184,8 +191,7 @@ export function CloudAuthProvider({
 			});
 			if (!issued) return false;
 			await writeTokens(issued);
-			generationRef.current += 1;
-			await resolveSession(generationRef.current);
+			await resolveSession(advanceSessionEpoch());
 			return true;
 		} catch (e) {
 			const message = e instanceof Error ? e.message : "Sign-in failed.";
@@ -194,7 +200,7 @@ export function CloudAuthProvider({
 		} finally {
 			setBusy(false);
 		}
-	}, [resolveSession]);
+	}, [advanceSessionEpoch, resolveSession]);
 
 	const registerLocal = useCallback(
 		async (input: RegisterLocalAuthInput) => {
@@ -203,8 +209,7 @@ export function CloudAuthProvider({
 			try {
 				const issued = await registerWithLocalAuth(baseUrl, input);
 				await writeTokens(issued);
-				generationRef.current += 1;
-				await resolveSession(generationRef.current);
+				await resolveSession(advanceSessionEpoch());
 			} catch (e) {
 				const message = e instanceof Error ? e.message : "Registration failed.";
 				setError(message);
@@ -213,20 +218,20 @@ export function CloudAuthProvider({
 				setBusy(false);
 			}
 		},
-		[baseUrl, resolveSession],
+		[advanceSessionEpoch, baseUrl, resolveSession],
 	);
 
 	const signOut = useCallback(async () => {
-		generationRef.current += 1;
+		advanceSessionEpoch();
 		await tokens.signOut();
 		setSignedIn(false);
 		setOrgId(null);
 		setError(null);
-	}, [tokens]);
+	}, [advanceSessionEpoch, tokens]);
 
 	const value = useMemo<CloudAuthState>(
-		() => ({ signedIn, orgId, client, baseUrl, error, busy, signInWithWorkOS, signInLocal, registerLocal, signOut }),
-		[signedIn, orgId, client, baseUrl, error, busy, signInWithWorkOS, signInLocal, registerLocal, signOut],
+		() => ({ signedIn, orgId, sessionEpoch, client, baseUrl, error, busy, signInWithWorkOS, signInLocal, registerLocal, signOut }),
+		[signedIn, orgId, sessionEpoch, client, baseUrl, error, busy, signInWithWorkOS, signInLocal, registerLocal, signOut],
 	);
 
 	return <CloudAuthContext.Provider value={value}>{children}</CloudAuthContext.Provider>;

@@ -12,22 +12,26 @@ export type CloudResolveInput = {
 	// The account's resolved org, or null while sign-in/org resolution is
 	// still in flight.
 	orgId: string | null;
+	/** Increments whenever the authenticated Cloud account session changes. */
+	sessionEpoch?: number;
 };
 
-// Memoised on (environment, config identity, org id) so the store hands the
-// same instance to every consumer between changes. See sameServerConfig's doc
-// comment: handing out a fresh source for an unchanged endpoint would tear
-// down and rebuild every effect keyed on it. sameServerConfig also compares
-// the password, so a rotated credential still rebuilds the local source.
+// Memoised on environment identity. Cloud identity includes the client, org,
+// and account session epoch; retaining a source across any of those boundaries
+// could let an old account's request publish into the new board.
 let cachedEnvironment: EnvironmentKind | undefined;
 let cachedConfig: ServerConfig | undefined;
 let cachedOrgId: string | null | undefined;
+let cachedCloudClient: CloudClient | undefined;
+let cachedCloudSessionEpoch: number | undefined;
 let cachedSource: SessionSource | undefined;
 
 function resetCache(): void {
 	cachedEnvironment = undefined;
 	cachedConfig = undefined;
 	cachedOrgId = undefined;
+	cachedCloudClient = undefined;
+	cachedCloudSessionEpoch = undefined;
 	cachedSource = undefined;
 }
 
@@ -69,6 +73,8 @@ export function resolveSessionSource(input: {
 			cachedEnvironment = "local";
 			cachedConfig = cfg;
 			cachedOrgId = undefined;
+			cachedCloudClient = undefined;
+			cachedCloudSessionEpoch = undefined;
 			cachedSource = createLocalSessionSource(cfg);
 		}
 		return cachedSource;
@@ -82,11 +88,15 @@ export function resolveSessionSource(input: {
 	if (
 		cachedSource === undefined ||
 		cachedEnvironment !== "cloud" ||
-		cachedOrgId !== cloud.orgId
+		cachedOrgId !== cloud.orgId ||
+		cachedCloudClient !== cloud.client ||
+		cachedCloudSessionEpoch !== (cloud.sessionEpoch ?? 0)
 	) {
 		cachedEnvironment = "cloud";
 		cachedConfig = undefined;
 		cachedOrgId = cloud.orgId;
+		cachedCloudClient = cloud.client;
+		cachedCloudSessionEpoch = cloud.sessionEpoch ?? 0;
 		cachedSource = createCloudSessionSource({ client: cloud.client, orgId: cloud.orgId });
 	}
 	return cachedSource;

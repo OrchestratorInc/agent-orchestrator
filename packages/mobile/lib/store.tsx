@@ -32,7 +32,14 @@ import { isConfigured, loadConfig, machineIdentity, type ServerConfig } from "./
 import { useCloudAuth } from "./cloud/authStore";
 import { loadEnvironment, saveEnvironment } from "./environment/store";
 import { loadSessionSourceBoard } from "./environment/board";
-import { publishCloudBoardResult, selectBoardState, type BoardState } from "./environment/boardSelection";
+import {
+	assertLocalEnvironment,
+	dispatchCurrentCloudBoardRequest,
+	publishCloudBoardResult,
+	selectBoardState,
+	type BoardState,
+	type CloudBoardRequest,
+} from "./environment/boardSelection";
 import { resolveSessionSource } from "./environment/resolve";
 import { shouldPollLocal } from "./environment/shouldPoll";
 import type { EnvironmentKind, SessionSource } from "./environment/types";
@@ -213,6 +220,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const [errorStatus, setErrorStatus] = useState<number | null>(null);
 	const [cloudBoard, setCloudBoard] = useState<BoardState<ProjectInfo, DashboardSession>>(EMPTY_BOARD);
 	const cloudRequestGenerationRef = useRef(0);
+	const activeEnvironmentRef = useRef<EnvironmentKind | null>(environment);
+	const cloudBoardRequestRef = useRef<CloudBoardRequest<SessionSource> | undefined>(undefined);
 	const sessionSource = useMemo(
 		() =>
 			resolveSessionSource({
@@ -222,9 +231,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 					client: cloudAuth.client,
 					signedIn: cloudAuth.signedIn === true,
 					orgId: cloudAuth.orgId,
+					sessionEpoch: cloudAuth.sessionEpoch,
 				},
 			}),
-		[environment, config, cloudAuth.client, cloudAuth.signedIn, cloudAuth.orgId],
+		[environment, config, cloudAuth.client, cloudAuth.signedIn, cloudAuth.orgId, cloudAuth.sessionEpoch],
 	);
 	// Start authenticated streaming only after the REST probe succeeds. A stale
 	// password must cost one failed request, not a poll plus a parallel SSE attempt.
@@ -384,7 +394,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// longer publish into the new board. A layout effect makes that invalidation
 	// visible before passive poll effects can start their next request.
 	useLayoutEffect(() => {
-		cloudRequestGenerationRef.current += 1;
+		activeEnvironmentRef.current = environment;
+		const generation = cloudRequestGenerationRef.current + 1;
+		cloudRequestGenerationRef.current = generation;
+		cloudBoardRequestRef.current =
+			environment === "cloud" && sessionSource?.kind === "cloud"
+				? { source: sessionSource, generation }
+				: undefined;
 		setCloudBoard(
 			environment === "cloud" && sessionSource?.kind === "cloud"
 				? { ...EMPTY_BOARD, loading: true }
@@ -392,36 +408,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		);
 	}, [environment, sessionSource]);
 
-	const fetchCloudBoard = useCallback(async (): Promise<void> => {
-		const source = sessionSource;
-		if (environment !== "cloud" || source?.kind !== "cloud") return;
-		const requestGeneration = cloudRequestGenerationRef.current;
-		setCloudBoard((current) => ({ ...current, loading: true, error: null }));
-		try {
-			const board = await loadSessionSourceBoard(source);
-			setCloudBoard((current) =>
-				publishCloudBoardResult({
-					current,
-					requestGeneration,
-					currentGeneration: cloudRequestGenerationRef.current,
-					result: { kind: "success", ...board },
-				}) ?? current,
-			);
-		} catch (cause) {
-			const message = cause instanceof Error ? cause.message : "Failed to load";
-			setCloudBoard((current) =>
-				publishCloudBoardResult({
-					current,
-					requestGeneration,
-					currentGeneration: cloudRequestGenerationRef.current,
-					result: { kind: "failure", error: message },
-				}) ?? current,
-			);
-		}
-	}, [environment, sessionSource]);
+	const fetchCloudBoard = useCallback((): Promise<void> =>
+		dispatchCurrentCloudBoardRequest(
+			() => cloudBoardRequestRef.current,
+			async ({ source, generation }) => {
+				setCloudBoard((current) => ({ ...current, loading: true, error: null }));
+				try {
+					const board = await loadSessionSourceBoard(source);
+					setCloudBoard((current) =>
+						publishCloudBoardResult({
+							current,
+							requestGeneration: generation,
+							currentGeneration: cloudBoardRequestRef.current?.generation ?? -1,
+							result: { kind: "success", ...board },
+						}) ?? current,
+					);
+				} catch (cause) {
+					const message = cause instanceof Error ? cause.message : "Failed to load";
+					setCloudBoard((current) =>
+						publishCloudBoardResult({
+							current,
+							requestGeneration: generation,
+							currentGeneration: cloudBoardRequestRef.current?.generation ?? -1,
+							result: { kind: "failure", error: message },
+						}) ?? current,
+					);
+				}
+			},
+		), []);
 
 	useEffect(() => {
-		if (environment !== "cloud" || sessionSource?.kind !== "cloud" || !appActive) return;
+		if (!cloudBoardRequestRef.current || !appActive) return;
 		void fetchCloudBoard();
 		const poll = setInterval(() => void fetchCloudBoard(), CLOUD_BOARD_POLL_MS);
 		return () => clearInterval(poll);
@@ -616,9 +633,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		if (projects.length === 1) return projects[0].id;
 		return null;
 	}, [activeProjectId, projects]);
+	const assertLocalAction = useCallback(() => {
+		assertLocalEnvironment(activeEnvironmentRef.current);
+	}, []);
 
 	const spawn = useCallback(
 		async ({ projectId, prompt, harness, model, mode, attachments }: SpawnOptions) => {
+			assertLocalAction();
 			const resolvedMode = mode ?? "chat";
 			return trackFeature("spawn", async () => {
 				const c = cfgRef.current;
@@ -636,61 +657,67 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				return session;
 			}, { mode: resolvedMode });
 		},
-		[targetProject, fetchAll],
+		[assertLocalAction, targetProject, fetchAll],
 	);
 
 	const launchConductor = useCallback(
 		async (projectId: string, clean = false, mode: SessionMode = "chat") =>
 			trackFeature("conductor", async () => {
+				assertLocalAction();
 				const c = cfgRef.current!;
 				const link = await apiLaunchOrchestrator(c, projectId, clean, mode);
 				await fetchAll();
 				return link;
 			}),
-		[fetchAll],
+		[assertLocalAction, fetchAll],
 	);
 
 	const merge = useCallback(
 		async (pr: DashboardPR) =>
 			trackFeature("merge", async () => {
+				assertLocalAction();
 				await apiMergePR(cfgRef.current!, pr);
 				await fetchAll();
 			}),
-		[fetchAll],
+		[assertLocalAction, fetchAll],
 	);
 
 	const kill = useCallback(
 		async (id: string) =>
 			trackFeature("kill", async () => {
+				assertLocalAction();
 				await killSession(cfgRef.current!, id);
 				await fetchAll();
 			}),
-		[fetchAll],
+		[assertLocalAction, fetchAll],
 	);
 
 	const renameWorker = useCallback(
 		async (id: string, displayName: string) => {
+			assertLocalAction();
 			await apiRenameSession(cfgRef.current!, id, displayName);
 			await fetchAll();
 		},
-		[fetchAll],
+		[assertLocalAction, fetchAll],
 	);
 
 	const setWorkerPinned = useCallback(
 		async (id: string, pinned: boolean) => {
+			assertLocalAction();
 			await (pinned ? apiPinSession(cfgRef.current!, id) : apiUnpinSession(cfgRef.current!, id));
 			await fetchAll();
 		},
-		[fetchAll],
+		[assertLocalAction, fetchAll],
 	);
 
 	const restore = useCallback(
 		async (id: string) =>
 			trackFeature("restore", async () => {
+				assertLocalAction();
 				await restoreSession(cfgRef.current!, id);
 				await fetchAll();
 			}),
-		[fetchAll],
+		[assertLocalAction, fetchAll],
 	);
 
 	// Distinct from restore, and the chat screen already relies on the
@@ -699,22 +726,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const resumeAgent = useCallback(
 		async (id: string) =>
 			trackFeature("restore", async () => {
+				assertLocalAction();
 				await resumeSessionAgent(cfgRef.current!, id);
 				await fetchAll();
 			}),
-		[fetchAll],
+		[assertLocalAction, fetchAll],
 	);
 
 	const send = useCallback(async (id: string, message: string) => {
+		assertLocalAction();
 		await trackFeature("send", () => sendMessage(cfgRef.current!, id, message));
-	}, []);
+	}, [assertLocalAction]);
 	const refresh = useCallback(async () => {
-		if (cloudEnvironment) {
+		if (activeEnvironmentRef.current === "cloud") {
 			await fetchCloudBoard();
 			return;
 		}
 		await fetchAll();
-	}, [cloudEnvironment, fetchAll, fetchCloudBoard]);
+	}, [fetchAll, fetchCloudBoard]);
 
 	// Memoized so the provider doesn't hand every useApp() consumer a brand-new
 	// object (causing re-renders) on each render. Re-renders now track real state changes.

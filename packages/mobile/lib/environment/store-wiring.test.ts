@@ -115,6 +115,35 @@ describe("resolveSessionSource", () => {
 			});
 			expect(first).not.toBe(second);
 		});
+
+		it("returns a new instance when the Cloud client changes for the same org", () => {
+			const first = resolveSessionSource({
+				environment: "cloud",
+				cfg: null,
+				cloud: { client: {} as CloudClient, signedIn: true, orgId: "org1", sessionEpoch: 1 },
+			});
+			const second = resolveSessionSource({
+				environment: "cloud",
+				cfg: null,
+				cloud: { client: {} as CloudClient, signedIn: true, orgId: "org1", sessionEpoch: 1 },
+			});
+			expect(first).not.toBe(second);
+		});
+
+		it("returns a new instance when the Cloud account session changes in the same org", () => {
+			const client = {} as CloudClient;
+			const first = resolveSessionSource({
+				environment: "cloud",
+				cfg: null,
+				cloud: { client, signedIn: true, orgId: "org1", sessionEpoch: 1 },
+			});
+			const second = resolveSessionSource({
+				environment: "cloud",
+				cfg: null,
+				cloud: { client, signedIn: true, orgId: "org1", sessionEpoch: 2 },
+			});
+			expect(first).not.toBe(second);
+		});
 	});
 
 	it("returns a new instance when switching environments even if the org id repeats", () => {

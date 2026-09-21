@@ -12,6 +12,12 @@ export type BoardSelection<Project, Session> = {
 	state: BoardState<Project, Session>;
 };
 
+/** A Cloud source and its invalidation generation must travel together. */
+export type CloudBoardRequest<Source> = {
+	source: Source;
+	generation: number;
+};
+
 /** Select the board visible for the resolved environment without mixing slices. */
 export function selectBoardState<Project, Session>(input: {
 	environment: EnvironmentKind | null;
@@ -47,4 +53,23 @@ export function publishCloudBoardResult<Project, Session>(input: {
 		return { projects: input.result.projects, sessions: input.result.sessions, loading: false, error: null };
 	}
 	return { ...input.current, loading: false, error: input.result.error };
+}
+
+/**
+ * Resolves a request at invocation time so a callback retained across a source
+ * switch uses the current committed source instead of its captured predecessor.
+ */
+export async function dispatchCurrentCloudBoardRequest<Source>(
+	current: () => CloudBoardRequest<Source> | undefined,
+	load: (request: CloudBoardRequest<Source>) => Promise<void>,
+): Promise<void> {
+	const request = current();
+	if (request) await load(request);
+}
+
+/** Blocks daemon-only mutations whenever Local is no longer the active environment. */
+export function assertLocalEnvironment(environment: EnvironmentKind | null): asserts environment is "local" {
+	if (environment !== "local") {
+		throw new Error("Local actions are unavailable outside the Local environment.");
+	}
 }
