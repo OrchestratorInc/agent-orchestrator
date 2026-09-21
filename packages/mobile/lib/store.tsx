@@ -42,7 +42,7 @@ import {
 	type CloudBoardRequest,
 } from "./environment/boardSelection";
 import { resolveSessionSource } from "./environment/resolve";
-import { configLoadPlan, shouldPublishConfigLoad, type ConfigLoadRequest } from "./environment/configLoad";
+import { ConfigLoadController } from "./environment/configLoadController";
 import { shouldMaintainLocalConnection, shouldPollLocal } from "./environment/shouldPoll";
 import type { EnvironmentKind, SessionSource } from "./environment/types";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
@@ -226,8 +226,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const [cloudBoard, setCloudBoard] = useState<BoardState<ProjectInfo, DashboardSession>>(EMPTY_BOARD);
 	const cloudRequestGenerationRef = useRef(0);
 	const activeEnvironmentRef = useRef<EnvironmentKind | null>(environment);
-	const configEnvironmentRef = useRef<EnvironmentKind | null>(environment);
-	const configLoadGenerationRef = useRef(0);
 	const cloudBoardRequestRef = useRef<CloudBoardRequest<SessionSource> | undefined>(undefined);
 	const sessionSource = useMemo(
 		() =>
@@ -316,56 +314,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const lastReRaceAt = useRef(0);
 	// Set when the app returns to the foreground, consumed by the upgrade check.
 	const resumedRef = useRef(false);
+	const configLoadControllerRef = useRef<ConfigLoadController | null>(null);
+	if (!configLoadControllerRef.current) {
+		configLoadControllerRef.current = new ConfigLoadController(
+			{
+				loadSaved: loadConfig,
+				resolveActive: () => resolveActiveConfig(runtimeResolveDeps()),
+				loadEndpoints: async () => {
+					try {
+						return (await activeHost())?.endpoints ?? [];
+					} catch {
+						return [];
+					}
+				},
+			},
+			({ config: loaded, endpoints, raced }) => {
+				const prev = cfgRef.current;
+				const next = sameServerConfig(prev, loaded) ? (prev as typeof loaded) : loaded;
+				if (raced) lastReRaceAt.current = Date.now();
+				cfgRef.current = next;
+				setConfig(next);
+				setActiveEndpoints(endpoints);
+				setConfigResolved(true);
+			},
+		);
+	}
 
 	useLayoutEffect(() => {
-		configEnvironmentRef.current = environment;
-		configLoadGenerationRef.current += 1;
+		configLoadControllerRef.current?.setEnvironment(environment);
 	}, [environment]);
 
-	const reloadConfig = useCallback(async () => {
-		const plan = configLoadPlan(environment);
-		if (environment === null || plan === "wait") return;
-		const request: ConfigLoadRequest = { environment, generation: configLoadGenerationRef.current };
-		const isCurrent = () => shouldPublishConfigLoad(request, {
-			environment: configEnvironmentRef.current,
-			generation: configLoadGenerationRef.current,
-		});
-		try {
-			// Cloud hydrates saved Local pairing state for later switching and the
-			// push lifecycle, but must not migrate or probe its endpoints.
-			const c = plan === "resolve"
-				? (await resolveActiveConfig(runtimeResolveDeps())) ?? (await loadConfig())
-				: await loadConfig();
-			if (!isCurrent()) return;
-		// Keep the previous object when the endpoint has not actually changed.
-		// Resolution builds a fresh one every time, and the live conversation
-		// stream, the poll loop and the terminal mux all key on this value's
-		// identity — handing them a new object for the same endpoint tears them
-		// down and rebuilds them, which showed up as chat replies arriving only
-		// on the next poll instead of streaming in.
-		// Stamped here so every race counts towards the cooldown, however it was
-		// triggered — otherwise a failure race and an upgrade race can fire back
-		// to back and thrash the connection.
-			if (plan === "resolve") lastReRaceAt.current = Date.now();
-			const prev = cfgRef.current;
-			const next = sameServerConfig(prev, c) ? (prev as typeof c) : c;
-			cfgRef.current = next;
-			setConfig(next);
-			if (plan !== "resolve") return;
-			// Read alongside the config so a failure can be explained: a stored
-			// tunnel that no longer answers is a rotated hostname, not a machine
-			// that is merely out of range.
-			const endpoints = (await activeHost())?.endpoints ?? [];
-			if (!isCurrent()) return;
-			setActiveEndpoints(endpoints);
-		} finally {
-			if (isCurrent()) setConfigResolved(true);
-		}
-	}, [environment]);
+	const reloadConfig = useCallback(() => configLoadControllerRef.current?.reload() ?? Promise.resolve(), []);
 
 	useEffect(() => {
 		void reloadConfig();
-	}, [reloadConfig]);
+	}, [environment, reloadConfig]);
 
 	// Nothing re-picks a path while the current one answers, so once the app
 	// fell to the tunnel it stayed there even after Wi-Fi came back — observed
