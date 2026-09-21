@@ -1984,6 +1984,8 @@
 	"shell.sessionMemoryAria": "메모리 {{size}} 사용 중",
 	"shell.sessionResourceAria": "메모리 {{size}}, 코어 하나의 {{cpu}} 사용 중",
 	"shell.pauseFreed": "일시 중지됨 · {{size}} 확보",
+	"shell.pausedStrip": "일시 중지됨 · 메모리를 점유하지 않음",
+	"shell.deleteSession": "삭제",
 	"pause.dialog": "에이전트가 턴 진행 중입니다",
 	"pause.dialogNamed": "{{title}} 일시 중지할까요?",
 	"pause.body": "현재 턴이 끝날 때까지 기다리거나 중단하고 지금 멈춥니다. 어느 쪽이든 세션과 작업은 유지됩니다.",

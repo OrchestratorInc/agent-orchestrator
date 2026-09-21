@@ -1534,6 +1534,8 @@
 	"shell.sessionMemoryAria": "Using {{size}} of memory",
 	"shell.sessionResourceAria": "Using {{size}} of memory and {{cpu}} of one core",
 	"shell.pauseFreed": "Paused · freed {{size}}",
+	"shell.pausedStrip": "Paused · holding no memory",
+	"shell.deleteSession": "Delete",
 	"pause.dialog": "Agent is mid-turn",
 	"pause.dialogNamed": "Pause {{title}}?",
 	"pause.body": "Wait for the current turn to finish, or interrupt it and stop now. Either way the session and its work are kept.",

@@ -179,10 +179,15 @@ describe("SessionsBoard", () => {
 		// A crash is not a pause: no pause or play button, and it still says Exited.
 		expect(screen.queryByRole("button", { name: /agent for Crashed task/ })).not.toBeInTheDocument();
 		expect(screen.getByText("Exited")).toBeInTheDocument();
-		await userEvent.click(playButton);
+		// A paused card carries a strip the user cannot miss: what it is, and the two ways out.
+		const strip = screen.getByTestId("session-paused-strip");
+		expect(strip).toHaveTextContent("Paused · holding no memory");
+		await userEvent.click(within(strip).getByRole("button", { name: "Resume agent" }));
 		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
 			params: { path: { sessionId: "paused" } },
 		}));
+		await userEvent.click(within(strip).getByRole("button", { name: "Delete" }));
+		expect(await screen.findByRole("dialog", { name: "Terminate Paused task?" })).toBeInTheDocument();
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 

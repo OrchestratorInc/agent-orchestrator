@@ -450,6 +450,12 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 		if cur.IsTerminated || !matchesLaunch(cur) {
 			return cur, false
 		}
+		// A paused agent's runtime is dead on purpose: the user stopped it and
+		// will resume it in place. Reaping it here would turn the pause into a
+		// termination two seconds later.
+		if cur.IsPaused() {
+			return cur, false
+		}
 		currentLaunch := cur.Metadata.RuntimeLaunchID
 		if currentLaunch != "" && f.Runtime == ports.ProbeAlive && f.Workload == ports.ProbeDead {
 			if cur.Activity.State == domain.ActivityExited {

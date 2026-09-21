@@ -27,7 +27,7 @@ import {
 import { agentLabel } from "../lib/agent-options";
 import type { WorkspaceSession } from "../types/workspace";
 import { canonicalTrackerIssueId } from "../types/workspace";
-import { canPauseAgent, useAgentPause } from "../hooks/useAgentPause";
+import { canPauseAgent, isAgentPaused, useAgentPause } from "../hooks/useAgentPause";
 import { formatCPU, formatMemory, type SessionMemoryReading } from "../hooks/useSessionMemory";
 import type { ChipTone } from "@aoagents/product-ui";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
@@ -39,6 +39,7 @@ import {
 import { cn } from "../lib/utils";
 import { AgentAvatar } from "./AgentAvatar";
 import { AgentPausePopover } from "./AgentPausePopover";
+import { Button } from "./ui/button";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionTerminationPopover } from "./SessionTerminationPopover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -183,7 +184,7 @@ function DesktopSessionCard({
 	const [pauseOpen, setPauseOpen] = useState(false);
 	const summaries = sessionPRDisplaySummaries(session, useSessionScmSummary(session.id).data);
 	const termination = useTerminateSessionState(session.id);
-	const showTerminate = interactive && session.isTerminated !== true && onTerminate;
+	const showTerminate = interactive && session.isTerminated !== true && onTerminate && !isAgentPaused(session);
 	const keepTerminateVisible = session.status === "merged";
 	const usagePresentation = toUsagePresentation(usage, t);
 	const resourcePresentation = toResourcePresentation(memory, session.activity?.state === "active", memoryTone, t);
@@ -327,7 +328,55 @@ function DesktopSessionCard({
 						: undefined
 			}
 			externalLink={ProductExternalLink}
-			footer={footer}
+			footer={
+				<>
+					{footer}
+					{interactive && pause.paused ? (
+						<div
+							className="flex items-center gap-2 border-t border-border px-3.5 py-2 text-2xs text-muted-foreground"
+							data-testid="session-paused-strip"
+							onClick={(event) => event.stopPropagation()}
+						>
+							<Pause aria-hidden="true" className="size-icon-2xs shrink-0" />
+							<span className="min-w-0 flex-1 truncate">{t("shell.pausedStrip")}</span>
+							<Button disabled={pause.isPending} onClick={() => pause.toggle()} size="sm">
+								{pause.isPending ? <LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" /> : <Play className="size-icon-sm" aria-hidden="true" />}
+								{t("shell.resumeAgent")}
+							</Button>
+							{onTerminate ? (
+								<SessionTerminationPopover
+									onConfirm={() => {
+										setConfirmOpen(false);
+										onTerminate();
+									}}
+									onOpenChange={setConfirmOpen}
+									open={confirmOpen}
+									session={session}
+									trigger={
+										<Button className="text-error/80 hover:text-error" disabled={termination.isPending} size="sm" variant="ghost">
+											<Trash2 className="size-icon-sm" aria-hidden="true" />
+											{t("shell.deleteSession")}
+										</Button>
+									}
+								/>
+							) : null}
+						</div>
+					) : null}
+					{interactive && session.statusReadiness === "unavailable" && (
+						<button
+							type="button"
+							disabled={retryStatus.isPending}
+							className="px-3 py-2 text-xs text-secondary hover:text-primary disabled:opacity-50"
+							onClick={(event) => {
+								event.stopPropagation();
+								retryStatus.mutate();
+							}}
+						>
+							{retryStatus.isPending ? t("session.statusChecking") : t("session.retryStatus")}
+						</button>
+					)}
+				</>
+			}
 			interactive={interactive}
 			labels={{
 				formatTime: formatTimeCompact,

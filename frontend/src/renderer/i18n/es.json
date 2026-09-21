@@ -2016,6 +2016,8 @@
 	"shell.sessionMemoryAria": "Usa {{size}} de memoria",
 	"shell.sessionResourceAria": "Usa {{size}} de memoria y {{cpu}} de un núcleo",
 	"shell.pauseFreed": "En pausa · {{size}} liberados",
+	"shell.pausedStrip": "En pausa · no ocupa memoria",
+	"shell.deleteSession": "Eliminar",
 	"pause.dialog": "El agente está a mitad de turno",
 	"pause.dialogNamed": "¿Pausar {{title}}?",
 	"pause.body": "Espera a que termine el turno actual o interrúmpelo y detente ahora. En ambos casos se conservan la sesión y su trabajo.",

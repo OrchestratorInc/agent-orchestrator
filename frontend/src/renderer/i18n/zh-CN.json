@@ -1380,6 +1380,8 @@
 	"shell.sessionMemoryAria": "占用 {{size}} 内存",
 	"shell.sessionResourceAria": "占用 {{size}} 内存和单核的 {{cpu}}",
 	"shell.pauseFreed": "已暂停 · 释放了 {{size}}",
+	"shell.pausedStrip": "已暂停 · 不占用内存",
+	"shell.deleteSession": "删除",
 	"pause.dialog": "代理正在执行中",
 	"pause.dialogNamed": "暂停 {{title}}？",
 	"pause.body": "等待当前回合结束，或立即中断并停止。两种方式都会保留会话及其工作。",

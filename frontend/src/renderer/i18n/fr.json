@@ -2016,6 +2016,8 @@
 	"shell.sessionMemoryAria": "Utilise {{size}} de mémoire",
 	"shell.sessionResourceAria": "Utilise {{size}} de mémoire et {{cpu}} d’un cœur",
 	"shell.pauseFreed": "En pause · {{size}} libérés",
+	"shell.pausedStrip": "En pause · n’occupe pas de mémoire",
+	"shell.deleteSession": "Supprimer",
 	"pause.dialog": "L’agent est en plein tour",
 	"pause.dialogNamed": "Mettre {{title}} en pause ?",
 	"pause.body": "Attendre la fin du tour en cours, ou l’interrompre et arrêter maintenant. La session et son travail sont conservés dans les deux cas.",

@@ -1984,6 +1984,8 @@
 	"shell.sessionMemoryAria": "メモリ {{size}} を使用中",
 	"shell.sessionResourceAria": "メモリ {{size}}、1 コアの {{cpu}} を使用中",
 	"shell.pauseFreed": "一時停止 · {{size}} を解放しました",
+	"shell.pausedStrip": "一時停止中 · メモリを使っていません",
+	"shell.deleteSession": "削除",
 	"pause.dialog": "エージェントはターンの途中です",
 	"pause.dialogNamed": "{{title}} を一時停止しますか？",
 	"pause.body": "現在のターンが終わるのを待つか、中断して今すぐ停止します。どちらでもセッションと作業は保持されます。",

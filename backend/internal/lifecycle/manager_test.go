@@ -518,6 +518,21 @@ func TestRuntimeObservation_ConfirmedRuntimeDeathTerminates(t *testing.T) {
 	}
 }
 
+func TestRuntimeObservation_PausedAgentIsNeverReapedAsDead(t *testing.T) {
+	m, st, _ := newManager()
+	rec := working("mer-1")
+	pausedAt := time.Now().Add(-time.Minute)
+	rec.PausedAt, rec.PauseReason = &pausedAt, domain.SessionPauseUser
+	rec.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: pausedAt}
+	st.sessions["mer-1"] = rec
+	if err := m.ApplyRuntimeObservation(ctx, "mer-1", ports.RuntimeFacts{Runtime: ports.ProbeDead, Workload: ports.ProbeFailed}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"]; got.IsTerminated || got.PausedAt == nil {
+		t.Fatalf("a paused agent must stay paused, not terminated: %+v", got)
+	}
+}
+
 func TestRuntimeObservation_CrashFinalizesUsageBeforeTermination(t *testing.T) {
 	m, st, _ := newManager()
 	rec := working("mer-1")

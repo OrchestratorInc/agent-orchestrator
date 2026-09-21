@@ -1984,6 +1984,8 @@
 	"shell.sessionMemoryAria": "Belegt {{size}} Speicher",
 	"shell.sessionResourceAria": "Belegt {{size}} Speicher und {{cpu}} eines Kerns",
 	"shell.pauseFreed": "Pausiert · {{size}} freigegeben",
+	"shell.pausedStrip": "Pausiert · belegt keinen Speicher",
+	"shell.deleteSession": "Löschen",
 	"pause.dialog": "Agent ist mitten im Zug",
 	"pause.dialogNamed": "{{title}} pausieren?",
 	"pause.body": "Auf das Ende des aktuellen Zugs warten oder jetzt unterbrechen. Sitzung und Arbeit bleiben in beiden Fällen erhalten.",

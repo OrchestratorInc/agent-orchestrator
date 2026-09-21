@@ -2512,6 +2512,15 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (Res
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: workspace: %w", id, err)
 	}
+	// A restore relaunches the agent, so a stale pause record must not
+	// survive it: the board would then show a running agent as paused and
+	// refuse to resume it.
+	if rec.PausedAt != nil {
+		if err := m.setPaused(ctx, id, nil, ""); err != nil {
+			return RestoreResult{}, fmt.Errorf("restore %s: clear pause: %w", id, err)
+		}
+		rec.PausedAt, rec.PauseReason = nil, ""
+	}
 	return m.relaunchRestoredSession(ctx, rec, project, ws)
 }
 
