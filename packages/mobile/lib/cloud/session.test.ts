@@ -11,6 +11,7 @@ vi.mock("expo-secure-store", () => ({
 }));
 
 import { createTokenProvider } from "./session";
+import { refreshWorkOSTokens } from "./signIn";
 import type { CloudTokens } from "./tokens";
 
 const fresh: CloudTokens = { accessToken: "fresh", refreshToken: "r", expiresAt: 10_000_000 };
@@ -41,6 +42,23 @@ describe("createTokenProvider", () => {
 		expect(await provider.getToken()).toBeNull();
 	});
 
+	it("does not return a fresh credential read before sign-out", async () => {
+		let releaseRead!: (tokens: CloudTokens) => void;
+		let stored: CloudTokens | null = fresh;
+		const provider = createTokenProvider({
+			read: () => new Promise((resolve) => { releaseRead = resolve; }),
+			write: async (tokens) => { stored = tokens; },
+			clear: async () => { stored = null; },
+			refresh: async () => fresh,
+			now: () => 0,
+		});
+		const pending = provider.getToken();
+		await provider.signOut();
+		releaseRead(fresh);
+		expect(await pending).toBeNull();
+		expect(stored).toBeNull();
+	});
+
 	it("refreshes an expired token and stores the result", async () => {
 		const { provider, stored } = harness(stale, async () => fresh);
 		expect(await provider.getToken()).toBe("fresh");
@@ -55,10 +73,38 @@ describe("createTokenProvider", () => {
 		expect(refreshSpy).toHaveBeenCalledTimes(1);
 	});
 
-	it("signs out and reports null when the refresh is rejected", async () => {
-		const { provider, stored } = harness(stale, async () => { throw new Error("invalid_grant"); });
+	it.each([
+		[400, { error: "invalid_grant", message: "Refresh token expired" }],
+		[401, { message: "Unauthorized" }],
+	])("clears a definitively rejected refresh (%s)", async (status, body) => {
+		const { provider, stored } = harness(stale, () => refreshWorkOSTokens(
+			{ clientId: "client", refreshToken: "r" },
+			{ fetchImpl: async () => new Response(JSON.stringify(body), { status }) },
+		));
 		expect(await provider.getToken()).toBeNull();
 		expect(stored()).toBeNull();
+	});
+
+	it.each([500, 503, 429, 400])("preserves credentials and allows retry after a non-grant refresh failure (%s)", async (status) => {
+		const { provider, stored } = harness(stale, () => refreshWorkOSTokens(
+			{ clientId: "client", refreshToken: "r" },
+			{ fetchImpl: async () => new Response(JSON.stringify({ message: "Try again" }), { status }) },
+		));
+		await expect(provider.getToken()).rejects.toThrow("Try again");
+		expect(stored()).toEqual(stale);
+	});
+
+	it("preserves the refresh token while offline, then recovers without signing in", async () => {
+		let offline = true;
+		const { provider, stored } = harness(stale, async () => {
+			if (offline) throw new TypeError("Network request failed");
+			return fresh;
+		});
+		await expect(provider.getToken()).rejects.toThrow("Network request failed");
+		expect(stored()).toEqual(stale);
+		offline = false;
+		expect(await provider.getToken()).toBe("fresh");
+		expect(stored()).toEqual(fresh);
 	});
 
 	// A refresh that lands after sign-out must not resurrect the session.
@@ -92,8 +138,9 @@ describe("createTokenProvider", () => {
 		// Let refresh() resolve and the write() call begin before signing out.
 		await Promise.resolve();
 		await Promise.resolve();
-		await provider.signOut();
+		const signedOut = provider.signOut();
 		releaseWrite();
+		await signedOut;
 
 		expect(await pending).toBeNull();
 		expect(stored).toBeNull();

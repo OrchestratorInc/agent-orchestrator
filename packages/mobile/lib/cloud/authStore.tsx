@@ -2,6 +2,7 @@ import type { CloudClient } from "@aoagents/cloud-client";
 import * as Crypto from "expo-crypto";
 import * as WebBrowser from "expo-web-browser";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { AppState } from "react-native";
 import { createMobileCloudClient } from "./client";
 import { CLOUD_BASE_URL, WORKOS_CLIENT_ID, WORKOS_REDIRECT_URI } from "./config";
 import { resolveOrg } from "./org";
@@ -15,7 +16,7 @@ import {
 	type RegisterLocalAuthInput,
 } from "./signIn";
 import { createTokenProvider } from "./session";
-import { clearTokens, readTokens, writeTokens } from "./tokens";
+import { clearTokens, readTokens, writeTokens, type CloudTokens } from "./tokens";
 import { wrapUnauthorized } from "./unauthorized";
 import { runWorkOSSignIn } from "./workosFlow";
 
@@ -34,6 +35,9 @@ export type CloudAuthState = {
 	/** The account's resolved org, or null while sign-in/org resolution is
 	 *  still in flight — see resolveSessionSource's CloudResolveInput. */
 	orgId: string | null;
+	orgLoading: boolean;
+	orgError: string | null;
+	retryOrgResolution(): Promise<void>;
 	/** Increments whenever the authenticated account session changes. */
 	sessionEpoch: number;
 	client: CloudClient;
@@ -65,6 +69,9 @@ export function CloudAuthProvider({
 }) {
 	const [signedIn, setSignedIn] = useState<boolean | null>(null);
 	const [orgId, setOrgId] = useState<string | null>(null);
+	const [orgLoading, setOrgLoading] = useState(false);
+	const [orgError, setOrgError] = useState<string | null>(null);
+	const orgResolutionRef = useRef<{ generation: number; promise: Promise<void> } | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [sessionEpoch, setSessionEpoch] = useState(0);
@@ -76,6 +83,8 @@ export function CloudAuthProvider({
 	const advanceSessionEpoch = useCallback(() => {
 		generationRef.current += 1;
 		setSessionEpoch(generationRef.current);
+		setOrgLoading(false);
+		setOrgError(null);
 		return generationRef.current;
 	}, []);
 
@@ -98,7 +107,8 @@ export function CloudAuthProvider({
 	// never succeed, and CloudUnreadyState would claim "you're signed in"
 	// with no way to recover short of reinstalling. Dropping to signed-out
 	// here sends the user back to the sign-in prompt instead.
-	const handleUnauthorized = useCallback(() => {
+	const handleUnauthorized = useCallback((generation: number) => {
+		if (generation !== generationRef.current) return;
 		advanceSessionEpoch();
 		void tokens.signOut();
 		setSignedIn(false);
@@ -106,43 +116,50 @@ export function CloudAuthProvider({
 	}, [advanceSessionEpoch, tokens]);
 
 	const client = useMemo(
-		() => wrapUnauthorized(createMobileCloudClient({ baseUrl, tokens }), handleUnauthorized),
+		() => wrapUnauthorized(createMobileCloudClient({ baseUrl, tokens }), handleUnauthorized, () => generationRef.current),
 		[baseUrl, tokens, handleUnauthorized],
 	);
 
 	const resolveSession = useCallback(
-		async (generation: number) => {
-			let signedInNow: boolean;
-			try {
-				const raw = await readTokens();
-				if (generation !== generationRef.current) return;
-				signedInNow = raw !== null;
-				setSignedIn(signedInNow);
-			} catch {
-				if (generation !== generationRef.current) return;
-				setSignedIn(false);
-				setOrgId(null);
-				return;
-			}
-			if (!signedInNow) {
-				setOrgId(null);
-				return;
-			}
-			try {
-				const org = await resolveOrg(client);
-				if (generation !== generationRef.current) return;
-				setOrgId(org.id);
-			} catch {
-				if (generation !== generationRef.current) return;
-				// Signed in but the org couldn't be resolved right now (offline,
-				// control plane hiccup). Stay signed in rather than bouncing a real
-				// session to the sign-in screen: resolveSessionSource treats a null
-				// orgId as "not ready yet", and the board can retry.
-				setOrgId(null);
-			}
+		(generation: number): Promise<void> => {
+			if (generation !== generationRef.current) return Promise.resolve();
+			if (orgResolutionRef.current?.generation === generation) return orgResolutionRef.current.promise;
+			setOrgLoading(true);
+			setOrgError(null);
+			const promise = (async () => {
+				try {
+					const raw = await readTokens();
+					if (generation !== generationRef.current) return;
+					setSignedIn(raw !== null);
+					if (!raw) {
+						setOrgId(null);
+						return;
+					}
+					const org = await resolveOrg(client, () => generation === generationRef.current);
+					if (generation !== generationRef.current) return;
+					setOrgId(org.id);
+				} catch (cause) {
+					if (generation !== generationRef.current) return;
+					setOrgId(null);
+					setOrgError(cause instanceof Error ? cause.message : "Could not load your cloud workspace.");
+				} finally {
+					if (generation === generationRef.current) setOrgLoading(false);
+					if (orgResolutionRef.current?.generation === generation) orgResolutionRef.current = null;
+				}
+			})();
+			orgResolutionRef.current = { generation, promise };
+			return promise;
 		},
 		[client],
 	);
+	const retryOrgResolution = useCallback(() => resolveSession(generationRef.current), [resolveSession]);
+
+	useEffect(() => {
+		const listener = AppState.addEventListener("change", (state) => {
+			if (state === "active" && signedIn && !orgId) void retryOrgResolution();
+		});
+		return () => listener.remove();
+	}, [signedIn, orgId, retryOrgResolution]);
 
 	useEffect(() => {
 		void resolveSession(generationRef.current);
@@ -151,14 +168,20 @@ export function CloudAuthProvider({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
+	const acceptSession = useCallback(async (issued: CloudTokens) => {
+		const generation = advanceSessionEpoch();
+		setOrgId(null);
+		await tokens.replace(issued);
+		await resolveSession(generation);
+	}, [advanceSessionEpoch, resolveSession, tokens]);
+
 	const signInLocal = useCallback(
 		async (email: string, password: string) => {
 			setBusy(true);
 			setError(null);
 			try {
 				const issued = await signInWithLocalAuth(baseUrl, email, password);
-				await writeTokens(issued);
-				await resolveSession(advanceSessionEpoch());
+				await acceptSession(issued);
 			} catch (e) {
 				const message = e instanceof Error ? e.message : "Sign-in failed.";
 				setError(message);
@@ -167,7 +190,7 @@ export function CloudAuthProvider({
 				setBusy(false);
 			}
 		},
-		[advanceSessionEpoch, baseUrl, resolveSession],
+		[acceptSession, baseUrl],
 	);
 
 	const signInWithWorkOS = useCallback(async (): Promise<boolean> => {
@@ -190,8 +213,7 @@ export function CloudAuthProvider({
 					exchangeWorkOSCode({ clientId: WORKOS_CLIENT_ID, code, codeVerifier }),
 			});
 			if (!issued) return false;
-			await writeTokens(issued);
-			await resolveSession(advanceSessionEpoch());
+			await acceptSession(issued);
 			return true;
 		} catch (e) {
 			const message = e instanceof Error ? e.message : "Sign-in failed.";
@@ -200,7 +222,7 @@ export function CloudAuthProvider({
 		} finally {
 			setBusy(false);
 		}
-	}, [advanceSessionEpoch, resolveSession]);
+	}, [acceptSession]);
 
 	const registerLocal = useCallback(
 		async (input: RegisterLocalAuthInput) => {
@@ -208,8 +230,7 @@ export function CloudAuthProvider({
 			setError(null);
 			try {
 				const issued = await registerWithLocalAuth(baseUrl, input);
-				await writeTokens(issued);
-				await resolveSession(advanceSessionEpoch());
+				await acceptSession(issued);
 			} catch (e) {
 				const message = e instanceof Error ? e.message : "Registration failed.";
 				setError(message);
@@ -218,7 +239,7 @@ export function CloudAuthProvider({
 				setBusy(false);
 			}
 		},
-		[advanceSessionEpoch, baseUrl, resolveSession],
+		[acceptSession, baseUrl],
 	);
 
 	const signOut = useCallback(async () => {
@@ -230,8 +251,8 @@ export function CloudAuthProvider({
 	}, [advanceSessionEpoch, tokens]);
 
 	const value = useMemo<CloudAuthState>(
-		() => ({ signedIn, orgId, sessionEpoch, client, baseUrl, error, busy, signInWithWorkOS, signInLocal, registerLocal, signOut }),
-		[signedIn, orgId, sessionEpoch, client, baseUrl, error, busy, signInWithWorkOS, signInLocal, registerLocal, signOut],
+		() => ({ signedIn, orgId, orgLoading, orgError, retryOrgResolution, sessionEpoch, client, baseUrl, error, busy, signInWithWorkOS, signInLocal, registerLocal, signOut }),
+		[signedIn, orgId, orgLoading, orgError, retryOrgResolution, sessionEpoch, client, baseUrl, error, busy, signInWithWorkOS, signInLocal, registerLocal, signOut],
 	);
 
 	return <CloudAuthContext.Provider value={value}>{children}</CloudAuthContext.Provider>;

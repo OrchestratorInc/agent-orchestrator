@@ -414,7 +414,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const fetchCloudBoard = useCallback((): Promise<void> =>
 		dispatchCurrentCloudBoardRequest(
 			() => cloudBoardRequestRef.current,
-			async ({ source, generation }) => {
+			async ({ source, generation, sequence }) => {
 				setCloudBoard((current) => ({ ...current, loading: true, error: null }));
 				try {
 					const board = await loadSessionSourceBoard(source);
@@ -423,6 +423,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 							current,
 							requestGeneration: generation,
 							currentGeneration: cloudBoardRequestRef.current?.generation ?? -1,
+							requestSequence: sequence,
+							currentSequence: cloudBoardRequestRef.current?.sequence,
 							result: { kind: "success", ...board },
 						}) ?? current,
 					);
@@ -433,6 +435,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 							current,
 							requestGeneration: generation,
 							currentGeneration: cloudBoardRequestRef.current?.generation ?? -1,
+							requestSequence: sequence,
+							currentSequence: cloudBoardRequestRef.current?.sequence,
 							result: { kind: "failure", error: message },
 						}) ?? current,
 					);

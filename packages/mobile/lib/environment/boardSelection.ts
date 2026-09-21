@@ -16,6 +16,8 @@ export type BoardSelection<Project, Session> = {
 export type CloudBoardRequest<Source> = {
 	source: Source;
 	generation: number;
+	/** Monotonic within this source; a pull-to-refresh supersedes older polls. */
+	sequence?: number;
 };
 
 /** Readiness belongs to the selected environment, not a retained Local pairing. */
@@ -50,15 +52,19 @@ type CloudBoardResult<Project, Session> =
 
 /**
  * Applies a Cloud request result only if the request still belongs to the
- * active source generation. A failure deliberately preserves the last board.
+ * active source generation and latest request sequence. A failure deliberately
+ * preserves the last board.
  */
 export function publishCloudBoardResult<Project, Session>(input: {
 	current: BoardState<Project, Session>;
 	requestGeneration: number;
 	currentGeneration: number;
+	requestSequence?: number;
+	currentSequence?: number;
 	result: CloudBoardResult<Project, Session>;
 }): BoardState<Project, Session> | undefined {
 	if (input.requestGeneration !== input.currentGeneration) return undefined;
+	if (input.requestSequence !== input.currentSequence) return undefined;
 	if (input.result.kind === "success") {
 		return { projects: input.result.projects, sessions: input.result.sessions, loading: false, error: null };
 	}
@@ -74,7 +80,10 @@ export async function dispatchCurrentCloudBoardRequest<Source>(
 	load: (request: CloudBoardRequest<Source>) => Promise<void>,
 ): Promise<void> {
 	const request = current();
-	if (request) await load(request);
+	if (request) {
+		request.sequence = (request.sequence ?? 0) + 1;
+		await load({ ...request });
+	}
 }
 
 /** Blocks daemon-only mutations whenever Local is no longer the active environment. */

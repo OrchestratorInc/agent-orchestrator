@@ -14,8 +14,11 @@ export function orgDisplayNameForAccount(user: { displayName: string; email: str
  * freshly created one. First-org is the same deliberate v0 simplification the
  * desktop makes (useCloudOrg.ts) — there is no org switcher yet.
  */
-export async function resolveOrg(client: CloudClient): Promise<OrganizationMembership> {
+export async function resolveOrg(client: CloudClient, isCurrentSession: () => boolean = () => true): Promise<OrganizationMembership> {
 	const account = await client.getCurrentAccount();
+	// The shared client may already carry a replacement account's credentials.
+	// A late lookup must not create that account's org from its predecessor.
+	if (!isCurrentSession()) throw new Error("Cloud account changed.");
 	const first = account.organizations[0];
 	if (first !== undefined) return first;
 	const created = await client.createOrganization({

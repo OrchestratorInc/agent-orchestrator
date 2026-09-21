@@ -3,6 +3,9 @@ import type { CloudTokens } from "./tokens";
 
 type Deps = { fetchImpl?: typeof fetch; now?: () => number };
 
+/** Only a definitive rejection of the refresh grant requires a new login. */
+export class RefreshRejectedError extends Error {}
+
 async function errorMessage(response: Response, fallback: string): Promise<string> {
 	try {
 		const body = (await response.json()) as { message?: unknown };
@@ -151,7 +154,17 @@ export async function refreshWorkOSTokens(
 		}),
 	});
 	if (!response.ok) {
-		throw new Error(await errorMessage(response, `Session refresh failed (${response.status}).`));
+		let body: { error?: string; code?: string; message?: string } = {};
+		try {
+			body = await response.json();
+		} catch {
+			// HTTP 401 is definitive even when the response has no JSON body.
+		}
+		const message = body?.message || `Session refresh failed (${response.status}).`;
+		if (response.status === 401 || (response.status === 400 && (body?.error === "invalid_grant" || body?.code === "invalid_grant"))) {
+			throw new RefreshRejectedError(message);
+		}
+		throw new Error(message);
 	}
 	const body = (await response.json()) as { access_token: string; refresh_token: string };
 	return {

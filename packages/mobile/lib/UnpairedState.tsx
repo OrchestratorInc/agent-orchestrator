@@ -36,12 +36,8 @@ export function UnpairedState() {
  * CloudAuthProvider) — that must not flash "sign in" for a user who already
  * is, so it renders a plain loading state rather than guessing.
  *
- * Signed-in cloud accounts get an honest "not wired up yet" message rather
- * than the board's empty state: `sessions`/`projects` in the store are still
- * populated by the local daemon poll only (see lib/store.tsx), so a cloud
- * account with real running sessions would otherwise see "No active workers" —
- * indistinguishable from actually having none, which is exactly the kind of
- * silent-wrong default this exists to avoid.
+ * A signed-in account needs an organization before the board can load. Show
+ * that resolution's progress or retryable failure instead of an empty board.
  */
 export function CloudUnreadyState() {
 	const router = useRouter();
@@ -62,11 +58,16 @@ export function CloudUnreadyState() {
 		);
 	}
 
+	if (cloudAuth.orgLoading) {
+		return <EmptyState icon="cloud" title="Loading your cloud workspace…" />;
+	}
+
 	return (
 		<EmptyState
 			icon="cloud"
-			title="You're signed in to AO Cloud"
-			message="Cloud sessions don't show on this board yet — that part is still being built."
+			title="Could not load your cloud workspace"
+			message={cloudAuth.orgError ?? "Your account is signed in. Retry to load your workspace."}
+			action={<Button title="Retry" icon="refresh-cw" onPress={() => void cloudAuth.retryOrgResolution()} />}
 		/>
 	);
 }

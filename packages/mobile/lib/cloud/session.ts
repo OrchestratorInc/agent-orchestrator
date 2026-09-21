@@ -1,4 +1,5 @@
 import { isExpired, type CloudTokens } from "./tokens";
+import { RefreshRejectedError } from "./signIn";
 
 export type TokenProviderDeps = {
 	read(): Promise<CloudTokens | null>;
@@ -11,41 +12,51 @@ export type TokenProviderDeps = {
 export interface TokenProvider {
 	/** The bearer token to send, or null when there is no usable session. */
 	getToken(): Promise<string | null>;
+	/** Invalidates pending reads/refreshes before storing a new login. */
+	replace(tokens: CloudTokens): Promise<void>;
 	signOut(): Promise<void>;
 }
 
 /**
  * Refresh-aware access to the stored cloud session.
  *
- * Mirrors frontend/src/main/cloud-auth.ts: concurrent callers share one
- * refresh, and a generation counter means a refresh that resolves after
- * sign-out is discarded rather than resurrecting the session.
+ * Concurrent callers share one refresh. Session replacement and sign-out
+ * invalidate pending reads/refreshes, and storage mutations remain ordered.
  */
 export function createTokenProvider(deps: TokenProviderDeps): TokenProvider {
 	let inFlight: Promise<CloudTokens | null> | null = null;
 	let generation = 0;
+	let storageWrite: Promise<void> | null = null;
+
+	// SecureStore operations are asynchronous. Serialize mutations so a late
+	// refresh write cannot overwrite a newer login or a sign-out clear.
+	function mutateStorage(operation: () => Promise<void>): Promise<void> {
+		const next = storageWrite ? storageWrite.then(operation, operation) : operation();
+		storageWrite = next;
+		const finish = () => { if (storageWrite === next) storageWrite = null; };
+		void next.then(finish, finish);
+		return next;
+	}
 
 	async function refreshOnce(tokens: CloudTokens, startedAt: number): Promise<CloudTokens | null> {
 		if (!tokens.refreshToken) {
-			await deps.clear();
+			await mutateStorage(async () => { if (startedAt === generation) await deps.clear(); });
 			return null;
 		}
 		try {
 			const next = await deps.refresh(tokens.refreshToken);
 			// Sign-out happened while this was in flight; drop the result.
 			if (startedAt !== generation) return null;
-			await deps.write(next);
-			// A sign-out that landed while the write above was in flight may have
-			// already run clear(); this write would then be the last writer and
-			// would resurrect the signed-out session. Re-check and undo.
-			if (startedAt !== generation) {
-				await deps.clear();
+			await mutateStorage(async () => { if (startedAt === generation) await deps.write(next); });
+			if (startedAt !== generation) return null;
+			return next;
+		} catch (error) {
+			if (startedAt !== generation) return null;
+			if (error instanceof RefreshRejectedError) {
+				await mutateStorage(async () => { if (startedAt === generation) await deps.clear(); });
 				return null;
 			}
-			return next;
-		} catch {
-			if (startedAt === generation) await deps.clear();
-			return null;
+			throw error;
 		}
 	}
 
@@ -57,19 +68,30 @@ export function createTokenProvider(deps: TokenProviderDeps): TokenProvider {
 			// be judged against the generation that was current when this call
 			// started, not whatever it is once execution resumes.
 			const startedAt = generation;
+			if (storageWrite) await storageWrite;
+			if (startedAt !== generation) return null;
 			const tokens = await deps.read();
+			if (startedAt !== generation) return null;
 			if (!tokens) return null;
 			if (!isExpired(tokens, deps.now())) return tokens.accessToken;
-			if (startedAt !== generation) return null;
 			if (inFlight === null) {
-				inFlight = refreshOnce(tokens, startedAt).finally(() => { inFlight = null; });
+				const refresh = refreshOnce(tokens, startedAt).finally(() => {
+					if (inFlight === refresh) inFlight = null;
+				});
+				inFlight = refresh;
 			}
-			return (await inFlight)?.accessToken ?? null;
+			const refreshed = await inFlight;
+			return startedAt === generation ? refreshed?.accessToken ?? null : null;
+		},
+		async replace(tokens) {
+			generation += 1;
+			inFlight = null;
+			await mutateStorage(() => deps.write(tokens));
 		},
 		async signOut() {
 			generation += 1;
 			inFlight = null;
-			await deps.clear();
+			await mutateStorage(() => deps.clear());
 		},
 	};
 }

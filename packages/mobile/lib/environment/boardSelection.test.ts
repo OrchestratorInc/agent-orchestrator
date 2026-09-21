@@ -107,6 +107,56 @@ describe("publishCloudBoardResult", () => {
 });
 
 describe("dispatchCurrentCloudBoardRequest", () => {
+	it.each(["success", "failure"] as const)("does not let an older %s replace a newer snapshot or error", async (olderResult) => {
+		const current: CloudBoardRequest<string> = { source: "org", generation: 1 };
+		let state = { ...cloud };
+		let releaseOlder!: () => void;
+		const older = dispatchCurrentCloudBoardRequest(() => current, async (request) => {
+			await new Promise<void>((resolve) => { releaseOlder = resolve; });
+			state = publishCloudBoardResult({
+				current: state, requestGeneration: request.generation, currentGeneration: current.generation,
+				requestSequence: request.sequence, currentSequence: current.sequence,
+				result: olderResult === "success"
+					? { kind: "success", projects: ["old"], sessions: ["old"] }
+					: { kind: "failure", error: "Old failure" },
+			}) ?? state;
+		});
+		await dispatchCurrentCloudBoardRequest(() => current, async (request) => {
+			state = publishCloudBoardResult({
+				current: state, requestGeneration: request.generation, currentGeneration: current.generation,
+				requestSequence: request.sequence, currentSequence: current.sequence,
+				result: { kind: "success", projects: ["new"], sessions: ["new"] },
+			}) ?? state;
+		});
+		releaseOlder();
+		await older;
+		expect(state).toEqual({ projects: ["new"], sessions: ["new"], loading: false, error: null });
+	});
+
+	it("keeps the last good snapshot and newest error when an older success arrives", async () => {
+		const current: CloudBoardRequest<string> = { source: "org", generation: 1 };
+		let state = { ...cloud };
+		let releaseOlder!: () => void;
+		const older = dispatchCurrentCloudBoardRequest(() => current, async (request) => {
+			await new Promise<void>((resolve) => { releaseOlder = resolve; });
+			state = publishCloudBoardResult({
+				current: state, requestGeneration: request.generation, currentGeneration: current.generation,
+				requestSequence: request.sequence, currentSequence: current.sequence,
+				result: { kind: "success", projects: ["old"], sessions: ["old"] },
+			}) ?? state;
+		});
+		await dispatchCurrentCloudBoardRequest(() => current, async (request) => {
+			state = publishCloudBoardResult({
+				current: state, requestGeneration: request.generation, currentGeneration: current.generation,
+				requestSequence: request.sequence, currentSequence: current.sequence,
+				result: { kind: "failure", error: "Newest failure" },
+			}) ?? state;
+		});
+		releaseOlder();
+		await older;
+		expect(state).toEqual({ projects: ["cloud-project"], sessions: ["cloud-session"], loading: false, error: "Newest failure" });
+	});
+
 	it("uses the new source when a retained refresh callback runs after a source switch", async () => {
 		let current: CloudBoardRequest<string> | undefined = { source: "old-org", generation: 1 };
 		const loaded: string[] = [];

@@ -3,7 +3,8 @@ import { CloudApiError, type CloudClient } from "@aoagents/cloud-client";
 /**
  * Wraps every method on a CloudClient so a 401 response — including the one
  * `authorizedFetch` synthesizes when `getAccessToken` yields `null` — calls
- * `onUnauthorized` before the error is rethrown to the caller.
+ * `onUnauthorized` with the initiating generation before rethrowing. The auth
+ * owner ignores that decision if a replacement session has since started.
  *
  * This is the single place that watches for an unrecoverable cloud session:
  * a local-auth token has no refresh token (see session.ts's refreshOnce), so
@@ -13,16 +14,17 @@ import { CloudApiError, type CloudClient } from "@aoagents/cloud-client";
  * event polling — rather than requiring every call site to check status
  * itself.
  */
-export function wrapUnauthorized(client: CloudClient, onUnauthorized: () => void): CloudClient {
+export function wrapUnauthorized(client: CloudClient, onUnauthorized: (generation: number) => void, getGeneration: () => number): CloudClient {
 	return new Proxy(client, {
 		get(target, prop, receiver) {
 			const value = Reflect.get(target, prop, receiver);
 			if (typeof value !== "function") return value;
 			return (...args: unknown[]) => {
+				const generation = getGeneration();
 				const result = Reflect.apply(value, target, args);
 				if (result instanceof Promise) {
 					return result.catch((error: unknown) => {
-						if (error instanceof CloudApiError && error.status === 401) onUnauthorized();
+						if (error instanceof CloudApiError && error.status === 401) onUnauthorized(generation);
 						throw error;
 					});
 				}

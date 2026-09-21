@@ -15,6 +15,7 @@ describe("wrapUnauthorized", () => {
 		const client = wrapUnauthorized(
 			fakeClient({ getCurrentAccount: async () => { throw error; } }),
 			onUnauthorized,
+			() => 0,
 		);
 
 		await expect(client.getCurrentAccount()).rejects.toBe(error);
@@ -27,6 +28,7 @@ describe("wrapUnauthorized", () => {
 		const client = wrapUnauthorized(
 			fakeClient({ getCurrentAccount: async () => { throw error; } }),
 			onUnauthorized,
+			() => 0,
 		);
 
 		await expect(client.getCurrentAccount()).rejects.toBe(error);
@@ -38,6 +40,7 @@ describe("wrapUnauthorized", () => {
 		const client = wrapUnauthorized(
 			fakeClient({ getCurrentAccount: async () => ({ id: "acct" }) }),
 			onUnauthorized,
+			() => 0,
 		);
 
 		await expect(client.getCurrentAccount()).resolves.toEqual({ id: "acct" });

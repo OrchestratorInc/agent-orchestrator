@@ -4,8 +4,8 @@ import { WORKOS_REDIRECT_URI } from "./config";
 describe("WORKOS_REDIRECT_URI", () => {
 	// WorkOS rejects a redirect URI it has not been shown, and a generic scheme
 	// can be claimed by any app on the device — this project's own dev build
-	// already steals `aomobile://`. The auth redirect therefore uses the bundle
-	// identifier, which only this app can register.
+	// already steals `aomobile://`. The bundle-identifier scheme reduces such
+	// collisions but is not exclusive; PKCE protects an intercepted auth code.
 	it("uses the bundle-identifier scheme, not the generic app scheme", () => {
 		expect(WORKOS_REDIRECT_URI).toBe("aoagents.ao://callback");
 	});
