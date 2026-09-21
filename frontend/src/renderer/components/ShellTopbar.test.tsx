@@ -12,7 +12,7 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { ShellTopbar, TopbarKillButton, TopbarPauseButton } from "./ShellTopbar";
+import { ShellTopbar, TopbarKillButton } from "./ShellTopbar";
 import { TooltipProvider } from "./ui/tooltip";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
@@ -55,11 +55,6 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 		};
 	},
 	workspaceQueryKey: ["workspaces"],
-}));
-
-vi.mock("../hooks/useSessionMemory", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../hooks/useSessionMemory")>()),
-	useSessionMemory: () => ({ data: new Map() }),
 }));
 
 vi.mock("../lib/api-client", () => ({
@@ -803,67 +798,5 @@ describe("TopbarKillButton", () => {
 		view.rerenderTopbar();
 		expect(await screen.findByText("worker one failed")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Kill session" })).toBeEnabled();
-	});
-});
-
-describe("TopbarPauseButton", () => {
-	function renderPause(session: WorkspaceSession) {
-		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-		return render(
-			<QueryClientProvider client={queryClient}>
-				<TooltipProvider>
-					<TopbarPauseButton session={session} />
-				</TooltipProvider>
-			</QueryClientProvider>,
-		);
-	}
-
-	it("pauses an idle agent straight away and resumes a paused one", async () => {
-		postMock.mockResolvedValue({ data: { ok: true }, error: undefined });
-		const idle = { ...worker, activity: { state: "idle" as const, lastActivityAt: "2026-01-01T00:00:00Z" } };
-		const { unmount } = renderPause(idle);
-		await userEvent.click(screen.getByRole("button", { name: `Pause agent for ${worker.title}` }));
-		await waitFor(() =>
-			expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/exit-agent", {
-				params: { path: { sessionId: worker.id } },
-				body: { policy: "drain" },
-			}),
-		);
-		unmount();
-
-		const paused = { ...idle, pausedAt: "2026-01-01T00:00:00Z", activity: { state: "exited" as const, lastActivityAt: "2026-01-01T00:00:00Z" } };
-		renderPause(paused);
-		const play = screen.getByRole("button", { name: `Resume agent for ${worker.title}` });
-		expect(play).toHaveAttribute("data-paused", "true");
-		await userEvent.click(play);
-		await waitFor(() =>
-			expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
-				params: { path: { sessionId: worker.id } },
-			}),
-		);
-	});
-
-	it("asks drain or interrupt when the agent is mid-turn", async () => {
-		const busy = { ...worker, activity: { state: "active" as const, lastActivityAt: "2026-01-01T00:00:00Z" } };
-		renderPause(busy);
-		await userEvent.click(screen.getByRole("button", { name: `Pause agent for ${worker.title}` }));
-		expect(postMock).not.toHaveBeenCalled();
-		expect(await screen.findByRole("dialog")).toBeInTheDocument();
-	});
-});
-
-describe("ShellTopbar pause wiring", () => {
-	it("shows Resume, not Pause, for a paused chat session", () => {
-		renderTopbar({
-			...worker,
-			mode: "chat",
-			status: "exited",
-			displayStatus: "Paused",
-			pausedAt: "2026-06-10T00:00:00Z",
-			activity: { state: "exited", lastActivityAt: "2026-06-10T00:00:00Z" },
-		} as WorkspaceSession);
-		const button = screen.getByTestId("topbar-pause");
-		expect(button).toHaveAttribute("data-paused", "true");
-		expect(button).toHaveAttribute("aria-label", "Resume agent for do the thing");
 	});
 });

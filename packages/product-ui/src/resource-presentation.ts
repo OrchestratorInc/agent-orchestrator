@@ -52,10 +52,6 @@ export type ResourceSessionFacts = {
 	working: boolean;
 	/** Seconds since the agent last did anything; undefined when unknown. */
 	idleSeconds?: number;
-	/** The agent was deliberately stopped and can be resumed. */
-	paused: boolean;
-	/** Whether the agent can be paused at all (runtime-less rows cannot). */
-	pausable: boolean;
 };
 
 /** Under this share of RAM in use, pressure is somebody else's doing. */
@@ -64,12 +60,12 @@ const AO_SHARE_MATTERS = 0.25;
 export type ResourceSuggestion =
 	| { kind: "none" }
 	| { kind: "other_apps"; aoBytes: number }
-	| { kind: "pause_largest"; sessionId: string; title: string; rssBytes: number };
+	| { kind: "kill_largest"; sessionId: string; title: string; rssBytes: number };
 
 /**
  * Evaluated top to bottom, first match wins, so there is only ever one line
  * and one button. Fine: nothing. AO holding under a quarter of what is in
- * use: say so, no button. Otherwise: pause the biggest.
+ * use: say so, no button. Otherwise: point at the biggest session.
  */
 export function resourceSuggestion(
 	state: PressureState,
@@ -80,9 +76,9 @@ export function resourceSuggestion(
 	if (state === "fine") return { kind: "none" };
 	const inUse = machine.totalBytes - machine.availableBytes;
 	if (inUse > 0 && aoBytes / inUse < AO_SHARE_MATTERS) return { kind: "other_apps", aoBytes };
-	const largest = [...sessions].filter((s) => s.pausable && !s.paused).sort((a, b) => b.rssBytes - a.rssBytes)[0];
+	const largest = [...sessions].sort((a, b) => b.rssBytes - a.rssBytes)[0];
 	if (!largest) return { kind: "none" };
-	return { kind: "pause_largest", sessionId: largest.id, title: largest.title, rssBytes: largest.rssBytes };
+	return { kind: "kill_largest", sessionId: largest.id, title: largest.title, rssBytes: largest.rssBytes };
 }
 
 export type ChipTone = "neutral" | "warning" | "critical";
@@ -94,7 +90,7 @@ export type ChipTone = "neutral" | "warning" | "critical";
  */
 export function chipTone(state: PressureState, session: ResourceSessionFacts, largestSessionId: string | undefined): ChipTone {
 	if (state === "tight" && session.id === largestSessionId) return "critical";
-	if (state !== "fine" && !session.working && !session.paused) return "warning";
+	if (state !== "fine" && !session.working) return "warning";
 	return "neutral";
 }
 
@@ -102,7 +98,6 @@ export function chipTone(state: PressureState, session: ResourceSessionFacts, la
 export function largestSession(sessions: ResourceSessionFacts[]): string | undefined {
 	let best: ResourceSessionFacts | undefined;
 	for (const s of sessions) {
-		if (s.paused) continue;
 		if (!best || s.rssBytes > best.rssBytes) best = s;
 	}
 	return best?.id;

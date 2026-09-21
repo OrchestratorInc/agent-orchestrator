@@ -145,12 +145,11 @@ describe("SessionsBoard", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("pauses a running agent from the card and resumes an exited one", async () => {
+	it("shows what a session costs the machine on its card", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([
 				boardSession({ id: "running", title: "Running task", status: "idle", activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" } }),
-				boardSession({ id: "paused", title: "Paused task", status: "exited", displayStatus: "Paused", pausedAt: "2026-01-01T00:00:00Z", pauseReason: "user", activity: { state: "exited", lastActivityAt: "2026-01-01T00:00:00Z" } }),
-				boardSession({ id: "crashed", title: "Crashed task", status: "exited", displayStatus: "Exited", activity: { state: "exited", lastActivityAt: "2026-01-01T00:00:00Z" } }),
+				boardSession({ id: "quiet", title: "Quiet task", status: "idle", activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" } }),
 			])],
 			isSuccess: true, isError: false,
 		});
@@ -159,36 +158,10 @@ describe("SessionsBoard", () => {
 			data: new Map([["running", { sessionId: "running", rssBytes: 641_728_512, processCount: 3, cpuPercent: 82.4, sampledAt: "", processes: [] }]]),
 		});
 		renderBoard("p1");
-		// The card says what the session costs the machine right now.
+		// The card says what the session costs the machine right now; an unsampled one shows nothing, never 0 MB.
+		expect(screen.getAllByTestId("session-resource")).toHaveLength(1);
 		expect(screen.getByTestId("session-resource")).toHaveTextContent("642 MB");
 		expect(screen.getByTestId("session-resource")).toHaveAttribute("data-resource-tone", "neutral");
-		const pauseButton = screen.getByRole("button", { name: "Pause agent for Running task" });
-		expect(pauseButton).toHaveAttribute("data-paused", "false");
-		await userEvent.hover(pauseButton);
-		expect(await screen.findByRole("tooltip")).toHaveTextContent("Pause agent · frees 642 MB");
-		await userEvent.click(pauseButton);
-		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/exit-agent", {
-			params: { path: { sessionId: "running" } },
-			body: { policy: "drain" },
-		}));
-		expect(await screen.findByRole("status")).toHaveTextContent("Paused · freed 642 MB");
-
-		const playButton = screen.getByRole("button", { name: "Resume agent for Paused task" });
-		expect(playButton).toHaveAttribute("data-paused", "true");
-		expect(screen.getByText("Paused")).toBeInTheDocument();
-		// A crash is not a pause: no pause or play button, and it still says Exited.
-		expect(screen.queryByRole("button", { name: /agent for Crashed task/ })).not.toBeInTheDocument();
-		expect(screen.getByText("Exited")).toBeInTheDocument();
-		// A paused card carries a strip the user cannot miss: what it is, and the two ways out.
-		const strip = screen.getByTestId("session-paused-strip");
-		expect(strip).toHaveTextContent("Paused · holding no memory");
-		await userEvent.click(within(strip).getByRole("button", { name: "Resume agent" }));
-		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
-			params: { path: { sessionId: "paused" } },
-		}));
-		await userEvent.click(within(strip).getByRole("button", { name: "Delete" }));
-		expect(await screen.findByRole("dialog", { name: "Terminate Paused task?" })).toBeInTheDocument();
-		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	it("shows AO memory pressure in the archive bar even with nothing archived", async () => {
@@ -213,44 +186,6 @@ describe("SessionsBoard", () => {
 		expect(indicator).toHaveAttribute("aria-label", "Tight · 2.1 GB free of 34.4 GB · AO holds 12.9 GB · pressure 35.0");
 		await userEvent.click(indicator);
 		expect(await screen.findByTestId("session-memory-stacked")).toBeInTheDocument();
-	});
-
-	it("asks drain or interrupt before pausing an agent mid-turn", async () => {
-		workspaceQueryMock.mockReturnValue({
-			data: [workspaceWithSessions([
-				boardSession({ id: "busy", title: "Busy task", status: "working", activity: { state: "active", lastActivityAt: "2026-01-01T00:00:00Z" } }),
-			])],
-			isSuccess: true, isError: false,
-		});
-		renderBoard("p1");
-		await userEvent.click(screen.getByRole("button", { name: "Pause agent for Busy task" }));
-		expect(postMock).not.toHaveBeenCalled();
-		const dialog = await screen.findByRole("dialog", { name: "Pause Busy task?" });
-		await userEvent.click(within(dialog).getByRole("button", { name: "Pause now" }));
-		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/exit-agent", {
-			params: { path: { sessionId: "busy" } },
-			body: { policy: "interrupt" },
-		}));
-	});
-
-	it("offers only interrupt after the daemon refused a drained pause", async () => {
-		workspaceQueryMock.mockReturnValue({
-			data: [workspaceWithSessions([
-				boardSession({ id: "busy", title: "Busy task", status: "working", activity: { state: "active", lastActivityAt: "2026-01-01T00:00:00Z" } }),
-			])],
-			isSuccess: true, isError: false,
-		});
-		postMock.mockResolvedValueOnce({ error: { code: "AGENT_PAUSE_DRAIN_BLOCKED", message: "mid-turn" } });
-		renderBoard("p1");
-		await userEvent.click(screen.getByRole("button", { name: "Pause agent for Busy task" }));
-		let dialog = await screen.findByRole("dialog", { name: "Pause Busy task?" });
-		await userEvent.click(within(dialog).getByRole("button", { name: "Pause after this turn" }));
-		await screen.findByRole("alert");
-
-		await userEvent.click(screen.getByRole("button", { name: "Pause agent for Busy task" }));
-		dialog = await screen.findByRole("dialog", { name: "Pause Busy task?" });
-		expect(within(dialog).queryByRole("button", { name: "Pause after this turn" })).not.toBeInTheDocument();
-		expect(within(dialog).getByRole("button", { name: "Pause now" })).toBeInTheDocument();
 	});
 
 	it("uses the last human message time rather than generic session updatedAt", () => {
@@ -594,8 +529,6 @@ describe("SessionsBoard", () => {
 		expect(within(card).getByText("$1.24 · 12,400 tokens")).toHaveClass("sr-only");
 
 		within(card).getByRole("button", { name: "keyboard worker" }).focus();
-		await userEvent.tab();
-		expect(within(card).getByRole("button", { name: "Pause agent for keyboard worker" })).toHaveFocus();
 		await userEvent.tab();
 		expect(within(card).getByRole("button", { name: "Terminate keyboard worker" })).toHaveFocus();
 

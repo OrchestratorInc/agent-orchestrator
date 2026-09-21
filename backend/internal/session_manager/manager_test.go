@@ -217,20 +217,6 @@ func (f *fakeStore) RecordSessionLatestUserPrompt(_ context.Context, id domain.S
 	f.sessions[id] = rec
 	return true, nil
 }
-func (f *fakeStore) SetSessionPaused(_ context.Context, id domain.SessionID, pausedAt *time.Time, reason domain.SessionPauseReason, _ time.Time) (bool, error) {
-	rec, ok := f.sessions[id]
-	if !ok {
-		return false, nil
-	}
-	rec.PausedAt = pausedAt
-	rec.PauseReason = reason
-	if pausedAt == nil {
-		rec.PauseReason = ""
-	}
-	f.sessions[id] = rec
-	return true, nil
-}
-
 func (f *fakeStore) GetSession(_ context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
 	if f.getSessionErr != nil {
 		return domain.SessionRecord{}, false, f.getSessionErr
@@ -2052,63 +2038,6 @@ func TestExitAgentStopsOnlyControllerAndPreservesSessionIdentity(t *testing.T) {
 	if got.Metadata.WorkspacePath != "/ws/mer-1" || got.Metadata.RuntimeHandleID != "tmux-mer-1" ||
 		got.Metadata.RuntimeLaunchID != "launch-current" || got.Metadata.AgentSessionID != "native-thread-1" {
 		t.Fatalf("exit changed resumable identity: %+v", got.Metadata)
-	}
-}
-
-func TestExitAgentRecordsPauseIntentAndResumeClearsIt(t *testing.T) {
-	m, st, runtime, _ := newManager()
-	st.sessions["mer-1"] = domain.SessionRecord{
-		ID:        "mer-1",
-		ProjectID: "mer",
-		Kind:      domain.KindWorker,
-		Harness:   domain.HarnessCodex,
-		Activity:  domain.Activity{State: domain.ActivityIdle},
-		Metadata: domain.SessionMetadata{
-			WorkspacePath:   "/ws/mer-1",
-			RuntimeHandleID: "tmux-mer-1",
-			RuntimeLaunchID: "launch-current",
-			AgentSessionID:  "native-thread-1",
-		},
-	}
-	runtime.aliveByHandle = map[string]bool{"tmux-mer-1": true}
-
-	got, err := m.ExitAgent(ctx, "mer-1", ExitAgentOptions{Reason: domain.SessionPauseIdle})
-	if err != nil {
-		t.Fatalf("ExitAgent: %v", err)
-	}
-	if got.PausedAt == nil || got.PauseReason != domain.SessionPauseIdle || !got.IsPaused() {
-		t.Fatalf("exit did not record pause intent: pausedAt=%v reason=%q", got.PausedAt, got.PauseReason)
-	}
-
-	// A crash reaches the same exited activity without a pause record.
-	crashed := st.sessions["mer-1"]
-	crashed.PausedAt, crashed.PauseReason = nil, ""
-	if crashed.IsPaused() {
-		t.Fatal("an exited agent without a pause record must not read as paused")
-	}
-}
-
-func TestResumeAgentClearsPauseBeforeRelaunch(t *testing.T) {
-	baseRuntime := &fakeRuntime{aliveByHandle: map[string]bool{"tmux-mer-1": true}}
-	runtime := &fakeRestartRuntime{fakeRuntime: baseRuntime}
-	agent := supervisedLaunchAgent{launchArgvAgent{argv: []string{"codex", "resume", "agent-x"}}}
-	m, st, _ := newExitedResumeManager(t, runtime, agent)
-	paused := st.sessions["mer-1"]
-	pausedAt := time.Unix(1000, 0)
-	paused.PausedAt, paused.PauseReason = &pausedAt, domain.SessionPauseUser
-	st.sessions["mer-1"] = paused
-	runtime.onRestart = func() {
-		if st.sessions["mer-1"].PausedAt != nil {
-			t.Fatal("pause still recorded when the runtime relaunched")
-		}
-	}
-
-	result, err := m.ResumeAgentWithMode(ctx, "mer-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Session.PausedAt != nil || result.Session.PauseReason != "" {
-		t.Fatalf("resumed session still paused: %+v", result.Session)
 	}
 }
 

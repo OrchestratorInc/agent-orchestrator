@@ -17,7 +17,7 @@ function machine(availableGiB: number, pressureRaw: number, pressureSource = "ps
 }
 
 function session(over: Partial<ResourceSessionFacts> & { id: string }): ResourceSessionFacts {
-	return { title: over.id, rssBytes: 200 * MB, working: false, idleSeconds: 0, paused: false, pausable: true, ...over };
+	return { title: over.id, rssBytes: 200 * MB, working: false, idleSeconds: 0, ...over };
 }
 
 describe("pressureState", () => {
@@ -45,13 +45,12 @@ describe("resourceSuggestion", () => {
 		expect(resourceSuggestion("tight", m, 1 * GB, [session({ id: "a", idleSeconds: 99_999 })])).toEqual({ kind: "other_apps", aoBytes: 1 * GB });
 	});
 
-	it("points at the biggest unpaused session", () => {
+	it("points at the biggest session", () => {
 		const out = resourceSuggestion("tight", m, 8 * GB, [
 			session({ id: "small", working: true, rssBytes: 300 * MB }),
 			session({ id: "big", title: "build-indexer", working: true, rssBytes: 3 * GB }),
-			session({ id: "paused", paused: true, rssBytes: 9 * GB }),
 		]);
-		expect(out).toEqual({ kind: "pause_largest", sessionId: "big", title: "build-indexer", rssBytes: 3 * GB });
+		expect(out).toEqual({ kind: "kill_largest", sessionId: "big", title: "build-indexer", rssBytes: 3 * GB });
 	});
 });
 
@@ -64,11 +63,10 @@ describe("chipTone", () => {
 		expect(chipTone("tight_soon", busy, "busy")).toBe("neutral");
 		expect(chipTone("tight_soon", idle, "busy")).toBe("warning");
 		expect(chipTone("tight", busy, "busy")).toBe("critical");
-		expect(chipTone("tight", session({ id: "p", paused: true }), "busy")).toBe("neutral");
 	});
 
-	it("names the largest unpaused session", () => {
-		expect(largestSession([idle, busy, session({ id: "huge", paused: true, rssBytes: 9 * GB })])).toBe("busy");
+	it("names the largest session", () => {
+		expect(largestSession([idle, busy])).toBe("busy");
 	});
 });
 

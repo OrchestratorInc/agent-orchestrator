@@ -181,8 +181,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    paused_at, pause_reason
+    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed
 FROM sessions WHERE id = ?;
 
 -- name: GetSessionByAutomationRunID :one
@@ -198,8 +197,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    paused_at, pause_reason
+    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed
 FROM sessions WHERE automation_run_id = ?;
 
 -- name: ListSessionsByProject :many
@@ -215,8 +213,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    paused_at, pause_reason
+    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed
 FROM sessions WHERE project_id IS ? ORDER BY num;
 
 -- name: ListAllSessions :many
@@ -232,8 +229,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    paused_at, pause_reason
+    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed
 FROM sessions ORDER BY project_id, num;
 
 -- name: PromoteTaskPreparation :execrows
@@ -288,9 +284,6 @@ UPDATE sessions SET auto_inject_ci = ?, updated_at = ? WHERE id = ?;
 
 -- name: SetSessionPinned :execrows
 UPDATE sessions SET is_pinned = ?, pinned_at = ?, updated_at = ? WHERE id = ?;
-
--- name: SetSessionPaused :execrows
-UPDATE sessions SET paused_at = ?, pause_reason = ?, updated_at = ? WHERE id = ?;
 
 -- name: SetSessionReviewerConfig :execrows
 UPDATE sessions SET reviewer_harness = ?, reviewer_agent_config = ?, updated_at = ? WHERE id = ?;

@@ -450,7 +450,7 @@ type SystemMemory struct {
 // AppMemory is the resident memory of everything AO runs: the daemon, the
 // desktop shell when the daemon is app-owned, and every live session tree.
 // Own is the daemon and shell alone, so the panel can pin AO's own cost as a
-// row the user cannot pause.
+// row with no action of its own.
 type AppMemory struct {
 	RSSBytes     uint64
 	ProcessCount int

@@ -42,10 +42,6 @@ type SessionFacts struct {
 	HasSignal      bool
 	SignalExpected bool
 	IsTerminated   bool
-	// Paused reports that an exited agent was stopped on purpose (by the user
-	// or an AO policy) and can be resumed in place; without it an exited
-	// agent reads as a crash.
-	Paused bool
 }
 
 // CIState is the aggregate CI state of a pull request.

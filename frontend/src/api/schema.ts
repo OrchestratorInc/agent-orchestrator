@@ -3390,7 +3390,7 @@ export interface components {
             createdAt: string;
             displayName?: string;
             /** @enum {string} */
-            displayStatus: "Working" | "Blocked" | "Exited" | "Paused" | "No signal" | "Awaiting PR" | "Fixing CI failures" | "Addressing comments" | "Needs review" | "Review scheduled" | "Reviewing" | "Review failed" | "Review pending" | "Draft" | "CI failing" | "Commented" | "Changes requested" | "Needs human review" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
+            displayStatus: "Working" | "Blocked" | "Exited" | "No signal" | "Awaiting PR" | "Fixing CI failures" | "Addressing comments" | "Needs review" | "Review scheduled" | "Reviewing" | "Review failed" | "Review pending" | "Draft" | "CI failing" | "Commented" | "Changes requested" | "Needs human review" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
             harness?: string;
             id: string;
             isPinned: boolean;
@@ -3404,9 +3404,6 @@ export interface components {
             /** @enum {string} */
             mode: "chat" | "tui";
             model?: string;
-            pauseReason?: string;
-            /** Format: date-time */
-            pausedAt?: null | string;
             /** Format: date-time */
             pinnedAt?: null | string;
             /** Format: int64 */
@@ -3832,12 +3829,6 @@ export interface components {
             providerAttribution: "observed" | "inferred" | "mixed";
             /** Format: int64 */
             totalNanos: number;
-        };
-        ExitAgentRequest: {
-            /** @enum {string} */
-            policy?: "drain" | "interrupt";
-            /** @enum {string} */
-            reason?: "user" | "idle" | "pressure";
         };
         ExitAgentResponse: {
             ok: boolean;
@@ -12154,11 +12145,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["ExitAgentRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description OK */
             200: {
@@ -12167,15 +12154,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExitAgentResponse"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Found */

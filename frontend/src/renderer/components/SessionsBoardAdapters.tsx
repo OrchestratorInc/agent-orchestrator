@@ -13,7 +13,7 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Check, Copy, GitBranch, LoaderCircle, Pause, Play, RotateCcw, Trash2 } from "lucide-react";
+import { Check, Copy, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "lucide-react";
 import type { MessageKey } from "../i18n";
 import { aoBridge } from "../lib/bridge";
 import { formatTimeCompact } from "../lib/format-time";
@@ -27,7 +27,6 @@ import {
 import { agentLabel } from "../lib/agent-options";
 import type { WorkspaceSession } from "../types/workspace";
 import { canonicalTrackerIssueId } from "../types/workspace";
-import { canPauseAgent, isAgentPaused, useAgentPause } from "../hooks/useAgentPause";
 import { formatCPU, formatMemory, type SessionMemoryReading } from "../hooks/useSessionMemory";
 import type { ChipTone } from "@aoagents/product-ui";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
@@ -38,8 +37,6 @@ import {
 } from "../hooks/useTerminateSession";
 import { cn } from "../lib/utils";
 import { AgentAvatar } from "./AgentAvatar";
-import { AgentPausePopover } from "./AgentPausePopover";
-import { Button } from "./ui/button";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionTerminationPopover } from "./SessionTerminationPopover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -99,7 +96,7 @@ export function BoardSessionCardAdapter({
 	session,
 	usage,
 }: {
-	/** Live reading of the session's process tree: the card's resource chip and the pause tooltip. */
+	/** Live reading of the session's process tree, for the card's resource chip. */
 	memory?: SessionMemoryReading;
 	/** Colour for the chip; neutral unless this card is part of the fix. */
 	memoryTone?: ChipTone;
@@ -181,87 +178,13 @@ function DesktopSessionCard({
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const [confirmOpen, setConfirmOpen] = useState(false);
-	const [pauseOpen, setPauseOpen] = useState(false);
 	const summaries = sessionPRDisplaySummaries(session, useSessionScmSummary(session.id).data);
 	const termination = useTerminateSessionState(session.id);
-	const showTerminate = interactive && session.isTerminated !== true && onTerminate && !isAgentPaused(session);
+	const showTerminate = interactive && session.isTerminated !== true && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
 	const usagePresentation = toUsagePresentation(usage, t);
 	const resourcePresentation = toResourcePresentation(memory, session.activity?.state === "active", memoryTone, t);
-	const memoryBytes = memory?.rssBytes;
 	const translate: ProductUITranslator = (key, values) => t(key as MessageKey, values);
-	const pause = useAgentPause(session, memoryBytes);
-	const showPause = interactive && canPauseAgent(session);
-	const pauseLabel = pause.paused
-		? t("shell.resumeAgent")
-		: memoryBytes
-			? t("shell.pauseAgentFrees", { size: formatMemory(memoryBytes) })
-			: t("shell.pauseAgent");
-
-	// A paused agent stays visible so the play button is the card's obvious
-	// way back; the pause button only appears on hover like the trash can.
-	// Mid-turn the pause needs a decision (finish the turn, or stop now), so the
-	// button opens a popover instead of firing. Idle or paused fires directly.
-	const needsPausePolicy = !pause.paused && (session.activity?.state === "active" || pause.drainBlocked);
-	const pauseTrigger = (
-		<button
-			aria-label={
-				pause.paused
-					? t("shell.resumeAgentNamed", { title: session.title })
-					: t("shell.pauseAgentNamed", { title: session.title })
-			}
-			className={cn(
-				"inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-[color,background-color,opacity] hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-				pause.paused || pause.isPending
-					? "opacity-100"
-					: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",
-			)}
-			data-testid="session-pause"
-			data-paused={pause.paused ? "true" : "false"}
-			disabled={pause.isPending}
-			onClick={(event) => {
-				event.stopPropagation();
-				if (needsPausePolicy) {
-					setPauseOpen(true);
-					return;
-				}
-				pause.toggle();
-			}}
-			type="button"
-		>
-			{pause.isPending ? (
-				<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
-			) : pause.paused ? (
-				<Play className="size-icon-sm" aria-hidden="true" />
-			) : (
-				<Pause className="size-icon-sm" aria-hidden="true" />
-			)}
-		</button>
-	);
-	const pauseButton = showPause ? (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<span className="inline-flex">
-					{needsPausePolicy ? (
-						<AgentPausePopover
-							blocked={pause.drainBlocked}
-							onChoose={(policy) => {
-								setPauseOpen(false);
-								pause.toggle(policy);
-							}}
-							onOpenChange={setPauseOpen}
-							open={pauseOpen}
-							session={session}
-							trigger={pauseTrigger}
-						/>
-					) : (
-						pauseTrigger
-					)}
-				</span>
-			</TooltipTrigger>
-			<TooltipContent side="bottom">{pause.isDraining ? t("shell.pausingAfterTurn") : pauseLabel}</TooltipContent>
-		</Tooltip>
-	) : null;
 
 	const terminationOverlay = showTerminate ? (
 		<Tooltip>
@@ -319,49 +242,11 @@ function DesktopSessionCard({
 			action={action}
 			branchAction={branchAction}
 			branchIcon={<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />}
-			error={termination.error ?? retryStatus.error?.message ?? pause.error?.message ?? undefined}
-			notice={
-				pause.isDraining
-					? t("shell.pausingAfterTurn")
-					: pause.freedBytes
-						? t("shell.pauseFreed", { size: formatMemory(pause.freedBytes) })
-						: undefined
-			}
+			error={termination.error ?? retryStatus.error?.message ?? undefined}
 			externalLink={ProductExternalLink}
 			footer={
 				<>
 					{footer}
-					{interactive && pause.paused ? (
-						<div
-							className="flex items-center gap-2 border-t border-border px-3.5 py-2 text-2xs text-muted-foreground"
-							data-testid="session-paused-strip"
-							onClick={(event) => event.stopPropagation()}
-						>
-							<Pause aria-hidden="true" className="size-icon-2xs shrink-0" />
-							<span className="min-w-0 flex-1 truncate">{t("shell.pausedStrip")}</span>
-							<Button disabled={pause.isPending} onClick={() => pause.toggle()} size="sm">
-								{pause.isPending ? <LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" /> : <Play className="size-icon-sm" aria-hidden="true" />}
-								{t("shell.resumeAgent")}
-							</Button>
-							{onTerminate ? (
-								<SessionTerminationPopover
-									onConfirm={() => {
-										setConfirmOpen(false);
-										onTerminate();
-									}}
-									onOpenChange={setConfirmOpen}
-									open={confirmOpen}
-									session={session}
-									trigger={
-										<Button className="text-error/80 hover:text-error" disabled={termination.isPending} size="sm" variant="ghost">
-											<Trash2 className="size-icon-sm" aria-hidden="true" />
-											{t("shell.deleteSession")}
-										</Button>
-									}
-								/>
-							) : null}
-						</div>
-					) : null}
 					{interactive && session.statusReadiness === "unavailable" && (
 						<button
 							type="button"
@@ -387,14 +272,7 @@ function DesktopSessionCard({
 			}}
 			onOpen={onOpen}
 			resource={resourcePresentation}
-			overlay={
-				pauseButton || terminationOverlay ? (
-					<span className="inline-flex items-center">
-						{pauseButton}
-						{terminationOverlay}
-					</span>
-				) : undefined
-			}
+			overlay={terminationOverlay}
 			prs={summaries.map((pr) => ({
 				commentCount: pr.review.unresolvedBy.reduce((count, reviewer) => count + reviewer.count, 0),
 				number: pr.number,

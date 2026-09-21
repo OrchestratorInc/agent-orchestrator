@@ -381,24 +381,6 @@ func (s *Store) RenameSessionIfDisplayName(
 	return rows > 0, nil
 }
 
-// SetSessionPaused records (or clears, with a nil time) the deliberate
-// pause of a session's agent.
-func (s *Store) SetSessionPaused(ctx context.Context, id domain.SessionID, pausedAt *time.Time, reason domain.SessionPauseReason, updatedAt time.Time) (bool, error) {
-	if pausedAt == nil {
-		reason = ""
-	}
-	rows, err := s.qw.SetSessionPaused(ctx, gen.SetSessionPausedParams{
-		PausedAt:    timePtrToNullTime(pausedAt),
-		PauseReason: string(reason),
-		UpdatedAt:   updatedAt,
-		ID:          id,
-	})
-	if err != nil {
-		return false, err
-	}
-	return rows > 0, nil
-}
-
 // SetSessionPinned updates the pinned status of a session.
 func (s *Store) SetSessionPinned(ctx context.Context, id domain.SessionID, isPinned bool, pinnedAt *time.Time, updatedAt time.Time) (bool, error) {
 	s.writeMu.Lock()
@@ -699,8 +681,6 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 		IsTerminated:       row.IsTerminated,
 		IsPinned:           row.IsPinned,
 		PinnedAt:           nullTimeToTimePtr(row.PinnedAt),
-		PausedAt:           nullTimeToTimePtr(row.PausedAt),
-		PauseReason:        domain.SessionPauseReason(row.PauseReason),
 		TerminateOnPRMerge: row.TerminateOnPRMerge,
 		AutoInjectReview:   row.AutoInjectReview,
 		AutoInjectCI:       row.AutoInjectCI,

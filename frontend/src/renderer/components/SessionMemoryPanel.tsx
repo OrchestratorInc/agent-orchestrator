@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { ChevronRight, Loader2, Pause, Play, Square, X } from "lucide-react";
+import { ChevronRight, X } from "lucide-react";
 import {
 	chipTone,
 	largestSession,
@@ -15,7 +15,7 @@ import {
 } from "@aoagents/product-ui";
 import { cn } from "@/lib/utils";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
-import { canPauseAgent, isAgentPaused, useAgentPause } from "../hooks/useAgentPause";
+import { useTerminateSession, useTerminateSessionState } from "../hooks/useTerminateSession";
 import {
 	formatCPU,
 	formatMemory,
@@ -26,7 +26,7 @@ import {
 	type SystemMemoryReading,
 } from "../hooks/useSessionMemory";
 import { isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
-import { AgentPausePopover } from "./AgentPausePopover";
+import { SessionTerminationPopover } from "./SessionTerminationPopover";
 import { Button } from "./ui/button";
 import {
 	Dialog,
@@ -55,8 +55,6 @@ export function toSessionFacts(session: WorkspaceSession, reading: SessionMemory
 		rssBytes: reading?.rssBytes ?? 0,
 		working: session.activity?.state === "active",
 		idleSeconds: Number.isNaN(lastActivity) ? undefined : Math.max(0, (now - lastActivity) / 1000),
-		paused: isAgentPaused(session),
-		pausable: canPauseAgent(session),
 	};
 }
 
@@ -93,8 +91,8 @@ function suggestionLabel(suggestion: ResourceSuggestion, t: TFunction): string |
 	switch (suggestion.kind) {
 		case "other_apps":
 			return t("shell.memoryFixNotAO");
-		case "pause_largest":
-			return t("shell.memoryFixPause", { title: suggestion.title });
+		case "kill_largest":
+			return t("shell.memoryFixKill", { title: suggestion.title });
 		default:
 			return undefined;
 	}
@@ -179,11 +177,11 @@ function MachineBar({ appBytes, system }: { appBytes: number; system: SystemMemo
 
 /** The lone line under the bar: what to do, and the one button that does it. */
 function SuggestionLine({
-	onPauseLargest,
+	onKillLargest,
 	state,
 	suggestion,
 }: {
-	onPauseLargest: (sessionId: string) => void;
+	onKillLargest: (sessionId: string) => void;
 	state: PressureState;
 	suggestion: ResourceSuggestion;
 }) {
@@ -197,9 +195,9 @@ function SuggestionLine({
 		<div className="settings-row-bar gap-3 text-sm" data-testid="session-memory-suggestion">
 			<span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", stateDot[state])} />
 			<span className={cn("min-w-0 flex-1 truncate font-medium", stateText[state] || "text-settings-label")}>{text}</span>
-			{suggestion.kind === "pause_largest" ? (
-				<Button data-testid="session-memory-fix" onClick={() => onPauseLargest(suggestion.sessionId)} size="sm">
-					{t("shell.memoryFixPause", { title: suggestion.title })}
+			{suggestion.kind === "kill_largest" ? (
+				<Button data-testid="session-memory-fix" onClick={() => onKillLargest(suggestion.sessionId)} size="sm">
+					{t("shell.memoryFixKill", { title: suggestion.title })}
 				</Button>
 			) : null}
 		</div>
@@ -233,8 +231,8 @@ export function SessionMemoryPanel({
 				.filter((session) => session.isTerminated !== true),
 		[workspaces, projectId],
 	);
-	// Rows with a reading are the live ones; a paused agent has no process
-	// tree, so it is listed apart and greyed, and never counted as running.
+	// Rows with a reading are the live ones; a session without a process tree
+	// is not listed, never shown as 0 MB.
 	const orderRef = useRef<string[]>([]);
 	const live = useMemo(() => {
 		const rows = sessions
@@ -245,7 +243,6 @@ export function SessionMemoryPanel({
 		orderRef.current = ordered.map((row) => row.id);
 		return ordered;
 	}, [sessions, readings]);
-	const paused = sessions.filter((session) => isAgentPaused(session) && !readings?.has(session.id));
 	const largest = largestSession(facts);
 	const maxBytes = Math.max(app?.own?.rssBytes ?? 0, ...live.map((row) => row.rssBytes), 1);
 	// Any number of rows open at once: comparing two trees is the point.
@@ -256,7 +253,9 @@ export function SessionMemoryPanel({
 			if (!next.delete(id)) next.add(id);
 			return next;
 		});
-	const [pauseTarget, setPauseTarget] = useState<string | undefined>();
+	// The suggestion's button opens that row's kill confirmation.
+	const [killTarget, setKillTarget] = useState<string | undefined>();
+	const terminate = useTerminateSession();
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className={cn(settingsDialogContentClass, "w-[min(52rem,calc(100vw-var(--space-8)))]")} showCloseButton={false}>
@@ -277,31 +276,29 @@ export function SessionMemoryPanel({
 						<div className="settings-grouped-rows flex w-full flex-col">
 							{system && app ? <MachineBar appBytes={app.rssBytes} system={system} /> : null}
 							{state ? (
-								<SuggestionLine onPauseLargest={setPauseTarget} state={state} suggestion={suggestion} />
+								<SuggestionLine onKillLargest={setKillTarget} state={state} suggestion={suggestion} />
 							) : null}
 						</div>
 					</section>
-					{live.length === 0 && paused.length === 0 && !app?.own ? (
+					{live.length === 0 && !app?.own ? (
 						<p className="py-6 text-center text-xs text-settings-muted">{t("shell.memoryEmpty")}</p>
 					) : (
 						<table className="w-full border-collapse text-xs" data-testid="session-memory-table">
 							<tbody>
-								{live.length > 0 || paused.length > 0 ? <GroupRow label={t("shell.memoryGroupSessions")} /> : null}
+								{live.length > 0 ? <GroupRow label={t("shell.memoryGroupSessions")} /> : null}
 								{live.map((row) => (
 									<SessionRow
 										chip={chipTone(state ?? "fine", facts.find((f) => f.id === row.id) ?? toSessionFacts(row.session, row.reading, Date.now()), largest)}
+										confirmOpen={killTarget === row.id}
 										isExpanded={expanded.has(row.id)}
 										key={row.id}
 										maxBytes={maxBytes}
+										onTerminate={() => terminate.mutate(row.session)}
 										onToggle={() => toggleExpanded(row.id)}
-										pauseOpen={pauseTarget === row.id}
 										reading={row.reading}
 										session={row.session}
-										setPauseOpen={(next) => setPauseTarget(next ? row.id : undefined)}
+										setConfirmOpen={(next) => setKillTarget(next ? row.id : undefined)}
 									/>
-								))}
-								{paused.map((session) => (
-									<PausedRow key={session.id} session={session} />
 								))}
 								{app?.own ? (
 									<>
@@ -350,49 +347,29 @@ function MemoryCell({ bytes, maxBytes, tone }: { bytes: number; maxBytes: number
 
 function SessionRow({
 	chip,
+	confirmOpen,
 	isExpanded,
 	maxBytes,
+	onTerminate,
 	onToggle,
-	pauseOpen,
 	reading,
 	session,
-	setPauseOpen,
+	setConfirmOpen,
 }: {
 	chip: ChipTone;
+	confirmOpen: boolean;
 	isExpanded: boolean;
 	maxBytes: number;
+	onTerminate: () => void;
 	onToggle: () => void;
-	pauseOpen: boolean;
 	reading: SessionMemoryReading;
 	session: WorkspaceSession;
-	setPauseOpen: (open: boolean) => void;
+	setConfirmOpen: (open: boolean) => void;
 }) {
 	const { t } = useTranslation();
-	const pause = useAgentPause(session, reading.rssBytes);
+	const termination = useTerminateSessionState(session.id);
 	const working = session.activity?.state === "active";
 	const canExpand = reading.processes.length > 0;
-	// Working: pause needs a decision (finish the turn, or stop now). Idle:
-	// stop straight away. Either way the agent exits and its memory is freed;
-	// the session, branch and conversation stay.
-	const needsPolicy = working || pause.drainBlocked;
-	const action = (
-		<Button
-			aria-label={working ? t("shell.pauseAgentNamed", { title: session.title }) : t("shell.stopAgentNamed", { title: session.title })}
-			disabled={pause.isPending}
-			onClick={() => (needsPolicy ? setPauseOpen(true) : pause.toggle())}
-			size="sm"
-			title={t("shell.stopAgentHelp")}
-		>
-			{pause.isPending ? (
-				<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
-			) : working ? (
-				<Pause className="size-icon-sm" aria-hidden="true" />
-			) : (
-				<Square className="size-icon-sm" aria-hidden="true" />
-			)}
-			<span>{working ? t("shell.pauseAgent") : t("shell.stopAgentFrees", { size: formatMemory(reading.rssBytes) })}</span>
-		</Button>
-	);
 	return (
 		<>
 			<tr
@@ -421,56 +398,32 @@ function SessionRow({
 					{working ? formatCPU(reading.cpuPercent) : "·"}
 				</td>
 				<td className="whitespace-nowrap px-2 py-2 text-right align-middle" onClick={(event) => event.stopPropagation()}>
-					{canPauseAgent(session) ? (
-						needsPolicy ? (
-							<AgentPausePopover
-								blocked={pause.drainBlocked}
-								onChoose={(policy) => {
-									setPauseOpen(false);
-									pause.toggle(policy);
-								}}
-								onOpenChange={setPauseOpen}
-								open={pauseOpen}
-								session={session}
-								trigger={action}
-							/>
-						) : (
-							action
-						)
-					) : null}
+					{/* The existing kill confirmation: the panel adds no new way to
+					    end a session, it only shows which one is worth ending. */}
+					<SessionTerminationPopover
+						onConfirm={() => {
+							setConfirmOpen(false);
+							onTerminate();
+						}}
+						onOpenChange={setConfirmOpen}
+						open={confirmOpen}
+						session={session}
+						trigger={
+							<Button
+								aria-label={t("shell.terminateNamed", { title: session.title })}
+								className="text-error/80 hover:bg-error/10 hover:text-error"
+								disabled={termination.isPending}
+								size="sm"
+								variant="ghost"
+							>
+								{termination.isPending ? t("shell.killing") : t("shell.memoryKillFrees", { size: formatMemory(reading.rssBytes) })}
+							</Button>
+						}
+					/>
 				</td>
 			</tr>
 			{isExpanded ? <ProcessRows processes={reading.processes} /> : null}
 		</>
-	);
-}
-
-/** A paused agent holds nothing: listed apart, greyed, with the way back. */
-function PausedRow({ session }: { session: WorkspaceSession }) {
-	const { t } = useTranslation();
-	const pause = useAgentPause(session);
-	return (
-		<tr className="border-t border-(--color-border-settings-dialog-header)" data-testid="session-memory-paused-row">
-			<td className="max-w-0 px-4 py-2 align-middle">
-				<div className="min-w-0 pl-[calc(var(--space-2)+0.75rem)] opacity-60">
-					<div className="truncate text-sm font-medium text-settings-label" title={session.title}>{session.title}</div>
-					<div className="truncate text-xs text-settings-muted">{t("shell.memoryRowPaused")}</div>
-				</div>
-			</td>
-			<td className="px-4 py-2 text-right align-middle font-mono text-xs text-settings-muted">·</td>
-			<td className="px-4 py-2 text-right align-middle font-mono text-xs text-settings-muted">·</td>
-			<td className="whitespace-nowrap px-2 py-2 text-right align-middle">
-				<Button
-					aria-label={t("shell.resumeAgentNamed", { title: session.title })}
-					disabled={pause.isPending}
-					onClick={() => pause.toggle()}
-					size="sm"
-				>
-					{pause.isPending ? <Loader2 className="size-icon-sm animate-spin" aria-hidden="true" /> : <Play className="size-icon-sm" aria-hidden="true" />}
-					<span>{t("shell.resumeAgent")}</span>
-				</Button>
-			</td>
-		</tr>
 	);
 }
 

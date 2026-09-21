@@ -85,7 +85,7 @@ export function useAppMemory() {
 		select: (data: SessionMemoryResponse) => ({
 			app: data.app,
 			system: data.system,
-			// Sessions with a live runtime: a paused one has none, so it is not counted.
+			// Sessions with a live runtime; one without a process tree is not counted.
 			liveCount: data.sessions.length,
 		}),
 	});

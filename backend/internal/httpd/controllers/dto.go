@@ -839,15 +839,6 @@ type RestoreSessionResponse struct {
 	Session     SessionView                `json:"session"`
 }
 
-// ExitAgentRequest is the optional body of POST /api/v1/sessions/{sessionId}/exit-agent.
-type ExitAgentRequest struct {
-	// Reason records who decided to pause; defaults to user.
-	Reason domain.SessionPauseReason `json:"reason,omitempty" enum:"user,idle,pressure"`
-	// Policy: drain (default) lets a turn in flight finish first; interrupt
-	// sends Ctrl-C and stops now.
-	Policy domain.SessionInterfaceTransitionPolicy `json:"policy,omitempty" enum:"drain,interrupt"`
-}
-
 // ExitAgentResponse is the body of POST /api/v1/sessions/{sessionId}/exit-agent.
 type ExitAgentResponse struct {
 	OK        bool             `json:"ok"`
@@ -1648,7 +1639,7 @@ type ListSessionMemoryResponse struct {
 }
 
 // AppMemoryResponse is everything AO runs at sample time, with AO's own
-// daemon and shell broken out so the panel can pin them as an unpausable row.
+// daemon and shell broken out so the panel can pin them as their own row.
 type AppMemoryResponse struct {
 	RSSBytes     uint64  `json:"rssBytes" minimum:"0"`
 	ProcessCount int     `json:"processCount" minimum:"0"`

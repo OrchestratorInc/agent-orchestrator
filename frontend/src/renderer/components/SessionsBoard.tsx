@@ -133,9 +133,9 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 		hasWorkerSessions: liveSessions.length > 0,
 	});
 	const hasMemory = useHasAppMemory();
-	// Per-session readings feed each card's resource chip and the pause
-	// tooltip ("frees 612 MB"). Chips are grey unless the machine is tight and
-	// the card is part of the fix (idle, or the single largest).
+	// Per-session readings feed each card's resource chip. Chips are grey
+	// unless the machine is tight and the card is part of the fix (idle, or
+	// the single largest).
 	const memoryBySession = useSessionMemory(projectId).data;
 	const pressure = usePressureState();
 	const chipToneOf = useMemo(() => {
