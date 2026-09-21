@@ -5,11 +5,11 @@
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { useRootNavigationState, useRouter } from "expo-router";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { AppState, Platform } from "react-native";
 import { announceDevice, markNotificationRead } from "./api";
 import { getInstallId } from "./installId";
-import { notificationTarget } from "./notificationView";
+import { pushNotificationTarget, shouldUnpairPush } from "./pushLifecycle";
 import { configurePushHandler, ensureAndroidChannel, registerForPush, unpairFromServer } from "./push";
 import { useApp } from "./store";
 import { MOBILE_EVENTS } from "./telemetry/events";
@@ -27,12 +27,16 @@ type PushData = {
 };
 
 export function PushManager(): null {
-	const { config, configured, connection } = useApp();
+	const { config, localConfigured, environment, connection } = useApp();
 	const router = useRouter();
 	const navState = useRootNavigationState();
 
 	const handledColdStart = useRef(false);
-	const wasConfigured = useRef(false);
+	const wasLocallyConfigured = useRef(false);
+	const routingContext = useRef({ environment, config });
+	useLayoutEffect(() => {
+		routingContext.current = { environment, config };
+	}, [environment, config]);
 
 	// Create the Android channel once at startup.
 	useEffect(() => {
@@ -43,11 +47,11 @@ export function PushManager(): null {
 	// daemon to drop the row entirely, not merely clear the token, so the old
 	// desktop stops listing a phone that has moved on. Uses the persisted creds.
 	useEffect(() => {
-		if (wasConfigured.current && !configured) {
+		if (shouldUnpairPush(wasLocallyConfigured.current, localConfigured)) {
 			void unpairFromServer();
 		}
-		wasConfigured.current = configured;
-	}, [configured]);
+		wasLocallyConfigured.current = localConfigured;
+	}, [localConfigured]);
 
 	// Announce this device's identity as soon as it connects, and again on every
 	// foreground while connected — with NO permission gate. This is what lets the
@@ -99,7 +103,7 @@ export function PushManager(): null {
 	// Route notification taps: warm via the response listener, cold start via
 	// getLastNotificationResponseAsync (the listener alone misses the launch tap).
 	useEffect(() => {
-		if (!navState?.key) return; // wait until navigation is ready to accept routes
+		if (!navState?.key || environment === null) return; // wait for routing and the saved environment
 
 		const handle = (resp: Notifications.NotificationResponse | null, coldStart: boolean) => {
 			if (!resp) return;
@@ -112,20 +116,22 @@ export function PushManager(): null {
 		}
 		const sub = Notifications.addNotificationResponseReceivedListener((r) => handle(r, false));
 		return () => sub.remove();
-		// route() reads the latest config via ref-free closure; re-bind when it changes.
+		// Pending cold-start responses also read the latest committed environment/config.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [navState?.key, config]);
+	}, [navState?.key, environment]);
 
 	function route(data: PushData, coldStart = false) {
+		const current = routingContext.current;
 		// Reuse the one routing rule so the reported target can't disagree with
 		// where the tap actually lands: notificationTarget returns /session/:id
 		// only for a needs_input with a sessionId, and /prs for everything else.
-		const destination = notificationTarget({ type: data.type ?? "", sessionId: data.sessionId });
+		const destination = pushNotificationTarget(current.environment, { type: data.type ?? "", sessionId: data.sessionId });
+		if (!destination) return;
 		const target = destination.startsWith("/session") ? "session" : "prs";
 		mobileTelemetry()?.capture(MOBILE_EVENTS.notificationOpened, { target, cold_start: coldStart });
 		// Best-effort mark-read so unread counts stay consistent with the dashboard.
-		if (config && data.notificationId) {
-			markNotificationRead(config, data.notificationId).catch(() => {});
+		if (current.config && data.notificationId) {
+			markNotificationRead(current.config, data.notificationId).catch(() => {});
 		}
 		router.navigate(destination);
 	}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boardPresentation, boardFailure, boardStaleMessage, workerInteractionProps } from "./board-presentation";
+import { boardPresentation, boardFailure, boardStaleMessage, projectDetailState, workerInteractionProps } from "./board-presentation";
 
 describe("board presentation", () => {
 	it.each(["local", "cloud"] as const)("shows a configured %s board", (environment) => {
@@ -38,6 +38,23 @@ describe("worker interaction boundary", () => {
 		if (props.interactionMode !== "full") throw new Error("Missing Local actions");
 		props.onRename("My worker");
 		expect(renamed).toBe("My worker");
+	});
+});
+
+describe("project detail availability", () => {
+	it("returns Cloud setup after source removal while a project is open", () => {
+		expect(projectDetailState(boardPresentation("cloud", true).state, true, false, false)).toBe("project");
+		expect(projectDetailState(boardPresentation("cloud", false).state, false, false, false)).toBe("cloud-unready");
+	});
+	it("hides retained project data until environment and Cloud readiness resolve", () => {
+		expect(projectDetailState("loading", true, false, false)).toBe("loading");
+		expect(projectDetailState("cloud-unready", true, false, false)).toBe("cloud-unready");
+	});
+	it("preserves loaded, missing, loading and Cloud error presentations on a ready board", () => {
+		expect(projectDetailState("board", true, false, true)).toBe("project");
+		expect(projectDetailState("board", false, false, false)).toBe("not-found");
+		expect(projectDetailState("board", false, true, false)).toBe("loading");
+		expect(projectDetailState("board", false, false, true)).toBe("cloud-error");
 	});
 });
 

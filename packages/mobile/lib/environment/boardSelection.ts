@@ -23,6 +23,11 @@ export function isBoardConfigured(environment: EnvironmentKind | null, sourceKin
 	return environment === "cloud" ? sourceKind === "cloud" : localConfigured;
 }
 
+export function boardReadiness(environment: EnvironmentKind | null, sourceKind: EnvironmentKind | undefined, localConfigured: boolean) {
+	const configured = isBoardConfigured(environment, sourceKind, localConfigured);
+	return { configured, localConfigured };
+}
+
 /** Select the board visible for the resolved environment without mixing slices. */
 export function selectBoardState<Project, Session>(input: {
 	environment: EnvironmentKind | null;

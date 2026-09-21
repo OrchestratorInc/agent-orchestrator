@@ -21,6 +21,11 @@ export function workerInteractionProps<T>(mode: BoardInteractionMode, full: () =
 	return mode === "read-only" ? { interactionMode: "read-only" } : { ...full(), interactionMode: "full" };
 }
 
+export function projectDetailState(state: ReturnType<typeof boardPresentation>["state"], hasProject: boolean, loading: boolean, cloudError: boolean) {
+	if (state === "loading" || state === "cloud-unready") return state;
+	return hasProject ? "project" : loading ? "loading" : cloudError ? "cloud-error" : "not-found";
+}
+
 export function boardFailure(
 	environment: EnvironmentKind | null,
 	status: number | undefined,

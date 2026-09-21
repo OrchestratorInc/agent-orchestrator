@@ -3,11 +3,12 @@ import { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { haptics } from "../../lib/haptics";
-import { boardFailure, boardPresentation } from "../../lib/board-presentation";
+import { boardFailure, boardPresentation, projectDetailState } from "../../lib/board-presentation";
 import { orchestratorProjectSections, projectDetailSessions, projectPageStats } from "../../lib/orchestratorView";
 import { ProjectPageHeader } from "../../lib/project-card";
 import { StaleBanner } from "../../lib/StaleBanner";
 import { useApp } from "../../lib/store";
+import { CloudUnreadyState } from "../../lib/UnpairedState";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
@@ -42,6 +43,7 @@ export default function ProjectScreen() {
 	);
 	const projectSessions = useMemo(() => projectDetailSessions(id ?? "", sessions), [id, sessions]);
 	const stats = useMemo(() => projectPageStats(projectSessions, row?.link), [projectSessions, row?.link]);
+	const detailState = projectDetailState(presentation.state, !!row, loading, environment === "cloud" && !!error);
 
 	const onRefresh = useCallback(async () => {
 		haptics.tap();
@@ -73,14 +75,16 @@ export default function ProjectScreen() {
 					/>
 				}
 			/>
-			<StaleBanner error={!!error} onRetry={onRefresh} />
+			{presentation.state === "board" && <StaleBanner error={!!error} onRetry={onRefresh} />}
 
-			{!row ? (
-				loading ? (
+			{detailState === "cloud-unready" ? (
+				<CloudUnreadyState />
+			) : detailState !== "project" || !row ? (
+				detailState === "loading" ? (
 					<View style={styles.center}>
 						<ActivityIndicator color={t.blue} />
 					</View>
-				) : environment === "cloud" && error ? (
+				) : detailState === "cloud-error" ? (
 					<EmptyState icon="wifi-off" title={cloudFailure.title} message={cloudFailure.message}
 						action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />} />
 				) : (

@@ -34,7 +34,7 @@ import { loadEnvironment, saveEnvironment } from "./environment/store";
 import { loadSessionSourceBoard } from "./environment/board";
 import {
 	assertLocalEnvironment,
-	isBoardConfigured,
+	boardReadiness,
 	dispatchCurrentCloudBoardRequest,
 	publishCloudBoardResult,
 	selectBoardState,
@@ -77,7 +77,10 @@ export type { SpawnOptions } from "./api";
 
 type AppState = {
 	config: ServerConfig | null;
+	/** Readiness of the active environment's board. */
 	configured: boolean;
+	/** Saved Local pairing readiness, independent of the selected environment. */
+	localConfigured: boolean;
 	/**
 	 * Which environment is active, or `null` while the persisted choice is
 	 * still loading.
@@ -755,7 +758,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const value = useMemo<AppState>(
 		() => ({
 			config: cloudEnvironment ? null : config,
-			configured: isBoardConfigured(environment, sessionSource?.kind, !!config && isConfigured(config)),
+			...boardReadiness(environment, sessionSource?.kind, !!config && isConfigured(config)),
 			environment,
 			setEnvironment,
 			sessionSource,
