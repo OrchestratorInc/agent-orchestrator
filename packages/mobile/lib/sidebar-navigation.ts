@@ -1,5 +1,11 @@
 import { boardZoneOf } from "./agentsView";
 import type { DashboardSession } from "./api";
+import type { EnvironmentKind } from "./environment/types";
+
+export function sidebarSessionRoute(environment: EnvironmentKind | null, session: Pick<DashboardSession, "id" | "projectId">) {
+	if (environment !== "local") return undefined;
+	return { pathname: "/session/[id]" as const, params: { id: session.id, projectId: session.projectId } };
+}
 
 export type SidebarDestinationId = "projects" | "agents" | "prs" | "settings";
 export type PrimarySidebarDestinationId = Exclude<SidebarDestinationId, "settings">;

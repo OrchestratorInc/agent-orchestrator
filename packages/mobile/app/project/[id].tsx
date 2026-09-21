@@ -3,6 +3,7 @@ import { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { haptics } from "../../lib/haptics";
+import { boardFailure, boardPresentation } from "../../lib/board-presentation";
 import { orchestratorProjectSections, projectDetailSessions, projectPageStats } from "../../lib/orchestratorView";
 import { ProjectPageHeader } from "../../lib/project-card";
 import { StaleBanner } from "../../lib/StaleBanner";
@@ -26,7 +27,9 @@ export default function ProjectScreen() {
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
 	const { id } = useLocalSearchParams<{ id: string }>();
-	const { loading, error, refresh, projects, sessions, orchestrators } = useApp();
+	const { environment, configured, loading, error, refresh, projects, sessions, orchestrators } = useApp();
+	const presentation = boardPresentation(environment, configured);
+	const cloudFailure = boardFailure("cloud", undefined, { host: "", port: "", platform: "" });
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
 	const [refreshing, setRefreshing] = useState(false);
 
@@ -77,11 +80,15 @@ export default function ProjectScreen() {
 					<View style={styles.center}>
 						<ActivityIndicator color={t.blue} />
 					</View>
+				) : environment === "cloud" && error ? (
+					<EmptyState icon="wifi-off" title={cloudFailure.title} message={cloudFailure.message}
+						action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />} />
 				) : (
 					<EmptyState icon="folder" title="Project not found" message="It may have been removed from AO." />
 				)
 			) : (
 				<WorkerBoardList
+					interactionMode={presentation.interactionMode}
 					sessions={projectSessions}
 					showProject={false}
 					contentBottomInset={insets.bottom + 32}
@@ -92,7 +99,7 @@ export default function ProjectScreen() {
 							row={row}
 							stats={stats}
 							busy={busyProjects.has(row.project.id)}
-							onPress={openOrchestrator}
+							onPress={presentation.localControls ? openOrchestrator : undefined}
 						/>
 					}
 					ListEmptyComponent={
@@ -101,8 +108,8 @@ export default function ProjectScreen() {
 							<EmptyState
 								icon="moon"
 								title="No workers yet"
-								message="Start a task to put this project to work."
-								action={<Button title="Start task" icon="plus" onPress={startTask} />}
+								message={presentation.localControls ? "Start a task to put this project to work." : "This Cloud project has no workers yet."}
+								action={presentation.localControls ? <Button title="Start task" icon="plus" onPress={startTask} /> : null}
 							/>
 						</View>
 					}

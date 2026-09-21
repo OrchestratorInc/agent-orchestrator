@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Keyboard, Platform, StyleSheet, View } from "react-native";
 import { useKeyboardState } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { classifyConnectionFailure, describeConnectionFailure } from "../../lib/connectionError";
+import { boardFailure, boardPresentation } from "../../lib/board-presentation";
 import { tunnelMayHaveRotated } from "../../lib/staleTunnel";
 import { haptics } from "../../lib/haptics";
 import { StaleBanner } from "../../lib/StaleBanner";
@@ -34,6 +34,7 @@ export default function FleetScreen() {
 	const insets = useSafeAreaInsets();
 	const { environment, configured, loading, error, errorStatus, connection, config, refresh, sessions, projects, notificationsUnread, activeEndpoints } =
 		useApp();
+	const presentation = boardPresentation(environment, configured);
 	const [refreshing, setRefreshing] = useState(false);
 	const [query, setQuery] = useState("");
 	const [searchRequested, setSearchRequested] = useState(false);
@@ -51,8 +52,8 @@ export default function FleetScreen() {
 	const listRef = useTabScrollToTop<FlatList<BoardRow>>();
 
 	const projectSessions = useMemo(
-		() => filterWorkersByProject(sessions, workerProjectId),
-		[sessions, workerProjectId],
+		() => filterWorkersByProject(sessions, presentation.localControls ? workerProjectId : ALL_WORKER_PROJECTS),
+		[sessions, workerProjectId, presentation.localControls],
 	);
 	const searchOpen = workerSearchPresentation(searchRequested, query) === "expanded";
 	const selectedProjectLabel = workerProjectLabel(projects, workerProjectId);
@@ -66,26 +67,19 @@ export default function FleetScreen() {
 		}
 	}, [projects, workerProjectId]);
 
-	// Turn the poll's raw failure ("401 - missing or invalid connection password")
-	// into the same human copy the pairing screens use, keyed on the cause.
 	const failure = useMemo(
 		() =>
-			describeConnectionFailure(
-				// A stored tunnel that no longer answers means the hostname
-				// rotated, which no amount of retrying fixes — rescanning does.
-				// Distinguished here rather than in the classifier because it
-				// depends on what the machine advertised, not on a status code.
-				classifyConnectionFailure(errorStatus ?? undefined) === "unreachable" &&
-					tunnelMayHaveRotated(activeEndpoints, connection === "open")
-					? "tunnel-rotated"
-					: classifyConnectionFailure(errorStatus ?? undefined),
+			boardFailure(
+				environment,
+				errorStatus ?? undefined,
 				{
 					host: config?.host ?? "",
 					port: config?.httpPort ?? "",
 					platform: Platform.OS,
 				},
+				tunnelMayHaveRotated(activeEndpoints, connection === "open"),
 			),
-		[errorStatus, config?.host, config?.httpPort, activeEndpoints, connection],
+		[environment, errorStatus, config?.host, config?.httpPort, activeEndpoints, connection],
 	);
 
 	const onRefresh = useCallback(async () => {
@@ -103,7 +97,7 @@ export default function FleetScreen() {
 	// chose not to use one. Same convention as `shouldShowLoading` for
 	// `config` in lib/configLoading.ts: unresolved means "still working out
 	// what to show", not "assume the common case".
-	if (environment === null) {
+	if (presentation.state === "loading") {
 		return (
 			<View style={styles.screen}>
 				<View style={{ height: insets.top }} />
@@ -115,11 +109,7 @@ export default function FleetScreen() {
 		);
 	}
 
-	// The cloud environment reads and renders a session board entirely
-	// separately from the local one below — it must never fall through to the
-	// local `configured`/`error`/`sessions` state, none of which the cloud poll
-	// (still local-daemon-only, see lib/store.tsx) ever populates.
-	if (environment === "cloud") {
+	if (presentation.state === "cloud-unready") {
 		return (
 			<View style={styles.screen}>
 				<View style={{ height: insets.top }} />
@@ -129,7 +119,7 @@ export default function FleetScreen() {
 		);
 	}
 
-	if (!configured) {
+	if (presentation.state === "unpaired") {
 		return (
 			<View style={styles.screen}>
 				<View style={{ height: insets.top }} />
@@ -140,11 +130,11 @@ export default function FleetScreen() {
 	}
 
 	return (
-		<View style={[styles.screen, { paddingBottom: keyboardLayout.rootPaddingBottom }]}>
+		<View style={[styles.screen, { paddingBottom: presentation.localControls ? keyboardLayout.rootPaddingBottom : 0 }]}>
 			<View style={{ height: insets.top }} />
 			<ScreenHeader
 				title="Workers"
-				right={
+				right={presentation.localControls &&
 					<HeaderIconButton
 						icon="bell"
 						label="Notifications"
@@ -163,14 +153,15 @@ export default function FleetScreen() {
 				</View>
 			) : (
 				<WorkerBoardList
+					interactionMode={presentation.interactionMode}
 					sessions={projectSessions}
-					query={query}
+					query={presentation.localControls ? query : ""}
 					listRef={listRef}
-					contentBottomInset={workerListBottomInset(keyboardLayout.dockBottom)}
+					contentBottomInset={presentation.localControls ? workerListBottomInset(keyboardLayout.dockBottom) : insets.bottom + 32}
 					refreshing={refreshing}
 					onRefresh={onRefresh}
 					ListEmptyComponent={
-						query.trim() ? (
+						presentation.localControls && query.trim() ? (
 							<EmptyState icon="search" title="No workers found" message={`No workers match “${query.trim()}”.`} />
 						) : error ? (
 							<EmptyState
@@ -183,11 +174,11 @@ export default function FleetScreen() {
 										{/* Re-scanning is the only fix for a rotated password, and the
 										    fastest one for a moved/renamed host — so it belongs beside
 										    Retry rather than three taps away in Settings. */}
-										<Button title="Scan" icon="maximize" onPress={() => router.push("/pair")} />
+										{presentation.localControls && <Button title="Scan" icon="maximize" onPress={() => router.push("/pair")} />}
 									</View>
 								}
 							/>
-						) : workerProjectId !== ALL_WORKER_PROJECTS ? (
+						) : presentation.localControls && workerProjectId !== ALL_WORKER_PROJECTS ? (
 							<EmptyState
 								icon="folder"
 								title={`No workers in ${selectedProjectLabel}`}
@@ -197,15 +188,15 @@ export default function FleetScreen() {
 							<EmptyState
 								icon="moon"
 								title="No active workers"
-								message="Spawn a worker to put your fleet to work."
-								action={<Button title="New agent" icon="plus" onPress={() => router.push({ pathname: "/spawn", params: spawnProjectParam(workerProjectId) })} />}
+								message={presentation.localControls ? "Spawn a worker to put your fleet to work." : "Your Cloud workers will appear here."}
+								action={presentation.localControls ? <Button title="New agent" icon="plus" onPress={() => router.push({ pathname: "/spawn", params: spawnProjectParam(workerProjectId) })} /> : null}
 							/>
 						)
 					}
 				/>
 			)}
 
-			<View style={[styles.dock, { bottom: keyboardLayout.dockBottom }]}>
+			{presentation.localControls && <View style={[styles.dock, { bottom: keyboardLayout.dockBottom }]}>
 				<WorkerDock
 					query={query}
 					onQueryChange={setQuery}
@@ -231,16 +222,16 @@ export default function FleetScreen() {
 						router.push({ pathname: "/spawn", params: spawnProjectParam(workerProjectId) });
 					}}
 				/>
-			</View>
+			</View>}
 
-			<WorkerControlsSheet
+			{presentation.localControls && <WorkerControlsSheet
 				open={controlsOpen}
 				onDismiss={() => setControlsOpen(false)}
 				onSearch={() => setSearchRequested(true)}
 				projects={projects}
 				selectedProjectId={workerProjectId}
 				onSelectProject={setWorkerProjectId}
-			/>
+			/>}
 		</View>
 	);
 }

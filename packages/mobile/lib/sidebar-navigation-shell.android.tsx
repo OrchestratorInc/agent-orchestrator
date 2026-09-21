@@ -26,6 +26,7 @@ import { AgentLogo } from "./AgentLogo";
 import { SidebarDestinationIcon } from "./sidebar-destination-icon";
 import { MascotLamp } from "./ui";
 import type { DashboardSession } from "./api";
+import { boardPresentation } from "./board-presentation";
 import { haptics } from "./haptics";
 import { sessionTitle } from "./sessionStatus";
 import {
@@ -36,6 +37,7 @@ import {
 	sidebarNavigationSettled,
 	sidebarDestinations,
 	sidebarSessions,
+	sidebarSessionRoute,
 	type PrimarySidebarDestinationId,
 	type SidebarDestination,
 	type SidebarDestinationId,
@@ -69,7 +71,8 @@ export function useOptionalSidebarNavigation() {
 
 export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	const styles = useThemedStyles(makeStyles);
-	const { sessions, projects, connection } = useApp();
+	const { sessions, projects, connection, environment, configured } = useApp();
+	const { localControls } = boardPresentation(environment, configured);
 	// See the iOS shell: cached sessions outlive a failed poll by design, so the
 	// drawer has to admit when what it is showing is no longer live.
 	const sessionsStale = connection !== "open";
@@ -179,16 +182,19 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	}, [activeDestination, closeSidebar, router]);
 
 	const selectSession = useCallback((session: DashboardSession) => {
+		const route = sidebarSessionRoute(environment, session);
+		if (!route) return;
 		haptics.select();
 		pendingClosePath.current = `/session/${session.id}`;
-		router.push({ pathname: "/session/[id]", params: { id: session.id, projectId: session.projectId } });
-	}, [router]);
+		router.push(route);
+	}, [router, environment]);
 
 	const spawnWorker = useCallback(() => {
+		if (!localControls) return;
 		haptics.tap();
 		closeSidebar();
 		router.push("/spawn");
-	}, [closeSidebar, router]);
+	}, [closeSidebar, router, localControls]);
 
 	// Settings belongs to the root modal stack. Deliberately leave the native
 	// drawer open so dismissing the sheet reveals the exact drawer state beneath.
@@ -244,6 +250,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 				</View>
 			</View>
 
+			{localControls && <>
 			<Text style={styles.sectionLabel}>
 				{RECENT_WORKERS_LABEL.toUpperCase()}
 				{sessionsStale ? <Text style={styles.sectionLabelStale}>{"  ·  DISCONNECTED"}</Text> : null}
@@ -266,10 +273,11 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 				)}
 				ListEmptyComponent={<Text style={styles.emptySessions}>No active sessions</Text>}
 			/>
+			</>}
 
 			<View pointerEvents="box-none" style={[styles.sidebarActions, { bottom: insets.bottom + 10 }]}>
 				<SidebarSettingsButton active={activeDestination === "settings"} onPress={openSettings} />
-				<SidebarSpawnButton onPress={spawnWorker} />
+				{localControls && <SidebarSpawnButton onPress={spawnWorker} />}
 			</View>
 		</Animated.View>
 	);

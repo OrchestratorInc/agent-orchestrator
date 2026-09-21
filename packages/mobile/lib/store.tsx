@@ -34,6 +34,7 @@ import { loadEnvironment, saveEnvironment } from "./environment/store";
 import { loadSessionSourceBoard } from "./environment/board";
 import {
 	assertLocalEnvironment,
+	isBoardConfigured,
 	dispatchCurrentCloudBoardRequest,
 	publishCloudBoardResult,
 	selectBoardState,
@@ -754,7 +755,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const value = useMemo<AppState>(
 		() => ({
 			config: cloudEnvironment ? null : config,
-			configured: cloudEnvironment ? false : !!config && isConfigured(config),
+			configured: isBoardConfigured(environment, sessionSource?.kind, !!config && isConfigured(config)),
 			environment,
 			setEnvironment,
 			sessionSource,

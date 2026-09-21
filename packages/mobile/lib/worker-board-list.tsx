@@ -4,6 +4,7 @@ import { Alert, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text 
 import { LayoutAnimationConfig } from "react-native-reanimated";
 import { groupSessions, type BoardSection } from "./agentsView";
 import type { DashboardSession } from "./api";
+import { workerInteractionProps, type BoardInteractionMode } from "./board-presentation";
 import { BoardRowTransition } from "./BoardRowTransition";
 import { haptics } from "./haptics";
 import { useApp } from "./store";
@@ -47,6 +48,7 @@ export type BoardRow =
  * sessions; this owns how they are presented and acted on.
  */
 export function WorkerBoardList({
+	interactionMode,
 	sessions,
 	query = "",
 	listRef,
@@ -58,6 +60,7 @@ export function WorkerBoardList({
 	initialArchiveOpen = false,
 	showProject = true,
 }: {
+	interactionMode: BoardInteractionMode;
 	sessions: DashboardSession[];
 	/** Non-empty switches the board to a single flat "Search results" section. */
 	query?: string;
@@ -219,17 +222,19 @@ export function WorkerBoardList({
 							<WorkerListRow
 								session={session}
 								projectName={showProject ? projectNames.get(session.projectId) : session.harness || "Agent"}
-								isRenaming={renamingWorkerId === session.id}
-								activeSwipeId={activeSwipeId}
-								onSwipeOpen={openExclusiveSwipe}
-								onSwipeClose={closeExclusiveSwipe}
-								onRenameStart={() => setRenamingWorkerId(session.id)}
-								onRenameCancel={() => setRenamingWorkerId(undefined)}
-								onRename={(title) => renameWorker(session.id, title)}
-								onSetPinned={(next) => updateWorkerPin(session, next)}
-								onDelete={() => confirmDeleteSession(session)}
-								onResume={() => runWorkerRecovery(session, "resume")}
-								onRestore={() => runWorkerRecovery(session, "restore")}
+								{...workerInteractionProps(interactionMode, () => ({
+									isRenaming: renamingWorkerId === session.id,
+									activeSwipeId,
+									onSwipeOpen: openExclusiveSwipe,
+									onSwipeClose: closeExclusiveSwipe,
+									onRenameStart: () => setRenamingWorkerId(session.id),
+									onRenameCancel: () => setRenamingWorkerId(undefined),
+									onRename: (title: string) => renameWorker(session.id, title),
+									onSetPinned: (next: boolean) => updateWorkerPin(session, next),
+									onDelete: () => confirmDeleteSession(session),
+									onResume: () => runWorkerRecovery(session, "resume"),
+									onRestore: () => runWorkerRecovery(session, "restore"),
+								}))}
 							/>
 						</BoardRowTransition>
 					);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	assertLocalEnvironment,
+	isBoardConfigured,
 	dispatchCurrentCloudBoardRequest,
 	publishCloudBoardResult,
 	selectBoardState,
@@ -28,6 +29,20 @@ const empty: BoardState<string, string> = {
 	loading: false,
 	error: null,
 };
+
+describe("isBoardConfigured", () => {
+	it("makes a ready Cloud source reachable without a Local pairing", () => {
+		expect(isBoardConfigured("cloud", "cloud", false)).toBe(true);
+	});
+	it("does not use retained Local configuration as Cloud readiness", () => {
+		expect(isBoardConfigured("cloud", undefined, true)).toBe(false);
+		expect(isBoardConfigured("cloud", "local", true)).toBe(false);
+	});
+	it("preserves Local pairing readiness", () => {
+		expect(isBoardConfigured("local", "local", true)).toBe(true);
+		expect(isBoardConfigured("local", undefined, false)).toBe(false);
+	});
+});
 
 describe("selectBoardState", () => {
 	it("selects the Cloud slice only for the resolved Cloud source", () => {

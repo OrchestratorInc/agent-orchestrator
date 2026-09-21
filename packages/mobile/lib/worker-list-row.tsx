@@ -17,7 +17,41 @@ import { WorkerRowInteraction } from "./worker-row-interaction";
 import { WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
 import { normalizeConversationTitle } from "./chat/conversationMenuModel";
 
-export function WorkerListRow({
+type ReadOnlyWorkerProps = { session: DashboardSession; projectName?: string };
+type WorkerListRowProps =
+	| (ReadOnlyWorkerProps & { interactionMode: "read-only" })
+	| (Parameters<typeof InteractiveWorkerListRow>[0] & { interactionMode: "full" });
+
+export function WorkerListRow(props: WorkerListRowProps) {
+	return props.interactionMode === "read-only"
+		? <ReadOnlyWorkerListRow session={props.session} projectName={props.projectName} />
+		: <InteractiveWorkerListRow {...props} />;
+}
+
+// No router, gesture shell, menu, or mutation handlers are mounted in Cloud.
+function ReadOnlyWorkerListRow({ session, projectName }: ReadOnlyWorkerProps) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const row = workerRowPresentation(t, session, projectName);
+	const visual = statusVisual(t, session.status);
+	const prs = prLine(session);
+	return (
+		<View style={[styles.shell, styles.foreground, styles.row]} accessible accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}. Read-only.`}>
+			<WorkerRowContents
+				row={row}
+				visual={visual}
+				glyph={workerStatusGlyph(session.status)}
+				details={[row.branch, prs?.text].filter(Boolean).join("  ·  ")}
+				prsTone={prs?.tone}
+				harness={session.harness}
+				styles={styles}
+				t={t}
+			/>
+		</View>
+	);
+}
+
+function InteractiveWorkerListRow({
 	session,
 	projectName,
 	isRenaming,

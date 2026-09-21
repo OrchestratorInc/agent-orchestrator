@@ -33,7 +33,6 @@ describe("project row", () => {
 		expect(card).toContain("onPress={() => onOpenProject(row)}");
 		expect(card).toContain('pointerEvents="box-none"');
 		expect(projects).toContain('pathname: "/project/[id]"');
-		expect(projects).toContain("onOrchestrator={openOrchestrator}");
 	});
 });
 

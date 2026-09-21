@@ -18,6 +18,11 @@ export type CloudBoardRequest<Source> = {
 	generation: number;
 };
 
+/** Readiness belongs to the selected environment, not a retained Local pairing. */
+export function isBoardConfigured(environment: EnvironmentKind | null, sourceKind: EnvironmentKind | undefined, localConfigured: boolean): boolean {
+	return environment === "cloud" ? sourceKind === "cloud" : localConfigured;
+}
+
 /** Select the board visible for the resolved environment without mixing slices. */
 export function selectBoardState<Project, Session>(input: {
 	environment: EnvironmentKind | null;

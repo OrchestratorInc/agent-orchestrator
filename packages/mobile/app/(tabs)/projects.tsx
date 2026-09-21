@@ -2,7 +2,7 @@ import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
 import { ActivityIndicator, Platform, RefreshControl, SectionList, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { classifyConnectionFailure, describeConnectionFailure } from "../../lib/connectionError";
+import { boardFailure, boardPresentation } from "../../lib/board-presentation";
 import { haptics } from "../../lib/haptics";
 import { orchestratorProjectSections, type OrchestratorProjectRow } from "../../lib/orchestratorView";
 import { ProjectCard } from "../../lib/project-card";
@@ -35,6 +35,7 @@ export default function ProjectsScreen() {
 		notificationsUnread,
 		refresh,
 	} = useApp();
+	const presentation = boardPresentation(environment, configured);
 	const [refreshing, setRefreshing] = useState(false);
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
 	const listRef = useTabScrollToTop<SectionList<OrchestratorProjectRow>>();
@@ -44,12 +45,12 @@ export default function ProjectsScreen() {
 	);
 	const failure = useMemo(
 		() =>
-			describeConnectionFailure(classifyConnectionFailure(errorStatus ?? undefined), {
+			boardFailure(environment, errorStatus ?? undefined, {
 				host: config?.host ?? "",
 				port: config?.httpPort ?? "",
 				platform: Platform.OS,
 			}),
-		[errorStatus, config?.host, config?.httpPort],
+		[environment, errorStatus, config?.host, config?.httpPort],
 	);
 
 	const onRefresh = async () => {
@@ -69,7 +70,7 @@ export default function ProjectsScreen() {
 
 	// See app/(tabs)/index.tsx's matching branch: the persisted environment
 	// choice hasn't loaded yet, so neither empty state below is safe to guess.
-	if (environment === null) {
+	if (presentation.state === "loading") {
 		return (
 			<View style={styles.screen}>
 				<View style={{ height: insets.top }} />
@@ -81,7 +82,7 @@ export default function ProjectsScreen() {
 		);
 	}
 
-	if (environment === "cloud") {
+	if (presentation.state === "cloud-unready") {
 		return (
 			<View style={styles.screen}>
 				<View style={{ height: insets.top }} />
@@ -91,7 +92,7 @@ export default function ProjectsScreen() {
 		);
 	}
 
-	if (!configured) {
+	if (presentation.state === "unpaired") {
 		return (
 			<View style={styles.screen}>
 				<View style={{ height: insets.top }} />
@@ -106,7 +107,7 @@ export default function ProjectsScreen() {
 			<View style={{ height: insets.top }} />
 			<ScreenHeader
 				title="Projects"
-				right={
+				right={presentation.localControls &&
 					<HeaderIconButton
 						icon="bell"
 						label="Notifications"
@@ -138,7 +139,7 @@ export default function ProjectsScreen() {
 							row={item}
 							busy={busyProjects.has(item.project.id)}
 							onOpenProject={openProject}
-							onOrchestrator={openOrchestrator}
+							onOrchestrator={presentation.localControls ? openOrchestrator : undefined}
 						/>
 					)}
 					ListEmptyComponent={

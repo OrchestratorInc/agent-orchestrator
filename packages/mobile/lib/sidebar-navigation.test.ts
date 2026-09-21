@@ -10,12 +10,25 @@ import {
 	sidebarNavigationSettled,
 	sidebarDestinations,
 	sidebarSessions,
+	sidebarSessionRoute,
 } from "./sidebar-navigation";
 
 vi.mock("@expo/ui/swift-ui/modifiers", () => ({
 	contentShape: (shape: { shape: string }) => ({ $type: "contentShape", ...shape, kind: undefined }),
 	shapes: { rectangle: () => ({ shape: "rectangle" }) },
 }));
+
+describe("sidebarSessionRoute", () => {
+	it("never routes Cloud worker IDs into Local chat, even when IDs collide", () => {
+		expect(sidebarSessionRoute("cloud", { id: "worker-1", projectId: "project-a" })).toBeUndefined();
+		expect(sidebarSessionRoute(null, { id: "worker-1", projectId: "project-a" })).toBeUndefined();
+	});
+	it("preserves the Local session and project route parameters", () => {
+		expect(sidebarSessionRoute("local", { id: "worker-1", projectId: "project-a" })).toEqual({
+			pathname: "/session/[id]", params: { id: "worker-1", projectId: "project-a" },
+		});
+	});
+});
 
 function session(overrides: Partial<DashboardSession> & Pick<DashboardSession, "id">): DashboardSession {
 	return {

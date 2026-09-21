@@ -2,6 +2,7 @@ import { Feather } from "@expo/vector-icons";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { haptics } from "./haptics";
+import { boardStaleMessage } from "./board-presentation";
 import { staleAgeLabel } from "./screenState";
 import { useApp } from "./store";
 import type { Theme } from "./theme";
@@ -26,7 +27,7 @@ import { useStaleness } from "./useStaleness";
 export function StaleBanner({ error = false, onRetry }: { error?: boolean; onRetry?: () => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const { getLastSyncAt, config } = useApp();
+	const { getLastSyncAt, config, environment } = useApp();
 	const { stale, ageMs } = useStaleness(getLastSyncAt);
 
 	// Fresh and healthy: say nothing. Silence is the correct state here, and it
@@ -39,11 +40,7 @@ export function StaleBanner({ error = false, onRetry }: { error?: boolean; onRet
 	const fill = error ? t.tintRed : t.tintAmber;
 	const host = config?.host?.trim();
 	const age = staleAgeLabel(ageMs);
-	const text = error
-		? host
-			? `Can't reach ${host} — showing data from ${age}`
-			: `Can't reach your desktop — showing data from ${age}`
-		: `Showing data from ${age}`;
+	const text = boardStaleMessage(environment, error, host, age);
 
 	return (
 		<View
