@@ -151,12 +151,10 @@ type AgentSwitchFailureReceipt struct {
 }
 
 type AppSetting struct {
-	ID                   int64
-	DefaultSessionMode   domain.SessionMode
-	UpdatedAt            time.Time
-	CloudOffering        bool
-	AutoPauseIdleMinutes int64
-	MemoryReserveBytes   int64
+	ID                 int64
+	DefaultSessionMode domain.SessionMode
+	UpdatedAt          time.Time
+	CloudOffering      bool
 }
 
 type Automation struct {

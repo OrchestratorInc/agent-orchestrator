@@ -1,5 +1,4 @@
 import { useMemo, useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { ChevronRight, Loader2, Pause, Play, Square, X } from "lucide-react";
@@ -15,13 +14,11 @@ import {
 	type ResourceSuggestion,
 } from "@aoagents/product-ui";
 import { cn } from "@/lib/utils";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
-import { useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { canPauseAgent, isAgentPaused, useAgentPause } from "../hooks/useAgentPause";
 import {
 	formatCPU,
 	formatMemory,
-	sessionMemoryQueryRoot,
 	useAppMemory,
 	useFastMemorySampling,
 	useSessionMemory,
@@ -74,17 +71,8 @@ const stateText: Record<PressureState, string> = {
 	tight: "text-destructive",
 };
 
-/** Idle over this long is what the "stop idle" suggestion sweeps; sent to the daemon in minutes. */
-const IDLE_SUGGESTION_MINUTES = 30;
-
-/**
- * The single fix the monitor offers, and the mutation behind its button.
- * Stopping idle sessions runs the daemon's own sweep so the two never
- * disagree on who counts as idle.
- */
+/** The single fix the monitor offers. */
 function useSuggestion(projectId?: string) {
-	const { t } = useTranslation();
-	const queryClient = useQueryClient();
 	const workspaces = useWorkspaceQuery().data ?? [];
 	const readings = useSessionMemory().data;
 	const memory = useAppMemory().data;
@@ -97,19 +85,7 @@ function useSuggestion(projectId?: string) {
 	const state = memory?.system ? pressureState(memory.system) : undefined;
 	const suggestion: ResourceSuggestion =
 		state && memory?.system && memory.app ? resourceSuggestion(state, memory.system, memory.app.rssBytes, facts) : { kind: "none" };
-	const stopIdle = useMutation({
-		mutationFn: async () => {
-			const { error } = await apiClient.POST("/api/v1/sessions/pause-idle", {
-				params: { query: { ...(projectId ? { project: projectId } : {}), idleMinutes: IDLE_SUGGESTION_MINUTES } },
-			});
-			if (error) throw new Error(apiErrorMessage(error, t("shell.memoryStopIdleFailed")));
-		},
-		onSettled: () => {
-			void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-			void queryClient.invalidateQueries({ queryKey: sessionMemoryQueryRoot });
-		},
-	});
-	return { state, suggestion, facts, stopIdle };
+	return { state, suggestion, facts };
 }
 
 /** Bar phrase: the state word, AO's size, and the fix if there is one. */
@@ -117,8 +93,6 @@ function suggestionLabel(suggestion: ResourceSuggestion, t: TFunction): string |
 	switch (suggestion.kind) {
 		case "other_apps":
 			return t("shell.memoryFixNotAO");
-		case "stop_idle":
-			return t("shell.memoryFixStopIdle", { count: suggestion.count, size: formatMemory(suggestion.freesBytes) });
 		case "pause_largest":
 			return t("shell.memoryFixPause", { title: suggestion.title });
 		default:
@@ -206,15 +180,11 @@ function MachineBar({ appBytes, system }: { appBytes: number; system: SystemMemo
 /** The lone line under the bar: what to do, and the one button that does it. */
 function SuggestionLine({
 	onPauseLargest,
-	pending,
 	state,
-	stopIdle,
 	suggestion,
 }: {
 	onPauseLargest: (sessionId: string) => void;
-	pending: boolean;
 	state: PressureState;
-	stopIdle: () => void;
 	suggestion: ResourceSuggestion;
 }) {
 	const { t } = useTranslation();
@@ -222,18 +192,12 @@ function SuggestionLine({
 	const text =
 		suggestion.kind === "other_apps"
 			? t("shell.memorySuggestOtherApps", { size: formatMemory(suggestion.aoBytes) })
-			: suggestion.kind === "stop_idle"
-				? t("shell.memorySuggestIdle", { count: suggestion.count })
-				: t("shell.memorySuggestLargest", { title: suggestion.title });
+			: t("shell.memorySuggestLargest", { title: suggestion.title });
 	return (
 		<div className="settings-row-bar gap-3 text-sm" data-testid="session-memory-suggestion">
 			<span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", stateDot[state])} />
 			<span className={cn("min-w-0 flex-1 truncate font-medium", stateText[state] || "text-settings-label")}>{text}</span>
-			{suggestion.kind === "stop_idle" ? (
-				<Button data-testid="session-memory-fix" disabled={pending} onClick={stopIdle} size="sm">
-					{pending ? t("shell.memoryStopIdleRunning") : t("shell.memoryFixStopIdle", { count: suggestion.count, size: formatMemory(suggestion.freesBytes) })}
-				</Button>
-			) : suggestion.kind === "pause_largest" ? (
+			{suggestion.kind === "pause_largest" ? (
 				<Button data-testid="session-memory-fix" onClick={() => onPauseLargest(suggestion.sessionId)} size="sm">
 					{t("shell.memoryFixPause", { title: suggestion.title })}
 				</Button>
@@ -258,7 +222,7 @@ export function SessionMemoryPanel({
 	const appMemory = useAppMemory().data;
 	const app = appMemory?.app;
 	const system = appMemory?.system;
-	const { state, suggestion, facts, stopIdle } = useSuggestion(projectId);
+	const { state, suggestion, facts } = useSuggestion(projectId);
 	// Orchestrators are listed too: they hold memory like any session, and
 	// leaving them out made the rows add up to less than AO's total.
 	const sessions = useMemo(
@@ -313,16 +277,7 @@ export function SessionMemoryPanel({
 						<div className="settings-grouped-rows flex w-full flex-col">
 							{system && app ? <MachineBar appBytes={app.rssBytes} system={system} /> : null}
 							{state ? (
-								<SuggestionLine
-									onPauseLargest={setPauseTarget}
-									pending={stopIdle.isPending}
-									state={state}
-									stopIdle={() => stopIdle.mutate()}
-									suggestion={suggestion}
-								/>
-							) : null}
-							{stopIdle.isError ? (
-								<p className="settings-row-bar text-xs text-error" role="alert">{stopIdle.error.message}</p>
+								<SuggestionLine onPauseLargest={setPauseTarget} state={state} suggestion={suggestion} />
 							) : null}
 						</div>
 					</section>

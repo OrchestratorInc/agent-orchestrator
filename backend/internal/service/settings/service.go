@@ -20,8 +20,6 @@ type Store interface {
 	GetAppSettings(ctx context.Context) (Snapshot, error)
 	SetDefaultSessionMode(ctx context.Context, mode domain.SessionMode, now time.Time) error
 	SetCloudOffering(ctx context.Context, enabled bool, now time.Time) error
-	SetAutoPauseIdleMinutes(ctx context.Context, minutes int, now time.Time) error
-	SetMemoryReserveBytes(ctx context.Context, bytes int64, now time.Time) error
 }
 
 // Snapshot is the current preference set.
@@ -29,29 +27,7 @@ type Snapshot struct {
 	DefaultSessionMode domain.SessionMode
 	// CloudOffering is the user's cloud toggle (Settings, Developer Mode).
 	CloudOffering bool
-	// AutoPauseIdleMinutes exits agents idle this long; zero is off.
-	AutoPauseIdleMinutes int
-	// MemoryReserveBytes is how much host RAM the user wants kept free. Below
-	// it AO stops auto-starting sessions and says so. Zero means the default.
-	MemoryReserveBytes int64
-	UpdatedAt          time.Time
-}
-
-// MinMemoryReserveBytes is the smallest explicit reserve accepted; below a
-// quarter of a gigabyte the line would sit inside normal jitter.
-const MinMemoryReserveBytes = 256 << 20
-
-// DefaultMemoryReserveBytes is the line used when none is set: two
-// gigabytes free is where a laptop stops feeling responsive.
-const DefaultMemoryReserveBytes = 2 << 30
-
-// ResolveMemoryReserve returns the effective reserve and whether it is the
-// default rather than a user choice.
-func (s Snapshot) ResolveMemoryReserve() (bytes uint64, auto bool) {
-	if s.MemoryReserveBytes > 0 {
-		return uint64(s.MemoryReserveBytes), false
-	}
-	return DefaultMemoryReserveBytes, true
+	UpdatedAt     time.Time
 }
 
 // Offering reports which AO offerings this daemon exposes to clients. It is
@@ -152,29 +128,6 @@ func (s *Service) SetDefaultSessionMode(ctx context.Context, mode domain.Session
 // new reads; nothing about running sessions changes.
 func (s *Service) SetCloudOffering(ctx context.Context, enabled bool) (Snapshot, error) {
 	if err := s.store.SetCloudOffering(ctx, enabled, s.now()); err != nil {
-		return Snapshot{}, err
-	}
-	return s.store.GetAppSettings(ctx)
-}
-
-// SetAutoPauseIdleMinutes sets how long an agent may sit idle before AO
-// pauses it; zero turns the policy off.
-func (s *Service) SetAutoPauseIdleMinutes(ctx context.Context, minutes int) (Snapshot, error) {
-	if minutes < 0 {
-		return Snapshot{}, fmt.Errorf("auto-pause minutes must not be negative: %d", minutes)
-	}
-	if err := s.store.SetAutoPauseIdleMinutes(ctx, minutes, s.now()); err != nil {
-		return Snapshot{}, err
-	}
-	return s.store.GetAppSettings(ctx)
-}
-
-// SetMemoryReserveBytes sets the memory reserve; zero restores the default.
-func (s *Service) SetMemoryReserveBytes(ctx context.Context, bytes int64) (Snapshot, error) {
-	if bytes < 0 || (bytes > 0 && bytes < MinMemoryReserveBytes) {
-		return Snapshot{}, fmt.Errorf("memory reserve must be zero (default) or at least %d bytes", MinMemoryReserveBytes)
-	}
-	if err := s.store.SetMemoryReserveBytes(ctx, bytes, s.now()); err != nil {
 		return Snapshot{}, err
 	}
 	return s.store.GetAppSettings(ctx)

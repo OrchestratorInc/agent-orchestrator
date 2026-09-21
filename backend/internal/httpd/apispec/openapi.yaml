@@ -7782,59 +7782,6 @@ paths:
       summary: Clean up terminated session workspaces
       tags:
       - sessions
-  /api/v1/sessions/pause-idle:
-    post:
-      operationId: pauseIdleSessions
-      parameters:
-      - description: Project id filter. When omitted, sweep every project.
-        in: query
-        name: project
-        schema:
-          description: Project id filter. When omitted, sweep every project.
-          type: string
-      - description: Pause only agents idle at least this long. Zero or omitted pauses
-          every idle agent.
-        in: query
-        name: idleMinutes
-        schema:
-          description: Pause only agents idle at least this long. Zero or omitted
-            pauses every idle agent.
-          minimum: 0
-          type: integer
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PauseIdleSessionsResponse'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Conflict
-        "500":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Internal Server Error
-        "501":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Implemented
-      summary: Pause every idle worker agent, keeping its session for resume
-      tags:
-      - sessions
   /api/v1/settings:
     get:
       operationId: getSettings
@@ -7858,44 +7805,6 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Read the daemon-owned user preferences
-      tags:
-      - settings
-  /api/v1/settings/auto-pause:
-    patch:
-      operationId: updateAutoPause
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/UpdateAutoPauseRequest'
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SettingsResponse'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "500":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Internal Server Error
-        "501":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Implemented
-      summary: Set how long an agent may sit idle before AO pauses it (zero turns
-        it off)
       tags:
       - settings
   /api/v1/settings/cloud-offering:
@@ -7933,44 +7842,6 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Turn the cloud offering on or off for this machine
-      tags:
-      - settings
-  /api/v1/settings/memory-reserve:
-    patch:
-      operationId: updateMemoryReserve
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/UpdateMemoryReserveRequest'
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SettingsResponse'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "500":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Internal Server Error
-        "501":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Implemented
-      summary: Set how much host RAM AO keeps free before it stops auto-starting sessions
-        (zero restores the default)
       tags:
       - settings
   /api/v1/settings/session-interface:
@@ -11822,8 +11693,6 @@ components:
       properties:
         app:
           $ref: '#/components/schemas/AppMemoryResponse'
-        reserve:
-          $ref: '#/components/schemas/MemoryReserveResponse'
         sessions:
           items:
             $ref: '#/components/schemas/SessionMemoryResponse'
@@ -11967,17 +11836,6 @@ components:
           type: string
       required:
       - status
-      type: object
-    MemoryReserveResponse:
-      properties:
-        auto:
-          type: boolean
-        bytes:
-          minimum: 0
-          type: integer
-      required:
-      - bytes
-      - auto
       type: object
     MergePRRequest:
       properties:
@@ -12270,33 +12128,6 @@ components:
       - title
       - targetSha
       - status
-      type: object
-    PauseIdleFailedSession:
-      properties:
-        reason:
-          type: string
-        sessionId:
-          type: string
-      required:
-      - sessionId
-      - reason
-      type: object
-    PauseIdleSessionsResponse:
-      properties:
-        failed:
-          items:
-            $ref: '#/components/schemas/PauseIdleFailedSession'
-          type: array
-        ok:
-          type: boolean
-        paused:
-          items:
-            type: string
-          type: array
-      required:
-      - ok
-      - paused
-      - failed
       type: object
     PrepareTaskResponse:
       properties:
@@ -13741,9 +13572,6 @@ components:
       type: object
     SettingsResponse:
       properties:
-        autoPauseIdleMinutes:
-          minimum: 0
-          type: integer
         chatHarnesses:
           items:
             type: string
@@ -13763,10 +13591,6 @@ components:
           type: string
         localEnabled:
           type: boolean
-        memoryReserveBytes:
-          format: int64
-          minimum: 0
-          type: integer
       required:
       - defaultSessionMode
       - chatHarnesses
@@ -13775,8 +13599,6 @@ components:
       - cloudOffering
       - cloudEnabled
       - cloudControlPlaneUrl
-      - autoPauseIdleMinutes
-      - memoryReserveBytes
       type: object
     ShellTerminalEnvelope:
       properties:
@@ -14327,16 +14149,6 @@ components:
       - token
       - deleted
       type: object
-    UpdateAutoPauseRequest:
-      properties:
-        idleMinutes:
-          minimum: 0
-          type:
-          - "null"
-          - integer
-      required:
-      - idleMinutes
-      type: object
     UpdateAutomationRequest:
       properties:
         cron:
@@ -14374,16 +14186,6 @@ components:
           type:
           - "null"
           - string
-      type: object
-    UpdateMemoryReserveRequest:
-      properties:
-        bytes:
-          minimum: 0
-          type:
-          - "null"
-          - integer
-      required:
-      - bytes
       type: object
     UpdateProjectSettingsInput:
       properties:

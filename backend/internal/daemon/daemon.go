@@ -564,9 +564,6 @@ func Run() error {
 			return roots
 		},
 	})
-	// Orchestrators fan out workers without seeing the machine; hold those
-	// spawns while free RAM sits below the user's reserve.
-	sessionSvc.SetAutoSpawnGate(lowMemoryGate(settingsSvc, memoryReader, log))
 	sessMgr = wiredSessMgr
 	if tunable, ok := sessMgr.(interface {
 		SetModelCatalog(interface {
@@ -958,8 +955,6 @@ func Run() error {
 	if usagePipeline != nil {
 		usageDone = usagePipeline.Start(ctx)
 	}
-	// Idle auto-pause: off until the user sets a threshold in Settings.
-	go runAutoPause(ctx, settingsSvc, sessionSvc, autoPauseInterval, log)
 	// ponytail: 5s tolerates a brief frontend restart; tune if dev hot-reload trips it.
 	const supervisorGrace = 5 * time.Second
 

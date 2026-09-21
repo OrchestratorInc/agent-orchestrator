@@ -23,20 +23,10 @@ func (s settingsStore) GetAppSettings(ctx context.Context) (settingssvc.Snapshot
 		return settingssvc.Snapshot{}, err
 	}
 	return settingssvc.Snapshot{
-		DefaultSessionMode:   row.DefaultSessionMode,
-		CloudOffering:        row.CloudOffering,
-		AutoPauseIdleMinutes: row.AutoPauseIdleMinutes,
-		MemoryReserveBytes:   row.MemoryReserveBytes,
-		UpdatedAt:            row.UpdatedAt,
+		DefaultSessionMode: row.DefaultSessionMode,
+		CloudOffering:      row.CloudOffering,
+		UpdatedAt:          row.UpdatedAt,
 	}, nil
-}
-
-func (s settingsStore) SetMemoryReserveBytes(ctx context.Context, bytes int64, now time.Time) error {
-	return s.store.SetMemoryReserveBytes(ctx, bytes, now)
-}
-
-func (s settingsStore) SetAutoPauseIdleMinutes(ctx context.Context, minutes int, now time.Time) error {
-	return s.store.SetAutoPauseIdleMinutes(ctx, minutes, now)
 }
 
 func (s settingsStore) SetDefaultSessionMode(

@@ -13,8 +13,7 @@ import { SettingsInputRow, SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
-import { useSettings, useUpdateAutoPause, useUpdateCloudOffering, useUpdateMemoryReserve, useUpdateSessionInterface } from "../../hooks/useSettings";
-import { formatMemory, useAppMemory } from "../../hooks/useSessionMemory";
+import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface } from "../../hooks/useSettings";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
 import { isWindowsPlatform } from "../../lib/platform";
@@ -59,77 +58,6 @@ function SessionInterfaceRow() {
 					{note}
 				</p>
 			) : null}
-		</div>
-	);
-}
-
-/** Auto-pause: exit idle agents after a while, keeping their sessions. Off by default. */
-const autoPauseChoices = [0, 15, 30, 60, 120] as const;
-
-function AutoPauseRow() {
-	const { t } = useTranslation();
-	const { settings, isLoading, error } = useSettings();
-	const { update, saving, error: saveError } = useUpdateAutoPause();
-	const current = settings?.autoPauseIdleMinutes ?? 0;
-	const values = autoPauseChoices.includes(current as (typeof autoPauseChoices)[number])
-		? [...autoPauseChoices]
-		: [...autoPauseChoices, current].sort((a, b) => a - b);
-	const options = values.map((minutes) => ({
-		value: String(minutes),
-		label: minutes === 0 ? t("settings.autoPause.off") : t("settings.autoPause.minutes", { count: minutes }),
-	})) satisfies SettingsOption<string>[];
-	const note = saveError ?? error ?? t("settings.autoPause.help");
-	return (
-		<div className="flex w-full flex-col">
-			<SettingsRow className="rounded-none" label={t("settings.autoPause.label")}>
-				<SettingsOptionMenu
-					aria-label={t("settings.autoPause.label")}
-					value={String(current)}
-					options={options}
-					onChange={(value) => update(Number(value))}
-					disabled={isLoading || saving}
-				/>
-			</SettingsRow>
-			<p className={cn("px-3 pt-0 pb-4 text-xs leading-relaxed", saveError || error ? "text-destructive" : "text-muted-foreground")}>
-				{note}
-			</p>
-		</div>
-	);
-}
-
-/** Memory reserve: a warning line, not a wall. Below it AO holds
- * agent-requested spawns and says so; nothing running is touched. */
-const GIB = 1024 ** 3;
-const memoryReserveChoicesGiB = [1, 2, 4, 8] as const;
-
-function MemoryReserveRow() {
-	const { t } = useTranslation();
-	const { settings, isLoading, error } = useSettings();
-	const { update, saving, error: saveError } = useUpdateMemoryReserve();
-	const memory = useAppMemory().data;
-	const current = settings?.memoryReserveBytes ?? 0;
-	const totalBytes = memory?.system?.totalBytes;
-	const choices = memoryReserveChoicesGiB.filter((gib) => totalBytes === undefined || gib * GIB < totalBytes).map((gib) => gib * GIB);
-	const values = current === 0 || choices.includes(current) ? choices : [...choices, current].sort((a, b) => a - b);
-	const options = [
-		{ value: "0", label: t("settings.memoryReserve.default") },
-		...values.map((bytes) => ({ value: String(bytes), label: formatMemory(bytes) })),
-	] satisfies SettingsOption<string>[];
-	const note = saveError ?? error ?? t("settings.memoryReserve.help");
-	return (
-		<div className="flex w-full flex-col">
-			<SettingsRow className="rounded-none" label={t("settings.memoryReserve.label")}>
-				<SettingsOptionMenu
-					aria-label={t("settings.memoryReserve.label")}
-					value={String(current)}
-					options={options}
-					onChange={(value) => update(Number(value))}
-					disabled={isLoading || saving}
-				/>
-			</SettingsRow>
-			<p className={cn("px-3 pt-0 pb-4 text-xs leading-relaxed", saveError || error ? "text-destructive" : "text-muted-foreground")}>
-				{note}
-			</p>
 		</div>
 	);
 }
@@ -288,8 +216,6 @@ export function GeneralSettingsSection({
 			{/* Sessions */}
 			<SettingsSection title={t("settings.sessions")} grouped>
 				<SessionInterfaceRow />
-				<MemoryReserveRow />
-				<AutoPauseRow />
 				{isWindowsPlatform() ? <TerminalShellRows /> : null}
 				<SettingsRow label={t("settings.terminalCopyOnSelect")}>
 					<Switch

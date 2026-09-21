@@ -90,7 +90,6 @@ function appReading(availableGiB: number, pressureRaw = 0, aoGiB = 2) {
 				own: reading("ao", 300 * 1024 ** 2, 3, [{ pid: 7, ppid: 1, rssBytes: 300 * 1024 ** 2, cpuPercent: 1, command: "ao daemon" }]),
 			},
 			system: host(availableGiB, pressureRaw),
-			reserve: { bytes: 2 * GIB, auto: true },
 			liveCount: 2,
 		},
 	};
@@ -148,11 +147,11 @@ describe("AppMemoryIndicator", () => {
 		expect(button).toHaveAttribute("data-memory-state", "fine");
 		expect(button).toHaveAttribute("aria-label", "Fine · 21.5 GB free of 34.4 GB · AO holds 2.1 GB · pressure 0.0");
 
-		// Stalling on memory, AO holds most of what is in use, two sessions idle for hours: stop them.
+		// Stalling on memory and AO holds most of what is in use: point at the biggest session.
 		appMemoryMock.mockReturnValue(appReading(3, 12, 20));
 		rerender();
 		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("data-memory-state", "tight_soon");
-		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("21.5 GB· Stop 3 idle · frees 2.9 GB");
+		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("21.5 GB· Pause big worker");
 
 		// Tight, but AO is a sliver of what is in use: say so, offer nothing.
 		appMemoryMock.mockReturnValue(appReading(1, 40, 2));
@@ -161,7 +160,7 @@ describe("AppMemoryIndicator", () => {
 		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("2.1 GB· not AO");
 	});
 
-	it("points at the biggest session when nothing is idle", () => {
+	it("points at the biggest session when everything is busy", () => {
 		const workspace: WorkspaceSummary = {
 			id: "p1",
 			name: "radic",
@@ -247,22 +246,15 @@ describe("AppMemoryIndicator", () => {
 		expect(rows[1]).not.toHaveTextContent("%");
 	});
 
-	it("colours only the rows that are part of the fix, and the one button stops them", async () => {
-		postMock.mockImplementation(async (path: string) =>
-			path === "/api/v1/sessions/pause-idle" ? { data: { ok: true, paused: ["s-small", "s-big"], failed: [] } } : { data: {} },
-		);
+	it("colours idle rows as part of the fix while the machine is getting tight", async () => {
 		appMemoryMock.mockReturnValue(appReading(3, 12, 20));
 		renderButton();
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		const table = await screen.findByTestId("session-memory-table");
-		expect(screen.getByTestId("session-memory-suggestion")).toHaveTextContent("3 sessions idle for over 30 minutes");
+		expect(screen.getByTestId("session-memory-suggestion")).toHaveTextContent("big worker is using the most memory");
 		const rows = within(table).getAllByTestId("session-memory-row");
 		expect(rows.every((row) => row.getAttribute("data-chip-tone") === "warning")).toBe(true);
-
-		await userEvent.click(screen.getByTestId("session-memory-fix"));
-		await waitFor(() =>
-			expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/pause-idle", { params: { query: { idleMinutes: 30 } } }),
-		);
+		expect(screen.getByTestId("session-memory-fix")).toHaveTextContent("Pause big worker");
 	});
 
 	it("marks the single largest session red when the machine is tight and everything is busy", async () => {

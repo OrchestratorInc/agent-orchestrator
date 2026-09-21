@@ -45,20 +45,11 @@ describe("resourceSuggestion", () => {
 		expect(resourceSuggestion("tight", m, 1 * GB, [session({ id: "a", idleSeconds: 99_999 })])).toEqual({ kind: "other_apps", aoBytes: 1 * GB });
 	});
 
-	it("offers to stop long-idle sessions before anything else", () => {
-		const out = resourceSuggestion("tight_soon", m, 8 * GB, [
-			session({ id: "old", idleSeconds: 31 * 60, rssBytes: 300 * MB }),
-			session({ id: "fresh", idleSeconds: 5 * 60, rssBytes: 900 * MB }),
-			session({ id: "busy", working: true, rssBytes: 2 * GB }),
-			session({ id: "paused", paused: true, idleSeconds: 99_999 }),
-		]);
-		expect(out).toEqual({ kind: "stop_idle", sessionIds: ["old"], freesBytes: 300 * MB, count: 1 });
-	});
-
-	it("points at the biggest session when everything is busy", () => {
+	it("points at the biggest unpaused session", () => {
 		const out = resourceSuggestion("tight", m, 8 * GB, [
 			session({ id: "small", working: true, rssBytes: 300 * MB }),
 			session({ id: "big", title: "build-indexer", working: true, rssBytes: 3 * GB }),
+			session({ id: "paused", paused: true, rssBytes: 9 * GB }),
 		]);
 		expect(out).toEqual({ kind: "pause_largest", sessionId: "big", title: "build-indexer", rssBytes: 3 * GB });
 	});

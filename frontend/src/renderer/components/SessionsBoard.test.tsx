@@ -198,7 +198,6 @@ describe("SessionsBoard", () => {
 			data: {
 				app: { rssBytes: 12 * GIB, processCount: 20, cpuPercent: 40 },
 				system: { totalBytes: 32 * GIB, availableBytes: 2 * GIB, swapTotalBytes: 0, swapUsedBytes: 0, swapBytesPerSec: 0, cpuCount: 8, load1: 1, pressureRaw: 35, pressureSource: "psi" },
-				reserve: { bytes: 2 * GIB, auto: true },
 				liveCount: 1,
 			},
 		});

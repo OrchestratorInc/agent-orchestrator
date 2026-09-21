@@ -7,7 +7,6 @@ import { apiClient } from "../lib/api-client";
 export type SessionMemoryReading = components["schemas"]["SessionMemoryResponse"];
 export type SystemMemoryReading = components["schemas"]["SystemMemoryResponse"];
 export type AppMemoryReading = components["schemas"]["AppMemoryResponse"];
-export type MemoryReserveReading = components["schemas"]["MemoryReserveResponse"];
 
 export const sessionMemoryQueryRoot = ["session-memory"] as const;
 export const sessionMemoryQueryKey = (projectId?: string) =>
@@ -25,7 +24,6 @@ type SessionMemoryResponse = {
 	sessions: SessionMemoryReading[];
 	system?: SystemMemoryReading;
 	app?: AppMemoryReading;
-	reserve?: MemoryReserveReading;
 };
 
 export async function fetchSessionMemory(projectId?: string): Promise<SessionMemoryResponse> {
@@ -33,7 +31,7 @@ export async function fetchSessionMemory(projectId?: string): Promise<SessionMem
 		params: { query: projectId ? { projectId } : {} },
 	});
 	if (error) throw error;
-	return { sessions: data?.sessions ?? [], system: data?.system, app: data?.app, reserve: data?.reserve };
+	return { sessions: data?.sessions ?? [], system: data?.system, app: data?.app };
 }
 
 /** How many mounted consumers want the fast cadence; the query reads it. */
@@ -87,7 +85,6 @@ export function useAppMemory() {
 		select: (data: SessionMemoryResponse) => ({
 			app: data.app,
 			system: data.system,
-			reserve: data.reserve,
 			// Sessions with a live runtime: a paused one has none, so it is not counted.
 			liveCount: data.sessions.length,
 		}),

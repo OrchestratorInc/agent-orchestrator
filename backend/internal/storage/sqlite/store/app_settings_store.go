@@ -25,11 +25,7 @@ type AppSettings struct {
 	// CloudOffering is the user's cloud toggle (Settings, Developer Mode). The
 	// daemon gate combines it with the deployment's control-plane URL.
 	CloudOffering bool
-	// AutoPauseIdleMinutes exits agents idle this long; zero is off.
-	AutoPauseIdleMinutes int
-	// MemoryReserveBytes is how much host RAM to keep free; zero means the default.
-	MemoryReserveBytes int64
-	UpdatedAt          time.Time
+	UpdatedAt     time.Time
 }
 
 // GetAppSettings reads the preference row.
@@ -41,44 +37,10 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 	return AppSettings{
 		// Normalized on read: a value written by a build that knows a mode this
 		// one does not must still resolve to something dispatchable.
-		DefaultSessionMode:   domain.NormalizeSessionMode(row.DefaultSessionMode),
-		CloudOffering:        row.CloudOffering,
-		AutoPauseIdleMinutes: int(row.AutoPauseIdleMinutes),
-		MemoryReserveBytes:   row.MemoryReserveBytes,
-		UpdatedAt:            row.UpdatedAt,
+		DefaultSessionMode: domain.NormalizeSessionMode(row.DefaultSessionMode),
+		CloudOffering:      row.CloudOffering,
+		UpdatedAt:          row.UpdatedAt,
 	}, nil
-}
-
-// SetMemoryReserveBytes persists the memory reserve; zero means the default.
-func (s *Store) SetMemoryReserveBytes(ctx context.Context, bytes int64, now time.Time) error {
-	if bytes < 0 {
-		return fmt.Errorf("memory reserve must not be negative: %d", bytes)
-	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	if err := s.qw.SetMemoryReserveBytes(ctx, gen.SetMemoryReserveBytesParams{
-		MemoryReserveBytes: bytes,
-		UpdatedAt:          now,
-	}); err != nil {
-		return fmt.Errorf("set memory reserve: %w", err)
-	}
-	return nil
-}
-
-// SetAutoPauseIdleMinutes persists the idle auto-pause threshold; zero disables it.
-func (s *Store) SetAutoPauseIdleMinutes(ctx context.Context, minutes int, now time.Time) error {
-	if minutes < 0 {
-		return fmt.Errorf("auto-pause minutes must not be negative: %d", minutes)
-	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	if err := s.qw.SetAutoPauseIdleMinutes(ctx, gen.SetAutoPauseIdleMinutesParams{
-		AutoPauseIdleMinutes: int64(minutes),
-		UpdatedAt:            now,
-	}); err != nil {
-		return fmt.Errorf("set auto-pause idle minutes: %w", err)
-	}
-	return nil
 }
 
 // SetDefaultSessionMode persists the default interface for new sessions.

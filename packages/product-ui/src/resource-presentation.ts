@@ -58,23 +58,18 @@ export type ResourceSessionFacts = {
 	pausable: boolean;
 };
 
-/** Idle this long and a session is a candidate for stopping. */
-export const IDLE_SUGGESTION_SECONDS = 30 * 60;
-
 /** Under this share of RAM in use, pressure is somebody else's doing. */
 const AO_SHARE_MATTERS = 0.25;
 
 export type ResourceSuggestion =
 	| { kind: "none" }
 	| { kind: "other_apps"; aoBytes: number }
-	| { kind: "stop_idle"; sessionIds: string[]; freesBytes: number; count: number }
 	| { kind: "pause_largest"; sessionId: string; title: string; rssBytes: number };
 
 /**
  * Evaluated top to bottom, first match wins, so there is only ever one line
  * and one button. Fine: nothing. AO holding under a quarter of what is in
- * use: say so, no button. Idle sessions: stop them. All busy: pause the
- * biggest.
+ * use: say so, no button. Otherwise: pause the biggest.
  */
 export function resourceSuggestion(
 	state: PressureState,
@@ -85,17 +80,6 @@ export function resourceSuggestion(
 	if (state === "fine") return { kind: "none" };
 	const inUse = machine.totalBytes - machine.availableBytes;
 	if (inUse > 0 && aoBytes / inUse < AO_SHARE_MATTERS) return { kind: "other_apps", aoBytes };
-	const idle = sessions.filter(
-		(s) => s.pausable && !s.paused && !s.working && (s.idleSeconds ?? 0) >= IDLE_SUGGESTION_SECONDS,
-	);
-	if (idle.length > 0) {
-		return {
-			kind: "stop_idle",
-			sessionIds: idle.map((s) => s.id),
-			freesBytes: idle.reduce((sum, s) => sum + s.rssBytes, 0),
-			count: idle.length,
-		};
-	}
 	const largest = [...sessions].filter((s) => s.pausable && !s.paused).sort((a, b) => b.rssBytes - a.rssBytes)[0];
 	if (!largest) return { kind: "none" };
 	return { kind: "pause_largest", sessionId: largest.id, title: largest.title, rssBytes: largest.rssBytes };
