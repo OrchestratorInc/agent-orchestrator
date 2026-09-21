@@ -42,6 +42,7 @@ import {
 	type CloudBoardRequest,
 } from "./environment/boardSelection";
 import { resolveSessionSource } from "./environment/resolve";
+import { configLoadPlan, shouldPublishConfigLoad, type ConfigLoadRequest } from "./environment/configLoad";
 import { shouldMaintainLocalConnection, shouldPollLocal } from "./environment/shouldPoll";
 import type { EnvironmentKind, SessionSource } from "./environment/types";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
@@ -225,6 +226,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const [cloudBoard, setCloudBoard] = useState<BoardState<ProjectInfo, DashboardSession>>(EMPTY_BOARD);
 	const cloudRequestGenerationRef = useRef(0);
 	const activeEnvironmentRef = useRef<EnvironmentKind | null>(environment);
+	const configEnvironmentRef = useRef<EnvironmentKind | null>(environment);
+	const configLoadGenerationRef = useRef(0);
 	const cloudBoardRequestRef = useRef<CloudBoardRequest<SessionSource> | undefined>(undefined);
 	const sessionSource = useMemo(
 		() =>
@@ -314,16 +317,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// Set when the app returns to the foreground, consumed by the upgrade check.
 	const resumedRef = useRef(false);
 
+	useLayoutEffect(() => {
+		configEnvironmentRef.current = environment;
+		configLoadGenerationRef.current += 1;
+	}, [environment]);
+
 	const reloadConfig = useCallback(async () => {
-		// Races the active machine's endpoints rather than reading one stored
-		// address, so the app lands on LAN at home and the tunnel from anywhere
-		// else without the user choosing. Always resolves to something: every
-		// failure path inside falls back to the last stored config.
-		// Marked resolved whatever happens below. An unhandled failure here would
-		// otherwise leave the loader up forever, which is a worse failure than
-		// the blank screen this flag exists to prevent.
+		const plan = configLoadPlan(environment);
+		if (environment === null || plan === "wait") return;
+		const request: ConfigLoadRequest = { environment, generation: configLoadGenerationRef.current };
+		const isCurrent = () => shouldPublishConfigLoad(request, {
+			environment: configEnvironmentRef.current,
+			generation: configLoadGenerationRef.current,
+		});
 		try {
-			const c = (await resolveActiveConfig(runtimeResolveDeps())) ?? (await loadConfig());
+			// Cloud hydrates saved Local pairing state for later switching and the
+			// push lifecycle, but must not migrate or probe its endpoints.
+			const c = plan === "resolve"
+				? (await resolveActiveConfig(runtimeResolveDeps())) ?? (await loadConfig())
+				: await loadConfig();
+			if (!isCurrent()) return;
 		// Keep the previous object when the endpoint has not actually changed.
 		// Resolution builds a fresh one every time, and the live conversation
 		// stream, the poll loop and the terminal mux all key on this value's
@@ -333,22 +346,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		// Stamped here so every race counts towards the cooldown, however it was
 		// triggered — otherwise a failure race and an upgrade race can fire back
 		// to back and thrash the connection.
-			lastReRaceAt.current = Date.now();
+			if (plan === "resolve") lastReRaceAt.current = Date.now();
 			const prev = cfgRef.current;
 			const next = sameServerConfig(prev, c) ? (prev as typeof c) : c;
 			cfgRef.current = next;
 			setConfig(next);
+			if (plan !== "resolve") return;
 			// Read alongside the config so a failure can be explained: a stored
 			// tunnel that no longer answers is a rotated hostname, not a machine
 			// that is merely out of range.
-			setActiveEndpoints((await activeHost())?.endpoints ?? []);
+			const endpoints = (await activeHost())?.endpoints ?? [];
+			if (!isCurrent()) return;
+			setActiveEndpoints(endpoints);
 		} finally {
-			setConfigResolved(true);
+			if (isCurrent()) setConfigResolved(true);
 		}
-	}, []);
+	}, [environment]);
 
 	useEffect(() => {
-		reloadConfig();
+		void reloadConfig();
 	}, [reloadConfig]);
 
 	// Nothing re-picks a path while the current one answers, so once the app
