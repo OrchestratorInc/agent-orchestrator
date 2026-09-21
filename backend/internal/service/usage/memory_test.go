@@ -213,3 +213,22 @@ func TestSystemMemoryDerivesSwapRateFromCounters(t *testing.T) {
 		t.Fatalf("swap rate = %v, want 2 MiB/s", second.SwapBytesPerSec)
 	}
 }
+
+func TestAppMemoryOwnExcludesSessionsUnderTheDaemon(t *testing.T) {
+	recs := []domain.SessionRecord{{ID: "s-a", Metadata: domain.SessionMetadata{RuntimeHandleID: "a"}}}
+	var snapshots int
+	reader := newTestMemoryReader(t, recs, &snapshots)
+	// The tmux server (100) is the daemon's child in practice; session a
+	// (200 → 300) hangs under it. Own must not count the session's 1.6 GB.
+	reader.deps.AppRootPIDs = func() []int { return []int{100} }
+	app, err := reader.AppMemory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := uint64(900+2500) * 1024; app.Own.RSSBytes != want || app.Own.ProcessCount != 2 {
+		t.Fatalf("own = %+v, want %d bytes across 2 processes (tmux + the other shell)", app.Own, want)
+	}
+	if want := uint64(900+3000+1600000+2500) * 1024; app.RSSBytes != want {
+		t.Fatalf("total = %d, want %d", app.RSSBytes, want)
+	}
+}

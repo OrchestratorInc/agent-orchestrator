@@ -173,14 +173,33 @@ func (r *MemoryReader) AppMemory(ctx context.Context) (domain.AppMemory, error) 
 		own = append(own, r.deps.AppRootPIDs()...)
 	}
 	roots := append([]int(nil), own...)
+	inSession := map[int]bool{}
 	for _, rec := range recs {
 		if rec.IsTerminated {
 			continue
 		}
-		roots = append(roots, r.rootPIDs(ctx, rec)...)
+		sessionRoots := r.rootPIDs(ctx, rec)
+		roots = append(roots, sessionRoots...)
+		for _, p := range table.Tree(sessionRoots...).Processes {
+			inSession[p.PID] = true
+		}
 	}
 	tree := table.Tree(roots...)
-	ownReading := treeReading(table.Tree(own...), prev, elapsed)
+	// The daemon starts tmux, so every session is a descendant of the daemon
+	// and a plain walk from its pid would count them as AO's own. Own is the
+	// daemon tree with the session trees cut out, so the rows stay disjoint
+	// and add up to the total.
+	ownTree := table.Tree(own...)
+	ownOnly := procmem.Tree{}
+	for _, p := range ownTree.Processes {
+		if inSession[p.PID] {
+			continue
+		}
+		ownOnly.RSSBytes += p.RSSBytes
+		ownOnly.CPUSeconds += p.CPUSeconds
+		ownOnly.Processes = append(ownOnly.Processes, p)
+	}
+	ownReading := treeReading(ownOnly, prev, elapsed)
 	ownReading.SampledAt = r.deps.Now()
 	return domain.AppMemory{
 		RSSBytes: tree.RSSBytes, ProcessCount: len(tree.Processes),
