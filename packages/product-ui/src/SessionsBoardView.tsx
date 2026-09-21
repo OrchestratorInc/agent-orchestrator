@@ -236,8 +236,9 @@ export type SessionCardViewProps = {
 	prs?: BoardPullRequestPresentation[];
 	renderAvatar: (provider: string) => ReactNode;
 	renderUsage?: (usage: BoardUsagePresentation) => ReactNode;
-	/** Live cost on the machine (memory, CPU), shown before token usage. */
-	resource?: BoardUsagePresentation;
+	/** Live cost on the machine (memory, CPU while working), shown before
+	 * token usage. Grey unless this card is part of the fix for a tight machine. */
+	resource?: BoardUsagePresentation & { tone?: "neutral" | "warning" | "critical" };
 	session: BoardSessionPresentation;
 	translate?: ProductUITranslator;
 	usage?: BoardUsagePresentation;
@@ -399,7 +400,14 @@ export function SessionCardView({
 					</span>
 				</div>
 				<div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap text-2xs text-muted-foreground">
-					{resource ? <SessionUsageMetricView data-testid="session-resource" usage={resource} /> : null}
+					{resource ? (
+						<SessionUsageMetricView
+							className={cn(resource.tone === "critical" && "text-destructive", resource.tone === "warning" && "text-warning")}
+							data-resource-tone={resource.tone ?? "neutral"}
+							data-testid="session-resource"
+							usage={resource}
+						/>
+					) : null}
 					{resource ? <span aria-hidden="true" className="text-border-strong">·</span> : null}
 					{usage ? renderUsage(usage) : null}
 					{usage ? <span aria-hidden="true" className="text-border-strong">·</span> : null}

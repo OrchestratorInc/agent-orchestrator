@@ -1,4 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { formatResourceBytes, pressureState, type PressureState } from "@aoagents/product-ui";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 
@@ -11,8 +13,13 @@ export const sessionMemoryQueryRoot = ["session-memory"] as const;
 export const sessionMemoryQueryKey = (projectId?: string) =>
 	[...sessionMemoryQueryRoot, projectId ?? "all"] as const;
 
-/** Memory is a live reading, so the board keeps it fresh like a process monitor. */
-export const sessionMemoryRefetchIntervalMs = 5_000;
+/**
+ * Memory is a live reading. The status bar polls slowly; while the memory
+ * window is open the same query speeds up, and closing it slows down again.
+ * Never faster than a second or two: the numbers only jitter.
+ */
+export const sessionMemoryRefetchIntervalMs = 10_000;
+export const sessionMemoryFastRefetchIntervalMs = 2_000;
 
 type SessionMemoryResponse = {
 	sessions: SessionMemoryReading[];
@@ -29,14 +36,30 @@ export async function fetchSessionMemory(projectId?: string): Promise<SessionMem
 	return { sessions: data?.sessions ?? [], system: data?.system, app: data?.app, reserve: data?.reserve };
 }
 
+/** How many mounted consumers want the fast cadence; the query reads it. */
+const fastWatchers = { count: 0 };
+
 export function sessionMemoryQueryOptions(projectId?: string) {
 	return {
 		queryKey: sessionMemoryQueryKey(projectId),
 		queryFn: () => fetchSessionMemory(projectId),
-		refetchInterval: sessionMemoryRefetchIntervalMs,
+		refetchInterval: () => (fastWatchers.count > 0 ? sessionMemoryFastRefetchIntervalMs : sessionMemoryRefetchIntervalMs),
 		// 501 on Windows is permanent for the run; do not hammer the daemon.
 		retry: false,
 	};
+}
+
+/** Mount while the memory window is open: samples arrive every two seconds
+ * instead of ten, and the first one is fetched right away. */
+export function useFastMemorySampling() {
+	const queryClient = useQueryClient();
+	useEffect(() => {
+		fastWatchers.count += 1;
+		void queryClient.invalidateQueries({ queryKey: sessionMemoryQueryRoot });
+		return () => {
+			fastWatchers.count -= 1;
+		};
+	}, [queryClient]);
 }
 
 export function useSessionMemory(projectId?: string) {
@@ -47,8 +70,8 @@ export function useSessionMemory(projectId?: string) {
 	});
 }
 
-/** Host RAM for the panel's total bar. Shares the session-memory query, so
- * mounting both hooks costs one fetch, not two. Absent where unsupported. */
+/** Host RAM and pressure. Shares the session-memory query, so mounting both
+ * hooks costs one fetch, not two. Absent where unsupported. */
 export function useSystemMemory(projectId?: string) {
 	return useQuery({
 		...sessionMemoryQueryOptions(projectId),
@@ -57,7 +80,7 @@ export function useSystemMemory(projectId?: string) {
 }
 
 /** Everything AO runs, app-wide, for the status bar. Same query as the
- * sessions so the bar and the panel it opens never disagree. */
+ * sessions so the bar and the window it opens never disagree. */
 export function useAppMemory() {
 	return useQuery({
 		...sessionMemoryQueryOptions(),
@@ -71,75 +94,34 @@ export function useAppMemory() {
 	});
 }
 
-/** Why the light is the colour it is: the worst of memory, swap and CPU. */
-export type PressureReason = "memory" | "swap" | "cpu";
-export type MemoryPressure = {
-	tone: MemoryTone;
-	reason: PressureReason;
-	/** Share of host RAM the kernel could still hand out. */
-	freePct: number;
-	/** One-minute load per core; above 1 work is queueing. */
-	cpuLoad: number;
-	/** Whether pages are actively moving to or from swap. */
-	swapping: boolean;
-	/** Free RAM sits under the user's reserve: auto-started spawns are on hold. */
-	belowReserve: boolean;
-};
+/** The machine's pressure state, or undefined where the host can't be read. */
+export function usePressureState(): PressureState | undefined {
+	const system = useAppMemory().data?.system;
+	return system ? pressureState(system) : undefined;
+}
 
-/** Actively swapping means more than this much moving per second: a few stray
- * pages are normal, a megabyte a second is the frozen-cursor signal. */
-const SWAPPING_BYTES_PER_SEC = 1024 ** 2;
+/** How many pressure samples the window's graph keeps. */
+export const pressureHistoryLength = 60;
 
 /**
- * The light reads the whole machine's headroom, never AO's share: the OS's
- * "available" already accounts for everyone else, and a host about to swap
- * is red whoever holds the memory. Over a quarter free is green; under a
- * tenth, or actively swapping, is red. CPU pinned for a while only ever
- * makes it yellow: slow is not the same as frozen.
+ * A ring of recent pressure readings for the graph, kept in the renderer:
+ * no backend history needed. One entry per distinct sample.
  */
-export function memoryPressure(system: SystemMemoryReading, reserveBytes?: number): MemoryPressure {
-	const { totalBytes, availableBytes, swapBytesPerSec, cpuCount, load1 } = system;
-	const freePct = totalBytes > 0 ? Math.round((availableBytes / totalBytes) * 100) : 100;
-	const cpuLoad = cpuCount > 0 ? load1 / cpuCount : 0;
-	const swapping = swapBytesPerSec >= SWAPPING_BYTES_PER_SEC;
-	const belowReserve = reserveBytes !== undefined && reserveBytes > 0 && availableBytes < reserveBytes;
-	let tone: MemoryTone = "default";
-	let reason: PressureReason = "memory";
-	if (swapping) {
-		tone = "critical";
-		reason = "swap";
-	} else if (freePct < 10) {
-		tone = "critical";
-	} else if (freePct < 25) {
-		tone = "warning";
-	} else if (cpuLoad >= 1) {
-		tone = "warning";
-		reason = "cpu";
-	}
-	return { tone, reason, freePct, cpuLoad, swapping, belowReserve };
+export function usePressureHistory(system: SystemMemoryReading | undefined, sampledAt: string | undefined): number[] {
+	const [history, setHistory] = useState<number[]>([]);
+	const lastSample = useRef<string | undefined>(undefined);
+	useEffect(() => {
+		if (!system || !sampledAt || sampledAt === lastSample.current) return;
+		lastSample.current = sampledAt;
+		setHistory((prev) => [...prev, system.pressureRaw].slice(-pressureHistoryLength));
+	}, [system, sampledAt]);
+	return history;
 }
 
-const GIB = 1024 ** 3;
-const MIB = 1024 ** 2;
+/** Bytes as the monitor shows them everywhere: 10 MB steps, GB above a thousand. */
+export const formatMemory = formatResourceBytes;
 
-/** Above one gigabyte a session is worth a glance; above two it is the one to kill. */
-export type MemoryTone = "default" | "warning" | "critical";
-
-export function memoryTone(rssBytes: number): MemoryTone {
-	if (rssBytes >= 2 * GIB) return "critical";
-	if (rssBytes >= GIB) return "warning";
-	return "default";
-}
-
-/** Binary units, one decimal above a gigabyte, whole megabytes below — the btop convention. */
-export function formatMemory(rssBytes: number): string {
-	if (rssBytes >= GIB) return `${(rssBytes / GIB).toFixed(1)} GB`;
-	if (rssBytes >= MIB) return `${Math.round(rssBytes / MIB)} MB`;
-	return `${Math.max(1, Math.round(rssBytes / 1024))} KB`;
-}
-
-/** Whole percent of one core; a tenth below one percent so "0%" never lies. */
+/** Whole percent of one core. */
 export function formatCPU(percent: number): string {
-	if (percent >= 1 || percent === 0) return `${Math.round(percent)}%`;
-	return `${percent.toFixed(1)}%`;
+	return `${Math.round(percent)}%`;
 }

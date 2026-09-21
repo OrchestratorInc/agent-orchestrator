@@ -1,29 +1,37 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ChevronRight, Loader2, Pause, Play, Trash2, X } from "lucide-react";
+import type { TFunction } from "i18next";
+import { ChevronRight, Loader2, Pause, Play, Square, X } from "lucide-react";
+import {
+	chipTone,
+	largestSession,
+	pressureState,
+	pressureStateFromRaw,
+	resourceSuggestion,
+	stableResourceOrder,
+	type ChipTone,
+	type PressureState,
+	type ResourceSessionFacts,
+	type ResourceSuggestion,
+} from "@aoagents/product-ui";
 import { cn } from "@/lib/utils";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
-import { formatTimeTerse } from "../lib/format-time";
-import { getAgentActivityView } from "../lib/session-presentation";
 import { useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
-import { useTerminateSession, useTerminateSessionState } from "../hooks/useTerminateSession";
-import { canPauseAgent, useAgentPause } from "../hooks/useAgentPause";
+import { canPauseAgent, isAgentPaused, useAgentPause } from "../hooks/useAgentPause";
 import {
 	formatCPU,
 	formatMemory,
-	memoryPressure,
-	memoryTone,
 	sessionMemoryQueryRoot,
 	useAppMemory,
+	useFastMemorySampling,
+	usePressureHistory,
 	useSessionMemory,
-	useSystemMemory,
 	type SessionMemoryReading,
 	type SystemMemoryReading,
 } from "../hooks/useSessionMemory";
 import { isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
 import { AgentPausePopover } from "./AgentPausePopover";
-import { SessionTerminationPopover } from "./SessionTerminationPopover";
 import { Button } from "./ui/button";
 import {
 	Dialog,
@@ -37,133 +45,130 @@ import {
 } from "./ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
-export type MemoryRow = {
-	session: WorkspaceSession;
-	reading?: SessionMemoryReading;
-	/** Set when the panel spans projects, so a row says where it lives. */
-	projectName?: string;
-};
-
-/**
- * Shown beside the light only while it is red and there is something cheap
- * to do about it: idle, unpaused workers. One click runs the same sweep the
- * panel offers. AO's pause exits the agent process (the session, worktree and
- * conversation stay), so unlike a SIGSTOP it really does give the memory
- * back. It subscribes to sessions only while mounted, so the bar stays quiet
- * in the normal case.
- */
-function MemoryPressureSuggestion() {
-	const { t } = useTranslation();
-	const queryClient = useQueryClient();
-	const workspaces = useWorkspaceQuery().data ?? [];
-	const readings = useSessionMemory().data;
-	const idle = workspaces
-		.flatMap((workspace) => workspace.sessions)
-		.filter((session) => canPauseAgent(session) && !session.pausedAt && session.activity?.state === "idle");
-	const frees = idle.reduce((sum, session) => sum + (readings?.get(session.id)?.rssBytes ?? 0), 0);
-	const pauseIdle = useMutation({
-		mutationFn: async () => {
-			const { error } = await apiClient.POST("/api/v1/sessions/pause-idle", { params: { query: {} } });
-			if (error) throw new Error(apiErrorMessage(error, t("shell.memoryPauseIdleFailed")));
-		},
-		onSettled: () => {
-			void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-			void queryClient.invalidateQueries({ queryKey: sessionMemoryQueryRoot });
-		},
-	});
-	if (idle.length === 0) return null;
-	return (
-		<button
-			className="mr-3 inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-2xs text-warning transition-colors hover:bg-warning/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-60"
-			data-testid="memory-pressure-suggestion"
-			disabled={pauseIdle.isPending}
-			onClick={() => pauseIdle.mutate()}
-			type="button"
-		>
-			{pauseIdle.isPending
-				? t("shell.memoryPauseIdleRunning")
-				: t("shell.memoryPressureSuggest", { count: idle.length, size: formatMemory(frees) })}
-		</button>
-	);
-}
-
 /** True once the daemon has produced an app-wide reading; gates the archive bar. */
 export function useHasAppMemory(): boolean {
 	const memory = useAppMemory();
 	return !memory.isError && (memory.data?.app?.rssBytes ?? 0) > 0;
 }
 
-/** Rate of swapping, for the bar: whole megabytes per second. */
-function formatRate(bytesPerSec: number): string {
-	return `${formatMemory(bytesPerSec)}/s`;
+/** What the monitor knows about a session, from the board plus its reading. */
+export function toSessionFacts(session: WorkspaceSession, reading: SessionMemoryReading | undefined, now: number): ResourceSessionFacts {
+	const lastActivity = session.activity?.lastActivityAt ? Date.parse(session.activity.lastActivityAt) : Number.NaN;
+	return {
+		id: session.id,
+		title: session.title,
+		rssBytes: reading?.rssBytes ?? 0,
+		working: session.activity?.state === "active",
+		idleSeconds: Number.isNaN(lastActivity) ? undefined : Math.max(0, (now - lastActivity) / 1000),
+		paused: isAgentPaused(session),
+		pausable: canPauseAgent(session),
+	};
+}
+
+const stateDot: Record<PressureState, string> = {
+	fine: "bg-success",
+	tight_soon: "bg-warning",
+	tight: "animate-status-pulse bg-destructive",
+};
+const stateText: Record<PressureState, string> = {
+	fine: "",
+	tight_soon: "text-warning",
+	tight: "text-destructive",
+};
+
+/** Idle over this long is what the "stop idle" suggestion sweeps; sent to the daemon in minutes. */
+const IDLE_SUGGESTION_MINUTES = 30;
+
+/**
+ * The single fix the monitor offers, and the mutation behind its button.
+ * Stopping idle sessions runs the daemon's own sweep so the two never
+ * disagree on who counts as idle.
+ */
+function useSuggestion(projectId?: string) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const workspaces = useWorkspaceQuery().data ?? [];
+	const readings = useSessionMemory().data;
+	const memory = useAppMemory().data;
+	const now = Date.now();
+	const facts = workspaces
+		.filter((workspace) => !projectId || workspace.id === projectId)
+		.flatMap((workspace) => workspace.sessions)
+		.filter((session) => session.isTerminated !== true && !isOrchestratorSession(session))
+		.map((session) => toSessionFacts(session, readings?.get(session.id), now));
+	const state = memory?.system ? pressureState(memory.system) : undefined;
+	const suggestion: ResourceSuggestion =
+		state && memory?.system && memory.app ? resourceSuggestion(state, memory.system, memory.app.rssBytes, facts) : { kind: "none" };
+	const stopIdle = useMutation({
+		mutationFn: async () => {
+			const { error } = await apiClient.POST("/api/v1/sessions/pause-idle", {
+				params: { query: { ...(projectId ? { project: projectId } : {}), idleMinutes: IDLE_SUGGESTION_MINUTES } },
+			});
+			if (error) throw new Error(apiErrorMessage(error, t("shell.memoryStopIdleFailed")));
+		},
+		onSettled: () => {
+			void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+			void queryClient.invalidateQueries({ queryKey: sessionMemoryQueryRoot });
+		},
+	});
+	return { state, suggestion, facts, stopIdle };
+}
+
+/** Bar phrase: the state word, AO's size, and the fix if there is one. */
+function suggestionLabel(suggestion: ResourceSuggestion, t: TFunction): string | undefined {
+	switch (suggestion.kind) {
+		case "other_apps":
+			return t("shell.memoryFixNotAO");
+		case "stop_idle":
+			return t("shell.memoryFixStopIdle", { count: suggestion.count, size: formatMemory(suggestion.freesBytes) });
+		case "pause_largest":
+			return t("shell.memoryFixPause", { title: suggestion.title });
+		default:
+			return undefined;
+	}
 }
 
 /**
- * Archive-bar light: a dot, free host RAM, and the live session count. The
- * swap rate appears only while swapping and the load only while the cores
- * are pinned, so the bar says more only when there is more to say; the
- * tooltip and the panel carry the rest. It reads only the memory query so the
- * board keeps its identity while sessions stream updates; the panel
- * subscribes to sessions only while open. Where the host can't be read the
- * dot is grey and only AO's own size shows.
+ * Archive-bar light: a dot, the state word, AO's size and the fix. Colour
+ * means something needs doing; grey means nothing does. The tooltip holds
+ * the machine figures, the window behind it everything else.
  */
 export function AppMemoryIndicator() {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const memory = useAppMemory();
+	const { state, suggestion } = useSuggestion();
 	const app = memory.data?.app;
 	const system = memory.data?.system;
-	const reserve = memory.data?.reserve;
 	if (memory.isError || !app || app.rssBytes === 0) {
 		return null;
 	}
-	const pressure = system ? memoryPressure(system, reserve?.bytes) : undefined;
-	const headline = system ? t("shell.memoryBarFree", { free: formatMemory(system.availableBytes) }) : formatMemory(app.rssBytes);
-	const detail = system && pressure
+	const word = state ? t(`shell.memoryState.${state}`) : t("shell.memoryState.unknown");
+	const fix = suggestionLabel(suggestion, t);
+	const detail = system
 		? t("shell.memoryBarDetail", {
 			free: formatMemory(system.availableBytes),
 			total: formatMemory(system.totalBytes),
-			freePct: pressure.freePct,
 			used: formatMemory(app.rssBytes),
-			load: pressure.cpuLoad.toFixed(2),
+			pressure: system.pressureRaw.toFixed(1),
 		})
 		: t("shell.memoryAppUsageNoTotal", { used: formatMemory(app.rssBytes) });
-	const extras: string[] = [];
-	if (system && pressure?.swapping) extras.push(t("shell.memoryBarSwap", { rate: formatRate(system.swapBytesPerSec) }));
-	if (pressure && pressure.cpuLoad >= 1) extras.push(t("shell.memoryBarLoad", { load: pressure.cpuLoad.toFixed(1) }));
-	if (pressure?.belowReserve && reserve) extras.push(t("shell.memoryBarBelowReserve", { size: formatMemory(reserve.bytes) }));
-	const count = memory.data?.liveCount ?? 0;
 	return (
 		<>
-			{pressure?.tone === "critical" ? <MemoryPressureSuggestion /> : null}
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<button
 						aria-label={detail}
 						className="inline-flex items-center gap-2 font-mono text-2xs tabular-nums text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:underline"
-						data-memory-tone={pressure?.tone ?? "unknown"}
-						data-memory-reason={pressure?.reason}
+						data-memory-state={state ?? "unknown"}
 						data-testid="app-memory-indicator"
 						onClick={() => setOpen(true)}
 						type="button"
 					>
-						<span
-							aria-hidden="true"
-							className={cn(
-								"size-1.5 shrink-0 rounded-full",
-								pressure?.tone === "critical" && "animate-status-pulse bg-destructive",
-								pressure?.tone === "warning" && "bg-warning",
-								pressure?.tone === "default" && "bg-success",
-								!pressure && "bg-passive",
-							)}
-						/>
-						<span className={cn(pressure?.tone === "critical" && "text-destructive", pressure?.tone === "warning" && "text-warning")}>
-							{headline}
-						</span>
-						{extras.map((extra) => (
-							<span className="text-passive" key={extra}>· {extra}</span>
-						))}
-						<span className="text-passive">· {t("shell.memoryBarSessions", { count })}</span>
+						<span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", state ? stateDot[state] : "bg-passive")} />
+						<span className={state ? stateText[state] : undefined}>{word}</span>
+						<span className="text-passive">· {t("shell.memoryBarAO", { size: formatMemory(app.rssBytes) })}</span>
+						{fix ? <span className={state ? stateText[state] : undefined}>· {fix}</span> : null}
 					</button>
 				</TooltipTrigger>
 				<TooltipContent side="top">{detail}</TooltipContent>
@@ -173,51 +178,101 @@ export function AppMemoryIndicator() {
 	);
 }
 
-/** btop's mem widget: one bar for the whole host, not one per row. The tick
- * marks the user's reserve: below it auto-started spawns wait. */
-export function SystemMemoryBar({ reserveBytes, system }: { reserveBytes?: number; system: SystemMemoryReading }) {
+/** One stacked bar for the whole machine: AO sessions, AO app, everyone else, free. */
+function StackedMemoryBar({ appBytes, sessionsBytes, system }: { appBytes: number; sessionsBytes: number; system: SystemMemoryReading }) {
 	const { t } = useTranslation();
-	const used = system.totalBytes - system.availableBytes;
-	const usedPct = system.totalBytes > 0 ? Math.min(100, Math.round((used / system.totalBytes) * 100)) : 0;
-	const reservePct = reserveBytes && system.totalBytes > 0 ? Math.min(100, (reserveBytes / system.totalBytes) * 100) : undefined;
-	const swap = system.swapTotalBytes > 0
-		? t("shell.memorySystemSwap", { used: formatMemory(system.swapUsedBytes), total: formatMemory(system.swapTotalBytes) })
-		: undefined;
+	const total = system.totalBytes || 1;
+	const inUse = Math.max(0, system.totalBytes - system.availableBytes);
+	const other = Math.max(0, inUse - sessionsBytes - appBytes);
+	const pct = (bytes: number) => `${Math.min(100, (bytes / total) * 100)}%`;
+	const legend = [
+		{ key: "sessions", label: t("shell.memoryLegendSessions"), bytes: sessionsBytes, className: "bg-accent-strong" },
+		{ key: "app", label: t("shell.memoryLegendApp"), bytes: appBytes, className: "bg-accent-strong/50" },
+		{ key: "other", label: t("shell.memoryLegendOther"), bytes: other, className: "bg-foreground/25" },
+		{ key: "free", label: t("shell.memoryLegendFree"), bytes: system.availableBytes, className: "bg-foreground/[0.06]" },
+	];
 	return (
-		<div className="flex items-center gap-3 border-b border-border px-4 py-2">
-			<div className="relative h-1.5 flex-1 rounded-sm bg-foreground/[0.06]">
-				<div
-					className={cn("h-full rounded-sm", usedPct > 90 ? "bg-destructive" : usedPct > 75 ? "bg-warning" : "bg-accent-strong")}
-					style={{ width: `${usedPct}%` }}
-				/>
-				{reservePct !== undefined ? (
-					<span
-						aria-hidden="true"
-						className="absolute -top-0.5 h-2.5 w-px bg-foreground/50"
-						data-testid="session-memory-reserve-tick"
-						style={{ right: `${reservePct}%` }}
-						title={t("shell.memoryReserveTick", { size: formatMemory(reserveBytes ?? 0) })}
-					/>
-				) : null}
+		<div className="border-b border-border px-4 py-3" data-testid="session-memory-stacked">
+			<div className="flex h-2 w-full overflow-hidden rounded-sm bg-foreground/[0.06]">
+				{legend.slice(0, 3).map((part) => (
+					<div className={cn("h-full transition-[width] duration-500", part.className)} key={part.key} style={{ width: pct(part.bytes) }} />
+				))}
 			</div>
-			<span className="whitespace-nowrap font-mono text-2xs tabular-nums text-muted-foreground">
-				{t("shell.memorySystemBar", { used: formatMemory(used), total: formatMemory(system.totalBytes), free: formatMemory(system.availableBytes) })}
-				{swap ? ` · ${swap}` : null}
-				{system.cpuCount > 0 ? ` · ${t("shell.memorySystemLoad", { load: system.load1.toFixed(1), cores: system.cpuCount })}` : null}
-			</span>
+			<div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-mono text-2xs tabular-nums text-muted-foreground">
+				{legend.map((part) => (
+					<span className="inline-flex items-center gap-1.5" key={part.key}>
+						<span aria-hidden="true" className={cn("size-1.5 rounded-full", part.className)} />
+						{part.label} <span className="text-foreground">{formatMemory(part.bytes)}</span>
+					</span>
+				))}
+			</div>
 		</div>
 	);
 }
 
-export function toRows(
-	sessions: WorkspaceSession[],
-	readings?: Map<string, SessionMemoryReading>,
-	projectNameOf?: (session: WorkspaceSession) => string | undefined,
-): MemoryRow[] {
-	return sessions
-		.filter((session) => session.isTerminated !== true)
-		.map((session) => ({ session, reading: readings?.get(session.id), projectName: projectNameOf?.(session) }))
-		.sort((a, b) => (b.reading?.rssBytes ?? -1) - (a.reading?.rssBytes ?? -1));
+/** The last minute of pressure, one bar per sample, coloured by the same rule as the dot. */
+function PressureGraph({ history, source }: { history: number[]; source: string }) {
+	const { t } = useTranslation();
+	const bars = [...Array.from({ length: Math.max(0, 60 - history.length) }, () => undefined), ...history];
+	return (
+		<div className="min-w-0 flex-1">
+			<div className="mb-1 text-2xs font-medium text-passive">{t("shell.memoryPressureGraph")}</div>
+			<div aria-hidden="true" className="flex h-10 items-end gap-px" data-testid="session-memory-graph">
+				{bars.map((value, index) => {
+					const state = value === undefined ? undefined : pressureStateFromRaw(value, source);
+					return (
+						<div
+							className={cn(
+								"flex-1 rounded-t-[1px] transition-[height] duration-500",
+								state === "tight" ? "bg-destructive" : state === "tight_soon" ? "bg-warning" : state === "fine" ? "bg-success" : "bg-transparent",
+							)}
+							key={index}
+							style={{ height: `${Math.max(4, Math.min(100, value ?? 0))}%` }}
+						/>
+					);
+				})}
+			</div>
+		</div>
+	);
+}
+
+/** The lone line under the bar: what to do, and the one button that does it. */
+function SuggestionLine({
+	onPauseLargest,
+	pending,
+	state,
+	stopIdle,
+	suggestion,
+}: {
+	onPauseLargest: (sessionId: string) => void;
+	pending: boolean;
+	state: PressureState;
+	stopIdle: () => void;
+	suggestion: ResourceSuggestion;
+}) {
+	const { t } = useTranslation();
+	if (suggestion.kind === "none") return null;
+	const text =
+		suggestion.kind === "other_apps"
+			? t("shell.memorySuggestOtherApps", { size: formatMemory(suggestion.aoBytes) })
+			: suggestion.kind === "stop_idle"
+				? t("shell.memorySuggestIdle", { count: suggestion.count })
+				: t("shell.memorySuggestLargest", { title: suggestion.title });
+	return (
+		<div className="flex items-center gap-3 border-b border-border px-4 py-2 text-xs" data-testid="session-memory-suggestion">
+			<span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", stateDot[state])} />
+			<span className={cn("min-w-0 flex-1 truncate", stateText[state])}>{text}</span>
+			{suggestion.kind === "stop_idle" ? (
+				<Button data-testid="session-memory-fix" disabled={pending} onClick={stopIdle} size="sm" variant="outline">
+					{pending ? t("shell.memoryStopIdleRunning") : t("shell.memoryFixStopIdle", { count: suggestion.count, size: formatMemory(suggestion.freesBytes) })}
+				</Button>
+			) : suggestion.kind === "pause_largest" ? (
+				<Button data-testid="session-memory-fix" onClick={() => onPauseLargest(suggestion.sessionId)} size="sm" variant="outline">
+					{t("shell.memoryFixPause", { title: suggestion.title })}
+				</Button>
+			) : null}
+		</div>
+	);
 }
 
 export function SessionMemoryPanel({
@@ -230,449 +285,332 @@ export function SessionMemoryPanel({
 	projectId?: string;
 }) {
 	const { t } = useTranslation();
-	const queryClient = useQueryClient();
+	useFastMemorySampling();
 	const workspaces = useWorkspaceQuery().data ?? [];
-	const workspace = projectId ? workspaces.find((w) => w.id === projectId) : undefined;
-	const memory = useSessionMemory(projectId);
-	const system = useSystemMemory(projectId).data;
+	const readings = useSessionMemory(projectId).data;
 	const appMemory = useAppMemory().data;
 	const app = appMemory?.app;
-	const pressure = appMemory?.system ? memoryPressure(appMemory.system, appMemory.reserve?.bytes) : undefined;
-	const underPressure = pressure !== undefined && pressure.tone !== "default";
-	// Includes the project's orchestrator session, not just worker sessions: it
-	// has its own process tree and is why the topbar pill can read nonzero
-	// with an empty board. Omitting it here made the panel's total silently
-	// disagree with the pill it was opened from.
+	const system = appMemory?.system;
+	const history = usePressureHistory(system, app?.own?.sampledAt);
+	const { state, suggestion, facts, stopIdle } = useSuggestion(projectId);
 	const sessions = useMemo(
 		() =>
 			workspaces
 				.filter((workspace) => !projectId || workspace.id === projectId)
-				.flatMap((workspace) => workspace.sessions),
+				.flatMap((workspace) => workspace.sessions)
+				.filter((session) => session.isTerminated !== true && !isOrchestratorSession(session)),
 		[workspaces, projectId],
 	);
-	const projectNames = useMemo(() => new Map(workspaces.map((w) => [w.id, w.name] as const)), [workspaces]);
-	const rows = useMemo(
-		() => toRows(sessions, memory.data, projectId ? undefined : (session) => projectNames.get(session.workspaceId)),
-		[sessions, memory.data, projectId, projectNames],
-	);
-	const total = rows.reduce((sum, row) => sum + (row.reading?.rssBytes ?? 0), 0);
-	// Each row's bar is its share of everything AO holds, AO's own processes
-	// included: it answers "which one is the pig", nothing else.
-	const shareOf = app?.rssBytes && app.rssBytes > 0 ? app.rssBytes : total;
-	const [expandedSessionId, setExpandedSessionId] = useState<string | undefined>();
-	const terminate = useTerminateSession();
-	const cleanup = useMutation({
-		mutationFn: async () => {
-			const { error } = await apiClient.POST("/api/v1/sessions/cleanup", {
-				params: { query: projectId ? { project: projectId } : {} },
-			});
-			if (error) throw new Error(apiErrorMessage(error, t("shell.memoryCleanupFailed")));
-		},
-		onSettled: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
-	});
-	const processes = rows.reduce((sum, row) => sum + (row.reading?.processCount ?? 0), 0);
-	// Bulk pause: every idle, unpaused worker in scope. Freed is summed from the
-	// readings held at click time, since the daemon only names who it paused.
-	const [pauseIdleResult, setPauseIdleResult] = useState<{ count: number; freedBytes: number } | undefined>();
-	const pauseIdle = useMutation({
-		mutationFn: async () => {
-			const before = new Map(rows.map((row) => [row.session.id, row.reading?.rssBytes ?? 0] as const));
-			const { data, error } = await apiClient.POST("/api/v1/sessions/pause-idle", {
-				params: { query: projectId ? { project: projectId } : {} },
-			});
-			if (error) throw new Error(apiErrorMessage(error, t("shell.memoryPauseIdleFailed")));
-			const paused = data?.paused ?? [];
-			return { count: paused.length, freedBytes: paused.reduce((sum, id) => sum + (before.get(id) ?? 0), 0) };
-		},
-		onSuccess: (result) => setPauseIdleResult(result),
-		onSettled: () => {
-			void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-			void queryClient.invalidateQueries({ queryKey: sessionMemoryQueryRoot });
-		},
-	});
-	const idleCount = rows.filter((row) => canPauseAgent(row.session) && !row.session.pausedAt && row.session.activity?.state === "idle").length;
+	// Rows with a reading are the live ones; a paused agent has no process
+	// tree, so it is listed apart and greyed, and never counted as running.
+	const orderRef = useRef<string[]>([]);
+	const live = useMemo(() => {
+		const rows = sessions
+			.map((session) => ({ id: session.id, session, reading: readings?.get(session.id) }))
+			.filter((row): row is { id: string; session: WorkspaceSession; reading: SessionMemoryReading } => row.reading !== undefined)
+			.map((row) => ({ ...row, rssBytes: row.reading.rssBytes }));
+		const ordered = stableResourceOrder(orderRef.current, rows);
+		orderRef.current = ordered.map((row) => row.id);
+		return ordered;
+	}, [sessions, readings]);
+	const paused = sessions.filter((session) => isAgentPaused(session));
+	const sessionsBytes = live.reduce((sum, row) => sum + row.rssBytes, 0);
+	const largest = largestSession(facts);
+	const maxBytes = Math.max(app?.own?.rssBytes ?? 0, ...live.map((row) => row.rssBytes), 1);
+	const [expanded, setExpanded] = useState<string | undefined>();
+	const [pauseTarget, setPauseTarget] = useState<string | undefined>();
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className={cn(settingsDialogContentClass, "w-[min(56rem,calc(100vw-var(--space-8)))]")} showCloseButton={false}>
+			<DialogContent className={cn(settingsDialogContentClass, "w-[min(52rem,calc(100vw-var(--space-8)))]")} showCloseButton={false}>
 				<div className={cn(settingsDialogHeaderClass, "flex-row items-center gap-3")}>
 					<div className="min-w-0 flex-1">
-						<DialogTitle className="text-sm font-medium">{workspace?.name ?? t("shell.memoryPanelTitle")}</DialogTitle>
-						<DialogDescription className="mt-0.5 font-mono text-2xs tabular-nums text-muted-foreground">
-							{t("shell.memoryPanelSummary", { size: formatMemory(total), count: rows.filter((row) => row.reading).length, processes })}
-							{app ? ` · ${t("shell.memoryPanelApp", { size: formatMemory(app.rssBytes) })}` : null}
-						</DialogDescription>
-						{underPressure && rows[0]?.reading ? (
-							<p className="mt-0.5 text-2xs text-warning" data-testid="session-memory-hint">
-								{t("shell.memoryHint", { title: rows[0].session.title, size: formatMemory(rows[0].reading.rssBytes) })}
-							</p>
-						) : null}
+						<DialogTitle className="text-sm font-medium">{t("shell.memoryPanelTitle")}</DialogTitle>
+						<DialogDescription className="sr-only">{t("shell.memoryPanelDescription")}</DialogDescription>
 					</div>
-					<Button
-						data-testid="session-memory-pause-idle"
-						disabled={pauseIdle.isPending || idleCount === 0}
-						onClick={() => pauseIdle.mutate()}
-						size="sm"
-						title={idleCount === 0 ? t("shell.memoryPauseIdleNone") : undefined}
-						variant="outline"
-					>
-						{pauseIdle.isPending ? t("shell.memoryPauseIdleRunning") : t("shell.memoryPauseIdle")}
-					</Button>
-					<Button
-						disabled={cleanup.isPending}
-						onClick={() => cleanup.mutate()}
-						size="sm"
-						variant="outline"
-					>
-						{cleanup.isPending ? t("shell.memoryCleanupRunning") : t("shell.memoryCleanup")}
-					</Button>
 					<DialogClose asChild>
 						<Button aria-label={t("common.close")} size="icon" variant="ghost">
 							<X className="size-icon-md" aria-hidden="true" />
 						</Button>
 					</DialogClose>
 				</div>
-				{system ? <SystemMemoryBar reserveBytes={appMemory?.reserve?.bytes} system={system} /> : null}
-				<div className={cn(settingsDialogBodyClass, "gap-0 p-0")}>
-					{cleanup.isError || pauseIdle.isError ? (
-						<p className="border-b border-border px-4 py-2 text-2xs text-destructive" role="alert">
-							{cleanup.error?.message ?? pauseIdle.error?.message}
-						</p>
-					) : pauseIdleResult ? (
-						<p className="border-b border-border px-4 py-2 text-2xs text-muted-foreground" role="status">
-							{t("shell.memoryPauseIdleDone", { count: pauseIdleResult.count, size: formatMemory(pauseIdleResult.freedBytes) })}
-						</p>
-					) : null}
-					<MemoryTable
-						emptyLabel={t("shell.memoryEmpty")}
-						expandedSessionId={expandedSessionId}
-						highlightSessionId={underPressure ? rows[0]?.session.id : undefined}
-						onTerminate={(session) => terminate.mutate(session)}
-						onToggle={(sessionId) =>
-							setExpandedSessionId((current) => (current === sessionId ? undefined : sessionId))
-						}
-						own={app?.own}
-						rows={rows}
-						shareOfBytes={shareOf}
+				{system && app ? <StackedMemoryBar appBytes={app.own?.rssBytes ?? 0} sessionsBytes={sessionsBytes} system={system} /> : null}
+				{state ? (
+					<SuggestionLine
+						onPauseLargest={setPauseTarget}
+						pending={stopIdle.isPending}
+						state={state}
+						stopIdle={() => stopIdle.mutate()}
+						suggestion={suggestion}
 					/>
+				) : null}
+				{stopIdle.isError ? (
+					<p className="border-b border-border px-4 py-2 text-2xs text-destructive" role="alert">{stopIdle.error.message}</p>
+				) : null}
+				<div className={cn(settingsDialogBodyClass, "gap-0 p-0")}>
+					{live.length === 0 && paused.length === 0 && !app?.own ? (
+						<p className="px-4 py-6 text-center text-xs text-passive">{t("shell.memoryEmpty")}</p>
+					) : (
+						<table className="w-full border-collapse text-xs" data-testid="session-memory-table">
+							<thead>
+								<tr className="text-2xs text-passive">
+									<th className="px-4 py-2 text-left font-medium">{t("shell.memoryColumnName")}</th>
+									<th className="px-4 py-2 text-right font-medium">{t("shell.memoryColumnRss")}</th>
+									<th className="w-16 px-4 py-2 text-right font-medium">{t("shell.memoryColumnCpu")}</th>
+									<th className="w-28 px-2 py-2" />
+								</tr>
+							</thead>
+							<tbody>
+								{live.length > 0 || paused.length > 0 ? <GroupRow label={t("shell.memoryGroupSessions")} /> : null}
+								{live.map((row) => (
+									<SessionRow
+										chip={chipTone(state ?? "fine", facts.find((f) => f.id === row.id) ?? toSessionFacts(row.session, row.reading, Date.now()), largest)}
+										isExpanded={expanded === row.id}
+										key={row.id}
+										maxBytes={maxBytes}
+										onToggle={() => setExpanded((current) => (current === row.id ? undefined : row.id))}
+										pauseOpen={pauseTarget === row.id}
+										reading={row.reading}
+										session={row.session}
+										setPauseOpen={(next) => setPauseTarget(next ? row.id : undefined)}
+									/>
+								))}
+								{paused.map((session) => (
+									<PausedRow key={session.id} session={session} />
+								))}
+								{app?.own ? (
+									<>
+										<GroupRow label={t("shell.memoryGroupApp")} />
+										<OwnRow
+											isExpanded={expanded === "ao"}
+											maxBytes={maxBytes}
+											onToggle={() => setExpanded((current) => (current === "ao" ? undefined : "ao"))}
+											reading={app.own}
+										/>
+									</>
+								) : null}
+							</tbody>
+						</table>
+					)}
 				</div>
+				{system ? (
+					<div className="flex items-start gap-6 border-t border-border px-4 py-3">
+						<PressureGraph history={history} source={system.pressureSource} />
+						<dl className="grid shrink-0 grid-cols-[auto_auto] gap-x-4 gap-y-0.5 font-mono text-2xs tabular-nums text-muted-foreground">
+							<dt>{t("shell.memoryMachineTotal")}</dt>
+							<dd className="text-right text-foreground">{formatMemory(system.totalBytes)}</dd>
+							<dt>{t("shell.memoryMachineInUse")}</dt>
+							<dd className="text-right text-foreground">{formatMemory(system.totalBytes - system.availableBytes)}</dd>
+							<dt>{t("shell.memoryMachineAO")}</dt>
+							<dd className="text-right text-foreground">{app ? formatMemory(app.rssBytes) : "—"}</dd>
+						</dl>
+					</div>
+				) : null}
 			</DialogContent>
 		</Dialog>
 	);
 }
 
-/** The btop-style rows, shared by the topbar panel and the Settings memory page. */
-export function MemoryTable({
-	emptyLabel,
-	expandedSessionId,
-	highlightSessionId,
-	onTerminate,
-	onToggle,
-	own,
-	rows,
-	shareOfBytes,
-}: {
-	emptyLabel: string;
-	expandedSessionId?: string;
-	/** The row the pressure hint points at. */
-	highlightSessionId?: string;
-	onTerminate: (session: WorkspaceSession) => void;
-	onToggle: (sessionId: string) => void;
-	/** AO's own daemon and shell, pinned last and not pausable, so the totals add up. */
-	own?: SessionMemoryReading;
-	rows: MemoryRow[];
-	/** Denominator for each row's share bar; defaults to the rows' sum. */
-	shareOfBytes?: number;
-}) {
-	const { t } = useTranslation();
-	if (rows.length === 0 && !own) {
-		return <p className="px-4 py-6 text-center text-xs text-passive">{emptyLabel}</p>;
-	}
-	const denominator = shareOfBytes ?? rows.reduce((sum, row) => sum + (row.reading?.rssBytes ?? 0), 0);
-	// The orchestrator manages tasks, it isn't one: mixed into one sorted-by-size
-	// list it reads as a peer task the user never started. Group it apart.
-	const taskRows = rows.filter((row) => !isOrchestratorSession(row.session));
-	const orchestratorRows = rows.filter((row) => isOrchestratorSession(row.session));
-	const showGroupLabels = taskRows.length > 0 && orchestratorRows.length > 0;
-	const renderRow = (row: MemoryRow) => (
-		<MemoryTableRow
-			isExpanded={expandedSessionId === row.session.id}
-			isHighlighted={highlightSessionId === row.session.id}
-			key={row.session.id}
-			onTerminate={() => onTerminate(row.session)}
-			onToggle={() => onToggle(row.session.id)}
-			row={row}
-			shareOfBytes={denominator}
-		/>
-	);
-	return (
-		<table className="w-full border-collapse text-xs" data-testid="session-memory-table">
-			<thead>
-				<tr className="text-2xs text-passive">
-					<th className="px-4 py-2 text-left font-medium">{t("shell.memoryColumnSession")}</th>
-					<th className="px-4 py-2 text-left font-medium">{t("shell.memoryColumnState")}</th>
-					<th className="px-4 py-2 text-right font-medium">{t("shell.memoryColumnRss")}</th>
-					<th className="px-4 py-2 text-right font-medium">{t("shell.memoryColumnCpu")}</th>
-					<th className="px-4 py-2 text-right font-medium">{t("shell.memoryColumnProcs")}</th>
-					<th className="px-4 py-2 text-right font-medium">{t("shell.memoryColumnIdle")}</th>
-					<th className="px-4 py-2" />
-				</tr>
-			</thead>
-			<tbody>
-				{showGroupLabels ? <MemoryGroupRow label={t("shell.memoryGroupTasks")} /> : null}
-				{taskRows.map(renderRow)}
-				{showGroupLabels ? <MemoryGroupRow label={t("shell.memoryGroupOrchestrator")} /> : null}
-				{orchestratorRows.map(renderRow)}
-				{own ? (
-					<>
-						<MemoryGroupRow label={t("shell.memoryGroupApp")} />
-						<OwnMemoryRow reading={own} shareOfBytes={denominator} />
-					</>
-				) : null}
-			</tbody>
-		</table>
-	);
-}
-
-const columnCount = 7;
-
-function MemoryGroupRow({ label }: { label: string }) {
+function GroupRow({ label }: { label: string }) {
 	return (
 		<tr className="border-t border-border">
-			<td className="px-4 pb-1 pt-3 text-2xs font-medium text-passive" colSpan={columnCount}>{label}</td>
+			<td className="px-4 pb-1 pt-3 text-2xs font-medium text-passive" colSpan={4}>{label}</td>
 		</tr>
 	);
 }
 
-/** The thin bar under a name: this row's slice of what AO holds. */
-function ShareBar({ rssBytes, shareOfBytes }: { rssBytes: number; shareOfBytes: number }) {
-	const pct = shareOfBytes > 0 ? Math.min(100, (rssBytes / shareOfBytes) * 100) : 0;
-	const tone = memoryTone(rssBytes);
+/** Memory cell: the number over a bar scaled to the biggest row, so "which one is the pig" reads at a glance. */
+function MemoryCell({ bytes, maxBytes, tone }: { bytes: number; maxBytes: number; tone: ChipTone }) {
 	return (
-		<div className="mt-1 h-0.5 w-full max-w-[12rem] rounded-sm bg-foreground/[0.06]" data-testid="session-memory-share">
-			<div
-				className={cn("h-full rounded-sm", tone === "critical" ? "bg-destructive" : tone === "warning" ? "bg-warning" : "bg-accent-strong")}
-				style={{ width: `${pct}%` }}
-			/>
-		</div>
+		<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums">
+			<span className={cn("font-medium", tone === "critical" ? "text-destructive" : tone === "warning" ? "text-warning" : "text-foreground")}>
+				{formatMemory(bytes)}
+			</span>
+			<div className="ml-auto mt-1 h-0.5 w-24 rounded-sm bg-foreground/[0.06]" data-testid="session-memory-share">
+				<div
+					className={cn("h-full rounded-sm transition-[width] duration-500", tone === "critical" ? "bg-destructive" : tone === "warning" ? "bg-warning" : "bg-accent-strong")}
+					style={{ width: `${Math.min(100, (bytes / maxBytes) * 100)}%` }}
+				/>
+			</div>
+		</td>
 	);
 }
 
-/** AO's daemon and desktop shell: real cost, but not a session, so no pause or kill. */
-function OwnMemoryRow({ reading, shareOfBytes }: { reading: SessionMemoryReading; shareOfBytes: number }) {
+function SessionRow({
+	chip,
+	isExpanded,
+	maxBytes,
+	onToggle,
+	pauseOpen,
+	reading,
+	session,
+	setPauseOpen,
+}: {
+	chip: ChipTone;
+	isExpanded: boolean;
+	maxBytes: number;
+	onToggle: () => void;
+	pauseOpen: boolean;
+	reading: SessionMemoryReading;
+	session: WorkspaceSession;
+	setPauseOpen: (open: boolean) => void;
+}) {
 	const { t } = useTranslation();
-	const [expanded, setExpanded] = useState(false);
+	const pause = useAgentPause(session, reading.rssBytes);
+	const working = session.activity?.state === "active";
 	const canExpand = reading.processes.length > 0;
+	// Working: pause needs a decision (finish the turn, or stop now). Idle:
+	// stop straight away. Either way the agent exits and its memory is freed;
+	// the session, branch and conversation stay.
+	const needsPolicy = working || pause.drainBlocked;
+	const action = (
+		<Button
+			aria-label={working ? t("shell.pauseAgentNamed", { title: session.title }) : t("shell.stopAgentNamed", { title: session.title })}
+			className="text-muted-foreground hover:text-foreground"
+			disabled={pause.isPending}
+			onClick={() => (needsPolicy ? setPauseOpen(true) : pause.toggle())}
+			size="sm"
+			title={t("shell.stopAgentHelp")}
+			variant="ghost"
+		>
+			{pause.isPending ? (
+				<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
+			) : working ? (
+				<Pause className="size-icon-sm" aria-hidden="true" />
+			) : (
+				<Square className="size-icon-sm" aria-hidden="true" />
+			)}
+			<span>{working ? t("shell.pauseAgent") : t("shell.stopAgentFrees", { size: formatMemory(reading.rssBytes) })}</span>
+		</Button>
+	);
 	return (
 		<>
 			<tr
-				aria-expanded={canExpand ? expanded : undefined}
+				aria-expanded={canExpand ? isExpanded : undefined}
 				className={cn("border-t border-border", canExpand && "cursor-pointer hover:bg-interactive-hover")}
-				data-testid="session-memory-own-row"
-				onClick={canExpand ? () => setExpanded((open) => !open) : undefined}
+				data-chip-tone={chip}
+				data-testid="session-memory-row"
+				onClick={canExpand ? onToggle : undefined}
 			>
 				<td className="max-w-0 px-4 py-2 align-middle">
 					<div className="flex items-center gap-1.5">
 						<ChevronRight
 							aria-hidden="true"
-							className={cn("size-icon-2xs shrink-0 text-passive transition-transform", canExpand ? "opacity-100" : "opacity-0", expanded && "rotate-90")}
+							className={cn("size-icon-2xs shrink-0 text-passive transition-transform", canExpand ? "opacity-100" : "opacity-0", isExpanded && "rotate-90")}
 						/>
 						<div className="min-w-0">
-							<div className="truncate font-medium">{t("shell.memoryOwnRow")}</div>
-							<ShareBar rssBytes={reading.rssBytes} shareOfBytes={shareOfBytes} />
+							<div className="truncate font-medium" title={session.title}>{session.title}</div>
+							<div className="truncate text-2xs text-passive">{working ? t("shell.memoryRowWorking") : t("shell.memoryRowIdle")}</div>
 						</div>
 					</div>
 				</td>
-				<td className="whitespace-nowrap px-4 py-2 align-middle text-2xs text-muted-foreground">—</td>
-				<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs font-medium tabular-nums">{formatMemory(reading.rssBytes)}</td>
-				<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums text-muted-foreground">{formatCPU(reading.cpuPercent)}</td>
-				<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums text-muted-foreground">{reading.processCount}</td>
-				<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums text-muted-foreground">—</td>
-				<td className="px-2 py-2" />
+				<MemoryCell bytes={reading.rssBytes} maxBytes={maxBytes} tone={chip} />
+				<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums text-muted-foreground">
+					{working ? formatCPU(reading.cpuPercent) : "·"}
+				</td>
+				<td className="whitespace-nowrap px-2 py-2 text-right align-middle" onClick={(event) => event.stopPropagation()}>
+					{canPauseAgent(session) ? (
+						needsPolicy ? (
+							<AgentPausePopover
+								blocked={pause.drainBlocked}
+								onChoose={(policy) => {
+									setPauseOpen(false);
+									pause.toggle(policy);
+								}}
+								onOpenChange={setPauseOpen}
+								open={pauseOpen}
+								session={session}
+								trigger={action}
+							/>
+						) : (
+							action
+						)
+					) : null}
+				</td>
 			</tr>
-			{expanded ? <ProcessBreakdownRow processes={reading.processes} /> : null}
+			{isExpanded ? <ProcessRows processes={reading.processes} /> : null}
 		</>
 	);
 }
 
-function MemoryTableRow({
-	isExpanded,
-	isHighlighted,
-	onTerminate,
-	onToggle,
-	row,
-	shareOfBytes,
-}: {
-	isExpanded: boolean;
-	isHighlighted?: boolean;
-	onTerminate: () => void;
-	onToggle: () => void;
-	row: MemoryRow;
-	shareOfBytes: number;
-}) {
+/** A paused agent holds nothing: listed apart, greyed, with the way back. */
+function PausedRow({ session }: { session: WorkspaceSession }) {
 	const { t } = useTranslation();
-	const [confirmOpen, setConfirmOpen] = useState(false);
-	const termination = useTerminateSessionState(row.session.id);
-	const { session, reading } = row;
-	const activity = session.activity ? getAgentActivityView(session.activity, t) : undefined;
-	const idle =
-		session.activity?.state === "active" || !session.activity?.lastActivityAt
-			? "—"
-			: formatTimeTerse(session.activity.lastActivityAt);
-	const tone = reading ? memoryTone(reading.rssBytes) : "default";
-	const canExpand = Boolean(reading && reading.processes.length > 0);
 	const pause = useAgentPause(session);
 	return (
-		<>
-		<tr
-			aria-expanded={canExpand ? isExpanded : undefined}
-			className={cn("border-t border-border", canExpand && "cursor-pointer hover:bg-interactive-hover", isHighlighted && "bg-warning/10")}
-			data-highlighted={isHighlighted ? "true" : undefined}
-			data-testid="session-memory-row"
-			onClick={canExpand ? onToggle : undefined}
-		>
+		<tr className="border-t border-border opacity-60" data-testid="session-memory-paused-row">
 			<td className="max-w-0 px-4 py-2 align-middle">
-				<div className="flex items-center gap-1.5">
-					<ChevronRight
-						aria-hidden="true"
-						className={cn(
-							"size-icon-2xs shrink-0 text-passive transition-transform",
-							canExpand ? "opacity-100" : "opacity-0",
-							isExpanded && "rotate-90",
-						)}
-					/>
-					<div className="min-w-0">
-						<div className="truncate font-medium" title={session.title}>{session.title}</div>
-						<div className="truncate font-mono text-2xs text-passive">
-							{row.projectName ? `${row.projectName} · ` : null}
-							{session.id}
-						</div>
-						{reading ? <ShareBar rssBytes={reading.rssBytes} shareOfBytes={shareOfBytes} /> : null}
-					</div>
+				<div className="min-w-0 pl-[calc(var(--space-2)+0.75rem)]">
+					<div className="truncate font-medium" title={session.title}>{session.title}</div>
+					<div className="truncate text-2xs text-passive">{t("shell.memoryRowPaused")}</div>
 				</div>
 			</td>
-			<td className="whitespace-nowrap px-4 py-2 align-middle text-2xs text-muted-foreground">{activity?.label ?? "—"}</td>
-			<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs font-medium tabular-nums">
-				{reading ? (
-					<span className={tone === "critical" ? "text-destructive" : tone === "warning" ? "text-warning" : "text-foreground"}>
-						{formatMemory(reading.rssBytes)}
-					</span>
-				) : (
-					<span className="text-passive">—</span>
-				)}
-			</td>
-			<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums text-muted-foreground">
-				{reading ? formatCPU(reading.cpuPercent) : "—"}
-			</td>
-			<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums text-muted-foreground">
-				{reading?.processCount ?? "—"}
-			</td>
-			<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums text-muted-foreground">{idle}</td>
-			<td className="whitespace-nowrap px-2 py-2 text-right align-middle" onClick={(event) => event.stopPropagation()}>
-				{canPauseAgent(session) ? (
-					<PauseRowButton pause={pause} session={session} />
-				) : null}
-				<SessionTerminationPopover
-					onConfirm={() => {
-						setConfirmOpen(false);
-						onTerminate();
-					}}
-					onOpenChange={setConfirmOpen}
-					open={confirmOpen}
-					session={session}
-					trigger={
-						<Button
-							aria-label={t("shell.terminateNamed", { title: session.title })}
-							className="text-error/70 hover:bg-error/10 hover:text-error"
-							disabled={termination.isPending}
-							size="icon-sm"
-							title={t("shell.kill")}
-							variant="ghost"
-						>
-							{termination.isPending ? <Loader2 className="size-icon-sm animate-spin" aria-hidden="true" /> : <Trash2 className="size-icon-sm" aria-hidden="true" />}
-						</Button>
-					}
-				/>
+			<td className="px-4 py-2 text-right align-middle font-mono text-2xs text-passive">·</td>
+			<td className="px-4 py-2 text-right align-middle font-mono text-2xs text-passive">·</td>
+			<td className="whitespace-nowrap px-2 py-2 text-right align-middle">
+				<Button
+					aria-label={t("shell.resumeAgentNamed", { title: session.title })}
+					className="text-muted-foreground hover:text-foreground"
+					disabled={pause.isPending}
+					onClick={() => pause.toggle()}
+					size="sm"
+					variant="ghost"
+				>
+					{pause.isPending ? <Loader2 className="size-icon-sm animate-spin" aria-hidden="true" /> : <Play className="size-icon-sm" aria-hidden="true" />}
+					<span>{t("shell.resumeAgent")}</span>
+				</Button>
 			</td>
 		</tr>
-		{isExpanded && reading ? <ProcessBreakdownRow processes={reading.processes} /> : null}
+	);
+}
+
+/** AO's daemon and desktop shell: real cost, but not a session, so no action. */
+function OwnRow({ isExpanded, maxBytes, onToggle, reading }: { isExpanded: boolean; maxBytes: number; onToggle: () => void; reading: SessionMemoryReading }) {
+	const { t } = useTranslation();
+	const canExpand = reading.processes.length > 0;
+	return (
+		<>
+			<tr
+				aria-expanded={canExpand ? isExpanded : undefined}
+				className={cn("border-t border-border", canExpand && "cursor-pointer hover:bg-interactive-hover")}
+				data-testid="session-memory-own-row"
+				onClick={canExpand ? onToggle : undefined}
+			>
+				<td className="max-w-0 px-4 py-2 align-middle">
+					<div className="flex items-center gap-1.5">
+						<ChevronRight
+							aria-hidden="true"
+							className={cn("size-icon-2xs shrink-0 text-passive transition-transform", canExpand ? "opacity-100" : "opacity-0", isExpanded && "rotate-90")}
+						/>
+						<div className="truncate font-medium">{t("shell.memoryOwnRow")}</div>
+					</div>
+				</td>
+				<MemoryCell bytes={reading.rssBytes} maxBytes={maxBytes} tone="neutral" />
+				<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums text-muted-foreground">{formatCPU(reading.cpuPercent)}</td>
+				<td className="px-2 py-2" />
+			</tr>
+			{isExpanded ? <ProcessRows processes={reading.processes} /> : null}
 		</>
 	);
 }
 
-/** Pause or play for one row; mid-turn it asks drain vs interrupt like the card. */
-function PauseRowButton({ pause, session }: { pause: ReturnType<typeof useAgentPause>; session: WorkspaceSession }) {
-	const { t } = useTranslation();
-	const [open, setOpen] = useState(false);
-	const needsPolicy = !pause.paused && (session.activity?.state === "active" || pause.drainBlocked);
-	const button = (
-		<Button
-			aria-label={pause.paused ? t("shell.resumeAgentNamed", { title: session.title }) : t("shell.pauseAgentNamed", { title: session.title })}
-			className="text-muted-foreground hover:text-foreground"
-			disabled={pause.isPending}
-			onClick={() => (needsPolicy ? setOpen(true) : pause.toggle())}
-			size="icon-sm"
-			title={pause.isDraining ? t("shell.pausingAfterTurn") : pause.paused ? t("shell.resumeAgent") : t("shell.pauseAgent")}
-			variant="ghost"
-		>
-			{pause.isPending ? (
-				<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
-			) : pause.paused ? (
-				<Play className="size-icon-sm" aria-hidden="true" />
-			) : (
-				<Pause className="size-icon-sm" aria-hidden="true" />
-			)}
-		</Button>
-	);
-	if (!needsPolicy) return button;
-	return (
-		<AgentPausePopover
-			blocked={pause.drainBlocked}
-			onChoose={(policy) => {
-				setOpen(false);
-				pause.toggle(policy);
-			}}
-			onOpenChange={setOpen}
-			open={open}
-			session={session}
-			trigger={button}
-		/>
-	);
-}
-
-/** btop's core affordance: expand a session to see exactly what is holding its memory. */
-function ProcessBreakdownRow({ processes }: { processes: SessionMemoryReading["processes"] }) {
-	const { t } = useTranslation();
+/** btop's tree: the processes under a row, largest first, drawn as children. */
+function ProcessRows({ processes }: { processes: SessionMemoryReading["processes"] }) {
 	const sorted = [...processes].sort((a, b) => b.rssBytes - a.rssBytes);
 	return (
-		<tr className="border-t border-border bg-foreground/[0.02]" data-testid="session-memory-process-row">
-			<td className="p-0" colSpan={columnCount}>
-				<table className="w-full border-collapse text-2xs">
-					<thead>
-						<tr className="text-passive">
-							<th className="py-1.5 pl-11 pr-2 text-left font-medium">{t("shell.memoryColumnProcess")}</th>
-							<th className="px-2 py-1.5 text-right font-medium">{t("shell.memoryColumnRss")}</th>
-							<th className="px-2 py-1.5 text-right font-medium">{t("shell.memoryColumnCpu")}</th>
-							<th className="px-4 py-1.5 text-right font-medium">{t("shell.memoryColumnPid")}</th>
-						</tr>
-					</thead>
-					<tbody>
-						{sorted.map((process) => (
-							<tr className="border-t border-border/60" key={process.pid}>
-								<td className="truncate py-1.5 pl-11 pr-2 font-mono text-muted-foreground" title={process.command}>
-									{process.command || "?"}
-								</td>
-								<td className="whitespace-nowrap px-2 py-1.5 text-right font-mono tabular-nums text-foreground">
-									{formatMemory(process.rssBytes)}
-								</td>
-								<td className="whitespace-nowrap px-2 py-1.5 text-right font-mono tabular-nums text-muted-foreground">
-									{formatCPU(process.cpuPercent)}
-								</td>
-								<td className="whitespace-nowrap px-4 py-1.5 text-right font-mono tabular-nums text-passive">{process.pid}</td>
-							</tr>
-						))}
-					</tbody>
-				</table>
-			</td>
-		</tr>
+		<>
+			{sorted.map((process, index) => (
+				<tr className="bg-foreground/[0.02] text-2xs" data-testid="session-memory-process-row" key={process.pid}>
+					<td className="max-w-0 py-1 pl-11 pr-4 font-mono text-muted-foreground">
+						<span aria-hidden="true" className="text-passive">{index === sorted.length - 1 ? "└─ " : "├─ "}</span>
+						<span className="truncate" title={`${process.command} (${process.pid})`}>{process.command || "?"}</span>
+					</td>
+					<td className="whitespace-nowrap px-4 py-1 text-right font-mono tabular-nums text-muted-foreground">{formatMemory(process.rssBytes)}</td>
+					<td className="whitespace-nowrap px-4 py-1 text-right font-mono tabular-nums text-passive">
+						{process.cpuPercent >= 1 ? formatCPU(process.cpuPercent) : "·"}
+					</td>
+					<td />
+				</tr>
+			))}
+		</>
 	);
 }

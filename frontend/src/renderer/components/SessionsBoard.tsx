@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -6,10 +6,14 @@ import {
 	SessionsArchiveView,
 	SessionsBoardGridView,
 	archiveToggleOffsetClassName,
+	chipTone,
+	largestSession,
+	type ChipTone,
 } from "@aoagents/product-ui";
 import { AlertTriangle, LayoutDashboard, RotateCw } from "lucide-react";
 import {
 	type WorkspaceSession,
+	isOrchestratorSession,
 	newestActiveOrchestrator,
 	orchestratorHealth,
 	workerSessions,
@@ -40,8 +44,8 @@ import { DaemonStartupLoader } from "./DaemonStartupLoader";
 import { useBoardPresentation } from "../hooks/useBoardPresentation";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { ProjectBoardActions } from "./ProjectBoardActions";
-import { useSessionMemory } from "../hooks/useSessionMemory";
-import { AppMemoryIndicator, useHasAppMemory } from "./SessionMemoryPanel";
+import { usePressureState, useSessionMemory } from "../hooks/useSessionMemory";
+import { AppMemoryIndicator, toSessionFacts, useHasAppMemory } from "./SessionMemoryPanel";
 import {
 	ArchivedSessionCardAdapter,
 	BoardSessionCardAdapter,
@@ -130,8 +134,19 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 	});
 	const hasMemory = useHasAppMemory();
 	// Per-session readings feed each card's resource chip and the pause
-	// tooltip ("frees 612 MB").
+	// tooltip ("frees 612 MB"). Chips are grey unless the machine is tight and
+	// the card is part of the fix (idle, or the single largest).
 	const memoryBySession = useSessionMemory(projectId).data;
+	const pressure = usePressureState();
+	const chipToneOf = useMemo(() => {
+		const now = Date.now();
+		const facts = sessions
+			.filter((session) => session.isTerminated !== true && !isOrchestratorSession(session))
+			.map((session) => toSessionFacts(session, memoryBySession?.get(session.id), now));
+		const largest = largestSession(facts);
+		return (session: WorkspaceSession): ChipTone =>
+			chipTone(pressure ?? "fine", facts.find((f) => f.id === session.id) ?? toSessionFacts(session, memoryBySession?.get(session.id), now), largest);
+	}, [sessions, memoryBySession, pressure]);
 	// The bar hosts the memory indicator too, so it stays up with an empty archive.
 	const hasArchive = archived.length > 0 || hasMemory;
 	const terminateSession = useTerminateSession();
@@ -247,6 +262,7 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 							renderSessionCard={(session) => (
 								<BoardSessionCardAdapter
 								memory={memoryBySession?.get(session.id)}
+								memoryTone={chipToneOf(session)}
 								onOpen={() => openSession(session)}
 									onTerminate={() => terminateSession.mutate(session)}
 									session={session}

@@ -160,17 +160,18 @@ describe("SessionsBoard", () => {
 		});
 		renderBoard("p1");
 		// The card says what the session costs the machine right now.
-		expect(screen.getByTestId("session-resource")).toHaveTextContent("612 MB · 82%");
+		expect(screen.getByTestId("session-resource")).toHaveTextContent("640 MB");
+		expect(screen.getByTestId("session-resource")).toHaveAttribute("data-resource-tone", "neutral");
 		const pauseButton = screen.getByRole("button", { name: "Pause agent for Running task" });
 		expect(pauseButton).toHaveAttribute("data-paused", "false");
 		await userEvent.hover(pauseButton);
-		expect(await screen.findByRole("tooltip")).toHaveTextContent("Pause agent · frees 612 MB");
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("Pause agent · frees 640 MB");
 		await userEvent.click(pauseButton);
 		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/exit-agent", {
 			params: { path: { sessionId: "running" } },
 			body: { policy: "drain" },
 		}));
-		expect(await screen.findByRole("status")).toHaveTextContent("Paused · freed 612 MB");
+		expect(await screen.findByRole("status")).toHaveTextContent("Paused · freed 640 MB");
 
 		const playButton = screen.getByRole("button", { name: "Resume agent for Paused task" });
 		expect(playButton).toHaveAttribute("data-paused", "true");
@@ -191,7 +192,7 @@ describe("SessionsBoard", () => {
 			isError: false,
 			data: {
 				app: { rssBytes: 12 * GIB, processCount: 20, cpuPercent: 40 },
-				system: { totalBytes: 32 * GIB, availableBytes: 2 * GIB, swapTotalBytes: 0, swapUsedBytes: 0, swapBytesPerSec: 0, cpuCount: 8, load1: 1 },
+				system: { totalBytes: 32 * GIB, availableBytes: 2 * GIB, swapTotalBytes: 0, swapUsedBytes: 0, swapBytesPerSec: 0, cpuCount: 8, load1: 1, pressureRaw: 35, pressureSource: "psi" },
 				reserve: { bytes: 2 * GIB, auto: true },
 				liveCount: 1,
 			},
@@ -203,11 +204,11 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		expect(screen.queryByRole("button", { name: /archive/i })).not.toBeInTheDocument();
 		const indicator = screen.getByTestId("app-memory-indicator");
-		expect(indicator).toHaveTextContent("2.0 GB free· 1 session");
-		expect(indicator).toHaveAttribute("data-memory-tone", "critical");
-		expect(indicator).toHaveAttribute("aria-label", "2.0 GB free of 32.0 GB (6%) · AO holds 12.0 GB · load 0.13 per core");
+		expect(indicator).toHaveTextContent("Tight· AO 12.9 GB");
+		expect(indicator).toHaveAttribute("data-memory-state", "tight");
+		expect(indicator).toHaveAttribute("aria-label", "2.1 GB free of 34.4 GB · AO holds 12.9 GB · pressure 35.0");
 		await userEvent.click(indicator);
-		expect(await screen.findByTestId("session-memory-table")).toBeInTheDocument();
+		expect(await screen.findByTestId("session-memory-stacked")).toBeInTheDocument();
 	});
 
 	it("asks drain or interrupt before pausing an agent mid-turn", async () => {
@@ -632,7 +633,7 @@ describe("SessionsBoard", () => {
 
 		const card = screen.getByText("tokens worker").closest('[data-testid="board-session-card"]') as HTMLElement;
 		// Memory sits beside token usage, never in place of it.
-		expect(within(card).getByTestId("session-resource")).toHaveTextContent("242 MB · 0%");
+		expect(within(card).getByTestId("session-resource")).toHaveTextContent("250 MB");
 		const usage = within(card).getByText("12.4K", { selector: "span" });
 		expect(usage).toHaveAttribute("aria-hidden", "true");
 		expect(within(card).getByText("12,400 tokens")).toHaveClass("sr-only");

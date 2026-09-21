@@ -29,6 +29,7 @@ import type { WorkspaceSession } from "../types/workspace";
 import { canonicalTrackerIssueId } from "../types/workspace";
 import { canPauseAgent, useAgentPause } from "../hooks/useAgentPause";
 import { formatCPU, formatMemory, type SessionMemoryReading } from "../hooks/useSessionMemory";
+import type { ChipTone } from "@aoagents/product-ui";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
 import type { SessionUsageSummary } from "../hooks/useSessionUsageSummaries";
 import {
@@ -91,6 +92,7 @@ export function sessionsBoardLabels(t: TFunction): BoardColumnLabels {
 
 export function BoardSessionCardAdapter({
 	memory,
+	memoryTone,
 	onOpen,
 	onTerminate,
 	session,
@@ -98,6 +100,8 @@ export function BoardSessionCardAdapter({
 }: {
 	/** Live reading of the session's process tree: the card's resource chip and the pause tooltip. */
 	memory?: SessionMemoryReading;
+	/** Colour for the chip; neutral unless this card is part of the fix. */
+	memoryTone?: ChipTone;
 	onOpen: () => void;
 	onTerminate: () => void;
 	session: WorkspaceSession;
@@ -106,6 +110,7 @@ export function BoardSessionCardAdapter({
 	return (
 		<DesktopSessionCard
 			memory={memory}
+			memoryTone={memoryTone}
 			onOpen={onOpen}
 			onTerminate={onTerminate}
 			session={session}
@@ -155,6 +160,7 @@ function DesktopSessionCard({
 	footer,
 	interactive = true,
 	memory,
+	memoryTone,
 	onOpen,
 	onTerminate,
 	session,
@@ -165,6 +171,7 @@ function DesktopSessionCard({
 	footer?: ReactNode;
 	interactive?: boolean;
 	memory?: SessionMemoryReading;
+	memoryTone?: ChipTone;
 	onOpen?: () => void;
 	onTerminate?: () => void;
 	session: WorkspaceSession;
@@ -179,7 +186,7 @@ function DesktopSessionCard({
 	const showTerminate = interactive && session.isTerminated !== true && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
 	const usagePresentation = toUsagePresentation(usage, t);
-	const resourcePresentation = toResourcePresentation(memory, t);
+	const resourcePresentation = toResourcePresentation(memory, session.activity?.state === "active", memoryTone, t);
 	const memoryBytes = memory?.rssBytes;
 	const translate: ProductUITranslator = (key, values) => t(key as MessageKey, values);
 	const pause = useAgentPause(session, memoryBytes);
@@ -398,17 +405,24 @@ function pullRequestProgressLabel(
 
 // Keep the board metric scannable by showing cost only. The full cost/token
 // summary remains available from the hover tooltip and to screen readers.
-/** "1.4 GB · 82%": what this session costs the machine right now. */
+/** "1.4 GB · 82%" while working, just "240 MB" while idle: an idle agent is
+ * always at 0% and printing it is noise. */
 function toResourcePresentation(
 	memory: SessionMemoryReading | undefined,
+	working: boolean,
+	tone: ChipTone | undefined,
 	t: TFunction,
-): BoardUsagePresentation | undefined {
+): (BoardUsagePresentation & { tone?: ChipTone }) | undefined {
 	if (!memory || memory.rssBytes <= 0) return undefined;
 	const size = formatMemory(memory.rssBytes);
+	if (!working) {
+		return { accessibleLabel: t("shell.sessionMemoryAria", { size }), compactLabel: size, tone };
+	}
 	const cpu = formatCPU(memory.cpuPercent);
 	return {
 		accessibleLabel: t("shell.sessionResourceAria", { size, cpu }),
 		compactLabel: `${size} · ${cpu}`,
+		tone,
 	};
 }
 
