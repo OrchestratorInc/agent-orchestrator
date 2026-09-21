@@ -1957,7 +1957,6 @@
 	"shell.memorySuggestLargest": "{{title}} belegt am meisten Speicher",
 	"shell.memoryStopIdleRunning": "Wird gestoppt…",
 	"shell.memoryStopIdleFailed": "Inaktive Sitzungen konnten nicht gestoppt werden",
-	"shell.memoryUsageGraph": "AO-CPU",
 	"shell.memoryLegendAO": "AO",
 	"shell.memoryLegendAvailable": "Verfügbar",
 	"shell.memoryRowOrchestrator": "Orchestrator",

@@ -1957,7 +1957,6 @@
 	"shell.memorySuggestLargest": "{{title}}이(가) 메모리를 가장 많이 사용 중",
 	"shell.memoryStopIdleRunning": "중지 중…",
 	"shell.memoryStopIdleFailed": "유휴 세션을 중지할 수 없습니다",
-	"shell.memoryUsageGraph": "AO CPU",
 	"shell.memoryLegendAO": "AO",
 	"shell.memoryLegendAvailable": "여유",
 	"shell.memoryRowOrchestrator": "오케스트레이터",

@@ -1957,7 +1957,6 @@
 	"shell.memorySuggestLargest": "{{title}} が最もメモリを使っています",
 	"shell.memoryStopIdleRunning": "停止中…",
 	"shell.memoryStopIdleFailed": "アイドル中のセッションを停止できませんでした",
-	"shell.memoryUsageGraph": "AO CPU",
 	"shell.memoryLegendAO": "AO",
 	"shell.memoryLegendAvailable": "空き",
 	"shell.memoryRowOrchestrator": "オーケストレーター",

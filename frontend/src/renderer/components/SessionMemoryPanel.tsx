@@ -24,10 +24,7 @@ import {
 	sessionMemoryQueryRoot,
 	useAppMemory,
 	useFastMemorySampling,
-	memoryHistoryLength,
-	useMemoryHistory,
 	useSessionMemory,
-	type MemorySample,
 	type SessionMemoryReading,
 	type SystemMemoryReading,
 } from "../hooks/useSessionMemory";
@@ -206,33 +203,6 @@ function MachineBar({ appBytes, system }: { appBytes: number; system: SystemMemo
 	);
 }
 
-/** AO's CPU over the last few minutes: newest on the right, the number for now. */
-function UsageGraph({ history }: { history: MemorySample[] }) {
-	const width = 600;
-	const height = 56;
-	const values = history.map((point) => point.cpuPercent);
-	const max = Math.max(100, ...values);
-	const step = width / Math.max(1, memoryHistoryLength - 1);
-	const y = (value: number) => height - (value / max) * (height - 4) - 2;
-	const x = (index: number) => width - (values.length - 1 - index) * step;
-	const points = values.map((value, index) => `${x(index)},${y(value)}`);
-	const current = values.at(-1);
-	return (
-		<div className="flex min-w-0 flex-1 items-end gap-4">
-			<svg aria-hidden="true" className="h-14 min-w-0 flex-1" data-testid="session-memory-graph" preserveAspectRatio="none" viewBox={`0 0 ${width} ${height}`}>
-				<line className="stroke-foreground/10" strokeWidth={1} x1={0} x2={width} y1={height - 1} y2={height - 1} />
-				{points.length > 1 ? (
-					<>
-						<polygon fill="var(--accent-strong)" opacity={0.15} points={`${x(0)},${height} ${points.join(" ")} ${width},${height}`} />
-						<polyline fill="none" points={points.join(" ")} stroke="var(--accent-strong)" strokeLinejoin="round" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-					</>
-				) : null}
-			</svg>
-			<div className="shrink-0 font-mono text-sm font-medium tabular-nums text-settings-label">{current === undefined ? "—" : formatCPU(current)}</div>
-		</div>
-	);
-}
-
 /** The lone line under the bar: what to do, and the one button that does it. */
 function SuggestionLine({
 	onPauseLargest,
@@ -288,11 +258,6 @@ export function SessionMemoryPanel({
 	const appMemory = useAppMemory().data;
 	const app = appMemory?.app;
 	const system = appMemory?.system;
-	const sample = useMemo<MemorySample | undefined>(
-		() => (app && system ? { appBytes: app.rssBytes, cpuPercent: app.cpuPercent } : undefined),
-		[app, system],
-	);
-	const history = useMemoryHistory(sample, app?.own?.sampledAt);
 	const { state, suggestion, facts, stopIdle } = useSuggestion(projectId);
 	// Orchestrators are listed too: they hold memory like any session, and
 	// leaving them out made the rows add up to less than AO's total.
@@ -397,16 +362,6 @@ export function SessionMemoryPanel({
 							</tbody>
 						</table>
 					)}
-					{system ? (
-						<section className="flex w-full flex-col items-stretch gap-(--size-settings-section-inner-gap)">
-							<h2 className="text-xs font-medium leading-4 text-settings-muted">{t("shell.memoryUsageGraph")}</h2>
-							<div className="settings-grouped-rows flex w-full flex-col">
-								<div className="settings-row-bar h-auto items-start py-3">
-									<UsageGraph history={history} />
-								</div>
-							</div>
-						</section>
-					) : null}
 				</div>
 			</DialogContent>
 		</Dialog>

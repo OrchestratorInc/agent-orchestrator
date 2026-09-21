@@ -1989,7 +1989,6 @@
 	"shell.memorySuggestLargest": "{{title}} es la que más memoria usa",
 	"shell.memoryStopIdleRunning": "Deteniendo…",
 	"shell.memoryStopIdleFailed": "No se pudieron detener las sesiones inactivas",
-	"shell.memoryUsageGraph": "CPU de AO",
 	"shell.memoryLegendAO": "AO",
 	"shell.memoryLegendAvailable": "Disponible",
 	"shell.memoryRowOrchestrator": "orquestador",
