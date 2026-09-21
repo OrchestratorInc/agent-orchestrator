@@ -128,15 +128,16 @@ const MB = 1000 ** 2;
 const GB = 1000 ** 3;
 
 /**
- * Rounded to the nearest 10 MB so summed RSS (which slightly overcounts
- * shared pages) never invites an audit. MB under a gigabyte, one decimal GB
- * above, decimal units like Activity Monitor.
+ * Whole megabytes under a gigabyte, one decimal GB above, decimal units like
+ * Activity Monitor. Whole MB rather than 10 MB steps: rows are summed into
+ * the AO total, and coarse rounding on each row made 123 + 157 read as
+ * 120 + 160 against a 280 total.
  */
 export function formatResourceBytes(bytes: number): string {
 	if (bytes >= GB) return `${(bytes / GB).toFixed(1)} GB`;
-	const mb = Math.round(bytes / MB / 10) * 10;
+	const mb = Math.round(bytes / MB);
 	if (mb >= 1000) return `${(mb / 1000).toFixed(1)} GB`;
-	return `${Math.max(10, mb)} MB`;
+	return `${Math.max(1, mb)} MB`;
 }
 
 /** Whole percent of one core; CPU is only shown while working, so zero never appears. */

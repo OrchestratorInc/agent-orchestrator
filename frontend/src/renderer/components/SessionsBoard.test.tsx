@@ -160,18 +160,18 @@ describe("SessionsBoard", () => {
 		});
 		renderBoard("p1");
 		// The card says what the session costs the machine right now.
-		expect(screen.getByTestId("session-resource")).toHaveTextContent("640 MB");
+		expect(screen.getByTestId("session-resource")).toHaveTextContent("642 MB");
 		expect(screen.getByTestId("session-resource")).toHaveAttribute("data-resource-tone", "neutral");
 		const pauseButton = screen.getByRole("button", { name: "Pause agent for Running task" });
 		expect(pauseButton).toHaveAttribute("data-paused", "false");
 		await userEvent.hover(pauseButton);
-		expect(await screen.findByRole("tooltip")).toHaveTextContent("Pause agent · frees 640 MB");
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("Pause agent · frees 642 MB");
 		await userEvent.click(pauseButton);
 		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/exit-agent", {
 			params: { path: { sessionId: "running" } },
 			body: { policy: "drain" },
 		}));
-		expect(await screen.findByRole("status")).toHaveTextContent("Paused · freed 640 MB");
+		expect(await screen.findByRole("status")).toHaveTextContent("Paused · freed 642 MB");
 
 		const playButton = screen.getByRole("button", { name: "Resume agent for Paused task" });
 		expect(playButton).toHaveAttribute("data-paused", "true");
@@ -638,7 +638,7 @@ describe("SessionsBoard", () => {
 
 		const card = screen.getByText("tokens worker").closest('[data-testid="board-session-card"]') as HTMLElement;
 		// Memory sits beside token usage, never in place of it.
-		expect(within(card).getByTestId("session-resource")).toHaveTextContent("250 MB");
+		expect(within(card).getByTestId("session-resource")).toHaveTextContent("254 MB");
 		const usage = within(card).getByText("12.4K", { selector: "span" });
 		expect(usage).toHaveAttribute("aria-hidden", "true");
 		expect(within(card).getByText("12,400 tokens")).toHaveClass("sr-only");

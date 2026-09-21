@@ -82,11 +82,11 @@ describe("chipTone", () => {
 });
 
 describe("formatResourceBytes", () => {
-	it("rounds to ten megabytes and switches to GB at a thousand", () => {
-		expect(formatResourceBytes(3 * MB)).toBe("10 MB");
-		expect(formatResourceBytes(238 * MB)).toBe("240 MB");
-		expect(formatResourceBytes(994 * MB)).toBe("990 MB");
-		expect(formatResourceBytes(996 * MB)).toBe("1.0 GB");
+	it("shows whole megabytes and switches to GB at a thousand", () => {
+		expect(formatResourceBytes(0.3 * MB)).toBe("1 MB");
+		expect(formatResourceBytes(238.4 * MB)).toBe("238 MB");
+		expect(formatResourceBytes(994 * MB)).toBe("994 MB");
+		expect(formatResourceBytes(999.6 * MB)).toBe("1.0 GB");
 		expect(formatResourceBytes(2.25 * 1000 ** 3)).toBe("2.3 GB");
 	});
 });

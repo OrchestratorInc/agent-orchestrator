@@ -198,7 +198,7 @@ describe("AppMemoryIndicator", () => {
 		expect(within(table).queryByText("unsampled worker")).not.toBeInTheDocument();
 		const own = within(table).getByTestId("session-memory-own-row");
 		expect(own).toHaveTextContent("Daemon and app");
-		expect(own).toHaveTextContent("310 MB");
+		expect(own).toHaveTextContent("315 MB");
 		expect(within(own).queryByRole("button")).not.toBeInTheDocument();
 
 		await userEvent.click(within(rows[0]).getByRole("button", { name: "Stop agent for big worker" }));
