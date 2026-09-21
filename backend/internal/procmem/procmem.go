@@ -90,6 +90,11 @@ func Parse(out string) (*Table, error) {
 			}
 		}
 		p.Command = strings.Join(rest, " ")
+		// A zombie has exited and holds no memory; it only waits for its
+		// parent to collect the exit code. Listing it reads as a leak.
+		if strings.Contains(p.Command, "<defunct>") {
+			continue
+		}
 		t.byPID[pid] = p
 		t.children[ppid] = append(t.children[ppid], pid)
 	}

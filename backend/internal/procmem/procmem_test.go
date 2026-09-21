@@ -85,3 +85,13 @@ func TestCPUPercentIsRateBetweenSnapshots(t *testing.T) {
 		t.Fatalf("first sample cpu = %v, want 0", got)
 	}
 }
+
+func TestParseDropsZombies(t *testing.T) {
+	tbl, err := Parse("300 200 1000 00:00:01 claude\n301 300 0 00:00:00 ao <defunct>\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tree := tbl.Tree(300); len(tree.Processes) != 1 {
+		t.Fatalf("zombie listed: %+v", tree.Processes)
+	}
+}
