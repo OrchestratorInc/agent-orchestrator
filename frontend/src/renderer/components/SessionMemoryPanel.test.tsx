@@ -185,8 +185,9 @@ describe("AppMemoryIndicator", () => {
 		renderButton();
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		const table = await screen.findByTestId("session-memory-table");
-		expect(screen.getByTestId("session-memory-stacked")).toHaveTextContent("AO2.1 GB");
-		expect(screen.getByTestId("session-memory-stacked")).toHaveTextContent("Available21.5 GB");
+		expect(screen.getByTestId("session-memory-stacked")).toHaveTextContent("AO 2.1 GB");
+		expect(screen.getByTestId("session-memory-stacked")).toHaveTextContent("Available 21.5 GB");
+		expect(screen.getByTestId("session-memory-stacked")).not.toHaveTextContent("In use");
 		expect(screen.getByTestId("session-memory-stacked")).not.toHaveTextContent("Other");
 		// Fine: no suggestion, every row grey.
 		expect(screen.queryByTestId("session-memory-suggestion")).not.toBeInTheDocument();

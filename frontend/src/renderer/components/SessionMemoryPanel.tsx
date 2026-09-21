@@ -177,8 +177,8 @@ export function AppMemoryIndicator() {
 	);
 }
 
-/** Two plain bars, each a share of the machine: what AO holds, what is
- * still available. Total, in use and everyone else stay on hover. */
+/** One bar for the machine: AO's slice on the left, free on the right, the
+ * gap between them everyone else. Total, other apps and pressure stay on hover. */
 function MachineBar({ appBytes, system }: { appBytes: number; system: SystemMemoryReading }) {
 	const { t } = useTranslation();
 	const total = system.totalBytes || 1;
@@ -190,23 +190,27 @@ function MachineBar({ appBytes, system }: { appBytes: number; system: SystemMemo
 		other: formatMemory(Math.max(0, inUse - appBytes)),
 		pressure: system.pressureRaw.toFixed(1),
 	});
-	const rows = [
+	const legend = [
 		{ key: "ao", label: t("shell.memoryLegendAO"), bytes: appBytes, className: "bg-accent-strong" },
-		{ key: "available", label: t("shell.memoryLegendAvailable"), bytes: system.availableBytes, className: "bg-success/70" },
+		{ key: "free", label: t("shell.memoryLegendAvailable"), bytes: system.availableBytes, className: "bg-success/70" },
 	];
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>
 				<div className="settings-row-bar h-auto flex-col items-stretch gap-2 py-3" data-testid="session-memory-stacked" tabIndex={0}>
-					{rows.map((row) => (
-						<div className="grid grid-cols-[6rem_1fr_5rem] items-center gap-3 font-mono text-xs tabular-nums" key={row.key}>
-							<span className="text-settings-muted">{row.label}</span>
-							<div className="h-1.5 w-full overflow-hidden rounded-sm bg-foreground/[0.06]">
-								<div className={cn("h-full rounded-sm transition-[width] duration-500", row.className)} style={{ width: pct(row.bytes) }} />
-							</div>
-							<span className="text-right text-settings-label">{formatMemory(row.bytes)}</span>
-						</div>
-					))}
+					<div className="flex h-2 w-full overflow-hidden rounded-sm bg-foreground/[0.06]">
+						<div className="h-full bg-accent-strong transition-[width] duration-500" style={{ width: pct(appBytes) }} />
+						<div className="h-full flex-1" />
+						<div className="h-full bg-success/70 transition-[width] duration-500" style={{ width: pct(system.availableBytes) }} />
+					</div>
+					<div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs tabular-nums text-settings-muted">
+						{legend.map((part) => (
+							<span className="inline-flex items-center gap-1.5" key={part.key}>
+								<span aria-hidden="true" className={cn("size-1.5 rounded-full", part.className)} />
+								{part.label} <span className="text-settings-label">{formatMemory(part.bytes)}</span>
+							</span>
+						))}
+					</div>
 				</div>
 			</TooltipTrigger>
 			<TooltipContent side="bottom">{detail}</TooltipContent>
