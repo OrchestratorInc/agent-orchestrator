@@ -25,6 +25,7 @@ import {
 	sessionMemoryQueryRoot,
 	useAppMemory,
 	useFastMemorySampling,
+	pressureHistoryLength,
 	usePressureHistory,
 	useSessionMemory,
 	type SessionMemoryReading,
@@ -178,65 +179,75 @@ export function AppMemoryIndicator() {
 }
 
 /** One bar for the machine: AO's slice on the left, free on the right, the
- * gap between them everyone else. Total, other apps and pressure stay on hover. */
+ * gap between them everyone else. Nothing else: those two are the answer. */
 function MachineBar({ appBytes, system }: { appBytes: number; system: SystemMemoryReading }) {
 	const { t } = useTranslation();
 	const total = system.totalBytes || 1;
 	const pct = (bytes: number) => `${Math.min(100, (bytes / total) * 100)}%`;
-	const inUse = Math.max(0, system.totalBytes - system.availableBytes);
-	const detail = t("shell.memoryMachineDetail", {
-		total: formatMemory(system.totalBytes),
-		inUse: formatMemory(inUse),
-		other: formatMemory(Math.max(0, inUse - appBytes)),
-		pressure: system.pressureRaw.toFixed(1),
-	});
 	const legend = [
 		{ key: "ao", label: t("shell.memoryLegendAO"), bytes: appBytes, className: "bg-accent-strong" },
 		{ key: "free", label: t("shell.memoryLegendAvailable"), bytes: system.availableBytes, className: "bg-success/70" },
 	];
 	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<div className="settings-row-bar h-auto flex-col items-stretch gap-2 py-3" data-testid="session-memory-stacked" tabIndex={0}>
-					<div className="flex h-2 w-full overflow-hidden rounded-sm bg-foreground/[0.06]">
-						<div className="h-full bg-accent-strong transition-[width] duration-500" style={{ width: pct(appBytes) }} />
-						<div className="h-full flex-1" />
-						<div className="h-full bg-success/70 transition-[width] duration-500" style={{ width: pct(system.availableBytes) }} />
-					</div>
-					<div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs tabular-nums text-settings-muted">
-						{legend.map((part) => (
-							<span className="inline-flex items-center gap-1.5" key={part.key}>
-								<span aria-hidden="true" className={cn("size-1.5 rounded-full", part.className)} />
-								{part.label} <span className="text-settings-label">{formatMemory(part.bytes)}</span>
-							</span>
-						))}
-					</div>
-				</div>
-			</TooltipTrigger>
-			<TooltipContent side="bottom">{detail}</TooltipContent>
-		</Tooltip>
+		<div className="settings-row-bar h-auto flex-col items-stretch gap-2 py-3" data-testid="session-memory-stacked">
+			<div className="flex h-2 w-full overflow-hidden rounded-sm bg-foreground/[0.06]">
+				<div className="h-full bg-accent-strong transition-[width] duration-500" style={{ width: pct(appBytes) }} />
+				<div className="h-full flex-1" />
+				<div className="h-full bg-success/70 transition-[width] duration-500" style={{ width: pct(system.availableBytes) }} />
+			</div>
+			<div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs tabular-nums text-settings-muted">
+				{legend.map((part) => (
+					<span className="inline-flex items-center gap-1.5" key={part.key}>
+						<span aria-hidden="true" className={cn("size-1.5 rounded-full", part.className)} />
+						{part.label} <span className="text-settings-label">{formatMemory(part.bytes)}</span>
+					</span>
+				))}
+			</div>
+		</div>
 	);
 }
 
-/** The last minute of pressure, one bar per sample, coloured by the same rule as the dot. */
+/**
+ * The recent pressure as an area line: the fill is where the machine has
+ * been, the dashed guides are where yellow and red begin, the number is
+ * now. Scaled 0–100 so a calm machine reads as a flat line near the floor
+ * rather than a jittery one.
+ */
 function PressureGraph({ history, source }: { history: number[]; source: string }) {
-	const bars = [...Array.from({ length: Math.max(0, 60 - history.length) }, () => undefined), ...history];
+	const { t } = useTranslation();
+	const width = 600;
+	const height = 56;
+	const guides = source === "psi" ? [5, 20] : [75, 90];
+	const y = (value: number) => height - (Math.min(100, Math.max(0, value)) / 100) * (height - 4) - 2;
+	const points = history.map((value, index) => `${(index / Math.max(1, pressureHistoryLength - 1)) * width},${y(value)}`);
+	const current = history.at(-1);
+	const state = current === undefined ? undefined : pressureStateFromRaw(current, source);
+	const stroke = state === "tight" ? "var(--destructive)" : state === "tight_soon" ? "var(--warning)" : "var(--success)";
+	const lastX = points.length > 0 ? ((points.length - 1) / Math.max(1, pressureHistoryLength - 1)) * width : 0;
 	return (
-		<div className="min-w-0 flex-1">
-			<div aria-hidden="true" className="flex h-12 items-end gap-px" data-testid="session-memory-graph">
-				{bars.map((value, index) => {
-					const state = value === undefined ? undefined : pressureStateFromRaw(value, source);
-					return (
-						<div
-							className={cn(
-								"flex-1 rounded-t-[1px] transition-[height] duration-500",
-								state === "tight" ? "bg-destructive" : state === "tight_soon" ? "bg-warning" : state === "fine" ? "bg-success" : "bg-transparent",
-							)}
-							key={index}
-							style={{ height: `${Math.max(4, Math.min(100, value ?? 0))}%` }}
-						/>
-					);
-				})}
+		<div className="flex min-w-0 flex-1 items-end gap-4">
+			<svg
+				aria-hidden="true"
+				className="h-14 min-w-0 flex-1"
+				data-testid="session-memory-graph"
+				preserveAspectRatio="none"
+				viewBox={`0 0 ${width} ${height}`}
+			>
+				{guides.map((guide) => (
+					<line className="stroke-foreground/15" key={guide} strokeDasharray="4 4" strokeWidth={1} x1={0} x2={width} y1={y(guide)} y2={y(guide)} />
+				))}
+				{points.length > 1 ? (
+					<>
+						<polygon fill={stroke} opacity={0.12} points={`0,${height} ${points.join(" ")} ${lastX},${height}`} />
+						<polyline fill="none" points={points.join(" ")} stroke={stroke} strokeLinejoin="round" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+					</>
+				) : null}
+			</svg>
+			<div className="shrink-0 text-right font-mono text-xs tabular-nums">
+				<div className={cn("text-sm font-medium", state === "tight" ? "text-destructive" : state === "tight_soon" ? "text-warning" : "text-settings-label")}>
+					{current === undefined ? "—" : `${current.toFixed(1)}%`}
+				</div>
+				<div className="text-settings-muted">{t("shell.memoryPressureNow")}</div>
 			</div>
 		</div>
 	);
