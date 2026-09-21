@@ -1507,7 +1507,7 @@
 	"shell.memorySuggestLargest": "{{title}} is using the most memory",
 	"shell.memoryStopIdleRunning": "Stopping…",
 	"shell.memoryStopIdleFailed": "Could not stop idle sessions",
-	"shell.memoryUsageGraph": "AO memory",
+	"shell.memoryUsageGraph": "AO CPU",
 	"shell.memoryLegendAO": "AO",
 	"shell.memoryLegendAvailable": "Available",
 	"shell.memoryRowOrchestrator": "orchestrator",

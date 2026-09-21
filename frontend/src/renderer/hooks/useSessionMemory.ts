@@ -103,8 +103,8 @@ export function usePressureState(): PressureState | undefined {
 /** How many samples the window's graph keeps. */
 export const memoryHistoryLength = 60;
 
-/** One point of the usage graph: what AO held and what was free. */
-export type MemorySample = { appBytes: number; availableBytes: number };
+/** One point of the usage graph: what AO held, and its share of one core. */
+export type MemorySample = { appBytes: number; cpuPercent: number };
 
 /**
  * A ring of recent readings for the graph, kept in the renderer: no backend

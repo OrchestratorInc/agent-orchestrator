@@ -206,15 +206,16 @@ function MachineBar({ appBytes, system }: { appBytes: number; system: SystemMemo
 	);
 }
 
-/** AO's memory over the last few minutes, as a plain area line, with the number for now. */
+/** AO's CPU over the last few minutes: newest on the right, the number for now. */
 function UsageGraph({ history }: { history: MemorySample[] }) {
 	const width = 600;
 	const height = 56;
-	const values = history.map((point) => point.appBytes);
-	const max = Math.max(1, ...values) * 1.15;
+	const values = history.map((point) => point.cpuPercent);
+	const max = Math.max(100, ...values);
+	const step = width / Math.max(1, memoryHistoryLength - 1);
 	const y = (value: number) => height - (value / max) * (height - 4) - 2;
-	const points = values.map((value, index) => `${(index / Math.max(1, memoryHistoryLength - 1)) * width},${y(value)}`);
-	const lastX = points.length > 0 ? ((points.length - 1) / Math.max(1, memoryHistoryLength - 1)) * width : 0;
+	const x = (index: number) => width - (values.length - 1 - index) * step;
+	const points = values.map((value, index) => `${x(index)},${y(value)}`);
 	const current = values.at(-1);
 	return (
 		<div className="flex min-w-0 flex-1 items-end gap-4">
@@ -222,12 +223,12 @@ function UsageGraph({ history }: { history: MemorySample[] }) {
 				<line className="stroke-foreground/10" strokeWidth={1} x1={0} x2={width} y1={height - 1} y2={height - 1} />
 				{points.length > 1 ? (
 					<>
-						<polygon fill="var(--accent-strong)" opacity={0.15} points={`0,${height} ${points.join(" ")} ${lastX},${height}`} />
+						<polygon fill="var(--accent-strong)" opacity={0.15} points={`${x(0)},${height} ${points.join(" ")} ${width},${height}`} />
 						<polyline fill="none" points={points.join(" ")} stroke="var(--accent-strong)" strokeLinejoin="round" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
 					</>
 				) : null}
 			</svg>
-			<div className="shrink-0 font-mono text-sm font-medium tabular-nums text-settings-label">{current === undefined ? "—" : formatMemory(current)}</div>
+			<div className="shrink-0 font-mono text-sm font-medium tabular-nums text-settings-label">{current === undefined ? "—" : formatCPU(current)}</div>
 		</div>
 	);
 }
@@ -288,7 +289,7 @@ export function SessionMemoryPanel({
 	const app = appMemory?.app;
 	const system = appMemory?.system;
 	const sample = useMemo<MemorySample | undefined>(
-		() => (app && system ? { appBytes: app.rssBytes, availableBytes: system.availableBytes } : undefined),
+		() => (app && system ? { appBytes: app.rssBytes, cpuPercent: app.cpuPercent } : undefined),
 		[app, system],
 	);
 	const history = useMemoryHistory(sample, app?.own?.sampledAt);

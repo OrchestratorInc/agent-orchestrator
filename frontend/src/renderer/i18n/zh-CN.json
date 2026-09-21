@@ -1353,7 +1353,7 @@
 	"shell.memorySuggestLargest": "{{title}} 占用的内存最多",
 	"shell.memoryStopIdleRunning": "正在停止…",
 	"shell.memoryStopIdleFailed": "无法停止空闲会话",
-	"shell.memoryUsageGraph": "AO 内存",
+	"shell.memoryUsageGraph": "AO CPU",
 	"shell.memoryLegendAO": "AO",
 	"shell.memoryLegendAvailable": "可用",
 	"shell.memoryRowOrchestrator": "编排器",
