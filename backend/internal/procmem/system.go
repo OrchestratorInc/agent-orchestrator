@@ -25,7 +25,21 @@ type System struct {
 	// is queueing for CPU.
 	CPUCount int
 	Load1    float64
+	// PressureRaw is the kernel's own memory-pressure figure: the share of
+	// the last ten seconds some task spent stalled waiting on memory (PSI
+	// "some avg10"). It tracks how the machine feels better than any free
+	// percentage. PressureSource says which reading produced it: "psi", or
+	// "available_pct" when PSI is unavailable and it is 100 minus the
+	// available percentage instead.
+	PressureRaw    float64
+	PressureSource string
 }
+
+// Pressure sources.
+const (
+	PressureSourcePSI          = "psi"
+	PressureSourceAvailablePct = "available_pct"
+)
 
 // ReadSystem reads host memory and load. It is Linux-only for now (parses
 // /proc); other platforms return ErrUnsupported.
@@ -41,7 +55,47 @@ func ReadSystem() (System, error) {
 	// gets a memory reading.
 	sys.SwapPages = readVMStatSwapPages()
 	sys.Load1 = readLoad1()
+	if some, ok := readPSISome10("/proc/pressure/memory"); ok {
+		sys.PressureRaw, sys.PressureSource = some, PressureSourcePSI
+	} else {
+		sys.PressureRaw, sys.PressureSource = availablePressure(sys), PressureSourceAvailablePct
+	}
 	return sys, nil
+}
+
+// availablePressure stands in for PSI where the kernel has none (pre-4.20,
+// CONFIG_PSI off, some containers): 100 minus the percent of RAM available.
+func availablePressure(sys System) float64 {
+	if sys.TotalBytes == 0 {
+		return 0
+	}
+	return 100 - float64(sys.AvailableBytes)/float64(sys.TotalBytes)*100
+}
+
+// readPSISome10 parses the "some avg10=" field of a PSI file.
+func readPSISome10(path string) (float64, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	return ParsePSISome10(string(data))
+}
+
+// ParsePSISome10 reads "some avg10=N.NN ..." from PSI file contents.
+func ParsePSISome10(contents string) (float64, bool) {
+	for _, line := range strings.Split(contents, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "some" {
+			continue
+		}
+		for _, field := range fields[1:] {
+			if val, ok := strings.CutPrefix(field, "avg10="); ok {
+				n, err := strconv.ParseFloat(val, 64)
+				return n, err == nil
+			}
+		}
+	}
+	return 0, false
 }
 
 func readMeminfo(sys *System) error {

@@ -5025,6 +5025,10 @@ export interface components {
             /** Format: double */
             load1: number;
             /** Format: double */
+            pressureRaw: number;
+            /** @enum {string} */
+            pressureSource: "psi" | "available_pct";
+            /** Format: double */
             swapBytesPerSec: number;
             swapTotalBytes: number;
             swapUsedBytes: number;

@@ -138,12 +138,16 @@ func (r *MemoryReader) SystemMemory(context.Context) (domain.SystemMemory, error
 		TotalBytes: sys.TotalBytes, AvailableBytes: sys.AvailableBytes,
 		SwapTotalBytes: sys.SwapTotalBytes, SwapUsedBytes: sys.SwapUsedBytes,
 		CPUCount: sys.CPUCount, Load1: sys.Load1,
+		PressureRaw: sys.PressureRaw, PressureSource: sys.PressureSource,
 	}
 	if gap := now.Sub(lastAt).Seconds(); !lastAt.IsZero() && gap > 0 && sys.SwapPages >= last.SwapPages {
 		out.SwapBytesPerSec = float64(sys.SwapPages-last.SwapPages) * swapPageBytes / gap
 	}
 	return out, nil
 }
+
+// cpuRateMaxGap is the longest gap between samples a CPU rate is trusted over.
+const cpuRateMaxGap = 60 * time.Second
 
 // swapPageBytes is the kernel page size vmstat counts in. 4 KiB everywhere
 // AO runs; a 16 KiB kernel would under-report by four, still the right shape.
@@ -225,7 +229,9 @@ func (r *MemoryReader) table(ctx context.Context) (cur, prev *procmem.Table, ela
 		r.prev, r.prevAt = r.cached, r.cachedAt
 		r.cached, r.cachedAt = table, now
 	}
-	if r.prev != nil {
+	// Across a sleep the CPU deltas are garbage; a gap over a minute means the
+	// first sample after it reports no rate rather than a wrong one.
+	if r.prev != nil && r.cachedAt.Sub(r.prevAt) <= cpuRateMaxGap {
 		elapsed = r.cachedAt.Sub(r.prevAt).Seconds()
 	}
 	return r.cached, r.prev, elapsed, nil

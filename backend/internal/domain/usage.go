@@ -440,6 +440,11 @@ type SystemMemory struct {
 	// Load1 is the one-minute load average; divided by CPUCount, above one
 	// means work is queueing.
 	Load1 float64
+	// PressureRaw is the kernel's memory-pressure figure (PSI some avg10, or
+	// 100 minus available percent where PSI is missing); PressureSource
+	// names which. Clients turn it into fine / tight-soon / tight.
+	PressureRaw    float64
+	PressureSource string
 }
 
 // AppMemory is the resident memory of everything AO runs: the daemon, the

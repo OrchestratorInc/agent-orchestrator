@@ -103,6 +103,7 @@ func (c *UsageController) listMemory(w http.ResponseWriter, r *http.Request) {
 			TotalBytes: sys.TotalBytes, AvailableBytes: sys.AvailableBytes,
 			SwapTotalBytes: sys.SwapTotalBytes, SwapUsedBytes: sys.SwapUsedBytes, SwapBytesPerSec: sys.SwapBytesPerSec,
 			CPUCount: sys.CPUCount, Load1: sys.Load1,
+			PressureRaw: sys.PressureRaw, PressureSource: sys.PressureSource,
 		}
 	}
 	var app *AppMemoryResponse

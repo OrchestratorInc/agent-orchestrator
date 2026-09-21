@@ -1700,6 +1700,13 @@ type SystemMemoryResponse struct {
 	CPUCount        int     `json:"cpuCount" minimum:"0"`
 	// Load1 is the one-minute load average; over cpuCount means work is queueing.
 	Load1 float64 `json:"load1" minimum:"0"`
+	// PressureRaw is the kernel's memory-pressure figure: PSI "some avg10"
+	// (percent of the last ten seconds a task stalled on memory), or 100
+	// minus the available percent where PSI is missing. Clients derive
+	// fine / tight-soon / tight from it.
+	PressureRaw float64 `json:"pressureRaw" minimum:"0"`
+	// PressureSource says which reading produced pressureRaw.
+	PressureSource string `json:"pressureSource" enum:"psi,available_pct"`
 }
 
 // UsageTotalsResponse is the canonical telemetry aggregate for one scope.

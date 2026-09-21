@@ -14171,6 +14171,15 @@ components:
           format: double
           minimum: 0
           type: number
+        pressureRaw:
+          format: double
+          minimum: 0
+          type: number
+        pressureSource:
+          enum:
+          - psi
+          - available_pct
+          type: string
         swapBytesPerSec:
           format: double
           minimum: 0
@@ -14192,6 +14201,8 @@ components:
       - swapBytesPerSec
       - cpuCount
       - load1
+      - pressureRaw
+      - pressureSource
       type: object
     SystemRequirement:
       properties:
