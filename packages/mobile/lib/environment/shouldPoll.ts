@@ -19,3 +19,12 @@ import type { EnvironmentKind } from "./types";
 export function shouldPollLocal(environment: EnvironmentKind | null): boolean {
 	return environment === "local";
 }
+
+/**
+ * Local endpoint races are connection work too: Cloud must stop their timer
+ * along with the daemon poll, or a saved desktop keeps receiving probes while
+ * the user is viewing a Cloud board.
+ */
+export function shouldMaintainLocalConnection(environment: EnvironmentKind | null): boolean {
+	return shouldPollLocal(environment);
+}

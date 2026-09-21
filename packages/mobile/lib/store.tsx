@@ -42,7 +42,7 @@ import {
 	type CloudBoardRequest,
 } from "./environment/boardSelection";
 import { resolveSessionSource } from "./environment/resolve";
-import { shouldPollLocal } from "./environment/shouldPoll";
+import { shouldMaintainLocalConnection, shouldPollLocal } from "./environment/shouldPoll";
 import type { EnvironmentKind, SessionSource } from "./environment/types";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
 import { pollIntervalFor } from "./pollInterval";
@@ -356,7 +356,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// on device, holding a Cloudflare connection with a working LAN unused.
 	// This is the only thing that moves the app back up the preference order.
 	useEffect(() => {
-		if (!config || !isConfigured(config) || !appActive) return;
+		if (!shouldMaintainLocalConnection(environment) || !config || !isConfigured(config) || !appActive) return;
 		let stopped = false;
 		const check = async () => {
 			if (stopped) return;
@@ -391,7 +391,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			stopped = true;
 			clearInterval(id);
 		};
-	}, [config, appActive, reloadConfig]);
+	}, [config, appActive, environment, reloadConfig]);
 
 	// A Cloud source is scoped to the signed-in account and organization. Every
 	// source change gets a new generation: any response already in flight can no
