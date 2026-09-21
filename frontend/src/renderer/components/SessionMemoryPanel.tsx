@@ -177,8 +177,8 @@ export function AppMemoryIndicator() {
 	);
 }
 
-/** One bar for the machine: AO's share and what is still available. Total,
- * in use and everyone else stay on hover; they are context, not the answer. */
+/** Two plain bars, each a share of the machine: what AO holds, what is
+ * still available. Total, in use and everyone else stay on hover. */
 function MachineBar({ appBytes, system }: { appBytes: number; system: SystemMemoryReading }) {
 	const { t } = useTranslation();
 	const total = system.totalBytes || 1;
@@ -190,25 +190,23 @@ function MachineBar({ appBytes, system }: { appBytes: number; system: SystemMemo
 		other: formatMemory(Math.max(0, inUse - appBytes)),
 		pressure: system.pressureRaw.toFixed(1),
 	});
+	const rows = [
+		{ key: "ao", label: t("shell.memoryLegendAO"), bytes: appBytes, className: "bg-accent-strong" },
+		{ key: "available", label: t("shell.memoryLegendAvailable"), bytes: system.availableBytes, className: "bg-success/70" },
+	];
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>
 				<div className="settings-row-bar h-auto flex-col items-stretch gap-2 py-3" data-testid="session-memory-stacked" tabIndex={0}>
-					<div className="flex h-2 w-full overflow-hidden rounded-sm bg-foreground/[0.06]">
-						<div className="h-full bg-accent-strong transition-[width] duration-500" style={{ width: pct(appBytes) }} />
-						<div className="h-full flex-1" />
-						<div className="h-full bg-success/60 transition-[width] duration-500" style={{ width: pct(system.availableBytes) }} />
-					</div>
-					<div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs tabular-nums text-settings-muted">
-						<span className="inline-flex items-center gap-1.5">
-							<span aria-hidden="true" className="size-1.5 rounded-full bg-accent-strong" />
-							{t("shell.memoryLegendAO")} <span className="text-settings-label">{formatMemory(appBytes)}</span>
-						</span>
-						<span className="inline-flex items-center gap-1.5">
-							<span aria-hidden="true" className="size-1.5 rounded-full bg-success/60" />
-							{t("shell.memoryLegendAvailable")} <span className="text-settings-label">{formatMemory(system.availableBytes)}</span>
-						</span>
-					</div>
+					{rows.map((row) => (
+						<div className="grid grid-cols-[6rem_1fr_5rem] items-center gap-3 font-mono text-xs tabular-nums" key={row.key}>
+							<span className="text-settings-muted">{row.label}</span>
+							<div className="h-1.5 w-full overflow-hidden rounded-sm bg-foreground/[0.06]">
+								<div className={cn("h-full rounded-sm transition-[width] duration-500", row.className)} style={{ width: pct(row.bytes) }} />
+							</div>
+							<span className="text-right text-settings-label">{formatMemory(row.bytes)}</span>
+						</div>
+					))}
 				</div>
 			</TooltipTrigger>
 			<TooltipContent side="bottom">{detail}</TooltipContent>
@@ -319,14 +317,21 @@ export function SessionMemoryPanel({
 		orderRef.current = ordered.map((row) => row.id);
 		return ordered;
 	}, [sessions, readings]);
-	const paused = sessions.filter((session) => isAgentPaused(session));
+	const paused = sessions.filter((session) => isAgentPaused(session) && !readings?.has(session.id));
 	const largest = largestSession(facts);
 	const maxBytes = Math.max(app?.own?.rssBytes ?? 0, ...live.map((row) => row.rssBytes), 1);
-	const [expanded, setExpanded] = useState<string | undefined>();
+	// Any number of rows open at once: comparing two trees is the point.
+	const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+	const toggleExpanded = (id: string) =>
+		setExpanded((current) => {
+			const next = new Set(current);
+			if (!next.delete(id)) next.add(id);
+			return next;
+		});
 	const [pauseTarget, setPauseTarget] = useState<string | undefined>();
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className={settingsDialogContentClass} showCloseButton={false}>
+			<DialogContent className={cn(settingsDialogContentClass, "w-[min(52rem,calc(100vw-var(--space-8)))]")} showCloseButton={false}>
 				<div className={cn(settingsDialogHeaderClass, "flex h-auto flex-row items-center justify-between border-b-0 pb-3")}>
 					<div className="min-w-0 flex-1">
 						<DialogTitle className="text-lg font-semibold leading-6 text-settings-label">{t("shell.memoryPanelTitle")}</DialogTitle>
@@ -366,10 +371,10 @@ export function SessionMemoryPanel({
 								{live.map((row) => (
 									<SessionRow
 										chip={chipTone(state ?? "fine", facts.find((f) => f.id === row.id) ?? toSessionFacts(row.session, row.reading, Date.now()), largest)}
-										isExpanded={expanded === row.id}
+										isExpanded={expanded.has(row.id)}
 										key={row.id}
 										maxBytes={maxBytes}
-										onToggle={() => setExpanded((current) => (current === row.id ? undefined : row.id))}
+										onToggle={() => toggleExpanded(row.id)}
 										pauseOpen={pauseTarget === row.id}
 										reading={row.reading}
 										session={row.session}
@@ -383,9 +388,9 @@ export function SessionMemoryPanel({
 									<>
 										<GroupRow label={t("shell.memoryGroupApp")} />
 										<OwnRow
-											isExpanded={expanded === "ao"}
+											isExpanded={expanded.has("ao")}
 											maxBytes={maxBytes}
-											onToggle={() => setExpanded((current) => (current === "ao" ? undefined : "ao"))}
+											onToggle={() => toggleExpanded("ao")}
 											reading={app.own}
 										/>
 									</>

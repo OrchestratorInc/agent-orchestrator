@@ -185,8 +185,8 @@ describe("AppMemoryIndicator", () => {
 		renderButton();
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		const table = await screen.findByTestId("session-memory-table");
-		expect(screen.getByTestId("session-memory-stacked")).toHaveTextContent("AO 2.1 GB");
-		expect(screen.getByTestId("session-memory-stacked")).toHaveTextContent("Available 21.5 GB");
+		expect(screen.getByTestId("session-memory-stacked")).toHaveTextContent("AO2.1 GB");
+		expect(screen.getByTestId("session-memory-stacked")).toHaveTextContent("Available21.5 GB");
 		expect(screen.getByTestId("session-memory-stacked")).not.toHaveTextContent("Other");
 		// Fine: no suggestion, every row grey.
 		expect(screen.queryByTestId("session-memory-suggestion")).not.toBeInTheDocument();
@@ -210,11 +210,12 @@ describe("AppMemoryIndicator", () => {
 		);
 	});
 
-	it("expands a row into its process tree, and collapses on a second click", async () => {
+	it("expands any number of rows into their process trees, and collapses each on a second click", async () => {
 		renderButton();
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		const table = await screen.findByTestId("session-memory-table");
 		const bigRow = within(table).getAllByTestId("session-memory-row")[0];
+		const own = within(table).getByTestId("session-memory-own-row");
 
 		expect(screen.queryByTestId("session-memory-process-row")).not.toBeInTheDocument();
 		await userEvent.click(bigRow);
@@ -223,8 +224,12 @@ describe("AppMemoryIndicator", () => {
 		expect(children[0]).toHaveTextContent("1.8 GB");
 		expect(children[1]).toHaveTextContent("└─ go test");
 
+		// A second row opens alongside, not instead.
+		await userEvent.click(own);
+		expect(screen.getAllByTestId("session-memory-process-row")).toHaveLength(3);
+
 		await userEvent.click(bigRow);
-		expect(screen.queryByTestId("session-memory-process-row")).not.toBeInTheDocument();
+		expect(screen.getAllByTestId("session-memory-process-row")).toHaveLength(1);
 	});
 
 	it("shows CPU only while a session is working", async () => {
