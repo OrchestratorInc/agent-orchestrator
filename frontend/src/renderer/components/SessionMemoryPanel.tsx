@@ -178,11 +178,11 @@ export function AppMemoryIndicator() {
 	);
 }
 
-/** One bar for the machine: AO's slice on the left, free on the right, the
- * gap between them everyone else. Nothing else: those two are the answer. */
+/** One bar: AO against free, and nothing else. The bar is scaled to the two
+ * of them, so there is no gap standing in for other apps. */
 function MachineBar({ appBytes, system }: { appBytes: number; system: SystemMemoryReading }) {
 	const { t } = useTranslation();
-	const total = system.totalBytes || 1;
+	const total = appBytes + system.availableBytes || 1;
 	const pct = (bytes: number) => `${Math.min(100, (bytes / total) * 100)}%`;
 	const legend = [
 		{ key: "ao", label: t("shell.memoryLegendAO"), bytes: appBytes, className: "bg-accent-strong" },
@@ -192,7 +192,6 @@ function MachineBar({ appBytes, system }: { appBytes: number; system: SystemMemo
 		<div className="settings-row-bar h-auto flex-col items-stretch gap-2 py-3" data-testid="session-memory-stacked">
 			<div className="flex h-2 w-full overflow-hidden rounded-sm bg-foreground/[0.06]">
 				<div className="h-full bg-accent-strong transition-[width] duration-500" style={{ width: pct(appBytes) }} />
-				<div className="h-full flex-1" />
 				<div className="h-full bg-success/70 transition-[width] duration-500" style={{ width: pct(system.availableBytes) }} />
 			</div>
 			<div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs tabular-nums text-settings-muted">

@@ -851,3 +851,19 @@ describe("TopbarPauseButton", () => {
 		expect(await screen.findByRole("dialog")).toBeInTheDocument();
 	});
 });
+
+describe("ShellTopbar pause wiring", () => {
+	it("shows Resume, not Pause, for a paused chat session", () => {
+		renderTopbar({
+			...worker,
+			mode: "chat",
+			status: "exited",
+			displayStatus: "Paused",
+			pausedAt: "2026-06-10T00:00:00Z",
+			activity: { state: "exited", lastActivityAt: "2026-06-10T00:00:00Z" },
+		} as WorkspaceSession);
+		const button = screen.getByTestId("topbar-pause");
+		expect(button).toHaveAttribute("data-paused", "true");
+		expect(button).toHaveAttribute("aria-label", "Resume agent for do the thing");
+	});
+});
