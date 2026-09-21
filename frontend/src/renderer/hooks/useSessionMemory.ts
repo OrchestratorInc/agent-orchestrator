@@ -100,21 +100,24 @@ export function usePressureState(): PressureState | undefined {
 	return system ? pressureState(system) : undefined;
 }
 
-/** How many pressure samples the window's graph keeps. */
-export const pressureHistoryLength = 60;
+/** How many samples the window's graph keeps. */
+export const memoryHistoryLength = 60;
+
+/** One point of the usage graph: what AO held and what was free. */
+export type MemorySample = { appBytes: number; availableBytes: number };
 
 /**
- * A ring of recent pressure readings for the graph, kept in the renderer:
- * no backend history needed. One entry per distinct sample.
+ * A ring of recent readings for the graph, kept in the renderer: no backend
+ * history needed. One entry per distinct sample.
  */
-export function usePressureHistory(system: SystemMemoryReading | undefined, sampledAt: string | undefined): number[] {
-	const [history, setHistory] = useState<number[]>([]);
+export function useMemoryHistory(sample: MemorySample | undefined, sampledAt: string | undefined): MemorySample[] {
+	const [history, setHistory] = useState<MemorySample[]>([]);
 	const lastSample = useRef<string | undefined>(undefined);
 	useEffect(() => {
-		if (!system || !sampledAt || sampledAt === lastSample.current) return;
+		if (!sample || !sampledAt || sampledAt === lastSample.current) return;
 		lastSample.current = sampledAt;
-		setHistory((prev) => [...prev, system.pressureRaw].slice(-pressureHistoryLength));
-	}, [system, sampledAt]);
+		setHistory((prev) => [...prev, sample].slice(-memoryHistoryLength));
+	}, [sample, sampledAt]);
 	return history;
 }
 

@@ -7,7 +7,6 @@ import {
 	chipTone,
 	largestSession,
 	pressureState,
-	pressureStateFromRaw,
 	resourceSuggestion,
 	stableResourceOrder,
 	type ChipTone,
@@ -25,9 +24,10 @@ import {
 	sessionMemoryQueryRoot,
 	useAppMemory,
 	useFastMemorySampling,
-	pressureHistoryLength,
-	usePressureHistory,
+	memoryHistoryLength,
+	useMemoryHistory,
 	useSessionMemory,
+	type MemorySample,
 	type SessionMemoryReading,
 	type SystemMemoryReading,
 } from "../hooks/useSessionMemory";
@@ -206,48 +206,28 @@ function MachineBar({ appBytes, system }: { appBytes: number; system: SystemMemo
 	);
 }
 
-/**
- * The recent pressure as an area line: the fill is where the machine has
- * been, the dashed guides are where yellow and red begin, the number is
- * now. Scaled 0–100 so a calm machine reads as a flat line near the floor
- * rather than a jittery one.
- */
-function PressureGraph({ history, source }: { history: number[]; source: string }) {
-	const { t } = useTranslation();
+/** AO's memory over the last few minutes, as a plain area line, with the number for now. */
+function UsageGraph({ history }: { history: MemorySample[] }) {
 	const width = 600;
 	const height = 56;
-	const guides = source === "psi" ? [5, 20] : [75, 90];
-	const y = (value: number) => height - (Math.min(100, Math.max(0, value)) / 100) * (height - 4) - 2;
-	const points = history.map((value, index) => `${(index / Math.max(1, pressureHistoryLength - 1)) * width},${y(value)}`);
-	const current = history.at(-1);
-	const state = current === undefined ? undefined : pressureStateFromRaw(current, source);
-	const stroke = state === "tight" ? "var(--destructive)" : state === "tight_soon" ? "var(--warning)" : "var(--success)";
-	const lastX = points.length > 0 ? ((points.length - 1) / Math.max(1, pressureHistoryLength - 1)) * width : 0;
+	const values = history.map((point) => point.appBytes);
+	const max = Math.max(1, ...values) * 1.15;
+	const y = (value: number) => height - (value / max) * (height - 4) - 2;
+	const points = values.map((value, index) => `${(index / Math.max(1, memoryHistoryLength - 1)) * width},${y(value)}`);
+	const lastX = points.length > 0 ? ((points.length - 1) / Math.max(1, memoryHistoryLength - 1)) * width : 0;
+	const current = values.at(-1);
 	return (
 		<div className="flex min-w-0 flex-1 items-end gap-4">
-			<svg
-				aria-hidden="true"
-				className="h-14 min-w-0 flex-1"
-				data-testid="session-memory-graph"
-				preserveAspectRatio="none"
-				viewBox={`0 0 ${width} ${height}`}
-			>
-				{guides.map((guide) => (
-					<line className="stroke-foreground/15" key={guide} strokeDasharray="4 4" strokeWidth={1} x1={0} x2={width} y1={y(guide)} y2={y(guide)} />
-				))}
+			<svg aria-hidden="true" className="h-14 min-w-0 flex-1" data-testid="session-memory-graph" preserveAspectRatio="none" viewBox={`0 0 ${width} ${height}`}>
+				<line className="stroke-foreground/10" strokeWidth={1} x1={0} x2={width} y1={height - 1} y2={height - 1} />
 				{points.length > 1 ? (
 					<>
-						<polygon fill={stroke} opacity={0.12} points={`0,${height} ${points.join(" ")} ${lastX},${height}`} />
-						<polyline fill="none" points={points.join(" ")} stroke={stroke} strokeLinejoin="round" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+						<polygon fill="var(--accent-strong)" opacity={0.15} points={`0,${height} ${points.join(" ")} ${lastX},${height}`} />
+						<polyline fill="none" points={points.join(" ")} stroke="var(--accent-strong)" strokeLinejoin="round" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
 					</>
 				) : null}
 			</svg>
-			<div className="shrink-0 text-right font-mono text-xs tabular-nums">
-				<div className={cn("text-sm font-medium", state === "tight" ? "text-destructive" : state === "tight_soon" ? "text-warning" : "text-settings-label")}>
-					{current === undefined ? "—" : `${current.toFixed(1)}%`}
-				</div>
-				<div className="text-settings-muted">{t("shell.memoryPressureNow")}</div>
-			</div>
+			<div className="shrink-0 font-mono text-sm font-medium tabular-nums text-settings-label">{current === undefined ? "—" : formatMemory(current)}</div>
 		</div>
 	);
 }
@@ -307,7 +287,11 @@ export function SessionMemoryPanel({
 	const appMemory = useAppMemory().data;
 	const app = appMemory?.app;
 	const system = appMemory?.system;
-	const history = usePressureHistory(system, app?.own?.sampledAt);
+	const sample = useMemo<MemorySample | undefined>(
+		() => (app && system ? { appBytes: app.rssBytes, availableBytes: system.availableBytes } : undefined),
+		[app, system],
+	);
+	const history = useMemoryHistory(sample, app?.own?.sampledAt);
 	const { state, suggestion, facts, stopIdle } = useSuggestion(projectId);
 	// Orchestrators are listed too: they hold memory like any session, and
 	// leaving them out made the rows add up to less than AO's total.
@@ -414,10 +398,10 @@ export function SessionMemoryPanel({
 					)}
 					{system ? (
 						<section className="flex w-full flex-col items-stretch gap-(--size-settings-section-inner-gap)">
-							<h2 className="text-xs font-medium leading-4 text-settings-muted">{t("shell.memoryPressureGraph")}</h2>
+							<h2 className="text-xs font-medium leading-4 text-settings-muted">{t("shell.memoryUsageGraph")}</h2>
 							<div className="settings-grouped-rows flex w-full flex-col">
 								<div className="settings-row-bar h-auto items-start py-3">
-									<PressureGraph history={history} source={system.pressureSource} />
+									<UsageGraph history={history} />
 								</div>
 							</div>
 						</section>
