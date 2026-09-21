@@ -623,9 +623,16 @@ describe("SessionsBoard", () => {
 			]),
 		});
 
+		sessionMemoryMock.mockReturnValue({
+			isError: false,
+			data: new Map([["s-tokens", { sessionId: "s-tokens", rssBytes: 253_755_392, processCount: 3, cpuPercent: 0, sampledAt: "", processes: [] }]]),
+		});
+
 		renderBoard("p1");
 
 		const card = screen.getByText("tokens worker").closest('[data-testid="board-session-card"]') as HTMLElement;
+		// Memory sits beside token usage, never in place of it.
+		expect(within(card).getByTestId("session-resource")).toHaveTextContent("242 MB · 0%");
 		const usage = within(card).getByText("12.4K", { selector: "span" });
 		expect(usage).toHaveAttribute("aria-hidden", "true");
 		expect(within(card).getByText("12,400 tokens")).toHaveClass("sr-only");
