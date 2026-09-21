@@ -196,7 +196,7 @@ describe("AppMemoryIndicator", () => {
 		// An unsampled session is not a row: never "0 MB".
 		expect(within(table).queryByText("unsampled worker")).not.toBeInTheDocument();
 		const own = within(table).getByTestId("session-memory-own-row");
-		expect(own).toHaveTextContent("AO itself (daemon and app)");
+		expect(own).toHaveTextContent("Daemon and app");
 		expect(own).toHaveTextContent("310 MB");
 		expect(within(own).queryByRole("button")).not.toBeInTheDocument();
 

@@ -192,17 +192,17 @@ function StackedMemoryBar({ appBytes, sessionsBytes, system }: { appBytes: numbe
 		{ key: "free", label: t("shell.memoryLegendFree"), bytes: system.availableBytes, className: "bg-foreground/[0.06]" },
 	];
 	return (
-		<div className="border-b border-border px-4 py-3" data-testid="session-memory-stacked">
+		<div className="settings-row-bar h-auto flex-col items-stretch gap-2 py-3" data-testid="session-memory-stacked">
 			<div className="flex h-2 w-full overflow-hidden rounded-sm bg-foreground/[0.06]">
 				{legend.slice(0, 3).map((part) => (
 					<div className={cn("h-full transition-[width] duration-500", part.className)} key={part.key} style={{ width: pct(part.bytes) }} />
 				))}
 			</div>
-			<div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-mono text-2xs tabular-nums text-muted-foreground">
+			<div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs tabular-nums text-settings-muted">
 				{legend.map((part) => (
 					<span className="inline-flex items-center gap-1.5" key={part.key}>
 						<span aria-hidden="true" className={cn("size-1.5 rounded-full", part.className)} />
-						{part.label} <span className="text-foreground">{formatMemory(part.bytes)}</span>
+						{part.label} <span className="text-settings-label">{formatMemory(part.bytes)}</span>
 					</span>
 				))}
 			</div>
@@ -212,12 +212,10 @@ function StackedMemoryBar({ appBytes, sessionsBytes, system }: { appBytes: numbe
 
 /** The last minute of pressure, one bar per sample, coloured by the same rule as the dot. */
 function PressureGraph({ history, source }: { history: number[]; source: string }) {
-	const { t } = useTranslation();
 	const bars = [...Array.from({ length: Math.max(0, 60 - history.length) }, () => undefined), ...history];
 	return (
 		<div className="min-w-0 flex-1">
-			<div className="mb-1 text-2xs font-medium text-passive">{t("shell.memoryPressureGraph")}</div>
-			<div aria-hidden="true" className="flex h-10 items-end gap-px" data-testid="session-memory-graph">
+			<div aria-hidden="true" className="flex h-12 items-end gap-px" data-testid="session-memory-graph">
 				{bars.map((value, index) => {
 					const state = value === undefined ? undefined : pressureStateFromRaw(value, source);
 					return (
@@ -259,15 +257,15 @@ function SuggestionLine({
 				? t("shell.memorySuggestIdle", { count: suggestion.count })
 				: t("shell.memorySuggestLargest", { title: suggestion.title });
 	return (
-		<div className="flex items-center gap-3 border-b border-border px-4 py-2 text-xs" data-testid="session-memory-suggestion">
+		<div className="settings-row-bar gap-3 text-sm" data-testid="session-memory-suggestion">
 			<span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", stateDot[state])} />
-			<span className={cn("min-w-0 flex-1 truncate", stateText[state])}>{text}</span>
+			<span className={cn("min-w-0 flex-1 truncate font-medium", stateText[state] || "text-settings-label")}>{text}</span>
 			{suggestion.kind === "stop_idle" ? (
-				<Button data-testid="session-memory-fix" disabled={pending} onClick={stopIdle} size="sm" variant="outline">
+				<Button data-testid="session-memory-fix" disabled={pending} onClick={stopIdle} size="sm">
 					{pending ? t("shell.memoryStopIdleRunning") : t("shell.memoryFixStopIdle", { count: suggestion.count, size: formatMemory(suggestion.freesBytes) })}
 				</Button>
 			) : suggestion.kind === "pause_largest" ? (
-				<Button data-testid="session-memory-fix" onClick={() => onPauseLargest(suggestion.sessionId)} size="sm" variant="outline">
+				<Button data-testid="session-memory-fix" onClick={() => onPauseLargest(suggestion.sessionId)} size="sm">
 					{t("shell.memoryFixPause", { title: suggestion.title })}
 				</Button>
 			) : null}
@@ -322,9 +320,9 @@ export function SessionMemoryPanel({
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className={cn(settingsDialogContentClass, "w-[min(52rem,calc(100vw-var(--space-8)))]")} showCloseButton={false}>
-				<div className={cn(settingsDialogHeaderClass, "flex-row items-center gap-3")}>
+				<div className={cn(settingsDialogHeaderClass, "flex h-auto flex-row items-center justify-between border-b-0 pb-3")}>
 					<div className="min-w-0 flex-1">
-						<DialogTitle className="text-sm font-medium">{t("shell.memoryPanelTitle")}</DialogTitle>
+						<DialogTitle className="text-lg font-semibold leading-6 text-settings-label">{t("shell.memoryPanelTitle")}</DialogTitle>
 						<DialogDescription className="sr-only">{t("shell.memoryPanelDescription")}</DialogDescription>
 					</div>
 					<DialogClose asChild>
@@ -333,32 +331,29 @@ export function SessionMemoryPanel({
 						</Button>
 					</DialogClose>
 				</div>
-				{system && app ? <StackedMemoryBar appBytes={app.own?.rssBytes ?? 0} sessionsBytes={sessionsBytes} system={system} /> : null}
-				{state ? (
-					<SuggestionLine
-						onPauseLargest={setPauseTarget}
-						pending={stopIdle.isPending}
-						state={state}
-						stopIdle={() => stopIdle.mutate()}
-						suggestion={suggestion}
-					/>
-				) : null}
-				{stopIdle.isError ? (
-					<p className="border-b border-border px-4 py-2 text-2xs text-destructive" role="alert">{stopIdle.error.message}</p>
-				) : null}
-				<div className={cn(settingsDialogBodyClass, "gap-0 p-0")}>
+				<div className={cn(settingsDialogBodyClass, "settings-dialog-body flex-1 gap-(--size-settings-section-gap,1.5rem) px-(--size-modal-padding) pt-0")}>
+					<section className="flex w-full flex-col items-stretch gap-(--size-settings-section-inner-gap)">
+						<h2 className="text-xs font-medium leading-4 text-settings-muted">{t("shell.memorySectionMachine")}</h2>
+						<div className="settings-grouped-rows flex w-full flex-col">
+							{system && app ? <StackedMemoryBar appBytes={app.own?.rssBytes ?? 0} sessionsBytes={sessionsBytes} system={system} /> : null}
+							{state ? (
+								<SuggestionLine
+									onPauseLargest={setPauseTarget}
+									pending={stopIdle.isPending}
+									state={state}
+									stopIdle={() => stopIdle.mutate()}
+									suggestion={suggestion}
+								/>
+							) : null}
+							{stopIdle.isError ? (
+								<p className="settings-row-bar text-xs text-error" role="alert">{stopIdle.error.message}</p>
+							) : null}
+						</div>
+					</section>
 					{live.length === 0 && paused.length === 0 && !app?.own ? (
-						<p className="px-4 py-6 text-center text-xs text-passive">{t("shell.memoryEmpty")}</p>
+						<p className="py-6 text-center text-xs text-settings-muted">{t("shell.memoryEmpty")}</p>
 					) : (
 						<table className="w-full border-collapse text-xs" data-testid="session-memory-table">
-							<thead>
-								<tr className="text-2xs text-passive">
-									<th className="px-4 py-2 text-left font-medium">{t("shell.memoryColumnName")}</th>
-									<th className="px-4 py-2 text-right font-medium">{t("shell.memoryColumnRss")}</th>
-									<th className="w-16 px-4 py-2 text-right font-medium">{t("shell.memoryColumnCpu")}</th>
-									<th className="w-28 px-2 py-2" />
-								</tr>
-							</thead>
 							<tbody>
 								{live.length > 0 || paused.length > 0 ? <GroupRow label={t("shell.memoryGroupSessions")} /> : null}
 								{live.map((row) => (
@@ -391,20 +386,25 @@ export function SessionMemoryPanel({
 							</tbody>
 						</table>
 					)}
+					{system ? (
+						<section className="flex w-full flex-col items-stretch gap-(--size-settings-section-inner-gap)">
+							<h2 className="text-xs font-medium leading-4 text-settings-muted">{t("shell.memoryPressureGraph")}</h2>
+							<div className="settings-grouped-rows flex w-full flex-col">
+								<div className="settings-row-bar h-auto items-start gap-6 py-3">
+									<PressureGraph history={history} source={system.pressureSource} />
+									<dl className="grid shrink-0 grid-cols-[auto_auto] gap-x-4 gap-y-0.5 font-mono text-xs tabular-nums text-settings-muted">
+										<dt>{t("shell.memoryMachineTotal")}</dt>
+										<dd className="text-right text-settings-label">{formatMemory(system.totalBytes)}</dd>
+										<dt>{t("shell.memoryMachineInUse")}</dt>
+										<dd className="text-right text-settings-label">{formatMemory(system.totalBytes - system.availableBytes)}</dd>
+										<dt>{t("shell.memoryMachineAO")}</dt>
+										<dd className="text-right text-settings-label">{app ? formatMemory(app.rssBytes) : "—"}</dd>
+									</dl>
+								</div>
+							</div>
+						</section>
+					) : null}
 				</div>
-				{system ? (
-					<div className="flex items-start gap-6 border-t border-border px-4 py-3">
-						<PressureGraph history={history} source={system.pressureSource} />
-						<dl className="grid shrink-0 grid-cols-[auto_auto] gap-x-4 gap-y-0.5 font-mono text-2xs tabular-nums text-muted-foreground">
-							<dt>{t("shell.memoryMachineTotal")}</dt>
-							<dd className="text-right text-foreground">{formatMemory(system.totalBytes)}</dd>
-							<dt>{t("shell.memoryMachineInUse")}</dt>
-							<dd className="text-right text-foreground">{formatMemory(system.totalBytes - system.availableBytes)}</dd>
-							<dt>{t("shell.memoryMachineAO")}</dt>
-							<dd className="text-right text-foreground">{app ? formatMemory(app.rssBytes) : "—"}</dd>
-						</dl>
-					</div>
-				) : null}
 			</DialogContent>
 		</Dialog>
 	);
@@ -412,8 +412,8 @@ export function SessionMemoryPanel({
 
 function GroupRow({ label }: { label: string }) {
 	return (
-		<tr className="border-t border-border">
-			<td className="px-4 pb-1 pt-3 text-2xs font-medium text-passive" colSpan={4}>{label}</td>
+		<tr>
+			<td className="pb-2 pt-6 text-xs font-medium leading-4 text-settings-muted first:pt-0" colSpan={4}>{label}</td>
 		</tr>
 	);
 }
@@ -421,8 +421,8 @@ function GroupRow({ label }: { label: string }) {
 /** Memory cell: the number over a bar scaled to the biggest row, so "which one is the pig" reads at a glance. */
 function MemoryCell({ bytes, maxBytes, tone }: { bytes: number; maxBytes: number; tone: ChipTone }) {
 	return (
-		<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums">
-			<span className={cn("font-medium", tone === "critical" ? "text-destructive" : tone === "warning" ? "text-warning" : "text-foreground")}>
+		<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-xs tabular-nums">
+			<span className={cn("font-medium", tone === "critical" ? "text-destructive" : tone === "warning" ? "text-warning" : "text-settings-label")}>
 				{formatMemory(bytes)}
 			</span>
 			<div className="ml-auto mt-1 h-0.5 w-24 rounded-sm bg-foreground/[0.06]" data-testid="session-memory-share">
@@ -465,12 +465,10 @@ function SessionRow({
 	const action = (
 		<Button
 			aria-label={working ? t("shell.pauseAgentNamed", { title: session.title }) : t("shell.stopAgentNamed", { title: session.title })}
-			className="text-muted-foreground hover:text-foreground"
 			disabled={pause.isPending}
 			onClick={() => (needsPolicy ? setPauseOpen(true) : pause.toggle())}
 			size="sm"
 			title={t("shell.stopAgentHelp")}
-			variant="ghost"
 		>
 			{pause.isPending ? (
 				<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
@@ -486,7 +484,7 @@ function SessionRow({
 		<>
 			<tr
 				aria-expanded={canExpand ? isExpanded : undefined}
-				className={cn("border-t border-border", canExpand && "cursor-pointer hover:bg-interactive-hover")}
+				className={cn("border-t border-(--color-border-settings-dialog-header)", canExpand && "cursor-pointer hover:bg-interactive-hover")}
 				data-chip-tone={chip}
 				data-testid="session-memory-row"
 				onClick={canExpand ? onToggle : undefined}
@@ -498,13 +496,13 @@ function SessionRow({
 							className={cn("size-icon-2xs shrink-0 text-passive transition-transform", canExpand ? "opacity-100" : "opacity-0", isExpanded && "rotate-90")}
 						/>
 						<div className="min-w-0">
-							<div className="truncate font-medium" title={session.title}>{session.title}</div>
-							<div className="truncate text-2xs text-passive">{working ? t("shell.memoryRowWorking") : t("shell.memoryRowIdle")}</div>
+							<div className="truncate text-sm font-medium text-settings-label" title={session.title}>{session.title}</div>
+							<div className="truncate text-xs text-settings-muted">{working ? t("shell.memoryRowWorking") : t("shell.memoryRowIdle")}</div>
 						</div>
 					</div>
 				</td>
 				<MemoryCell bytes={reading.rssBytes} maxBytes={maxBytes} tone={chip} />
-				<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums text-muted-foreground">
+				<td className="w-16 whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-xs tabular-nums text-settings-muted">
 					{working ? formatCPU(reading.cpuPercent) : "·"}
 				</td>
 				<td className="whitespace-nowrap px-2 py-2 text-right align-middle" onClick={(event) => event.stopPropagation()}>
@@ -537,23 +535,21 @@ function PausedRow({ session }: { session: WorkspaceSession }) {
 	const { t } = useTranslation();
 	const pause = useAgentPause(session);
 	return (
-		<tr className="border-t border-border opacity-60" data-testid="session-memory-paused-row">
+		<tr className="border-t border-(--color-border-settings-dialog-header)" data-testid="session-memory-paused-row">
 			<td className="max-w-0 px-4 py-2 align-middle">
-				<div className="min-w-0 pl-[calc(var(--space-2)+0.75rem)]">
-					<div className="truncate font-medium" title={session.title}>{session.title}</div>
-					<div className="truncate text-2xs text-passive">{t("shell.memoryRowPaused")}</div>
+				<div className="min-w-0 pl-[calc(var(--space-2)+0.75rem)] opacity-60">
+					<div className="truncate text-sm font-medium text-settings-label" title={session.title}>{session.title}</div>
+					<div className="truncate text-xs text-settings-muted">{t("shell.memoryRowPaused")}</div>
 				</div>
 			</td>
-			<td className="px-4 py-2 text-right align-middle font-mono text-2xs text-passive">·</td>
-			<td className="px-4 py-2 text-right align-middle font-mono text-2xs text-passive">·</td>
+			<td className="px-4 py-2 text-right align-middle font-mono text-xs text-settings-muted">·</td>
+			<td className="px-4 py-2 text-right align-middle font-mono text-xs text-settings-muted">·</td>
 			<td className="whitespace-nowrap px-2 py-2 text-right align-middle">
 				<Button
 					aria-label={t("shell.resumeAgentNamed", { title: session.title })}
-					className="text-muted-foreground hover:text-foreground"
 					disabled={pause.isPending}
 					onClick={() => pause.toggle()}
 					size="sm"
-					variant="ghost"
 				>
 					{pause.isPending ? <Loader2 className="size-icon-sm animate-spin" aria-hidden="true" /> : <Play className="size-icon-sm" aria-hidden="true" />}
 					<span>{t("shell.resumeAgent")}</span>
@@ -571,7 +567,7 @@ function OwnRow({ isExpanded, maxBytes, onToggle, reading }: { isExpanded: boole
 		<>
 			<tr
 				aria-expanded={canExpand ? isExpanded : undefined}
-				className={cn("border-t border-border", canExpand && "cursor-pointer hover:bg-interactive-hover")}
+				className={cn("border-t border-(--color-border-settings-dialog-header)", canExpand && "cursor-pointer hover:bg-interactive-hover")}
 				data-testid="session-memory-own-row"
 				onClick={canExpand ? onToggle : undefined}
 			>
@@ -581,12 +577,12 @@ function OwnRow({ isExpanded, maxBytes, onToggle, reading }: { isExpanded: boole
 							aria-hidden="true"
 							className={cn("size-icon-2xs shrink-0 text-passive transition-transform", canExpand ? "opacity-100" : "opacity-0", isExpanded && "rotate-90")}
 						/>
-						<div className="truncate font-medium">{t("shell.memoryOwnRow")}</div>
+						<div className="truncate text-sm font-medium text-settings-label">{t("shell.memoryOwnRow")}</div>
 					</div>
 				</td>
 				<MemoryCell bytes={reading.rssBytes} maxBytes={maxBytes} tone="neutral" />
-				<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-2xs tabular-nums text-muted-foreground">{formatCPU(reading.cpuPercent)}</td>
-				<td className="px-2 py-2" />
+				<td className="w-16 whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-xs tabular-nums text-settings-muted">{formatCPU(reading.cpuPercent)}</td>
+				<td className="w-28 px-2 py-2" />
 			</tr>
 			{isExpanded ? <ProcessRows processes={reading.processes} /> : null}
 		</>
@@ -599,12 +595,12 @@ function ProcessRows({ processes }: { processes: SessionMemoryReading["processes
 	return (
 		<>
 			{sorted.map((process, index) => (
-				<tr className="bg-foreground/[0.02] text-2xs" data-testid="session-memory-process-row" key={process.pid}>
-					<td className="max-w-0 py-1 pl-11 pr-4 font-mono text-muted-foreground">
+				<tr className="text-xs" data-testid="session-memory-process-row" key={process.pid}>
+					<td className="max-w-0 py-1 pl-11 pr-4 font-mono text-settings-muted">
 						<span aria-hidden="true" className="text-passive">{index === sorted.length - 1 ? "└─ " : "├─ "}</span>
 						<span className="truncate" title={`${process.command} (${process.pid})`}>{process.command || "?"}</span>
 					</td>
-					<td className="whitespace-nowrap px-4 py-1 text-right font-mono tabular-nums text-muted-foreground">{formatMemory(process.rssBytes)}</td>
+					<td className="whitespace-nowrap px-4 py-1 text-right font-mono tabular-nums text-settings-muted">{formatMemory(process.rssBytes)}</td>
 					<td className="whitespace-nowrap px-4 py-1 text-right font-mono tabular-nums text-passive">
 						{process.cpuPercent >= 1 ? formatCPU(process.cpuPercent) : "·"}
 					</td>
