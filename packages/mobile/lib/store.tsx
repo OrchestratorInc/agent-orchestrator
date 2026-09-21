@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 // Aliased: this file already declares its own `AppState` type for the
 // provider's context value, so the React Native app-lifecycle API imports
 // under a different name to avoid colliding with it.
@@ -31,6 +31,8 @@ import {
 import { isConfigured, loadConfig, machineIdentity, type ServerConfig } from "./config";
 import { useCloudAuth } from "./cloud/authStore";
 import { loadEnvironment, saveEnvironment } from "./environment/store";
+import { loadSessionSourceBoard } from "./environment/board";
+import { publishCloudBoardResult, selectBoardState, type BoardState } from "./environment/boardSelection";
 import { resolveSessionSource } from "./environment/resolve";
 import { shouldPollLocal } from "./environment/shouldPoll";
 import type { EnvironmentKind, SessionSource } from "./environment/types";
@@ -51,6 +53,13 @@ import { mobileTelemetry, trackFeature } from "./telemetry/runtime";
 import { useConversationEventTransport } from "./chat/conversationEvents";
 
 const ACTIVE_PROJECT_KEY = "ao.activeProject";
+const CLOUD_BOARD_POLL_MS = 5_000;
+const EMPTY_BOARD: BoardState<ProjectInfo, DashboardSession> = {
+	projects: [],
+	sessions: [],
+	loading: false,
+	error: null,
+};
 
 // Board-level connection state is derived from the REST poll. The session screen
 // tracks its own terminal mux connection separately.
@@ -202,9 +211,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	const [errorStatus, setErrorStatus] = useState<number | null>(null);
+	const [cloudBoard, setCloudBoard] = useState<BoardState<ProjectInfo, DashboardSession>>(EMPTY_BOARD);
+	const cloudRequestGenerationRef = useRef(0);
+	const sessionSource = useMemo(
+		() =>
+			resolveSessionSource({
+				environment,
+				cfg: config,
+				cloud: {
+					client: cloudAuth.client,
+					signedIn: cloudAuth.signedIn === true,
+					orgId: cloudAuth.orgId,
+				},
+			}),
+		[environment, config, cloudAuth.client, cloudAuth.signedIn, cloudAuth.orgId],
+	);
 	// Start authenticated streaming only after the REST probe succeeds. A stale
 	// password must cost one failed request, not a poll plus a parallel SSE attempt.
-	useConversationEventTransport(connection === "open" ? config : null);
+	useConversationEventTransport(environment === "local" && connection === "open" ? config : null);
 
 	const cfgRef = useRef<ServerConfig | null>(null);
 	// Gate for the connected event: emit only on the not-open -> open transition,
@@ -354,6 +378,54 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			clearInterval(id);
 		};
 	}, [config, appActive, reloadConfig]);
+
+	// A Cloud source is scoped to the signed-in account and organization. Every
+	// source change gets a new generation: any response already in flight can no
+	// longer publish into the new board. A layout effect makes that invalidation
+	// visible before passive poll effects can start their next request.
+	useLayoutEffect(() => {
+		cloudRequestGenerationRef.current += 1;
+		setCloudBoard(
+			environment === "cloud" && sessionSource?.kind === "cloud"
+				? { ...EMPTY_BOARD, loading: true }
+				: EMPTY_BOARD,
+		);
+	}, [environment, sessionSource]);
+
+	const fetchCloudBoard = useCallback(async (): Promise<void> => {
+		const source = sessionSource;
+		if (environment !== "cloud" || source?.kind !== "cloud") return;
+		const requestGeneration = cloudRequestGenerationRef.current;
+		setCloudBoard((current) => ({ ...current, loading: true, error: null }));
+		try {
+			const board = await loadSessionSourceBoard(source);
+			setCloudBoard((current) =>
+				publishCloudBoardResult({
+					current,
+					requestGeneration,
+					currentGeneration: cloudRequestGenerationRef.current,
+					result: { kind: "success", ...board },
+				}) ?? current,
+			);
+		} catch (cause) {
+			const message = cause instanceof Error ? cause.message : "Failed to load";
+			setCloudBoard((current) =>
+				publishCloudBoardResult({
+					current,
+					requestGeneration,
+					currentGeneration: cloudRequestGenerationRef.current,
+					result: { kind: "failure", error: message },
+				}) ?? current,
+			);
+		}
+	}, [environment, sessionSource]);
+
+	useEffect(() => {
+		if (environment !== "cloud" || sessionSource?.kind !== "cloud" || !appActive) return;
+		void fetchCloudBoard();
+		const poll = setInterval(() => void fetchCloudBoard(), CLOUD_BOARD_POLL_MS);
+		return () => clearInterval(poll);
+	}, [appActive, environment, fetchCloudBoard, sessionSource]);
 
 	// fetchAll returns false when it hit an auth failure (missing/wrong password
 	// or a 429 lockout). The poll loop uses that to STOP hammering: a phone that
@@ -518,10 +590,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
 	// During a re-pair, the previous machine's retained list is not evidence
 	// about the new machine. Keep it hidden until the active machine answers.
-	const { projects, known: projectsKnown } = projectsForMachine(
+	const { projects: localProjects, known: localProjectsKnown } = projectsForMachine(
 		knownProjects,
 		config && isConfigured(config) ? machineIdentity(config) : "",
 	);
+	const boardSelection = selectBoardState({
+		environment,
+		sourceKind: sessionSource?.kind,
+		local: { projects: localProjects, sessions, loading, error },
+		cloud: cloudBoard,
+		empty: EMPTY_BOARD,
+	});
+	const cloudActive = boardSelection.kind === "cloud";
+	const cloudEnvironment = environment === "cloud";
+	const { projects, sessions: activeSessions, loading: activeLoading, error: activeError } = boardSelection.state;
+	const projectsKnown = cloudActive ? true : boardSelection.kind === "none" ? false : localProjectsKnown;
 	const activeProjectId = useMemo(
 		() => resolveActiveProject(chosenProjectId, projects, projectsKnown),
 		[chosenProjectId, projects, projectsKnown],
@@ -626,8 +709,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		await trackFeature("send", () => sendMessage(cfgRef.current!, id, message));
 	}, []);
 	const refresh = useCallback(async () => {
+		if (cloudEnvironment) {
+			await fetchCloudBoard();
+			return;
+		}
 		await fetchAll();
-	}, [fetchAll]);
+	}, [cloudEnvironment, fetchAll, fetchCloudBoard]);
 
 	// Memoized so the provider doesn't hand every useApp() consumer a brand-new
 	// object (causing re-renders) on each render. Re-renders now track real state changes.
@@ -635,41 +722,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// dependency list below without ever busting it.
 	const getLastSyncAt = useCallback(() => lastSyncAtRef.current, []);
 
-	const sessionSource = useMemo(
-		() =>
-			resolveSessionSource({
-				environment,
-				cfg: config,
-				cloud: {
-					client: cloudAuth.client,
-					signedIn: cloudAuth.signedIn === true,
-					orgId: cloudAuth.orgId,
-				},
-			}),
-		[environment, config, cloudAuth.client, cloudAuth.signedIn, cloudAuth.orgId],
-	);
-
 	const value = useMemo<AppState>(
 		() => ({
-			config,
-			configured: !!config && isConfigured(config),
+			config: cloudEnvironment ? null : config,
+			configured: cloudEnvironment ? false : !!config && isConfigured(config),
 			environment,
 			setEnvironment,
 			sessionSource,
-			activeEndpoints,
+			activeEndpoints: cloudEnvironment ? [] : activeEndpoints,
 			projects,
 			projectsKnown,
-			sessions,
-			orchestrators,
-			orchestratorId,
-			stats,
+			sessions: activeSessions,
+			orchestrators: cloudEnvironment ? [] : orchestrators,
+			orchestratorId: cloudEnvironment ? null : orchestratorId,
+			stats: cloudEnvironment ? {} : stats,
 			activeProjectId,
-			connection,
-			notificationsUnread,
-			loading,
-			error,
-			errorStatus,
-			getLastSyncAt,
+			connection: cloudEnvironment ? "closed" : connection,
+			notificationsUnread: cloudEnvironment ? 0 : notificationsUnread,
+			loading: activeLoading,
+			error: activeError,
+			errorStatus: cloudEnvironment ? null : errorStatus,
+			getLastSyncAt: cloudEnvironment ? () => 0 : getLastSyncAt,
 			reloadConfig,
 			refresh,
 			setActiveProject,
@@ -685,20 +758,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		}),
 		[
 			config,
+			cloudEnvironment,
 			environment,
 			setEnvironment,
 			sessionSource,
+			activeEndpoints,
 			projects,
 			projectsKnown,
-			sessions,
+			activeSessions,
 			orchestrators,
 			orchestratorId,
 			stats,
 			activeProjectId,
 			connection,
 			notificationsUnread,
-			loading,
-			error,
+			activeLoading,
+			activeError,
 			errorStatus,
 			getLastSyncAt,
 			reloadConfig,

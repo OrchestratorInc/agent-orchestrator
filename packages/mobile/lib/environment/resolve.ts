@@ -36,10 +36,8 @@ function resetCache(): void {
  * (no daemon paired for local; not signed in or no org resolved yet for
  * cloud).
  *
- * Deliberately unconsumed for now — the store exposes it via useSessionSource
- * but its existing polling/fetching/spawn paths still call the daemon
- * functions directly. Nothing calls through the SessionSource interface in
- * production yet.
+ * The store uses this source for the Cloud board while daemon mutations retain
+ * their existing Local-only paths.
  */
 export function resolveSessionSource(input: {
 	// `null` means the persisted choice hasn't loaded yet — see
