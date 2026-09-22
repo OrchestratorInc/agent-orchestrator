@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { Button } from "./ui/button";
@@ -7,7 +8,7 @@ import { useSessionDelivery } from "../hooks/useSessionDelivery";
 
 export type DeliveryStatus = components["schemas"]["DeliveryStatus"];
 
-function actionLabel(delivery: DeliveryStatus, t: (key: string, options?: Record<string, unknown>) => string): string {
+function actionLabel(delivery: DeliveryStatus, t: TFunction): string {
 	const pr = delivery.pullRequest?.number;
 	switch (delivery.action) {
 		case "commit_and_publish_pr": return t("inspector.delivery.commitAndCreate");
