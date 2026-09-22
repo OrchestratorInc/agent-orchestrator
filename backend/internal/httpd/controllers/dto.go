@@ -610,6 +610,21 @@ type WorkspaceHistoryResponse struct {
 	Behind           *int                     `json:"behind,omitempty"`
 }
 
+// AdvanceDeliveryRequest asks AO to perform exactly the action shown for a reviewed workspace snapshot.
+type AdvanceDeliveryRequest struct {
+	Action                   sessionsvc.DeliveryAction `json:"action" enum:"commit_and_publish_pr,publish_pr,commit_and_push,push"`
+	ExpectedWorkspaceVersion string                    `json:"expectedWorkspaceVersion"`
+	CommitMessage            string                    `json:"commitMessage,omitempty"`
+}
+
+// AdvanceDeliveryResponse reports completed irreversible stages and refreshed state.
+type AdvanceDeliveryResponse struct {
+	Delivery    DeliveryStatus       `json:"delivery"`
+	PullRequest *DeliveryPullRequest `json:"pullRequest,omitempty"`
+	Committed   bool                 `json:"committed"`
+	Pushed      bool                 `json:"pushed"`
+}
+
 // ListPRFilesResponse is the exact base...head changed-file set for one PR.
 type ListPRFilesResponse struct {
 	SessionID domain.SessionID       `json:"sessionId"`

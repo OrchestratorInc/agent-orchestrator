@@ -84,6 +84,8 @@ type fakeSessionService struct {
 	listPRErr                  error
 	linkedPRs                  []domain.ChangeRequestReference
 	workspaceErr               error
+	deliveryInput              sessionsvc.DeliveryActionInput
+	deliveryResult             sessionsvc.DeliveryActionResult
 	staged                     []ports.SpawnAttachment
 	stagedPaths                []string
 	stageErr                   error
@@ -687,6 +689,11 @@ func (f *fakeSessionService) GetWorkspaceHistory(ctx context.Context, id domain.
 		SessionID: files.SessionID, Commits: files.Commits, CommitsTruncated: files.CommitsTruncated,
 		Ahead: files.Ahead, Behind: files.Behind,
 	}, nil
+}
+
+func (f *fakeSessionService) AdvanceDelivery(_ context.Context, _ domain.SessionID, input sessionsvc.DeliveryActionInput) (sessionsvc.DeliveryActionResult, error) {
+	f.deliveryInput = input
+	return f.deliveryResult, f.workspaceErr
 }
 
 func (f *fakeSessionService) ListPRFiles(_ context.Context, id domain.SessionID, _ int, _ string) (sessionsvc.PRFiles, error) {

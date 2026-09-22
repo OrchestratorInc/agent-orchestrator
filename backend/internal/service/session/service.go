@@ -189,6 +189,7 @@ type Service struct {
 	store               Store
 	prClaimer           ports.PRClaimer
 	scm                 scmProvider
+	publisher           ports.SCMPullRequestPublisher
 	tracker             ports.Tracker
 	clock               func() time.Time
 	dataDir             string
@@ -202,6 +203,8 @@ type Service struct {
 	workspaceCache      *workspaceCache
 	workspaceManifests  *workspaceManifestIndex
 	workspaceEditsMu    sync.Mutex
+	deliveryLocksMu     sync.Mutex
+	deliveryLocks       map[domain.SessionID]*sync.Mutex
 	// workspaceGroup coalesces concurrent cache-miss compare/status lookups
 	// for the same (session, root): "Expand All" on many files fires that
 	// many GetWorkspaceFile calls at once, and without this each one would
@@ -253,6 +256,7 @@ type Deps struct {
 	Store     Store
 	PRClaimer ports.PRClaimer
 	SCM       scmProvider
+	Publisher ports.SCMPullRequestPublisher
 	Tracker   ports.Tracker
 	Clock     func() time.Time
 	DataDir   string
@@ -284,7 +288,11 @@ func NewWithDeps(d Deps) *Service {
 	if backgroundContext == nil {
 		backgroundContext = context.Background()
 	}
-	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler}
+	publisher := d.Publisher
+	if publisher == nil {
+		publisher, _ = d.SCM.(ports.SCMPullRequestPublisher)
+	}
+	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, publisher: publisher, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, deliveryLocks: make(map[domain.SessionID]*sync.Mutex)}
 	if s.prClaimer == nil {
 		if w, ok := d.Store.(ports.PRClaimer); ok {
 			s.prClaimer = w
