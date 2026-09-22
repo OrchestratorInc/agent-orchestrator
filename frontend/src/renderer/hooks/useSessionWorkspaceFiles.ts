@@ -23,7 +23,7 @@ export type WorkspaceFileSections = components["schemas"]["WorkspaceFileSections
 export type WorkspaceCommitSummary = components["schemas"]["WorkspaceCommitSummary"];
 export type WorkspaceHistoryResponse = components["schemas"]["WorkspaceHistoryResponse"];
 export type WorkspaceSummary = components["schemas"]["WorkspaceSummary"];
-export type WorkspaceFilesResponse = Omit<components["schemas"]["ListWorkspaceFilesResponse"], "files" | "sections" | "workspaceVersion" | "degraded" | "degradedCode"> & {
+export type WorkspaceFilesResponse = Omit<components["schemas"]["ListWorkspaceFilesResponse"], "delivery" | "files" | "sections" | "workspaceVersion" | "degraded" | "degradedCode"> & {
 	compareMode?: WorkspaceCompareMode;
 	files: WorkspaceFileSummary[];
 	sections: {
@@ -37,6 +37,7 @@ export type WorkspaceFilesResponse = Omit<components["schemas"]["ListWorkspaceFi
 	degradedCode?: string;
 	stale?: boolean;
 	refreshing?: boolean;
+	delivery?: components["schemas"]["DeliveryStatus"];
 };
 export type WorkspaceFileDetail = Omit<components["schemas"]["WorkspaceFileResponse"], "editable" | "fileFingerprint" | "workspaceVersion"> & {
 	editable?: boolean;
