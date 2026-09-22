@@ -84,7 +84,16 @@ func (s *Service) AdvanceDelivery(ctx context.Context, id domain.SessionID, inpu
 			return result, err
 		}
 	}
-	if input.Action == DeliveryActionPush || input.Action == DeliveryActionCommitAndPush || input.Action == DeliveryActionCommitAndPublish || (input.Action == DeliveryActionPublishPR && (current.Ahead == nil || *current.Ahead > 0)) {
+	shouldPush := input.Action == DeliveryActionPush || input.Action == DeliveryActionCommitAndPush || input.Action == DeliveryActionCommitAndPublish || (input.Action == DeliveryActionPublishPR && (current.Ahead == nil || *current.Ahead > 0))
+	if shouldPush && (input.Action == DeliveryActionPublishPR || input.Action == DeliveryActionCommitAndPublish) {
+		// A prior attempt may have pushed successfully and failed while creating or
+		// associating the PR. Reconcile the exact remote branch before retrying so
+		// that the retry does not repeat a completed transport mutation.
+		if matches, matchErr := deliveryRemoteBranchMatchesHead(ctx, rec.Metadata.WorkspacePath, current.Delivery.Branch); matchErr == nil && matches {
+			shouldPush = false
+		}
+	}
+	if shouldPush {
 		branch := current.Delivery.Branch
 		if branch == "" {
 			return result, apierr.Conflict("DELIVERY_BRANCH_REQUIRED", "The current branch cannot be determined", nil)
@@ -113,7 +122,7 @@ func (s *Service) AdvanceDelivery(ctx context.Context, id domain.SessionID, inpu
 		}
 		target := strings.TrimPrefix(strings.TrimPrefix(current.CompareBaseRef, "refs/remotes/"), "origin/")
 		if target == "" || target == "HEAD" {
-			target = "main"
+			return result, apierr.Conflict("DELIVERY_TARGET_REQUIRED", "The pull request target branch cannot be determined safely", nil)
 		}
 		title := current.Delivery.CommitSubject
 		if title == "" {
@@ -134,6 +143,22 @@ func (s *Service) AdvanceDelivery(ctx context.Context, id domain.SessionID, inpu
 		result.Delivery = refreshed.Delivery
 	}
 	return result, refreshErr
+}
+
+func deliveryRemoteBranchMatchesHead(ctx context.Context, root, branch string) (bool, error) {
+	if strings.TrimSpace(branch) == "" {
+		return false, nil
+	}
+	head, err := gitDeliveryOutput(ctx, root, "rev-parse", "HEAD")
+	if err != nil {
+		return false, err
+	}
+	remote, err := gitDeliveryOutput(ctx, root, "ls-remote", "--heads", "origin", "refs/heads/"+branch)
+	if err != nil {
+		return false, err
+	}
+	fields := strings.Fields(remote)
+	return len(fields) >= 2 && fields[0] == strings.TrimSpace(head), nil
 }
 
 func (s *Service) claimPublishedPullRequest(ctx context.Context, rec domain.SessionRecord, repo ports.SCMRepo, pr ports.SCMPRObservation) error {

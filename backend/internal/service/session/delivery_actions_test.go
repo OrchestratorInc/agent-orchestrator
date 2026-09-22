@@ -89,3 +89,14 @@ func TestAdvanceDeliveryCommitSurvivesPushFailureAsRecoverableCommit(t *testing.
 		t.Fatalf("worktree not preserved as committed state: %q", got)
 	}
 }
+
+func TestDeliveryRemoteBranchMatchesHeadRecognizesCompletedPush(t *testing.T) {
+	_, repo := deliveryActionService(t)
+	if matches, err := deliveryRemoteBranchMatchesHead(context.Background(), repo, "ao/card"); err != nil || matches {
+		t.Fatalf("before push: matches=%v err=%v", matches, err)
+	}
+	runGit(t, repo, "push", "origin", "HEAD:refs/heads/ao/card")
+	if matches, err := deliveryRemoteBranchMatchesHead(context.Background(), repo, "ao/card"); err != nil || !matches {
+		t.Fatalf("after push: matches=%v err=%v", matches, err)
+	}
+}

@@ -156,6 +156,10 @@ func classifyDelivery(files WorkspaceFiles, facts deliveryGitFacts, prs []domain
 		status.State = DeliveryStateSynchronized
 		return status
 	}
+	target := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(files.CompareBaseRef), "refs/remotes/"), "origin/")
+	if target == "" || target == "HEAD" {
+		return block("The pull request target branch cannot be determined safely.")
+	}
 	if dirty {
 		status.State, status.Action = DeliveryStateUncommitted, DeliveryActionCommitAndPublish
 		return status
