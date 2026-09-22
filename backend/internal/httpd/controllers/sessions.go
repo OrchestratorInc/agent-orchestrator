@@ -2626,6 +2626,7 @@ func workspaceFilesResponse(files sessionsvc.WorkspaceFiles) ListWorkspaceFilesR
 		DegradedCode:     files.DegradedCode,
 		Ahead:            files.Ahead,
 		Behind:           files.Behind,
+		Delivery:         deliveryStatusResponse(files.Delivery),
 	}
 }
 
@@ -2652,6 +2653,19 @@ func workspaceHistoryResponse(history sessionsvc.WorkspaceHistory) WorkspaceHist
 		SessionID: history.SessionID, Commits: workspaceCommitsResponse(history.Commits),
 		CommitsTruncated: history.CommitsTruncated, Ahead: history.Ahead, Behind: history.Behind,
 	}
+}
+
+func deliveryStatusResponse(status sessionsvc.DeliveryStatus) DeliveryStatus {
+	out := DeliveryStatus{
+		State: status.State, Action: status.Action, BlockedReason: status.BlockedReason,
+		WorkspaceVersion: status.WorkspaceVersion, Branch: status.Branch, Repository: status.Repository,
+		CommitCount: status.CommitCount, CommitSubject: status.CommitSubject, ChangedFiles: status.ChangedFiles,
+		Additions: status.Additions, Deletions: status.Deletions, Ahead: status.Ahead, Behind: status.Behind,
+	}
+	if status.PullRequest != nil {
+		out.PullRequest = &DeliveryPullRequest{URL: status.PullRequest.URL, Number: status.PullRequest.Number}
+	}
+	return out
 }
 
 func prFilesResponse(files sessionsvc.PRFiles) ListPRFilesResponse {

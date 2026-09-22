@@ -3337,6 +3337,11 @@ func TestSessionsAPI_ListWorkspaceFiles(t *testing.T) {
 			{Path: "notes.txt", PreviousPath: "old-notes.txt", Status: sessionsvc.WorkspaceFileRenamed, Additions: 1, Size: 11},
 		},
 		CommitsTruncated: true,
+		Delivery: sessionsvc.DeliveryStatus{
+			State: sessionsvc.DeliveryStateReadyToPublish, Action: sessionsvc.DeliveryActionPublishPR,
+			WorkspaceVersion: "version-1", Branch: "ao/card", Repository: "acme/widget",
+			CommitCount: 1, CommitSubject: "feat: card", ChangedFiles: 2, Additions: 3, Deletions: 1,
+		},
 	}
 	srv := newSessionTestServer(t, svc)
 
@@ -3360,6 +3365,14 @@ func TestSessionsAPI_ListWorkspaceFiles(t *testing.T) {
 			Editable     bool   `json:"editable"`
 		} `json:"files"`
 		CommitsTruncated bool `json:"commitsTruncated"`
+		Delivery         struct {
+			State            string `json:"state"`
+			Action           string `json:"action"`
+			WorkspaceVersion string `json:"workspaceVersion"`
+			Branch           string `json:"branch"`
+			Repository       string `json:"repository"`
+			CommitSubject    string `json:"commitSubject"`
+		} `json:"delivery"`
 	}
 	mustJSON(t, body, &got)
 	if got.SessionID != "ao-1" || len(got.Files) != 2 || !got.CommitsTruncated {
@@ -3376,6 +3389,9 @@ func TestSessionsAPI_ListWorkspaceFiles(t *testing.T) {
 	}
 	if got.Files[1].Path != "notes.txt" || got.Files[1].PreviousPath != "old-notes.txt" || got.Files[1].Status != "renamed" {
 		t.Fatalf("second file = %#v", got.Files[1])
+	}
+	if got.Delivery.State != "ready_to_publish" || got.Delivery.Action != "publish_pr" || got.Delivery.WorkspaceVersion != "version-1" || got.Delivery.Branch != "ao/card" || got.Delivery.Repository != "acme/widget" || got.Delivery.CommitSubject != "feat: card" {
+		t.Fatalf("delivery = %#v", got.Delivery)
 	}
 }
 

@@ -304,6 +304,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersWorkspaceFileSections":                    "WorkspaceFileSections",
 	"ControllersWorkspaceCommitSummary":                   "WorkspaceCommitSummary",
 	"ControllersWorkspaceSummary":                         "WorkspaceSummary",
+	"ControllersDeliveryStatus":                           "DeliveryStatus",
+	"ControllersDeliveryPullRequest":                      "DeliveryPullRequest",
 	"ControllersEnsureCodexAccountsRequest":               "EnsureCodexAccountsRequest",
 	"ControllersConsumeCodexAccountResetCreditRequest":    "ConsumeCodexAccountResetCreditRequest",
 	"ControllersCodexAccountsResponse":                    "CodexAccountsResponse",
