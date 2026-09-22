@@ -182,6 +182,7 @@ function Shell() {
 				/>
 				<Stack.Screen name="session/[id]" options={{ title: "Session", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="review/[sessionId]" options={{ title: "Review", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
+				<Stack.Screen name="reviewer/[reviewId]" options={{ title: "Reviewer", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="shell/[handleId]" options={{ title: "Worktree shell", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="preview/[id]" options={{ title: "Preview", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen
