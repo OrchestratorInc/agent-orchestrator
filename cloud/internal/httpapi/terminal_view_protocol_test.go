@@ -48,6 +48,116 @@ type viewerOutputStore struct {
 	grid terminalview.Grid
 }
 
+type viewerAttachStore struct {
+	Store
+	mu       sync.Mutex
+	viewers  map[string]terminalview.Viewer
+	released chan struct{}
+}
+
+func (*viewerAttachStore) OpenTerminal(_ context.Context, _, _ string, _ time.Duration) (domain.TerminalSession, error) {
+	return domain.TerminalSession{ID: "term", OrgID: "org", SessionID: "session", WorkerEpoch: 1, Kind: "agent", Scopes: []string{"terminal:view"}}, nil
+}
+
+func (*viewerAttachStore) RefreshTerminalInteraction(context.Context, domain.TerminalSession, time.Duration) error {
+	return nil
+}
+
+func (*viewerAttachStore) TerminalGrid(context.Context, domain.TerminalSession) (terminalview.Grid, error) {
+	return terminalview.Grid{}, nil
+}
+
+func (*viewerAttachStore) ListTerminalOutput(context.Context, domain.TerminalSession, int64, int) ([]domain.TerminalOutput, string, error) {
+	return nil, "open", nil
+}
+
+func (s *viewerAttachStore) UpsertTerminalViewer(_ context.Context, _ domain.TerminalSession, id string, viewer terminalview.Viewer, _ time.Duration) (terminalview.Grid, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.viewers == nil {
+		s.viewers = make(map[string]terminalview.Viewer)
+	}
+	s.viewers[id] = viewer
+	return terminalview.Grid{}, nil
+}
+
+func (s *viewerAttachStore) RemoveTerminalViewer(_ context.Context, _ domain.TerminalSession, id string) (terminalview.Grid, error) {
+	s.mu.Lock()
+	delete(s.viewers, id)
+	s.mu.Unlock()
+	close(s.released)
+	return terminalview.Grid{}, nil
+}
+
+func TestTerminalViewerAttachRejectsInvalidFirstFrame(t *testing.T) {
+	store := &viewerAttachStore{released: make(chan struct{})}
+	server := &Server{store: store, logger: slog.Default(), terminalStreams: newTerminalStreams()}
+	listener := httptest.NewServer(http.HandlerFunc(server.connectTerminal))
+	defer listener.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	connection, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(listener.URL, "http")+"?ticket=t&kind=agent&protocol=3", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.CloseNow()
+	_, _, err = connection.Read(ctx) // reset
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := connection.Write(ctx, websocket.MessageText, []byte(`{"type":"resize","columns":80,"rows":24}`)); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = connection.Read(ctx)
+	if websocket.CloseStatus(err) != websocket.StatusProtocolError {
+		t.Fatalf("close status %v, error %v", websocket.CloseStatus(err), err)
+	}
+}
+
+func TestTerminalViewerAttachAllowsReadOnlyUpdateAndReleasesOnClose(t *testing.T) {
+	store := &viewerAttachStore{released: make(chan struct{})}
+	server := &Server{store: store, logger: slog.Default(), terminalStreams: newTerminalStreams()}
+	listener := httptest.NewServer(http.HandlerFunc(server.connectTerminal))
+	defer listener.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	connection, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(listener.URL, "http")+"?ticket=t&kind=agent&protocol=3", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.CloseNow()
+	_, _, err = connection.Read(ctx) // reset
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, frame := range []string{
+		`{"type":"viewer","role":"secondary","visible":true,"columns":0,"rows":0}`,
+		`{"type":"viewer","role":"secondary","visible":false,"columns":55,"rows":39}`,
+	} {
+		if err := connection.Write(ctx, websocket.MessageText, []byte(frame)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A read-only attachment can update its sizing lease, but not send input.
+	if err := connection.Write(ctx, websocket.MessageText, []byte(`{"type":"input","data":"x"}`)); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = connection.Read(ctx)
+	if websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
+		t.Fatalf("close status %v, error %v", websocket.CloseStatus(err), err)
+	}
+	select {
+	case <-store.released:
+	case <-time.After(time.Second):
+		t.Fatal("viewer lease not released")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.viewers) != 0 {
+		t.Fatalf("viewers still attached: %+v", store.viewers)
+	}
+}
+
 func (s *viewerOutputStore) TerminalGrid(context.Context, domain.TerminalSession) (terminalview.Grid, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
