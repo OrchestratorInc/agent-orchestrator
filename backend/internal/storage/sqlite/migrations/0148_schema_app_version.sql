@@ -7,7 +7,11 @@ CREATE TABLE IF NOT EXISTS schema_app_version (
 );
 
 INSERT INTO schema_app_version (id, version)
+<<<<<<<< HEAD:backend/internal/storage/sqlite/migrations/0130_schema_app_version.sql
 VALUES (1, 130)
+========
+VALUES (1, 148)
+>>>>>>>> c3e355ee4 (fix(storage): avoid schema migration version collision):backend/internal/storage/sqlite/migrations/0148_schema_app_version.sql
 ON CONFLICT(id) DO UPDATE SET
     version = excluded.version,
     updated_at = CURRENT_TIMESTAMP;
