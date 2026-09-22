@@ -36,6 +36,27 @@ type SCMMergeResult struct {
 	MergeCommitSHA string
 }
 
+// SCMPublishRequest identifies one exact branch-to-base pull request.
+type SCMPublishRequest struct {
+	Repo         SCMRepo
+	SourceBranch string
+	TargetBranch string
+	HeadSHA      string
+	Title        string
+	Body         string
+}
+
+// SCMPublishResult returns the canonical PR and whether an existing open PR was reconciled.
+type SCMPublishResult struct {
+	PR         SCMPRObservation
+	Reconciled bool
+}
+
+// SCMPullRequestPublisher reconciles an equivalent open PR before creating one.
+type SCMPullRequestPublisher interface {
+	ReconcileOrCreatePullRequest(ctx context.Context, request SCMPublishRequest) (SCMPublishResult, error)
+}
+
 // SCMMerger mutates pull requests through an SCM provider.
 type SCMMerger interface {
 	MergePullRequest(ctx context.Context, request SCMMergeRequest) (SCMMergeResult, error)
