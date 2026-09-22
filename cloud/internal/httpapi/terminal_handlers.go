@@ -515,17 +515,17 @@ func (s *Server) writeTerminalOutput(
 				processReady = true
 			}
 			if viewerAware {
+				if state == "failed" {
+					return errTerminalProcessUnavailable
+				}
+				if state == "closed" {
+					return connection.Close(websocket.StatusNormalClosure, "terminal process exited")
+				}
 				grid, err := s.store.TerminalGrid(ctx, terminal)
 				if err != nil {
 					return err
 				}
 				if grid == (terminalview.Grid{}) {
-					if state == "failed" {
-						return errTerminalProcessUnavailable
-					}
-					if state == "closed" {
-						return connection.Close(websocket.StatusNormalClosure, "terminal process exited")
-					}
 					pollDurable = false
 					continue
 				}

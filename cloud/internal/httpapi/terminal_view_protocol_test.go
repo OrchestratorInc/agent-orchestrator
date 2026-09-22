@@ -48,6 +48,41 @@ type viewerOutputStore struct {
 	grid terminalview.Grid
 }
 
+type closedViewerOutputStore struct{ Store }
+
+func (closedViewerOutputStore) ListTerminalOutput(context.Context, domain.TerminalSession, int64, int) ([]domain.TerminalOutput, string, error) {
+	return nil, "closed", nil
+}
+
+func (closedViewerOutputStore) TerminalGrid(context.Context, domain.TerminalSession) (terminalview.Grid, error) {
+	panic("closed terminal must not request its grid")
+}
+
+func TestTerminalViewerClosedProcessSkipsGridRead(t *testing.T) {
+	server := &Server{store: closedViewerOutputStore{}, logger: slog.Default()}
+	listener := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connection, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer connection.CloseNow()
+		var writeMu sync.Mutex
+		_ = server.writeTerminalOutput(r.Context(), connection, domain.TerminalSession{ID: "term"}, 0, true, &writeMu, true)
+	}))
+	defer listener.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	connection, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(listener.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.CloseNow()
+	_, _, err = connection.Read(ctx)
+	if websocket.CloseStatus(err) != websocket.StatusNormalClosure {
+		t.Fatalf("close status %v, error %v", websocket.CloseStatus(err), err)
+	}
+}
+
 type viewerAttachStore struct {
 	Store
 	mu       sync.Mutex
