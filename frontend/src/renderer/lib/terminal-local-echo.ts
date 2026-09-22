@@ -479,6 +479,8 @@ export function withLineBufferedLocalInput(
 	return {
 		open: (id, cols, rows) => inner.open(id, cols, rows),
 		resize: (id, cols, rows, force) => inner.resize(id, cols, rows, force),
+		setViewerState: inner.setViewerState?.bind(inner),
+		onAuthoritativeSize: inner.onAuthoritativeSize?.bind(inner),
 		close: (id) => inner.close(id),
 		onExit: (id, listener) => inner.onExit(id, listener),
 		onOpened: (id, listener) => inner.onOpened(id, listener),
