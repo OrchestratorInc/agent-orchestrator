@@ -1937,8 +1937,6 @@
 	"shell.memoryState.unknown": "메모리를 읽을 수 없음",
 	"shell.memoryBarDetail": "{{total}} 중 {{free}} 여유 · AO {{used}} 사용 · 압박 {{pressure}}",
 	"shell.memoryFixNotAO": "AO 아님",
-	"shell.memoryFixKill": "{{title}} 종료",
-	"shell.memoryKillFrees": "종료 · {{size}} 확보",
 	"shell.memorySuggestOtherApps": "메모리 대부분을 다른 앱이 사용 중입니다. AO는 {{size}}뿐입니다.",
 	"shell.memorySuggestLargest": "{{title}}이(가) 메모리를 가장 많이 사용 중",
 	"shell.memoryLegendAO": "AO",

@@ -50,7 +50,7 @@ describe("resourceSuggestion", () => {
 			session({ id: "small", working: true, rssBytes: 300 * MB }),
 			session({ id: "big", title: "build-indexer", working: true, rssBytes: 3 * GB }),
 		]);
-		expect(out).toEqual({ kind: "kill_largest", sessionId: "big", title: "build-indexer", rssBytes: 3 * GB });
+		expect(out).toEqual({ kind: "largest", sessionId: "big", title: "build-indexer", rssBytes: 3 * GB });
 	});
 });
 

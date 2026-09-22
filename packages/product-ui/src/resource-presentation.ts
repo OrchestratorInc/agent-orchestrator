@@ -60,12 +60,13 @@ const AO_SHARE_MATTERS = 0.25;
 export type ResourceSuggestion =
 	| { kind: "none" }
 	| { kind: "other_apps"; aoBytes: number }
-	| { kind: "kill_largest"; sessionId: string; title: string; rssBytes: number };
+	| { kind: "largest"; sessionId: string; title: string; rssBytes: number };
 
 /**
- * Evaluated top to bottom, first match wins, so there is only ever one line
- * and one button. Fine: nothing. AO holding under a quarter of what is in
- * use: say so, no button. Otherwise: point at the biggest session.
+ * Evaluated top to bottom, first match wins, so there is only ever one line.
+ * Fine: nothing. AO holding under a quarter of what is in use: say so.
+ * Otherwise: name the biggest session. The window never acts on it; the
+ * board's own kill is where sessions end.
  */
 export function resourceSuggestion(
 	state: PressureState,
@@ -78,7 +79,7 @@ export function resourceSuggestion(
 	if (inUse > 0 && aoBytes / inUse < AO_SHARE_MATTERS) return { kind: "other_apps", aoBytes };
 	const largest = [...sessions].sort((a, b) => b.rssBytes - a.rssBytes)[0];
 	if (!largest) return { kind: "none" };
-	return { kind: "kill_largest", sessionId: largest.id, title: largest.title, rssBytes: largest.rssBytes };
+	return { kind: "largest", sessionId: largest.id, title: largest.title, rssBytes: largest.rssBytes };
 }
 
 export type ChipTone = "neutral" | "warning" | "critical";

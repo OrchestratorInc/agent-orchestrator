@@ -1966,8 +1966,6 @@
 	"shell.memoryState.unknown": "Memória não legível",
 	"shell.memoryBarDetail": "{{free}} livres de {{total}} · AO ocupa {{used}} · pressão {{pressure}}",
 	"shell.memoryFixNotAO": "não é o AO",
-	"shell.memoryFixKill": "Encerrar {{title}}",
-	"shell.memoryKillFrees": "Encerrar · libera {{size}}",
 	"shell.memorySuggestOtherApps": "Outros apps estão usando a maior parte da memória. O AO usa só {{size}}.",
 	"shell.memorySuggestLargest": "{{title}} é a que mais usa memória",
 	"shell.memoryLegendAO": "AO",

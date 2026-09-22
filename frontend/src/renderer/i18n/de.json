@@ -1937,8 +1937,6 @@
 	"shell.memoryState.unknown": "Speicher nicht lesbar",
 	"shell.memoryBarDetail": "{{free}} frei von {{total}} · AO belegt {{used}} · Druck {{pressure}}",
 	"shell.memoryFixNotAO": "nicht AO",
-	"shell.memoryFixKill": "{{title}} beenden",
-	"shell.memoryKillFrees": "Beenden · gibt {{size}} frei",
 	"shell.memorySuggestOtherApps": "Andere Apps belegen den Großteil des Speichers. AO nur {{size}}.",
 	"shell.memorySuggestLargest": "{{title}} belegt am meisten Speicher",
 	"shell.memoryLegendAO": "AO",

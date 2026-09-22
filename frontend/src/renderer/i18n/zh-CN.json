@@ -1334,8 +1334,6 @@
 	"shell.memoryState.unknown": "无法读取内存",
 	"shell.memoryBarDetail": "{{total}} 中剩余 {{free}} · AO 占用 {{used}} · 压力 {{pressure}}",
 	"shell.memoryFixNotAO": "不是 AO",
-	"shell.memoryFixKill": "终止 {{title}}",
-	"shell.memoryKillFrees": "终止 · 释放 {{size}}",
 	"shell.memorySuggestOtherApps": "大部分内存被其他应用占用。AO 只用了 {{size}}。",
 	"shell.memorySuggestLargest": "{{title}} 占用的内存最多",
 	"shell.memoryLegendAO": "AO",

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toKanbanColumn } from "@aoagents/product-ui";
@@ -146,29 +146,18 @@ describe("AppMemoryIndicator", () => {
 		expect(button).toHaveAttribute("data-memory-state", "fine");
 		expect(button).toHaveAttribute("aria-label", "Fine · 21.5 GB free of 34.4 GB · AO holds 2.1 GB · pressure 0.0");
 
-		// Stalling on memory and AO holds most of what is in use: point at the biggest session.
+		// Stalling on memory and AO holds most of what is in use: colour, no phrase.
 		appMemoryMock.mockReturnValue(appReading(3, 12, 20));
 		rerender();
 		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("data-memory-state", "tight_soon");
-		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("21.5 GB· Kill big worker");
+		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("21.5 GB");
+		expect(screen.getByTestId("app-memory-indicator")).not.toHaveTextContent("·");
 
 		// Tight, but AO is a sliver of what is in use: say so, offer nothing.
 		appMemoryMock.mockReturnValue(appReading(1, 40, 2));
 		rerender();
 		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("data-memory-state", "tight");
 		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("2.1 GB· not AO");
-	});
-
-	it("points at the biggest session when everything is busy", () => {
-		const workspace: WorkspaceSummary = {
-			id: "p1",
-			name: "radic",
-			sessions: [session("s-big", "big worker", "active"), session("s-small", "small worker", "active")],
-		} as WorkspaceSummary;
-		workspaceQueryMock.mockReturnValue({ data: [workspace], isError: false, isSuccess: true });
-		appMemoryMock.mockReturnValue(appReading(1, 40, 20));
-		renderButton();
-		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("21.5 GB· Kill big worker");
 	});
 
 	it("goes grey and falls back to AO's own size where the host cannot be read", () => {
@@ -179,7 +168,7 @@ describe("AppMemoryIndicator", () => {
 		expect(button).toHaveAttribute("data-memory-state", "unknown");
 	});
 
-	it("opens a window: stacked bar, rows largest first with a kill that frees memory, AO pinned last", async () => {
+	it("opens a window: stacked bar, rows largest first with no actions, AO pinned last", async () => {
 		renderButton();
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		const table = await screen.findByTestId("session-memory-table");
@@ -200,18 +189,9 @@ describe("AppMemoryIndicator", () => {
 		expect(own).toHaveTextContent("315 MB");
 		expect(within(own).queryByRole("button")).not.toBeInTheDocument();
 
-		// The row's button is the existing kill confirmation, so nothing is sent until confirmed.
-		const kill = within(rows[0]).getByRole("button", { name: "Terminate big worker" });
-		expect(kill).toHaveTextContent("Kill · frees 2.3 GB");
-		await userEvent.click(kill);
+		// The window only measures: no row can end a session from here.
+		expect(within(table).queryByRole("button")).not.toBeInTheDocument();
 		expect(postMock).not.toHaveBeenCalled();
-		const dialog = await screen.findByRole("dialog", { name: "Terminate big worker?" });
-		await userEvent.click(within(dialog).getByRole("button", { name: "Yes, terminate session" }));
-		await waitFor(() =>
-			expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/kill", {
-				params: { path: { sessionId: "s-big" } },
-			}),
-		);
 	});
 
 	it("expands any number of rows into their process trees, and collapses each on a second click", async () => {
@@ -258,7 +238,7 @@ describe("AppMemoryIndicator", () => {
 		expect(screen.getByTestId("session-memory-suggestion")).toHaveTextContent("big worker is using the most memory");
 		const rows = within(table).getAllByTestId("session-memory-row");
 		expect(rows.every((row) => row.getAttribute("data-chip-tone") === "warning")).toBe(true);
-		expect(screen.getByTestId("session-memory-fix")).toHaveTextContent("Kill big worker");
+		expect(screen.queryByTestId("session-memory-fix")).not.toBeInTheDocument();
 	});
 
 	it("marks the single largest session red when the machine is tight and everything is busy", async () => {
@@ -274,22 +254,6 @@ describe("AppMemoryIndicator", () => {
 		const rows = within(await screen.findByTestId("session-memory-table")).getAllByTestId("session-memory-row");
 		expect(rows[0]).toHaveAttribute("data-chip-tone", "critical");
 		expect(rows[1]).toHaveAttribute("data-chip-tone", "neutral");
-		expect(screen.getByTestId("session-memory-fix")).toHaveTextContent("Kill big worker");
-	});
-
-	it("opens the largest row's kill confirmation from the suggestion button", async () => {
-		const workspace: WorkspaceSummary = {
-			id: "p1",
-			name: "radic",
-			sessions: [session("s-big", "big worker", "active"), session("s-small", "small worker", "active")],
-		} as WorkspaceSummary;
-		workspaceQueryMock.mockReturnValue({ data: [workspace], isError: false, isSuccess: true });
-		appMemoryMock.mockReturnValue(appReading(1, 40, 20));
-		renderButton();
-		await userEvent.click(screen.getByTestId("app-memory-indicator"));
-		await screen.findByTestId("session-memory-table");
-		await userEvent.click(screen.getByTestId("session-memory-fix"));
-		expect(await screen.findByRole("dialog", { name: "Terminate big worker?" })).toBeInTheDocument();
-		expect(postMock).not.toHaveBeenCalled();
+		expect(screen.getByTestId("session-memory-suggestion")).toHaveTextContent("big worker is using the most memory");
 	});
 });

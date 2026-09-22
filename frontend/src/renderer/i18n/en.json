@@ -1488,8 +1488,6 @@
 	"shell.memoryState.unknown": "Memory unreadable",
 	"shell.memoryBarDetail": "{{free}} free of {{total}} · AO holds {{used}} · pressure {{pressure}}",
 	"shell.memoryFixNotAO": "not AO",
-	"shell.memoryFixKill": "Kill {{title}}",
-	"shell.memoryKillFrees": "Kill · frees {{size}}",
 	"shell.memorySuggestOtherApps": "Other apps are using most of your memory. AO is only {{size}}.",
 	"shell.memorySuggestLargest": "{{title}} is using the most memory",
 	"shell.memoryLegendAO": "AO",

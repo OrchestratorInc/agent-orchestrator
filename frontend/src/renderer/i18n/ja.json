@@ -1937,8 +1937,6 @@
 	"shell.memoryState.unknown": "メモリを読めません",
 	"shell.memoryBarDetail": "{{total}} 中 {{free}} 空き · AO が {{used}} 使用 · 圧迫 {{pressure}}",
 	"shell.memoryFixNotAO": "AO 以外",
-	"shell.memoryFixKill": "{{title}} を終了",
-	"shell.memoryKillFrees": "終了 · {{size}} を解放",
 	"shell.memorySuggestOtherApps": "メモリの大半は他のアプリが使っています。AO は {{size}} だけです。",
 	"shell.memorySuggestLargest": "{{title}} が最もメモリを使っています",
 	"shell.memoryLegendAO": "AO",
