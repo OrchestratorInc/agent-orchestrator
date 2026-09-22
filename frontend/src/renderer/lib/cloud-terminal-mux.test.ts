@@ -54,28 +54,6 @@ async function settle() {
 }
 
 describe("createCloudTerminalMux direct open", () => {
-	it("publishes visible desktop ownership and receives the authoritative grid", async () => {
-		FakeWebSocket.instances = [];
-		const mux = makeMux();
-		mux.open("agent", 120, 40);
-		await settle();
-		const ws = FakeWebSocket.instances[0];
-		expect(paramOf(ws, "protocol")).toBe("3");
-		ws.emit("open", {});
-		expect(sentJSON(ws)[0]).toEqual({ type: "viewer", role: "primary", visible: true, columns: 120, rows: 40 });
-		mux.setViewerState?.("agent", false, 120, 40);
-		mux.setViewerState?.("agent", true, 120, 40);
-		expect(sentJSON(ws).slice(-2)).toEqual([
-			{ type: "viewer", role: "primary", visible: false, columns: 120, rows: 40 },
-			{ type: "viewer", role: "primary", visible: true, columns: 120, rows: 40 },
-		]);
-		const sizes: Array<[number, number]> = [];
-		mux.onAuthoritativeSize?.("agent", (cols, rows) => sizes.push([cols, rows]));
-		ws.deliver({ type: "size", columns: 55, rows: 39 });
-		expect(sizes).toEqual([[55, 39]]);
-		expect(sentJSON(ws).at(-1)).toEqual({ type: "viewer", role: "primary", visible: true, columns: 120, rows: 40 });
-		mux.dispose();
-	});
 	it("opens its socket directly at construction with no agent-ready wait", async () => {
 		FakeWebSocket.instances = [];
 		const mux = makeMux();
@@ -114,15 +92,15 @@ describe("createCloudTerminalMux direct open", () => {
 		const mux = makeMux();
 		await settle();
 		const ws = FakeWebSocket.instances[0];
-		// A hidden/parked pane still attaches, but its zero fit cannot win the
-		// shared PTY size election.
+		ws.sent.length = 0;
+		// A hidden/parked pane attaches at 0×0. The CP rejects a 0-dimension resize
+		// and closes the socket, so the mux must send nothing.
 		mux.open("agent", 0, 0);
-		ws.emit("open", {});
-		expect(sentJSON(ws)).toEqual([{ type: "viewer", role: "primary", visible: false, columns: 0, rows: 0 }]);
+		expect(ws.sent).toHaveLength(0);
 		// Becoming visible (open for a visible pane, or resize on activation) sends
 		// the real, non-zero grid so the PTY resizes and the TUI redraws at width.
 		mux.resize("agent", 100, 30);
-		expect(sentJSON(ws).at(-1)).toEqual({ type: "viewer", role: "primary", visible: true, columns: 100, rows: 30 });
+		expect(sentJSON(ws)).toEqual([{ type: "resize", columns: 100, rows: 30 }]);
 		mux.dispose();
 	});
 });

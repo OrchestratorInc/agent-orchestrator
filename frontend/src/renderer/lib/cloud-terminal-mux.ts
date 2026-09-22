@@ -6,7 +6,7 @@
 // main process, so the WorkOS token never reaches the renderer), not by an
 // Authorization header, so the renderer can dial it directly.
 //
-// This adapts the CP's viewer-aware terminal protocol (protocol=3) onto the same
+// This adapts the CP's structured terminal protocol (protocol=2) onto the same
 // TerminalMux interface the local daemon mux implements, so useTerminalSession's
 // attach/replay/reconnect lifecycle works unchanged. Each connection mints its
 // own ticket, so the hook's reconnect (which builds a fresh mux) transparently
@@ -20,9 +20,9 @@
 // a not-yet-started agent is held in `starting` up to the CP's ready deadline.
 //
 // CP wire (see cloud/internal/httpapi/terminal_handlers.go):
-//   client -> {type:"input",data} | {type:"viewer",role,visible,columns,rows}
+//   client -> {type:"input",data} | {type:"resize",columns,rows}
 //   server -> {type:"starting"|"ready"|"reset"|"replay_complete"|"input_ack"}
-//             {type:"output",data:<base64>,sequence} | {type:"size",columns,rows}
+//             {type:"output",data:<base64>,sequence}
 
 import { base64ToBytes, type MuxConnectionState, type TerminalMux } from "./terminal-mux";
 
@@ -64,11 +64,8 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 	const openedListeners = new Set<OpenedListener>();
 	const errorListeners = new Set<ErrorListener>();
 	const connectionListeners = new Set<ConnectionListener>();
-	const sizeListeners = new Set<(cols: number, rows: number) => void>();
 
 	let socket: WebSocket | null = null;
-	let socketOpen = false;
-	let viewer = { visible: false, cols: 0, rows: 0 };
 	// Resume from the shared cursor so a rebuilt mux does not replay the whole
 	// scrollback from sequence 0 (the flicker/never-settle bug). advanceCursor
 	// keeps the shared ref in step with our local position.
@@ -80,6 +77,7 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 	let disposed = false;
 	let exited = false;
 	let connectionState: MuxConnectionState | undefined;
+	let pendingResize: { cols: number; rows: number } | null = null;
 	const pendingInput: string[] = [];
 
 	const setConnectionState = (next: MuxConnectionState) => {
@@ -100,33 +98,22 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 	};
 
 	const sendJSON = (message: unknown): boolean => {
-		if (socket && socketOpen && socket.readyState === WS.OPEN) {
+		if (socket && socket.readyState === WS.OPEN) {
 			socket.send(JSON.stringify(message));
 			return true;
 		}
 		return false;
 	};
-	const sendViewer = () => sendJSON({
-		type: "viewer", role: "primary", visible: viewer.visible,
-		columns: viewer.cols, rows: viewer.rows,
-	});
 
 	const handleMessage = (event: MessageEvent) => {
 		if (typeof event.data !== "string") return;
-		let message: { type?: string; data?: string; sequence?: number; columns?: number; rows?: number };
+		let message: { type?: string; data?: string; sequence?: number };
 		try {
 			message = JSON.parse(event.data);
 		} catch {
 			return;
 		}
 		switch (message.type) {
-			case "size":
-				if (Number.isInteger(message.columns) && Number.isInteger(message.rows) &&
-					(message.columns ?? 0) > 0 && (message.rows ?? 0) > 0 &&
-					(message.columns ?? 0) <= 65535 && (message.rows ?? 0) <= 65535) {
-					sizeListeners.forEach((listener) => listener(message.columns!, message.rows!));
-				}
-				break;
 			case "ready":
 				if (typeof message.sequence === "number") advanceCursor(message.sequence);
 				openedListeners.forEach((listener) => listener());
@@ -163,15 +150,14 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 			ticket,
 			kind,
 			after: String(after),
-			protocol: "3",
+			protocol: "2",
 		});
 		const url = `${options.wsBaseUrl.replace(/\/+$/, "")}/terminal?${query.toString()}`;
 		const ws = new WS(url);
 		socket = ws;
 		ws.addEventListener("open", () => {
 			if (disposed || socket !== ws) return;
-			socketOpen = true;
-			sendViewer();
+			if (pendingResize) sendJSON({ type: "resize", columns: pendingResize.cols, rows: pendingResize.rows });
 			for (const input of pendingInput.splice(0)) sendJSON({ type: "input", data: input });
 			setConnectionState("open");
 		});
@@ -180,7 +166,6 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 		});
 		ws.addEventListener("close", (event: CloseEvent) => {
 			if (socket !== ws) return;
-			socketOpen = false;
 			if (event.code === 1000 && !exited) {
 				exited = true;
 				exitListeners.forEach((listener) => listener());
@@ -227,25 +212,27 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 	// so the socket was never even attempted).
 	void connect(options.kind);
 
-	const updateViewer = (visible: boolean, cols: number, rows: number) => {
-		viewer = { visible, cols, rows };
-		sendViewer();
+	// A hidden/parked pane attaches at 0×0 to keep receiving output WITHOUT
+	// claiming a size — the shared PTY must never be resized from an off-screen
+	// grid. The CP rejects a 0-dimension resize as invalid and closes the socket
+	// (which would loop a parked reconnect), so a 0×0 open/resize sends nothing;
+	// the real size follows from the first visible fit (open for a visible pane,
+	// or resize() when the pane becomes visible).
+	const sendResize = (cols: number, rows: number) => {
+		if (cols <= 0 || rows <= 0) return;
+		pendingResize = { cols, rows };
+		sendJSON({ type: "resize", columns: cols, rows });
 	};
 
 	return {
 		open: (_id, cols, rows) => {
-			updateViewer(cols > 0 && rows > 0, cols, rows);
+			sendResize(cols, rows);
 		},
 		sendInput: (_id, input) => {
 			if (!sendJSON({ type: "input", data: input })) pendingInput.push(input);
 		},
 		resize: (_id, cols, rows) => {
-			updateViewer(cols > 0 && rows > 0, cols, rows);
-		},
-		setViewerState: (_id, visible, cols, rows) => updateViewer(visible, cols, rows),
-		onAuthoritativeSize: (_id, listener) => {
-			sizeListeners.add(listener);
-			return () => sizeListeners.delete(listener);
+			sendResize(cols, rows);
 		},
 		close: () => {
 			if (socket) {
@@ -279,13 +266,11 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 		dispose: () => {
 			if (disposed) return;
 			disposed = true;
-			socketOpen = false;
 			dataListeners.clear();
 			exitListeners.clear();
 			openedListeners.clear();
 			errorListeners.clear();
 			connectionListeners.clear();
-			sizeListeners.clear();
 			if (socket) {
 				try {
 					socket.close();

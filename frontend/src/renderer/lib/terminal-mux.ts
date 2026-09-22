@@ -103,10 +103,6 @@ export type TerminalMux = {
 	sendInput: (id: string, input: string) => void;
 	/** Resize normally, or explicitly re-signal an unchanged grid for recovery. */
 	resize: (id: string, cols: number, rows: number, force?: boolean) => void;
-	/** Cloud-only: publish whether this viewer is visible and its natural fit. */
-	setViewerState?: (id: string, visible: boolean, cols: number, rows: number) => void;
-	/** Cloud-only: observe the shared PTY grid without proposing it back. */
-	onAuthoritativeSize?: (id: string, listener: (cols: number, rows: number) => void) => () => void;
 	close: (id: string) => void;
 	onData: (id: string, listener: DataListener) => () => void;
 	onExit: (id: string, listener: ExitListener) => () => void;

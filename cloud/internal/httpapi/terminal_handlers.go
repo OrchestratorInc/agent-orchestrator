@@ -13,10 +13,8 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/terminalview"
 	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 )
 
 const (
@@ -40,8 +38,6 @@ const (
 	// few misses prevents a reconnect storm during heavy replays while still
 	// closing a genuinely unresponsive socket within a bounded window.
 	terminalPingMaxFailures = 3
-	terminalViewerLease     = 60 * time.Second
-	terminalViewerRefresh   = 20 * time.Second
 )
 
 var errTerminalProcessUnavailable = errors.New("terminal process unavailable")
@@ -153,8 +149,7 @@ func (s *Server) connectTerminal(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	go s.refreshTerminalInteraction(ctx, terminal)
-	protocol3 := r.URL.Query().Get("protocol") == "3"
-	structured := protocol3 || r.URL.Query().Get("protocol") == "2"
+	structured := r.URL.Query().Get("protocol") == "2"
 	if structured {
 		// Replay this attachment from sequence zero and tell the client to discard
 		// whatever it was showing. A workspace reconnect gets a fresh shell; an
@@ -171,43 +166,15 @@ func (s *Server) connectTerminal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	var viewerID string
-	var viewerState *terminalViewerState
-	if protocol3 {
-		firstCtx, stopFirstRead := context.WithTimeout(ctx, terminalReadyTimeout)
-		_, data, readErr := connection.Read(firstCtx)
-		stopFirstRead()
-		if readErr != nil {
-			_ = connection.Close(websocket.StatusProtocolError, "terminal viewer frame required")
-			return
-		}
-		viewer, parseErr := parseTerminalViewerFrame(data)
-		if parseErr != nil {
-			_ = connection.Close(websocket.StatusProtocolError, "invalid terminal viewer frame")
-			return
-		}
-		viewerID = uuid.NewString()
-		viewerState = &terminalViewerState{viewer: viewer}
-		if _, err := s.store.UpsertTerminalViewer(ctx, terminal, viewerID, viewer, terminalViewerLease); err != nil && !retryableTerminalViewerError(err) {
-			_ = connection.Close(websocket.StatusInternalError, "terminal viewer unavailable")
-			return
-		}
-		go s.refreshTerminalViewer(ctx, terminal, viewerID, viewerState)
-		defer func() {
-			releaseCtx, stop := context.WithTimeout(context.WithoutCancel(r.Context()), 3*time.Second)
-			defer stop()
-			_, _ = s.store.RemoveTerminalViewer(releaseCtx, terminal, viewerID)
-		}()
-	}
 	attachedAt := time.Now()
 	readResult := make(chan error, 1)
 	var writeMu sync.Mutex
 	go func() {
-		readResult <- s.readTerminalInput(ctx, connection, terminal, &writeMu, viewerID, viewerState)
+		readResult <- s.readTerminalInput(ctx, connection, terminal, &writeMu)
 	}()
 	writeResult := make(chan error, 1)
 	go func() {
-		writeResult <- s.writeTerminalOutput(ctx, connection, terminal, after, structured, &writeMu, protocol3)
+		writeResult <- s.writeTerminalOutput(ctx, connection, terminal, after, structured, &writeMu)
 	}()
 	pingResult := make(chan error, 1)
 	go func() {
@@ -329,8 +296,6 @@ func (s *Server) readTerminalInput(
 	connection *websocket.Conn,
 	terminal domain.TerminalSession,
 	writeMu *sync.Mutex,
-	viewerID string,
-	viewerState *terminalViewerState,
 ) error {
 	operate := terminalScope(terminal.Scopes, "terminal:operate")
 	for {
@@ -338,33 +303,11 @@ func (s *Server) readTerminalInput(
 		if err != nil {
 			return err
 		}
-		if len(data) == 0 || len(data) > maxTerminalFrame {
-			return connection.Close(websocket.StatusMessageTooBig, "terminal input is too large")
-		}
-		if viewerState != nil {
-			var envelope struct {
-				Type string `json:"type"`
-			}
-			if json.Unmarshal(data, &envelope) != nil {
-				return connection.Close(websocket.StatusProtocolError, "invalid terminal frame")
-			}
-			if envelope.Type == "viewer" {
-				viewer, err := parseTerminalViewerFrame(data)
-				if err != nil {
-					return connection.Close(websocket.StatusProtocolError, "invalid terminal viewer frame")
-				}
-				viewerState.set(viewer)
-				if _, err := s.store.UpsertTerminalViewer(ctx, terminal, viewerID, viewer, terminalViewerLease); err != nil && !retryableTerminalViewerError(err) {
-					return err
-				}
-				continue
-			}
-			if envelope.Type != "input" {
-				return connection.Close(websocket.StatusProtocolError, "unsupported terminal frame")
-			}
-		}
 		if !operate {
 			return connection.Close(websocket.StatusPolicyViolation, "terminal is read-only")
+		}
+		if len(data) == 0 || len(data) > maxTerminalFrame {
+			return connection.Close(websocket.StatusMessageTooBig, "terminal input is too large")
 		}
 		var message struct {
 			Type    string `json:"type"`
@@ -470,9 +413,7 @@ func (s *Server) writeTerminalOutput(
 	after int64,
 	structured bool,
 	writeMu *sync.Mutex,
-	protocol3 ...bool,
 ) error {
-	viewerAware := len(protocol3) > 0 && protocol3[0]
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	startupDeadline := time.NewTimer(terminalReadyTimeout)
@@ -481,7 +422,7 @@ func (s *Server) writeTerminalOutput(
 	// new output row commits; the ticker stays as the missed-notification
 	// fallback.
 	var wake chan struct{}
-	if (s.terminalStreamEnabled || viewerAware) && s.terminalStreams != nil {
+	if s.terminalStreamEnabled {
 		var cancelWake func()
 		wake, cancelWake = s.terminalStreams.subscribeOutput(terminal.ID)
 		defer cancelWake()
@@ -498,8 +439,6 @@ func (s *Server) writeTerminalOutput(
 	replayComplete := false
 	startingSent := false
 	ready := false
-	processReady := false
-	sentSize := terminalview.Grid{}
 	// Poll once to establish state and replay existing output. Once relay mode
 	// is live, only the ticker/NOTIFY fallback asks Postgres again; a hot output
 	// frame must not wait behind a database round trip.
@@ -511,36 +450,6 @@ func (s *Server) writeTerminalOutput(
 				return err
 			}
 			pollDurable = len(frames) == 100
-			if state == "open" {
-				processReady = true
-			}
-			if viewerAware {
-				if state == "failed" {
-					return errTerminalProcessUnavailable
-				}
-				if state == "closed" {
-					return connection.Close(websocket.StatusNormalClosure, "terminal process exited")
-				}
-				grid, err := s.store.TerminalGrid(ctx, terminal)
-				if err != nil {
-					return err
-				}
-				if grid == (terminalview.Grid{}) {
-					pollDurable = false
-					continue
-				}
-				if grid != sentSize {
-					writeMu.Lock()
-					err = writeTerminalMessage(ctx, connection, terminalServerMessage{
-						Type: "size", Columns: grid.Columns, Rows: grid.Rows,
-					})
-					writeMu.Unlock()
-					if err != nil {
-						return err
-					}
-					sentSize = grid
-				}
-			}
 			if structured && !ready && (!startingSent || state == "open") {
 				writeMu.Lock()
 				messageType := "starting"
@@ -610,14 +519,10 @@ func (s *Server) writeTerminalOutput(
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-startupDeadline.C:
-			if !processReady {
+			if !ready {
 				return errTerminalProcessUnavailable
 			}
 		case frame := <-live:
-			if viewerAware && !replayComplete {
-				pollDurable = true
-				continue
-			}
 			// A direct frame uses the same sequence that the ordered durable
 			// mirror will commit. Never jump a gap: the next durable replay pass
 			// fills it, preserving the terminal's byte order after a saturated
@@ -663,8 +568,6 @@ type terminalServerMessage struct {
 	Message  string `json:"message,omitempty"`
 	Sequence int64  `json:"sequence,omitempty"`
 	InputID  string `json:"inputId,omitempty"`
-	Columns  uint16 `json:"columns,omitempty"`
-	Rows     uint16 `json:"rows,omitempty"`
 }
 
 func writeTerminalMessage(

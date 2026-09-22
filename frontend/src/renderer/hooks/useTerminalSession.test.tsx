@@ -24,7 +24,6 @@ type FakeMux = {
 	mux: TerminalMux;
 	opens: Array<[string, number, number]>;
 	resizes: Array<[string, number, number]>;
-	viewerStates: Array<[boolean, number, number]>;
 	inputs: Array<[string, string]>;
 	closes: string[];
 	events: string[];
@@ -43,7 +42,7 @@ function subscribe<T>(map: Map<string, Set<T>>, id: string, listener: T): () => 
 	return () => set.delete(listener);
 }
 
-function createFakeMux(viewerAware = false): FakeMux {
+function createFakeMux(): FakeMux {
 	const data = new Map<string, Set<(bytes: Uint8Array) => void>>();
 	const exit = new Map<string, Set<() => void>>();
 	const opened = new Map<string, Set<() => void>>();
@@ -53,7 +52,6 @@ function createFakeMux(viewerAware = false): FakeMux {
 	const fake: FakeMux = {
 		opens: [],
 		resizes: [],
-		viewerStates: [],
 		inputs: [],
 		closes: [],
 		events: [],
@@ -62,10 +60,6 @@ function createFakeMux(viewerAware = false): FakeMux {
 			open: (id, cols, rows) => fake.opens.push([id, cols, rows]),
 			sendInput: (id, input) => fake.inputs.push([id, input]),
 			resize: (id, cols, rows) => fake.resizes.push([id, cols, rows]),
-			...(viewerAware ? {
-				setViewerState: (_id: string, visible: boolean, cols: number, rows: number) =>
-					fake.viewerStates.push([visible, cols, rows]),
-			} : {}),
 			close: (id) => {
 				fake.closes.push(id);
 				fake.events.push(`close:${id}`);
@@ -169,11 +163,10 @@ function setup({
 	attachedSession = session as WorkspaceSession | undefined,
 	isVisible = true,
 	inputDisabled = false,
-	viewerAware = false,
 } = {}) {
 	const muxes: FakeMux[] = [];
 	const createMux = () => {
-		const fake = createFakeMux(viewerAware);
+		const fake = createFakeMux();
 		muxes.push(fake);
 		return fake.mux;
 	};
@@ -349,25 +342,6 @@ describe("useTerminalSession", () => {
 		act(() => view.result.current.syncVisibleSize(terminal.cols, terminal.rows));
 
 		expect(muxes[0].resizes.slice(initialResizes)).toEqual([["handle-1", 132, 47]]);
-	});
-
-	it("parks and reclaims Cloud ownership even when the desktop fit is unchanged", () => {
-		const cloudSession: WorkspaceSession = { ...session, cloud: { orgId: "org-1" } };
-		const { view, terminal, muxes } = setup({ attachedSession: cloudSession, viewerAware: true });
-		act(() => muxes[0].emitOpened("handle-1"));
-		terminal.cols = 120;
-		terminal.rows = 40;
-		terminal.emitResize(120, 40);
-		act(() => void vi.advanceTimersByTime(100));
-		const resizesBeforePark = muxes[0].resizes.length;
-		view.rerender({ daemonReady: true, isVisible: false });
-		view.rerender({ daemonReady: true, isVisible: true });
-		act(() => view.result.current.syncVisibleSize(120, 40));
-		expect(muxes[0].viewerStates.slice(-2)).toEqual([
-			[false, 120, 40],
-			[true, 120, 40],
-		]);
-		expect(muxes[0].resizes).toHaveLength(resizesBeforePark);
 	});
 
 	it("collapses a drag's burst into one resize and does not re-send the settled grid", () => {

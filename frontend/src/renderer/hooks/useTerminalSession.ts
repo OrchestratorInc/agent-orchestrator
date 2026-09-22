@@ -207,9 +207,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		// separate from xterm's local grid: hidden fits must not resize the PTY, and
 		// repeated identical visible fits must not manufacture another SIGWINCH.
 		lastPublishedGrid: null as { cols: number; rows: number } | null,
-		// The Cloud PTY grid may follow another viewer. Never reuse it as this
-		// desktop pane's natural-fit proposal.
-		authoritativeGrid: null as { cols: number; rows: number } | null,
 		attempts: 0,
 		generation: 0,
 		inputReady: false,
@@ -294,7 +291,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		r.replayTailPending = false;
 		r.queuedProtocolInputs = [];
 		r.lastPublishedGrid = null;
-		r.authoritativeGrid = null;
 		// Nothing is buffering any more, so nothing should stay covered. connect()
 		// re-arms the gate immediately after calling this, in the same tick, so
 		// the reveal here never flashes. Without it, a teardown that does not
@@ -603,13 +599,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		};
 		r.flushReplay = (preserveBeforeTeardown = false) =>
 			flushReplay(false, preserveBeforeTeardown);
-		if (mux.onAuthoritativeSize) {
-			r.disposers.push(mux.onAuthoritativeSize(handle, (cols, rows) => {
-				if (isCurrentAttachment(generation, handle, mux)) {
-					r.authoritativeGrid = { cols, rows };
-				}
-			}));
-		}
 
 		r.disposers.push(
 			mux.onData(handle, (bytes) => {
@@ -929,10 +918,9 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			r.resizeTimer = null;
 		}
 		r.needsVisibleSizeSync = false;
-		r.mux.setViewerState?.(r.handle, true, cols, rows);
 		const published = r.lastPublishedGrid;
 		if (published?.cols === cols && published.rows === rows) return;
-		if (!r.mux.setViewerState) r.mux.resize(r.handle, cols, rows);
+		r.mux.resize(r.handle, cols, rows);
 		r.lastPublishedGrid = { cols, rows };
 	}, []);
 
@@ -957,11 +945,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		if (isVisible) return;
 		const r = runtime.current;
 		r.needsVisibleSizeSync = true;
-		if (r.mux && r.handle) {
-			r.mux.setViewerState?.(
-				r.handle, false, r.lastPublishedGrid?.cols ?? 0, r.lastPublishedGrid?.rows ?? 0,
-			);
-		}
 		if (r.resizeTimer) {
 			clearTimeout(r.resizeTimer);
 			r.resizeTimer = null;

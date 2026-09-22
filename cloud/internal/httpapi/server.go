@@ -19,7 +19,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/terminalview"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -94,9 +93,6 @@ type Store interface {
 	RefreshTerminalInteraction(context.Context, domain.TerminalSession, time.Duration) error
 	QueueTerminalInput(context.Context, domain.TerminalSession, string, []byte) error
 	QueueTerminalResize(context.Context, domain.TerminalSession, uint16, uint16) error
-	UpsertTerminalViewer(context.Context, domain.TerminalSession, string, terminalview.Viewer, time.Duration) (terminalview.Grid, error)
-	RemoveTerminalViewer(context.Context, domain.TerminalSession, string) (terminalview.Grid, error)
-	TerminalGrid(context.Context, domain.TerminalSession) (terminalview.Grid, error)
 	CloseTerminal(context.Context, domain.TerminalSession) error
 	AppendTerminalOutput(context.Context, string, string, string, string, int64, []byte) (int64, error)
 	AppendTerminalOutputAt(context.Context, string, string, string, string, int64, int64, []byte) (int64, error)
