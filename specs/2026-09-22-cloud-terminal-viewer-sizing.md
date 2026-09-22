@@ -1,6 +1,6 @@
 # Cloud terminal viewer sizing and mobile zoom
 
-Status: proposed for user review. This spec does not authorize deployment or a production rollout.
+Status: approved for implementation on 2026-09-22. This spec does not authorize deployment or a production rollout.
 
 ## Goal
 
