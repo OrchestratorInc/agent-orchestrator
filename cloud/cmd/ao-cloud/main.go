@@ -417,6 +417,7 @@ func run(logger *slog.Logger) error {
 	if reconciler != nil {
 		notifyListener := postgres.NewListener(cfg.DatabaseURL, logger)
 		notifyListener.Handle("ao_worker_work", api.HandleWorkerWorkNotify)
+		notifyListener.Handle("ao_terminal_size", api.HandleTerminalSizeNotify)
 		if cfg.TerminalStreamEnabled {
 			notifyListener.Handle("ao_terminal_output", api.HandleTerminalOutputNotify)
 			notifyListener.Handle("ao_terminal_input", api.HandleTerminalInputNotify)

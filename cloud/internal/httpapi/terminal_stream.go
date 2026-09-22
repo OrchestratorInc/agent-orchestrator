@@ -205,6 +205,15 @@ func (s *Server) HandleTerminalOutputNotify(terminalID string) {
 	s.terminalStreams.notifyOutput(terminalID)
 }
 
+// HandleTerminalSizeNotify wakes sockets attached on this replica when the
+// authoritative grid changes on any control-plane replica.
+func (s *Server) HandleTerminalSizeNotify(terminalID string) {
+	if s.terminalStreams == nil {
+		return
+	}
+	s.terminalStreams.notifyOutput(terminalID)
+}
+
 // HandleTerminalInputNotify is the Postgres NOTIFY callback for
 // ao_terminal_input; the payload is the terminal id. If this replica holds
 // the terminal's worker stream, pending input rows are claimed and pushed.
