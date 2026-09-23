@@ -1063,8 +1063,7 @@ export interface components {
         };
         PutUserCloudPreferencesInput: {
             sandboxProvider: string | null;
-            /** @default false */
-            initializeOnly: boolean;
+            initializeOnly?: boolean;
         };
         CreateOrganizationInput: {
             displayName: string;

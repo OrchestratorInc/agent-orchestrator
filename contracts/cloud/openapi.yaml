@@ -1769,7 +1769,6 @@ components:
           type: [string, "null"]
         initializeOnly:
           type: boolean
-          default: false
     CreateOrganizationInput:
       type: object
       additionalProperties: false

@@ -85,6 +85,14 @@ describe("CloudProviderSection", () => {
 		expect(screen.queryByRole("button")).not.toBeInTheDocument();
 	});
 
+	it("still shows preference errors when only one provider is offered", () => {
+		providers.available = ["coder"];
+		providers.default = "coder";
+		preference.error = "Could not load account preference";
+		render(<CloudProviderSection />);
+		expect(screen.getByRole("alert")).toHaveTextContent("Could not load account preference");
+	});
+
 	it("lets a user replace a saved provider that is no longer offered", () => {
 		providers.available = ["nodeops"];
 		providers.default = "nodeops";

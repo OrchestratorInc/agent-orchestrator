@@ -65,6 +65,7 @@ function CloudProviderSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						{only ? providerLabel(only) : t("settings.cloudProvider.none")}
 					</span>
 				</SettingsRow>
+				{error ? <p role="alert" className="px-3 text-xs text-destructive">{error}</p> : null}
 				<p className="px-3 text-xs leading-relaxed text-muted-foreground">{t("settings.cloudProvider.description")}</p>
 			</SettingsSection>
 		);
