@@ -475,6 +475,14 @@ docker build \
 	"$repository_root"
 compose up --build -d
 wait_for_ready
+preference_rls="$(
+	compose exec -T postgres psql -U ao_cloud_owner -d ao_cloud -Atc \
+		"SELECT CASE WHEN relrowsecurity AND relforcerowsecurity THEN 1 ELSE 0 END FROM pg_class WHERE oid = 'ao_user_sandbox_preferences'::regclass"
+)"
+if [[ "$preference_rls" != 1 ]]; then
+	echo "User sandbox preferences must have enabled and forced RLS." >&2
+	exit 1
+fi
 assert_loopback_port control-plane 8080 "$AO_CLOUD_PORT"
 assert_loopback_port postgres 5432 "$AO_CLOUD_POSTGRES_PORT"
 

@@ -38,6 +38,8 @@ type Store interface {
 	CreateLocalSession(context.Context, string, []byte, time.Time) error
 	PrincipalFromLocalToken(context.Context, []byte) (domain.Principal, error)
 	RevokeLocalSession(context.Context, []byte) error
+	GetUserSandboxProvider(context.Context, string) (string, bool, error)
+	PutUserSandboxProvider(context.Context, string, string, bool) (string, error)
 	ListMemberships(context.Context, domain.Principal) ([]domain.Membership, error)
 	CreateOrganization(context.Context, domain.Principal, string) (domain.Membership, error)
 	ListOrgMembers(context.Context, domain.Principal, string) ([]domain.OrgMember, error)
