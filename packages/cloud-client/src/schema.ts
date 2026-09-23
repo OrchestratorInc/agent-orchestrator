@@ -20,6 +20,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the authenticated user's Cloud sandbox-provider preference. */
+        get: operations["getUserPreferences"];
+        /** Replace or atomically initialize the user's sandbox-provider preference. */
+        put: operations["putUserPreferences"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs": {
         parameters: {
             query?: never;
@@ -1040,6 +1058,14 @@ export interface components {
             user: components["schemas"]["CurrentUser"];
             organizations: components["schemas"]["OrganizationMembership"][];
         };
+        UserCloudPreferences: {
+            sandboxProvider: string | null;
+        };
+        PutUserCloudPreferencesInput: {
+            sandboxProvider: string | null;
+            /** @default false */
+            initializeOnly: boolean;
+        };
         CreateOrganizationInput: {
             displayName: string;
         };
@@ -1648,6 +1674,8 @@ export interface components {
             mode: components["schemas"]["SessionMode"];
             /** @default [] */
             deniedCommands: string[];
+            /** @description Explicit sandbox provider override. If omitted, the control plane resolves the user's preference or deployment default. */
+            provider?: string;
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
         };
@@ -2132,6 +2160,52 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CurrentAccount"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getUserPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user's saved provider, or null for the deployment default. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserCloudPreferences"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putUserPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutUserCloudPreferencesInput"];
+            };
+        };
+        responses: {
+            /** @description The saved preference. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserCloudPreferences"];
                 };
             };
             default: components["responses"]["Error"];

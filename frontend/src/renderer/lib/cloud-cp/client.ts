@@ -24,6 +24,8 @@ import type {
 	CloudCpListQuery,
 	CloudCpListSessionsQuery,
 	CloudCpMeResponse,
+	CloudCpUserPreferences,
+	CloudCpPutUserPreferencesRequest,
 	CloudCpProjectDeletedResponse,
 	CloudCpProjectListResponse,
 	CloudCpProjectResponse,
@@ -83,6 +85,8 @@ export interface CloudCpSessionEventsOptions {
 
 export interface CloudCpClient {
 	me(options?: CloudCpRequestOptions): Promise<CloudCpMeResponse>;
+	getUserPreferences(options?: CloudCpRequestOptions): Promise<CloudCpUserPreferences>;
+	putUserPreferences(body: CloudCpPutUserPreferencesRequest, options?: CloudCpRequestOptions): Promise<CloudCpUserPreferences>;
 	createOrganization(
 		body: CloudCpCreateOrganizationRequest,
 		options?: CloudCpRequestOptions,
@@ -358,6 +362,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 
 	return {
 		me: (o) => requestJson("GET", "/me", { signal: o?.signal }),
+		getUserPreferences: (o) => requestJson("GET", "/me/preferences", { signal: o?.signal }),
+		putUserPreferences: (body, o) => requestJson("PUT", "/me/preferences", { body, signal: o?.signal }),
 		createOrganization: (body, o) => requestJson("POST", "/orgs", { body, signal: o?.signal }),
 		listMyInvitations: (o) => requestJson("GET", "/invitations", { signal: o?.signal }),
 

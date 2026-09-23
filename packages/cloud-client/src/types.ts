@@ -9,6 +9,8 @@ export type OrganizationRole = Schemas["OrganizationRole"];
 export type CurrentUser = Schemas["CurrentUser"];
 export type OrganizationMembership = Schemas["OrganizationMembership"];
 export type CurrentAccount = Schemas["CurrentAccount"];
+export type UserCloudPreferences = Schemas["UserCloudPreferences"];
+export type PutUserCloudPreferencesInput = Schemas["PutUserCloudPreferencesInput"];
 export type CreateOrganizationInput = Schemas["CreateOrganizationInput"];
 
 export type AgentCapability = Schemas["AgentCapability"];

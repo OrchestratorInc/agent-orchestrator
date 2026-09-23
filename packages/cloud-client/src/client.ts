@@ -10,6 +10,8 @@ import type {
   CreateProjectInput,
   CreateSessionInput,
   CurrentAccount,
+  UserCloudPreferences,
+  PutUserCloudPreferencesInput,
   DeleteProjectResponse,
   DeleteSessionResponse,
   ErrorEnvelope,
@@ -122,6 +124,14 @@ export class CloudClient {
 
   getCurrentAccount(options: RequestOptions = {}): Promise<CurrentAccount> {
     return this.request("/api/cloud/v1/me", options);
+  }
+
+  getUserPreferences(options: RequestOptions = {}): Promise<UserCloudPreferences> {
+    return this.request("/api/cloud/v1/me/preferences", options);
+  }
+
+  putUserPreferences(input: PutUserCloudPreferencesInput, options: RequestOptions = {}): Promise<UserCloudPreferences> {
+    return this.request("/api/cloud/v1/me/preferences", { method: "PUT", body: input, signal: options.signal });
   }
 
   createOrganization(

@@ -40,6 +40,39 @@ paths:
                 $ref: "#/components/schemas/CurrentAccount"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/preferences:
+    get:
+      operationId: getUserPreferences
+      tags: [Account]
+      summary: Get the authenticated user's Cloud sandbox-provider preference.
+      responses:
+        "200":
+          description: The user's saved provider, or null for the deployment default.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserCloudPreferences"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: putUserPreferences
+      tags: [Account]
+      summary: Replace or atomically initialize the user's sandbox-provider preference.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutUserCloudPreferencesInput"
+      responses:
+        "200":
+          description: The saved preference.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserCloudPreferences"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs:
     post:
       operationId: createOrganization
@@ -1720,6 +1753,23 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/OrganizationMembership"
+    UserCloudPreferences:
+      type: object
+      additionalProperties: false
+      required: [sandboxProvider]
+      properties:
+        sandboxProvider:
+          type: [string, "null"]
+    PutUserCloudPreferencesInput:
+      type: object
+      additionalProperties: false
+      required: [sandboxProvider]
+      properties:
+        sandboxProvider:
+          type: [string, "null"]
+        initializeOnly:
+          type: boolean
+          default: false
     CreateOrganizationInput:
       type: object
       additionalProperties: false
@@ -3037,6 +3087,9 @@ components:
           items:
             type: string
           default: []
+        provider:
+          type: string
+          description: Explicit sandbox provider override. If omitted, the control plane resolves the user's preference or deployment default.
         sandboxProviderConnectionId:
           type: string
           format: uuid
