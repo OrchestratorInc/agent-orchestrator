@@ -12,7 +12,23 @@ const h = vi.hoisted(() => ({
 	ensureTargetedReadiness: vi.fn(),
 	agentValues: [] as string[],
 	agentCatalog: undefined as { agents: ReturnType<typeof import("../test/agent-readiness-fixtures").agentReadiness>[] } | undefined,
+	cloudProject: false,
+	cloudCreateSession: vi.fn(),
 }));
+
+vi.mock("../hooks/useCloudCp", () => ({
+	useCloudCp: () => ({ client: { createSession: h.cloudCreateSession } }),
+}));
+vi.mock("../hooks/useCloudOrg", () => ({
+	useCloudOrg: () => ({ org: h.cloudProject ? { id: "org-1" } : undefined }),
+}));
+vi.mock("../hooks/useWorkspaceQuery", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useWorkspaceQuery")>();
+	return {
+		...actual,
+		useCloudProjectsQuery: () => ({ data: h.cloudProject ? [{ id: "cloud-project" }] : [] }),
+	};
+});
 
 vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../hooks/useAgentReadinessQuery")>();
@@ -99,11 +115,26 @@ afterEach(() => {
 	h.ensureReadiness.mockReset();
 	h.ensureTargetedReadiness.mockReset();
 	h.agentCatalog = undefined;
+	h.cloudProject = false;
+	h.cloudCreateSession.mockReset();
+	window.localStorage.removeItem("ao.cloud.sandboxProvider");
 	vi.unstubAllGlobals();
 	h.agentValues.length = 0;
 });
 
 describe("TaskComposer", () => {
+	it("omits the old local provider override when starting a Cloud task", async () => {
+		h.cloudProject = true;
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "cloud-session-1" } });
+		window.localStorage.setItem("ao.cloud.sandboxProvider", "coder");
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="cloud-project" onCreated={onCreated} /></Wrap>);
+		fireEvent.change(task(), { target: { value: "Do the task" } });
+		fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("cloud-session-1"));
+		expect(h.cloudCreateSession.mock.calls[0]?.[1]).toMatchObject({ projectId: "cloud-project", kind: "worker", prompt: "Do the task" });
+		expect(h.cloudCreateSession.mock.calls[0]?.[1]).not.toHaveProperty("provider");
+	});
 	it("prompts for an agent instead of loading models forever in a standalone task", () => {
 		render(
 			<Wrap>

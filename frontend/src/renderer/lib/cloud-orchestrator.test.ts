@@ -72,6 +72,7 @@ describe("spawnCloudOrchestrator", () => {
 	}
 
 	it("starts without a user kickoff prompt so the role comes only from the system prompt", async () => {
+		window.localStorage.setItem("ao.cloud.sandboxProvider", "coder");
 		const queryClient = primeClient({ id: "project-1" });
 		cloudMocks.listProviderConnections.mockResolvedValue({
 			providerConnections: [connection("claude-code")],
@@ -85,6 +86,7 @@ describe("spawnCloudOrchestrator", () => {
 			displayName: "Orchestrator",
 			prompt: "",
 		});
+		window.localStorage.removeItem("ao.cloud.sandboxProvider");
 	});
 
 	it("honors the project's configured orchestrator agent over the Codex-first fallback", async () => {
