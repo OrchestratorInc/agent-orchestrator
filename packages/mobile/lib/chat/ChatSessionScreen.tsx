@@ -47,6 +47,7 @@ import { useMobileConversation } from "./useConversation";
 import { type, space } from "../tokens";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
+import { reviewRouteForSession } from "../reviewView";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
 
@@ -378,7 +379,16 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			onMap: () => router.push(chatSheetRoute({ kind: "conversation-map", markers: conversationMarkers(actionsEntryRef.current?.snapshot ?? current), onSelect: setJumpToSequence })),
 			onOpenShell: () => void openShell(),
 			onPreview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, previewUrl: "previewUrl" in session ? session.previewUrl ?? undefined : undefined } }),
-			onPullRequests: () => { setActiveProject(session.projectId); router.push("/(tabs)/prs"); },
+			onPullRequests: () => {
+				const route = !("projectName" in session) && (session.prs?.length ?? (session.pr ? 1 : 0)) <= 1
+					? reviewRouteForSession(session)
+					: undefined;
+				if (route) router.push(route);
+				else {
+					setActiveProject(session.projectId);
+					router.push("/(tabs)/prs");
+				}
+			},
 			onSettings: () => void openTurnSettings(),
 			onSwitchInterface: requestInterfaceSwitch,
 			onCompact: () => void conversation.compact().catch(() => {}),
