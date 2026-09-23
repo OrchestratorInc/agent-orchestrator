@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/go-chi/chi/v5"
 )
@@ -35,6 +36,15 @@ type stubAutolinkStore struct {
 func (s *stubAutolinkStore) GetUserSandboxProvider(_ context.Context, _ string) (string, bool, error) {
 	s.preferenceReads++
 	return s.preference, s.preferenceConfigured, nil
+}
+
+func (s *stubAutolinkStore) PutUserSandboxProvider(_ context.Context, _ string, provider string, initializeOnly bool) (string, error) {
+	if initializeOnly && s.preferenceConfigured {
+		return "", postgres.ErrConflict
+	}
+	s.preference = provider
+	s.preferenceConfigured = true
+	return provider, nil
 }
 
 func (s *stubAutolinkStore) ProjectActiveOrchestrator(
@@ -192,5 +202,43 @@ func TestCreateSessionProviderUnsetUsesDeploymentDefault(t *testing.T) {
 	srv.createSession(rec, createSessionRequestHTTP(t, "orchestrator", ""))
 	if rec.Code != http.StatusCreated || store.captured.Provider != sandbox.ProviderNodeOps {
 		t.Fatalf("status=%d provider=%q body=%s", rec.Code, store.captured.Provider, rec.Body.String())
+	}
+}
+
+func TestCreateSessionProviderPreferenceAcrossDeviceFlows(t *testing.T) {
+	store := &stubAutolinkStore{}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+	put := httptest.NewRecorder()
+	srv.putUserPreferences(put, preferenceRequest(http.MethodPut, `{"sandboxProvider":"coder"}`))
+	if put.Code != http.StatusOK {
+		t.Fatalf("save preference: %d %s", put.Code, put.Body.String())
+	}
+	get := httptest.NewRecorder()
+	srv.getUserPreferences(get, preferenceRequest(http.MethodGet, ""))
+	if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), `"sandboxProvider":"coder"`) {
+		t.Fatalf("read preference: %d %s", get.Code, get.Body.String())
+	}
+
+	for _, kind := range []string{"orchestrator", "worker"} {
+		rec := httptest.NewRecorder()
+		srv.createSession(rec, createSessionRequestHTTP(t, kind, ""))
+		if rec.Code != http.StatusCreated || store.captured.Provider != sandbox.ProviderCoder {
+			t.Fatalf("%s: %d provider=%q body=%s", kind, rec.Code, store.captured.Provider, rec.Body.String())
+		}
+	}
+
+	// A later account change does not move an existing orchestrator's tree.
+	store.orchFound = true
+	store.orchProvider = sandbox.ProviderCoder
+	store.orchestratorID = "00000000-0000-0000-0000-0000000000b2"
+	put = httptest.NewRecorder()
+	srv.putUserPreferences(put, preferenceRequest(http.MethodPut, `{"sandboxProvider":"nodeops"}`))
+	if put.Code != http.StatusOK {
+		t.Fatalf("switch preference: %d %s", put.Code, put.Body.String())
+	}
+	linked := httptest.NewRecorder()
+	srv.createSession(linked, createSessionRequestHTTP(t, "worker", ""))
+	if linked.Code != http.StatusCreated || store.captured.Provider != sandbox.ProviderCoder || store.captured.ParentSessionID != store.orchestratorID {
+		t.Fatalf("linked worker: %d provider=%q parent=%q body=%s", linked.Code, store.captured.Provider, store.captured.ParentSessionID, linked.Body.String())
 	}
 }

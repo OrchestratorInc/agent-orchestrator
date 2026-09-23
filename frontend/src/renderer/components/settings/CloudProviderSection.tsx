@@ -95,7 +95,7 @@ function CloudProviderSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 			</SettingsRow>
 			{savedProviderUnavailable ? (
 				<p role="alert" className="px-3 text-xs text-destructive">
-					{providerLabel(provider ?? "")} is no longer available. Choose a provider to resume starting sessions.
+					{t("settings.cloudProvider.unavailable", { provider: providerLabel(provider ?? "") })}
 				</p>
 			) : null}
 			{error ? <p role="alert" className="px-3 text-xs text-destructive">{error}</p> : null}

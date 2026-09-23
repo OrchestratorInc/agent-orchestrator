@@ -635,6 +635,7 @@
 	"settings.cloudProvider.signIn": "サンドボックスプロバイダーを選択するには、AO Cloud にサインインしてください（左サイドバー）。",
 	"settings.cloudProvider.optionDefault": "{{provider}}（デフォルト）",
 	"settings.cloudProvider.none": "未設定",
+	"settings.cloudProvider.unavailable": "保存されたプロバイダー {{provider}} は利用できなくなりました。セッションを開始するには利用可能なプロバイダーを選択してください。",
 	"settings.githubPat.description": "Optional. Paste a GitHub personal access token with access to private repositories. It is encrypted and used only by Cloud workers when cloning GitHub repositories.",
 	"settings.githubPat.remove": "Remove",
 	"settings.cloudConfirm.confirm": "クラウドを有効化",

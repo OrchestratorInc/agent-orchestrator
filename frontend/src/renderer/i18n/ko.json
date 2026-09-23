@@ -635,6 +635,7 @@
 	"settings.cloudProvider.signIn": "샌드박스 제공자를 선택하려면 AO Cloud에 로그인하세요(왼쪽 사이드바).",
 	"settings.cloudProvider.optionDefault": "{{provider}} (기본값)",
 	"settings.cloudProvider.none": "구성되지 않음",
+	"settings.cloudProvider.unavailable": "저장된 제공자 {{provider}}를 더 이상 사용할 수 없습니다. 세션을 시작하려면 사용 가능한 제공자를 선택하세요.",
 	"settings.githubPat.description": "Optional. Paste a GitHub personal access token with access to private repositories. It is encrypted and used only by Cloud workers when cloning GitHub repositories.",
 	"settings.githubPat.remove": "Remove",
 	"settings.cloudConfirm.confirm": "클라우드 활성화",

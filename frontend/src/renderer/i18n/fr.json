@@ -638,6 +638,7 @@
 	"settings.cloudProvider.signIn": "Connectez-vous à AO Cloud (barre latérale gauche) pour choisir un fournisseur de sandbox.",
 	"settings.cloudProvider.optionDefault": "{{provider}} (par défaut)",
 	"settings.cloudProvider.none": "Aucun configuré",
+	"settings.cloudProvider.unavailable": "Le fournisseur enregistré {{provider}} n'est plus disponible. Choisissez un fournisseur disponible pour démarrer des sessions.",
 	"settings.githubPat.description": "Optional. Paste a GitHub personal access token with access to private repositories. It is encrypted and used only by Cloud workers when cloning GitHub repositories.",
 	"settings.githubPat.remove": "Remove",
 	"settings.cloudConfirm.confirm": "Activer le cloud",
