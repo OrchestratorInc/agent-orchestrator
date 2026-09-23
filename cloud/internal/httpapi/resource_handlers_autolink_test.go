@@ -21,12 +21,20 @@ const autolinkOrgID = "00000000-0000-0000-0000-0000000000a1"
 // handler's coding-agent credential check is skipped.
 type stubAutolinkStore struct {
 	Store
-	orchestratorID string
-	orchProvider   string
-	orchFound      bool
-	orchErr        error
-	captured       domain.CreateSession
-	created        bool
+	orchestratorID       string
+	orchProvider         string
+	orchFound            bool
+	orchErr              error
+	captured             domain.CreateSession
+	created              bool
+	preference           string
+	preferenceConfigured bool
+	preferenceReads      int
+}
+
+func (s *stubAutolinkStore) GetUserSandboxProvider(_ context.Context, _ string) (string, bool, error) {
+	s.preferenceReads++
+	return s.preference, s.preferenceConfigured, nil
 }
 
 func (s *stubAutolinkStore) ProjectActiveOrchestrator(
@@ -140,5 +148,49 @@ func TestCreateSessionDoesNotAutoLinkOrchestrator(t *testing.T) {
 	}
 	if store.captured.Provider != sandbox.ProviderNodeOps {
 		t.Fatalf("orchestrator provider = %q, want %q", store.captured.Provider, sandbox.ProviderNodeOps)
+	}
+}
+
+func TestCreateSessionProviderPreferencePrecedence(t *testing.T) {
+	cases := []struct {
+		name, kind, explicit, parentProvider, preference, want string
+		linked                                                 bool
+		wantReads                                              int
+	}{
+		{"orchestrator uses preference", "orchestrator", "", "", sandbox.ProviderCoder, sandbox.ProviderCoder, false, 1},
+		{"standalone worker uses preference", "worker", "", "", sandbox.ProviderCoder, sandbox.ProviderCoder, false, 1},
+		{"explicit wins", "orchestrator", sandbox.ProviderNodeOps, "", sandbox.ProviderCoder, sandbox.ProviderNodeOps, false, 0},
+		{"linked worker inherits", "worker", "", sandbox.ProviderNodeOps, sandbox.ProviderCoder, sandbox.ProviderNodeOps, true, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &stubAutolinkStore{preference: tc.preference, preferenceConfigured: true, orchFound: tc.linked, orchProvider: tc.parentProvider, orchestratorID: "00000000-0000-0000-0000-0000000000b2"}
+			srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+			rec := httptest.NewRecorder()
+			srv.createSession(rec, createSessionRequestHTTP(t, tc.kind, tc.explicit))
+			if rec.Code != http.StatusCreated || store.captured.Provider != tc.want || store.preferenceReads != tc.wantReads {
+				t.Fatalf("status=%d provider=%q reads=%d, want 201 %q %d; body=%s", rec.Code, store.captured.Provider, store.preferenceReads, tc.want, tc.wantReads, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestCreateSessionProviderPreferenceUnavailable(t *testing.T) {
+	store := &stubAutolinkStore{preference: "removed-provider", preferenceConfigured: true}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+	rec := httptest.NewRecorder()
+	srv.createSession(rec, createSessionRequestHTTP(t, "orchestrator", ""))
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "provider_unavailable") || store.created {
+		t.Fatalf("status=%d created=%t body=%s", rec.Code, store.created, rec.Body.String())
+	}
+}
+
+func TestCreateSessionProviderUnsetUsesDeploymentDefault(t *testing.T) {
+	store := &stubAutolinkStore{}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+	rec := httptest.NewRecorder()
+	srv.createSession(rec, createSessionRequestHTTP(t, "orchestrator", ""))
+	if rec.Code != http.StatusCreated || store.captured.Provider != sandbox.ProviderNodeOps {
+		t.Fatalf("status=%d provider=%q body=%s", rec.Code, store.captured.Provider, rec.Body.String())
 	}
 }

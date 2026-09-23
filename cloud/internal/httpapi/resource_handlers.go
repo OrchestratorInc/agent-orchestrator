@@ -429,6 +429,16 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if request.Provider == "" {
+		preferred, configured, err := s.store.GetUserSandboxProvider(r.Context(), principalFrom(r).UserID)
+		if err != nil {
+			s.writeStoreError(w, r, err)
+			return
+		}
+		if configured {
+			request.Provider = preferred
+		}
+	}
 	// Validate the sandbox provider AFTER the auto-link override above: an
 	// auto-linked worker inherits its orchestrator's provider, so the
 	// availability check must run on the final value, not the client-sent one.
