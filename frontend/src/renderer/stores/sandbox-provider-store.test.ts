@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { readSelectedSandboxProvider, useSandboxProviderStore } from "./sandbox-provider-store";
+import { clearLegacySandboxProvider, readSelectedSandboxProvider, useSandboxProviderStore } from "./sandbox-provider-store";
 
 const storageKey = "ao.cloud.sandboxProvider";
 
@@ -33,5 +33,11 @@ describe("sandbox-provider-store", () => {
 	it("reads a previously persisted value", () => {
 		window.localStorage.setItem(storageKey, "docker");
 		expect(readSelectedSandboxProvider()).toBe("docker");
+	});
+
+	it("clears a migrated legacy value", () => {
+		window.localStorage.setItem(storageKey, "coder");
+		clearLegacySandboxProvider();
+		expect(readSelectedSandboxProvider()).toBeNull();
 	});
 });

@@ -27,6 +27,14 @@ export function readSelectedSandboxProvider(): string | null {
 	}
 }
 
+export function clearLegacySandboxProvider(): void {
+	try {
+		getLocalStorage()?.removeItem(storageKey);
+	} catch {
+		// A blocked localStorage must not prevent using the Cloud preference.
+	}
+}
+
 function persistSelectedSandboxProvider(provider: string | null): void {
 	try {
 		const storage = getLocalStorage();

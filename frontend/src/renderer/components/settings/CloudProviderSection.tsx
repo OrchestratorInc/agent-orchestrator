@@ -1,9 +1,9 @@
 import { Server } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../../hooks/useCloudGate";
+import { useCloudProviderPreference } from "../../hooks/useCloudProviderPreference";
 import { useCloudSandboxProviders } from "../../hooks/useCloudSandboxProviders";
 import { useCloudSession } from "../../lib/cloud-session";
-import { useSandboxProviderStore } from "../../stores/sandbox-provider-store";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
@@ -27,8 +27,8 @@ function providerLabel(provider: string): string {
  * the outer component only reads the daemon cloud gate (a query the settings
  * page already runs), so a local-only app renders nothing and never mounts the
  * cloud hooks; the inner component subscribes to the cloud session/provider
- * queries. The chosen provider is a client preference the session-create
- * request carries; the control plane validates it against what it offers.
+ * queries. The selection is stored on the Cloud account and applied by the
+ * control plane when a new session does not explicitly choose a provider.
  */
 export function CloudProviderSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { cloudEnabled } = useCloudGate();
@@ -40,8 +40,8 @@ function CloudProviderSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	const { t } = useTranslation();
 	const { status } = useCloudSession();
 	const { available, default: defaultProvider } = useCloudSandboxProviders();
-	const selectedProvider = useSandboxProviderStore((s) => s.selectedProvider);
-	const setSelectedProvider = useSandboxProviderStore((s) => s.setSelectedProvider);
+	const { provider, loading, saving, error, setProvider } = useCloudProviderPreference();
+	const savedProviderUnavailable = provider !== null && !available.includes(provider);
 
 	// Choosing a provider needs the signed-in session that reports what the
 	// control plane offers. The Cloud settings page is reachable while signed
@@ -56,7 +56,7 @@ function CloudProviderSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 
 	// A control plane that offers a single provider (or predates multi-provider)
 	// leaves nothing to choose, so show it read-only rather than a one-item menu.
-	if (available.length <= 1) {
+	if (available.length <= 1 && !savedProviderUnavailable) {
 		const only = available[0] ?? defaultProvider;
 		return (
 			<SettingsSection title={t("settings.cloudProvider")} sectionId="cloud-provider" titleHidden={titleHidden}>
@@ -70,9 +70,10 @@ function CloudProviderSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 		);
 	}
 
-	// Fall back to the control plane default when the stored choice is unset or
-	// is a provider this deployment no longer offers.
-	const effective = selectedProvider && available.includes(selectedProvider) ? selectedProvider : defaultProvider;
+	// Fall back to the control plane default only for presentation when no
+	// available saved choice exists. The server still rejects creation if a
+	// previously saved provider has become unavailable.
+	const effective = provider && available.includes(provider) ? provider : defaultProvider;
 	const options: SettingsOption<string>[] = available.map((provider) => ({
 		value: provider,
 		label:
@@ -88,9 +89,16 @@ function CloudProviderSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 					aria-label={t("settings.cloudProvider.label")}
 					value={effective}
 					options={options}
-					onChange={(next) => setSelectedProvider(next)}
+					disabled={loading || saving}
+					onChange={(next) => { void setProvider(next); }}
 				/>
 			</SettingsRow>
+			{savedProviderUnavailable ? (
+				<p role="alert" className="px-3 text-xs text-destructive">
+					{providerLabel(provider ?? "")} is no longer available. Choose a provider to resume starting sessions.
+				</p>
+			) : null}
+			{error ? <p role="alert" className="px-3 text-xs text-destructive">{error}</p> : null}
 			<p className="px-3 text-xs leading-relaxed text-muted-foreground">{t("settings.cloudProvider.description")}</p>
 		</SettingsSection>
 	);

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCloudGate } from "../hooks/useCloudGate";
+import { useCloudProviderPreference } from "../hooks/useCloudProviderPreference";
 import { useCloudSession } from "../lib/cloud-session";
 import { cloudOrgQueryKey, useCloudOrg } from "../hooks/useCloudOrg";
 import { cloudProjectsQueryKey, cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
@@ -21,6 +22,7 @@ export function CloudOnboardingGate() {
 	const connections = useProviderConnections(org?.id);
 	const openDialog = useCredentialDialogStore((s) => s.openDialog);
 	const queryClient = useQueryClient();
+	useCloudProviderPreference({ migrateLegacy: true });
 	// Prompt at most once per signed-in session so a developer who dismisses
 	// without connecting is not re-nagged every render.
 	const autoPromptedRef = useRef(false);
@@ -36,6 +38,7 @@ export function CloudOnboardingGate() {
 		queryClient.removeQueries({ queryKey: cloudSessionsQueryKey });
 		queryClient.removeQueries({ queryKey: cloudOrgQueryKey });
 		queryClient.removeQueries({ queryKey: ["cloud-provider-connections"] });
+		queryClient.removeQueries({ queryKey: ["cloud-provider-preference"] });
 	}, [status, queryClient]);
 
 	useEffect(() => {
