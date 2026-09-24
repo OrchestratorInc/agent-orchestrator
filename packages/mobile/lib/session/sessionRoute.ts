@@ -3,6 +3,7 @@
 // the same split as orchestratorView.ts / projectFilter.ts.
 import type { DashboardSession, OrchestratorLink } from "../api";
 import { isSessionGone, shouldKeepPolling } from "../connectionError";
+import type { EnvironmentKind } from "../environment/types";
 import type { ConnStatus } from "../store";
 
 export type RouteSession = DashboardSession | OrchestratorLink;
@@ -26,6 +27,26 @@ export type SessionRouteView =
 	| { kind: "failed" };
 
 const pending: SessionLookup = { state: "pending" };
+
+/** Cloud Terminal is a view of the running agent PTY, not a Local controller-mode handoff. */
+export function sessionDisplaySurface(input: {
+	environment: EnvironmentKind | null;
+	sessionMode: "chat" | "tui";
+	requestedView?: string;
+}): "chat" | "local-terminal" | "cloud-terminal" {
+	if (input.environment === "cloud" && input.requestedView === "terminal") return "cloud-terminal";
+	return input.sessionMode === "chat" ? "chat" : "local-terminal";
+}
+
+export function sessionRouteConfigured(input: {
+	environment: EnvironmentKind | null;
+	sourceKind: EnvironmentKind | undefined;
+	localConfigured: boolean | null;
+}): boolean | null {
+	if (input.environment === null) return null;
+	if (input.environment === "cloud") return input.sourceKind === "cloud";
+	return input.localConfigured;
+}
 
 export function sessionLookupKey(machine: string, id: string): string {
 	return `${machine}|${id}`;

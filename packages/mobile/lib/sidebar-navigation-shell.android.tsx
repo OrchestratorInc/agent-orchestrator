@@ -11,6 +11,7 @@ import {
 	type ReactNode,
 } from "react";
 import {
+	ActivityIndicator,
 	Animated,
 	BackHandler,
 	FlatList,
@@ -36,6 +37,8 @@ import {
 	selectedPrimarySidebarDestination,
 	sidebarNavigationSettled,
 	sidebarDestinations,
+	sidebarSessionHealth,
+	sidebarSessionListPresentation,
 	sidebarSessions,
 	sidebarSessionRoute,
 	type PrimarySidebarDestinationId,
@@ -44,6 +47,7 @@ import {
 } from "./sidebar-navigation";
 import { sidebarGestureTarget, shouldCaptureSidebarGesture } from "./sidebar-gesture";
 import { SidebarSettingsButton } from "./sidebar-settings-button";
+import { SidebarEnvironmentPicker } from "./sidebar-environment-picker";
 import { SidebarSpawnButton } from "./sidebar-spawn-button";
 import { useReducedMotion } from "./useReducedMotion";
 import { useApp } from "./store";
@@ -70,12 +74,13 @@ export function useOptionalSidebarNavigation() {
 }
 
 export function SidebarNavigationShell({ children }: { children: ReactNode }) {
+	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const { sessions, projects, connection, environment, configured } = useApp();
-	const { localControls } = boardPresentation(environment, configured);
-	// See the iOS shell: cached sessions outlive a failed poll by design, so the
-	// drawer has to admit when what it is showing is no longer live.
-	const sessionsStale = connection !== "open";
+	const { sessions, projects, connection, environment, configured, loading, error } = useApp();
+	const { spawnControls, showSidebarSessions } = boardPresentation(environment, configured);
+	// See the iOS shell: Local health is daemon connectivity; Cloud health is the
+	// active board refresh result, because Cloud deliberately has no Local poll.
+	const { stale: sessionsStale, label: sessionsStaleLabel, lampStatus } = sidebarSessionHealth({ environment, configured, connection, error });
 	const router = useRouter();
 	const pathname = usePathname();
 	const insets = useSafeAreaInsets();
@@ -95,6 +100,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	lastPrimaryDestination.current = selectedPrimaryDestination;
 	const drawerWidth = Math.min(width * 0.76, 320);
 	const liveSessions = useMemo(() => sidebarSessions(sessions), [sessions]);
+	const sessionListPresentation = sidebarSessionListPresentation(environment, loading, liveSessions.length);
 	const projectNames = useMemo(
 		() => new Map(projects.map((project) => [project.id, project.name])),
 		[projects],
@@ -190,11 +196,11 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	}, [router, environment]);
 
 	const spawnWorker = useCallback(() => {
-		if (!localControls) return;
+		if (!spawnControls) return;
 		haptics.tap();
 		closeSidebar();
 		router.push("/spawn");
-	}, [closeSidebar, router, localControls]);
+	}, [closeSidebar, router, spawnControls]);
 
 	// Settings belongs to the root modal stack. Deliberately leave the native
 	// drawer open so dismissing the sheet reveals the exact drawer state beneath.
@@ -234,8 +240,11 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 			accessibilityViewIsModal={open}
 		>
 			<View style={styles.sidebarTop}>
-				<View style={styles.brandMascotSlot}>
-					<MascotLamp status={connection} size={55} />
+				<View style={styles.brandRow}>
+					<View style={styles.brandMascotSlot}>
+						<MascotLamp status={lampStatus} size={55} />
+					</View>
+					<SidebarEnvironmentPicker />
 				</View>
 				<View style={styles.destinations}>
 					{sidebarDestinations.slice(0, -1).map((destination) => (
@@ -250,10 +259,10 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 				</View>
 			</View>
 
-			{localControls && <>
+			{showSidebarSessions && <>
 			<Text style={styles.sectionLabel}>
 				{RECENT_WORKERS_LABEL.toUpperCase()}
-				{sessionsStale ? <Text style={styles.sectionLabelStale}>{"  ·  DISCONNECTED"}</Text> : null}
+				{sessionsStaleLabel ? <Text style={styles.sectionLabelStale}>{`  ·  ${sessionsStaleLabel}`}</Text> : null}
 			</Text>
 			<FlatList
 				data={liveSessions}
@@ -271,13 +280,20 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 						onPress={() => selectSession(item)}
 					/>
 				)}
-				ListEmptyComponent={<Text style={styles.emptySessions}>No active sessions</Text>}
-			/>
+					ListEmptyComponent={sessionListPresentation.kind === "loading" ? (
+						<View style={styles.loadingSessions}>
+							<ActivityIndicator size="small" color={t.blue} />
+							<Text style={styles.emptySessions}>{sessionListPresentation.label}</Text>
+						</View>
+					) : sessionListPresentation.kind === "empty" ? (
+						<Text style={styles.emptySessions}>{sessionListPresentation.label}</Text>
+					) : null}
+				/>
 			</>}
 
 			<View pointerEvents="box-none" style={[styles.sidebarActions, { bottom: insets.bottom + 10 }]}>
 				<SidebarSettingsButton active={activeDestination === "settings"} onPress={openSettings} />
-				{localControls && <SidebarSpawnButton onPress={spawnWorker} />}
+				{spawnControls && <SidebarSpawnButton onPress={spawnWorker} />}
 			</View>
 		</Animated.View>
 	);
@@ -399,7 +415,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	},
 	sidebar: { flex: 1, paddingHorizontal: 16, backgroundColor: t.bgSide },
 	sidebarTop: { height: 232 },
-	brandMascotSlot: { width: 72, height: 62, paddingLeft: 14, justifyContent: "center" },
+	brandRow: { height: 62, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", gap: 12 },
+	brandMascotSlot: { width: 58, height: 48, justifyContent: "center" },
 	brandMascot: { width: 58, height: 48 },
 	destinations: { gap: 7, paddingTop: 8 },
 	destination: {
@@ -431,6 +448,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	sessionListContent: { paddingBottom: 8 },
 	emptySessionList: { flexGrow: 1 },
 	emptySessions: { paddingHorizontal: 12, paddingTop: 8, color: t.textTertiary, fontSize: 14 },
+	loadingSessions: { paddingHorizontal: 12, paddingTop: 8, flexDirection: "row", alignItems: "center", gap: 8 },
 	sessionRow: {
 		minHeight: 58,
 		paddingHorizontal: 12,

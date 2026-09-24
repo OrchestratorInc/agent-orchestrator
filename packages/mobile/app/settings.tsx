@@ -23,6 +23,8 @@ import { openGitHub } from "../lib/openGitHub";
 import { getPushStatus, openNotificationSettings, registerForPush, unregisterFromPush } from "../lib/push";
 import { describePushToggle, describeRegisterFailure, type PushStatus } from "../lib/pushStatus";
 import { useCloudAuth } from "../lib/cloud/authStore";
+import { useCloudSignInAction } from "../lib/cloud/useCloudSignInAction";
+import { environmentChoiceAction } from "../lib/environment/store";
 import { useApp, useEnvironment } from "../lib/store";
 import {
 	describeSoftwareUpdateRow,
@@ -185,15 +187,18 @@ function SettingsCard({ children }: { children: ReactNode }) {
 function EnvironmentRow() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const router = useRouter();
 	const { environment, setEnvironment } = useEnvironment();
 	const cloudAuth = useCloudAuth();
+	const cloudSignIn = useCloudSignInAction();
 
 	function choose(next: "local" | "cloud") {
-		if (next === environment) return;
+		const action = environmentChoiceAction(environment, next, cloudAuth.signedIn === true);
+		if (action === "none") return;
 		haptics.select();
-		if (next === "cloud" && cloudAuth.signedIn !== true) {
-			router.push("/sheets/cloud-signin");
+		if (action === "sign-in") {
+			void cloudSignIn.signIn().then((authenticated) => {
+				if (authenticated) setEnvironment("cloud");
+			});
 			return;
 		}
 		setEnvironment(next);
@@ -209,6 +214,7 @@ function EnvironmentRow() {
 						accessibilityRole="button"
 						accessibilityState={{ selected }}
 						onPress={() => choose(option)}
+						disabled={cloudSignIn.busy && option === "cloud"}
 						style={({ pressed }) => [styles.inlineChoice, pressed && { opacity: 0.6 }]}
 					>
 						<Feather
@@ -219,7 +225,11 @@ function EnvironmentRow() {
 						<Text style={[styles.inlineChoiceLabel, selected && { color: t.textPrimary, fontWeight: "700" }]}>
 							{option === "local" ? "Local" : "Cloud"}
 						</Text>
-						{selected ? <Feather name="check" size={16} color={t.textPrimary} /> : null}
+						{cloudSignIn.busy && option === "cloud" ? (
+							<ActivityIndicator size="small" color={t.textSecondary} />
+						) : selected ? (
+							<Feather name="check" size={16} color={t.textPrimary} />
+						) : null}
 					</Pressable>
 				);
 			})}

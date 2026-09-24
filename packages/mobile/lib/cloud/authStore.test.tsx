@@ -88,6 +88,26 @@ afterEach(async () => {
 });
 
 describe("CloudAuthProvider session boundaries", () => {
+	it("reuses the browser identity when signing in after sign-out", async () => {
+		await mount();
+		await act(async () => { await auth.signOut(); });
+		expect(raw).toBeNull();
+		await replaceSession("hosted");
+		expect(native.openAuthSessionAsync).toHaveBeenCalledWith(
+			expect.any(String),
+			expect.any(String),
+		);
+		expect(auth.signedIn).toBe(true);
+	});
+
+	it("asks AuthKit to show the login screen after sign-out", async () => {
+		await mount();
+		await act(async () => { await auth.signOut(); });
+		await replaceSession("hosted");
+		const authorizationUrl = new URL(native.openAuthSessionAsync.mock.calls[0]![0] as string);
+		expect(authorizationUrl.searchParams.get("prompt")).toBe("login");
+	});
+
 	it("keeps replacement credentials when an earlier refresh storage write finishes late", async () => {
 		raw = JSON.stringify({ accessToken: "expired", refreshToken: "old-refresh", expiresAt: 0 });
 		const write = deferred<void>();

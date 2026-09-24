@@ -7,7 +7,6 @@ import { AppState as RNAppState } from "react-native";
 import { shouldPoll } from "./appStatePoll";
 import {
 	ApiError,
-	delegateTask,
 	getNotifications,
 	getSessions,
 	killSession,
@@ -31,7 +30,7 @@ import {
 import { isConfigured, loadConfig, machineIdentity, type ServerConfig } from "./config";
 import { useCloudAuth } from "./cloud/authStore";
 import { loadEnvironment, saveEnvironment } from "./environment/store";
-import { loadSessionSourceBoard } from "./environment/board";
+import { loadSessionSourceBoard, spawnSessionThroughSource } from "./environment/board";
 import {
 	assertLocalEnvironment,
 	boardReadiness,
@@ -46,7 +45,7 @@ import { ConfigLoadController } from "./environment/configLoadController";
 import { shouldMaintainLocalConnection, shouldPollLocal } from "./environment/shouldPoll";
 import type { EnvironmentKind, SessionSource } from "./environment/types";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
-import { pollIntervalFor } from "./pollInterval";
+import { cloudBoardPollInterval, pollIntervalFor } from "./pollInterval";
 import type { Endpoint } from "./endpoints";
 import { activeHost, loadHosts } from "./hosts";
 import { shouldReRace } from "./reRace";
@@ -62,10 +61,10 @@ import { mobileTelemetry, trackFeature } from "./telemetry/runtime";
 import { useConversationEventTransport } from "./chat/conversationEvents";
 
 const ACTIVE_PROJECT_KEY = "ao.activeProject";
-const CLOUD_BOARD_POLL_MS = 5_000;
-const EMPTY_BOARD: BoardState<ProjectInfo, DashboardSession> = {
+const EMPTY_BOARD: BoardState<ProjectInfo, DashboardSession, OrchestratorLink> = {
 	projects: [],
 	sessions: [],
+	orchestrators: [],
 	loading: false,
 	error: null,
 };
@@ -130,7 +129,7 @@ type AppState = {
 	reloadConfig: () => Promise<void>;
 	refresh: () => Promise<void>;
 	setActiveProject: (id: string) => void;
-	spawn: (opts: SpawnOptions) => Promise<DashboardSession>;
+	spawn: (opts: SpawnOptions) => Promise<{ id: string; projectId: string }>;
 	launchConductor: (projectId: string, clean?: boolean, mode?: SessionMode) => Promise<OrchestratorLink>;
 	merge: (pr: DashboardPR) => Promise<void>;
 	kill: (id: string) => Promise<void>;
@@ -223,7 +222,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	const [errorStatus, setErrorStatus] = useState<number | null>(null);
-	const [cloudBoard, setCloudBoard] = useState<BoardState<ProjectInfo, DashboardSession>>(EMPTY_BOARD);
+	const [cloudBoard, setCloudBoard] = useState<BoardState<ProjectInfo, DashboardSession, OrchestratorLink>>(EMPTY_BOARD);
 	const cloudRequestGenerationRef = useRef(0);
 	const activeEnvironmentRef = useRef<EnvironmentKind | null>(environment);
 	const cloudBoardRequestRef = useRef<CloudBoardRequest<SessionSource> | undefined>(undefined);
@@ -444,12 +443,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			},
 		), []);
 
+	const cloudPollMs = cloudBoardPollInterval([
+		...cloudBoard.sessions,
+		...cloudBoard.orchestrators,
+	]);
+
 	useEffect(() => {
 		if (!cloudBoardRequestRef.current || !appActive) return;
 		void fetchCloudBoard();
-		const poll = setInterval(() => void fetchCloudBoard(), CLOUD_BOARD_POLL_MS);
+		const poll = setInterval(() => void fetchCloudBoard(), cloudPollMs);
 		return () => clearInterval(poll);
-	}, [appActive, environment, fetchCloudBoard, sessionSource]);
+	}, [appActive, cloudPollMs, environment, fetchCloudBoard, sessionSource]);
 
 	// fetchAll returns false when it hit an auth failure (missing/wrong password
 	// or a 429 lockout). The poll loop uses that to STOP hammering: a phone that
@@ -621,13 +625,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const boardSelection = selectBoardState({
 		environment,
 		sourceKind: sessionSource?.kind,
-		local: { projects: localProjects, sessions, loading, error },
+		local: { projects: localProjects, sessions, orchestrators, loading, error },
 		cloud: cloudBoard,
 		empty: EMPTY_BOARD,
 	});
 	const cloudActive = boardSelection.kind === "cloud";
 	const cloudEnvironment = environment === "cloud";
-	const { projects, sessions: activeSessions, loading: activeLoading, error: activeError } = boardSelection.state;
+	const {
+		projects,
+		sessions: activeSessions,
+		orchestrators: activeOrchestrators,
+		loading: activeLoading,
+		error: activeError,
+	} = boardSelection.state;
 	const projectsKnown = cloudActive ? true : boardSelection.kind === "none" ? false : localProjectsKnown;
 	const activeProjectId = useMemo(
 		() => resolveActiveProject(chosenProjectId, projects, projectsKnown),
@@ -646,25 +656,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
 	const spawn = useCallback(
 		async ({ projectId, prompt, harness, model, mode, attachments }: SpawnOptions) => {
-			assertLocalAction();
+			const source = sessionSource;
 			const resolvedMode = mode ?? "chat";
 			return trackFeature("spawn", async () => {
-				const c = cfgRef.current;
 				const proj = projectId ?? targetProject();
-				if (!c || !proj) throw new Error("Pick a project first");
-				const session = await delegateTask(c, {
+				if (!source) throw new Error("The selected environment is not ready.");
+				if (!proj) throw new Error("Pick a project first");
+				return spawnSessionThroughSource(source, {
 					projectId: proj,
-					brief: prompt ?? "",
-					agent: harness,
+					prompt,
+					harness,
 					model,
 					mode: resolvedMode,
 					attachments,
-				});
-				await fetchAll();
-				return session;
+				}, source.kind === "cloud"
+					? fetchCloudBoard
+					: async () => { await fetchAll(); });
 			}, { mode: resolvedMode });
 		},
-		[assertLocalAction, targetProject, fetchAll],
+		[sessionSource, targetProject, fetchAll, fetchCloudBoard],
 	);
 
 	const launchConductor = useCallback(
@@ -769,7 +779,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			projects,
 			projectsKnown,
 			sessions: activeSessions,
-			orchestrators: cloudEnvironment ? [] : orchestrators,
+			orchestrators: activeOrchestrators,
 			orchestratorId: cloudEnvironment ? null : orchestratorId,
 			stats: cloudEnvironment ? {} : stats,
 			activeProjectId,
@@ -802,6 +812,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			projects,
 			projectsKnown,
 			activeSessions,
+			activeOrchestrators,
 			orchestrators,
 			orchestratorId,
 			stats,

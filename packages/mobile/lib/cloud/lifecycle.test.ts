@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { ControllerState } from "../chat/types";
+import * as lifecycle from "./lifecycle";
 import { cloudLifecycleStage, isResumable, stageLabel } from "./lifecycle";
 
 const base = { sandboxProvider: "docker", desiredState: "running", observedState: "running" };
@@ -25,16 +27,23 @@ describe("cloudLifecycleStage", () => {
 			.toBe("waiting_for_coder_agent");
 	});
 
-	it("separates starting the worker from restoring the agent", () => {
+	it("keeps a fresh bootstrap in the starting state after the runtime connects", () => {
 		expect(cloudLifecycleStage({ cloud: { ...base, observedState: "bootstrapping" }, runtimeConnected: false }))
 			.toBe("starting_ao_worker");
 		expect(cloudLifecycleStage({ cloud: { ...base, observedState: "bootstrapping" }, runtimeConnected: true }))
-			.toBe("restoring_agent");
+			.toBe("starting_ao_worker");
 	});
 
 	it("is connected only once the runtime is attached", () => {
 		expect(cloudLifecycleStage({ cloud: base, runtimeConnected: true })).toBe("connected");
 		expect(cloudLifecycleStage({ cloud: base, runtimeConnected: false })).toBe("restoring_agent");
+	});
+
+	it("surfaces a failed sandbox even when the runtime connection flag is stale", () => {
+		expect(cloudLifecycleStage({
+			cloud: { ...base, observedState: "failed" },
+			runtimeConnected: true,
+		})).toBe("failed");
 	});
 });
 
@@ -56,5 +65,24 @@ describe("stageLabel", () => {
 		expect(stageLabel("starting_ao_worker")).toBe("Starting worker…");
 		expect(stageLabel("restoring_agent")).toBe("Restoring agent…");
 		expect(stageLabel("connected")).toBe("Connected");
+	});
+});
+
+describe("cloud lifecycle header state", () => {
+	it("does not show a connected dot for failed or paused sandboxes", () => {
+		const headerState = (lifecycle as typeof lifecycle & {
+			cloudHeaderControllerState?: (stage: lifecycle.CloudLifecycleStage | undefined, fallback: ControllerState) => ControllerState;
+		}).cloudHeaderControllerState;
+		expect(headerState?.("failed", "ready")).toBe("stopped");
+		expect(headerState?.("paused_by_coder", "ready")).toBe("stopped");
+	});
+
+	it("shows transitional sandboxes as connecting and preserves connected state", () => {
+		const headerState = (lifecycle as typeof lifecycle & {
+			cloudHeaderControllerState?: (stage: lifecycle.CloudLifecycleStage | undefined, fallback: ControllerState) => ControllerState;
+		}).cloudHeaderControllerState;
+		expect(headerState?.("restoring_agent", "ready")).toBe("connecting");
+		expect(headerState?.("connected", "busy")).toBe("busy");
+		expect(headerState?.(undefined, "ready")).toBe("ready");
 	});
 });

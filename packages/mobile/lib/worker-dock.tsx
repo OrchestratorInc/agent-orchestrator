@@ -5,6 +5,8 @@ import { useTheme, useThemeState } from "./ThemeProvider";
 import { workerDockVisibility } from "./worker-dock-layout";
 
 export type WorkerDockProps = {
+	/** Local exposes filtering/search; Cloud reuses the same dock placement for spawn only. */
+	controlsEnabled?: boolean;
 	query: string;
 	onQueryChange: (query: string) => void;
 	onSpawn: () => void;
@@ -19,6 +21,7 @@ export type WorkerDockProps = {
 };
 
 export function WorkerDock({
+	controlsEnabled = true,
 	query,
 	onQueryChange,
 	onSpawn,
@@ -30,7 +33,7 @@ export function WorkerDock({
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const value = useNativeState(query);
-	const visibility = workerDockVisibility(searchOpen);
+	const visibility = workerDockVisibility(searchOpen, controlsEnabled);
 
 	useEffect(() => {
 		if (value.value !== query) value.value = query;
@@ -75,6 +78,7 @@ export function WorkerDock({
 					/>
 				}
 			</Host> : null}
+			{visibility.showSpawn && !visibility.showSearch ? <View style={styles.flexSpacer} /> : null}
 			{visibility.showSpawn ? <Host style={styles.actionHost} colorScheme={scheme} seedColor={t.blue}>
 				<Button
 					label="+"
@@ -89,7 +93,8 @@ export function WorkerDock({
 }
 
 const styles = StyleSheet.create({
-	row: { height: 52, flexDirection: "row", gap: 10 },
+	row: { flex: 1, height: 52, flexDirection: "row", gap: 10 },
+	flexSpacer: { flex: 1 },
 	searchHost: { flex: 1, height: 52 },
 	actionHost: { width: 52, height: 52 },
 });

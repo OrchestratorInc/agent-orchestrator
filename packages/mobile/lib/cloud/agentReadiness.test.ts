@@ -47,4 +47,8 @@ describe("readyHarnesses", () => {
 	it("excludes a valid daytona connection", () => {
 		expect(readyHarnesses([claude, daytonaValid] as never)).toEqual(["claude-code"]);
 	});
+
+	it("lists a harness once when both personal and organization credentials are valid", () => {
+		expect(readyHarnesses([claude, { ...claude, id: "personal-claude" }] as never)).toEqual(["claude-code"]);
+	});
 });

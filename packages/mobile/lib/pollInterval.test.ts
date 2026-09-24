@@ -8,7 +8,14 @@ vi.mock("expo-secure-store", () => ({
 }));
 
 import { DEFAULT_CONFIG, type ServerConfig } from "./config";
-import { DIRECT_POLL_MS, pollIntervalFor, TUNNEL_POLL_MS } from "./pollInterval";
+import {
+	CLOUD_BOARD_POLL_MS,
+	CLOUD_BOARD_TRANSITION_POLL_MS,
+	cloudBoardPollInterval,
+	DIRECT_POLL_MS,
+	pollIntervalFor,
+	TUNNEL_POLL_MS,
+} from "./pollInterval";
 
 const cfg = (over: Partial<ServerConfig> = {}): ServerConfig => ({
 	...DEFAULT_CONFIG, host: "192.168.1.42", httpPort: "3011", password: "pw", ...over,
@@ -36,5 +43,22 @@ describe("pollIntervalFor", () => {
 	it("keeps the normal interval when the endpoint kind is unknown", () => {
 		expect(pollIntervalFor(cfg({ endpointKind: undefined }))).toBe(DIRECT_POLL_MS);
 		expect(pollIntervalFor(null)).toBe(DIRECT_POLL_MS);
+	});
+});
+
+describe("cloudBoardPollInterval", () => {
+	it("reconciles quickly while a newly spawned worker is bootstrapping", () => {
+		expect(cloudBoardPollInterval([{
+			cloud: { desiredState: "running", observedState: "bootstrapping" },
+			runtimeConnected: true,
+		}])).toBe(CLOUD_BOARD_TRANSITION_POLL_MS);
+	});
+
+	it("returns to the steady cadence once cloud workers are settled", () => {
+		expect(cloudBoardPollInterval([{
+			cloud: { desiredState: "running", observedState: "running" },
+			runtimeConnected: true,
+		}])).toBe(CLOUD_BOARD_POLL_MS);
+		expect(cloudBoardPollInterval([])).toBe(CLOUD_BOARD_POLL_MS);
 	});
 });

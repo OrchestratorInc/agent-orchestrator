@@ -17,7 +17,7 @@ import {
 	View,
 } from "react-native";
 import { mobileReachablePreviewURL, restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
-import { cloudLifecycleStage, isResumable } from "../cloud/lifecycle";
+import { cloudHeaderControllerState, cloudLifecycleStage, isResumable } from "../cloud/lifecycle";
 import { haptics } from "../haptics";
 import { headerActionStyle } from "../headerAction";
 import { deferRouteContent, resetHeaderRightForSwap } from "../headerRightSwap";
@@ -92,8 +92,9 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	), [session.id]);
 	const { config, projects, refresh: refreshBoard, setActiveProject, setWorkerPinned, renameWorker, kill } = useApp();
 	const sessionSource = useSessionSource();
-	const conversation = useMobileConversation(config, session.id);
-	const interfaceSwitch = useInterfaceTransition(config, session.id, refreshBoard);
+	const cloudSession = sessionSource?.kind === "cloud";
+	const conversation = useMobileConversation(config, session.id, sessionSource);
+	const interfaceSwitch = useInterfaceTransition(cloudSession ? null : config, cloudSession ? "" : session.id, refreshBoard);
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [jumpToSequence, setJumpToSequence] = useState<number>();
 	const clearJumpToSequence = useCallback(() => setJumpToSequence(undefined), []);
@@ -120,10 +121,9 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	const terminated = "projectName" in session ? Boolean(session.isTerminal) : Boolean(session.isTerminated);
 	// Undefined for a local daemon session (no `cloud` field) and for a cloud
 	// session already connected — both cases leave this screen exactly as it
-	// was before cloud environments existed.
-	// Orchestrator links have no sandbox lifecycle of their own; only a
-	// DashboardSession (worker) can carry cloud fields.
-	const cloudStage = "projectName" in session ? undefined : cloudLifecycleStage(session);
+	// was before cloud environments existed. Cloud workers and orchestrators
+	// both carry the control-plane sandbox lifecycle.
+	const cloudStage = cloudLifecycleStage(session);
 	const cloudComposerLocked = cloudStage !== undefined && cloudStage !== "connected";
 	const interfaceTransitionActive = mobileInterfaceTransitionIsActive(interfaceSwitch.transition);
 	const interfaceTransitionNotice =
@@ -172,7 +172,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		? session.projectName
 		: projects.find((project) => project.id === session.projectId)?.name;
 	const headerHarness = conversation.snapshot?.harness || session.harness || "Agent";
-	const headerState = conversation.snapshot?.controller.state;
+	const headerState = cloudHeaderControllerState(cloudStage, conversation.snapshot?.controller.state ?? "connecting");
 
 	// The blocking request. It takes the composer's place until it is answered.
 	// Computed here rather than at render because the back-swipe below is a hook
@@ -209,12 +209,17 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				/>
 			),
 			headerRight: () => (
-				<Pressable accessibilityRole="button" accessibilityLabel="Conversation actions" hitSlop={11} onPress={() => { haptics.tap(); setMenuOpen(true); }} style={headerActionStyle}>
-					<Feather name="more-horizontal" size={20} color={t.textSecondary} />
-				</Pressable>
+				<View style={{ flexDirection: "row", alignItems: "center" }}>
+					{cloudSession ? <Pressable accessibilityRole="button" accessibilityLabel="Open Terminal UI" disabled={terminated} hitSlop={9} onPress={() => router.replace({ pathname: "/session/[id]", params: { id: session.id, view: "terminal" } })} style={[headerActionStyle, terminated && { opacity: 0.4 }]}>
+						<Feather name="terminal" size={19} color={t.textSecondary} />
+					</Pressable> : null}
+					<Pressable accessibilityRole="button" accessibilityLabel="Conversation actions" hitSlop={11} onPress={() => { haptics.tap(); setMenuOpen(true); }} style={headerActionStyle}>
+						<Feather name="more-horizontal" size={20} color={t.textSecondary} />
+					</Pressable>
+				</View>
 			),
 		});
-	}, [headerHarness, headerRightReady, headerState, navigation, projectName, title, t]);
+	}, [cloudSession, headerHarness, headerRightReady, headerState, navigation, projectName, router, session.id, terminated, title, t]);
 
 	const loadWorkspaceFiles = useCallback(async () => {
 		if (!config || !conversation.snapshot) return { paths: filePaths, truncated: filePathsTruncated };
@@ -325,6 +330,10 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	);
 
 	const requestInterfaceSwitch = useCallback(() => {
+		if (cloudSession) {
+			router.replace({ pathname: "/session/[id]", params: { id: session.id, view: "terminal" } });
+			return;
+		}
 		if (!interfaceSwitch.status?.supported) {
 			Alert.alert("Terminal UI unavailable", interfaceSwitch.status?.reason || interfaceSwitch.error || "This agent cannot resume the same native conversation in Terminal UI.");
 			return;
@@ -344,7 +353,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				{ text: "Stop and switch", style: "destructive", onPress: () => void startInterfaceSwitch("interrupt") },
 			],
 		);
-	}, [interfaceSwitch, startInterfaceSwitch, turnActive, turnWaiting]);
+	}, [cloudSession, interfaceSwitch, router, session.id, startInterfaceSwitch, turnActive, turnWaiting]);
 
 	useEffect(() => {
 		const current = conversation.snapshot;
@@ -360,9 +369,9 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			refreshing: conversation.refreshing,
 			compactSupported: can(current, "compaction") && !conversationActionUnsupported("compact", conversation.actionCodes.compact),
 			mcpReloadSupported: can(current, "mcp_reload") && !conversationActionUnsupported("mcp", conversation.actionCodes.mcp),
-			interfaceSupported: Boolean(interfaceSwitch.status?.supported),
-			interfaceReason: interfaceSwitch.status?.reason || interfaceSwitch.error,
-			interfaceSwitching: interfaceTransitionActive || interfaceSwitch.starting,
+			interfaceSupported: cloudSession ? !terminated : Boolean(interfaceSwitch.status?.supported),
+			interfaceReason: cloudSession ? (terminated ? "This session has ended." : undefined) : interfaceSwitch.status?.reason || interfaceSwitch.error,
+			interfaceSwitching: !cloudSession && (interfaceTransitionActive || interfaceSwitch.starting),
 			// Orchestrators are not deleted from here; the board owns their lifecycle.
 			canDelete: !("projectName" in session),
 			canPin: !("projectName" in session),
@@ -399,7 +408,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				);
 			},
 		})));
-	}, [conversation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setActiveProject, setWorkerPinned, title]);
+	}, [cloudSession, conversation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setActiveProject, setWorkerPinned, terminated, title]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. Nothing else

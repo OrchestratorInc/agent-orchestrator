@@ -9,23 +9,26 @@ import {
 	type CloudBoardRequest,
 } from "./boardSelection";
 
-const local: BoardState<string, string> = {
+const local: BoardState<string, string, string> = {
 	projects: ["local-project"],
 	sessions: ["local-session"],
+	orchestrators: ["local-orchestrator"],
 	loading: false,
 	error: "Local daemon unavailable",
 };
 
-const cloud: BoardState<string, string> = {
+const cloud: BoardState<string, string, string> = {
 	projects: ["cloud-project"],
 	sessions: ["cloud-session"],
+	orchestrators: ["cloud-orchestrator"],
 	loading: true,
 	error: null,
 };
 
-const empty: BoardState<string, string> = {
+const empty: BoardState<string, string, string> = {
 	projects: [],
 	sessions: [],
+	orchestrators: [],
 	loading: false,
 	error: null,
 };
@@ -73,7 +76,7 @@ describe("publishCloudBoardResult", () => {
 		current: cloud,
 		requestGeneration: 4,
 		currentGeneration: 5,
-		result: { kind: "success", projects: ["stale-project"], sessions: ["stale-session"] },
+			result: { kind: "success", projects: ["stale-project"], sessions: ["stale-session"], orchestrators: ["stale-orchestrator"] },
 	})).toBeUndefined();
 	});
 
@@ -82,10 +85,11 @@ describe("publishCloudBoardResult", () => {
 		current: { ...cloud, loading: true, error: "Temporary failure" },
 		requestGeneration: 5,
 		currentGeneration: 5,
-		result: { kind: "success", projects: ["fresh-project"], sessions: ["fresh-session"] },
+			result: { kind: "success", projects: ["fresh-project"], sessions: ["fresh-session"], orchestrators: ["fresh-orchestrator"] },
 	})).toEqual({
-		projects: ["fresh-project"],
-		sessions: ["fresh-session"],
+			projects: ["fresh-project"],
+			sessions: ["fresh-session"],
+			orchestrators: ["fresh-orchestrator"],
 		loading: false,
 		error: null,
 	});
@@ -97,11 +101,12 @@ describe("publishCloudBoardResult", () => {
 		requestGeneration: 5,
 		currentGeneration: 5,
 		result: { kind: "failure", error: "Timed out" },
-	})).toEqual({
-		projects: ["cloud-project"],
-		sessions: ["cloud-session"],
-		loading: false,
-		error: "Timed out",
+		})).toEqual({
+			projects: ["cloud-project"],
+			sessions: ["cloud-session"],
+			orchestrators: ["cloud-orchestrator"],
+			loading: false,
+			error: "Timed out",
 	});
 	});
 });
@@ -117,7 +122,7 @@ describe("dispatchCurrentCloudBoardRequest", () => {
 				current: state, requestGeneration: request.generation, currentGeneration: current.generation,
 				requestSequence: request.sequence, currentSequence: current.sequence,
 				result: olderResult === "success"
-					? { kind: "success", projects: ["old"], sessions: ["old"] }
+					? { kind: "success", projects: ["old"], sessions: ["old"], orchestrators: ["old-orchestrator"] }
 					: { kind: "failure", error: "Old failure" },
 			}) ?? state;
 		});
@@ -125,12 +130,12 @@ describe("dispatchCurrentCloudBoardRequest", () => {
 			state = publishCloudBoardResult({
 				current: state, requestGeneration: request.generation, currentGeneration: current.generation,
 				requestSequence: request.sequence, currentSequence: current.sequence,
-				result: { kind: "success", projects: ["new"], sessions: ["new"] },
+				result: { kind: "success", projects: ["new"], sessions: ["new"], orchestrators: ["new-orchestrator"] },
 			}) ?? state;
 		});
 		releaseOlder();
 		await older;
-		expect(state).toEqual({ projects: ["new"], sessions: ["new"], loading: false, error: null });
+		expect(state).toEqual({ projects: ["new"], sessions: ["new"], orchestrators: ["new-orchestrator"], loading: false, error: null });
 	});
 
 	it("keeps the last good snapshot and newest error when an older success arrives", async () => {
@@ -142,7 +147,7 @@ describe("dispatchCurrentCloudBoardRequest", () => {
 			state = publishCloudBoardResult({
 				current: state, requestGeneration: request.generation, currentGeneration: current.generation,
 				requestSequence: request.sequence, currentSequence: current.sequence,
-				result: { kind: "success", projects: ["old"], sessions: ["old"] },
+				result: { kind: "success", projects: ["old"], sessions: ["old"], orchestrators: ["old-orchestrator"] },
 			}) ?? state;
 		});
 		await dispatchCurrentCloudBoardRequest(() => current, async (request) => {
@@ -154,7 +159,10 @@ describe("dispatchCurrentCloudBoardRequest", () => {
 		});
 		releaseOlder();
 		await older;
-		expect(state).toEqual({ projects: ["cloud-project"], sessions: ["cloud-session"], loading: false, error: "Newest failure" });
+		expect(state).toEqual({
+			projects: ["cloud-project"], sessions: ["cloud-session"], orchestrators: ["cloud-orchestrator"],
+			loading: false, error: "Newest failure",
+		});
 	});
 
 	it("uses the new source when a retained refresh callback runs after a source switch", async () => {

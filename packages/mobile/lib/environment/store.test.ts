@@ -13,7 +13,7 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
 	},
 }));
 
-import { loadEnvironment, saveEnvironment } from "./store";
+import { environmentChoiceAction, loadEnvironment, saveEnvironment } from "./store";
 
 beforeEach(() => storage.clear());
 
@@ -32,5 +32,20 @@ describe("environment persistence", () => {
 	it("falls back to local for an unrecognised stored value", async () => {
 		storage.set("ao.environment", "mainframe");
 		expect(await loadEnvironment()).toBe("local");
+	});
+});
+
+describe("environment choice", () => {
+	it("opens sign-in instead of switching to an unauthenticated Cloud environment", () => {
+		expect(environmentChoiceAction("local", "cloud", false)).toBe("sign-in");
+	});
+
+	it("switches directly when the destination is ready", () => {
+		expect(environmentChoiceAction("local", "cloud", true)).toBe("switch");
+		expect(environmentChoiceAction("cloud", "local", false)).toBe("switch");
+	});
+
+	it("does nothing when the selected environment is already active", () => {
+		expect(environmentChoiceAction("cloud", "cloud", true)).toBe("none");
 	});
 });

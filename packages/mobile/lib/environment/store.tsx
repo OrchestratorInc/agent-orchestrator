@@ -3,6 +3,19 @@ import type { EnvironmentKind } from "./types";
 
 const KEY = "ao.environment";
 
+export type EnvironmentChoiceAction = "none" | "switch" | "sign-in";
+
+/** Keeps every environment picker on the same authenticated-switch contract. */
+export function environmentChoiceAction(
+	current: EnvironmentKind | null,
+	next: EnvironmentKind,
+	cloudSignedIn: boolean,
+): EnvironmentChoiceAction {
+	if (next === current) return "none";
+	if (next === "cloud" && !cloudSignedIn) return "sign-in";
+	return "switch";
+}
+
 /** Which environment is active, defaulting (and falling back) to local. */
 export async function loadEnvironment(): Promise<EnvironmentKind> {
 	try {

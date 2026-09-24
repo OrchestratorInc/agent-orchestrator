@@ -144,6 +144,33 @@ describe("createCloudSessionSource", () => {
 		]);
 	});
 
+	it("projects the cloud active turn into the conversation snapshot", async () => {
+		const client = clientStub({
+			getSession: vi.fn(async () => ({
+				session: {
+					...fullSession("s1"),
+					activeTurn: {
+						id: "t1",
+						sessionId: "s1",
+						userMessageSequence: 4,
+						state: "provisioning",
+						attemptCount: 1,
+						createdAt: "2026-09-01T00:00:04Z",
+						updatedAt: "2026-09-01T00:00:05Z",
+					},
+				},
+			})),
+			replayEvents: vi.fn(async () => ({ events: [], hasMore: false, nextAfter: 4 })),
+		});
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
+
+		expect((await source.getConversationPage("s1")).turns).toEqual([{
+			id: "t1",
+			state: "queued",
+			requestedAt: "2026-09-01T00:00:04Z",
+		}]);
+	});
+
 	// A single replayEvents call is capped at the server's page limit; opening
 	// a conversation longer than that must still show its live tail, not just
 	// whatever the first page happened to contain.

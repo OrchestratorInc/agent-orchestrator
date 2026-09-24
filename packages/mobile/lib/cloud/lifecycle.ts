@@ -1,3 +1,5 @@
+import type { ControllerState } from "../chat/types";
+
 /** Ported verbatim from frontend/src/renderer/lib/cloud-lifecycle.ts. */
 export type CloudLifecycleStage =
 	| "paused_by_coder"
@@ -5,6 +7,7 @@ export type CloudLifecycleStage =
 	| "waiting_for_coder_agent"
 	| "starting_ao_worker"
 	| "restoring_agent"
+	| "failed"
 	| "connected";
 
 export type CloudLifecycleInput = {
@@ -21,6 +24,7 @@ export function cloudLifecycleStage(session: CloudLifecycleInput): CloudLifecycl
 	if (!lifecycle) return undefined;
 	const { desiredState: desired, observedState: observed } = lifecycle;
 
+	if (observed === "failed") return "failed";
 	if (lifecycle.sandboxProvider === "coder" && desired === "paused" && observed === "stopped") {
 		return "paused_by_coder";
 	}
@@ -31,7 +35,7 @@ export function cloudLifecycleStage(session: CloudLifecycleInput): CloudLifecycl
 		return "waiting_for_coder_agent";
 	}
 	if (observed === "bootstrapping") {
-		return session.runtimeConnected ? "restoring_agent" : "starting_ao_worker";
+		return "starting_ao_worker";
 	}
 	if (observed === "running") {
 		return session.runtimeConnected ? "connected" : "restoring_agent";
@@ -51,6 +55,16 @@ export function stageLabel(stage: CloudLifecycleStage): string {
 		case "waiting_for_coder_agent": return "Starting sandbox…";
 		case "starting_ao_worker": return "Starting worker…";
 		case "restoring_agent": return "Restoring agent…";
+		case "failed": return "Sandbox unavailable";
 		case "connected": return "Connected";
 	}
+}
+
+export function cloudHeaderControllerState(
+	stage: CloudLifecycleStage | undefined,
+	fallback: ControllerState,
+): ControllerState {
+	if (!stage || stage === "connected") return fallback;
+	if (stage === "failed" || stage === "paused_by_coder") return "stopped";
+	return "connecting";
 }

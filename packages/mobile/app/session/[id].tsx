@@ -5,11 +5,14 @@ import { shouldPoll } from "../../lib/appStatePoll";
 import { ChatSessionScreen } from "../../lib/chat/ChatSessionScreen";
 import { isConfigured, machineIdentity } from "../../lib/config";
 import { lookUpSession } from "../../lib/session/sessionLookup";
+import { CloudTerminalSessionScreen } from "../../lib/session/CloudTerminalSessionScreen";
 import TerminalSessionScreen from "../../lib/session/TerminalSessionScreen";
 import {
 	currentSessionLookup,
 	sessionLookupDue,
 	sessionLookupKey,
+	sessionRouteConfigured,
+	sessionDisplaySurface,
 	sessionRouteView,
 	type KeyedSessionLookup,
 } from "../../lib/session/sessionRoute";
@@ -26,13 +29,17 @@ import { Button, EmptyState } from "../../lib/ui";
  * `sessionRouteView`, and when the route asks is `sessionLookupDue`.
  */
 export default function MobileSessionRoute() {
-	const { id: rawId } = useLocalSearchParams<{ id: string }>();
+	const { id: rawId, view: requestedView } = useLocalSearchParams<{ id: string; view?: string }>();
 	const id = String(rawId ?? "");
 	const router = useRouter();
-	const { sessions, orchestrators, config, connection, loading } = useApp();
+	const { sessions, orchestrators, config, connection, environment, loading, sessionSource } = useApp();
 	const listed = sessions.find((item) => item.id === id) ?? orchestrators.find((item) => item.id === id);
 	const isListed = Boolean(listed);
-	const configured = config === null ? null : isConfigured(config);
+	const configured = sessionRouteConfigured({
+		environment,
+		sourceKind: sessionSource?.kind,
+		localConfigured: config === null ? null : isConfigured(config),
+	});
 	const machine = config ? machineIdentity(config) : "";
 	const key = sessionLookupKey(machine, id);
 	const [stored, setStored] = useState<KeyedSessionLookup | null>(null);
@@ -106,12 +113,12 @@ export default function MobileSessionRoute() {
 	const view = sessionRouteView({ listed, configured, connection, loading, lookup });
 
 	switch (view.kind) {
-		case "screen":
-			return view.session.mode === "chat" ? (
-				<ChatSessionScreen session={view.session} />
-			) : (
-				<TerminalSessionScreen session={view.session} />
-			);
+		case "screen": {
+			const surface = sessionDisplaySurface({ environment, sessionMode: view.session.mode, requestedView });
+			if (surface === "cloud-terminal") return <CloudTerminalSessionScreen session={view.session} />;
+			if (surface === "local-terminal") return <TerminalSessionScreen session={view.session} />;
+			return <ChatSessionScreen session={view.session} />;
+		}
 		case "loading":
 			return (
 				<View style={styles.center}>

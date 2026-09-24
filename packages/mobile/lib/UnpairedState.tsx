@@ -1,6 +1,7 @@
 import { useRouter } from "expo-router";
 
 import { useCloudAuth } from "./cloud/authStore";
+import { useCloudSignInAction } from "./cloud/useCloudSignInAction";
 import { Button, EmptyState } from "./ui";
 
 /**
@@ -40,8 +41,8 @@ export function UnpairedState() {
  * that resolution's progress or retryable failure instead of an empty board.
  */
 export function CloudUnreadyState() {
-	const router = useRouter();
 	const cloudAuth = useCloudAuth();
+	const cloudSignIn = useCloudSignInAction();
 
 	if (cloudAuth.signedIn === null) {
 		return <EmptyState icon="cloud" title="Loading your account…" />;
@@ -53,7 +54,7 @@ export function CloudUnreadyState() {
 				icon="cloud"
 				title="Sign in to AO Cloud"
 				message="Sign in to see and drive the agents running in your cloud workspace."
-				action={<Button title="Sign in" icon="log-in" onPress={() => router.push("/sheets/cloud-signin")} />}
+				action={<Button title="Sign in" icon="log-in" loading={cloudSignIn.busy} onPress={cloudSignIn.signIn} />}
 			/>
 		);
 	}

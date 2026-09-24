@@ -2,8 +2,64 @@ import { boardZoneOf } from "./agentsView";
 import type { DashboardSession } from "./api";
 import type { EnvironmentKind } from "./environment/types";
 
+export type SidebarEnvironmentOption = {
+	id: EnvironmentKind;
+	label: "Local" | "Cloud";
+	selected: boolean;
+};
+
+export function sidebarEnvironmentOptions(active: EnvironmentKind | null): SidebarEnvironmentOption[] {
+	return [
+		{ id: "local", label: "Local", selected: active === "local" },
+		{ id: "cloud", label: "Cloud", selected: active === "cloud" },
+	];
+}
+
+type SidebarSessionHealth = {
+	stale: boolean;
+	label: "DISCONNECTED" | "REFRESH FAILED" | null;
+	lampStatus: "closed" | "connecting" | "open";
+};
+
+export function sidebarSessionHealth(input: {
+	environment: EnvironmentKind | null;
+	configured: boolean;
+	connection: "closed" | "connecting" | "open";
+	error: string | null;
+}): SidebarSessionHealth {
+	if (input.environment === "cloud") {
+		return input.error
+			? { stale: true, label: "REFRESH FAILED", lampStatus: "closed" }
+			: { stale: false, label: null, lampStatus: input.configured ? "open" : "closed" };
+	}
+	return input.environment === "local" && input.connection !== "open"
+		? { stale: true, label: "DISCONNECTED", lampStatus: input.connection }
+		: { stale: false, label: null, lampStatus: input.connection };
+}
+
+export type SidebarSessionListPresentation =
+	| { kind: "loading"; label: string }
+	| { kind: "empty"; label: "No active sessions" }
+	| { kind: "list" };
+
+/** Distinguishes an empty board from the first request after an environment switch. */
+export function sidebarSessionListPresentation(
+	environment: EnvironmentKind | null,
+	loading: boolean,
+	sessionCount: number,
+): SidebarSessionListPresentation {
+	if (sessionCount > 0) return { kind: "list" };
+	if (loading) {
+		return {
+			kind: "loading",
+			label: environment === "cloud" ? "Loading Cloud workers…" : "Loading workers…",
+		};
+	}
+	return { kind: "empty", label: "No active sessions" };
+}
+
 export function sidebarSessionRoute(environment: EnvironmentKind | null, session: Pick<DashboardSession, "id" | "projectId">) {
-	if (environment !== "local") return undefined;
+	if (environment === null) return undefined;
 	return { pathname: "/session/[id]" as const, params: { id: session.id, projectId: session.projectId } };
 }
 

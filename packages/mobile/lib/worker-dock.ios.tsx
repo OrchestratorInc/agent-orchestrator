@@ -25,6 +25,7 @@ import { workerDockVisibility } from "./worker-dock-layout";
 import { workerSearchClearState } from "./worker-search";
 
 export function WorkerDock({
+	controlsEnabled = true,
 	query,
 	onQueryChange,
 	onSpawn,
@@ -42,7 +43,7 @@ export function WorkerDock({
 	const clear = workerSearchClearState(query);
 	const projectOptions = workerProjectOptions(projects);
 	const selectedProjectLabel = workerProjectLabel(projects, selectedProjectId);
-	const visibility = workerDockVisibility(searchOpen);
+	const visibility = workerDockVisibility(searchOpen, controlsEnabled);
 
 	useEffect(() => {
 		if (text.get() !== query) text.set(query);
@@ -130,7 +131,7 @@ export function WorkerDock({
 							]}
 						/>
 					</HStack>
-				) : visibility.showControls && visibility.showSpawn ? (
+				) : visibility.showSpawn ? (
 					<Spacer />
 				) : null}
 				{visibility.showSpawn ? <Button

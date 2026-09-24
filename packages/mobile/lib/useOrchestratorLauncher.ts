@@ -1,8 +1,11 @@
+import * as Crypto from "expo-crypto";
 import { useRouter } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import { Alert, Platform } from "react-native";
 import { ApiError } from "./api";
 import { chatErrorCopy, isChatPreflightError } from "./chatError";
+import { useCloudAuth } from "./cloud/authStore";
+import { spawnCloudOrchestrator } from "./cloud/orchestrator";
 import { classifyConnectionFailure, describeConnectionFailure } from "./connectionError";
 import { haptics } from "./haptics";
 import type { OrchestratorProjectRow } from "./orchestratorView";
@@ -18,11 +21,13 @@ import { useApp } from "./store";
  */
 export function useOrchestratorLauncher() {
 	const router = useRouter();
-	const { config, refresh, launchConductor } = useApp();
+	const { environment, config, refresh, launchConductor } = useApp();
+	const { client, orgId } = useCloudAuth();
 	const [busyProjects, setBusyProjects] = useState<ReadonlySet<string>>(() => new Set());
 	// A ref as well as state: state is a render behind, and a fast double tap must
 	// not slip a second launch in before the first one has re-rendered.
 	const launching = useRef(new Set<string>());
+	const cloudRequestKeys = useRef(new Map<string, string>());
 
 	const setBusy = useCallback((projectId: string, busy: boolean) => {
 		setBusyProjects((current) => {
@@ -42,11 +47,28 @@ export function useOrchestratorLauncher() {
 		launching.current.add(row.project.id);
 		setBusy(row.project.id, true);
 		try {
+			if (environment === "cloud") {
+				if (!orgId) throw new Error("Your Cloud workspace is not ready. Please try again.");
+				let key = cloudRequestKeys.current.get(row.project.id);
+				if (!key) {
+					key = Crypto.randomUUID();
+					cloudRequestKeys.current.set(row.project.id, key);
+				}
+				const id = await spawnCloudOrchestrator(client, orgId, row.project.id, key);
+				cloudRequestKeys.current.delete(row.project.id);
+				await refresh().catch(() => {});
+				openSession(row, id);
+				return;
+			}
 			const next = await launchConductor(row.project.id, false, mode);
 			if (next?.id) openSession(row, next.id);
 			else await refresh();
 		} catch (cause) {
 			haptics.error();
+			if (environment === "cloud") {
+				Alert.alert("Couldn't open orchestrator", cause instanceof Error ? cause.message : "Please try again.");
+				return;
+			}
 			if (mode === "chat" && isChatPreflightError(cause)) {
 				Alert.alert("Chat is unavailable", chatErrorCopy(cause), [
 					{ text: "Cancel", style: "cancel" },
@@ -65,7 +87,7 @@ export function useOrchestratorLauncher() {
 			launching.current.delete(row.project.id);
 			setBusy(row.project.id, false);
 		}
-	}, [config?.host, config?.httpPort, launchConductor, openSession, refresh, setBusy]);
+	}, [client, config?.host, config?.httpPort, environment, launchConductor, openSession, orgId, refresh, setBusy]);
 
 	/** Opens a running orchestrator, or starts or resumes one that is not. */
 	const openOrchestrator = useCallback((row: OrchestratorProjectRow) => {

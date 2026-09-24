@@ -15,6 +15,8 @@ export type SpawnComposerControlsProps = {
 	modelLabel: string;
 	onSelectModel: (model: string) => void;
 	onAttach: () => void;
+	showAttachments?: boolean;
+	showModels?: boolean;
 	onSpawn: () => void;
 	busy: boolean;
 	disabled: boolean;

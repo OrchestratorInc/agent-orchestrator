@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useRouter } from "expo-router";
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { setOnboardingSkipped } from "../lib/onboardingStore";
 import { useApp } from "../lib/store";
@@ -11,12 +11,14 @@ import type { Theme } from "../lib/theme";
 import { haptics } from "../lib/haptics";
 import { MOBILE_EVENTS } from "../lib/telemetry/events";
 import { mobileTelemetry } from "../lib/telemetry/runtime";
+import { useCloudSignInAction } from "../lib/cloud/useCloudSignInAction";
 
 export default function OnboardingScreen() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { reloadConfig } = useApp();
+	const { reloadConfig, setEnvironment } = useApp();
+	const cloudSignIn = useCloudSignInAction("/sheets/cloud-signin?from=onboarding");
 
 	useEffect(() => {
 		mobileTelemetry()?.capture(MOBILE_EVENTS.onboardingStarted);
@@ -26,6 +28,13 @@ export default function OnboardingScreen() {
 		mobileTelemetry()?.capture(MOBILE_EVENTS.onboardingSkipped);
 		await setOnboardingSkipped();
 		await reloadConfig();
+		router.replace("/");
+	}
+
+	async function useCloud() {
+		haptics.tap();
+		if (!(await cloudSignIn.signIn())) return;
+		setEnvironment("cloud");
 		router.replace("/");
 	}
 
@@ -60,14 +69,16 @@ export default function OnboardingScreen() {
 					/>
 					<Pressable
 						accessibilityRole="button"
-						onPress={() => {
-							haptics.tap();
-							router.push("/sheets/cloud-signin?from=onboarding");
-						}}
+						disabled={cloudSignIn.busy}
+						onPress={() => void useCloud()}
 						hitSlop={8}
 						style={styles.cloudAlt}
 					>
-						<Text style={styles.cloudAltText}>Use AO Cloud instead</Text>
+						{cloudSignIn.busy ? (
+							<ActivityIndicator size="small" />
+						) : (
+							<Text style={styles.cloudAltText}>Use AO Cloud instead</Text>
+						)}
 					</Pressable>
 				</View>
 

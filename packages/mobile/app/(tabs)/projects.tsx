@@ -2,7 +2,7 @@ import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
 import { ActivityIndicator, Platform, RefreshControl, SectionList, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { boardFailure, boardPresentation } from "../../lib/board-presentation";
+import { boardFailure, boardPresentation, canUseOrchestratorAction } from "../../lib/board-presentation";
 import { haptics } from "../../lib/haptics";
 import { orchestratorProjectSections, type OrchestratorProjectRow } from "../../lib/orchestratorView";
 import { ProjectCard } from "../../lib/project-card";
@@ -107,7 +107,8 @@ export default function ProjectsScreen() {
 			<View style={{ height: insets.top }} />
 			<ScreenHeader
 				title="Projects"
-				right={presentation.localControls &&
+				right={environment === "cloud" ?
+					<HeaderIconButton icon="plus" label="Add Cloud project" onPress={() => router.push("/create-project")} /> : presentation.localControls &&
 					<HeaderIconButton
 						icon="bell"
 						label="Notifications"
@@ -139,7 +140,7 @@ export default function ProjectsScreen() {
 							row={item}
 							busy={busyProjects.has(item.project.id)}
 							onOpenProject={openProject}
-							onOrchestrator={presentation.localControls ? openOrchestrator : undefined}
+							onOrchestrator={canUseOrchestratorAction(environment, item.action) ? openOrchestrator : undefined}
 						/>
 					)}
 					ListEmptyComponent={
@@ -151,7 +152,12 @@ export default function ProjectsScreen() {
 								action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />}
 							/>
 						) : (
-							<EmptyState icon="folder" title="No projects" message="Add a project in AO to get started." />
+							<EmptyState
+								icon="folder"
+								title="No projects"
+								message={environment === "cloud" ? "Import a GitHub repository to get started." : "Add a project in AO to get started."}
+								action={environment === "cloud" ? <Button title="Add Cloud project" icon="plus" onPress={() => router.push("/create-project")} /> : undefined}
+							/>
 						)
 					}
 				/>

@@ -208,6 +208,9 @@ export function CloudAuthProvider({
 						codeChallenge: challenge,
 						state,
 					}),
+				// Keep the browser's device identity so Google does not interpret
+				// every AO login as a new browser. `prompt=login` in the URL still
+				// makes AuthKit ask which account should continue after sign-out.
 				openAuth: (url) => WebBrowser.openAuthSessionAsync(url, WORKOS_REDIRECT_URI),
 				exchange: ({ code, codeVerifier }) =>
 					exchangeWorkOSCode({ clientId: WORKOS_CLIENT_ID, code, codeVerifier }),

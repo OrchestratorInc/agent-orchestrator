@@ -20,6 +20,8 @@ export function SpawnComposerControls({
 	modelLabel,
 	onSelectModel,
 	onAttach,
+	showAttachments = true,
+	showModels = true,
 	onSpawn,
 	busy,
 	disabled,
@@ -62,19 +64,23 @@ export function SpawnComposerControls({
 			<SelectorButton label={projectLabel} icon="folder" onPress={() => setOpenMenu("project")} style={styles.projectButton} />
 
 			<View style={styles.rail}>
-				<Pressable
-					accessibilityRole="button"
-					accessibilityLabel="Attach a file"
-					android_ripple={{ color: t.tintBlue, borderless: true, radius: 20 }}
-					onPress={onAttach}
-					style={styles.attach}
-				>
-					<Feather name="paperclip" size={20} color={t.textSecondary} />
-				</Pressable>
-				<View style={styles.divider} />
+				{showAttachments ? <>
+					<Pressable
+						accessibilityRole="button"
+						accessibilityLabel="Attach a file"
+						android_ripple={{ color: t.tintBlue, borderless: true, radius: 20 }}
+						onPress={onAttach}
+						style={styles.attach}
+					>
+						<Feather name="paperclip" size={20} color={t.textSecondary} />
+					</Pressable>
+					<View style={styles.divider} />
+				</> : null}
 				<SelectorButton label={harnessLabel} icon="terminal" harness={harness} onPress={() => setOpenMenu("harness")} style={styles.railButton} />
-				<View style={styles.divider} />
-				<SelectorButton label={modelLabel} icon="cpu" onPress={() => setOpenMenu("model")} style={styles.railButton} />
+				{showModels ? <>
+					<View style={styles.divider} />
+					<SelectorButton label={modelLabel} icon="cpu" onPress={() => setOpenMenu("model")} style={styles.railButton} />
+				</> : null}
 			</View>
 
 			<Pressable

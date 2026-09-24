@@ -27,6 +27,7 @@ describe("toDashboardSession", () => {
 		const mapped = toDashboardSession(session);
 		expect(mapped.id).toBe("s1");
 		expect(mapped.projectId).toBe("p1");
+		expect(mapped.kind).toBe("worker");
 		expect(mapped.harness).toBe("claude-code");
 		expect(mapped.displayName).toBe("fix the build");
 		expect(mapped.branch).toBe("ao/fix-build");

@@ -11,9 +11,37 @@ import {
 	sessionLookupDue,
 	sessionLookupKey,
 	sessionLookupSettled,
+	sessionRouteConfigured,
+	sessionDisplaySurface,
 	sessionRouteView,
 	type SessionLookup,
 } from "./sessionRoute";
+
+describe("sessionDisplaySurface", () => {
+	it("opens a Cloud terminal only for an explicit Cloud terminal view", () => {
+		expect(sessionDisplaySurface({ environment: "cloud", sessionMode: "chat", requestedView: "terminal" })).toBe("cloud-terminal");
+		expect(sessionDisplaySurface({ environment: "cloud", sessionMode: "chat", requestedView: undefined })).toBe("chat");
+		expect(sessionDisplaySurface({ environment: "local", sessionMode: "chat", requestedView: "terminal" })).toBe("chat");
+		expect(sessionDisplaySurface({ environment: "local", sessionMode: "tui", requestedView: "terminal" })).toBe("local-terminal");
+	});
+});
+
+describe("sessionRouteConfigured", () => {
+	it("treats a ready Cloud source as configured without a Local daemon", () => {
+		expect(sessionRouteConfigured({ environment: "cloud", sourceKind: "cloud", localConfigured: null })).toBe(true);
+	});
+
+	it("waits for unresolved environments and Local configuration", () => {
+		expect(sessionRouteConfigured({ environment: null, sourceKind: undefined, localConfigured: null })).toBeNull();
+		expect(sessionRouteConfigured({ environment: "local", sourceKind: undefined, localConfigured: null })).toBeNull();
+	});
+
+	it("rejects an unavailable Cloud source and preserves resolved Local state", () => {
+		expect(sessionRouteConfigured({ environment: "cloud", sourceKind: undefined, localConfigured: true })).toBe(false);
+		expect(sessionRouteConfigured({ environment: "local", sourceKind: "local", localConfigured: true })).toBe(true);
+		expect(sessionRouteConfigured({ environment: "local", sourceKind: undefined, localConfigured: false })).toBe(false);
+	});
+});
 
 const worker = (over: Partial<DashboardSession> = {}): DashboardSession =>
 	({ id: "proj-1", projectId: "proj", mode: "chat", isTerminated: false, ...over }) as DashboardSession;

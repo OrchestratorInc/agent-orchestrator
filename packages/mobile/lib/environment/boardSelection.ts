@@ -1,15 +1,16 @@
 import type { EnvironmentKind } from "./types";
 
-export interface BoardState<Project, Session> {
+export interface BoardState<Project, Session, Orchestrator = never> {
 	projects: Project[];
 	sessions: Session[];
+	orchestrators: Orchestrator[];
 	loading: boolean;
 	error: string | null;
 }
 
-export type BoardSelection<Project, Session> = {
+export type BoardSelection<Project, Session, Orchestrator = never> = {
 	kind: "local" | "cloud" | "none";
-	state: BoardState<Project, Session>;
+	state: BoardState<Project, Session, Orchestrator>;
 };
 
 /** A Cloud source and its invalidation generation must travel together. */
@@ -31,13 +32,13 @@ export function boardReadiness(environment: EnvironmentKind | null, sourceKind: 
 }
 
 /** Select the board visible for the resolved environment without mixing slices. */
-export function selectBoardState<Project, Session>(input: {
+export function selectBoardState<Project, Session, Orchestrator>(input: {
 	environment: EnvironmentKind | null;
 	sourceKind: EnvironmentKind | undefined;
-	local: BoardState<Project, Session>;
-	cloud: BoardState<Project, Session>;
-	empty: BoardState<Project, Session>;
-}): BoardSelection<Project, Session> {
+	local: BoardState<Project, Session, Orchestrator>;
+	cloud: BoardState<Project, Session, Orchestrator>;
+	empty: BoardState<Project, Session, Orchestrator>;
+}): BoardSelection<Project, Session, Orchestrator> {
 	if (input.environment === "cloud") {
 		return input.sourceKind === "cloud"
 			? { kind: "cloud", state: input.cloud }
@@ -46,8 +47,8 @@ export function selectBoardState<Project, Session>(input: {
 	return { kind: "local", state: input.local };
 }
 
-type CloudBoardResult<Project, Session> =
-	| { kind: "success"; projects: Project[]; sessions: Session[] }
+type CloudBoardResult<Project, Session, Orchestrator> =
+	| { kind: "success"; projects: Project[]; sessions: Session[]; orchestrators: Orchestrator[] }
 	| { kind: "failure"; error: string };
 
 /**
@@ -55,18 +56,24 @@ type CloudBoardResult<Project, Session> =
  * active source generation and latest request sequence. A failure deliberately
  * preserves the last board.
  */
-export function publishCloudBoardResult<Project, Session>(input: {
-	current: BoardState<Project, Session>;
+export function publishCloudBoardResult<Project, Session, Orchestrator>(input: {
+	current: BoardState<Project, Session, Orchestrator>;
 	requestGeneration: number;
 	currentGeneration: number;
 	requestSequence?: number;
 	currentSequence?: number;
-	result: CloudBoardResult<Project, Session>;
-}): BoardState<Project, Session> | undefined {
+	result: CloudBoardResult<Project, Session, Orchestrator>;
+}): BoardState<Project, Session, Orchestrator> | undefined {
 	if (input.requestGeneration !== input.currentGeneration) return undefined;
 	if (input.requestSequence !== input.currentSequence) return undefined;
 	if (input.result.kind === "success") {
-		return { projects: input.result.projects, sessions: input.result.sessions, loading: false, error: null };
+		return {
+			projects: input.result.projects,
+			sessions: input.result.sessions,
+			orchestrators: input.result.orchestrators,
+			loading: false,
+			error: null,
+		};
 	}
 	return { ...input.current, loading: false, error: input.result.error };
 }

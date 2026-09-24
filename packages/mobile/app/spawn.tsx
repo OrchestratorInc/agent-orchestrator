@@ -16,9 +16,11 @@ import {
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { agentErrorCopy } from "../lib/agentError";
 import { defaultAgent, rankAgents } from "../lib/agentPicker";
-import { ApiError, getAgentModels, getAgents, getProject, getSettings, type AgentCatalog, type AgentModelCatalog, type ProjectDetail, type SessionMode } from "../lib/api";
+import { ApiError, getAgentModels, getAgents, getProject, getSettings, type AgentCatalog, type AgentInfo, type AgentModelCatalog, type ProjectDetail, type SessionMode } from "../lib/api";
 import { classifyConnectionFailure, describeConnectionFailure } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
+import { readyHarnesses } from "../lib/cloud/agentReadiness";
+import { useCloudAuth } from "../lib/cloud/authStore";
 import { haptics } from "../lib/haptics";
 import { resolveSpawnProject } from "../lib/projectFilter";
 import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
@@ -37,7 +39,9 @@ export default function SpawnModal() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const { projectId: routeProjectId } = useLocalSearchParams<{ projectId?: string }>();
-	const { projects, projectsKnown, activeProjectId, config, spawn } = useApp();
+	const { environment, projects, projectsKnown, activeProjectId, config, spawn } = useApp();
+	const { client: cloudClient, orgId: cloudOrgId } = useCloudAuth();
+	const cloudSpawn = environment === "cloud";
 
 	const [projectId, setProjectId] = useState<string | null>(null);
 	const [harness, setHarness] = useState("");
@@ -79,9 +83,52 @@ export default function SpawnModal() {
 	}, [activeProjectId, projects, projectsKnown, projectId, routeProjectId]);
 
 	useEffect(() => {
-		if (!config) return;
 		let cancelled = false;
 		setLoading(true);
+		setCatalogError(null);
+		if (environment === "cloud") {
+			setMode("chat");
+			setAttachments([]);
+			setModel("");
+			setModelTouched(false);
+			if (!cloudOrgId) {
+				setCatalog(null);
+				setChatHarnesses([]);
+				setCatalogError("Your Cloud workspace is not ready yet.");
+				setLoading(false);
+				return;
+			}
+			void Promise.allSettled([
+				cloudClient.listProviderConnections(cloudOrgId),
+				cloudClient.listUserProviderConnections(),
+			]).then((results) => {
+				if (cancelled) return;
+				const available = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+				if (results.every((result) => result.status === "rejected")) {
+					const failure = results[0].status === "rejected" ? results[0].reason : undefined;
+					throw failure instanceof Error ? failure : new Error("Could not load Cloud agents.");
+				}
+				const harnesses = readyHarnesses(available);
+				const agents = harnesses.map(cloudAgentInfo);
+				setCatalog({ supported: agents, installed: agents, authorized: agents });
+				setChatHarnesses(harnesses);
+				setCatalogError(null);
+			}).catch((cause) => {
+				if (cancelled) return;
+				setCatalog(null);
+				setChatHarnesses([]);
+				setCatalogError(cause instanceof Error ? cause.message : "Could not load Cloud agents.");
+			}).finally(() => {
+				if (!cancelled) setLoading(false);
+			});
+			return () => { cancelled = true; };
+		}
+		if (!config) {
+			setCatalog(null);
+			setChatHarnesses([]);
+			setLoading(false);
+			return;
+		}
 		Promise.all([getAgents(config), getSettings(config)])
 			.then(([c, settings]) => {
 				if (cancelled) return;
@@ -100,7 +147,7 @@ export default function SpawnModal() {
 		return () => {
 			cancelled = true;
 		};
-	}, [config]);
+	}, [environment, config, cloudClient, cloudOrgId]);
 
 	// Refreshing the catalog moved into the agent sheet route, which owns its own
 	// copy of it — see app/sheets/agent.tsx.
@@ -124,7 +171,7 @@ export default function SpawnModal() {
 	);
 
 	useEffect(() => {
-		if (!config || !projectId) { setProjectDetail(undefined); setProjectDetailLoadedFor(null); return; }
+		if (environment !== "local" || !config || !projectId) { setProjectDetail(undefined); setProjectDetailLoadedFor(projectId); return; }
 		let cancelled = false;
 		setProjectDetailLoadedFor(null);
 		getProject(config, projectId)
@@ -132,21 +179,21 @@ export default function SpawnModal() {
 			.catch((cause) => { if (!cancelled) setModelError(cause instanceof Error ? cause.message : String(cause)); })
 			.finally(() => { if (!cancelled) setProjectDetailLoadedFor(projectId); });
 		return () => { cancelled = true; };
-	}, [config, projectId]);
+	}, [environment, config, projectId]);
 
 	useEffect(() => {
 		if (agentTouched || loading || !catalog) return;
-		if (projectId && projectDetailLoadedFor !== projectId) return;
+		if (environment === "local" && projectId && projectDetailLoadedFor !== projectId) return;
 		const nextHarness = resolveSpawnAgent({
 			projectWorkerAgent: projectDetail?.config?.worker?.agent,
 			projectAgent: projectDetail?.agent,
 			availableAgents: agents.filter((agent) => agent.selectable).map((agent) => agent.id),
 		});
 		setHarness((current) => current === nextHarness ? current : nextHarness);
-	}, [agentTouched, agents, catalog, loading, projectDetail, projectDetailLoadedFor, projectId]);
+	}, [agentTouched, agents, catalog, environment, loading, projectDetail, projectDetailLoadedFor, projectId]);
 
 	useEffect(() => {
-		if (!config || !projectId || !harness) { setModelCatalog(undefined); return; }
+		if (environment !== "local" || !config || !projectId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }
 		let cancelled = false;
 		setModelLoading(true);
 		getAgentModels(config, harness, projectId)
@@ -154,7 +201,7 @@ export default function SpawnModal() {
 			.catch((cause) => { if (!cancelled) setModelError(cause instanceof Error ? cause.message : String(cause)); })
 			.finally(() => { if (!cancelled) setModelLoading(false); });
 		return () => { cancelled = true; };
-	}, [config, harness, projectId]);
+	}, [environment, config, harness, projectId]);
 
 	const clearModelOverride = () => { setModel(""); setModelTouched(false); };
 	const resetModelSource = () => { clearModelOverride(); setModelCatalog(undefined); setModelError(undefined); };
@@ -258,8 +305,8 @@ export default function SpawnModal() {
 			});
 		} catch (e) {
 			haptics.error();
-			setError(spawnErrorCopy(e));
-			setOfferTUI(mode === "chat" && isChatPreflightError(e));
+			setError(spawnErrorCopy(e, environment));
+			setOfferTUI(!cloudSpawn && mode === "chat" && isChatPreflightError(e));
 			setBusy(false);
 		}
 	};
@@ -291,7 +338,7 @@ export default function SpawnModal() {
 		{Platform.OS === "ios" ? <View style={styles.flexSpacer} /> : null}
 
 		{hasComposerMessage ? <View style={styles.messages}>
-					{mode === "chat" && !loading && agents.length === 0 ? <Text style={styles.warn}>No installed agent on this AO host currently supports Chat. Choose Terminal UI or install/authenticate a Chat-capable agent.</Text> : null}
+					{mode === "chat" && !loading && agents.length === 0 ? <Text style={styles.warn}>{cloudSpawn ? "Connect a Cloud coding agent before starting a worker." : "No installed agent on this AO host currently supports Chat. Choose Terminal UI or install/authenticate a Chat-capable agent."}</Text> : null}
 					{catalogError ? <Text style={styles.warn}>{catalogError}</Text> : null}
 					{modelError ? <Text style={styles.warn}>{modelError}</Text> : null}
 					{attachmentError ? <Text style={styles.warn}>{attachmentError}</Text> : null}
@@ -320,6 +367,8 @@ export default function SpawnModal() {
 					modelLabel={displayedModelLabel}
 					onSelectModel={selectModel}
 					onAttach={() => { void pickAttachments(); }}
+					showAttachments={!cloudSpawn}
+					showModels={!cloudSpawn}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
 					disabled={!projectId || !harness || busy || modelLoading || loading}
@@ -352,8 +401,9 @@ export default function SpawnModal() {
 // Human copy for a failed spawn, matching every other screen. This one used to
 // render `e.message` — the wire string, e.g. "401 - missing or invalid
 // connection password".
-function spawnErrorCopy(e: unknown): string {
+function spawnErrorCopy(e: unknown, environment: "local" | "cloud" | null): string {
 	if (isChatPreflightError(e)) return chatErrorCopy(e);
+	if (environment === "cloud") return e instanceof Error ? e.message : "Could not start the Cloud worker.";
 	const status = e instanceof ApiError ? e.status : undefined;
 	const { title, message } = describeConnectionFailure(classifyConnectionFailure(status), {
 		host: "",
@@ -361,6 +411,16 @@ function spawnErrorCopy(e: unknown): string {
 		platform: Platform.OS,
 	});
 	return `${title} ${message}`;
+}
+
+const CLOUD_AGENT_LABELS: Record<string, string> = {
+	"claude-code": "Claude Code",
+	codex: "Codex",
+	cursor: "Cursor",
+};
+
+function cloudAgentInfo(id: string): AgentInfo {
+	return { id, label: CLOUD_AGENT_LABELS[id] ?? id, authStatus: "authorized" };
 }
 
 const makeStyles = (t: Theme) =>

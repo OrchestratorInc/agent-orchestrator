@@ -5,6 +5,7 @@ import { workerDockVisibility } from "./worker-dock-layout";
 import type { WorkerDockProps } from "./worker-dock";
 
 export function WorkerDock({
+	controlsEnabled = true,
 	query,
 	onQueryChange,
 	onSpawn,
@@ -14,7 +15,7 @@ export function WorkerDock({
 	projectFiltered,
 }: WorkerDockProps) {
 	const t = useTheme();
-	const visibility = workerDockVisibility(searchOpen);
+	const visibility = workerDockVisibility(searchOpen, controlsEnabled);
 	return (
 		<View style={styles.row}>
 			{visibility.showControls ? (
@@ -52,7 +53,7 @@ export function WorkerDock({
 						<Feather name="x" size={20} color={t.textSecondary} />
 					</Pressable>
 				</View>
-			) : visibility.showControls && visibility.showSpawn ? <View style={styles.flexSpacer} /> : null}
+			) : visibility.showSpawn ? <View style={styles.flexSpacer} /> : null}
 			{visibility.showSpawn ? (
 				<RoundButton icon="plus" label="Spawn worker" onPress={onSpawn} testID="spawn-worker" />
 			) : null}

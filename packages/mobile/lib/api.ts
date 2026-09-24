@@ -51,6 +51,8 @@ export function isKanbanColumn(value: string | null | undefined): value is Kanba
 export type DashboardSession = {
 	id: string;
 	projectId: string;
+	/** Session role. Cloud lists workers and orchestrators through one endpoint. */
+	kind?: "worker" | "orchestrator";
 	/** Opaque daemon runtime handle used only for terminal mux operations. */
 	terminalHandleId?: string;
 	status: string | null;
@@ -119,6 +121,10 @@ export type OrchestratorLink = {
 	mode: SessionMode;
 	updatedAt?: string | null;
 	runtimeState?: string | null;
+	/** Cloud control-plane connection for the orchestrator runtime. Absent locally. */
+	runtimeConnected?: boolean;
+	/** Sandbox lifecycle for a cloud-hosted orchestrator. Absent locally. */
+	cloud?: DashboardSession["cloud"];
 	hasRuntime?: boolean;
 	isTerminal?: boolean;
 	isRestorable?: boolean;

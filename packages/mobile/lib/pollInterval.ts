@@ -1,4 +1,5 @@
 import type { ServerConfig } from "./config";
+import { cloudLifecycleStage, type CloudLifecycleInput } from "./cloud/lifecycle";
 
 /**
  * How often to poll, given which endpoint won the race.
@@ -31,6 +32,23 @@ export const DIRECT_POLL_MS = 8_000;
  */
 export const TUNNEL_POLL_MS = 2_000;
 
+/** Cloud board polling is a backstop once every worker has settled. */
+export const CLOUD_BOARD_POLL_MS = 5_000;
+
+/** Briefly reconcile faster while the control plane is moving a worker. */
+export const CLOUD_BOARD_TRANSITION_POLL_MS = 1_000;
+
 export function pollIntervalFor(cfg: ServerConfig | null): number {
 	return cfg?.endpointKind === "tunnel" ? TUNNEL_POLL_MS : DIRECT_POLL_MS;
+}
+
+export function cloudBoardPollInterval(sessions: readonly CloudLifecycleInput[]): number {
+	const transitioning = sessions.some((session) => {
+		const stage = cloudLifecycleStage(session);
+		return stage !== undefined
+			&& stage !== "connected"
+			&& stage !== "paused_by_coder"
+			&& stage !== "failed";
+	});
+	return transitioning ? CLOUD_BOARD_TRANSITION_POLL_MS : CLOUD_BOARD_POLL_MS;
 }

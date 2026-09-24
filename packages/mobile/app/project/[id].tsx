@@ -3,7 +3,7 @@ import { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { haptics } from "../../lib/haptics";
-import { boardFailure, boardPresentation, projectDetailState } from "../../lib/board-presentation";
+import { boardFailure, boardPresentation, canUseOrchestratorAction, projectDetailState } from "../../lib/board-presentation";
 import { orchestratorProjectSections, projectDetailSessions, projectPageStats } from "../../lib/orchestratorView";
 import { ProjectPageHeader } from "../../lib/project-card";
 import { StaleBanner } from "../../lib/StaleBanner";
@@ -14,6 +14,8 @@ import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
 import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
 import { WorkerBoardList } from "../../lib/worker-board-list";
+import { WorkerDock } from "../../lib/worker-dock";
+import { workerListBottomInset } from "../../lib/worker-dock-layout";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -74,6 +76,7 @@ export default function ProjectScreen() {
 						onPress={() => (router.canGoBack() ? router.back() : router.replace("/projects"))}
 					/>
 				}
+				right={null}
 			/>
 			{presentation.state === "board" && <StaleBanner error={!!error} onRetry={onRefresh} />}
 
@@ -95,15 +98,15 @@ export default function ProjectScreen() {
 					interactionMode={presentation.interactionMode}
 					sessions={projectSessions}
 					showProject={false}
-					contentBottomInset={insets.bottom + 32}
+					contentBottomInset={presentation.spawnControls ? workerListBottomInset(insets.bottom + 12) : insets.bottom + 32}
 					refreshing={refreshing}
 					onRefresh={onRefresh}
 					ListHeaderComponent={
 						<ProjectPageHeader
-							row={row}
-							stats={stats}
-							busy={busyProjects.has(row.project.id)}
-							onPress={presentation.localControls ? openOrchestrator : undefined}
+								row={row}
+								stats={stats}
+								busy={busyProjects.has(row.project.id)}
+								onPress={canUseOrchestratorAction(environment, row.action) ? openOrchestrator : undefined}
 						/>
 					}
 					ListEmptyComponent={
@@ -112,13 +115,31 @@ export default function ProjectScreen() {
 							<EmptyState
 								icon="moon"
 								title="No workers yet"
-								message={presentation.localControls ? "Start a task to put this project to work." : "This Cloud project has no workers yet."}
-								action={presentation.localControls ? <Button title="Start task" icon="plus" onPress={startTask} /> : null}
+								message="Start a task to put this project to work."
+								action={presentation.spawnControls ? <Button title="Start task" icon="plus" onPress={startTask} /> : null}
 							/>
 						</View>
 					}
 				/>
 			)}
+			{detailState === "project" && presentation.spawnControls ? (
+				<View style={[styles.dock, { bottom: insets.bottom + 12 }]}>
+					<WorkerDock
+						controlsEnabled={false}
+						query=""
+						onQueryChange={() => {}}
+						searchOpen={false}
+						onSearchOpen={() => {}}
+						onSearchClose={() => {}}
+						onOpenControls={() => {}}
+						projectFiltered={false}
+						projects={projects}
+						selectedProjectId={id ?? ""}
+						onSelectProject={() => {}}
+						onSpawn={startTask}
+					/>
+				</View>
+			) : null}
 		</View>
 	);
 }
@@ -127,4 +148,5 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
+		dock: { position: "absolute", left: 16, right: 16, height: 52, flexDirection: "row" },
 	});

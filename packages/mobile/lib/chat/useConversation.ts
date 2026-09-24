@@ -1,19 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState } from "react-native";
 import type { ServerConfig } from "../config";
+import type { SessionSource } from "../environment/types";
 import {
-	cancelQueuedConversationTurn,
 	compactConversation,
 	getConversationConfigOptions,
 	getConversationModels,
-	getConversationPage,
 	getConversationSkills,
 	mergeConversationPages,
 	reloadMcpServers,
 	resolveApproval,
 	resolveInput,
 	rollbackConversation,
-	sendConversationMessage,
 	setConversationConfigOption,
 	setConversationSettings,
 	setConversationTitle,
@@ -26,8 +24,7 @@ import {
 import type { ChatConfigOption, ChatImage, ChatModel, ChatResource, ChatSkill, ConversationSnapshot, TurnSettings } from "./types";
 import { cachedConversationState, createMobileConversationPageCache, discardHistoricalPages } from "./snapshot";
 import { conversationActionError, conversationErrorCode } from "./conversationErrors";
-import { subscribeConversationEvents } from "./conversationEvents";
-import { conversationPollIntervalFor } from "./conversationPoll";
+import { conversationAccess } from "./conversation-access";
 import { createAsyncValueCache } from "./asyncValueCache";
 import { createRequestGate } from "./requestGate";
 import { withAttachmentReferences } from "./messageAttachments";
@@ -99,8 +96,13 @@ export type MobileConversation = {
 export function useMobileConversation(
 	cfg: ServerConfig | null,
 	sessionId: string,
+	sessionSource?: SessionSource,
 ): MobileConversation {
-	const cacheKey = cfg ? conversationPageCacheKey(cfg, sessionId) : "";
+	const access = useMemo(
+		() => conversationAccess({ config: cfg, source: sessionSource, sessionId }),
+		[cfg, sessionId, sessionSource],
+	);
+	const cacheKey = access?.cacheKey ?? "";
 	const [initialState] = useState(() => cacheKey
 		? cachedConversationState(conversationPageCache, cacheKey)
 		: { pages: [] as ConversationPage[], loading: true });
@@ -127,11 +129,11 @@ export function useMobileConversation(
 	const hasProviderConfig = Boolean(snapshot?.capabilities?.includes("config_options"));
 
 	const refresh = useCallback(async () => {
-		if (!cfg) return;
+		if (!access) return;
 		const request = refreshGate.begin();
 		setRefreshing(true);
 		try {
-			const live = await getConversationPage(cfg, sessionId);
+			const live = await access.source.getConversationPage(sessionId);
 			if (!mounted.current || !refreshGate.isCurrent(request)) return;
 			setPages((old) => {
 				const next = old[0]?.conversationId && old[0].conversationId !== live.conversationId
@@ -153,7 +155,7 @@ export function useMobileConversation(
 				setRefreshing(false);
 			}
 		}
-	}, [cacheKey, cfg, refreshGate, sessionId]);
+	}, [access, cacheKey, refreshGate, sessionId]);
 
 	const scheduleRefresh = useCallback(() => {
 		if (refreshTimer.current) clearTimeout(refreshTimer.current);
@@ -161,17 +163,17 @@ export function useMobileConversation(
 	}, [refresh]);
 
 	const loadOlder = useCallback(async () => {
-		if (!cfg || !snapshot?.hasMoreBefore || loadingOlder) return;
+		if (!access || !snapshot?.hasMoreBefore || loadingOlder) return;
 		setLoadingOlder(true);
 		try {
-			const older = await getConversationPage(cfg, sessionId, snapshot.oldestSequence);
+			const older = await access.source.getConversationPage(sessionId, snapshot.oldestSequence);
 			if (mounted.current) setPages((old) => [...old, older]);
 		} catch (cause) {
 			if (mounted.current) setActionError(conversationActionError(cause));
 		} finally {
 			if (mounted.current) setLoadingOlder(false);
 		}
-	}, [cfg, sessionId, snapshot?.hasMoreBefore, snapshot?.oldestSequence, loadingOlder]);
+	}, [access, sessionId, snapshot?.hasMoreBefore, snapshot?.oldestSequence, loadingOlder]);
 
 	useEffect(() => {
 		mounted.current = true;
@@ -218,11 +220,11 @@ export function useMobileConversation(
 	}, [cacheKey, cfg, hasConversation, sessionId, skills, unavailable]);
 
 	useEffect(() => {
-		if (!cfg || unavailable) return;
-		return subscribeConversationEvents(sessionId, (event) => {
+		if (!access?.subscribeToEvents || unavailable) return;
+		return access.source.subscribeEvents(sessionId, (event) => {
 			if (event.payload?.conversationId) scheduleRefresh();
 		});
-	}, [cfg, sessionId, scheduleRefresh, unavailable]);
+	}, [access, sessionId, scheduleRefresh, unavailable]);
 
 	// Poll the conversation on paths where the event stream cannot deliver.
 	// Over a Cloudflare quick tunnel the subscription above never fires — the
@@ -230,11 +232,11 @@ export function useMobileConversation(
 	// bytes — so without this the screen shows the agent working indefinitely
 	// while the reply has already landed.
 	useEffect(() => {
-		const every = conversationPollIntervalFor(cfg);
+		const every = access?.pollInterval ?? null;
 		if (every === null || unavailable) return;
 		const timer = setInterval(() => scheduleRefresh(), every);
 		return () => clearInterval(timer);
-	}, [cfg, unavailable, scheduleRefresh]);
+	}, [access?.pollInterval, unavailable, scheduleRefresh]);
 
 	useEffect(() => {
 		const subscription = AppState.addEventListener("change", (state) => {
@@ -269,10 +271,10 @@ export function useMobileConversation(
 
 	const deliver = useCallback(
 		async (pending: PendingSend) => {
-			if (!cfg) throw new Error("No AO server configured");
+			if (!access) throw new Error("No conversation source available");
 			setPendingSends((old) => upsertPending(old, { ...pending, state: "sending", error: undefined }));
 			try {
-				await sendConversationMessage(cfg, sessionId, {
+				await access.source.sendMessage(sessionId, {
 					text: pending.text,
 					clientMessageId: pending.id,
 					attachments: pending.attachments,
@@ -286,7 +288,7 @@ export function useMobileConversation(
 				throw new Error(message);
 			}
 		},
-		[cfg, sessionId, refresh],
+		[access, sessionId, refresh],
 	);
 
 	const send = useCallback(
@@ -320,8 +322,8 @@ export function useMobileConversation(
 		[cfg, runAction, sessionId],
 	);
 	const cancelQueuedTurn = useCallback(
-		(turnId: string) => runAction("queue", () => requireConfig(cfg, (c) => cancelQueuedConversationTurn(c, sessionId, turnId))),
-		[cfg, runAction, sessionId],
+		(turnId: string) => runAction("queue", () => requireConversationAccess(access, (source) => source.cancelTurn(sessionId, turnId))),
+		[access, runAction, sessionId],
 	);
 	const promoteQueuedTurn = useCallback(
 		(turnId: string) => runAction("queue", () => requireConfig(cfg, (c) => promoteQueuedConversationTurn(c, sessionId, turnId))),
@@ -447,6 +449,10 @@ function classifyConversationError(error: unknown): { permanent: boolean; code?:
 	};
 }
 
-function conversationPageCacheKey(cfg: ServerConfig, sessionId: string): string {
-	return `${cfg.secure ? "https" : "http"}://${cfg.host}:${cfg.httpPort}/${cfg.password}/${sessionId}`;
+async function requireConversationAccess<T>(
+	access: ReturnType<typeof conversationAccess>,
+	action: (source: SessionSource) => Promise<T>,
+): Promise<T> {
+	if (!access) throw new Error("No conversation source available");
+	return action(access.source);
 }

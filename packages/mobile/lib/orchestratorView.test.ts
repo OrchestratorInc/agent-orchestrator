@@ -214,8 +214,29 @@ describe("orchestratorStatus", () => {
 	});
 
 	it("defers to the shared status vocabulary while running", () => {
-		expect(orchestratorStatus(darkTheme, link({ status: "working" })).label).toBe("Working");
+		expect(orchestratorStatus(darkTheme, link({ status: "working", activity: "active" })).label).toBe("Working");
 		expect(orchestratorStatus(darkTheme, link({ status: "needs_input" })).label).toBe("Needs input");
+	});
+
+	it("does not claim an orchestrator is working when its live activity is idle", () => {
+		expect(orchestratorStatus(darkTheme, link({ status: "working", activity: "idle" }))).toMatchObject({
+			label: "Idle",
+			breathing: false,
+		});
+	});
+
+	it("does not claim an orchestrator is working without a live activity signal", () => {
+		expect(orchestratorStatus(darkTheme, link({ status: "working" }))).toMatchObject({
+			label: "Online",
+			breathing: false,
+		});
+	});
+
+	it("does not claim an orchestrator is working when its cloud runtime is offline", () => {
+		expect(orchestratorStatus(darkTheme, link({ status: "working", activity: "active", runtimeConnected: false }))).toMatchObject({
+			label: "Offline",
+			breathing: false,
+		});
 	});
 
 	it("falls back to Online when the daemon sent no status", () => {
@@ -235,13 +256,14 @@ describe("orchestratorStatus", () => {
 	});
 
 	it("takes its colours from the passed theme", () => {
-		const a = orchestratorStatus(lightTheme, link({ status: "working" }));
-		const b = orchestratorStatus(darkTheme, link({ status: "working" }));
+		const a = orchestratorStatus(lightTheme, link({ status: "working", activity: "active" }));
+		const b = orchestratorStatus(darkTheme, link({ status: "working", activity: "active" }));
 		expect(a.color).not.toBe(b.color);
 	});
 
 	it("only breathes for a live, working orchestrator", () => {
-		expect(orchestratorStatus(darkTheme, link({ status: "working" })).breathing).toBe(true);
+		expect(orchestratorStatus(darkTheme, link({ status: "working", activity: "active" })).breathing).toBe(true);
+		expect(orchestratorStatus(darkTheme, link({ status: "working", activity: "idle" })).breathing).toBe(false);
 		expect(orchestratorStatus(darkTheme, link({ status: "idle" })).breathing).toBe(false);
 		expect(orchestratorStatus(darkTheme, null).breathing).toBe(false);
 	});
@@ -328,7 +350,7 @@ describe("orchestratorProjectSections", () => {
 
 		expect(rowByProject(sections, "many").detail).toBe("2 workers need input · 1 pull request is ready");
 		expect(rowByProject(sections, "single").detail).toBe("1 worker needs input");
-		expect(rowByProject(sections, "healthy").detail).toBe("3 active workers");
+		expect(rowByProject(sections, "healthy").detail).toBe("3 workers");
 		expect(rowByProject(sections, "missing").detail).toBe("Start one to coordinate work for this project");
 	});
 
@@ -344,7 +366,7 @@ describe("orchestratorProjectSections", () => {
 
 		expect(sections.map((section) => section.title)).toEqual(["Coordinating"]);
 		expect(rowByProject(sections, "proj")).toMatchObject({
-			detail: "1 active worker",
+			detail: "1 worker",
 			activityAt: "2026-09-04T10:00:00Z",
 		});
 	});

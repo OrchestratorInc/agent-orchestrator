@@ -20,23 +20,45 @@ import { normalizeConversationTitle } from "./chat/conversationMenuModel";
 type ReadOnlyWorkerProps = { session: DashboardSession; projectName?: string };
 type WorkerListRowProps =
 	| (ReadOnlyWorkerProps & { interactionMode: "read-only" })
+	| (ReadOnlyWorkerProps & { interactionMode: "open-only" })
 	| (Parameters<typeof InteractiveWorkerListRow>[0] & { interactionMode: "full" });
 
 export function WorkerListRow(props: WorkerListRowProps) {
-	return props.interactionMode === "read-only"
-		? <ReadOnlyWorkerListRow session={props.session} projectName={props.projectName} />
-		: <InteractiveWorkerListRow {...props} />;
+	if (props.interactionMode === "read-only") {
+		return <PassiveWorkerListRow session={props.session} projectName={props.projectName} />;
+	}
+	if (props.interactionMode === "open-only") {
+		return <OpenOnlyWorkerListRow session={props.session} projectName={props.projectName} />;
+	}
+	return <InteractiveWorkerListRow {...props} />;
 }
 
-// No router, gesture shell, menu, or mutation handlers are mounted in Cloud.
-function ReadOnlyWorkerListRow({ session, projectName }: ReadOnlyWorkerProps) {
+// Cloud can enter the conversation, but it never mounts the Local gesture,
+// context-menu, or mutation layer.
+function OpenOnlyWorkerListRow(props: ReadOnlyWorkerProps) {
+	const router = useRouter();
+	return (
+		<PassiveWorkerListRow
+			{...props}
+			onPress={() => {
+				haptics.tap();
+				router.push({
+					pathname: "/session/[id]",
+					params: { id: props.session.id, projectId: props.session.projectId },
+				});
+			}}
+		/>
+	);
+}
+
+function PassiveWorkerListRow({ session, projectName, onPress }: ReadOnlyWorkerProps & { onPress?: () => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const row = workerRowPresentation(t, session, projectName);
 	const visual = statusVisual(t, session.status);
 	const prs = prLine(session);
-	return (
-		<View style={[styles.shell, styles.foreground, styles.row]} accessible accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}. Read-only.`}>
+	const contents = (
+		<>
 			<WorkerRowContents
 				row={row}
 				visual={visual}
@@ -47,6 +69,25 @@ function ReadOnlyWorkerListRow({ session, projectName }: ReadOnlyWorkerProps) {
 				styles={styles}
 				t={t}
 			/>
+		</>
+	);
+	if (onPress) {
+		return (
+			<Pressable
+				onPress={onPress}
+				accessibilityRole="button"
+				accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}.`}
+				accessibilityHint="Opens worker conversation."
+				android_ripple={{ color: t.bgElevatedHover }}
+				style={({ pressed }) => [styles.shell, styles.foreground, styles.row, pressed && styles.rowPressed]}
+			>
+				{contents}
+			</Pressable>
+		);
+	}
+	return (
+		<View style={[styles.shell, styles.foreground, styles.row]} accessible accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}. Read-only.`}>
+			{contents}
 		</View>
 	);
 }

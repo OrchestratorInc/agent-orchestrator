@@ -105,6 +105,17 @@ function Shell() {
 			>
 				<Stack.Screen name="(tabs)" options={{ headerShown: false }} />
 				<Stack.Screen
+					name="create-project"
+					options={{
+						presentation: "formSheet",
+						headerShown: false,
+						sheetAllowedDetents: [0.92],
+						sheetGrabberVisible: true,
+						sheetCornerRadius: 24,
+						contentStyle: { backgroundColor: t.bgSurface },
+					}}
+				/>
+				<Stack.Screen
 					name="settings"
 					options={{
 						presentation: "formSheet",

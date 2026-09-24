@@ -81,6 +81,7 @@ export function buildWorkOSAuthUrl(input: {
 	url.searchParams.set("redirect_uri", input.redirectUri);
 	url.searchParams.set("response_type", "code");
 	url.searchParams.set("provider", "authkit");
+	url.searchParams.set("prompt", "login");
 	url.searchParams.set("code_challenge", input.codeChallenge);
 	url.searchParams.set("code_challenge_method", "S256");
 	url.searchParams.set("state", input.state);

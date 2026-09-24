@@ -1,6 +1,7 @@
-import type { CloudClient } from "@aoagents/cloud-client";
+import type { CloudClient, Turn } from "@aoagents/cloud-client";
 import type { DashboardSession, ProjectInfo } from "../api";
 import type { ConversationEvent } from "../chat/sse";
+import type { ConversationTurn } from "../chat/types";
 import type { SessionSource } from "../environment/types";
 import { fetchConversationReplay, pollCloudEvents, toConversationItems } from "./events";
 import { toDashboardSession, toProjectInfo } from "./mapping";
@@ -8,6 +9,22 @@ import { toDashboardSession, toProjectInfo } from "./mapping";
 /** How often the cloud transcript is polled for new events. Matches the
  * tunnel-path conversation poll interval mobile already uses elsewhere. */
 const CLOUD_EVENT_POLL_MS = 2_000;
+
+function toConversationTurn(turn: Turn): ConversationTurn {
+	const state = turn.state === "provisioning"
+		? "queued"
+		: turn.state === "cancel_requested"
+			? "running"
+			: turn.state;
+	return {
+		id: turn.id,
+		state,
+		errorMessage: turn.errorMessage,
+		requestedAt: turn.createdAt,
+		startedAt: turn.startedAt,
+		completedAt: turn.completedAt,
+	};
+}
 
 /** Page through a cursor-paginated cloud list until it ends. */
 async function collect<T>(
@@ -32,8 +49,10 @@ export function createCloudSessionSource(input: {
 		kind: "cloud",
 		listProjects: async (): Promise<ProjectInfo[]> =>
 			(await collect((cursor) => client.listProjects(orgId, { cursor }))).map(toProjectInfo),
-		listSessions: async (): Promise<DashboardSession[]> =>
-			(await collect((cursor) => client.listSessions(orgId, { cursor }))).map(toDashboardSession),
+		listSessions: async (): Promise<DashboardSession[]> => {
+			const sessions = await collect((cursor) => client.listSessions(orgId, { cursor }));
+			return sessions.map(toDashboardSession);
+		},
 		createSession: async (options) => {
 			if (!options.projectId) throw new Error("Pick a project first");
 			const response = await client.createSession(
@@ -77,7 +96,7 @@ export function createCloudSessionSource(input: {
 				// No backward pagination yet: a full forward replay is the whole
 				// transcript the control plane will hand back today.
 				hasMoreBefore: false,
-				turns: [],
+				turns: session.activeTurn ? [toConversationTurn(session.activeTurn)] : [],
 				items: toConversationItems(events),
 				settings: {},
 			};

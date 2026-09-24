@@ -23,7 +23,10 @@ export function workerListBottomInset(dockBottom: number): number {
 	return dockBottom + DOCK_HEIGHT + LIST_GAP;
 }
 
-export function workerDockVisibility(searchOpen: boolean) {
+export function workerDockVisibility(searchOpen: boolean, controlsEnabled = true) {
+	if (!controlsEnabled) {
+		return { showControls: false, showSearch: false, showSpawn: true };
+	}
 	return searchOpen
 		? { showControls: false, showSearch: true, showSpawn: false }
 		: { showControls: true, showSearch: false, showSpawn: true };

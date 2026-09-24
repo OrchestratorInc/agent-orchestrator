@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { CloudLifecycleStage } from "../cloud/lifecycle";
 import { cloudLifecycleBanner, controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner } from "./conversationBanners";
 
 describe("conversation banners", () => {
@@ -49,5 +50,14 @@ describe("conversation banners", () => {
 
 	it("gives every in-flight stage a title with no resume hint", () => {
 		expect(cloudLifecycleBanner("resuming_workspace")).toMatchObject({ title: "Resuming workspace…", body: undefined });
+	});
+
+	it("explains that a failed sandbox cannot process messages", () => {
+		const failed = "failed" as CloudLifecycleStage;
+		expect(cloudLifecycleBanner(failed)).toMatchObject({
+			key: "cloud:failed",
+			title: "Sandbox unavailable",
+			body: "This session cannot process messages until its sandbox recovers.",
+		});
 	});
 });

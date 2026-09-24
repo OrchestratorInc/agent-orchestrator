@@ -34,6 +34,8 @@ export function SpawnComposerControls({
 	modelLabel,
 	onSelectModel,
 	onAttach,
+	showAttachments = true,
+	showModels = true,
 	onSpawn,
 	busy,
 	disabled,
@@ -77,7 +79,7 @@ export function SpawnComposerControls({
 						glassEffect({ glass: { variant: "regular", interactive: true }, shape: "roundedRectangle", cornerRadius: 18 }),
 					]}
 				>
-					<Button
+					{showAttachments ? <Button
 						label="Attach file"
 						systemImage="paperclip"
 						onPress={() => { haptics.tap(); onAttach(); }}
@@ -88,7 +90,7 @@ export function SpawnComposerControls({
 							tint(t.textPrimary),
 							accessibilityIdentifier("spawn-attachment"),
 						]}
-					/>
+					/> : null}
 
 					<Menu
 						label={
@@ -112,7 +114,7 @@ export function SpawnComposerControls({
 						))}
 					</Menu>
 
-					<Menu
+					{showModels ? <Menu
 						label={
 							<HStack spacing={5} modifiers={[frame({ maxWidth: 1000, alignment: "leading" })]}>
 								<Text modifiers={[font({ size: 14, weight: "medium" })]}>{modelLabel}</Text>
@@ -141,7 +143,7 @@ export function SpawnComposerControls({
 								onPress={() => { haptics.select(); onSelectModel(model.id); }}
 							/>
 						))}
-					</Menu>
+					</Menu> : null}
 				</HStack>
 
 				</VStack>

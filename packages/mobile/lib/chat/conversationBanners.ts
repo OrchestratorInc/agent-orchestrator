@@ -86,7 +86,11 @@ export function cloudLifecycleBanner(stage: CloudLifecycleStage | undefined): Ba
 	return {
 		key: `cloud:${stage}`,
 		title: stageLabel(stage),
-		body: isResumable(stage) ? "The sandbox paused after a period of inactivity." : undefined,
+		body: stage === "failed"
+			? "This session cannot process messages until its sandbox recovers."
+			: isResumable(stage)
+				? "The sandbox paused after a period of inactivity."
+				: undefined,
 	};
 }
 

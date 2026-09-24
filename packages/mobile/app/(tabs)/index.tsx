@@ -134,13 +134,14 @@ export default function FleetScreen() {
 			<View style={{ height: insets.top }} />
 			<ScreenHeader
 				title="Workers"
-				right={presentation.localControls &&
+				right={presentation.localControls ?
 					<HeaderIconButton
 						icon="bell"
 						label="Notifications"
 						badge={notificationsUnread}
 						onPress={() => router.navigate("/notifications")}
 					/>
+					: null
 				}
 			/>
 			{/* Above the list rather than inside ListEmptyComponent: the case this
@@ -157,7 +158,7 @@ export default function FleetScreen() {
 					sessions={projectSessions}
 					query={presentation.localControls ? query : ""}
 					listRef={listRef}
-					contentBottomInset={presentation.localControls ? workerListBottomInset(keyboardLayout.dockBottom) : insets.bottom + 32}
+					contentBottomInset={presentation.spawnControls ? workerListBottomInset(keyboardLayout.dockBottom) : insets.bottom + 32}
 					refreshing={refreshing}
 					onRefresh={onRefresh}
 					ListEmptyComponent={
@@ -188,16 +189,17 @@ export default function FleetScreen() {
 							<EmptyState
 								icon="moon"
 								title="No active workers"
-								message={presentation.localControls ? "Spawn a worker to put your fleet to work." : "Your Cloud workers will appear here."}
-								action={presentation.localControls ? <Button title="New agent" icon="plus" onPress={() => router.push({ pathname: "/spawn", params: spawnProjectParam(workerProjectId) })} /> : null}
+								message={presentation.localControls ? "Spawn a worker to put your fleet to work." : "Start a Cloud worker for one of your projects."}
+								action={presentation.spawnControls ? <Button title="New worker" icon="plus" onPress={() => router.push({ pathname: "/spawn", params: spawnProjectParam(workerProjectId) })} /> : null}
 							/>
 						)
 					}
 				/>
 			)}
 
-			{presentation.localControls && <View style={[styles.dock, { bottom: keyboardLayout.dockBottom }]}>
+			{presentation.spawnControls && <View style={[styles.dock, { bottom: keyboardLayout.dockBottom }]}>
 				<WorkerDock
+					controlsEnabled={presentation.localControls}
 					query={query}
 					onQueryChange={setQuery}
 					searchOpen={searchOpen}

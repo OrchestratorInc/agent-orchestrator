@@ -27,6 +27,7 @@ const screenRoutes = [
 ];
 
 const sheetRoutes = [
+	"create-project.tsx",
 	"spawn.tsx",
 	"sheets/agent.tsx",
 	"sheets/chat-settings.tsx",

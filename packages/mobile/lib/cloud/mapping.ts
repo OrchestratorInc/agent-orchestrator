@@ -48,6 +48,7 @@ export function toDashboardSession(session: Session): DashboardSession {
 	return {
 		id: session.id,
 		projectId: session.projectId,
+		kind: session.kind,
 		status: session.status,
 		kanbanColumn: kanbanColumnForStatus(session.status),
 		displayStatus: null,

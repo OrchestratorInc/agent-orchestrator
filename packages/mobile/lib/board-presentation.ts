@@ -1,24 +1,38 @@
 import { classifyConnectionFailure, describeConnectionFailure } from "./connectionError";
 import type { EnvironmentKind } from "./environment/types";
+import type { OrchestratorProjectAction } from "./orchestratorView";
 
-export type BoardInteractionMode = "full" | "read-only";
+export type BoardInteractionMode = "full" | "open-only" | "read-only";
 
 export function boardPresentation(environment: EnvironmentKind | null, configured: boolean): {
 	state: "loading" | "cloud-unready" | "unpaired" | "board";
 	interactionMode: BoardInteractionMode;
 	localControls: boolean;
+	spawnControls: boolean;
+	showSidebarSessions: boolean;
 } {
 	return {
 		state: environment === null ? "loading" : configured ? "board" : environment === "cloud" ? "cloud-unready" : "unpaired",
-		interactionMode: environment === "local" ? "full" : "read-only",
+		interactionMode: environment === "local" ? "full" : environment === "cloud" ? "open-only" : "read-only",
 		localControls: environment === "local",
+		spawnControls: environment !== null && configured,
+		showSidebarSessions: environment !== null && configured,
 	};
 }
 
 export function workerInteractionProps<T>(mode: BoardInteractionMode, full: () => T):
 	| { interactionMode: "read-only" }
+	| { interactionMode: "open-only" }
 	| ({ interactionMode: "full" } & T) {
-	return mode === "read-only" ? { interactionMode: "read-only" } : { ...full(), interactionMode: "full" };
+	return mode === "full" ? { ...full(), interactionMode: "full" } : { interactionMode: mode };
+}
+
+/** A configured project's orchestrator action is available in both environments. */
+export function canUseOrchestratorAction(
+	environment: EnvironmentKind | null,
+	_action: OrchestratorProjectAction,
+): boolean {
+	return environment === "local" || environment === "cloud";
 }
 
 export function projectDetailState(state: ReturnType<typeof boardPresentation>["state"], hasProject: boolean, loading: boolean, cloudError: boolean) {

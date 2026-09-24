@@ -12,6 +12,7 @@ import {
 	type ReactNode,
 } from "react";
 import {
+	ActivityIndicator,
 	Animated,
 	FlatList,
 	PanResponder,
@@ -36,6 +37,8 @@ import {
 	RECENT_WORKERS_LABEL,
 	selectedPrimarySidebarDestination,
 	sidebarDestinations,
+	sidebarSessionHealth,
+	sidebarSessionListPresentation,
 	sidebarSessions,
 	sidebarSessionRoute,
 	type PrimarySidebarDestinationId,
@@ -44,6 +47,7 @@ import {
 } from "./sidebar-navigation";
 import { sidebarGestureTarget, shouldCaptureSidebarGesture } from "./sidebar-gesture";
 import { SidebarSettingsButton } from "./sidebar-settings-button";
+import { SidebarEnvironmentPicker } from "./sidebar-environment-picker";
 import { useReducedMotion } from "./useReducedMotion";
 import { SidebarSpawnButton } from "./sidebar-spawn-button";
 import { useApp } from "./store";
@@ -76,13 +80,12 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { scheme } = useThemeState();
-	const { sessions, projects, connection, environment, configured } = useApp();
-	const { localControls } = boardPresentation(environment, configured);
+	const { sessions, projects, connection, environment, configured, loading, error } = useApp();
+	const { spawnControls, showSidebarSessions } = boardPresentation(environment, configured);
 	// The store keeps the last good sessions when a poll fails — that is what lets
-	// the board show rows with a stale banner rather than blanking. The drawer had
-	// no such tell, so a disconnected phone still listed workers as if they were
-	// live. Same data, so say the same thing about it.
-	const sessionsStale = connection !== "open";
+	// the board show rows with a stale banner rather than blanking. Local health
+	// comes from its daemon connection; Cloud has no daemon and uses refresh errors.
+	const { stale: sessionsStale, label: sessionsStaleLabel, lampStatus } = sidebarSessionHealth({ environment, configured, connection, error });
 	const router = useRouter();
 	const pathname = usePathname();
 	const insets = useSafeAreaInsets();
@@ -101,6 +104,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	lastPrimaryDestination.current = selectedPrimaryDestination;
 	const drawerWidth = Math.min(width * 0.76, 320);
 	const liveSessions = useMemo(() => sidebarSessions(sessions), [sessions]);
+	const sessionListPresentation = sidebarSessionListPresentation(environment, loading, liveSessions.length);
 	const projectNames = useMemo(
 		() => new Map(projects.map((project) => [project.id, project.name])),
 		[projects],
@@ -182,11 +186,11 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 		[closeSidebar, router, environment],
 	);
 	const spawnWorker = useCallback(() => {
-		if (!localControls) return;
+		if (!spawnControls) return;
 		haptics.tap();
 		closeSidebar();
 		router.push("/spawn");
-	}, [closeSidebar, router, localControls]);
+	}, [closeSidebar, router, spawnControls]);
 	const openSettings = useCallback(() => {
 		haptics.tap();
 		router.push("/settings");
@@ -235,8 +239,11 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 								style={{ width: drawerWidth - 32, height: 232 }}
 							>
 								<RNHostView matchContents>
-									<View style={styles.brandMascotSlot}>
-										<MascotLamp status={connection} size={55} />
+									<View style={styles.brandRow}>
+										<View style={styles.brandMascotSlot}>
+											<MascotLamp status={lampStatus} size={55} />
+										</View>
+										<SidebarEnvironmentPicker />
 									</View>
 								</RNHostView>
 								<Spacer size={14} />
@@ -256,10 +263,10 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 						</Host>
 					</View>
 
-					{localControls && <>
+					{showSidebarSessions && <>
 					<RNText style={styles.sectionLabel}>
 						{RECENT_WORKERS_LABEL.toUpperCase()}
-						{sessionsStale ? <RNText style={styles.sectionLabelStale}>{"  ·  DISCONNECTED"}</RNText> : null}
+						{sessionsStaleLabel ? <RNText style={styles.sectionLabelStale}>{`  ·  ${sessionsStaleLabel}`}</RNText> : null}
 					</RNText>
 					<FlatList
 						data={liveSessions}
@@ -277,7 +284,14 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 								onPress={() => selectSession(item)}
 							/>
 						)}
-						ListEmptyComponent={<RNText style={styles.emptySessions}>No active sessions</RNText>}
+						ListEmptyComponent={sessionListPresentation.kind === "loading" ? (
+							<View style={styles.loadingSessions}>
+								<ActivityIndicator size="small" color={t.blue} />
+								<RNText style={styles.emptySessions}>{sessionListPresentation.label}</RNText>
+							</View>
+						) : sessionListPresentation.kind === "empty" ? (
+							<RNText style={styles.emptySessions}>{sessionListPresentation.label}</RNText>
+						) : null}
 					/>
 					</>}
 
@@ -286,7 +300,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 							active={activeDestination === "settings"}
 							onPress={openSettings}
 						/>
-						{localControls && <SidebarSpawnButton onPress={spawnWorker} />}
+						{spawnControls && <SidebarSpawnButton onPress={spawnWorker} />}
 					</View>
 				</Animated.View>
 
@@ -407,7 +421,8 @@ const makeStyles = (t: Theme) =>
 			paddingHorizontal: 16,
 		},
 		sidebarTop: { height: 232 },
-		brandMascotSlot: { width: 72, height: 48, paddingLeft: 14 },
+		brandRow: { width: "100%", height: 48, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", gap: 12 },
+		brandMascotSlot: { width: 58, height: 48 },
 		brandMascot: { width: 58, height: 48 },
 		sectionLabel: {
 			marginTop: 8,
@@ -422,8 +437,9 @@ const makeStyles = (t: Theme) =>
 		sessionListStale: { opacity: 0.55 },
 		sessionList: { flex: 1 },
 		sessionListContent: { paddingBottom: 8 },
-		emptySessionList: { flexGrow: 1 },
-		emptySessions: { paddingHorizontal: 12, paddingTop: 8, color: t.textTertiary, fontSize: 14 },
+			emptySessionList: { flexGrow: 1 },
+			emptySessions: { paddingHorizontal: 12, paddingTop: 8, color: t.textTertiary, fontSize: 14 },
+			loadingSessions: { paddingHorizontal: 12, paddingTop: 8, flexDirection: "row", alignItems: "center", gap: 8 },
 		sessionRow: {
 			minHeight: 58,
 			paddingHorizontal: 12,

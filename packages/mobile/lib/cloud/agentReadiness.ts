@@ -47,7 +47,7 @@ export function hasConnectionForHarness(
 
 /** Every coding-agent harness with its own valid provider connection, in list order. */
 export function readyHarnesses(connections: RedactedProviderConnection[]): string[] {
-	return connections
+	return [...new Set(connections
 		.filter((connection) => connection.validationState === "valid" && isCodingAgentProvider(connection.provider))
-		.map((connection) => connection.provider);
+		.map((connection) => connection.provider))];
 }

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { boardPresentation, boardFailure, boardStaleMessage, projectDetailState, workerInteractionProps } from "./board-presentation";
+import {
+	boardPresentation,
+	boardFailure,
+	boardStaleMessage,
+	canUseOrchestratorAction,
+	projectDetailState,
+	workerInteractionProps,
+} from "./board-presentation";
 
 describe("board presentation", () => {
 	it.each(["local", "cloud"] as const)("shows a configured %s board", (environment) => {
@@ -10,22 +17,53 @@ describe("board presentation", () => {
 		expect(boardPresentation("cloud", false).state).toBe("cloud-unready");
 		expect(boardPresentation("local", false).state).toBe("unpaired");
 	});
-	it("exposes only read-only Cloud workers and project browsing", () => {
+	it("lets Cloud workers open without exposing Local controls", () => {
 		const view = boardPresentation("cloud", true);
-		expect(view.interactionMode).toBe("read-only");
+		expect(view.interactionMode).toBe("open-only");
 		expect(view.localControls).toBe(false);
+		expect(view.spawnControls).toBe(true);
 	});
 	it("preserves all Local controls and full worker interactions", () => {
 		const view = boardPresentation("local", true);
 		expect(view.interactionMode).toBe("full");
 		expect(view.localControls).toBe(true);
+		expect(view.spawnControls).toBe(true);
 	});
 	it("does not expose Local controls before the environment is resolved", () => {
 		expect(boardPresentation(null, false).localControls).toBe(false);
+		expect(boardPresentation(null, true).spawnControls).toBe(false);
+		expect(boardPresentation("local", false).spawnControls).toBe(false);
+		expect(boardPresentation("cloud", false).spawnControls).toBe(false);
+	});
+	it("shows sidebar sessions for configured Local and Cloud boards", () => {
+		expect(boardPresentation("local", true).showSidebarSessions).toBe(true);
+		expect(boardPresentation("cloud", true).showSidebarSessions).toBe(true);
+		expect(boardPresentation("local", false).showSidebarSessions).toBe(false);
+		expect(boardPresentation("cloud", false).showSidebarSessions).toBe(false);
+		expect(boardPresentation(null, true).showSidebarSessions).toBe(false);
+	});
+
+	it("lets the Cloud project button open or create an orchestrator from one action", () => {
+		expect(canUseOrchestratorAction("cloud", "open")).toBe(true);
+		expect(canUseOrchestratorAction("cloud", "start")).toBe(true);
+		expect(canUseOrchestratorAction("cloud", "resume")).toBe(true);
+	});
+
+	it("keeps every orchestrator action available locally", () => {
+		for (const action of ["open", "start", "resume"] as const) {
+			expect(canUseOrchestratorAction("local", action)).toBe(true);
+		}
+		expect(canUseOrchestratorAction(null, "open")).toBe(false);
 	});
 });
 
 describe("worker interaction boundary", () => {
+	it("does not construct Local mutation handlers for an open-only row", () => {
+		const props = workerInteractionProps("open-only", () => {
+			throw new Error("Local actions must not be constructed for Cloud workers");
+		});
+		expect(props).toEqual({ interactionMode: "open-only" });
+	});
 	it("never constructs navigation or action handlers for a read-only row", () => {
 		const props = workerInteractionProps("read-only", () => {
 			throw new Error("Local actions must not be constructed for Cloud workers");

@@ -9,6 +9,8 @@ import {
 	selectedPrimarySidebarDestination,
 	sidebarNavigationSettled,
 	sidebarDestinations,
+	sidebarSessionListPresentation,
+	sidebarSessionHealth,
 	sidebarSessions,
 	sidebarSessionRoute,
 } from "./sidebar-navigation";
@@ -19,13 +21,80 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => ({
 }));
 
 describe("sidebarSessionRoute", () => {
-	it("never routes Cloud worker IDs into Local chat, even when IDs collide", () => {
-		expect(sidebarSessionRoute("cloud", { id: "worker-1", projectId: "project-a" })).toBeUndefined();
+	it("routes Cloud workers through the environment-aware session screen", () => {
+		expect(sidebarSessionRoute("cloud", { id: "worker-1", projectId: "project-a" })).toEqual({
+			pathname: "/session/[id]", params: { id: "worker-1", projectId: "project-a" },
+		});
+	});
+	it("does not route before the active environment is resolved", () => {
 		expect(sidebarSessionRoute(null, { id: "worker-1", projectId: "project-a" })).toBeUndefined();
 	});
 	it("preserves the Local session and project route parameters", () => {
 		expect(sidebarSessionRoute("local", { id: "worker-1", projectId: "project-a" })).toEqual({
 			pathname: "/session/[id]", params: { id: "worker-1", projectId: "project-a" },
+		});
+	});
+});
+
+describe("sidebar session-list transition", () => {
+	it("shows environment-specific loading feedback before the first rows arrive", () => {
+		expect(sidebarSessionListPresentation("cloud", true, 0)).toEqual({
+			kind: "loading",
+			label: "Loading Cloud workers…",
+		});
+		expect(sidebarSessionListPresentation("local", true, 0)).toEqual({
+			kind: "loading",
+			label: "Loading workers…",
+		});
+	});
+
+	it("keeps existing rows visible during a background refresh", () => {
+		expect(sidebarSessionListPresentation("cloud", true, 2)).toEqual({ kind: "list" });
+	});
+
+	it("shows the real empty state only after loading finishes", () => {
+		expect(sidebarSessionListPresentation("cloud", false, 0)).toEqual({
+			kind: "empty",
+			label: "No active sessions",
+		});
+	});
+});
+
+describe("sidebar session health", () => {
+	it("does not call a successful Cloud board disconnected", () => {
+		expect(sidebarSessionHealth({ environment: "cloud", configured: true, connection: "closed", error: null })).toEqual({
+			stale: false,
+			label: null,
+			lampStatus: "open",
+		});
+	});
+
+	it("marks retained Cloud data stale only after a refresh failure", () => {
+		expect(sidebarSessionHealth({ environment: "cloud", configured: true, connection: "closed", error: "Timed out" })).toEqual({
+			stale: true,
+			label: "REFRESH FAILED",
+			lampStatus: "closed",
+		});
+	});
+
+	it("keeps the Cloud lamp dark before an account is configured", () => {
+		expect(sidebarSessionHealth({ environment: "cloud", configured: false, connection: "closed", error: null })).toEqual({
+			stale: false,
+			label: null,
+			lampStatus: "closed",
+		});
+	});
+
+	it("preserves Local daemon disconnection semantics", () => {
+		expect(sidebarSessionHealth({ environment: "local", configured: true, connection: "closed", error: null })).toEqual({
+			stale: true,
+			label: "DISCONNECTED",
+			lampStatus: "closed",
+		});
+		expect(sidebarSessionHealth({ environment: "local", configured: true, connection: "open", error: "Old failure" })).toEqual({
+			stale: false,
+			label: null,
+			lampStatus: "open",
 		});
 	});
 });
