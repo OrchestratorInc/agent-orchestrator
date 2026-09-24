@@ -438,7 +438,8 @@ type SystemMemory struct {
 	SwapBytesPerSec float64
 	CPUCount        int
 	// Load1 is the one-minute load average; divided by CPUCount, above one
-	// means work is queueing.
+	// means work is queueing. -1 on a platform with no such concept
+	// (Windows); never otherwise negative.
 	Load1 float64
 	// CPUPercent is the share of all cores the whole host used since the
 	// previous sample, 0..100; zero on the first sample.

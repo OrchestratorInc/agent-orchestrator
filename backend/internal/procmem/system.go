@@ -20,7 +20,8 @@ type System struct {
 	// readings is the swapping that makes a machine feel frozen.
 	SwapPages uint64
 	// CPUCount and Load1 give the one-minute load per core: above one, work
-	// is queueing for CPU.
+	// is queueing for CPU. Load1 is -1 on a platform with no such concept
+	// (Windows); every reader that does have one only ever sets it to >= 0.
 	CPUCount int
 	Load1    float64
 	// CPUBusyTicks and CPUTotalTicks are the aggregate "cpu" line of

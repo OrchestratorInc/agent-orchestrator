@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -16,6 +15,12 @@ import (
 
 // ErrUnsupported is returned where the process table cannot be read.
 var ErrUnsupported = errors.New("procmem: process memory is not supported on " + runtime.GOOS)
+
+// Runner executes a command and returns its combined output. It matches the
+// shape the runtime adapters already inject for tests. Declared here, rather
+// than beside the one platform that shells out, because Snapshot's exported
+// signature must be identical on every platform.
+type Runner func(ctx context.Context, name string, args ...string) ([]byte, error)
 
 // Process is one row of the process table.
 type Process struct {
@@ -39,35 +44,6 @@ type Tree struct {
 type Table struct {
 	byPID    map[int]Process
 	children map[int][]int
-}
-
-// Runner executes a command and returns its combined output. It matches the
-// shape the runtime adapters already inject for tests.
-type Runner func(ctx context.Context, name string, args ...string) ([]byte, error)
-
-func execRunner(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).Output()
-}
-
-// Snapshot reads the current process table. A nil runner uses exec.
-func Snapshot(ctx context.Context, run Runner) (*Table, error) {
-	if runtime.GOOS == "windows" {
-		return nil, ErrUnsupported
-	}
-	if run == nil {
-		run = execRunner
-	}
-	// rss= is KiB and time= is cumulative CPU time on both Linux and macOS ps.
-	// args= is the full command line, so a child reads as "sh -c go test ./..."
-	// rather than "sh"; the window shows what each process is doing. macOS
-	// truncates args= to the terminal width unless told otherwise, which with
-	// no terminal at all is unhelpfully short; -ww lifts the cap and is a
-	// silent no-op on Linux.
-	out, err := run(ctx, "ps", "-axww", "-o", "pid=,ppid=,rss=,time=,args=")
-	if err != nil {
-		return nil, fmt.Errorf("procmem: ps: %w", err)
-	}
-	return Parse(string(out))
 }
 
 // maxCommandLen caps a stored command line. Long node and electron argv

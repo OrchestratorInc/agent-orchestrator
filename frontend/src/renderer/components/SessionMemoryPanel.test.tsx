@@ -69,8 +69,9 @@ function reading(
 	return { sessionId, rssBytes, processCount, cpuPercent, sampledAt: "2026-09-18T00:00:00Z", processes };
 }
 
-/** A 32 GB host with the given amount free and PSI stall percentage. */
-function host(availableGiB: number, pressureRaw = 0, cpuPercent = 0) {
+/** A 32 GB host with the given amount free and PSI stall percentage. `load1`
+ * is -1 on a platform with no load average (Windows), never otherwise negative. */
+function host(availableGiB: number, pressureRaw = 0, cpuPercent = 0, load1 = 0.5) {
 	return {
 		cpuPercent,
 		totalBytes: 32 * GIB,
@@ -79,14 +80,14 @@ function host(availableGiB: number, pressureRaw = 0, cpuPercent = 0) {
 		swapUsedBytes: 0,
 		swapBytesPerSec: 0,
 		cpuCount: 8,
-		load1: 0.5,
+		load1,
 		pressureRaw,
 		pressureSource: "psi",
 	};
 }
 
 /** AO holding `aoGiB` on a host with `availableGiB` free at the given pressure. */
-function appReading(availableGiB: number, pressureRaw = 0, aoGiB = 2, hostCPUPercent = 0, aoCPUPercent = 12) {
+function appReading(availableGiB: number, pressureRaw = 0, aoGiB = 2, hostCPUPercent = 0, aoCPUPercent = 12, load1 = 0.5) {
 	return {
 		isError: false,
 		data: {
@@ -96,7 +97,7 @@ function appReading(availableGiB: number, pressureRaw = 0, aoGiB = 2, hostCPUPer
 				cpuPercent: aoCPUPercent,
 				own: reading("ao", 300 * 1024 ** 2, 3, [{ pid: 7, ppid: 1, rssBytes: 300 * 1024 ** 2, cpuPercent: 1, command: "ao daemon" }]),
 			},
-			system: host(availableGiB, pressureRaw, hostCPUPercent),
+			system: host(availableGiB, pressureRaw, hostCPUPercent, load1),
 			liveCount: 2,
 		},
 	};
@@ -219,6 +220,18 @@ describe("AppMemoryIndicator", () => {
 		expect(within(table).queryByRole("button", { name: /terminate|kill|pause/i })).not.toBeInTheDocument();
 		expect(within(table).queryAllByRole("button")).toHaveLength(0);
 		expect(postMock).not.toHaveBeenCalled();
+	});
+
+	it("hides the load figure on a platform with no load average, in the graph and in the copied report", async () => {
+		appMemoryMock.mockReturnValue(appReading(20, 0, 2, 40, 160, -1));
+		renderButton();
+		await userEvent.click(screen.getByTestId("app-memory-indicator"));
+		const cpu = await screen.findByTestId("session-cpu-graph");
+		expect(cpu).toHaveTextContent("CPU · 8 cores");
+		expect(cpu).not.toHaveTextContent("load");
+		await userEvent.click(screen.getByRole("button", { name: "Copy report" }));
+		const report = clipboardMock.mock.calls[0][0] as string;
+		expect(report).not.toContain("load");
 	});
 
 	it("expands any number of rows into their process trees, and collapses each on a second click", async () => {

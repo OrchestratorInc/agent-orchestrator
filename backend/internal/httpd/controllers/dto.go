@@ -1679,8 +1679,10 @@ type SystemMemoryResponse struct {
 	// previous sample. Sustained non-zero is the frozen-cursor signal.
 	SwapBytesPerSec float64 `json:"swapBytesPerSec" minimum:"0"`
 	CPUCount        int     `json:"cpuCount" minimum:"0"`
-	// Load1 is the one-minute load average; over cpuCount means work is queueing.
-	Load1 float64 `json:"load1" minimum:"0"`
+	// Load1 is the one-minute load average; over cpuCount means work is
+	// queueing. -1 on a platform with no such concept (Windows); never
+	// otherwise negative.
+	Load1 float64 `json:"load1"`
 	// CPUPercent is how busy the whole host was since the previous sample,
 	// 0..100 across all cores; zero on the first sample.
 	CPUPercent float64 `json:"cpuPercent" minimum:"0"`

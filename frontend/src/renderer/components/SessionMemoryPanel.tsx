@@ -634,7 +634,9 @@ export function diagnosticsReport(
 		lines.push(`Memory   AO ${formatMemory(app.rssBytes)}`);
 	}
 	if (system) {
-		lines.push(`CPU      ${formatCPU(system.cpuPercent)} of ${system.cpuCount} cores · AO ${formatCPU(Math.min(100, (app?.cpuPercent ?? 0) / Math.max(1, system.cpuCount)))} · load ${system.load1.toFixed(2)}`);
+		// A negative load average is Windows' "not applicable" sentinel, never a real reading.
+		const load = system.load1 >= 0 ? ` · load ${system.load1.toFixed(2)}` : "";
+		lines.push(`CPU      ${formatCPU(system.cpuPercent)} of ${system.cpuCount} cores · AO ${formatCPU(Math.min(100, (app?.cpuPercent ?? 0) / Math.max(1, system.cpuCount)))}${load}`);
 		if (system.swapBytesPerSec > 0) lines.push(`Swapping ${formatMemory(system.swapBytesPerSec)}/s`);
 	}
 	lines.push(`Sessions ${rows.length}`);
@@ -874,7 +876,10 @@ function CpuGraph({ current, history, system }: { current: CPUSample; history: C
 		<section className="flex w-full flex-col items-stretch gap-(--size-settings-section-inner-gap)" data-testid="session-cpu-graph">
 			<div className="flex items-center justify-between">
 				<h2 className="text-xs font-medium leading-4 text-settings-muted">{t("shell.cpuBarTitle", { cores: system.cpuCount })}</h2>
-				<span className="font-mono text-xs tabular-nums text-settings-muted">{t("shell.cpuBarLoad", { load: system.load1.toFixed(2) })}</span>
+				{/* A negative load average is Windows' "not applicable" sentinel: the platform has no such concept, and printing 0.00 would read as an idle machine rather than a missing number. */}
+				{system.load1 >= 0 ? (
+					<span className="font-mono text-xs tabular-nums text-settings-muted">{t("shell.cpuBarLoad", { load: system.load1.toFixed(2) })}</span>
+				) : null}
 			</div>
 			<div className="settings-grouped-rows flex w-full flex-col">
 				<div className="settings-row-bar h-auto flex-col items-stretch gap-2 py-3">

@@ -13995,7 +13995,6 @@ components:
           type: number
         load1:
           format: double
-          minimum: 0
           type: number
         pressureRaw:
           format: double
