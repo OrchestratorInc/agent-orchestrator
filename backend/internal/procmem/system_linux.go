@@ -44,7 +44,7 @@ func readMeminfo(sys *System) error {
 	if err != nil {
 		return fmt.Errorf("procmem: open /proc/meminfo: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var swapFree uint64
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -90,7 +90,7 @@ func readVMStatSwapPages() uint64 {
 	if err != nil {
 		return 0
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var pages uint64
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {

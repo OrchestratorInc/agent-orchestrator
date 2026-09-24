@@ -217,7 +217,7 @@ describe("AppMemoryIndicator", () => {
 
 		// The window only measures: its rows copy, they never end a session.
 		expect(within(table).queryByRole("button", { name: /terminate|kill|pause/i })).not.toBeInTheDocument();
-		expect(within(table).getAllByRole("button").every((button) => (button.getAttribute("aria-label") ?? "").startsWith("Copy"))).toBe(true);
+		expect(within(table).queryAllByRole("button")).toHaveLength(0);
 		expect(postMock).not.toHaveBeenCalled();
 	});
 

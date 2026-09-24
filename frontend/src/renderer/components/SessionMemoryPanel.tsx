@@ -363,7 +363,7 @@ export function DiagnosticsBody({ projectId, scroller }: { projectId?: string; s
 					) : null}
 					{appMemory?.system ? (
 						<span>
-							CPU <span className="text-settings-label">{formatCPU(appMemory.system.cpuPercent)}</span>
+							{t("shell.memoryColumnCpu")} <span className="text-settings-label">{formatCPU(appMemory.system.cpuPercent)}</span>
 						</span>
 					) : null}
 				</div>

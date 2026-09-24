@@ -20,15 +20,14 @@ func (m *Manager) recordStepLocked(id domain.SessionID, s ports.ActivitySignal, 
 	}
 	switch {
 	case s.Event == "pre-tool-use":
-		steps := append(m.steps[id], domain.SessionStep{
+		m.steps[id] = append(m.steps[id], domain.SessionStep{
 			ToolUseID: s.ToolUseID,
 			Tool:      s.ToolName,
 			StartedAt: timeOr(s.Timestamp, now),
 		})
-		if len(steps) > stepRingSize {
-			steps = steps[len(steps)-stepRingSize:]
+		if steps := m.steps[id]; len(steps) > stepRingSize {
+			m.steps[id] = steps[len(steps)-stepRingSize:]
 		}
-		m.steps[id] = steps
 	case isPostToolUseEvent(s.Event):
 		if s.ToolUseID == "" {
 			return
