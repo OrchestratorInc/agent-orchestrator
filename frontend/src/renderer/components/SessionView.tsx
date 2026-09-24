@@ -518,7 +518,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const [filesPoppedOut, setFilesPoppedOut] = useState(false);
 	const [filesSplit, setFilesSplit] = useState(() => window.localStorage.getItem("ao.files.diffStyle") === "split");
 	const [filePreviewRequestsBySession, setFilePreviewRequestsBySession] = useState<
-		Record<string, { path: string; key: number }>
+		Record<string, { feedback?: boolean; path: string; key: number; source?: "artifact" }>
 	>({});
 	const [fileTabsBySession, setFileTabsBySession] = useState<Record<string, SessionFileTabState>>({});
 	const fileTabs = fileTabsBySession[uiSessionId] ?? EMPTY_SESSION_FILE_TABS;
@@ -1387,6 +1387,27 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		uiSessionId,
 		workspaceFileOpenRequest,
 	]);
+	const handleOpenArtifact = useCallback(
+		(target: { feedback?: boolean; path: string }) => {
+			if (browserOnly) return;
+			prepareFilesInspector();
+			setFilePreviewRequestsBySession((current) => ({
+				...current,
+				[uiSessionId]: { feedback: target.feedback, path: target.path, key: (current[uiSessionId]?.key ?? 0) + 1, source: "artifact" },
+			}));
+		},
+		[browserOnly, prepareFilesInspector, uiSessionId],
+	);
+	const handleFilePreviewRequestConsumed = useCallback((key: number) => {
+		setFilePreviewRequestsBySession((current) => {
+			const request = current[uiSessionId];
+			if (!request || request.key !== key || !request.feedback) return current;
+			return {
+				...current,
+				[uiSessionId]: { ...request, feedback: undefined },
+			};
+		});
+	}, [uiSessionId]);
 
 	const handleToggleFilesPopOut = useCallback(
 		(next: boolean) => {
@@ -1809,8 +1830,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 										<CloudWorkspaceDiff annotation={fileAnnotation} onOpenFile={openCenterFile} onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} session={session} split={filesSplit} />
 									) : (
 										<SessionFileExplorer
+											artifacts={session.artifactFiles ?? []}
 											hostId={hostId}
 											onOpenFile={openCenterFile}
+											onRevealRequestConsumed={handleFilePreviewRequestConsumed}
 											onSplitChange={setFilesSplit}
 											onToggleMaximized={handleToggleFilesPopOut}
 											onRevealHandled={handleRevealHandled}
@@ -1822,11 +1845,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								) : null
 							}
 							isInspectorVisible={inspectorPanelVisible}
+							onOpenArtifact={browserOnly ? undefined : handleOpenArtifact}
 							onOpenFiles={browserOnly ? undefined : handleOpenFiles}
 							onOpenReviewFile={handleOpenReviewFile}
-								onOpenReviewerTerminal={selectReviewerTerminal}
-								onOpenReviewerChat={selectReviewerChat}
-								onWorkerMessageSent={showChatSurface || reviewerChatId ? selectSessionTerminal : undefined}
+							onOpenReviewerTerminal={selectReviewerTerminal}
+							onOpenReviewerChat={selectReviewerChat}
+							onWorkerMessageSent={showChatSurface || reviewerChatId ? selectSessionTerminal : undefined}
 							onToggleBrowserPopOut={handleToggleBrowserPopOut}
 							onViewChange={transitionInspectorView}
 							view={inspectorView}
@@ -1903,7 +1927,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								{session.cloud ? (
 									<CloudWorkspaceDiff annotation={fileAnnotation} isMaximized onOpenFile={openCenterFile} onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} session={session} split={filesSplit} />
 								) : (
-									<SessionFileExplorer hostId={hostId} isMaximized onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} sessionId={session.id} split={filesSplit} />
+									<SessionFileExplorer artifacts={session.artifactFiles ?? []} revealRequest={filePreviewRequestsBySession[uiSessionId] ?? null} onRevealRequestConsumed={handleFilePreviewRequestConsumed} hostId={hostId} isMaximized onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} sessionId={session.id} split={filesSplit} />
 								)}
 							</FilesTopbarHostContext.Provider>
 						}</SessionFilesPopOut>,

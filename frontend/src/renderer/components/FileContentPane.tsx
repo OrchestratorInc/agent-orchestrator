@@ -432,7 +432,7 @@ function CompleteFileView({ annotation, commitSha, detail, editing, onContentRea
 		// that request carries an expected workspace snapshot and can lose a race
 		// with the file watcher, leaving the center tab stuck on a stale-snapshot
 		// error even though the current image is available.
-		enabled: (detail.deleted || detail.contentTruncated) && !detail.imageMediaType,
+		enabled: source.kind !== "artifact" && (detail.deleted || detail.contentTruncated) && !detail.imageMediaType,
 	});
 	if (revision.isPending && revision.isFetching) return <PanelMessage>{t("files.loading")}</PanelMessage>;
 	if (revision.error) return <PanelMessage>{revision.error.message}</PanelMessage>;
