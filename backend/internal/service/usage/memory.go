@@ -124,7 +124,7 @@ func treeReading(tree procmem.Tree, prev *procmem.Table, elapsed float64) domain
 
 // SystemMemory reports the host's headroom: RAM, swap, swapping rate since
 // the last call, and load. ErrUnsupported on platforms procmem can't read.
-func (r *MemoryReader) SystemMemory(context.Context) (domain.SystemMemory, error) {
+func (r *MemoryReader) SystemMemory(ctx context.Context) (domain.SystemMemory, error) {
 	sys, err := r.ReadSystem()
 	if err != nil {
 		return domain.SystemMemory{}, err
@@ -143,8 +143,19 @@ func (r *MemoryReader) SystemMemory(context.Context) (domain.SystemMemory, error
 	if gap := now.Sub(lastAt).Seconds(); !lastAt.IsZero() && gap > 0 && sys.SwapPages >= last.SwapPages {
 		out.SwapBytesPerSec = float64(sys.SwapPages-last.SwapPages) * swapPageBytes / gap
 	}
-	if !lastAt.IsZero() && sys.CPUTotalTicks > last.CPUTotalTicks && sys.CPUBusyTicks >= last.CPUBusyTicks {
+	switch {
+	case !lastAt.IsZero() && sys.CPUTotalTicks > last.CPUTotalTicks && sys.CPUBusyTicks >= last.CPUBusyTicks:
 		out.CPUPercent = 100 * float64(sys.CPUBusyTicks-last.CPUBusyTicks) / float64(sys.CPUTotalTicks-last.CPUTotalTicks)
+	case sys.CPUTotalTicks == 0:
+		// No system-wide ticks on this platform (macOS today). The daemon
+		// already samples every process for the session rows, so the same
+		// table gives the machine's busy share: total CPU-seconds used by
+		// everything, divided by elapsed time and core count. This slightly
+		// undercounts processes that start and exit between two samples,
+		// which a whole-machine tick counter would not miss.
+		if table, prev, elapsed, err := r.table(ctx); err == nil && sys.CPUCount > 0 {
+			out.CPUPercent = min(100, procmem.CPUPercent(table.All(), prev, elapsed)/float64(sys.CPUCount))
+		}
 	}
 	return out, nil
 }

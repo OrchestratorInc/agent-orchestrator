@@ -1,10 +1,8 @@
 package procmem
 
 import (
-	"bufio"
+	"encoding/binary"
 	"fmt"
-	"os"
-	"runtime"
 	"strconv"
 	"strings"
 )
@@ -47,29 +45,6 @@ const (
 	PressureSourceAvailablePct = "available_pct"
 )
 
-// ReadSystem reads host memory and load. It is Linux-only for now (parses
-// /proc); other platforms return ErrUnsupported.
-func ReadSystem() (System, error) {
-	if runtime.GOOS != "linux" {
-		return System{}, ErrUnsupported
-	}
-	sys := System{CPUCount: runtime.NumCPU()}
-	if err := readMeminfo(&sys); err != nil {
-		return System{}, err
-	}
-	// Swap activity and load are refinements; a host that hides them still
-	// gets a memory reading.
-	sys.SwapPages = readVMStatSwapPages()
-	sys.Load1 = readLoad1()
-	sys.CPUBusyTicks, sys.CPUTotalTicks = readCPUTicks()
-	if some, ok := readPSISome10("/proc/pressure/memory"); ok {
-		sys.PressureRaw, sys.PressureSource = some, PressureSourcePSI
-	} else {
-		sys.PressureRaw, sys.PressureSource = availablePressure(sys), PressureSourceAvailablePct
-	}
-	return sys, nil
-}
-
 // availablePressure stands in for PSI where the kernel has none (pre-4.20,
 // CONFIG_PSI off, some containers): 100 minus the percent of RAM available.
 func availablePressure(sys System) float64 {
@@ -77,15 +52,6 @@ func availablePressure(sys System) float64 {
 		return 0
 	}
 	return 100 - float64(sys.AvailableBytes)/float64(sys.TotalBytes)*100
-}
-
-// readPSISome10 parses the "some avg10=" field of a PSI file.
-func readPSISome10(path string) (float64, bool) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0, false
-	}
-	return ParsePSISome10(string(data))
 }
 
 // ParsePSISome10 reads "some avg10=N.NN ..." from PSI file contents.
@@ -103,83 +69,6 @@ func ParsePSISome10(contents string) (float64, bool) {
 		}
 	}
 	return 0, false
-}
-
-func readMeminfo(sys *System) error {
-	f, err := os.Open("/proc/meminfo")
-	if err != nil {
-		return fmt.Errorf("procmem: open /proc/meminfo: %w", err)
-	}
-	defer f.Close()
-	var swapFree uint64
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		key, kib, ok := strings.Cut(sc.Text(), ":")
-		if !ok {
-			continue
-		}
-		fields := strings.Fields(kib)
-		if len(fields) == 0 {
-			continue
-		}
-		n, err := strconv.ParseUint(fields[0], 10, 64)
-		if err != nil {
-			continue
-		}
-		switch key {
-		case "MemTotal":
-			sys.TotalBytes = n * 1024
-		case "MemAvailable":
-			sys.AvailableBytes = n * 1024
-		case "SwapTotal":
-			sys.SwapTotalBytes = n * 1024
-		case "SwapFree":
-			swapFree = n * 1024
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return fmt.Errorf("procmem: read /proc/meminfo: %w", err)
-	}
-	if sys.TotalBytes == 0 {
-		return fmt.Errorf("procmem: /proc/meminfo missing MemTotal")
-	}
-	if sys.SwapTotalBytes >= swapFree {
-		sys.SwapUsedBytes = sys.SwapTotalBytes - swapFree
-	}
-	return nil
-}
-
-// readVMStatSwapPages sums pswpin and pswpout from /proc/vmstat; zero when
-// unreadable.
-func readVMStatSwapPages() uint64 {
-	f, err := os.Open("/proc/vmstat")
-	if err != nil {
-		return 0
-	}
-	defer f.Close()
-	var pages uint64
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		key, val, ok := strings.Cut(sc.Text(), " ")
-		if !ok || (key != "pswpin" && key != "pswpout") {
-			continue
-		}
-		n, err := strconv.ParseUint(strings.TrimSpace(val), 10, 64)
-		if err == nil {
-			pages += n
-		}
-	}
-	return pages
-}
-
-// readCPUTicks reads the aggregate cpu line of /proc/stat; zeros when
-// unreadable.
-func readCPUTicks() (busy, total uint64) {
-	data, err := os.ReadFile("/proc/stat")
-	if err != nil {
-		return 0, 0
-	}
-	return ParseCPUTicks(string(data))
 }
 
 // ParseCPUTicks sums the whole-machine "cpu" line of /proc/stat: user nice
@@ -205,20 +94,91 @@ func ParseCPUTicks(contents string) (busy, total uint64) {
 	return 0, 0
 }
 
-// readLoad1 is the one-minute load average from /proc/loadavg; zero when
-// unreadable.
-func readLoad1() float64 {
-	data, err := os.ReadFile("/proc/loadavg")
-	if err != nil {
+// VMStat is the slice of vm_stat's page counts the monitor needs.
+type VMStat struct {
+	PageSize uint64
+	// Free, Inactive, Speculative and Purgeable are the pages the kernel can
+	// hand out without swapping anything. macOS publishes no single
+	// "available" figure, so this is the nearest honest equivalent of Linux's
+	// MemAvailable.
+	Free        uint64
+	Inactive    uint64
+	Speculative uint64
+	Purgeable   uint64
+	// PageIns and PageOuts are lifetime counters; their growth between two
+	// readings is the swapping that makes a machine feel frozen.
+	PageIns  uint64
+	PageOuts uint64
+}
+
+// AvailableBytes is what the kernel could give out right now.
+func (v VMStat) AvailableBytes() uint64 {
+	return (v.Free + v.Inactive + v.Speculative + v.Purgeable) * v.PageSize
+}
+
+// ParseVMStat reads `vm_stat` output: a header naming the page size, then
+// "Label: N." lines. Unknown labels are ignored, so a newer macOS adding rows
+// changes nothing here.
+func ParseVMStat(contents string) (VMStat, error) {
+	stat := VMStat{}
+	for line := range strings.Lines(contents) {
+		line = strings.TrimSpace(line)
+		if stat.PageSize == 0 {
+			if _, rest, ok := strings.Cut(line, "page size of "); ok {
+				size, _, _ := strings.Cut(rest, " ")
+				if n, err := strconv.ParseUint(size, 10, 64); err == nil {
+					stat.PageSize = n
+				}
+			}
+		}
+		label, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		n, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimSpace(value), "."), 10, 64)
+		if err != nil {
+			continue
+		}
+		switch strings.TrimSpace(label) {
+		case "Pages free":
+			stat.Free = n
+		case "Pages inactive":
+			stat.Inactive = n
+		case "Pages speculative":
+			stat.Speculative = n
+		case "Pages purgeable":
+			stat.Purgeable = n
+		case "Pageins":
+			stat.PageIns = n
+		case "Pageouts":
+			stat.PageOuts = n
+		}
+	}
+	if stat.PageSize == 0 {
+		return VMStat{}, fmt.Errorf("procmem: vm_stat did not name a page size")
+	}
+	return stat, nil
+}
+
+// parseSwapUsage decodes the xsw_usage struct behind vm.swapusage: three
+// 64-bit byte counts (total, available, used) and then fields we ignore.
+func parseSwapUsage(raw []byte) (total, used uint64) {
+	if len(raw) < 24 {
+		return 0, 0
+	}
+	return binary.LittleEndian.Uint64(raw[0:8]), binary.LittleEndian.Uint64(raw[16:24])
+}
+
+// parseLoadavg decodes the loadavg struct behind vm.loadavg: three fixed-point
+// averages, then the scale to divide them by. The scale sits at offset 16
+// because the 64-bit field is aligned past the three 32-bit ones.
+func parseLoadavg(raw []byte) float64 {
+	if len(raw) < 24 {
 		return 0
 	}
-	fields := strings.Fields(string(data))
-	if len(fields) == 0 {
+	scale := binary.LittleEndian.Uint64(raw[16:24])
+	if scale == 0 {
 		return 0
 	}
-	load, err := strconv.ParseFloat(fields[0], 64)
-	if err != nil {
-		return 0
-	}
-	return load
+	return float64(binary.LittleEndian.Uint32(raw[0:4])) / float64(scale)
 }

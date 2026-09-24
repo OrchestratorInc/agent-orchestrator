@@ -59,8 +59,11 @@ func Snapshot(ctx context.Context, run Runner) (*Table, error) {
 	}
 	// rss= is KiB and time= is cumulative CPU time on both Linux and macOS ps.
 	// args= is the full command line, so a child reads as "sh -c go test ./..."
-	// rather than "sh"; the window shows what each process is doing.
-	out, err := run(ctx, "ps", "-axo", "pid=,ppid=,rss=,time=,args=")
+	// rather than "sh"; the window shows what each process is doing. macOS
+	// truncates args= to the terminal width unless told otherwise, which with
+	// no terminal at all is unhelpfully short; -ww lifts the cap and is a
+	// silent no-op on Linux.
+	out, err := run(ctx, "ps", "-axww", "-o", "pid=,ppid=,rss=,time=,args=")
 	if err != nil {
 		return nil, fmt.Errorf("procmem: ps: %w", err)
 	}
@@ -109,6 +112,17 @@ func Parse(out string) (*Table, error) {
 		t.children[ppid] = append(t.children[ppid], pid)
 	}
 	return t, nil
+}
+
+// All returns every process in the table, zombies already excluded by Parse.
+// Used where a reading needs the whole machine rather than one root's tree,
+// such as deriving host CPU on a platform with no system-wide ticks of its own.
+func (t *Table) All() []Process {
+	out := make([]Process, 0, len(t.byPID))
+	for _, p := range t.byPID {
+		out = append(out, p)
+	}
+	return out
 }
 
 // Tree sums the root and every descendant. A root that no longer exists

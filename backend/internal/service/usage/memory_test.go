@@ -219,6 +219,78 @@ func TestSystemMemoryDerivesSwapRateFromCounters(t *testing.T) {
 	}
 }
 
+func TestSystemMemoryDerivesCPUFromTheProcessTableWhenTheHostHasNoTicks(t *testing.T) {
+	// macOS today: ReadSystem cannot report system-wide ticks (no cgo), so
+	// SystemMemory must fall back to what it already samples for the session
+	// rows: every process's own CPU-seconds, divided by elapsed time and core
+	// count to land in the same 0..100 range a tick counter would give.
+	now := time.Unix(2000, 0)
+	table, err := procmem.Parse("100 1 900 00:00:10 launchd\n200 100 3000 00:00:00 claude\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewMemoryReader(MemoryReaderDeps{
+		Store: memStore{}, Runtime: memRuntime{}, Now: func() time.Time { return now },
+		Snapshot: func(context.Context) (*procmem.Table, error) { return table, nil },
+	})
+	r.ReadSystem = func() (procmem.System, error) {
+		return procmem.System{TotalBytes: 16 << 30, AvailableBytes: 4 << 30, CPUCount: 4}, nil
+	}
+	first, err := r.SystemMemory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.CPUPercent != 0 {
+		t.Fatalf("first sample has nothing to compare against, want 0, got %v", first.CPUPercent)
+	}
+
+	// 4 seconds of CPU across all processes over 2 elapsed seconds, on 4
+	// cores: 4 core-seconds used / (2s * 4 cores) = 50%.
+	table, err = procmem.Parse("100 1 900 00:00:14 launchd\n200 100 3000 00:00:00 claude\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Second)
+	second, err := r.SystemMemory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.CPUPercent != 50 {
+		t.Fatalf("cpu = %v, want 50", second.CPUPercent)
+	}
+}
+
+func TestSystemMemoryCPUFallbackNeverExceedsOneHundred(t *testing.T) {
+	now := time.Unix(3000, 0)
+	table, err := procmem.Parse("100 1 900 00:00:00 a\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewMemoryReader(MemoryReaderDeps{
+		Store: memStore{}, Runtime: memRuntime{}, Now: func() time.Time { return now },
+		Snapshot: func(context.Context) (*procmem.Table, error) { return table, nil },
+	})
+	r.ReadSystem = func() (procmem.System, error) {
+		return procmem.System{TotalBytes: 1, AvailableBytes: 1, CPUCount: 1}, nil
+	}
+	if _, err := r.SystemMemory(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// One process alone used far more than one core's worth of wall time.
+	table, err = procmem.Parse("100 1 900 00:03:00 a\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(1 * time.Second)
+	out, err := r.SystemMemory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.CPUPercent != 100 {
+		t.Fatalf("cpu = %v, want capped at 100", out.CPUPercent)
+	}
+}
+
 func TestAppMemoryOwnExcludesSessionsUnderTheDaemon(t *testing.T) {
 	recs := []domain.SessionRecord{{ID: "s-a", Metadata: domain.SessionMetadata{RuntimeHandleID: "a"}}}
 	var snapshots int
