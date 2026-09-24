@@ -70,4 +70,13 @@ describe("AgentAvatar", () => {
 			screen.getByRole("img", { name: "opencode" }).getAttribute("src"),
 		);
 	});
+
+	it("renders the OpenHands brand asset", () => {
+		render(<AgentAvatar provider="openhands" />);
+
+		expect(screen.getByRole("img", { name: "openhands" })).toHaveAttribute(
+			"src",
+			expect.stringContaining("openhands.svg"),
+		);
+	});
 });

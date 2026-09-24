@@ -41,6 +41,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetUnreal:     "https://github.com/unreallabsai/unreal-agent",
 	TargetMiMoCode:   "https://github.com/XiaomiMiMo/MiMo-Code",
 	TargetDeepSeek:   "https://github.com/deepseek-ai/deepseek-harness",
+	TargetOpenHands:  "https://docs.openhands.dev/openhands/usage/cli/installation",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -236,6 +237,14 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		// DeepSeek Harness ships as one Node CLI that boots every profile
 		// (headless, ACP, web) from the same install, so npm is the only method.
 		plans = []Plan{s.planNPM(target, "@deepseek-ai/dsh")}
+	case TargetOpenHands:
+		// The package pins Requires-Python ==3.12.*, which uv resolves (and
+		// downloads if needed) on its own; pipx would need a 3.12 interpreter
+		// already on PATH, so it is not offered.
+		plans = []Plan{s.planUV(target, "openhands")}
+		if s.goos == "darwin" || s.goos == "linux" {
+			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
+		}
 	default:
 		plans = []Plan{{Target: target, Unsupported: true, Method: "manual", Reason: "unknown install target"}}
 	}
