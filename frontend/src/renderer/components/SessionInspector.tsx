@@ -2,7 +2,7 @@ import { AppLink } from "./AppLink";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
-import { memo, useCallback, useEffect, useId, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useId, useState, type MouseEvent, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -28,11 +28,14 @@ import {
 	ArrowUpRight,
 	ChevronDown,
 	ChevronRight,
+	Files as FilesIcon,
 	GitPullRequest,
 	GitMerge,
+	Globe,
 	Info,
 	Play,
 	Loader2,
+	MessageSquarePlus,
 	MessageSquare,
 	X,
 } from "lucide-react";
@@ -65,10 +68,11 @@ import { clearTerminateSessionState, useTerminateSession } from "../hooks/useTer
 import { formatEstimatedCost, type EstimatedCost } from "../lib/format-cost";
 import { prBrowserUrl, prCanMerge, prCardPresentation, prNounKeys, sessionPRDisplaySummaries } from "../lib/pr-display";
 import { formatTokenCount } from "../lib/format-token-count";
-import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
+import type { SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import {
 	openPRs,
 	resolveNextNavigationAfterSessionKill,
+	sessionArtifacts,
 	sortedPRs,
 	STANDALONE_WORKSPACE_ID,
 } from "../types/workspace";
@@ -182,6 +186,7 @@ export const SessionInspector = memo(function SessionInspector({
 	browserAnnotationQueue,
 	isInspectorVisible = true,
 	onToggleBrowserPopOut,
+	onOpenArtifact,
 	onOpenFiles,
 	onOpenReviewFile,
 	onOpenReviewerChat,
@@ -199,6 +204,7 @@ export const SessionInspector = memo(function SessionInspector({
 	browserAnnotationQueue?: BrowserAnnotationQueueModel;
 	isInspectorVisible?: boolean;
 	onToggleBrowserPopOut?: (next: boolean) => void;
+	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 	onOpenFiles?: () => void;
 	onOpenReviewFile?: (target: { line?: number; path: string }) => void;
 	onOpenReviewerChat?: (reviewId: string) => void;
@@ -320,7 +326,15 @@ export const SessionInspector = memo(function SessionInspector({
 					session ? <ReviewsView hostId={hostId} onOpenReviewFile={onOpenReviewFile} onOpenReviewerTerminal={onOpenReviewerTerminal} onOpenReviewerChat={onOpenReviewerChat} onWorkerMessageSent={onWorkerMessageSent} session={session} /> : undefined
 				}
 				summaryView={
-					session ? <SummaryView canOpenReviews={reviewsAvailable} hostId={hostId} onOpenReviews={openReviews} session={session} /> : undefined
+					session ? (
+						<SummaryView
+							canOpenReviews={reviewsAvailable}
+							hostId={hostId}
+							onOpenArtifact={onOpenArtifact}
+							onOpenReviews={openReviews}
+							session={session}
+						/>
+					) : undefined
 				}
 				tabs={tabs}
 			/>
@@ -346,11 +360,13 @@ function normalizeReviewerId(value: string | undefined): string {
 const SummaryView = memo(function SummaryView({
 	canOpenReviews,
 	hostId,
+	onOpenArtifact,
 	onOpenReviews,
 	session,
 }: {
 	canOpenReviews: boolean;
 	hostId?: string;
+	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 	onOpenReviews: () => void;
 	session: WorkspaceSession;
 }) {
@@ -380,6 +396,12 @@ const SummaryView = memo(function SummaryView({
 	const prCount = prSummaries.length + linkedPRs.length;
 	const prSectionTitle = prCount > 1 ? t("inspector.pullRequests", { count: prCount }) : t("inspector.pullRequest");
 	const hasPRs = prCount > 0;
+	const artifacts = sessionArtifacts(session);
+	const hasArtifacts = artifacts.length > 0;
+	const showPRSection = hasPRs || session.outputType === "pr" || session.outputType === "pr_artifact";
+	const artifactSectionTitle = artifacts.length > 1
+		? t("inspector.artifacts", { count: artifacts.length })
+		: t("inspector.artifact");
 	// Cloud orchestrators list the workers they spawned; local orchestrators
 	// have no parent/child model and every other session has no children.
 	const showWorkers =
@@ -398,6 +420,19 @@ const SummaryView = memo(function SummaryView({
 				</>
 			}
 			activityTitle={t("inspector.activity")}
+			artifactCards={
+				hasArtifacts ? (
+					artifacts.map((artifact) => (
+						<ArtifactSummaryCard
+							artifact={artifact}
+							key={artifact.path}
+							onOpenArtifact={onOpenArtifact}
+							session={session}
+						/>
+					))
+				) : undefined
+			}
+			artifactTitle={hasArtifacts ? artifactSectionTitle : undefined}
 			completion={<SessionControls hostId={hostId} session={session} />}
 			pullRequestCards={
 				<div className="flex flex-col gap-1.5">
@@ -421,7 +456,7 @@ const SummaryView = memo(function SummaryView({
 					)}
 				</div>
 			}
-			pullRequestTitle={prSectionTitle}
+			pullRequestTitle={showPRSection ? prSectionTitle : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
 			usage={
 				showUsageError ? (
@@ -1401,6 +1436,69 @@ function PRSummaryCard({
 			pr={viewModel}
 			pullRequestIcon={<GitPullRequest className="size-icon-sm shrink-0" aria-hidden="true" />}
 		/>
+	);
+}
+
+/**
+ * One row in the Summary panel's Artifacts list. HTML artifacts open in the
+ * existing Browser preview flow (same mechanism as any other AO Browser
+ * link); markdown/file artifacts open in a dedicated read-only viewer in the
+ * Files inspector, since artifact files live outside the git workspace and
+ * the workspace-diff Files flow can't resolve them.
+ */
+function ArtifactSummaryCard({
+	artifact,
+	onOpenArtifact,
+	session,
+}: {
+	artifact: SessionArtifact;
+	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
+	session: WorkspaceSession;
+}) {
+	const openInAOBrowser = useSessionBrowserLink(session);
+	const handleOpen = () => {
+		if (artifact.kind === "html" && artifact.previewUrl) {
+			openInAOBrowser(artifact.previewUrl);
+			return;
+		}
+		onOpenArtifact?.({ path: artifact.path });
+	};
+	const handleFeedback = (event: MouseEvent<HTMLButtonElement>) => {
+		event.stopPropagation();
+		onOpenArtifact?.({ feedback: true, path: artifact.path });
+	};
+	return (
+		<div className="flex w-full min-w-0 items-center rounded-md border border-(--color-border-settings-input) text-xs transition-colors hover:bg-interactive-hover focus-within:bg-interactive-hover focus-within:ring-1 focus-within:ring-ring">
+			<button
+				className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5 text-left outline-none"
+				onClick={handleOpen}
+				type="button"
+			>
+				{artifact.kind === "html" ? (
+					<Globe aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
+				) : (
+					<FilesIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
+				)}
+				<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
+			</button>
+			{onOpenArtifact ? (
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button
+							aria-label={`${appI18n.t("files.addFeedback")}: ${artifact.name}`}
+							className="mr-1 size-6 shrink-0"
+							onClick={handleFeedback}
+							size="icon-sm"
+							type="button"
+							variant="ghost"
+						>
+							<MessageSquarePlus aria-hidden="true" className="size-icon-sm" />
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">{appI18n.t("files.addFeedback")}</TooltipContent>
+				</Tooltip>
+			) : null}
+		</div>
 	);
 }
 
