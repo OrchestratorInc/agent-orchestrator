@@ -192,18 +192,20 @@ func TestListMemoryReportsCPUAsRateBetweenSamples(t *testing.T) {
 func TestSystemMemoryDerivesSwapRateFromCounters(t *testing.T) {
 	now := time.Unix(1000, 0)
 	pages := uint64(100)
+	busy, idle := uint64(500), uint64(1000)
 	r := NewMemoryReader(MemoryReaderDeps{Store: memStore{}, Runtime: memRuntime{}, Now: func() time.Time { return now }})
 	r.ReadSystem = func() (procmem.System, error) {
-		return procmem.System{TotalBytes: 16 << 30, AvailableBytes: 4 << 30, SwapTotalBytes: 8 << 30, SwapUsedBytes: 1 << 30, SwapPages: pages, CPUCount: 8, Load1: 2.5}, nil
+		return procmem.System{TotalBytes: 16 << 30, AvailableBytes: 4 << 30, SwapTotalBytes: 8 << 30, SwapUsedBytes: 1 << 30, SwapPages: pages, CPUCount: 8, Load1: 2.5, CPUBusyTicks: busy, CPUTotalTicks: busy + idle}, nil
 	}
 	first, err := r.SystemMemory(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.SwapBytesPerSec != 0 || first.SwapUsedBytes != 1<<30 || first.CPUCount != 8 || first.Load1 != 2.5 {
+	if first.SwapBytesPerSec != 0 || first.CPUPercent != 0 || first.SwapUsedBytes != 1<<30 || first.CPUCount != 8 || first.Load1 != 2.5 {
 		t.Fatalf("first = %+v", first)
 	}
-	pages += 1024 // 4 MiB in 2s
+	pages += 1024                   // 4 MiB in 2s
+	busy, idle = busy+300, idle+300 // half the elapsed ticks were busy
 	now = now.Add(2 * time.Second)
 	second, err := r.SystemMemory(context.Background())
 	if err != nil {
@@ -211,6 +213,9 @@ func TestSystemMemoryDerivesSwapRateFromCounters(t *testing.T) {
 	}
 	if second.SwapBytesPerSec != 2<<20 {
 		t.Fatalf("swap rate = %v, want 2 MiB/s", second.SwapBytesPerSec)
+	}
+	if second.CPUPercent != 50 {
+		t.Fatalf("cpu = %v, want 50", second.CPUPercent)
 	}
 }
 

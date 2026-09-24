@@ -12781,6 +12781,17 @@ components:
       - sessionId
       - message
       type: object
+    SessionActivityResponse:
+      properties:
+        current:
+          $ref: '#/components/schemas/SessionStepResponse'
+        recent:
+          items:
+            $ref: '#/components/schemas/SessionStepResponse'
+          type: array
+      required:
+      - recent
+      type: object
     SessionInterfaceTransition:
       properties:
         completedAt:
@@ -12897,6 +12908,8 @@ components:
       type: object
     SessionMemoryResponse:
       properties:
+        activity:
+          $ref: '#/components/schemas/SessionActivityResponse'
         cpuPercent:
           description: Share of one core the whole tree used since the previous sample;
             zero on the first.
@@ -13255,6 +13268,26 @@ components:
           $ref: '#/components/schemas/ControllersSessionView'
       required:
       - session
+      type: object
+    SessionStepResponse:
+      properties:
+        endedAt:
+          description: Absent while the tool is still running.
+          format: date-time
+          type:
+          - "null"
+          - string
+        failed:
+          type: boolean
+        startedAt:
+          format: date-time
+          type: string
+        tool:
+          type: string
+      required:
+      - tool
+      - startedAt
+      - failed
       type: object
     SessionUsageResponse:
       properties:
@@ -13956,6 +13989,10 @@ components:
         cpuCount:
           minimum: 0
           type: integer
+        cpuPercent:
+          format: double
+          minimum: 0
+          type: number
         load1:
           format: double
           minimum: 0
@@ -13990,6 +14027,7 @@ components:
       - swapBytesPerSec
       - cpuCount
       - load1
+      - cpuPercent
       - pressureRaw
       - pressureSource
       type: object

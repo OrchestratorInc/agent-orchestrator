@@ -58,15 +58,22 @@ func Snapshot(ctx context.Context, run Runner) (*Table, error) {
 		run = execRunner
 	}
 	// rss= is KiB and time= is cumulative CPU time on both Linux and macOS ps.
-	out, err := run(ctx, "ps", "-axo", "pid=,ppid=,rss=,time=,comm=")
+	// args= is the full command line, so a child reads as "sh -c go test ./..."
+	// rather than "sh"; the window shows what each process is doing.
+	out, err := run(ctx, "ps", "-axo", "pid=,ppid=,rss=,time=,args=")
 	if err != nil {
 		return nil, fmt.Errorf("procmem: ps: %w", err)
 	}
 	return Parse(string(out))
 }
 
-// Parse builds a Table from `ps -axo pid=,ppid=,rss=,time=,comm=` output.
-// The time column is optional so a table without it still parses.
+// maxCommandLen caps a stored command line. Long node and electron argv
+// lists run to kilobytes; nobody reads past the first couple of hundred.
+const maxCommandLen = 200
+
+// Parse builds a Table from `ps -axo pid=,ppid=,rss=,time=,args=` output.
+// The time column is optional so a table without it still parses, and a
+// bare comm= column is just a one-word command line.
 func Parse(out string) (*Table, error) {
 	t := &Table{byPID: map[int]Process{}, children: map[int][]int{}}
 	sc := bufio.NewScanner(strings.NewReader(out))
@@ -90,6 +97,9 @@ func Parse(out string) (*Table, error) {
 			}
 		}
 		p.Command = strings.Join(rest, " ")
+		if len(p.Command) > maxCommandLen {
+			p.Command = p.Command[:maxCommandLen]
+		}
 		// A zombie has exited and holds no memory; it only waits for its
 		// parent to collect the exit code. Listing it reads as a leak.
 		if strings.Contains(p.Command, "<defunct>") {

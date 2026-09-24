@@ -1,6 +1,9 @@
 package procmem
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 const table = `
     1     0  1200 systemd
@@ -93,5 +96,19 @@ func TestParseDropsZombies(t *testing.T) {
 	}
 	if tree := tbl.Tree(300); len(tree.Processes) != 1 {
 		t.Fatalf("zombie listed: %+v", tree.Processes)
+	}
+}
+
+func TestParseKeepsFullCommandLineAndCapsIt(t *testing.T) {
+	long := strings.Repeat("x", 500)
+	tbl, err := Parse("300 200 100 00:00:01 sh -c go test ./internal/httpd/...\n310 300 100 00:00:01 node " + long + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tbl.byPID[300].Command; got != "sh -c go test ./internal/httpd/..." {
+		t.Fatalf("command = %q", got)
+	}
+	if got := tbl.byPID[310].Command; len(got) != maxCommandLen || !strings.HasPrefix(got, "node x") {
+		t.Fatalf("capped command = %d chars", len(got))
 	}
 }

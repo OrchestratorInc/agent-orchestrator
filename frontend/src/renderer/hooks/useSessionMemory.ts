@@ -5,6 +5,7 @@ import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 
 export type SessionMemoryReading = components["schemas"]["SessionMemoryResponse"];
+export type SessionStepReading = components["schemas"]["SessionStepResponse"];
 export type SystemMemoryReading = components["schemas"]["SystemMemoryResponse"];
 export type AppMemoryReading = components["schemas"]["AppMemoryResponse"];
 
@@ -24,6 +25,8 @@ type SessionMemoryResponse = {
 	sessions: SessionMemoryReading[];
 	system?: SystemMemoryReading;
 	app?: AppMemoryReading;
+	/** When this response arrived; the graph keys its samples on it. */
+	fetchedAt: string;
 };
 
 export async function fetchSessionMemory(projectId?: string): Promise<SessionMemoryResponse> {
@@ -31,7 +34,7 @@ export async function fetchSessionMemory(projectId?: string): Promise<SessionMem
 		params: { query: projectId ? { projectId } : {} },
 	});
 	if (error) throw error;
-	return { sessions: data?.sessions ?? [], system: data?.system, app: data?.app };
+	return { sessions: data?.sessions ?? [], system: data?.system, app: data?.app, fetchedAt: new Date().toISOString() };
 }
 
 /** How many mounted consumers want the fast cadence; the query reads it. */
@@ -85,6 +88,7 @@ export function useAppMemory() {
 		select: (data: SessionMemoryResponse) => ({
 			app: data.app,
 			system: data.system,
+			fetchedAt: data.fetchedAt,
 			// Sessions with a live runtime; one without a process tree is not counted.
 			liveCount: data.sessions.length,
 		}),
@@ -97,23 +101,23 @@ export function usePressureState(): PressureState | undefined {
 	return system ? pressureState(system) : undefined;
 }
 
-/** How many samples the window's graph keeps. */
-export const memoryHistoryLength = 60;
+/** How many samples the window's graph keeps: two minutes at the fast cadence. */
+export const sampleHistoryLength = 60;
 
-/** One point of the usage graph: what AO held, and its share of one core. */
-export type MemorySample = { appBytes: number; cpuPercent: number };
+/** One point of the CPU graph: the host's busy share and AO's share of the machine. */
+export type CPUSample = { host: number; ao: number };
 
 /**
- * A ring of recent readings for the graph, kept in the renderer: no backend
- * history needed. One entry per distinct sample.
+ * A ring of recent readings for a graph, kept in the renderer: no backend
+ * history needed. One entry per distinct sample, keyed on when it arrived.
  */
-export function useMemoryHistory(sample: MemorySample | undefined, sampledAt: string | undefined): MemorySample[] {
-	const [history, setHistory] = useState<MemorySample[]>([]);
+export function useSampleHistory<T>(sample: T | undefined, sampledAt: string | undefined): T[] {
+	const [history, setHistory] = useState<T[]>([]);
 	const lastSample = useRef<string | undefined>(undefined);
 	useEffect(() => {
-		if (!sample || !sampledAt || sampledAt === lastSample.current) return;
+		if (sample === undefined || !sampledAt || sampledAt === lastSample.current) return;
 		lastSample.current = sampledAt;
-		setHistory((prev) => [...prev, sample].slice(-memoryHistoryLength));
+		setHistory((prev) => [...prev, sample].slice(-sampleHistoryLength));
 	}, [sample, sampledAt]);
 	return history;
 }

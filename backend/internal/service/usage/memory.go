@@ -143,6 +143,9 @@ func (r *MemoryReader) SystemMemory(context.Context) (domain.SystemMemory, error
 	if gap := now.Sub(lastAt).Seconds(); !lastAt.IsZero() && gap > 0 && sys.SwapPages >= last.SwapPages {
 		out.SwapBytesPerSec = float64(sys.SwapPages-last.SwapPages) * swapPageBytes / gap
 	}
+	if !lastAt.IsZero() && sys.CPUTotalTicks > last.CPUTotalTicks && sys.CPUBusyTicks >= last.CPUBusyTicks {
+		out.CPUPercent = 100 * float64(sys.CPUBusyTicks-last.CPUBusyTicks) / float64(sys.CPUTotalTicks-last.CPUTotalTicks)
+	}
 	return out, nil
 }
 

@@ -25,6 +25,12 @@ type System struct {
 	// is queueing for CPU.
 	CPUCount int
 	Load1    float64
+	// CPUBusyTicks and CPUTotalTicks are the aggregate "cpu" line of
+	// /proc/stat: jiffies spent busy (everything but idle and iowait) and in
+	// total across all cores since boot. Two readings apart give the host's
+	// CPU use over the gap; one alone says nothing.
+	CPUBusyTicks  uint64
+	CPUTotalTicks uint64
 	// PressureRaw is the kernel's own memory-pressure figure: the share of
 	// the last ten seconds some task spent stalled waiting on memory (PSI
 	// "some avg10"). It tracks how the machine feels better than any free
@@ -55,6 +61,7 @@ func ReadSystem() (System, error) {
 	// gets a memory reading.
 	sys.SwapPages = readVMStatSwapPages()
 	sys.Load1 = readLoad1()
+	sys.CPUBusyTicks, sys.CPUTotalTicks = readCPUTicks()
 	if some, ok := readPSISome10("/proc/pressure/memory"); ok {
 		sys.PressureRaw, sys.PressureSource = some, PressureSourcePSI
 	} else {
@@ -163,6 +170,39 @@ func readVMStatSwapPages() uint64 {
 		}
 	}
 	return pages
+}
+
+// readCPUTicks reads the aggregate cpu line of /proc/stat; zeros when
+// unreadable.
+func readCPUTicks() (busy, total uint64) {
+	data, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return 0, 0
+	}
+	return ParseCPUTicks(string(data))
+}
+
+// ParseCPUTicks sums the whole-machine "cpu" line of /proc/stat: user nice
+// system idle iowait irq softirq steal. Idle and iowait are the unused part.
+func ParseCPUTicks(contents string) (busy, total uint64) {
+	for _, line := range strings.Split(contents, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 5 || fields[0] != "cpu" {
+			continue
+		}
+		for i, f := range fields[1:] {
+			n, err := strconv.ParseUint(f, 10, 64)
+			if err != nil {
+				return 0, 0
+			}
+			total += n
+			if i != 3 && i != 4 {
+				busy += n
+			}
+		}
+		return busy, total
+	}
+	return 0, 0
 }
 
 // readLoad1 is the one-minute load average from /proc/loadavg; zero when

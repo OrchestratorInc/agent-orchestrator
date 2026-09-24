@@ -242,24 +242,11 @@ function DesktopSessionCard({
 			action={action}
 			branchAction={branchAction}
 			branchIcon={<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />}
-			error={termination.error ?? retryStatus.error?.message ?? undefined}
+			error={termination.error ?? undefined}
 			externalLink={ProductExternalLink}
 			footer={
 				<>
 					{footer}
-					{interactive && session.statusReadiness === "unavailable" && (
-						<button
-							type="button"
-							disabled={retryStatus.isPending}
-							className="px-3 py-2 text-xs text-secondary hover:text-primary disabled:opacity-50"
-							onClick={(event) => {
-								event.stopPropagation();
-								retryStatus.mutate();
-							}}
-						>
-							{retryStatus.isPending ? t("session.statusChecking") : t("session.retryStatus")}
-						</button>
-					)}
 				</>
 			}
 			interactive={interactive}

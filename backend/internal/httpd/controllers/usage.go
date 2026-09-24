@@ -32,11 +32,18 @@ type SessionMemoryService interface {
 	AppMemory(context.Context) (domain.AppMemory, error)
 }
 
+// SessionStepsReader lists a session's recent tool calls, oldest first.
+type SessionStepsReader interface {
+	Steps(id domain.SessionID) []domain.SessionStep
+}
+
 // UsageController owns compact dashboard usage routes.
 type UsageController struct {
 	Svc    UsageSummaryService
 	Log    *slog.Logger
 	Memory SessionMemoryService
+	// Steps is optional: without it rows carry no activity.
+	Steps SessionStepsReader
 }
 
 // Register mounts usage routes on the supplied router.
@@ -87,14 +94,18 @@ func (c *UsageController) listMemory(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]SessionMemoryResponse, 0, len(items))
 	for _, item := range items {
-		out = append(out, sessionMemoryResponse(item))
+		row := sessionMemoryResponse(item)
+		if c.Steps != nil {
+			row.Activity = sessionActivityResponse(c.Steps.Steps(item.SessionID))
+		}
+		out = append(out, row)
 	}
 	var system *SystemMemoryResponse
 	if sys, sysErr := c.Memory.SystemMemory(r.Context()); sysErr == nil {
 		system = &SystemMemoryResponse{
 			TotalBytes: sys.TotalBytes, AvailableBytes: sys.AvailableBytes,
 			SwapTotalBytes: sys.SwapTotalBytes, SwapUsedBytes: sys.SwapUsedBytes, SwapBytesPerSec: sys.SwapBytesPerSec,
-			CPUCount: sys.CPUCount, Load1: sys.Load1,
+			CPUCount: sys.CPUCount, Load1: sys.Load1, CPUPercent: sys.CPUPercent,
 			PressureRaw: sys.PressureRaw, PressureSource: sys.PressureSource,
 		}
 	}
@@ -107,6 +118,41 @@ func (c *UsageController) listMemory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	envelope.WriteJSON(w, http.StatusOK, ListSessionMemoryResponse{Sessions: out, System: system, App: app})
+}
+
+// recentStepsShown is how many finished steps a row lists; the window is a
+// glance, not a log.
+const recentStepsShown = 5
+
+// sessionActivityResponse splits the ring into the step still running and the
+// last few finished ones, newest first. Nil when the harness reported none.
+func sessionActivityResponse(steps []domain.SessionStep) *SessionActivityResponse {
+	if len(steps) == 0 {
+		return nil
+	}
+	out := &SessionActivityResponse{Recent: []SessionStepResponse{}}
+	for i := len(steps) - 1; i >= 0; i-- {
+		step := stepResponse(steps[i])
+		if steps[i].EndedAt.IsZero() {
+			if out.Current == nil {
+				out.Current = &step
+			}
+			continue
+		}
+		if len(out.Recent) < recentStepsShown {
+			out.Recent = append(out.Recent, step)
+		}
+	}
+	return out
+}
+
+func stepResponse(step domain.SessionStep) SessionStepResponse {
+	out := SessionStepResponse{Tool: step.Tool, StartedAt: step.StartedAt, Failed: step.Failed}
+	if !step.EndedAt.IsZero() {
+		ended := step.EndedAt
+		out.EndedAt = &ended
+	}
+	return out
 }
 
 func sessionMemoryResponse(item domain.SessionMemory) SessionMemoryResponse {

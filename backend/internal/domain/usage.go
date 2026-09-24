@@ -440,6 +440,9 @@ type SystemMemory struct {
 	// Load1 is the one-minute load average; divided by CPUCount, above one
 	// means work is queueing.
 	Load1 float64
+	// CPUPercent is the share of all cores the whole host used since the
+	// previous sample, 0..100; zero on the first sample.
+	CPUPercent float64
 	// PressureRaw is the kernel's memory-pressure figure (PSI some avg10, or
 	// 100 minus available percent where PSI is missing); PressureSource
 	// names which. Clients turn it into fine / tight-soon / tight.
@@ -456,4 +459,15 @@ type AppMemory struct {
 	ProcessCount int
 	CPUPercent   float64
 	Own          SessionMemory
+}
+
+// SessionStep is one tool call the agent made, as reported by its hooks: which
+// tool and when. Transient like SessionMemory; never persisted.
+type SessionStep struct {
+	ToolUseID string
+	Tool      string
+	StartedAt time.Time
+	// EndedAt is zero while the tool is still running.
+	EndedAt time.Time
+	Failed  bool
 }

@@ -41,8 +41,10 @@ describe("resourceSuggestion", () => {
 		expect(resourceSuggestion("fine", m, 10 * GB, [session({ id: "a", idleSeconds: 99_999 })])).toEqual({ kind: "none" });
 	});
 
-	it("is honest when other apps hold the memory", () => {
-		expect(resourceSuggestion("tight", m, 1 * GB, [session({ id: "a", idleSeconds: 99_999 })])).toEqual({ kind: "other_apps", aoBytes: 1 * GB });
+	it("names the biggest session whatever share of the machine AO holds", () => {
+		expect(resourceSuggestion("tight", m, 1 * GB, [session({ id: "a", title: "a", rssBytes: 300 * MB })])).toEqual({
+			kind: "largest", sessionId: "a", title: "a", rssBytes: 300 * MB,
+		});
 	});
 
 	it("points at the biggest session", () => {

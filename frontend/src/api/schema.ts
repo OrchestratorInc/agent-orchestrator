@@ -4477,6 +4477,10 @@ export interface components {
             ok: boolean;
             sessionId: string;
         };
+        SessionActivityResponse: {
+            current?: components["schemas"]["SessionStepResponse"];
+            recent: components["schemas"]["SessionStepResponse"][];
+        };
         SessionInterfaceTransition: {
             /** Format: date-time */
             completedAt?: null | string;
@@ -4521,6 +4525,7 @@ export interface components {
             rssBytes: number;
         };
         SessionMemoryResponse: {
+            activity?: components["schemas"]["SessionActivityResponse"];
             /**
              * Format: double
              * @description Share of one core the whole tree used since the previous sample; zero on the first.
@@ -4651,6 +4656,17 @@ export interface components {
         };
         SessionResponse: {
             session: components["schemas"]["ControllersSessionView"];
+        };
+        SessionStepResponse: {
+            /**
+             * Format: date-time
+             * @description Absent while the tool is still running.
+             */
+            endedAt?: null | string;
+            failed: boolean;
+            /** Format: date-time */
+            startedAt: string;
+            tool: string;
         };
         SessionUsageResponse: {
             harnesses: components["schemas"]["UsageHarnessResponse"][];
@@ -4945,6 +4961,8 @@ export interface components {
             /** @description What the kernel would hand out without swapping (MemAvailable). */
             availableBytes: number;
             cpuCount: number;
+            /** Format: double */
+            cpuPercent: number;
             /** Format: double */
             load1: number;
             /** Format: double */

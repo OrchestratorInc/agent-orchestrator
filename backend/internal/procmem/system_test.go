@@ -12,6 +12,16 @@ func TestParsePSISome10(t *testing.T) {
 	}
 }
 
+func TestParseCPUTicksSkipsIdleAndIOWait(t *testing.T) {
+	busy, total := ParseCPUTicks("cpu  100 20 50 800 30 5 5 0 0 0\ncpu0 1 2 3 4 5 6 7 8 9 10\n")
+	if busy != 180 || total != 1010 {
+		t.Fatalf("busy=%d total=%d, want 180/1010", busy, total)
+	}
+	if b, tt := ParseCPUTicks("intr 1 2 3\n"); b != 0 || tt != 0 {
+		t.Fatal("missing cpu line must read as zero")
+	}
+}
+
 func TestAvailablePressureIsUsedShare(t *testing.T) {
 	if got := availablePressure(System{TotalBytes: 16 << 30, AvailableBytes: 4 << 30}); got != 75 {
 		t.Fatalf("pressure = %v, want 75", got)

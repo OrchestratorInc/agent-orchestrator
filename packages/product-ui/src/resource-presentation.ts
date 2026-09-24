@@ -54,29 +54,23 @@ export type ResourceSessionFacts = {
 	idleSeconds?: number;
 };
 
-/** Under this share of RAM in use, pressure is somebody else's doing. */
-const AO_SHARE_MATTERS = 0.25;
-
 export type ResourceSuggestion =
 	| { kind: "none" }
-	| { kind: "other_apps"; aoBytes: number }
 	| { kind: "largest"; sessionId: string; title: string; rssBytes: number };
 
 /**
- * Evaluated top to bottom, first match wins, so there is only ever one line.
- * Fine: nothing. AO holding under a quarter of what is in use: say so.
- * Otherwise: name the biggest session. The window never acts on it; the
- * board's own kill is where sessions end.
+ * One line at most, and only about AO: while the machine is tight, name the
+ * session holding the most. Never a verdict on other applications — the bar
+ * already shows AO's size against what is free, and the user can read the
+ * rest of the machine in their own monitor.
  */
 export function resourceSuggestion(
 	state: PressureState,
-	machine: { totalBytes: number; availableBytes: number },
-	aoBytes: number,
+	_machine: { totalBytes: number; availableBytes: number },
+	_aoBytes: number,
 	sessions: ResourceSessionFacts[],
 ): ResourceSuggestion {
 	if (state === "fine") return { kind: "none" };
-	const inUse = machine.totalBytes - machine.availableBytes;
-	if (inUse > 0 && aoBytes / inUse < AO_SHARE_MATTERS) return { kind: "other_apps", aoBytes };
 	const largest = [...sessions].sort((a, b) => b.rssBytes - a.rssBytes)[0];
 	if (!largest) return { kind: "none" };
 	return { kind: "largest", sessionId: largest.id, title: largest.title, rssBytes: largest.rssBytes };

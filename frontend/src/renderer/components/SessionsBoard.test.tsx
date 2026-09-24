@@ -128,20 +128,16 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
-	it("retries an unverified session without opening or terminating it", async () => {
+	it("says a session's status could not be verified, without offering a retry", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([boardSession({ id: "unverified", title: "Unverified task", status: "unknown", displayStatus: "Working", statusReadiness: "unavailable" })])],
 			isSuccess: true, isError: false,
 		});
-		const client = renderBoard("p1");
-		const invalidate = vi.spyOn(client, "invalidateQueries");
+		renderBoard("p1");
 		expect(screen.queryByText("Working")).not.toBeInTheDocument();
 		expect(screen.getByText("Unable to verify")).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Retry status check" }));
-		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
-			params: { path: { sessionId: "unverified" } },
-		}));
-		await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["workspaces"] }));
+		expect(screen.queryByRole("button", { name: "Retry status check" })).not.toBeInTheDocument();
+		expect(postMock).not.toHaveBeenCalled();
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
@@ -170,7 +166,7 @@ describe("SessionsBoard", () => {
 			isError: false,
 			data: {
 				app: { rssBytes: 12 * GIB, processCount: 20, cpuPercent: 40 },
-				system: { totalBytes: 32 * GIB, availableBytes: 2 * GIB, swapTotalBytes: 0, swapUsedBytes: 0, swapBytesPerSec: 0, cpuCount: 8, load1: 1, pressureRaw: 35, pressureSource: "psi" },
+				system: { totalBytes: 32 * GIB, availableBytes: 2 * GIB, swapTotalBytes: 0, swapUsedBytes: 0, swapBytesPerSec: 0, cpuCount: 8, load1: 1, cpuPercent: 0, pressureRaw: 35, pressureSource: "psi" },
 				liveCount: 1,
 			},
 		});

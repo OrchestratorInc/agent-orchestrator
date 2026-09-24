@@ -1625,6 +1625,25 @@ type SessionMemoryResponse struct {
 	CPUPercent   float64                        `json:"cpuPercent" minimum:"0" description:"Share of one core the whole tree used since the previous sample; zero on the first."`
 	SampledAt    time.Time                      `json:"sampledAt"`
 	Processes    []SessionMemoryProcessResponse `json:"processes"`
+	// Activity is what the agent has been doing, from its tool hooks. Absent
+	// for harnesses that emit none (the process tree is all there is).
+	Activity *SessionActivityResponse `json:"activity,omitempty"`
+}
+
+// SessionStepResponse is one tool call the agent made: which kind of tool
+// and when. Deliberately not what it was given; the window is a glance.
+type SessionStepResponse struct {
+	Tool      string     `json:"tool"`
+	StartedAt time.Time  `json:"startedAt"`
+	EndedAt   *time.Time `json:"endedAt,omitempty" description:"Absent while the tool is still running."`
+	Failed    bool       `json:"failed"`
+}
+
+// SessionActivityResponse is the step in flight and the last few finished.
+type SessionActivityResponse struct {
+	Current *SessionStepResponse `json:"current,omitempty"`
+	// Recent is newest first, at most a handful.
+	Recent []SessionStepResponse `json:"recent"`
 }
 
 // ListSessionMemoryResponse is the batch memory reading for the board.
@@ -1662,6 +1681,9 @@ type SystemMemoryResponse struct {
 	CPUCount        int     `json:"cpuCount" minimum:"0"`
 	// Load1 is the one-minute load average; over cpuCount means work is queueing.
 	Load1 float64 `json:"load1" minimum:"0"`
+	// CPUPercent is how busy the whole host was since the previous sample,
+	// 0..100 across all cores; zero on the first sample.
+	CPUPercent float64 `json:"cpuPercent" minimum:"0"`
 	// PressureRaw is the kernel's memory-pressure figure: PSI "some avg10"
 	// (percent of the last ten seconds a task stalled on memory), or 100
 	// minus the available percent where PSI is missing. Clients derive
