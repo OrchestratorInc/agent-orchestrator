@@ -663,6 +663,37 @@ export class CloudClient {
     return response.providerConnections;
   }
 
+  async listUserProviderConnections(
+    options: RequestOptions = {},
+  ): Promise<RedactedProviderConnection[]> {
+    const response = await this.request<{
+      providerConnections: RedactedProviderConnection[];
+    }>("/api/cloud/v1/me/providers", options);
+    return response.providerConnections;
+  }
+
+  putGitHubPAT(
+    input: { secret: string },
+    options: RequestOptions = {},
+  ): Promise<{ providerConnection: { provider: string } }> {
+    return this.request("/api/cloud/v1/me/github-pat", {
+      method: "PUT",
+      body: input,
+      signal: options.signal,
+    });
+  }
+
+  validateSavedRepositoryAccess(
+    input: { repositoryUrl: string },
+    options: RequestOptions = {},
+  ): Promise<{ writeAccess: boolean }> {
+    return this.request("/api/cloud/v1/me/github-pat/validate-saved-repository", {
+      method: "POST",
+      body: input,
+      signal: options.signal,
+    });
+  }
+
   putAgentProviderConnection(
     orgId: string,
     provider: "claude-code" | "codex" | "cursor",

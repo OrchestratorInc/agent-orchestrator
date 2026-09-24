@@ -11,6 +11,25 @@ import {
 } from "../src/index.js";
 
 describe("CloudClient", () => {
+  it("saves a GitHub token and validates repository write access for project creation", async () => {
+    const requests: Array<{ url: string; method?: string; body?: string }> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), method: init?.method, body: String(init?.body) });
+      return jsonResponse(requests.length === 1 ? { providerConnection: { provider: "github" } } : { writeAccess: true });
+    });
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await client.putGitHubPAT({ secret: "github-token" });
+    await expect(client.validateSavedRepositoryAccess({ repositoryUrl: "https://github.com/acme/app" })).resolves.toEqual({ writeAccess: true });
+    expect(requests).toEqual([
+      { url: "https://cloud.example.com/api/cloud/v1/me/github-pat", method: "PUT", body: '{"secret":"github-token"}' },
+      { url: "https://cloud.example.com/api/cloud/v1/me/github-pat/validate-saved-repository", method: "POST", body: '{"repositoryUrl":"https://github.com/acme/app"}' },
+    ]);
+  });
   it("loads the authenticated account and organization memberships", async () => {
     const account = {
       user: {
@@ -587,6 +606,39 @@ describe("CloudClient", () => {
     );
     expect(requestHeaders(fetchMock, 1).get("Authorization")).toBe(
       "Bearer second-token",
+    );
+  });
+
+  it("lists the signed-in user's personal provider connections", async () => {
+    const providerConnection = {
+      id: "personal-connection-1",
+      provider: "claude-code",
+      label: "default",
+      config: { credentialType: "api_key" },
+      validationState: "valid",
+      createdAt: "2026-09-21T00:00:00Z",
+      updatedAt: "2026-09-21T00:00:00Z",
+    };
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse({ providerConnections: [providerConnection] }),
+    );
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+    const listPersonal = (client as unknown as {
+      listUserProviderConnections?: () => Promise<unknown>;
+    }).listUserProviderConnections;
+
+    const result = typeof listPersonal === "function"
+      ? await listPersonal.call(client)
+      : undefined;
+
+    expect(result).toEqual([providerConnection]);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/me/providers",
     );
   });
 
