@@ -28,7 +28,8 @@ vi.mock("./worker-row-interaction", async () => {
 	};
 });
 vi.mock("./openGitHub", () => ({ openGitHub: vi.fn() }));
-vi.mock("@expo/vector-icons", async () => {
+vi.mock("./ui", () => ({ Spinning: () => null }));
+vi.mock("./icons", async () => {
 	const React = await import("react");
 	return { Feather: (props: object) => React.createElement("Feather", props) };
 });

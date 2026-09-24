@@ -16,6 +16,7 @@ import { usePRSummaries } from "../../lib/usePRSummaries";
 import { useTabScrollToTop } from "../../lib/useTabScrollToTop";
 import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
+import { space } from "../../lib/tokens";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -78,7 +79,7 @@ export default function PRsScreen() {
 				<View style={{ height: insets.top }} />
 				<ScreenHeader title="Pull Requests" />
 				<View style={styles.center}>
-					<ActivityIndicator color={t.blue} />
+					<ActivityIndicator color={t.accent} />
 				</View>
 			</View>
 		);
@@ -132,7 +133,7 @@ export default function PRsScreen() {
 
 			{loading && prs.length === 0 ? (
 				<View style={styles.center}>
-					<ActivityIndicator color={t.blue} />
+					<ActivityIndicator color={t.accent} />
 				</View>
 			) : (
 				<SectionList
@@ -141,7 +142,7 @@ export default function PRsScreen() {
 					keyExtractor={({ pr, session }) => `${session.projectId}#${pr.number}`}
 					contentContainerStyle={{ paddingBottom: 110 }}
 					stickySectionHeadersEnabled={false}
-					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.blue} />}
+					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.accent} />}
 					renderSectionHeader={({ section }) => <ListSectionHeader label={section.label} />}
 					renderItem={({ item: { pr, session } }) => (
 						<PRCard pr={pr} session={session} summary={summaries.summaryFor(session.id, pr.number)} />
@@ -186,6 +187,6 @@ const makeStyles = (t: Theme) =>
 			flexDirection: "row",
 			alignItems: "center",
 			justifyContent: "center",
-			gap: 8,
+			gap: space.sm,
 		},
 	});

@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AgentLogo } from "../lib/AgentLogo";
+import { backOr } from "../lib/backNavigation";
 import { readyHarnesses } from "../lib/cloud/agentReadiness";
 import { useCloudAuth } from "../lib/cloud/authStore";
 import { cloudProjectInput, initialProjectCreationStep, validGitHubRepositoryURL } from "../lib/cloud/projectCreation";
@@ -168,7 +169,7 @@ export default function CreateCloudProject() {
 	const back = () => {
 		haptics.tap();
 		if (step === "agents") { setError(null); setStep("repository"); }
-		else router.back();
+		else backOr(router);
 	};
 
 	return (
@@ -176,17 +177,17 @@ export default function CreateCloudProject() {
 			<View style={styles.header}>
 				<HeaderIconButton icon="back" label="Back" onPress={back} />
 				<Text style={styles.headerTitle}>Add Cloud project</Text>
-				<HeaderIconButton icon="close" label="Close" onPress={() => router.back()} />
+				<HeaderIconButton icon="close" label="Close" onPress={() => backOr(router)} />
 			</View>
 			<ScrollView contentInsetAdjustmentBehavior="automatic" automaticallyAdjustKeyboardInsets={Platform.OS === "ios"} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: insets.bottom + 28 }}>
 				<View style={styles.content}>
-				{step === "loading" ? <ActivityIndicator color={t.blue} style={styles.loading} /> : null}
+				{step === "loading" ? <ActivityIndicator color={t.accent} style={styles.loading} /> : null}
 				{step === "unavailable" ? (
 					<View style={styles.group}>
 						<Text style={styles.title}>Can't add a project yet</Text>
 						<Text style={styles.description}>{error}</Text>
 						{signedIn && orgError ? <Button title="Retry" onPress={() => void retryOrgResolution()} /> : null}
-						<Button title="Close" variant="ghost" onPress={() => router.back()} />
+						<Button title="Close" variant="ghost" onPress={() => backOr(router)} />
 					</View>
 				) : null}
 				{step === "github-token" ? (
@@ -222,9 +223,9 @@ export default function CreateCloudProject() {
 						{agents.length === 0 ? <Text style={styles.warning}>No Cloud agent credential is ready. Add a Claude Code, Codex, or Cursor credential in desktop Settings, then reopen this form.</Text> : (
 							<>
 								<Text style={styles.label}>Worker agent</Text>
-								{agents.map((agent) => <AgentOption key={`worker-${agent}`} agent={agent} selected={workerAgent === agent} onPress={() => { setWorkerAgent(agent); creationKey.current = null; }} styles={styles} color={t.blue} />)}
+								{agents.map((agent) => <AgentOption key={`worker-${agent}`} agent={agent} selected={workerAgent === agent} onPress={() => { setWorkerAgent(agent); creationKey.current = null; }} styles={styles} color={t.accent} />)}
 								<Text style={styles.label}>Orchestrator agent</Text>
-								{agents.map((agent) => <AgentOption key={`orchestrator-${agent}`} agent={agent} selected={orchestratorAgent === agent} onPress={() => { setOrchestratorAgent(agent); creationKey.current = null; }} styles={styles} color={t.blue} />)}
+								{agents.map((agent) => <AgentOption key={`orchestrator-${agent}`} agent={agent} selected={orchestratorAgent === agent} onPress={() => { setOrchestratorAgent(agent); creationKey.current = null; }} styles={styles} color={t.accent} />)}
 							</>
 						)}
 						<Button title="Create project" loading={busy} disabled={agents.length === 0} onPress={() => void createProject()} />
@@ -273,6 +274,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	error: { color: t.red, fontSize: 14, lineHeight: 21 },
 	agentOption: { minHeight: 52, paddingHorizontal: 15, borderWidth: 1, borderColor: t.borderDefault, borderRadius: 12, backgroundColor: t.bgElevated, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
 	agentIdentity: { flexDirection: "row", alignItems: "center", gap: 12 },
-	agentSelected: { borderColor: t.blue, backgroundColor: t.tintBlue },
+	agentSelected: { borderColor: t.accent, backgroundColor: t.accentTint },
 	agentText: { color: t.textPrimary, fontSize: 15, fontWeight: "600" },
 });

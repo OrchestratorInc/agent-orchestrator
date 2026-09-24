@@ -76,7 +76,7 @@ export default function ProjectsScreen() {
 				<View style={{ height: insets.top }} />
 				<ScreenHeader title="Projects" />
 				<View style={styles.center}>
-					<ActivityIndicator color={t.blue} />
+					<ActivityIndicator color={t.accent} />
 				</View>
 			</View>
 		);
@@ -121,7 +121,7 @@ export default function ProjectsScreen() {
 
 			{loading && projects.length === 0 ? (
 				<View style={styles.center}>
-					<ActivityIndicator color={t.blue} />
+					<ActivityIndicator color={t.accent} />
 				</View>
 			) : (
 				<SectionList
@@ -131,7 +131,7 @@ export default function ProjectsScreen() {
 					contentInsetAdjustmentBehavior="automatic"
 					contentContainerStyle={{ paddingBottom: insets.bottom + 92 }}
 					stickySectionHeadersEnabled={false}
-					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.blue} />}
+					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.accent} />}
 					renderSectionHeader={({ section }) => (
 						<ListSectionHeader label={section.title} count={section.data.length} />
 					)}

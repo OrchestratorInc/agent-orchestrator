@@ -107,7 +107,7 @@ describe("board errors", () => {
 	});
 	it("preserves Local password and rotated tunnel guidance", () => {
 		expect(boardFailure("local", 401, target).message).toContain("Re-scan");
-		expect(boardFailure("local", undefined, target, true).title).toContain("remote address changed");
+		expect(boardFailure("local", undefined, target, true).title).toContain("desktop's address changed");
 		expect(boardFailure("local", undefined, target).showLocalNetworkHint).toBe(true);
 	});
 	it("offers Cloud retry without claiming a sync age from the Local clock", () => {

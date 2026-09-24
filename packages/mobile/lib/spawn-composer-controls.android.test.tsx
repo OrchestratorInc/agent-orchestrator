@@ -10,7 +10,7 @@ vi.mock("./AgentLogo", async () => {
 	const React = await import("react");
 	return { AgentLogo: (props: object) => React.createElement("AgentLogo", props) };
 });
-vi.mock("@expo/vector-icons", async () => {
+vi.mock("./icons", async () => {
 	const React = await import("react");
 	return { Feather: (props: object) => React.createElement("Feather", props) };
 });

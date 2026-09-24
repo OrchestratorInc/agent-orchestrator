@@ -61,6 +61,7 @@ import type {
   WorkerTurn,
   WakePausedSessionsResponse,
   WorkspaceDiff,
+  WorkspaceDiffFileDetail,
   WorkspaceEntryPage,
   WorkspaceFile,
   WorkspaceFileWriteInput,
@@ -620,6 +621,19 @@ export class CloudClient {
     const endpoint = this.orgPath(
       orgId,
       `/sessions/${encodeURIComponent(sessionId)}/workspace/file`,
+    );
+    return this.request(this.withQuery(endpoint, { path }), options);
+  }
+
+  readWorkspaceDiffFile(
+    orgId: string,
+    sessionId: string,
+    path: string,
+    options: RequestOptions = {},
+  ): Promise<WorkspaceDiffFileDetail> {
+    const endpoint = this.orgPath(
+      orgId,
+      `/sessions/${encodeURIComponent(sessionId)}/workspace/file/diff`,
     );
     return this.request(this.withQuery(endpoint, { path }), options);
   }

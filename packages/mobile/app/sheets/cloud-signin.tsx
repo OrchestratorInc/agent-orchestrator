@@ -1,5 +1,6 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { CloudSignInSheet } from "../../lib/CloudSignInSheet";
+import { backOr } from "../../lib/backNavigation";
 import { useEnvironment } from "../../lib/store";
 
 /**
@@ -15,10 +16,10 @@ export default function CloudSignInSheetRoute() {
 	function done() {
 		setEnvironment("cloud");
 		if (from === "onboarding") router.replace("/");
-		else router.back();
+		else backOr(router);
 	}
 
-	return <CloudSignInSheet onDone={done} onClose={() => router.back()} />;
+	return <CloudSignInSheet onDone={done} onClose={() => backOr(router)} />;
 }
 
 export { SheetErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";

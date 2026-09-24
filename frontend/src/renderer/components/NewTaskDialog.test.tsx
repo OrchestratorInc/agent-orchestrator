@@ -81,6 +81,7 @@ async function waitForAgentCatalog() {
 }
 
 beforeEach(() => {
+	window.localStorage.removeItem("ao.taskComposer.preferences.v1");
 	ensureAgentReadinessMock.mockReset();
 	getMock.mockReset().mockImplementation(async (path: string) => {
 		if (path === "/api/v1/agents/readiness") {
@@ -90,7 +91,18 @@ beforeEach(() => {
 			return { data: directModelCatalog, error: undefined };
 		}
 		return {
-			data: { status: "ok", project: { id: "proj-1", config: { worker: { agent: "claude-code" } } } },
+			data: {
+				status: "ok",
+				project: {
+					id: "proj-1",
+					name: "careerops",
+					repo: "github.com/team/careerops",
+					defaultBranch: "main",
+					path: "/work/careerops",
+					workspaceRepos: [{ name: "api", relativePath: "api", repo: "github.com/team/careerops-api" }],
+					config: { worker: { agent: "claude-code" }, orchestrator: { agent: "codex" } },
+				},
+			},
 			error: undefined,
 		};
 	});
@@ -114,6 +126,14 @@ describe("NewTaskDialog", () => {
 		expect(screen.queryByRole("button", { name: "Close new task dialog" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Agent" })).toHaveTextContent("Claude Code");
+		expect(screen.getByTestId("execution-context")).toHaveTextContent("careerops");
+		expect(screen.getByTestId("execution-context")).toHaveTextContent("main");
+		expect(screen.getByTestId("execution-context")).toHaveTextContent("/work/careerops");
+		expect(screen.getByTestId("execution-context")).not.toHaveAttribute("open");
+		expect(screen.getByTestId("execution-context-toggle")).toHaveTextContent("careerops");
+		expect(screen.getByTestId("execution-context-toggle")).toHaveTextContent("main");
+		await userEvent.click(screen.getByTestId("execution-context-toggle"));
+		expect(screen.getByTestId("execution-context")).toHaveAttribute("open");
 		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("Use Claude Code's default");
 		expect(screen.getByRole("button", { name: "Add file" })).toBeInTheDocument();
 		expect(screen.getByLabelText("Task").getAttribute("placeholder")).toBeTruthy();
@@ -315,7 +335,7 @@ describe("NewTaskDialog", () => {
 
 		// Plain Enter submits the task.
 		await user.keyboard("{Enter}");
-		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(delegateCalls()).toHaveLength(1));
 	});
 
 	it.each([
@@ -328,9 +348,14 @@ describe("NewTaskDialog", () => {
 			message: "task start failed",
 		},
 	])("displays daemon start errors for $code", async ({ code, message }) => {
-		postMock.mockResolvedValueOnce({
-			data: undefined,
-			error: { code, message },
+		postMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents/readiness/ensure") {
+				return { data: agentInventory, error: undefined };
+			}
+			return {
+				data: undefined,
+				error: { code, message },
+			};
 		});
 		renderDialog();
 		const user = userEvent.setup();

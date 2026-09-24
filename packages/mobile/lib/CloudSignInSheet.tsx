@@ -111,9 +111,9 @@ export function CloudSignInSheet({ onDone, onClose }: { onDone: () => void; onCl
 											setMode(option);
 											setError(null);
 										}}
-										style={[s.chip, selected && { borderColor: t.blue }]}
+										style={[s.chip, selected && { borderColor: t.accent }]}
 									>
-										<Text style={[s.chipText, selected && { color: t.blue }]}>
+										<Text style={[s.chipText, selected && { color: t.accent }]}>
 											{option === "sign-in" ? "Sign in" : "Create account"}
 										</Text>
 									</Pressable>
@@ -218,7 +218,7 @@ const makeStyles = (t: Theme) =>
 		error: { flexDirection: "row", alignItems: "center", gap: 8 },
 		errorText: { color: t.red, fontSize: 13, flex: 1 },
 		submit: {
-			backgroundColor: t.blue,
+			backgroundColor: t.accent,
 			borderRadius: 8,
 			paddingVertical: 12,
 			alignItems: "center",

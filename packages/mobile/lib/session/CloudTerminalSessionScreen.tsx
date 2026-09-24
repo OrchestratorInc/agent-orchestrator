@@ -201,11 +201,11 @@ export function CloudTerminalSessionScreen({ session }: { session: RouteSession 
 		navigation.setOptions({
 			title: sessionTitle || "Cloud terminal",
 			headerRight: () => <Pressable accessibilityRole="button" accessibilityLabel="Open Chat UI" onPress={openChat} style={styles.chatButton}>
-				<Feather name="message-square" size={16} color={t.blue} />
+				<Feather name="message-square" size={16} color={t.accent} />
 				<Text style={styles.chatButtonText}>Chat</Text>
 			</Pressable>,
 		});
-	}, [headerRightReady, navigation, openChat, sessionTitle, styles, t.blue]);
+	}, [headerRightReady, navigation, openChat, sessionTitle, styles, t.accent]);
 
 	useEffect(() => {
 		xtermReady.current = false;
@@ -342,7 +342,7 @@ export function CloudTerminalSessionScreen({ session }: { session: RouteSession 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	chatButton: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10, paddingVertical: 6 },
-	chatButtonText: { color: t.blue, fontSize: 14, fontWeight: "600" },
+	chatButtonText: { color: t.accent, fontSize: 14, fontWeight: "600" },
 	statusBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: t.borderSubtle },
 	dot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
 	statusText: { color: t.textSecondary, fontSize: 12, flex: 1 },

@@ -16,6 +16,7 @@ import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader }
 import { WorkerBoardList } from "../../lib/worker-board-list";
 import { WorkerDock } from "../../lib/worker-dock";
 import { workerListBottomInset } from "../../lib/worker-dock-layout";
+import { backOr } from "../../lib/backNavigation";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -73,7 +74,7 @@ export default function ProjectScreen() {
 						label="Back"
 						// A deep link can open this page as the only screen in the stack, with
 						// nothing beneath it to go back to. Land on Projects instead.
-						onPress={() => (router.canGoBack() ? router.back() : router.replace("/projects"))}
+						onPress={() => backOr(router, "/projects")}
 					/>
 				}
 				right={null}
@@ -85,7 +86,7 @@ export default function ProjectScreen() {
 			) : detailState !== "project" || !row ? (
 				detailState === "loading" ? (
 					<View style={styles.center}>
-						<ActivityIndicator color={t.blue} />
+						<ActivityIndicator color={t.accent} />
 					</View>
 				) : detailState === "cloud-error" ? (
 					<EmptyState icon="wifi-off" title={cloudFailure.title} message={cloudFailure.message}

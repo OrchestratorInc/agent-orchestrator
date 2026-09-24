@@ -1,7 +1,8 @@
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Keyboard, Platform, StyleSheet, View } from "react-native";
-import { useKeyboardState } from "react-native-keyboard-controller";
+import Animated, { useAnimatedStyle } from "react-native-reanimated";
+import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { boardFailure, boardPresentation } from "../../lib/board-presentation";
 import { tunnelMayHaveRotated } from "../../lib/staleTunnel";
@@ -15,7 +16,7 @@ import { useTabScrollToTop } from "../../lib/useTabScrollToTop";
 import { Button, EmptyState, HeaderIconButton, ScreenHeader } from "../../lib/ui";
 import { WorkerBoardList, type BoardRow } from "../../lib/worker-board-list";
 import { WorkerDock } from "../../lib/worker-dock";
-import { workerDockKeyboardLayout, workerListBottomInset } from "../../lib/worker-dock-layout";
+import { workerDockKeyboardLayout, workerDockLift, workerListBottomInset } from "../../lib/worker-dock-layout";
 import { WorkerControlsSheet } from "../../lib/worker-controls-sheet";
 import {
 	ALL_WORKER_PROJECTS,
@@ -24,12 +25,14 @@ import {
 	workerProjectLabel,
 	workerSearchPresentation,
 } from "../../lib/worker-controls";
+import { space } from "../../lib/tokens";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
 export default function FleetScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
 	const { environment, configured, loading, error, errorStatus, connection, config, refresh, sessions, projects, notificationsUnread, activeEndpoints } =
@@ -40,6 +43,24 @@ export default function FleetScreen() {
 	const [searchRequested, setSearchRequested] = useState(false);
 	const [controlsOpen, setControlsOpen] = useState(false);
 	const [workerProjectId, setWorkerProjectId] = useState(ALL_WORKER_PROJECTS);
+	// Stable identities so the memoised dock is not rebuilt on every poll — a
+	// re-render mid-tap is what made the filter menu open only sometimes.
+	const openSearch = useCallback(() => setSearchRequested(true), []);
+	const closeSearch = useCallback(() => {
+		Keyboard.dismiss();
+		setQuery("");
+		setSearchRequested(false);
+	}, []);
+	const openControls = useCallback(() => {
+		Keyboard.dismiss();
+		haptics.tap();
+		setControlsOpen(true);
+	}, []);
+	const spawnWorker = useCallback(() => {
+		Keyboard.dismiss();
+		haptics.tap();
+		router.push({ pathname: "/spawn", params: spawnProjectParam(workerProjectId) });
+	}, [router, workerProjectId]);
 	// Two selectors rather than the whole state object, so the board re-renders
 	// only when one of these two values actually changes.
 	//
@@ -49,6 +70,10 @@ export default function FleetScreen() {
 	// the dock and the list inset arrived a beat after the keyboard had landed.
 	const keyboardHeight = useKeyboardState((state) => state.height);
 	const keyboardVisible = useKeyboardState((state) => state.isVisible);
+	// The keyboard's own animated height, for the dock. The `isVisible` flag above
+	// turns over when the keyboard has *finished* moving, so anything positioned
+	// from it arrives late — see `workerDockLift`.
+	const keyboardAnimation = useReanimatedKeyboardAnimation();
 	const listRef = useTabScrollToTop<FlatList<BoardRow>>();
 
 	const projectSessions = useMemo(
@@ -90,6 +115,13 @@ export default function FleetScreen() {
 	}, [refresh]);
 
 	const keyboardLayout = workerDockKeyboardLayout(keyboardHeight, insets.bottom, keyboardVisible);
+	// `progress`, not the animated `height`: that value is the keyboard's frame
+	// origin, which is negative while the keyboard is up (the library's own
+	// avoiding view negates it before use). Feeding it to a `max(…, 0)` produced a
+	// lift of exactly nothing, which parked the search field under the keyboard.
+	const dockRise = useAnimatedStyle(() => ({
+		transform: [{ translateY: -keyboardAnimation.progress.value * workerDockLift(keyboardHeight, insets.bottom) }],
+	}));
 
 	// The persisted environment choice hasn't loaded yet. Rendering either
 	// empty state here would guess — and for a returning cloud user, the local
@@ -103,7 +135,7 @@ export default function FleetScreen() {
 				<View style={{ height: insets.top }} />
 				<ScreenHeader title="Workers" />
 				<View style={styles.center}>
-					<ActivityIndicator color={t.blue} />
+					<ActivityIndicator color={t.accent} />
 				</View>
 			</View>
 		);
@@ -150,13 +182,14 @@ export default function FleetScreen() {
 
 			{loading && sessions.length === 0 ? (
 				<View style={styles.center}>
-					<ActivityIndicator color={t.blue} />
+					<ActivityIndicator color={t.accent} />
 				</View>
 			) : (
 				<WorkerBoardList
 					interactionMode={presentation.interactionMode}
 					sessions={projectSessions}
 					query={presentation.localControls ? query : ""}
+					identityKey={`${workerProjectId}|${query.trim()}`}
 					listRef={listRef}
 					contentBottomInset={presentation.spawnControls ? workerListBottomInset(keyboardLayout.dockBottom) : insets.bottom + 32}
 					refreshing={refreshing}
@@ -197,34 +230,26 @@ export default function FleetScreen() {
 				/>
 			)}
 
-			{presentation.spawnControls && <View style={[styles.dock, { bottom: keyboardLayout.dockBottom }]}>
+			{presentation.spawnControls && <>
+			{/* Resting position plus the keyboard's lift, animated: the dock travels with
+			    the keys instead of jumping once they have finished moving. */}
+			<Animated.View style={[styles.dock, { bottom: keyboardLayout.restingBottom }, dockRise]}>
 				<WorkerDock
 					controlsEnabled={presentation.localControls}
 					query={query}
 					onQueryChange={setQuery}
 					searchOpen={searchOpen}
-					onSearchOpen={() => setSearchRequested(true)}
-					onSearchClose={() => {
-						Keyboard.dismiss();
-						setQuery("");
-						setSearchRequested(false);
-					}}
-					onOpenControls={() => {
-						Keyboard.dismiss();
-						haptics.tap();
-						setControlsOpen(true);
-					}}
+					onSearchOpen={openSearch}
+					onSearchClose={closeSearch}
+					onOpenControls={openControls}
 					projectFiltered={workerProjectId !== ALL_WORKER_PROJECTS}
 					projects={projects}
 					selectedProjectId={workerProjectId}
 					onSelectProject={setWorkerProjectId}
-					onSpawn={() => {
-						Keyboard.dismiss();
-						haptics.tap();
-						router.push({ pathname: "/spawn", params: spawnProjectParam(workerProjectId) });
-					}}
+					onSpawn={spawnWorker}
 				/>
-			</View>}
+			</Animated.View>
+			</>}
 
 			{presentation.localControls && <WorkerControlsSheet
 				open={controlsOpen}
@@ -242,7 +267,7 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
-		errorActions: { flexDirection: "row", gap: 10, alignItems: "center" },
+		errorActions: { flexDirection: "row", gap: space.sm, alignItems: "center" },
 		dock: {
 			position: "absolute",
 			left: 16,
