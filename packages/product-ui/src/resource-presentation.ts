@@ -36,6 +36,13 @@ export function pressureStateFromRaw(pressureRaw: number, pressureSource: string
 		if (pressureRaw >= 5) return "tight_soon";
 		return "fine";
 	}
+	if (pressureSource === "memorystatus") {
+		// macOS's own kernel verdict: 1 normal, 2 warn, 4 critical. A direct
+		// kernel signal like PSI, not a derived free-memory percentage.
+		if (pressureRaw >= 4) return "tight";
+		if (pressureRaw >= 2) return "tight_soon";
+		return "fine";
+	}
 	// The fallback is 100 minus the available percent, so the classic
 	// 25% / 10% free cut-offs sit at 75 and 90.
 	if (pressureRaw > 90) return "tight";

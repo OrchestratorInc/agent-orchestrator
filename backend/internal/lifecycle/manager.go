@@ -607,6 +607,7 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 	}
 	projectionAttempts := 0
 	originalSignal := s
+	stepRecorded := false
 retryProjection:
 	s = originalSignal
 	rec, ok, err := m.store.GetSession(ctx, id)
@@ -620,7 +621,6 @@ retryProjection:
 	}
 	observedRevision := rec.Revision
 	now := m.clock()
-	m.recordStepLocked(id, s, now)
 	if rec.IsTerminated {
 		delete(m.flights, id)
 		delete(m.steps, id)
@@ -669,6 +669,10 @@ retryProjection:
 	if s.ExpectedRevision != nil && rec.Revision != *s.ExpectedRevision {
 		m.mu.Unlock()
 		return nil
+	}
+	if !stepRecorded {
+		m.recordStepLocked(id, s, now)
+		stepRecorded = true
 	}
 	// Conversation text is meaningful only inside one provider identity, owner
 	// generation, and main turn. Reduce it as one durable state machine so a Stop

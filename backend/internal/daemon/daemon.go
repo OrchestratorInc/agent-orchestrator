@@ -561,6 +561,11 @@ func Run() error {
 			if os.Getenv("AO_OWNER") == "app" {
 				roots = append(roots, os.Getppid())
 			}
+			// The tmux server behind AO's sessions detaches and reparents to
+			// init, so it is a descendant of neither of the above.
+			if pid, ok := runtimeAdapter.ServerPID(context.Background()); ok {
+				roots = append(roots, pid)
+			}
 			return roots
 		},
 	})

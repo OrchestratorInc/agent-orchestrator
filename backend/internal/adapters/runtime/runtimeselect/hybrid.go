@@ -120,6 +120,12 @@ func (r *hybridRuntime) GetOutput(ctx context.Context, handle ports.RuntimeHandl
 	return backend.GetOutput(ctx, raw, lines)
 }
 
+// ServerPID always asks the legacy (tmux) backend: it's the one shared
+// detached server, regardless of which backend owns any given session.
+func (r *hybridRuntime) ServerPID(ctx context.Context) (int, bool) {
+	return r.legacy.ServerPID(ctx)
+}
+
 func (r *hybridRuntime) GetStyledOutput(ctx context.Context, handle ports.RuntimeHandle, lines int) (string, error) {
 	backend, raw := r.route(handle)
 	return backend.GetStyledOutput(ctx, raw, lines)

@@ -112,3 +112,20 @@ func TestParseKeepsFullCommandLineAndCapsIt(t *testing.T) {
 		t.Fatalf("capped command = %d chars", len(got))
 	}
 }
+
+// TestParseHandlesRowsPastTheDefaultScannerLimit guards against bufio.Scanner's
+// default 64 KiB token limit silently truncating a long electron/node argv
+// line: the process it belongs to, and every row after it, must still parse.
+func TestParseHandlesRowsPastTheDefaultScannerLimit(t *testing.T) {
+	longArgs := strings.Repeat("x", 70*1024)
+	tbl, err := Parse("300 200 100 00:00:01 node " + longArgs + "\n301 300 200 00:00:01 claude\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tbl.byPID[300]; !ok {
+		t.Fatal("process with an oversized row went missing")
+	}
+	if _, ok := tbl.byPID[301]; !ok {
+		t.Fatal("row after the oversized one went missing")
+	}
+}

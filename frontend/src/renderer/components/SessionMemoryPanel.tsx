@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { Check, ChevronRight, Copy, X } from "lucide-react";
@@ -86,7 +86,7 @@ function useSuggestion(projectId?: string) {
 	const facts = workspaces
 		.filter((workspace) => !projectId || workspace.id === projectId)
 		.flatMap((workspace) => workspace.sessions)
-		.filter((session) => session.isTerminated !== true && !isOrchestratorSession(session))
+		.filter((session) => session.isTerminated !== true && !isOrchestratorSession(session) && readings?.has(session.id))
 		.map((session) => toSessionFacts(session, readings?.get(session.id), now));
 	const state = memory?.system ? pressureState(memory.system) : undefined;
 	const suggestion: ResourceSuggestion =
@@ -475,6 +475,17 @@ function MemoryCell({ bytes, maxBytes, tone }: { bytes: number; maxBytes: number
 	);
 }
 
+/** Enter/Space activates a row the same way a click does, so an expandable
+ * row is reachable without a mouse. */
+function toggleOnKeyDown(onToggle: () => void) {
+	return (event: KeyboardEvent<HTMLTableRowElement>) => {
+		if (event.key === "Enter" || event.key === " ") {
+			event.preventDefault();
+			onToggle();
+		}
+	};
+}
+
 function SessionRow({
 	chip,
 	isExpanded,
@@ -501,6 +512,8 @@ function SessionRow({
 				data-chip-tone={chip}
 				data-testid="session-memory-row"
 				onClick={canExpand ? onToggle : undefined}
+				onKeyDown={canExpand ? toggleOnKeyDown(onToggle) : undefined}
+				tabIndex={canExpand ? 0 : undefined}
 			>
 				<td className="px-4 py-2 align-middle">
 					<div className="flex items-center gap-1.5">
@@ -517,7 +530,7 @@ function SessionRow({
 				<ProcessCountCell count={reading.processes.length} isExpanded={isExpanded} />
 				<MemoryCell bytes={reading.rssBytes} maxBytes={maxBytes} tone={chip} />
 				<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-xs tabular-nums text-settings-muted">
-					{working ? formatCPU(reading.cpuPercent) : "·"}
+					{formatCPU(reading.cpuPercent)}
 				</td>
 			</tr>
 			{isExpanded ? <ProcessRows processes={reading.processes} /> : null}
@@ -686,6 +699,8 @@ function OwnRow({ isExpanded, maxBytes, onToggle, reading }: { isExpanded: boole
 				className={cn("memory-row", canExpand && "cursor-pointer hover:bg-interactive-hover")}
 				data-testid="session-memory-own-row"
 				onClick={canExpand ? onToggle : undefined}
+				onKeyDown={canExpand ? toggleOnKeyDown(onToggle) : undefined}
+				tabIndex={canExpand ? 0 : undefined}
 			>
 				<td className="px-4 py-2 align-middle">
 					<div className="flex items-center gap-1.5">

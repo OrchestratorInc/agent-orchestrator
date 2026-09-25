@@ -16,9 +16,12 @@ type System struct {
 	// none reports zero for both.
 	SwapTotalBytes uint64
 	SwapUsedBytes  uint64
-	// SwapPages counts pages ever paged in plus out. Its growth between two
+	// SwapPages counts pages ever swapped in plus out. Its growth between two
 	// readings is the swapping that makes a machine feel frozen.
 	SwapPages uint64
+	// SwapPageBytes is the byte size of one unit counted in SwapPages. A
+	// reader that doesn't know its page size leaves this zero.
+	SwapPageBytes uint64
 	// CPUCount and Load1 give the one-minute load per core: above one, work
 	// is queueing for CPU. Load1 is -1 on a platform with no such concept
 	// (Windows); every reader that does have one only ever sets it to >= 0.
@@ -44,6 +47,14 @@ type System struct {
 const (
 	PressureSourcePSI          = "psi"
 	PressureSourceAvailablePct = "available_pct"
+	// PressureSourceMemoryStatus is macOS's own kernel pressure level (the
+	// same signal Activity Monitor's memory-pressure gauge uses), read via
+	// kern.memorystatus_vm_pressure_level. It is a direct kernel verdict,
+	// like PSI, not a derived free-memory percentage: macOS keeps very
+	// little RAM "Free" by design (it fills spare RAM with reclaimable
+	// cache), so the available-percent fallback reads as chronically tight
+	// there even on an idle machine.
+	PressureSourceMemoryStatus = "memorystatus"
 )
 
 // availablePressure stands in for PSI where the kernel has none (pre-4.20,
@@ -106,10 +117,15 @@ type VMStat struct {
 	Inactive    uint64
 	Speculative uint64
 	Purgeable   uint64
-	// PageIns and PageOuts are lifetime counters; their growth between two
-	// readings is the swapping that makes a machine feel frozen.
+	// PageIns and PageOuts are lifetime counters of ordinary file-backed
+	// paging, not swap: a Mac reads mapped files through these with no swap
+	// traffic at all.
 	PageIns  uint64
 	PageOuts uint64
+	// SwapIns and SwapOuts are the real swap-file counters; their growth
+	// between two readings is the swapping that makes a machine feel frozen.
+	SwapIns  uint64
+	SwapOuts uint64
 }
 
 // AvailableBytes is what the kernel could give out right now.
@@ -153,6 +169,10 @@ func ParseVMStat(contents string) (VMStat, error) {
 			stat.PageIns = n
 		case "Pageouts":
 			stat.PageOuts = n
+		case "Swapins":
+			stat.SwapIns = n
+		case "Swapouts":
+			stat.SwapOuts = n
 		}
 	}
 	if stat.PageSize == 0 {

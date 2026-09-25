@@ -56,6 +56,9 @@ const maxCommandLen = 200
 func Parse(out string) (*Table, error) {
 	t := &Table{byPID: map[int]Process{}, children: map[int][]int{}}
 	sc := bufio.NewScanner(strings.NewReader(out))
+	// A long args= column (electron/node argv) can exceed the scanner's
+	// default 64 KiB token limit; grow it rather than silently truncate.
+	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for sc.Scan() {
 		fields := strings.Fields(sc.Text())
 		if len(fields) < 3 {
@@ -86,6 +89,9 @@ func Parse(out string) (*Table, error) {
 		}
 		t.byPID[pid] = p
 		t.children[ppid] = append(t.children[ppid], pid)
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("procmem: scan ps output: %w", err)
 	}
 	return t, nil
 }

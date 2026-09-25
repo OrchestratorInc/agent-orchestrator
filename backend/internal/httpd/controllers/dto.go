@@ -1687,12 +1687,13 @@ type SystemMemoryResponse struct {
 	// 0..100 across all cores; zero on the first sample.
 	CPUPercent float64 `json:"cpuPercent" minimum:"0"`
 	// PressureRaw is the kernel's memory-pressure figure: PSI "some avg10"
-	// (percent of the last ten seconds a task stalled on memory), or 100
-	// minus the available percent where PSI is missing. Clients derive
+	// (percent of the last ten seconds a task stalled on memory) on Linux,
+	// macOS's own kernel pressure level (1/2/4) on macOS, or 100 minus the
+	// available percent where neither is available. Clients derive
 	// fine / tight-soon / tight from it.
 	PressureRaw float64 `json:"pressureRaw" minimum:"0"`
 	// PressureSource says which reading produced pressureRaw.
-	PressureSource string `json:"pressureSource" enum:"psi,available_pct"`
+	PressureSource string `json:"pressureSource" enum:"psi,available_pct,memorystatus"`
 }
 
 // UsageTotalsResponse is the canonical telemetry aggregate for one scope.

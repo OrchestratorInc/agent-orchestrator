@@ -997,6 +997,10 @@ func (r *selectableRuntime) GetOutput(context.Context, ports.RuntimeHandle, int)
 	return "", nil
 }
 
+func (r *selectableRuntime) ServerPID(context.Context) (int, bool) {
+	return 0, false
+}
+
 func (r *selectableRuntime) IsAlive(context.Context, ports.RuntimeHandle) (bool, error) {
 	return true, nil
 }

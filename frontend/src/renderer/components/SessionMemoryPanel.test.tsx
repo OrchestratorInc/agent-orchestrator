@@ -268,18 +268,45 @@ describe("AppMemoryIndicator", () => {
 		expect(screen.getAllByTestId("session-memory-process-row")).toHaveLength(1);
 	});
 
-	it("shows CPU only while a session is working", async () => {
+	it("opens a row from the keyboard alone: Tab to reach it, Enter or Space to open it", async () => {
+		renderButton();
+		await userEvent.click(screen.getByTestId("app-memory-indicator"));
+		const table = await screen.findByTestId("session-memory-table");
+		const bigRow = within(table).getAllByTestId("session-memory-row")[0];
+		const own = within(table).getByTestId("session-memory-own-row");
+
+		bigRow.focus();
+		expect(bigRow).toHaveFocus();
+		await userEvent.keyboard("{Enter}");
+		expect(await screen.findAllByTestId("session-memory-process-row")).toHaveLength(2);
+		await userEvent.keyboard(" ");
+		expect(screen.queryByTestId("session-memory-process-row")).not.toBeInTheDocument();
+
+		own.focus();
+		await userEvent.keyboard(" ");
+		expect(await screen.findAllByTestId("session-memory-process-row")).toHaveLength(1);
+	});
+
+	it("shows a session's measured CPU even while it looks idle", async () => {
 		const workspace: WorkspaceSummary = {
 			id: "p1",
 			name: "radic",
 			sessions: [session("s-big", "big worker", "active"), session("s-small", "small worker")],
 		} as WorkspaceSummary;
 		workspaceQueryMock.mockReturnValue({ data: [workspace], isError: false, isSuccess: true });
+		memoryQueryMock.mockReturnValue({
+			isError: false,
+			data: new Map([
+				["s-small", reading("s-small", 641_728_512, 5, [], 7)],
+				["s-big", reading("s-big", 2_254_857_830, 9, [], 82)],
+			]),
+		});
 		renderButton();
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		const rows = within(await screen.findByTestId("session-memory-table")).getAllByTestId("session-memory-row");
 		expect(rows[0]).toHaveTextContent("82%");
-		expect(rows[1]).not.toHaveTextContent("%");
+		// s-small is idle, not "working" — its measured CPU still shows, not hidden.
+		expect(rows[1]).toHaveTextContent("7%");
 	});
 
 	it("colours idle rows as part of the fix while the machine is getting tight", async () => {
@@ -291,6 +318,21 @@ describe("AppMemoryIndicator", () => {
 		const rows = within(table).getAllByTestId("session-memory-row");
 		expect(rows.every((row) => row.getAttribute("data-chip-tone") === "warning")).toBe(true);
 		expect(screen.queryByTestId("session-memory-fix")).not.toBeInTheDocument();
+	});
+
+	it("never names an unmeasured session as the one using the most memory", async () => {
+		const workspace: WorkspaceSummary = {
+			id: "p1",
+			name: "radic",
+			sessions: [session("s-none", "unsampled worker")],
+		} as WorkspaceSummary;
+		workspaceQueryMock.mockReturnValue({ data: [workspace], isError: false, isSuccess: true });
+		memoryQueryMock.mockReturnValue({ isError: false, data: new Map() });
+		appMemoryMock.mockReturnValue(appReading(3, 12, 20));
+		renderButton();
+		await userEvent.click(screen.getByTestId("app-memory-indicator"));
+		await screen.findByTestId("session-memory-table");
+		expect(screen.queryByTestId("session-memory-suggestion")).not.toBeInTheDocument();
 	});
 
 	it("marks the single largest session red when the machine is tight and everything is busy", async () => {

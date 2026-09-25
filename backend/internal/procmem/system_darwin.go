@@ -35,7 +35,8 @@ func ReadSystem() (System, error) {
 		return System{}, err
 	}
 	sys.AvailableBytes = min(stat.AvailableBytes(), total)
-	sys.SwapPages = stat.PageIns + stat.PageOuts
+	sys.SwapPages = stat.SwapIns + stat.SwapOuts
+	sys.SwapPageBytes = stat.PageSize
 
 	// Swap and load are refinements: a Mac that hides them still gets its
 	// memory reading rather than an error.
@@ -45,7 +46,15 @@ func ReadSystem() (System, error) {
 	if raw, err := unix.SysctlRaw("vm.loadavg"); err == nil {
 		sys.Load1 = parseLoadavg(raw)
 	}
-	// No PSI on macOS, so pressure is how little is available.
-	sys.PressureRaw, sys.PressureSource = availablePressure(sys), PressureSourceAvailablePct
+	// macOS has no PSI, but it does have its own kernel pressure verdict —
+	// the same one Activity Monitor's gauge reads. Prefer that over the
+	// available-percent fallback: macOS deliberately runs with little "Free"
+	// memory (it fills spare RAM with reclaimable cache), so the fallback's
+	// Linux-calibrated thresholds read as tight almost all the time here.
+	if level, err := unix.SysctlUint32("kern.memorystatus_vm_pressure_level"); err == nil {
+		sys.PressureRaw, sys.PressureSource = float64(level), PressureSourceMemoryStatus
+	} else {
+		sys.PressureRaw, sys.PressureSource = availablePressure(sys), PressureSourceAvailablePct
+	}
 	return sys, nil
 }

@@ -641,6 +641,23 @@ func (r *Runtime) ProcessRootPIDs(ctx context.Context, handle ports.RuntimeHandl
 	return ids, nil
 }
 
+// ServerPID returns the pid of AO's own tmux server, which every session on
+// this socket shares. It is not reachable by walking up from a pane: the
+// server detaches on startup and is reparented to init, not to anything AO
+// already tracks. Zero, false when the server cannot be reached or the
+// output cannot be parsed.
+func (r *Runtime) ServerPID(ctx context.Context) (int, bool) {
+	out, err := r.run(ctx, "display-message", "-p", "#{pid}")
+	if err != nil {
+		return 0, false
+	}
+	pid, convErr := strconv.Atoi(strings.TrimSpace(string(out)))
+	if convErr != nil || pid <= 1 {
+		return 0, false
+	}
+	return pid, true
+}
+
 // IsChildAlive also detects exited panes retained by tmux's remain-on-exit.
 func (r *Runtime) IsChildAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
 	alive, err := r.IsAlive(ctx, handle)

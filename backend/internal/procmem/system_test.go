@@ -71,9 +71,32 @@ Swapouts:                                  0.
 	if stat.PageIns != 900000 || stat.PageOuts != 1234 {
 		t.Fatalf("pageins/outs = %d/%d", stat.PageIns, stat.PageOuts)
 	}
+	if stat.SwapIns != 0 || stat.SwapOuts != 0 {
+		t.Fatalf("swapins/outs = %d/%d, want 0/0 from the fixture", stat.SwapIns, stat.SwapOuts)
+	}
 	wantAvailable := uint64(10000+5000+2000+3000) * 16384
 	if got := stat.AvailableBytes(); got != wantAvailable {
 		t.Fatalf("available = %d, want %d", got, wantAvailable)
+	}
+}
+
+// TestParseVMStatDistinguishesSwapFromOrdinaryPaging guards against reading
+// Pageins/Pageouts (routine file-backed paging) as if they were swap
+// activity: only Swapins/Swapouts should feed SwapIns/SwapOuts.
+func TestParseVMStatDistinguishesSwapFromOrdinaryPaging(t *testing.T) {
+	out := `Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                             10000.
+Pageins:                             900000.
+Pageouts:                              1234.
+Swapins:                                   7.
+Swapouts:                                  3.
+`
+	stat, err := ParseVMStat(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stat.SwapIns != 7 || stat.SwapOuts != 3 {
+		t.Fatalf("swapins/outs = %d/%d, want 7/3", stat.SwapIns, stat.SwapOuts)
 	}
 }
 

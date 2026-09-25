@@ -195,7 +195,10 @@ func TestSystemMemoryDerivesSwapRateFromCounters(t *testing.T) {
 	busy, idle := uint64(500), uint64(1000)
 	r := NewMemoryReader(MemoryReaderDeps{Store: memStore{}, Runtime: memRuntime{}, Now: func() time.Time { return now }})
 	r.ReadSystem = func() (procmem.System, error) {
-		return procmem.System{TotalBytes: 16 << 30, AvailableBytes: 4 << 30, SwapTotalBytes: 8 << 30, SwapUsedBytes: 1 << 30, SwapPages: pages, CPUCount: 8, Load1: 2.5, CPUBusyTicks: busy, CPUTotalTicks: busy + idle}, nil
+		return procmem.System{
+			TotalBytes: 16 << 30, AvailableBytes: 4 << 30, SwapTotalBytes: 8 << 30, SwapUsedBytes: 1 << 30,
+			SwapPages: pages, SwapPageBytes: 4096, CPUCount: 8, Load1: 2.5, CPUBusyTicks: busy, CPUTotalTicks: busy + idle,
+		}, nil
 	}
 	first, err := r.SystemMemory(context.Background())
 	if err != nil {
@@ -216,6 +219,30 @@ func TestSystemMemoryDerivesSwapRateFromCounters(t *testing.T) {
 	}
 	if second.CPUPercent != 50 {
 		t.Fatalf("cpu = %v, want 50", second.CPUPercent)
+	}
+}
+
+// TestSystemMemoryDerivesSwapRateFromReportedPageSize guards against
+// hardcoding 4 KiB pages: on Apple Silicon vm_stat reports 16 KiB pages, and
+// the swap rate must scale with whatever page size this reading carries.
+func TestSystemMemoryDerivesSwapRateFromReportedPageSize(t *testing.T) {
+	now := time.Unix(2000, 0)
+	pages := uint64(100)
+	r := NewMemoryReader(MemoryReaderDeps{Store: memStore{}, Runtime: memRuntime{}, Now: func() time.Time { return now }})
+	r.ReadSystem = func() (procmem.System, error) {
+		return procmem.System{TotalBytes: 16 << 30, AvailableBytes: 4 << 30, SwapPages: pages, SwapPageBytes: 16384, CPUCount: 8}, nil
+	}
+	if _, err := r.SystemMemory(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	pages += 1024 // 16 MiB at a 16 KiB page size, in 2s
+	now = now.Add(2 * time.Second)
+	second, err := r.SystemMemory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.SwapBytesPerSec != 8<<20 {
+		t.Fatalf("swap rate = %v, want 8 MiB/s at a 16 KiB page size", second.SwapBytesPerSec)
 	}
 }
 

@@ -487,6 +487,12 @@ func (r *Runtime) ProcessRootPIDs(ctx context.Context, handle ports.RuntimeHandl
 	return []int{sess.pid}, nil
 }
 
+// ServerPID has no equivalent here: ConPTY hosts one pty per session rather
+// than sharing a detached server the way tmux does.
+func (r *Runtime) ServerPID(ctx context.Context) (int, bool) {
+	return 0, false
+}
+
 // SendMessage chunks message and writes it to the pty-host followed by Enter.
 func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, message string) error {
 	sess, err := r.resolveWithEvidence(ctx, handle.ID)

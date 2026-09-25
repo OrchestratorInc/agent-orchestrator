@@ -4968,7 +4968,7 @@ export interface components {
             /** Format: double */
             pressureRaw: number;
             /** @enum {string} */
-            pressureSource: "psi" | "available_pct";
+            pressureSource: "psi" | "available_pct" | "memorystatus";
             /** Format: double */
             swapBytesPerSec: number;
             swapTotalBytes: number;

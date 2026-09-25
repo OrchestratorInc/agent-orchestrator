@@ -141,7 +141,7 @@ func (r *MemoryReader) SystemMemory(ctx context.Context) (domain.SystemMemory, e
 		PressureRaw: sys.PressureRaw, PressureSource: sys.PressureSource,
 	}
 	if gap := now.Sub(lastAt).Seconds(); !lastAt.IsZero() && gap > 0 && sys.SwapPages >= last.SwapPages {
-		out.SwapBytesPerSec = float64(sys.SwapPages-last.SwapPages) * swapPageBytes / gap
+		out.SwapBytesPerSec = float64(sys.SwapPages-last.SwapPages) * float64(sys.SwapPageBytes) / gap
 	}
 	switch {
 	case !lastAt.IsZero() && sys.CPUTotalTicks > last.CPUTotalTicks && sys.CPUBusyTicks >= last.CPUBusyTicks:
@@ -162,10 +162,6 @@ func (r *MemoryReader) SystemMemory(ctx context.Context) (domain.SystemMemory, e
 
 // cpuRateMaxGap is the longest gap between samples a CPU rate is trusted over.
 const cpuRateMaxGap = 60 * time.Second
-
-// swapPageBytes is the kernel page size vmstat counts in. 4 KiB everywhere
-// AO runs; a 16 KiB kernel would under-report by four, still the right shape.
-const swapPageBytes = 4096
 
 // AppMemory sums AO's own processes and every live session tree. Roots are
 // deduplicated by Table.Tree, so a session that happens to be a daemon

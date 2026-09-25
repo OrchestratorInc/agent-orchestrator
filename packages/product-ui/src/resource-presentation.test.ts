@@ -32,6 +32,15 @@ describe("pressureState", () => {
 		expect(pressureState(machine(3, 81, "available_pct"))).toBe("tight_soon");
 		expect(pressureState(machine(1, 94, "available_pct"))).toBe("tight");
 	});
+
+	it("reads macOS's own kernel pressure level rather than a derived free-memory percent", () => {
+		// A Mac with plenty of "Available" memory still keeps very little
+		// literally "Free" by design, so the available-percent fallback would
+		// misread it as tight; the kernel's own 1/2/4 verdict must win instead.
+		expect(pressureState(machine(1, 1, "memorystatus"))).toBe("fine");
+		expect(pressureState(machine(1, 2, "memorystatus"))).toBe("tight_soon");
+		expect(pressureState(machine(1, 4, "memorystatus"))).toBe("tight");
+	});
 });
 
 describe("resourceSuggestion", () => {

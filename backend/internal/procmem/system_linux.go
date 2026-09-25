@@ -20,6 +20,7 @@ func ReadSystem() (System, error) {
 	// Swap activity and load are refinements; a host that hides them still
 	// gets a memory reading.
 	sys.SwapPages = readVMStatSwapPages()
+	sys.SwapPageBytes = 4096
 	sys.Load1 = readLoad1()
 	sys.CPUBusyTicks, sys.CPUTotalTicks = readCPUTicks()
 	if some, ok := readPSISome10("/proc/pressure/memory"); ok {

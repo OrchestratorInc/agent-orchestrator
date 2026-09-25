@@ -123,7 +123,10 @@ async function machineText(queryClient: QueryClient): Promise<string> {
 		lines.push(`Memory: AO ${formatMemory(app.rssBytes)}`);
 	}
 	if (system) {
-		lines.push(`CPU: ${formatCPU(system.cpuPercent)} of ${system.cpuCount} cores · load ${system.load1.toFixed(2)}`);
+		// Windows has no load average and reports the sentinel -1 rather than a
+		// fabricated 0; leave the figure out of the report entirely there.
+		const load = system.load1 >= 0 ? ` · load ${system.load1.toFixed(2)}` : "";
+		lines.push(`CPU: ${formatCPU(system.cpuPercent)} of ${system.cpuCount} cores${load}`);
 		if (system.swapBytesPerSec > 0) lines.push(`Swapping: ${formatMemory(system.swapBytesPerSec)}/s`);
 	}
 	if (sessions.length > 0) {
