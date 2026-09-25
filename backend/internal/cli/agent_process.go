@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 const supervisedExitReportTimeout = 5 * time.Second
@@ -55,13 +57,13 @@ func newAgentProcessSuperviseCommand(ctx *commandContext) *cobra.Command {
 			if activityID == "" {
 				activityID = reviewID
 			}
-			if !sessionIDPattern.MatchString(activityID) {
+			if !domain.ValidSessionID(activityID) {
 				return usageError{fmt.Errorf("invalid activity id")}
 			}
-			if activityReviewID != "" && !sessionIDPattern.MatchString(activityReviewID) {
+			if activityReviewID != "" && !domain.ValidSessionID(activityReviewID) {
 				return usageError{fmt.Errorf("invalid review activity id")}
 			}
-			if !sessionIDPattern.MatchString(strings.TrimSpace(launchID)) {
+			if !launchIDPattern.MatchString(launchID) {
 				return usageError{fmt.Errorf("invalid launch id")}
 			}
 			if activityReviewID == "" {
