@@ -11,6 +11,10 @@ import (
 	"strings"
 )
 
+// pageSize is os.Getpagesize, indirected so a test can simulate a host with
+// a larger page size (16 KiB, 64 KiB) without needing one to actually run on.
+var pageSize = os.Getpagesize
+
 // ReadSystem reads host memory, swap, load and CPU from /proc.
 func ReadSystem() (System, error) {
 	sys := System{CPUCount: runtime.NumCPU()}
@@ -20,7 +24,10 @@ func ReadSystem() (System, error) {
 	// Swap activity and load are refinements; a host that hides them still
 	// gets a memory reading.
 	sys.SwapPages = readVMStatSwapPages()
-	sys.SwapPageBytes = 4096
+	// pswpin/pswpout in /proc/vmstat are counted in pages, not bytes, and
+	// Linux's page size is not always 4 KiB (some arches use 16 KiB or 64
+	// KiB) — read the kernel's own answer rather than assuming.
+	sys.SwapPageBytes = uint64(pageSize())
 	sys.Load1 = readLoad1()
 	sys.CPUBusyTicks, sys.CPUTotalTicks = readCPUTicks()
 	if some, ok := readPSISome10("/proc/pressure/memory"); ok {
