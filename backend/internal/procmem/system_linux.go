@@ -15,6 +15,18 @@ import (
 // a larger page size (16 KiB, 64 KiB) without needing one to actually run on.
 var pageSize = os.Getpagesize
 
+// pageSizeBytes converts pageSize()'s int to the uint64 System.SwapPageBytes
+// wants. os.Getpagesize() never returns negative in practice, but the
+// conversion is guarded rather than bare so it can't wrap a stray negative
+// into a huge unsigned value.
+func pageSizeBytes() uint64 {
+	n := pageSize()
+	if n <= 0 {
+		return 0
+	}
+	return uint64(n)
+}
+
 // ReadSystem reads host memory, swap, load and CPU from /proc.
 func ReadSystem() (System, error) {
 	sys := System{CPUCount: runtime.NumCPU()}
@@ -27,7 +39,7 @@ func ReadSystem() (System, error) {
 	// pswpin/pswpout in /proc/vmstat are counted in pages, not bytes, and
 	// Linux's page size is not always 4 KiB (some arches use 16 KiB or 64
 	// KiB) — read the kernel's own answer rather than assuming.
-	sys.SwapPageBytes = uint64(pageSize())
+	sys.SwapPageBytes = pageSizeBytes()
 	sys.Load1 = readLoad1()
 	sys.CPUBusyTicks, sys.CPUTotalTicks = readCPUTicks()
 	if some, ok := readPSISome10("/proc/pressure/memory"); ok {
