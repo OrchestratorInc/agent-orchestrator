@@ -362,8 +362,8 @@ func migrate(db *sql.DB) error {
 }
 
 // repairRenumberedCueMigrationHistory preserves preview Cue databases that
-// recorded 0149, 0155, or 0156 for Cues before main assigned those versions
-// to other features. Move only an identifiable Cue schema to 0159 before the
+// recorded 0149, 0155, 0156, or 0159 for Cues before main assigned those versions
+// to other features. Move only an identifiable Cue schema to 0161 before the
 // upstream migration repairs inspect or reuse the old ledger entries.
 func repairRenumberedCueMigrationHistory(db *sql.DB) error {
 	var gooseTable int
@@ -386,20 +386,25 @@ func repairRenumberedCueMigrationHistory(db *sql.DB) error {
 	if err := db.QueryRow(`SELECT instr(sql, 'unreal-agent') FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&unrealHarness); err != nil {
 		return err
 	}
-	var applied149, applied155, applied156, applied159 int
+	var applied149, applied155, applied156, applied159, applied161, discussionCountColumn int
 	for _, item := range []struct {
 		version int
 		result  *int
-	}{{149, &applied149}, {155, &applied155}, {156, &applied156}, {159, &applied159}} {
+	}{{149, &applied149}, {155, &applied155}, {156, &applied156}, {159, &applied159}, {161, &applied161}} {
 		if err := db.QueryRow(`SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = ? ORDER BY id DESC LIMIT 1), 0)`, item.version).Scan(item.result); err != nil {
 			return err
 		}
 	}
-	if applied159 != 0 {
+	if applied161 != 0 {
 		return nil
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('pr') WHERE name = 'discussion_comment_count'`).Scan(&discussionCountColumn); err != nil {
+		return err
 	}
 	oldVersion := 0
 	switch {
+	case applied159 != 0 && discussionCountColumn == 0:
+		oldVersion = 159
 	case applied156 != 0 && provisionColumns != 2:
 		oldVersion = 156
 	case applied155 != 0 && unrealHarness == 0 && provisionColumns != 2:
@@ -415,7 +420,7 @@ func repairRenumberedCueMigrationHistory(db *sql.DB) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (159, 1)`); err != nil {
+	if _, err := tx.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (161, 1)`); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM goose_db_version WHERE version_id = ?`, oldVersion); err != nil {
