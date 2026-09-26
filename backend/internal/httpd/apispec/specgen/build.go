@@ -753,6 +753,7 @@ func browserOperations() []operation {
 			resps: []respUnit{
 				{http.StatusOK, controllers.BrowserStatusResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
