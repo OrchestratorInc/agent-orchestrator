@@ -6,10 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 	"sync"
-	"syscall"
 
 	gopty "github.com/aymanbagabas/go-pty"
 	"golang.org/x/sys/windows"
@@ -53,13 +50,6 @@ func newConPTY(cwd, shellCmd string, shellArgs []string) (ptyConn, error) {
 	}
 
 	cmd := cp.Command(shellCmd, shellArgs...)
-	if commandLine, ok := cmdOneShotCommandLine(shellCmd, shellArgs); ok {
-		// go-pty normally composes argv using Windows C escaping. cmd.exe does
-		// not understand its backslash-escaped quotes after /C, which corrupts
-		// authored commands containing quoted paths. Supply cmd.exe's native
-		// outer command quotes for this one-shot form only.
-		cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: commandLine}
-	}
 	cmd.Dir = cwd
 	// Inherit parent env so PATH, HOME, etc. are available.
 	cmd.Env = os.Environ()
@@ -77,18 +67,6 @@ func newConPTY(cwd, shellCmd string, shellArgs []string) (ptyConn, error) {
 
 	go c.wait()
 	return c, nil
-}
-
-func cmdOneShotCommandLine(shellCmd string, shellArgs []string) (string, bool) {
-	if len(shellArgs) < 2 || !strings.EqualFold(filepath.Base(shellCmd), "cmd.exe") {
-		return "", false
-	}
-	commandIndex := len(shellArgs) - 1
-	if !strings.EqualFold(shellArgs[commandIndex-1], "/C") {
-		return "", false
-	}
-	prefix := append([]string{shellCmd}, shellArgs[:commandIndex]...)
-	return windows.ComposeCommandLine(prefix) + ` "` + shellArgs[commandIndex] + `"`, true
 }
 
 func (c *conptyConn) wait() {
