@@ -66,10 +66,12 @@ func TestCueReadinessFromInteractiveUnixShell(t *testing.T) {
 			}()
 			if name == "bash" {
 				deadline := time.After(5 * time.Second)
+				var transcript string
 				for {
 					select {
 					case part := <-output:
-						if strings.Contains(part, "startup-blocked") {
+						transcript += part
+						if strings.Contains(transcript, "startup-blocked") {
 							goto startupBlocked
 						}
 					case <-deadline:
