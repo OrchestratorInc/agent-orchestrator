@@ -544,6 +544,18 @@ func (m *sideManager) restore(side domain.SideConversation) {
 		m.service.log.Warn("side restore failed", "side", side.ID, "error", err)
 		return
 	}
+	if activator, ok := conv.(ports.ChatLiveReconnectActivator); ok {
+		// Side recovery has already settled any interrupted turn. Release a
+		// committed ACP prompt result before allowing another side question.
+		if err := activator.ActivateLiveReconnect(ctx, ""); err != nil {
+			_ = conv.Close()
+			m.service.log.Warn("side provider replay activation failed", "side", side.ID, "error", err)
+			_ = m.store.SetSideFailed(context.Background(), side.ID, side.Generation,
+				"Side provider could not resume; close and reopen the side chat.", m.service.now())
+			m.announce(side.ID)
+			return
+		}
+	}
 	m.attach(side, conv)
 }
 
@@ -814,8 +826,23 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 					message = event.Err.Error()
 				}
 			}
-			_ = m.store.SettleSideTurn(context.Background(), side.ID, turn.ID, side.Generation,
-				state, ref.ProviderTurnID, message, m.service.now())
+			if err := m.store.SettleSideTurn(context.Background(), side.ID, turn.ID, side.Generation,
+				state, ref.ProviderTurnID, message, m.service.now()); err != nil {
+				m.service.log.Warn("side turn settlement failed", "side", side.ID, "turn", turn.ID, "error", err)
+				return
+			}
+			if event.ProviderEventID != "" {
+				if acknowledger, ok := runtime.conv.(ports.ChatProviderEventAcknowledger); ok {
+					ackCtx, cancel := context.WithTimeout(m.ctx, 5*time.Second)
+					err := acknowledger.AcknowledgeProviderEvent(ackCtx, event.ProviderEventID)
+					cancel()
+					if err != nil && m.ctx.Err() == nil {
+						m.service.log.Warn("side provider event acknowledgement failed", "side", side.ID, "turn", turn.ID, "error", err)
+						_ = m.store.SetSideFailed(context.Background(), side.ID, side.Generation,
+							"Side provider did not acknowledge the completed turn; close and reopen the side chat.", m.service.now())
+					}
+				}
+			}
 			m.announce(side.ID)
 			runtime.mu.Lock()
 			runtime.activeTurnID = ""
