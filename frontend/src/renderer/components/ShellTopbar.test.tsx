@@ -146,7 +146,7 @@ function renderTopbarSessions(
 	sessionId: string,
 	embedded = false,
 	sessionAction?: ReactNode,
-	projectKind?: WorkspaceSummary["kind"],
+	projectKind: WorkspaceSummary["kind"] = "single_repo",
 ) {
 	const data: WorkspaceSummary[] = [
 		{
@@ -363,6 +363,20 @@ describe("ShellTopbar status pill", () => {
 });
 
 describe("ShellTopbar orchestrator actions", () => {
+	it.each([CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, "unknown"] as const)(
+		"hides the session cue runner for %s projects", (kind) => {
+			renderTopbarSessions([sessionWith()], "sess-1", false, undefined, kind as WorkspaceSummary["kind"]);
+			expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
+		},
+	);
+
+	it.each([CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, "unknown"] as const)(
+		"hides the board cue runner for %s projects", (kind) => {
+			renderTopbarSessions([orchestrator], "", false, undefined, kind as WorkspaceSummary["kind"]);
+			expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
+		},
+	);
+
 	it("shows the play-icon cue runner for a worker session", () => {
 		renderTopbar(sessionWith());
 

@@ -9,6 +9,7 @@ import {
 } from "@aoagents/product-ui";
 import { AlertTriangle, LayoutDashboard, RotateCw } from "lucide-react";
 import {
+	toProjectKind,
 	type WorkspaceSession,
 	newestActiveOrchestrator,
 	orchestratorHealth,
@@ -151,12 +152,12 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 	const actions = projectId ? (
 		<>
 			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} />
-			<span className="inline-flex">
+			{workspace && toProjectKind(workspace.kind) ? <span className="inline-flex">
 				<CueRunMenu
 					projectId={projectId}
 					disabled={isProjectRestarting || isProvisioning}
 				/>
-			</span>
+			</span> : null}
 			{boardOwnsNotificationCenter ? (
 				<>
 					<NotificationCenter />
