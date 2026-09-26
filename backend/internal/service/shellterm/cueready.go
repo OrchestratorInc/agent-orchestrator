@@ -127,8 +127,15 @@ func prepareCueShellReadiness(dataDir string, argv []string) (cueShellReadiness,
 			"& $global:aoCueOriginalPrompt }"
 		result.argv = append(result.argv, "-NoExit", "-Command", script)
 	case "cmd.exe":
-		// /K runs its startup command after cmd AutoRun and remains interactive.
-		result.argv = append(result.argv, "/K", "echo ready>\""+result.file+"\"")
+		// /K runs a tiny script after cmd AutoRun and remains interactive. Keep
+		// the redirection inside the script so go-pty need only quote its path.
+		script := result.file + ".cmd"
+		if err := os.WriteFile(script, []byte("@echo off\r\necho ready>\""+result.file+"\"\r\n"), 0o600); err != nil {
+			result.cleanup()
+			return cueShellReadiness{}, err
+		}
+		result.argv = append(result.argv, "/K", script)
+		result.cleanup = func() { _ = os.Remove(result.file); _ = os.Remove(script) }
 	}
 	return result, nil
 }
@@ -144,7 +151,7 @@ func (s *Service) waitForCueShellReady(ctx context.Context, handle ports.Runtime
 	ticker := time.NewTicker(initialInputPollInterval)
 	defer ticker.Stop()
 	for {
-		if data, err := os.ReadFile(file); err == nil && string(data) == "ready" {
+		if data, err := os.ReadFile(file); err == nil && strings.TrimSpace(string(data)) == "ready" {
 			return nil
 		}
 		alive, err := s.runtime.IsChildAlive(waitCtx, handle)
