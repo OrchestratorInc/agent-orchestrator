@@ -19,7 +19,10 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 });
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
-	useWorkspaceScope: () => ({ ...useWorkspaceQueryMock(), data: {} }),
+	useWorkspaceScope: () => {
+		const result = useWorkspaceQueryMock();
+		return { ...result, data: result.data ?? {} };
+	},
 	workspaceQueryKey: ["workspaces"],
 }));
 
@@ -79,6 +82,11 @@ describe("ShellTopbar on Linux", () => {
 
 	it("shows the play-icon cue runner on project boards", () => {
 		paramsMock.projectId = "proj-1";
+		useWorkspaceQueryMock.mockReturnValue({
+			data: { project: { id: "proj-1", name: "Project", kind: "single_repo" } },
+			isError: false,
+			isLoading: false,
+		});
 		render(
 			<QueryClientProvider client={new QueryClient()}>
 				<TooltipProvider>
