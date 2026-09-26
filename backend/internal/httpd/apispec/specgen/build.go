@@ -1248,6 +1248,18 @@ func cueOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/cues/{cueId}", id: "getCue", tag: "cues",
+			summary:    "Get a cue",
+			pathParams: []any{controllers.CueIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.CueEnvelope{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodPatch, path: "/api/v1/cues/{cueId}", id: "updateCue", tag: "cues",
 			summary:    "Replace a cue's definition",
 			pathParams: []any{controllers.CueIDParam{}},

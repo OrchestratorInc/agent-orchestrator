@@ -28,6 +28,7 @@ type fakeCueService struct {
 	gotUpdateIn     cuesvc.Input
 	created         domain.Cue
 	listed          []domain.Cue
+	got             domain.Cue
 	updated         domain.Cue
 	invoked         cuesvc.InvokeResult
 	enforceLoopback bool
@@ -43,6 +44,11 @@ func (f *fakeCueService) Create(_ context.Context, projectID domain.ProjectID, i
 func (f *fakeCueService) List(_ context.Context, projectID domain.ProjectID) ([]domain.Cue, error) {
 	f.gotProject = projectID
 	return f.listed, f.err
+}
+
+func (f *fakeCueService) Get(_ context.Context, cueID domain.CueID) (domain.Cue, error) {
+	f.gotCueID = cueID
+	return f.got, f.err
 }
 
 func (f *fakeCueService) Update(_ context.Context, cueID domain.CueID, input cuesvc.Input) (domain.Cue, error) {
@@ -109,6 +115,15 @@ func TestCuesAPI_ListReturnsProjectCues(t *testing.T) {
 	if len(resp.Cues) != 1 || resp.Cues[0].ID != "cue-def456" || resp.Cues[0].Name != "Run Tests" ||
 		resp.Cues[0].Type != "command" || resp.Cues[0].Command != "pnpm test" {
 		t.Fatalf("cues = %+v", resp.Cues)
+	}
+}
+
+func TestCuesAPI_GetReturnsCue(t *testing.T) {
+	svc := &fakeCueService{got: sampleCue()}
+	srv := newCueTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/cues/cue-def456", "")
+	if status != http.StatusOK || svc.gotCueID != "cue-def456" || !strings.Contains(string(body), `"id":"cue-def456"`) {
+		t.Fatalf("status=%d cueID=%q body=%s", status, svc.gotCueID, body)
 	}
 }
 

@@ -86,6 +86,24 @@ func (s *Service) List(ctx context.Context, projectID domain.ProjectID) ([]domai
 	return s.store.SelectCuesByProject(ctx, projectID)
 }
 
+// Get returns a cue by id, preserving the same not-found contract as updates.
+func (s *Service) Get(ctx context.Context, cueID domain.CueID) (domain.Cue, error) {
+	if s == nil || s.store == nil {
+		return domain.Cue{}, errors.New("cue: store is required")
+	}
+	if strings.TrimSpace(string(cueID)) == "" {
+		return domain.Cue{}, apierr.Invalid("INVALID_CUE_ID", "Cue id is required", nil)
+	}
+	cue, ok, err := s.store.SelectCueByID(ctx, cueID)
+	if err != nil {
+		return domain.Cue{}, storeError(err)
+	}
+	if !ok {
+		return domain.Cue{}, apierr.NotFound("CUE_NOT_FOUND", "Unknown cue")
+	}
+	return cue, nil
+}
+
 // Update replaces a cue's whole definition, reporting CUE_NOT_FOUND for an
 // unknown id and CUE_NAME_EXISTS for a rename that collides within the project.
 func (s *Service) Update(ctx context.Context, cueID domain.CueID, input Input) (domain.Cue, error) {

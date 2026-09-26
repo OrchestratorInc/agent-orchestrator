@@ -1119,6 +1119,50 @@ paths:
       summary: Delete a cue
       tags:
       - cues
+    get:
+      operationId: getCue
+      parameters:
+      - description: Cue identifier.
+        in: path
+        name: cueId
+        required: true
+        schema:
+          description: Cue identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CueEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get a cue
+      tags:
+      - cues
     patch:
       operationId: updateCue
       parameters:

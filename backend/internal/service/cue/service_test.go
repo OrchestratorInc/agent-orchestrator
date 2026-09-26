@@ -98,6 +98,20 @@ func commandInput(name string) cue.Input {
 	return cue.Input{Name: name, Description: "d", Type: domain.CueTypeCommand, Command: "pnpm test"}
 }
 
+func TestGetCue(t *testing.T) {
+	store := newFakeStore()
+	store.cues["cue-a"] = domain.Cue{ID: "cue-a", ProjectID: "mer", Name: "Test"}
+	svc := newTestService(store)
+	got, err := svc.Get(context.Background(), "cue-a")
+	if err != nil || got.ID != "cue-a" {
+		t.Fatalf("Get existing = %+v, %v", got, err)
+	}
+	_, err = svc.Get(context.Background(), "cue-missing")
+	wantCode(t, err, apierr.KindNotFound, "CUE_NOT_FOUND")
+	_, err = svc.Get(context.Background(), "  ")
+	wantCode(t, err, apierr.KindInvalid, "INVALID_CUE_ID")
+}
+
 // wantCode asserts err is an *apierr.Error carrying the given kind and machine
 // code.
 func wantCode(t *testing.T, err error, kind apierr.Kind, code string) {

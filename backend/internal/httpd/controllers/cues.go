@@ -23,6 +23,7 @@ import (
 type CueService interface {
 	Create(ctx context.Context, projectID domain.ProjectID, input cuesvc.Input) (domain.Cue, error)
 	List(ctx context.Context, projectID domain.ProjectID) ([]domain.Cue, error)
+	Get(ctx context.Context, cueID domain.CueID) (domain.Cue, error)
 	Update(ctx context.Context, cueID domain.CueID, input cuesvc.Input) (domain.Cue, error)
 	Delete(ctx context.Context, cueID domain.CueID) error
 	Invoke(ctx context.Context, cueID domain.CueID, input cuesvc.InvokeInput) (cuesvc.InvokeResult, error)
@@ -51,9 +52,28 @@ func (b *invokeCueRequestBody) UnmarshalJSON(data []byte) error {
 func (c *CuesController) Register(r chi.Router) {
 	r.Get("/projects/{projectId}/cues", c.list)
 	r.Post("/projects/{projectId}/cues", c.create)
+	r.Get("/cues/{cueId}", c.get)
 	r.Patch("/cues/{cueId}", c.update)
 	r.Delete("/cues/{cueId}", c.delete)
 	r.Post("/cues/{cueId}/invoke", c.invoke)
+}
+
+func (c *CuesController) get(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/cues/{cueId}")
+		return
+	}
+	cueID, err := url.PathUnescape(chi.URLParam(r, "cueId"))
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "CUE_ID_INVALID", "Invalid cue id", nil)
+		return
+	}
+	cue, err := c.Svc.Get(r.Context(), domain.CueID(cueID))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, CueEnvelope{Cue: cueResponse(cue)})
 }
 
 func (c *CuesController) list(w http.ResponseWriter, r *http.Request) {
