@@ -401,6 +401,17 @@ func (m *sideManager) open(side domain.SideConversation, source *Controller, cfg
 	defer func() { m.mu.Lock(); delete(m.restoring, side.ID); m.mu.Unlock() }()
 	ctx, cancel := context.WithTimeout(m.ctx, 60*time.Second)
 	defer cancel()
+	attached := false
+	defer func() {
+		if attached || m.service.stopProviderHost == nil {
+			return
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if err := m.service.stopProviderHost(cleanupCtx, domain.SessionID(side.ProviderHostID)); err != nil {
+			m.service.log.Warn("side host cleanup after opening failed", "side", side.ID, "error", err)
+		}
+	}()
 	var providerID string
 	var err error
 	var conv ports.ChatConversation
@@ -475,7 +486,7 @@ func (m *sideManager) open(side domain.SideConversation, source *Controller, cfg
 		return
 	}
 	side.ProviderForkID, side.State = providerID, "ready"
-	m.attach(side, conv)
+	attached = m.attach(side, conv)
 	m.announce(side.ID)
 }
 
@@ -536,7 +547,7 @@ func (m *sideManager) restore(side domain.SideConversation) {
 	m.attach(side, conv)
 }
 
-func (m *sideManager) attach(side domain.SideConversation, conv ports.ChatConversation) {
+func (m *sideManager) attach(side domain.SideConversation, conv ports.ChatConversation) bool {
 	ctx, cancel := context.WithCancel(m.ctx)
 	runtime := &sideRuntime{side: side, conv: conv, cancel: cancel, done: ctx.Done(),
 		completed: make(chan ports.ChatEvent, 8), messageText: make(map[string]string),
@@ -546,12 +557,13 @@ func (m *sideManager) attach(side domain.SideConversation, conv ports.ChatConver
 		m.mu.Unlock()
 		cancel()
 		_ = conv.Close()
-		return
+		return false
 	}
 	m.runtimes[side.ID] = runtime
 	m.mu.Unlock()
 	go m.consumeEvents(ctx, runtime)
 	m.signal()
+	return true
 }
 
 func (m *sideManager) consumeEvents(ctx context.Context, runtime *sideRuntime) {
@@ -561,7 +573,18 @@ func (m *sideManager) consumeEvents(ctx context.Context, runtime *sideRuntime) {
 			return
 		case event, ok := <-runtime.conv.Events():
 			if !ok {
+				unexpected := ctx.Err() == nil && m.ctx.Err() == nil
 				runtime.cancel()
+				m.mu.Lock()
+				if m.runtimes[runtime.side.ID] == runtime {
+					delete(m.runtimes, runtime.side.ID)
+				}
+				m.mu.Unlock()
+				if unexpected {
+					_ = m.store.SetSideFailed(context.Background(), runtime.side.ID, runtime.side.Generation,
+						"Side provider connection ended; close and reopen the side chat.", m.service.now())
+					m.announce(runtime.side.ID)
+				}
 				return
 			}
 			switch event.Kind {
@@ -614,7 +637,14 @@ func (m *sideManager) projectSideActivity(runtime *sideRuntime, event ports.Chat
 	runtime.mu.Unlock()
 	activity := domain.SideActivity{ID: id, SideID: runtime.side.ID, TurnID: turnID,
 		ProviderItemID: event.ProviderItemID, Summary: event.Summary, Text: text,
-		RequestID: event.RequestID, CreatedAt: m.service.now(), Status: "running", Kind: "activity"}
+		RequestID: event.RequestID, CreatedAt: m.service.now(), Status: "running", Kind: "system",
+		Detail: append([]byte(nil), event.Detail...)}
+	if event.ActivityKind != "" {
+		activity.Kind = string(event.ActivityKind)
+	}
+	if event.ActivityStatus != "" {
+		activity.Status = string(event.ActivityStatus)
+	}
 	if event.Kind == ports.ChatEventApprovalRequested || event.Kind == ports.ChatEventApprovalResolved {
 		activity.Kind = "approval"
 		activity.Status = "pending"
@@ -626,7 +656,7 @@ func (m *sideManager) projectSideActivity(runtime *sideRuntime, event ports.Chat
 				domain.SideDecision{ID: decision.ID, Label: decision.Label, Kind: string(decision.Kind), Raw: decision.Raw})
 		}
 	} else if event.Kind == ports.ChatEventInputRequested || event.Kind == ports.ChatEventInputResolved {
-		activity.Kind = "input"
+		activity.Kind = "user_input"
 		activity.Status = "pending"
 		if event.Kind == ports.ChatEventInputResolved {
 			activity.Status = "completed"
@@ -748,6 +778,21 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 	runtime.mu.Lock()
 	runtime.providerTurnID = ref.ProviderTurnID
 	runtime.mu.Unlock()
+	// ACP prepares session/prompt in SendTurn and waits for an explicit start.
+	// Bind the provider turn to this side before any streamed event can arrive.
+	if deferred, ok := runtime.conv.(ports.ChatDeferredTurnStarter); ok {
+		if err := deferred.StartDeferredTurn(ref.ProviderTurnID); err != nil {
+			deferred.DiscardDeferredTurn(ref.ProviderTurnID)
+			_ = m.store.SettleSideTurn(context.Background(), side.ID, turn.ID, side.Generation,
+				"failed", ref.ProviderTurnID, err.Error(), m.service.now())
+			m.announce(side.ID)
+			runtime.mu.Lock()
+			runtime.activeTurnID = ""
+			runtime.providerTurnID = ""
+			runtime.mu.Unlock()
+			return
+		}
+	}
 	for {
 		select {
 		case <-m.ctx.Done():

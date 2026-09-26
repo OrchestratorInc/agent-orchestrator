@@ -92,6 +92,7 @@ export function TurnSettingsBar({
 	configPending,
 	error,
 	disabled,
+	hideApproval = false,
 	children,
 }: {
 	models: ChatModel[];
@@ -120,6 +121,8 @@ export function TurnSettingsBar({
 	configPending?: boolean;
 	error?: string;
 	disabled?: boolean;
+	/** The caller supports model and effort changes but cannot change approval policy. */
+	hideApproval?: boolean;
 	/** Inline controls on the right model row, before the mode/approval picker — queue vs steer. */
 	children?: ReactNode;
 }) {
@@ -181,7 +184,7 @@ export function TurnSettingsBar({
 			Remember for this project
 		</OptionMenuItem>
 	) : null;
-	const showRightDropdown = Boolean(children || (!planning && (onChange || modeOption)));
+	const showRightDropdown = Boolean(children || (!hideApproval && !planning && (onChange || modeOption)));
 
 	return (
 		<div role="group" aria-label="Turn settings" className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -234,14 +237,14 @@ export function TurnSettingsBar({
 				{showRightDropdown || children ? (
 					<div className="flex h-7 shrink-0 items-center gap-1">
 						{children}
-						{!planning && modeOption && onChangeConfigOption ? (
+						{!hideApproval && !planning && modeOption && onChangeConfigOption ? (
 							<ConfigOptionPicker
 								option={modeOption}
 								disabled={optionDisabled}
 								onChange={(value) => applyOption(modeOption.id, value)}
 								footer={rememberAction}
 							/>
-						) : onChange ? (
+						) : !hideApproval && onChange ? (
 							<Picker
 								label={approvalLabel}
 													title="Approval policy for the next turn"

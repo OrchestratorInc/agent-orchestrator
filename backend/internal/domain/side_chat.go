@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // SideConversation is one launch-scoped /btw provider conversation. Its
 // provider host and transcript are independent of the main conversation.
@@ -35,29 +38,29 @@ type SideConversation struct {
 }
 
 type SideTurn struct {
-	ID              string     `json:"id"`
-	SideID          string     `json:"sideId"`
-	ClientMessageID string     `json:"clientMessageId"`
-	Text            string     `json:"text"`
-	Content         []SideContent `json:"-"`
-	SelectionText   string     `json:"selectionText,omitempty"`
-	ReferenceContext string    `json:"referenceContext,omitempty"`
-	ProviderTurnID  string     `json:"providerTurnId,omitempty"`
-	RetryOfTurnID   string     `json:"retryOfTurnId,omitempty"`
-	State           string     `json:"state"`
-	ErrorMessage    string     `json:"errorMessage,omitempty"`
-	CreatedAt       time.Time  `json:"createdAt"`
-	StartedAt       *time.Time `json:"startedAt,omitempty"`
-	CompletedAt     *time.Time `json:"completedAt,omitempty"`
+	ID               string        `json:"id"`
+	SideID           string        `json:"sideId"`
+	ClientMessageID  string        `json:"clientMessageId"`
+	Text             string        `json:"text"`
+	Content          []SideContent `json:"-"`
+	SelectionText    string        `json:"selectionText,omitempty"`
+	ReferenceContext string        `json:"referenceContext,omitempty"`
+	ProviderTurnID   string        `json:"providerTurnId,omitempty"`
+	RetryOfTurnID    string        `json:"retryOfTurnId,omitempty"`
+	State            string        `json:"state"`
+	ErrorMessage     string        `json:"errorMessage,omitempty"`
+	CreatedAt        time.Time     `json:"createdAt"`
+	StartedAt        *time.Time    `json:"startedAt,omitempty"`
+	CompletedAt      *time.Time    `json:"completedAt,omitempty"`
 }
 
 type SideContent struct {
-	Type string `json:"type"`
+	Type     string `json:"type"`
 	MIMEType string `json:"mimeType,omitempty"`
-	Data string `json:"data,omitempty"`
-	URI string `json:"uri,omitempty"`
-	Name string `json:"name,omitempty"`
-	Text string `json:"text,omitempty"`
+	Data     string `json:"data,omitempty"`
+	URI      string `json:"uri,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Text     string `json:"text,omitempty"`
 }
 
 type SideMessage struct {
@@ -75,40 +78,41 @@ type SideMessage struct {
 }
 
 type SideSnapshot struct {
-	Side     SideConversation `json:"side"`
-	Turns    []SideTurn       `json:"turns"`
-	Messages []SideMessage    `json:"messages"`
-	Activities []SideActivity `json:"activities"`
-	HasMore  bool             `json:"hasMore"`
+	Side       SideConversation `json:"side"`
+	Turns      []SideTurn       `json:"turns"`
+	Messages   []SideMessage    `json:"messages"`
+	Activities []SideActivity   `json:"activities"`
+	HasMore    bool             `json:"hasMore"`
 }
 
 type SideDecision struct {
-	ID string `json:"id"`
+	ID    string `json:"id"`
 	Label string `json:"label"`
-	Kind string `json:"kind"`
-	Raw []byte `json:"-"`
+	Kind  string `json:"kind"`
+	Raw   []byte `json:"-"`
 }
 
 type SideActivity struct {
-	ID string `json:"id"`
-	SideID string `json:"sideId"`
-	TurnID string `json:"turnId"`
-	ProviderItemID string `json:"-"`
-	Kind string `json:"kind"`
-	Status string `json:"status"`
-	Summary string `json:"summary"`
-	Text string `json:"text,omitempty"`
-	RequestID string `json:"requestId,omitempty"`
-	Decisions []SideDecision `json:"decisions,omitempty"`
-	Input *SideInput `json:"input,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID             string          `json:"id"`
+	SideID         string          `json:"sideId"`
+	TurnID         string          `json:"turnId"`
+	ProviderItemID string          `json:"-"`
+	Kind           string          `json:"kind"`
+	Status         string          `json:"status"`
+	Summary        string          `json:"summary"`
+	Text           string          `json:"text,omitempty"`
+	Detail         json.RawMessage `json:"detail,omitempty"`
+	RequestID      string          `json:"requestId,omitempty"`
+	Decisions      []SideDecision  `json:"decisions,omitempty"`
+	Input          *SideInput      `json:"input,omitempty"`
+	CreatedAt      time.Time       `json:"createdAt"`
 }
 
 type SideInput struct {
-	Mode string `json:"mode"`
-	Message string `json:"message"`
-	URL string `json:"url,omitempty"`
-	Schema map[string]any `json:"schema,omitempty"`
+	Mode    string         `json:"mode"`
+	Message string         `json:"message"`
+	URL     string         `json:"url,omitempty"`
+	Schema  map[string]any `json:"schema,omitempty"`
 }
 
 type SideProviderCleanup struct {

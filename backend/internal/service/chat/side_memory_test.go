@@ -73,6 +73,77 @@ func TestMemorySideStoreRecoversInFlightTurnWithoutDurableRows(t *testing.T) {
 	}
 }
 
+func TestMemorySideStoreRecoveryReplayKeepsLiveSideState(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	store := newMemorySideStore()
+	_, _ = store.ClaimSideLaunch(ctx, "launch-1", now)
+	record := SideRecoveryRecord{Side: domain.SideConversation{
+		ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", State: "ready",
+	}, ProviderHostID: "btw-side-1", ProviderForkID: "fork-1", Generation: "generation-1"}
+	if created, err := store.recover("launch-1", []SideRecoveryRecord{record}, now); err != nil || len(created) != 1 {
+		t.Fatalf("first recovery = %#v, %v", created, err)
+	}
+	if _, _, err := store.ReserveSideTurn(ctx, domain.SideTurn{
+		ID: "turn-1", SideID: "side-1", ClientMessageID: "client-1", Text: "new question", CreatedAt: now,
+	}, "launch-1"); err != nil {
+		t.Fatal(err)
+	}
+	if created, err := store.recover("launch-1", []SideRecoveryRecord{record}, now); err != nil || len(created) != 0 {
+		t.Fatalf("replayed recovery = %#v, %v", created, err)
+	}
+	turns, _, err := store.SideTurns(ctx, "side-1", time.Time{}, 10)
+	if err != nil || len(turns) != 1 || turns[0].Text != "new question" {
+		t.Fatalf("live turn after replay = %#v, %v", turns, err)
+	}
+}
+
+func TestMemorySideStoreResolvesProjectedUserInput(t *testing.T) {
+	ctx := context.Background()
+	store := newMemorySideStore()
+	_, _ = store.ClaimSideLaunch(ctx, "launch-1", time.Now())
+	_, _, err := store.CreateSideConversation(ctx, domain.SideConversation{
+		ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", AppRunID: "launch-1", Generation: "g",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertSideActivity("side-1", "g", domain.SideActivity{
+		ID: "activity-1", SideID: "side-1", Kind: "user_input", Status: "pending", RequestID: "request-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SideInput("side-1", "request-1"); err != nil {
+		t.Fatalf("pending user input unavailable: %v", err)
+	}
+}
+
+func TestMemorySideStoreLateActivityDeltaCannotReopenCompletedActivity(t *testing.T) {
+	ctx := context.Background()
+	store := newMemorySideStore()
+	_, _ = store.ClaimSideLaunch(ctx, "launch-1", time.Now())
+	_, _, err := store.CreateSideConversation(ctx, domain.SideConversation{
+		ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", AppRunID: "launch-1", Generation: "g",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := domain.SideActivity{ID: "activity-1", SideID: "side-1", TurnID: "turn-1", Kind: "command", Status: "completed", Summary: "run"}
+	if err := store.UpsertSideActivity("side-1", "g", completed); err != nil {
+		t.Fatal(err)
+	}
+	late := completed
+	late.Status = "running"
+	late.Text = "late output"
+	if err := store.UpsertSideActivity("side-1", "g", late); err != nil {
+		t.Fatal(err)
+	}
+	activities := store.SideActivities("side-1", []string{"turn-1"})
+	if len(activities) != 1 || activities[0].Status != "completed" || activities[0].Text != "late output" {
+		t.Fatalf("late activity delta = %#v", activities)
+	}
+}
+
 func TestMemorySideStoreKeepsInterruptedOpeningVisibleAfterRecovery(t *testing.T) {
 	now := time.Now().UTC()
 	store := newMemorySideStore()

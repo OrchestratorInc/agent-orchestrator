@@ -4809,6 +4809,7 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
             decisions?: components["schemas"]["SideDecision"][];
+            detail?: unknown;
             id: string;
             input?: components["schemas"]["SideInput"];
             kind: string;

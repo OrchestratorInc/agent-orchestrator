@@ -84,6 +84,7 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 		return nil, ErrSideLaunchUnclaimed
 	}
 	seen := map[string]bool{}
+	alreadyRestored := map[string]bool{}
 	created := []domain.SideConversation{}
 	for _, record := range records {
 		side := record.Side
@@ -93,12 +94,19 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 		seen[side.MainConversationID] = true
 		for _, existing := range m.sides {
 			if existing.MainConversationID == side.MainConversationID && existing.ClosedAt == nil {
-				return nil, ErrSideUnavailable
+				if existing.ID != side.ID || existing.Generation != record.Generation ||
+					existing.ProviderHostID != record.ProviderHostID || existing.ProviderForkID != record.ProviderForkID {
+					return nil, ErrSideUnavailable
+				}
+				alreadyRestored[side.ID] = true
 			}
 		}
 	}
 	for _, record := range records {
 		side := record.Side
+		if alreadyRestored[side.ID] {
+			continue
+		}
 		side.AppRunID = runID
 		side.ProviderHostID = record.ProviderHostID
 		side.ProviderForkID = record.ProviderForkID
@@ -482,6 +490,15 @@ func (m *memorySideStore) UpsertSideActivity(sideID, generation string, activity
 	for i := range m.activities[sideID] {
 		if m.activities[sideID][i].ID == activity.ID {
 			old := m.activities[sideID][i]
+			if activity.Status == "running" && old.Status != "running" && old.Status != "pending" {
+				activity.Status = old.Status
+			}
+			if activity.Kind == "system" && old.Kind != "" {
+				activity.Kind = old.Kind
+			}
+			if len(activity.Detail) == 0 {
+				activity.Detail = old.Detail
+			}
 			if activity.Summary == "" {
 				activity.Summary = old.Summary
 			}
@@ -531,7 +548,7 @@ func (m *memorySideStore) SideInput(sideID, requestID string) (domain.SideActivi
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, item := range m.activities[sideID] {
-		if item.RequestID == requestID && item.Kind == "input" && item.Status == "pending" {
+		if item.RequestID == requestID && item.Kind == "user_input" && item.Status == "pending" {
 			return item, nil
 		}
 	}

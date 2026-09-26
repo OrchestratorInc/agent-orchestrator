@@ -124,6 +124,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	newWorkDisabled,
 	onConversationWorkChange,
 	onSideOpened,
+	inspectorOpen = false,
 }: {
 	session: WorkspaceSession;
 	reviewerTerminal?: { handleId: string; harness: string };
@@ -172,6 +173,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	/** Reports accepted Chat work that must inform an interface-switch policy choice. */
 	onConversationWorkChange?: (state: ConversationWorkState) => void;
 	onSideOpened?: () => void;
+	inspectorOpen?: boolean;
 }) {
 	const {
 		snapshot: queriedSnapshot,
@@ -342,7 +344,15 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot));
 	const stageAttachments = useStageAttachments(session.id);
-	const sideChats = useIndependentSideChats(session.id, models, stageAttachments, Boolean(snapshot && can(snapshot, "images")));
+	const sideModelOption = providerOptions.find((option) => option.category === "model" || option.id === "model");
+	const sideEffortOption = providerOptions.find((option) => option.category === "thought_level" || option.category === "effort" || option.id === "effort");
+	const sideEfforts = sideEffortOption?.choices.map((choice) => choice.value);
+	const sideModels = models.length ? models : (sideModelOption?.choices.map((choice) => ({
+		id: choice.value, displayName: choice.name || choice.value,
+		default: choice.value === sideModelOption.currentValue,
+		efforts: sideEfforts, defaultEffort: sideEffortOption?.currentValue,
+	})) ?? []);
+	const sideChats = useIndependentSideChats(session.id, sideModels, stageAttachments, Boolean(snapshot && can(snapshot, "images")));
 	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser, paths);
 	const conversationLinkBaselines = useRef(new Map<string, ConversationLinkBaseline>());
 	useEffect(() => {
@@ -653,7 +663,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				/>
 			) : null}
 		</div>
-		{sideChats.panel}
+		{inspectorOpen ? null : sideChats.panel}
 		</div>
 	);
 });
