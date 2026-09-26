@@ -192,7 +192,11 @@ func mountControl(r chi.Router, deps ControlDeps) {
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
 		}
-		go deps.RequestShutdown()
+		// Start shutdown only after the accepted response has had a chance to
+		// leave this handler. Otherwise http.Server.Shutdown can observe the
+		// /shutdown request itself as still active and wait until its graceful
+		// deadline under the race detector.
+		time.AfterFunc(10*time.Millisecond, deps.RequestShutdown)
 	})
 }
 
