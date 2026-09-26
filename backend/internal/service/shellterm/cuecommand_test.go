@@ -191,6 +191,53 @@ func TestCueCommandDoesNotSendWhenShellExitsBeforePrompt(t *testing.T) {
 	}
 }
 
+func TestCueCommandDoesNotSendWhenShellReadinessTimesOut(t *testing.T) {
+	previousTimeout := cueShellReadyTimeout
+	cueShellReadyTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { cueShellReadyTimeout = previousTimeout })
+	root := t.TempDir()
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": root}})
+	svc.dataDir = t.TempDir()
+	_, err := svc.RunCueCommand(context.Background(), RunCueCommandInput{ProjectID: "portfolio", Shell: cueTestShell(t), Command: "pwd"})
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "CUE_SHELL_NOT_READY" || len(rt.sentCh) != 0 || len(st.records) != 1 {
+		t.Fatalf("err=%v sends=%d records=%d", err, len(rt.sentCh), len(st.records))
+	}
+}
+
+func TestCueCommandDoesNotSendWhenCanceledDuringReadiness(t *testing.T) {
+	root := t.TempDir()
+	rt := newFakeShellRuntime()
+	rt.childProbeCh = make(chan struct{}, 1)
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": root}})
+	svc.dataDir = t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	shell := cueTestShell(t)
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.RunCueCommand(ctx, RunCueCommandInput{ProjectID: "portfolio", Shell: shell, Command: "pwd"})
+		done <- err
+	}()
+	select {
+	case <-rt.childProbeCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cue did not begin waiting for shell readiness")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) || len(rt.sentCh) != 0 || len(st.records) != 1 {
+			t.Fatalf("err=%v sends=%d records=%d", err, len(rt.sentCh), len(st.records))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled cue did not stop waiting")
+	}
+}
+
 func TestCueCommandRejectsInvalidInputAndCancellation(t *testing.T) {
 	svc := newTestService(newFakeShellRuntime(), &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
 	for _, input := range []RunCueCommandInput{{Command: "pwd"}, {ProjectID: "portfolio", Command: "  "}} {

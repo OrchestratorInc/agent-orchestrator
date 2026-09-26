@@ -140,7 +140,7 @@ func prepareCueShellReadiness(dataDir string, argv []string) (cueShellReadiness,
 	return result, nil
 }
 
-const cueShellReadyTimeout = 10 * time.Second
+var cueShellReadyTimeout = 10 * time.Second
 
 func (s *Service) waitForCueShellReady(ctx context.Context, handle ports.RuntimeHandle, file string) error {
 	if file == "" {

@@ -47,6 +47,7 @@ type fakeShellRuntime struct {
 	handlePrefix  string
 	childExited   bool
 	childProbeErr error
+	childProbeCh  chan struct{}
 	cueReady      bool
 	cueReadyGate  <-chan struct{}
 }
@@ -137,6 +138,12 @@ func (f *fakeShellRuntime) IsAlive(_ context.Context, handle ports.RuntimeHandle
 }
 
 func (f *fakeShellRuntime) IsChildAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
+	if f.childProbeCh != nil {
+		select {
+		case f.childProbeCh <- struct{}{}:
+		default:
+		}
+	}
 	if f.childProbeErr != nil {
 		return false, f.childProbeErr
 	}
