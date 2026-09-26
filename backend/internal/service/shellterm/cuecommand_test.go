@@ -24,8 +24,10 @@ func cueTestShell(t *testing.T) string {
 func TestCueCommandOpensNewNormalProjectShellForEveryInvocation(t *testing.T) {
 	root := t.TempDir()
 	rt := newFakeShellRuntime()
+	rt.cueReady = true
 	st := &fakeShellTerminalStore{}
 	svc := newTestService(rt, st, &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": root}})
+	svc.dataDir = t.TempDir()
 	input := RunCueCommandInput{ProjectID: "portfolio", Shell: cueTestShell(t), Command: `echo "héllo"`}
 	first, err := svc.RunCueCommand(context.Background(), input)
 	if err != nil {
@@ -53,9 +55,11 @@ func TestCueCommandOpensNewNormalProjectShellForEveryInvocation(t *testing.T) {
 func TestCueCommandDoesNotSendToExistingTerminals(t *testing.T) {
 	root, workspace := t.TempDir(), t.TempDir()
 	rt := newFakeShellRuntime()
+	rt.cueReady = true
 	st := &fakeShellTerminalStore{}
 	sessions := &fakeSessionWorkspaceLocator{sessions: map[domain.SessionID]fakeSessionWorkspace{"session": {workspacePath: workspace, projectID: "portfolio", activity: domain.ActivityIdle}}}
 	svc := newTestServiceWithSessions(rt, st, &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": root}}, sessions)
+	svc.dataDir = t.TempDir()
 	add := func(id string, project domain.ProjectID, session domain.SessionID, dir string, when time.Time) {
 		st.records = append(st.records, ShellTerminalRecord{HandleID: id, ProjectID: project, SessionID: session, WorkingDir: dir, Title: id, CreatedAt: when})
 		rt.aliveByHandle[id] = true
@@ -111,7 +115,9 @@ func TestCueCommandUsesExactSessionWorktreeAndRejectsUnusableTargets(t *testing.
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := newFakeShellRuntime()
+			rt.cueReady = true
 			svc := newTestServiceWithSessions(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": root}}, &fakeSessionWorkspaceLocator{sessions: map[domain.SessionID]fakeSessionWorkspace{"session": tc.target}})
+			svc.dataDir = t.TempDir()
 			term, err := svc.RunCueCommand(context.Background(), RunCueCommandInput{ProjectID: "portfolio", SessionID: "session", Shell: cueTestShell(t), Command: "pwd"})
 			if tc.valid {
 				if err != nil || term.WorkingDir != workspace || len(rt.created) != 1 {
@@ -127,12 +133,61 @@ func TestCueCommandUsesExactSessionWorktreeAndRejectsUnusableTargets(t *testing.
 func TestCueCommandDoesNotRetryAmbiguousSendFailure(t *testing.T) {
 	root := t.TempDir()
 	rt := newFakeShellRuntime()
+	rt.cueReady = true
 	rt.sendErr = errors.New("send failed")
 	st := &fakeShellTerminalStore{}
 	svc := newTestService(rt, st, &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": root}})
+	svc.dataDir = t.TempDir()
 	_, err := svc.RunCueCommand(context.Background(), RunCueCommandInput{ProjectID: "portfolio", Shell: cueTestShell(t), Command: "npm test"})
 	if !errors.Is(err, rt.sendErr) || len(rt.created) != 1 || len(rt.sentCh) != 1 || len(st.records) != 1 || len(rt.destroyed) != 0 {
 		t.Fatalf("err = %v, creates = %+v, sends = %d, records = %+v, destroyed = %+v", err, rt.created, len(rt.sentCh), st.records, rt.destroyed)
+	}
+}
+
+func TestCueCommandWaitsForShellPrompt(t *testing.T) {
+	root := t.TempDir()
+	gate := make(chan struct{})
+	rt := newFakeShellRuntime()
+	rt.cueReadyGate = gate
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": root}})
+	svc.dataDir = t.TempDir()
+	shell := cueTestShell(t)
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.RunCueCommand(context.Background(), RunCueCommandInput{ProjectID: "portfolio", Shell: shell, Command: "pwd"})
+		done <- err
+	}()
+	select {
+	case sent := <-rt.sentCh:
+		t.Fatalf("sent before shell readiness: %+v", sent)
+	case <-time.After(2 * initialInputPollInterval):
+	}
+	close(gate)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cue did not dispatch after shell readiness")
+	}
+	if sent := <-rt.sentCh; sent.input != "pwd" {
+		t.Fatalf("sent = %+v", sent)
+	}
+}
+
+func TestCueCommandDoesNotSendWhenShellExitsBeforePrompt(t *testing.T) {
+	root := t.TempDir()
+	rt := newFakeShellRuntime()
+	rt.childExited = true
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": root}})
+	svc.dataDir = t.TempDir()
+	_, err := svc.RunCueCommand(context.Background(), RunCueCommandInput{ProjectID: "portfolio", Shell: cueTestShell(t), Command: "pwd"})
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "CUE_SHELL_NOT_READY" || len(rt.sentCh) != 0 || len(st.records) != 1 {
+		t.Fatalf("err=%v sends=%d records=%d", err, len(rt.sentCh), len(st.records))
 	}
 }
 
@@ -148,6 +203,7 @@ func TestCueCommandRejectsInvalidInputAndCancellation(t *testing.T) {
 	root := t.TempDir()
 	rt := newFakeShellRuntime()
 	svc = newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": root}})
+	svc.dataDir = t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := svc.RunCueCommand(ctx, RunCueCommandInput{ProjectID: "portfolio", Shell: cueTestShell(t), Command: "pwd"})

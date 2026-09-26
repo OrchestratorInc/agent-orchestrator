@@ -47,6 +47,8 @@ type fakeShellRuntime struct {
 	handlePrefix  string
 	childExited   bool
 	childProbeErr error
+	cueReady      bool
+	cueReadyGate  <-chan struct{}
 }
 
 type sentInput struct {
@@ -66,6 +68,15 @@ func (f *fakeShellRuntime) Create(ctx context.Context, cfg ports.RuntimeConfig) 
 		return ports.RuntimeHandle{}, f.createErr
 	}
 	f.created = append(f.created, cfg)
+	if f.cueReady && cfg.Env["AO_CUE_READY_FILE"] != "" {
+		_ = os.WriteFile(cfg.Env["AO_CUE_READY_FILE"], []byte("ready"), 0o600)
+	}
+	if f.cueReadyGate != nil && cfg.Env["AO_CUE_READY_FILE"] != "" {
+		go func() {
+			<-f.cueReadyGate
+			_ = os.WriteFile(cfg.Env["AO_CUE_READY_FILE"], []byte("ready"), 0o600)
+		}()
+	}
 	handleID := f.handlePrefix + string(cfg.SessionID)
 	f.aliveByHandle[handleID] = true
 	return ports.RuntimeHandle{ID: handleID}, nil

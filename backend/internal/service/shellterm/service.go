@@ -353,12 +353,27 @@ func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (She
 	if len(argv) == 0 {
 		return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SHELL", "Could not determine a shell to launch. Set SHELL (macOS/Linux) or ComSpec (Windows).")
 	}
-	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: argv, env: s.pinnedEnv(), projectID: projectID,
+	readiness, err := prepareCueShellReadiness(s.dataDir, argv)
+	if err != nil {
+		return ShellTerminal{}, err
+	}
+	defer readiness.cleanup()
+	env := s.pinnedEnv()
+	if env == nil {
+		env = map[string]string{}
+	}
+	for key, value := range readiness.env {
+		env[key] = value
+	}
+	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: readiness.argv, env: env, projectID: projectID,
 		sessionID: in.SessionID, workingDir: workingDir, title: nextShellTerminalTitle(records)})
 	if err != nil {
 		return ShellTerminal{}, err
 	}
 	if err := ctx.Err(); err != nil {
+		return ShellTerminal{}, err
+	}
+	if err := s.waitForCueShellReady(ctx, ports.RuntimeHandle{ID: terminal.HandleID}, readiness.file); err != nil {
 		return ShellTerminal{}, err
 	}
 	if err := s.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: terminal.HandleID}, in.Command); err != nil {
