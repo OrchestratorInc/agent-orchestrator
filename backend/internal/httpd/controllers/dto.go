@@ -10,6 +10,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/legacyimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
@@ -2480,17 +2481,61 @@ type ConversationBranchMaterializationResponse struct {
 	ReplayTruncated bool   `json:"replayTruncated"`
 }
 
-// CreateConversationSideChatRequest optionally names a new /btw thread.
+// CreateConversationSideChatRequest opens an independent launch-scoped side chat.
 type CreateConversationSideChatRequest struct {
-	Label string `json:"label,omitempty" maxLength:"80"`
+	Label          string                               `json:"label,omitempty" maxLength:"80"`
+	IdempotencyKey string                               `json:"idempotencyKey"`
+	Reference      *ConversationExcerptReferenceRequest `json:"reference,omitempty"`
 }
 
-// CreateConversationSideChatResponse identifies the newly active side branch.
+// CreateConversationSideChatResponse identifies a side without activating it.
 type CreateConversationSideChatResponse struct {
-	ID                string `json:"id"`
-	ParentBranchID    string `json:"parentBranchId"`
-	Label             string `json:"label"`
-	ForkAfterSequence int64  `json:"forkAfterSequence"`
+	Side domain.SideConversation `json:"side"`
+}
+
+type SendSideQuestionRequest struct {
+	Text            string `json:"text"`
+	ClientMessageID string `json:"clientMessageId"`
+	Attachments []ConversationImageContentRequest `json:"attachments,omitempty"`
+	Resources []ConversationResourceContentRequest `json:"resources,omitempty"`
+}
+
+type SideQuestionResponse struct {
+	Turn domain.SideTurn `json:"turn"`
+}
+type SideChatSnapshotResponse struct {
+	Snapshot domain.SideSnapshot `json:"snapshot"`
+}
+type SideChatListResponse struct {
+	Sides []domain.SideConversation `json:"sides"`
+}
+type SideSettingsRequest struct {
+	Model  string `json:"model"`
+	Effort string `json:"effort"`
+}
+type SideDraftRequest struct {
+	ContentJSON string `json:"contentJson"`
+}
+type SideDraftResponse struct {
+	ContentJSON string `json:"contentJson"`
+}
+
+type SideChatIDParam struct {
+	SideID string `path:"sideId" description:"Independent side chat identifier."`
+}
+
+type SideChatPageQuery struct {
+	Before string `query:"before,omitempty" description:"Read side turns older than this RFC3339 timestamp."`
+	Limit *int `query:"limit,omitempty" minimum:"1" maximum:"500"`
+}
+
+type SideChatLaunchClaimRequest struct {
+	AppRunID string `json:"appRunId"`
+}
+
+type SideChatLaunchState struct {
+	AppRunID string `json:"appRunId"`
+	Sides []chatsvc.SideRecoveryRecord `json:"sides"`
 }
 
 // ConversationSideChatResponse is one durable /btw thread.

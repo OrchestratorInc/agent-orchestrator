@@ -51,7 +51,8 @@ type fakeConversationService struct {
 	inputResponse     ports.ChatInputResponse
 	sideChatSession   domain.SessionID
 	sideChatLabel     string
-	sideChatBranch    domain.ConversationBranch
+	sideChatRequest   chatsvc.SideCreateRequest
+	sideChat          domain.SideConversation
 	sideChatErr       error
 	reviewSnapshot    chatsvc.Snapshot
 	reviewErr         error
@@ -71,10 +72,51 @@ func (f *fakeConversationService) ActivateBranch(context.Context, domain.Session
 	return "", nil
 }
 
-func (f *fakeConversationService) CreateSideChat(_ context.Context, session domain.SessionID, label string) (domain.ConversationBranch, error) {
+func (f *fakeConversationService) CreateIndependentSideChat(_ context.Context, session domain.SessionID, req chatsvc.SideCreateRequest) (domain.SideConversation, error) {
 	f.sideChatSession = session
-	f.sideChatLabel = label
-	return f.sideChatBranch, f.sideChatErr
+	f.sideChatLabel = req.Label
+	f.sideChatRequest = req
+	return f.sideChat, f.sideChatErr
+}
+
+func (f *fakeConversationService) ListIndependentSideChats(context.Context, domain.SessionID) ([]domain.SideConversation, error) {
+	return []domain.SideConversation{f.sideChat}, nil
+}
+func (f *fakeConversationService) SideSnapshot(context.Context, domain.SessionID, string, time.Time, int) (domain.SideSnapshot, error) {
+	return domain.SideSnapshot{Side: f.sideChat}, nil
+}
+func (f *fakeConversationService) SendSideQuestion(context.Context, domain.SessionID, string, ports.ChatUserMessage) (domain.SideTurn, error) {
+	return domain.SideTurn{ID: "turn-1"}, nil
+}
+func (f *fakeConversationService) EditQueuedSideQuestion(context.Context, domain.SessionID, string, string, string) error {
+	return nil
+}
+func (f *fakeConversationService) RetrySideQuestion(context.Context, domain.SessionID, string, string) error {
+	return nil
+}
+func (f *fakeConversationService) UpdateSideSettings(context.Context, domain.SessionID, string, string, string) error {
+	return nil
+}
+func (f *fakeConversationService) SaveSideDraft(context.Context, domain.SessionID, string, string) error {
+	return nil
+}
+func (f *fakeConversationService) SideDraft(context.Context, domain.SessionID, string) (string, error) {
+	return "", nil
+}
+func (f *fakeConversationService) InterruptSideQuestion(context.Context, domain.SessionID, string) error {
+	return nil
+}
+func (f *fakeConversationService) ResolveSideApproval(context.Context, domain.SessionID, string, string, string) error { return nil }
+func (f *fakeConversationService) ResolveSideInput(context.Context, domain.SessionID, string, string, ports.ChatInputResponse) error { return nil }
+func (f *fakeConversationService) CloseIndependentSideChat(context.Context, domain.SessionID, string) error {
+	return nil
+}
+func (f *fakeConversationService) ClaimSideChatLaunch(context.Context, string) error { return nil }
+func (f *fakeConversationService) ExportSideChatLaunch(context.Context, string) ([]chatsvc.SideRecoveryRecord, error) { return nil, nil }
+func (f *fakeConversationService) RecoverSideChatLaunch(context.Context, string, []chatsvc.SideRecoveryRecord) error { return nil }
+func (f *fakeConversationService) RetireSideChatLaunch(context.Context, string) error { return nil }
+func (f *fakeConversationService) WatchSideChat(context.Context, domain.SessionID, string) (string, <-chan struct{}, func(), error) {
+	return "generation-1", make(chan struct{}), func(){}, nil
 }
 
 func (f *fakeConversationService) Snapshot(context.Context, domain.SessionID) (chatsvc.Snapshot, error) {
@@ -401,16 +443,13 @@ func TestSendConversationCarriesExcerptReferencesWithoutTrustingClientResources(
 	}
 }
 
-func TestCreateConversationSideChatReturnsDurableBranch(t *testing.T) {
-	service := &fakeConversationService{sideChatBranch: domain.ConversationBranch{
-		ID: "side-1", ParentBranchID: "main-1", Label: "Explain this",
-		ForkAfterSequence: 12,
-	}}
+func TestCreateConversationSideChatReturnsIndependentSide(t *testing.T) {
+	service := &fakeConversationService{sideChat: domain.SideConversation{ID: "side-1", Label: "Explain this", State: "opening"}}
 	server := conversationTestServer(t, service)
 	response, err := http.Post(
 		server.URL+"/api/v1/sessions/p1-1/conversation/side-chats",
 		"application/json",
-		bytes.NewBufferString(`{"label":"Explain this"}`),
+		bytes.NewBufferString(`{"label":"Explain this","idempotencyKey":"create-1","reference":{"conversationId":"conversation-1","messageId":"message-7","revision":3,"text":"sun"}}`),
 	)
 	if err != nil {
 		t.Fatalf("POST side chat: %v", err)
@@ -427,7 +466,10 @@ func TestCreateConversationSideChatReturnsDurableBranch(t *testing.T) {
 	if service.sideChatSession != "p1-1" || service.sideChatLabel != "Explain this" {
 		t.Fatalf("create side chat input = %q/%q", service.sideChatSession, service.sideChatLabel)
 	}
-	if got["id"] != "side-1" || got["parentBranchId"] != "main-1" || got["forkAfterSequence"] != float64(12) {
+	if service.sideChatRequest.IdempotencyKey != "create-1" || service.sideChatRequest.Reference == nil || service.sideChatRequest.Reference.Text != "sun" {
+		t.Fatalf("create side chat reference = %#v", service.sideChatRequest)
+	}
+	if got["side"].(map[string]any)["id"] != "side-1" || got["side"].(map[string]any)["state"] != "opening" {
 		t.Fatalf("response = %#v", got)
 	}
 }

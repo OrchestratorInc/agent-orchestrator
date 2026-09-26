@@ -80,8 +80,9 @@ const visibilityMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../lib/api-client", () => ({
-	apiClient: { GET: getMock, POST: postMock },
+	apiClient: { GET: getMock, POST: postMock, PUT: vi.fn().mockResolvedValue({ data: {}, error: undefined }) },
 	getApiBaseUrl: () => "",
+	subscribeApiBaseUrl: () => () => undefined,
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 }));
 
@@ -102,7 +103,7 @@ vi.mock("../../hooks/useConversation", () => ({
 	}),
 	useConversationModels: vi.fn(() => ({ models: [] })),
 	useConversationSkills: vi.fn(() => ({ skills: [] })),
-	useStageAttachments: () => undefined,
+	useStageAttachments: () => async () => [],
 	useWorkspaceFilePaths: () => ({ paths: workspacePathsState.paths, truncated: false }),
 }));
 
@@ -120,6 +121,7 @@ vi.mock("./ChatWorkspace", async () => {
 			sessionTabAction,
 			newWorkDisabled,
 			onLinkOpen,
+			onSend,
 			onRememberPermissions,
 			onChooseSettings,
 			snapshot,
@@ -130,6 +132,7 @@ vi.mock("./ChatWorkspace", async () => {
 			sessionTabAction?: ReactNode;
 			newWorkDisabled?: boolean;
 			onLinkOpen?: (url: string) => void;
+			onSend?: (text: string, attachments: { mimeType: string; data: string }[], clientMessageId: string) => Promise<unknown>;
 			onRememberPermissions?: unknown;
 			onChooseSettings?: unknown;
 			snapshot: { sessionId?: string };
@@ -158,6 +161,7 @@ vi.mock("./ChatWorkspace", async () => {
 					<button type="button" onClick={() => onLinkOpen?.(REPORT_LINK)}>
 						Open report link
 					</button>
+					<button type="button" onClick={() => void onSend?.("/btw What is this?", [], "btw-client-1")}>Send /btw question</button>
 					{shellTarget ? <div data-testid="shell-target">{shellTarget.handleId}</div> : null}
 				</div>
 			);
@@ -219,6 +223,21 @@ afterEach(() => {
 });
 
 describe("SessionChatSurface link routing", () => {
+	it("routes /btw questions to one side without sending them to main", async () => {
+		postMock.mockImplementation(async (path: string) => path.endsWith("/side-chats")
+			? { data: { side: { id: "side-1", sessionId: "sess-1", state: "opening" } }, error: undefined }
+			: { data: { turn: { id: "side-turn-1" } }, error: undefined });
+		const onSideOpened = vi.fn();
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} onSideOpened={onSideOpened} /></Wrapper>);
+		await userEvent.click(screen.getByRole("button", { name: "Send /btw question" }));
+		await waitFor(() => expect(postMock).toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/messages",
+			expect.objectContaining({ params: { path: { sessionId: "sess-1", sideId: "side-1" } },
+				body: expect.objectContaining({ text: "What is this?" }) }),
+		));
+		expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation/messages", expect.anything());
+		expect(onSideOpened).toHaveBeenCalled();
+	});
 	it("keeps OpenCode approvals writable when its provider supplies Build/Plan mode", () => {
 		conversationState.snapshot = { capabilities: ["config_options"], harness: "opencode" };
 		configState.options = [{

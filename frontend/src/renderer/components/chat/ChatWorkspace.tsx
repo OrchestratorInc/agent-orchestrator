@@ -408,8 +408,8 @@ export interface ChatWorkspaceProps {
 	editMessageError?: string;
 	/** Switch the visible conversation to another branch. */
 	onActivateBranch?: (branchId: string) => void | Promise<unknown>;
-	/** Fork the current main conversation into a durable read-only /btw chat. */
-	onCreateSideChat?: (label?: string) => Promise<{ id: string } | undefined>;
+	/** Open an independent side conversation; the selection is its quoted reference. */
+	onCreateSideChat?: (excerpt?: ChatDraftExcerptReference) => Promise<{ id: string } | undefined>;
 	createSideChatPending?: boolean;
 	createSideChatError?: string;
 	activateBranchPending?: boolean;
@@ -884,14 +884,8 @@ function ChatWorkspaceContent({
 	);
 	const createSideChatWithExcerpt = useCallback(async (excerpt: ChatDraftExcerptReference) => {
 		if (!onCreateSideChat) return;
-		await onCreateSideChat(excerpt.text.slice(0, 80));
-		const current = readChatSessionDraft(draftScope).composer.excerpts ?? [];
-		const duplicate = current.some((item) =>
-			item.messageId === excerpt.messageId && item.revision === excerpt.revision && item.text === excerpt.text,
-		);
-		const result = writeChatExcerptReferences(draftScope, duplicate ? current : [...current, excerpt].slice(-8));
-		if (!result.ok) throw new Error("chat.draft.saveFailed");
-	}, [draftScope, onCreateSideChat]);
+		await onCreateSideChat(excerpt);
+	}, [onCreateSideChat]);
 	const addSideSelectionToMain = useCallback(async (excerpt: ChatDraftExcerptReference) => {
 		if (!activeSideChat || !onActivateBranch) return;
 		await onActivateBranch(activeSideChat.parentBranchId);
@@ -1451,42 +1445,16 @@ function ChatWorkspaceContent({
 						turnInFlight={Boolean(turn)}
 						error={mcpReloadError}
 					/>
-					{(snapshot.sideChats?.length || can(snapshot, "read_only")) ? (
+					{onCreateSideChat ? (
 						<div className="flex min-h-9 items-center gap-1 border-b border-border bg-sidebar/60 px-4 py-1.5 text-xs">
-							<Button
-								type="button"
-								size="sm"
-								variant={activeSideChat ? "ghost" : "secondary"}
-								disabled={activateBranchPending || !activeSideChat}
-								onClick={() => activeSideChat && void onActivateBranch?.(activeSideChat.parentBranchId)}
-							>
-								Main chat
+							{activeSideChat && onActivateBranch ? <Button type="button" size="sm" variant="ghost"
+								onClick={() => void onActivateBranch(activeSideChat.parentBranchId)}>
+								Return to main
+							</Button> : null}
+							<Button type="button" size="sm" variant="ghost" disabled={createSideChatPending}
+								onClick={() => void onCreateSideChat()}>
+								<MessageSquarePlus aria-hidden="true" className="size-3.5" /> New /btw
 							</Button>
-							{snapshot.sideChats?.map((sideChat, index) => (
-								<Button
-									key={sideChat.id}
-									type="button"
-									size="sm"
-									variant={sideChat.active ? "secondary" : "ghost"}
-									disabled={activateBranchPending || sideChat.active}
-									onClick={() => void onActivateBranch?.(sideChat.id)}
-									title="Read-only side chat"
-								>
-									/btw {index + 1}
-								</Button>
-							))}
-							{!activeSideChat && can(snapshot, "read_only") ? (
-								<Button
-									type="button"
-									size="sm"
-									variant="ghost"
-									disabled={createSideChatPending || Boolean(turn)}
-									onClick={() => void onCreateSideChat?.()}
-								>
-									<MessageSquarePlus aria-hidden="true" className="size-3.5" /> New /btw
-								</Button>
-							) : null}
-							{activeSideChat ? <span className="ml-auto text-muted-foreground">Read-only</span> : null}
 							{createSideChatError || activateBranchError ? (
 								<span className="ml-auto text-destructive" role="alert">{createSideChatError ?? activateBranchError}</span>
 							) : null}

@@ -46,6 +46,7 @@ import type { TerminalTarget } from "../../types/terminal";
 import type { AgentSwitchSummary, WorkspaceSession } from "../../types/workspace";
 import { AgentSwitchProgressTrack } from "../AgentSwitchProgressTrack";
 import { ChatWorkspace } from "./ChatWorkspace";
+import { useIndependentSideChats } from "./IndependentSideChats";
 import { hasProviderPermissionMode } from "./TurnSettingsBar";
 
 export interface ConversationWorkState {
@@ -122,6 +123,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	controllerTransitioning,
 	newWorkDisabled,
 	onConversationWorkChange,
+	onSideOpened,
 }: {
 	session: WorkspaceSession;
 	reviewerTerminal?: { handleId: string; harness: string };
@@ -169,6 +171,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	newWorkDisabled?: boolean;
 	/** Reports accepted Chat work that must inform an interface-switch policy choice. */
 	onConversationWorkChange?: (state: ConversationWorkState) => void;
+	onSideOpened?: () => void;
 }) {
 	const {
 		snapshot: queriedSnapshot,
@@ -339,6 +342,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot));
 	const stageAttachments = useStageAttachments(session.id);
+	const sideChats = useIndependentSideChats(session.id, models, stageAttachments, Boolean(snapshot && can(snapshot, "images")));
 	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser, paths);
 	const conversationLinkBaselines = useRef(new Map<string, ConversationLinkBaseline>());
 	useEffect(() => {
@@ -477,7 +481,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	}
 
 	return (
-		<div className="relative h-full min-h-0">
+		<div className="relative flex h-full min-h-0">
+		<div className="min-w-0 flex-1">
 			<ChatWorkspace
 				key={session.id}
 				snapshot={renderSnapshot}
@@ -506,11 +511,25 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				sessionTabAction={sessionTabAction}
 				sessionTabActionWide={sessionTabActionWide}
 				tabStripAction={tabStripAction}
-				workspaceTabs={workspaceTabs}
+				workspaceTabs={[
+					...(workspaceTabs ?? []),
+					...(sideChats.activeId ? [{
+						key: `side:${sideChats.activeId}`,
+						onSelect: () => { sideChats.show(); onSideOpened?.(); },
+						content: <div className="inline-flex h-full items-center border-r border-border bg-overlay text-sm">
+							<button type="button" className="h-full px-3" onClick={() => { sideChats.show(); onSideOpened?.(); }} aria-label="Show side chat">/btw</button>
+							<button type="button" className="h-full px-2" onClick={() => void sideChats.close(sideChats.activeId!)} aria-label="Close side chat">×</button>
+						</div>,
+					}] : []),
+				]}
 				workspaceTabActions={workspaceTabActions}
 				workspaceActiveTabKey={workspaceActiveTabKey}
-				auxiliaryTabOrder={auxiliaryTabOrder}
-				onAuxiliaryTabOrderChange={onAuxiliaryTabOrderChange}
+				auxiliaryTabOrder={sideChats.activeId
+					? [...(auxiliaryTabOrder ?? []), `side:${sideChats.activeId}`]
+					: auxiliaryTabOrder}
+				onAuxiliaryTabOrderChange={onAuxiliaryTabOrderChange
+					? (keys) => onAuxiliaryTabOrderChange(keys.filter((key) => !key.startsWith("side:")))
+					: undefined}
 				controllerTransitioning={controllerTransitioning}
 				hasOlder={hasOlder}
 				loadingOlder={isLoadingOlder}
@@ -520,8 +539,13 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					const btw = /^\/btw(?:\s+|$)/i.exec(text);
 					const message = btw ? text.slice(btw[0].length).trim() : text;
 					if (btw) {
-						if (!message) throw new Error("Type a question after /btw.");
-						await commands.createSideChat(message.slice(0, 80));
+						const side = await sideChats.create(excerpts?.[0]);
+						onSideOpened?.();
+						if (message) {
+							sideChats.setQuestionDraft(side.id, message);
+							await sideChats.send(side.id, message, attachments);
+						}
+						return;
 					}
 					return commands.send({
 						text: message,
@@ -573,9 +597,13 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onActivateBranch={commands.activateBranch}
 				activateBranchPending={commands.activateBranchPending}
 				activateBranchError={commands.activateBranchError}
-				onCreateSideChat={commands.createSideChat}
-				createSideChatPending={commands.createSideChatPending}
-				createSideChatError={commands.createSideChatError}
+				onCreateSideChat={async (excerpt) => {
+					const side = await sideChats.create(excerpt);
+					onSideOpened?.();
+					return side;
+				}}
+				createSideChatPending={sideChats.pending}
+				createSideChatError={sideChats.error}
 				skills={skills}
 				filePaths={paths}
 				filePathsTruncated={truncated}
@@ -624,6 +652,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					presentation={shownSwitchPresentation}
 				/>
 			) : null}
+		</div>
+		{sideChats.panel}
 		</div>
 	);
 });

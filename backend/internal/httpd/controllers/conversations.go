@@ -61,7 +61,24 @@ type pagedConversationService interface {
 }
 
 type sideChatConversationService interface {
-	CreateSideChat(ctx context.Context, session domain.SessionID, label string) (domain.ConversationBranch, error)
+	ListIndependentSideChats(context.Context, domain.SessionID) ([]domain.SideConversation, error)
+	CreateIndependentSideChat(context.Context, domain.SessionID, chatsvc.SideCreateRequest) (domain.SideConversation, error)
+	SideSnapshot(context.Context, domain.SessionID, string, time.Time, int) (domain.SideSnapshot, error)
+	SendSideQuestion(context.Context, domain.SessionID, string, ports.ChatUserMessage) (domain.SideTurn, error)
+	EditQueuedSideQuestion(context.Context, domain.SessionID, string, string, string) error
+	RetrySideQuestion(context.Context, domain.SessionID, string, string) error
+	UpdateSideSettings(context.Context, domain.SessionID, string, string, string) error
+	SaveSideDraft(context.Context, domain.SessionID, string, string) error
+	SideDraft(context.Context, domain.SessionID, string) (string, error)
+	InterruptSideQuestion(context.Context, domain.SessionID, string) error
+	ResolveSideApproval(context.Context, domain.SessionID, string, string, string) error
+	ResolveSideInput(context.Context, domain.SessionID, string, string, ports.ChatInputResponse) error
+	CloseIndependentSideChat(context.Context, domain.SessionID, string) error
+	ClaimSideChatLaunch(context.Context, string) error
+	ExportSideChatLaunch(context.Context, string) ([]chatsvc.SideRecoveryRecord, error)
+	RecoverSideChatLaunch(context.Context, string, []chatsvc.SideRecoveryRecord) error
+	RetireSideChatLaunch(context.Context, string) error
+	WatchSideChat(context.Context, domain.SessionID, string) (string, <-chan struct{}, func(), error)
 }
 
 type reviewerConversationService interface {
@@ -105,6 +122,23 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/retry", c.retryTurn)
 	r.Post("/sessions/{sessionId}/conversation/branches/{branchId}/activate", c.activateBranch)
 	r.Post("/sessions/{sessionId}/conversation/side-chats", c.createSideChat)
+	r.Get("/sessions/{sessionId}/conversation/side-chats", c.listSideChats)
+	r.Get("/sessions/{sessionId}/conversation/side-chats/{sideId}", c.sideSnapshot)
+	r.Get("/sessions/{sessionId}/conversation/side-chats/{sideId}/events", c.streamSideChat)
+	r.Delete("/sessions/{sessionId}/conversation/side-chats/{sideId}", c.closeSideChat)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/messages", c.sendSideQuestion)
+	r.Patch("/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}", c.editSideQuestion)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/retry", c.retrySideQuestion)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/interrupt", c.interruptSideQuestion)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/approvals/{requestId}/resolve", c.resolveSideApproval)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/inputs/{requestId}/resolve", c.resolveSideInput)
+	r.Patch("/sessions/{sessionId}/conversation/side-chats/{sideId}/settings", c.sideSettings)
+	r.Get("/sessions/{sessionId}/conversation/side-chats/{sideId}/draft", c.getSideDraft)
+	r.Put("/sessions/{sessionId}/conversation/side-chats/{sideId}/draft", c.putSideDraft)
+	r.Post("/side-chats/launch/claim", c.claimSideLaunch)
+	r.Get("/side-chats/launch/state", c.exportSideLaunch)
+	r.Post("/side-chats/launch/state", c.recoverSideLaunch)
+	r.Post("/side-chats/launch/retire", c.retireSideLaunch)
 	r.Put("/sessions/{sessionId}/conversation/title", c.setTitle)
 	r.Post("/sessions/{sessionId}/conversation/mcp/reload", c.reloadMCPServers)
 	r.Get("/reviews/{reviewId}/conversation", c.reviewSnapshot)
@@ -257,25 +291,18 @@ func (c *ConversationsController) createSideChat(w http.ResponseWriter, r *http.
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/conversation/side-chats")
 		return
 	}
-	branch, err := svc.CreateSideChat(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), req.Label)
-	if errors.Is(err, chatsvc.ErrSideChatUnsupported) || errors.Is(err, chatsvc.ErrForkUnsupported) {
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_SIDE_UNSUPPORTED",
-			"this agent cannot open a read-only side chat", nil)
-		return
+	var ref *ports.ChatExcerptReference
+	if req.Reference != nil {
+		ref = &ports.ChatExcerptReference{ConversationID: req.Reference.ConversationID,
+			MessageID: req.Reference.MessageID, Revision: req.Reference.Revision, Text: req.Reference.Text}
 	}
-	if errors.Is(err, chatsvc.ErrTurnRunning) || errors.Is(err, chatsvc.ErrControllerHandoff) {
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_SIDE_BUSY",
-			"finish or stop the current turn before opening a side chat", nil)
-		return
-	}
+	side, err := svc.CreateIndependentSideChat(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")),
+		chatsvc.SideCreateRequest{IdempotencyKey: req.IdempotencyKey, Label: req.Label, Reference: ref})
 	if err != nil {
-		writeConversationError(w, r, err)
+		writeSideChatError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusCreated, CreateConversationSideChatResponse{
-		ID: branch.ID, ParentBranchID: branch.ParentBranchID, Label: branch.Label,
-		ForkAfterSequence: branch.ForkAfterSequence,
-	})
+	envelope.WriteJSON(w, http.StatusCreated, CreateConversationSideChatResponse{Side: side})
 }
 
 func (c *ConversationsController) editMessage(w http.ResponseWriter, r *http.Request) {

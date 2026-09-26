@@ -2023,6 +2023,7 @@ export function SessionView({ sessionId }: SessionViewProps) {
 										routedTerminalTarget.kind === "reviewer" ? routedTerminalTarget : undefined
 									}
 									onSelectChat={selectSessionTerminal}
+									onSideOpened={() => setInspectorOpenForSession(sessionId, false)}
 									shellTerminals={shellTerminals}
 									shellTarget={
 										routedTerminalTarget.kind === "shell" ? routedTerminalTarget : undefined

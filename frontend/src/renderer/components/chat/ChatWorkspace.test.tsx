@@ -466,8 +466,8 @@ describe("ChatWorkspace timeline", () => {
 		}
 	});
 
-	it("offers selected transcript text to a new read-only side chat", async () => {
-		const snapshot = { ...idleSnapshot(chatFixture), capabilities: ["read_only"] };
+	it("offers the exact selected transcript reference to the side chat", async () => {
+		const snapshot = idleSnapshot(chatFixture);
 		const onCreateSideChat = vi.fn().mockResolvedValue({ id: "side-1" });
 		render(<ChatWorkspace snapshot={snapshot} onCreateSideChat={onCreateSideChat} />);
 		const message = screen.getByText(
@@ -488,33 +488,19 @@ describe("ChatWorkspace timeline", () => {
 		try {
 			fireEvent.mouseUp(screen.getByRole("log", { name: "Conversation" }));
 			await userEvent.click(screen.getByRole("button", { name: "Add to side chat" }));
-			expect(onCreateSideChat).toHaveBeenCalledWith("what changed");
-			expect(readChatSessionDraft(snapshot.sessionId).composer.excerpts).toEqual([
-				expect.objectContaining({ text: "what changed", messageId: "m-1" }),
-			]);
+			expect(onCreateSideChat).toHaveBeenCalledWith(expect.objectContaining({ text: "what changed", messageId: "m-1" }));
+			expect(readChatSessionDraft(snapshot.sessionId).composer.excerpts).toBeUndefined();
 		} finally {
 			getSelection.mockRestore();
 		}
 	});
 
-	it("navigates durable /btw chats and labels the active one read-only", async () => {
-		const onActivateBranch = vi.fn().mockResolvedValue(undefined);
-		const snapshot: ConversationSnapshot = {
-			...idleSnapshot(chatFixture),
-			activeBranchId: "side-1",
-			sideChats: [{
-				id: "side-1",
-				parentBranchId: "main-1",
-				label: "Question",
-				forkAfterSequence: 1,
-				active: true,
-				createdAt: "2026-09-22T00:00:00Z",
-			}],
-		};
-		render(<ChatWorkspace snapshot={snapshot} onActivateBranch={onActivateBranch} />);
-		expect(screen.getByText("Read-only")).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Main chat" }));
-		expect(onActivateBranch).toHaveBeenCalledWith("main-1");
+	it("opens the side chat without switching the main branch", async () => {
+		const onCreateSideChat = vi.fn().mockResolvedValue({ id: "side-1" });
+		render(<ChatWorkspace snapshot={idleSnapshot(chatFixture)} onCreateSideChat={onCreateSideChat} />);
+		await userEvent.click(screen.getByRole("button", { name: "New /btw" }));
+		expect(onCreateSideChat).toHaveBeenCalledWith();
+		expect(screen.queryByText("Read-only")).not.toBeInTheDocument();
 	});
 
 	it("shows a local human echo until the matching durable turn arrives", () => {

@@ -898,7 +898,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 				"/api/v1/sessions/{sessionId}/conversation/side-chats",
 				{
 					params: { path: { sessionId } },
-					body: { label },
+					body: { label, idempotencyKey: crypto.randomUUID() },
 				},
 			);
 			if (error) throw error;
