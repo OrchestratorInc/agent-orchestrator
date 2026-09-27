@@ -168,6 +168,23 @@ describe("BrowserProfileStore", () => {
 		expect(store.getDefaultProfileId()).toBeNull();
 	});
 
+	it("keeps an explicit Temporary binding distinct from having no binding at all", async () => {
+		const stateDir = await makeStateDir();
+		const store = new BrowserProfileStore({ stateDir });
+		const profile = await store.createProfile("Work");
+		await store.setDefaultProfileId(profile.id);
+
+		expect(store.getSessionProfileId("never-touched")).toBeUndefined();
+
+		await store.bindSession("explicit-temporary", null);
+		expect(store.getSessionProfileId("explicit-temporary")).toBeNull();
+
+		const reloaded = new BrowserProfileStore({ stateDir });
+		await reloaded.load();
+		expect(reloaded.getSessionProfileId("never-touched")).toBeUndefined();
+		expect(reloaded.getSessionProfileId("explicit-temporary")).toBeNull();
+	});
+
 	it("serializes profile data operations and keeps the live-operation marker until the full queue drains", async () => {
 		const store = new BrowserProfileStore({ stateDir: await makeStateDir() });
 		const profile = await store.createProfile("Work");

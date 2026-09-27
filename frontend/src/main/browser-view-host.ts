@@ -790,15 +790,21 @@ export function createBrowserViewHost(options: BrowserViewHostOptions): BrowserV
 		return entry;
 	};
 
+	// A session with no binding of its own (`undefined`) falls back to the
+	// global default profile. A session explicitly switched to Temporary
+	// (`null`) must stay Temporary even once a default profile exists.
+	const resolveFallbackProfileId = (sessionId: string): string | undefined => {
+		const sessionProfileId = options.browserProfileStore?.getSessionProfileId(sessionId);
+		if (sessionProfileId !== undefined) return sessionProfileId ?? undefined;
+		return options.browserProfileStore?.getDefaultProfileId() ?? undefined;
+	};
+
 	const ensureSession = (sessionId: string, rendererId?: number): BrowserSessionEntry => {
 		const existingViewId = viewIdsBySessionId.get(sessionId);
 		const viewId = existingViewId ?? `${rendererId ?? 0}:${sessionId}`;
 		let session = entries.get(viewId);
 		if (!session) {
-			const boundProfileId =
-				options.browserProfileStore?.getSessionProfileId(sessionId) ??
-				options.browserProfileStore?.getDefaultProfileId() ??
-				undefined;
+			const boundProfileId = resolveFallbackProfileId(sessionId);
 			const boundProfile = boundProfileId ? options.browserProfileStore?.getProfile(boundProfileId) : undefined;
 			const profileId = boundProfile ? boundProfile.id : null;
 			session = {
@@ -862,7 +868,7 @@ export function createBrowserViewHost(options: BrowserViewHostOptions): BrowserV
 		const store = options.browserProfileStore;
 		if (store) {
 			for (;;) {
-				const boundProfileId = store.getSessionProfileId(sessionId) ?? store.getDefaultProfileId() ?? undefined;
+				const boundProfileId = resolveFallbackProfileId(sessionId);
 				if (!boundProfileId || !store.isProfileOperationInProgress(boundProfileId)) break;
 				await store.waitForProfileOperation(boundProfileId);
 			}

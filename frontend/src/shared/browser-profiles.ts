@@ -24,7 +24,8 @@ export type BrowserProfile = {
 };
 
 export type BrowserProfileBinding = {
-	profileId: BrowserProfileId;
+	/** `null` is an explicit, durable choice of Temporary — distinct from no binding at all. */
+	profileId: BrowserProfileId | null;
 	updatedAt: string;
 };
 

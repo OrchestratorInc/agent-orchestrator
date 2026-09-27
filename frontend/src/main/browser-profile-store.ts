@@ -112,7 +112,10 @@ function parseRegistry(raw: unknown): BrowserProfileRegistry {
 			throw invalidRegistry("The browser profile registry contains an invalid worker binding.");
 		}
 		const profileId = value.profileId;
-		if (!isBrowserProfileId(profileId) || profileId !== profileId.toLowerCase() || !profileIds.has(profileId)) {
+		if (
+			profileId !== null &&
+			(!isBrowserProfileId(profileId) || profileId !== profileId.toLowerCase() || !profileIds.has(profileId))
+		) {
 			throw invalidRegistry("The browser profile registry contains a binding to an unknown profile.");
 		}
 		if (!validTimestamp(value.updatedAt)) {
@@ -212,7 +215,12 @@ export class BrowserProfileStore {
 		return profile ? { ...profile } : undefined;
 	}
 
-	getSessionProfileId(sessionId: string): string | undefined {
+	/**
+	 * `undefined` means this session has never chosen a profile (fall back to
+	 * the default). `null` means it explicitly chose Temporary, which must
+	 * stick even once a default profile exists.
+	 */
+	getSessionProfileId(sessionId: string): string | null | undefined {
 		if (this.loadError) return undefined;
 		return this.registry.bindings[sessionId]?.profileId;
 	}
@@ -319,17 +327,17 @@ export class BrowserProfileStore {
 				throw new BrowserProfileStoreError("BROWSER_PROFILE_NOT_FOUND", "Browser profile was not found.");
 			}
 			const nextBindings = { ...current.bindings };
-			if (profileId === null) {
-				delete nextBindings[sessionId];
-			} else {
-				if (!nextBindings[sessionId] && Object.keys(nextBindings).length >= BROWSER_PROFILE_MAX_BINDINGS) {
-					throw new BrowserProfileStoreError(
-						"BROWSER_PROFILE_BINDING_LIMIT",
-						"The retained browser worker binding limit has been reached.",
-					);
-				}
-				nextBindings[sessionId] = { profileId, updatedAt: this.now().toISOString() };
+			// An explicit choice of Temporary (profileId === null) is still recorded
+			// here, not deleted: once a default profile exists, "no binding" and
+			// "explicitly Temporary" must stay distinguishable so the default can't
+			// silently override a session that deliberately opted out of it.
+			if (!nextBindings[sessionId] && Object.keys(nextBindings).length >= BROWSER_PROFILE_MAX_BINDINGS) {
+				throw new BrowserProfileStoreError(
+					"BROWSER_PROFILE_BINDING_LIMIT",
+					"The retained browser worker binding limit has been reached.",
+				);
 			}
+			nextBindings[sessionId] = { profileId, updatedAt: this.now().toISOString() };
 			return { registry: { ...current, bindings: nextBindings }, result: undefined };
 		});
 	}

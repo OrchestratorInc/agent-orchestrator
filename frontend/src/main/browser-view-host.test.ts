@@ -737,7 +737,7 @@ function setupTabHost(
 
 function fakeBrowserProfileStore(
 	profile: BrowserProfile,
-	bindings: Record<string, string>,
+	bindings: Record<string, string | null>,
 	defaultProfileId: string | null = null,
 ): BrowserProfileStore {
 	return {
@@ -745,9 +745,10 @@ function fakeBrowserProfileStore(
 		getProfile: (profileId: string) => (profileId === profile.id ? { ...profile } : undefined),
 		getSessionProfileId: (sessionId: string) => bindings[sessionId],
 		getDefaultProfileId: () => defaultProfileId,
+		// A binding of `null` is an explicit, durable choice of Temporary and
+		// must be kept distinct from an absent key (no binding at all).
 		bindSession: vi.fn(async (sessionId: string, profileId: string | null) => {
-			if (profileId === null) delete bindings[sessionId];
-			else bindings[sessionId] = profileId;
+			bindings[sessionId] = profileId;
 		}),
 		isProfileOperationInProgress: () => false,
 		waitForProfileOperation: async () => undefined,
@@ -1290,6 +1291,22 @@ describe("browser profile partitions and replacement", () => {
 		});
 	});
 
+	it("keeps a session explicitly switched to Temporary out of the default profile, even across reconstruction", async () => {
+		const bindings: Record<string, string | null> = {};
+		const store = fakeBrowserProfileStore(profile, bindings, profile.id);
+		const firstHost = setupTabHost(store);
+		const ensured = (await firstHost.invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		expect(firstHost.host.getProfileState(ensured.viewId)).toMatchObject({ profileId: profile.id, temporary: false });
+
+		await firstHost.host.switchProfile(ensured.viewId, null);
+		expect(bindings["worker-1"]).toBeNull();
+		firstHost.host.destroyAll();
+
+		const reconstructed = setupTabHost(store);
+		const reensured = (await reconstructed.invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		expect(reconstructed.host.getProfileState(reensured.viewId)).toMatchObject({ profileId: null, temporary: true });
+	});
+
 	it("uses a stable named partition and restores the durable binding on host reconstruction", async () => {
 		const bindings = { "worker-1": profile.id, "worker-2": profile.id };
 		const store = fakeBrowserProfileStore(profile, bindings);
@@ -1410,7 +1427,8 @@ describe("browser profile partitions and replacement", () => {
 
 		const switched = await host.switchProfile(nav.viewId, null);
 		expect(switched).toMatchObject({ profileId: null, temporary: true });
-		expect(bindings["worker-1"]).toBeUndefined();
+		// An explicit switch to Temporary is a durable choice, not the absence of one.
+		expect(bindings["worker-1"]).toBeNull();
 		expect(runtime.closeSession).toHaveBeenCalledWith("worker-1");
 		expect(views.some((view) => view.webContents.closeDevTools.mock.calls.length > 0)).toBe(true);
 		expect(views[0]!.webContents.close).toHaveBeenCalled();
