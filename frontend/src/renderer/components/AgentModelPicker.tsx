@@ -135,7 +135,6 @@ export function AgentModelPicker({
 			agentLabel={agentLabel}
 			onRefresh={refreshCatalog}
 			refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
-			lastSuccessAt={catalog?.lastSuccessAt}
 			refreshError={catalog?.refreshError}
 			retryAt={catalog?.retryAt}
 			disabled={disabled || agentId === ""}

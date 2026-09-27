@@ -845,7 +845,6 @@ function AgentModelField({
 						agentLabel={agentId}
 						onRefresh={refreshCatalog}
 						refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
-						lastSuccessAt={catalog?.lastSuccessAt}
 						refreshError={catalog?.refreshError}
 						retryAt={catalog?.retryAt}
 						disabled={(query.isFetching && !catalog) || agentId === ""}
