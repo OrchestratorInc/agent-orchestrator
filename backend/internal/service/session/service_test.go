@@ -128,6 +128,28 @@ func TestListBatchesKanbanReads(t *testing.T) {
 	}
 }
 
+func TestTaskPreparationsStayOutOfSessionReads(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", IsTaskPreparation: true}
+	svc := &Service{store: st}
+
+	list, err := svc.List(context.Background(), ListFilter{ProjectID: "mer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("list = %+v, want no preparations", list)
+	}
+	_, err = svc.Get(context.Background(), "mer-1")
+	var apiError *apierr.Error
+	if !errors.As(err, &apiError) || apiError.Code != "SESSION_NOT_FOUND" {
+		t.Fatalf("get preparation error = %v", err)
+	}
+	if first, err := svc.isFirstSession(context.Background()); err != nil || !first {
+		t.Fatalf("isFirstSession = %v, %v", first, err)
+	}
+}
+
 func (f *fakeStore) GetActiveAgentSwitch(_ context.Context, id domain.SessionID) (domain.AgentSwitch, bool, error) {
 	if f.activeSwitchGetErr != nil {
 		return domain.AgentSwitch{}, false, f.activeSwitchGetErr
@@ -232,6 +254,17 @@ func (f *fakeStore) ListAllSessions(_ context.Context) ([]domain.SessionRecord, 
 func (f *fakeStore) RenameSession(_ context.Context, id domain.SessionID, displayName string, updatedAt time.Time) (bool, error) {
 	r, ok := f.sessions[id]
 	if !ok {
+		return false, nil
+	}
+	r.DisplayName = displayName
+	r.UpdatedAt = updatedAt
+	f.sessions[id] = r
+	return true, nil
+}
+
+func (f *fakeStore) RenameSessionIfDisplayName(_ context.Context, id domain.SessionID, currentDisplayName, displayName string, updatedAt time.Time) (bool, error) {
+	r, ok := f.sessions[id]
+	if !ok || r.DisplayName != currentDisplayName {
 		return false, nil
 	}
 	r.DisplayName = displayName
@@ -485,6 +518,21 @@ func TestSessionRenameUpdatesDisplayName(t *testing.T) {
 	}
 }
 
+func TestSessionRenameRejectsOverlongDisplayName(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer"}
+
+	overlong := strings.Repeat("x", 101)
+	err := (&Service{store: st}).Rename(context.Background(), "mer-1", overlong)
+	if err == nil {
+		t.Fatal("expected error for overlong display name, got nil")
+	}
+	var e *apierr.Error
+	if !errors.As(err, &e) || e.Code != "DISPLAY_NAME_TOO_LONG" {
+		t.Fatalf("err = %v, want DISPLAY_NAME_TOO_LONG", err)
+	}
+}
+
 func TestSessionPinAndUnpin(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer"}
@@ -729,6 +777,31 @@ func TestListWorkspaceFilesRepoUnavailableWrapsSentinel(t *testing.T) {
 	}
 }
 
+func TestListWorkspaceFilesClassifiesGitReadFailure(t *testing.T) {
+	repo := newWorkspaceRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, ".git", "index"), []byte("not a git index"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st := newFakeStore()
+	st.sessions["ao-1"] = domain.SessionRecord{
+		ID:       "ao-1",
+		Metadata: domain.SessionMetadata{WorkspacePath: repo},
+		Activity: domain.Activity{State: domain.ActivityActive},
+	}
+
+	_, err := (&Service{store: st}).ListWorkspaceFiles(context.Background(), "ao-1")
+	if err == nil {
+		t.Fatal("ListWorkspaceFiles succeeded with a corrupt Git index")
+	}
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error = %v, want typed API error", err)
+	}
+	if apiErr.Code != "WORKSPACE_GIT_READ_FAILED" {
+		t.Fatalf("error code = %q, want WORKSPACE_GIT_READ_FAILED", apiErr.Code)
+	}
+}
+
 func TestListWorkspaceFilesTreatsStandaloneWorkerAsNonGitWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	writeWorkspaceFile(t, workspace, "notes.txt", "standalone note\n")
@@ -745,6 +818,75 @@ func TestListWorkspaceFilesTreatsStandaloneWorkerAsNonGitWorkspace(t *testing.T)
 	}
 	if len(got.Files) != 1 || got.Files[0].Path != "notes.txt" || got.Files[0].Status != WorkspaceFileAdded {
 		t.Fatalf("standalone files = %#v, want added notes.txt", got.Files)
+	}
+}
+
+func TestListWorkspaceFilesHidesAOManagedStandaloneFiles(t *testing.T) {
+	workspace := t.TempDir()
+	writeWorkspaceFile(t, workspace, ".kimi/.gitignore", aoManagedGitignoreSentinel+"\n/.gitignore\n/AGENTS.md\n")
+	writeWorkspaceFile(t, workspace, ".kimi/AGENTS.md", "AO instructions\n")
+	writeWorkspaceFile(t, workspace, ".kimi/draft.md", "agent-created work\n")
+	writeWorkspaceFile(t, workspace, "notes.txt", "user work\n")
+	st := newFakeStore()
+	st.sessions["standalone-1"] = domain.SessionRecord{
+		ID:       "standalone-1",
+		Kind:     domain.KindWorker,
+		Metadata: domain.SessionMetadata{WorkspacePath: workspace},
+	}
+
+	got, err := (&Service{store: st}).ListWorkspaceFiles(context.Background(), "standalone-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{".kimi/draft.md", "notes.txt"}
+	if len(got.Files) != len(want) {
+		t.Fatalf("standalone files = %#v, want user-created files %v", got.Files, want)
+	}
+	for i, path := range want {
+		if got.Files[i].Path != path {
+			t.Fatalf("standalone file[%d] = %q, want %q", i, got.Files[i].Path, path)
+		}
+	}
+}
+
+func TestListWorkspaceFilesHidesAOManagedStandaloneDirectoryContents(t *testing.T) {
+	workspace := t.TempDir()
+	writeWorkspaceFile(t, workspace, ".ao/.gitignore", aoManagedGitignoreSentinel+"\n/.gitignore\n/hooks\n")
+	writeWorkspaceFile(t, workspace, ".ao/hooks/run.sh", "#!/bin/sh\n")
+	writeWorkspaceFile(t, workspace, "notes.txt", "user work\n")
+	st := newFakeStore()
+	st.sessions["standalone-1"] = domain.SessionRecord{
+		ID:       "standalone-1",
+		Kind:     domain.KindWorker,
+		Metadata: domain.SessionMetadata{WorkspacePath: workspace},
+	}
+
+	got, err := (&Service{store: st}).ListWorkspaceFiles(context.Background(), "standalone-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Files) != 1 || got.Files[0].Path != "notes.txt" {
+		t.Fatalf("standalone files = %#v, want only user-created notes.txt", got.Files)
+	}
+}
+
+func TestListWorkspaceFilesHidesAOManagedCopilotProfile(t *testing.T) {
+	workspace := t.TempDir()
+	writeWorkspaceFile(t, workspace, ".github/agents/ao-standalone-4.agent.md", "---\nname: ao-standalone-4\ntarget: github-copilot\n---\n\n"+aoManagedCopilotProfileSentinel+"\n\nAO instructions\n")
+	writeWorkspaceFile(t, workspace, "result.md", "agent-created work\n")
+	st := newFakeStore()
+	st.sessions["standalone-4"] = domain.SessionRecord{
+		ID:       "standalone-4",
+		Kind:     domain.KindWorker,
+		Metadata: domain.SessionMetadata{WorkspacePath: workspace},
+	}
+
+	got, err := (&Service{store: st}).ListWorkspaceFiles(context.Background(), "standalone-4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Files) != 1 || got.Files[0].Path != "result.md" {
+		t.Fatalf("standalone files = %#v, want only agent-created result.md", got.Files)
 	}
 }
 
@@ -2340,31 +2482,42 @@ func TestSessionRenameMissingSessionReturnsNotFound(t *testing.T) {
 // fakeCommander records Kill/Spawn calls so a test can assert the
 // clean-orchestrator ordering without wiring a real session engine.
 type fakeCommander struct {
-	killed          []domain.SessionID
-	retired         []domain.SessionID
-	exited          []domain.SessionID
-	resumed         []domain.SessionID
-	ready           []domain.SessionID
-	sent            []domain.SessionID
-	sentMessages    []string
-	cleanupProjects []domain.ProjectID
-	killErr         error
-	retireErr       error
-	sendErr         error
-	sendFunc        func(domain.SessionID, string) error
-	cleanupErr      error
-	spawnErr        error
-	spawnRecord     domain.SessionRecord
-	spawnFunc       func(ports.SpawnConfig) domain.SessionRecord
-	spawnCalls      int
-	spawned         bool
-	spawnedCfg      ports.SpawnConfig
-	killsAtSpawn    int
-	restoreErr      error
-	restoreResult   sessionmanager.RestoreResult
-	readyErr        error
-	killFunc        func(domain.SessionID)
-	killMu          sync.Mutex
+	killed           []domain.SessionID
+	retired          []domain.SessionID
+	exited           []domain.SessionID
+	resumed          []domain.SessionID
+	ready            []domain.SessionID
+	sent             []domain.SessionID
+	sentMessages     []string
+	cleanupProjects  []domain.ProjectID
+	killErr          error
+	retireErr        error
+	sendErr          error
+	sendFunc         func(domain.SessionID, string) error
+	cleanupErr       error
+	spawnErr         error
+	spawnRecord      domain.SessionRecord
+	spawnFunc        func(ports.SpawnConfig) domain.SessionRecord
+	spawnCalls       int
+	spawned          bool
+	spawnedCfg       ports.SpawnConfig
+	killsAtSpawn     int
+	restoreErr       error
+	restoreResult    sessionmanager.RestoreResult
+	readyErr         error
+	backgroundResult string
+	backgroundErr    error
+	backgroundFunc   func(backgroundTaskCall) (string, error)
+	backgroundCalls  []backgroundTaskCall
+	killFunc         func(domain.SessionID)
+	killMu           sync.Mutex
+}
+
+type backgroundTaskCall struct {
+	ctx          context.Context
+	id           domain.SessionID
+	systemPrompt string
+	prompt       string
 }
 
 func (f *fakeCommander) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
@@ -2382,6 +2535,12 @@ func (f *fakeCommander) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.
 		return f.spawnRecord, len(cfg.Prompt), 0, nil
 	}
 	return domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness}, len(cfg.Prompt), 0, nil
+}
+func (*fakeCommander) PrepareTaskWorkspace(context.Context, domain.ProjectRecord) (domain.TaskPreparationToken, error) {
+	return "", nil
+}
+func (*fakeCommander) CancelTaskPreparation(context.Context, domain.TaskPreparationToken) error {
+	return nil
 }
 func (*fakeCommander) SwitchAgent(context.Context, domain.SessionID, sessionmanager.SwitchAgentConfig) (domain.AgentSwitch, error) {
 	return domain.AgentSwitch{}, nil
@@ -2451,6 +2610,22 @@ func (f *fakeCommander) Send(_ context.Context, id domain.SessionID, message str
 	f.sent = append(f.sent, id)
 	f.sentMessages = append(f.sentMessages, message)
 	return nil
+}
+func (f *fakeCommander) RunBackgroundTask(ctx context.Context, id domain.SessionID, systemPrompt, prompt string) (string, error) {
+	call := backgroundTaskCall{
+		ctx: ctx, id: id, systemPrompt: systemPrompt, prompt: prompt,
+	}
+	f.backgroundCalls = append(f.backgroundCalls, call)
+	if f.backgroundFunc != nil {
+		return f.backgroundFunc(call)
+	}
+	if f.backgroundErr != nil {
+		return "", f.backgroundErr
+	}
+	if f.backgroundResult != "" {
+		return f.backgroundResult, nil
+	}
+	return "Generated task", nil
 }
 func (f *fakeCommander) Cleanup(_ context.Context, project domain.ProjectID) (sessionmanager.CleanupResult, error) {
 	f.cleanupProjects = append(f.cleanupProjects, project)
@@ -2798,21 +2973,51 @@ func TestSpawnBlocksDefinitelyMissingHarnessBeforeManager(t *testing.T) {
 	}
 }
 
-func TestSpawnTreatsUnauthorizedReadinessAsAdvisory(t *testing.T) {
+func TestSpawnProjectClaudeGatewayTreatsGlobalUnauthorizedAsAdvisory(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{
+		ID: "mer",
+		Config: domain.ProjectConfig{Env: map[string]string{
+			"ANTHROPIC_BASE_URL": "https://gateway.example",
+			"ANTHROPIC_API_KEY":  "project-fixture-key",
+		}},
+	}
+	fc := &fakeCommander{}
+	readiness := &fakeAgentReadiness{snapshot: domain.AgentReadinessSnapshot{
+		ID: "claude-code", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled},
+		Authentication: domain.AgentAuthenticationObservation{
+			State: domain.AgentAuthenticationUnauthorized, Freshness: domain.AgentReadinessFresh,
+		},
+	}}
+	svc := NewWithDeps(Deps{Manager: fc, Store: st, AgentReadiness: readiness})
+
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if fc.spawnCalls != 1 {
+		t.Fatalf("manager.Spawn calls = %d, want project-aware launch to remain authoritative", fc.spawnCalls)
+	}
+}
+
+func TestSpawnStillRejectsFreshUnauthorizedCodexAccount(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
 	fc := &fakeCommander{}
 	readiness := &fakeAgentReadiness{snapshot: domain.AgentReadinessSnapshot{
 		ID: "codex", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled},
-		Authentication: domain.AgentAuthenticationObservation{State: domain.AgentAuthenticationUnauthorized},
+		Authentication: domain.AgentAuthenticationObservation{
+			State: domain.AgentAuthenticationUnauthorized, Freshness: domain.AgentReadinessFresh,
+		},
 	}}
 	svc := NewWithDeps(Deps{Manager: fc, Store: st, AgentReadiness: readiness})
 
-	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: "codex"}); err != nil {
-		t.Fatalf("Spawn: %v", err)
+	_, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex})
+	var apiError *apierr.Error
+	if !errors.As(err, &apiError) || apiError.Code != "CODEX_ACCOUNT_AUTH_UNVERIFIED" {
+		t.Fatalf("Spawn error = %v, want CODEX_ACCOUNT_AUTH_UNVERIFIED", err)
 	}
-	if fc.spawnCalls != 1 {
-		t.Fatalf("manager.Spawn calls = %d, want unauthorized readiness to remain advisory", fc.spawnCalls)
+	if fc.spawnCalls != 0 {
+		t.Fatalf("manager.Spawn calls = %d, want fresh unauthorized Codex account blocked", fc.spawnCalls)
 	}
 }
 
@@ -3339,6 +3544,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"chat driver unavailable", fmt.Errorf("spawn: %w", ports.ErrChatDriverUnavailable), apierr.KindConflict, "CHAT_DRIVER_UNAVAILABLE"},
 		{"chat driver incompatible", fmt.Errorf("spawn: %w", ports.ErrChatDriverIncompatible), apierr.KindConflict, "CHAT_DRIVER_INCOMPATIBLE"},
 		{"chat auth required", fmt.Errorf("spawn: %w", ports.ErrChatAuthRequired), apierr.KindConflict, "CHAT_AUTH_REQUIRED"},
+		{"agent auth required", fmt.Errorf("spawn: %w", ports.ErrAgentAuthRequired), apierr.KindConflict, "AGENT_AUTH_REQUIRED"},
 		{"interface notice not acknowledgeable", fmt.Errorf("acknowledge interface notice: %w", sessionmanager.ErrInterfaceTransitionNoticeNotAcknowledgeable), apierr.KindConflict, "INTERFACE_TRANSITION_NOTICE_NOT_ACKNOWLEDGEABLE"},
 		{"provider history recovery unavailable", fmt.Errorf("recover interface: %w", sessionmanager.ErrInterfaceProviderHistoryRecoveryUnavailable), apierr.KindConflict, "PROVIDER_HISTORY_RECOVERY_UNAVAILABLE"},
 		{"native conversation missing", fmt.Errorf("switch interface: %w", sessionmanager.ErrNativeConversationMissing), apierr.KindConflict, "NATIVE_SESSION_MISSING"},
@@ -3692,6 +3898,26 @@ func TestSpawnGenericOrchestratorReturnsExistingActiveSession(t *testing.T) {
 	}
 }
 
+// A scheduled orchestrator must never be falsely linked to an unrelated
+// interactive orchestrator. It stays retryable until the active one exits.
+func TestSpawnAutomationOrchestratorConflictsWithUnrelatedActiveSession(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	st.sessions["mer-orch"] = domain.SessionRecord{ID: "mer-orch", ProjectID: "mer", Kind: domain.KindOrchestrator}
+	fc := &fakeCommander{}
+	svc := &Service{manager: fc, store: st}
+	runID := domain.AutomationRunID("run-1")
+
+	_, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindOrchestrator, AutomationRunID: &runID})
+	var apiError *apierr.Error
+	if !errors.As(err, &apiError) || apiError.Kind != apierr.KindConflict || apiError.Code != "ORCHESTRATOR_ALREADY_ACTIVE" {
+		t.Fatalf("Spawn error = %v, want ORCHESTRATOR_ALREADY_ACTIVE conflict", err)
+	}
+	if fc.spawned {
+		t.Fatal("manager.Spawn must not run while another orchestrator is active")
+	}
+}
+
 func TestSpawnGenericOrchestratorAllowsReplacementAfterTermination(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
@@ -3969,7 +4195,7 @@ func TestClaimRowsFromSCMSnapshotsSessionReviewPolicy(t *testing.T) {
 		PR: ports.SCMPRObservation{URL: "https://github.com/acme/repo/pull/7", Number: 7},
 		Review: ports.SCMReviewObservation{
 			Reviews: []ports.SCMReviewSummaryObservation{{ID: "r1", State: string(domain.ReviewChangesRequest), Body: "review body"}},
-			Threads: []ports.SCMReviewThreadObservation{{ID: "t1", Comments: []ports.SCMReviewCommentObservation{{ID: "c1", Body: "inline comment"}}}},
+			Threads: []ports.SCMReviewThreadObservation{{ID: "t1", IsBot: true, Comments: []ports.SCMReviewCommentObservation{{ID: "c1", Author: "human", IsBot: false, Body: "inline comment"}}}},
 		},
 	}
 	for _, autoInject := range []bool{false, true} {
@@ -3980,6 +4206,9 @@ func TestClaimRowsFromSCMSnapshotsSessionReviewPolicy(t *testing.T) {
 			}
 			if len(comments) != 1 || comments[0].AutoInjectReview != autoInject {
 				t.Fatalf("comments = %+v, want policy %t", comments, autoInject)
+			}
+			if comments[0].IsBot {
+				t.Fatalf("human comment in bot-started thread was persisted as bot-authored: %+v", comments[0])
 			}
 		})
 	}

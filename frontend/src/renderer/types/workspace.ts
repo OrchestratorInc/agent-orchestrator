@@ -112,6 +112,17 @@ export type WorkspaceSession = {
 	 */
 	displayStatus?: string;
 	statusReadiness?: "checking" | "ready" | "unavailable";
+	/**
+	 * How far this session's start-up got. A Chat spawn answers as soon as the
+	 * session is addressable, so a session can be open and typeable while its
+	 * worktree and agent are still being created ("provisioning"), and a start
+	 * that fails leaves the session in place ("failed") with
+	 * {@link provisionError} explaining why. Absent means ready — which is also
+	 * what every session created before asynchronous spawn reads as.
+	 */
+	provisionState?: "provisioning" | "ready" | "failed";
+	/** Why a failed start stopped, in the daemon's words. */
+	provisionError?: string;
 	/** Durable runtime fact from the daemon; independent of the derived SCM-aware status. */
 	isTerminated?: boolean;
 	/** Whether the cloud worker has a current control-plane connection. */
@@ -265,23 +276,19 @@ function sessionNewer(a: WorkspaceSession, b: WorkspaceSession): boolean {
 	return a.id > b.id;
 }
 
-function sessionRecentlyUpdatedNewer(a: WorkspaceSession, b: WorkspaceSession): boolean {
+function sessionRecentlyMessagedNewer(a: WorkspaceSession, b: WorkspaceSession): boolean {
+	const aMessaged = sessionLastMessageTimestamp(a);
+	const bMessaged = sessionLastMessageTimestamp(b);
+	if (aMessaged !== bMessaged) return aMessaged > bMessaged;
 	const aUpdated = timestamp(a.updatedAt);
 	const bUpdated = timestamp(b.updatedAt);
 	if (aUpdated !== bUpdated) return aUpdated > bUpdated;
-	const aLastActive = sessionLastActiveTimestamp(a);
-	const bLastActive = sessionLastActiveTimestamp(b);
-	if (aLastActive !== bLastActive) return aLastActive > bLastActive;
 	return a.id > b.id;
 }
 
-function sessionLastActiveTimestamp(session: WorkspaceSession): number {
-	return (
-		validTimestamp(session.activity?.lastActivityAt) ??
-		validTimestamp(session.updatedAt) ??
-		validTimestamp(session.createdAt) ??
-		0
-	);
+/** The sidebar's message-age label reads lastUserMessageAt, so the sort must too. */
+function sessionLastMessageTimestamp(session: WorkspaceSession): number {
+	return validTimestamp(session.lastUserMessageAt) ?? validTimestamp(session.createdAt) ?? 0;
 }
 
 function timestamp(value?: string): number {
@@ -298,15 +305,24 @@ export function workerSessions(sessions: WorkspaceSession[]): WorkspaceSession[]
 	return sessions.filter((s) => !isOrchestratorSession(s));
 }
 
-/** Worker sessions ordered by session update time, newest first. */
+/** Worker sessions ordered by the user's latest message (else creation), newest first. */
 export function sortedWorkerSessions(sessions: WorkspaceSession[]): WorkspaceSession[] {
 	return workerSessions(sessions).sort((a, b) =>
-		sessionRecentlyUpdatedNewer(b, a) ? 1 : sessionRecentlyUpdatedNewer(a, b) ? -1 : 0,
+		sessionRecentlyMessagedNewer(b, a) ? 1 : sessionRecentlyMessagedNewer(a, b) ? -1 : 0,
 	);
 }
 
 export function sessionIsActive(session: WorkspaceSession): boolean {
 	return session.isTerminated !== true && session.status !== "terminated";
+}
+
+/**
+ * Whether the agent PROCESS is gone while the session ROW is still alive —
+ * Ctrl+C, `/exit`, a usage limit. Recovered with `resume-agent`, not `restore`.
+ * Not `sessionIsActive`, which reports row liveness and calls this state alive.
+ */
+export function sessionAgentExited(session: WorkspaceSession | undefined): boolean {
+	return Boolean(session && session.activity?.state === "exited" && sessionIsActive(session));
 }
 
 export function sessionNeedsAttention(session: WorkspaceSession): boolean {
@@ -389,4 +405,42 @@ export function orchestratorHealth(workspace: WorkspaceSummary, restarting = fal
 export function toAgentProvider(provider?: string): AgentProvider {
 	if (provider === "fake") return provider;
 	return AGENT_OPTIONS.find((candidate) => candidate === provider) ?? "codex";
+}
+
+export type NextSessionNavigation =
+	| { target: "session"; sessionId: string }
+	| { target: "project" };
+
+/**
+ * Resolves where to navigate after an active session is killed.
+ * Prioritizes:
+ * 1. Adjacent remaining worker session (previous if available, else first remaining).
+ * 2. Active non-terminated orchestrator if no worker sessions remain.
+ * 3. Project board if no alive sessions remain.
+ */
+export function resolveNextNavigationAfterSessionKill(
+	workspace: WorkspaceSummary | undefined,
+	killedSessionId: string,
+	sessionsInDisplayOrder?: WorkspaceSession[],
+): NextSessionNavigation {
+	if (!workspace) return { target: "project" };
+
+	const workerList = (sessionsInDisplayOrder ?? sortedWorkerSessions(workspace.sessions)).filter(
+		(s) => s.isTerminated !== true,
+	);
+	const currentIndex = workerList.findIndex((s) => s.id === killedSessionId);
+	const remaining = workerList.filter((s) => s.id !== killedSessionId);
+
+	if (remaining.length > 0) {
+		const nextIndex = currentIndex > 0 ? currentIndex - 1 : 0;
+		const nextSession = remaining[nextIndex] ?? remaining[0];
+		return { target: "session", sessionId: nextSession.id };
+	}
+
+	const orchestrator = newestActiveOrchestrator(workspace.sessions);
+	if (orchestrator && orchestrator.id !== killedSessionId && orchestrator.isTerminated !== true) {
+		return { target: "session", sessionId: orchestrator.id };
+	}
+
+	return { target: "project" };
 }

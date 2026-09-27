@@ -11,6 +11,7 @@ const routeMocks = vi.hoisted(() => ({
 	createProjectFlowProps: null as null | {
 		existingProjectPaths?: readonly string[];
 		onOpenExistingProject?: (path: string) => void | Promise<void>;
+		sourceSignal?: { source: string; nonce: number } | null;
 	},
 	navigate: vi.fn(),
 	workspaces: [] as WorkspaceSummary[],
@@ -60,16 +61,12 @@ vi.mock("../components/CreateProjectFlow", () => ({
 	},
 }));
 
-vi.mock("../components/BoardEmptyStates", () => ({
-	BoardWelcome: () => <div data-testid="board-welcome" />,
-}));
-
 import { HomePage } from "../components/HomePage";
 
 const standaloneSession = (overrides: Partial<WorkspaceSession>): WorkspaceSession => ({
 	id: "standalone-1",
 	workspaceId: STANDALONE_WORKSPACE_ID,
-	workspaceName: "Ad hoc agents",
+	workspaceName: "Scratchpad",
 	title: "Ad hoc task",
 	provider: "codex",
 	kind: "worker",
@@ -91,12 +88,24 @@ beforeEach(() => {
 });
 
 describe("shell index route", () => {
-	it("restores first-run onboarding when no projects exist", async () => {
+	it("shows the home actions when no projects exist", () => {
 		render(<HomePage />);
 
-		expect(screen.getByTestId("board-welcome")).toBeInTheDocument();
+		expect(screen.getByText("Get started")).toBeInTheDocument();
 		expect(screen.queryByText("Jump back right in")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Clone from Git" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Import an existing project" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Import a workspace folder" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "New standalone agent" })).toBeInTheDocument();
+		expect(screen.queryByText("Recent projects")).not.toBeInTheDocument();
 		expect(routeMocks.navigate).not.toHaveBeenCalled();
+	});
+
+	it("opens the clone flow from the empty home page", () => {
+		render(<HomePage />);
+
+		fireEvent.click(screen.getByRole("button", { name: "Clone from Git" }));
+		expect(routeMocks.createProjectFlowProps?.sourceSignal?.source).toBe("clone");
 	});
 
 	it("renders the home page instead of redirecting to a scratch board when projects exist", async () => {
@@ -157,9 +166,9 @@ describe("shell index route", () => {
 		routeMocks.workspaces = [
 			{
 				id: STANDALONE_WORKSPACE_ID,
-				name: "Ad hoc agents",
+				name: "Scratchpad",
 				kind: STANDALONE_PROJECT_KIND,
-				path: "Ad hoc agents",
+				path: "Scratchpad",
 				sessions: [
 					standaloneSession({
 						id: "standalone-oldest",
@@ -186,7 +195,7 @@ describe("shell index route", () => {
 
 		render(<HomePage />);
 
-		fireEvent.click(screen.getByRole("button", { name: /Ad hoc agents/ }));
+		fireEvent.click(screen.getByRole("button", { name: /Scratchpad/ }));
 		expect(routeMocks.navigate).toHaveBeenCalledWith({
 			to: "/sessions/$sessionId",
 			params: { sessionId: "standalone-newest-active" },

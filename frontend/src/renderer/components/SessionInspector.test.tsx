@@ -15,9 +15,11 @@ import { TooltipProvider } from "./ui/tooltip";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { sessionWorkspaceFilesQueryKey } from "../hooks/useSessionWorkspaceFiles";
+import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { useUiStore } from "../stores/ui-store";
+import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
 import type {
   PRState,
   PullRequestFacts,
@@ -278,7 +280,7 @@ beforeEach(() => {
   navigateMock.mockReset();
   patchMock.mockReset();
   postMock.mockReset();
-  useUiStore.setState({ developerMode: false, inspectorSessions: {} });
+  useUiStore.setState({ developerMode: false, inspectorSessions: {}, settingsModal: null });
   putMock.mockReset();
   mockCommonGets();
   patchMock.mockResolvedValue({
@@ -490,10 +492,10 @@ describe("SessionInspector PR section", () => {
 
     expect(screen.getByText("Pull requests (3)")).toBeInTheDocument();
     const cards = prSection("Pull requests (3)")
-      .getAllByText(/^PR #\d+$/)
-      .map((el) => el.textContent);
+      .getAllByRole("article")
+      .map((el) => within(el).getByText(/^#\d+$/).textContent);
     // open (41), draft (42), merged (40)
-    expect(cards).toEqual(["PR #41", "PR #42", "PR #40"]);
+    expect(cards).toEqual(["#41", "#42", "#40"]);
   });
 
   it("uses the singular heading and shows enriched facts for a single PR", () => {
@@ -515,27 +517,65 @@ describe("SessionInspector PR section", () => {
 
     expect(screen.getByText("Pull request")).toBeInTheDocument();
     expect(screen.queryByText(/Pull requests \(/)).not.toBeInTheDocument();
-    expect(prSection("Pull request").getByText("PR #7")).toBeInTheDocument();
+    expect(prSection("Pull request").getByText("#7")).toBeInTheDocument();
     expect(
-      prSection("Pull request").getByText("Mergeable"),
+      prSection("Pull request").getByText("Ready to merge"),
     ).toBeInTheDocument();
-    expect(prSection("Pull request").getByText("PR approved")).toBeInTheDocument();
     expect(
       prSection("Pull request").getByText("Checks passing"),
     ).toBeInTheDocument();
     expect(
-      prSection("Pull request").getByRole("link", { name: "PR 7" }),
+      prSection("Pull request").getByText("PR 7"),
     ).toHaveClass("text-sm");
     expect(
-      prSection("Pull request").getByRole("link", { name: "PR 7" }),
+      prSection("Pull request").getByRole("link", { name: "View PR" }),
     ).toHaveAttribute("href", "https://github.com/acme/repo/pull/7");
-    expect(prSection("Pull request").getByText("open")).toHaveClass(
-      "text-[9px]",
-      "leading-none",
-    );
+    expect(prSection("Pull request").queryByText("open", { exact: true })).not.toBeInTheDocument();
     expect(
       prSection("Pull request").getByRole("button", { name: "Merge PR #7" }),
     ).toBeInTheDocument();
+  });
+
+  it("shows only people who commented beside the review status", () => {
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")])} />,
+      undefined,
+      (client) => {
+        client.setQueryData(sessionScmSummaryQueryKey("sess-1"), [
+          prSummary(7, "open", {
+            discussionCommentCount: 2,
+            discussionCommenters: ["alice", "bob"],
+            review: {
+              decision: "approved",
+              hasUnresolvedHumanComments: true,
+              unresolvedBy: [{ reviewerId: "thread-commenter", count: 1, links: [] }],
+              reviews: [{
+                reviewerId: "verdict-only",
+                verdict: "approved",
+                submittedAt: "2026-09-20T12:00:00Z",
+                autoInjectReview: false,
+              }, {
+                reviewerId: "review-body-author",
+                verdict: "approved",
+                body: "I checked this change",
+                submittedAt: "2026-09-21T12:00:00Z",
+                autoInjectReview: false,
+              }],
+            },
+          }),
+        ]);
+      },
+    );
+
+    const commenterGroup = prSection("Pull request").getByLabelText("Commented: alice, bob, review-body-author, thread-commenter");
+    expect(Array.from(commenterGroup.querySelectorAll("img"), (avatar) => avatar.getAttribute("src"))).toEqual([
+      "https://avatars.githubusercontent.com/alice?size=64",
+      "https://avatars.githubusercontent.com/bob?size=64",
+      "https://avatars.githubusercontent.com/review-body-author?size=64",
+      "https://avatars.githubusercontent.com/thread-commenter?size=64",
+    ]);
+    expect(commenterGroup).not.toHaveTextContent("+1");
+    expect(prSection("Pull request").queryByRole("button", { name: "View review details" })).not.toBeInTheDocument();
   });
 
   it("merges a ready pull request directly through the daemon", async () => {
@@ -637,7 +677,7 @@ describe("SessionInspector PR section", () => {
     );
 
     expect(screen.getByRole("button", { name: "Merge PR #7" })).toBeEnabled();
-    expect(prSection("Pull request").getByText("No review required")).toBeInTheDocument();
+    expect(prSection("Pull request").getByText("Ready to merge")).toBeInTheDocument();
     expect(prSection("Pull request").queryByText("Review pending")).not.toBeInTheDocument();
   });
 
@@ -682,7 +722,7 @@ describe("SessionInspector PR section", () => {
     );
 
     const card = prSection("Pull request")
-      .getByText("PR #7")
+      .getByText("#7")
       .closest("article") as HTMLElement;
     expect(within(card).getByText("merged", { exact: true })).toHaveClass(
       "border-border-strong",
@@ -714,7 +754,7 @@ describe("SessionInspector PR section", () => {
       "Terminate session when pull requests merge",
     );
     const prCard = prSection("Pull request")
-      .getByText("PR #7")
+      .getByText("#7")
       .closest("article") as HTMLElement;
     const appearsBefore = (first: HTMLElement, second: HTMLElement) =>
       Boolean(
@@ -834,7 +874,7 @@ describe("SessionInspector PR section", () => {
     );
 
     const card = prSection("Pull request")
-      .getByText("PR #7")
+      .getByText("#7")
       .closest("article") as HTMLElement;
     expect(within(card).getByText("Checks failing")).toBeInTheDocument();
     expect(within(card).queryByText("CI failures not injected")).not.toBeInTheDocument();
@@ -844,18 +884,44 @@ describe("SessionInspector PR section", () => {
     renderWithQuery(
       <SessionInspector session={session([pr(41, "open"), pr(42, "draft")])} />,
     );
-    const links = [
-      prSection("Pull requests (2)").getByRole("link", { name: "Open PR #41" }),
-      prSection("Pull requests (2)").getByRole("link", { name: "Open PR #42" }),
-    ];
+    const links = prSection("Pull requests (2)").getAllByRole("link", { name: "View PR" });
     expect(links[0]).toHaveClass(
       "text-settings-label",
-      "hover:text-settings-label",
+      "hover:bg-interactive-hover",
     );
     expect(links.map((a) => a.getAttribute("href"))).toEqual([
       "https://example.com/pr/41",
       "https://example.com/pr/42",
     ]);
+  });
+
+  it("links the provider conversation count without implying submitted reviews", () => {
+    renderWithQuery(
+      <SessionInspector session={session([pr(4383, "open")])} />,
+      undefined,
+      (client) => {
+        client.setQueryData(sessionScmSummaryQueryKey("sess-1"), [
+          prSummary(4383, "open", {
+            discussionCommentCount: 9,
+            discussionCommenters: ["alice", "bob"],
+            review: {
+              decision: "none",
+              hasUnresolvedHumanComments: false,
+              unresolvedBy: [],
+              reviews: [{ reviewerId: "verdict-only", verdict: "approved", submittedAt: "2026-06-15T12:00:00Z", autoInjectReview: false }],
+            },
+          }),
+        ]);
+      },
+    );
+
+    const commentCount = prSection("Pull request").getByLabelText("9 comments");
+    expect(commentCount).toHaveTextContent("9");
+    expect(commentCount.querySelector("svg.lucide-message-square")).toBeInTheDocument();
+    expect(prSection("Pull request").getByLabelText("Commented: alice, bob")).toBeInTheDocument();
+    expect(prSection("Pull request").getAllByRole("link")).toHaveLength(1);
+    expect(prSection("Pull request").getByText("No review required")).toBeInTheDocument();
+    expect(prSection("Pull request").queryByRole("button", { name: "View review details" })).not.toBeInTheDocument();
   });
 });
 
@@ -1212,7 +1278,7 @@ describe("SessionInspector completion controls", () => {
       <SessionInspector
         session={session([], {
           workspaceId: STANDALONE_WORKSPACE_ID,
-          workspaceName: "Ad hoc agents",
+          workspaceName: "Scratchpad",
           status: "idle",
         })}
       />,
@@ -1305,12 +1371,11 @@ describe("SessionInspector completion controls", () => {
 });
 
 describe("SessionInspector Activity section", () => {
-  const activitySection = () =>
-    within(
-      screen
-        .getByText("Activity")
-        .closest("[data-testid='inspector-section']") as HTMLElement,
-    );
+  const activitySectionElement = () =>
+    screen
+      .getByText("Activity")
+      .closest("[data-testid='inspector-section']") as HTMLElement;
+  const activitySection = () => within(activitySectionElement());
 
   it("offers a managed resume only for an exited, nonterminated agent", async () => {
     renderWithQuery(
@@ -1349,6 +1414,9 @@ describe("SessionInspector Activity section", () => {
     expect(
       screen.queryByRole("button", { name: "Resume agent" }),
     ).not.toBeInTheDocument();
+    expect(
+      activitySectionElement().querySelector(".mt-3.border-t.pt-3"),
+    ).not.toBeInTheDocument();
 
     live.unmount();
     renderWithQuery(
@@ -1384,6 +1452,31 @@ describe("SessionInspector Activity section", () => {
 
     expect(
       screen.queryByRole("button", { name: "Resume agent" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not offer agent resume during an interface transition", () => {
+    renderWithQuery(
+      <SessionInspector
+        session={session([], {
+          status: "exited",
+          activity: { state: "exited", lastActivityAt: "2026-06-15T10:00:00Z" },
+        })}
+      />,
+      undefined,
+      (client) => {
+        client.setQueryData(
+          sessionInterfaceTransitionQueryKey("sess-1"),
+          sessionInterfaceTransitionStatus("sess-1"),
+        );
+      },
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Resume agent" }),
+    ).not.toBeInTheDocument();
+    expect(
+      activitySectionElement().querySelector(".mt-3.border-t.pt-3"),
     ).not.toBeInTheDocument();
   });
 
@@ -1509,6 +1602,25 @@ describe("SessionInspector Activity section", () => {
     },
   );
 
+  it("ignores stale failing CI from a merged PR when the open PR is passing", () => {
+    renderWithQuery(
+      <SessionInspector
+        session={session(
+          [pr(5753, "open", { ci: "passing" }), pr(5754, "merged", { ci: "failing" })],
+          {
+            status: "working",
+            activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
+          },
+        )}
+      />,
+    );
+
+    const activityRow = activitySection()
+      .getByText("Idle")
+      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
+    expect(within(activityRow).queryByText("CI Failed")).not.toBeInTheDocument();
+  });
+
   it("renders PR conflicts as an SCM state in the current Activity row", () => {
     renderWithQuery(
       <SessionInspector
@@ -1624,6 +1736,12 @@ describe("SessionInspector Activity section", () => {
       );
     }
   });
+
+	it("keeps execution context out of the summary", () => {
+		renderWithQuery(<SessionInspector session={session([], { branch: "feature/session" })} />);
+
+		expect(screen.queryByTestId("execution-context")).not.toBeInTheDocument();
+	});
 
   it("keeps workspace, PR, and SCM context rows in the Activity timeline", () => {
     renderWithQuery(
@@ -1938,6 +2056,33 @@ describe("SessionInspector summary reviews", () => {
     });
   });
 
+  it("opens reviewer Chat when triggering a review from a Chat session", async () => {
+    mockCommonGets([], "", [reviewState(3, "needs_review")]);
+    postMock.mockResolvedValue({
+      response: { status: 201 },
+      data: {
+        reviewerHandleId: "reviewer-pane",
+        reviewerSurface: { mode: "chat", reviewId: "review-1", harness: "codex" },
+        reviews: [{ ...reviewState(3, "running"), latestRun: { ...approvedReview, status: "running", verdict: "", body: "" } }],
+      },
+    });
+    const onOpenReviewerTerminal = vi.fn();
+    const onOpenReviewerChat = vi.fn();
+
+    renderWithQuery(
+      <SessionInspector
+        onOpenReviewerTerminal={onOpenReviewerTerminal}
+        onOpenReviewerChat={onOpenReviewerChat}
+        session={session([pr(3, "open")], { mode: "chat" })}
+      />,
+    );
+    await openReviewsSection();
+    await userEvent.click(await screen.findByRole("button", { name: "Review latest commit" }));
+
+    await waitFor(() => expect(onOpenReviewerChat).toHaveBeenCalledWith("review-1"));
+    expect(onOpenReviewerTerminal).not.toHaveBeenCalled();
+  });
+
   it("shows the worker-compatible default reviewer before a run exists", async () => {
     getMock.mockImplementation(async (path: string) => {
       if (path === "/api/v1/sessions/{sessionId}/reviews") {
@@ -2024,6 +2169,35 @@ describe("SessionInspector summary reviews", () => {
     });
     expect(trigger).toHaveTextContent("Claude Code");
     expect(trigger).not.toHaveTextContent("claude-code");
+  });
+
+  it("opens Harness from the reviewer menu for its unavailable selection", async () => {
+    const responder = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) => {
+      if (path === "/api/v1/agents/readiness") {
+        return {
+          data: {
+            agents: [
+              agentReadiness("claude-code", "Claude Code"),
+              agentReadiness("codex", "Codex", { authentication: "unauthorized" }),
+            ],
+          },
+        };
+      }
+      return responder(path);
+    });
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+    await userEvent.click(await screen.findByRole("button", { name: /Select reviewer agent/ }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Manage agents…" }));
+    await waitFor(() => expect(useUiStore.getState().settingsModal).not.toBeNull());
+
+    expect(useUiStore.getState().settingsModal).toEqual({
+      scope: "global",
+      section: "harness",
+      focusAgentId: "codex",
+    });
   });
 
   it("configures session auto-review and disables manual controls", async () => {
@@ -2364,6 +2538,7 @@ describe("SessionInspector summary reviews", () => {
 
   it("opens an AO review in Browser and sends its summary to the worker", async () => {
     const reviewUrl = "https://github.com/acme/repo/pull/3#pullrequestreview-98765";
+    const onWorkerMessageSent = vi.fn();
     mockCommonGets([], "reviewer-pane", [
       {
         ...reviewState(3, "up_to_date", "abc123"),
@@ -2376,7 +2551,12 @@ describe("SessionInspector summary reviews", () => {
       },
     ]);
 
-    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    renderWithQuery(
+      <SessionInspector
+        onWorkerMessageSent={onWorkerMessageSent}
+        session={session([pr(3, "open")])}
+      />,
+    );
     await openReviewsSection();
 
     await userEvent.click(await screen.findByRole("button", { name: "Review actions" }));
@@ -2404,6 +2584,7 @@ describe("SessionInspector summary reviews", () => {
       params: { path: { sessionId: "sess-1" } },
       body: { message: expect.stringContaining(`Review URL: ${reviewUrl}`) },
     });
+    expect(onWorkerMessageSent).toHaveBeenCalledOnce();
   });
 
   it("shows inline comments on their exact AO review pass without duplicating them externally", async () => {

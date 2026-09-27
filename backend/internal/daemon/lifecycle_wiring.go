@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -51,6 +52,7 @@ type lifecycleStack struct {
 	autoReviewDone <-chan struct{}
 	scmDone        <-chan struct{}
 	trackerDone    <-chan struct{}
+	automationDone <-chan struct{}
 }
 
 // startLifecycle constructs the Lifecycle Manager over the store and starts the
@@ -156,6 +158,9 @@ func (l *lifecycleStack) Stop() {
 	if l.trackerDone != nil {
 		<-l.trackerDone
 	}
+	if l.automationDone != nil {
+		<-l.automationDone
+	}
 }
 
 // sessionLifecycle is the narrow surface of sessionmanager.Manager used for
@@ -171,6 +176,7 @@ type sessionLifecycle interface {
 	ReconcileStartupSafety(ctx context.Context) error
 	ReconcileBackground(ctx context.Context) error
 	RestoreAll(ctx context.Context) error
+	WaitBackgroundWorkers(ctx context.Context) error
 	WaitAgentSwitchWorkers(ctx context.Context) error
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
@@ -193,6 +199,10 @@ type sessionLifecycle interface {
 	// SetHarnessUseGate prevents lifecycle operations from racing a harness
 	// executable replacement.
 	SetHarnessUseGate(gate sessionmanager.HarnessUseGate)
+	// PersistChatModel records the model the user picked in ChatUI onto the
+	// session's durable metadata before the next prompt routes. A later TUI
+	// rebuild reads it back so ChatUI model changes survive the handoff.
+	PersistChatModel(ctx context.Context, id domain.SessionID, model string) error
 }
 
 // sessionLifecycleMessenger adapts sessionLifecycle to ports.AgentMessenger so
@@ -309,6 +319,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("reviewer resolver: %w", err)
 	}
+	reviewerChat, _ := chat.(reviewcore.ReviewerChatController)
 	reviewEngine := reviewcore.New(reviewcore.Deps{
 		Store:    store,
 		Sessions: store,
@@ -316,7 +327,8 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		Projects: store,
 		Launcher: reviewcore.NewLauncher(reviewers, runtime, cfg.DataDir,
 			reviewcore.WithRunFilePath(cfg.RunFilePath),
-			reviewcore.WithAgentAuth(reviewerAgentAuth{readiness: agentReadiness})),
+			reviewcore.WithAgentAuth(reviewerAgentAuth{readiness: agentReadiness}),
+			reviewcore.WithReviewerChat(reviewerChat)),
 	})
 	reviewOpts := []reviewsvc.Option{
 		reviewsvc.WithLifecycleReducer(lcm),
@@ -479,7 +491,7 @@ func buildAgentResolver(defaultAgent string, log *slog.Logger) (ports.AgentResol
 	}
 	resolver := agentRegistry{reg: reg}
 	if _, ok := resolver.Agent(domain.AgentHarness(defaultAgent)); !ok {
-		return nil, fmt.Errorf("configured default agent %q is not a registered adapter", defaultAgent)
+		return nil, fmt.Errorf("configured agent %q is not a registered adapter", defaultAgent)
 	}
 	ids := make([]string, 0)
 	for _, mf := range reg.Manifests() {
@@ -523,6 +535,7 @@ type chatLauncher struct{ svc *chatsvc.Service }
 
 var _ sessionmanager.ChatLauncher = chatLauncher{}
 var _ interface {
+	RunBackgroundTask(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
 	ArmChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
 	PrepareChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
 	AbortChatHandoff(domain.SessionID)
@@ -540,8 +553,65 @@ func (c chatLauncher) PreflightChat(
 	return c.svc.PreflightChat(ctx, harness, permissions)
 }
 
+func (c chatLauncher) SupportsReviewChat(harness domain.AgentHarness) bool {
+	return c.svc.SupportsChat(harness)
+}
+
+func (c chatLauncher) PreflightReviewChat(ctx context.Context, harness domain.AgentHarness) error {
+	return c.svc.PreflightChat(ctx, harness, ports.PermissionModeAuto)
+}
+
+func (c chatLauncher) StartReviewChat(ctx context.Context, cfg reviewcore.ReviewerChatStart) (string, error) {
+	return c.startReviewChat(ctx, cfg, true)
+}
+
+func (c chatLauncher) RestoreReviewChat(ctx context.Context, cfg reviewcore.ReviewerChatStart) (string, error) {
+	return c.startReviewChat(ctx, cfg, false)
+}
+
+func (c chatLauncher) startReviewChat(ctx context.Context, cfg reviewcore.ReviewerChatStart, sendPrompt bool) (string, error) {
+	owner := domain.ReviewConversationOwner(cfg.ReviewID)
+	started, err := c.svc.StartChat(ctx, chatsvc.StartConfig{Owner: owner, SessionID: cfg.WorkerID, ProjectID: cfg.ProjectID, Kind: domain.KindWorker, Harness: cfg.Harness, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Permissions: ports.PermissionModeAuto, SystemPrompt: cfg.SystemPrompt, ProviderConversationID: cfg.ProviderConversationID})
+	if err != nil {
+		return "", err
+	}
+	if !sendPrompt {
+		return started.ProviderConversationID, nil
+	}
+	if _, err := c.svc.SendForOwner(ctx, owner, ports.ChatUserMessage{Text: cfg.Prompt, Origin: domain.MessageOriginHuman}); err != nil {
+		_ = c.svc.StopForOwner(context.Background(), owner)
+		return "", err
+	}
+	return started.ProviderConversationID, nil
+}
+
+func (c chatLauncher) SendReviewChat(ctx context.Context, reviewID, message string) error {
+	_, err := c.svc.SendForOwner(ctx, domain.ReviewConversationOwner(reviewID), ports.ChatUserMessage{Text: message, Origin: domain.MessageOriginDaemon})
+	return err
+}
+
+func (c chatLauncher) ReviewChatAlive(reviewID string) bool {
+	return c.svc.HasLiveControllerForOwner(domain.ReviewConversationOwner(reviewID))
+}
+
+func (c chatLauncher) InterruptReviewChat(ctx context.Context, reviewID string) error {
+	err := c.svc.InterruptForOwner(ctx, domain.ReviewConversationOwner(reviewID))
+	if errors.Is(err, chatsvc.ErrNoActiveTurn) || errors.Is(err, ports.ErrChatNoActiveTurn) {
+		return nil
+	}
+	return err
+}
+
+func (c chatLauncher) StopReviewChat(ctx context.Context, reviewID string) error {
+	return c.svc.StopForOwner(ctx, domain.ReviewConversationOwner(reviewID))
+}
+
 func (c chatLauncher) StartChat(ctx context.Context, cfg sessionmanager.ChatStart) (sessionmanager.ChatStarted, error) {
 	return c.svc.StartChat(ctx, cfg)
+}
+
+func (c chatLauncher) RunBackgroundTask(ctx context.Context, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (string, error) {
+	return c.svc.RunBackgroundTask(ctx, harness, cfg, prompt)
 }
 
 func (c chatLauncher) StartChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error) {
@@ -558,6 +628,22 @@ func (c chatLauncher) RelayChatTurnWithID(
 	text, clientMessageID string,
 ) (string, error) {
 	return c.svc.RelayChatTurnWithID(ctx, id, text, clientMessageID)
+}
+
+func (c chatLauncher) QueueChatPrompt(ctx context.Context, id domain.SessionID, text string) (string, error) {
+	turn, err := c.svc.QueueUserMessage(ctx, id, ports.ChatUserMessage{
+		Text: text,
+		// The opening prompt is the user's own task brief, whatever carries it.
+		Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		return "", err
+	}
+	return turn.ID, nil
+}
+
+func (c chatLauncher) DrainChatQueue(ctx context.Context, id domain.SessionID) error {
+	return c.svc.DrainQueued(ctx, id)
 }
 
 func (c chatLauncher) HasLiveChatController(id domain.SessionID) bool {
