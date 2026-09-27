@@ -31,7 +31,6 @@ function viewProps(overrides: Partial<TaskComposerViewProps> = {}): TaskComposer
 		onPromptChange: vi.fn(),
 		labels: {
 			addFile: "Add file",
-			effort: "Effort",
 			fallbackAction: "Create as Terminal UI",
 			removeFile: (name) => `Remove ${name}`,
 			runsWith: "Runs with",
@@ -73,12 +72,6 @@ function viewProps(overrides: Partial<TaskComposerViewProps> = {}): TaskComposer
 			onModelChange: vi.fn(),
 			onModeChange: vi.fn(),
 		},
-		effort: {
-			disabled: false,
-			options: ["low", "high"],
-			value: "high",
-			onChange: vi.fn(),
-		},
 		attachments: {
 			items: [],
 			onAddFiles: vi.fn(),
@@ -102,12 +95,6 @@ function viewProps(overrides: Partial<TaskComposerViewProps> = {}): TaskComposer
 				onChange={(event) => control.onModelChange(event.target.value)}
 			/>
 		),
-		renderEffortControl: (control) => (
-			<button type="button" aria-label={control.label} onClick={() => control.onChange("low")}>
-				{control.value}
-			</button>
-		),
-		showEffort: true,
 		...overrides,
 	};
 }
@@ -131,8 +118,6 @@ describe("TaskComposerView", () => {
 		expect(props.agent.onChange).toHaveBeenCalledWith("claude-code");
 		fireEvent.change(screen.getByRole("textbox", { name: "Model" }), { target: { value: "gpt-5.1" } });
 		expect(props.model.onModelChange).toHaveBeenCalledWith("gpt-5.1");
-		fireEvent.click(screen.getByRole("button", { name: "Effort" }));
-		expect(props.effort.onChange).toHaveBeenCalledWith("low");
 		expect(screen.getByRole("group", { name: "Runs with" })).toHaveClass("composer-run-controls");
 	});
 
@@ -148,13 +133,6 @@ describe("TaskComposerView", () => {
 		expect(context).toBeInTheDocument();
 		expect(Boolean(context.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
 		expect(container.querySelector("form")?.firstElementChild).toBe(context);
-	});
-
-	it("omits effort when the selected model does not advertise it", () => {
-		render(<TaskComposerView {...viewProps({ showEffort: false })} />);
-
-		expect(screen.getByRole("group", { name: "Runs with" })).not.toHaveClass("composer-run-controls-with-effort");
-		expect(screen.queryByRole("button", { name: "Effort" })).not.toBeInTheDocument();
 	});
 
 	it("claims the caret when asked to autofocus, and reclaims it from a surface that steals it", async () => {
@@ -210,6 +188,21 @@ describe("TaskComposerView", () => {
 
 		rerender(<TaskComposerView {...viewProps({ canSubmit: false })} />);
 		expect(screen.getByRole("button", { name: "Start task" })).toBeDisabled();
+	});
+
+	it("starts from the chat send arrow and names its pending state", () => {
+		const props = viewProps();
+		const { rerender } = render(<TaskComposerView {...props} />);
+		const start = screen.getByRole("button", { name: "Start task" });
+		expect(start).toHaveTextContent("");
+		expect(start.querySelector(".lucide-arrow-up")).not.toBeNull();
+		expect(start).toHaveClass("rounded-full", "bg-foreground");
+
+		rerender(<TaskComposerView {...viewProps({ submission: { ...props.submission, isSubmitting: true } })} />);
+		const pending = screen.getByRole("button", { name: "Starting..." });
+		expect(pending).toBeDisabled();
+		expect(pending).toHaveClass("bg-primary");
+		expect(pending.querySelector(".animate-spin")).not.toBeNull();
 	});
 
 	it("blocks form and Enter submission while project context is unavailable", () => {
@@ -345,6 +338,21 @@ describe("TaskComposerView", () => {
 		);
 
 		expect(lastAttachmentTransition.current).toEqual({ duration: 0 });
+	});
+
+	it("gives a model warning one of the prompt's reserved lines instead of growing the composer", () => {
+		const props = viewProps();
+		const { rerender } = render(<TaskComposerView {...props} />);
+		const prompt = screen.getByRole("textbox", { name: "Task" });
+		expect(prompt).toHaveClass("min-h-[calc(3lh+1.75rem)]");
+
+		const warning = "claude-code model discovery: no credential could be resolved for this provider";
+		rerender(<TaskComposerView {...viewProps({ submission: { ...props.submission, modelWarning: warning } })} />);
+		expect(prompt).toHaveClass("min-h-[calc(2lh+1.75rem)]");
+		const status = screen.getByRole("status");
+		expect(status).toHaveTextContent(warning);
+		expect(status).toHaveAttribute("title", warning);
+		expect(status).toHaveClass("truncate");
 	});
 
 	it("shows attachment and submission errors with a fallback action", () => {

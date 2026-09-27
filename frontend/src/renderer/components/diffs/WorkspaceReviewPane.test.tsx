@@ -109,12 +109,27 @@ describe("WorkspaceReviewPane", () => {
 		expect(screen.getByTestId("code-view")).toHaveAttribute("data-surface-css", expect.stringContaining("--diffs-bg: var(--color-bg-primary)"));
 		await userEvent.click(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
 		expect(screen.getByText("1 of 1 viewed")).toBeInTheDocument();
+		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
 		expect(screen.getByRole("checkbox", { name: "Mark src/App.tsx as not viewed" })).toHaveClass("size-4");
 		expect(screen.getByRole("checkbox", { name: "Mark src/App.tsx as not viewed" })).toHaveStyle({
 			backgroundColor: "#fff",
 			borderColor: "#fff",
 			color: "#000",
 		});
+	});
+
+	it("keeps saved viewed files collapsed when the review pane remounts", async () => {
+		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
+		const first = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
+		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
+		first.unmount();
+
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		expect(await screen.findByRole("checkbox", { name: "Mark src/App.tsx as not viewed" })).toBeInTheDocument();
+		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
 	});
 
 	it("collapses and expands file items through controlled CodeView state", async () => {

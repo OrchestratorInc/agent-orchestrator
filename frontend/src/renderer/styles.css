@@ -1077,11 +1077,6 @@ button.settings-row-bar {
 	column-gap: var(--space-2);
 }
 
-.composer-run-controls-with-effort {
-	/* Capability-driven Agent / Model / Effort sizing: 2 / 2 / 1. */
-	grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) minmax(5.5rem, 1fr);
-}
-
 .composer-toolbar-slot {
 	min-width: 0;
 }

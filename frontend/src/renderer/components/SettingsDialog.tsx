@@ -82,17 +82,37 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 
 	const closeSettingsDialog = () => {
 		if (cueBusy) return;
-		if (isProjectSettings && (projectSaveState.phase === "pending" || projectSaveState.phase === "saving")) {
-			closeWhenSavedRef.current = true;
-			return;
+		if (isProjectSettings) {
+			if (closeWhenSavedRef.current) return;
+			if (projectSaveState.requestPending) {
+				closeWhenSavedRef.current = true;
+				return;
+			}
+			if (projectSaveState.dirty) {
+				const form = document.getElementById("project-settings-form") as HTMLFormElement | null;
+				if (form) {
+					closeWhenSavedRef.current = true;
+					form.requestSubmit();
+					return;
+				}
+			}
+			if (projectSaveState.phase === "pending" || projectSaveState.phase === "saving") {
+				closeWhenSavedRef.current = true;
+				return;
+			}
 		}
 		closeSettings();
 	};
 	useEffect(() => {
-		if (!closeWhenSavedRef.current || (projectSaveState.phase !== "saved" && projectSaveState.phase !== "idle")) return;
-		closeWhenSavedRef.current = false;
-		closeSettings();
-	}, [closeSettings, projectSaveState.phase]);
+		if (!closeWhenSavedRef.current) return;
+		if (projectSaveState.phase === "failed") {
+			closeWhenSavedRef.current = false;
+		} else if (!projectSaveState.dirty && !projectSaveState.requestPending &&
+			(projectSaveState.phase === "saved" || projectSaveState.phase === "idle")) {
+			closeWhenSavedRef.current = false;
+			closeSettings();
+		}
+	}, [closeSettings, projectSaveState]);
 	const closeButtonRef = useRef<HTMLButtonElement>(null);
 	const contentRef = useRef<HTMLDivElement>(null);
 	const returnFocusRef = useRef(document.activeElement as HTMLElement | null);

@@ -2,7 +2,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	TaskComposerView,
 	type TaskComposerAgentControl,
-	type TaskComposerEffortControl,
 	type TaskComposerModelCatalog,
 	type TaskComposerModelControl,
 } from "@aoagents/product-ui";
@@ -39,7 +38,7 @@ import {
 	revalidateAgentModels,
 } from "../hooks/useAgentModelsQuery";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
-import { AgentModelCombobox } from "./settings/AgentModelCombobox";
+import { AgentModelCombobox, type ModelEffortSelection } from "./settings/AgentModelCombobox";
 import { useModelTuning } from "./settings/ModelTuningControls";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import {
@@ -463,6 +462,8 @@ export function TaskComposer({
 		onEffortReset: setEffort,
 	});
 	const effortOptions = effortModel?.efforts?.filter((option) => option && option.toLowerCase() !== "default") ?? [];
+	const reportedEffort =
+		effortModel?.defaultEffort && effortOptions.includes(effortModel.defaultEffort) ? effortModel.defaultEffort : "";
 	const inheritedEffort = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
 	const implicitEffort = inheritedEffort || effortModel?.defaultEffort || "";
 	const requestedEffort = effortTouched || rememberedEffortIsExplicit
@@ -474,6 +475,20 @@ export function TaskComposer({
 		selectedAgent !== "" &&
 		settings?.defaultSessionMode === "chat" &&
 		!settings.chatHarnesses.includes(selectedAgent);
+	// Effort stays inside the model menu and opens only when the user asks.
+	// The menu shows only a level the selected model lists, and
+	// reports the model's own default as "" (no override): keep the level itself
+	// so choosing it still overrides an inherited project effort.
+	const modelTuning: ModelEffortSelection | undefined = requiresTuiFallback
+		? undefined
+		: {
+				effort: effortOptions.includes(effort) ? effort : "",
+				onEffortChange: (value) => {
+					setEffort(value || reportedEffort);
+					setEffortTouched(true);
+				},
+				onEffortReset: setEffort,
+			};
 	const canSubmit =
 		Boolean(projectId) &&
 		(!isStandalone || selectedAgent !== "") &&
@@ -590,7 +605,6 @@ export function TaskComposer({
 			onPromptChange={handlePromptChange}
 			labels={{
 				addFile: t("newTask.addFile"),
-				effort: t("settings.models.effort"),
 				fallbackAction: fallbackAction === "bypass-permissions"
 					? t("newTask.startWithoutApprovals", { defaultValue: "Start without approvals" })
 					: t("newTask.createAsTui"),
@@ -657,15 +671,6 @@ export function TaskComposer({
 					setEffort("");
 				},
 			}}
-			effort={{
-				disabled: isSubmitting,
-				options: effortOptions,
-				value: effort,
-				onChange: (value) => {
-					setEffort(value);
-					setEffortTouched(true);
-				},
-			}}
 			attachments={{
 				items: attachments.map(({ id, name, dataUrl }) => ({ id, name, previewUrl: dataUrl })),
 				error: attachmentError,
@@ -684,42 +689,11 @@ export function TaskComposer({
 				onSubmit: (brief) => void submitTask(brief, selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined),
 			}}
 			renderAgentControl={(control) => <DesktopAgentControl {...control} manageAgents={!isCloudProject} />}
-			renderEffortControl={(control) => <TaskEffortPicker {...control} defaultEffort={effortModel?.defaultEffort} />}
 			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
-				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
-			showEffort={!requiresTuiFallback && effortOptions.length > 0}
+				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))}
+				tuning={modelTuning} />}
 		/>
 	);
-}
-
-function TaskEffortPicker({ disabled, label, onChange, options, value, defaultEffort }: TaskComposerEffortControl & { defaultEffort?: string }) {
-	const { t } = useTranslation();
-	const explicitEffort = value.toLowerCase() === "default" ? "" : value;
-	const reportedDefault = defaultEffort && options.includes(defaultEffort) ? defaultEffort : "";
-	const effectiveEffort = explicitEffort || reportedDefault;
-	const visibleLabel = effectiveEffort ? formatEffortLabel(effectiveEffort) : t("settings.models.effortNotReported");
-
-	return (
-		<SettingsOptionMenu
-			aria-label={label}
-			disabled={disabled}
-			value={effectiveEffort}
-			options={options.map((option) => ({ value: option, label: formatEffortLabel(option) }))}
-			action={explicitEffort && !reportedDefault ? { label: t("settings.models.useAgentEffort"), onSelect: () => onChange("") } : undefined}
-			triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
-			menuAlign="end"
-			renderTrigger={() => (
-				<span className="min-w-0 truncate text-control text-foreground" title={visibleLabel}>
-					{visibleLabel}
-				</span>
-			)}
-			onChange={onChange}
-		/>
-	);
-}
-
-function formatEffortLabel(value: string): string {
-	return value === "xhigh" ? "Extra high" : value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function DesktopAgentControl({ manageAgents, ...control }: TaskComposerAgentControl & { manageAgents: boolean }) {
@@ -745,7 +719,12 @@ function TaskModelPicker({
 	onModeChange,
 	onRefresh,
 	showFollowAgentAction,
-}: TaskComposerModelControl & { onRefresh: () => Promise<void>; showFollowAgentAction: boolean }) {
+	tuning,
+}: TaskComposerModelControl & {
+	onRefresh: () => Promise<void>;
+	showFollowAgentAction: boolean;
+	tuning?: ModelEffortSelection;
+}) {
 	const { t } = useTranslation();
 
 	// No agent selected: there is nothing loading and no model to choose yet, so
@@ -842,9 +821,17 @@ function TaskModelPicker({
 			onCustom={selectCustomModel}
 			compact
 			recentScope={agentId}
+			tuning={tuning}
 			triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
 			menuAlign="start"
-			renderTrigger={(label) => <span className="min-w-0 truncate text-control text-foreground" title={label}>{label}</span>}
+			// One truncating line: when space runs out the effort is cut before the model name.
+			renderTrigger={(label, effortLabel) => effortLabel ? (
+				<span className="min-w-0 truncate text-control text-settings-muted" title={`${label} · ${effortLabel}`}>
+					<span className="text-foreground">{label}</span> · {effortLabel}
+				</span>
+			) : (
+				<span className="min-w-0 truncate text-control text-foreground" title={label}>{label}</span>
+			)}
 		/>
 	);
 }

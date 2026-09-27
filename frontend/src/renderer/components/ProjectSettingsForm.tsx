@@ -52,6 +52,8 @@ type SettingsSaveResult = {
 export type ProjectSettingsSection = "general" | "agents";
 export type ProjectSettingsSaveState = {
 	phase: "idle" | "pending" | "saving" | "saved" | "failed";
+	dirty?: boolean;
+	requestPending?: boolean;
 	error?: string;
 	replacementError?: string;
 };
@@ -387,6 +389,8 @@ function SettingsBody({
 		const mutationError = mutation.isError ? (mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")) : undefined;
 		const hasUnsavedChanges = JSON.stringify(form) !== lastSavedRef.current;
 		onSaveState?.({
+			dirty: hasUnsavedChanges && !intakeSetupIncomplete,
+			requestPending: mutation.isPending,
 			phase:
 				validationError || mutationError
 					? "failed"
