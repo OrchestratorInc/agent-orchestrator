@@ -1525,6 +1525,16 @@ function errorMessage(err: unknown): string {
   return userFacingUpdateError(raw);
 }
 
+// manifest404Message is the specific user-facing copy for a manifest 404.
+// errorMessage() rewrites any HttpError dump — including manifest 404s — into
+// the generic "server returned an error" line, so the staged-restore paths
+// must use this instead to keep checkError consistent with the broadcast copy.
+function manifest404Message(phase: UpdatePhase): string {
+  return phase === "download"
+    ? "Download failed — the update file was not found on the server."
+    : "Couldn't check for updates — the update information was not found on the server.";
+}
+
 // isManifest404Error checks whether the error is a 404 on a release
 // manifest YAML file — a routine condition that should not be surfaced
 // to users as an error dialog.
@@ -2079,18 +2089,18 @@ function wireUpdaterEvents(): void {
         broadcast(
           withActiveRequest({
             state: "error",
-            message:
-              "Download failed — the update file was not found on the server.",
+            message: manifest404Message("download"),
           }),
         );
       } else if (stagedAtMs !== undefined) {
-        lastCheckError = errorMessage(err);
+        lastCheckError = manifest404Message(
+          updateErrorIsForDownload() ? "download" : "check",
+        );
         broadcastUpdaterStatus(stagedDownloadedStatus());
       } else {
         broadcastCompletedCheck({
           state: "error",
-          message:
-            "Couldn't check for updates — the update information was not found on the server.",
+          message: manifest404Message("check"),
         });
       }
       return;
@@ -2464,14 +2474,11 @@ export async function checkForUpdatesNow(
       console.info(`manual update ${failed.phase} failed:`, err);
       broadcastCompletedCheck({
         state: "error",
-        message:
-          failed.phase === "download"
-            ? "Download failed — the update file was not found on the server."
-            : "Couldn't check for updates — the update information was not found on the server.",
+        message: manifest404Message(failed.phase),
         ...(options.requestId === undefined ? {} : { requestId: options.requestId }),
       });
       if (stagedAtMs !== undefined) {
-        lastCheckError = errorMessage(err);
+        lastCheckError = manifest404Message(failed.phase);
         broadcast(stagedDownloadedStatus());
       }
     } else {
@@ -2607,8 +2614,7 @@ export async function downloadUpdateNow(requestId?: string): Promise<void> {
       console.error("update download failed:", err);
       broadcast({
         state: "error",
-        message:
-          "Download failed — the update file was not found on the server.",
+        message: manifest404Message("download"),
         requestId,
       });
     } else {
