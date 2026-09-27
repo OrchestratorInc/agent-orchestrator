@@ -118,6 +118,9 @@ func TestInstall_WritesSkillAndIsIdempotent(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(Dir(dataDir), "commands", "spawn.md")); err != nil {
 		t.Fatalf("commands/spawn.md missing: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(Dir(dataDir), "commands", "cue.md")); err != nil {
+		t.Fatalf("commands/cue.md missing: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(Dir(dataDir), "commands", "browser.md")); err != nil {
 		t.Fatalf("commands/browser.md missing: %v", err)
 	}
