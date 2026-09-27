@@ -192,6 +192,49 @@ func TestApplyPullRequestSnapshotNotifiesAndResolvesReviewFeedback(t *testing.T)
 	}
 }
 
+func TestApplyPullRequestSnapshotResolvesReadyToMergeWithoutConcurrentCreate(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	pr, err := store.CreatePullRequestRecord(ctx, fixture.orgID, fixture.sessionID,
+		"github", "octo/widgets", "owner", 41, "https://github.test/octo/widgets/pull/41",
+		"feature", "main", "head", "Title", 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := domain.PullRequestSnapshot{
+		URL: pr.URL, Title: pr.Title, Author: pr.Author, SourceBranch: pr.SourceBranch, TargetBranch: pr.TargetBranch,
+		Observation: domain.PullRequestObservation{State: contract.PRStateOpen, HeadSHA: "head", CIState: contract.CIPassing, ReviewState: contract.ReviewNone, Mergeability: contract.MergeMergeable},
+	}
+	if _, err := store.ApplyPullRequestSnapshot(ctx, fixture.orgID, pr.ID, ready, domain.PullRequestRefreshContext{}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.ListNotifications(ctx, principal, fixture.orgID, domain.NotificationFilter{Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := notificationByType(page.Items, "ready_to_merge"); n == nil || n.ResolvedAt != nil {
+		t.Fatalf("ready_to_merge notification = %+v, notifications = %+v", n, page.Items)
+	}
+
+	// Drop the PR out of the ready state so the only transition is a resolve with no
+	// notification created in the same transaction. This pure-resolve path silently
+	// matched zero rows under forced RLS before resolvePullRequestNotificationTx set
+	// ao.user_id, so the bell never cleared once it had been shown.
+	notReady := ready
+	notReady.Observation.Mergeability = contract.MergeBlocked
+	if _, err := store.ApplyPullRequestSnapshot(ctx, fixture.orgID, pr.ID, notReady, domain.PullRequestRefreshContext{}); err != nil {
+		t.Fatal(err)
+	}
+	page, err = store.ListNotifications(ctx, principal, fixture.orgID, domain.NotificationFilter{Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := notificationByType(page.Items, "ready_to_merge"); n == nil || n.ResolvedAt == nil {
+		t.Fatalf("ready_to_merge should resolve once the PR is no longer mergeable = %+v, notifications = %+v", n, page.Items)
+	}
+}
+
 func TestApplyPullRequestSnapshotBackfillsMissingReviewFeedbackNotification(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()

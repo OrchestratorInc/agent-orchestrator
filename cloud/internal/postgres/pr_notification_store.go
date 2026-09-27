@@ -136,6 +136,21 @@ func createPullRequestNotificationTx(ctx context.Context, tx pgx.Tx, pr domain.P
 }
 
 func resolvePullRequestNotificationTx(ctx context.Context, tx pgx.Tx, pr domain.PullRequest, kind string) error {
+	// This runs inside ApplyPullRequestSnapshot's withOrg transaction, so ao.user_id
+	// is unset and ao_notifications' forced RLS (recipient/service policies) would
+	// filter every row out — the resolve would silently match nothing. Scope to the
+	// notification's recipient (the session creator, the same recipient the create
+	// path uses) so the resolve and its event writes satisfy the recipient policy.
+	var recipientID string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(created_by_user_id::text,'') FROM ao_sessions WHERE org_id=$1 AND id=$2`, pr.OrgID, pr.SessionID).Scan(&recipientID); err != nil {
+		return err
+	}
+	if recipientID == "" {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `SELECT set_config('ao.user_id',$1,true)`, recipientID); err != nil {
+		return err
+	}
 	dedupe := kind + ":" + pr.ID
 	rows, err := tx.Query(ctx, `UPDATE ao_notifications SET resolved_at=now(),updated_at=now() WHERE org_id=$1 AND pull_request_id=$2 AND dedupe_key=$3 AND resolved_at IS NULL RETURNING id::text,recipient_user_id::text`, pr.OrgID, pr.ID, dedupe)
 	if err != nil {
