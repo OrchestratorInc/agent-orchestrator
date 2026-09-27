@@ -7,19 +7,20 @@ keeps Reasonix's configured default; AO does not maintain a model list.
 
 ## CLI compatibility
 
-AO requires a Reasonix CLI that exposes `--append-system-prompt-file` and `--resume-exact`. AO uses
-this process-scoped flag to add its standing instructions as system-role content
-on both fresh launch and exact restore. The exact-resume flag selects the saved canonical identity directly, without
-filename precedence, fuzzy search, or the recent-session catalog. AO rejects binaries
-that lack either flag
-with an actionable compatibility error.
+AO requires a Reasonix CLI that exposes `--append-system-prompt-file` and
+`--resume-exact`. The prompt-file flag adds AO's standing instructions as
+system-role content on both fresh launch and exact restore. The exact-resume
+flag selects the saved canonical identity directly, without filename precedence,
+fuzzy search, or the recent-session catalog. AO rejects binaries that lack either
+flag with an actionable compatibility error.
 
-**The current official v1.39.2 release is not compatible.** The prerequisite is
-[Reasonix PR #11059](https://github.com/esengine/DeepSeek-Reasonix/pull/11059).
-Until that capability ships in a verified official release, use a source build
-containing the prerequisite change. There is no advertised minimum compatible
-release yet. Installing an official package by itself does not establish AO
-compatibility.
+**The current official v1.39.2 release is not compatible.** The upstream proposal
+[Reasonix PR #11059](https://github.com/esengine/DeepSeek-Reasonix/pull/11059) was
+closed because the 1.x maintenance line accepts only bug fixes; new upstream
+features must target the separate 2.x `studio` line. This AO integration currently
+requires the tested fork build below, not an accepted upstream release. There is
+no advertised minimum compatible release yet. Installing an official package by
+itself does not establish AO compatibility.
 
 The tested source build is
 [`9790b1c`](https://github.com/nikhilachale/DeepSeek-Reasonix/commit/9790b1c53d6d68919455b237bc0f03cfdf3b7dac),
@@ -45,7 +46,23 @@ not covered by this macOS test.
 ## Install and configure
 
 Install AO through the [desktop releases](https://github.com/aoagents/agent-orchestrator/releases).
-Install Reasonix separately using the official channel for your system:
+For the currently qualified Reasonix build, use the pinned fork source with
+Go 1.26.6:
+
+```bash
+git clone https://github.com/nikhilachale/DeepSeek-Reasonix.git reasonix-ao
+cd reasonix-ao
+git checkout --detach 9790b1c53d6d68919455b237bc0f03cfdf3b7dac
+CGO_ENABLED=0 go build -ldflags '-X main.version=v1.39.2-ao.9790b1c' \
+  -o bin/reasonix ./cmd/reasonix
+```
+
+Put the resulting executable on the PATH inherited by AO, ahead of incompatible
+Reasonix installations, and restart AO. On Windows, name it `reasonix.exe`.
+Rebuilt executable checksums can differ from the recorded test artifact.
+
+The official installation channels below are available in Harness settings, but
+their current v1.39.2 packages do not satisfy AO's required capabilities:
 
 ```bash
 # macOS with Homebrew

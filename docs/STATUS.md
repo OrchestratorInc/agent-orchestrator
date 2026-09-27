@@ -84,8 +84,9 @@ surface (`npm run sqlc`, `npm run api`).
   is Chat-only until its ACP and TUI conversation ids are proven to share identity.
 - [Reasonix](harnesses/reasonix.md) is selectable for Terminal UI worker and
   orchestrator sessions. AO requires the CLI to expose
-  `--append-system-prompt-file`; official v1.39.2 is not compatible. The source
-  prerequisite is [Reasonix PR #11059](https://github.com/esengine/DeepSeek-Reasonix/pull/11059).
+  `--append-system-prompt-file` and `--resume-exact`; official v1.39.2 is not
+  compatible. The tested source fork is documented in the harness guide; the 1.x
+  upstream proposal [#11059](https://github.com/esengine/DeepSeek-Reasonix/pull/11059) is closed.
   No minimum compatible release is advertised until one is published and verified.
   Chat, reviewer execution, interface handoff, and nested-agent sessions are not
   supported. Models use direct free-form IDs, and configured credentials are

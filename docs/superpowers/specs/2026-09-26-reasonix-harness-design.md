@@ -71,7 +71,7 @@ The name may change upstream, but the behavior must remain equivalent:
 
 The adapter verifies the native version identity and required help flags with
 bounded probes. Released v1.39.2 lacks the prompt-file flag and is rejected with
-an actionable error. The implementation in upstream PR #11059 supplies it;
+an actionable error. The tested fork derived from the now-closed upstream PR #11059 supplies it;
 there is no minimum compatible release yet. Live conformance records the exact
 tested binary and does not claim that an untested release is compatible.
 

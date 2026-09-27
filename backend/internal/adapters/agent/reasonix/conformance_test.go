@@ -96,7 +96,7 @@ func TestReasonixLiveAOConformance(t *testing.T) {
 		var request liveReasonixRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Errorf("decode provider request: %v", err)
-			http.Error(w, "invalid request", 400)
+			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
 		select {
@@ -222,18 +222,18 @@ api_key_env = "AO_REASONIX_CONFORMANCE_KEY"
 		t.Fatal(err)
 	}
 	create(argv)
-	waitLiveReasonixReady(t, ctx, runtime, handle, plugin, "", promptFile)
+	waitLiveReasonixReady(ctx, t, runtime, handle, plugin, "", promptFile)
 	if err := runtime.SendMessage(ctx, handle, task); err != nil {
 		t.Fatal(err)
 	}
-	assertLiveReasonixRoles(t, liveReasonixReceive(t, ctx, requests), private, configured, memory, task)
-	waitLiveReasonixReady(t, ctx, runtime, handle, plugin, "AO_REASONIX_REPLY_1", promptFile)
-	nativeID := liveReasonixHookID(t, ctx, hookDir, "session-start", 1)
+	assertLiveReasonixRoles(t, liveReasonixReceive(ctx, t, requests), private, configured, memory, task)
+	waitLiveReasonixReady(ctx, t, runtime, handle, plugin, "AO_REASONIX_REPLY_1", promptFile)
+	nativeID := liveReasonixHookID(ctx, t, hookDir, "session-start", 1)
 	if manifestID := liveReasonixNativeID(t, fixtureHome); manifestID != nativeID {
 		t.Fatalf("hook identity %q does not match native manifest %q", nativeID, manifestID)
 	}
 	for _, event := range []string{"user-prompt-submit", "stop"} {
-		if got := liveReasonixHookID(t, ctx, hookDir, event, 1); got != nativeID {
+		if got := liveReasonixHookID(ctx, t, hookDir, event, 1); got != nativeID {
 			t.Fatalf("%s hook identity %q != %q", event, got, nativeID)
 		}
 	}
@@ -241,7 +241,7 @@ api_key_env = "AO_REASONIX_CONFORMANCE_KEY"
 		t.Fatal(err)
 	}
 	handle = ports.RuntimeHandle{}
-	if got := liveReasonixHookID(t, ctx, hookDir, "session-end", 1); got != nativeID {
+	if got := liveReasonixHookID(ctx, t, hookDir, "session-end", 1); got != nativeID {
 		t.Fatalf("shutdown hook identity %q != %q", got, nativeID)
 	}
 	// Exact resume must select the canonical native ID even when an unrelated
@@ -254,14 +254,14 @@ api_key_env = "AO_REASONIX_CONFORMANCE_KEY"
 		t.Fatalf("exact restore: ok=%v err=%v", ok, err)
 	}
 	create(restored)
-	waitLiveReasonixReady(t, ctx, runtime, handle, plugin, "", promptFile)
+	waitLiveReasonixReady(ctx, t, runtime, handle, plugin, "", promptFile)
 	if err := runtime.SendMessage(ctx, handle, restoredTask); err != nil {
 		t.Fatal(err)
 	}
-	assertLiveReasonixRoles(t, liveReasonixReceive(t, ctx, requests), updated, configured, memory, task, restoredTask)
-	waitLiveReasonixReady(t, ctx, runtime, handle, plugin, "AO_REASONIX_REPLY_2", promptFile)
+	assertLiveReasonixRoles(t, liveReasonixReceive(ctx, t, requests), updated, configured, memory, task, restoredTask)
+	waitLiveReasonixReady(ctx, t, runtime, handle, plugin, "AO_REASONIX_REPLY_2", promptFile)
 	for _, event := range []string{"session-start", "user-prompt-submit", "stop"} {
-		if got := liveReasonixHookID(t, ctx, hookDir, event, 2); got != nativeID {
+		if got := liveReasonixHookID(ctx, t, hookDir, event, 2); got != nativeID {
 			t.Fatalf("restored %s hook identity %q != %q", event, got, nativeID)
 		}
 	}
@@ -278,7 +278,7 @@ api_key_env = "AO_REASONIX_CONFORMANCE_KEY"
 		t.Fatal(err)
 	}
 	handle = ports.RuntimeHandle{}
-	if got := liveReasonixHookID(t, cleanupCtx, hookDir, "session-end", 2); got != nativeID {
+	if got := liveReasonixHookID(cleanupCtx, t, hookDir, "session-end", 2); got != nativeID {
 		t.Fatalf("final shutdown hook identity %q != %q", got, nativeID)
 	}
 	t.Log("proved AO tmux launch, literal multiline Unicode task delivery, system/user role separation, native hook identity capture, and exact native restore; AO CLI hook routing is tested separately")
@@ -291,7 +291,7 @@ func writeLiveReasonixFile(t *testing.T, path, body string) {
 	}
 }
 
-func liveReasonixReceive(t *testing.T, ctx context.Context, requests <-chan liveReasonixRequest) liveReasonixRequest {
+func liveReasonixReceive(ctx context.Context, t *testing.T, requests <-chan liveReasonixRequest) liveReasonixRequest {
 	t.Helper()
 	select {
 	case request := <-requests:
@@ -302,7 +302,7 @@ func liveReasonixReceive(t *testing.T, ctx context.Context, requests <-chan live
 	}
 }
 
-func waitLiveReasonixReady(t *testing.T, ctx context.Context, runtime *tmux.Runtime, handle ports.RuntimeHandle, plugin *Plugin, response, promptPath string) {
+func waitLiveReasonixReady(ctx context.Context, t *testing.T, runtime *tmux.Runtime, handle ports.RuntimeHandle, plugin *Plugin, response, promptPath string) {
 	t.Helper()
 	deadline := time.NewTimer(20 * time.Second)
 	defer deadline.Stop()
@@ -401,7 +401,7 @@ func liveReasonixNativeID(t *testing.T, fixtureHome string) string {
 	return ids[0]
 }
 
-func liveReasonixHookID(t *testing.T, ctx context.Context, hookDir, event string, minimum int) string {
+func liveReasonixHookID(ctx context.Context, t *testing.T, hookDir, event string, minimum int) string {
 	t.Helper()
 	deadline := time.NewTimer(5 * time.Second)
 	defer deadline.Stop()

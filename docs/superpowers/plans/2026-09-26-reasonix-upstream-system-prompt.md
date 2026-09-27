@@ -10,10 +10,24 @@
 
 **Spec:** AO repository `docs/superpowers/specs/2026-09-26-reasonix-harness-design.md`
 
-## Implementation status — 2026-09-27
+## Current status — 2026-09-27
 
-The upstream implementation is submitted in
-[draft Reasonix PR #11059](https://github.com/esengine/DeepSeek-Reasonix/pull/11059),
+The maintainer closed PR #11059: `main-v2` is a bug-fix-only maintenance line,
+and new upstream features must target `studio` (2.x) with its stable prompt-prefix
+contract. The historical implementation and checks below describe the 1.x
+proposal; they do not establish accepted upstream or 2.x compatibility.
+
+AO's completed integration is qualified against fork commit
+`9790b1c53d6d68919455b237bc0f03cfdf3b7dac`, which additionally implements
+`--resume-exact` to bypass filename/fuzzy selection and recent-session limits.
+The final native CLI/i18n suites and AO real-tmux conformance passed for that
+build. AO rejects binaries without both required capabilities. Upstream 2.x
+support needs separate qualification; it is not claimed by AO PR #5905.
+
+## Historical 1.x implementation evidence
+
+The upstream implementation was submitted in
+[now-closed Reasonix PR #11059](https://github.com/esengine/DeepSeek-Reasonix/pull/11059),
 committed as
 [`642173c`](https://github.com/nikhilachale/DeepSeek-Reasonix/commit/642173c)
 on `feat/append-system-prompt-file`, based on CLI branch `main-v2` at

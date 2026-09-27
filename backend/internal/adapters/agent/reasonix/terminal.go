@@ -61,7 +61,7 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 				shortcuts = shortcuts || strings.HasPrefix(row, "Shift+Tab ")
 				continue
 			}
-			if !footerData(row) && !(gitRowAllowed && gitFooterIdentity.MatchString(row)) {
+			if !footerData(row) && (!gitRowAllowed || !gitFooterIdentity.MatchString(row)) {
 				return "", false
 			}
 			gitRowAllowed = false
@@ -78,7 +78,7 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 // Git owns only the first data row (repo@branch), followed by named metrics.
 var (
 	readyFooterState  = regexp.MustCompile(`(?:^| · )(?:ready|就绪|就緒)(?: · |$|\s{2,})`)
-	gitFooterIdentity = regexp.MustCompile(`^[^@\r\n]+@\S+(?:  .*)?$`)
+	gitFooterIdentity = regexp.MustCompile(`^[^@\r\n]+@\S+(?: {2}.*)?$`)
 )
 
 func composerBorder(line string) bool {
