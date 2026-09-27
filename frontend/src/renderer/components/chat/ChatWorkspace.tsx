@@ -110,6 +110,7 @@ import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
 import { ChatComposer, type StoredComposerAttachment } from "./ChatComposer";
+import type { SideChatDraft } from "./sideChatDraft";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
@@ -410,6 +411,7 @@ export interface ChatWorkspaceProps {
 	onActivateBranch?: (branchId: string) => void | Promise<unknown>;
 	/** Open an independent side conversation; the selection is its quoted reference. */
 	onCreateSideChat?: (excerpt?: ChatDraftExcerptReference) => Promise<{ id: string } | undefined>;
+	onBtwAction?: (draft?: SideChatDraft) => Promise<void>;
 	createSideChatPending?: boolean;
 	createSideChatError?: string;
 	activateBranchPending?: boolean;
@@ -613,6 +615,7 @@ function ChatWorkspaceContent({
 	activateBranchPending,
 	activateBranchError,
 	onCreateSideChat,
+	onBtwAction,
 	createSideChatPending,
 	createSideChatError,
 	skills,
@@ -1546,6 +1549,7 @@ function ChatWorkspaceContent({
 									steerPending={steerPending}
 									steerRefusal={steerRefusal}
 									onCompact={newWorkDisabled ? undefined : onCompact}
+									onBtwAction={onBtwAction}
 									compacting={compacting}
 									compactUnavailable={compactUnavailable}
 									compactBlocked={Boolean(turn)}

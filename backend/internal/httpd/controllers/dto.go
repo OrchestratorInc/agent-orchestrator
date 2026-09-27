@@ -10,9 +10,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/legacyimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
@@ -2494,10 +2494,11 @@ type CreateConversationSideChatResponse struct {
 }
 
 type SendSideQuestionRequest struct {
-	Text            string `json:"text"`
-	ClientMessageID string `json:"clientMessageId"`
-	Attachments []ConversationImageContentRequest `json:"attachments,omitempty"`
-	Resources []ConversationResourceContentRequest `json:"resources,omitempty"`
+	Text            string                                `json:"text"`
+	ClientMessageID string                                `json:"clientMessageId"`
+	References      []ConversationExcerptReferenceRequest `json:"references,omitempty"`
+	Attachments     []ConversationImageContentRequest     `json:"attachments,omitempty"`
+	Resources       []ConversationResourceContentRequest  `json:"resources,omitempty"`
 }
 
 type SideQuestionResponse struct {
@@ -2526,7 +2527,7 @@ type SideChatIDParam struct {
 
 type SideChatPageQuery struct {
 	Before string `query:"before,omitempty" description:"Read side turns older than this RFC3339 timestamp."`
-	Limit *int `query:"limit,omitempty" minimum:"1" maximum:"500"`
+	Limit  *int   `query:"limit,omitempty" minimum:"1" maximum:"500"`
 }
 
 type SideChatLaunchClaimRequest struct {
@@ -2534,8 +2535,8 @@ type SideChatLaunchClaimRequest struct {
 }
 
 type SideChatLaunchState struct {
-	AppRunID string `json:"appRunId"`
-	Sides []chatsvc.SideRecoveryRecord `json:"sides"`
+	AppRunID string                       `json:"appRunId"`
+	Sides    []chatsvc.SideRecoveryRecord `json:"sides"`
 }
 
 // ConversationSideChatResponse is one durable /btw thread.

@@ -1157,6 +1157,38 @@ describe("steering", () => {
 /* ---- slash commands ------------------------------------------------------ */
 
 describe("slash commands", () => {
+	it("runs the /btw menu action without sending or inserting a skill token", async () => {
+		const onBtwAction = vi.fn(async () => undefined);
+		const { onSend, field } = renderComposer({ onBtwAction, skills: SKILLS });
+		await typeInComposer(field, "Explain /");
+		await userEvent.click(screen.getByRole("option", { name: /\/btw/ }));
+		await waitFor(() => expect(onBtwAction).toHaveBeenCalledWith({ version: 1, text: "Explain", attachments: [], references: [] }));
+		expect(onSend).not.toHaveBeenCalled();
+		expect(field.querySelector('[data-composer-token="skill"]')).toBeNull();
+	});
+
+	it("moves main reference chips with a /btw draft", async () => {
+		const sessionId = "btw-transfer-references";
+		const reference = { id: "ref-1", conversationId: "conversation-1", messageId: "message-1", revision: 2,
+			text: "sun", role: "assistant" as const };
+		writeChatExcerptReferences(sessionId, [reference]);
+		const onBtwAction = vi.fn(async () => undefined);
+		const { field } = renderComposer({ draftSessionId: sessionId, onBtwAction });
+		await typeInComposer(field, "/");
+		await userEvent.click(screen.getByRole("option", { name: /\/btw/ }));
+		await waitFor(() => expect(onBtwAction).toHaveBeenCalledWith({ version: 1, text: "", attachments: [], references: [reference] }));
+		expect(readChatSessionDraft(sessionId).composer.excerpts ?? []).toEqual([]);
+	});
+
+	it("opens /btw on Enter and preserves an existing side draft when main has no content", async () => {
+		const onBtwAction = vi.fn(async () => undefined);
+		const { onSend, field } = renderComposer({ onBtwAction, skills: [] });
+		await typeInComposer(field, "/btw");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onBtwAction).toHaveBeenCalledWith(undefined));
+		expect(onBtwAction).toHaveBeenCalledTimes(1);
+		expect(onSend).not.toHaveBeenCalled();
+	});
 	it("opens the skill menu on a leading slash", async () => {
 		const { field } = renderComposer({ skills: SKILLS });
 		await typeInComposer(field, "/");

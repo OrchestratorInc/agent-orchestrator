@@ -312,7 +312,7 @@ func (m *memorySideStore) ReserveSideTurn(_ context.Context, turn domain.SideTur
 	}
 	for _, existing := range m.turns[turn.SideID] {
 		if existing.ClientMessageID == turn.ClientMessageID {
-			if existing.Text != turn.Text || !reflect.DeepEqual(existing.Content, turn.Content) {
+			if existing.Text != turn.Text || !reflect.DeepEqual(existing.Content, turn.Content) || !reflect.DeepEqual(existing.References, turn.References) {
 				return domain.SideTurn{}, false, ErrSideIdempotencyConflict
 			}
 			return existing, false, nil
@@ -464,6 +464,11 @@ func (m *memorySideStore) UpsertSideMessage(_ context.Context, msg domain.SideMe
 	}
 	for i := range m.messages[msg.SideID] {
 		if m.messages[msg.SideID][i].ID == msg.ID {
+			previous := m.messages[msg.SideID][i]
+			msg.Revision = previous.Revision
+			if previous.Text != msg.Text || previous.Streaming != msg.Streaming {
+				msg.Revision++
+			}
 			msg.Sequence = m.messages[msg.SideID][i].Sequence
 			msg.CreatedAt = m.messages[msg.SideID][i].CreatedAt
 			m.messages[msg.SideID][i] = msg
@@ -471,6 +476,7 @@ func (m *memorySideStore) UpsertSideMessage(_ context.Context, msg domain.SideMe
 		}
 	}
 	msg.Sequence = int64(len(m.messages[msg.SideID]) + 1)
+	msg.Revision = 1
 	m.messages[msg.SideID] = append(m.messages[msg.SideID], msg)
 	return nil
 }

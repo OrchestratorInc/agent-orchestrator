@@ -71,6 +71,7 @@ type sideChatConversationService interface {
 	SaveSideDraft(context.Context, domain.SessionID, string, string) error
 	SideDraft(context.Context, domain.SessionID, string) (string, error)
 	InterruptSideQuestion(context.Context, domain.SessionID, string) error
+	CompactSideChat(context.Context, domain.SessionID, string) (ports.ChatCompactionResult, error)
 	ResolveSideApproval(context.Context, domain.SessionID, string, string, string) error
 	ResolveSideInput(context.Context, domain.SessionID, string, string, ports.ChatInputResponse) error
 	CloseIndependentSideChat(context.Context, domain.SessionID, string) error
@@ -130,6 +131,7 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Patch("/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}", c.editSideQuestion)
 	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/retry", c.retrySideQuestion)
 	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/interrupt", c.interruptSideQuestion)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/compact", c.compactSideChat)
 	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/approvals/{requestId}/resolve", c.resolveSideApproval)
 	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/inputs/{requestId}/resolve", c.resolveSideInput)
 	r.Patch("/sessions/{sessionId}/conversation/side-chats/{sideId}/settings", c.sideSettings)

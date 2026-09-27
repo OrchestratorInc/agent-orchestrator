@@ -352,7 +352,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		default: choice.value === sideModelOption.currentValue,
 		efforts: sideEfforts, defaultEffort: sideEffortOption?.currentValue,
 	})) ?? []);
-	const sideChats = useIndependentSideChats(session.id, sideModels, stageAttachments, Boolean(snapshot && can(snapshot, "images")));
+	const sideChats = useIndependentSideChats(session.id, sideModels, skills, stageAttachments, Boolean(snapshot && can(snapshot, "images")));
 	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser, paths);
 	const conversationLinkBaselines = useRef(new Map<string, ConversationLinkBaseline>());
 	useEffect(() => {
@@ -550,8 +550,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						const side = await sideChats.create(excerpts?.[0]);
 						onSideOpened?.();
 						if (message) {
-							sideChats.setQuestionDraft(side.id, message);
-							await sideChats.send(side.id, message, attachments);
+							await sideChats.replaceDraft(side.id, { version: 1, text: message, attachments: [], references: excerpts ?? [] });
+							await sideChats.send(side.id, message, attachments, excerpts);
 						}
 						return;
 					}
@@ -609,6 +609,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					const side = await sideChats.create(excerpt);
 					onSideOpened?.();
 					return side;
+				}}
+				onBtwAction={async (draft) => {
+					const side = await sideChats.create(draft?.references[0]);
+					if (draft) await sideChats.replaceDraft(side.id, draft);
+					onSideOpened?.();
 				}}
 				createSideChatPending={sideChats.pending}
 				createSideChatError={sideChats.error}

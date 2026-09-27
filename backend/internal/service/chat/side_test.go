@@ -21,6 +21,49 @@ type deferredSideTestConversation struct {
 	acked        bool
 }
 
+type compactSideTestConversation struct {
+	deferredSideTestConversation
+	compactions int
+}
+
+func (*compactSideTestConversation) Capabilities() ports.ChatCapabilities {
+	return ports.ChatCapabilities{ports.ChatCapabilityCompaction: true}
+}
+
+func (c *compactSideTestConversation) Compact(context.Context) (ports.ChatCompactionResult, error) {
+	c.compactions++
+	return ports.ChatCompactionResult{TokensBefore: 100}, nil
+}
+
+func TestSideCompactionUsesOnlySideProviderAndRejectsBusyTurn(t *testing.T) {
+	ctx := context.Background()
+	svc := New(Options{AppRunID: "launch-1"})
+	store := svc.sides.store
+	now := time.Now().UTC()
+	_, _ = store.ClaimSideLaunch(ctx, "launch-1", now)
+	side := domain.SideConversation{ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", AppRunID: "launch-1", Generation: "g", State: "opening"}
+	if _, _, err := store.CreateSideConversation(ctx, side); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetSideReady(ctx, side.ID, side.Generation, "provider-1", now); err != nil {
+		t.Fatal(err)
+	}
+	conv := &compactSideTestConversation{}
+	runtime := &sideRuntime{side: side, conv: conv}
+	svc.sides.runtimes[side.ID] = runtime
+	result, err := svc.CompactSideChat(ctx, side.SessionID, side.ID)
+	if err != nil || result.TokensBefore != 100 || conv.compactions != 1 {
+		t.Fatalf("side compact = %#v, %v; calls=%d", result, err, conv.compactions)
+	}
+	runtime.activeTurnID = "running"
+	if _, err := svc.CompactSideChat(ctx, side.SessionID, side.ID); !errors.Is(err, ErrCompactionWhileBusy) {
+		t.Fatalf("busy compact error = %v", err)
+	}
+	if conv.compactions != 1 {
+		t.Fatalf("busy turn compacted provider %d times", conv.compactions)
+	}
+}
+
 func (*deferredSideTestConversation) ProviderConversationID() string       { return "provider-side-1" }
 func (*deferredSideTestConversation) Capabilities() ports.ChatCapabilities { return nil }
 func (c *deferredSideTestConversation) SendTurn(context.Context, ports.ChatUserMessage) (ports.ChatTurnRef, error) {
@@ -61,6 +104,61 @@ func TestSideQuestionTreatsSelectionAsSubjectAndPairAsBackground(t *testing.T) {
 	}
 	if strings.Index(got, "The sun is a star.") >= strings.Index(got, "> sun") || strings.Index(got, "> sun") >= strings.Index(got, "What is this?") {
 		t.Fatalf("background, selection, and question are out of order: %q", got)
+	}
+}
+
+func TestSideQuestionWithMultipleReferencesKeepsQuestionLast(t *testing.T) {
+	turn := domain.SideTurn{Text: "What do these mean together?", References: []domain.SideReference{
+		{Selection: "sun", Context: "user: sky\nassistant: star"},
+		{Selection: "moon"},
+	}}
+	got := sideQuestionWithReferences(turn)
+	for _, part := range []string{"quoted background", "> sun", "> moon", turn.Text} {
+		if !strings.Contains(got, part) {
+			t.Fatalf("missing %q from %q", part, got)
+		}
+	}
+	if strings.Index(got, "> sun") >= strings.Index(got, "> moon") || strings.Index(got, "> moon") >= strings.Index(got, turn.Text) {
+		t.Fatalf("references and question out of order: %q", got)
+	}
+}
+
+func TestValidateSideReferenceRequiresCompletedExactMessage(t *testing.T) {
+	ctx := context.Background()
+	svc := New(Options{AppRunID: "launch-1"})
+	store := svc.sides.store
+	now := time.Now().UTC()
+	_, _ = store.ClaimSideLaunch(ctx, "launch-1", now)
+	side := domain.SideConversation{ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", AppRunID: "launch-1", Generation: "g", State: "opening"}
+	if _, _, err := store.CreateSideConversation(ctx, side); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetSideReady(ctx, side.ID, side.Generation, "provider-1", now); err != nil {
+		t.Fatal(err)
+	}
+	turn := domain.SideTurn{ID: "turn-1", SideID: side.ID, ClientMessageID: "client-1", Text: "Say sun", CreatedAt: now}
+	if _, _, err := store.ReserveSideTurn(ctx, turn, "launch-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SettleSideTurn(ctx, side.ID, turn.ID, side.Generation, "completed", "provider-turn-1", "", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertSideMessage(ctx, domain.SideMessage{ID: "message-1", SideID: side.ID, TurnID: turn.ID, Role: "assistant", Text: "The **sun** is a star.", CreatedAt: now, UpdatedAt: now}, side.Generation); err != nil {
+		t.Fatal(err)
+	}
+	ref := ports.ChatExcerptReference{ConversationID: side.ID, MessageID: "message-1", Revision: 1, Text: "sun"}
+	result, err := svc.validateSideReferences(ctx, side.SessionID, side, []ports.ChatExcerptReference{ref})
+	if err != nil || len(result) != 1 || result[0].Selection != "sun" {
+		t.Fatalf("valid selection = %#v, %v", result, err)
+	}
+	ref.Revision = 0
+	if _, err := svc.validateSideReferences(ctx, side.SessionID, side, []ports.ChatExcerptReference{ref}); !errors.Is(err, ErrExcerptStale) {
+		t.Fatalf("stale revision = %v", err)
+	}
+	ref.Revision = 1
+	ref.Text = "moon"
+	if _, err := svc.validateSideReferences(ctx, side.SessionID, side, []ports.ChatExcerptReference{ref}); !errors.Is(err, ErrExcerptInvalid) {
+		t.Fatalf("wrong selection = %v", err)
 	}
 }
 

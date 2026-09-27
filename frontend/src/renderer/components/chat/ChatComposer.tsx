@@ -99,6 +99,7 @@ import {
 } from "../../lib/chat-drafts";
 import { attachmentURL, IMAGE_ATTACHMENT_PATH } from "./messageAttachments";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
+import type { SideChatDraft } from "./sideChatDraft";
 
 // These responses precede AppendUserMessage. Provider/transport errors can
 // follow durable acceptance and must keep the original delivery ID for recovery.
@@ -178,6 +179,7 @@ export const ChatComposer = memo(function ChatComposer({
 	attachedTop = false,
 	queuedDock,
 	onCompact,
+	onBtwAction,
 	compacting,
 	compactUnavailable,
 	compactBlocked,
@@ -257,6 +259,8 @@ export const ChatComposer = memo(function ChatComposer({
 	queuedDock?: ReactNode;
 	/** Run AO's built-in `/compact` command instead of sending it to the agent. */
 	onCompact?: () => void | Promise<unknown>;
+	/** Open/focus a side chat; a transferred draft remains unsent. */
+	onBtwAction?: (draft?: SideChatDraft) => Promise<void>;
 	/** The provider is already compacting this conversation. */
 	compacting?: boolean;
 	/** A typed provider refusal from the last compaction attempt. */
@@ -344,6 +348,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const menuId = useId();
 	const hadQueuedDockRef = useRef(Boolean(queuedDock));
 	const previousTrigger = useRef<ComposerTrigger | undefined>(undefined);
+	const btwCompletionHandled = useRef(false);
 	const triggerRef = useRef<ComposerTrigger | undefined>(undefined);
 	const automaticDeliveryRecoveryAttempted = useRef<string | undefined>(undefined);
 	const restoredSeedKey = useRef<string | undefined>(undefined);
@@ -454,17 +459,19 @@ export const ChatComposer = memo(function ChatComposer({
 	const canAttach = Boolean(onStageAttachments) && !queuedEditRecovery;
 
 	const slashCommands = useMemo<ChatSkill[]>(() => {
-		if (!onCompact || compactUnavailable === "This agent cannot compact its history") return skills;
+		const builtins: ChatSkill[] = onBtwAction ? [{ name: "btw", displayName: "btw", description: "Opens a side chat", source: "AO" }] : [];
+		if (!onCompact || compactUnavailable === "This agent cannot compact its history") return [...builtins, ...skills.filter((skill) => skill.name !== "btw")];
 		return [
+			...builtins,
 			{
 				name: "compact",
 				displayName: "compact",
 				description: "Summarize earlier history to reclaim context",
 				source: "AO",
 			},
-			...skills.filter((skill) => skill.name !== "compact"),
+			...skills.filter((skill) => skill.name !== "compact" && skill.name !== "btw"),
 		];
-	}, [compactUnavailable, onCompact, skills]);
+	}, [compactUnavailable, onCompact, onBtwAction, skills]);
 
 	const suggestionsFor = useCallback((currentTrigger?: ComposerTrigger): Suggestion[] => {
 		if (!currentTrigger || currentTrigger.key === dismissedKeyRef.current) return [];
@@ -903,7 +910,29 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 	}, [draftScope, onQueuedDraftChange]);
 
+	const invokeBtw = useCallback(async (rawText: string) => {
+		if (!onBtwAction || submitInFlight.current || savingQueuedEdit || durableDelivery) return;
+		setSendError(null);
+		try {
+			await fileAttachments.toSettledPayload();
+			if (fileAttachments.hasPendingReads()) return;
+			const attachments = fileAttachments.getAttachments();
+			if (attachments.some((file) => !file.stagedPath)) throw new Error("Attached files are still preparing.");
+			const text = rawText.replace(/\/[^\s]*$/, "").trim();
+			const draft: SideChatDraft | undefined = text || attachments.length || contextReferences.length
+				? { version: 1, text, attachments: attachments.map((file) => ({ id: file.id, name: file.name,
+					path: file.stagedPath!, mimeType: file.mimeType, bytes: file.bytes })), references: contextReferences }
+				: undefined;
+			const revision = composerRevision.current;
+			await onBtwAction(draft);
+			const cleared = draftScope ? clearAcceptedChatComposer(draftScope, revision) : { ok: true, cleared: true };
+			if (!cleared.ok) { setSendError("Side chat opened, but the main draft could not be cleared. Your text is still here."); return; }
+			if (cleared.cleared) { clearEditorView(); fileAttachments.clear(); }
+		} catch (error) { setSendError(apiErrorMessage(error, "Could not open the side chat.")); }
+	}, [onBtwAction, savingQueuedEdit, durableDelivery, fileAttachments, contextReferences, draftScope, clearEditorView]);
+
 	const pick = useCallback((value: string) => {
+		if (value === "btw" && onBtwAction) { void invokeBtw(editor.current?.getSnapshot().text ?? textRef.current); return; }
 		const currentTrigger = triggerRef.current;
 		if (!currentTrigger) return;
 		editor.current?.insertToken(currentTrigger, value);
@@ -914,14 +943,14 @@ export const ChatComposer = memo(function ChatComposer({
 		setHighlighted(0);
 		dismissedKeyRef.current = null;
 		setDismissedKey(null);
-	}, []);
+	}, [invokeBtw, onBtwAction]);
 
 	useEffect(() => {
 		if (isComposing || !trigger || trigger.kind !== "skill" || trigger.key === dismissedKey) return;
 		const query = trigger.query.toLowerCase();
 		if (!query) return;
 		const exact = slashCommands.find((skill) => skill.name.toLowerCase() === query);
-		if (!exact) return;
+		if (!exact || exact.name === "btw") return;
 
 		// Do not eagerly accept a skill whose full name is also the start of another
 		// skill. The user must still be able to type `/review-pr` when `/review`
@@ -953,12 +982,17 @@ export const ChatComposer = memo(function ChatComposer({
 			const matches = suggestionsFor(currentTrigger);
 			const chosen = matches[Math.min(highlightedRef.current, matches.length - 1)];
 			if (!chosen) return undefined;
+			if (chosen.value === "btw" && onBtwAction && key === "Enter") {
+				btwCompletionHandled.current = true;
+				void invokeBtw(snapshot.text);
+				return undefined;
+			}
 			triggerRef.current = currentTrigger;
 			highlightedRef.current = 0;
 			dismissedKeyRef.current = null;
 			return chosen.value;
 		},
-		[onCompact, suggestionsFor],
+		[onCompact, onBtwAction, invokeBtw, suggestionsFor],
 	);
 
 	function submit(event?: FormEvent, forceSteer?: boolean): Promise<void> {
@@ -1291,6 +1325,7 @@ export const ChatComposer = memo(function ChatComposer({
 		snapshot: ComposerEditorSnapshot,
 		event: globalThis.KeyboardEvent,
 	): boolean {
+		if (btwCompletionHandled.current) { btwCompletionHandled.current = false; return true; }
 		textRef.current = snapshot.text;
 		return handleEnterKey(event);
 	}
@@ -1302,12 +1337,13 @@ export const ChatComposer = memo(function ChatComposer({
 			const liveTrigger = liveSnapshot?.trigger;
 			const liveSuggestions = suggestionsFor(liveTrigger);
 			if (liveSuggestions.length > 0) {
+				const chosen = liveSuggestions[Math.min(highlightedRef.current, liveSuggestions.length - 1)];
+				if (chosen?.value === "btw" && onBtwAction) { void invokeBtw(textRef.current); return true; }
 				if (textRef.current.trim() === "/compact" && onCompact) {
 					void submit();
 					return true;
 				}
 				triggerRef.current = liveTrigger;
-				const chosen = liveSuggestions[Math.min(highlightedRef.current, liveSuggestions.length - 1)];
 				if (chosen) pick(chosen.value);
 				return true;
 			}
@@ -1320,7 +1356,7 @@ export const ChatComposer = memo(function ChatComposer({
 			void submit(undefined, wantsSteer);
 			return true;
 		},
-		[canSteerDraft, canSteerNext, fileAttachments, onCompact, pick, suggestionsFor],
+		[canSteerDraft, canSteerNext, fileAttachments, onCompact, onBtwAction, invokeBtw, pick, suggestionsFor],
 	);
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {

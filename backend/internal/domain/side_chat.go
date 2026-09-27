@@ -38,20 +38,31 @@ type SideConversation struct {
 }
 
 type SideTurn struct {
-	ID               string        `json:"id"`
-	SideID           string        `json:"sideId"`
-	ClientMessageID  string        `json:"clientMessageId"`
-	Text             string        `json:"text"`
-	Content          []SideContent `json:"-"`
-	SelectionText    string        `json:"selectionText,omitempty"`
-	ReferenceContext string        `json:"referenceContext,omitempty"`
-	ProviderTurnID   string        `json:"providerTurnId,omitempty"`
-	RetryOfTurnID    string        `json:"retryOfTurnId,omitempty"`
-	State            string        `json:"state"`
-	ErrorMessage     string        `json:"errorMessage,omitempty"`
-	CreatedAt        time.Time     `json:"createdAt"`
-	StartedAt        *time.Time    `json:"startedAt,omitempty"`
-	CompletedAt      *time.Time    `json:"completedAt,omitempty"`
+	ID               string          `json:"id"`
+	SideID           string          `json:"sideId"`
+	ClientMessageID  string          `json:"clientMessageId"`
+	Text             string          `json:"text"`
+	Content          []SideContent   `json:"-"`
+	References       []SideReference `json:"references,omitempty"`
+	SelectionText    string          `json:"selectionText,omitempty"`
+	ReferenceContext string          `json:"referenceContext,omitempty"`
+	ProviderTurnID   string          `json:"providerTurnId,omitempty"`
+	RetryOfTurnID    string          `json:"retryOfTurnId,omitempty"`
+	State            string          `json:"state"`
+	ErrorMessage     string          `json:"errorMessage,omitempty"`
+	CreatedAt        time.Time       `json:"createdAt"`
+	StartedAt        *time.Time      `json:"startedAt,omitempty"`
+	CompletedAt      *time.Time      `json:"completedAt,omitempty"`
+}
+
+// SideReference is verified and frozen when its question is accepted.
+type SideReference struct {
+	ConversationID string `json:"conversationId"`
+	MessageID      string `json:"messageId"`
+	Revision       int64  `json:"revision"`
+	Selection      string `json:"selection"`
+	SourceRole     string `json:"sourceRole"`
+	Context        string `json:"context,omitempty"`
 }
 
 type SideContent struct {

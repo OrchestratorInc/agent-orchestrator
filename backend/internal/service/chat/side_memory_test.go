@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -137,6 +138,48 @@ func TestMemorySideStoreRecoveryReplayKeepsLiveSideState(t *testing.T) {
 	turns, _, err := store.SideTurns(ctx, "side-1", time.Time{}, 10)
 	if err != nil || len(turns) != 1 || turns[0].Text != "new question" {
 		t.Fatalf("live turn after replay = %#v, %v", turns, err)
+	}
+}
+
+func TestMemorySideStoreFreezesReferencesAndIncrementsMessageRevision(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	store := newMemorySideStore()
+	_, _ = store.ClaimSideLaunch(ctx, "launch-1", now)
+	_, _, err := store.CreateSideConversation(ctx, domain.SideConversation{ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", AppRunID: "launch-1", Generation: "g"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := domain.SideTurn{ID: "turn-1", SideID: "side-1", ClientMessageID: "client-1", Text: "What is this?", CreatedAt: now,
+		References: []domain.SideReference{{ConversationID: "side-1", MessageID: "source", Revision: 1, Selection: "sun"}}}
+	if _, created, err := store.ReserveSideTurn(ctx, turn, "launch-1"); err != nil || !created {
+		t.Fatalf("reserve: %v, %v", created, err)
+	}
+	if _, created, err := store.ReserveSideTurn(ctx, turn, "launch-1"); err != nil || created {
+		t.Fatalf("duplicate: %v, %v", created, err)
+	}
+	changed := turn
+	changed.References = []domain.SideReference{{ConversationID: "side-1", MessageID: "source", Revision: 1, Selection: "moon"}}
+	if _, _, err := store.ReserveSideTurn(ctx, changed, "launch-1"); !errors.Is(err, ErrSideIdempotencyConflict) {
+		t.Fatalf("reference mismatch: %v", err)
+	}
+	first := domain.SideMessage{ID: "source", SideID: "side-1", TurnID: "turn-1", Role: "assistant", Text: "sun", Streaming: true, CreatedAt: now, UpdatedAt: now}
+	if err := store.UpsertSideMessage(ctx, first, "g"); err != nil {
+		t.Fatal(err)
+	}
+	first.Text = "sun and moon"
+	first.Streaming = false
+	if err := store.UpsertSideMessage(ctx, first, "g"); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := store.SideMessages(ctx, "side-1", []string{"turn-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range messages {
+		if message.ID == "source" && message.Revision != 2 {
+			t.Fatalf("revision = %d, want 2", message.Revision)
+		}
 	}
 }
 

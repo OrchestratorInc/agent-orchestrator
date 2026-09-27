@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/go-chi/chi/v5"
 )
@@ -96,23 +96,51 @@ func (c *ConversationsController) sideSnapshot(w http.ResponseWriter, r *http.Re
 }
 
 func (c *ConversationsController) streamSideChat(w http.ResponseWriter, r *http.Request) {
-	svc, ok := c.sideService(w, r); if !ok { return }
+	svc, ok := c.sideService(w, r)
+	if !ok {
+		return
+	}
 	generation, changes, cancel, err := svc.WatchSideChat(r.Context(), sideSession(r), sideID(r))
-	if err != nil { writeSideChatError(w, r, err); return }
+	if err != nil {
+		writeSideChatError(w, r, err)
+		return
+	}
 	defer cancel()
 	flusher, ok := w.(http.Flusher)
-	if !ok { envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "CHAT_SIDE_STREAM_UNAVAILABLE", "streaming is unavailable", nil); return }
+	if !ok {
+		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "CHAT_SIDE_STREAM_UNAVAILABLE", "streaming is unavailable", nil)
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	payload, _ := json.Marshal(map[string]string{"sideId": sideID(r), "generation": generation})
-	write := func(kind string) bool { _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", kind, payload); if err != nil { return false }; flusher.Flush(); return true }
-	if !write("snapshot") { return }
-	ticker := time.NewTicker(20*time.Second); defer ticker.Stop()
-	for { select {
-	case <-r.Context().Done(): return
-	case <-changes: if !write("changed") { return }
-	case <-ticker.C: if !write("heartbeat") { return }
-	} }
+	write := func(kind string) bool {
+		_, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", kind, payload)
+		if err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+	if !write("snapshot") {
+		return
+	}
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-changes:
+			if !write("changed") {
+				return
+			}
+		case <-ticker.C:
+			if !write("heartbeat") {
+				return
+			}
+		}
+	}
 }
 
 func (c *ConversationsController) sendSideQuestion(w http.ResponseWriter, r *http.Request) {
@@ -125,9 +153,16 @@ func (c *ConversationsController) sendSideQuestion(w http.ResponseWriter, r *htt
 		return
 	}
 	content, attachmentErr := conversationContent(SendConversationMessageRequest{Attachments: req.Attachments, Resources: req.Resources})
-	if attachmentErr != nil { envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", attachmentErr.code, attachmentErr.message, nil); return }
+	if attachmentErr != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", attachmentErr.code, attachmentErr.message, nil)
+		return
+	}
+	excerpts := make([]ports.ChatExcerptReference, 0, len(req.References))
+	for _, ref := range req.References {
+		excerpts = append(excerpts, ports.ChatExcerptReference{ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Text: ref.Text})
+	}
 	turn, err := svc.SendSideQuestion(r.Context(), sideSession(r), sideID(r), ports.ChatUserMessage{
-		Text: req.Text, ClientMessageID: req.ClientMessageID, Content: content, Origin: domain.MessageOriginHuman})
+		Text: req.Text, ClientMessageID: req.ClientMessageID, Content: content, Excerpts: excerpts, Origin: domain.MessageOriginHuman})
 	if err != nil {
 		writeSideChatError(w, r, err)
 		return
@@ -175,22 +210,59 @@ func (c *ConversationsController) interruptSideQuestion(w http.ResponseWriter, r
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (c *ConversationsController) compactSideChat(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.sideService(w, r)
+	if !ok {
+		return
+	}
+	result, err := svc.CompactSideChat(r.Context(), sideSession(r), sideID(r))
+	if err != nil {
+		writeSideChatError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusAccepted, CompactConversationResponse{
+		TokensBefore: result.TokensBefore, TokensAfter: result.TokensAfter,
+	})
+}
+
 func (c *ConversationsController) resolveSideApproval(w http.ResponseWriter, r *http.Request) {
-	svc, ok := c.sideService(w, r); if !ok { return }
+	svc, ok := c.sideService(w, r)
+	if !ok {
+		return
+	}
 	var req ResolveConversationApprovalRequest
-	if !decodeConversationBody(w, r, &req) { return }
-	if req.DecisionID == "" { envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_DECISION_REQUIRED", "decisionId is required", nil); return }
-	if err := svc.ResolveSideApproval(r.Context(), sideSession(r), sideID(r), chi.URLParam(r, "requestId"), req.DecisionID); err != nil { writeSideChatError(w, r, err); return }
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	if req.DecisionID == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_DECISION_REQUIRED", "decisionId is required", nil)
+		return
+	}
+	if err := svc.ResolveSideApproval(r.Context(), sideSession(r), sideID(r), chi.URLParam(r, "requestId"), req.DecisionID); err != nil {
+		writeSideChatError(w, r, err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (c *ConversationsController) resolveSideInput(w http.ResponseWriter, r *http.Request) {
-	svc, ok := c.sideService(w, r); if !ok { return }
+	svc, ok := c.sideService(w, r)
+	if !ok {
+		return
+	}
 	var req ResolveConversationInputRequest
-	if !decodeConversationBody(w, r, &req) { return }
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
 	response := ports.ChatInputResponse{Action: ports.ChatInputAction(req.Action), Content: req.Content}
-	if !response.Action.Valid() { envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_INPUT_ACTION_INVALID", "action must be accept, decline, or cancel", nil); return }
-	if err := svc.ResolveSideInput(r.Context(), sideSession(r), sideID(r), chi.URLParam(r, "requestId"), response); err != nil { writeSideChatError(w, r, err); return }
+	if !response.Action.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_INPUT_ACTION_INVALID", "action must be accept, decline, or cancel", nil)
+		return
+	}
+	if err := svc.ResolveSideInput(r.Context(), sideSession(r), sideID(r), chi.URLParam(r, "requestId"), response); err != nil {
+		writeSideChatError(w, r, err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -270,25 +342,47 @@ func (c *ConversationsController) claimSideLaunch(w http.ResponseWriter, r *http
 }
 
 func (c *ConversationsController) exportSideLaunch(w http.ResponseWriter, r *http.Request) {
-	svc, ok := c.sideService(w, r); if !ok { return }
+	svc, ok := c.sideService(w, r)
+	if !ok {
+		return
+	}
 	runID := r.URL.Query().Get("appRunId")
 	sides, err := svc.ExportSideChatLaunch(r.Context(), runID)
-	if err != nil { writeSideChatError(w, r, err); return }
+	if err != nil {
+		writeSideChatError(w, r, err)
+		return
+	}
 	envelope.WriteJSON(w, http.StatusOK, SideChatLaunchState{AppRunID: runID, Sides: sides})
 }
 
 func (c *ConversationsController) recoverSideLaunch(w http.ResponseWriter, r *http.Request) {
-	svc, ok := c.sideService(w, r); if !ok { return }
+	svc, ok := c.sideService(w, r)
+	if !ok {
+		return
+	}
 	var req SideChatLaunchState
-	if !decodeConversationBody(w, r, &req) { return }
-	if err := svc.RecoverSideChatLaunch(r.Context(), req.AppRunID, req.Sides); err != nil { writeSideChatError(w, r, err); return }
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	if err := svc.RecoverSideChatLaunch(r.Context(), req.AppRunID, req.Sides); err != nil {
+		writeSideChatError(w, r, err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (c *ConversationsController) retireSideLaunch(w http.ResponseWriter, r *http.Request) {
-	svc, ok := c.sideService(w, r); if !ok { return }
+	svc, ok := c.sideService(w, r)
+	if !ok {
+		return
+	}
 	var req SideChatLaunchClaimRequest
-	if !decodeConversationBody(w, r, &req) { return }
-	if err := svc.RetireSideChatLaunch(r.Context(), req.AppRunID); err != nil { writeSideChatError(w, r, err); return }
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	if err := svc.RetireSideChatLaunch(r.Context(), req.AppRunID); err != nil {
+		writeSideChatError(w, r, err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }

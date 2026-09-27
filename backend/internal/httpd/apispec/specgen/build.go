@@ -959,22 +959,28 @@ func shellTerminalOperations() []operation {
 			resps:      []respUnit{{http.StatusNoContent, nil}, {http.StatusConflict, envelope.APIError{}}},
 		},
 		{
-			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/events", id: "streamSessionSideChat", tag: "conversations",
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/compact", id: "compactSessionSideChat", tag: "conversations",
 			pathParams: []any{controllers.SessionIDParam{}, controllers.SideChatIDParam{}},
-			resps: []respUnit{{http.StatusOK, nil}, {http.StatusNotFound, envelope.APIError{}}},
+			resps: []respUnit{{http.StatusAccepted, controllers.CompactConversationResponse{}},
+				{http.StatusConflict, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/events", id: "streamSessionSideChat", tag: "conversations",
+			pathParams:   []any{controllers.SessionIDParam{}, controllers.SideChatIDParam{}},
+			resps:        []respUnit{{http.StatusOK, nil}, {http.StatusNotFound, envelope.APIError{}}},
 			contentTypes: map[int]string{http.StatusOK: "text/event-stream"},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/approvals/{requestId}/resolve", id: "resolveSessionSideChatApproval", tag: "conversations",
 			pathParams: []any{controllers.SessionIDParam{}, controllers.SideChatIDParam{}, controllers.ConversationRequestIDParam{}},
-			reqBody: controllers.ResolveConversationApprovalRequest{},
-			resps: []respUnit{{http.StatusNoContent, nil}, {http.StatusConflict, envelope.APIError{}}},
+			reqBody:    controllers.ResolveConversationApprovalRequest{},
+			resps:      []respUnit{{http.StatusNoContent, nil}, {http.StatusConflict, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/inputs/{requestId}/resolve", id: "resolveSessionSideChatInput", tag: "conversations",
 			pathParams: []any{controllers.SessionIDParam{}, controllers.SideChatIDParam{}, controllers.ConversationRequestIDParam{}},
-			reqBody: controllers.ResolveConversationInputRequest{},
-			resps: []respUnit{{http.StatusNoContent, nil}, {http.StatusConflict, envelope.APIError{}}},
+			reqBody:    controllers.ResolveConversationInputRequest{},
+			resps:      []respUnit{{http.StatusNoContent, nil}, {http.StatusConflict, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPatch, path: "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/settings", id: "updateSessionSideChatSettings", tag: "conversations",
@@ -1003,12 +1009,12 @@ func shellTerminalOperations() []operation {
 		{
 			method: http.MethodPost, path: "/api/v1/side-chats/launch/state", id: "recoverSideChatLaunch", tag: "conversations",
 			reqBody: controllers.SideChatLaunchState{},
-			resps: []respUnit{{http.StatusNoContent, nil}, {http.StatusConflict, envelope.APIError{}}},
+			resps:   []respUnit{{http.StatusNoContent, nil}, {http.StatusConflict, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/side-chats/launch/retire", id: "retireSideChatLaunch", tag: "conversations",
 			reqBody: controllers.SideChatLaunchClaimRequest{},
-			resps: []respUnit{{http.StatusNoContent, nil}, {http.StatusConflict, envelope.APIError{}}},
+			resps:   []respUnit{{http.StatusNoContent, nil}, {http.StatusConflict, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/approvals/{requestId}/resolve", id: "resolveSessionConversationApproval", tag: "conversations",

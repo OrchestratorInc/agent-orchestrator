@@ -106,17 +106,28 @@ func (f *fakeConversationService) SideDraft(context.Context, domain.SessionID, s
 func (f *fakeConversationService) InterruptSideQuestion(context.Context, domain.SessionID, string) error {
 	return nil
 }
-func (f *fakeConversationService) ResolveSideApproval(context.Context, domain.SessionID, string, string, string) error { return nil }
-func (f *fakeConversationService) ResolveSideInput(context.Context, domain.SessionID, string, string, ports.ChatInputResponse) error { return nil }
+func (f *fakeConversationService) CompactSideChat(context.Context, domain.SessionID, string) (ports.ChatCompactionResult, error) {
+	return ports.ChatCompactionResult{}, nil
+}
+func (f *fakeConversationService) ResolveSideApproval(context.Context, domain.SessionID, string, string, string) error {
+	return nil
+}
+func (f *fakeConversationService) ResolveSideInput(context.Context, domain.SessionID, string, string, ports.ChatInputResponse) error {
+	return nil
+}
 func (f *fakeConversationService) CloseIndependentSideChat(context.Context, domain.SessionID, string) error {
 	return nil
 }
 func (f *fakeConversationService) ClaimSideChatLaunch(context.Context, string) error { return nil }
-func (f *fakeConversationService) ExportSideChatLaunch(context.Context, string) ([]chatsvc.SideRecoveryRecord, error) { return nil, nil }
-func (f *fakeConversationService) RecoverSideChatLaunch(context.Context, string, []chatsvc.SideRecoveryRecord) error { return nil }
+func (f *fakeConversationService) ExportSideChatLaunch(context.Context, string) ([]chatsvc.SideRecoveryRecord, error) {
+	return nil, nil
+}
+func (f *fakeConversationService) RecoverSideChatLaunch(context.Context, string, []chatsvc.SideRecoveryRecord) error {
+	return nil
+}
 func (f *fakeConversationService) RetireSideChatLaunch(context.Context, string) error { return nil }
 func (f *fakeConversationService) WatchSideChat(context.Context, domain.SessionID, string) (string, <-chan struct{}, func(), error) {
-	return "generation-1", make(chan struct{}), func(){}, nil
+	return "generation-1", make(chan struct{}), func() {}, nil
 }
 
 func (f *fakeConversationService) Snapshot(context.Context, domain.SessionID) (chatsvc.Snapshot, error) {

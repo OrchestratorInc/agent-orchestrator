@@ -1732,6 +1732,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/compact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["compactSessionSideChat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/draft": {
         parameters: {
             query?: never;
@@ -3823,6 +3839,15 @@ export interface components {
             mode: string;
             reviewId: string;
         };
+        DomainSideReference: {
+            context?: string;
+            conversationId: string;
+            messageId: string;
+            /** Format: int64 */
+            revision: number;
+            selection: string;
+            sourceRole: string;
+        };
         EditConversationMessageRequest: {
             clientMessageId?: string;
             text: string;
@@ -4507,6 +4532,7 @@ export interface components {
         SendSideQuestionRequest: {
             attachments?: components["schemas"]["ConversationImageContentRequest"][];
             clientMessageId: string;
+            references?: components["schemas"]["ConversationExcerptReferenceRequest"][];
             resources?: components["schemas"]["ConversationResourceContentRequest"][];
             text: string;
         };
@@ -4940,6 +4966,7 @@ export interface components {
             id: string;
             providerTurnId?: string;
             referenceContext?: string;
+            references?: components["schemas"]["DomainSideReference"][];
             retryOfTurnId?: string;
             selectionText?: string;
             sideId: string;
@@ -11313,6 +11340,49 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    compactSessionSideChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Independent side chat identifier. */
+                sideId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompactConversationResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
             };
             /** @description Conflict */
             409: {

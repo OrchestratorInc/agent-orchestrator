@@ -4700,6 +4700,46 @@ paths:
       summary: ""
       tags:
       - conversations
+  /api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/compact:
+    post:
+      operationId: compactSessionSideChat
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Independent side chat identifier.
+        in: path
+        name: sideId
+        required: true
+        schema:
+          description: Independent side chat identifier.
+          type: string
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompactConversationResponse'
+          description: Accepted
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+      summary: ""
+      tags:
+      - conversations
   /api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/draft:
     get:
       operationId: getSessionSideChatDraft
@@ -10999,6 +11039,28 @@ components:
       - reviewId
       - harness
       type: object
+    DomainSideReference:
+      properties:
+        context:
+          type: string
+        conversationId:
+          type: string
+        messageId:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        selection:
+          type: string
+        sourceRole:
+          type: string
+      required:
+      - conversationId
+      - messageId
+      - revision
+      - selection
+      - sourceRole
+      type: object
     EditConversationMessageRequest:
       properties:
         clientMessageId:
@@ -12791,6 +12853,10 @@ components:
           type: array
         clientMessageId:
           type: string
+        references:
+          items:
+            $ref: '#/components/schemas/ConversationExcerptReferenceRequest'
+          type: array
         resources:
           items:
             $ref: '#/components/schemas/ConversationResourceContentRequest'
@@ -13891,6 +13957,10 @@ components:
           type: string
         referenceContext:
           type: string
+        references:
+          items:
+            $ref: '#/components/schemas/DomainSideReference'
+          type: array
         retryOfTurnId:
           type: string
         selectionText:
