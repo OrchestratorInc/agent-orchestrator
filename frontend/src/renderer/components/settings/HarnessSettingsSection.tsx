@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Download, LoaderCircle, LogIn, RefreshCw, Search, Trash2, TriangleAlert, X } from "lucide-react";
+import { Check, ChevronDown, Copy, Download, LoaderCircle, LogIn, RefreshCw, Search, Trash2, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
@@ -30,6 +30,9 @@ import { SettingsOptionMenu } from "./SettingsOptionMenu";
 type AgentInstallPlan = components["schemas"]["AgentInstallPlan"];
 type InstallJob = components["schemas"]["InstallJob"];
 type AgentOperation = "install" | "reinstall" | "update" | "uninstall";
+type InstalledOperation = "update" | "uninstall";
+type AgentInstallMethod = AgentInstallPlan["methods"][number];
+type OperationRequest = { agentId: AgentId; operation: InstalledOperation; method: string; needsMethod: boolean; confirmed: boolean };
 
 const installerQueryKey = ["agent-installers"] as const;
 const installJobsQueryKey = ["agent-install-jobs"] as const;
@@ -88,7 +91,11 @@ function upsertJob(current: InstallJob[] | undefined, next: InstallJob): Install
 }
 
 function isActive(job: InstallJob | undefined): boolean {
-	return job?.status === "installing" || job?.status === "verifying";
+	return job?.status === "running" || job?.status === "installing" || job?.status === "verifying";
+}
+
+function supportsOperation(method: AgentInstallMethod | undefined, operation: InstalledOperation): boolean {
+	return Boolean(method?.available && (operation === "update" ? method.updateAvailable : method.uninstallAvailable));
 }
 
 function diagnosticsText(agentId: AgentId, job: InstallJob): string {
@@ -142,7 +149,10 @@ export function HarnessSettingsSection({
 	const focusHandledRef = useRef(false);
 	const highlightTimerRef = useRef<number | null>(null);
 	const [highlightedAgentId, setHighlightedAgentId] = useState<AgentId | null>(null);
-	const [uninstallRequest, setUninstallRequest] = useState<{ agentId: AgentId; method: string } | null>(null);
+	const [expandedAgentId, setExpandedAgentId] = useState<AgentId | null>(null);
+	const [operationRequest, setOperationRequest] = useState<OperationRequest | null>(null);
+	// Operation identity is local to jobs started here; restored jobs use neutral copy.
+	const [operationAttempts, setOperationAttempts] = useState<Partial<Record<AgentId, { operation: AgentOperation; startedAt?: string }>>>({});
 
 	const plans = useMemo(() => new Map(installers.data?.map((plan) => [plan.agentId, plan]) ?? []), [installers.data]);
 	const jobMap = useMemo(() => new Map(jobs.data?.map((job) => [job.target, job]) ?? []), [jobs.data]);
@@ -296,7 +306,10 @@ export function HarnessSettingsSection({
 	};
 
 	const startAgentOperation = async (agentId: AgentId, method: string, operation: AgentOperation): Promise<boolean> => {
+		if (isActive(jobMap.get(agentId))) return false;
+		if ((operation === "update" || operation === "uninstall") && (!installed.has(agentId) || !supportsOperation(plans.get(agentId)?.methods.find((candidate) => candidate.id === method), operation))) return false;
 		if (!beginAction(agentId)) return false;
+		setOperationAttempts((current) => ({ ...current, [agentId]: { operation } }));
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
 		try {
 			const { data, error } = await apiClient.POST("/api/v1/agents/{agent}/install", {
@@ -307,13 +320,38 @@ export function HarnessSettingsSection({
 				setActionErrors((current) => ({ ...current, [agentId]: apiErrorMessage(error, t(operation === "uninstall" ? "settings.harness.uninstallFailed" : operation === "update" ? "settings.harness.updateFailed" : "settings.harness.startFailed")) }));
 				return false;
 			}
+			setOperationAttempts((current) => ({ ...current, [agentId]: { operation, startedAt: data.startedAt } }));
 			updateJob(data);
 			if (data.status === "succeeded") refreshInstalledAgent(agentId);
 			return true;
+		} catch (error) {
+			setActionErrors((current) => ({ ...current, [agentId]: error instanceof Error ? error.message : t("settings.harness.startFailed") }));
+			return false;
 		} finally {
 			endAction(agentId);
 		}
 	};
+
+	const requestInstalledOperation = (agentId: AgentId, operation: InstalledOperation) => {
+		if (!installed.has(agentId) || pendingActions.current.has(agentId) || isActive(jobMap.get(agentId))) return;
+		const method = jobMap.get(agentId)?.method ?? "";
+		const methods = plans.get(agentId)?.methods ?? [];
+		if (method ? !supportsOperation(methods.find((candidate) => candidate.id === method), operation) : !methods.some((candidate) => supportsOperation(candidate, operation))) return;
+		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
+		if (method && operation === "update") {
+			void startAgentOperation(agentId, method, operation);
+			return;
+		}
+		setOperationRequest({ agentId, operation, method, needsMethod: !method, confirmed: false });
+	};
+
+	const requestMethods = operationRequest ? plans.get(operationRequest.agentId)?.methods ?? [] : [];
+	const requestMethod = requestMethods.find((method) => method.id === operationRequest?.method);
+	const requestBusy = operationRequest ? pendingAgentIds.has(operationRequest.agentId) : false;
+	const canConfirmOperation = Boolean(operationRequest && installed.has(operationRequest.agentId)
+		&& !requestBusy && !isActive(jobMap.get(operationRequest.agentId))
+		&& supportsOperation(requestMethod, operationRequest.operation)
+		&& (operationRequest.operation !== "uninstall" || operationRequest.confirmed));
 
 	const verifyInstall = async (agentId: AgentId) => {
 		if (!beginAction(agentId)) return;
@@ -483,19 +521,22 @@ export function HarnessSettingsSection({
 					const job = jobMap.get(agentId);
 					const isInstalled = installed.has(agentId);
 					const availableMethods = plan?.methods.filter((method) => method.available) ?? [];
-					const operationMethods = availableMethods.filter((method) => method.updateAvailable || method.uninstallAvailable);
 					const recommendedMethod = availableMethods.find((method) => method.recommended) ?? availableMethods[0];
 					const selectedMethodId = selectedMethods[agentId] ?? (availableMethods.some((method) => method.id === job?.method) ? job?.method : recommendedMethod?.id) ?? "";
-					const selectedOperationMethodId = selectedMethods[agentId];
-					const operationMethodId = (
-						selectedOperationMethodId && operationMethods.some((method) => method.id === selectedOperationMethodId)
-							? selectedOperationMethodId
-							: operationMethods.find((method) => method.id === job?.method)?.id ?? (operationMethods.length === 1 ? operationMethods[0].id : "")
-					) ?? "";
-					const operationMethod = operationMethods.find((method) => method.id === operationMethodId);
+					// Neither a recommendation nor an unsubmitted install choice identifies an existing CLI's method.
+					const operationMethodId = job?.method ?? "";
+					const operationMethod = plan?.methods.find((method) => method.id === operationMethodId);
+					const canUpdate = operationMethodId ? supportsOperation(operationMethod, "update") : availableMethods.some((method) => supportsOperation(method, "update"));
+					const canUninstall = operationMethodId ? supportsOperation(operationMethod, "uninstall") : availableMethods.some((method) => supportsOperation(method, "uninstall"));
+					const reasonMethod = operationMethodId ? operationMethod : plan?.methods.length === 1 ? plan.methods[0] : undefined;
+					const updateReason = reasonMethod?.updateReason || reasonMethod?.reason || t("settings.harness.updateUnsupported");
+					const uninstallReason = reasonMethod?.uninstallReason || reasonMethod?.reason || t("settings.harness.uninstallUnsupported");
+					const isExpanded = expandedAgentId === agentId;
 					const selectedMethod = availableMethods.find((method) => method.id === selectedMethodId);
 					const pending = pendingAgentIds.has(agentId);
 					const actionError = actionErrors[agentId];
+					const attempt = operationAttempts[agentId];
+					const currentOperation = attempt && (pending || actionError || attempt.startedAt === job?.startedAt) ? attempt.operation : undefined;
 					const failed = job?.status === "failed" || job?.status === "unsupported" || job?.status === "interrupted" || Boolean(actionError);
 					const active = isActive(job);
 						const readinessAgent = readinessAgents.get(agentId);
@@ -546,16 +587,6 @@ export function HarnessSettingsSection({
 							onChange={(value) => setSelectedMethods((current) => ({ ...current, [agentId]: value }))}
 						/>
 		) : null;
-		const operationMethodSelect = operationMethods.length > 1 ? (
-			<SettingsOptionMenu
-				aria-label={t("settings.harness.installMethod")}
-				value={operationMethodId}
-				options={operationMethods.map((method) => ({ value: method.id, label: installMethodLabel(method) ?? method.label }))}
-				placeholder={t("settings.harness.chooseMethod")}
-				triggerClassName="h-8! min-h-8! rounded-md! border border-settings-menu bg-transparent px-2! text-xs leading-4"
-				onChange={(value) => setSelectedMethods((current) => ({ ...current, [agentId]: value }))}
-			/>
-		) : null;
 						const authControls = authPlan && authPlan.action !== "instructions" ? (
 							<>
 								{authStatus !== "authorized" ? (
@@ -571,6 +602,7 @@ export function HarnessSettingsSection({
 							aria-labelledby={`harness-agent-${agentId}`}
 							className={cn(
 								"settings-row-bar min-h-14 flex-wrap gap-3 transition-[background-color,box-shadow] duration-200",
+								isInstalled && isExpanded && "harness-row-expanded rounded-lg! bg-(--color-bg-settings-input) ring-1 ring-inset ring-(--color-border-settings-input)",
 								highlightedAgentId === agentId && "bg-accent-weak ring-2 ring-inset ring-accent",
 							)}
 							data-agent={agentId}
@@ -582,12 +614,12 @@ export function HarnessSettingsSection({
 							<div className="min-w-0 flex-1">
 								<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
 								<p className={cn("truncate text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? authPlan?.reason ?? plan?.reason}>
-									{isInstalled ? authSummary : installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired")))}
+									{isInstalled ? actionError ?? (failed && job?.error ? job.error : authSummary) : installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired")))}
 								</p>
 							</div>
 
 			{active ? (
-				<span className="inline-flex items-center gap-1.5 text-xs text-settings-muted" role="status"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{job?.status === "installing" ? t("settings.harness.installing") : job?.status === "verifying" ? t("settings.harness.verifying") : t("settings.harness.working")}</span>
+				<span className="inline-flex items-center gap-1.5 text-xs text-settings-muted" role="status"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{job?.status === "verifying" ? t("settings.harness.verifying") : currentOperation === "update" ? t("settings.harness.updating") : currentOperation === "uninstall" ? t("settings.harness.uninstalling") : currentOperation === "install" ? t("settings.harness.installing") : t("settings.harness.working")}</span>
 							) : isInstalled ? (
 								<div className="flex shrink-0 items-center gap-2">
 								{showInstallationStatus ? <Button
@@ -601,13 +633,6 @@ export function HarnessSettingsSection({
 									{installationStatusLabel}
 								</Button> : null}
 								{authControls}
-				{operationMethods.length > 0 ? (
-									<>
-										{operationMethodSelect}
-										{operationMethod?.updateAvailable ? <Button size="sm" variant="outline" disabled={pending} onClick={() => void startAgentOperation(agentId, operationMethodId, "update")}><RefreshCw aria-hidden="true" />{t("settings.harness.update")}</Button> : null}
-										{operationMethod?.uninstallAvailable ? <Button size="sm" variant="outline" disabled={pending} onClick={() => setUninstallRequest({ agentId, method: operationMethodId })}><Trash2 aria-hidden="true" />{t("settings.harness.uninstall")}</Button> : null}
-									</>
-								) : null}
 								</div>
 							) : failed ? (
 								<div className="flex items-center gap-1.5">
@@ -637,6 +662,24 @@ export function HarnessSettingsSection({
 							) : plan?.command ? (
 								<Button size="sm" variant="outline" onClick={() => void copyText(agentId, plan.command!)}>{copiedAgent === agentId ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{copiedAgent === agentId ? t("settings.harness.copied") : t("settings.harness.copyCommand")}</Button>
 							) : null}
+
+				{isInstalled ? (
+					<Button type="button" size="none" variant="ghost" className="size-8 shrink-0" aria-label={t(isExpanded ? "settings.harness.collapseOptions" : "settings.harness.expandOptions", { agent: agentLabel(agentId) })} aria-expanded={isExpanded} aria-controls={`harness-options-${agentId}`} onClick={() => setExpandedAgentId(isExpanded ? null : agentId)}>
+						<ChevronDown aria-hidden="true" className={cn("size-4 transition-transform motion-reduce:transition-none", isExpanded && "rotate-180")} />
+					</Button>
+				) : null}
+				{isInstalled ? (
+					<div id={`harness-options-${agentId}`} hidden={!isExpanded} className={cn("basis-full space-y-2 pl-10", !isExpanded && "hidden")}>
+						<div className="flex flex-wrap items-center gap-2">
+							<Button size="sm" variant="outline" disabled={pending || active || !canUpdate} aria-describedby={!canUpdate ? `harness-update-reason-${agentId}` : undefined} onClick={() => requestInstalledOperation(agentId, "update")}><RefreshCw aria-hidden="true" />{t(failed && currentOperation === "update" ? "settings.harness.retryUpdate" : "settings.harness.update")}</Button>
+							<Button size="sm" variant="outline" className="text-error" disabled={pending || active || !canUninstall} aria-describedby={!canUninstall ? `harness-uninstall-reason-${agentId}` : undefined} onClick={() => requestInstalledOperation(agentId, "uninstall")}><Trash2 aria-hidden="true" />{t(failed && currentOperation === "uninstall" ? "settings.harness.retryUninstall" : "settings.harness.uninstall")}</Button>
+							{plan?.documentationUrl ? <Button size="sm" variant="ghost" className="ml-auto text-settings-muted" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl!)}>{t("settings.harness.setupGuide")}</Button> : null}
+						</div>
+						{!canUpdate ? <p id={`harness-update-reason-${agentId}`} className="text-xs text-settings-muted">{updateReason}</p> : null}
+						{!canUninstall ? <p id={`harness-uninstall-reason-${agentId}`} className="text-xs text-settings-muted">{uninstallReason}</p> : null}
+						{actionError ? <p role="alert" className="text-xs text-error">{actionError}</p> : null}
+					</div>
+				) : null}
 
 				{hasDiagnostics ? (
 				<div className="basis-full">
@@ -675,19 +718,35 @@ export function HarnessSettingsSection({
 			</div>
 		</SettingsSection>
 		<ConfirmDialog
-			open={uninstallRequest !== null}
-			title={t("settings.harness.uninstallConfirmTitle", { agent: uninstallRequest ? agentLabel(uninstallRequest.agentId) : "" })}
-			description={t("settings.harness.uninstallConfirmDescription", { agent: uninstallRequest ? agentLabel(uninstallRequest.agentId) : "" })}
-			confirmLabel={t("settings.harness.uninstall")}
-			destructive
-			busy={uninstallRequest ? pendingAgentIds.has(uninstallRequest.agentId) : false}
-			error={uninstallRequest ? actionErrors[uninstallRequest.agentId] : null}
+			open={operationRequest !== null}
+			title={t(operationRequest?.operation === "uninstall" ? "settings.harness.uninstallConfirmTitle" : "settings.harness.updateConfirmTitle", { agent: operationRequest ? agentLabel(operationRequest.agentId) : "" })}
+			description={operationRequest ? t(operationRequest.operation === "uninstall" ? "settings.harness.uninstallConfirmDescription" : "settings.harness.updateConfirmDescription", { agent: agentLabel(operationRequest.agentId) }) : ""}
+			confirmLabel={t(operationRequest?.operation === "uninstall" ? "settings.harness.uninstall" : "settings.harness.update")}
+			destructive={operationRequest?.operation === "uninstall"}
+			busy={requestBusy}
+			confirmDisabled={!canConfirmOperation}
+			error={operationRequest ? actionErrors[operationRequest.agentId] : null}
 			onConfirm={() => {
-				if (!uninstallRequest) return;
-				void startAgentOperation(uninstallRequest.agentId, uninstallRequest.method, "uninstall").then((started) => { if (started) setUninstallRequest(null); });
+				if (!operationRequest || !canConfirmOperation) return;
+				void startAgentOperation(operationRequest.agentId, operationRequest.method, operationRequest.operation).then((started) => { if (started) setOperationRequest(null); });
 			}}
-			onOpenChange={(open) => { if (!open && (!uninstallRequest || !pendingAgentIds.has(uninstallRequest.agentId))) setUninstallRequest(null); }}
-		/>
+			onOpenChange={(open) => { if (!open && !requestBusy) setOperationRequest(null); }}
+		>
+			{operationRequest ? <div className="space-y-3 text-control leading-5 text-settings-muted">
+				{operationRequest.needsMethod ? <label className="block space-y-1">
+					<span>{t("settings.harness.method")}</span>
+					<select className="settings-inline-input w-full" value={operationRequest.method} disabled={requestBusy} onChange={(event) => setOperationRequest((current) => current ? { ...current, method: event.target.value, confirmed: false } : null)}>
+						<option value="" disabled>{t("settings.harness.chooseMethod")}</option>
+						{requestMethods.map((method) => <option key={method.id} value={method.id} disabled={!supportsOperation(method, operationRequest.operation)}>{installMethodLabel(method) ?? method.label}</option>)}
+					</select>
+				</label> : <p>{t("settings.harness.method")}: <strong className="text-settings-label">{installMethodLabel(requestMethod) ?? operationRequest.method}</strong></p>}
+				<p className="text-xs">{t("settings.harness.methodOwnershipHint")}</p>
+				{operationRequest.operation === "uninstall" ? <label className="flex items-start gap-2">
+					<input type="checkbox" className="mt-1" checked={operationRequest.confirmed} disabled={requestBusy} onChange={(event) => setOperationRequest((current) => current ? { ...current, confirmed: event.target.checked } : null)} />
+					<span>{t("settings.harness.confirmOriginalMethod", { agent: agentLabel(operationRequest.agentId) })}</span>
+				</label> : null}
+			</div> : null}
+		</ConfirmDialog>
 		</>
 	);
 }

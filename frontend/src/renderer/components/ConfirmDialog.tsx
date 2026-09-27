@@ -18,9 +18,11 @@ type ConfirmDialogProps = {
 	open: boolean;
 	title: string;
 	description: React.ReactNode;
+	children?: React.ReactNode;
 	confirmLabel: string;
 	destructive?: boolean;
 	busy?: boolean;
+	confirmDisabled?: boolean;
 	error?: string | null;
 	onConfirm: () => void;
 	onOpenChange: (open: boolean) => void;
@@ -34,9 +36,11 @@ export function ConfirmDialog({
 	open,
 	title,
 	description,
+	children,
 	confirmLabel,
 	destructive,
 	busy,
+	confirmDisabled,
 	error,
 	onConfirm,
 	onOpenChange,
@@ -72,11 +76,12 @@ export function ConfirmDialog({
 					</DialogDescription>
 				</div>
 
-				{error ? (
+				{children || error ? (
 					<div className={cn(settingsDialogBodyClass, "p-5 py-3")}>
-						<p role="alert" className="text-caption leading-4 text-error">
+						{children}
+						{error ? <p role="alert" className="text-caption leading-4 text-error">
 							{error}
-						</p>
+						</p> : null}
 					</div>
 				) : null}
 
@@ -90,7 +95,7 @@ export function ConfirmDialog({
 						type="button"
 						variant="footer-primary"
 						className={cn(compactButtonClass, destructive && "bg-danger-strong hover:bg-danger-strong")}
-						disabled={busy}
+						disabled={busy || confirmDisabled}
 						onClick={onConfirm}
 					>
 						{confirmLabel}

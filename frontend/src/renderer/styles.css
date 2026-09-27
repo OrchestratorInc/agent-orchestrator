@@ -778,6 +778,12 @@ button.settings-row-bar {
 	padding-inline: 0;
 }
 
+/* An expanded harness remains one row; keep its header aligned with its peers. */
+.settings-dialog-body .harness-row-expanded {
+	margin-inline: calc(-1 * var(--space-3));
+	padding-inline: var(--space-3);
+}
+
 /* The update summary is a content row, not a compact control row. */
 .settings-grouped-rows .update-status-row {
 	padding-block: var(--space-4);
