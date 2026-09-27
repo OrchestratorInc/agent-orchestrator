@@ -3517,3 +3517,20 @@ func TestSessionsAPI_ClaimPRErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionsAPI_SpawnsReasonixTUI(t *testing.T) {
+	for _, kind := range []string{"worker", "orchestrator"} {
+		t.Run(kind, func(t *testing.T) {
+			svc := newFakeSessionService()
+			srv := newSessionTestServer(t, svc)
+			body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions",
+				`{"projectId":"ao","kind":"`+kind+`","harness":"reasonix","mode":"tui","prompt":"fix"}`)
+			if status != http.StatusCreated {
+				t.Fatalf("spawn Reasonix %s = %d, want 201; body=%s", kind, status, body)
+			}
+			if svc.lastSpawn.Harness != "reasonix" || svc.lastSpawn.RequestedMode != domain.SessionModeTUI || string(svc.lastSpawn.Kind) != kind {
+				t.Fatalf("spawn config = %#v, want Reasonix TUI %s", svc.lastSpawn, kind)
+			}
+		})
+	}
+}

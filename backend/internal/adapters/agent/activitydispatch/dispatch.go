@@ -26,6 +26,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/reasonix"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/vibe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -54,6 +55,7 @@ var Derivers = map[string]DeriveFunc{
 	"amp":         amp.DeriveActivityState,
 	"pi":          pi.DeriveActivityState,
 	"auggie":      auggie.DeriveActivityState,
+	"reasonix":    reasonix.DeriveActivityState,
 	"goose":       activitystate.StandardDeriveActivityState,
 	"devin":       activitystate.StandardDeriveActivityState,
 	"cursor":      cursor.DeriveActivityState,
@@ -93,6 +95,9 @@ const (
 var signalCoverageOverrides = map[domain.AgentHarness]SignalCoverage{
 	domain.HarnessAider:    SignalCoveragePartial,
 	domain.HarnessContinue: SignalCoveragePartial,
+	// Reasonix emits SessionStart lazily on the first turn, and permission
+	// payloads lack call IDs. Silence immediately after launch is normal.
+	domain.HarnessReasonix: SignalCoveragePartial,
 }
 
 // CoverageForHarness returns the activity-signal coverage for a selectable

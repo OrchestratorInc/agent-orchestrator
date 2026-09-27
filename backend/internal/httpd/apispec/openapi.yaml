@@ -10741,6 +10741,7 @@ components:
           - prime-agent
           - autohand
           - unreal-agent
+          - reasonix
           - fake
           type: string
         approvalMode:
@@ -11367,6 +11368,7 @@ components:
           - prime-agent
           - omp
           - unreal-agent
+          - reasonix
           - cloudflared
           type: string
         updatedAt:
@@ -13548,6 +13550,7 @@ components:
           - prime-agent
           - autohand
           - unreal-agent
+          - reasonix
           type: string
         issueId:
           type: string

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"os"
@@ -10438,5 +10439,148 @@ func TestRestoreRetainsSpawnPermissionsAfterProjectChange(t *testing.T) {
 		if agent.lastRestore.Permissions != want || agent.lastRestore.Config.Permissions != want {
 			t.Fatalf("restore=%#v want %q", agent.lastRestore, want)
 		}
+	}
+}
+
+func TestSpawnWorker_PromptFileFailureBlocksReasonix(t *testing.T) {
+	st := newFakeStore()
+	agent := &recordingAgent{}
+	dataDir := blockedDataDir(t)
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{
+		Runtime:   &fakeRuntime{},
+		Agents:    singleAgent{agent: agent},
+		Workspace: &fakeWorkspace{},
+		Store:     st,
+		Messenger: &fakeMessenger{},
+		Lifecycle: &fakeLCM{store: st},
+		DataDir:   dataDir,
+		LookPath:  lookPath,
+	})
+
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessReasonix, Prompt: "do it"})
+	if err == nil {
+		t.Fatal("Spawn succeeded, want prompt-file error for file-only harness")
+	}
+	if !strings.Contains(err.Error(), "system prompt file") {
+		t.Fatalf("Spawn err = %v, want system prompt file error", err)
+	}
+	if _, ok := st.sessions["mer-1"]; ok {
+		t.Fatal("seed row still exists after prompt-file failure")
+	}
+}
+
+func TestRestore_PromptFileFailureBlocksReasonix(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessReasonix, IsTerminated: true,
+		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x", Prompt: "do it"},
+	}
+	agent := &recordingAgent{}
+	dataDir := blockedDataDir(t)
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{
+		Runtime:   &fakeRuntime{},
+		Agents:    singleAgent{agent: agent},
+		Workspace: &fakeWorkspace{},
+		Store:     st,
+		Messenger: &fakeMessenger{},
+		Lifecycle: &fakeLCM{store: st},
+		DataDir:   dataDir,
+		LookPath:  lookPath,
+	})
+
+	_, err := m.RestoreWithMode(ctx, "mer-1")
+	if err == nil {
+		t.Fatal("Restore succeeded, want prompt-file error for file-only harness")
+	}
+	if !strings.Contains(err.Error(), "system prompt file") {
+		t.Fatalf("Restore err = %v, want system prompt file error", err)
+	}
+}
+
+// requiredReadinessAgent distinguishes an empty composer from a prompt marker
+// left visible behind an active turn or a permission overlay.
+type requiredReadinessAgent struct{ readinessAgent }
+
+func (requiredReadinessAgent) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
+	switch output {
+	case "idle":
+		return domain.ActivityIdle, true
+	case "Ready... blocked":
+		return domain.ActivityBlocked, true
+	case "Ready... active":
+		return domain.ActivityActive, true
+	default:
+		return "", false
+	}
+}
+
+func TestSpawn_AfterStartPromptRequiresPositiveReadiness(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		outputs       []string
+		detector      bool
+		noPatterns    bool
+		timeout       time.Duration
+		initialDelay  time.Duration
+		callerTimeout time.Duration
+		outputErr     error
+		wantErr       bool
+	}{
+		{name: "timeout", outputs: []string{"booting"}, timeout: 10 * time.Millisecond, wantErr: true},
+		{name: "output unavailable", outputErr: errors.New("capture unavailable"), timeout: 10 * time.Millisecond, wantErr: true},
+		{name: "unknown detector overrides matching marker", outputs: []string{"Ready..."}, detector: true, timeout: 10 * time.Millisecond, wantErr: true},
+		{name: "blocked detector overrides matching marker", outputs: []string{"Ready... blocked"}, detector: true, timeout: 10 * time.Millisecond, wantErr: true},
+		{name: "active detector overrides matching marker", outputs: []string{"Ready... active"}, detector: true, timeout: 10 * time.Millisecond, wantErr: true},
+		{name: "detector becomes idle", outputs: []string{"Ready... blocked", "idle"}, detector: true, timeout: time.Second},
+		{name: "detector without patterns", outputs: []string{"idle"}, detector: true, noPatterns: true, timeout: time.Second},
+		{name: "pattern without detector", outputs: []string{"Ready..."}, timeout: time.Second},
+		{name: "no detection configured", noPatterns: true, timeout: time.Second, wantErr: true},
+		{name: "nonpositive timeout", outputs: []string{"Ready..."}, wantErr: true},
+		{name: "no caller budget", outputs: []string{"Ready..."}, timeout: time.Second, callerTimeout: time.Second, wantErr: true},
+		{name: "initial delay exhausts budget", outputs: []string{"Ready..."}, timeout: time.Second, initialDelay: time.Second, callerTimeout: time.Second, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+			rt := &fakeRuntime{outputs: tc.outputs, outputErr: tc.outputErr}
+			msg := &fakeMessenger{}
+			hints := ports.PromptReadinessHints{RequireReady: true, Patterns: []string{"Ready..."}, PollInterval: time.Millisecond, Timeout: tc.timeout, InitialDelay: tc.initialDelay}
+			if tc.noPatterns {
+				hints.Patterns = nil
+			}
+			base := readinessAgent{afterStartAgent: afterStartAgent{recordingAgent: &recordingAgent{}}, hints: hints}
+			var agent ports.Agent = base
+			if tc.detector {
+				agent = requiredReadinessAgent{base}
+			}
+			m := New(Deps{Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: msg, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+			spawnCtx := context.Background()
+			if tc.callerTimeout > 0 {
+				var cancel context.CancelFunc
+				spawnCtx, cancel = context.WithTimeout(spawnCtx, tc.callerTimeout)
+				defer cancel()
+			}
+			_, _, _, err := m.Spawn(spawnCtx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "fix the button"})
+			if tc.wantErr {
+				if !errors.Is(err, ErrSpawnDeliverPrompt) || !strings.Contains(err.Error(), "prompt readiness") {
+					t.Fatalf("Spawn err = %v, want prompt-readiness delivery failure", err)
+				}
+				if len(msg.msgs) != 0 {
+					t.Fatalf("delivered %v without positive readiness", msg.msgs)
+				}
+				if rec := st.sessions["mer-1"]; !rec.IsTerminated || rec.Activity.State != domain.ActivityExited {
+					t.Fatalf("session after readiness failure = %#v, want terminated/exited", rec)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(msg.msgs) != 1 || msg.msgs[0] != "fix the button" {
+					t.Fatalf("delivered prompts = %v, want original task", msg.msgs)
+				}
+			}
+		})
 	}
 }

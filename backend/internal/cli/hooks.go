@@ -20,6 +20,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/activitydispatch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/reasonix"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
@@ -510,10 +511,26 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		return c.runCursorPermissionHook(ctx, agent, event, sessionID, payload)
 	}
 
+	if agent == "reasonix" && !reasonix.IsMainSessionHook(event, payload) {
+		// Reasonix child/planner runners share these commands but use synthetic
+		// identities. Their completion must not overwrite the parent's handle.
+		return nil
+	}
+	if agent == "reasonix" {
+		// Reasonix treats a native gating-hook timeout as a block. Finish this
+		// best-effort observer well before the installed 10-second timeout,
+		// including the activity-projection retry path.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 1500*time.Millisecond)
+		defer cancel()
+	}
 	state, hasActivity := activitydispatch.Derive(agent, event, payload)
 	agentSessionID := ""
 	if activitydispatch.SupportsHarness(domain.AgentHarness(agent)) {
 		agentSessionID = hookAgentSessionID(payload)
+	}
+	if agent == "reasonix" {
+		agentSessionID = reasonix.HookSessionID(payload)
 	}
 	usage := hookUsageMetadata(agent, payload)
 	if !hasActivity && agentSessionID == "" && usage == nil {
@@ -528,6 +545,11 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	}
 
 	toolName, toolUseID := activityMeta(payload)
+	if agent == "reasonix" {
+		// Native Reasonix toolName is not paired with a stable call ID. Do not
+		// adopt Claude-shaped aliases or invent tool-flight correlation.
+		toolName, toolUseID = "", ""
+	}
 	if domain.AgentHarness(agent) == domain.HarnessCursor && event == "post-tool-use-failure" {
 		if failureEvent, failureTool, ok := cursor.TerminalFailureCorrelation(payload); ok {
 			event = failureEvent

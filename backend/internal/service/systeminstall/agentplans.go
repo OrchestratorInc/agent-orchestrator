@@ -36,6 +36,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetPrimeAgent: "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md",
 	TargetOMP:        "https://github.com/can1357/oh-my-pi",
 	TargetUnreal:     "https://github.com/unreallabsai/unreal-agent",
+	TargetReasonix:   "https://github.com/esengine/DeepSeek-Reasonix/releases",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -197,6 +198,16 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			plans = []Plan{s.planBrew(target, "can1357/tap/omp"), s.planBun(target), official}
 		} else {
 			plans = []Plan{s.planBun(target), official}
+		}
+	case TargetReasonix:
+		manual := manualPlan(target, "Install Reasonix from its official releases. AO requires --append-system-prompt-file and --resume-exact; official v1.39.2 is not compatible.", agentDocumentationURLs[target])
+		switch s.goos {
+		case "darwin":
+			plans = []Plan{s.planBrew(target, "esengine/reasonix/reasonix"), s.planNPM(target, "reasonix"), manual}
+		case "linux", "windows":
+			plans = []Plan{s.planNPM(target, "reasonix"), manual}
+		default:
+			plans = []Plan{manual}
 		}
 	case TargetUnreal:
 		plans = []Plan{{

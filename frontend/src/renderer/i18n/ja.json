@@ -1,6 +1,7 @@
 {
 	"agentSelector.manage": "エージェントを管理…",
 	"agentSelector.noneReady": "利用可能なエージェントがありません",
+	"agentSelector.unverified": "未検証",
 	"agentSelector.needsSetup": "設定が必要",
 	"session.statusChecking": "確認中…",
 	"session.statusUnavailable": "確認できません",
@@ -1878,6 +1879,8 @@
 	"settings.harness.instructions": "Instructions",
 	"settings.harness.interrupted": "Interrupted",
 	"settings.harness.loggedIn": "Connected",
+	"settings.harness.credentialsConfigured": "認証情報は設定済みですが、未検証です",
+	"settings.harness.reasonixCompatibility": "ターミナル UI のみ。--append-system-prompt-file と --resume-exact が必要です。公式 v1.39.2 は対応していません。",
 	"settings.harness.configured": "Set up",
 	"settings.harness.loginUnknown": "Unknown",
 	"settings.harness.configurationUnknown": "Unknown",

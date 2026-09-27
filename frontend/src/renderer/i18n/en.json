@@ -1,6 +1,7 @@
 {
 	"agentSelector.manage": "Manage agents…",
 	"agentSelector.noneReady": "No agents ready",
+	"agentSelector.unverified": "Unverified",
 	"agentSelector.needsSetup": "Needs setup",
 	"session.statusChecking": "Checking…",
 	"session.statusUnavailable": "Unable to verify",
@@ -1111,6 +1112,8 @@
 	"settings.harness.instructions": "Instructions",
 	"settings.harness.interrupted": "Interrupted",
 	"settings.harness.loggedIn": "Connected",
+	"settings.harness.credentialsConfigured": "Credentials configured; not yet verified",
+	"settings.harness.reasonixCompatibility": "Terminal UI only. Requires --append-system-prompt-file and --resume-exact; official v1.39.2 is not compatible.",
 	"settings.harness.configured": "Set up",
 	"settings.harness.loginUnknown": "Unknown",
 	"settings.harness.configurationUnknown": "Unknown",

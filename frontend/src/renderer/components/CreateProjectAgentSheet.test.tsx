@@ -68,7 +68,7 @@ describe("CreateProjectAgentSheet", () => {
 			agents: [agentReadiness("claude-code", "Claude Code", { authentication: "configured" })],
 		});
 		renderSheet(undefined, queryClient);
-		await waitFor(() => expect(screen.getAllByText("Claude Code").length).toBeGreaterThan(0));
+		await waitFor(() => expect(screen.getByRole("combobox", { name: "Worker agent" })).toHaveTextContent("Unverified"));
 	});
 
 	// I2: only a definite rejection removes an agent from the pool.
@@ -153,6 +153,20 @@ describe("CreateProjectAgentSheet", () => {
 		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "harness", focusAgentId: "codex" }));
 		expect(onChange).not.toHaveBeenCalled();
 		expect(trigger).toHaveTextContent("Codex");
+	});
+
+	it.each(["stacked", "chip", "settings-row", "settings-control"] as const)("%s lets users select configured Reasonix without claiming readiness", async (variant) => {
+		const onChange = vi.fn();
+		render(<RequiredAgentField
+			id="agent" label="Agent" placeholder="Choose agent" value="" variant={variant} onChange={onChange}
+			agents={[agentReadiness("reasonix", "Reasonix", { authentication: "configured" })]}
+		/>);
+		await userEvent.click(screen.getByLabelText("Agent"));
+		const option = screen.getByRole(variant === "stacked" ? "option" : "menuitem", { name: /Reasonix/ });
+		expect(option).toHaveTextContent("Unverified");
+		expect(option).not.toHaveAttribute("aria-disabled", "true");
+		await userEvent.click(option);
+		expect(onChange).toHaveBeenCalledWith("reasonix");
 	});
 
 	it("preserves cloud agent choices without offering local Harness management", async () => {

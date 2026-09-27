@@ -1,6 +1,7 @@
 {
 	"agentSelector.manage": "管理代理…",
 	"agentSelector.noneReady": "暂无可用代理",
+	"agentSelector.unverified": "未验证",
 	"agentSelector.needsSetup": "需要设置",
 	"session.statusChecking": "正在检查…",
 	"session.statusUnavailable": "无法验证",
@@ -1890,6 +1891,8 @@
 	"settings.harness.instructions": "Instructions",
 	"settings.harness.interrupted": "Interrupted",
 	"settings.harness.loggedIn": "Connected",
+	"settings.harness.credentialsConfigured": "凭据已配置，尚未验证",
+	"settings.harness.reasonixCompatibility": "仅支持终端界面。需要 --append-system-prompt-file 和 --resume-exact；官方 v1.39.2 不兼容。",
 	"settings.harness.configured": "Set up",
 	"settings.harness.loginUnknown": "Unknown",
 	"settings.harness.configurationUnknown": "Unknown",

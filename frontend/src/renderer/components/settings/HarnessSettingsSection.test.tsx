@@ -127,6 +127,41 @@ describe("HarnessSettingsSection", () => {
 		vi.restoreAllMocks();
 	});
 
+	it("offers Reasonix installation with an explicit CLI compatibility notice", async () => {
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: { agents: [agentReadiness("reasonix", "Reasonix", { installation: "not_installed", authentication: "unknown" })] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [{
+				agentId: "reasonix", available: true, automatic: true, method: "homebrew", command: "brew install esengine/reasonix/reasonix",
+				documentationUrl: "https://github.com/esengine/DeepSeek-Reasonix/releases",
+				methods: [{ id: "homebrew", label: "Homebrew", available: true, recommended: true, command: "brew install esengine/reasonix/reasonix", reinstallAvailable: true }],
+			}] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		renderSection("reasonix");
+		const row = (await screen.findByText("Reasonix")).closest('[data-agent="reasonix"]') as HTMLElement;
+		expect(within(row).getByText(/Terminal UI only/)).toHaveTextContent("--append-system-prompt-file");
+		expect(within(row).getByText(/official v1.39.2/)).toHaveTextContent("not compatible");
+		await userEvent.click(await within(row).findByRole("button", { name: "Install" }));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
+			params: { path: { agent: "reasonix" } }, body: { method: "homebrew", operation: "install" },
+		});
+	});
+
+	it("shows configured Reasonix credentials without claiming authorization", async () => {
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: { agents: [agentReadiness("reasonix", "Reasonix", { authentication: "configured" })] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		renderSection("reasonix");
+		const row = (await screen.findByText("Reasonix")).closest('[data-agent="reasonix"]') as HTMLElement;
+		expect(await within(row).findByText("Credentials configured; not yet verified")).toBeInTheDocument();
+		expect(within(row).queryByText("Authorized")).not.toBeInTheDocument();
+		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
+	});
+
 	it("keeps a targeted harness visible, scrolls it, focuses Install, and highlights it for two seconds once", async () => {
 		const scrollIntoView = vi.fn();
 		const setTimeoutSpy = vi.spyOn(window, "setTimeout");

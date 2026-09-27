@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
+	chatregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/tmux"
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
@@ -187,6 +188,7 @@ func TestWiring_AgentResolverResolvesRealAdapters(t *testing.T) {
 		{domain.HarnessPrimeAgent, "prime-agent"},
 		{domain.HarnessAutohand, "autohand"},
 		{domain.HarnessUnreal, "unreal-agent"},
+		{domain.HarnessReasonix, "reasonix"},
 	} {
 		agent, ok := resolver.Agent(tc.harness)
 		if !ok {
@@ -1058,5 +1060,15 @@ func writeFakeExecutable(t *testing.T, path string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatalf("write fake executable %s: %v", path, err)
+	}
+}
+
+func TestWiringReasonixDoesNotSupportChat(t *testing.T) {
+	registry := chatregistry.Build(slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	if registry.SupportsChat("reasonix") {
+		t.Fatal("Reasonix must remain TUI-only")
+	}
+	if _, err := registry.Driver("reasonix"); !errors.Is(err, ports.ErrChatUnsupported) {
+		t.Fatalf("Reasonix chat driver error = %v, want ErrChatUnsupported", err)
 	}
 }

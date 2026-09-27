@@ -101,8 +101,8 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 28 {
-		t.Fatalf("got %d plans, want 28", len(plans))
+	if len(plans) != 29 {
+		t.Fatalf("got %d plans, want 29", len(plans))
 	}
 	seen := make(map[string]bool, len(plans))
 	for _, plan := range plans {
@@ -577,4 +577,59 @@ func TestAgentTargetsAreValidButPrerequisitesAreNotHarnessRows(t *testing.T) {
 			t.Fatalf("prerequisite target %q was classified incorrectly", target)
 		}
 	}
+}
+
+func TestReasonixOfficialPackagePlans(t *testing.T) {
+	for _, tt := range []struct {
+		name, goos, node, method, command string
+		found                             []string
+		writable                          bool
+	}{
+		{"macOS prefers Homebrew", "darwin", "v22.19.0", "homebrew", "brew install esengine/reasonix/reasonix", []string{"brew", "npm"}, true},
+		{"macOS npm fallback", "darwin", "v18.0.0", "npm", "npm install -g reasonix", []string{"npm"}, true},
+		{"Linux npm", "linux", "v18.0.0", "npm", "npm install -g reasonix", []string{"npm"}, true},
+		{"Windows npm", "windows", "v18.0.0", "npm", "npm install -g reasonix", []string{"npm"}, true},
+		{"missing manager", "linux", "v22.19.0", "manual", "", nil, true},
+		{"old Node", "linux", "v16.20.0", "manual", "", []string{"npm"}, true},
+		{"unwritable prefix", "windows", "v22.19.0", "manual", "", []string{"npm"}, false},
+		{"unsupported OS", "freebsd", "v22.19.0", "manual", "", []string{"npm"}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestService(tt.goos, tt.found...)
+			s.installCapabilities = installCapabilitiesStub{nodeVersion: tt.node, prefix: "/user/npm", writable: tt.writable}
+			plan := s.planAgent(Target("reasonix"))
+			if plan.Method != tt.method || strings.Join(plan.Command, " ") != tt.command || plan.Unsupported != (tt.method == "manual") {
+				t.Fatalf("plan = %+v, want %s: %s", plan, tt.method, tt.command)
+			}
+			if plan.DocsURL != "https://github.com/esengine/DeepSeek-Reasonix/releases" || plan.Script != nil {
+				t.Fatalf("plan must link official releases without a remote shell installer: %+v", plan)
+			}
+		})
+	}
+}
+
+func TestReasonixNPMReinstallAndRegistration(t *testing.T) {
+	s := newTestService("linux", "npm")
+	s.installCapabilities = installCapabilitiesStub{prefix: "/user/npm", writable: true}
+	planner, err := s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.resolveAgentMethod(Target("reasonix"), "npm", AgentOperationReinstall)
+	if err != nil || strings.Join(plan.Command, " ") != "npm install -g reasonix --force" {
+		t.Fatalf("reinstall = %+v, %v", plan, err)
+	}
+	plans, err := s.AgentPlans(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, plan := range plans {
+		if plan.AgentID == "reasonix" {
+			if !plan.Available || plan.Method != "npm" {
+				t.Fatalf("Reasonix plan = %+v", plan)
+			}
+			return
+		}
+	}
+	t.Fatal("Reasonix missing from installer catalog")
 }

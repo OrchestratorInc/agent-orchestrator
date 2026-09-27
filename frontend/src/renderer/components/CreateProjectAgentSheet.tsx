@@ -426,10 +426,16 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	const selectedOption = options.find((agent) => agent.id === value) ?? (value ? unknownAgentReadiness(value, agentLabel(value)) : undefined);
 	const hasReadinessSnapshot = agents !== undefined;
 	const needsSetup = manageAgents && hasReadinessSnapshot && Boolean(selectedOption && !isReadyAgent(selectedOption));
-	const visibleOptions = manageAgents && hasReadinessSnapshot ? options.filter(isReadyAgent) : options;
+	// Configured credentials are deliberately selectable but remain unverified.
+	// Keep unknown/missing installations and explicitly rejected credentials in
+	// Harness management; a local credential alone must never become "ready".
+	const visibleOptions = manageAgents && hasReadinessSnapshot
+		? options.filter((agent) => isReadyAgent(agent) || (agent.installation.state === "installed" && agent.authentication.state === "configured"))
+		: options;
 	const management = useAgentManagementMenu(needsSetup ? value : undefined);
 	const managementAction = manageAgents ? { label: t("agentSelector.manage"), onSelect: management.requestManagement } : undefined;
-	const setupHint = needsSetup ? <span className="text-xs text-muted-foreground">{t("agentSelector.needsSetup")}</span> : null;
+	const configuredSelection = selectedOption?.installation.state === "installed" && selectedOption.authentication.state === "configured";
+	const setupHint = needsSetup ? <span className="text-xs text-muted-foreground">{t(configuredSelection ? "agentSelector.unverified" : "agentSelector.needsSetup")}</span> : null;
 
 	if (variant === "settings-row" || variant === "settings-control") {
 		const menuOptions = visibleOptions.map((agent) => ({
