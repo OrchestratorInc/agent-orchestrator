@@ -826,6 +826,12 @@ func Run() error {
 		}
 		return fmt.Errorf("reconcile sessions on boot: %w", reconcileErr)
 	}
+	// Ownerless conpty panes (the crash windows of #5948) have no one left to
+	// tear them down. Sweep before the listener accepts traffic so no fresh
+	// pane can appear mid-sweep, and before ReconcileBackground's adopt pass.
+	if reconcileErr := sessMgr.ReconcileOrphanedPtyHosts(ctx); reconcileErr != nil {
+		log.Warn("orphaned pty-host sweep deferred", "err", reconcileErr)
+	}
 	agentSvc.WarmCodexAccounts()
 	automationSvc, automationDone := startAutomations(ctx, store, sessionSvc, log)
 	lcStack.automationDone = automationDone
