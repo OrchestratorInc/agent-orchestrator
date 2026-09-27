@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -795,7 +796,7 @@ func (s *Service) Verify(ctx context.Context, target Target) (Job, error) {
 	}
 	go func() { //nolint:gosec // bounded daemon-owned worker intentionally outlives the request.
 		defer s.workers.Done()
-		s.runAgentVerification(s.backgroundContext, job, "")
+		s.runAgentVerification(s.backgroundContext, job)
 	}()
 	return initial, nil
 }
@@ -901,6 +902,12 @@ func (s *Service) runAgentInstall(parent context.Context, plan Plan, job *Job) {
 	ctx, cancel := context.WithTimeout(parent, s.installTimeout)
 	defer cancel()
 	out := &capturedOutput{max: maxOutputBytes}
+	outputWriter := io.Writer(out)
+	var devinInstallConfirmation *patternObservingWriter
+	if plan.Target == TargetDevin && plan.Method == "official-installer" && plan.Script != nil {
+		devinInstallConfirmation = &patternObservingWriter{dst: out, pattern: devinInstalledLine, maxPending: maxOutputBytes}
+		outputWriter = devinInstallConfirmation
+	}
 	env := []string{
 		"CI=1", "NONINTERACTIVE=1", "HOMEBREW_NO_AUTO_UPDATE=1",
 		"NPM_CONFIG_AUDIT=false", "NPM_CONFIG_FUND=false",
@@ -913,7 +920,7 @@ func (s *Service) runAgentInstall(parent context.Context, plan Plan, job *Job) {
 			command := *plan.Script
 			command.Env = append(append([]string(nil), env...), command.Env...)
 			var result ports.InstallScriptResult
-			result, runErr = s.installScripts.RunInstallScript(ctx, command, out, out)
+			result, runErr = s.installScripts.RunInstallScript(ctx, command, outputWriter, outputWriter)
 			if result.SHA256 != "" {
 				_, _ = fmt.Fprintf(out, "\nsource: %s\nsha256: %s\n", command.URL, result.SHA256)
 			}
@@ -934,8 +941,8 @@ func (s *Service) runAgentInstall(parent context.Context, plan Plan, job *Job) {
 		s.finishAgentJob(job, StatusInterrupted, out.String(), "daemon shutdown interrupted the install", "")
 		return
 	}
-	signInRequired := runErr != nil && plan.Target == TargetDevin && plan.Method == "official-installer" && plan.Script != nil && devinInstallConfirmedBeforeLoginCanceled(out.String())
-	if runErr != nil && !signInRequired {
+	installConfirmed := runErr != nil && devinInstallConfirmation != nil && devinInstallConfirmation.Matched()
+	if runErr != nil && !installConfirmed {
 		s.finishAgentJob(job, StatusFailed, out.String(), runErr.Error(), "")
 		return
 	}
@@ -944,22 +951,10 @@ func (s *Service) runAgentInstall(parent context.Context, plan Plan, job *Job) {
 		s.finishAgentJob(job, StatusFailed, "", fmt.Sprintf("persist verifying state: %v", err), "")
 		return
 	}
-	successNote := ""
-	if signInRequired {
-		successNote = "Installed — sign-in required. Run devin in a terminal to sign in."
-	}
-	s.runAgentVerification(s.backgroundContext, job, successNote)
+	s.runAgentVerification(s.backgroundContext, job)
 }
 
-func devinInstallConfirmedBeforeLoginCanceled(output string) bool {
-	confirmation := devinInstalledLine.FindStringIndex(output)
-	if len(confirmation) != 2 {
-		return false
-	}
-	return strings.Contains(output[confirmation[1]:], "Error: Login canceled")
-}
-
-func (s *Service) runAgentVerification(ctx context.Context, job *Job, successNote string) {
+func (s *Service) runAgentVerification(ctx context.Context, job *Job) {
 	if s.verifier == nil {
 		s.finishAgentJob(job, StatusFailed, "", "adapter-backed install verifier is not configured", "")
 		return
@@ -973,7 +968,7 @@ func (s *Service) runAgentVerification(ctx context.Context, job *Job, successNot
 		s.finishAgentJob(job, StatusFailed, result.Output, err.Error(), result.ResolvedPath)
 		return
 	}
-	s.finishAgentJob(job, StatusSucceeded, combineOutput(result.Output, successNote), "", result.ResolvedPath)
+	s.finishAgentJob(job, StatusSucceeded, result.Output, "", result.ResolvedPath)
 }
 
 func (s *Service) transitionAgentJob(job *Job, status Status, output, errorMessage, resolvedPath string) error {
@@ -1114,6 +1109,46 @@ func (c *capturedOutput) String() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.buf.String()
+}
+
+// patternObservingWriter remembers whether a pattern appeared in the stream,
+// even after the bounded destination evicts those bytes from its diagnostics.
+type patternObservingWriter struct {
+	mu         sync.Mutex
+	dst        io.Writer
+	pattern    *regexp.Regexp
+	pending    []byte
+	maxPending int
+	matched    bool
+}
+
+func (w *patternObservingWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	n, err := w.dst.Write(p)
+	if w.matched {
+		return n, err
+	}
+	w.pending = append(w.pending, p...)
+	if w.pattern.Match(w.pending) {
+		w.matched = true
+		w.pending = nil
+		return n, err
+	}
+	if delimiter := bytes.LastIndexAny(w.pending, "\r\n"); delimiter >= 0 {
+		w.pending = append(w.pending[:0], w.pending[delimiter+1:]...)
+	}
+	if len(w.pending) > w.maxPending {
+		w.pending = append(w.pending[:0], w.pending[len(w.pending)-w.maxPending:]...)
+	}
+	return n, err
+}
+
+func (w *patternObservingWriter) Matched() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.matched
 }
 
 // planFor resolves the install Plan for target on the current platform,
