@@ -42,10 +42,16 @@ type CodexSessionAccountService interface {
 	SwitchSessionAccount(context.Context, string, string) (string, error)
 }
 
+// CodexSessionAccountReader reads the durable account pin for a session.
+type CodexSessionAccountReader interface {
+	SessionAccount(context.Context, string) (string, bool, error)
+}
+
 // CodexAccountsController exposes cached accounts, login, switching, and events.
 type CodexAccountsController struct {
 	Svc           CodexAccountService
 	SessionRoutes CodexSessionAccountService
+	SessionReader CodexSessionAccountReader
 }
 
 // Register adds request-timeout-bound Codex account routes.
@@ -62,6 +68,25 @@ func (c *CodexAccountsController) Register(r chi.Router) {
 	r.Post("/agents/codex/account-switches", c.startSwitch)
 	r.Get("/agents/codex/account-switches/{switchId}", c.getSwitch)
 	r.Post("/agents/codex/sessions/{sessionId}/account", c.switchSessionAccount)
+	r.Get("/agents/codex/sessions/{sessionId}/account", c.getSessionAccount)
+}
+
+func (c *CodexAccountsController) getSessionAccount(w http.ResponseWriter, r *http.Request) {
+	if c.SessionReader == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/agents/codex/sessions/{sessionId}/account")
+		return
+	}
+	sessionID := strings.TrimSpace(chi.URLParam(r, "sessionId"))
+	accountID, found, err := c.SessionReader.SessionAccount(r.Context(), sessionID)
+	if err != nil {
+		writeCodexSessionAccountError(w, r, err)
+		return
+	}
+	if !found {
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "CODEX_SESSION_ACCOUNT_NOT_PINNED", "This Codex session has not been pinned to an account", nil)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, SwitchCodexSessionAccountResponse{SessionID: sessionID, AccountID: accountID})
 }
 
 func (c *CodexAccountsController) switchSessionAccount(w http.ResponseWriter, r *http.Request) {

@@ -222,6 +222,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersProjectResponse":                          "ProjectResponse",
 	"ControllersAgentIDParam":                             "AgentIDParam",
 	"ControllersCodexAccountIDParam":                      "CodexAccountIDParam",
+	"ControllersAccountsManagerProviderParam":             "AccountsManagerProviderParam",
 	"ControllersCodexAccountLoginIDParam":                 "CodexAccountLoginIDParam",
 	"ControllersGetProjectResponse":                       "ProjectGetResponse",
 	"ControllersProjectOrDegraded":                        "ProjectOrDegraded",
@@ -304,6 +305,20 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersCodexAccountSwitchPhase":                  "CodexAccountSwitchPhase",
 	"ControllersStartCodexAccountSwitchRequest":           "StartCodexAccountSwitchRequest",
 	"ControllersCodexAccountSwitchIDParam":                "CodexAccountSwitchIDParam",
+	"ControllersAccountsManagerStatusResponse":            "AccountsManagerStatusResponse",
+	"ControllersAccountsManagerCooldownResponse":          "AccountsManagerCooldownResponse",
+	"ControllersAccountsManagerAccountResponse":           "AccountsManagerAccountResponse",
+	"ControllersAccountsManagerAccountsResponse":          "AccountsManagerAccountsResponse",
+	"ControllersAccountsManagerRoutingResponse":           "AccountsManagerRoutingResponse",
+	"ControllersAccountsManagerOAuthSessionResponse":      "AccountsManagerOAuthSessionResponse",
+	"ControllersStartAccountsManagerOAuthRequest":         "StartAccountsManagerOAuthRequest",
+	"ControllersAccountsManagerAPIKeyRequest":             "AccountsManagerAPIKeyRequest",
+	"ControllersAccountsManagerImportRequest":             "AccountsManagerImportRequest",
+	"ControllersUpdateAccountsManagerAccountRequest":      "UpdateAccountsManagerAccountRequest",
+	"ControllersAccountsManagerModelResponse":             "AccountsManagerModelResponse",
+	"ControllersAccountsManagerModelsResponse":            "AccountsManagerModelsResponse",
+	"ControllersAccountsManagerQuotaResponse":             "AccountsManagerQuotaResponse",
+	"ControllersUpdateAccountsManagerRoutingRequest":      "UpdateAccountsManagerRoutingRequest",
 	"DomainCodexCapacitySummary":                          "CodexCapacitySummary",
 	"ControllersWorkspaceFileResponse":                    "WorkspaceFileResponse",
 	"ControllersWorkspaceDiffRequest":                     "WorkspaceDiffRequest",
@@ -1328,6 +1343,67 @@ func agentOperations() []operation {
 			summary: "Pin later requests from one Codex session to another logged-in account", pathParams: []any{controllers.SessionIDParam{}},
 			reqBody: controllers.SwitchCodexSessionAccountRequest{},
 			resps:   []respUnit{{http.StatusOK, controllers.SwitchCodexSessionAccountResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/agents/codex/sessions/{sessionId}/account", id: "getCodexSessionAccount", tag: "agents",
+			summary: "Read the durable account pin for one Codex session", pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{{http.StatusOK, controllers.SwitchCodexSessionAccountResponse{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/accounts-manager/status", id: "getCodexAccountsManagerStatus", tag: "agents",
+			summary: "Return embedded Codex accounts manager health", resps: []respUnit{{http.StatusOK, controllers.AccountsManagerStatusResponse{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/accounts-manager/accounts", id: "getCodexAccountsManagerAccounts", tag: "agents",
+			summary: "List redacted embedded Codex credentials and routing policy", resps: []respUnit{{http.StatusOK, controllers.AccountsManagerAccountsResponse{}}, {http.StatusServiceUnavailable, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/accounts-manager/oauth-sessions", id: "startCodexAccountsManagerOAuth", tag: "agents",
+			summary: "Start an embedded Codex OAuth login", reqBody: controllers.StartAccountsManagerOAuthRequest{}, resps: []respUnit{{http.StatusCreated, controllers.AccountsManagerOAuthSessionResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/accounts-manager/oauth-sessions/{operationId}", id: "cancelCodexAccountsManagerOAuth", tag: "agents",
+			summary: "Cancel an embedded Codex OAuth login", pathParams: []any{controllers.CodexAccountLoginIDParam{}}, resps: []respUnit{{http.StatusNoContent, nil}, {http.StatusNotFound, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/accounts-manager/accounts/api-key", id: "addCodexAccountsManagerAPIKey", tag: "agents",
+			summary: "Add a private Codex API-key credential", reqBody: controllers.AccountsManagerAPIKeyRequest{}, resps: []respUnit{{http.StatusCreated, controllers.AccountsManagerAccountsResponse{}}, {http.StatusBadRequest, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/accounts-manager/accounts/import", id: "importCodexAccountsManagerCredential", tag: "agents",
+			summary: "Import one private Codex credential JSON document", reqBody: controllers.AccountsManagerImportRequest{}, resps: []respUnit{{http.StatusCreated, controllers.AccountsManagerAccountsResponse{}}, {http.StatusBadRequest, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/accounts-manager/accounts/{accountId}", id: "updateCodexAccountsManagerAccount", tag: "agents",
+			summary: "Enable or disable one embedded Codex credential", pathParams: []any{controllers.CodexAccountIDParam{}}, reqBody: controllers.UpdateAccountsManagerAccountRequest{}, resps: []respUnit{{http.StatusOK, controllers.AccountsManagerAccountsResponse{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/accounts-manager/accounts/{accountId}/refresh", id: "refreshCodexAccountsManagerAccount", tag: "agents",
+			summary: "Refresh one embedded Codex credential", pathParams: []any{controllers.CodexAccountIDParam{}}, resps: []respUnit{{http.StatusOK, controllers.AccountsManagerAccountsResponse{}}, {http.StatusNotFound, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/accounts-manager/accounts/{accountId}", id: "removeCodexAccountsManagerAccount", tag: "agents",
+			summary: "Remove one embedded Codex credential", pathParams: []any{controllers.CodexAccountIDParam{}}, resps: []respUnit{{http.StatusOK, controllers.AccountsManagerAccountsResponse{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/accounts-manager/accounts/{accountId}/models", id: "getCodexAccountsManagerModels", tag: "agents",
+			summary: "List models observed for one embedded Codex credential", pathParams: []any{controllers.CodexAccountIDParam{}}, resps: []respUnit{{http.StatusOK, controllers.AccountsManagerModelsResponse{}}, {http.StatusNotFound, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/accounts-manager/accounts/{accountId}/quota", id: "getCodexAccountsManagerQuota", tag: "agents",
+			summary: "Return cached quota state for one embedded Codex credential", pathParams: []any{controllers.CodexAccountIDParam{}}, resps: []respUnit{{http.StatusOK, controllers.AccountsManagerQuotaResponse{}}, {http.StatusNotFound, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/accounts-manager/accounts/{accountId}/quota/reset", id: "resetCodexAccountsManagerQuota", tag: "agents",
+			summary: "Clear cached quota cooldown for one embedded Codex credential", pathParams: []any{controllers.CodexAccountIDParam{}}, resps: []respUnit{{http.StatusNoContent, nil}, {http.StatusNotFound, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/accounts-manager/routing/{provider}", id: "setCodexAccountsManagerRouting", tag: "agents",
+			summary: "Set ordered Codex account routing preferences", pathParams: []any{controllers.AccountsManagerProviderParam{}}, reqBody: controllers.UpdateAccountsManagerRoutingRequest{}, resps: []respUnit{{http.StatusOK, controllers.AccountsManagerAccountsResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/accounts-manager/accounts/events", id: "streamCodexAccountsManagerAccounts", tag: "agents",
+			summary: "Stream an initial embedded Codex account snapshot", resps: []respUnit{{http.StatusOK, controllers.AccountsManagerAccountsResponse{}}, {http.StatusNotImplemented, envelope.APIError{}}}, contentTypes: map[int]string{http.StatusOK: "text/event-stream"},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/agents/refresh", id: "refreshAgents", tag: "agents",

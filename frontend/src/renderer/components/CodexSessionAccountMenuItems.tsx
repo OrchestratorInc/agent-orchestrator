@@ -2,7 +2,8 @@ import { Check, LoaderCircle, UserRound } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from "./ui/dropdown-menu";
-import { switchCodexSessionAccount, useCodexAccountsQuery } from "../hooks/useCodexAccountsQuery";
+import { fetchCodexSessionAccount, switchCodexSessionAccount, useCodexAccountsQuery } from "../hooks/useCodexAccountsQuery";
+import { useCodexAccountsManagerQuery } from "../hooks/useCodexAccountsManagerQuery";
 import { apiErrorMessage } from "../lib/api-client";
 
 const sessionAccountSelectionCache = new Map<string, string>();
@@ -15,6 +16,7 @@ const sessionAccountSelectionCache = new Map<string, string>();
 export function CodexSessionAccountMenuItems({ sessionId, enabled }: { sessionId: string; enabled: boolean }) {
 	const { t } = useTranslation();
 	const query = useCodexAccountsQuery(enabled);
+	const managerQuery = useCodexAccountsManagerQuery(enabled);
 	const [pendingAccountId, setPendingAccountId] = useState<string | null>(null);
 	const [sessionAccountId, setSessionAccountId] = useState<string | null>(() => sessionAccountSelectionCache.get(sessionId) ?? null);
 	const [error, setError] = useState<string | null>(null);
@@ -30,11 +32,25 @@ export function CodexSessionAccountMenuItems({ sessionId, enabled }: { sessionId
 			setSessionAccountId(active);
 		}
 	}, [query.data?.activeAccountId, sessionId]);
+	useEffect(() => {
+		if (!enabled) return;
+		let mounted = true;
+		void fetchCodexSessionAccount(sessionId).then((pin) => {
+			if (!mounted || !pin) return;
+			sessionAccountSelectionCache.set(sessionId, pin.accountId);
+			setSessionAccountId(pin.accountId);
+		});
+		return () => { mounted = false; };
+	}, [enabled, sessionId]);
 	if (!enabled || !query.data) return null;
 
-	const accounts = query.data.accounts.filter(
+	const nativeAccounts = query.data.accounts.filter(
 		(account) => account.status === "valid" && account.authentication.state === "authorized",
 	);
+	const managerAccounts = (managerQuery.data?.accounts ?? [])
+		.filter((account) => account.provider === "codex" && !account.disabled && account.status === "active")
+		.map((account) => ({ id: account.id, label: account.email || account.id, accountEmail: account.email, active: false, status: "valid" as const, authentication: { state: "authorized" as const } }));
+	const accounts = [...nativeAccounts, ...managerAccounts.filter((account) => !nativeAccounts.some((native) => native.id === account.id))];
 	if (accounts.length === 0) return null;
 	const selectedAccountId = sessionAccountId ?? query.data.activeAccountId ?? accounts.find((account) => account.active)?.id;
 

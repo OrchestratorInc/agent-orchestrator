@@ -52,13 +52,27 @@ type Options struct {
 // Account is the redacted account view used by internal management surfaces.
 // It intentionally contains no token, auth file path, or raw provider data.
 type Account struct {
-	ID          string `json:"id"`
-	Label       string `json:"label,omitempty"`
-	Email       string `json:"email,omitempty"`
-	Provider    string `json:"provider"`
-	Status      string `json:"status"`
-	Disabled    bool   `json:"disabled"`
-	Unavailable bool   `json:"unavailable"`
+	ID              string            `json:"id"`
+	Label           string            `json:"label,omitempty"`
+	Email           string            `json:"email,omitempty"`
+	Provider        string            `json:"provider"`
+	Kind            string            `json:"kind,omitempty"`
+	Status          string            `json:"status"`
+	Disabled        bool              `json:"disabled"`
+	Unavailable     bool              `json:"unavailable"`
+	CreatedAt       time.Time         `json:"createdAt,omitempty"`
+	UpdatedAt       time.Time         `json:"updatedAt,omitempty"`
+	LastRefreshedAt time.Time         `json:"lastRefreshedAt,omitempty"`
+	Models          []string          `json:"models,omitempty"`
+	Cooldowns       []AccountCooldown `json:"cooldowns,omitempty"`
+}
+
+// AccountCooldown is a display-safe quota cooldown retained by CLIProxyAPI.
+type AccountCooldown struct {
+	Model            string    `json:"model,omitempty"`
+	Reason           string    `json:"reason,omitempty"`
+	RetryAt          time.Time `json:"retryAt,omitempty"`
+	RemainingSeconds int64     `json:"remainingSeconds,omitempty"`
 }
 
 // Service owns one loopback-only CLIProxyAPI instance for the AO daemon.
@@ -79,11 +93,15 @@ type Service struct {
 	nativeRefs    map[string]string            // AO/native account id -> proxy auth id
 	nativeDigests map[string][sha256.Size]byte // AO/native account id -> source credential digest
 
-	lifecycleMu sync.Mutex
-	runCancel   context.CancelFunc
-	runCtx      context.Context
-	runDone     chan error
-	closed      bool
+	lifecycleMu  sync.Mutex
+	runCancel    context.CancelFunc
+	runCtx       context.Context
+	runDone      chan error
+	closed       bool
+	managementMu sync.Mutex
+	subscribers  map[chan ManagementSnapshot]struct{}
+	revision     int64
+	mutationMu   sync.Mutex
 }
 
 // New prepares private state and a ready-to-run upstream service. It does not
@@ -177,6 +195,7 @@ func New(options Options) (*Service, error) {
 		switches:          switches,
 		nativeRefs:        make(map[string]string),
 		nativeDigests:     make(map[string][sha256.Size]byte),
+		subscribers:       make(map[chan ManagementSnapshot]struct{}),
 	}
 	if err := service.syncNativeAccounts(); err != nil {
 		return nil, err
@@ -199,6 +218,43 @@ func New(options Options) (*Service, error) {
 	}
 	service.proxy = built
 	return service, nil
+}
+
+// Subscribe returns redacted management snapshots for the settings SSE stream.
+// The channel is closed automatically with the request context.
+func (s *Service) Subscribe(ctx context.Context) <-chan ManagementSnapshot {
+	updates := make(chan ManagementSnapshot, 1)
+	if s == nil {
+		close(updates)
+		return updates
+	}
+	s.managementMu.Lock()
+	if s.subscribers == nil {
+		s.subscribers = make(map[chan ManagementSnapshot]struct{})
+	}
+	s.subscribers[updates] = struct{}{}
+	s.managementMu.Unlock()
+	go func() {
+		<-ctx.Done()
+		s.managementMu.Lock()
+		if _, ok := s.subscribers[updates]; ok {
+			delete(s.subscribers, updates)
+			close(updates)
+		}
+		s.managementMu.Unlock()
+	}()
+	return updates
+}
+
+func (s *Service) publishManagement(snapshot ManagementSnapshot) {
+	s.managementMu.Lock()
+	defer s.managementMu.Unlock()
+	for subscriber := range s.subscribers {
+		select {
+		case subscriber <- snapshot:
+		default:
+		}
+	}
 }
 
 // Start binds the loopback proxy and waits until its listener is accepting
@@ -327,17 +383,30 @@ func (s *Service) RouteForSession(ctx context.Context, sessionID string) (ports.
 			return ports.AgentProviderRoute{}, fmt.Errorf("route Codex session %s: %w", sessionID, ports.ErrCodexProxyAccountUnavailable)
 		}
 	} else {
-		if activeID, active := s.routes.activeAccountID(); active {
-			if _, ok := s.resolveUsableAccount(activeID); !ok {
-				return ports.AgentProviderRoute{}, fmt.Errorf("route Codex session %s: %w", sessionID, ports.ErrCodexProxyAccountUnavailable)
+		enabled, preferred := s.routes.routing()
+		if enabled {
+			for _, preferredID := range preferred {
+				if account, ok := s.resolveUsableAccount(preferredID); ok {
+					// Native Codex accounts are exposed through their AO id,
+					// while CLIProxy routes use the mirrored auth id.
+					accountID = account.ID
+					break
+				}
 			}
-			accountID = activeID
-		} else {
-			account, ok := s.defaultUsableAccount()
-			if !ok {
-				return ports.AgentProviderRoute{}, ports.ErrCodexProxyNoAccounts
+		}
+		if accountID == "" {
+			if activeID, active := s.routes.activeAccountID(); active {
+				if _, ok := s.resolveUsableAccount(activeID); !ok {
+					return ports.AgentProviderRoute{}, fmt.Errorf("route Codex session %s: %w", sessionID, ports.ErrCodexProxyAccountUnavailable)
+				}
+				accountID = activeID
+			} else {
+				account, ok := s.defaultUsableAccount()
+				if !ok {
+					return ports.AgentProviderRoute{}, ports.ErrCodexProxyNoAccounts
+				}
+				accountID = account.ID
 			}
-			accountID = account.ID
 		}
 		if err := s.routes.setAccountForSession(sessionID, accountID); err != nil {
 			return ports.AgentProviderRoute{}, fmt.Errorf("persist Codex session account: %w", err)
@@ -400,6 +469,23 @@ func (s *Service) SwitchSessionAccount(ctx context.Context, sessionID, accountRe
 	return s.externalAccountID(account.ID), nil
 }
 
+// SessionAccount returns the durable pin without changing it. A missing pin
+// is intentionally distinct from the global default so the renderer can show
+// the right account after it remounts an existing session.
+func (s *Service) SessionAccount(ctx context.Context, sessionID string) (string, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	if s == nil || s.routes == nil {
+		return "", false, ports.ErrCodexProxyUnavailable
+	}
+	proxyID, ok := s.routes.accountForSession(sessionID)
+	if !ok {
+		return "", false, nil
+	}
+	return s.externalAccountID(proxyID), true, nil
+}
+
 // Accounts returns a redacted snapshot for an AO management surface.
 func (s *Service) Accounts(ctx context.Context) ([]Account, error) {
 	if err := s.refreshAccounts(ctx); err != nil {
@@ -411,13 +497,11 @@ func (s *Service) Accounts(ctx context.Context) ([]Account, error) {
 			continue
 		}
 		accounts = append(accounts, Account{
-			ID:          s.externalAccountID(auth.ID),
-			Label:       auth.Label,
-			Email:       accountEmail(auth),
-			Provider:    auth.Provider,
-			Status:      string(auth.Status),
-			Disabled:    auth.Disabled,
-			Unavailable: auth.Unavailable,
+			ID: s.externalAccountID(auth.ID), Label: auth.Label, Email: accountEmail(auth),
+			Provider: auth.Provider, Kind: authKind(auth), Status: string(auth.Status),
+			Disabled: auth.Disabled, Unavailable: auth.Unavailable, CreatedAt: auth.CreatedAt,
+			UpdatedAt: auth.UpdatedAt, LastRefreshedAt: auth.LastRefreshedAt,
+			Models: authModels(auth), Cooldowns: authCooldowns(auth),
 		})
 	}
 	sort.Slice(accounts, func(i, j int) bool { return accounts[i].ID < accounts[j].ID })
@@ -592,6 +676,7 @@ func proxyCodexCredential(raw []byte) ([]byte, bool) {
 	var document struct {
 		Type         string `json:"type"`
 		OpenAIAPIKey string `json:"OPENAI_API_KEY"`
+		AccessToken  string `json:"access_token"`
 		Tokens       *struct {
 			AccountID    string `json:"account_id"`
 			AccessToken  string `json:"access_token"`
@@ -603,6 +688,10 @@ func proxyCodexCredential(raw []byte) ([]byte, bool) {
 		return nil, false
 	}
 	if strings.EqualFold(strings.TrimSpace(document.Type), "codex") {
+		if strings.TrimSpace(document.AccessToken) == "" && strings.TrimSpace(document.OpenAIAPIKey) == "" &&
+			(document.Tokens == nil || (strings.TrimSpace(document.Tokens.AccessToken) == "" && strings.TrimSpace(document.Tokens.RefreshToken) == "" && strings.TrimSpace(document.Tokens.IDToken) == "")) {
+			return nil, false
+		}
 		return raw, true
 	}
 	credential := map[string]string{"type": "codex"}

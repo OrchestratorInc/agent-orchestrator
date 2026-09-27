@@ -13,6 +13,7 @@ import { AgentProviderGroup } from "./AgentProviderGroup";
 import { formatAuthMethod, formatPercentage, formatPlanName } from "./CodexAccountDetails";
 import { CodexAccountLoginTerminalPanel } from "./CodexAccountLoginTerminalPanel";
 import { CodexAccountRow } from "./CodexAccountRow";
+import { CodexAccountsManagerPanel } from "./CodexAccountsManagerPanel";
 import { SettingsSection } from "./SettingsSection";
 
 export type PendingCodexAccountAction =
@@ -209,6 +210,7 @@ export function CodexAccountsSection({ titleHidden }: { titleHidden?: boolean })
 			{accountsQuery.isLoading ? <p className="px-4 py-3 text-xs text-muted-foreground">{t("settings.codexAccounts.loading")}</p> : null}{accountsError ? <p className="px-4 py-3 text-xs text-error" role="alert">{accountsError}</p> : null}
 			<div className="divide-y divide-border">{data?.accounts.map((account) => <CodexAccountRow key={account.id} account={account} expanded={expandedAccount === account.id} resetCreditSupported={data.capabilities.resetCreditConsume.state === "supported"} mutationDisabled={mutationDisabled} deviceMutationDisabled={mutationDisabled || switchUnsupported} canUse={!activeAccount && !deviceRefreshing && !switchUnsupported && codexAccountCanSwitch(account)} resetBusy={pendingAction?.kind === "reset" && pendingAction.account.id === account.id && pendingAction.submitting} authenticationRetryBusy={actions.authenticationRetryAccountId === account.id} logoutBusy={pendingAction?.kind === "logout" && pendingAction.account.id === account.id && pendingAction.submitting} deleteBusy={pendingAction?.kind === "delete" && pendingAction.account.id === account.id && pendingAction.submitting} activeLogin={activeLogin?.accountId === account.id ? activeLogin : null} loginPending={actions.loginOperationPending} onToggle={() => toggleAccount(account)} onUseAccount={() => openPending("switch", account)} onUseReset={() => openPending("reset", account)} onRetryAuthentication={() => void actions.retryAuthentication(account.id).catch(() => undefined)} onSignIn={() => void beginLogin(account.id)} onLogout={() => openPending("logout", account)} onDelete={() => openPending("delete", account)} onCheckLogin={() => activeLogin && void verifyLogin(activeLogin)} onCloseLogin={() => activeLogin && void actions.closeLogin(activeLogin)} onRetryLogin={() => activeLogin && void actions.retryLogin(activeLogin)} />)}</div>
 		</AgentProviderGroup>
+		<CodexAccountsManagerPanel />
 		{dialog && pendingAction ? <ConfirmDialog open title={dialog.title} description={dialog.description} confirmLabel={dialog.confirmLabel} destructive={dialog.destructive} busy={pendingAction.submitting} error={actions.error} onConfirm={() => void submitPending()} onOpenChange={(open) => { if (!open && !pendingAction.submitting) setPendingAction(null); }} /> : null}
 	</SettingsSection>;
 }

@@ -8,6 +8,381 @@ servers:
 - description: Local daemon (loopback only)
   url: http://127.0.0.1:3001
 paths:
+  /api/v1/accounts-manager/accounts:
+    get:
+      operationId: getCodexAccountsManagerAccounts
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountsManagerAccountsResponse'
+          description: OK
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: List redacted embedded Codex credentials and routing policy
+      tags:
+      - agents
+  /api/v1/accounts-manager/accounts/{accountId}:
+    delete:
+      operationId: removeCodexAccountsManagerAccount
+      parameters:
+      - description: AO Codex account identifier.
+        in: path
+        name: accountId
+        required: true
+        schema:
+          description: AO Codex account identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountsManagerAccountsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+      summary: Remove one embedded Codex credential
+      tags:
+      - agents
+    patch:
+      operationId: updateCodexAccountsManagerAccount
+      parameters:
+      - description: AO Codex account identifier.
+        in: path
+        name: accountId
+        required: true
+        schema:
+          description: AO Codex account identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAccountsManagerAccountRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountsManagerAccountsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+      summary: Enable or disable one embedded Codex credential
+      tags:
+      - agents
+  /api/v1/accounts-manager/accounts/{accountId}/models:
+    get:
+      operationId: getCodexAccountsManagerModels
+      parameters:
+      - description: AO Codex account identifier.
+        in: path
+        name: accountId
+        required: true
+        schema:
+          description: AO Codex account identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountsManagerModelsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+      summary: List models observed for one embedded Codex credential
+      tags:
+      - agents
+  /api/v1/accounts-manager/accounts/{accountId}/quota:
+    get:
+      operationId: getCodexAccountsManagerQuota
+      parameters:
+      - description: AO Codex account identifier.
+        in: path
+        name: accountId
+        required: true
+        schema:
+          description: AO Codex account identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountsManagerQuotaResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+      summary: Return cached quota state for one embedded Codex credential
+      tags:
+      - agents
+  /api/v1/accounts-manager/accounts/{accountId}/quota/reset:
+    post:
+      operationId: resetCodexAccountsManagerQuota
+      parameters:
+      - description: AO Codex account identifier.
+        in: path
+        name: accountId
+        required: true
+        schema:
+          description: AO Codex account identifier.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+      summary: Clear cached quota cooldown for one embedded Codex credential
+      tags:
+      - agents
+  /api/v1/accounts-manager/accounts/{accountId}/refresh:
+    post:
+      operationId: refreshCodexAccountsManagerAccount
+      parameters:
+      - description: AO Codex account identifier.
+        in: path
+        name: accountId
+        required: true
+        schema:
+          description: AO Codex account identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountsManagerAccountsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+      summary: Refresh one embedded Codex credential
+      tags:
+      - agents
+  /api/v1/accounts-manager/accounts/api-key:
+    post:
+      operationId: addCodexAccountsManagerAPIKey
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountsManagerAPIKeyRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountsManagerAccountsResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+      summary: Add a private Codex API-key credential
+      tags:
+      - agents
+  /api/v1/accounts-manager/accounts/events:
+    get:
+      operationId: streamCodexAccountsManagerAccounts
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/AccountsManagerAccountsResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Stream an initial embedded Codex account snapshot
+      tags:
+      - agents
+  /api/v1/accounts-manager/accounts/import:
+    post:
+      operationId: importCodexAccountsManagerCredential
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountsManagerImportRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountsManagerAccountsResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+      summary: Import one private Codex credential JSON document
+      tags:
+      - agents
+  /api/v1/accounts-manager/oauth-sessions:
+    post:
+      operationId: startCodexAccountsManagerOAuth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartAccountsManagerOAuthRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountsManagerOAuthSessionResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+      summary: Start an embedded Codex OAuth login
+      tags:
+      - agents
+  /api/v1/accounts-manager/oauth-sessions/{operationId}:
+    delete:
+      operationId: cancelCodexAccountsManagerOAuth
+      parameters:
+      - description: In-memory Codex account login operation identifier.
+        in: path
+        name: operationId
+        required: true
+        schema:
+          description: In-memory Codex account login operation identifier.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+      summary: Cancel an embedded Codex OAuth login
+      tags:
+      - agents
+  /api/v1/accounts-manager/routing/{provider}:
+    put:
+      operationId: setCodexAccountsManagerRouting
+      parameters:
+      - description: Accounts Manager provider; Codex is currently supported.
+        in: path
+        name: provider
+        required: true
+        schema:
+          description: Accounts Manager provider; Codex is currently supported.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAccountsManagerRoutingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountsManagerAccountsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+      summary: Set ordered Codex account routing preferences
+      tags:
+      - agents
+  /api/v1/accounts-manager/status:
+    get:
+      operationId: getCodexAccountsManagerStatus
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountsManagerStatusResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Return embedded Codex accounts manager health
+      tags:
+      - agents
   /api/v1/agents:
     get:
       operationId: listAgents
@@ -824,6 +1199,44 @@ paths:
       tags:
       - agents
   /api/v1/agents/codex/sessions/{sessionId}/account:
+    get:
+      operationId: getCodexSessionAccount
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SwitchCodexSessionAccountResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Read the durable account pin for one Codex session
+      tags:
+      - agents
     post:
       operationId: switchCodexSessionAccount
       parameters:
@@ -7988,6 +8401,219 @@ components:
       - code
       - message
       type: object
+    AccountsManagerAPIKeyRequest:
+      properties:
+        baseUrl:
+          type: string
+        key:
+          type: string
+        label:
+          type: string
+        provider:
+          enum:
+          - codex
+          type: string
+      required:
+      - provider
+      - key
+      type: object
+    AccountsManagerAccountResponse:
+      properties:
+        cooldowns:
+          items:
+            $ref: '#/components/schemas/AccountsManagerCooldownResponse'
+          type: array
+        createdAt:
+          format: date-time
+          type: string
+        disabled:
+          type: boolean
+        email:
+          type: string
+        id:
+          type: string
+        kind:
+          enum:
+          - oauth
+          - api_key
+          - unknown
+          type: string
+        lastRefreshedAt:
+          format: date-time
+          type: string
+        models:
+          items:
+            $ref: '#/components/schemas/AccountsManagerModelResponse'
+          type: array
+        provider:
+          enum:
+          - codex
+          type: string
+        status:
+          type: string
+        unavailable:
+          type: boolean
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - id
+      - provider
+      - kind
+      - status
+      - disabled
+      - unavailable
+      - models
+      - cooldowns
+      type: object
+    AccountsManagerAccountsResponse:
+      properties:
+        accounts:
+          items:
+            $ref: '#/components/schemas/AccountsManagerAccountResponse'
+          type: array
+        availability:
+          enum:
+          - starting
+          - ready
+          - degraded
+          type: string
+        revision:
+          format: int64
+          type: integer
+        routing:
+          $ref: '#/components/schemas/AccountsManagerRoutingResponse'
+        stale:
+          type: boolean
+      required:
+      - revision
+      - availability
+      - stale
+      - accounts
+      - routing
+      type: object
+    AccountsManagerCooldownResponse:
+      properties:
+        model:
+          type: string
+        reason:
+          type: string
+        remainingSeconds:
+          format: int64
+          type: integer
+        retryAt:
+          format: date-time
+          type: string
+      type: object
+    AccountsManagerImportRequest:
+      properties:
+        credential: {}
+        filename:
+          type: string
+        provider:
+          enum:
+          - codex
+          type: string
+      required:
+      - provider
+      - credential
+      type: object
+    AccountsManagerModelResponse:
+      properties:
+        id:
+          type: string
+      required:
+      - id
+      type: object
+    AccountsManagerModelsResponse:
+      properties:
+        models:
+          items:
+            $ref: '#/components/schemas/AccountsManagerModelResponse'
+          type: array
+      required:
+      - models
+      type: object
+    AccountsManagerOAuthSessionResponse:
+      properties:
+        expiresAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        mode:
+          enum:
+          - callback
+          - device
+          type: string
+        provider:
+          enum:
+          - codex
+          type: string
+        shellTerminal:
+          $ref: '#/components/schemas/CodexAccountLoginTerminalResponse'
+        status:
+          type: string
+      required:
+      - id
+      - provider
+      - mode
+      - status
+      - expiresAt
+      type: object
+    AccountsManagerQuotaResponse:
+      properties:
+        exceeded:
+          type: boolean
+        nextRecoverAt:
+          format: date-time
+          type: string
+        observedAt:
+          format: date-time
+          type: string
+        reason:
+          type: string
+        signals:
+          additionalProperties:
+            type: string
+          type: object
+      required:
+      - exceeded
+      type: object
+    AccountsManagerRoutingResponse:
+      properties:
+        accountIds:
+          items:
+            type: string
+          type: array
+        enabled:
+          type: boolean
+        provider:
+          enum:
+          - codex
+          type: string
+      required:
+      - provider
+      - enabled
+      - accountIds
+      type: object
+    AccountsManagerStatusResponse:
+      properties:
+        engineVersion:
+          type: string
+        reason:
+          type:
+          - "null"
+          - string
+        state:
+          enum:
+          - starting
+          - ready
+          - degraded
+          type: string
+      required:
+      - state
+      type: object
     AcknowledgeSessionInterfaceTransitionNoticeResponse:
       properties:
         ok:
@@ -13011,6 +13637,21 @@ components:
       - sessionId
       - paths
       type: object
+    StartAccountsManagerOAuthRequest:
+      properties:
+        mode:
+          enum:
+          - callback
+          - device
+          type: string
+        provider:
+          enum:
+          - codex
+          type: string
+      required:
+      - provider
+      - mode
+      type: object
     StartAgentAuthResponse:
       properties:
         action:
@@ -13361,6 +14002,25 @@ components:
       required:
       - token
       - deleted
+      type: object
+    UpdateAccountsManagerAccountRequest:
+      properties:
+        disabled:
+          type: boolean
+      required:
+      - disabled
+      type: object
+    UpdateAccountsManagerRoutingRequest:
+      properties:
+        accountIds:
+          items:
+            type: string
+          type: array
+        enabled:
+          type: boolean
+      required:
+      - enabled
+      - accountIds
       type: object
     UpdateProjectSettingsInput:
       properties:

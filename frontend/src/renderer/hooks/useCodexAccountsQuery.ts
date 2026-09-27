@@ -113,6 +113,16 @@ export async function switchCodexSessionAccount(sessionId: string, accountId: st
 	return data as CodexSessionAccountSwitch;
 }
 
+export async function fetchCodexSessionAccount(sessionId: string): Promise<CodexSessionAccountSwitch | null> {
+	const { data, error } = await apiClient.GET("/api/v1/agents/codex/sessions/{sessionId}/account", { params: { path: { sessionId } } });
+	if (error) {
+		// A session without a pin is expected before its first launch; the global
+		// default remains the renderer fallback in that case.
+		return null;
+	}
+	return data as CodexSessionAccountSwitch;
+}
+
 export const codexAccountsQueryOptions = {
 	queryKey: codexAccountsQueryKey,
 	queryFn: async ({ client }: { client: QueryClient }) => {

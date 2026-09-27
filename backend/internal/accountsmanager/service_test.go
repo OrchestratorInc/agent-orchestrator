@@ -114,6 +114,15 @@ func TestServiceGlobalSwitchPreservesExistingAndPinsFutureSessions(t *testing.T)
 	if got, ok := service.routes.accountForSession("session-3"); !ok || got != "ao-native-native-account-2.json" {
 		t.Fatalf("future session pin = (%q, %t), want account 2", got, ok)
 	}
+	if _, err := service.SetRoutingPolicy(context.Background(), true, []string{"native-account-1"}); err != nil {
+		t.Fatalf("SetRoutingPolicy: %v", err)
+	}
+	if _, err := service.RouteForSession(context.Background(), "session-4"); err != nil {
+		t.Fatalf("RouteForSession(session-4): %v", err)
+	}
+	if got, ok := service.routes.accountForSession("session-4"); !ok || got != "ao-native-native-account-1.json" {
+		t.Fatalf("preferred route pin = (%q, %t), want account 1", got, ok)
+	}
 }
 
 func TestServiceRemovesMirrorsWhenNativeAccountRootDisappears(t *testing.T) {
@@ -189,5 +198,42 @@ func TestServiceDoesNotOverwriteRefreshedMirrorWhenNativeCredentialIsUnchanged(t
 	}
 	if string(got) != string(refreshed) {
 		t.Fatalf("mirror = %s, want refreshed credential %s", got, refreshed)
+	}
+}
+
+func TestServiceManagesCodexAPIKeyCredential(t *testing.T) {
+	service, err := New(Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = service.Close(context.Background()) }()
+
+	snapshot, err := service.AddAPIKey(context.Background(), APIKeyInput{Key: "sk-test", Label: "work"})
+	if err != nil {
+		t.Fatalf("AddAPIKey: %v", err)
+	}
+	if len(snapshot.Accounts) != 1 || snapshot.Accounts[0].Kind != "api_key" {
+		t.Fatalf("accounts after add = %#v, want one api-key account", snapshot.Accounts)
+	}
+	id := snapshot.Accounts[0].ID
+	snapshot, err = service.SetAccountDisabled(context.Background(), id, true)
+	if err != nil {
+		t.Fatalf("SetAccountDisabled: %v", err)
+	}
+	if len(snapshot.Accounts) != 1 || !snapshot.Accounts[0].Disabled {
+		t.Fatalf("accounts after disable = %#v, want disabled account", snapshot.Accounts)
+	}
+	snapshot, err = service.RemoveAccount(context.Background(), id)
+	if err != nil {
+		t.Fatalf("RemoveAccount: %v", err)
+	}
+	if len(snapshot.Accounts) != 0 {
+		t.Fatalf("accounts after remove = %#v, want empty", snapshot.Accounts)
+	}
+}
+
+func TestProxyCodexCredentialRejectsEmptyCodexDocuments(t *testing.T) {
+	if _, ok := proxyCodexCredential([]byte(`{"type":"codex"}`)); ok {
+		t.Fatal("proxyCodexCredential accepted a credential without tokens")
 	}
 }

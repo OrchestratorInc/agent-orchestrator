@@ -20,6 +20,114 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
+// AccountsManagerStatusResponse reports embedded CLIProxy readiness.
+type AccountsManagerStatusResponse struct {
+	State         string  `json:"state" enum:"starting,ready,degraded"`
+	Reason        *string `json:"reason,omitempty"`
+	EngineVersion string  `json:"engineVersion,omitempty"`
+}
+
+// AccountsManagerCooldownResponse is a redacted quota cooldown.
+type AccountsManagerCooldownResponse struct {
+	Model            string    `json:"model,omitempty"`
+	Reason           string    `json:"reason,omitempty"`
+	RetryAt          time.Time `json:"retryAt,omitempty"`
+	RemainingSeconds int64     `json:"remainingSeconds,omitempty"`
+}
+
+// AccountsManagerAccountResponse is a redacted Codex account projection.
+type AccountsManagerAccountResponse struct {
+	ID              string                            `json:"id"`
+	Provider        string                            `json:"provider" enum:"codex"`
+	Kind            string                            `json:"kind" enum:"oauth,api_key,unknown"`
+	Email           string                            `json:"email,omitempty"`
+	Status          string                            `json:"status"`
+	Disabled        bool                              `json:"disabled"`
+	Unavailable     bool                              `json:"unavailable"`
+	CreatedAt       time.Time                         `json:"createdAt,omitempty"`
+	UpdatedAt       time.Time                         `json:"updatedAt,omitempty"`
+	LastRefreshedAt time.Time                         `json:"lastRefreshedAt,omitempty"`
+	Models          []AccountsManagerModelResponse    `json:"models"`
+	Cooldowns       []AccountsManagerCooldownResponse `json:"cooldowns"`
+}
+
+// AccountsManagerRoutingResponse describes Codex routing order.
+type AccountsManagerRoutingResponse struct {
+	Provider   string   `json:"provider" enum:"codex"`
+	Enabled    bool     `json:"enabled"`
+	AccountIDs []string `json:"accountIds"`
+}
+
+// AccountsManagerAccountsResponse is the accounts manager snapshot.
+type AccountsManagerAccountsResponse struct {
+	Revision     int64                            `json:"revision"`
+	Availability string                           `json:"availability" enum:"starting,ready,degraded"`
+	Stale        bool                             `json:"stale"`
+	Accounts     []AccountsManagerAccountResponse `json:"accounts"`
+	Routing      AccountsManagerRoutingResponse   `json:"routing"`
+}
+
+// AccountsManagerOAuthSessionResponse identifies a native Codex login.
+type AccountsManagerOAuthSessionResponse struct {
+	ID            string                             `json:"id"`
+	Provider      string                             `json:"provider" enum:"codex"`
+	Mode          string                             `json:"mode" enum:"callback,device"`
+	Status        string                             `json:"status"`
+	ExpiresAt     time.Time                          `json:"expiresAt"`
+	ShellTerminal *CodexAccountLoginTerminalResponse `json:"shellTerminal,omitempty"`
+}
+
+// StartAccountsManagerOAuthRequest starts a Codex login operation.
+type StartAccountsManagerOAuthRequest struct {
+	Provider string `json:"provider" enum:"codex"`
+	Mode     string `json:"mode" enum:"callback,device"`
+}
+
+// AccountsManagerAPIKeyRequest adds a Codex API key.
+type AccountsManagerAPIKeyRequest struct {
+	Provider string `json:"provider" enum:"codex"`
+	Key      string `json:"key"`
+	Label    string `json:"label,omitempty"`
+	BaseURL  string `json:"baseUrl,omitempty"`
+}
+
+// AccountsManagerImportRequest imports a Codex credential document.
+type AccountsManagerImportRequest struct {
+	Provider   string          `json:"provider" enum:"codex"`
+	Filename   string          `json:"filename,omitempty"`
+	Credential json.RawMessage `json:"credential"`
+}
+
+// UpdateAccountsManagerAccountRequest changes account availability.
+type UpdateAccountsManagerAccountRequest struct {
+	Disabled bool `json:"disabled"`
+}
+
+// AccountsManagerModelResponse identifies an account model.
+type AccountsManagerModelResponse struct {
+	ID string `json:"id"`
+}
+
+// AccountsManagerModelsResponse lists account models.
+type AccountsManagerModelsResponse struct {
+	Models []AccountsManagerModelResponse `json:"models"`
+}
+
+// AccountsManagerQuotaResponse exposes safe cached quota signals.
+type AccountsManagerQuotaResponse struct {
+	Exceeded      bool              `json:"exceeded"`
+	Reason        string            `json:"reason,omitempty"`
+	NextRecoverAt time.Time         `json:"nextRecoverAt,omitempty"`
+	ObservedAt    time.Time         `json:"observedAt,omitempty"`
+	Signals       map[string]string `json:"signals,omitempty"`
+}
+
+// UpdateAccountsManagerRoutingRequest updates new-session account order.
+type UpdateAccountsManagerRoutingRequest struct {
+	Enabled    bool     `json:"enabled"`
+	AccountIDs []string `json:"accountIds"`
+}
+
 // CreateReportRequest is the local caller-to-daemon report submission contract.
 // SessionID attributes the report; like the rest of AO's unauthenticated
 // loopback API, it is not cryptographic proof of worker authorship. Reports do
@@ -122,6 +230,11 @@ type CodexAccountLoginIDParam struct {
 // CodexAccountSwitchIDParam documents a durable Codex account switch identifier.
 type CodexAccountSwitchIDParam struct {
 	SwitchID string `path:"switchId" description:"Durable Codex account switch identifier."`
+}
+
+// AccountsManagerProviderParam documents the provider-specific routing path.
+type AccountsManagerProviderParam struct {
+	Provider string `path:"provider" description:"Accounts Manager provider; Codex is currently supported."`
 }
 
 // ListProjectsResponse is the body of GET /api/v1/projects.

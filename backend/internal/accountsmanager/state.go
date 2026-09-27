@@ -13,8 +13,10 @@ import (
 )
 
 type persistedRouteState struct {
-	ActiveAccount string            `json:"active_account,omitempty"`
-	Sessions      map[string]string `json:"sessions"`
+	ActiveAccount     string            `json:"active_account,omitempty"`
+	Sessions          map[string]string `json:"sessions"`
+	RoutingEnabled    *bool             `json:"routing_enabled,omitempty"`
+	PreferredAccounts []string          `json:"preferred_accounts,omitempty"`
 }
 
 // routeState is the small durable part of Accounts Manager state. It stores
@@ -23,9 +25,12 @@ type persistedRouteState struct {
 type routeState struct {
 	path string
 
-	mu            sync.RWMutex
-	activeAccount string
-	sessions      map[string]string
+	mu                sync.RWMutex
+	activeAccount     string
+	sessions          map[string]string
+	routingSet        bool
+	routingEnabled    bool
+	preferredAccounts []string
 }
 
 func newRouteState(path string) (*routeState, error) {
@@ -52,6 +57,11 @@ func newRouteState(path string) (*routeState, error) {
 		}
 	}
 	state.activeAccount = strings.TrimSpace(persisted.ActiveAccount)
+	if persisted.RoutingEnabled != nil {
+		state.routingSet = true
+		state.routingEnabled = *persisted.RoutingEnabled
+		state.preferredAccounts = compactStrings(persisted.PreferredAccounts)
+	}
 	return state, nil
 }
 
@@ -88,7 +98,7 @@ func (s *routeState) setAccountForSession(sessionID, accountID string) error {
 	defer s.mu.Unlock()
 	candidate := cloneStringMap(s.sessions)
 	candidate[sessionID] = accountID
-	if err := s.persist(persistedRouteState{ActiveAccount: s.activeAccount, Sessions: candidate}); err != nil {
+	if err := s.persist(s.persisted(candidate)); err != nil {
 		return err
 	}
 	s.sessions = candidate
@@ -109,12 +119,50 @@ func (s *routeState) setAccountForAllSessions(accountID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	candidate := cloneStringMap(s.sessions)
-	if err := s.persist(persistedRouteState{ActiveAccount: accountID, Sessions: candidate}); err != nil {
+	previous := s.activeAccount
+	s.activeAccount = accountID
+	if err := s.persist(s.persisted(candidate)); err != nil {
+		s.activeAccount = previous
 		return err
 	}
-	s.activeAccount = accountID
 	s.sessions = candidate
 	return nil
+}
+
+func (s *routeState) routing() (bool, []string) {
+	if s == nil {
+		return true, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.routingEnabled || !s.routingSet, append([]string(nil), s.preferredAccounts...)
+}
+
+func (s *routeState) setRouting(enabled bool, accountIDs []string) error {
+	if s == nil {
+		return ports.ErrCodexProxyUnavailable
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	candidate := compactStrings(accountIDs)
+	enabledCopy := enabled
+	if err := s.persist(persistedRouteState{
+		ActiveAccount: s.activeAccount, Sessions: cloneStringMap(s.sessions),
+		RoutingEnabled: &enabledCopy, PreferredAccounts: candidate,
+	}); err != nil {
+		return err
+	}
+	s.routingSet, s.routingEnabled, s.preferredAccounts = true, enabled, candidate
+	return nil
+}
+
+func (s *routeState) persisted(sessions map[string]string) persistedRouteState {
+	state := persistedRouteState{ActiveAccount: s.activeAccount, Sessions: sessions}
+	if s.routingSet {
+		state.RoutingEnabled = &s.routingEnabled
+		state.PreferredAccounts = append([]string(nil), s.preferredAccounts...)
+	}
+	return state
 }
 
 func (s *routeState) persist(persisted persistedRouteState) error {
@@ -157,6 +205,23 @@ func cloneStringMap(input map[string]string) map[string]string {
 	result := make(map[string]string, len(input))
 	for key, value := range input {
 		result[key] = value
+	}
+	return result
+}
+
+func compactStrings(input []string) []string {
+	seen := make(map[string]struct{}, len(input))
+	result := make([]string, 0, len(input))
+	for _, value := range input {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
 	}
 	return result
 }

@@ -60,6 +60,19 @@ export function setApiDaemonStatus(nextStatus: DaemonStatus): void {
 // still normalizes IDs for every resource, including ones a segment heuristic
 // would miss (orchestrators/{id}). Keep in sync with schema.ts.
 const ROUTE_TEMPLATES = [
+	"/api/v1/accounts-manager/accounts",
+	"/api/v1/accounts-manager/accounts/{accountId}",
+	"/api/v1/accounts-manager/accounts/{accountId}/models",
+	"/api/v1/accounts-manager/accounts/{accountId}/quota",
+	"/api/v1/accounts-manager/accounts/{accountId}/quota/reset",
+	"/api/v1/accounts-manager/accounts/{accountId}/refresh",
+	"/api/v1/accounts-manager/accounts/api-key",
+	"/api/v1/accounts-manager/accounts/events",
+	"/api/v1/accounts-manager/accounts/import",
+	"/api/v1/accounts-manager/oauth-sessions",
+	"/api/v1/accounts-manager/oauth-sessions/{operationId}",
+	"/api/v1/accounts-manager/routing/{provider}",
+	"/api/v1/accounts-manager/status",
 	"/api/v1/agents",
 	"/api/v1/agents/install-jobs",
 	"/api/v1/agents/auth-plans",
