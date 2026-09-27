@@ -17,4 +17,13 @@ describe("AgentAvatar", () => {
 
 		expect(screen.getByRole("img", { name: "omp" })).toHaveAttribute("src", expect.stringContaining("omp.png"));
 	});
+
+	it("renders the Unreal Agent brand asset", () => {
+		render(<AgentAvatar provider="unreal-agent" />);
+
+		expect(screen.getByRole("img", { name: "unreal-agent" })).toHaveAttribute(
+			"src",
+			expect.stringContaining("unreal-agent.png"),
+		);
+	});
 });
