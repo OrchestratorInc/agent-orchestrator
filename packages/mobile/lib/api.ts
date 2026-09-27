@@ -91,6 +91,8 @@ export type DashboardSession = {
 	// finished status: a merged session whose agent is still running belongs on
 	// the board, only a terminated one belongs in the archive.
 	isTerminated?: boolean;
+	provisionState?: "provisioning" | "ready" | "failed";
+	provisionError?: string;
 	isPinned?: boolean;
 	pinnedAt?: string | null;
 	/** Whether the cloud worker has a current control-plane connection. Cloud sessions only. */
@@ -197,6 +199,8 @@ type WireSession = {
 	displayName?: string;
 	activity?: unknown;
 	isTerminated?: boolean;
+	provisionState?: "provisioning" | "ready" | "failed";
+	provisionError?: string;
 	status?: string | null;
 	kanbanColumn?: string | null;
 	displayStatus?: string | null;
@@ -290,6 +294,8 @@ function mapSession(s: WireSession): DashboardSession {
 		prs,
 		previewUrl: s.previewUrl ?? null,
 		isTerminated: !!s.isTerminated,
+		provisionState: s.provisionState,
+		provisionError: s.provisionError,
 		isPinned: !!s.isPinned,
 		pinnedAt: s.pinnedAt ?? null,
 	};
@@ -315,6 +321,8 @@ function mapOrchestrator(s: WireSession, projectName: string): OrchestratorLink 
 // ---- Low-level fetch with friendly errors ----------------------------------
 
 const REQUEST_TIMEOUT_MS = 12000;
+// The daemon gives attachment uploads 10 minutes; allow time for its response.
+export const ATTACHMENT_REQUEST_TIMEOUT_MS = 11 * 60_000;
 
 // The server answered, but with an error status. Distinct from the errors fetch
 // itself throws (DNS/refused/timeout), which mean the server was never reached —
@@ -788,6 +796,7 @@ export async function spawnSession(
 ): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/sessions`, {
 		method: "POST",
+		headers: opts.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 		body: JSON.stringify({
 			projectId: opts.projectId,
 			prompt: opts.prompt,
@@ -802,7 +811,7 @@ export async function spawnSession(
 			kind: "worker",
 			attachments: opts.attachments?.length ? opts.attachments : undefined,
 		}),
-	});
+	}, opts.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
 	const data = await res.json();
 	return mapSession(data?.session ?? data);
 }
@@ -837,6 +846,7 @@ export async function delegateTask(
 ): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/orchestrators/delegate`, {
 		method: "POST",
+		headers: opts.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 		body: JSON.stringify({
 			projectId: opts.projectId,
 			brief: opts.brief,
@@ -845,7 +855,7 @@ export async function delegateTask(
 			mode: opts.mode,
 			attachments: opts.attachments?.length ? opts.attachments : undefined,
 		}),
-	});
+	}, opts.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
 	const data = await res.json();
 	if (!data?.workerId) throw new Error("The daemon did not return the new worker session");
 	return getSession(cfg, data.workerId);

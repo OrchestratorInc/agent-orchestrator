@@ -90,6 +90,11 @@ type ProjectIDParam struct {
 	ID string `path:"id" description:"Project identifier (registry key)."`
 }
 
+// TaskPreparationTokenParam identifies an unclaimed speculative task workspace.
+type TaskPreparationTokenParam struct {
+	Token string `path:"token" description:"Opaque speculative task-worktree token."`
+}
+
 // AgentIDParam is the {agent} path parameter for one-agent catalog probes.
 type AgentIDParam struct {
 	Agent string `path:"agent" description:"Agent adapter identifier."`
@@ -370,7 +375,7 @@ type SpawnSessionRequest struct {
 	ParentSessionID domain.SessionID       `json:"parentSessionId,omitempty"`
 	TrackerProvider domain.TrackerProvider `json:"trackerProvider,omitempty" enum:"github,gitlab"`
 	Kind            domain.SessionKind     `json:"kind,omitempty" enum:"worker,orchestrator"`
-	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,grok,droid,amp,agy,crush,cursor,qwen,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,prime-agent,autohand"`
+	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,grok,droid,amp,agy,crush,cursor,qwen,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,prime-agent,autohand,unreal-agent"`
 	Branch          string                 `json:"branch,omitempty"`
 	// Mode picks the conversation controller: chat talks to the agent over a
 	// structured connection, tui opens the agent's native terminal interface.
@@ -379,8 +384,10 @@ type SpawnSessionRequest struct {
 	// never mutates existing sessions automatically; compatible sessions may later
 	// switch through the durable interface-transition endpoint. An unsupported
 	// explicit request fails rather than quietly producing the other kind of session.
-	Mode   domain.SessionMode `json:"mode,omitempty" enum:"chat,tui"`
-	Prompt string             `json:"prompt,omitempty" maxLength:"16384"`
+	Mode domain.SessionMode `json:"mode,omitempty" enum:"chat,tui"`
+	// ApprovalMode overrides the project/default policy for this spawn.
+	ApprovalMode domain.PermissionMode `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
+	Prompt       string                `json:"prompt,omitempty" maxLength:"16384"`
 	// Model is an optional agent model override scoped to this single spawn. Empty
 	// keeps the resolved project/role default. The daemon validates that the
 	// selected harness can honor the model before launching.
@@ -505,6 +512,10 @@ type ListWorkspaceFilesResponse struct {
 	// Commits are the commits between the compare base and HEAD, newest first.
 	Commits []WorkspaceCommitSummary `json:"commits"`
 	Summary WorkspaceSummary         `json:"summary"`
+	// Degraded indicates that the primary file list is available but optional
+	// Git-state enrichment failed and can be retried.
+	Degraded     bool   `json:"degraded"`
+	DegradedCode string `json:"degradedCode,omitempty"`
 	// Ahead and Behind are omitted when no push/pull data is available (no
 	// upstream, detached HEAD).
 	Ahead  *int `json:"ahead,omitempty"`
@@ -958,7 +969,7 @@ type SendSessionMessageResponse struct {
 type DelegateTaskRequest struct {
 	ProjectID domain.ProjectID    `json:"projectId"`
 	Brief     string              `json:"brief" maxLength:"16384"`
-	Agent     domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,grok,droid,amp,agy,crush,cursor,qwen,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,prime-agent,autohand,fake"`
+	Agent     domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,grok,droid,amp,agy,crush,cursor,qwen,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,prime-agent,autohand,unreal-agent,fake"`
 	Model     string              `json:"model,omitempty" maxLength:"256"`
 	// Effort is an explicit, provider-advertised model tuning override. Nil
 	// inherits the project default; an empty string selects the provider default.
@@ -974,6 +985,15 @@ type DelegateTaskRequest struct {
 	// daemon writes them into the spawned worker worktree and appends path
 	// references to the worker prompt.
 	Attachments []AttachmentInput `json:"attachments,omitempty"`
+	// TaskPreparation is the opaque worktree token returned while the New Task
+	// dialog is open. Missing or expired tokens fall back to normal creation.
+	TaskPreparation string `json:"taskPreparation,omitempty"`
+}
+
+// PrepareTaskResponse returns the opaque token for a speculative task workspace.
+type PrepareTaskResponse struct {
+	OK              bool   `json:"ok"`
+	TaskPreparation string `json:"taskPreparation,omitempty"`
 }
 
 // DelegateTaskResponse confirms which worker was spawned and, when available,
@@ -1000,30 +1020,32 @@ type SessionPRFacts struct {
 // /sessions/{sessionId}/pr. It intentionally omits CI log tails and review
 // comment bodies.
 type SessionPRSummary struct {
-	URL              string                       `json:"url"`
-	HTMLURL          string                       `json:"htmlUrl,omitempty"`
-	Number           int                          `json:"number"`
-	Title            string                       `json:"title"`
-	State            domain.PRState               `json:"state" enum:"draft,open,merged,closed"`
-	Provider         string                       `json:"provider" enum:"github,gitlab"`
-	Repo             string                       `json:"repo"`
-	Author           string                       `json:"author"`
-	AuthorAvatarURL  string                       `json:"authorAvatarUrl,omitempty"`
-	SourceBranch     string                       `json:"sourceBranch"`
-	TargetBranch     string                       `json:"targetBranch"`
-	HeadSHA          string                       `json:"headSha"`
-	Additions        int                          `json:"additions"`
-	Deletions        int                          `json:"deletions"`
-	ChangedFiles     int                          `json:"changedFiles"`
-	CI               SessionPRCISummary           `json:"ci"`
-	Review           SessionPRReviewSummary       `json:"review"`
-	Mergeability     SessionPRMergeabilitySummary `json:"mergeability"`
-	StateChangedAt   *time.Time                   `json:"stateChangedAt,omitempty"`
-	CreatedAt        *time.Time                   `json:"createdAt,omitempty"`
-	UpdatedAt        time.Time                    `json:"updatedAt"`
-	ObservedAt       time.Time                    `json:"observedAt,omitempty"`
-	CIObservedAt     time.Time                    `json:"ciObservedAt,omitempty"`
-	ReviewObservedAt time.Time                    `json:"reviewObservedAt,omitempty"`
+	URL                    string                       `json:"url"`
+	HTMLURL                string                       `json:"htmlUrl,omitempty"`
+	Number                 int                          `json:"number"`
+	Title                  string                       `json:"title"`
+	State                  domain.PRState               `json:"state" enum:"draft,open,merged,closed"`
+	Provider               string                       `json:"provider" enum:"github,gitlab"`
+	Repo                   string                       `json:"repo"`
+	Author                 string                       `json:"author"`
+	AuthorAvatarURL        string                       `json:"authorAvatarUrl,omitempty"`
+	DiscussionCommentCount int                          `json:"discussionCommentCount,omitempty"`
+	DiscussionCommenters   []string                     `json:"discussionCommenters,omitempty"`
+	SourceBranch           string                       `json:"sourceBranch"`
+	TargetBranch           string                       `json:"targetBranch"`
+	HeadSHA                string                       `json:"headSha"`
+	Additions              int                          `json:"additions"`
+	Deletions              int                          `json:"deletions"`
+	ChangedFiles           int                          `json:"changedFiles"`
+	CI                     SessionPRCISummary           `json:"ci"`
+	Review                 SessionPRReviewSummary       `json:"review"`
+	Mergeability           SessionPRMergeabilitySummary `json:"mergeability"`
+	StateChangedAt         *time.Time                   `json:"stateChangedAt,omitempty"`
+	CreatedAt              *time.Time                   `json:"createdAt,omitempty"`
+	UpdatedAt              time.Time                    `json:"updatedAt"`
+	ObservedAt             time.Time                    `json:"observedAt,omitempty"`
+	CIObservedAt           time.Time                    `json:"ciObservedAt,omitempty"`
+	ReviewObservedAt       time.Time                    `json:"reviewObservedAt,omitempty"`
 }
 
 // SessionPRCISummary is the CI status block for a session PR summary.
@@ -1105,30 +1127,32 @@ type ListSessionPRsResponse struct {
 // NewSessionPRSummary maps the service PR summary model to its HTTP DTO.
 func NewSessionPRSummary(in sessionsvc.PRSummary) SessionPRSummary {
 	return SessionPRSummary{
-		URL:              in.URL,
-		HTMLURL:          in.HTMLURL,
-		Number:           in.Number,
-		Title:            in.Title,
-		State:            in.State,
-		Provider:         in.Provider,
-		Repo:             in.Repo,
-		Author:           in.Author,
-		AuthorAvatarURL:  in.AuthorAvatarURL,
-		SourceBranch:     in.SourceBranch,
-		TargetBranch:     in.TargetBranch,
-		HeadSHA:          in.HeadSHA,
-		Additions:        in.Additions,
-		Deletions:        in.Deletions,
-		ChangedFiles:     in.ChangedFiles,
-		CI:               newSessionPRCISummary(in.CI),
-		Review:           newSessionPRReviewSummary(in.Review),
-		Mergeability:     newSessionPRMergeabilitySummary(in.Mergeability),
-		StateChangedAt:   optionalTime(in.StateChangedAt),
-		CreatedAt:        optionalTime(in.CreatedAt),
-		UpdatedAt:        in.UpdatedAt,
-		ObservedAt:       in.ObservedAt,
-		CIObservedAt:     in.CIObservedAt,
-		ReviewObservedAt: in.ReviewObservedAt,
+		URL:                    in.URL,
+		HTMLURL:                in.HTMLURL,
+		Number:                 in.Number,
+		Title:                  in.Title,
+		State:                  in.State,
+		Provider:               in.Provider,
+		Repo:                   in.Repo,
+		Author:                 in.Author,
+		AuthorAvatarURL:        in.AuthorAvatarURL,
+		DiscussionCommentCount: in.DiscussionCommentCount,
+		DiscussionCommenters:   in.DiscussionCommenters,
+		SourceBranch:           in.SourceBranch,
+		TargetBranch:           in.TargetBranch,
+		HeadSHA:                in.HeadSHA,
+		Additions:              in.Additions,
+		Deletions:              in.Deletions,
+		ChangedFiles:           in.ChangedFiles,
+		CI:                     newSessionPRCISummary(in.CI),
+		Review:                 newSessionPRReviewSummary(in.Review),
+		Mergeability:           newSessionPRMergeabilitySummary(in.Mergeability),
+		StateChangedAt:         optionalTime(in.StateChangedAt),
+		CreatedAt:              optionalTime(in.CreatedAt),
+		UpdatedAt:              in.UpdatedAt,
+		ObservedAt:             in.ObservedAt,
+		CIObservedAt:           in.CIObservedAt,
+		ReviewObservedAt:       in.ReviewObservedAt,
 	}
 }
 

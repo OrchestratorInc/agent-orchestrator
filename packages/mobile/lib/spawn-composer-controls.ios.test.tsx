@@ -11,6 +11,10 @@ vi.mock("./ThemeProvider", () => ({
 }));
 vi.mock("./harnessLogoAssets", () => ({ logoFor: () => undefined }));
 vi.mock("./haptics", () => ({ haptics: { select: vi.fn(), tap: vi.fn() } }));
+vi.mock("./voice/MicKey", async () => {
+	const React = await import("react");
+	return { MicKey: (props: object) => React.createElement("MicKey", props) };
+});
 vi.mock("expo-asset", () => ({ Asset: { fromModule: vi.fn() } }));
 vi.mock("react-native", async () => {
 	const React = await import("react");
@@ -25,7 +29,10 @@ vi.mock("react-native", async () => {
 });
 vi.mock("@expo/ui", async () => {
 	const React = await import("react");
-	return { Host: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("Host", props, children) };
+	return {
+		Host: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("Host", props, children),
+		RNHostView: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("RNHostView", props, children),
+	};
 });
 vi.mock("@expo/ui/swift-ui", async () => {
 	const React = await import("react");
@@ -42,9 +49,10 @@ vi.mock("@expo/ui/swift-ui", async () => {
 	};
 });
 vi.mock("@expo/ui/swift-ui/modifiers", () => ({
-	accessibilityIdentifier: vi.fn(), aspectRatio: vi.fn(), buttonStyle: vi.fn(),
-	containerRelativeFrame: vi.fn(), font: vi.fn(), frame: vi.fn(), glassEffect: vi.fn(),
-	labelStyle: vi.fn(), opacity: vi.fn(), padding: vi.fn(), resizable: vi.fn(), tint: vi.fn(),
+	accessibilityIdentifier: vi.fn(), aspectRatio: vi.fn(), backgroundOverlay: vi.fn(), buttonStyle: vi.fn(),
+	clipShape: vi.fn(), containerRelativeFrame: vi.fn(), font: vi.fn(), frame: vi.fn(), glassEffect: vi.fn(),
+	labelStyle: vi.fn(), layoutPriority: vi.fn(), lineLimit: vi.fn(), opacity: vi.fn(), padding: vi.fn(),
+	resizable: vi.fn(), tint: vi.fn(), truncationMode: vi.fn(),
 }));
 
 import { SpawnComposerControls } from "./spawn-composer-controls.ios";
@@ -82,6 +90,7 @@ describe("SpawnComposerControls on iOS", () => {
 				modelLabel="Automatic"
 				onSelectModel={vi.fn()}
 				onAttach={vi.fn()}
+				voice={{ state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn() }}
 				onSpawn={vi.fn()}
 				busy={false}
 				disabled={false}

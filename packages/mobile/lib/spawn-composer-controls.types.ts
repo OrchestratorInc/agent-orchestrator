@@ -1,6 +1,15 @@
+import type { VoiceMode, VoiceState } from "./voice/types";
+
 export type SpawnComposerOption = {
 	id: string;
 	label: string;
+};
+
+export type SpawnComposerVoice = {
+	state: VoiceState;
+	mode: VoiceMode;
+	onPressIn: () => void;
+	onPressOut: () => void;
 };
 
 export type SpawnComposerControlsProps = {
@@ -17,6 +26,8 @@ export type SpawnComposerControlsProps = {
 	onAttach: () => void;
 	showAttachments?: boolean;
 	showModels?: boolean;
+	/** Dictation into the prompt: hold to talk, double-tap for hands-free. */
+	voice: SpawnComposerVoice;
 	onSpawn: () => void;
 	busy: boolean;
 	disabled: boolean;

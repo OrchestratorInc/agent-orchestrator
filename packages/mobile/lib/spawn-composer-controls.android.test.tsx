@@ -6,6 +6,10 @@ const fixtures = vi.hoisted(() => ({
 }));
 
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme }));
+vi.mock("./voice/MicKey", async () => {
+	const React = await import("react");
+	return { MicKey: (props: object) => React.createElement("MicKey", props) };
+});
 vi.mock("./AgentLogo", async () => {
 	const React = await import("react");
 	return { AgentLogo: (props: object) => React.createElement("AgentLogo", props) };
@@ -62,6 +66,7 @@ describe("SpawnComposerControls", () => {
 			modelLabel: "Automatic",
 			onSelectModel: vi.fn(),
 			onAttach: vi.fn(),
+			voice: { state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn() },
 			onSpawn: vi.fn(),
 			busy: false,
 			disabled: false,

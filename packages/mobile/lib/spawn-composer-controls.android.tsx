@@ -6,6 +6,7 @@ import { useTheme } from "./ThemeProvider";
 import type { Theme } from "./theme";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
 import { type, space } from "./tokens";
+import { MicKey } from "./voice/MicKey";
 
 type OpenMenu = "project" | "harness" | "model" | null;
 
@@ -23,6 +24,7 @@ export function SpawnComposerControls({
 	onAttach,
 	showAttachments = true,
 	showModels = true,
+	voice,
 	onSpawn,
 	busy,
 	disabled,
@@ -82,6 +84,18 @@ export function SpawnComposerControls({
 					<View style={styles.divider} />
 					<SelectorButton label={modelLabel} onPress={() => setOpenMenu("model")} style={styles.railButton} />
 				</> : null}
+				<View style={styles.divider} />
+				{/* Plain, like the paperclip: the rail is the surface, and a second
+				    disc inside it would compete with Start task. */}
+				<MicKey
+					variant="plain"
+					size={42}
+					glyphSize={20}
+					state={voice.state}
+					mode={voice.mode}
+					onPressIn={voice.onPressIn}
+					onPressOut={voice.onPressOut}
+				/>
 			</View>
 
 			<Pressable

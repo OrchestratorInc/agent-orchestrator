@@ -27,6 +27,17 @@ func TestModelCommandUsesProjectWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestNormalizeShowsConcreteNameForDefaultCatalogModel(t *testing.T) {
+	got := normalize([]ports.AgentModelInfo{
+		{ID: "opus", Label: "Opus (default)"},
+		{ID: "sonnet", Label: "Default (recommended)"},
+	})
+	if len(got) != 2 || got[0].ID != "opus" || got[0].Label != "Opus" || !got[0].IsDefault ||
+		got[1].ID != "sonnet" || got[1].Label != "sonnet" || !got[1].IsDefault {
+		t.Fatalf("normalized models = %#v", got)
+	}
+}
+
 func environmentContains(env []string, wanted string) bool {
 	for _, item := range env {
 		if item == wanted {
@@ -241,6 +252,32 @@ func TestMuseReturnsStaticCatalogWithoutStartingAgent(t *testing.T) {
 	}
 	if got.Source != "official-catalog" || !reflect.DeepEqual(got.Models, want) {
 		t.Fatalf("catalog = %#v, want models %#v", got, want)
+	}
+}
+
+func TestUnrealCatalogShowsEffectiveModelAndAllowsOverride(t *testing.T) {
+	t.Setenv("UNREAL_HARNESS_LLM_PROVIDER", "openai-codex")
+	t.Setenv("UNREAL_HARNESS_LLM_MODEL", "gpt-6-sol")
+	request := ports.AgentModelDiscoveryRequest{AgentID: "unreal-agent"}
+	got, err := (Discoverer{}).Discover(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.AllowCustom || got.CustomModelEntry != ports.CustomModelEntryDirect ||
+		len(got.Models) != 1 || got.Models[0].ID != "gpt-6-sol" || !got.Models[0].IsDefault {
+		t.Fatalf("Unreal catalog = %#v", got)
+	}
+	before := (Discoverer{}).CatalogFingerprint(context.Background(), request)
+	request.Env = map[string]string{"UNREAL_HARNESS_LLM_MODEL": "custom-model"}
+	got, err = (Discoverer{}).Discover(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Models) != 1 || got.Models[0].ID != "custom-model" || !got.Models[0].IsDefault {
+		t.Fatalf("project override catalog = %#v", got)
+	}
+	if before == (Discoverer{}).CatalogFingerprint(context.Background(), request) {
+		t.Fatal("Unreal model override did not invalidate catalog")
 	}
 }
 

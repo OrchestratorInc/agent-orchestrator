@@ -38,7 +38,7 @@ import { ChatComposer } from "./ChatComposer";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
 import { ConversationTitle } from "./ConversationTitle";
-import { chatSheetRoute } from "./chatSheetRegistry";
+import { chatSheetRoute, type ConversationActionsEntry } from "./chatSheetRegistry";
 import { quotaWarning } from "./conversationChrome";
 import { cloudLifecycleBanner, controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
@@ -88,6 +88,8 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	const cloudSession = sessionSource?.kind === "cloud";
 	const conversation = useMobileConversation(config, session.id, sessionSource);
 	const interfaceSwitch = useInterfaceTransition(cloudSession ? null : config, cloudSession ? "" : session.id, refreshBoard);
+	const actionsEntryRef = useRef<ConversationActionsEntry | undefined>(undefined);
+	const actionsListeners = useRef(new Set<(entry: ConversationActionsEntry) => void>());
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [jumpToSequence, setJumpToSequence] = useState<number>();
 	const clearJumpToSequence = useCallback(() => setJumpToSequence(undefined), []);
@@ -118,7 +120,30 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	// both carry the control-plane sandbox lifecycle.
 	const cloudStage = cloudLifecycleStage(session);
 	const cloudComposerLocked = cloudStage !== undefined && cloudStage !== "connected";
+	const failedStart = "projectName" in session || session.provisionState !== "failed"
+		? undefined
+		: session.provisionError || "The session did not finish starting.";
 	const interfaceTransitionActive = mobileInterfaceTransitionIsActive(interfaceSwitch.transition);
+	useLayoutEffect(() => {
+		const entry = actionsEntryRef.current;
+		const snapshot = conversation.snapshot;
+		if (!entry || entry.sessionId !== session.id || !snapshot) return;
+		const liveEntry = {
+			...entry,
+			snapshot,
+			openingShell,
+			compacting: conversation.pendingActions.includes("compact"),
+			mcpReloading: conversation.pendingActions.includes("mcp"),
+			refreshing: conversation.refreshing,
+			compactSupported: can(snapshot, "compaction") && !conversationActionUnsupported("compact", conversation.actionCodes.compact),
+			mcpReloadSupported: can(snapshot, "mcp_reload") && !conversationActionUnsupported("mcp", conversation.actionCodes.mcp),
+			interfaceSupported: cloudSession ? !terminated : Boolean(interfaceSwitch.status?.supported),
+			interfaceReason: cloudSession ? (terminated ? "This session has ended." : undefined) : interfaceSwitch.status?.reason || interfaceSwitch.error,
+			interfaceSwitching: !cloudSession && (interfaceTransitionActive || interfaceSwitch.starting),
+		};
+		actionsEntryRef.current = liveEntry;
+		actionsListeners.current.forEach((listener) => listener(liveEntry));
+	}, [cloudSession, conversation.snapshot, conversation.pendingActions, conversation.refreshing, conversation.actionCodes, openingShell, interfaceSwitch.status, interfaceSwitch.error, interfaceSwitch.starting, interfaceTransitionActive, session.id, terminated]);
 	const interfaceTransitionNotice =
 		!interfaceTransitionActive &&
 		!interfaceSwitch.transition?.noticeAcknowledgedAt &&
@@ -357,9 +382,15 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		const current = conversation.snapshot;
 		if (!menuOpen || !current) return;
 		setMenuOpen(false);
-		void dismissKeyboardBeforeSheet(keyboardVisible).then(() => router.push(chatSheetRoute({
+		const entry: ConversationActionsEntry = {
 			kind: "conversation-actions",
+			sessionId: session.id,
 			snapshot: current,
+			subscribeEntry: (listener) => {
+				actionsListeners.current.add(listener);
+				listener(actionsEntryRef.current ?? entry);
+				return () => { actionsListeners.current.delete(listener); };
+			},
 			sessionTitle: sessionName,
 			openingShell,
 			compacting: conversation.pendingActions.includes("compact"),
@@ -374,7 +405,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			canDelete: !("projectName" in session),
 			canPin: !("projectName" in session),
 			pinned: "projectName" in session ? false : Boolean(session.isPinned),
-			onMap: () => router.push(chatSheetRoute({ kind: "conversation-map", markers: conversationMarkers(current), onSelect: setJumpToSequence })),
+			onMap: () => router.push(chatSheetRoute({ kind: "conversation-map", markers: conversationMarkers(actionsEntryRef.current?.snapshot ?? current), onSelect: setJumpToSequence })),
 			onOpenShell: () => void openShell(),
 			onPreview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, previewUrl: "previewUrl" in session ? session.previewUrl ?? undefined : undefined } }),
 			onPullRequests: () => { setActiveProject(session.projectId); router.push("/(tabs)/prs"); },
@@ -405,7 +436,9 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 					],
 				);
 			},
-		})));
+		};
+		actionsEntryRef.current = entry;
+		void dismissKeyboardBeforeSheet(keyboardVisible).then(() => router.push(chatSheetRoute(actionsEntryRef.current ?? entry)));
 	}, [cloudSession, conversation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setActiveProject, setWorkerPinned, terminated, title]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
@@ -442,6 +475,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		onSecondary: recheckingTransition ? undefined : () => void retryInterfaceCheck(),
 	};
 
+	if (failedStart && !conversation.snapshot) return <Centered icon="alert-triangle" title="Session failed to start" message={failedStart} action={resuming ? "Retrying…" : "Retry"} onAction={() => void resume()} />;
 	if (conversation.loading && !conversation.snapshot) return <Centered icon="message-square" title="Loading conversation…" spinning />;
 	if (conversation.unavailable) return <Unavailable message={conversation.unavailable.message} onShell={() => void openShell()} openingShell={openingShell} />;
 	if (!conversation.snapshot) return <Centered icon="alert-triangle" title="Couldn't load the conversation" message={conversation.error || "The daemon did not return a conversation."} action="Retry" onAction={() => void conversation.refresh()} />;
@@ -498,6 +532,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			) : null}
 			<ConversationBanners
 				snapshot={snapshot}
+				startFailure={failedStart}
 				brokenServers={brokenServers}
 				resuming={resuming}
 				terminated={terminated}
@@ -561,7 +596,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				configOptions={conversation.configOptions}
 				models={conversation.models}
 				steerUnavailable={steerUnsupported}
-				disabled={interfaceTransitionActive || cloudComposerLocked}
+				disabled={interfaceTransitionActive || cloudComposerLocked || Boolean(failedStart)}
 				pending={mobileInterfaceTransitionIsBusy(interfaceSwitch.transition) || conversation.pendingSends.some((item) => item.state === "sending")}
 				interrupting={conversation.pendingActions.includes("interrupt")}
 				onSend={conversation.send}
@@ -578,14 +613,14 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	);
 }
 
-function ConversationBanners({ snapshot, brokenServers, resuming, terminated, mcpReloading, mcpError, mcpReloadSupported, turnInFlight, onResume, onReload, onOpenShell, dismissed, onDismiss }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; brokenServers: ReturnType<typeof brokenMcpServers>; resuming: boolean; terminated: boolean; mcpReloading: boolean; mcpError?: string; mcpReloadSupported: boolean; turnInFlight: boolean; onResume(): void; onReload(): void; onOpenShell(): void; dismissed: ReadonlySet<string>; onDismiss(key: string): void }) {
+function ConversationBanners({ snapshot, startFailure, brokenServers, resuming, terminated, mcpReloading, mcpError, mcpReloadSupported, turnInFlight, onResume, onReload, onOpenShell, dismissed, onDismiss }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; startFailure?: string; brokenServers: ReturnType<typeof brokenMcpServers>; resuming: boolean; terminated: boolean; mcpReloading: boolean; mcpError?: string; mcpReloadSupported: boolean; turnInFlight: boolean; onResume(): void; onReload(): void; onOpenShell(): void; dismissed: ReadonlySet<string>; onDismiss(key: string): void }) {
 	const thread = snapshot.threadState;
 	const reauthAt = snapshot.account?.reauthRequiredAt;
 	return <>
 		{reauthAt ? <DismissibleBanner copy={reauthBanner(reauthAt, signInCommand(snapshot.harness))} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="key" action="Open shell" onPress={onOpenShell} /> : null}
-		{snapshot.controller.state === "stopped" ? <DismissibleBanner copy={controllerStoppedBanner(terminated, snapshot.controller.error)} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="power" action={terminated ? (resuming ? "Restoring…" : "Restore") : (resuming ? "Resuming…" : "Resume")} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : null}
+		{startFailure ? <DismissibleBanner copy={{ key: `start:${startFailure}`, title: "Session failed to start", body: startFailure }} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="alert-triangle" action={resuming ? "Retrying…" : "Retry"} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : snapshot.controller.state === "stopped" ? <DismissibleBanner copy={controllerStoppedBanner(terminated, snapshot.controller.error)} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="power" action={terminated ? (resuming ? "Restoring…" : "Restore") : (resuming ? "Resuming…" : "Resume")} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : null}
 		{/* Passing states clear themselves, so there is nothing to close. */}
-		{snapshot.controller.state === "recovering" || snapshot.controller.state === "connecting" ? <InlineBanner tone="warning" icon="loader" title={snapshot.controller.state === "recovering" ? "Reconnecting to the agent…" : "Starting the agent…"} /> : null}
+		{!startFailure && (snapshot.controller.state === "recovering" || snapshot.controller.state === "connecting") ? <InlineBanner tone="warning" icon="loader" title={snapshot.controller.state === "recovering" ? "Reconnecting to the agent…" : "Starting the agent…"} /> : null}
 		{threadBanner(thread?.status) ? <DismissibleBanner copy={threadBanner(thread?.status)!} dismissed={dismissed} onDismiss={onDismiss} tone={thread?.status === "system_error" ? "danger" : "warning"} icon="alert-triangle" /> : null}
 		{brokenServers.length ? <DismissibleBanner copy={mcpBanner(brokenServers, mcpError)!} dismissed={dismissed} onDismiss={onDismiss} tone="warning" icon="tool" action={mcpReloadSupported && !turnInFlight ? (mcpReloading ? "Reloading…" : "Reload") : undefined} onPress={mcpReloading ? undefined : onReload} /> : null}
 	</>;
