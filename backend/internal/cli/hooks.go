@@ -46,6 +46,19 @@ const (
 // state; ToolName/ToolUseID are the tool-use correlation facts lifted from the
 // native payload when present. All four are optional: an old daemon decodes
 // the body leniently and simply ignores them.
+// setContextPressureRequest mirrors the daemon's context-pressure body. The CLI
+// hand-mirrors daemon DTOs by design (see AGENTS.md).
+type setContextPressureRequest struct {
+	ContextUsedPercent int       `json:"contextUsedPercent"`
+	Source             string    `json:"source,omitempty"`
+	ObservedAt         time.Time `json:"observedAt,omitempty"`
+}
+
+type setContextPressureResponse struct {
+	OK        bool   `json:"ok"`
+	SessionID string `json:"sessionId"`
+}
+
 type setActivityAPIRequest struct {
 	ObservedAt                   time.Time                           `json:"observedAt,omitempty"`
 	State                        string                              `json:"state,omitempty"`
@@ -444,6 +457,68 @@ func newHooksCommand(ctx *commandContext) *cobra.Command {
 	}
 }
 
+// statuslineEvent is the pseudo-event AO installs as the harness's statusline
+// command. It is not one of the agent's hook events: a statusline renders a
+// line of text on every turn, and the payload it receives is the only
+// documented place a harness states how full its context window is.
+const statuslineEvent = "statusline"
+
+// statuslinePayload is the subset of the harness's statusline JSON that AO
+// reads. Every field is optional: an older agent build sends no context_window
+// block, and the statusline must still render.
+type statuslinePayload struct {
+	Model struct {
+		DisplayName string `json:"display_name"`
+	} `json:"model"`
+	ContextWindow *struct {
+		UsedPercentage      float64 `json:"used_percentage"`
+		RemainingPercentage float64 `json:"remaining_percentage"`
+	} `json:"context_window"`
+}
+
+// runStatuslineHook reports context fullness and renders the status line.
+//
+// Two rules govern it. It always exits 0: a statusline that fails would show an
+// error where the agent draws its status. And it always prints something, since
+// whatever it writes to stdout IS the user's status line — printing nothing
+// would blank a line the user had before AO took it over.
+func (c *commandContext) runStatuslineHook(ctx context.Context, sessionID string) error {
+	raw, err := io.ReadAll(c.deps.In)
+	if err != nil {
+		return nil //nolint:nilerr // exit 0: a failed read costs a reading, never the user's status line.
+	}
+	var payload statuslinePayload
+	if jsonErr := json.Unmarshal(raw, &payload); jsonErr != nil {
+		return nil //nolint:nilerr // exit 0: a changed payload shape must not print errors where the status line goes.
+	}
+
+	line := strings.TrimSpace(payload.Model.DisplayName)
+	if payload.ContextWindow != nil {
+		percent := int(payload.ContextWindow.UsedPercentage)
+		if line != "" {
+			line += " · "
+		}
+		line += fmt.Sprintf("%d%% context", percent)
+
+		req := setContextPressureRequest{
+			ContextUsedPercent: percent,
+			Source:             "claude-code-statusline",
+			ObservedAt:         c.deps.Now().UTC(),
+		}
+		var res setContextPressureResponse
+		if postErr := c.postJSON(ctx, "sessions/"+url.PathEscape(sessionID)+"/context-pressure", req, &res); postErr != nil {
+			// A daemon that is down, or too old to know this route, must not
+			// cost the user their status line.
+			c.reportHookFailure("claude-code", statuslineEvent, sessionID, postErr)
+		}
+	}
+	if line == "" {
+		return nil
+	}
+	_, _ = fmt.Fprintln(c.deps.Out, line)
+	return nil
+}
+
 func (c *commandContext) runHook(ctx context.Context, agent, event string) error {
 	observedAt := c.deps.Now()
 	if isAgyModernHookEvent(agent, event) {
@@ -464,6 +539,9 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		// request path. Return before reading stdin so a manual invocation
 		// without a piped payload can't block on EOF.
 		return nil
+	}
+	if event == statuslineEvent {
+		return c.runStatuslineHook(ctx, sessionID)
 	}
 	var payload []byte
 	if hookReadsStdin(agent, event) {

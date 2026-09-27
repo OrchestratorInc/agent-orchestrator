@@ -3170,6 +3170,51 @@ paths:
       summary: Enable or disable automatic review for a session
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/context-pressure:
+    post:
+      operationId: setSessionContextPressure
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetContextPressureRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetContextPressureResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Report a harness context-fullness reading for a session
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/conversation:
     get:
       operationId: getSessionConversation
@@ -11483,6 +11528,34 @@ components:
       - ok
       - sessionId
       - state
+      type: object
+    SetContextPressureRequest:
+      properties:
+        contextUsedPercent:
+          description: Percent of the agent's context window currently occupied.
+          maximum: 100
+          minimum: 0
+          type: integer
+        observedAt:
+          description: When the harness reported the figure. Defaults to receipt time.
+          format: date-time
+          type: string
+        source:
+          description: Which harness mechanism produced the reading (e.g. claude-code-statusline).
+          maxLength: 64
+          type: string
+      required:
+      - contextUsedPercent
+      type: object
+    SetContextPressureResponse:
+      properties:
+        ok:
+          type: boolean
+        sessionId:
+          type: string
+      required:
+      - ok
+      - sessionId
       type: object
     SetConversationConfigOptionRequest:
       properties:

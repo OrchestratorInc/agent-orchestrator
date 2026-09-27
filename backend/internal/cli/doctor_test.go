@@ -644,6 +644,76 @@ func TestDoctorIncludesAOBinaryCheck(t *testing.T) {
 	}
 }
 
+func TestDoctorContextPressure(t *testing.T) {
+	now := time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC)
+	fresh := now.Add(-time.Minute).Format(time.RFC3339)
+	stale := now.Add(-2 * time.Hour).Format(time.RFC3339)
+
+	for _, tc := range []struct {
+		name      string
+		sessions  string
+		wantFound bool
+		wantLevel doctorLevel
+		wantText  string
+	}{
+		{
+			name:      "no sessions report a reading",
+			sessions:  `{"id":"s1","projectId":"p","kind":"worker","status":"working","activity":{"state":"active"},"isTerminated":false}`,
+			wantFound: false,
+		},
+		{
+			name:      "below the threshold",
+			sessions:  `{"id":"s1","projectId":"p","kind":"worker","status":"working","activity":{"state":"active"},"isTerminated":false,"contextPressure":{"contextUsedPercent":42,"source":"chat-controller","observedAt":"` + fresh + `"}}`,
+			wantFound: true, wantLevel: doctorPass, wantText: "below 90%",
+		},
+		{
+			name:      "at the threshold warns and names the session",
+			sessions:  `{"id":"hot-1","projectId":"p","kind":"worker","status":"working","activity":{"state":"active"},"isTerminated":false,"contextPressure":{"contextUsedPercent":90,"source":"chat-controller","observedAt":"` + fresh + `"}}`,
+			wantFound: true, wantLevel: doctorWarn, wantText: "hot-1 (90%)",
+		},
+		{
+			name:      "a stale reading never warns",
+			sessions:  `{"id":"old-1","projectId":"p","kind":"worker","status":"working","activity":{"state":"active"},"isTerminated":false,"contextPressure":{"contextUsedPercent":99,"source":"chat-controller","observedAt":"` + stale + `"}}`,
+			wantFound: true, wantLevel: doctorPass, wantText: "1 stale reading(s) ignored",
+		},
+		{
+			name:      "a terminated session is ignored",
+			sessions:  `{"id":"dead-1","projectId":"p","kind":"worker","status":"terminated","activity":{"state":"exited"},"isTerminated":true,"contextPressure":{"contextUsedPercent":99,"source":"chat-controller","observedAt":"` + fresh + `"}}`,
+			wantFound: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := setConfigEnv(t)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"sessions":[`+tc.sessions+`]}`)
+			}))
+			t.Cleanup(srv.Close)
+			writeRunFileFor(t, cfg, srv)
+			c := &commandContext{deps: Deps{ProcessAlive: func(int) bool { return true }}.withDefaults()}
+
+			check, ok := c.checkContextPressure(context.Background(), now)
+			if ok != tc.wantFound {
+				t.Fatalf("reported=%v, want %v (check=%+v)", ok, tc.wantFound, check)
+			}
+			if !tc.wantFound {
+				return
+			}
+			if check.Level != tc.wantLevel || !strings.Contains(check.Message, tc.wantText) {
+				t.Fatalf("check = %+v, want %s containing %q", check, tc.wantLevel, tc.wantText)
+			}
+		})
+	}
+}
+
+func TestDoctorContextPressureSilentWithoutDaemon(t *testing.T) {
+	setConfigEnv(t)
+	c := &commandContext{deps: Deps{ProcessAlive: func(int) bool { return false }}.withDefaults()}
+	if check, ok := c.checkContextPressure(context.Background(), time.Now()); ok {
+		t.Fatalf("unreachable daemon produced a check: %+v", check)
+	}
+}
+
 func doctorContext(t *testing.T, paths map[string]string, commandOutput func(context.Context, string, ...string) ([]byte, error)) *commandContext {
 	t.Helper()
 	t.Setenv("AO_TMUX_BINARY", "")

@@ -930,12 +930,12 @@ func writeSessionList(cmd *cobra.Command, sessions []sessionDTO, summaries map[s
 				if _, err := fmt.Fprintf(table, "%s:\n", currentProject); err != nil {
 					return err
 				}
-				if _, err := fmt.Fprintln(table, "  SESSION\tBRANCH\tPR\tCI\tREVIEW\tTHREADS\tACTIVITY\tAGE"); err != nil {
+				if _, err := fmt.Fprintln(table, "  SESSION\tBRANCH\tPR\tCI\tREVIEW\tTHREADS\tACTIVITY\tCTX\tAGE"); err != nil {
 					return err
 				}
 			}
 			pr, ci, review, threads := sessionPRColumns(sess, summaries[sess.ID])
-			if _, err := fmt.Fprintf(table, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sess.ID, emptyDash(sess.Branch), pr, ci, review, threads, emptyDash(sess.Activity.State), sessionAge(now, sess.Activity.LastActivityAt)); err != nil {
+			if _, err := fmt.Fprintf(table, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sess.ID, emptyDash(sess.Branch), pr, ci, review, threads, emptyDash(sess.Activity.State), sessionContextColumn(sess), sessionAge(now, sess.Activity.LastActivityAt)); err != nil {
 				return err
 			}
 		}
@@ -953,6 +953,15 @@ func writeSessionList(cmd *cobra.Command, sessions []sessionDTO, summaries map[s
 		return err
 	}
 	return nil
+}
+
+// sessionContextColumn renders context fullness, or "-" when the harness
+// reported none.
+func sessionContextColumn(sess sessionDTO) string {
+	if sess.ContextPressure == nil {
+		return "-"
+	}
+	return fmt.Sprintf("%d%%", sess.ContextPressure.ContextUsedPercent)
 }
 
 func sessionPRColumns(sess sessionDTO, summaries []sessionPRSummaryDTO) (prNumbers, ci, review, threads string) {

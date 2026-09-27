@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 type sessionRequestLog struct {
@@ -470,6 +473,38 @@ func TestSessionGet_JSONIncludesContextPressure(t *testing.T) {
 	}
 	if got.Session.ContextPressure == nil || got.Session.ContextPressure.ContextUsedPercent != 73 {
 		t.Fatalf("contextPressure = %#v, want 73%% used", got.Session.ContextPressure)
+	}
+}
+
+func TestSessionList_RendersContextColumn(t *testing.T) {
+	now := time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC)
+	sessions := []sessionDTO{
+		{ID: "with-ctx", ProjectID: "demo", Kind: "worker", Status: "working",
+			Activity:        sessionActivity{State: "active", LastActivityAt: now},
+			ContextPressure: &sessionContextPressure{ContextUsedPercent: 92, Source: "chat-controller", ObservedAt: now}},
+		{ID: "no-ctx", ProjectID: "demo", Kind: "worker", Status: "working",
+			Activity: sessionActivity{State: "active", LastActivityAt: now}},
+	}
+
+	var output bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&output)
+	if err := writeSessionList(cmd, sessions, nil, 0, 0, now); err != nil {
+		t.Fatal(err)
+	}
+
+	text := output.String()
+	if !strings.Contains(text, "CTX") {
+		t.Fatalf("header is missing the CTX column:\n%s", text)
+	}
+	for _, want := range []string{"with-ctx", "92%", "no-ctx"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("output missing %q:\n%s", want, text)
+		}
+	}
+	// A session with no reading must render the dash placeholder, never "0%".
+	if strings.Contains(text, "0%") {
+		t.Fatalf("unknown pressure rendered as a real zero:\n%s", text)
 	}
 }
 

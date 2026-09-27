@@ -28,6 +28,7 @@ type APIDeps struct {
 	Sessions           controllers.SessionService
 	DesktopWorkspaces  controllers.DesktopWorkspaceService
 	Activity           controllers.ActivityRecorder
+	ContextPressure    controllers.ContextPressureRecorder
 	UsageHooks         controllers.UsageHookRecorder
 	UsageSummary       controllers.UsageSummaryService
 	PRs                prsvc.ActionManager
@@ -142,12 +143,13 @@ func NewAPI(cfg config.Config, deps APIDeps) *API {
 			Mgr: deps.Projects,
 		},
 		sessions: &controllers.SessionsController{
-			Svc:           deps.Sessions,
-			Activity:      deps.Activity,
-			Usage:         deps.UsageHooks,
-			Attachments:   attachmentstore.New(cfg.DataDir),
-			PreviewServer: deps.PreviewServer,
-			Capabilities:  deps.SessionCapabilities,
+			Svc:             deps.Sessions,
+			Activity:        deps.Activity,
+			ContextPressure: deps.ContextPressure,
+			Usage:           deps.UsageHooks,
+			Attachments:     attachmentstore.New(cfg.DataDir),
+			PreviewServer:   deps.PreviewServer,
+			Capabilities:    deps.SessionCapabilities,
 		},
 		desktop:       &controllers.DesktopWorkspaceController{Svc: deps.DesktopWorkspaces},
 		usage:         &controllers.UsageController{Svc: deps.UsageSummary},
