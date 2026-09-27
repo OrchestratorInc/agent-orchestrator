@@ -126,6 +126,7 @@ vi.mock("./ChatWorkspace", async () => {
 			onChooseSettings,
 			snapshot,
 			shellTarget,
+			workspaceTabs,
 		}: {
 			agentInputDisabled?: boolean;
 			headerActions?: ReactNode;
@@ -137,6 +138,7 @@ vi.mock("./ChatWorkspace", async () => {
 			onChooseSettings?: unknown;
 			snapshot: { sessionId?: string };
 			shellTarget?: { handleId: string };
+			workspaceTabs?: { key: string; content: ReactNode }[];
 		}) => {
 			const [mountedSessionId] = useState(snapshot.sessionId);
 			return (
@@ -155,6 +157,7 @@ vi.mock("./ChatWorkspace", async () => {
 					<div data-testid="turn-settings-available">{String(Boolean(onChooseSettings))}</div>
 					{headerActions}
 					{sessionTabAction}
+					{workspaceTabs?.map((tab) => <div key={tab.key}>{tab.content}</div>)}
 					<button type="button" onClick={() => onLinkOpen?.(LINK)}>
 						Open chat link
 					</button>
@@ -223,6 +226,20 @@ afterEach(() => {
 });
 
 describe("SessionChatSurface link routing", () => {
+	it("keeps a tab for every open side chat", async () => {
+		getMock.mockImplementation(async (path: string) => path.endsWith("/side-chats")
+			? { data: { sides: [
+				{ id: "side-1", sessionId: "sess-1", state: "ready" },
+				{ id: "side-2", sessionId: "sess-1", state: "ready" },
+			] }, error: undefined }
+			: { data: { switches: [] }, error: undefined });
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		await waitFor(() => {
+			expect(screen.getByRole("button", { name: "Show side chat 1" })).toHaveTextContent("/btw 1");
+			expect(screen.getByRole("button", { name: "Show side chat 2" })).toHaveTextContent("/btw 2");
+		});
+	});
+
 	it("routes /btw questions to one side without sending them to main", async () => {
 		postMock.mockImplementation(async (path: string) => path.endsWith("/side-chats")
 			? { data: { side: { id: "side-1", sessionId: "sess-1", state: "opening" } }, error: undefined }

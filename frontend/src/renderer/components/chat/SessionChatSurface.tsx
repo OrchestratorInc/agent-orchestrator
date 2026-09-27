@@ -523,20 +523,18 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				tabStripAction={tabStripAction}
 				workspaceTabs={[
 					...(workspaceTabs ?? []),
-					...(sideChats.activeId ? [{
-						key: `side:${sideChats.activeId}`,
-						onSelect: () => { sideChats.show(); onSideOpened?.(); },
+					...sideChats.sides.map((side, index) => ({
+						key: `side:${side.id}`,
+						onSelect: () => { sideChats.show(side.id); onSideOpened?.(); },
 						content: <div className="inline-flex h-full items-center border-r border-border bg-overlay text-sm">
-							<button type="button" className="h-full px-3" onClick={() => { sideChats.show(); onSideOpened?.(); }} aria-label="Show side chat">/btw</button>
-							<button type="button" className="h-full px-2" onClick={() => void sideChats.close(sideChats.activeId!)} aria-label="Close side chat">×</button>
+							<button type="button" className="h-full px-3" onClick={() => { sideChats.show(side.id); onSideOpened?.(); }} aria-label={`Show side chat ${index + 1}`}>/btw {index + 1}</button>
+							<button type="button" className="h-full px-2" onClick={() => void sideChats.close(side.id)} aria-label={`Close side chat ${index + 1}`}>×</button>
 						</div>,
-					}] : []),
+					})),
 				]}
 				workspaceTabActions={workspaceTabActions}
 				workspaceActiveTabKey={workspaceActiveTabKey}
-				auxiliaryTabOrder={sideChats.activeId
-					? [...(auxiliaryTabOrder ?? []), `side:${sideChats.activeId}`]
-					: auxiliaryTabOrder}
+				auxiliaryTabOrder={[...(auxiliaryTabOrder ?? []), ...sideChats.sides.map((side) => `side:${side.id}`)]}
 				onAuxiliaryTabOrderChange={onAuxiliaryTabOrderChange
 					? (keys) => onAuxiliaryTabOrderChange(keys.filter((key) => !key.startsWith("side:")))
 					: undefined}

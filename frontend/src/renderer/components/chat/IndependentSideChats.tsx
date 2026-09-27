@@ -212,7 +212,9 @@ export function useIndependentSideChats(sessionId: string, models: ChatModel[],
 			});
 			if (requestError) throw requestError;
 			await aoBridge.sideChats.capture().catch(() => undefined);
-			setSides((current) => [...current.filter((side) => side.id !== data.side.id), data.side]);
+			setSides((current) => current.some((side) => side.id === data.side.id)
+				? current.map((side) => side.id === data.side.id ? data.side : side)
+				: [...current, data.side]);
 			setActiveId(data.side.id);
 			setVisible(true);
 			return { id: data.side.id };
@@ -240,6 +242,12 @@ export function useIndependentSideChats(sessionId: string, models: ChatModel[],
 	}, [sessionId, activeId, drafts]);
 
 	const send = useCallback(async (sideId: string, text: string, extraAttachments: { mimeType: string; data: string }[] = []) => {
+		const btw = /^\/btw(?:\s+|$)/i.exec(text);
+		if (btw) {
+			text = text.slice(btw[0].length).trim();
+			updateDraft(sideId, text);
+			if (!text) return;
+		}
 		if (sendingRef.current.has(sideId)) return;
 		sendingRef.current.add(sideId);
 		setSending(true);
@@ -273,10 +281,11 @@ export function useIndependentSideChats(sessionId: string, models: ChatModel[],
 		await aoBridge.sideChats.capture().catch(() => undefined);
 		setDrafts((current) => { const next = { ...current }; delete next[sideId]; return next; });
 		setAttachments((current) => { const next = { ...current }; delete next[sideId]; return next; });
-		setSides((current) => current.filter((side) => side.id !== sideId));
-		if (activeId === sideId) { setActiveId(undefined); setSnapshot(undefined); }
-		setVisible(false);
-	}, [sessionId, activeId]);
+		const remaining = sides.filter((side) => side.id !== sideId);
+		setSides(remaining);
+		if (activeId === sideId) { setActiveId(remaining.at(-1)?.id); setSnapshot(undefined); }
+		if (remaining.length === 0) setVisible(false);
+	}, [sessionId, activeId, sides]);
 
 	const interrupt = useCallback(async (sideId: string) => {
 		const { error: requestError } = await apiClient.POST("/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/interrupt", {
@@ -412,5 +421,8 @@ export function useIndependentSideChats(sessionId: string, models: ChatModel[],
 	) : null;
 
 	return { create, panel, pending, error, send, setQuestionDraft: updateDraft,
-		activeId: currentActiveId, visible, show: () => setVisible(true), hide: () => setVisible(false), close };
+		sides, activeId: currentActiveId, visible, show: (sideId?: string) => {
+			if (sideId) setActiveId(sideId);
+			setVisible(true);
+		}, hide: () => setVisible(false), close };
 }

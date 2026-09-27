@@ -84,16 +84,19 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 		return nil, ErrSideLaunchUnclaimed
 	}
 	seen := map[string]bool{}
+	seenIDs := map[string]bool{}
 	alreadyRestored := map[string]bool{}
 	created := []domain.SideConversation{}
 	for _, record := range records {
 		side := record.Side
-		if side.ID == "" || side.MainConversationID == "" || record.ProviderHostID != "btw-"+side.ID || (record.ProviderForkID == "" && side.State == "ready") || seen[side.MainConversationID] {
+		anchorKey := side.MainConversationID + "\x00" + side.AnchorTurnID
+		if side.ID == "" || side.MainConversationID == "" || record.ProviderHostID != "btw-"+side.ID || (record.ProviderForkID == "" && side.State == "ready") || seen[anchorKey] || seenIDs[side.ID] {
 			return nil, ErrSideUnavailable
 		}
-		seen[side.MainConversationID] = true
+		seen[anchorKey] = true
+		seenIDs[side.ID] = true
 		for _, existing := range m.sides {
-			if existing.MainConversationID == side.MainConversationID && existing.ClosedAt == nil {
+			if existing.MainConversationID == side.MainConversationID && existing.AnchorTurnID == side.AnchorTurnID && existing.ClosedAt == nil {
 				if existing.ID != side.ID || existing.Generation != record.Generation ||
 					existing.ProviderHostID != record.ProviderHostID || existing.ProviderForkID != record.ProviderForkID {
 					return nil, ErrSideUnavailable
@@ -197,7 +200,7 @@ func (m *memorySideStore) CreateSideConversation(_ context.Context, side domain.
 		return domain.SideConversation{}, false, ErrSideLaunchUnclaimed
 	}
 	for _, current := range m.sides {
-		if current.MainConversationID == side.MainConversationID && current.ClosedAt == nil {
+		if current.MainConversationID == side.MainConversationID && current.AnchorTurnID == side.AnchorTurnID && current.ClosedAt == nil {
 			return current, false, nil
 		}
 	}
@@ -222,6 +225,12 @@ func (m *memorySideStore) ListSideConversations(_ context.Context, session domai
 			out = append(out, side)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
 	return out, nil
 }
 func (m *memorySideStore) ListOpenSidesForRun(_ context.Context, runID string) ([]domain.SideConversation, error) {

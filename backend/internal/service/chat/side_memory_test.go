@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -9,7 +10,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-func TestMemorySideStoreEnforcesOneSidePerMainAcrossConcurrentCreates(t *testing.T) {
+func TestMemorySideStoreReusesAnchorAcrossConcurrentCreates(t *testing.T) {
 	ctx := context.Background()
 	store := newMemorySideStore()
 	_, _ = store.ClaimSideLaunch(ctx, "launch-1", time.Now())
@@ -22,7 +23,7 @@ func TestMemorySideStoreEnforcesOneSidePerMainAcrossConcurrentCreates(t *testing
 			defer wg.Done()
 			side, _, err := store.CreateSideConversation(ctx, domain.SideConversation{
 				ID: string(rune('a' + n)), SessionID: "session-1", MainConversationID: "main-1",
-				AppRunID: "launch-1", CreateKey: string(rune('A' + n)), Generation: "g",
+				AnchorTurnID: "anchor-1", AppRunID: "launch-1", CreateKey: string(rune('A' + n)), Generation: "g",
 			})
 			if err != nil {
 				t.Error(err)
@@ -42,12 +43,53 @@ func TestMemorySideStoreEnforcesOneSidePerMainAcrossConcurrentCreates(t *testing
 			t.Fatalf("created multiple sides: %q and %q", first, id)
 		}
 	}
+	next, created, err := store.CreateSideConversation(ctx, domain.SideConversation{
+		ID: "next-anchor", SessionID: "session-1", MainConversationID: "main-1", AnchorTurnID: "anchor-2", AppRunID: "launch-1",
+	})
+	if err != nil || !created || next.ID != "next-anchor" {
+		t.Fatalf("next anchor create = %#v, %v, %v", next, created, err)
+	}
+	listed, err := store.ListSideConversations(ctx, "session-1", "launch-1")
+	if err != nil || len(listed) != 2 {
+		t.Fatalf("open sides = %#v, %v", listed, err)
+	}
+	for i := 3; i <= 12; i++ {
+		if _, created, err := store.CreateSideConversation(ctx, domain.SideConversation{
+			ID: fmt.Sprintf("side-%d", i), SessionID: "session-1", MainConversationID: "main-1",
+			AnchorTurnID: fmt.Sprintf("anchor-%d", i), AppRunID: "launch-1",
+		}); err != nil || !created {
+			t.Fatalf("side %d: created=%v err=%v", i, created, err)
+		}
+	}
+	listed, err = store.ListSideConversations(ctx, "session-1", "launch-1")
+	if err != nil || len(listed) != 12 {
+		t.Fatalf("open sides above previous limits = %d, %v", len(listed), err)
+	}
 	if _, err := store.CloseSideConversation(ctx, first, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	other, created, err := store.CreateSideConversation(ctx, domain.SideConversation{ID: "replacement", SessionID: "session-1", MainConversationID: "main-1", AppRunID: "launch-1"})
+	other, created, err := store.CreateSideConversation(ctx, domain.SideConversation{ID: "replacement", SessionID: "session-1", MainConversationID: "main-1", AnchorTurnID: "anchor-1", AppRunID: "launch-1"})
 	if err != nil || !created || other.ID != "replacement" {
 		t.Fatalf("close then create = %#v, %v, %v", other, created, err)
+	}
+}
+
+func TestMemorySideStoreRecoversMultipleAnchorsForOneMain(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	store := newMemorySideStore()
+	_, _ = store.ClaimSideLaunch(ctx, "launch-1", now)
+	records := []SideRecoveryRecord{
+		{Side: domain.SideConversation{ID: "side-1", SessionID: "session-1", MainConversationID: "main-1", AnchorTurnID: "turn-1", State: "ready"}, ProviderHostID: "btw-side-1", ProviderForkID: "fork-1", Generation: "generation-1"},
+		{Side: domain.SideConversation{ID: "side-2", SessionID: "session-1", MainConversationID: "main-1", AnchorTurnID: "turn-2", State: "ready"}, ProviderHostID: "btw-side-2", ProviderForkID: "fork-2", Generation: "generation-2"},
+	}
+	created, err := store.recover("launch-1", records, now)
+	if err != nil || len(created) != 2 {
+		t.Fatalf("recover multiple anchors = %#v, %v", created, err)
+	}
+	listed, err := store.ListSideConversations(ctx, "session-1", "launch-1")
+	if err != nil || len(listed) != 2 {
+		t.Fatalf("recovered sides = %#v, %v", listed, err)
 	}
 }
 
