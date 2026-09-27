@@ -403,7 +403,6 @@ export function TaskComposer({
 		? {
 				allowCustom: modelCatalogQuery.data.allowCustom,
 				customModelEntry: modelCatalogQuery.data.customModelEntry,
-				lastSuccessAt: modelCatalogQuery.data.lastSuccessAt,
 				models: modelCatalogQuery.data.models,
 				refreshError: modelCatalogQuery.data.refreshError,
 				refreshState: modelCatalogQuery.data.refreshState,
@@ -830,7 +829,6 @@ function TaskModelPicker({
 			agentLabel={agentLabel}
 			onRefresh={onRefresh}
 			refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
-			lastSuccessAt={catalog?.lastSuccessAt}
 			refreshError={catalog?.refreshError}
 			retryAt={catalog?.retryAt}
 			disabled={disabled || agentId === ""}

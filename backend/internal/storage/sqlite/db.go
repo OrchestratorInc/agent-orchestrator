@@ -333,6 +333,9 @@ func migrate(db *sql.DB) error {
 	if err := repairRenumberedPRReviewPartialMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair renumbered PR review-partial migration history: %w", err)
 	}
+	if err := repairBurnedAutomationsMigrationHistory(db); err != nil {
+		return fmt.Errorf("repair burned automations migration history: %w", err)
+	}
 	if err := prepareBurnedSchemaRepairs(db); err != nil {
 		return fmt.Errorf("prepare burned schema repairs: %w", err)
 	}
@@ -1690,6 +1693,91 @@ SELECT COALESCE((
 		return err
 	}
 	return tx.Commit()
+}
+
+// repairBurnedAutomationsMigrationHistory preserves development databases that
+// applied automations at an earlier version, including 159, which now belongs
+// to main's PR discussion migration. The physical schemas determine whether
+// Goose should apply PR discussion at 159 and automations at canonical 161.
+// An older automation build also used 156; release it only when the canonical
+// session-provisioning columns are absent. Once 162 has dropped the PR
+// discussion columns, their absence no longer says anything about 159.
+func repairBurnedAutomationsMigrationHistory(db *sql.DB) error {
+	var gooseTable int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`,
+	).Scan(&gooseTable); err != nil {
+		return err
+	}
+	if gooseTable == 0 {
+		return nil
+	}
+
+	var automationsTable, automationRunID, provisionColumns, discussionColumn int
+	if err := db.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'automations'),
+		(SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'automation_run_id'),
+		(SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name IN ('provision_state', 'provision_error')),
+		(SELECT COUNT(*) FROM pragma_table_info('pr') WHERE name = 'discussion_comment_count')`).Scan(
+		&automationsTable, &automationRunID, &provisionColumns, &discussionColumn,
+	); err != nil {
+		return err
+	}
+	applied := func(version int64) (bool, error) {
+		var value int
+		if err := db.QueryRow(`
+SELECT COALESCE((
+    SELECT is_applied FROM goose_db_version
+    WHERE version_id = ? ORDER BY id DESC LIMIT 1
+), 0)`, version).Scan(&value); err != nil {
+			return false, err
+		}
+		return value == 1, nil
+	}
+	applied159, err := applied(159)
+	if err != nil {
+		return err
+	}
+	applied161, err := applied(161)
+	if err != nil {
+		return err
+	}
+	applied156, err := applied(156)
+	if err != nil {
+		return err
+	}
+	applied162, err := applied(162)
+	if err != nil {
+		return err
+	}
+	if automationsTable > 0 && automationRunID > 0 {
+		if applied156 && provisionColumns != 2 {
+			if _, err := db.Exec(`DELETE FROM goose_db_version WHERE version_id = 156`); err != nil {
+				return err
+			}
+		}
+		if !applied161 {
+			if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (161, 1)`); err != nil {
+				return err
+			}
+		}
+	} else if applied161 {
+		if _, err := db.Exec(`DELETE FROM goose_db_version WHERE version_id = 161`); err != nil {
+			return err
+		}
+	}
+	if applied162 {
+		return nil
+	}
+	if discussionColumn > 0 && !applied159 {
+		_, err = db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (159, 1)`)
+		return err
+	}
+	if discussionColumn == 0 && applied159 {
+		_, err = db.Exec(`DELETE FROM goose_db_version WHERE version_id = 159`)
+		return err
+	}
+	return nil
 }
 
 // schemaRepairs lists the column-level effects of migrations that real

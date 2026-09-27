@@ -1494,7 +1494,6 @@ describe("TaskComposer", () => {
 						selectionMode: "catalog",
 						models: [{ id: "gpt-5", label: "GPT-5", isDefault: true }],
 						allowCustom: true,
-						lastSuccessAt: "2026-09-23T08:00:00Z",
 						refreshState: "error",
 						refreshError: "Provider temporarily unavailable",
 						retryAt: "2026-09-23T08:05:00Z",

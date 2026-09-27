@@ -1257,6 +1257,22 @@ describe("BrowserPanel", () => {
 		expect(onTogglePopOut).toHaveBeenCalledWith(true);
 	});
 
+	it("shows a one-click return button while popped out", async () => {
+		const onTogglePopOut = vi.fn();
+		render(<BrowserPanel active onTogglePopOut={onTogglePopOut} poppedOut session={session} />);
+
+		const returnButton = screen.getByRole("button", { name: "Return to panel" });
+		await userEvent.click(returnButton);
+
+		expect(onTogglePopOut).toHaveBeenCalledWith(false);
+	});
+
+	it("keeps the one-click return action out of the docked toolbar", () => {
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		expect(screen.queryByRole("button", { name: "Return to panel" })).not.toBeInTheDocument();
+	});
+
 	it("keeps workspace sizing controls out of the browser toolbar", async () => {
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 

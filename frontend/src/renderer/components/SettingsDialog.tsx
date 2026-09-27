@@ -78,17 +78,37 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 		: globalSettingsItem(activeSection, { cloudEnabled }).label(t);
 
 	const closeSettingsDialog = () => {
-		if (isProjectSettings && (projectSaveState.phase === "pending" || projectSaveState.phase === "saving")) {
-			closeWhenSavedRef.current = true;
-			return;
+		if (isProjectSettings) {
+			if (closeWhenSavedRef.current) return;
+			if (projectSaveState.requestPending) {
+				closeWhenSavedRef.current = true;
+				return;
+			}
+			if (projectSaveState.dirty) {
+				const form = document.getElementById("project-settings-form") as HTMLFormElement | null;
+				if (form) {
+					closeWhenSavedRef.current = true;
+					form.requestSubmit();
+					return;
+				}
+			}
+			if (projectSaveState.phase === "pending" || projectSaveState.phase === "saving") {
+				closeWhenSavedRef.current = true;
+				return;
+			}
 		}
 		closeSettings();
 	};
 	useEffect(() => {
-		if (!closeWhenSavedRef.current || (projectSaveState.phase !== "saved" && projectSaveState.phase !== "idle")) return;
-		closeWhenSavedRef.current = false;
-		closeSettings();
-	}, [closeSettings, projectSaveState.phase]);
+		if (!closeWhenSavedRef.current) return;
+		if (projectSaveState.phase === "failed") {
+			closeWhenSavedRef.current = false;
+		} else if (!projectSaveState.dirty && !projectSaveState.requestPending &&
+			(projectSaveState.phase === "saved" || projectSaveState.phase === "idle")) {
+			closeWhenSavedRef.current = false;
+			closeSettings();
+		}
+	}, [closeSettings, projectSaveState]);
 	const closeButtonRef = useRef<HTMLButtonElement>(null);
 	const contentRef = useRef<HTMLDivElement>(null);
 	const returnFocusRef = useRef(document.activeElement as HTMLElement | null);
@@ -159,7 +179,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 					aria-modal="true"
 					className={cn(
 						settingsDialogContentClass,
-						"fixed left-1/2 top-1/2 h-(--size-settings-dialog-height) w-(--size-settings-dialog-wide) max-h-none -translate-x-1/2 -translate-y-1/2 origin-center overflow-hidden p-0 animate-modal-in motion-reduce:animate-none sm:rounded-lg",
+						"fixed left-1/2 top-1/2 z-[calc(var(--z-overlay)+1)] h-(--size-settings-dialog-height) w-(--size-settings-dialog-wide) max-h-none -translate-x-1/2 -translate-y-1/2 origin-center overflow-hidden p-0 animate-modal-in motion-reduce:animate-none sm:rounded-lg",
 						isProjectSettings && "h-[min(40rem,calc(100vh-3rem))]",
 					)}
 					onOpenAutoFocus={(event) => event.preventDefault()}

@@ -1020,32 +1020,30 @@ type SessionPRFacts struct {
 // /sessions/{sessionId}/pr. It intentionally omits CI log tails and review
 // comment bodies.
 type SessionPRSummary struct {
-	URL                    string                       `json:"url"`
-	HTMLURL                string                       `json:"htmlUrl,omitempty"`
-	Number                 int                          `json:"number"`
-	Title                  string                       `json:"title"`
-	State                  domain.PRState               `json:"state" enum:"draft,open,merged,closed"`
-	Provider               string                       `json:"provider" enum:"github,gitlab"`
-	Repo                   string                       `json:"repo"`
-	Author                 string                       `json:"author"`
-	AuthorAvatarURL        string                       `json:"authorAvatarUrl,omitempty"`
-	DiscussionCommentCount int                          `json:"discussionCommentCount,omitempty"`
-	DiscussionCommenters   []string                     `json:"discussionCommenters,omitempty"`
-	SourceBranch           string                       `json:"sourceBranch"`
-	TargetBranch           string                       `json:"targetBranch"`
-	HeadSHA                string                       `json:"headSha"`
-	Additions              int                          `json:"additions"`
-	Deletions              int                          `json:"deletions"`
-	ChangedFiles           int                          `json:"changedFiles"`
-	CI                     SessionPRCISummary           `json:"ci"`
-	Review                 SessionPRReviewSummary       `json:"review"`
-	Mergeability           SessionPRMergeabilitySummary `json:"mergeability"`
-	StateChangedAt         *time.Time                   `json:"stateChangedAt,omitempty"`
-	CreatedAt              *time.Time                   `json:"createdAt,omitempty"`
-	UpdatedAt              time.Time                    `json:"updatedAt"`
-	ObservedAt             time.Time                    `json:"observedAt,omitempty"`
-	CIObservedAt           time.Time                    `json:"ciObservedAt,omitempty"`
-	ReviewObservedAt       time.Time                    `json:"reviewObservedAt,omitempty"`
+	URL              string                       `json:"url"`
+	HTMLURL          string                       `json:"htmlUrl,omitempty"`
+	Number           int                          `json:"number"`
+	Title            string                       `json:"title"`
+	State            domain.PRState               `json:"state" enum:"draft,open,merged,closed"`
+	Provider         string                       `json:"provider" enum:"github,gitlab"`
+	Repo             string                       `json:"repo"`
+	Author           string                       `json:"author"`
+	AuthorAvatarURL  string                       `json:"authorAvatarUrl,omitempty"`
+	SourceBranch     string                       `json:"sourceBranch"`
+	TargetBranch     string                       `json:"targetBranch"`
+	HeadSHA          string                       `json:"headSha"`
+	Additions        int                          `json:"additions"`
+	Deletions        int                          `json:"deletions"`
+	ChangedFiles     int                          `json:"changedFiles"`
+	CI               SessionPRCISummary           `json:"ci"`
+	Review           SessionPRReviewSummary       `json:"review"`
+	Mergeability     SessionPRMergeabilitySummary `json:"mergeability"`
+	StateChangedAt   *time.Time                   `json:"stateChangedAt,omitempty"`
+	CreatedAt        *time.Time                   `json:"createdAt,omitempty"`
+	UpdatedAt        time.Time                    `json:"updatedAt"`
+	ObservedAt       time.Time                    `json:"observedAt,omitempty"`
+	CIObservedAt     time.Time                    `json:"ciObservedAt,omitempty"`
+	ReviewObservedAt time.Time                    `json:"reviewObservedAt,omitempty"`
 }
 
 // SessionPRCISummary is the CI status block for a session PR summary.
@@ -1127,32 +1125,30 @@ type ListSessionPRsResponse struct {
 // NewSessionPRSummary maps the service PR summary model to its HTTP DTO.
 func NewSessionPRSummary(in sessionsvc.PRSummary) SessionPRSummary {
 	return SessionPRSummary{
-		URL:                    in.URL,
-		HTMLURL:                in.HTMLURL,
-		Number:                 in.Number,
-		Title:                  in.Title,
-		State:                  in.State,
-		Provider:               in.Provider,
-		Repo:                   in.Repo,
-		Author:                 in.Author,
-		AuthorAvatarURL:        in.AuthorAvatarURL,
-		DiscussionCommentCount: in.DiscussionCommentCount,
-		DiscussionCommenters:   in.DiscussionCommenters,
-		SourceBranch:           in.SourceBranch,
-		TargetBranch:           in.TargetBranch,
-		HeadSHA:                in.HeadSHA,
-		Additions:              in.Additions,
-		Deletions:              in.Deletions,
-		ChangedFiles:           in.ChangedFiles,
-		CI:                     newSessionPRCISummary(in.CI),
-		Review:                 newSessionPRReviewSummary(in.Review),
-		Mergeability:           newSessionPRMergeabilitySummary(in.Mergeability),
-		StateChangedAt:         optionalTime(in.StateChangedAt),
-		CreatedAt:              optionalTime(in.CreatedAt),
-		UpdatedAt:              in.UpdatedAt,
-		ObservedAt:             in.ObservedAt,
-		CIObservedAt:           in.CIObservedAt,
-		ReviewObservedAt:       in.ReviewObservedAt,
+		URL:              in.URL,
+		HTMLURL:          in.HTMLURL,
+		Number:           in.Number,
+		Title:            in.Title,
+		State:            in.State,
+		Provider:         in.Provider,
+		Repo:             in.Repo,
+		Author:           in.Author,
+		AuthorAvatarURL:  in.AuthorAvatarURL,
+		SourceBranch:     in.SourceBranch,
+		TargetBranch:     in.TargetBranch,
+		HeadSHA:          in.HeadSHA,
+		Additions:        in.Additions,
+		Deletions:        in.Deletions,
+		ChangedFiles:     in.ChangedFiles,
+		CI:               newSessionPRCISummary(in.CI),
+		Review:           newSessionPRReviewSummary(in.Review),
+		Mergeability:     newSessionPRMergeabilitySummary(in.Mergeability),
+		StateChangedAt:   optionalTime(in.StateChangedAt),
+		CreatedAt:        optionalTime(in.CreatedAt),
+		UpdatedAt:        in.UpdatedAt,
+		ObservedAt:       in.ObservedAt,
+		CIObservedAt:     in.CIObservedAt,
+		ReviewObservedAt: in.ReviewObservedAt,
 	}
 }
 
@@ -1663,6 +1659,113 @@ type StartInstallResponse = systeminstall.Job
 // InstallStatusResponse is the body of GET /api/v1/system/install/{target}.
 type InstallStatusResponse = systeminstall.Job
 
+// AutomationIDParam identifies a recurring definition.
+type AutomationIDParam struct {
+	AutomationID string `path:"automationId" description:"Automation identifier."`
+}
+
+// ListAutomationsQuery describes filters and pagination for automation definitions.
+type ListAutomationsQuery struct {
+	ProjectID string `query:"projectId,omitempty"`
+	Enabled   *bool  `query:"enabled,omitempty"`
+	Limit     int    `query:"limit,omitempty" minimum:"1" maximum:"100"`
+	Cursor    string `query:"cursor,omitempty"`
+}
+
+// ListAutomationRunsQuery describes pagination for an automation's run history.
+type ListAutomationRunsQuery struct {
+	Limit  int    `query:"limit,omitempty" minimum:"1" maximum:"100"`
+	Cursor string `query:"cursor,omitempty"`
+}
+
+// CreateAutomationRequest is the body accepted when creating an automation.
+type CreateAutomationRequest struct {
+	ProjectID   string `json:"projectId"`
+	DisplayName string `json:"displayName"`
+	Prompt      string `json:"prompt"`
+	Kind        string `json:"kind" enum:"worker,orchestrator"`
+	Harness     string `json:"harness,omitempty"`
+	RRule       string `json:"rrule,omitempty"`
+	Cron        string `json:"cron,omitempty"`
+	Timezone    string `json:"timezone"`
+	Enabled     *bool  `json:"enabled,omitempty"`
+}
+
+// UpdateAutomationRequest is the partial body accepted when updating an automation.
+type UpdateAutomationRequest struct {
+	DisplayName *string `json:"displayName,omitempty"`
+	Prompt      *string `json:"prompt,omitempty"`
+	Kind        *string `json:"kind,omitempty" enum:"worker,orchestrator"`
+	Harness     *string `json:"harness,omitempty"`
+	RRule       *string `json:"rrule,omitempty"`
+	Cron        *string `json:"cron,omitempty"`
+	Timezone    *string `json:"timezone,omitempty"`
+	Enabled     *bool   `json:"enabled,omitempty"`
+}
+
+// AutomationRunSummaryResponse is the latest-run projection attached to a definition.
+type AutomationRunSummaryResponse struct {
+	ID           string     `json:"id"`
+	Status       string     `json:"status" enum:"pending,spawning,running,completed,failed"`
+	ScheduledFor time.Time  `json:"scheduledFor"`
+	SessionID    string     `json:"sessionId,omitempty"`
+	ErrorMessage string     `json:"errorMessage,omitempty"`
+	StartedAt    *time.Time `json:"startedAt,omitempty"`
+	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
+}
+
+// AutomationResponse is the API representation of an automation definition.
+type AutomationResponse struct {
+	ID          string                        `json:"id"`
+	ProjectID   string                        `json:"projectId"`
+	DisplayName string                        `json:"displayName"`
+	Prompt      string                        `json:"prompt"`
+	Kind        string                        `json:"kind" enum:"worker,orchestrator"`
+	Harness     string                        `json:"harness,omitempty"`
+	RRule       string                        `json:"rrule"`
+	Timezone    string                        `json:"timezone"`
+	Enabled     bool                          `json:"enabled"`
+	NextRunAt   time.Time                     `json:"nextRunAt"`
+	LastRunAt   *time.Time                    `json:"lastRunAt,omitempty"`
+	CreatedAt   time.Time                     `json:"createdAt"`
+	UpdatedAt   time.Time                     `json:"updatedAt"`
+	LatestRun   *AutomationRunSummaryResponse `json:"latestRun,omitempty"`
+}
+
+// AutomationEnvelope wraps one automation response.
+type AutomationEnvelope struct {
+	Automation AutomationResponse `json:"automation"`
+}
+
+// ListAutomationsResponse is one page of automation definitions.
+type ListAutomationsResponse struct {
+	Automations []AutomationResponse `json:"automations"`
+	NextCursor  string               `json:"nextCursor,omitempty"`
+}
+
+// AutomationRunResponse is the API representation of one scheduled occurrence.
+type AutomationRunResponse struct {
+	ID             string     `json:"id"`
+	AutomationID   string     `json:"automationId"`
+	ScheduledFor   time.Time  `json:"scheduledFor"`
+	SessionID      string     `json:"sessionId,omitempty"`
+	Status         string     `json:"status" enum:"pending,spawning,running,completed,failed"`
+	AttemptCount   int64      `json:"attemptCount"`
+	ClaimedAt      *time.Time `json:"claimedAt,omitempty"`
+	LeaseExpiresAt *time.Time `json:"leaseExpiresAt,omitempty"`
+	StartedAt      *time.Time `json:"startedAt,omitempty"`
+	FinishedAt     *time.Time `json:"finishedAt,omitempty"`
+	ErrorMessage   string     `json:"errorMessage,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+}
+
+// ListAutomationRunsResponse is one page of automation run history.
+type ListAutomationRunsResponse struct {
+	Runs       []AutomationRunResponse `json:"runs"`
+	NextCursor string                  `json:"nextCursor,omitempty"`
+}
+
 // AgentInstallResponse is shared by the agent harness start and status routes.
 type AgentInstallResponse = systeminstall.Job
 
@@ -1932,6 +2035,21 @@ type MobileStatusResponse struct {
 	Password      string              `json:"password"`
 	Warning       string              `json:"warning"`
 	SecurePairing SecurePairingStatus `json:"securePairing"`
+	KeepAwake     KeepAwakeStatus     `json:"keepAwake"`
+}
+
+// KeepAwakeStatus describes the macOS-only option that stops the machine from
+// idle-sleeping while Connect Mobile is on, so a paired phone stays connected.
+type KeepAwakeStatus struct {
+	Supported  bool `json:"supported"`  // this platform can hold the machine awake (macOS)
+	Enabled    bool `json:"enabled"`    // the user turned the option on
+	Active     bool `json:"active"`     // the sleep assertion is currently held
+	HasBattery bool `json:"hasBattery"` // a laptop, where closing the lid still sleeps it
+}
+
+// SetKeepAwakeRequest is the body of POST /api/v1/mobile/keep-awake.
+type SetKeepAwakeRequest struct {
+	Enabled bool `json:"enabled"`
 }
 
 // SecurePairingStatus describes the optional TLS-over-Tailscale pairing mode,

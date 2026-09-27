@@ -1312,6 +1312,19 @@ export function BrowserPanelView({
 						</DropdownMenuContent>
 					</DropdownMenu>
 				) : null}
+				{poppedOut ? (
+					<BrowserControlTooltip label={t("browser.returnToPanel")}>
+						<Button
+							aria-label={t("browser.returnToPanel")}
+							onClick={() => onTogglePopOut(false)}
+							size="icon-sm"
+							type="button"
+							variant="ghost"
+						>
+							<Minimize2 aria-hidden="true" className="size-icon-base" />
+						</Button>
+					</BrowserControlTooltip>
+				) : null}
 				<DropdownMenu
 					onOpenChange={(open) => {
 						setControlsOpen(open);
