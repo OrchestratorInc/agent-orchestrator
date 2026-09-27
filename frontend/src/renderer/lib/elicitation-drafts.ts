@@ -55,7 +55,13 @@ const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
  */
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
-/** How often a mounting question re-checks for abandoned drafts, so a window left open for days still gets swept. */
+/**
+ * How long a sweep counts as recent enough to skip. There is no background
+ * timer: each call to `pruneExpiredElicitationDraftsOnce` is opportunistic,
+ * paid by whatever triggers it (a question appearing, a conversation
+ * switching), and only actually sweeps if this much time has passed since
+ * the last one that did.
+ */
 const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
 export type ElicitationDraftStorage = DraftStorage & Partial<Pick<Storage, "key" | "length">>;
@@ -172,11 +178,13 @@ export function reconcileElicitationDraftsForConversation(
 }
 
 /**
- * Sweeps expired drafts at most once per `SWEEP_INTERVAL_MS`, tracked in
- * storage itself rather than in memory: a once-per-process guard never runs
- * again in a window left open for days, which is exactly when an abandoned
- * draft has had the most time to accumulate. Pruning walks every stored key,
- * so it belongs on a question appearing, not on a keystroke.
+ * Sweeps expired drafts, but only if it has been at least `SWEEP_INTERVAL_MS`
+ * since the last sweep that ran — tracked in storage itself rather than in
+ * memory, so a once-per-process guard doesn't skip every call after the
+ * first for the rest of a renderer left open for days, which is exactly when
+ * an abandoned draft has had the most time to accumulate. This still only
+ * runs when something calls it, not on a timer of its own; see the caller
+ * for what that means for the 7-day expiry in practice.
  */
 export function pruneExpiredElicitationDraftsOnce(
 	storage: ElicitationDraftStorage | undefined = rendererStorage(),

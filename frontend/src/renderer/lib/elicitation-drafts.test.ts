@@ -125,6 +125,15 @@ describe("elicitation drafts", () => {
 			getItem: (key: string) => (reads++, window.localStorage.getItem(key)),
 			setItem: (key: string, value: string) => window.localStorage.setItem(key, value),
 			removeItem: (key: string) => window.localStorage.removeItem(key),
+			// Forwarded live so a write that started walking the store — through
+			// pruneExpiredElicitationDrafts or reconcileElicitationDraftsForConversation,
+			// say — would actually be caught here: without these, both bail out on
+			// their own `typeof storage.key`/`length` guard before ever calling
+			// getItem, and this test would stay green regardless.
+			key: (index: number) => window.localStorage.key(index),
+			get length() {
+				return window.localStorage.length;
+			},
 		};
 
 		writeElicitationDraft("conversation-1", "request-1", { values: { a: "o" }, activeQuestion: 0 }, counted);

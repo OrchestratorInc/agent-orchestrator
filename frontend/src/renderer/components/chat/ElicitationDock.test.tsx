@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
@@ -10,7 +10,7 @@ import {
 	writeElicitationDraft,
 } from "../../lib/elicitation-drafts";
 import type { ConversationActivity } from "../../types/conversation";
-import { ElicitationDock } from "./ElicitationDock";
+import { ElicitationDock, resetElicitationWriteFailureTracking } from "./ElicitationDock";
 
 function activity(detail: ConversationActivity["detail"]): ConversationActivity {
 	return {
@@ -31,6 +31,7 @@ describe("ElicitationDock", () => {
 	beforeEach(() => {
 		window.localStorage.clear();
 		resetElicitationDraftPruning();
+		resetElicitationWriteFailureTracking();
 	});
 
 	const claudeQuestions = {
@@ -321,13 +322,17 @@ describe("ElicitationDock", () => {
 		}
 	});
 
-	it("reports a failed write through the leave/quit draft boundary, and clears it on unmount", () => {
+	it("reports a failed write through the leave/quit draft boundary, and keeps it set through an unmount that still can't save", () => {
 		// Dropping the sessionId prop, always passing undefined to
-		// setChatDraftBoundary, or deleting the unmount cleanup would each keep
-		// every other test in this file green — none of them look at the
-		// boundary. Left unreported, a failed save gives no warning before the
-		// human navigates away or quits with an unsent answer; left uncleared
-		// after the dock is gone, the warning outlives the thing it was about.
+		// setChatDraftBoundary, or clearing it unconditionally on unmount would
+		// each keep every other test in this file green — none of them look at
+		// the boundary. Left unreported, a failed save gives no warning before
+		// the human navigates away or quits with an unsent answer. Clearing it
+		// on every unmount regardless of outcome is just as wrong the other
+		// way: plenty of unmounts (ending a queued-message edit, closing the
+		// reviewer overlay, a refetch error swapping the view) never go through
+		// the leave/quit guards at all, so an unconditional clear would drop
+		// the warning while the answer is still genuinely unsaved.
 		vi.spyOn(window.localStorage, "setItem").mockImplementation((key: string) => {
 			if (key === elicitationDraftKey("conversation-1", "request-1")) {
 				throw new DOMException("quota exceeded", "QuotaExceededError");
@@ -347,9 +352,186 @@ describe("ElicitationDock", () => {
 
 			fireEvent.click(screen.getByRole("radio", { name: /Native/ }));
 			expect(getChatDraftBoundary("session-1")).toBe("persistence-failed");
+			expect(screen.getByRole("alert")).toHaveTextContent(/couldn.?t be saved/i);
 
 			view.unmount();
+			// Storage is still failing: the warning must not have quietly gone away.
+			expect(getChatDraftBoundary("session-1")).toBe("persistence-failed");
+		} finally {
+			vi.restoreAllMocks();
+		}
+	});
+
+	it("saves and clears the boundary on unmount if storage recovers, even without another edit", () => {
+		let failing = true;
+		const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
+		vi.spyOn(window.localStorage, "setItem").mockImplementation((key: string, value: string) => {
+			if (failing && key === elicitationDraftKey("conversation-1", "request-1")) {
+				throw new DOMException("quota exceeded", "QuotaExceededError");
+			}
+			originalSetItem(key, value);
+		});
+
+		try {
+			const view = render(
+				<ElicitationDock
+					activity={activity({ inputMode: "form", schema: claudeQuestions })}
+					sessionId="session-1"
+					conversationId="conversation-1"
+					onResolve={vi.fn()}
+				/>,
+			);
+
+			fireEvent.click(screen.getByRole("radio", { name: /Native/ }));
+			expect(getChatDraftBoundary("session-1")).toBe("persistence-failed");
+
+			// The failure clears (quota freed elsewhere) before the 3s retry fires
+			// and before any further edit — an unmount here is the only remaining
+			// chance to save it.
+			failing = false;
+			view.unmount();
+
 			expect(getChatDraftBoundary("session-1")).toBeUndefined();
+			expect(readElicitationDraft("conversation-1", "request-1")?.values.question_0).toBe("Native");
+		} finally {
+			vi.restoreAllMocks();
+		}
+	});
+
+	it("retries once the form re-enables after a rejected resolve, without another edit", async () => {
+		// values/activeQuestion are unchanged by a rejected resolve, and the
+		// write effect used to skip whenever content matched the last write —
+		// re-enabling the form after the rejection didn't count as a reason to
+		// retry on its own.
+		const user = userEvent.setup();
+		let failing = true;
+		const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
+		vi.spyOn(window.localStorage, "setItem").mockImplementation((key: string, value: string) => {
+			if (failing && key === elicitationDraftKey("conversation-1", "request-1")) {
+				throw new DOMException("quota exceeded", "QuotaExceededError");
+			}
+			originalSetItem(key, value);
+		});
+
+		try {
+			render(
+				<ElicitationDock
+					activity={activity({ inputMode: "form", schema: claudeQuestions })}
+					sessionId="session-1"
+					conversationId="conversation-1"
+					onResolve={vi.fn().mockRejectedValue(new Error("network down"))}
+				/>,
+			);
+
+			await user.click(screen.getByRole("radio", { name: /Native/ }));
+			expect(getChatDraftBoundary("session-1")).toBe("persistence-failed");
+
+			// Storage recovers, but nothing edits the form again — only the
+			// disable/re-enable cycle around the rejected Skip should retry.
+			failing = false;
+			await user.click(screen.getByRole("button", { name: "Skip" }));
+
+			await waitFor(() => {
+				expect(readElicitationDraft("conversation-1", "request-1")?.values.question_0).toBe("Native");
+			});
+			expect(getChatDraftBoundary("session-1")).toBeUndefined();
+		} finally {
+			vi.restoreAllMocks();
+		}
+	});
+
+	it("clears the boundary and cancels the pending retry when the answer reverts to what storage already has", async () => {
+		// Picking Native saves; a longer answer then fails to save and leaves a
+		// retry pending; picking Native again matches what storage already
+		// holds. The old code compared only against the last *successful*
+		// write and returned early on a match, leaving the stale failure
+		// flagged and the retry still armed to rewrite the same answer.
+		const user = userEvent.setup();
+		const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
+		vi.spyOn(window.localStorage, "setItem").mockImplementation((key: string, value: string) => {
+			if (key === elicitationDraftKey("conversation-1", "request-1") && JSON.parse(value).values.question_0 === "Bridge") {
+				throw new DOMException("quota exceeded", "QuotaExceededError");
+			}
+			originalSetItem(key, value);
+		});
+
+		try {
+			render(
+				<ElicitationDock
+					activity={activity({ inputMode: "form", schema: claudeQuestions })}
+					sessionId="session-1"
+					conversationId="conversation-1"
+					onResolve={vi.fn()}
+				/>,
+			);
+
+			await user.click(screen.getByRole("radio", { name: /Native/ }));
+			expect(getChatDraftBoundary("session-1")).toBeUndefined();
+
+			await user.click(screen.getByRole("radio", { name: /Bridge/ }));
+			expect(getChatDraftBoundary("session-1")).toBe("persistence-failed");
+
+			await user.click(screen.getByRole("radio", { name: /Native/ }));
+			expect(getChatDraftBoundary("session-1")).toBeUndefined();
+			expect(readElicitationDraft("conversation-1", "request-1")?.values.question_0).toBe("Native");
+		} finally {
+			vi.restoreAllMocks();
+		}
+	});
+
+	it("does not let one dock on a session clear another's still-failing boundary", async () => {
+		// The reviewer overlay reports the same session id as its underlying
+		// worker chat while running its own conversation, so two docks can be
+		// mounted under one sessionId at once. setChatDraftBoundary keeps a
+		// single "elicitation" slot per session; either dock succeeding,
+		// resolving, or unmounting must not silently clear a warning that still
+		// belongs to the other one's unsaved answer.
+		const user = userEvent.setup();
+		vi.spyOn(window.localStorage, "setItem").mockImplementation((key: string) => {
+			if (key === elicitationDraftKey("worker-conversation", "request-1")) {
+				throw new DOMException("quota exceeded", "QuotaExceededError");
+			}
+		});
+
+		try {
+			const worker = render(
+				<ElicitationDock
+					activity={activity({ inputMode: "form", schema: claudeQuestions })}
+					sessionId="session-1"
+					conversationId="worker-conversation"
+					onResolve={vi.fn()}
+				/>,
+			);
+			await user.click(screen.getByRole("radio", { name: /Native/ }));
+			expect(getChatDraftBoundary("session-1")).toBe("persistence-failed");
+
+			const overlay = render(
+				<ElicitationDock
+					activity={{
+						...activity({
+							inputMode: "form",
+							schema: { type: "object", properties: { name: { type: "string", title: "Name" } } },
+						}),
+						id: "overlay-question",
+						requestId: "overlay-request",
+					}}
+					sessionId="session-1"
+					conversationId="overlay-conversation"
+					onResolve={vi.fn().mockResolvedValue(undefined)}
+				/>,
+			);
+			const overlayScreen = within(overlay.container);
+			await user.type(overlayScreen.getByLabelText("Name"), "Alice");
+			await user.click(overlayScreen.getByRole("button", { name: "Continue" }));
+			await waitFor(() => expect(overlayScreen.getByRole("button", { name: "Sending answer" })).toBeInTheDocument());
+
+			// The overlay's own answer saved fine; the worker's is still unsaved.
+			expect(getChatDraftBoundary("session-1")).toBe("persistence-failed");
+
+			overlay.unmount();
+			expect(getChatDraftBoundary("session-1")).toBe("persistence-failed");
+
+			worker.unmount();
 		} finally {
 			vi.restoreAllMocks();
 		}

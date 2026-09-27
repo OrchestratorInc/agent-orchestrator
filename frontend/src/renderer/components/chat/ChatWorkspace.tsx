@@ -1220,9 +1220,13 @@ function ChatWorkspaceContent({
 	// whole workspace was unmounted (a session switch) while the question was
 	// still open: a plain "did it change since I last saw it" comparison would
 	// start fresh on the next mount and never notice the old request is gone.
-	// The sweep is scheduled here too, unconditionally, so an abandoned draft
-	// still gets cleaned up on its own schedule even in a conversation that
-	// never shows a question again.
+	// The sweep is also called here whenever this effect runs (a mount, or
+	// conversationId/the pending request changing) — not on a real timer, so
+	// its 7-day expiry is opportunistic rather than guaranteed. A conversation
+	// left open for a week straight, with no mount or pending-question change
+	// in between, would not otherwise get swept until one happens; the next
+	// session switch, new question, or app restart is what actually catches
+	// it in practice.
 	//
 	// Reconciliation itself is skipped while the loaded page is partial
 	// (`hasMoreBefore`): a pending question old enough to sit outside the

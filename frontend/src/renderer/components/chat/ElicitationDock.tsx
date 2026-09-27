@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type React
 import { ExternalLink, Loader2 } from "lucide-react";
 import { aoBridge } from "../../lib/bridge";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
+import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import {
 	clearElicitationDraft,
 	pruneExpiredElicitationDraftsOnce,
@@ -20,6 +21,49 @@ type ElicitationDraftKey = { conversationId: string; requestId: string };
 
 /** How long to wait before retrying a draft write that failed (e.g. quota). */
 const ELICITATION_DRAFT_RETRY_DELAY_MS = 3000;
+
+/**
+ * `setChatDraftBoundary` keeps one "elicitation" slot per session, but a
+ * reviewer-chat overlay reports the same session id as its underlying worker
+ * chat while running its own, separately-conversationed dock — so two docks
+ * can share that slot. Without per-request bookkeeping, one dock's success or
+ * unmount would clear the warning while the other's failed save is still
+ * unsaved. This tracks which requests currently have a failed write, per
+ * session, so the shared slot is only cleared once none of them do.
+ */
+const failingElicitationRequests = new Map<string, Set<string>>();
+
+function reportElicitationWriteOutcome(sessionId: string | undefined, requestId: string, ok: boolean): void {
+	if (!sessionId) return;
+	if (ok) {
+		const failing = failingElicitationRequests.get(sessionId);
+		if (!failing?.delete(requestId)) return;
+		if (failing.size > 0) return; // another request on this session is still failing
+		failingElicitationRequests.delete(sessionId);
+		setChatDraftBoundary(sessionId, "elicitation", undefined);
+		return;
+	}
+	const failing = failingElicitationRequests.get(sessionId) ?? new Set<string>();
+	failing.add(requestId);
+	failingElicitationRequests.set(sessionId, failing);
+	setChatDraftBoundary(sessionId, "elicitation", "persistence-failed");
+}
+
+function requestHasFailingWrite(sessionId: string | undefined, requestId: string): boolean {
+	return Boolean(sessionId && failingElicitationRequests.get(sessionId)?.has(requestId));
+}
+
+/** Test seam: clears every session's tracked write failures between tests. */
+export function resetElicitationWriteFailureTracking(): void {
+	// Also clears the shared "elicitation" boundary slot for every session
+	// this was tracking: clearing only this module's own bookkeeping would
+	// leave a real test — or a real leftover from a truly unrecovered failure
+	// — with no owner left to ever clear the warning it set.
+	for (const sessionId of failingElicitationRequests.keys()) {
+		setChatDraftBoundary(sessionId, "elicitation", undefined);
+	}
+	failingElicitationRequests.clear();
+}
 
 /** Keeps a restored question index inside the bounds of the current question set. */
 function clampActiveQuestion(index: number, questionGroups: PropertyEntry[][] | undefined): number {
@@ -77,7 +121,7 @@ export function ElicitationDock({
 		try {
 			await onResolve(requestId, action, content);
 			if (conversationId) clearElicitationDraft(conversationId, requestId);
-			if (sessionId) setChatDraftBoundary(sessionId, "elicitation", undefined);
+			reportElicitationWriteOutcome(sessionId, requestId, true);
 			// Leave the form disabled on success rather than resetting `submitting`
 			// here: `onResolve`'s conversation refetch is fire-and-forget, so this
 			// question can still be on screen for a beat after it resolves. A
@@ -261,6 +305,8 @@ function FormRequest({
 	const [activeQuestion, setActiveQuestion] = useState(() =>
 		clampActiveQuestion(draft?.activeQuestion ?? 0, questionGroups),
 	);
+	const translateDraft = useChatDraftTranslation();
+	const [writeError, setWriteError] = useState<string>();
 	// Tracks what was last *successfully* written (or the initial, unwritten
 	// state) so a write only happens when something actually changed. A
 	// boolean "was this ever touched" flag needs every state-changing handler
@@ -269,55 +315,79 @@ function FormRequest({
 	// against the *initial* state instead of the last write wouldn't work
 	// either: restore at question 0, go Next, then Back lands back on question
 	// 0, which looks unchanged from the start but must still overwrite the
-	// draft that Next just saved at question 1. A failed write must not
-	// advance this: doing so would make an untouched answer that failed to
-	// save look already saved, with no further edit left to trigger a retry.
+	// draft that Next just saved at question 1.
 	const lastWritten = useRef({ values, activeQuestion });
-	// Holds the pending retry timer, and — via reassignment on every render —
-	// always the latest values/activeQuestion/draftKey/sessionId to retry
-	// with, so a retry firing after a later edit uses that edit rather than a
-	// stale snapshot from when the failure happened.
-	const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-	const attemptWrite = useRef<(() => void) | undefined>(undefined);
-	attemptWrite.current = () => {
-		if (!draftKey) return;
+	// True from a failed write until the next one that succeeds. Content
+	// matching `lastWritten` normally means nothing to do, but not while this
+	// is true: picking Native (saved), then a longer answer (fails), then
+	// Native again matches `lastWritten` again without a single successful
+	// write having happened for the answer in between — the failure is still
+	// real and still needs clearing.
+	const hasPendingFailure = useRef(false);
+	// Bumped when a scheduled retry fires, so it re-runs the write effect even
+	// though nothing else changed. A plain boolean can't do this by itself:
+	// setting `hasPendingFailure.current` back to the same value doesn't
+	// trigger a re-render, and it's a ref for exactly that reason — nothing
+	// about it should cause one on its own.
+	const [retryTick, setRetryTick] = useState(0);
+
+	// The single source of truth for persisting this answer. Depending on
+	// `disabled` and `retryTick` — not a separately-orchestrated timer ref
+	// reassigned during render — means every reason to write, retry, or stop
+	// (an edit, a failure clearing, the form disabling, the form re-enabling)
+	// is just another run of this one effect, and its own cleanup is what
+	// cancels a stale retry: React calls it before the next run and on
+	// unmount, so there is nothing to remember to cancel by hand.
+	useEffect(() => {
+		if (!draftKey || disabled) return;
+		const unchanged = lastWritten.current.activeQuestion === activeQuestion && valuesEqual(lastWritten.current.values, values);
+		if (unchanged && !hasPendingFailure.current) return;
 		const result = writeElicitationDraft(draftKey.conversationId, draftKey.requestId, { values, activeQuestion });
-		// Reported the same way a failed composer or queued-edit write is: a
-		// silently dropped write here is exactly the bug this module exists to
-		// prevent, so the leave/quit guard needs to know about it too.
-		if (sessionId) setChatDraftBoundary(sessionId, "elicitation", result.ok ? undefined : "persistence-failed");
+		reportElicitationWriteOutcome(sessionId, draftKey.requestId, result.ok);
 		if (result.ok) {
 			lastWritten.current = { values, activeQuestion };
+			hasPendingFailure.current = false;
+			setWriteError(undefined);
 			return;
 		}
 		// A quota or storage failure is often transient. Retry without waiting
 		// for another edit — nothing else would otherwise prompt one if the
-		// human never touches the form again after the failure.
-		retryTimer.current = setTimeout(() => attemptWrite.current?.(), ELICITATION_DRAFT_RETRY_DELAY_MS);
-	};
+		// human never touches the form again after the failure, and re-enabling
+		// after a rejected resolve is itself just another run of this effect.
+		hasPendingFailure.current = true;
+		setWriteError("chat.draft.saveFailed");
+		const timer = setTimeout(() => setRetryTick((tick) => tick + 1), ELICITATION_DRAFT_RETRY_DELAY_MS);
+		return () => clearTimeout(timer);
+	}, [draftKey?.conversationId, draftKey?.requestId, sessionId, values, activeQuestion, disabled, retryTick]);
 
+	// Keeps the latest answer reachable from the unmount-only effect below,
+	// whose own closure would otherwise still hold whatever values existed at
+	// its last run — not necessarily the most recent ones.
+	const latest = useRef({ draftKey, values, activeQuestion });
 	useEffect(() => {
-		if (!draftKey) return;
-		if (lastWritten.current.activeQuestion === activeQuestion && valuesEqual(lastWritten.current.values, values)) return;
-		// A fresh write supersedes any retry still pending from an earlier failure.
-		clearTimeout(retryTimer.current);
-		attemptWrite.current?.();
-	}, [draftKey?.conversationId, draftKey?.requestId, values, activeQuestion]);
-
-	// `disabled` goes true the moment Cancel/Skip/Continue is clicked, and (on
-	// success) stays true afterward — see the comment in ElicitationDock's own
-	// `resolve`. The submitted answer went to `onResolve` directly from React
-	// state, not through this draft, so a retry gains nothing once disabled;
-	// letting one fire anyway risks re-creating a draft that resolving just
-	// cleared.
-	useEffect(() => {
-		if (disabled) clearTimeout(retryTimer.current);
-	}, [disabled]);
+		latest.current = { draftKey, values, activeQuestion };
+	});
 
 	useEffect(
 		() => () => {
-			clearTimeout(retryTimer.current);
-			if (sessionId) setChatDraftBoundary(sessionId, "elicitation", undefined);
+			// The leave/quit guards only cover navigating away or quitting. A
+			// remount that doesn't go through them — ending a queued-message
+			// edit, closing the reviewer overlay, a refetch error swapping the
+			// view — would otherwise drop an unsaved answer with no warning at
+			// all. If whatever caused the last known failure has cleared by now
+			// (freed quota, for instance), this attempt saves it before the
+			// warning goes away; if it hasn't, the warning stays through
+			// reportElicitationWriteOutcome below.
+			const { draftKey: key, values: finalValues, activeQuestion: finalActiveQuestion } = latest.current;
+			if (key && requestHasFailingWrite(sessionId, key.requestId)) {
+				const result = writeElicitationDraft(key.conversationId, key.requestId, {
+					values: finalValues,
+					activeQuestion: finalActiveQuestion,
+				});
+				reportElicitationWriteOutcome(sessionId, key.requestId, result.ok);
+				return;
+			}
+			if (key) reportElicitationWriteOutcome(sessionId, key.requestId, true);
 		},
 		[sessionId],
 	);
@@ -383,6 +453,11 @@ function FormRequest({
 					/>
 				))}
 			</div>
+			{writeError ? (
+				<p role="alert" className="px-3 pb-1 text-[11px] leading-snug text-destructive">
+					{translateDraft(writeError)}
+				</p>
+			) : null}
 			<DockFooter>
 				<div className="flex items-center gap-1.5">
 					<button type="button" className={QUIET_ACTION_PILL} disabled={disabled} onClick={() => onResolve("cancel")}>

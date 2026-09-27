@@ -4,6 +4,7 @@ import { Activity, Profiler, type ReactElement } from "react";
 import { typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
+import { resetElicitationWriteFailureTracking } from "./ElicitationDock";
 import { AssistantMessage, HumanMessage, OriginMessage } from "./ChatTimelineItems";
 import {
 	chatFixture,
@@ -165,6 +166,7 @@ beforeEach(() => {
 	terminalPaneState.props = undefined;
 	renameSessionMock.mockReset().mockResolvedValue(undefined);
 	window.localStorage.clear();
+	resetElicitationWriteFailureTracking();
 	setApiBaseUrl("http://127.0.0.1:3001");
 	useUiStore.setState({ isSidebarOpen: true, inspectorSessions: {} });
 });
@@ -859,11 +861,15 @@ describe("ChatWorkspace timeline", () => {
 		try {
 			await user.click(screen.getByRole("radio", { name: "ACP" }));
 			await waitFor(() => expect(getChatDraftBoundary(chatFixture.sessionId)).toBe("persistence-failed"));
-		} finally {
+			// Storage is still throwing at this point: an unmount now must not
+			// quietly drop the warning just because the dock is gone. Unmounting
+			// while storage keeps failing is exactly the case the warning exists
+			// to cover.
 			view.unmount();
+			expect(getChatDraftBoundary(chatFixture.sessionId)).toBe("persistence-failed");
+		} finally {
 			localStorage.mockRestore();
 		}
-		expect(getChatDraftBoundary(chatFixture.sessionId)).toBeUndefined();
 	});
 
 	it("resets the dock instead of reusing one still disabled from a different question's in-flight resolve", async () => {
