@@ -5,6 +5,7 @@ import {
 	pruneExpiredElicitationDrafts,
 	pruneExpiredElicitationDraftsOnce,
 	readElicitationDraft,
+	reconcileElicitationDraftsForConversation,
 	resetElicitationDraftPruning,
 	writeElicitationDraft,
 } from "./elicitation-drafts";
@@ -213,5 +214,61 @@ describe("elicitation drafts", () => {
 		);
 
 		expect(readElicitationDraft("conversation-1", "slightly-ahead")?.values).toEqual({ a: "one" });
+	});
+
+	it("does not let a corrupt or future sweep marker wedge the sweep shut", () => {
+		// A marker written while the clock was far ahead (manual change, bad RTC,
+		// an NTP step) makes `now - last` negative for as long as real time is
+		// behind it — for a corrupt or absurd value, that could be forever.
+		// Drafts in a conversation that is never reopened have no other path to
+		// expiry, so a wedged marker would keep them past their advertised seven
+		// days indefinitely.
+		window.localStorage.setItem("ao.elicitation-draft-sweep:last", String(Date.now() + 30 * 24 * 60 * 60 * 1000));
+		const eightDays = 8 * 24 * 60 * 60 * 1000;
+		window.localStorage.setItem(
+			elicitationDraftKey("conversation-1", "stale"),
+			JSON.stringify({ schemaVersion: 1, values: { a: "one" }, activeQuestion: 0, updatedAt: Date.now() - eightDays }),
+		);
+
+		pruneExpiredElicitationDraftsOnce(window.localStorage);
+
+		expect(window.localStorage.getItem(elicitationDraftKey("conversation-1", "stale"))).toBeNull();
+	});
+
+	describe("reconcileElicitationDraftsForConversation", () => {
+		it("keeps a draft for every request that is still pending, not only the one shown", () => {
+			// The daemon can have more than one user_input open on a conversation
+			// at once; the UI only ever displays the newest, but every open
+			// question's draft has to survive reconciliation.
+			writeElicitationDraft("conversation-1", "q1", { values: { a: "one" }, activeQuestion: 0 });
+			writeElicitationDraft("conversation-1", "q2", { values: { a: "two" }, activeQuestion: 0 });
+			writeElicitationDraft("conversation-1", "answered", { values: { a: "gone" }, activeQuestion: 0 });
+
+			reconcileElicitationDraftsForConversation("conversation-1", ["q1", "q2"]);
+
+			expect(readElicitationDraft("conversation-1", "q1")?.values).toEqual({ a: "one" });
+			expect(readElicitationDraft("conversation-1", "q2")?.values).toEqual({ a: "two" });
+			expect(readElicitationDraft("conversation-1", "answered")).toBeUndefined();
+		});
+
+		it("removes every draft for a conversation when nothing is pending there anymore", () => {
+			writeElicitationDraft("conversation-1", "answered", { values: { a: "gone" }, activeQuestion: 0 });
+
+			reconcileElicitationDraftsForConversation("conversation-1", []);
+
+			expect(readElicitationDraft("conversation-1", "answered")).toBeUndefined();
+		});
+
+		it("leaves another conversation's drafts untouched", () => {
+			// A reviewer-chat overlay and its worker chat can be open on the same
+			// session id at once. Reconciling one conversation must never reach
+			// into another's keys, even one sharing the storage instance.
+			writeElicitationDraft("conversation-1", "q1", { values: { a: "one" }, activeQuestion: 0 });
+			writeElicitationDraft("other-conversation", "q1", { values: { a: "unrelated" }, activeQuestion: 0 });
+
+			reconcileElicitationDraftsForConversation("conversation-1", []);
+
+			expect(readElicitationDraft("other-conversation", "q1")?.values).toEqual({ a: "unrelated" });
+		});
 	});
 });

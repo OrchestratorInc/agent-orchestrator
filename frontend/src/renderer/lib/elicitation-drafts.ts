@@ -133,28 +133,36 @@ export function clearElicitationDraft(
 }
 
 /**
- * Removes every draft this conversation is holding except the one for
- * `currentRequestId` (if any question is pending). A ChatWorkspace mount only
- * ever sees the requests that come and go while it stays mounted; a question
- * that resolves elsewhere, times out, or is answered from another window
- * while this conversation's Chat surface is unmounted never fires that
- * transition here. Reconciling directly against the loaded snapshot instead —
- * on every mount, not only on a live change — catches that case too, well
- * inside the sweep's 7-day window rather than only at its end.
+ * Removes every draft this conversation is holding except the ones in
+ * `pendingRequestIds`. A ChatWorkspace mount only ever sees the requests that
+ * come and go while it stays mounted; a question that resolves elsewhere,
+ * times out, or is answered from another window while this conversation's
+ * Chat surface is unmounted never fires that transition here. Reconciling
+ * directly against the loaded snapshot instead — on every mount, not only on
+ * a live change — catches that case too, well inside the sweep's 7-day
+ * window rather than only at its end.
+ *
+ * Every currently pending request has to be passed, not just the one on
+ * screen: the daemon can have more than one `user_input` open on a
+ * conversation at once (an MCP elicitation and an AskUserQuestion can both be
+ * in flight), and the UI surfaces only the newest one. Reconciling against
+ * that single visible id would delete a still-open question's draft the
+ * moment a second question arrives, and again every time the visible one
+ * changes.
  */
 export function reconcileElicitationDraftsForConversation(
 	conversationId: string,
-	currentRequestId: string | undefined,
+	pendingRequestIds: Iterable<string>,
 	storage: ElicitationDraftStorage | undefined = rendererStorage(),
 ): void {
 	if (!storage || typeof storage.key !== "function" || typeof storage.length !== "number") return;
 	const prefix = `${KEY_PREFIX}${conversationId}:`;
-	const currentKey = currentRequestId ? elicitationDraftKey(conversationId, currentRequestId) : undefined;
+	const keep = new Set([...pendingRequestIds].map((requestId) => elicitationDraftKey(conversationId, requestId)));
 	const stale: string[] = [];
 	try {
 		for (let index = 0; index < storage.length; index += 1) {
 			const key = storage.key(index);
-			if (!key || !key.startsWith(prefix) || key === currentKey) continue;
+			if (!key || !key.startsWith(prefix) || keep.has(key)) continue;
 			stale.push(key);
 		}
 		for (const key of stale) storage.removeItem(key);
@@ -182,7 +190,22 @@ export function pruneExpiredElicitationDraftsOnce(
 	} catch {
 		last = undefined;
 	}
-	if (typeof last === "number" && Number.isFinite(last) && now - last < SWEEP_INTERVAL_MS) return;
+	// A marker further in the future than clock skew allows is treated as no
+	// marker at all, the same way a draft's own future-dated updatedAt is: a
+	// clock that was ahead when the marker was written (manual change, bad
+	// RTC, an NTP step) and later gets corrected would otherwise skip every
+	// sweep until real time caught up to the stale marker — for a corrupt or
+	// absurd value, that could be never. Drafts that are never reopened have
+	// no other path to expiry, so a wedged marker would keep them past their
+	// advertised seven days indefinitely.
+	if (
+		typeof last === "number" &&
+		Number.isFinite(last) &&
+		last <= now + MAX_CLOCK_SKEW_MS &&
+		now - last < SWEEP_INTERVAL_MS
+	) {
+		return;
+	}
 	pruneExpiredElicitationDrafts(storage, now);
 	try {
 		storage.setItem(LAST_SWEEP_KEY, String(now));

@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
+import { getChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import {
 	elicitationDraftKey,
 	readElicitationDraft,
@@ -316,6 +317,40 @@ describe("ElicitationDock", () => {
 			expect(readElicitationDraft("conversation-1", "request-1")?.values.question_0).toBe("Native");
 		} finally {
 			vi.useRealTimers();
+			vi.restoreAllMocks();
+		}
+	});
+
+	it("reports a failed write through the leave/quit draft boundary, and clears it on unmount", () => {
+		// Dropping the sessionId prop, always passing undefined to
+		// setChatDraftBoundary, or deleting the unmount cleanup would each keep
+		// every other test in this file green — none of them look at the
+		// boundary. Left unreported, a failed save gives no warning before the
+		// human navigates away or quits with an unsent answer; left uncleared
+		// after the dock is gone, the warning outlives the thing it was about.
+		vi.spyOn(window.localStorage, "setItem").mockImplementation((key: string) => {
+			if (key === elicitationDraftKey("conversation-1", "request-1")) {
+				throw new DOMException("quota exceeded", "QuotaExceededError");
+			}
+		});
+
+		try {
+			const view = render(
+				<ElicitationDock
+					activity={activity({ inputMode: "form", schema: claudeQuestions })}
+					sessionId="session-1"
+					conversationId="conversation-1"
+					onResolve={vi.fn()}
+				/>,
+			);
+			expect(getChatDraftBoundary("session-1")).toBeUndefined();
+
+			fireEvent.click(screen.getByRole("radio", { name: /Native/ }));
+			expect(getChatDraftBoundary("session-1")).toBe("persistence-failed");
+
+			view.unmount();
+			expect(getChatDraftBoundary("session-1")).toBeUndefined();
+		} finally {
 			vi.restoreAllMocks();
 		}
 	});

@@ -527,6 +527,20 @@ describe("session-scoped conversation commands", () => {
 		expect(result.current.error).toBeUndefined();
 	});
 
+	it("surfaces a failed resolveInput the same way it surfaces other command failures", async () => {
+		// This session hook is the one both the worker and reviewer Chat surfaces
+		// use; the reviewer hook's own `error` already includes resolveInput. A
+		// resolve that fails silently here is exactly the case that leaves a
+		// human's answer to an agent question dropped with no visible sign it
+		// never sent.
+		const refusal = { code: "CHAT_INPUT_NOT_PENDING" };
+		postMock.mockResolvedValue({ data: undefined, error: refusal });
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+
+		await expect(result.current.resolveInput("request-1", "accept", { answer: "Native" })).rejects.toBe(refusal);
+		await waitFor(() => expect(result.current.error).toBe("failed"));
+	});
+
 	it.each(["retry", "edit"] as const)(
 		"keeps pending and accepted %s work attached to its initiating session",
 		async (operation) => {

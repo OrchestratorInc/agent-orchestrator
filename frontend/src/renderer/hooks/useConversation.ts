@@ -1076,11 +1076,13 @@ export function useConversationCommands(sessionId: string | undefined) {
 		error:
 			(sendTargetsCurrentSession && send.error) ||
 			resolve.error ||
+			resolveInput.error ||
 			(interruptTargetsCurrentSession && interrupt.error) ||
 			chooseSettings.error
 				? apiErrorMessage(
 							(sendTargetsCurrentSession ? send.error : undefined) ??
 							resolve.error ??
+							resolveInput.error ??
 							(interruptTargetsCurrentSession ? interrupt.error : undefined) ??
 							chooseSettings.error,
 					)

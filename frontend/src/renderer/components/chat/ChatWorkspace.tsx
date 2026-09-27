@@ -1138,6 +1138,21 @@ function ChatWorkspaceContent({
 		() => latestPendingInteraction(snapshot.items, "user_input", turn),
 		[snapshot.items, turn],
 	);
+	// The dock only ever shows the newest pending question, but the daemon can
+	// have more than one open on a conversation at once (e.g. an MCP
+	// elicitation alongside an AskUserQuestion) — every one of them needs its
+	// draft kept, not only whichever is currently on screen.
+	const pendingUserInputRequestIds = useMemo(
+		() =>
+			snapshot.items
+				.filter(
+					(item): item is ConversationActivity =>
+						item.kind === "activity" && item.activityKind === "user_input" && item.status === "pending",
+				)
+				.map((item) => item.requestId)
+				.filter((requestId): requestId is string => Boolean(requestId)),
+		[snapshot.items],
+	);
 	const stableSettings = useStableValue(snapshot.settings);
 	const stableModelReroute = useStableValue(snapshot.modelReroute);
 	const stablePendingApproval = useStableValue(pendingApproval);
@@ -1208,10 +1223,23 @@ function ChatWorkspaceContent({
 	// The sweep is scheduled here too, unconditionally, so an abandoned draft
 	// still gets cleaned up on its own schedule even in a conversation that
 	// never shows a question again.
+	//
+	// Reconciliation itself is skipped while the loaded page is partial
+	// (`hasMoreBefore`): a pending question old enough to sit outside the
+	// loaded window would look resolved by its absence from `snapshot.items`
+	// and get its draft deleted, even though it is still open. The sweep still
+	// runs regardless, since it only removes drafts that are independently
+	// stale.
+	const pendingUserInputRequestIdsKey = pendingUserInputRequestIds.join(",");
 	useEffect(() => {
 		pruneExpiredElicitationDraftsOnce();
-		reconcileElicitationDraftsForConversation(snapshot.conversationId, stablePendingUserInput?.requestId);
-	}, [snapshot.conversationId, stablePendingUserInput?.requestId]);
+		if (snapshot.hasMoreBefore) return;
+		reconcileElicitationDraftsForConversation(snapshot.conversationId, pendingUserInputRequestIds);
+		// Depends on pendingUserInputRequestIdsKey, not the array itself: the
+		// array is a fresh reference on nearly every snapshot even when its
+		// contents are unchanged, but whichever render this effect runs in
+		// always has an array consistent with that render's key.
+	}, [snapshot.conversationId, snapshot.hasMoreBefore, pendingUserInputRequestIdsKey]);
 	const composerElicitation = useMemo(
 		() =>
 			stablePendingUserInput ? (

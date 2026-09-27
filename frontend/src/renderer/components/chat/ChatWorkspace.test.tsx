@@ -29,7 +29,7 @@ import {
 	getChatDraftBoundaries,
 	getChatDraftBoundary,
 } from "../../lib/chat-draft-boundary";
-import { readElicitationDraft } from "../../lib/elicitation-drafts";
+import { elicitationDraftKey, readElicitationDraft } from "../../lib/elicitation-drafts";
 import { TooltipProvider } from "../ui/tooltip";
 
 const renameSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -777,13 +777,39 @@ describe("ChatWorkspace timeline", () => {
 		// Nothing else exercises the conversationId prop actually reaching the
 		// dock: it's optional on ElicitationDock, so a dropped wire here would
 		// quietly turn off persistence while every dock-level test still passes,
-		// since those pass conversationId directly.
+		// since those pass conversationId directly. Checking the DOM alone after
+		// a remount is not enough either — the answer would appear to round-trip
+		// even under a wrong key, since both mounts would use that same wrong
+		// key. Asserting the actual storage key catches that a wiring mistake
+		// the DOM-only check would miss.
 		const user = userEvent.setup();
 		const snapshot = withUserInput("pending");
 		const first = render(<ChatWorkspace snapshot={snapshot} onResolveInput={vi.fn()} />);
 
 		await user.click(screen.getByRole("radio", { name: "ACP" }));
+		expect(readElicitationDraft(chatFixture.conversationId, "input-1")?.values.question_0).toBe("acp");
 		first.unmount();
+
+		render(<ChatWorkspace snapshot={snapshot} onResolveInput={vi.fn()} />);
+		expect(screen.getByRole("radio", { name: "ACP" })).toBeChecked();
+	});
+
+	it("keeps a draft intact across a second mount before it is actually resolved", async () => {
+		// A DOM-only check after one remount can pass for the wrong reason: the
+		// lazy useState initializer that seeds the dock's fields reads the draft
+		// during render, before any effect — including the reconcile effect —
+		// has run. So even a reconcile that incorrectly deleted the draft a
+		// moment later would leave the just-rendered DOM looking right. Only a
+		// second remount, reading whatever the first remount's reconcile left
+		// behind, actually proves reconciliation preserved it.
+		const user = userEvent.setup();
+		const snapshot = withUserInput("pending");
+		const first = render(<ChatWorkspace snapshot={snapshot} onResolveInput={vi.fn()} />);
+		await user.click(screen.getByRole("radio", { name: "ACP" }));
+		first.unmount();
+
+		const second = render(<ChatWorkspace snapshot={snapshot} onResolveInput={vi.fn()} />);
+		second.unmount();
 
 		render(<ChatWorkspace snapshot={snapshot} onResolveInput={vi.fn()} />);
 		expect(screen.getByRole("radio", { name: "ACP" })).toBeChecked();
@@ -801,10 +827,96 @@ describe("ChatWorkspace timeline", () => {
 		const first = render(<ChatWorkspace snapshot={pending} onResolveInput={vi.fn()} />);
 
 		await user.click(screen.getByRole("radio", { name: "ACP" }));
+		expect(readElicitationDraft(chatFixture.conversationId, "input-1")).toBeDefined();
 		first.unmount();
 
 		render(<ChatWorkspace snapshot={withUserInput("completed")} onResolveInput={vi.fn()} />);
 		expect(readElicitationDraft(chatFixture.conversationId, "input-1")).toBeUndefined();
+	});
+
+	it("reports a failed elicitation draft write through the session's leave/quit boundary", async () => {
+		// Dropping the sessionId prop the dock is given, or always passing it
+		// undefined, keeps every other elicitation test in this file green —
+		// none of them look at the boundary. A failed save then gives no
+		// warning before the human navigates away or quits with an unsent
+		// answer.
+		const user = userEvent.setup();
+		const snapshot = withUserInput("pending");
+		const durableStorage = window.localStorage;
+		const storage = {
+			getItem: durableStorage.getItem.bind(durableStorage),
+			removeItem: durableStorage.removeItem.bind(durableStorage),
+			setItem: (key: string, value: string) => {
+				if (key === elicitationDraftKey(chatFixture.conversationId, "input-1")) {
+					throw new DOMException("full", "QuotaExceededError");
+				}
+				durableStorage.setItem(key, value);
+			},
+		} as Storage;
+		const localStorage = vi.spyOn(window, "localStorage", "get").mockReturnValue(storage);
+		const view = render(<ChatWorkspace snapshot={snapshot} onResolveInput={vi.fn()} />);
+
+		try {
+			await user.click(screen.getByRole("radio", { name: "ACP" }));
+			await waitFor(() => expect(getChatDraftBoundary(chatFixture.sessionId)).toBe("persistence-failed"));
+		} finally {
+			view.unmount();
+			localStorage.mockRestore();
+		}
+		expect(getChatDraftBoundary(chatFixture.sessionId)).toBeUndefined();
+	});
+
+	it("resets the dock instead of reusing one still disabled from a different question's in-flight resolve", async () => {
+		// Without a key on ElicitationDock, React would keep reusing the same
+		// component instance across a snapshot swap and carry its `submitting`/
+		// `error` local state along with it. `finally { setSubmitting(false) }`
+		// was removed from `resolve()` deliberately (the form stays disabled
+		// after a success while the answered question can still briefly be on
+		// screen), so only this key resets that state when a different question
+		// takes over — the inner FormRequest key only resets the answers.
+		const user = userEvent.setup();
+		const snapshotA = withUserInput("pending");
+		const onResolveInput = vi.fn(() => new Promise<void>(() => {}));
+		const view = render(<ChatWorkspace snapshot={snapshotA} onResolveInput={onResolveInput} />);
+
+		await user.click(screen.getByRole("radio", { name: "ACP" }));
+		await user.click(screen.getByRole("button", { name: "Continue" }));
+		// The submit button's own accessible name becomes "Sending answer" while
+		// disabled (its label swaps for a spinner), so this is A's own way of
+		// showing the request is in flight.
+		expect(screen.getByRole("button", { name: "Sending answer" })).toBeInTheDocument();
+
+		const snapshotB = structuredClone(snapshotA);
+		snapshotB.items = snapshotB.items.filter(
+			(item) => !(item.kind === "activity" && item.activityKind === "user_input"),
+		);
+		snapshotB.items.push({
+			kind: "activity",
+			id: "input-2",
+			sequence: 101,
+			revision: 1,
+			turnId: "turn-1",
+			activityKind: "user_input",
+			status: "pending",
+			summary: "Choose a language",
+			requestId: "input-2",
+			detail: {
+				inputMode: "form",
+				message: "Choose a language",
+				schema: {
+					type: "object",
+					properties: {
+						question_0: { type: "string", title: "Which language?", oneOf: [{ const: "go", title: "Go" }] },
+					},
+				},
+			},
+			createdAt: "2026-08-24T00:01:00Z",
+		});
+
+		view.rerender(<ChatWorkspace snapshot={snapshotB} onResolveInput={onResolveInput} />);
+
+		expect(screen.getByRole("radio", { name: "Go" })).not.toBeDisabled();
+		expect(screen.getByRole("button", { name: "Continue" })).not.toBeDisabled();
 	});
 
 	it("does not interrupt while an elicitation is open", () => {
