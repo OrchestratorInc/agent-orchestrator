@@ -247,7 +247,7 @@ func TestServerShutdownEndpoint(t *testing.T) {
 	// then waits on that silent conn for the whole ShutdownTimeout (observed as
 	// a flaky 5s failure under -race). DisableKeepAlives keeps this POST off
 	// the shared pool entirely.
-	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	client := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
 	resp, err := client.Post(base+"/shutdown", "application/json", nil)
 	if err != nil {
 		t.Fatalf("POST /shutdown: %v", err)
