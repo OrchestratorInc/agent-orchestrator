@@ -576,6 +576,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			? current
 			: { sessionId, attached });
 	}, [sessionId]);
+	const cloudFailure = session?.cloud?.observedState === "terminated";
 	// Latch the session that has reached "connected" at least once (keyed on
 	// sessionId so it resets cleanly when the view switches sessions). After the
 	// first successful connect, a transient runtime-connection drop while the
@@ -598,9 +599,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// "restoring_agent" while the sandbox is still running (a transient runtime
 	// relay drop mid-turn). A terminal re-mint (cloudReconnecting, covers a blank
 	// flash) and a genuine workspace restart still raise the loader.
-	const showLifecycleLoader = hasConnectedOnce
+	const showLifecycleLoader = !cloudFailure && (hasConnectedOnce
 		? (cloudReconnecting || workspaceRestarting)
-		: (cloudReconnecting || (cloudStage != null && cloudStage !== "paused_by_coder" && !sessionReady));
+		: (cloudReconnecting || (cloudStage != null && cloudStage !== "paused_by_coder" && !sessionReady)));
 	const loaderVisibleLongEnoughRef = useRef("");
 	const [completionDismissed, setCompletionDismissed] = useState(false);
 	useEffect(() => {
@@ -610,7 +611,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const timer = window.setTimeout(() => { loaderVisibleLongEnoughRef.current = sessionId; }, 200);
 		return () => window.clearTimeout(timer);
 	}, [sessionId, showLifecycleLoader]);
-	const showCompletedLoader = !showLifecycleLoader && sessionReady && loaderVisibleLongEnoughRef.current === sessionId && !completionDismissed;
+	const showCompletedLoader = !cloudFailure && !showLifecycleLoader && sessionReady && loaderVisibleLongEnoughRef.current === sessionId && !completionDismissed;
 	useEffect(() => {
 		if (!showCompletedLoader) return;
 		const timer = window.setTimeout(() => setCompletionDismissed(true), 360);
