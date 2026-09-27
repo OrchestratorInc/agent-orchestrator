@@ -20,6 +20,61 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
+// CreateReportRequest is the local caller-to-daemon report submission contract.
+// SessionID attributes the report; like the rest of AO's unauthenticated
+// loopback API, it is not cryptographic proof of worker authorship. Reports do
+// not mutate or derive authoritative session status.
+type CreateReportRequest struct {
+	SessionID string                `json:"sessionId"`
+	State     string                `json:"state,omitempty" enum:"checkpoint,needs_input,stuck,done"`
+	Note      string                `json:"note,omitempty" maxLength:"1000"`
+	Message   string                `json:"message,omitempty" maxLength:"1000"`
+	Outputs   []ReportOutputRequest `json:"outputs,omitempty"`
+}
+
+// ReportOutputRequest is one ordered structured output reference.
+type ReportOutputRequest struct {
+	Kind      string `json:"kind" enum:"artifact,pr_created,pr_reviewed"`
+	Reference string `json:"reference" minLength:"1"`
+	Label     string `json:"label,omitempty"`
+}
+
+// CreateReportResponse returns only the durable identifier needed to correlate
+// a successful submission without echoing report contents.
+type CreateReportResponse struct {
+	ID string `json:"id"`
+}
+
+// ReportOutputResponse is one ordered output reference in the read projection.
+type ReportOutputResponse struct {
+	Kind      string `json:"kind"`
+	Reference string `json:"reference"`
+	Label     string `json:"label,omitempty"`
+}
+
+// ReportResponse is one persisted worker claim, independent of delivery state.
+type ReportResponse struct {
+	ID          string                 `json:"id"`
+	SessionID   string                 `json:"sessionId"`
+	ProjectID   string                 `json:"projectId"`
+	State       string                 `json:"state,omitempty"`
+	Note        string                 `json:"note,omitempty"`
+	Message     string                 `json:"message,omitempty"`
+	Outputs     []ReportOutputResponse `json:"outputs,omitempty"`
+	CreatedAt   time.Time              `json:"createdAt"`
+	RepeatCount int64                  `json:"repeatCount"`
+}
+
+// ListReportsResponse contains a project's ordered persisted reports.
+type ListReportsResponse struct {
+	Reports []ReportResponse `json:"reports"`
+}
+
+// ListReportsQuery selects reports by stable project identity.
+type ListReportsQuery struct {
+	ProjectID string `query:"projectId" required:"true" description:"Stable project identifier."`
+}
+
 // HTTP response envelopes for the projects surface — the SINGLE definition of
 // each wire shape. The handlers encode these (envelope.WriteJSON), and
 // apispec.Build reflects these same types into openapi.yaml, so the served
@@ -33,6 +88,11 @@ import (
 // as the path parameter.
 type ProjectIDParam struct {
 	ID string `path:"id" description:"Project identifier (registry key)."`
+}
+
+// TaskPreparationTokenParam identifies an unclaimed speculative task workspace.
+type TaskPreparationTokenParam struct {
+	Token string `path:"token" description:"Opaque speculative task-worktree token."`
 }
 
 // AgentIDParam is the {agent} path parameter for one-agent catalog probes.
@@ -315,7 +375,7 @@ type SpawnSessionRequest struct {
 	ParentSessionID domain.SessionID       `json:"parentSessionId,omitempty"`
 	TrackerProvider domain.TrackerProvider `json:"trackerProvider,omitempty" enum:"github,gitlab"`
 	Kind            domain.SessionKind     `json:"kind,omitempty" enum:"worker,orchestrator"`
-	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,grok,droid,amp,agy,crush,cursor,qwen,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,prime-agent,autohand"`
+	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,grok,droid,amp,agy,crush,cursor,qwen,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,prime-agent,autohand,unreal-agent"`
 	Branch          string                 `json:"branch,omitempty"`
 	// Mode picks the conversation controller: chat talks to the agent over a
 	// structured connection, tui opens the agent's native terminal interface.
@@ -324,12 +384,16 @@ type SpawnSessionRequest struct {
 	// never mutates existing sessions automatically; compatible sessions may later
 	// switch through the durable interface-transition endpoint. An unsupported
 	// explicit request fails rather than quietly producing the other kind of session.
-	Mode   domain.SessionMode `json:"mode,omitempty" enum:"chat,tui"`
-	Prompt string             `json:"prompt,omitempty" maxLength:"16384"`
+	Mode domain.SessionMode `json:"mode,omitempty" enum:"chat,tui"`
+	// ApprovalMode overrides the project/default policy for this spawn.
+	ApprovalMode domain.PermissionMode `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
+	Prompt       string                `json:"prompt,omitempty" maxLength:"16384"`
 	// Model is an optional agent model override scoped to this single spawn. Empty
 	// keeps the resolved project/role default. The daemon validates that the
 	// selected harness can honor the model before launching.
 	Model string `json:"model,omitempty" maxLength:"256"`
+	// Effort is the optional reasoning level for the selected model.
+	Effort string `json:"effort,omitempty" maxLength:"32"`
 
 	// DisplayName is the sidebar label for the session, capped at 100 characters.
 	// `ao spawn --name` always sets it; other clients (e.g. the desktop new-task
@@ -448,6 +512,10 @@ type ListWorkspaceFilesResponse struct {
 	// Commits are the commits between the compare base and HEAD, newest first.
 	Commits []WorkspaceCommitSummary `json:"commits"`
 	Summary WorkspaceSummary         `json:"summary"`
+	// Degraded indicates that the primary file list is available but optional
+	// Git-state enrichment failed and can be retried.
+	Degraded     bool   `json:"degraded"`
+	DegradedCode string `json:"degradedCode,omitempty"`
 	// Ahead and Behind are omitted when no push/pull data is available (no
 	// upstream, detached HEAD).
 	Ahead  *int `json:"ahead,omitempty"`
@@ -901,9 +969,11 @@ type SendSessionMessageResponse struct {
 type DelegateTaskRequest struct {
 	ProjectID domain.ProjectID    `json:"projectId"`
 	Brief     string              `json:"brief" maxLength:"16384"`
-	Agent     domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,grok,droid,amp,agy,crush,cursor,qwen,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,prime-agent,autohand,fake"`
+	Agent     domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,grok,droid,amp,agy,crush,cursor,qwen,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,prime-agent,autohand,unreal-agent,fake"`
 	Model     string              `json:"model,omitempty" maxLength:"256"`
-	Effort    *string             `json:"effort,omitempty" maxLength:"64"`
+	// Effort is an explicit, provider-advertised model tuning override. Nil
+	// inherits the project default; an empty string selects the provider default.
+	Effort *string `json:"effort,omitempty" maxLength:"64"`
 	// ApprovalMode is an optional per-session override. The UI uses the explicit
 	// bypass value only after the user accepts an approval-less Chat fallback.
 	ApprovalMode domain.PermissionMode `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
@@ -915,6 +985,15 @@ type DelegateTaskRequest struct {
 	// daemon writes them into the spawned worker worktree and appends path
 	// references to the worker prompt.
 	Attachments []AttachmentInput `json:"attachments,omitempty"`
+	// TaskPreparation is the opaque worktree token returned while the New Task
+	// dialog is open. Missing or expired tokens fall back to normal creation.
+	TaskPreparation string `json:"taskPreparation,omitempty"`
+}
+
+// PrepareTaskResponse returns the opaque token for a speculative task workspace.
+type PrepareTaskResponse struct {
+	OK              bool   `json:"ok"`
+	TaskPreparation string `json:"taskPreparation,omitempty"`
 }
 
 // DelegateTaskResponse confirms which worker was spawned and, when available,
@@ -941,30 +1020,32 @@ type SessionPRFacts struct {
 // /sessions/{sessionId}/pr. It intentionally omits CI log tails and review
 // comment bodies.
 type SessionPRSummary struct {
-	URL              string                       `json:"url"`
-	HTMLURL          string                       `json:"htmlUrl,omitempty"`
-	Number           int                          `json:"number"`
-	Title            string                       `json:"title"`
-	State            domain.PRState               `json:"state" enum:"draft,open,merged,closed"`
-	Provider         string                       `json:"provider" enum:"github,gitlab"`
-	Repo             string                       `json:"repo"`
-	Author           string                       `json:"author"`
-	AuthorAvatarURL  string                       `json:"authorAvatarUrl,omitempty"`
-	SourceBranch     string                       `json:"sourceBranch"`
-	TargetBranch     string                       `json:"targetBranch"`
-	HeadSHA          string                       `json:"headSha"`
-	Additions        int                          `json:"additions"`
-	Deletions        int                          `json:"deletions"`
-	ChangedFiles     int                          `json:"changedFiles"`
-	CI               SessionPRCISummary           `json:"ci"`
-	Review           SessionPRReviewSummary       `json:"review"`
-	Mergeability     SessionPRMergeabilitySummary `json:"mergeability"`
-	StateChangedAt   *time.Time                   `json:"stateChangedAt,omitempty"`
-	CreatedAt        *time.Time                   `json:"createdAt,omitempty"`
-	UpdatedAt        time.Time                    `json:"updatedAt"`
-	ObservedAt       time.Time                    `json:"observedAt,omitempty"`
-	CIObservedAt     time.Time                    `json:"ciObservedAt,omitempty"`
-	ReviewObservedAt time.Time                    `json:"reviewObservedAt,omitempty"`
+	URL                    string                       `json:"url"`
+	HTMLURL                string                       `json:"htmlUrl,omitempty"`
+	Number                 int                          `json:"number"`
+	Title                  string                       `json:"title"`
+	State                  domain.PRState               `json:"state" enum:"draft,open,merged,closed"`
+	Provider               string                       `json:"provider" enum:"github,gitlab"`
+	Repo                   string                       `json:"repo"`
+	Author                 string                       `json:"author"`
+	AuthorAvatarURL        string                       `json:"authorAvatarUrl,omitempty"`
+	DiscussionCommentCount int                          `json:"discussionCommentCount,omitempty"`
+	DiscussionCommenters   []string                     `json:"discussionCommenters,omitempty"`
+	SourceBranch           string                       `json:"sourceBranch"`
+	TargetBranch           string                       `json:"targetBranch"`
+	HeadSHA                string                       `json:"headSha"`
+	Additions              int                          `json:"additions"`
+	Deletions              int                          `json:"deletions"`
+	ChangedFiles           int                          `json:"changedFiles"`
+	CI                     SessionPRCISummary           `json:"ci"`
+	Review                 SessionPRReviewSummary       `json:"review"`
+	Mergeability           SessionPRMergeabilitySummary `json:"mergeability"`
+	StateChangedAt         *time.Time                   `json:"stateChangedAt,omitempty"`
+	CreatedAt              *time.Time                   `json:"createdAt,omitempty"`
+	UpdatedAt              time.Time                    `json:"updatedAt"`
+	ObservedAt             time.Time                    `json:"observedAt,omitempty"`
+	CIObservedAt           time.Time                    `json:"ciObservedAt,omitempty"`
+	ReviewObservedAt       time.Time                    `json:"reviewObservedAt,omitempty"`
 }
 
 // SessionPRCISummary is the CI status block for a session PR summary.
@@ -1046,30 +1127,32 @@ type ListSessionPRsResponse struct {
 // NewSessionPRSummary maps the service PR summary model to its HTTP DTO.
 func NewSessionPRSummary(in sessionsvc.PRSummary) SessionPRSummary {
 	return SessionPRSummary{
-		URL:              in.URL,
-		HTMLURL:          in.HTMLURL,
-		Number:           in.Number,
-		Title:            in.Title,
-		State:            in.State,
-		Provider:         in.Provider,
-		Repo:             in.Repo,
-		Author:           in.Author,
-		AuthorAvatarURL:  in.AuthorAvatarURL,
-		SourceBranch:     in.SourceBranch,
-		TargetBranch:     in.TargetBranch,
-		HeadSHA:          in.HeadSHA,
-		Additions:        in.Additions,
-		Deletions:        in.Deletions,
-		ChangedFiles:     in.ChangedFiles,
-		CI:               newSessionPRCISummary(in.CI),
-		Review:           newSessionPRReviewSummary(in.Review),
-		Mergeability:     newSessionPRMergeabilitySummary(in.Mergeability),
-		StateChangedAt:   optionalTime(in.StateChangedAt),
-		CreatedAt:        optionalTime(in.CreatedAt),
-		UpdatedAt:        in.UpdatedAt,
-		ObservedAt:       in.ObservedAt,
-		CIObservedAt:     in.CIObservedAt,
-		ReviewObservedAt: in.ReviewObservedAt,
+		URL:                    in.URL,
+		HTMLURL:                in.HTMLURL,
+		Number:                 in.Number,
+		Title:                  in.Title,
+		State:                  in.State,
+		Provider:               in.Provider,
+		Repo:                   in.Repo,
+		Author:                 in.Author,
+		AuthorAvatarURL:        in.AuthorAvatarURL,
+		DiscussionCommentCount: in.DiscussionCommentCount,
+		DiscussionCommenters:   in.DiscussionCommenters,
+		SourceBranch:           in.SourceBranch,
+		TargetBranch:           in.TargetBranch,
+		HeadSHA:                in.HeadSHA,
+		Additions:              in.Additions,
+		Deletions:              in.Deletions,
+		ChangedFiles:           in.ChangedFiles,
+		CI:                     newSessionPRCISummary(in.CI),
+		Review:                 newSessionPRReviewSummary(in.Review),
+		Mergeability:           newSessionPRMergeabilitySummary(in.Mergeability),
+		StateChangedAt:         optionalTime(in.StateChangedAt),
+		CreatedAt:              optionalTime(in.CreatedAt),
+		UpdatedAt:              in.UpdatedAt,
+		ObservedAt:             in.ObservedAt,
+		CIObservedAt:           in.CIObservedAt,
+		ReviewObservedAt:       in.ReviewObservedAt,
 	}
 }
 
@@ -1166,6 +1249,7 @@ type SetActivityRequest struct {
 	LatestUserPrompt             string                              `json:"latestUserPrompt,omitempty" maxLength:"16384" description:"Latest real user prompt exposed by the provider hook."`
 	LatestAssistantUpdate        string                              `json:"latestAssistantUpdate,omitempty" maxLength:"16384" description:"Latest assistant update exposed by the provider hook."`
 	ConversationCheckpointOrigin domain.ConversationCheckpointOrigin `json:"conversationCheckpointOrigin,omitempty" enum:"human,coordination" description:"Whether the main-turn boundary came from a human or AO coordination."`
+	CoordinationID               string                              `json:"coordinationId,omitempty" description:"Opaque identity of an AO-authored semantic prompt accepted by the native agent."`
 	ProviderTurnID               string                              `json:"providerTurnId,omitempty" description:"Native main-turn identity reported by the hook, when supported."`
 	SubmissionID                 string                              `json:"submissionId,omitempty" maxLength:"36" description:"AO prompt-hook context correlation UUID, when supported."`
 	TranscriptPath               string                              `json:"transcriptPath,omitempty" maxLength:"4096" description:"Read-only provider-native transcript path exposed by the hook."`
@@ -1579,6 +1663,113 @@ type StartInstallResponse = systeminstall.Job
 // InstallStatusResponse is the body of GET /api/v1/system/install/{target}.
 type InstallStatusResponse = systeminstall.Job
 
+// AutomationIDParam identifies a recurring definition.
+type AutomationIDParam struct {
+	AutomationID string `path:"automationId" description:"Automation identifier."`
+}
+
+// ListAutomationsQuery describes filters and pagination for automation definitions.
+type ListAutomationsQuery struct {
+	ProjectID string `query:"projectId,omitempty"`
+	Enabled   *bool  `query:"enabled,omitempty"`
+	Limit     int    `query:"limit,omitempty" minimum:"1" maximum:"100"`
+	Cursor    string `query:"cursor,omitempty"`
+}
+
+// ListAutomationRunsQuery describes pagination for an automation's run history.
+type ListAutomationRunsQuery struct {
+	Limit  int    `query:"limit,omitempty" minimum:"1" maximum:"100"`
+	Cursor string `query:"cursor,omitempty"`
+}
+
+// CreateAutomationRequest is the body accepted when creating an automation.
+type CreateAutomationRequest struct {
+	ProjectID   string `json:"projectId"`
+	DisplayName string `json:"displayName"`
+	Prompt      string `json:"prompt"`
+	Kind        string `json:"kind" enum:"worker,orchestrator"`
+	Harness     string `json:"harness,omitempty"`
+	RRule       string `json:"rrule,omitempty"`
+	Cron        string `json:"cron,omitempty"`
+	Timezone    string `json:"timezone"`
+	Enabled     *bool  `json:"enabled,omitempty"`
+}
+
+// UpdateAutomationRequest is the partial body accepted when updating an automation.
+type UpdateAutomationRequest struct {
+	DisplayName *string `json:"displayName,omitempty"`
+	Prompt      *string `json:"prompt,omitempty"`
+	Kind        *string `json:"kind,omitempty" enum:"worker,orchestrator"`
+	Harness     *string `json:"harness,omitempty"`
+	RRule       *string `json:"rrule,omitempty"`
+	Cron        *string `json:"cron,omitempty"`
+	Timezone    *string `json:"timezone,omitempty"`
+	Enabled     *bool   `json:"enabled,omitempty"`
+}
+
+// AutomationRunSummaryResponse is the latest-run projection attached to a definition.
+type AutomationRunSummaryResponse struct {
+	ID           string     `json:"id"`
+	Status       string     `json:"status" enum:"pending,spawning,running,completed,failed"`
+	ScheduledFor time.Time  `json:"scheduledFor"`
+	SessionID    string     `json:"sessionId,omitempty"`
+	ErrorMessage string     `json:"errorMessage,omitempty"`
+	StartedAt    *time.Time `json:"startedAt,omitempty"`
+	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
+}
+
+// AutomationResponse is the API representation of an automation definition.
+type AutomationResponse struct {
+	ID          string                        `json:"id"`
+	ProjectID   string                        `json:"projectId"`
+	DisplayName string                        `json:"displayName"`
+	Prompt      string                        `json:"prompt"`
+	Kind        string                        `json:"kind" enum:"worker,orchestrator"`
+	Harness     string                        `json:"harness,omitempty"`
+	RRule       string                        `json:"rrule"`
+	Timezone    string                        `json:"timezone"`
+	Enabled     bool                          `json:"enabled"`
+	NextRunAt   time.Time                     `json:"nextRunAt"`
+	LastRunAt   *time.Time                    `json:"lastRunAt,omitempty"`
+	CreatedAt   time.Time                     `json:"createdAt"`
+	UpdatedAt   time.Time                     `json:"updatedAt"`
+	LatestRun   *AutomationRunSummaryResponse `json:"latestRun,omitempty"`
+}
+
+// AutomationEnvelope wraps one automation response.
+type AutomationEnvelope struct {
+	Automation AutomationResponse `json:"automation"`
+}
+
+// ListAutomationsResponse is one page of automation definitions.
+type ListAutomationsResponse struct {
+	Automations []AutomationResponse `json:"automations"`
+	NextCursor  string               `json:"nextCursor,omitempty"`
+}
+
+// AutomationRunResponse is the API representation of one scheduled occurrence.
+type AutomationRunResponse struct {
+	ID             string     `json:"id"`
+	AutomationID   string     `json:"automationId"`
+	ScheduledFor   time.Time  `json:"scheduledFor"`
+	SessionID      string     `json:"sessionId,omitempty"`
+	Status         string     `json:"status" enum:"pending,spawning,running,completed,failed"`
+	AttemptCount   int64      `json:"attemptCount"`
+	ClaimedAt      *time.Time `json:"claimedAt,omitempty"`
+	LeaseExpiresAt *time.Time `json:"leaseExpiresAt,omitempty"`
+	StartedAt      *time.Time `json:"startedAt,omitempty"`
+	FinishedAt     *time.Time `json:"finishedAt,omitempty"`
+	ErrorMessage   string     `json:"errorMessage,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+}
+
+// ListAutomationRunsResponse is one page of automation run history.
+type ListAutomationRunsResponse struct {
+	Runs       []AutomationRunResponse `json:"runs"`
+	NextCursor string                  `json:"nextCursor,omitempty"`
+}
+
 // AgentInstallResponse is shared by the agent harness start and status routes.
 type AgentInstallResponse = systeminstall.Job
 
@@ -1848,6 +2039,21 @@ type MobileStatusResponse struct {
 	Password      string              `json:"password"`
 	Warning       string              `json:"warning"`
 	SecurePairing SecurePairingStatus `json:"securePairing"`
+	KeepAwake     KeepAwakeStatus     `json:"keepAwake"`
+}
+
+// KeepAwakeStatus describes the macOS-only option that stops the machine from
+// idle-sleeping while Connect Mobile is on, so a paired phone stays connected.
+type KeepAwakeStatus struct {
+	Supported  bool `json:"supported"`  // this platform can hold the machine awake (macOS)
+	Enabled    bool `json:"enabled"`    // the user turned the option on
+	Active     bool `json:"active"`     // the sleep assertion is currently held
+	HasBattery bool `json:"hasBattery"` // a laptop, where closing the lid still sleeps it
+}
+
+// SetKeepAwakeRequest is the body of POST /api/v1/mobile/keep-awake.
+type SetKeepAwakeRequest struct {
+	Enabled bool `json:"enabled"`
 }
 
 // SecurePairingStatus describes the optional TLS-over-Tailscale pairing mode,

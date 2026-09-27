@@ -6,6 +6,7 @@ import { useTheme } from "./ThemeProvider";
 import type { Theme } from "./theme";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
 import { type, space } from "./tokens";
+import { MicKey } from "./voice/MicKey";
 
 type OpenMenu = "project" | "harness" | "model" | null;
 
@@ -21,6 +22,7 @@ export function SpawnComposerControls({
 	modelLabel,
 	onSelectModel,
 	onAttach,
+	voice,
 	onSpawn,
 	busy,
 	disabled,
@@ -75,7 +77,19 @@ export function SpawnComposerControls({
 				<View style={styles.divider} />
 				<SelectorButton label={harnessLabel} icon="terminal" harness={harness} onPress={() => setOpenMenu("harness")} style={styles.railButton} />
 				<View style={styles.divider} />
-				<SelectorButton label={modelLabel} icon="cpu" onPress={() => setOpenMenu("model")} style={styles.railButton} />
+				<SelectorButton label={modelLabel} onPress={() => setOpenMenu("model")} style={styles.railButton} />
+				<View style={styles.divider} />
+				{/* Plain, like the paperclip: the rail is the surface, and a second
+				    disc inside it would compete with Start task. */}
+				<MicKey
+					variant="plain"
+					size={42}
+					glyphSize={20}
+					state={voice.state}
+					mode={voice.mode}
+					onPressIn={voice.onPressIn}
+					onPressOut={voice.onPressOut}
+				/>
 			</View>
 
 			<Pressable
@@ -98,7 +112,7 @@ export function SpawnComposerControls({
 
 function SelectorButton({ label, icon, harness, onPress, style }: {
 	label: string;
-	icon: keyof typeof Feather.glyphMap;
+	icon?: keyof typeof Feather.glyphMap;
 	harness?: string;
 	onPress: () => void;
 	style?: object;
@@ -113,7 +127,7 @@ function SelectorButton({ label, icon, harness, onPress, style }: {
 			onPress={onPress}
 			style={[styles.selector, style]}
 		>
-			{harness ? <AgentLogo harness={harness} size={20} /> : <Feather name={icon} size={15} color={t.textSecondary} />}
+			{harness ? <AgentLogo harness={harness} size={20} /> : icon ? <Feather name={icon} size={15} color={t.textSecondary} /> : null}
 			<Text numberOfLines={1} style={styles.selectorLabel}>{label}</Text>
 			<Feather name="chevron-down" size={15} color={t.textTertiary} />
 		</Pressable>
