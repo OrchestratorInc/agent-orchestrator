@@ -13,7 +13,7 @@ const MAX_AUTH_DOCUMENT_BYTES = 64 << 10;
 // headless/cloud contexts; matching on the token shape (rather than a specific
 // storage file) keeps extraction stable across claude versions, which have moved
 // the credential between settings.json, .credentials.json, and the OS keychain.
-const CLAUDE_OAUTH_TOKEN_PATTERN = /sk-ant-oat[0-9A-Za-z_-]{10,}/;
+const CLAUDE_OAUTH_TOKEN_PATTERN = /sk-ant-[0-9A-Za-z_-]{10,}/;
 
 export function extractClaudeOAuthToken(text: string): string | null {
 	const match = text.match(CLAUDE_OAUTH_TOKEN_PATTERN);

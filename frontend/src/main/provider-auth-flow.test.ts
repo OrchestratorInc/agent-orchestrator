@@ -67,6 +67,11 @@ describe("extractClaudeOAuthToken", () => {
 		expect(extractClaudeOAuthToken(stdout)).toBe("sk-ant-oat01-AbC_dEf-123456789");
 	});
 
+	it("pulls an sk-ant-api token if the format changed", () => {
+		const stdout = "Authenticated!\nYour token:\nsk-ant-api03-AbC_dEf-123456789 \nDone.\n";
+		expect(extractClaudeOAuthToken(stdout)).toBe("sk-ant-api03-AbC_dEf-123456789");
+	});
+
 	it("returns null when no token is present", () => {
 		expect(extractClaudeOAuthToken("Opening browser to sign in...\nno token here")).toBeNull();
 	});
