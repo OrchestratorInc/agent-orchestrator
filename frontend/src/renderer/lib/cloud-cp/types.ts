@@ -234,6 +234,11 @@ export interface CloudCpCreateSessionRequest {
 	prompt: string;
 	/** Defaults to "trusted" on the control plane when omitted. */
 	mode?: CloudCpSessionMode;
+	/**
+	 * Coding-agent model the session launches with (harness-native id). Optional:
+	 * omitted uses the harness default.
+	 */
+	model?: string;
 	deniedCommands?: string[];
 	sandboxProviderConnectionId?: string;
 	/**
@@ -699,13 +704,14 @@ export interface CloudCpTerminalTicketResponse {
 // ---------------------------------------------------------------------------
 
 /** Coding-agent providers the control plane accepts (`validAgentProvider`). */
-export type CloudCpAgentProvider = "claude-code" | "codex" | "cursor";
+export type CloudCpAgentProvider = "claude-code" | "codex" | "cursor" | "opencode";
 
 /**
  * Credential types by provider (`validAgentCredentialType`):
  * claude-code accepts "api_key" | "oauth_token"; codex accepts
  * "api_key" | "access_token" | "auth_json" (the opaque result of a
- * ChatGPT subscription login); cursor accepts "api_key".
+ * ChatGPT subscription login); cursor accepts "api_key"; opencode accepts
+ * "auth_json" (its multi-provider auth document; no single api-key env var).
  */
 export interface CloudCpPutAgentConnectionRequest {
 	credentialType: string;

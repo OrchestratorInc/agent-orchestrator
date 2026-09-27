@@ -73,7 +73,11 @@ export function useSessionScmSummary(
 			sessionId,
 			signal: controller.signal,
 			onEvent: (event) => {
-				if (event.type === "scm.updated") {
+				if (
+					event.type === "scm.updated" ||
+					event.type === "pull_request.created" ||
+					event.type === "pull_request.claimed"
+				) {
 					void queryClient.invalidateQueries({ queryKey });
 				}
 			},

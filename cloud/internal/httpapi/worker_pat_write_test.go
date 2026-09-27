@@ -22,6 +22,7 @@ type patServerStore struct {
 	Store
 	pat    domain.WorkerGitHubPAT
 	patErr error
+	opened int
 }
 
 func (s *patServerStore) WorkerGitHubPAT(context.Context, string, string, string, int64) (domain.WorkerGitHubPAT, error) {
@@ -33,6 +34,11 @@ func (s *patServerStore) WorkerGitHubPAT(context.Context, string, string, string
 
 func (s *patServerStore) AppendSessionEvent(context.Context, string, string, string, json.RawMessage) (domain.ClientEvent, error) {
 	return domain.ClientEvent{}, nil
+}
+
+func (s *patServerStore) RecordPullRequestOpened(context.Context, string, domain.PullRequest, string) error {
+	s.opened++
+	return nil
 }
 
 // patRecordStore is the PAT write service's record store.
@@ -64,13 +70,13 @@ func (b *recordingCheckoutBroker) RaisePullRequest(context.Context, string, stri
 	return domain.PullRequest{ID: "broker-pr", Number: 99, URL: "https://github.com/octo/widgets/pull/99"}, nil
 }
 func (b *recordingCheckoutBroker) ClaimPullRequest(context.Context, string, string, string) (domain.PullRequest, error) {
-	return domain.PullRequest{}, nil
+	return domain.PullRequest{ID: "broker-pr", Number: 7, URL: "https://github.com/octo/widgets/pull/7"}, nil
 }
 func (b *recordingCheckoutBroker) SubmitReview(context.Context, string, string, string, domain.SubmitReviewResult) (domain.ReviewRun, error) {
 	return domain.ReviewRun{}, nil
 }
 
-func newPATTestServer(t *testing.T, patErr error) (*Server, *recordingCheckoutBroker, *patRecordStore, *githubServerRecorder) {
+func newPATTestServer(t *testing.T, patErr error) (*Server, *recordingCheckoutBroker, *patRecordStore, *githubServerRecorder, *patServerStore) {
 	t.Helper()
 	key := make([]byte, 32)
 	cipher, err := secrets.New(key)
@@ -117,7 +123,7 @@ func newPATTestServer(t *testing.T, patErr error) (*Server, *recordingCheckoutBr
 		PATWrites:      patWrites,
 		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
-	return srv, broker, recordStore, rec
+	return srv, broker, recordStore, rec, serverStore
 }
 
 type githubServerRecorder struct {
@@ -133,7 +139,7 @@ func patRaiseRequest(t *testing.T) *http.Request {
 // With a configured PAT the write must go to GitHub with the PAT, and the
 // (write-incapable) broker must never be touched.
 func TestWorkerRaisePullRequestPrefersPAT(t *testing.T) {
-	srv, broker, recordStore, gh := newPATTestServer(t, nil)
+	srv, broker, recordStore, gh, serverStore := newPATTestServer(t, nil)
 	w := httptest.NewRecorder()
 	srv.workerRaisePullRequest(w, patRaiseRequest(t))
 
@@ -152,6 +158,9 @@ func TestWorkerRaisePullRequestPrefersPAT(t *testing.T) {
 	if recordStore.created != 1 {
 		t.Fatalf("PR record created %d times, want 1", recordStore.created)
 	}
+	if serverStore.opened != 1 {
+		t.Fatalf("PR opened notifications = %d, want 1", serverStore.opened)
+	}
 	var resp worker.RaisePullRequestResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
@@ -163,7 +172,7 @@ func TestWorkerRaisePullRequestPrefersPAT(t *testing.T) {
 
 // Without a PAT the handler must fall through to the checkout broker.
 func TestWorkerRaisePullRequestFallsBackToBrokerWithoutPAT(t *testing.T) {
-	srv, broker, _, gh := newPATTestServer(t, postgres.ErrNotFound)
+	srv, broker, _, gh, serverStore := newPATTestServer(t, postgres.ErrNotFound)
 	w := httptest.NewRecorder()
 	srv.workerRaisePullRequest(w, patRaiseRequest(t))
 
@@ -175,5 +184,21 @@ func TestWorkerRaisePullRequestFallsBackToBrokerWithoutPAT(t *testing.T) {
 	}
 	if gh.hits != 0 {
 		t.Fatalf("GitHub was called %d times; without a PAT the PAT path must not run", gh.hits)
+	}
+	if serverStore.opened != 1 {
+		t.Fatalf("PR opened notifications = %d, want 1", serverStore.opened)
+	}
+}
+
+func TestWorkerClaimPullRequestRecordsOpenedNotification(t *testing.T) {
+	srv, _, _, _, serverStore := newPATTestServer(t, postgres.ErrNotFound)
+	req := workerRequest(t, http.MethodPost, "/worker/pull-requests/claim", `{"reference":"https://github.com/octo/widgets/pull/7"}`, "worker:git")
+	w := httptest.NewRecorder()
+	srv.workerClaimPullRequest(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if serverStore.opened != 1 {
+		t.Fatalf("PR opened notifications = %d, want 1", serverStore.opened)
 	}
 }

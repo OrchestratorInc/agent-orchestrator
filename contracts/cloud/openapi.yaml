@@ -2446,6 +2446,10 @@ components:
           maxLength: 256
         mode:
           $ref: "#/components/schemas/SessionMode"
+        model:
+          type: string
+          maxLength: 200
+          description: Coding-agent model to launch with; empty uses the harness default.
         deniedCommands:
           type: array
           items:
@@ -3169,6 +3173,11 @@ components:
           type: string
         mode:
           $ref: "#/components/schemas/SessionMode"
+        model:
+          type: string
+          description: >-
+            Coding-agent model the session launched with; empty means the harness
+            default.
         deniedCommands:
           type: array
           items:
@@ -3221,6 +3230,12 @@ components:
         mode:
           $ref: "#/components/schemas/SessionMode"
           default: trusted
+        model:
+          type: string
+          maxLength: 200
+          description: >-
+            Coding-agent model the session launches with (harness-native id, e.g.
+            "anthropic/claude-opus-4-8"). Optional; empty uses the harness default.
         deniedCommands:
           type: array
           items:

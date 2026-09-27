@@ -73,12 +73,16 @@ type projectResponse struct {
 }
 
 type createSessionRequest struct {
-	ProjectID                   string   `json:"projectId"`
-	Kind                        string   `json:"kind"`
-	Harness                     string   `json:"harness"`
-	DisplayName                 string   `json:"displayName"`
-	Prompt                      string   `json:"prompt"`
-	Mode                        string   `json:"mode,omitempty"`
+	ProjectID   string `json:"projectId"`
+	Kind        string `json:"kind"`
+	Harness     string `json:"harness"`
+	DisplayName string `json:"displayName"`
+	Prompt      string `json:"prompt"`
+	Mode        string `json:"mode,omitempty"`
+	// Model is the coding-agent model the session launches with (harness-native
+	// id, e.g. "anthropic/claude-opus-4-8" for opencode). Optional: empty uses
+	// the harness default.
+	Model                       string   `json:"model,omitempty"`
 	DeniedCommands              []string `json:"deniedCommands,omitempty"`
 	SandboxProviderConnectionID string   `json:"sandboxProviderConnectionId,omitempty"`
 	// Provider selects which configured sandbox provider runs this session. It
@@ -101,6 +105,7 @@ type sessionResponse struct {
 	DisplayName        string                   `json:"displayName"`
 	Branch             string                   `json:"branch"`
 	Mode               string                   `json:"mode"`
+	Model              string                   `json:"model,omitempty"`
 	DeniedCommands     []string                 `json:"deniedCommands"`
 	ActivityState      string                   `json:"activityState"`
 	Status             string                   `json:"status"`
@@ -536,6 +541,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			DisplayName:         request.DisplayName,
 			Prompt:              request.Prompt,
 			Mode:                request.Mode,
+			Model:               request.Model,
 			DeniedCommands:      request.DeniedCommands,
 			Provider:            plan.Provider,
 			SandboxConnectionID: request.SandboxProviderConnectionID,
@@ -1077,6 +1083,7 @@ func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionRe
 		DisplayName:        session.DisplayName,
 		Branch:             session.Branch,
 		Mode:               session.Mode,
+		Model:              session.Model,
 		DeniedCommands:     nonNilStrings(session.DeniedCommands),
 		ActivityState:      string(session.ActivityState),
 		Status:             string(session.Status(time.Now().UTC(), prs)),

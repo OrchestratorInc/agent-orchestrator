@@ -26,6 +26,9 @@ type LaunchContext struct {
 	// top-level sessions.
 	ParentSessionID string   `json:"parentSessionId,omitempty"`
 	Mode            string   `json:"mode"`
+	// Model is the coding-agent model the worker launches the harness with;
+	// empty uses the harness default.
+	Model           string   `json:"model,omitempty"`
 	DeniedCommands  []string `json:"deniedCommands"`
 	RepositoryURL   string   `json:"repositoryUrl"`
 	DefaultBranch   string   `json:"defaultBranch"`

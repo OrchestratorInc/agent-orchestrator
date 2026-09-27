@@ -410,8 +410,8 @@ func (s *Store) PullRequestsByGitHubRepository(
 	return records, err
 }
 
-// RecordPullRequestOpened creates or refreshes the durable bell notification
-// for an AO-tracked pull request opened through the installed GitHub App.
+// RecordPullRequestOpened creates one durable bell notification for an
+// AO-tracked pull request and ignores repeated reports of the same PR.
 func (s *Store) RecordPullRequestOpened(
 	ctx context.Context,
 	orgID string,
@@ -449,12 +449,13 @@ func (s *Store) RecordPullRequestOpened(
 				'Pull request opened', $6, $7, $8, $9, 'unread')
 			ON CONFLICT (org_id, recipient_user_id, dedupe_key)
 				WHERE resolved_at IS NULL
-			DO UPDATE SET body = EXCLUDED.body, metadata = EXCLUDED.metadata,
-				source_event_id = EXCLUDED.source_event_id, status = 'unread', updated_at = now()
+			DO NOTHING
 			RETURNING id::text`,
 			orgID, recipientID, projectID, pr.SessionID, pr.ID,
 			fmt.Sprintf("%s#%d is ready for review.", pr.Repository, pr.Number),
-			metadata, dedupeKey, deliveryID).Scan(&notificationID); err != nil {
+			metadata, dedupeKey, deliveryID).Scan(&notificationID); errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		} else if err != nil {
 			return err
 		}
 		var snapshot []byte

@@ -36,6 +36,18 @@ func TestRecordPullRequestOpenedPersistsRecipientNotification(t *testing.T) {
 	if len(page.Items) != 1 || page.Items[0].Type != "pr_opened" || page.Items[0].Source != "cloud" {
 		t.Fatalf("notifications = %+v, want one cloud pr_opened item", page.Items)
 	}
+	if err := store.RecordPullRequestOpened(ctx, fixture.orgID, pullRequest, "delivery-20"); err != nil {
+		t.Fatalf("repeat opened notification: %v", err)
+	}
+	events, _, err := store.ListNotificationEvents(
+		ctx, domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID, 0, 20,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("notification events = %d, want one for repeated PR-opened delivery", len(events))
+	}
 }
 
 func TestPullRequestByGitHubReferenceSupportsProjectCreatedBeforeAppInstall(t *testing.T) {

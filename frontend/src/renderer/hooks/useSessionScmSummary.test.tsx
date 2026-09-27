@@ -1,11 +1,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { useSessionScmSummary } from "./useSessionScmSummary";
 
-const { listSessionPullRequestsMock } = vi.hoisted(() => ({
+const { listSessionPullRequestsMock, subscribeSessionEventsMock } = vi.hoisted(() => ({
 	listSessionPullRequestsMock: vi.fn(),
+	subscribeSessionEventsMock: vi.fn(),
+}));
+
+vi.mock("../lib/cloud-cp/stream-bridge", () => ({
+	subscribeSessionEventsBridged: subscribeSessionEventsMock,
 }));
 
 vi.mock("../lib/cloud-cp/renderer-client", () => ({
@@ -21,6 +26,25 @@ vi.mock("../lib/api-client", () => ({
 }));
 
 describe("useSessionScmSummary cloud source", () => {
+	it.each(["pull_request.created", "pull_request.claimed"])(
+		"refreshes the inspector after %s",
+		async (type) => {
+			listSessionPullRequestsMock.mockReset().mockResolvedValue({ sessionId: "session-1", pullRequests: [] });
+			subscribeSessionEventsMock.mockReset().mockResolvedValue(undefined);
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			const wrapper = ({ children }: { children: ReactNode }) => (
+				<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+			);
+			const { unmount } = renderHook(() => useSessionScmSummary("session-1", true, "org-1"), { wrapper });
+			await waitFor(() => expect(listSessionPullRequestsMock).toHaveBeenCalledTimes(1));
+			await waitFor(() => expect(subscribeSessionEventsMock).toHaveBeenCalledTimes(1));
+			const onEvent = subscribeSessionEventsMock.mock.calls[0][0].onEvent;
+			act(() => onEvent({ type }));
+			await waitFor(() => expect(listSessionPullRequestsMock).toHaveBeenCalledTimes(2));
+			unmount();
+		},
+	);
+
 	it("maps Cloud PR details into the exact local inspector model", async () => {
 		listSessionPullRequestsMock.mockResolvedValue({
 			sessionId: "session-1",

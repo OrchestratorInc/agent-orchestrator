@@ -276,6 +276,7 @@ func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error)
 		AgentSessionID:  launch.AgentSessionID,
 		ParentSessionID: launch.ParentSessionID,
 		Mode:            launch.Mode,
+		Model:           launch.Model,
 		DeniedCommands:  launch.DeniedCommands,
 		RepositoryURL:   launch.RepositoryURL,
 		DefaultBranch:   launch.DefaultBranch,
@@ -614,6 +615,7 @@ func (s *Server) workerRaisePullRequest(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.appendSessionProjectionEvent(r.Context(), claims.OrgID, claims.SessionID, "pull_request.created", pr)
+	s.recordWorkerPullRequestOpened(r.Context(), claims.OrgID, pr)
 	writeJSON(w, http.StatusCreated, worker.RaisePullRequestResponse{
 		ID:         pr.ID,
 		Number:     pr.Number,
@@ -675,9 +677,21 @@ func (s *Server) workerClaimPullRequest(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.appendSessionProjectionEvent(r.Context(), claims.OrgID, claims.SessionID, "pull_request.claimed", pr)
+	s.recordWorkerPullRequestOpened(r.Context(), claims.OrgID, pr)
 	writeJSON(w, http.StatusOK, worker.ClaimPullRequestResponse{
 		ID: pr.ID, Number: pr.Number, HTMLURL: pr.URL,
 	})
+}
+
+// The GitHub App webhook can be delivered to a different environment from the
+// worker that opened the PR. Record the bell notification at the worker write
+// boundary so it does not depend on webhook routing.
+func (s *Server) recordWorkerPullRequestOpened(ctx context.Context, orgID string, pr domain.PullRequest) {
+	if err := s.store.RecordPullRequestOpened(ctx, orgID, pr, "worker:"+pr.ID); err != nil {
+		// GitHub may already have created the PR, so do not report the operation as
+		// failed solely because its notification could not be written.
+		s.logger.Error("record worker pull request notification", "error", err, "pull_request_id", pr.ID)
+	}
 }
 
 func (s *Server) workerSubmitReview(w http.ResponseWriter, r *http.Request) {
