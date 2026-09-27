@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -35,46 +34,32 @@ func TestDelegateTaskSpawnsWorkerWithoutSecondMessage(t *testing.T) {
 			st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
 			now := time.Now().UTC()
 			st.sessions["orch-old"] = domain.SessionRecord{ID: "orch-old", ProjectID: "ao", Kind: domain.KindOrchestrator, CreatedAt: now.Add(-time.Minute)}
-			st.sessions["orch-new"] = domain.SessionRecord{ID: "orch-new", ProjectID: "ao", Kind: domain.KindOrchestrator, CreatedAt: now}
-			st.sessions["orch-exited"] = domain.SessionRecord{ID: "orch-exited", ProjectID: "ao", Kind: domain.KindOrchestrator, Activity: domain.Activity{State: domain.ActivityExited}, CreatedAt: now.Add(time.Minute)}
-			st.sessions["orch-dead"] = domain.SessionRecord{ID: "orch-dead", ProjectID: "ao", Kind: domain.KindOrchestrator, IsTerminated: true, CreatedAt: now.Add(2 * time.Minute)}
-			st.sessions["worker"] = domain.SessionRecord{ID: "worker", ProjectID: "ao", Kind: domain.KindWorker, CreatedAt: now.Add(3 * time.Minute)}
+			st.sessions["orch-exited"] = domain.SessionRecord{ID: "orch-exited", ProjectID: "ao", Kind: domain.KindOrchestrator, Activity: domain.Activity{State: domain.ActivityExited}, CreatedAt: now}
 			cmd := &fakeCommander{}
-			svc := &Service{store: st, manager: cmd}
-
 			brief := "  Fix the renderer\nwithout changing the API.  "
-			out, err := svc.DelegateTask(context.Background(), DelegateTaskInput{
-				ProjectID: "ao", Brief: brief, RequestedAgent: tt.agent, Model: tt.model, Effort: effort, RequestedMode: tt.mode,
+
+			out, err := (&Service{store: st, manager: cmd}).DelegateTask(context.Background(), DelegateTaskInput{
+				ProjectID: "ao", Brief: brief, RequestedAgent: tt.agent, Model: tt.model,
+				Effort: effort, RequestedMode: tt.mode, TaskPreparation: "prep-token",
 			})
 			if err != nil {
 				t.Fatalf("DelegateTask: %v", err)
 			}
 			if out.WorkerID != "mer-9" || out.OrchestratorID != "" {
-				t.Fatalf("out = %#v, want worker mer-9", out)
+				t.Fatalf("out = %#v, want worker mer-9 only", out)
 			}
-			if !cmd.spawned || cmd.spawnedCfg.ProjectID != "ao" || cmd.spawnedCfg.Kind != domain.KindWorker || cmd.spawnedCfg.Harness != tt.wantAgent || cmd.spawnedCfg.Prompt != brief || cmd.spawnedCfg.DisplayName != "Fix the renderer wit" {
-				t.Fatalf("spawn cfg = %#v", cmd.spawnedCfg)
+			cfg := cmd.spawnedCfg
+			if !cmd.spawned || cfg.ProjectID != "ao" || cfg.Kind != domain.KindWorker || cfg.Harness != tt.wantAgent || cfg.Prompt != brief || cfg.DisplayName != "Fix the renderer without changing the API." {
+				t.Fatalf("spawn cfg = %#v", cfg)
 			}
-			if cmd.spawnedCfg.AgentConfig.Model != strings.TrimSpace(tt.model) {
-				t.Fatalf("spawn model = %q, want %q", cmd.spawnedCfg.AgentConfig.Model, strings.TrimSpace(tt.model))
+			if cfg.AgentConfig.Model != strings.TrimSpace(tt.model) || cfg.AgentConfig.Effort != strings.TrimSpace(tt.effort) || cfg.EffortOverride != (effort != nil) || cfg.RequestedMode != tt.mode {
+				t.Fatalf("spawn tuning = %#v", cfg)
 			}
-			if cmd.spawnedCfg.AgentConfig.Effort != strings.TrimSpace(tt.effort) {
-				t.Fatalf("spawn tuning = %#v", cmd.spawnedCfg.AgentConfig)
+			if cfg.StartupSystemPrompt != sessionmanager.DelegatedTaskTitleStartupPrompt || cfg.TaskPreparation != "prep-token" || !cfg.Async {
+				t.Fatalf("spawn startup/preparation = %#v", cfg)
 			}
-			if cmd.spawnedCfg.EffortOverride != (effort != nil) {
-				t.Fatalf("spawn tuning presence = %#v", cmd.spawnedCfg)
-			}
-			if cmd.spawnedCfg.RequestedMode != tt.mode {
-				t.Fatalf("spawn mode = %q, want %q", cmd.spawnedCfg.RequestedMode, tt.mode)
-			}
-			if cmd.spawnedCfg.StartupSystemPrompt != sessionmanager.DelegatedTaskTitleStartupPrompt {
-				t.Fatalf("startup system prompt = %q, want delegated title instruction", cmd.spawnedCfg.StartupSystemPrompt)
-			}
-			if cmd.spawnCalls != 1 {
-				t.Fatalf("spawn calls = %d, want one worker spawn", cmd.spawnCalls)
-			}
-			if len(cmd.resumed) != 0 || len(cmd.ready) != 0 || len(cmd.sent) != 0 {
-				t.Fatalf("delegation contacted an orchestrator or sent a second message: resumed=%#v ready=%#v sent=%#v", cmd.resumed, cmd.ready, cmd.sent)
+			if cmd.spawnCalls != 1 || len(cmd.resumed) != 0 || len(cmd.ready) != 0 || len(cmd.sent) != 0 || len(cmd.backgroundCalls) != 0 {
+				t.Fatalf("delegation started extra title work: spawns=%d resumed=%#v ready=%#v sent=%#v background=%#v", cmd.spawnCalls, cmd.resumed, cmd.ready, cmd.sent, cmd.backgroundCalls)
 			}
 		})
 	}
@@ -82,18 +67,19 @@ func TestDelegateTaskSpawnsWorkerWithoutSecondMessage(t *testing.T) {
 
 func TestDelegatedTaskDisplayName(t *testing.T) {
 	for _, tt := range []struct {
-		name  string
-		brief string
-		want  string
+		name string
+		in   string
+		want string
 	}{
-		{name: "empty", brief: " \n\t ", want: "Untitled task"},
-		{name: "short", brief: "  tell me a joke  ", want: "tell me a joke"},
-		{name: "whitespace", brief: "Fix the renderer\nwithout changing the API", want: "Fix the renderer wit"},
-		{name: "unicode rune limit", brief: "一二三四五六七八九十一二三四五六七八九十一", want: "一二三四五六七八九十一二三四五六七八九十"},
+		{name: "empty", in: " \n\t ", want: "Untitled task"},
+		{name: "short", in: "  tell me a joke  ", want: "tell me a joke"},
+		{name: "whitespace", in: "Fix the renderer\nwithout changing the API", want: "Fix the renderer without changing the API"},
+		{name: "unicode rune limit", in: strings.Repeat("一", 101), want: strings.Repeat("一", 100)},
+		{name: "truncates past the rune limit", in: strings.Repeat(" long", 21), want: strings.TrimSpace(strings.Repeat(" long", 21)[:100])},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := delegatedTaskDisplayName(tt.brief); got != tt.want {
-				t.Fatalf("delegatedTaskDisplayName(%q) = %q, want %q", tt.brief, got, tt.want)
+			if got := delegatedTaskDisplayName(tt.in); got != tt.want {
+				t.Fatalf("delegatedTaskDisplayName(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}
@@ -102,96 +88,34 @@ func TestDelegatedTaskDisplayName(t *testing.T) {
 func TestDelegateTaskStartsPromptlessWorkerWithoutRequestingTitle(t *testing.T) {
 	st := newFakeStore()
 	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
-	st.sessions["orch"] = domain.SessionRecord{ID: "orch", ProjectID: "ao", Kind: domain.KindOrchestrator}
 	cmd := &fakeCommander{}
-
-	out, err := (&Service{store: st, manager: cmd}).DelegateTask(
-		context.Background(),
-		DelegateTaskInput{ProjectID: "ao", Brief: " \n\t "},
-	)
-	if err != nil {
-		t.Fatalf("DelegateTask: %v", err)
+	out, err := (&Service{store: st, manager: cmd}).DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", Brief: " \n\t "})
+	if err != nil || out.WorkerID != "mer-9" || out.OrchestratorID != "" {
+		t.Fatalf("DelegateTask = %#v, %v", out, err)
 	}
-	if out.WorkerID != "mer-9" || out.OrchestratorID != "" {
-		t.Fatalf("out = %#v, want promptless worker mer-9", out)
+	if cfg := cmd.spawnedCfg; !cmd.spawned || cfg.Prompt != "" || cfg.DisplayName != "Untitled task" || cfg.StartupSystemPrompt != "" {
+		t.Fatalf("spawn cfg = %#v", cfg)
 	}
-	if !cmd.spawned || cmd.spawnedCfg.Prompt != "" || cmd.spawnedCfg.DisplayName != "Untitled task" {
-		t.Fatalf("spawn cfg = %#v", cmd.spawnedCfg)
-	}
-	if cmd.spawnedCfg.StartupSystemPrompt != "" {
-		t.Fatalf("promptless startup system prompt = %q, want empty", cmd.spawnedCfg.StartupSystemPrompt)
-	}
-	if len(cmd.ready) != 0 || len(cmd.sent) != 0 || len(cmd.resumed) != 0 {
-		t.Fatalf("promptless spawn contacted orchestrator: ready=%#v sent=%#v resumed=%#v", cmd.ready, cmd.sent, cmd.resumed)
+	if len(cmd.backgroundCalls) != 0 || len(cmd.ready) != 0 || len(cmd.sent) != 0 || len(cmd.resumed) != 0 {
+		t.Fatalf("promptless spawn started title work: background=%#v ready=%#v sent=%#v resumed=%#v", cmd.backgroundCalls, cmd.ready, cmd.sent, cmd.resumed)
 	}
 }
 
-func TestDelegateTaskDoesNotResumeOrchestratorForTitle(t *testing.T) {
+func TestDelegateTaskDoesNotSpawnOrResumeOrchestratorForTitle(t *testing.T) {
 	st := newFakeStore()
 	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
-	now := time.Now().UTC()
-	st.sessions["orch-old"] = domain.SessionRecord{ID: "orch-old", ProjectID: "ao", Kind: domain.KindOrchestrator, Activity: domain.Activity{State: domain.ActivityExited}, CreatedAt: now.Add(-time.Minute)}
-	st.sessions["orch-new"] = domain.SessionRecord{ID: "orch-new", ProjectID: "ao", Kind: domain.KindOrchestrator, Activity: domain.Activity{State: domain.ActivityExited}, CreatedAt: now}
-	cmd := &fakeCommander{}
-
-	out, err := (&Service{store: st, manager: cmd}).DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", Brief: "Fix it"})
-	if err != nil {
-		t.Fatalf("DelegateTask: %v", err)
-	}
-	if out.WorkerID != "mer-9" || out.OrchestratorID != "" {
-		t.Fatalf("out = %#v, want worker mer-9", out)
-	}
-	if cmd.spawnCalls != 1 || cmd.spawnedCfg.Kind != domain.KindWorker {
-		t.Fatalf("spawn calls/config = %d/%#v, want one worker spawn", cmd.spawnCalls, cmd.spawnedCfg)
-	}
-	if len(cmd.resumed) != 0 || len(cmd.ready) != 0 || len(cmd.sent) != 0 {
-		t.Fatalf("delegation contacted an exited orchestrator: resumed=%#v ready=%#v sent=%#v", cmd.resumed, cmd.ready, cmd.sent)
-	}
-}
-
-func TestDelegateTaskDoesNotSpawnOrchestratorForTitle(t *testing.T) {
-	st := newFakeStore()
-	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
-	st.sessions["orch-dead"] = domain.SessionRecord{ID: "orch-dead", ProjectID: "ao", Kind: domain.KindOrchestrator, IsTerminated: true}
+	st.sessions["orch"] = domain.SessionRecord{ID: "orch", ProjectID: "ao", Kind: domain.KindOrchestrator, Activity: domain.Activity{State: domain.ActivityExited}}
 	cmd := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
 		if cfg.Kind == domain.KindOrchestrator {
-			return domain.SessionRecord{ID: "orch-new", ProjectID: cfg.ProjectID, Kind: cfg.Kind}
+			t.Fatal("orchestrator spawned for title")
 		}
 		return domain.SessionRecord{ID: "worker-new", ProjectID: cfg.ProjectID, Kind: cfg.Kind}
 	}}
-
 	out, err := (&Service{store: st, manager: cmd}).DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", Brief: "Fix it"})
-	if err != nil {
-		t.Fatalf("DelegateTask: %v", err)
+	if err != nil || out.WorkerID != "worker-new" || out.OrchestratorID != "" {
+		t.Fatalf("DelegateTask = %#v, %v", out, err)
 	}
-	if out.WorkerID != "worker-new" || out.OrchestratorID != "" {
-		t.Fatalf("out = %#v, want worker-new", out)
-	}
-	if cmd.spawnCalls != 1 || cmd.spawnedCfg.Kind != domain.KindWorker {
-		t.Fatalf("spawn calls/config = %d/%#v, want one worker spawn", cmd.spawnCalls, cmd.spawnedCfg)
-	}
-	if len(cmd.resumed) != 0 || len(cmd.ready) != 0 || len(cmd.sent) != 0 {
-		t.Fatalf("delegation contacted or spawned an orchestrator: resumed=%#v ready=%#v sent=%#v", cmd.resumed, cmd.ready, cmd.sent)
-	}
-}
-
-func TestDelegateTaskKeepsProvisionalDisplayNameWithoutTitleReadiness(t *testing.T) {
-	st := newFakeStore()
-	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
-	st.sessions["orch"] = domain.SessionRecord{ID: "orch", ProjectID: "ao", Kind: domain.KindOrchestrator}
-	cmd := &fakeCommander{readyErr: errors.New("readiness timed out")}
-
-	out, err := (&Service{store: st, manager: cmd}).DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", Brief: "Fix it"})
-	if err != nil {
-		t.Fatalf("DelegateTask: %v", err)
-	}
-	if out.WorkerID != "mer-9" || out.OrchestratorID != "" {
-		t.Fatalf("out = %#v, want spawned worker", out)
-	}
-	if cmd.spawnedCfg.DisplayName != "Fix it" {
-		t.Fatalf("display name = %q, want provisional title", cmd.spawnedCfg.DisplayName)
-	}
-	if len(cmd.resumed) != 0 || len(cmd.ready) != 0 || len(cmd.sent) != 0 {
-		t.Fatalf("delegation attempted title delivery: resumed=%#v ready=%#v sent=%#v", cmd.resumed, cmd.ready, cmd.sent)
+	if cmd.spawnCalls != 1 || len(cmd.resumed) != 0 || len(cmd.ready) != 0 || len(cmd.sent) != 0 || len(cmd.backgroundCalls) != 0 {
+		t.Fatalf("orchestrator contacted for title: spawns=%d resumed=%#v ready=%#v sent=%#v background=%#v", cmd.spawnCalls, cmd.resumed, cmd.ready, cmd.sent, cmd.backgroundCalls)
 	}
 }

@@ -9,11 +9,16 @@ import { PRCard } from "../../lib/PRCard";
 import { PRFilterDock } from "../../lib/pr-filter-dock";
 import { ProjectSwitcher } from "../../lib/ProjectSwitcher";
 import { prLifecycle, prListSections, type PRListFilter } from "../../lib/prView";
+import { StaleBanner } from "../../lib/StaleBanner";
 import { useApp, usePRs } from "../../lib/store";
+import { UnpairedState } from "../../lib/UnpairedState";
 import { usePRSummaries } from "../../lib/usePRSummaries";
 import { useTabScrollToTop } from "../../lib/useTabScrollToTop";
 import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
+import { space } from "../../lib/tokens";
+
+export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
 type Filter = PRListFilter;
 
@@ -70,7 +75,11 @@ export default function PRsScreen() {
 		return (
 			<View style={styles.screen}>
 				<View style={{ height: insets.top }} />
-				<EmptyState icon="git-pull-request" title="No server" message="Connect to AO in Settings." />
+				{/* Workers and Projects both keep their header in the unpaired state; this
+				    screen dropped it, so the tab lost its title and connection lamp exactly
+				    when a user most needs to know what they are looking at. */}
+				<ScreenHeader title="Pull Requests" />
+				<UnpairedState />
 			</View>
 		);
 	}
@@ -86,8 +95,6 @@ export default function PRsScreen() {
 			<View style={{ height: insets.top }} />
 			<ScreenHeader
 				title="Pull Requests"
-				subtitle={config?.host}
-				status={connection}
 				right={
 					<HeaderIconButton
 						icon="bell"
@@ -98,10 +105,11 @@ export default function PRsScreen() {
 				}
 			/>
 			<ProjectSwitcher />
+			<StaleBanner error={!!error} onRetry={onRefresh} />
 
 			{loading && prs.length === 0 ? (
 				<View style={styles.center}>
-					<ActivityIndicator color={t.blue} />
+					<ActivityIndicator color={t.accent} />
 				</View>
 			) : (
 				<SectionList
@@ -110,7 +118,7 @@ export default function PRsScreen() {
 					keyExtractor={({ pr, session }) => `${session.projectId}#${pr.number}`}
 					contentContainerStyle={{ paddingBottom: 110 }}
 					stickySectionHeadersEnabled={false}
-					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.blue} />}
+					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.accent} />}
 					renderSectionHeader={({ section }) => <ListSectionHeader label={section.label} />}
 					renderItem={({ item: { pr, session } }) => (
 						<PRCard pr={pr} session={session} summary={summaries.summaryFor(session.id, pr.number)} />
@@ -155,6 +163,6 @@ const makeStyles = (t: Theme) =>
 			flexDirection: "row",
 			alignItems: "center",
 			justifyContent: "center",
-			gap: 8,
+			gap: space.sm,
 		},
 	});

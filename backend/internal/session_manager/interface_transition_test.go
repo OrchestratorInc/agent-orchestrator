@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -336,6 +337,19 @@ func (transitionAgent) NativeConversationID(_ context.Context, session ports.Ses
 	}
 	id := session.Metadata[ports.MetadataKeyAgentSessionID]
 	return id, id != "", nil
+}
+
+type transitionLaunchAuthAgent struct {
+	transitionAgent
+	status     ports.AgentAuthStatus
+	workingDir string
+	env        map[string]string
+}
+
+func (a *transitionLaunchAuthAgent) ValidateLaunchAuth(_ context.Context, workingDir string, env map[string]string) (ports.AgentAuthStatus, error) {
+	a.workingDir = workingDir
+	a.env = maps.Clone(env)
+	return a.status, nil
 }
 
 type failingRestoreTransitionAgent struct {
@@ -1195,6 +1209,12 @@ func TestInterfaceTransitionReportsNativeHistoryReplayFailure(t *testing.T) {
 		wantStarts int
 	}{
 		{name: "unavailable", err: ports.ErrChatHistoryUnavailable, code: "TARGET_HISTORY_UNAVAILABLE", wantStarts: 1},
+		{name: "load rejected", err: ports.ErrChatHistoryLoadFailed, code: "TARGET_HISTORY_LOAD_FAILED", wantStarts: 1},
+		// The reporter's shape: AO's settle deadline expired while the provider
+		// kept answering session/load with -32603. Not retried with a second target.
+		{name: "load rejected after unsettled wait", err: fmt.Errorf("wait for settled native conversation history: %w: %w",
+			ports.ErrChatHistoryUnsettled, fmt.Errorf("%w: %w", context.DeadlineExceeded, ports.ErrChatHistoryLoadFailed)),
+			code: "TARGET_HISTORY_LOAD_FAILED", wantStarts: 1},
 		{name: "unsettled", err: ports.ErrChatHistoryUnsettled, code: "TARGET_HISTORY_UNSETTLED", wantStarts: 2},
 		{name: "legacy text mismatch", err: &ports.ChatHistoryUnsettledError{Dimensions: []ports.ChatHistoryMismatchDimension{
 			ports.ChatHistoryMismatchUntrustedUserText,
@@ -2753,6 +2773,111 @@ func TestInterfaceTransitionChatToTUIInterruptsThenStopsBeforeStarting(t *testin
 	}
 }
 
+// modelRecordingTransitionAgent records the restore config the TUI rebuild
+// hands the harness, so a Chat-to-TUI handoff test can assert which model the
+// rebuilt terminal resumes with.
+type modelRecordingTransitionAgent struct {
+	transitionAgent
+	mu             sync.Mutex
+	restoreConfigs []ports.RestoreConfig
+}
+
+func (a *modelRecordingTransitionAgent) GetRestoreCommand(_ context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
+	a.mu.Lock()
+	a.restoreConfigs = append(a.restoreConfigs, cfg)
+	a.mu.Unlock()
+	if cfg.Session.Metadata[ports.MetadataKeyAgentSessionID] == "" {
+		return nil, false, nil
+	}
+	return []string{"resume"}, true, nil
+}
+
+func (a *modelRecordingTransitionAgent) restores() []ports.RestoreConfig {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]ports.RestoreConfig(nil), a.restoreConfigs...)
+}
+
+// TestInterfaceTransitionChatToTUIRebuildUsesChatModel is the regression for
+// the ChatUI ↔ TUI model-persistence bug (#4893), including the handoff race
+// where the old terminal is still closing: the transition interrupts and stops
+// the Chat source before starting the TUI target, and the rebuilt TUI harness
+// restore command must carry the model the user picked in ChatUI — refreshed
+// from the session's durable metadata, not the project default — while still
+// resuming the SAME native conversation.
+func TestInterfaceTransitionChatToTUIRebuildUsesChatModel(t *testing.T) {
+	manager, store, runtime, _, log := newTransitionManager(t, domain.SessionModeChat)
+	// The project default would otherwise win: the ChatUI choice persisted on
+	// the session must take precedence in the rebuilt TUI restore command.
+	store.projects["proj"] = domain.ProjectRecord{
+		ID: "proj", Path: "/repo",
+		Config: domain.ProjectConfig{AgentConfig: domain.AgentConfig{Model: "project-default-model"}},
+	}
+	seedSessionModel := store.sessions["session-1"]
+	seedSessionModel.Metadata.Model = "5.6-luna"
+	store.sessions["session-1"] = seedSessionModel
+	agent := &modelRecordingTransitionAgent{}
+	manager.agents = singleAgent{agent: agent}
+
+	transition, err := manager.StartInterfaceTransition(context.Background(), "session-1", domain.SessionModeTUI,
+		domain.SessionInterfaceTransitionInterrupt, domain.SessionInterfaceTransitionHistoryStrict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled := awaitTransition(t, store, transition.ID)
+	if settled.Phase != domain.SessionInterfaceTransitionCompleted {
+		t.Fatalf("phase = %s, error = %s", settled.Phase, settled.ErrorDetail)
+	}
+
+	// The preflight and the rebuild both resume with the ChatUI model — every
+	// restore command the handoff builds (target preflight happens while the
+	// old terminal is still closing, then the rebuild itself) carries it.
+	restores := agent.restores()
+	if len(restores) != 2 {
+		t.Fatalf("harness restore calls = %d, want 2 (target preflight + rebuild)", len(restores))
+	}
+	for i, cfg := range restores {
+		if cfg.Config.Model != "5.6-luna" {
+			t.Fatalf("restore call %d model = %q, want the ChatUI choice 5.6-luna", i, cfg.Config.Model)
+		}
+	}
+
+	// History is preserved across the handoff: same native conversation, no new
+	// session, and the terminal was rebuilt exactly once.
+	rec := store.sessions["session-1"]
+	if rec.Mode != domain.SessionModeTUI {
+		t.Fatalf("mode = %s, want tui", rec.Mode)
+	}
+	if rec.Metadata.AgentSessionID != "native-1" {
+		t.Fatalf("agent session = %q, want native-1 (conversation must be preserved)", rec.Metadata.AgentSessionID)
+	}
+	if runtime.created != 1 {
+		t.Fatalf("terminal runtime created %d times, want 1", runtime.created)
+	}
+	if got := fmt.Sprint(*log); got != "[prepare:chat:interrupt stop:chat start:tui]" {
+		t.Fatalf("controller order = %s", got)
+	}
+}
+
+func TestInterfaceTransitionChatToTUIRejectsUnauthorizedLaunchContext(t *testing.T) {
+	manager, store, _, _, _ := newTransitionManager(t, domain.SessionModeChat)
+	project := store.projects["proj"]
+	project.Config.Env = map[string]string{"ANTHROPIC_BASE_URL": "https://gateway.example"}
+	store.projects["proj"] = project
+	agent := &transitionLaunchAuthAgent{status: ports.AgentAuthStatusUnauthorized}
+	manager.agents = singleAgent{agent: agent}
+	rec := store.sessions["session-1"]
+	err := manager.preflightInterfaceTarget(context.Background(), rec, domain.SessionInterfaceTransition{
+		TargetMode: domain.SessionModeTUI, NativeConversationID: "native-1",
+	})
+	if !errors.Is(err, ports.ErrAgentAuthRequired) {
+		t.Fatalf("preflight error = %v, want ErrAgentAuthRequired", err)
+	}
+	if agent.workingDir != "/ws/session-1" || agent.env["ANTHROPIC_BASE_URL"] != "https://gateway.example" {
+		t.Fatalf("launch auth context = cwd %q env %#v", agent.workingDir, agent.env)
+	}
+}
+
 func TestInterfaceTransitionChatToTUIArmsInterruptBeforeReturning(t *testing.T) {
 	manager, store, _, chat, _ := newTransitionManager(t, domain.SessionModeChat)
 	transition, err := manager.StartInterfaceTransition(
@@ -3326,4 +3451,12 @@ func TestInterfaceTransitionStatusReportsUnverifiedWhenInspectionFails(t *testin
 	); err == nil || !strings.Contains(err.Error(), "transcript root unreadable") {
 		t.Fatalf("StartInterfaceTransition error = %v, want inspection failure", err)
 	}
+}
+
+func (c *transitionChat) QueueChatPrompt(_ context.Context, _ domain.SessionID, _ string) (string, error) {
+	return "", nil
+}
+
+func (c *transitionChat) DrainChatQueue(_ context.Context, _ domain.SessionID) error {
+	return nil
 }

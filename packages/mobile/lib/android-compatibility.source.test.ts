@@ -53,20 +53,29 @@ describe("Android native compatibility boundaries", () => {
 		expect(spawn).toContain("BottomSheetView");
 		expect(spawn).toContain("enablePanDownToClose");
 		expect(spawn).not.toContain("KeyboardAvoidingView");
+		// The controls stick to the keyboard instead, which is the only approach
+		// that moves in step with it inside a native form sheet.
+		expect(spawn).toContain("KeyboardStickyView");
 		expect(spawn).not.toContain("androidGrabber");
-		expect(spawn).toContain('Platform.OS === "ios" ? <View style={styles.flexSpacer} /> : null');
-		expect(spawn).toContain('promptHost: { width: "100%", height: 112 }');
+		// Only iOS's prompt flexes to fill the sheet; Android's sheet sizes to its
+		// content, so a flexing child there would have nothing to fill.
+		expect(spawn).toContain('Platform.OS === "ios" && styles.promptHostFill');
+		expect(spawn).toContain("const PROMPT_MIN_HEIGHT = 112;");
+		expect(spawn).toContain('promptHost: { width: "100%", height: PROMPT_MIN_HEIGHT }');
 		expect(source("../app/_layout.tsx")).toContain('presentation: Platform.OS === "ios" ? "formSheet" : "transparentModal"');
 	});
 
-	it("uses a compact Android option sheet instead of exposed dropdown fields for Spawn", () => {
+	// Spawn is itself a bottom sheet on Android, so its choices open inside it.
+	// They used to be a second sheet over the first: two grabbers, and only the
+	// top one answered a swipe down.
+	it("shows Spawn's choices inside Spawn's own sheet", () => {
 		const android = source("./spawn-composer-controls.android.tsx");
-		expect(android).toContain("Modal");
-		expect(android).toContain("OptionSheet");
+		expect(android).toContain("OptionList");
+		expect(android).not.toMatch(/\bModal\b/);
+		expect(android).not.toContain("@expo/ui/community/bottom-sheet");
 		expect(android).not.toContain("Picker");
 		expect(android).not.toContain("@expo/ui");
 		expect(android).toContain("AgentLogo");
-		expect(source("../app/project/[id].tsx")).not.toContain('style={{ width: "100%"');
 	});
 
 	it("uses a rounded native Android attachment chooser instead of the square popup menu", () => {
@@ -75,7 +84,7 @@ describe("Android native compatibility boundaries", () => {
 		const android = existsSync(path) ? source("./chat/ChatAttachmentMenu.android.tsx") : "";
 		expect(android).toContain('@expo/ui/community/bottom-sheet');
 		expect(android).toContain("enablePanDownToClose");
-		expect(android).toContain("borderRadius: 21");
+		expect(android).toContain("borderRadius: radius.pill");
 		expect(android).not.toContain("MenuView");
 	});
 
@@ -121,12 +130,26 @@ describe("Android native compatibility boundaries", () => {
 		expect(controls).not.toContain("<Host");
 	});
 
-	it("keeps the iOS Spawn prompt geometry aligned with Android", () => {
+	it("makes the entire iOS Spawn prompt a native text-input hit target", () => {
 		const ios = source("./spawn-prompt-input.ios.tsx");
-		expect(ios).toContain("height: 112");
-		expect(ios).toMatch(/paddingHorizontal:\s*16/);
-		expect(ios).toMatch(/paddingVertical:\s*14/);
-		expect(ios).not.toContain("height: 154");
+		// A SwiftUI TextField keeps an intrinsic one-line hit target even when its
+		// Host is tall. React Native's native TextInput owns the full frame, so every
+		// visible point in the prompt area focuses the editor.
+		expect(ios).toContain('import { StyleSheet, TextInput } from "react-native"');
+		expect(ios).not.toContain('@expo/ui');
+		expect(ios).toContain("height = 112");
+		expect(ios).toMatch(/paddingHorizontal:\s*space\.lg/);
+		expect(ios).toMatch(/paddingTop:\s*space\.huge/);
+		expect(ios).toMatch(/paddingBottom:\s*space\.md/);
+		expect(ios).toContain('textAlignVertical="top"');
+		expect(ios).toContain("scrollEnabled");
+		expect(ios).toMatch(/style=\{\[styles\.input,\s*\{\s*height,/);
+	});
+
+	it("gives the iOS Spawn prompt modest top breathing room", () => {
+		const spawn = source("../app/spawn.tsx");
+		expect(spawn).toContain('Platform.OS === "ios" && styles.iosContent');
+		expect(spawn).toContain("iosContent: { paddingTop: space.xxxl }");
 	});
 
 	it("waits for the Android destination route before closing the drawer", () => {
@@ -140,11 +163,12 @@ describe("Android native compatibility boundaries", () => {
 		const path = fileURLToPath(new URL("./chat/ChatSettingsModal.android.tsx", import.meta.url));
 		expect(existsSync(path)).toBe(true);
 		const android = existsSync(path) ? source("./chat/ChatSettingsModal.android.tsx") : "";
-		expect(android).toContain("OptionSheet");
+		expect(android).toContain("ChoicePage");
 		expect(android).toContain("SettingRow");
 		expect(android).not.toContain("Picker");
-		expect(android).toContain('@expo/ui/community/bottom-sheet');
-		expect(android).toContain("enablePanDownToClose");
+		// The turn-settings route is already a native form sheet, so a choice list
+		// opens as a page within it rather than a sheet on top.
+		expect(android).not.toContain('@expo/ui/community/bottom-sheet');
 		expect(android).not.toMatch(/\bModal\b/);
 		expect(android).toContain('numberOfLines={1}');
 		expect(android).not.toContain('description ? <Text numberOfLines={1} style={styles.rowDescription}');
@@ -187,7 +211,7 @@ describe("Android native compatibility boundaries", () => {
 		expect(actions).toMatch(/ListHeaderComponent=\{<SheetHeader[\s\S]*?\/>}/);
 		expect(actions).not.toContain("<ScrollView");
 		expect(registry).toContain("sessionTitle: string");
-		expect(actions).toContain('title={entry.snapshot.title || "Untitled conversation"}');
+		expect(actions).toContain('title={snapshot.title || "Untitled conversation"}');
 		expect(actions).toContain('subtitle={`Session · ${entry.sessionTitle}`}');
 		expect(actions).toContain("backgroundColor: t.bgBase");
 		expect(actions).toContain("backgroundColor: t.bgElevated");

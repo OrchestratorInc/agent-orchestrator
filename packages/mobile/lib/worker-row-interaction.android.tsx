@@ -1,3 +1,4 @@
+import { Feather } from "./icons";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Animated, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -5,7 +6,9 @@ import { haptics } from "./haptics";
 import { type Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { boundWorkerActionTranslation, WORKER_ACTION_REVEAL_WIDTH, resolveWorkerActionRail } from "./worker-row-swipe-model";
+import { workerActionGlyph, type WorkerActionId } from "./worker-action-model";
 import type { WorkerRowInteractionProps } from "./worker-row-interaction.types";
+import { press, space, type } from "./tokens";
 
 const GESTURE_DISTANCE = 16;
 const LONG_PRESS_DISTANCE = 12;
@@ -23,7 +26,8 @@ export function WorkerRowInteraction({
 	accessibilityLabel,
 	accessibilityHint,
 	onPress,
-	onRenameRequest,
+	actions,
+	onAction,
 	onSwipeOpen,
 	onSwipeClose,
 	onReady,
@@ -31,7 +35,7 @@ export function WorkerRowInteraction({
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const [actionsOpen, setActionsOpen] = useState(false);
-	const [renameMenuVisible, setRenameMenuVisible] = useState(false);
+	const [menuVisible, setMenuVisible] = useState(false);
 	const closeRef = useRef<() => void>(() => {});
 	const translationX = useRef(new Animated.Value(0)).current;
 	const translationXRef = useRef(0);
@@ -83,15 +87,15 @@ export function WorkerRowInteraction({
 		}
 		onPress();
 	}, [actionsOpen, closeActions, onPress]);
-	const showRenameMenu = useCallback(() => {
+	const showMenu = useCallback(() => {
 		if (actionsOpen) closeActions();
 		haptics.tap();
-		setRenameMenuVisible(true);
+		setMenuVisible(true);
 	}, [actionsOpen, closeActions]);
-	const chooseRename = useCallback(() => {
-		setRenameMenuVisible(false);
-		onRenameRequest();
-	}, [onRenameRequest]);
+	const choose = useCallback((id: WorkerActionId) => {
+		setMenuVisible(false);
+		onAction(id);
+	}, [onAction]);
 
 	const gesture = useMemo(() => {
 		let startingOffset = 0;
@@ -118,7 +122,7 @@ export function WorkerRowInteraction({
 			.runOnJS(true)
 			.minDuration(longPressDelayMs)
 			.maxDistance(LONG_PRESS_DISTANCE)
-			.onStart(showRenameMenu);
+			.onStart(showMenu);
 		const tap = Gesture.Tap()
 			.runOnJS(true)
 			.maxDistance(LONG_PRESS_DISTANCE)
@@ -126,7 +130,7 @@ export function WorkerRowInteraction({
 				if (success) handleTap();
 			});
 		return Gesture.Race(pan, longPress, tap);
-	}, [handleTap, moveTo, settleRail, showRenameMenu, trackFinger]);
+	}, [handleTap, moveTo, settleRail, showMenu, trackFinger]);
 
 	return (
 		<>
@@ -156,38 +160,60 @@ export function WorkerRowInteraction({
 
 			<Modal
 				transparent
-				visible={renameMenuVisible}
+				visible={menuVisible}
 				animationType="fade"
-				onRequestClose={() => setRenameMenuVisible(false)}
+				onRequestClose={() => setMenuVisible(false)}
 			>
 				<View style={styles.modalScrim}>
-					<Pressable accessibilityLabel="Dismiss worker options" onPress={() => setRenameMenuVisible(false)} style={StyleSheet.absoluteFill} />
+					<Pressable accessibilityLabel="Dismiss worker options" onPress={() => setMenuVisible(false)} style={StyleSheet.absoluteFill} />
 					<View accessibilityViewIsModal style={styles.menu}>
 						<Text style={styles.menuTitle}>Worker options</Text>
-						<Text numberOfLines={1} style={styles.menuDescription}>Rename this worker in place.</Text>
-						<View style={styles.menuActions}>
-							<Pressable
-								accessibilityRole="button"
-								accessibilityLabel="Rename worker"
-								onPress={chooseRename}
-								style={({ pressed }) => [styles.menuButton, styles.renameButton, pressed && styles.menuButtonPressed]}
-							>
-								<Text style={styles.renameButtonText}>Rename</Text>
-							</Pressable>
-							<Pressable
-								accessibilityRole="button"
-								accessibilityLabel="Cancel worker options"
-								onPress={() => setRenameMenuVisible(false)}
-								style={({ pressed }) => [styles.menuButton, styles.cancelButton, pressed && styles.menuButtonPressed]}
-							>
-								<Text style={styles.cancelButtonText}>Cancel</Text>
-							</Pressable>
+						{/* A real action list now, rather than a Rename/Cancel pair. Rows are
+						    48dp so they clear Material's touch minimum, and the destructive
+						    one is tinted rather than separated, matching the native menu. */}
+						<View style={styles.menuList}>
+							{actions.map((action) => (
+								<Pressable
+									key={action.id}
+									accessibilityRole="button"
+									accessibilityLabel={action.title}
+									onPress={() => choose(action.id)}
+									android_ripple={{ color: action.destructive ? t.tintRed : t.accentTint }}
+									style={({ pressed }) => [styles.menuRow, pressed && styles.menuButtonPressed]}
+								>
+									{/* A vector font, not a drawable: this list is an in-app Modal,
+									    so it never reaches the bundled icons the native menu uses.
+									    Pin comes from the same set as the swipe rail, tilted to
+									    match it. */}
+									<MenuGlyph id={action.id} color={action.destructive ? t.red : t.textSecondary} />
+									<Text style={[styles.menuRowText, action.destructive && styles.menuRowTextDestructive]}>
+										{action.title}
+									</Text>
+								</Pressable>
+							))}
 						</View>
+						<Pressable
+							accessibilityRole="button"
+							accessibilityLabel="Cancel worker options"
+							onPress={() => setMenuVisible(false)}
+							style={({ pressed }) => [styles.menuButton, styles.cancelButton, pressed && styles.menuButtonPressed]}
+						>
+							<Text style={styles.cancelButtonText}>Cancel</Text>
+						</Pressable>
 					</View>
 				</View>
 			</Modal>
 		</>
 	);
+}
+
+/**
+ * One action's icon. Pin and unpin come from the swipe rail's set and carry its
+ * tilt, so the same action reads the same whichever way you reach it.
+ */
+function MenuGlyph({ id, color }: { id: WorkerActionId; color: string }) {
+	const glyph = workerActionGlyph(id);
+	return <Feather name={glyph.name} size={20} color={color} />;
 }
 
 const makeStyles = (t: Theme) =>
@@ -198,6 +224,11 @@ const makeStyles = (t: Theme) =>
 			right: 0,
 			bottom: 0,
 			width: WORKER_ACTION_REVEAL_WIDTH,
+			// The rail is the row's full height; the buttons are a fixed 76pt block.
+			// Without this the block is top-pinned, so any row taller than the minimum
+			// — a rename in progress, a larger text size, a wrapped line — leaves both
+			// controls sitting above the row's own centre.
+			justifyContent: "center",
 			backgroundColor: t.bgElevated,
 			borderLeftWidth: StyleSheet.hairlineWidth,
 			borderLeftColor: t.borderSubtle,
@@ -206,27 +237,27 @@ const makeStyles = (t: Theme) =>
 			flex: 1,
 			alignItems: "center",
 			justifyContent: "center",
-			padding: 24,
+			padding: space.xxl,
 			backgroundColor: "rgba(0, 0, 0, 0.58)",
 		},
 		menu: {
 			width: "100%",
 			maxWidth: 340,
-			padding: 20,
-			gap: 8,
-			borderRadius: 24,
+			padding: space.xl,
+			gap: space.sm,
+			borderRadius: 20,
 			borderWidth: StyleSheet.hairlineWidth,
 			borderColor: t.borderDefault,
 			backgroundColor: t.bgElevated,
 			elevation: 12,
 		},
-		menuTitle: { color: t.textPrimary, fontSize: 20, lineHeight: 25, fontWeight: "700" },
-		menuDescription: { color: t.textSecondary, fontSize: 14, lineHeight: 20 },
-		menuActions: { flexDirection: "row", justifyContent: "flex-end", gap: 10, marginTop: 12 },
-		menuButton: { minHeight: 42, paddingHorizontal: 16, borderRadius: 21, alignItems: "center", justifyContent: "center" },
-		renameButton: { backgroundColor: t.blue },
+		menuTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, lineHeight: type.title3.lineHeight, fontWeight: "600" },
+		menuList: { marginTop: space.xs, marginHorizontal: -8 },
+		menuRow: { minHeight: 48, paddingHorizontal: space.sm, flexDirection: "row", alignItems: "center", gap: space.md, borderRadius: 8 },
+		menuRowText: { fontFamily: "Geist_500Medium", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "500" },
+		menuRowTextDestructive: { color: t.red },
+		menuButton: { minHeight: 42, paddingHorizontal: space.lg, borderRadius: 20, alignItems: "center", justifyContent: "center", marginTop: space.sm, alignSelf: "flex-end" },
 		cancelButton: { backgroundColor: t.bgElevatedHover, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
-		renameButtonText: { color: t.onAccent, fontSize: 14, lineHeight: 18, fontWeight: "700" },
-		cancelButtonText: { color: t.textPrimary, fontSize: 14, lineHeight: 18, fontWeight: "600" },
+		cancelButtonText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
 		menuButtonPressed: { opacity: 0.76 },
 	});

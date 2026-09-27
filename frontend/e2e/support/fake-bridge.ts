@@ -157,6 +157,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					nativeCompositionEnabled: true,
 					ensure: async (sessionId: string) => navState(`preview:${sessionId}`),
 					setBounds: () => undefined,
+					onBoundsApplied: () => () => undefined,
 					setOverlayOpen: () => undefined,
 					navigate: async ({ viewId }: { viewId: string }) => navState(viewId),
 					historySuggestions: async () => [],
@@ -241,6 +242,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					setBadge: async (_count: number) => undefined,
 					devBounce: async () => undefined,
 					onClick: unsubscribe,
+					onPlaySound: unsubscribe,
+					reportSoundFailure: () => undefined,
 				},
 				tray: {
 					setAttentionState: () => undefined,
@@ -289,6 +292,14 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				featureBuilds: {
 					list: async () => [],
 					getActive: async () => null,
+				},
+				remotes: {
+					list: async () => [],
+					add: async () => "offline" as const,
+					update: async () => "offline" as const,
+					remove: async () => undefined,
+					probe: async () => "offline" as const,
+					request: async () => ({ status: 0, body: null }),
 				},
 				cloud: {
 					getSession: async () => null,
@@ -719,6 +730,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					nativeCompositionEnabled: true,
 					ensure: async (sessionId: string) => navState(`preview:${sessionId}`),
 					setBounds: () => undefined,
+					onBoundsApplied: () => () => undefined,
 					setOverlayOpen: () => undefined,
 					navigate: async ({ viewId, url }: { viewId: string; url: string }) =>
 						state.browserError ? navState(viewId, "", state.browserError) : navState(viewId, url),
@@ -804,6 +816,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					setBadge: async (_count: number) => undefined,
 					devBounce: async () => undefined,
 					onClick: unsubscribe,
+					onPlaySound: unsubscribe,
+					reportSoundFailure: () => undefined,
 				},
 				tray: { setAttentionState: () => undefined, onOpenSession: unsubscribe },
 				appState: { getMigration: async () => ({ status: "completed" }), setMigration: async () => undefined },
@@ -843,6 +857,14 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				featureBuilds: {
 					list: async () => [],
 					getActive: async () => null,
+				},
+				remotes: {
+					list: async () => [],
+					add: async () => "offline" as const,
+					update: async () => "offline" as const,
+					remove: async () => undefined,
+					probe: async () => "offline" as const,
+					request: async () => ({ status: 0, body: null }),
 				},
 				cloud: {
 					getSession: async () => null,

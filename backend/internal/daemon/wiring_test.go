@@ -186,6 +186,7 @@ func TestWiring_AgentResolverResolvesRealAdapters(t *testing.T) {
 		{domain.HarnessPi, "pi"},
 		{domain.HarnessPrimeAgent, "prime-agent"},
 		{domain.HarnessAutohand, "autohand"},
+		{domain.HarnessUnreal, "unreal-agent"},
 	} {
 		agent, ok := resolver.Agent(tc.harness)
 		if !ok {
@@ -921,6 +922,7 @@ func (f *fakeSessionLifecycle) RestoreAll(_ context.Context) error {
 }
 
 func (*fakeSessionLifecycle) WaitAgentSwitchWorkers(context.Context) error { return nil }
+func (*fakeSessionLifecycle) WaitBackgroundWorkers(context.Context) error  { return nil }
 
 func (f *fakeSessionLifecycle) SetShellTerminalCloser(sessionmanager.ShellTerminalCloser) {}
 func (f *fakeSessionLifecycle) SetTerminalInputGate(sessionmanager.TerminalInputGate)     {}
@@ -931,6 +933,20 @@ func (f *fakeSessionLifecycle) AcquireSessionInput(domain.SessionID) (func(), bo
 func (f *fakeSessionLifecycle) SessionMutationInProgress(domain.SessionID) bool         { return false }
 func (f *fakeSessionLifecycle) SetReviewerTerminator(sessionmanager.ReviewerTerminator) {}
 func (f *fakeSessionLifecycle) SetHarnessUseGate(sessionmanager.HarnessUseGate)         {}
+func (f *fakeSessionLifecycle) CodexAccountSwitchInProgress() bool                      { return false }
+func (f *fakeSessionLifecycle) StartCodexAccountSwitch(context.Context, ports.CodexAccountSwitchConfig) (domain.CodexAccountSwitch, error) {
+	return domain.CodexAccountSwitch{}, nil
+}
+func (f *fakeSessionLifecycle) RecoverCodexAccountSwitch(context.Context, string) (domain.CodexAccountSwitch, error) {
+	return domain.CodexAccountSwitch{}, nil
+}
+func (f *fakeSessionLifecycle) GetActiveCodexAccountSwitch(context.Context) (domain.CodexAccountSwitch, bool, error) {
+	return domain.CodexAccountSwitch{}, false, nil
+}
+func (f *fakeSessionLifecycle) SetCodexAccountSwitchObserver(func()) {}
+func (f *fakeSessionLifecycle) PersistChatModel(_ context.Context, _ domain.SessionID, _ string) error {
+	return nil
+}
 
 // TestWiring_SessionLifecycleInterfaceInvokedByDaemon asserts the
 // sessionLifecycle interface is satisfied by *sessionmanager.Manager (compile
