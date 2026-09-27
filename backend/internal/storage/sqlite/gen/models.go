@@ -474,8 +474,6 @@ type PR struct {
 	ProviderID               string
 	AuthorAvatarURL          string
 	ReviewPartial            bool
-	DiscussionCommentCount   int64
-	DiscussionCommentersJson string
 }
 
 type PRCheck struct {

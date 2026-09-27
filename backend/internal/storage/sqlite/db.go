@@ -365,9 +365,9 @@ func migrate(db *sql.DB) error {
 }
 
 // repairRenumberedCueMigrationHistory preserves preview Cue databases that
-// recorded 0149, 0155, 0156, 0159, or 0161 for Cues before main assigned those
-// versions to other features. Move only an identifiable Cue schema to 0162 before the
-// upstream migration repairs inspect or reuse the old ledger entries.
+// recorded 0149, 0155, 0156, 0159, 0161, or 0162 for Cues before main assigned
+// those versions to other features. Move only an identifiable Cue schema to
+// 0163 before the upstream migration repairs inspect or reuse old entries.
 func repairRenumberedCueMigrationHistory(db *sql.DB) error {
 	var gooseTable int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`).Scan(&gooseTable); err != nil || gooseTable == 0 {
@@ -389,16 +389,16 @@ func repairRenumberedCueMigrationHistory(db *sql.DB) error {
 	if err := db.QueryRow(`SELECT instr(sql, 'unreal-agent') FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&unrealHarness); err != nil {
 		return err
 	}
-	var applied149, applied155, applied156, applied159, applied161, applied162, discussionCountColumn int
+	var applied149, applied155, applied156, applied159, applied161, applied162, applied163, discussionCountColumn int
 	for _, item := range []struct {
 		version int
 		result  *int
-	}{{149, &applied149}, {155, &applied155}, {156, &applied156}, {159, &applied159}, {161, &applied161}, {162, &applied162}} {
+	}{{149, &applied149}, {155, &applied155}, {156, &applied156}, {159, &applied159}, {161, &applied161}, {162, &applied162}, {163, &applied163}} {
 		if err := db.QueryRow(`SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = ? ORDER BY id DESC LIMIT 1), 0)`, item.version).Scan(item.result); err != nil {
 			return err
 		}
 	}
-	if applied162 != 0 {
+	if applied163 != 0 {
 		return nil
 	}
 	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('pr') WHERE name = 'discussion_comment_count'`).Scan(&discussionCountColumn); err != nil {
@@ -414,6 +414,8 @@ func repairRenumberedCueMigrationHistory(db *sql.DB) error {
 		oldVersion = 155
 	case applied149 != 0 && reviewerColumn == 0 && provisionColumns != 2:
 		oldVersion = 149
+	case applied162 != 0:
+		oldVersion = 162
 	case applied161 != 0:
 		oldVersion = 161
 	}
@@ -425,7 +427,7 @@ func repairRenumberedCueMigrationHistory(db *sql.DB) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (162, 1)`); err != nil {
+	if _, err := tx.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (163, 1)`); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM goose_db_version WHERE version_id = ?`, oldVersion); err != nil {
@@ -1773,7 +1775,8 @@ SELECT COALESCE((
 // to main's PR discussion migration. The physical schemas determine whether
 // Goose should apply PR discussion at 159 and automations at canonical 161.
 // An older automation build also used 156; release it only when the canonical
-// session-provisioning columns are absent.
+// session-provisioning columns are absent. Once 162 has dropped the PR
+// discussion columns, their absence no longer says anything about 159.
 func repairBurnedAutomationsMigrationHistory(db *sql.DB) error {
 	var gooseTable int
 	if err := db.QueryRow(
@@ -1818,6 +1821,10 @@ SELECT COALESCE((
 	if err != nil {
 		return err
 	}
+	applied162, err := applied(162)
+	if err != nil {
+		return err
+	}
 	if automationsTable > 0 && automationRunID > 0 {
 		if applied156 && provisionColumns != 2 {
 			if _, err := db.Exec(`DELETE FROM goose_db_version WHERE version_id = 156`); err != nil {
@@ -1833,6 +1840,9 @@ SELECT COALESCE((
 		if _, err := db.Exec(`DELETE FROM goose_db_version WHERE version_id = 161`); err != nil {
 			return err
 		}
+	}
+	if applied162 {
+		return nil
 	}
 	if discussionColumn > 0 && !applied159 {
 		_, err = db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (159, 1)`)

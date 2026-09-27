@@ -10,7 +10,8 @@ import (
 )
 
 // Main owns 159/160, while older PR builds may have applied automations at
-// 159. Every history must end with both main's PR columns and automations.
+// 159. Every history must end with 159-162 applied, automations present, and
+// the PR discussion columns dropped again by 162.
 func TestMigrateRepairsInterleavedAutomationsHistory(t *testing.T) {
 	for _, tt := range []struct {
 		name      string
@@ -68,6 +69,14 @@ func TestMigrateRepairsInterleavedAutomationsHistory(t *testing.T) {
 			if err != nil {
 				t.Fatalf("open upgraded database: %v", err)
 			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			// A second startup must not read 162's dropped columns as a lost 159.
+			store, err = Open(dataDir)
+			if err != nil {
+				t.Fatalf("reopen upgraded database: %v", err)
+			}
 			t.Cleanup(func() { _ = store.Close() })
 			check, err := sql.Open("sqlite", databaseURI(dataDir)+pragmas)
 			if err != nil {
@@ -75,17 +84,20 @@ func TestMigrateRepairsInterleavedAutomationsHistory(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = check.Close() })
 
-			for _, column := range []struct{ table, name string }{
-				{"pr", "discussion_comment_count"},
-				{"pr", "discussion_commenters_json"},
-				{"sessions", "automation_run_id"},
+			for _, column := range []struct {
+				table, name string
+				want        int
+			}{
+				{"pr", "discussion_comment_count", 0},
+				{"pr", "discussion_commenters_json", 0},
+				{"sessions", "automation_run_id", 1},
 			} {
 				var present int
 				if err := check.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, column.table, column.name).Scan(&present); err != nil {
 					t.Fatalf("inspect %s.%s: %v", column.table, column.name, err)
 				}
-				if present != 1 {
-					t.Errorf("%s.%s count = %d, want 1", column.table, column.name, present)
+				if present != column.want {
+					t.Errorf("%s.%s count = %d, want %d", column.table, column.name, present, column.want)
 				}
 			}
 			for _, table := range []string{"automations", "automation_runs"} {
@@ -97,7 +109,7 @@ func TestMigrateRepairsInterleavedAutomationsHistory(t *testing.T) {
 					t.Errorf("%s table count = %d, want 1", table, present)
 				}
 			}
-			for _, version := range []int{159, 160, 161} {
+			for _, version := range []int{159, 160, 161, 162} {
 				var applied int
 				if err := check.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = ? AND is_applied = 1`, version).Scan(&applied); err != nil {
 					t.Fatalf("inspect migration %d: %v", version, err)

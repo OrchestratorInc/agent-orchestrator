@@ -164,7 +164,8 @@ var shippedMigrations = map[int64]string{
 	159: "0159_pr_discussion_comment_count.sql",
 	160: "0160_pr_discussion_commenters.sql",
 	161: "0161_automations.sql",
-	162: "0162_cues.sql",
+	162: "0162_drop_pr_discussion_columns.sql",
+	163: "0163_cues.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
