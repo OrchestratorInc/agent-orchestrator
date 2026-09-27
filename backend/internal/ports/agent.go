@@ -319,8 +319,8 @@ type AgentExitDetector interface {
 // AgentPromptReadinessProvider is an optional capability for interactive
 // adapters that receive their first task after startup. It lets AO wait until a
 // terminal UI is ready before injecting text through the runtime. When the
-// adapter also implements TerminalActivityDetector, an authoritative idle
-// detection takes precedence over the fallback text patterns.
+// adapter requires readiness and implements TerminalActivityDetector, only an
+// authoritative idle detection permits delivery.
 type AgentPromptReadinessProvider interface {
 	PromptReadinessHints(ctx context.Context, cfg LaunchConfig) (PromptReadinessHints, error)
 }
@@ -366,10 +366,13 @@ type WaitingTerminalActivityDetector interface {
 }
 
 // PromptReadinessHints describes when an after-start prompt should be sent.
-// Empty patterns mean "send immediately" unless the adapter also implements
-// TerminalActivityDetector, in which case AO waits for an authoritative idle
-// detection. A non-positive timeout always preserves immediate delivery.
+// Best-effort delivery sends immediately for empty patterns or a non-positive
+// timeout. RequireReady instead demands a positive timeout and a terminal
+// detector or prompt patterns; missing readiness evidence is an error.
 type PromptReadinessHints struct {
+	// RequireReady rejects delivery when the ready composer cannot be proved.
+	// Other adapters retain their existing best-effort timeout behavior.
+	RequireReady bool
 	InitialDelay time.Duration
 	Patterns     []string
 	PollInterval time.Duration

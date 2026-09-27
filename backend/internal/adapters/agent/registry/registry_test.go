@@ -185,3 +185,27 @@ func hasLine(content, line string) bool {
 	}
 	return false
 }
+
+func TestRegistryIncludesReasonix(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("reasonix")
+	if !ok {
+		t.Fatal("registry does not contain reasonix")
+	}
+	if got := adapter.Manifest().Name; got != "Reasonix" {
+		t.Fatalf("manifest name = %q, want Reasonix", got)
+	}
+	for _, item := range Harnessed() {
+		if item.Harness != "reasonix" {
+			continue
+		}
+		if _, ok := item.Agent.(ports.AgentInterfaceHandoff); ok {
+			t.Fatal("Reasonix must not offer interface handoff")
+		}
+		return
+	}
+	t.Fatal("Harnessed does not contain reasonix")
+}

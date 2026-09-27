@@ -276,7 +276,7 @@ func TestCommandBuilders(t *testing.T) {
 	if got, want := listPanePIDsArgs("sess-1"), []string{"list-panes", "-s", "-t", "=sess-1", "-F", "#{pane_pid}"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("listPanePIDsArgs = %#v, want %#v", got, want)
 	}
-	if got, want := sendKeysLiteralArgs("sess-1", "hello"), []string{"send-keys", "-t", "sess-1", "-l", "hello"}; !reflect.DeepEqual(got, want) {
+	if got, want := sendKeysLiteralArgs("sess-1", "hello"), []string{"send-keys", "-t", "sess-1", "-l", "--", "hello"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sendKeysLiteralArgs = %#v, want %#v", got, want)
 	}
 	if got, want := sendEnterArgs("sess-1"), []string{"send-keys", "-t", "sess-1", "Enter"}; !reflect.DeepEqual(got, want) {
@@ -2162,4 +2162,24 @@ func exitCodeErr(t *testing.T, code int) error {
 		t.Fatalf("sh -c 'exit %d' should fail", code)
 	}
 	return err
+}
+
+func TestSendMessageSeparatesOptionLikeChunks(t *testing.T) {
+	r, runner := newTestRuntime(5)
+	if err := r.SendMessage(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, "--abc--def"); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"send-keys", "-t", "sess-1", "-l", "--", "--abc"},
+		{"send-keys", "-t", "sess-1", "-l", "--", "--def"},
+		{"send-keys", "-t", "sess-1", "Enter"},
+	}
+	if len(runner.calls) != len(want) {
+		t.Fatalf("tmux calls = %d, want %d", len(runner.calls), len(want))
+	}
+	for i, call := range runner.calls {
+		if !reflect.DeepEqual(call.args, want[i]) {
+			t.Fatalf("tmux call %d = %q, want %q", i, call.args, want[i])
+		}
+	}
 }

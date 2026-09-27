@@ -893,3 +893,17 @@ func TestCatalogFingerprintKeepsTheExecutableOnlyValueForConfiglessAgents(t *tes
 		t.Fatalf("fingerprint = %q, want the executable fingerprint %q", got, want)
 	}
 }
+
+func TestReasonixModelsUseDirectTextWithoutAnInventedCatalog(t *testing.T) {
+	for name, load := range map[string]func(string) ports.AgentModelCatalog{"base": Base, "fallback": Manual} {
+		t.Run(name, func(t *testing.T) {
+			got := load("reasonix")
+			if got.SelectionMode != ports.ModelSelectionText || got.CustomModelEntry != ports.CustomModelEntryDirect || !got.AllowCustom {
+				t.Fatalf("Reasonix model entry = %#v, want direct free-form input", got)
+			}
+			if got.Source != "manual" || len(got.Models) != 0 {
+				t.Fatalf("Reasonix model catalog = %#v, want no AO-owned choices", got)
+			}
+		})
+	}
+}

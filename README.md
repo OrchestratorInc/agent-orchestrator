@@ -129,7 +129,7 @@ AO works with the coding agents and source-control workflow you already use. Age
 
 ## Supported agents
 
-**28 coding agents supported** through one supervised workflow.
+**29 coding agents supported** through one supervised workflow.
 
 <table>
   <tr valign="middle">
@@ -179,10 +179,12 @@ AO works with the coding agents and source-control workflow you already use. Age
   </tr>
   <tr valign="middle">
     <td valign="middle" nowrap><b>Unreal Agent</b></td>
-    <td></td>
+    <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/reasonix.svg" alt="Reasonix" width="24" height="24" align="middle" /> &nbsp; <b><a href="docs/harnesses/reasonix.md">Reasonix</a></b></td>
     <td></td>
   </tr>
 </table>
+
+Reasonix supports Terminal UI worker and orchestrator sessions with a compatible CLI exposing `--append-system-prompt-file` and `--resume-exact`. The current official v1.39.2 release is not compatible; see [Reasonix setup and limitations](docs/harnesses/reasonix.md).
 
 [Browse agent setup guides →](https://docs.aoagents.dev/plugins/agents)
 

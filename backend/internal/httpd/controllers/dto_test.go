@@ -2,6 +2,8 @@ package controllers_test
 
 import (
 	"encoding/json"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -117,5 +119,29 @@ func TestNewSessionPRSummaryExposesCIFailureInjectionPolicy(t *testing.T) {
 	}
 	if !strings.Contains(string(payload), `"autoInjectCI":false`) {
 		t.Fatalf("CI summary payload = %s, want explicit disabled injection policy", payload)
+	}
+}
+
+func TestReasonixHarnessAPIEnums(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value any
+		field string
+		want  bool
+	}{
+		{"spawn", controllers.SpawnSessionRequest{}, "Harness", true},
+		{"delegate", controllers.DelegateTaskRequest{}, "Agent", true},
+		{"reviewer", controllers.SetSessionReviewerRequest{}, "Harness", false},
+		{"agent switch", controllers.SwitchAgentRequest{}, "TargetHarness", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			field, ok := reflect.TypeOf(tc.value).FieldByName(tc.field)
+			if !ok {
+				t.Fatalf("missing field %s", tc.field)
+			}
+			if got := slices.Contains(strings.Split(field.Tag.Get("enum"), ","), "reasonix"); got != tc.want {
+				t.Fatalf("reasonix enum membership = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

@@ -1,8 +1,19 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { AgentAvatar } from "./AgentAvatar";
+import reasonixLogo from "../assets/agents/reasonix.svg";
 
 describe("AgentAvatar", () => {
+	it("renders the Reasonix brand asset", () => {
+		render(<AgentAvatar provider="reasonix" />);
+		expect(screen.getByRole("img", { name: "reasonix" })).toHaveAttribute("src", reasonixLogo);
+	});
+
+	it("keeps the initial fallback for unknown agents", () => {
+		render(<AgentAvatar provider="example-agent" />);
+		expect(screen.getByRole("img", { name: "example-agent" })).toHaveTextContent("E");
+	});
+
 	it("renders the Prime Agent brand asset", () => {
 		render(<AgentAvatar provider="prime-agent" />);
 

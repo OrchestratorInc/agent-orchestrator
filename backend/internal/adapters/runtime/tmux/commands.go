@@ -141,11 +141,11 @@ func listPanePIDsArgs(id string) []string {
 	return []string{"list-panes", "-s", "-t", exactSessionTarget(id), "-F", "#{pane_pid}"}
 }
 
-// sendKeysLiteralArgs builds args for `tmux send-keys -t <id> -l <chunk>`.
+// sendKeysLiteralArgs builds args for `tmux send-keys -t <id> -l -- <chunk>`.
 // The -l flag stops tmux interpreting words like "Enter" as key names so the
-// text is sent verbatim.
+// text is sent verbatim. The delimiter also keeps leading dashes out of option parsing.
 func sendKeysLiteralArgs(id, chunk string) []string {
-	return []string{"send-keys", "-t", id, "-l", chunk}
+	return []string{"send-keys", "-t", id, "-l", "--", chunk}
 }
 
 // sendEnterArgs builds args for `tmux send-keys -t <id> Enter` to submit the

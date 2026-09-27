@@ -1,6 +1,7 @@
 {
 	"agentSelector.manage": "에이전트 관리…",
 	"agentSelector.noneReady": "준비된 에이전트 없음",
+	"agentSelector.unverified": "미검증",
 	"agentSelector.needsSetup": "설정 필요",
 	"session.statusChecking": "확인 중…",
 	"session.statusUnavailable": "확인할 수 없음",
@@ -1878,6 +1879,8 @@
 	"settings.harness.instructions": "Instructions",
 	"settings.harness.interrupted": "Interrupted",
 	"settings.harness.loggedIn": "Connected",
+	"settings.harness.credentialsConfigured": "인증 정보가 설정되었지만 아직 검증되지 않았습니다",
+	"settings.harness.reasonixCompatibility": "터미널 UI만 지원합니다. --append-system-prompt-file 및 --resume-exact이 필요하며 공식 v1.39.2는 호환되지 않습니다.",
 	"settings.harness.configured": "Set up",
 	"settings.harness.loginUnknown": "Unknown",
 	"settings.harness.configurationUnknown": "Unknown",

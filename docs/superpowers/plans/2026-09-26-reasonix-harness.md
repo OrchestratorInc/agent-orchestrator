@@ -2,36 +2,45 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a production-selectable Reasonix TUI harness to AO after the upstream process-scoped system-prompt contract ships.
+**Goal:** Complete the selectable Reasonix TUI harness in AO PR #5905, requiring a compatible process-scoped system-prompt contract at launch.
 
-**Architecture:** Implement an initially unregistered Go adapter that launches the user-owned Reasonix binary, merges observation-only native hooks, and restores exact machine session IDs. Promote it through AO's domain, storage, API, installer, and frontend boundaries only after published-binary conformance passes.
+**Architecture:** Register a Go adapter that launches the user-owned Reasonix binary after bounded identity/capability checks, merges observation-only native hooks, and restores exact machine session IDs. Include domain, storage, API, installer, and frontend integration in this PR.
 
 **Tech Stack:** Go, Cobra, SQLite/goose, OpenAPI, TypeScript, React/Electron
 
 **Spec:** `docs/superpowers/specs/2026-09-26-reasonix-harness-design.md`
 
+## Implementation status — 2026-09-27
+
+Core launch/restore, conservative hook activity and identity, auth/model/install
+metadata, domain/registry/storage/API registration, and desktop identity/settings
+are implemented. Focused suites pass. Real-binary conformance, full CI validation,
+visual review, and final PR publication are the remaining verification work.
+The detailed steps below record the implementation plan; their individual commit
+examples are not a requirement to split the final AO changes.
+
 ## Global Constraints
 
-- Complete `docs/superpowers/plans/2026-09-26-reasonix-upstream-system-prompt.md` first.
-- Pin the first tagged Reasonix release containing `--append-system-prompt-file`; reject earlier or unidentifiable binaries.
+- The upstream prompt-file implementation is submitted in Reasonix PR #11059. Per the user's explicit 2026-09-27 instruction, complete AO registration now; the earlier wait-for-release rule is superseded.
+- Reject unidentifiable binaries and builds without the required CLI capabilities, including `--resume-exact`. v1.39.2 lacks `--append-system-prompt-file`; there is no compatible release floor yet.
 - Do not replace `REASONIX_HOME`, copy credentials, or write Reasonix user configuration.
 - TUI only: no Chat driver, reviewer registration, interface handoff, or nested-agent sessions.
 - AO standing instructions stay system-role content and are reapplied on exact restore.
 - Hooks are observation-only and preserve every user entry and unknown JSON field.
 - Reasonix accepts direct free-form model IDs; AO must not invent a catalog.
-- Allocate the migration number immediately before implementation; on this snapshot the next number is `0156`, but a newer `main` takes precedence.
+- Migration `0163_allow_reasonix_harness.sql` follows the current merged main's `0162` and supports current and legacy-qm schemas.
 
 ## Review Focus
 
-- An executable named `reasonix` from another product or an older release is rejected before session side effects; Task 1 tests identity and version flooring.
-- Prompt text containing leading dashes, multiline Unicode, or terminal control characters is delivered only through the TUI and never shell-interpolated; Task 1 tests argv/readiness, and Task 4 must prove the bounded fallback is safe before registration.
+- An executable named `reasonix` from another product or an older release is rejected before session side effects; Task 1 tests identity and required capabilities.
+- Prompt text containing leading dashes, multiline Unicode, or terminal control characters is delivered only through the TUI and never shell-interpolated; Task 1 tests argv/readiness, and Task 4 validates strict readiness; timeout must never fall back to sending.
 - Existing malformed or concurrently changed `.reasonix/settings.json` is never overwritten; Task 2 tests fail-closed merge behavior.
 - A hook payload with a huge or malformed `sessionId` cannot enter metadata or suppress lifecycle reporting; Task 2 tests bounds and malformed input.
-- `accept-edits` and `auto` intentionally share `workspace-write`, while bypass alone selects `danger-full-access`; Task 1 pins every mode and unknown-value fallback.
+- `accept-edits` and `auto` intentionally share `workspace-write`, while bypass alone selects `danger-full-access`; Task 1 pins every mode and rejects unknown values.
 
 ---
 
-### Task 1: Build the unregistered core adapter
+### Task 1: Build the core adapter
 
 **Files:**
 - Create: `backend/internal/adapters/agent/reasonix/reasonix.go`
@@ -41,11 +50,11 @@
 
 **Interfaces:**
 - Produces: `func New() *Plugin`, `func ResolveReasonixBinary(context.Context) (string, error)`, and implementations of `adapters.Adapter`, `ports.Agent`, `ports.AgentBinaryResolver`, `ports.AgentBinaryPresenceResolver`, and `ports.AgentPromptReadinessProvider`.
-- Produces: `minimumReasonixVersion` set to the first published compatible tag from the upstream plan.
+- Produces: bounded `--version` identity and `--help` capability probes; no fabricated version floor.
 
 - [ ] **Step 1: Write failing manifest, model, and argv tests**
 
-Assert manifest ID `reasonix`, name `Reasonix`, capability `agent`, and a string model config. Table-test fresh and restore argv for all AO permission modes, optional model, absolute `--dir`, mandatory `--append-system-prompt-file`, and exact `--resume <sessionId>`. Assert no prompt text enters argv, unknown permission values are rejected, and missing prompt-file/native-ID inputs fail safely.
+Assert manifest ID `reasonix`, name `Reasonix`, capability `agent`, and a string model config. Table-test fresh and restore argv for all AO permission modes, optional model, absolute `--dir`, mandatory `--append-system-prompt-file`, and exact `--resume-exact <sessionId>`. Assert no prompt text enters argv, unknown permission values are rejected, and missing prompt-file/native-ID inputs fail safely.
 
 - [ ] **Step 2: Run the core test and confirm failure**
 
@@ -55,19 +64,19 @@ Expected: FAIL because the package does not exist.
 
 - [ ] **Step 3: Implement the adapter command contract**
 
-Implement `GetConfigSpec`, `GetLaunchCommand`, `GetRestoreCommand`, `GetPromptDeliveryStrategy`, `PromptReadinessHints`, and `SessionInfo`. Use argument slices only. Map `default`, `accept-edits`, and `auto` to `workspace-write`; map `bypass-permissions` to `danger-full-access`; reject unsupported explicit values.
+Implement `GetConfigSpec`, `GetLaunchCommand`, `GetRestoreCommand`, `GetPromptDeliveryStrategy`, `PromptReadinessHints`, and `SessionInfo`. Use argument slices only. Map `default` to `read-only`, `accept-edits` and `auto` to `workspace-write`; map `bypass-permissions` to `danger-full-access`; reject unsupported explicit values.
 
 - [ ] **Step 4: Write failing binary identity tests**
 
-Cover PATH, Homebrew, common npm locations, Windows `.cmd`/`.exe` shims, name collision, context cancellation, hanging version probe, `reasonix v<version>` parsing, and the minimum compatible version boundary. The process-free presence probe must return `ErrAgentBinaryIdentityUnknown` until the normal probe confirms identity.
+Cover PATH, Homebrew, common npm locations, Windows `.cmd`/`.exe` shims, name collision, context cancellation, hanging version probe, `reasonix v<version>` parsing, and missing required CLI capabilities. The process-free presence probe must return `ErrAgentBinaryIdentityUnknown` until the normal probe confirms identity.
 
 - [ ] **Step 5: Implement identity-validated binary resolution**
 
-Use `binaryutil.BinarySpec` with `ValidateIdentity` backed by a bounded `--version` command. Cache only a successfully identified, version-compatible path and implement invalidation through the existing adapter capability.
+Use `binaryutil.BinarySpec` and bounded identity/capability commands. Keep presence checks process-free. Resolve Windows npm shims to official native payloads; do not invoke a command shell.
 
 - [ ] **Step 6: Pin TUI readiness**
 
-Add fixture-driven terminal snapshots for startup, ready composer, startup error, and permission dialog. Implement readiness hints or `TerminalActivityDetector` only for markers proven stable by the released binary. Task 4 must prove AO's bounded timeout fallback cannot submit into a startup or permission dialog; otherwise stop before registration.
+Add fixture-driven terminal snapshots for startup, ready composer, startup error, and permission dialog. Implement strict `TerminalActivityDetector` readiness. Task 4 must prove the tested native composer is detected; unknown startup/permission dialogs and timeout reject delivery.
 
 - [ ] **Step 7: Run and commit**
 
@@ -77,7 +86,7 @@ Expected: PASS.
 
 ```bash
 git add backend/internal/adapters/agent/reasonix
-git commit -m "feat: add unregistered Reasonix adapter"
+git commit -m "feat: add Reasonix adapter"
 ```
 
 ### Task 2: Add native hooks, activity, and exact identity
@@ -112,11 +121,11 @@ Merge the direct Reasonix event-array schema without routing through Claude comp
 
 - [ ] **Step 4: Write failing activity and identity tests**
 
-Assert `sessionId` is captured on every supported event; accepted prompt/pre-tool are active; correlated permission requests become blocked and clear on post-tool; stop becomes waiting-input; malformed/oversized IDs are ignored without losing valid activity; and raw prompt/tool/result fields never enter persisted metadata.
+Assert a valid root `sessionId` is captured on supported events; prompt-submit/pre-tool are active; permission requests do not assert blocked; successful stop becomes waiting-input; malformed/oversized and child IDs are ignored before metadata/activity updates; and raw prompt/tool/result fields never enter persisted metadata.
 
 - [ ] **Step 5: Implement dispatch integration**
 
-Implement `DeriveActivityState`, add `reasonix` to `activitydispatch.Derivers`, and rely on the existing camel-case `sessionId` parser in `backend/internal/cli/hooks.go`. Add only the minimum CLI hook changes needed for semantic prompt acceptance and blocked-state correlation proven by the payload fixtures.
+Implement `DeriveActivityState`, add `reasonix` to `activitydispatch.Derivers`, and validate root `sessionId` values in `backend/internal/cli/hooks.go` before metadata or activity updates. UserPromptSubmit does not prove semantic acceptance; PermissionRequest has no correlation ID and does not mark blocked. SessionEnd is conversation rotation, not process exit.
 
 - [ ] **Step 6: Run and commit**
 
@@ -179,38 +188,38 @@ git add backend/internal/adapters/agent/reasonix backend/internal/adapters/agent
 git commit -m "feat: add Reasonix readiness and installation metadata"
 ```
 
-### Task 4: Prove the published binary before registration
+### Task 4: Verify a compatible native binary
 
 **Files:**
 - Create: `backend/internal/adapters/agent/reasonix/conformance_test.go`
 - Create: `docs/harnesses/reasonix.md`
 
 **Interfaces:**
-- Consumes: the adapter from Tasks 1–3 and the tagged upstream release.
-- Produces: an opt-in `AO_LIVE_REASONIX=1` conformance gate and documented minimum version/checksums.
+- Consumes: the adapter from Tasks 1–3 and an explicitly selected compatible native build.
+- Produces: opt-in real-binary conformance and exact build evidence, without claiming released compatibility.
 
 - [ ] **Step 1: Write the opt-in conformance test**
 
-In temporary AO data and workspace directories, exercise the real published binary for version identity, prompt-role separation, TUI readiness, Unicode initial delivery, hook coexistence, session-ID capture, exact resume, all permission presets, SIGINT/SIGTERM cancellation, and changed-file boundaries. Skip unless `AO_LIVE_REASONIX=1`; never copy credentials or replace Reasonix home.
+In disposable fixture home, AO data, and workspace directories, exercise the selected native binary through AO's tmux runtime for version identity, prompt-role separation, strict TUI readiness, Unicode/leading-dash initial delivery, exact resume, and changed-file boundaries. Keep hook identity capture, all permission presets, and cancellation as separately reported coverage; do not imply that fixture-manifest identity proves daemon hook capture. Skip unless `AO_LIVE_REASONIX=1`; never copy credentials or use the real user's Reasonix profile.
 
-- [ ] **Step 2: Run conformance against the release artifact**
+- [ ] **Step 2: Run conformance against the compatible build**
 
-Run: `cd backend && AO_LIVE_REASONIX=1 go test ./internal/adapters/agent/reasonix -run TestLiveReasonixConformance -count=1 -v`
+Run: `cd backend && AO_LIVE_REASONIX=1 AO_REASONIX_TEST_BINARY=/absolute/path/to/reasonix go test ./internal/adapters/agent/reasonix -run TestReasonixLiveAOConformance -count=1 -v`
 
-Expected: PASS with the pinned release and no writes outside the temporary workspace/AO data plus Reasonix's normal user-owned session store.
+Expected: PASS with the pinned build, isolated fixture home/workspaces, a private tmux socket, and a local fake provider; no real user profile is used.
 
 - [ ] **Step 3: Record evidence and limits**
 
-Document the release tag, commit, checksums, platforms, install methods, authentication classification, prompt mechanism, permission mapping, hook schema, session ID, restore command, cancellation, free-form model behavior, and explicit non-support for Chat/reviewer/handoff/nested sessions.
+Document the tested version, commit, checksums, platforms, install methods, authentication classification, prompt mechanism, permission mapping, hook schema, session ID, restore command, cancellation, free-form model behavior, and explicit non-support for Chat/reviewer/handoff/nested sessions.
 
-- [ ] **Step 4: Commit and stop on any failed gate**
+- [ ] **Step 4: Fix failed conformance checks**
 
 ```bash
 git add backend/internal/adapters/agent/reasonix/conformance_test.go docs/harnesses/reasonix.md
 git commit -m "test: prove Reasonix harness conformance"
 ```
 
-If any conformance case fails, keep the adapter unregistered and stop before Task 5.
+Fix failures in the AO integration before handoff. Unsupported binaries continue to fail closed at launch; upstream release publication is not required to finish this PR.
 
 ### Task 5: Register Reasonix across domain, storage, and API
 
@@ -298,7 +307,7 @@ Copy the upstream MIT-licensed `docs/logo.svg` without altering its provenance, 
 
 - [ ] **Step 3: Update settings, translations, and docs**
 
-Add concise localized labels using the repository's existing translation pattern. Add Reasonix to the README supported-agent table, docs index, and status list, linking `docs/harnesses/reasonix.md` and stating the minimum compatible release plus TUI-only limitation.
+Add concise localized labels using the repository's existing translation pattern. Add Reasonix to the README supported-agent table, docs index, and status list, linking `docs/harnesses/reasonix.md` and stating the required build capability and TUI-only limitation.
 
 - [ ] **Step 4: Run and commit**
 

@@ -1,6 +1,7 @@
 {
 	"agentSelector.manage": "Gestionar agentes…",
 	"agentSelector.noneReady": "No hay agentes listos",
+	"agentSelector.unverified": "Sin verificar",
 	"agentSelector.needsSetup": "Requiere configuración",
 	"session.statusChecking": "Comprobando…",
 	"session.statusUnavailable": "No se puede verificar",
@@ -1906,6 +1907,8 @@
 	"settings.harness.instructions": "Instructions",
 	"settings.harness.interrupted": "Interrupted",
 	"settings.harness.loggedIn": "Connected",
+	"settings.harness.credentialsConfigured": "Credenciales configuradas; aún sin verificar",
+	"settings.harness.reasonixCompatibility": "Solo interfaz de terminal. Requiere --append-system-prompt-file y --resume-exact; la versión oficial v1.39.2 no es compatible.",
 	"settings.harness.configured": "Set up",
 	"settings.harness.loginUnknown": "Unknown",
 	"settings.harness.configurationUnknown": "Unknown",

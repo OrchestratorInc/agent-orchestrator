@@ -203,3 +203,16 @@ func TestGrokDerivesClaudeCompatibleActivity(t *testing.T) {
 		})
 	}
 }
+
+func TestReasonixDispatchesOnlyNativeParentActivity(t *testing.T) {
+	got, ok := Derive("reasonix", "stop", []byte(`{"event":"Stop","sessionId":"native-1","turn":1}`))
+	if !ok || got != domain.ActivityWaitingInput {
+		t.Fatalf("got (%q,%v), want waiting_input", got, ok)
+	}
+	if got, ok := Derive("reasonix", "stop", []byte(`{"event":"Stop","sessionId":"subagent:child"}`)); ok {
+		t.Fatalf("child completed parent: %q", got)
+	}
+	if CoverageForHarness(domain.HarnessReasonix) != SignalCoveragePartial {
+		t.Fatal("lazy SessionStart must not promise a launch callback")
+	}
+}

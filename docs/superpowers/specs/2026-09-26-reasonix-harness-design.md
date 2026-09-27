@@ -2,8 +2,8 @@
 
 ## Goal
 
-Add Reasonix as a production-selectable AO worker/orchestrator harness after a
-released Reasonix version exposes a process-scoped, system-role channel for AO's
+Add Reasonix as a selectable AO worker/orchestrator harness, with launch gated on
+the installed binary exposing a process-scoped, system-role channel for AO's
 standing instructions. Keep Reasonix user-owned, preserve its configuration and
 hooks, and use its native session identity for exact restoration.
 
@@ -39,9 +39,12 @@ per-process system prompt. Existing `system_prompt_file`, `REASONIX.md`,
 `SessionStart` hook output is injected into a subsequent user turn as
 `<hook-context>`, so it is not a private system-role channel.
 
-## Production gate
+## Runtime compatibility gate
 
-Reasonix must first ship a tagged release with this command-line contract:
+On 2026-09-27 the user explicitly requested completing AO registration now,
+superseding the original requirement to wait for an upstream tagged release.
+AO registers the harness and checks the installed executable before launch.
+The required command-line contract is:
 
 ```text
 reasonix --append-system-prompt-file <path> [...]
@@ -66,10 +69,11 @@ The name may change upstream, but the behavior must remain equivalent:
 8. Accept an absolute AO-owned path outside the workspace without expanding it
    through a shell.
 
-AO will not register Reasonix from an unreleased commit. After this contract is
-merged upstream, a live conformance test must pass against the published binary,
-and the adapter documentation will record the minimum supported Reasonix
-version and executable fingerprint.
+The adapter verifies the native version identity and required help flags with
+bounded probes. Released v1.39.2 lacks the prompt-file flag and is rejected with
+an actionable error. The implementation in upstream PR #11059 supplies it;
+there is no minimum compatible release yet. Live conformance records the exact
+tested binary and does not claim that an untested release is compatible.
 
 ## Rejected workarounds
 
@@ -85,7 +89,7 @@ version and executable fingerprint.
 These paths remain prohibited even if they appear to work in a narrow launch
 test.
 
-## AO adapter after the gate passes
+## AO adapter
 
 Create `backend/internal/adapters/agent/reasonix/` following current registered
 adapter boundaries. The adapter owns binary resolution, launch and restore argv,
@@ -102,10 +106,11 @@ reasonix --dir <workspace> --permission-mode <preset>
 ```
 
 The initial user task will be delivered only after an authoritative TUI-ready
-signal or a pinned, bounded readiness pattern proves the composer can accept
+signal proves the composer can accept
 input. AO will not place arbitrary prompt text into shell argv. The adapter must
 prove multibyte text, leading dashes, multiline input, and startup-dialog
-behavior against the released binary.
+behavior against the tested binary. Readiness timeout fails the launch; it does
+not inject the task into a startup or permission dialog.
 
 Restore will use the exact native machine session ID and reapply all launch-time
 policy:
@@ -113,11 +118,15 @@ policy:
 ```text
 reasonix --dir <workspace> --permission-mode <preset>
   --append-system-prompt-file <ao-system-file> [--model <model>]
-  --resume <native-session-id>
+  --resume-exact <native-session-id>
 ```
 
-Missing or malformed native identity returns no restore command; AO must not use
+Missing or malformed native identity returns an error; AO must not use
 `--continue`, a recent-session picker, or fuzzy matching as a substitute.
+
+The ordinary native `--resume` accepts filenames and fuzzy queries and searches a
+bounded recent-session catalog. AO therefore requires `--resume-exact`, which
+resolves a canonical identity directly and fails for missing or legacy-only IDs.
 
 ## Permissions
 
@@ -125,7 +134,7 @@ Reasonix exposes three presets. The initial AO mapping is explicit:
 
 | AO mode | Reasonix preset | Contract |
 | --- | --- | --- |
-| `default` | `workspace-write` | Reasonix's documented CLI default |
+| `default` | `read-only` | Conservative explicit AO default |
 | `accept-edits` | `workspace-write` | Closest native preset; the UI/help text must disclose that Reasonix also permits its normal workspace-scoped operations |
 | `auto` | `workspace-write` | Automatic operation inside the Reasonix workspace sandbox |
 | `bypass-permissions` | `danger-full-access` | Removes the workspace sandbox and requires AO's existing high-risk confirmation |
@@ -150,12 +159,19 @@ stored in AO metadata.
 
 The activity mapping is conservative:
 
-- accepted prompt or pre-tool event: `active`;
-- permission-request event: `blocked` only when a later correlated event can
-  clear it safely;
+- prompt-submission or pre-tool event: `active` (submission does not prove
+  semantic acceptance, because a later native hook can veto it);
+- permission-request event: no activity transition; native payloads have no
+  correlation ID that could safely clear a blocked state;
 - post-tool event: active while the turn continues;
 - successful stop: `waiting_input`;
-- session/process end: exited/terminated through existing runtime lifecycle.
+- process end: exited/terminated through existing runtime lifecycle.
+
+Hook coverage is partial. Native `SessionStart` is lazy on the first turn, not a
+readiness signal. `SessionEnd` can mean conversation rotation while the process
+is still alive, so it does not mark the AO session exited. Native hook entries
+are direct `{command, match?, timeout?, description?}` arrays per event, not
+Claude matcher groups. Child/planner identities never replace the parent ID.
 
 The native machine session ID is captured from a documented hook field or the
 redacted machine session commands. `SessionInfo` persists it under AO's standard
@@ -183,7 +199,7 @@ documented package-manager locations; identity verification must parse
 
 ## Registration
 
-Only after upstream and adapter conformance pass:
+The AO integration includes:
 
 1. Add the Reasonix harness value and production registry constructor.
 2. Add a new SQLite migration widening only the current session harness check,
@@ -195,13 +211,14 @@ Only after upstream and adapter conformance pass:
 6. Verify create, launch, restore, message delivery, cancellation, kill,
    cleanup, daemon restart, and project-default flows.
 
-Reasonix will not enter `domain.AllHarnesses`, the registry, storage constraints,
-API enums, or UI pickers while any production gate remains unproven.
+Reasonix appears in the terminal harness domain, registry, storage constraints,
+API enums, and UI pickers. Compatibility qualification remains a launch-time
+requirement; installation or configured credentials alone do not prove it.
 
 ## Testing and verification
 
 Upstream tests must cover both interactive and `run` parsing, composition order,
-fresh launch, exact resume, invalid files, and redaction. A published-binary
+fresh launch, exact resume, invalid files, and redaction. An opt-in real-binary
 conformance test will additionally prove prompt role, native session identity,
 TUI readiness, cancellation, hook payloads, hook preservation, and restore.
 

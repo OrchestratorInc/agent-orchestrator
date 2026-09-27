@@ -70,11 +70,13 @@ The native headless `run_done` event still omits `session_id`. The upstream
 contract test reads the sole disposable native manifest to check exact identity;
 this does not prove AO hook identity capture or TUI restore conformance.
 
-**Release gate remains closed.** No AO adapter, registration, migration, API enum,
-installer entry, or selectable UI has been added. A tagged upstream release must
-include the flag, and the AO harness plan must then qualify that actual artifact
-for prompt roles, readiness, hooks, identity, permissions, and cancellation.
-Do not infer a minimum compatible version from this source commit.
+**AO continuation — 2026-09-27:** The user explicitly requested completing the
+AO integration in PR #5905 now. The prior registration-before-release restriction
+is superseded: AO now has an adapter, registration, migration, API enums,
+installer metadata, and selectable UI, guarded by launch-time executable identity
+and capability checks. Released v1.39.2 still fails those checks. Do not infer a
+minimum compatible version from the source commit; see the AO harness plan and
+`docs/harnesses/reasonix.md` for the current implementation and validation.
 
 ## Global Constraints
 
@@ -84,7 +86,7 @@ Do not infer a minimum compatible version from this source commit.
 - Preserve Reasonix's built-in/configured prompt, core policies, and hierarchical project instructions.
 - Missing, unreadable, invalid-UTF-8, and empty files fail before a model turn.
 - Prompt contents and the supplied path must not appear in diagnostics, JSONL events, or error strings.
-- Do not claim AO compatibility until this change exists in a tagged release and the release asset passes live conformance.
+- Record compatibility against the exact tested build; do not claim a released minimum until a tagged artifact passes live conformance.
 
 ## Review Focus
 
@@ -232,6 +234,6 @@ git add README.md reasonix.example.toml docs/CLI.md docs/CLI_HOST_INTEGRATION.md
 git commit -m "docs(cli): document external standing instructions"
 ```
 
-- [ ] **Step 6: Stop for upstream release**
+- [ ] **Step 6: Qualify the eventual upstream release**
 
-Upstream handoff is complete in PR #11059; maintainer review, release, and artifact qualification remain pending. Do not begin AO production registration until a tagged release contains the contract. Record its tag, commit, asset checksums, supported platforms, and exact `reasonix --version` output in the AO conformance evidence.
+Upstream handoff is complete in PR #11059; maintainer review, release, and artifact qualification remain pending. AO registration proceeds with its runtime capability gate per the user's explicit continuation. When a tagged release contains the contract, record its tag, commit, asset checksums, supported platforms, and exact `reasonix --version` output in the AO conformance evidence.

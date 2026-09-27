@@ -512,6 +512,8 @@ export function HarnessSettingsSection({
 
 						const authSummary = authState?.error
 								? authState.error
+							: authStatus === "configured"
+								? t("settings.harness.credentialsConfigured")
 							: authStatus === "authorized"
 								? (isSetupAction ? t("settings.harness.configured") : t("settings.harness.loggedIn"))
 								: authPlan && !authPlan.available
@@ -607,6 +609,10 @@ export function HarnessSettingsSection({
 							) : plan?.command ? (
 								<Button size="sm" variant="outline" onClick={() => void copyText(agentId, plan.command!)}>{copiedAgent === agentId ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{copiedAgent === agentId ? t("settings.harness.copied") : t("settings.harness.copyCommand")}</Button>
 							) : null}
+
+				{agentId === "reasonix" ? (
+					<p className="basis-full pl-10 text-xs text-settings-muted">{t("settings.harness.reasonixCompatibility")}</p>
+				) : null}
 
 				{!isInstalled && hasDiagnostics ? (
 				<div className="basis-full">

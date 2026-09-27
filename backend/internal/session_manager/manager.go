@@ -4978,7 +4978,8 @@ func systemPromptFileRequired(harness domain.AgentHarness) bool {
 		domain.HarnessKiro,
 		domain.HarnessOpenCode,
 		domain.HarnessCopilot,
-		domain.HarnessVibe:
+		domain.HarnessVibe,
+		domain.HarnessReasonix:
 		return true
 	default:
 		return false
@@ -5489,9 +5490,16 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 	if err != nil {
 		return fmt.Errorf("prompt readiness: %w", err)
 	}
+	detector, hasDetector := agent.(ports.TerminalActivityDetector)
+	if hints.RequireReady && (hints.Timeout <= 0 || (len(hints.Patterns) == 0 && !hasDetector)) {
+		return errors.New("prompt readiness: required readiness needs a positive timeout and a terminal detector or prompt pattern")
+	}
 	callerDeadline, hasCallerDeadline := ctx.Deadline()
 	if hints.InitialDelay > 0 {
 		if hasCallerDeadline && time.Until(callerDeadline)-promptDeliveryDeadlineReserve <= hints.InitialDelay {
+			if hints.RequireReady {
+				return errors.New("prompt readiness: insufficient caller deadline for required initial delay")
+			}
 			m.logger.Warn("prompt readiness skipped to preserve caller deadline for fallback delivery",
 				"sessionID", cfg.SessionID,
 				"kind", string(cfg.Kind),
@@ -5503,7 +5511,7 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 			return err
 		}
 	}
-	if len(hints.Patterns) == 0 || hints.Timeout <= 0 {
+	if !hints.RequireReady && (len(hints.Patterns) == 0 || hints.Timeout <= 0) {
 		return nil
 	}
 	poll := hints.PollInterval
@@ -5517,6 +5525,9 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 
 	waitTimeout, hasReadinessBudget := promptReadinessWaitTimeout(hints.Timeout, callerDeadline, hasCallerDeadline)
 	if !hasReadinessBudget {
+		if hints.RequireReady {
+			return errors.New("prompt readiness: insufficient caller deadline to prove readiness")
+		}
 		m.logger.Warn("prompt readiness skipped to preserve caller deadline for fallback delivery",
 			"sessionID", cfg.SessionID,
 			"kind", string(cfg.Kind),
@@ -5532,13 +5543,22 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 
 	for {
 		output, err := m.runtime.GetOutput(ctx, handle, lines)
-		if err == nil && promptOutputContains(output, hints.Patterns) {
-			return nil
+		if err == nil {
+			if hints.RequireReady && hasDetector {
+				if state, valid := detector.DetectTerminalActivity(output); valid && state == domain.ActivityIdle {
+					return nil
+				}
+			} else if promptOutputContains(output, hints.Patterns) {
+				return nil
+			}
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
+			if hints.RequireReady {
+				return fmt.Errorf("prompt readiness: terminal did not become ready within %s", waitTimeout)
+			}
 			// Prompt readiness is best-effort: a missing terminal marker must not
 			// block spawn forever or be treated as confirmed readiness. Fall back
 			// to delivering the prompt and make the degraded path observable.

@@ -1935,3 +1935,70 @@ func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
 		})
 	}
 }
+
+func TestReasonixHooksCaptureNativeIdentityWithoutContentOrDecisions(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	for _, tt := range []struct {
+		event, payload, state string
+		hits                  int
+	}{
+		{"session-start", `{"event":"SessionStart","sessionId":"native-1","source":"startup"}`, "", 1},
+		{"user-prompt-submit", `{"event":"UserPromptSubmit","sessionId":"native-1","prompt":"private prompt","turn":1}`, "active", 1},
+		{"pre-tool-use", `{"event":"PreToolUse","sessionId":"native-1","toolName":"bash","toolArgs":{"command":"private command"},"tool_name":"untrusted alias","tool_use_id":"fake"}`, "active", 1},
+		{"stop", `{"event":"Stop","sessionId":"native-1","lastAssistantText":"private response","turn":1}`, "waiting_input", 1},
+		{"session-start", `{"event":"SessionStart","sessionId":"subagent:child"}`, "", 0},
+		{"stop", `{"event":"Stop","sessionId":"native-1:planner"}`, "", 0},
+		{"stop", `{"event":"Stop","sessionId":"subagent"}`, "", 0},
+		{"stop", `{"event":"Stop","sessionId":"../invalid"}`, "", 0},
+		{"stop", `{"event":"PermissionRequest","sessionId":"native-1"}`, "", 0},
+		{"unknown", `{"event":"Unknown","sessionId":"native-1"}`, "", 0},
+		{"stop", `{"session_id":"native-1"}`, "", 0},
+		{"stop", `{`, "", 0},
+	} {
+		t.Run(tt.event+tt.payload, func(t *testing.T) {
+			before := capture.hits
+			stdout, _, err := executeCLI(t, Deps{In: strings.NewReader(tt.payload), ProcessAlive: func(int) bool { return true }}, "hooks", "reasonix", tt.event)
+			if err != nil || stdout != "" {
+				t.Fatalf("hook output=%q err=%v", stdout, err)
+			}
+			if got := capture.hits - before; got != tt.hits {
+				t.Fatalf("requests=%d want %d", got, tt.hits)
+			}
+			if tt.hits == 0 {
+				return
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if req.AgentSessionID != "native-1" || req.State != tt.state || req.LaunchID != "launch-1" {
+				t.Fatalf("request=%+v", req)
+			}
+			if req.LatestUserPrompt != "" || req.LatestAssistantUpdate != "" || req.ProviderTurnID != "" || req.CoordinationID != "" || req.ToolName != "" || req.ToolUseID != "" || req.Usage != nil {
+				t.Fatalf("unexpected raw or uncorrelated metadata: %+v", req)
+			}
+		})
+	}
+}
+
+func TestReasonixHookDeliveryHasDeadlineBelowNativeBlockingTimeout(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		deadline, ok := req.Context().Deadline()
+		if !ok || time.Until(deadline) > 2*time.Second {
+			t.Error("observer delivery can outlive Reasonix's blocking-hook timeout")
+		}
+		return http.DefaultTransport.RoundTrip(req)
+	})}
+	stdout, _, err := executeCLI(t, Deps{In: strings.NewReader(`{"event":"PreToolUse","sessionId":"native-1","toolName":"bash"}`), HTTPClient: client, ProcessAlive: func(int) bool { return true }}, "hooks", "reasonix", "pre-tool-use")
+	if err != nil || stdout != "" || capture.hits != 1 {
+		t.Fatalf("stdout=%q hits=%d err=%v", stdout, capture.hits, err)
+	}
+}
