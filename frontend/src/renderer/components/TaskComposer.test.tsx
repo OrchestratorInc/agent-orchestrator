@@ -569,7 +569,7 @@ describe("TaskComposer", () => {
 		);
 
 		expect(startTask()).toBeDisabled();
-		expect(screen.getByRole("status", { name: "loading project context…" })).toBeInTheDocument();
+		expect(screen.queryByTestId("execution-context")).not.toBeInTheDocument();
 		fireEvent.change(task(), { target: { value: "should wait" } });
 		fireEvent.keyDown(task(), { key: "Enter", shiftKey: false, altKey: false });
 		expect(h.post).not.toHaveBeenCalled();
@@ -1479,7 +1479,6 @@ describe("TaskComposer", () => {
 						selectionMode: "catalog",
 						models: [{ id: "gpt-5", label: "GPT-5", isDefault: true }],
 						allowCustom: true,
-						lastSuccessAt: "2026-09-23T08:00:00Z",
 						refreshState: "error",
 						refreshError: "Provider temporarily unavailable",
 						retryAt: "2026-09-23T08:05:00Z",

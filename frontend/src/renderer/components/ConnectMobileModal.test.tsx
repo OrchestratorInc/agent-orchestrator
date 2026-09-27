@@ -38,6 +38,9 @@ const { mobileStatus } = vi.hoisted(() => ({
 			port: 0,
 			reason: "",
 		},
+		keepAwake: undefined as
+			| undefined
+			| { supported: boolean; enabled: boolean; active: boolean; hasBattery: boolean },
 	},
 }));
 
@@ -106,6 +109,7 @@ beforeEach(() => {
 		port: 0,
 		reason: "",
 	};
+	mobileStatus.keepAwake = undefined;
 });
 
 test("QR payload carries host, port, and password for one-scan connect", () => {
@@ -570,4 +574,45 @@ test("does not offer an install when a connector already exists", async () => {
 	renderMobileSettings();
 
 	await waitFor(() => expect(screen.queryByTestId("mobile-install-cloudflared")).toBeNull());
+});
+
+// macOS only: the daemon reports the option unsupported elsewhere, and an older
+// daemon omits the block entirely. Neither should show a switch that cannot work.
+test.each([
+	{ name: "absent", keepAwake: undefined },
+	{ name: "unsupported", keepAwake: { supported: false, enabled: false, active: false, hasBattery: false } },
+])("hides the keep-awake option when it is $name", async ({ keepAwake }) => {
+	mobileStatus.keepAwake = keepAwake;
+	renderMobileSettings();
+	await screen.findByRole("button", { name: "Turn off mobile connection" });
+	expect(screen.queryByTestId("mobile-keep-awake")).not.toBeInTheDocument();
+});
+
+test("turns the keep-awake option on", async () => {
+	mobileStatus.keepAwake = { supported: true, enabled: false, active: false, hasBattery: false };
+	renderMobileSettings();
+
+	const toggle = await screen.findByRole("switch", { name: "Keep this Mac awake" });
+	expect(toggle).not.toBeChecked();
+	expect(screen.queryByTestId("mobile-keep-awake-laptop")).not.toBeInTheDocument();
+
+	// The daemon persists the choice, so the refetch after the POST reads it back.
+	vi.mocked(apiClient.POST).mockImplementationOnce(async () => {
+		mobileStatus.keepAwake = { supported: true, enabled: true, active: true, hasBattery: false };
+		return { data: {}, error: undefined } as never;
+	});
+	await userEvent.click(toggle);
+	expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/keep-awake", { body: { enabled: true } });
+	// Flipped immediately and never falls back to off while the refetch lands.
+	expect(toggle).toBeChecked();
+	await waitFor(() => expect(toggle).toBeChecked());
+});
+
+// Closing a MacBook's lid sleeps it regardless, so laptops get told up front.
+test("warns laptops that closing the lid still sleeps them", async () => {
+	mobileStatus.keepAwake = { supported: true, enabled: true, active: true, hasBattery: true };
+	renderMobileSettings();
+
+	expect(await screen.findByRole("switch", { name: "Keep this Mac awake" })).toBeChecked();
+	expect(screen.getByTestId("mobile-keep-awake-laptop")).toBeInTheDocument();
 });
