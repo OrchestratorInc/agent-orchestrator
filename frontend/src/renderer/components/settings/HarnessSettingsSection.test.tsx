@@ -100,8 +100,7 @@ function renderSection(focusAgentId?: string, selectorAgentId?: string) {
 	return { ...view, client };
 }
 
-function mockInstalledOperations(savedMethod?: string) {
-	const readiness = catalogWithInstalled("claude-code", "codex", "cursor");
+function mockInstalledOperations(savedMethod?: string, readiness = catalogWithInstalled("claude-code", "codex", "cursor")) {
 	const managedPlans = { agents: plans.agents.map((plan) => ({
 		...plan,
 		methods: plan.methods.map((method) => ({
@@ -209,12 +208,7 @@ describe("HarnessSettingsSection", () => {
 	});
 
 	it.each([undefined, "homebrew"])("does not trust an unsubmitted install choice after readiness refresh (saved method: %s)", async (savedMethod) => {
-		mockInstalledOperations(savedMethod);
-		const previousGet = vi.mocked(apiClient.GET).getMockImplementation()!;
-		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
-			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
-			return previousGet(path, options);
-		});
+		mockInstalledOperations(savedMethod, catalog);
 		const { client } = renderSection();
 		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
 		await userEvent.click(await within(row).findByRole("button", { name: "Installation method" }));
@@ -294,10 +288,10 @@ describe("HarnessSettingsSection", () => {
 
 	it("shows the daemon's active-session error and retries the same update", async () => {
 		mockInstalledOperations("npm");
-		const previousPost = vi.mocked(apiClient.POST).getMockImplementation()!;
-		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => {
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/{agent}/install") return { error: { error: "HARNESS_ACTIVE", code: "HARNESS_ACTIVE", message: "End the active Codex session before updating.", requestId: "test-active-session" } } as never;
-			return previousPost(path, options);
+			if (path === "/api/v1/agents/refresh" || path === "/api/v1/agents/readiness/ensure") return { data: catalogWithInstalled("claude-code", "codex", "cursor") } as never;
+			return { data: undefined } as never;
 		});
 		renderSection();
 		await userEvent.click(await screen.findByRole("button", { name: "Expand Codex options" }));
