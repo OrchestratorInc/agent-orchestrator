@@ -84,24 +84,30 @@ function canOpenRendered(file: WorkspaceFileSummary) {
 
 type ViewedRecord = Record<string, string>;
 
+function viewedStorageKey(sessionId: string, selectionKey: string) {
+	return `ao.files.viewed.${sessionId}.${selectionKey}`;
+}
+
+function readViewedRecords(key: string): ViewedRecord {
+	try {
+		return JSON.parse(window.localStorage.getItem(key) ?? "{}") as ViewedRecord;
+	} catch {
+		return {};
+	}
+}
+
+function isViewedRecord(file: WorkspaceFileSummary, records: ViewedRecord) {
+	return records[file.path] === (file.fileFingerprint ?? "legacy");
+}
+
 function useViewedFiles(sessionId: string, selectionKey: string, files: readonly WorkspaceFileSummary[]) {
-	const key = `ao.files.viewed.${sessionId}.${selectionKey}`;
-	const [records, setRecords] = useState<ViewedRecord>(() => {
-		try {
-			return JSON.parse(window.localStorage.getItem(key) ?? "{}") as ViewedRecord;
-		} catch {
-			return {};
-		}
-	});
+	const key = viewedStorageKey(sessionId, selectionKey);
+	const [records, setRecords] = useState<ViewedRecord>(() => readViewedRecords(key));
 	useEffect(() => {
-		try {
-			setRecords(JSON.parse(window.localStorage.getItem(key) ?? "{}") as ViewedRecord);
-		} catch {
-			setRecords({});
-		}
+		setRecords(readViewedRecords(key));
 	}, [key]);
 	const viewed = useMemo(
-		() => new Set(files.filter((file) => records[file.path] === (file.fileFingerprint ?? "legacy")).map((file) => file.path)),
+		() => new Set(files.filter((file) => isViewedRecord(file, records)).map((file) => file.path)),
 		[files, records],
 	);
 	const toggle = useCallback(
@@ -186,10 +192,11 @@ export function WorkspaceReviewPane({
 	const { viewed, toggle: toggleViewed } = useViewedFiles(sessionId, reviewSelectionKey, allFiles);
 
 	useEffect(() => {
-		setCollapsedPaths(new Set(files.filter(isDeferredByDefault).map((file) => file.path)));
+		const savedViewed = readViewedRecords(viewedStorageKey(sessionId, reviewSelectionKey));
+		setCollapsedPaths(new Set(files.filter((file) => isDeferredByDefault(file) || isViewedRecord(file, savedViewed)).map((file) => file.path)));
 		setLoadedDeferredPaths(new Set());
 		setActiveBatchCount(4);
-	}, [data.workspaceVersion, reviewSelectionKey]);
+	}, [data.workspaceVersion, files, reviewSelectionKey, sessionId]);
 
 	const requestedFiles = useMemo(
 		() => files.filter((file) => !isDeferredByDefault(file) || loadedDeferredPaths.has(file.path)),
@@ -241,6 +248,18 @@ export function WorkspaceReviewPane({
 		}
 		return result;
 	}, [patchQueries]);
+	// A batch still in flight (or still queued behind activeBatchCount) is the
+	// only reason a requested file can legitimately have no patch yet. Once its
+	// batch settles, a file with no diff is a failure the user can retry or step
+	// around, not a load that will finish on its own.
+	const pendingDiffPaths = useMemo(() => {
+		const result = new Set<string>();
+		batches.forEach((paths, index) => {
+			const query = patchQueries[index];
+			if (!query || query.isPending || query.isFetching) for (const path of paths) result.add(path);
+		});
+		return result;
+	}, [batches, patchQueries]);
 
 	const summaryById = useMemo(() => new Map(files.map((file) => [`${reviewSelectionKey}:${file.path}`, file])), [files, reviewSelectionKey]);
 	const items = useMemo<CodeViewItem<"feedback">[]>(
@@ -313,6 +332,19 @@ export function WorkspaceReviewPane({
 			return next;
 		});
 	}, [annotation]);
+	const collapsePath = useCallback((path: string) => {
+		if (annotation.target?.surface === "review" && annotation.target.path === path) annotation.cancel();
+		setCollapsedPaths((current) => {
+			if (current.has(path)) return current;
+			const next = new Set(current);
+			next.add(path);
+			return next;
+		});
+	}, [annotation]);
+	const markViewed = useCallback((file: WorkspaceFileSummary, checked: boolean) => {
+		toggleViewed(file);
+		if (checked) collapsePath(file.path);
+	}, [collapsePath, toggleViewed]);
 	const collapseAll = useCallback(() => {
 		if (annotation.target?.surface === "review") annotation.cancel();
 		setCollapsedPaths(new Set(files.map((file) => file.path)));
@@ -490,7 +522,7 @@ export function WorkspaceReviewPane({
 													aria-label={isViewed ? t("files.markUnviewed", { file: file.path }) : t("files.markViewed", { file: file.path })}
 													checked={isViewed}
 													className="size-4 border border-muted-foreground/70 bg-transparent"
-													onCheckedChange={() => toggleViewed(file)}
+													onCheckedChange={(checked) => markViewed(file, checked === true)}
 													style={isViewed ? { backgroundColor: "#fff", borderColor: "#fff", color: "#000" } : undefined}
 												/>
 											</HeaderActionTooltip>
@@ -506,11 +538,14 @@ export function WorkspaceReviewPane({
 				{files.filter((file) => file.binary || !metadataByPath.has(file.path)).map((file) => {
 					const deferred = isDeferredByDefault(file) && !loadedDeferredPaths.has(file.path);
 					const serverDeferredReason = serverDeferredByPath.get(file.path);
+					const pending = pendingDiffPaths.has(file.path);
+					const unavailable = !file.binary && !deferred && !serverDeferredReason && !pending;
 					return (
 					<div className="m-2 flex items-center gap-2 rounded-md border border-border bg-surface p-3" key={file.path}>
 						<FileCode2 aria-hidden="true" className="text-passive" />
-						<div className="min-w-0 flex-1"><p className="truncate font-mono text-xs">{file.path}</p><p className="text-caption text-muted-foreground">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : serverDeferredReason ? t("files.diffUnavailableReason", { reason: serverDeferredReason }) : t("files.loadingDiff")}</p></div>
+						<div className="min-w-0 flex-1"><p className="truncate font-mono text-xs">{file.path}</p><p className="text-caption text-muted-foreground">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : serverDeferredReason ? t("files.diffUnavailableReason", { reason: serverDeferredReason }) : pending ? t("files.loadingDiff") : t("files.diffUnavailable")}</p></div>
 						{deferred ? <Button onClick={() => setLoadedDeferredPaths((current) => new Set(current).add(file.path))} size="sm" type="button" variant="outline">{t("files.loadDiff")}</Button> : null}
+						{unavailable ? <RetryButton onClick={retryAll} /> : null}
 						<Button onClick={() => onOpenFile?.(file.path, { ...fileOpenContext, mode: "file" })} size="sm" type="button" variant="outline">{t("files.fileView")}</Button>
 					</div>
 					);

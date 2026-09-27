@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { keyboardOverlap, workerDockKeyboardLayout, workerDockVisibility, workerListBottomInset } from "./worker-dock-layout";
+import { workerDockKeyboardLayout, workerDockLift, workerDockRestingBottom, workerDockVisibility, workerListBottomInset } from "./worker-dock-layout";
 
 describe("worker dock keyboard layout", () => {
 	it("anchors the controls directly above the keyboard", () => {
 		expect(workerDockKeyboardLayout(336, 34, true)).toEqual({
 			rootPaddingBottom: 0,
 			dockBottom: 348,
+			restingBottom: 46,
 		});
 	});
 
@@ -13,6 +14,7 @@ describe("worker dock keyboard layout", () => {
 		expect(workerDockKeyboardLayout(0, 34, true)).toEqual({
 			rootPaddingBottom: 0,
 			dockBottom: 12,
+			restingBottom: 46,
 		});
 	});
 
@@ -20,6 +22,7 @@ describe("worker dock keyboard layout", () => {
 		expect(workerDockKeyboardLayout(0, 34, false)).toEqual({
 			rootPaddingBottom: 0,
 			dockBottom: 46,
+			restingBottom: 46,
 		});
 	});
 
@@ -29,13 +32,27 @@ describe("worker dock keyboard layout", () => {
 	});
 });
 
-describe("keyboardOverlap", () => {
-	it("derives visible keyboard overlap from its screen frame", () => {
-		expect(keyboardOverlap(844, 508, 336)).toBe(336);
+// The dock is positioned from a distance now, not a visibility flag: the flag
+// turns over when the keyboard has finished hiding, which left the buttons
+// hanging where the keyboard had been and then snapping back.
+describe("worker dock lift", () => {
+	it("sets the dock down 8pt above the keyboard", () => {
+		expect(workerDockRestingBottom(34) + workerDockLift(336, 34)).toBe(336 + 8);
 	});
 
-	it("returns zero once the keyboard frame is below the window", () => {
-		expect(keyboardOverlap(844, 844, 336)).toBe(0);
+	it("is shorter than the keyboard's height, because the dock starts higher than the screen edge", () => {
+		expect(workerDockLift(336, 34)).toBeLessThan(336);
+	});
+
+	it("is zero once the keyboard is at or below the resting line", () => {
+		// Resting is safeArea + 12, so a keyboard shorter than resting minus the
+		// gap has nothing to lift the dock over.
+		expect(workerDockLift(38, 34)).toBe(0);
+		expect(workerDockLift(0, 34)).toBe(0);
+	});
+
+	it("never lifts by the home indicator alone", () => {
+		expect(workerDockLift(20, 34)).toBe(0);
 	});
 });
 

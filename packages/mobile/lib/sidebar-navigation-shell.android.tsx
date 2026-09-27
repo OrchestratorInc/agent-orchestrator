@@ -1,4 +1,4 @@
-import { Feather, FontAwesome } from "@expo/vector-icons";
+import { Feather } from "./icons";
 import { usePathname, useRouter } from "expo-router";
 import {
 	createContext,
@@ -12,10 +12,8 @@ import {
 } from "react";
 import {
 	Animated,
-	AccessibilityInfo,
 	BackHandler,
 	FlatList,
-	Image,
 	PanResponder,
 	Pressable,
 	StyleSheet,
@@ -24,13 +22,15 @@ import {
 	View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import MASCOT from "../assets/mascot.png";
 import { AgentLogo } from "./AgentLogo";
+import { SidebarDestinationIcon } from "./sidebar-destination-icon";
+import { MascotLamp } from "./ui";
 import type { DashboardSession } from "./api";
 import { haptics } from "./haptics";
 import { sessionTitle } from "./sessionStatus";
 import {
 	activeSidebarDestination,
+	sidebarDestinationBadge,
 	RECENT_WORKERS_LABEL,
 	selectedPrimarySidebarDestination,
 	sidebarNavigationSettled,
@@ -43,42 +43,31 @@ import {
 import { sidebarGestureTarget, shouldCaptureSidebarGesture } from "./sidebar-gesture";
 import { SidebarSettingsButton } from "./sidebar-settings-button";
 import { SidebarSpawnButton } from "./sidebar-spawn-button";
+import { useReducedMotion } from "./useReducedMotion";
 import { useApp } from "./store";
 import { statusVisual, type Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
+import { SidebarNavigationContext, type SidebarScrollRequest } from "./sidebar-navigation-context";
+import { type, space } from "./tokens";
 
-type ScrollRequest = { destination: SidebarDestinationId; sequence: number };
-type SidebarNavigationContextValue = {
-	openSidebar: () => void;
-	scrollRequest: ScrollRequest | null;
-};
-
-const SidebarNavigationContext = createContext<SidebarNavigationContextValue | null>(null);
 let retainedDrawerOpen = false;
-
-export function useSidebarNavigation() {
-	const context = useContext(SidebarNavigationContext);
-	if (!context) throw new Error("useSidebarNavigation must be used within <SidebarNavigationShell>");
-	return context;
-}
-
-export function useOptionalSidebarNavigation() {
-	return useContext(SidebarNavigationContext);
-}
 
 export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	const styles = useThemedStyles(makeStyles);
-	const { sessions, projects } = useApp();
+	const { sessions, projects, connection } = useApp();
+	// See the iOS shell: cached sessions outlive a failed poll by design, so the
+	// drawer has to admit when what it is showing is no longer live.
+	const sessionsStale = connection !== "open";
 	const router = useRouter();
 	const pathname = usePathname();
 	const insets = useSafeAreaInsets();
 	const { width } = useWindowDimensions();
 	const [open, setOpen] = useState(retainedDrawerOpen);
-	const [reduceMotion, setReduceMotion] = useState(false);
+	const reduceMotion = useReducedMotion();
 	const progress = useRef(new Animated.Value(retainedDrawerOpen ? 1 : 0)).current;
 	const gestureStartedOpen = useRef(false);
 	const pendingClosePath = useRef<string | null>(null);
-	const [scrollRequest, setScrollRequest] = useState<ScrollRequest | null>(null);
+	const [scrollRequest, setScrollRequest] = useState<SidebarScrollRequest | null>(null);
 	const activeDestination = activeSidebarDestination(pathname);
 	const lastPrimaryDestination = useRef<PrimarySidebarDestinationId>("agents");
 	const selectedPrimaryDestination = selectedPrimarySidebarDestination(
@@ -92,20 +81,6 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 		() => new Map(projects.map((project) => [project.id, project.name])),
 		[projects],
 	);
-
-	useEffect(() => {
-		let mounted = true;
-		void AccessibilityInfo.isReduceMotionEnabled()
-			.then((enabled) => {
-				if (mounted) setReduceMotion(enabled);
-			})
-			.catch(() => {});
-		const subscription = AccessibilityInfo.addEventListener("reduceMotionChanged", setReduceMotion);
-		return () => {
-			mounted = false;
-			subscription.remove();
-		};
-	}, []);
 
 	const animateSidebar = useCallback((nextOpen: boolean) => {
 		retainedDrawerOpen = nextOpen;
@@ -239,7 +214,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 		>
 			<View style={styles.sidebarTop}>
 				<View style={styles.brandMascotSlot}>
-					<Image source={MASCOT} resizeMode="contain" style={styles.brandMascot} accessibilityLabel="AO mascot" />
+					<MascotLamp status={connection} size={55} />
 				</View>
 				<View style={styles.destinations}>
 					{sidebarDestinations.slice(0, -1).map((destination) => (
@@ -247,21 +222,22 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 							key={destination.id}
 							destination={destination}
 							active={destination.id === selectedPrimaryDestination}
+							badge={sidebarDestinationBadge(destination.id, sessions)}
 							onPress={() => selectDestination(destination)}
 						/>
 					))}
 				</View>
 			</View>
 
-			<Text style={styles.sectionLabel}>{RECENT_WORKERS_LABEL.toUpperCase()}</Text>
+			<Text style={styles.sectionLabel}>
+				{RECENT_WORKERS_LABEL.toUpperCase()}
+				{sessionsStale ? <Text style={styles.sectionLabelStale}>{"  ·  DISCONNECTED"}</Text> : null}
+			</Text>
 			<FlatList
 				data={liveSessions}
 				keyExtractor={(session) => `${session.projectId}:${session.id}`}
-				style={styles.sessionList}
-			contentContainerStyle={[
-				liveSessions.length === 0 ? styles.emptySessionList : styles.sessionListContent,
-				{ paddingBottom: insets.bottom + 76 },
-			]}
+				style={[styles.sessionList, sessionsStale && styles.sessionListStale]}
+				contentContainerStyle={liveSessions.length === 0 ? styles.emptySessionList : styles.sessionListContent}
 				showsVerticalScrollIndicator={false}
 				renderItem={({ item }) => (
 					<SessionRow
@@ -273,7 +249,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 				ListEmptyComponent={<Text style={styles.emptySessions}>No active sessions</Text>}
 			/>
 
-			<View pointerEvents="box-none" style={[styles.sidebarActions, { bottom: insets.bottom + 10 }]}>
+			<View pointerEvents="box-none" style={styles.sidebarActions}>
 				<SidebarSettingsButton active={activeDestination === "settings"} onPress={openSettings} />
 				<SidebarSpawnButton onPress={spawnWorker} />
 			</View>
@@ -305,9 +281,10 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	);
 }
 
-function DestinationRow({ destination, active, onPress }: {
+function DestinationRow({ destination, active, badge, onPress }: {
 	destination: SidebarDestination;
 	active: boolean;
+	badge?: number;
 	onPress: () => void;
 }) {
 	const t = useTheme();
@@ -317,18 +294,22 @@ function DestinationRow({ destination, active, onPress }: {
 			testID={`sidebar-${destination.id}`}
 			accessibilityRole="button"
 			accessibilityState={{ selected: active }}
-			android_ripple={{ color: t.tintBlue }}
+			android_ripple={{ color: t.accentTint }}
 			onPress={onPress}
 			style={({ pressed }) => [
 				styles.destination,
-				(active || pressed) && { backgroundColor: t.tintBlue },
+				(active || pressed) && { backgroundColor: t.accentTint },
 			]}
 		>
-			<Feather name={destination.icon} size={21} color={active ? t.blue : t.textSecondary} />
-			<Text numberOfLines={1} style={[styles.destinationLabel, active && { color: t.blue, fontWeight: "700" }]}>
+			<SidebarDestinationIcon destination={destination} active={active} color={active ? t.accent : t.textSecondary} />
+			<Text numberOfLines={1} style={[styles.destinationLabel, active && { fontFamily: "Geist_600SemiBold", color: t.accent, fontWeight: "600" }]}>
 				{destination.label}
 			</Text>
-			{active ? <Feather name="check" size={21} color={t.blue} /> : null}
+			{/* No check: the tinted row and the blue label already say which
+			    destination you are on, and every drawer worth copying settles for
+			    one or two such signals. The slot carries a count instead — the
+			    workers waiting on a person, which is why you opened the app. */}
+			{badge ? <Text style={styles.destinationBadge}>{badge}</Text> : null}
 		</Pressable>
 	);
 }
@@ -358,7 +339,12 @@ function SessionRow({ session, projectName, onPress }: {
 					<Text numberOfLines={1} style={styles.sessionMeta}>{statusLabel} · {projectName}</Text>
 				</View>
 			</View>
-			{session.isPinned ? <FontAwesome name="thumb-tack" size={14} color={t.textTertiary} style={{ transform: [{ rotate: "28deg" }] }} /> : null}
+			{/* Upright, like the desktop's own row (`{isPinned ? <PinOff/> : <Pin/>}` with
+			    no rotation anywhere). It was tilted 28° here and in the rail to match a
+			    tilt the desktop does not have — and a rotated glyph does not sit in the
+			    middle of its button: on Android the rail's pin measured 11px left of
+			    centre in an 81px circle, where the untilted trash beside it was 0.6px. */}
+			{session.isPinned ? <Feather name="pin" size={14} color={t.textTertiary} /> : null}
 		</Pressable>
 	);
 }
@@ -390,57 +376,60 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 		bottom: 88,
 		width: 64,
 	},
-	sidebar: { flex: 1, paddingHorizontal: 16, backgroundColor: t.bgSide },
+	sidebar: { flex: 1, paddingHorizontal: space.lg, backgroundColor: t.bgSide },
 	sidebarTop: { height: 232 },
-	brandMascotSlot: { width: 72, height: 62, paddingLeft: 14, justifyContent: "center" },
+	brandMascotSlot: { width: 72, height: 62, paddingLeft: space.md, justifyContent: "center" },
 	brandMascot: { width: 58, height: 48 },
-	destinations: { gap: 7, paddingTop: 8 },
+	destinations: { gap: space.xs, paddingTop: space.sm },
 	destination: {
 		height: 52,
-		paddingHorizontal: 14,
-		borderRadius: 13,
-		borderCurve: "continuous",
-		flexDirection: "row",
-		alignItems: "center",
-		gap: 13,
-		overflow: "hidden",
-	},
-	destinationLabel: { flex: 1, color: t.textPrimary, fontSize: 17, lineHeight: 22, fontWeight: "600" },
-	sectionLabel: {
-		paddingTop: 8,
-		paddingBottom: 8,
-		paddingHorizontal: 12,
-		color: t.textTertiary,
-		fontSize: 12,
-		fontWeight: "700",
-		letterSpacing: 0.7,
-	},
-	sessionList: { flex: 1 },
-	sessionListContent: { paddingBottom: 8 },
-	emptySessionList: { flexGrow: 1 },
-	emptySessions: { paddingHorizontal: 12, paddingTop: 8, color: t.textTertiary, fontSize: 14 },
-	sessionRow: {
-		minHeight: 58,
-		paddingHorizontal: 12,
-		paddingVertical: 9,
+		paddingHorizontal: space.md,
 		borderRadius: 12,
 		borderCurve: "continuous",
 		flexDirection: "row",
 		alignItems: "center",
-		gap: 11,
+		gap: space.md,
+		overflow: "hidden",
+	},
+	destinationLabel: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textPrimary, fontSize: type.body.fontSize, lineHeight: type.body.lineHeight, fontWeight: "600" },
+	// Amber, not the selection blue: this is attention owed, and it must read
+	// the same whether or not you are standing on that destination.
+	destinationBadge: { fontFamily: "Geist_600SemiBold", minWidth: 22, textAlign: "center", color: t.amber, fontSize: type.footnote.fontSize, fontWeight: "600", fontVariant: ["tabular-nums"] },
+	sectionLabel: { fontFamily: "Geist_600SemiBold",
+		paddingTop: space.sm,
+		paddingBottom: space.sm,
+		paddingHorizontal: space.md,
+		color: t.textTertiary,
+		fontSize: type.caption1.fontSize,
+		fontWeight: "600",
+		letterSpacing: 0.7,
+	},
+	sectionLabelStale: { color: t.amber },
+	sessionList: { flex: 1 },
+	sessionListStale: { opacity: 0.55 },
+	sessionListContent: { paddingBottom: space.sm },
+	emptySessionList: { flexGrow: 1 },
+	emptySessions: { fontFamily: "Geist_400Regular", paddingHorizontal: space.md, paddingTop: space.sm, color: t.textTertiary, fontSize: type.subheadline.fontSize },
+	sessionRow: {
+		minHeight: 58,
+		paddingHorizontal: space.md,
+		paddingVertical: space.sm,
+		borderRadius: 12,
+		borderCurve: "continuous",
+		flexDirection: "row",
+		alignItems: "center",
+		gap: space.md,
 		overflow: "hidden",
 	},
 	sessionRowPressed: { backgroundColor: t.bgSubtle },
 	sessionText: { flex: 1, minWidth: 0 },
-	sessionTitle: { color: t.textPrimary, fontSize: 15, fontWeight: "600" },
-	sessionMetaRow: { marginTop: 4, flexDirection: "row", alignItems: "center", gap: 6 },
-	statusDot: { width: 6, height: 6, borderRadius: 3 },
-	sessionMeta: { flex: 1, color: t.textTertiary, fontSize: 12 },
+	sessionTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, fontWeight: "600", includeFontPadding: false },
+	sessionMetaRow: { marginTop: 2, flexDirection: "row", alignItems: "center", gap: space.xs },
+	statusDot: { width: 6, height: 6, borderRadius: 4 },
+	sessionMeta: { fontFamily: "Geist_400Regular", flex: 1, color: t.textTertiary, fontSize: type.caption1.fontSize, includeFontPadding: false },
 	sidebarActions: {
-		position: "absolute",
-		left: 28,
-		right: 28,
-		height: 48,
+		height: 52,
+		marginHorizontal: 4,
 		flexDirection: "row",
 		alignItems: "center",
 		justifyContent: "space-between",

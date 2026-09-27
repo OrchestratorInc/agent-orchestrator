@@ -31,7 +31,9 @@ var routineInternalCLICommands = []string{
 	"ao orchestrator ls",
 	"ao hooks",
 	"ao pty-host",
+	"ao unreal-provider",
 	"ao codex-login",
+	"ao claude-login",
 }
 
 // CLIActorType infers the actor for legacy loopback CLI telemetry requests that
@@ -57,7 +59,7 @@ func CLIActorType(actorType, commandPath string) string {
 	case "ao session agent-switch", "ao session agent-switch ls", "ao session switch-agent":
 		return "user"
 	}
-	if normalized == "ao hooks" {
+	if normalized == "ao hooks" || normalized == "ao report" {
 		return "agent"
 	}
 	return "system"
@@ -72,11 +74,19 @@ var legacyActorlessSystemCLICommands = map[string]struct{}{
 	"ao help":                    {},
 	"ao pty-host":                {},
 	"ao start":                   {},
+	"ao unreal-provider":         {},
 }
 
 var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao agent":                  {},
 	"ao agent ls":               {},
+	"ao automation":             {},
+	"ao automation create":      {},
+	"ao automation delete":      {},
+	"ao automation get":         {},
+	"ao automation list":        {},
+	"ao automation runs":        {},
+	"ao automation update":      {},
 	"ao browser":                {},
 	"ao browser act":            {},
 	"ao browser check":          {},

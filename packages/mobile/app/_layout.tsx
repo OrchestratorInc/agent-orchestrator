@@ -1,7 +1,17 @@
-import { Stack } from "expo-router";
+// Per weight, not from the package root: the barrels pull every face the family
+// ships, and this app draws four of the thirty-six.
+import { Geist_400Regular } from "@expo-google-fonts/geist/400Regular";
+import { Geist_500Medium } from "@expo-google-fonts/geist/500Medium";
+import { Geist_600SemiBold } from "@expo-google-fonts/geist/600SemiBold";
+import { GeistMono_400Regular } from "@expo-google-fonts/geist-mono/400Regular";
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider as NavigationThemeProvider } from "expo-router";
+import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
-import { Platform } from "react-native";
+import { useFonts } from "expo-font";
+import { useEffect, useMemo } from "react";
+import { Platform, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { OnboardingGate } from "../lib/OnboardingGate";
 import { TelemetryManager } from "../lib/TelemetryManager";
@@ -9,6 +19,8 @@ import { PushManager } from "../lib/PushManager";
 import { UpdatesManager } from "../lib/UpdatesManager";
 import { StoreUpdateManager } from "../lib/StoreUpdateManager";
 import { MinimalBackButton } from "../lib/MinimalBackButton";
+import { glassHeaderControl } from "../lib/native-header-items";
+import { LayoutGrid } from "../lib/layoutGrid";
 import { AppProvider } from "../lib/store";
 import { ThemeProvider, useTheme, useThemeState } from "../lib/ThemeProvider";
 
@@ -29,7 +41,6 @@ const SHEET_ROUTES = [
 	{ name: "sheets/conversation-actions", detents: [0.6, 0.95] },
 	{ name: "sheets/conversation-rename", detents: [0.35, 0.65] },
 	{ name: "sheets/composer-picker", detents: [0.6, 0.95] },
-	{ name: "sheets/theme", detents: "fitToContents" },
 	{ name: "sheets/store-update", detents: "fitToContents" },
 ] as const;
 
@@ -55,19 +66,47 @@ const CONNECT_SHEET_OPTIONS = {
 	headerShown: false,
 } as const;
 
+// Held until the faces are in, so the wait is spent on the splash instead of on
+// an empty root. The tree draws nothing without the family, and the splash is the
+// only thing that can cover that gap.
+void SplashScreen.preventAutoHideAsync().catch(() => {});
+
 export default function RootLayout() {
+	// The desktop's family, loaded before anything else draws: rendering the tree
+	// first would paint one frame of SF Pro and then swap every label under it.
+	//
+	// `error` matters as much as `loaded`. A face that fails to load never flips
+	// `loaded`, so waiting on that flag alone left the app on a blank root forever,
+	// with no way out and nothing on screen to say why. A missing family is worth
+	// losing to a system fallback; it is not worth losing the app to.
+	const [fontsReady, fontError] = useFonts({ Geist_400Regular, Geist_500Medium, Geist_600SemiBold, GeistMono_400Regular });
+	const fontsSettled = fontsReady || fontError != null;
+	useEffect(() => {
+		if (fontsSettled) void SplashScreen.hideAsync().catch(() => {});
+	}, [fontsSettled]);
+	if (!fontsSettled) return null;
+
 	// ThemeProvider sits outside everything that reads a colour, including the
 	// Stack's own screenOptions below — hence the inner component: a hook cannot
 	// consume a provider its own component renders.
 	return (
 		<GestureHandlerRootView style={{ flex: 1 }}>
-			<SafeAreaProvider>
-				<ThemeProvider>
-					<AppProvider>
-						<Shell />
-					</AppProvider>
-				</ThemeProvider>
-			</SafeAreaProvider>
+			{/* Sits above everything that positions itself against the keyboard. It
+			    reports the IME frame-by-frame, which the platform listeners cannot:
+			    Android only fires `keyboardDidShow` once the keyboard has finished
+			    animating, so every dock and composer arrived a beat late. */}
+			<KeyboardProvider>
+				<SafeAreaProvider>
+					<ThemeProvider>
+						<AppProvider>
+							<Shell />
+						</AppProvider>
+					</ThemeProvider>
+				</SafeAreaProvider>
+			</KeyboardProvider>
+			{/* Dev-only measurement overlay, mounted as a sibling of the whole app so it
+			    resolves against the full screen rather than a provider's box. */}
+			<LayoutGrid />
 		</GestureHandlerRootView>
 	);
 }
@@ -75,8 +114,26 @@ export default function RootLayout() {
 function Shell() {
 	const t = useTheme();
 	const { scheme } = useThemeState();
+	const navigationTheme = useMemo(
+		() => ({
+			...(scheme === "dark" ? DarkTheme : DefaultTheme),
+			colors: {
+				...DarkTheme.colors,
+				primary: t.accent,
+				background: t.bgBase,
+				card: t.bgSurface,
+				text: t.textPrimary,
+				border: t.borderSubtle,
+				notification: t.red,
+			},
+		}),
+		[t, scheme],
+	);
 	return (
-		<>
+		// Themed backdrop behind the navigator. Every view above this one is
+		// transparent, so without it the transition between two screens revealed the
+		// platform's default view colour — a white flash around the page as it moved.
+		<View style={{ flex: 1, backgroundColor: t.bgBase }}>
 			{/* Light content on a dark app, dark content on a light one. */}
 			<StatusBar style={scheme === "dark" ? "light" : "dark"} />
 			<TelemetryManager />
@@ -84,11 +141,27 @@ function Shell() {
 			<UpdatesManager />
 			<StoreUpdateManager />
 			<OnboardingGate />
+			{/* The navigator paints surfaces of its own, and it reads them from *its*
+			    theme, not from the palette above. Two of those surfaces are visible
+			    only while a page moves: the stack's own container, which shows
+			    through the seam between the outgoing and incoming screens, and the
+			    content view underneath a screen's own background. Left on the
+			    navigator's defaults they are white — the edge that appeared around
+			    the page mid-transition — so the theme carries our palette into the
+			    native layer instead. */}
+			<NavigationThemeProvider value={navigationTheme}>
 			<Stack
 				screenOptions={{
+					// One push animation for every page: the platform's own slide. Named
+					// rather than left to "default" so a sub-page never picks up a
+					// different presentation than the page beside it.
+					animation: "slide_from_right",
 					headerStyle: { backgroundColor: t.bgSurface },
-					headerTintColor: t.textPrimary,
-					headerTitleStyle: { fontWeight: "700" },
+					// Every native header control draws its glyph in this tone. At `textPrimary`
+					// the back and action buttons on sub-pages came out near-white — brighter
+					// than the identical-looking glass buttons on the board, which use this one.
+					headerTintColor: t.textSecondary,
+					headerTitleStyle: { fontFamily: "Geist_600SemiBold", fontWeight: "600" },
 					headerShadowVisible: false,
 					headerBackButtonDisplayMode: "minimal",
 					contentStyle: { backgroundColor: t.bgBase },
@@ -107,10 +180,9 @@ function Shell() {
 						contentStyle: { backgroundColor: t.bgBase },
 					}}
 				/>
-				<Stack.Screen name="session/[id]" options={{ title: "Session", headerBackButtonDisplayMode: "minimal", headerLeft: () => <MinimalBackButton /> }} />
-				<Stack.Screen name="shell/[handleId]" options={{ title: "Worktree shell", headerBackButtonDisplayMode: "minimal", headerLeft: () => <MinimalBackButton /> }} />
-				<Stack.Screen name="preview/[id]" options={{ title: "Preview", headerBackButtonDisplayMode: "minimal", headerLeft: () => <MinimalBackButton /> }} />
-				<Stack.Screen name="project/[id]" options={{ title: "Project", headerBackButtonDisplayMode: "minimal", headerLeft: () => <MinimalBackButton /> }} />
+				<Stack.Screen name="session/[id]" options={{ title: "Session", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
+				<Stack.Screen name="shell/[handleId]" options={{ title: "Worktree shell", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
+				<Stack.Screen name="preview/[id]" options={{ title: "Preview", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen
 					name="spawn"
 					options={{
@@ -121,7 +193,11 @@ function Shell() {
 						presentation: Platform.OS === "ios" ? "formSheet" : "transparentModal",
 						headerShown: false,
 						sheetAllowedDetents: Platform.OS === "ios" ? [0.5, 0.9] : undefined,
-						sheetInitialDetentIndex: 0,
+						// Opens tall on iOS. At the half detent the keyboard is taller
+						// than the sheet, so the selectors and Start task had nowhere to
+						// go and ended up clipped beneath it; dragging down to half is
+						// still there for anyone who wants the board behind it.
+						sheetInitialDetentIndex: Platform.OS === "ios" ? 1 : 0,
 						sheetGrabberVisible: Platform.OS === "ios",
 						sheetCornerRadius: 24,
 						contentStyle: { backgroundColor: Platform.OS === "ios" ? t.bgSurface : "transparent" },
@@ -136,6 +212,8 @@ function Shell() {
 						headerShown: false,
 					}}
 				/>
+				{/* Draws its own header, like notifications, so the title can be the project. */}
+				<Stack.Screen name="project/[id]" options={{ headerShown: false }} />
 				<Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false }} />
 				<Stack.Screen name="pair" options={{ presentation: "modal", headerShown: false }} />
 
@@ -172,6 +250,7 @@ function Shell() {
 					options={{ ...CONNECT_SHEET_OPTIONS, contentStyle: { backgroundColor: t.bgSurface } }}
 				/>
 			</Stack>
-		</>
+			</NavigationThemeProvider>
+		</View>
 	);
 }

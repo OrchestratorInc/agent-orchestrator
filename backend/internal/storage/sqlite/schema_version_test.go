@@ -32,6 +32,41 @@ func TestMigrateStampsSchemaAppVersion(t *testing.T) {
 	}
 }
 
+func TestMigrateRepairsPriorSchemaAppVersionMigrationNumber(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 148)
+	if _, err := db.Exec(`
+CREATE TABLE schema_app_version (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    version INTEGER NOT NULL CHECK (version >= 0),
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO schema_app_version (id, version) VALUES (1, 149);
+INSERT INTO goose_db_version (version_id, is_applied) VALUES (149, 1);
+`); err != nil {
+		t.Fatalf("seed prior PR migration: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate prior PR database: %v", err)
+	}
+	var reviewerColumns, applied149, version int64
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('review') WHERE name = 'interface_mode'`).Scan(&reviewerColumns); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 149 AND is_applied = 1`).Scan(&applied149); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT version FROM schema_app_version WHERE id = 1`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if reviewerColumns != 1 || applied149 != 1 || version != 163 {
+		t.Fatalf("reviewer columns = %d, applied 0149 = %d, stamped version = %d; want 1, 1, 163", reviewerColumns, applied149, version)
+	}
+	if err := migrate(db); err != nil {
+		t.Fatalf("repeat migration: %v", err)
+	}
+}
+
 func TestMigrateRefusesNewerSchemaAppVersion(t *testing.T) {
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
 	if err != nil {

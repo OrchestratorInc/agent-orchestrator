@@ -1,13 +1,17 @@
-import { Feather } from "@expo/vector-icons";
+import { Feather } from "../icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Image, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import Animated, { useAnimatedStyle } from "react-native-reanimated";
+import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { haptics } from "../haptics";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
+import { fontScaleCap, iconSize, space, type } from "../tokens";
+import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { MicKey } from "../voice/MicKey";
 import { useVoiceInput } from "../voice/useVoiceInput";
 import { activeTurn, type ChatConfigOption, type ChatImage, type ChatModel, type ChatResource, type ChatSkill, type ConversationSnapshot, type TurnSettings } from "./types";
@@ -19,8 +23,12 @@ import {
 } from "./composerSuggestions";
 import { chatSheetRoute } from "./chatSheetRegistry";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
+import { ComposerGlass, composerGlassSupported } from "./composer-glass";
 import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
 import { composerDeliveryPresentation, composerDeliveryRoute, composerPrimaryAction, type ComposerDeliveryIntent } from "./composerDeliveryModel";
+import { contextMeterModel } from "./contextMeter";
+import { RequestCard } from "./RequestCard";
+import type { RequestDockModel } from "./requestDockModel";
 import { createRequestGate } from "./requestGate";
 import { queuedConversationMessages } from "./timelineModel";
 
@@ -29,6 +37,22 @@ type Attachment =
 	| { id: string; kind: "resource"; name: string; bytes: number; resource: ChatResource };
 
 const MAX_EMBEDDED_FILE_BYTES = 500_000;
+
+/** The pill's resting height; it grows with the field up to COMPOSER_MAX_HEIGHT. */
+export const COMPOSER_HEIGHT = 56;
+export const COMPOSER_FIELD_HEIGHT = 44;
+/**
+ * Where the pill stops growing and the field starts scrolling instead.
+ *
+ * Main's numbers, kept because they were tuned against the same transcript: about
+ * six lines of a reply's worth of prompt, so the composer can never swallow the
+ * conversation it is writing into.
+ */
+const COMPOSER_MAX_HEIGHT = 150;
+const COMPOSER_FIELD_MAX_HEIGHT = 138;
+const COMPOSER_LINE_HEIGHT = type.subheadline.lineHeight;
+/** The pill's corner, and so also the radius of the glass drawn behind it. */
+const COMPOSER_RADIUS = 28;
 const MAX_ATTACHMENTS = 8;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_BYTES_TOTAL = 25 * 1024 * 1024;
@@ -48,7 +72,6 @@ export function ChatComposer({
 	pending,
 	interrupting,
 	disabled,
-	error,
 	onSend,
 	onSteer,
 	onPromoteQueuedTurn,
@@ -57,7 +80,15 @@ export function ChatComposer({
 	onOpenSettings,
 	onSettings,
 	onConfigOption,
-	bottomInset,
+	restingInset,
+	quotaActive,
+	request,
+	requestDismissed,
+	onRequestDecide,
+	onRequestResolveInput,
+	onShowRequest,
+	onDismissRequest,
+	onRestoreRequest,
 }: {
 	sessionId: string;
 	snapshot: ConversationSnapshot;
@@ -72,7 +103,6 @@ export function ChatComposer({
 	pending?: boolean;
 	interrupting?: boolean;
 	disabled?: boolean;
-	error?: string;
 	onSend(text: string, attachments?: ChatImage[], resources?: ChatResource[]): Promise<void>;
 	onSteer(text: string): Promise<void>;
 	onPromoteQueuedTurn(turnId: string): Promise<void>;
@@ -81,13 +111,36 @@ export function ChatComposer({
 	onOpenSettings(): void;
 	onSettings(settings: TurnSettings): Promise<void>;
 	onConfigOption(id: string, value: { value: string } | { enabled: boolean }): Promise<ChatConfigOption[]>;
-	bottomInset: number;
+	/**
+	 * What the dock owes with the keyboard down — the home-indicator inset. The
+	 * dock keeps it at all times and closes the difference to the keyboard by
+	 * itself; see `dockRise` below.
+	 */
+	restingInset: number;
+	/** The account-quota banner is up, so the context meter stands down. */
+	quotaActive?: boolean;
+	/** A pending request, which takes the composer's place until it is answered. */
+	request?: RequestDockModel | null;
+	/** The user pushed the request aside to type instead. */
+	requestDismissed?: boolean;
+	onRequestDecide(requestId: string, decisionId: string): Promise<void>;
+	onRequestResolveInput(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>): Promise<void>;
+	onShowRequest(sequence: number): void;
+	onDismissRequest(): void;
+	onRestoreRequest(): void;
 }) {
 	const t = useTheme();
 	const router = useRouter();
 	const styles = useThemedStyles(makeStyles);
+	// The keyboard's own progress, 0 closed to 1 open. This is the same value the
+	// keyboard is animating with, so the dock moves in lockstep with it.
+	const keyboard = useReanimatedKeyboardAnimation();
+	const dockRise = useAnimatedStyle(() => ({
+		transform: [{ translateY: (restingInset - KEYBOARD_DOCK_GAP) * keyboard.progress.value }],
+	}));
 	const [text, setText] = useState("");
 	const [cursor, setCursor] = useState(0);
+	const [fieldHeight, setFieldHeight] = useState(COMPOSER_FIELD_HEIGHT);
 	const [attachments, setAttachments] = useState<Attachment[]>([]);
 	const [localError, setLocalError] = useState<string>();
 	const [submitting, setSubmitting] = useState(false);
@@ -97,6 +150,19 @@ export function ChatComposer({
 	const active = Boolean(activeTurn(snapshot));
 	const queuedMessages = useMemo(() => queuedConversationMessages(snapshot), [snapshot]);
 	const visibleQueuedMessages = useMemo(() => queuedMessages.filter((entry) => !hiddenQueuedTurnIds.has(entry.turnId)), [hiddenQueuedTurnIds, queuedMessages]);
+	// Absent below 70%: a permanent token gauge is chrome nobody reads.
+	const contextMeter = contextMeterModel(snapshot.usage, Boolean(quotaActive));
+	// A blocking question is the next thing to do, so it takes the input's place
+	// rather than pointing at a card somewhere up the timeline.
+	const requestCard = request && !requestDismissed ? (
+		<RequestCard
+			model={request}
+			onDecide={onRequestDecide}
+			onResolveInput={onRequestResolveInput}
+			onShow={onShowRequest}
+			onDismiss={onDismissRequest}
+		/>
+	) : null;
 	const canSteer = snapshot.capabilities?.includes("steer") && !steerUnavailable && active;
 	const canEmbedFiles = snapshot.capabilities?.includes("embedded_context");
 	const hasDraft = Boolean(text.trim());
@@ -129,6 +195,10 @@ export function ChatComposer({
 		if (submitting || pending || disabled) return;
 		const trimmed = text.trim();
 		if (!trimmed && attachments.length === 0) return;
+		// Dismissed on the tap, not after the send lands. Waiting for the request
+		// tied the keyboard's exit to the network, so it dropped whenever the
+		// answer arrived — which read as the keyboard being taken away mid-sentence.
+		Keyboard.dismiss();
 		setLocalError(undefined);
 		setSubmitting(true);
 		try {
@@ -137,10 +207,11 @@ export function ChatComposer({
 			const route = composerDeliveryRoute(intent, steerEligible);
 			if (route === "steer") await onSteer(trimmed);
 			else await onSend(trimmed, images.length ? images : undefined, resources.length ? resources : undefined);
+			latestText.current = "";
 			setText("");
+			setFieldHeight(COMPOSER_FIELD_HEIGHT);
 			setAttachments([]);
 			void AsyncStorage.removeItem(draftKey);
-			Keyboard.dismiss();
 			haptics.success();
 		} catch (cause) {
 			setLocalError(cause instanceof Error ? cause.message : String(cause));
@@ -173,7 +244,7 @@ export function ChatComposer({
 			setAttachments(accepted);
 			setLocalError(errors.size ? [...errors].join(" ") : undefined);
 		} catch (cause) {
-			setLocalError(cause instanceof Error ? cause.message : "Could not open the photo library.");
+			setLocalError(cause instanceof Error ? cause.message : "Couldn't open your photo library.");
 		}
 	};
 	const addFile = async () => {
@@ -227,10 +298,16 @@ export function ChatComposer({
 		void openPicker(suggestion.kind, suggestion);
 	}, [cursor, openPicker, pickerGate, text]);
 	return (
-		<View style={[styles.dock, { paddingBottom: bottomInset }]}>
+		// The dock holds its resting inset at all times and rides the keyboard's own
+		// progress to close the difference, so its distance to the keyboard is
+		// `KEYBOARD_DOCK_GAP` at every frame of the animation rather than only once
+		// the keyboard has finished moving.
+		<Animated.View style={[styles.dock, { paddingBottom: restingInset }, dockRise]}>
 			{voice.state === "starting" || voice.state === "recording" ? <View style={styles.voice}><Feather name="mic" size={12} color={t.red} /><Text style={styles.voiceText}>{voice.partial || (voice.state === "starting" ? "Keep holding…" : "Listening…")}</Text></View> : null}
-			{attachments.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>{attachments.map((item) => <View key={item.id} style={styles.attachment}>{item.kind === "image" ? <Image accessibilityIgnoresInvertColors source={{ uri: `data:${item.image.mimeType};base64,${item.image.data}` }} style={styles.attachmentImage} /> : <Feather name="file-text" size={13} color={t.blue} />}<Text numberOfLines={1} style={styles.attachmentName}>{item.name}</Text><Pressable hitSlop={7} accessibilityLabel={`Remove ${item.name}`} onPress={() => { haptics.tap(); setAttachments((old) => old.filter((candidate) => candidate.id !== item.id)); }}><Feather name="x" size={13} color={t.textTertiary} /></Pressable></View>)}</ScrollView> : null}
-			{error || localError || voice.error ? <Text accessibilityRole="alert" style={styles.error}>{localError || error || voice.error}</Text> : null}
+			{attachments.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>{attachments.map((item) => <View key={item.id} style={styles.attachment}>{item.kind === "image" ? <Image accessibilityIgnoresInvertColors source={{ uri: `data:${item.image.mimeType};base64,${item.image.data}` }} style={styles.attachmentImage} /> : <Feather name="file-text" size={12} color={t.accent} />}<Text numberOfLines={1} style={styles.attachmentName}>{item.name}</Text><Pressable hitSlop={7} accessibilityLabel={`Remove ${item.name}`} onPress={() => { haptics.tap(); setAttachments((old) => old.filter((candidate) => candidate.id !== item.id)); }}><Feather name="x" size={12} color={t.textTertiary} /></Pressable></View>)}</ScrollView> : null}
+			{/* Composer-local only. Conversation and action failures are banners above
+			    the timeline; echoing them here showed one failure twice. */}
+			{localError || voice.error ? <Text accessibilityRole="alert" style={styles.error}>{localError || voice.error}</Text> : null}
 			<View style={styles.metaRow}>
 				<View style={styles.settingsSlot}>
 				<ChatTurnSettingsControl snapshot={snapshot} models={models} options={configOptions ?? []} disabled={disabled || stopped || pending || submitting} onSettings={onSettings} onOption={onConfigOption} onOpenFallback={onOpenSettings} />
@@ -238,7 +315,13 @@ export function ChatComposer({
 				{deliveryPresentation.showQueueNote ? <View style={styles.deliveryNote}>
 					<Feather name="clock" size={12} color={t.textTertiary} />
 					<Text numberOfLines={1} style={styles.deliveryNoteText}>{attachments.length ? "Attachments next" : "Sent after this"}</Text>
-					{deliveryPresentation.showSteerAction ? <Pressable accessibilityRole="button" accessibilityLabel="Steer this turn now" disabled={disabled || submitting || pending} onPress={() => { haptics.tap(); void submit("steer"); }} style={({ pressed }) => [styles.steerAction, pressed && { opacity: 0.7 }]}><Feather name="corner-up-right" size={14} color={t.blue} /></Pressable> : null}
+					{deliveryPresentation.showSteerAction ? <Pressable accessibilityRole="button" accessibilityLabel="Steer this turn now" disabled={disabled || submitting || pending} onPress={() => { haptics.tap(); void submit("steer"); }} style={({ pressed }) => [styles.steerAction, pressed && { opacity: 0.7 }]}><Feather name="corner-up-right" size={15} color={t.accent} /></Pressable> : null}
+				</View> : null}
+				{contextMeter ? <View accessibilityRole="progressbar" accessibilityLabel={`Context window ${contextMeter.percent}% used`} style={styles.contextMeter}>
+					<View style={styles.contextTrack}>
+						<View style={[styles.contextFill, { width: `${contextMeter.fillPercent}%`, backgroundColor: contextMeter.severity === "critical" ? t.red : t.amber }]} />
+					</View>
+					<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.contextText, { color: contextMeter.severity === "critical" ? t.red : t.amber }]}>{contextMeter.label}</Text>
 				</View> : null}
 			</View>
 			{visibleQueuedMessages.length ? <View accessibilityRole="list" style={styles.queueDock}>
@@ -247,7 +330,7 @@ export function ChatComposer({
 					const cancelling = cancellingQueuedTurnId === entry.turnId;
 					const queueActionPending = Boolean(promotingQueuedTurnId || cancellingQueuedTurnId);
 					return <View key={entry.turnId} style={[styles.queueRow, index > 0 && styles.queueRowDivider]}>
-						<Feather name="corner-down-right" size={14} color={t.textTertiary} />
+						<Feather name="corner-down-right" size={15} color={t.textTertiary} />
 						<Text numberOfLines={1} style={styles.queueText}>{entry.message.text}</Text>
 						{canSteer ? <Pressable
 							accessibilityRole="button"
@@ -272,7 +355,7 @@ export function ChatComposer({
 							}}
 							style={({ pressed }) => [styles.queueSteer, pressed && { opacity: 0.55 }]}
 						>
-							{promoting ? <ActivityIndicator size="small" color={t.blue} /> : <Feather name="corner-up-right" size={15} color={t.blue} />}
+							{promoting ? <ActivityIndicator size="small" color={t.accent} /> : <Feather name="corner-up-right" size={15} color={t.accent} />}
 						</Pressable> : null}
 						<Pressable
 							accessibilityRole="button"
@@ -289,54 +372,106 @@ export function ChatComposer({
 							}}
 							style={({ pressed }) => [styles.queueDelete, pressed && { opacity: 0.55 }]}
 						>
-							{cancelling ? <ActivityIndicator size="small" color={t.textTertiary} /> : <Feather name="x" size={16} color={t.textTertiary} />}
+							{cancelling ? <ActivityIndicator size="small" color={t.textTertiary} /> : <Feather name="x" size={15} color={t.textTertiary} />}
 						</Pressable>
 					</View>;
 				})}
 			</View> : null}
-			<View style={[styles.composer, stopped && { opacity: 0.55 }]}>
+			{request && !requestCard ? <Pressable
+				accessibilityRole="button"
+				accessibilityLabel={`${request.title}. Answer it`}
+				onPress={() => { haptics.tap(); onRestoreRequest(); }}
+				style={({ pressed }) => [styles.restore, pressed && { opacity: 0.6 }]}
+			>
+				<Feather name={request.kind === "approval" ? "shield" : "message-circle"} size={12} color={t.amber} />
+				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.restoreText}>{request.title}</Text>
+				<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.restoreAction}>Answer</Text>
+			</Pressable> : null}
+			{requestCard ?? <View
+				style={[styles.composer, stopped && { opacity: 0.55 }]}
+			>
+				<ComposerGlass radius={COMPOSER_RADIUS} />
 				<ChatAttachmentMenu disabled={stopped} canAttachFile={Boolean(canEmbedFiles)} onChoosePhoto={() => void addImage()} onChooseFile={() => void addFile()} />
 				<TextInput
 					accessibilityLabel="Message the agent"
 					editable={!stopped}
 					value={text}
-					onChangeText={setText}
+					onChangeText={(value) => { latestText.current = value; setText(value); }}
 					onSelectionChange={(event) => setCursor(event.nativeEvent.selection.start)}
+					onContentSizeChange={(event) => {
+						if (!latestText.current) {
+							setFieldHeight(COMPOSER_FIELD_HEIGHT);
+							return;
+						}
+						// Native contentSize already includes the TextInput's vertical
+						// padding. Treat it as the field's full height; converting it to
+						// lines counted the padding as an extra line on the first render.
+						const contentHeight = Math.ceil(event.nativeEvent.contentSize.height);
+						setFieldHeight(Math.max(COMPOSER_FIELD_HEIGHT, Math.min(COMPOSER_FIELD_MAX_HEIGHT, contentHeight)));
+					}}
 					placeholder={stopped ? "Agent is stopped" : deliveryPresentation.placeholder}
 					placeholderTextColor={t.textFaint}
-					style={styles.input}
+					style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}
 					multiline
 					maxLength={40_000}
 				/>
-				<MicKey circular size={42} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} />
-				{primaryAction === "stop" ? <Pressable accessibilityRole="button" accessibilityLabel="Stop turn" accessibilityState={{ busy: interrupting, disabled: disabled || interrupting }} disabled={disabled || interrupting} onPress={() => { haptics.tap(); void onInterrupt(); }} style={[styles.stop, (disabled || interrupting) && { opacity: 0.55 }]}>{interrupting ? <ActivityIndicator size="small" color={t.textPrimary} /> : <Feather name="square" size={13} color={t.textPrimary} />}</Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={active ? "Queue message" : "Send message"} accessibilityState={{ disabled: disabled || stopped || pending || submitting }} disabled={disabled || stopped || pending || submitting || (!text.trim() && attachments.length === 0)} onPress={() => { haptics.tap(); void submit("send"); }} style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }, (disabled || stopped || pending || submitting || (!text.trim() && attachments.length === 0)) && { opacity: 0.35 }]}>{pending || submitting ? <ActivityIndicator size="small" color={t.onAccent} /> : <Feather name="arrow-up" size={17} color={t.onAccent} />}</Pressable>}
-			</View>
-		</View>
+				<MicKey variant="plain" size={44} glyphSize={iconSize.lg} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} />
+				{primaryAction === "stop" ? <Pressable accessibilityRole="button" accessibilityLabel="Stop turn" accessibilityState={{ busy: interrupting, disabled: disabled || interrupting }} disabled={disabled || interrupting} onPress={() => { haptics.tap(); void onInterrupt(); }} style={[styles.stop, (disabled || interrupting) && { opacity: 0.55 }]}>{interrupting ? <ActivityIndicator size="small" color={t.textPrimary} /> : <Feather name="square" size={12} color={t.textPrimary} />}</Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={active ? "Queue message" : "Send message"} accessibilityState={{ disabled: disabled || stopped || pending || submitting }} disabled={disabled || stopped || pending || submitting || (!text.trim() && attachments.length === 0)} onPress={() => { haptics.tap(); void submit("send"); }} style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }, (disabled || stopped || pending || submitting || (!text.trim() && attachments.length === 0)) && { opacity: 0.35 }]}>{pending || submitting ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={17} color={t.bgBase} />}</Pressable>}
+			</View>}
+		</Animated.View>
 	);
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
-	dock: { paddingHorizontal: 12, paddingTop: 7, gap: 6, backgroundColor: t.bgBase },
-	metaRow: { width: "100%", height: 44, flexDirection: "row", alignItems: "center" },
-	settingsSlot: { flex: 1, minWidth: 0, height: 44, alignItems: "flex-start", justifyContent: "center" },
-	composer: { minHeight: 54, maxHeight: 150, flexDirection: "row", alignItems: "flex-end", gap: 3, padding: 5, backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, borderRadius: 27, borderCurve: "continuous" },
-	input: { flex: 1, minHeight: 42, maxHeight: 138, color: t.textPrimary, fontSize: 15, lineHeight: 21, paddingHorizontal: 3, paddingVertical: 10, textAlignVertical: "top" },
-	send: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center", backgroundColor: t.blue },
-	stop: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center", backgroundColor: t.bgSubtle, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
-	attachments: { gap: 7, paddingBottom: 7 },
-	attachment: { maxWidth: 180, flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: t.bgElevated, borderRadius: 9, borderWidth: 1, borderColor: t.borderSubtle, paddingHorizontal: 9, paddingVertical: 7 },
-	attachmentImage: { width: 28, height: 28, borderRadius: 6, backgroundColor: t.bgSubtle },
-	attachmentName: { flexShrink: 1, color: t.textSecondary, fontSize: 11 },
-	deliveryNote: { maxWidth: "46%", height: 32, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 5, paddingRight: 5 },
-	deliveryNoteText: { flexShrink: 1, color: t.textTertiary, fontSize: 10, fontWeight: "600" },
-	steerAction: { width: 30, height: 30, alignItems: "center", justifyContent: "center", borderRadius: 15, backgroundColor: t.tintBlue },
+	dock: { paddingHorizontal: space.md, paddingTop: space.xs, gap: space.xs, backgroundColor: t.bgBase },
+	// Three things can share this row — the turn settings, the queued-message note
+	// and the context meter — and the settings label is the only one that can be
+	// long. It is the one that yields: `flex: 1` with `minWidth: 0` to allow the
+	// squeeze, and `overflow: "hidden"` so a label that does not truncate cleanly
+	// cannot paint over its neighbours. The `gap` is the floor under that: even
+	// when everything fits, the two never touch.
+	metaRow: { width: "100%", height: 44, flexDirection: "row", alignItems: "center", gap: space.sm },
+	settingsSlot: { flex: 1, minWidth: 0, height: 44, alignItems: "flex-start", justifyContent: "center", overflow: "hidden" },
+	// One pill for the whole row: attach, the field, dictation, and the one filled
+	// control that commits. The pill's radius is half its resting height, so a
+	// single line reads as a capsule and a long message grows a rounded panel —
+	// no second border, no second surface.
+	//
+	// The fill goes transparent where the glass layer is drawing behind it: an
+	// opaque pill under a material is the one arrangement that turns glass grey.
+	//
+	// Bottom-align the controls so attach, mic and send stay anchored while the
+	// text field grows above them. The pill grows around the row; the glass fills
+	// that pill rather than receiving a separately measured height.
+	composer: { minHeight: COMPOSER_HEIGHT, maxHeight: COMPOSER_MAX_HEIGHT, flexDirection: "row", alignItems: "flex-end", gap: space.xxs, paddingHorizontal: space.xs, paddingVertical: space.xs, backgroundColor: composerGlassSupported ? "transparent" : t.bgElevated, borderRadius: COMPOSER_RADIUS, borderCurve: "continuous" },
+	// The native content-size event grows this from its one-line resting height;
+	// at the cap, the multiline field scrolls while the controls remain in place.
+	input: { fontFamily: "Geist_400Regular", flex: 1, minHeight: COMPOSER_FIELD_HEIGHT, maxHeight: COMPOSER_FIELD_MAX_HEIGHT, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: COMPOSER_LINE_HEIGHT, paddingVertical: space.md, textAlignVertical: "top" },
+	send: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", backgroundColor: t.accent },
+	stop: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", backgroundColor: t.bgSubtle, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
+	attachments: { gap: space.xs, paddingBottom: space.xs },
+	attachment: { maxWidth: 180, flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.bgElevated, borderRadius: 8, borderWidth: 1, borderColor: t.borderSubtle, paddingHorizontal: space.sm, paddingVertical: space.xs },
+	attachmentImage: { width: 28, height: 28, borderRadius: 4, backgroundColor: t.bgSubtle },
+	attachmentName: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.caption2.fontSize },
+	// The way back to a request the user pushed aside to type instead.
+	restore: { flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, paddingHorizontal: space.sm, borderRadius: 12, backgroundColor: t.tintAmber },
+	restoreText: { fontFamily: "Geist_600SemiBold", flex: 1, minWidth: 0, color: t.amber, fontSize: type.caption1.fontSize, fontWeight: "600" },
+	restoreAction: { fontFamily: "Geist_600SemiBold", color: t.amber, fontSize: type.caption1.fontSize, fontWeight: "600", textDecorationLine: "underline" },
+	// Sits at the end of the meta row; the bar carries the reading, the label names it.
+	contextMeter: { flexShrink: 0, flexDirection: "row", alignItems: "center", gap: space.xs, height: 32, paddingLeft: space.sm },
+	contextTrack: { width: 34, height: 4, borderRadius: 2, overflow: "hidden", backgroundColor: t.bgSubtle },
+	contextFill: { height: 4, borderRadius: 2 },
+	contextText: { fontFamily: "Geist_600SemiBold", fontSize: type.caption2.fontSize, fontWeight: "600" },
+	deliveryNote: { flexShrink: 0, maxWidth: "46%", height: 32, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.xxs, paddingRight: space.xxs },
+	deliveryNoteText: { fontFamily: "Geist_600SemiBold", flexShrink: 1, color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600" },
+	steerAction: { width: 30, height: 30, alignItems: "center", justifyContent: "center", borderRadius: 16, backgroundColor: t.accentTint },
 	queueDock: { overflow: "hidden", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, borderRadius: 16, borderCurve: "continuous" },
-	queueRow: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 9, paddingLeft: 13, paddingRight: 4 },
+	queueRow: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, paddingRight: space.xxs },
 	queueRowDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderSubtle },
-	queueText: { flex: 1, color: t.textSecondary, fontSize: 13, lineHeight: 18, fontWeight: "500" },
+	queueText: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 	queueSteer: { width: 40, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 20 },
 	queueDelete: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
-	error: { color: t.red, fontSize: 11, lineHeight: 15, marginBottom: 6, paddingHorizontal: 3 },
-	voice: { flexDirection: "row", alignItems: "center", gap: 7, backgroundColor: t.tintRed, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 7, marginBottom: 7 },
-	voiceText: { flex: 1, color: t.textSecondary, fontSize: 11 },
+	error: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, marginBottom: space.xs, paddingHorizontal: space.hair },
+	voice: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.tintRed, borderRadius: 8, paddingHorizontal: space.sm, paddingVertical: space.xs, marginBottom: space.xs },
+	voiceText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize },
 });

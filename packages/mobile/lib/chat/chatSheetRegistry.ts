@@ -4,7 +4,9 @@ import type { ChatConfigOption, ChatModel, ConversationSnapshot, TurnSettings } 
 
 export type ConversationActionsEntry = {
 	kind: "conversation-actions";
+	sessionId: string;
 	snapshot: ConversationSnapshot;
+	subscribeEntry(listener: (entry: ConversationActionsEntry) => void): () => void;
 	sessionTitle: string;
 	openingShell: boolean;
 	compacting: boolean;
@@ -17,6 +19,7 @@ export type ConversationActionsEntry = {
 	interfaceSwitching: boolean;
 	canPin: boolean;
 	pinned: boolean;
+	canDelete: boolean;
 	onMap(): void;
 	onOpenShell(): void;
 	onPreview(): void;
@@ -28,6 +31,7 @@ export type ConversationActionsEntry = {
 	onRename(): void;
 	onTogglePin(): void;
 	onRefresh(): void;
+	onDelete(): void;
 };
 
 export type ConversationRenameEntry = {
