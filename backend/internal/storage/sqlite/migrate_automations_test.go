@@ -3,52 +3,118 @@ package sqlite
 import (
 	"database/sql"
 	"testing"
+	"testing/fstest"
 	"time"
+
+	"github.com/pressly/goose/v3"
 )
 
-// Parallel feature branches commonly burn goose version 159 without the
-// automations schema. Open must release that ledger entry and apply
-// 0159_automations.sql, or daemon boot dies on automation_run_id.
-func TestMigrateRepairsBurnedAutomationsVersion(t *testing.T) {
-	dataDir := t.TempDir()
-	db := openMigratedDatabaseCopyAt(t, dataDir, 152, pragmas)
-	if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (159, 1)`); err != nil {
-		t.Fatalf("burn version 159: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
+// Main owns 159/160, while older PR builds may have applied automations at
+// 159. Every history must end with both main's PR columns and automations.
+func TestMigrateRepairsInterleavedAutomationsHistory(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		base      int64
+		legacy159 bool
+		burned159 bool
+		burned161 bool
+		lost159   bool
+	}{
+		{name: "main 159 and 160 already applied", base: 160},
+		{name: "main 159 marker lost with column present", base: 160, lost159: true},
+		{name: "old automations at 159", base: 158, legacy159: true},
+		{name: "burned 159 without either schema", base: 158, burned159: true},
+		{name: "burned 161 without automations schema", base: 160, burned161: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			db := openMigratedDatabaseCopyAt(t, dataDir, tt.base, pragmas)
+			if tt.legacy159 {
+				contents, err := migrationsFS.ReadFile("migrations/0161_automations.sql")
+				if err != nil {
+					t.Fatalf("read automations migration: %v", err)
+				}
+				gooseMu.Lock()
+				goose.SetBaseFS(fstest.MapFS{
+					"migrations/0159_automations.sql": &fstest.MapFile{Data: contents},
+				})
+				err = goose.Up(db, "migrations")
+				goose.SetBaseFS(migrationsFS)
+				gooseMu.Unlock()
+				if err != nil {
+					t.Fatalf("apply old automations migration: %v", err)
+				}
+			}
+			if tt.burned159 {
+				if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (159, 1)`); err != nil {
+					t.Fatalf("burn version 159: %v", err)
+				}
+			}
+			if tt.burned161 {
+				if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (161, 1)`); err != nil {
+					t.Fatalf("burn version 161: %v", err)
+				}
+			}
+			if tt.lost159 {
+				if _, err := db.Exec(`DELETE FROM goose_db_version WHERE version_id = 159`); err != nil {
+					t.Fatalf("remove version 159 marker: %v", err)
+				}
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
 
-	store, err := Open(dataDir)
-	if err != nil {
-		t.Fatalf("open burned automations database: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+			store, err := Open(dataDir)
+			if err != nil {
+				t.Fatalf("open upgraded database: %v", err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			check, err := sql.Open("sqlite", databaseURI(dataDir)+pragmas)
+			if err != nil {
+				t.Fatalf("reopen: %v", err)
+			}
+			t.Cleanup(func() { _ = check.Close() })
 
-	check, err := sql.Open("sqlite", databaseURI(dataDir)+pragmas)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	t.Cleanup(func() { _ = check.Close() })
-
-	var automationsTable, runIDColumn int
-	if err := check.QueryRow(`SELECT
-		(SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'automations'),
-		(SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'automation_run_id')`).Scan(
-		&automationsTable, &runIDColumn,
-	); err != nil {
-		t.Fatalf("inspect repaired schema: %v", err)
-	}
-	if automationsTable != 1 || runIDColumn != 1 {
-		t.Fatalf("repaired schema automations=%d automation_run_id=%d, want both 1", automationsTable, runIDColumn)
+			for _, column := range []struct{ table, name string }{
+				{"pr", "discussion_comment_count"},
+				{"pr", "discussion_commenters_json"},
+				{"sessions", "automation_run_id"},
+			} {
+				var present int
+				if err := check.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, column.table, column.name).Scan(&present); err != nil {
+					t.Fatalf("inspect %s.%s: %v", column.table, column.name, err)
+				}
+				if present != 1 {
+					t.Errorf("%s.%s count = %d, want 1", column.table, column.name, present)
+				}
+			}
+			for _, table := range []string{"automations", "automation_runs"} {
+				var present int
+				if err := check.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&present); err != nil {
+					t.Fatalf("inspect %s: %v", table, err)
+				}
+				if present != 1 {
+					t.Errorf("%s table count = %d, want 1", table, present)
+				}
+			}
+			for _, version := range []int{159, 160, 161} {
+				var applied int
+				if err := check.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = ? AND is_applied = 1`, version).Scan(&applied); err != nil {
+					t.Fatalf("inspect migration %d: %v", version, err)
+				}
+				if applied != 1 {
+					t.Errorf("migration %d applied rows = %d, want 1", version, applied)
+				}
+			}
+		})
 	}
 }
 
 // Removing the run-occurrence uniqueness or the durable enum constraints must
 // make this test fail: they are what let duplicate pollers and restart recovery
 // converge on one logical run instead of spawning independent work.
-func TestMigration0159EnforcesAutomationRunIdentity(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 159)
+func TestMigration0161EnforcesAutomationRunIdentity(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 161)
 
 	now := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
 	mustExec(t, db, `
@@ -93,8 +159,8 @@ INSERT INTO automations (
 // Removing the unique session origin or changing its delete action must make
 // this test fail: one run may create at most one session, while deleting
 // automation history must never delete the user's already-created session.
-func TestMigration0159LinksOneSessionAndPreservesItOnAutomationDelete(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 159)
+func TestMigration0161LinksOneSessionAndPreservesItOnAutomationDelete(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 161)
 
 	now := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
 	mustExec(t, db, `
