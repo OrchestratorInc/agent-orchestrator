@@ -283,6 +283,7 @@ type PRFileQuery struct {
 	Path         string `query:"path" required:"true" description:"Repository-relative file path."`
 	PreviousPath string `query:"previousPath,omitempty" description:"Previous repository-relative path supplied by the selected PR file summary for rename detection."`
 	SourceURL    string `query:"sourceUrl,omitempty" description:"Stable URL of the selected associated pull request."`
+	CommitSHA    string `query:"commitSha,omitempty" description:"Exact SHA of one of the pull request's commits; reads that commit's change instead of the whole pull request."`
 }
 
 // PRFileRevisionQuery selects one immutable side of a pull-request comparison.
@@ -290,6 +291,7 @@ type PRFileRevisionQuery struct {
 	Path      string `query:"path" required:"true" description:"Repository-relative file path."`
 	Side      string `query:"side,omitempty" enum:"before,after" description:"Comparison side. Defaults to after."`
 	SourceURL string `query:"sourceUrl,omitempty" description:"Stable URL of the selected associated pull request."`
+	CommitSHA string `query:"commitSha,omitempty" description:"Exact SHA of one of the pull request's commits; before is its first parent, after is the commit."`
 }
 
 // WorkspaceSearchQuery is the query string accepted by the workspace path search.
@@ -526,8 +528,11 @@ type ListWorkspaceFilesResponse struct {
 type ListPRFilesResponse struct {
 	SessionID domain.SessionID       `json:"sessionId"`
 	Files     []WorkspaceFileSummary `json:"files"`
-	Truncated bool                   `json:"truncated"`
-	Summary   WorkspaceSummary       `json:"summary"`
+	// Commits are the pull request's own commits (base..head), newest first.
+	// File sizes are not read for commit files.
+	Commits   []WorkspaceCommitSummary `json:"commits"`
+	Truncated bool                     `json:"truncated"`
+	Summary   WorkspaceSummary         `json:"summary"`
 }
 
 // WorkspaceFileSections groups a session workspace's changed files by git

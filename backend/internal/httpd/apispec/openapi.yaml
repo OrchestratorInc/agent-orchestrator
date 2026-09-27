@@ -5912,6 +5912,14 @@ paths:
         schema:
           description: Stable URL of the selected associated pull request.
           type: string
+      - description: Exact SHA of one of the pull request's commits; reads that commit's
+          change instead of the whole pull request.
+        in: query
+        name: commitSha
+        schema:
+          description: Exact SHA of one of the pull request's commits; reads that
+            commit's change instead of the whole pull request.
+          type: string
       responses:
         "200":
           content:
@@ -5980,6 +5988,14 @@ paths:
         name: sourceUrl
         schema:
           description: Stable URL of the selected associated pull request.
+          type: string
+      - description: Exact SHA of one of the pull request's commits; before is its
+          first parent, after is the commit.
+        in: query
+        name: commitSha
+        schema:
+          description: Exact SHA of one of the pull request's commits; before is its
+            first parent, after is the commit.
           type: string
       responses:
         "200":
@@ -11542,6 +11558,10 @@ components:
       type: object
     ListPRFilesResponse:
       properties:
+        commits:
+          items:
+            $ref: '#/components/schemas/WorkspaceCommitSummary'
+          type: array
         files:
           items:
             $ref: '#/components/schemas/WorkspaceFileSummary'
@@ -11555,6 +11575,7 @@ components:
       required:
       - sessionId
       - files
+      - commits
       - truncated
       - summary
       type: object

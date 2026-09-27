@@ -8,6 +8,7 @@ import { useUpdateStatus } from "../hooks/useUpdateStatus";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { useUiStore } from "../stores/ui-store";
 import { Button } from "./ui/button";
+import { DesktopReleaseNotes } from "./DesktopReleaseNotes";
 import {
 	Dialog,
 	DialogContent,
@@ -179,11 +180,10 @@ function RestartToUpdateDialogBody() {
 						{t("update.restart.whatsNew")}
 					</p>
 					{releaseNotes ? (
-						// Plain text on purpose. The notes are the remote release body,
-						// sanitized in the main process; nothing here injects markup.
-						<p className="mt-1.5 max-h-56 overflow-y-auto whitespace-pre-line text-pretty text-sm leading-5 text-settings-label">
-							{releaseNotes}
-						</p>
+						<DesktopReleaseNotes
+							notes={releaseNotes}
+							textClassName="mt-1.5 max-h-56 overflow-y-auto text-pretty text-sm leading-5 text-settings-label"
+						/>
 					) : (
 						<p className="mt-1.5 text-sm leading-5 text-settings-muted">{t("update.restart.noNotes")}</p>
 					)}

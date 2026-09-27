@@ -24,6 +24,7 @@ import {
 	type InspectorView,
 } from "@aoagents/product-ui";
 import {
+	Archive,
 	ArrowUpRight,
 	ChevronDown,
 	ChevronRight,
@@ -69,10 +70,11 @@ import {
 import { getAgentActivityView, getSessionTimelinePillView } from "../lib/session-presentation";
 import { BrowserPanelView, type BrowserAnnotationQueueModel } from "./BrowserPanel";
 import type { BrowserViewModel } from "../hooks/useBrowserView";
+import { FilesTopbarHostContext } from "./files-topbar-host";
 import { useUiStore } from "../stores/ui-store";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
-import { SessionTerminationPopover } from "./SessionTerminationPopover";
+import { SessionArchiveDialog } from "./SessionArchiveDialog";
 import { ReviewerSelect } from "./ReviewerSelect";
 import { agentLabel } from "../lib/agent-options";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
@@ -200,6 +202,7 @@ export const SessionInspector = memo(function SessionInspector({
 	const { t } = useTranslation();
 	const [internalView, setInternalView] = useState<InspectorView>("summary");
 	const [browserTopbarHost, setBrowserTopbarHost] = useState<HTMLDivElement | null>(null);
+	const [filesTopbarHost, setFilesTopbarHost] = useState<HTMLDivElement | null>(null);
 	const requestedView = viewProp ?? internalView;
 	// Badge the Browser tab when a preview target arrived without us opening it.
 	const browserUnseen = useUiStore((state) =>
@@ -274,11 +277,22 @@ export const SessionInspector = memo(function SessionInspector({
 						/>
 					) : undefined
 				}
-				filesView={session ? <FilesView filesView={filesView} onOpenFiles={onOpenFiles} /> : undefined}
+				filesView={
+					session ? (
+						<FilesTopbarHostContext.Provider value={filesTopbarHost}>
+							<FilesView filesView={filesView} onOpenFiles={onOpenFiles} />
+						</FilesTopbarHostContext.Provider>
+					) : undefined
+				}
 						headerActions={
 							view === "browser" && !browserPoppedOut ? (
 								<>
 									<div className="browser-panel__topbar-host min-w-0 flex-1" ref={setBrowserTopbarHost} />
+									<span aria-hidden="true" className="session-inspector-actions-spacer" />
+								</>
+							) : view === "files" && filesView ? (
+								<>
+									<div className="files-panel__topbar-host min-w-0 flex-1" ref={setFilesTopbarHost} />
 									<span aria-hidden="true" className="session-inspector-actions-spacer" />
 								</>
 							) : (
@@ -1130,34 +1144,33 @@ function SessionControls({ session }: { session: WorkspaceSession }) {
 
 	const terminateAction = (
 		<div className="flex items-center justify-between gap-3 py-1">
-			<span className="min-w-0 text-xs font-medium text-settings-label">{t("inspector.terminateShort")}</span>
+			<span className="min-w-0 text-xs font-medium text-settings-label">{t("inspector.archiveShort")}</span>
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<span className="inline-flex">
-						<SessionTerminationPopover
+						<SessionArchiveDialog
 							onConfirm={confirmTermination}
 							onOpenChange={setConfirmOpen}
 							open={confirmOpen}
 							session={session}
 							trigger={
 								<button
-									aria-label={t("inspector.terminate")}
-									className="inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-colors hover:bg-error/10 hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+									aria-label={t("inspector.archive")}
+									className="inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 									onClick={() => {
 										clearTerminateSessionState(queryClient, session.id);
-										// Force the confirm open instead of toggling it, so repeated
-										// trash taps keep the dialog up rather than dismissing it.
+										// Always open the confirm; the modal owns its own dismissal.
 										setConfirmOpen(true);
 									}}
 									type="button"
 								>
-									<Trash2 className="size-icon-sm" aria-hidden="true" />
+									<Archive className="size-icon-sm" aria-hidden="true" />
 								</button>
 							}
 						/>
 					</span>
 				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("inspector.terminate")}</TooltipContent>
+				<TooltipContent side="bottom">{t("inspector.archive")}</TooltipContent>
 			</Tooltip>
 		</div>
 	);

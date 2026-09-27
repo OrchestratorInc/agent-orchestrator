@@ -99,7 +99,7 @@ for (const platform of PLATFORMS) {
 			.first()
 			.click({ force: true });
 		await page.getByRole("menuitem", { name: /New task/ }).click();
-		const prompt = page.getByRole("dialog").getByLabel("Task");
+		const prompt = page.getByRole("dialog").getByLabel("Task", { exact: true });
 		await expect(prompt).toBeVisible();
 		await page.keyboard.type("caret is here");
 		await expect(prompt).toHaveValue("caret is here");
