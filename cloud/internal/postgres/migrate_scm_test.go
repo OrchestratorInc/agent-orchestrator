@@ -17,6 +17,15 @@ func TestCloudSCMWebhookMigrationContract(t *testing.T) {
 		"CREATE TABLE ao_ci_feedback_outbox",
 		"UNIQUE (pull_request_id, application_key)",
 		"application_key TEXT NOT NULL UNIQUE",
+		// Both tables are org-scoped and must carry forced row-level security like
+		// every other tenant table (tenant policy for withOrg access, service policy
+		// for the withService CI-feedback outbox lease/claim/finish paths).
+		"ALTER TABLE ao_github_pr_applications FORCE ROW LEVEL SECURITY",
+		"CREATE POLICY ao_github_pr_applications_tenant_policy",
+		"CREATE POLICY ao_github_pr_applications_service_policy",
+		"ALTER TABLE ao_ci_feedback_outbox FORCE ROW LEVEL SECURITY",
+		"CREATE POLICY ao_ci_feedback_outbox_tenant_policy",
+		"CREATE POLICY ao_ci_feedback_outbox_service_policy",
 	} {
 		if !strings.Contains(sql, required) {
 			t.Errorf("migration missing %q", required)

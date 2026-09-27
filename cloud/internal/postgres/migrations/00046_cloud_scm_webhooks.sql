@@ -34,6 +34,24 @@ CREATE INDEX ao_ci_feedback_outbox_ready_idx
     ON ao_ci_feedback_outbox(status, next_attempt_at, created_at)
     WHERE status IN ('pending', 'retry');
 
+-- Both tables are org-scoped tenant tables, so they carry forced row-level
+-- security like every other tenant table. A tenant policy covers the withOrg
+-- access paths (application dedup + outbox enqueue) and a service policy covers
+-- the withService background paths (CI-feedback outbox lease/claim/finish).
+ALTER TABLE ao_github_pr_applications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ao_github_pr_applications FORCE ROW LEVEL SECURITY;
+CREATE POLICY ao_github_pr_applications_tenant_policy ON ao_github_pr_applications
+    USING (org_id = ao_current_org_id()) WITH CHECK (org_id = ao_current_org_id());
+CREATE POLICY ao_github_pr_applications_service_policy ON ao_github_pr_applications
+    USING (ao_service_context()) WITH CHECK (ao_service_context());
+
+ALTER TABLE ao_ci_feedback_outbox ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ao_ci_feedback_outbox FORCE ROW LEVEL SECURITY;
+CREATE POLICY ao_ci_feedback_outbox_tenant_policy ON ao_ci_feedback_outbox
+    USING (org_id = ao_current_org_id()) WITH CHECK (org_id = ao_current_org_id());
+CREATE POLICY ao_ci_feedback_outbox_service_policy ON ao_ci_feedback_outbox
+    USING (ao_service_context()) WITH CHECK (ao_service_context());
+
 -- +goose Down
 DROP INDEX IF EXISTS ao_ci_feedback_outbox_ready_idx;
 DROP TABLE IF EXISTS ao_ci_feedback_outbox;
