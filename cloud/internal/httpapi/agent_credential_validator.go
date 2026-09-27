@@ -102,9 +102,7 @@ func (v *agentCredentialValidator) validateClaude(
 	credentialType string,
 	secret []byte,
 ) error {
-	// #nosec G101 -- this checks a public credential-format prefix.
-	if credentialType == "oauth_token" &&
-		(!strings.HasPrefix(string(secret), "sk-ant-oat01-") || len(secret) < 80) {
+	if credentialType == "oauth_token" && len(secret) == 0 {
 		return errInvalidAgentCredential
 	}
 	request, err := http.NewRequestWithContext(
@@ -124,7 +122,6 @@ func (v *agentCredentialValidator) validateClaude(
 		request.Header.Set("x-api-key", string(secret))
 	case "oauth_token":
 		request.Header.Set("Authorization", "Bearer "+string(secret))
-		request.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
 		request.Header.Set("x-app", "cli")
 	default:
 		return errInvalidAgentCredential

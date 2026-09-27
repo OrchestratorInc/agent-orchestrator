@@ -304,8 +304,12 @@ func (b HarnessBuilder) configureCredential(
 		switch credential.CredentialType {
 		case "api_key":
 			command.Env["ANTHROPIC_API_KEY"] = credential.Secret
+			command.Env["CLAUDE_CODE_OAUTH_TOKEN"] = ""
+			command.Env["ANTHROPIC_AUTH_TOKEN"] = ""
 		case "oauth_token":
 			command.Env["CLAUDE_CODE_OAUTH_TOKEN"] = credential.Secret
+			command.Env["ANTHROPIC_API_KEY"] = ""
+			command.Env["ANTHROPIC_AUTH_TOKEN"] = ""
 		default:
 			return errors.New("unsupported Claude Code credential type")
 		}
