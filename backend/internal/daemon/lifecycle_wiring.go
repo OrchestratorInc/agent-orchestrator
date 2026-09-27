@@ -52,6 +52,7 @@ type lifecycleStack struct {
 	autoReviewDone <-chan struct{}
 	scmDone        <-chan struct{}
 	trackerDone    <-chan struct{}
+	automationDone <-chan struct{}
 }
 
 // startLifecycle constructs the Lifecycle Manager over the store and starts the
@@ -156,6 +157,9 @@ func (l *lifecycleStack) Stop() {
 	}
 	if l.trackerDone != nil {
 		<-l.trackerDone
+	}
+	if l.automationDone != nil {
+		<-l.automationDone
 	}
 }
 
@@ -487,7 +491,7 @@ func buildAgentResolver(defaultAgent string, log *slog.Logger) (ports.AgentResol
 	}
 	resolver := agentRegistry{reg: reg}
 	if _, ok := resolver.Agent(domain.AgentHarness(defaultAgent)); !ok {
-		return nil, fmt.Errorf("configured default agent %q is not a registered adapter", defaultAgent)
+		return nil, fmt.Errorf("configured agent %q is not a registered adapter", defaultAgent)
 	}
 	ids := make([]string, 0)
 	for _, mf := range reg.Manifests() {
