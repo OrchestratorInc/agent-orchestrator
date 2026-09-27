@@ -615,7 +615,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					if (draft) await sideChats.replaceDraft(side.id, draft);
 					onSideOpened?.();
 				}}
-				createSideChatPending={sideChats.pending}
 				createSideChatError={sideChats.error}
 				skills={skills}
 				filePaths={paths}

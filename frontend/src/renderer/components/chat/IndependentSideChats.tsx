@@ -467,13 +467,9 @@ export function useIndependentSideChats(sessionId: string, models: ChatModel[], 
 		<aside aria-label="Side chats" className="cursor-chat-surface flex h-full min-h-0 w-1/2 min-w-[360px] shrink-0 flex-col border-l border-border bg-background [font-size:14px]">
 			<div className="flex h-10 shrink-0 items-center border-b border-border px-4 text-xs font-medium">/btw</div>
 			{snapshot && snapshot.side.id === activeId ? <>
-				<div className="border-b border-border px-4 py-2 text-[11px] text-muted-foreground">
-					{snapshot.side.contextMode === "native" ? "Native chat context through the selected turn" :
-						snapshot.side.contextMode === "reconstructed" ? "Recorded visible chat context through the selected turn" : "Fresh side chat"} · current workspace files
-					{snapshot.side.selectedText ? <details className="mt-1"><summary className="cursor-pointer">Selected text</summary>
-						<blockquote className="mt-1 whitespace-pre-wrap border-l-2 border-logo-accent pl-2 text-foreground">{snapshot.side.selectedText}</blockquote></details> : null}
-					{snapshot.side.state !== "ready" ? <p role="status">{snapshot.side.errorMessage ?? snapshot.side.state}</p> : null}
-				</div>
+				{snapshot.side.state !== "ready" ? <p className="border-b border-border px-4 py-2 text-xs text-muted-foreground" role="status">
+					{snapshot.side.errorMessage ?? snapshot.side.state}
+				</p> : null}
 				<div className="relative min-h-0 flex-1">
 					{selectionAction?.excerpt.conversationId === activeId ? <div style={{ left: selectionAction.left, top: selectionAction.top }}
 						className="absolute z-50 flex overflow-hidden rounded-md border border-border-strong bg-popover text-xs font-medium text-popover-foreground shadow-lg"

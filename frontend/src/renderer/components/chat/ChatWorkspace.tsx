@@ -412,7 +412,6 @@ export interface ChatWorkspaceProps {
 	/** Open an independent side conversation; the selection is its quoted reference. */
 	onCreateSideChat?: (excerpt?: ChatDraftExcerptReference) => Promise<{ id: string } | undefined>;
 	onBtwAction?: (draft?: SideChatDraft) => Promise<void>;
-	createSideChatPending?: boolean;
 	createSideChatError?: string;
 	activateBranchPending?: boolean;
 	activateBranchError?: string;
@@ -616,7 +615,6 @@ function ChatWorkspaceContent({
 	activateBranchError,
 	onCreateSideChat,
 	onBtwAction,
-	createSideChatPending,
 	createSideChatError,
 	skills,
 	filePaths,
@@ -1448,16 +1446,12 @@ function ChatWorkspaceContent({
 						turnInFlight={Boolean(turn)}
 						error={mcpReloadError}
 					/>
-					{onCreateSideChat ? (
+					{((activeSideChat && onActivateBranch) || createSideChatError || activateBranchError) ? (
 						<div className="flex min-h-9 items-center gap-1 border-b border-border bg-sidebar/60 px-4 py-1.5 text-xs">
 							{activeSideChat && onActivateBranch ? <Button type="button" size="sm" variant="ghost"
 								onClick={() => void onActivateBranch(activeSideChat.parentBranchId)}>
 								Return to main
 							</Button> : null}
-							<Button type="button" size="sm" variant="ghost" disabled={createSideChatPending}
-								onClick={() => void onCreateSideChat()}>
-								<MessageSquarePlus aria-hidden="true" className="size-3.5" /> New /btw
-							</Button>
 							{createSideChatError || activateBranchError ? (
 								<span className="ml-auto text-destructive" role="alert">{createSideChatError ?? activateBranchError}</span>
 							) : null}

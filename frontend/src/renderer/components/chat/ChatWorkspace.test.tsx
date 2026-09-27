@@ -495,11 +495,10 @@ describe("ChatWorkspace timeline", () => {
 		}
 	});
 
-	it("opens the side chat without switching the main branch", async () => {
+	it("does not show a standalone side-chat creation button", () => {
 		const onCreateSideChat = vi.fn().mockResolvedValue({ id: "side-1" });
 		render(<ChatWorkspace snapshot={idleSnapshot(chatFixture)} onCreateSideChat={onCreateSideChat} />);
-		await userEvent.click(screen.getByRole("button", { name: "New /btw" }));
-		expect(onCreateSideChat).toHaveBeenCalledWith();
+		expect(screen.queryByRole("button", { name: "New /btw" })).not.toBeInTheDocument();
 		expect(screen.queryByText("Read-only")).not.toBeInTheDocument();
 	});
 
