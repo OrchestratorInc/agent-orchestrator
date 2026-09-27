@@ -903,10 +903,10 @@ func (s *Service) runAgentInstall(parent context.Context, plan Plan, job *Job) {
 	defer cancel()
 	out := &capturedOutput{max: maxOutputBytes}
 	outputWriter := io.Writer(out)
-	var devinInstallConfirmation *patternObservingWriter
+	var devinOutput *devinInstallOutput
 	if plan.Target == TargetDevin && plan.Method == "official-installer" && plan.Script != nil {
-		devinInstallConfirmation = &patternObservingWriter{dst: out, pattern: devinInstalledLine, maxPending: maxOutputBytes}
-		outputWriter = devinInstallConfirmation
+		devinOutput = &devinInstallOutput{dst: out, maxPending: maxOutputBytes}
+		outputWriter = devinOutput
 	}
 	env := []string{
 		"CI=1", "NONINTERACTIVE=1", "HOMEBREW_NO_AUTO_UPDATE=1",
@@ -941,7 +941,7 @@ func (s *Service) runAgentInstall(parent context.Context, plan Plan, job *Job) {
 		s.finishAgentJob(job, StatusInterrupted, out.String(), "daemon shutdown interrupted the install", "")
 		return
 	}
-	installConfirmed := runErr != nil && devinInstallConfirmation != nil && devinInstallConfirmation.Matched()
+	installConfirmed := runErr != nil && devinOutput != nil && devinOutput.Confirmed()
 	if runErr != nil && !installConfirmed {
 		s.finishAgentJob(job, StatusFailed, out.String(), runErr.Error(), "")
 		return
@@ -1111,28 +1111,27 @@ func (c *capturedOutput) String() string {
 	return c.buf.String()
 }
 
-// patternObservingWriter remembers whether a pattern appeared in the stream,
-// even after the bounded destination evicts those bytes from its diagnostics.
-type patternObservingWriter struct {
+// devinInstallOutput remembers whether Devin reported a completed binary
+// install, even after the bounded destination evicts that line from diagnostics.
+type devinInstallOutput struct {
 	mu         sync.Mutex
 	dst        io.Writer
-	pattern    *regexp.Regexp
 	pending    []byte
 	maxPending int
-	matched    bool
+	confirmed  bool
 }
 
-func (w *patternObservingWriter) Write(p []byte) (int, error) {
+func (w *devinInstallOutput) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	n, err := w.dst.Write(p)
-	if w.matched {
+	if w.confirmed {
 		return n, err
 	}
 	w.pending = append(w.pending, p...)
-	if w.pattern.Match(w.pending) {
-		w.matched = true
+	if devinInstalledLine.Match(w.pending) {
+		w.confirmed = true
 		w.pending = nil
 		return n, err
 	}
@@ -1145,10 +1144,10 @@ func (w *patternObservingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func (w *patternObservingWriter) Matched() bool {
+func (w *devinInstallOutput) Confirmed() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.matched
+	return w.confirmed
 }
 
 // planFor resolves the install Plan for target on the current platform,
