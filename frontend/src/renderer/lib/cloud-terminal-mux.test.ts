@@ -104,6 +104,25 @@ describe("createCloudTerminalMux direct open", () => {
 		expect(sentJSON(ws)).toEqual([{ type: "resize", columns: 100, rows: 30 }]);
 		mux.dispose();
 	});
+
+	it("ignores an implausibly small grid so a mis-measured fit never reaches the PTY", async () => {
+		FakeWebSocket.instances = [];
+		const mux = makeMux();
+		await settle();
+		const ws = FakeWebSocket.instances[0];
+		ws.sent.length = 0;
+		// A fit measured before font metrics / the pane box settle can propose a
+		// couple columns; forwarding that wraps the agent TUI to ~2 chars, and it
+		// would be cached in pendingResize and replayed on every reconnect. It must
+		// be dropped, never sent and never cached.
+		mux.resize("agent", 2, 2);
+		mux.resize("agent", 8, 30);
+		expect(ws.sent).toHaveLength(0);
+		// A settled, plausible grid sends normally.
+		mux.resize("agent", 120, 40);
+		expect(sentJSON(ws)).toEqual([{ type: "resize", columns: 120, rows: 40 }]);
+		mux.dispose();
+	});
 });
 
 describe("createCloudTerminalMux cursor resume", () => {
