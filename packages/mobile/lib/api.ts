@@ -302,6 +302,7 @@ function mapOrchestrator(s: WireSession, projectName: string): OrchestratorLink 
 // ---- Low-level fetch with friendly errors ----------------------------------
 
 const REQUEST_TIMEOUT_MS = 12000;
+const DISCONNECT_REQUEST_TIMEOUT_MS = 2000;
 // The daemon gives attachment uploads 10 minutes; allow time for its response.
 export const ATTACHMENT_REQUEST_TIMEOUT_MS = 11 * 60_000;
 
@@ -626,7 +627,7 @@ export async function unregisterPushDevice(cfg: ServerConfig, token: string): Pr
 // Prefers the install id and falls back to the token so the call still works
 // from a build that predates install ids.
 export async function unpairFromDaemon(cfg: ServerConfig, id: string): Promise<void> {
-	await req(cfg, `${API}/push/pairings/${encodeURIComponent(id)}`, { method: "DELETE" });
+	await req(cfg, `${API}/push/pairings/${encodeURIComponent(id)}`, { method: "DELETE" }, DISCONNECT_REQUEST_TIMEOUT_MS);
 }
 
 // Mark a notification read (best-effort on notification tap) so unread counts

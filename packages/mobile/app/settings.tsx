@@ -11,7 +11,7 @@ import { ActivityIndicator, Alert, Linking, Platform, Pressable, ScrollView, Sty
 import { ApiError, pingServer } from "../lib/api";
 import { formatVersionLine, type BuildInfo } from "../lib/appInfo";
 import { bugReportClipboard, bugReportOpenUrl, bugReportUrl } from "../lib/bugReport";
-import { DEFAULT_CONFIG, isConfigured, loadConfig, type ServerConfig } from "../lib/config";
+import { DEFAULT_CONFIG, isConfigured, type ServerConfig } from "../lib/config";
 import { classifyConnectionFailure, describeConnectionFailure } from "../lib/connectionError";
 import { discordFeatureRequestURL } from "../lib/discord";
 import { forgetServer } from "../lib/disconnect";
@@ -53,23 +53,12 @@ import { backOr } from "../lib/backNavigation";
 export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
 export default function SettingsScreen() {
-	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
-	const { reloadConfig } = useApp();
+	const { config, reloadConfig } = useApp();
 	const scrollRef = useRef<ScrollView>(null);
-	const [cfg, setCfg] = useState<ServerConfig>(DEFAULT_CONFIG);
-	const [loaded, setLoaded] = useState(false);
 
-	useFocusEffect(useCallback(() => {
-		loadConfig().then((saved) => {
-			setCfg(saved);
-			setLoaded(true);
-		});
-	}, []));
-
-	if (!loaded) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
-
+	const cfg = config ?? DEFAULT_CONFIG;
 	const paired = isConfigured(cfg);
 	return (
 		<View style={styles.screen} collapsable={false}>
@@ -307,7 +296,7 @@ function AppearanceRow() {
 			icon="sun"
 			label="Appearance"
 			right={
-				<Host style={{ width: 96, height: 38 }} colorScheme={scheme} seedColor={t.accent}>
+				<Host style={{ width: 124, height: 38 }} colorScheme={scheme} seedColor={t.accent}>
 					<Picker
 						selectedValue={preference}
 						onValueChange={(value) => {
@@ -575,7 +564,6 @@ function VersionFooter() {
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
-	center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
 	header: { height: 64, alignItems: "center", justifyContent: "center", paddingHorizontal: space.lg },
 	headerTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, lineHeight: type.title3.lineHeight, fontWeight: "600", letterSpacing: -0.3 },
 	closeButton: { position: "absolute", right: 14, top: 10 },
