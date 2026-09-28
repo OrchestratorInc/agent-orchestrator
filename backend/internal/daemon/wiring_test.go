@@ -49,6 +49,7 @@ func TestReviewerAgentAuthUsesLaunchReadinessAndPreservesStrictStates(t *testing
 		want  ports.AgentAuthStatus
 	}{
 		{name: "authorized", state: domain.AgentAuthenticationAuthorized, want: ports.AgentAuthStatusAuthorized},
+		{name: "configured", state: domain.AgentAuthenticationConfigured, want: ports.AgentAuthStatusConfigured},
 		{name: "not applicable", state: domain.AgentAuthenticationNotApplicable, want: ports.AgentAuthStatusAuthorized},
 		{name: "unauthorized", state: domain.AgentAuthenticationUnauthorized, want: ports.AgentAuthStatusUnauthorized},
 		{name: "unknown", state: domain.AgentAuthenticationUnknown, want: ports.AgentAuthStatusUnknown},
@@ -186,8 +187,8 @@ func TestWiring_AgentResolverResolvesRealAdapters(t *testing.T) {
 		{domain.HarnessPi, "pi"},
 		{domain.HarnessPrimeAgent, "prime-agent"},
 		{domain.HarnessAutohand, "autohand"},
-		{domain.HarnessUnreal, "unreal-agent"},
 		{domain.HarnessFX, "fx"},
+		{domain.HarnessUnreal, "unreal-agent"},
 	} {
 		agent, ok := resolver.Agent(tc.harness)
 		if !ok {

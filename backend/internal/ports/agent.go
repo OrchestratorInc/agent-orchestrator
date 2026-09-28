@@ -108,19 +108,19 @@ type AgentBinaryResolver interface {
 	ResolveBinary(ctx context.Context) (path string, err error)
 }
 
+// AgentRuntimeLaunchEnv augments a terminal launch after its generation has
+// been assigned. Native reporters can then carry that generation in their
+// own protocol identity. Implementations only modify the supplied environment.
+type AgentRuntimeLaunchEnv interface {
+	AugmentRuntimeLaunchEnv(env map[string]string, dataDir string, sessionID domain.SessionID, launchID string)
+}
+
 // AgentBinaryResolutionInvalidator is an optional capability for adapters that
 // cache the executable path. Install and reinstall flows use it to make the
 // next readiness, model-discovery, or launch operation resolve the current
 // local installation again.
 type AgentBinaryResolutionInvalidator interface {
 	InvalidateBinaryResolution()
-}
-
-// AgentRuntimeLaunchEnv augments a terminal launch after its generation has
-// been assigned. Native reporters can then carry that generation in their
-// own protocol identity. Implementations only modify the supplied environment.
-type AgentRuntimeLaunchEnv interface {
-	AugmentRuntimeLaunchEnv(env map[string]string, dataDir string, sessionID domain.SessionID, launchID string)
 }
 
 // AgentBinaryPresenceResolver is an optional startup-only refinement for an

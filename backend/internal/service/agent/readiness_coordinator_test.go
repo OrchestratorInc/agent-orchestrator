@@ -219,7 +219,7 @@ func TestReadinessCoordinatorNormalizesConfiguredAuthentication(t *testing.T) {
 		t.Fatalf("authentication timestamps = (%v, %v), want both populated", auth.CheckedAt, auth.AttemptedAt)
 	}
 	if got[0].EffectiveReadiness != domain.AgentReadinessUnknown {
-		t.Fatalf("effective readiness = %q, want unknown for unverified credentials", got[0].EffectiveReadiness)
+		t.Fatalf("effective readiness = %q, want unknown", got[0].EffectiveReadiness)
 	}
 }
 

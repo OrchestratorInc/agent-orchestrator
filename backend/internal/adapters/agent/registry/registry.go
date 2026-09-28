@@ -73,8 +73,8 @@ func Constructors() []adapters.Adapter {
 		kimchi.New(),
 		primeagent.New(),
 		autohand.New(),
-		unrealagent.New(),
 		fx.New(),
+		unrealagent.New(),
 	}
 }
 
