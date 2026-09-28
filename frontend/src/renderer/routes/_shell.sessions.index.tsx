@@ -6,5 +6,5 @@ export const Route = createFileRoute("/_shell/sessions/")({
 });
 
 function AllSessionsBoardRoute() {
-	return <SessionsBoard />;
+	return <SessionsBoard standaloneOnly />;
 }

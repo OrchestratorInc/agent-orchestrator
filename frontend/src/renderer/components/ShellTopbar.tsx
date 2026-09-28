@@ -114,6 +114,7 @@ export function ShellTopbar({
 	const session = workspaceScope?.session;
 	const isSessionRoute = Boolean(params.sessionId);
 	const isAutomationsRoute = location.pathname === "/automations";
+	const isStandaloneBoardRoute = location.pathname === "/sessions" || location.pathname === "/sessions/";
 	const isOrchestrator = session ? isOrchestratorSession(session) : false;
 	const isInspectorOpen = useUiStore((state) =>
 		currentSessionId ? (state.inspectorSessions[currentSessionId]?.isOpen ?? !isOrchestrator) : false,
@@ -125,9 +126,9 @@ export function ShellTopbar({
 	// route slug. "Board" is the root-board crumb only.
 	const projectId = session?.workspaceId ?? params.projectId;
 	const isProjectBoardRoute = !isSessionRoute && Boolean(projectId);
-	const isRootBoardRoute = !isSessionRoute && !isProjectBoardRoute && !isAutomationsRoute;
+	const isRootBoardRoute = !isSessionRoute && !isProjectBoardRoute && !isAutomationsRoute && !isStandaloneBoardRoute;
 	const project = workspaceScope?.project;
-	const projectLabel = project?.name ?? session?.workspaceName ?? (projectId ? "" : t("shell.board"));
+	const projectLabel = project?.name ?? session?.workspaceName ?? (projectId ? "" : isStandaloneBoardRoute ? t("standalone.workspaceName") : t("shell.board"));
 	const orchestrator = workspaceScope?.orchestrator;
 	const supportsProjectActions = project?.kind !== STANDALONE_PROJECT_KIND && projectId !== STANDALONE_WORKSPACE_ID;
 	const projectActions = useProjectOrchestratorAction({
@@ -191,7 +192,7 @@ export function ShellTopbar({
 							transition={{ type: "spring", stiffness: 400, damping: 40 }}
 						>
 							<LayoutDashboard aria-hidden="true" className="size-icon-md" />
-							{t("shell.board")}
+							{isStandaloneBoardRoute ? t("standalone.workspaceName") : t("shell.board")}
 						</motion.span>
 					</div>
 				)}

@@ -25,6 +25,8 @@
 	"cloud.lifecycle.connecting": "Connecting",
 	"board.empty.body": "Describe a task and the orchestrator plans it, spawns worker sessions, and tracks them here as work moves forward.",
 	"board.empty.title": "No worker sessions yet",
+	"board.standalone.empty.title": "No standalone agents yet",
+	"board.standalone.empty.body": "Standalone agents you start from Scratchpad will appear here. Archived standalone agents show in the Archive drawer at the bottom.",
 	"home.folderMissing": "Folder missing",
 	"home.getStarted": "Get started",
 	"home.jumpBack": "Jump back right in",

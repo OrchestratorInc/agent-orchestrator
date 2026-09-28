@@ -9,6 +9,7 @@ import {
 } from "@aoagents/product-ui";
 import { AlertTriangle, LayoutDashboard, RotateCw } from "lucide-react";
 import {
+	STANDALONE_WORKSPACE_ID,
 	type WorkspaceSession,
 	newestActiveOrchestrator,
 	orchestratorHealth,
@@ -49,6 +50,8 @@ import {
 type SessionsBoardProps = {
 	/** When set, the board shows only this project's sessions. */
 	projectId?: string;
+	/** When set, the board shows only projectless standalone sessions. */
+	standaloneOnly?: boolean;
 };
 
 type UsageBySession = ReadonlyMap<string, SessionUsageSummary>;
@@ -69,7 +72,7 @@ const isMac = isMacPlatform();
 const dragStyle = isMac ? ({ WebkitAppRegion: "drag" } as React.CSSProperties) : undefined;
 const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
-export function SessionsBoard({ projectId }: SessionsBoardProps) {
+export function SessionsBoard({ projectId, standaloneOnly = false }: SessionsBoardProps) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
@@ -84,10 +87,14 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 	/** Bell lives in the board action row when the shell topbar does not host it. */
 	const boardOwnsNotificationCenter = isLinuxPlatform() || boardActionsInPanel;
 	const all = workspaceQuery.data ?? [];
-	const workspaces = projectId ? all.filter((workspace) => workspace.id === projectId) : all;
+	const workspaces = standaloneOnly
+		? all.filter((workspace) => workspace.id === STANDALONE_WORKSPACE_ID)
+		: projectId
+			? all.filter((workspace) => workspace.id === projectId)
+			: all;
 	const workspace = projectId ? workspaces[0] : undefined;
 	// Board chrome stays route-oriented; project context remains in the sidebar.
-	const boardLabel = t("shell.board");
+	const boardLabel = standaloneOnly ? t("standalone.workspaceName") : t("shell.board");
 	const liveSessions = workspaces.flatMap((workspace) => workerSessions(workspace.sessions));
 	const demoWorkspaceId = projectId ?? workspaces[0]?.id;
 	const sessions = usesPreviewWorkspaceData && demoWorkspaceId && liveSessions.length === 0
@@ -119,7 +126,7 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 		.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 	const activeSessions = sessions.filter((candidate) => !isArchivedSession(candidate));
 	const boardLabels = sessionsBoardLabels(t);
-	const { showStartup, showWelcome, showProjectEmpty, workspaceStartupState } = useBoardPresentation({
+	const { isLoaded, showStartup, showWelcome, showProjectEmpty, workspaceStartupState } = useBoardPresentation({
 		projectId,
 		isSuccess: workspaceQuery.isSuccess,
 		isError: workspaceQuery.isError,
@@ -127,15 +134,21 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 		hasWorkerSessions: liveSessions.length > 0,
 	});
 	const hasArchive = archived.length > 0;
+	const showStandaloneEmpty = standaloneOnly && isLoaded && liveSessions.length === 0;
 	const terminateSession = useTerminateSession();
 	const activeProjectIdRef = useRef(projectId);
 	activeProjectIdRef.current = projectId;
 
-	const openSession = useCallback((session: WorkspaceSession) =>
+	const openSession = useCallback((session: WorkspaceSession) => {
+		if (session.workspaceId === STANDALONE_WORKSPACE_ID) {
+			void navigate({ to: "/sessions/$sessionId", params: { sessionId: session.id } });
+			return;
+		}
 		void navigate({
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: session.workspaceId, sessionId: session.id },
-		}), [navigate]);
+		});
+	}, [navigate]);
 
 	const restartOrchestrator = async () => {
 		if (!projectId) return;
@@ -228,6 +241,8 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 			) : null}
 			{workspaceStartupState === "error" || workspaceQuery.isError ? (
 				<p className="py-10 text-center text-xs text-passive">{t("shell.couldNotLoadSessions")}</p>
+			) : showStandaloneEmpty ? (
+				<StandaloneBoardEmpty />
 			) : showWelcome ? (
 				<BoardWelcome />
 			) : showProjectEmpty ? (
@@ -259,6 +274,26 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 				/>
 			) : null}
 			{showStartup ? <DaemonStartupLoader /> : null}
+		</div>
+	);
+}
+
+function StandaloneBoardEmpty() {
+	const { t } = useTranslation();
+	const requestNewTask = useUiStore((state) => state.requestNewTask);
+	return (
+		<div className="flex h-full min-h-0 items-center justify-center overflow-y-auto" data-testid="standalone-board-empty">
+			<div className="flex w-full max-w-preview-content flex-col items-center pb-empty-offset-y text-center">
+				<h2 className="text-subtitle font-semibold tracking-tight text-foreground">{t("board.standalone.empty.title")}</h2>
+				<p className="mt-2 text-md-sm leading-relaxed text-muted-foreground">{t("board.standalone.empty.body")}</p>
+				<button
+					className="mt-5 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+					onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
+					type="button"
+				>
+					{t("home.newStandaloneAgent")}
+				</button>
+			</div>
 		</div>
 	);
 }
@@ -324,6 +359,10 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 			const result = await restoreSessionById(session.id);
 			if (!isStillActiveProject()) return;
 			if (result.status === "success") {
+				if (session.workspaceId === STANDALONE_WORKSPACE_ID) {
+					void navigate({ to: "/sessions/$sessionId", params: { sessionId: session.id } });
+					return;
+				}
 				void navigate({
 					to: "/projects/$projectId/sessions/$sessionId",
 					params: { projectId: session.workspaceId, sessionId: session.id },
