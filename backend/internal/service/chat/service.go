@@ -2054,7 +2054,7 @@ func (s *Service) persistPickedModel(id domain.SessionID, previous, next domain.
 // Delivery follows the same rules as any other send: a message arriving mid-turn
 // queues instead of racing the running turn.
 func (s *Service) RelayChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error) {
-	return s.RelayChatTurnWithID(ctx, id, text, "")
+	return s.relayChatTurn(ctx, id, text, "", false)
 }
 
 // RelayChatTurnWithID is RelayChatTurn with a durable caller-supplied
@@ -2066,6 +2066,21 @@ func (s *Service) RelayChatTurnWithID(
 	id domain.SessionID,
 	text, clientMessageID string,
 ) (string, error) {
+	return s.relayChatTurn(ctx, id, text, clientMessageID, false)
+}
+
+// RelayUserAuthoredChatTurn delivers user-written content through AO's relay
+// path without changing its automation delivery attribution.
+func (s *Service) RelayUserAuthoredChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error) {
+	return s.relayChatTurn(ctx, id, text, "", true)
+}
+
+func (s *Service) relayChatTurn(
+	ctx context.Context,
+	id domain.SessionID,
+	text, clientMessageID string,
+	authoredByUser bool,
+) (string, error) {
 	controller, err := s.Controller(id)
 	if err != nil {
 		return "", err
@@ -2074,6 +2089,7 @@ func (s *Service) RelayChatTurnWithID(
 		Text:            text,
 		ClientMessageID: clientMessageID,
 		Origin:          domain.MessageOriginAutomation,
+		AuthoredByUser:  authoredByUser,
 	})
 	if err != nil {
 		return "", err

@@ -133,17 +133,10 @@ const MOBILE_STATUS_POLL_MS = 2_000;
 /**
  * Whether the pairing QR is safe to show.
  *
- * The connector takes roughly thirty seconds after the listener comes up
- * before its hostname resolves. A code scanned inside that window carries no
- * tunnel endpoint, so the pairing works on this network and fails everywhere
- * else — with nothing on either side to indicate why. Holding the code back is
- * the same discipline the daemon already applies to advertising the endpoint.
- *
- * A supported tunnel is also pending before its process reports running. That
- * startup window is the important edge case: showing the LAN-only QR there
- * makes it disappear again as soon as the next status response observes the
- * connector starting. Unsupported or failed tunnels are terminal LAN-only
- * states, so they do not block the QR.
+ * Pairing can start as soon as any endpoint is reachable. Remote access is
+ * optional and can take up to a minute to start, so it must not block a LAN
+ * code. The status query continues polling while the tunnel starts and the QR
+ * is refreshed with the remote endpoint once the daemon advertises it.
  *
  * A daemon that does not report endpoints at all predates the endpoint race.
  * It has no tunnel to wait for, and its QR still works, so it is shown — the
@@ -155,7 +148,7 @@ export function qrIsReady(status: PairingReadinessStatus): boolean {
 	// longer a v1 form to fall back to. An absent list is as unready as an empty
 	// one — it means the daemon has not told us where it can be reached.
 	if (!status.endpoints || status.endpoints.length === 0) return false;
-	return !pairingIsPending(status);
+	return true;
 }
 
 /** The app's registered scheme (app.json `expo.scheme`), not a universal link:
@@ -669,6 +662,15 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 										<p className="text-center text-caption leading-(--leading-settings-mobile-hint) text-settings-muted">
 											{mode === "tailscale" ? t("mobile.noTailscaleHost") : t("mobile.noPairingHost")}
 										</p>
+									</div>
+								) : enabled ? (
+									<div
+										className="flex size-full items-center justify-center bg-(--color-bg-settings-input) p-4 text-settings-muted"
+										data-testid="mobile-pairing-preparing"
+										role="status"
+										aria-label={t("mobile.checkingStatus")}
+									>
+										<Loader2 className="size-6 animate-spin" aria-hidden="true" />
 									</div>
 								) : (
 									<>

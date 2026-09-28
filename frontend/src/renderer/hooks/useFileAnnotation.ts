@@ -71,7 +71,7 @@ export function useFileAnnotation(sessionId: string, options: UseFileAnnotationO
 			} else {
 				const { error: responseError } = await apiClient.POST("/api/v1/sessions/{sessionId}/send", {
 					params: { path: { sessionId } },
-					body: { message },
+					body: { message, userAuthored: true },
 				});
 				if (responseError) throw new Error(apiErrorMessage(responseError, t("files.feedbackError")));
 			}

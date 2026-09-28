@@ -173,6 +173,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 				<Dialog.Overlay
 					className="dialog-overlay animate-overlay-in motion-reduce:animate-none"
 					data-testid="settings-dialog-overlay"
+					style={{ backdropFilter: "none", WebkitBackdropFilter: "none" }}
 					onWheel={(event) => event.preventDefault()}
 				/>
 				<Dialog.Content
