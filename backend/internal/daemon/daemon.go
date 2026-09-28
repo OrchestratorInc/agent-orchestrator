@@ -587,7 +587,7 @@ func Run() error {
 		stop()
 		<-reportDeliveryDone
 	}()
-	lcStack.trackerDone = startTrackerIntake(ctx, store, sessionSvc, tracker, log)
+	lcStack.trackerDone = startTrackerIntake(ctx, cfg.TrackerIntake, store, sessionSvc, tracker, log)
 
 	hostCommands := systemexec.New(cfg.DataDir)
 	systemChecks := systemcheck.NewWithCommandRunner(agentSvc, hostCommands, hostCommands)

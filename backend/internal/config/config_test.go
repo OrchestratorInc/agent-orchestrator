@@ -471,3 +471,53 @@ func TestLoadGitLabInvalidHostTokens(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadTrackerIntakeDefaultsOff pins the gate's default. Intake starts one
+// session per eligible issue with no concurrency bound, so an operator has to
+// opt the daemon in before a project's own trackerIntake.enabled does anything.
+func TestLoadTrackerIntakeDefaultsOff(t *testing.T) {
+	t.Setenv("AO_TRACKER_INTAKE", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.TrackerIntake {
+		t.Error("TrackerIntake = true, want false by default")
+	}
+}
+
+func TestLoadTrackerIntakeToggle(t *testing.T) {
+	on := []string{"on", "true", "1", "yes"}
+	off := []string{"off", "false", "0", "no"}
+	for _, raw := range on {
+		t.Run("on/"+raw, func(t *testing.T) {
+			t.Setenv("AO_TRACKER_INTAKE", raw)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if !cfg.TrackerIntake {
+				t.Errorf("TrackerIntake = false for %q, want true", raw)
+			}
+		})
+	}
+	for _, raw := range off {
+		t.Run("off/"+raw, func(t *testing.T) {
+			t.Setenv("AO_TRACKER_INTAKE", raw)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.TrackerIntake {
+				t.Errorf("TrackerIntake = true for %q, want false", raw)
+			}
+		})
+	}
+}
+
+func TestLoadTrackerIntakeRejectsGarbage(t *testing.T) {
+	t.Setenv("AO_TRACKER_INTAKE", "maybe")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() = nil error, want error for malformed AO_TRACKER_INTAKE")
+	}
+}
