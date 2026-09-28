@@ -99,11 +99,11 @@ func (c Cue) Validate() error {
 	}
 	switch c.Type {
 	case CueTypeCommand:
-		if strings.TrimSpace(c.Command) == "" || len(c.Command) > MaxCueCommandLength {
+		if strings.TrimSpace(c.Command) == "" {
 			return ErrInvalidCueCommand
 		}
 	case CueTypeAgent:
-		if strings.TrimSpace(c.Prompt) == "" || len(c.Prompt) > MaxCuePromptLength {
+		if strings.TrimSpace(c.Prompt) == "" {
 			return ErrInvalidCuePrompt
 		}
 	}
