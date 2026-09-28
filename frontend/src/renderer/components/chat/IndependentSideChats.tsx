@@ -15,6 +15,7 @@ import { emptySideChatDraft, parseSideChatDraft, type SideChatDraft } from "./si
 import { TurnSettingsBar } from "./TurnSettingsBar";
 import { QueuedMessageDock } from "./QueuedMessageDock";
 import { Button } from "../ui/button";
+import { SelectionActionToolbar } from "./SelectionActionToolbar";
 
 type Side = components["schemas"]["SideConversation"];
 type Snapshot = components["schemas"]["SideSnapshot"];
@@ -156,7 +157,7 @@ export function useIndependentSideChats(sessionId: string, models: ChatModel[], 
 	const [drafts, setDrafts] = useState<Record<string, SideChatDraft>>({});
 	const [attachments, setAttachments] = useState<Record<string, { path: string; file: File }[]>>({});
 	const [focusKey, setFocusKey] = useState(0);
-	const [selectionAction, setSelectionAction] = useState<{ excerpt: ChatDraftExcerptReference; left: number; top: number }>();
+	const [selectionAction, setSelectionAction] = useState<{ excerpt: ChatDraftExcerptReference; anchorX: number; top: number }>();
 	const [error, setError] = useState<string>();
 	const [pending, setPending] = useState(false);
 	const [sending, setSending] = useState(false);
@@ -458,7 +459,7 @@ export function useIndependentSideChats(sessionId: string, models: ChatModel[], 
 		const timelineRect = node.getBoundingClientRect();
 		setSelectionAction({ excerpt: { id: crypto.randomUUID(), conversationId: activeId, messageId: message.id,
 			revision: message.revision, text, role: message.role === "user" ? "user" : "assistant" },
-			left: Math.max(8, Math.min(timelineRect.width - 130, rect.left - timelineRect.left)),
+			anchorX: rect.left - timelineRect.left + rect.width / 2,
 			top: Math.max(8, rect.top - timelineRect.top - 42) });
 	};
 
@@ -471,11 +472,9 @@ export function useIndependentSideChats(sessionId: string, models: ChatModel[], 
 					{snapshot.side.errorMessage ?? snapshot.side.state}
 				</p> : null}
 				<div className="relative min-h-0 flex-1">
-					{selectionAction?.excerpt.conversationId === activeId ? <div style={{ left: selectionAction.left, top: selectionAction.top }}
-						className="absolute z-50 flex overflow-hidden rounded-md border border-border-strong bg-popover text-xs font-medium text-popover-foreground shadow-lg"
-						onMouseDown={(event) => event.preventDefault()}>
-						<button type="button" className="px-2.5 py-1.5 hover:bg-interactive-hover" onClick={() => { addReference(activeId, selectionAction.excerpt); setSelectionAction(undefined); window.getSelection()?.removeAllRanges(); }}>Add to side chat</button>
-					</div> : null}
+					{selectionAction?.excerpt.conversationId === activeId ? <SelectionActionToolbar anchorX={selectionAction.anchorX} top={selectionAction.top}>
+						<button type="button" className="shrink-0 whitespace-nowrap px-2.5 py-1.5 hover:bg-interactive-hover" onClick={() => { addReference(activeId, selectionAction.excerpt); setSelectionAction(undefined); window.getSelection()?.removeAllRanges(); }}>Add to side chat</button>
+					</SelectionActionToolbar> : null}
 				<div className="cursor-chat-timeline h-full space-y-5 overflow-y-auto px-5 py-6" role="log"
 					onMouseUp={(event) => captureSideSelection(event.currentTarget)} onKeyUp={(event) => captureSideSelection(event.currentTarget)}>
 					<div className="mx-auto flex w-full max-w-3xl flex-col gap-5">

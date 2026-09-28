@@ -33,6 +33,7 @@ import { ArrowDown, Loader2, MessageSquarePlus, TriangleAlert, Undo2 } from "luc
 import { Reorder, useDragControls } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
+import { SelectionActionToolbar } from "./SelectionActionToolbar";
 import {
 	acknowledgeChatInlineEditMutation,
 	beginChatInlineEditMutation,
@@ -2089,7 +2090,7 @@ function Timeline({
 	const [hoveredMarker, setHoveredMarker] = useState<number | null>(null);
 	const [selectionAction, setSelectionAction] = useState<{
 		excerpt: ChatDraftExcerptReference;
-		left: number;
+		anchorX: number;
 		top: number;
 	} | null>(null);
 	const hoveredMarkerRef = useRef<number | null>(null);
@@ -2193,10 +2194,7 @@ function Timeline({
 				text,
 				role,
 			},
-			left: Math.min(
-				timelineRect.width - 92,
-				Math.max(8, rect.left - timelineRect.left + rect.width / 2 - 46),
-			),
+			anchorX: rect.left - timelineRect.left + rect.width / 2,
 			top: Math.max(8, rect.top - timelineRect.top - 42),
 		});
 	}, [snapshot.conversationId]);
@@ -3017,20 +3015,16 @@ function Timeline({
 			style={{ contain: "layout paint" }}
 		>
 			{selectionAction ? (
-				<div
-					style={{ left: selectionAction.left, top: selectionAction.top }}
-					onMouseDown={(event) => event.preventDefault()}
-					className="absolute z-50 flex overflow-hidden rounded-md border border-border-strong bg-popover text-xs font-medium text-popover-foreground shadow-lg"
-				>
-					<button type="button" onClick={() => void addSelectionToChat()} className="flex items-center gap-1.5 px-2.5 py-1.5 hover:bg-interactive-hover">
-						<MessageSquarePlus aria-hidden="true" className="size-3.5" /> Add to chat
+				<SelectionActionToolbar anchorX={selectionAction.anchorX} top={selectionAction.top}>
+					<button type="button" onClick={() => void addSelectionToChat()} className="flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 hover:bg-interactive-hover">
+						<MessageSquarePlus aria-hidden="true" className="size-3.5 shrink-0" /> Add to chat
 					</button>
 					{onAddSelectionToSideChat ? (
-						<button type="button" onClick={() => void addSelectionToSideChat()} className="border-l border-border px-2.5 py-1.5 hover:bg-interactive-hover">
+						<button type="button" onClick={() => void addSelectionToSideChat()} className="shrink-0 whitespace-nowrap border-l border-border px-2.5 py-1.5 hover:bg-interactive-hover">
 							Add to side chat
 						</button>
 					) : null}
-				</div>
+				</SelectionActionToolbar>
 			) : null}
 			<div
 				ref={scroller}

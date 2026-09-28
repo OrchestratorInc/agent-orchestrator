@@ -495,6 +495,37 @@ describe("ChatWorkspace timeline", () => {
 		}
 	});
 
+	it("keeps both selection actions on one line inside the pane near its right edge", () => {
+		const geometry = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+			const width = this.dataset.testid === "selection-action-toolbar" ? 180 : 240;
+			return { left: 0, top: 0, width, height: 200 } as DOMRect;
+		});
+		try {
+			render(<ChatWorkspace snapshot={idleSnapshot(chatFixture)} onCreateSideChat={vi.fn()} />);
+			const message = screen.getByText("Check the worktree state and tell me what changed since the base commit.");
+			const selection = {
+				anchorNode: message.firstChild,
+				focusNode: message.firstChild,
+				isCollapsed: false,
+				rangeCount: 1,
+				toString: () => "sun",
+				getRangeAt: () => ({ getBoundingClientRect: () => ({ left: 232, top: 100, width: 6, height: 18 }) }),
+			} as unknown as Selection;
+			vi.spyOn(window, "getSelection").mockReturnValue(selection);
+			fireEvent.mouseUp(screen.getByRole("log", { name: "Conversation" }));
+			const toolbar = screen.getByTestId("selection-action-toolbar");
+			const left = Number.parseFloat(toolbar.style.left);
+			expect(toolbar).toHaveClass("flex-nowrap", "whitespace-nowrap");
+			expect(screen.getByRole("button", { name: "Add to chat" })).toHaveClass("whitespace-nowrap");
+			expect(screen.getByRole("button", { name: "Add to side chat" })).toHaveClass("whitespace-nowrap");
+			expect(left).toBeGreaterThanOrEqual(8);
+			expect(left + 180).toBeLessThanOrEqual(240 - 8);
+		} finally {
+			geometry.mockRestore();
+			vi.mocked(window.getSelection).mockRestore();
+		}
+	});
+
 	it("does not show a standalone side-chat creation button", () => {
 		const onCreateSideChat = vi.fn().mockResolvedValue({ id: "side-1" });
 		render(<ChatWorkspace snapshot={idleSnapshot(chatFixture)} onCreateSideChat={onCreateSideChat} />);
