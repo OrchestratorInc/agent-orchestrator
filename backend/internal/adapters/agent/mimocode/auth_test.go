@@ -51,6 +51,41 @@ func TestAuthStatusUsesDocumentedProviderListCommand(t *testing.T) {
 	}
 }
 
+func TestAuthStatusRecognizesFreeMiMoAutoWithoutCredentials(t *testing.T) {
+	old := runAuthProbe
+	t.Cleanup(func() { runAuthProbe = old })
+	runAuthProbe = func(_ context.Context, binary string, args ...string) ([]byte, error) {
+		if binary != "mimo" {
+			t.Fatalf("probe binary = %q", binary)
+		}
+		switch {
+		case reflect.DeepEqual(args, []string{"auth", "list"}):
+			return []byte("0 credentials\n0 environment variables\n"), nil
+		case reflect.DeepEqual(args, []string{"models", "mimo"}):
+			return []byte("mimo/mimo-auto — window 1M, compacts at 900K\n"), nil
+		default:
+			t.Fatalf("unexpected probe args = %q", args)
+			return nil, nil
+		}
+	}
+	status, err := (&Plugin{resolvedBinary: "mimo"}).AuthStatus(context.Background())
+	if err != nil || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("AuthStatus = (%q, %v), want configured", status, err)
+	}
+}
+
+func TestFreeModelListedRequiresExactModelID(t *testing.T) {
+	for _, output := range []string{
+		"xiaomi/mimo-v2.5-pro — window 1M\n",
+		"mimo/mimo-auto-premium — window 1M\n",
+		"no models available\n",
+	} {
+		if freeModelListed(output) {
+			t.Fatalf("freeModelListed(%q) = true", output)
+		}
+	}
+}
+
 func TestAuthStatusPropagatesCallerCancellation(t *testing.T) {
 	old := runAuthProbe
 	t.Cleanup(func() { runAuthProbe = old })
