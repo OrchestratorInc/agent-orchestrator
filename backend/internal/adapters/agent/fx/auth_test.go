@@ -18,8 +18,8 @@ func TestAuthStatusParsesDocumentedFXFields(t *testing.T) {
 	}{
 		{name: "missing", json: `{"auth":"missing","auth_expired":false}`, want: ports.AgentAuthStatusUnauthorized},
 		{name: "expired named source", json: `{"auth":"vercel","auth_expired":true}`, want: ports.AgentAuthStatusUnauthorized},
-		{name: "named source is configured", json: `{"auth":"vercel","auth_expired":false}`, want: ports.AgentAuthStatusConfigured},
-		{name: "another named source is configured", json: `{"auth":"api-key"}`, want: ports.AgentAuthStatusConfigured},
+		{name: "named source is authorized", json: `{"auth":"vercel","auth_expired":false}`, want: ports.AgentAuthStatusAuthorized},
+		{name: "another named source is authorized", json: `{"auth":"api-key"}`, want: ports.AgentAuthStatusAuthorized},
 		{name: "unknown shape", json: `{"version":"0.0.9"}`, want: ports.AgentAuthStatusUnknown},
 		{name: "malformed", json: `{"auth":`, want: ports.AgentAuthStatusUnknown},
 	}
@@ -29,9 +29,6 @@ func TestAuthStatusParsesDocumentedFXFields(t *testing.T) {
 			got := authStatusFromJSON([]byte(tc.json))
 			if got != tc.want {
 				t.Fatalf("status = %q, want %q", got, tc.want)
-			}
-			if got == ports.AgentAuthStatusAuthorized {
-				t.Fatal("local fx status evidence must not be reported as authorized")
 			}
 		})
 	}

@@ -125,9 +125,9 @@ surface (`npm run sqlc`, `npm run api`).
   delegation, desktop/mobile logos, and Settings installation/readiness. fx
   remains experimental while its upstream CLI is pre-1.0. The fixed macOS/Linux
   installer is `curl -fsSL https://fx.sh/setup.sh | bash`, with expected binary
-  `~/.local/bin/fx`; Windows users receive WSL guidance. A `configured` readiness
-  state means local provider credentials exist, not that provider authorization
-  was verified. Interactive fx lacks a per-session system-prompt flag: AO does
+  `~/.local/bin/fx`; Windows users receive WSL guidance. AO treats a named,
+  non-expired credential source from `fx status --json` as authorized.
+  Interactive fx lacks a per-session system-prompt flag: AO does
   not overwrite project `AGENTS.md` or user `~/.fx/AGENTS.md`, so TUI standing
   instructions have reduced coverage. fx Chat and interface switching are not
   implemented. See [fx docs](https://fx.sh/docs).
