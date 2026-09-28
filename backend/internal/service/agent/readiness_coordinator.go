@@ -647,16 +647,23 @@ func (c *readinessCoordinator) sortedIDsLocked() []string {
 }
 
 func (c *readinessCoordinator) neededChecksLocked(entry *readinessEntry, purpose domain.AgentReadinessPurpose) readinessInvalidation {
-	ttl := c.displayTTL
+	// Installation probes are millisecond-cheap PATH lookups, so launch keeps
+	// its aggressive horizon for them. Authentication probes shell out to
+	// capacity reads that take seconds (up to the auth timeout), and spawn
+	// blocks on a launch ensure — re-probing auth on every start is the
+	// measured Chat task-create delay. Authentication therefore reuses the
+	// display horizon for every purpose; explicit invalidation (sign-in/out,
+	// launch failures) still forces an immediate recheck.
+	installTTL := c.displayTTL
 	if purpose == domain.AgentReadinessPurposeLaunch {
-		ttl = c.launchTTL
+		installTTL = c.launchTTL
 	}
 	now := c.now()
 	needed := entry.invalidated
-	if entry.snapshot.Installation.CheckedAt == nil || now.Sub(*entry.snapshot.Installation.CheckedAt) >= ttl {
+	if entry.snapshot.Installation.CheckedAt == nil || now.Sub(*entry.snapshot.Installation.CheckedAt) >= installTTL {
 		needed |= readinessInvalidateInstallation
 	}
-	if entry.snapshot.Authentication.CheckedAt == nil || now.Sub(*entry.snapshot.Authentication.CheckedAt) >= ttl {
+	if entry.snapshot.Authentication.CheckedAt == nil || now.Sub(*entry.snapshot.Authentication.CheckedAt) >= c.displayTTL {
 		needed |= readinessInvalidateAuthentication
 	}
 	return needed

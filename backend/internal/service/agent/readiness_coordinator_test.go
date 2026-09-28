@@ -975,3 +975,46 @@ func TestReadinessCoordinatorTreatsConfiguredAsUnverified(t *testing.T) {
 		t.Fatal("a configured verdict is a definite observation and must be marked checked")
 	}
 }
+
+func TestReadinessCoordinatorLaunchReusesDisplayFreshnessForAuth(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	agent := &readinessTestAgent{
+		resolve: func(context.Context) (string, error) { return "/bin/codex", nil },
+		auth:    func(context.Context) (ports.AgentAuthStatus, error) { return ports.AgentAuthStatusAuthorized, nil },
+	}
+	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+		Agents:     []agentregistry.HarnessAgent{readinessHarness("codex", "Codex", agent)},
+		Now:        func() time.Time { return now },
+		DisplayTTL: 5 * time.Minute,
+		LaunchTTL:  30 * time.Second,
+	})
+	if _, err := coordinator.Ensure(context.Background(), nil, domain.AgentReadinessPurposeDisplay); err != nil {
+		t.Fatal(err)
+	}
+	if got := agent.authCalls.Load(); got != 1 {
+		t.Fatalf("display auth checks = %d, want 1", got)
+	}
+	// 60s later: past the 30s launch TTL but inside the 5m display TTL.
+	// Installation (millisecond-cheap) is re-probed for launch, but
+	// authentication (seconds-expensive native probe) must reuse the
+	// display-fresh result so spawn never blocks on it.
+	now = now.Add(60 * time.Second)
+	if _, err := coordinator.Ensure(context.Background(), nil, domain.AgentReadinessPurposeLaunch); err != nil {
+		t.Fatal(err)
+	}
+	if got := agent.resolveCalls.Load(); got != 2 {
+		t.Fatalf("launch install checks = %d, want 2 total", got)
+	}
+	if got := agent.authCalls.Load(); got != 1 {
+		t.Fatalf("launch auth checks = %d, want reused display result", got)
+	}
+	// Past the display horizon both observations are re-probed.
+	now = now.Add(5 * time.Minute)
+	if _, err := coordinator.Ensure(context.Background(), nil, domain.AgentReadinessPurposeLaunch); err != nil {
+		t.Fatal(err)
+	}
+	if got := agent.authCalls.Load(); got != 2 {
+		t.Fatalf("launch auth checks after 5m = %d, want recheck", got)
+	}
+}
