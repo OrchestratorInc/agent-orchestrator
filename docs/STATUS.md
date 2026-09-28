@@ -121,16 +121,8 @@ surface (`npm run sqlc`, `npm run api`).
 - Lifecycle reducer plus reaper (`internal/observe/reaper`).
 - Agent adapter platform under `internal/adapters/agent/` (28 public harnesses) with a
   registry and `ao hooks` activity dispatch.
-- Experimental fx Terminal UI adapter, persistent sessions, API/CLI spawn and
-  delegation, desktop/mobile logos, and Settings installation/readiness. fx
-  remains experimental while its upstream CLI is pre-1.0. The fixed macOS/Linux
-  installer is `curl -fsSL https://fx.sh/setup.sh | bash`, with expected binary
-  `~/.local/bin/fx`; Windows users receive WSL guidance. AO treats a named,
-  non-expired credential source from `fx status --json` as authorized.
-  Interactive fx lacks a per-session system-prompt flag: AO does
-  not overwrite project `AGENTS.md` or user `~/.fx/AGENTS.md`, so TUI standing
-  instructions have reduced coverage. fx Chat and interface switching are not
-  implemented. See [fx docs](https://fx.sh/docs).
+- Experimental fx adapter: Terminal UI only (no Chat), with restore, agent
+  switching, and Settings installation.
 - Daemon-owned in-memory agent readiness coordination with normalized
   installation/authentication observations, purpose-specific freshness,
   single-flight checks, bounded warm-up/retries, launch-time validation, and
