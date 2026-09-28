@@ -632,6 +632,43 @@ describe("ElicitationDock", () => {
 		}
 	});
 
+	it("does not resurrect the draft on unmount after a successful resolve", async () => {
+		const user = userEvent.setup();
+		let failing = true;
+		const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
+		vi.spyOn(window.localStorage, "setItem").mockImplementation((key: string, value: string) => {
+			if (failing && key === elicitationDraftKey("conversation-1", "request-1")) {
+				throw new DOMException("quota exceeded", "QuotaExceededError");
+			}
+			originalSetItem(key, value);
+		});
+
+		try {
+			const view = render(
+				<ElicitationDock
+					activity={activity({ inputMode: "form", schema: claudeQuestions })}
+					sessionId="session-1"
+					conversationId="conversation-1"
+					onResolve={vi.fn().mockResolvedValue(undefined)}
+				/>,
+			);
+			await user.click(screen.getByRole("radio", { name: /Native/ }));
+			await user.click(screen.getByRole("button", { name: "Next" }));
+			await user.click(screen.getByRole("radio", { name: "Go" }));
+			await user.click(screen.getByRole("button", { name: "Continue" }));
+			await waitFor(() => expect(getChatDraftBoundary("session-1")).toBeUndefined());
+
+			failing = false;
+			view.unmount();
+
+			expect(readElicitationDraft("conversation-1", "request-1")).toBeUndefined();
+			expect(getChatDraftBoundary("session-1")).toBeUndefined();
+		} finally {
+			vi.restoreAllMocks();
+			clearElicitationBoundary("session-1", "request-1");
+		}
+	});
+
 	it("hides the failed-save alert once the form disables for a resolve, successful or not", async () => {
 		// The write effect bails out entirely while disabled, so nothing else
 		// would clear the underlying failure state in that window — the alert

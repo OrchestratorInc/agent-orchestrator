@@ -139,9 +139,13 @@ export function ElicitationDock({
 			{activity.detail?.inputMode === "url" ? (
 				<URLRequest activity={activity} disabled={submitting || unavailable} onResolve={resolve} />
 			) : (
-				// ChatWorkspace keys the whole ElicitationDock by request id, so a new
-				// question always gets a fresh FormRequest; no key needed here too.
+				// Keyed by request: a caller that reuses one ElicitationDock element
+				// across requests (this component's own tests do; ChatWorkspace's own
+				// outer key is a separate guarantee, not a substitute for this one)
+				// otherwise keeps FormRequest's state — a typed answer, in particular
+				// — across an unrelated question.
 				<FormRequest
+					key={requestId ?? activity.id}
 					activity={activity}
 					sessionId={sessionId}
 					draftKey={conversationId && requestId ? { conversationId, requestId } : undefined}
@@ -381,7 +385,10 @@ function FormRequest({
 			// the warning goes away; if it hasn't, the warning stays.
 			const { draftKey: key, values: finalValues, activeQuestion: finalActiveQuestion } = latest.current;
 			if (!key) return;
-			if (!hasPendingFailure.current) return;
+			// The cache entry, not `hasPendingFailure`, is the gate: a successful
+			// resolve forgets the entry but never resets this instance's ref, and
+			// writing here after that would resurrect a draft for an answered question.
+			if (!hasPendingFailure.current || !peekUnsavedElicitationDraft(key.conversationId, key.requestId)) return;
 			const result = writeElicitationDraft(key.conversationId, key.requestId, {
 				values: finalValues,
 				activeQuestion: finalActiveQuestion,
