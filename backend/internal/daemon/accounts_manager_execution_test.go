@@ -15,6 +15,7 @@ import (
 
 	core "github.com/aoagents/agent-orchestrator/backend/internal/accountsmanager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -103,7 +104,20 @@ func (r *publicExecutionRuntime) GetStyledOutput(context.Context, ports.RuntimeH
 	return "\x1b[1m›\x1b[0m \x1b[2mWrite tests for @filename\x1b[0m\n\ngpt-5.6-sol low · ~/project\n", nil
 }
 
+func (r *publicExecutionRuntime) IsExactSupervisedProcessAlive(ctx context.Context, handle ports.RuntimeHandle, ref ports.SupervisedProcessRef) (bool, error) {
+	probe := r.ProbeFencedRuntime(ctx, ports.FencedRuntimeRef{Handle: handle, SessionID: ref.SessionID, Generation: ref.LaunchID})
+	if probe.Liveness == ports.FencedUnknown {
+		return false, errors.New("synthetic exact owner is unknown")
+	}
+	return probe.Liveness == ports.FencedAlive, nil
+}
+
 func newPublicExecutionFixture(t *testing.T) (*publicControlFixture, *publicExecutionRuntime, *publicExecutionAgent) {
+	t.Helper()
+	return newPublicExecutionFixtureWithRuntime(t, nil)
+}
+
+func newPublicExecutionFixtureWithRuntime(t *testing.T, wrap func(*publicExecutionRuntime) runtimeselect.Runtime) (*publicControlFixture, *publicExecutionRuntime, *publicExecutionAgent) {
 	t.Helper()
 	binary, err := exec.LookPath("true")
 	if err != nil {
@@ -120,7 +134,11 @@ func newPublicExecutionFixture(t *testing.T) (*publicControlFixture, *publicExec
 	}}}
 	accounts := accountsvc.New(catalog, store)
 	ctx, cancel := context.WithCancel(t.Context())
-	svc, _, owner, err := startSession(ctx, cfg, runtime, store, lifecycle.New(store, nil), newSessionMessenger(store, runtime, log), telemetryadapter.NoopSink{}, publicExecutionAgents{agent}, nil, nil, nil, nil, nil, nil, nil, nil, nil, accounts, log)
+	selected := runtimeselect.Runtime(runtime)
+	if wrap != nil {
+		selected = wrap(runtime)
+	}
+	svc, _, owner, err := startSession(ctx, cfg, selected, store, lifecycle.New(store, nil), newSessionMessenger(store, selected, log), telemetryadapter.NoopSink{}, publicExecutionAgents{agent}, nil, nil, nil, nil, nil, nil, nil, nil, nil, accounts, log)
 	if err != nil {
 		cancel()
 		t.Fatal(err)

@@ -433,6 +433,7 @@ func (m *Manager) releaseAccountSwitch(id domain.SessionID, run *accountsManager
 	})
 }
 
+// CancelAccountsManagerSwitch requires durable proof that source stopping has not begun.
 func (m *Manager) CancelAccountsManagerSwitch(ctx context.Context, id domain.SessionID, operationID string) (domain.AccountsManagerSwitch, error) {
 	store, ok := m.store.(ports.AccountsManagerSwitchStore)
 	if !ok {
@@ -445,15 +446,32 @@ func (m *Manager) CancelAccountsManagerSwitch(ctx context.Context, id domain.Ses
 	if !found || op.SessionID != id {
 		return op, ErrNotFound
 	}
-	if op.Phase == domain.AccountsManagerSwitchCancelled {
-		return op, nil
-	}
-	if op.Phase != domain.AccountsManagerSwitchRequested && op.Phase != domain.AccountsManagerSwitchWaiting {
-		return op, domain.ErrAccountsManagerSwitchConflict
-	}
-	op, err = store.AdvanceAccountsManagerSwitch(ctx, operationID, op.Phase, domain.AccountsManagerSwitchCancelled, "")
-	if err != nil {
-		return op, err
+	for op.Phase != domain.AccountsManagerSwitchCancelled {
+		if op.Phase != domain.AccountsManagerSwitchRequested && op.Phase != domain.AccountsManagerSwitchWaiting {
+			return op, domain.ErrAccountsManagerSwitchConflict
+		}
+		cancelled, advanceErr := store.AdvanceAccountsManagerSwitch(ctx, operationID, op.Phase, domain.AccountsManagerSwitchCancelled, "")
+		if advanceErr == nil {
+			op = cancelled
+			break
+		}
+		current, found, readErr := store.GetAccountsManagerSwitch(ctx, operationID)
+		if readErr != nil {
+			return op, errors.Join(advanceErr, readErr)
+		}
+		if !found || current.SessionID != id {
+			return op, ErrNotFound
+		}
+		if current.Phase == domain.AccountsManagerSwitchCancelled {
+			op = current
+			break
+		}
+		// Retry only the single forward transition that retains pre-stop proof.
+		if op.Phase == domain.AccountsManagerSwitchRequested && current.Phase == domain.AccountsManagerSwitchWaiting && errors.Is(advanceErr, domain.ErrAccountsManagerSwitchConflict) {
+			op = current
+			continue
+		}
+		return current, advanceErr
 	}
 	m.accountSwitchMu.Lock()
 	run := m.accountSwitches[id]

@@ -1,6 +1,6 @@
 # Gates: remaining account isolation and completion
 
-Scope: execute NEXT-IMPLEMENTATION-PLAN.md against the published checkpoint and a reviewed current-main integration. All gates are open. Existing slice evidence is historical until the relevant final snapshot is reverified.
+Scope: execute NEXT-IMPLEMENTATION-PLAN.md against the published checkpoint and a reviewed current-main integration. Gate states below distinguish local checks from independent review and release evidence. Existing slice evidence is historical until the relevant final snapshot is reverified.
 
 This ledger contains acceptance outcomes, not permission to implement or publish. Manual gates cover combined product outcomes whose new test oracles have not yet been written, native evidence, or independent review. Before implementing a slice, replace its manual test obligations with exact commands and decisive expectations where automation is possible; confirm every named test actually executes. Do not turn a planned command into passing evidence.
 
@@ -17,11 +17,11 @@ This ledger contains acceptance outcomes, not permission to implement or publish
 
 ## Switching and exact retirement
 
-- [ ] G05: the two existing production execution and cancellation regressions pass three race repetitions.
+- [x] G05: the two existing production execution and cancellation regressions pass three race repetitions.
   CHECK: go test -v -race -count=3 -timeout=180s ./internal/daemon -run 'TestAccountsManagerControlProduction(Execution|SwitchCancellation)'
   EXPECT: /ok\s+github\.com\/aoagents\/agent-orchestrator\/backend\/internal\/daemon/
   CWD: backend
-  EVIDENCE: pending; run with Fish from the repository root and preserve verbose test-selection evidence.
+  EVIDENCE: `/var/tmp/pr-5769-next-79.wos4rh/switch-corrections-race3-post-lint.log`, exit 0; exact four-file correction seal in REVIEW-82-NEXT-SWITCHING.md. Missing exact-inspector capability was a fixture defect; cancellation required a narrow durable-state correction. G06 remains pending independent review.
 - [ ] G06: independent switching review clears readiness, retry, cancellation, ownership and queue recovery across direct/fallback runtimes and SQLite reopen.
   EVIDENCE: pending; passing G05 alone is insufficient. P2 includes failed launch publication, replacement takeover, empty history, lost cancel response and no interrupt replay.
 - [ ] G07: the preserved Linux escaped-descendant regression passes for exact retirement and account deletion without changing its survival invariant.
