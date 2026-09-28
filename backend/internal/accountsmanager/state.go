@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -73,6 +74,59 @@ func (s *routeState) accountForSession(sessionID string) (string, bool) {
 	accountID, ok := s.sessions[strings.TrimSpace(sessionID)]
 	s.mu.RUnlock()
 	return accountID, ok
+}
+
+func (s *routeState) hasSession(sessionID string) bool {
+	_, ok := s.accountForSession(sessionID)
+	return ok
+}
+
+func (s *routeState) removeSession(sessionID string) error {
+	if s == nil {
+		return ports.ErrCodexProxyUnavailable
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return errors.New("session id is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.sessions[sessionID]; !ok {
+		return nil
+	}
+	candidate := cloneStringMap(s.sessions)
+	delete(candidate, sessionID)
+	if err := s.persist(s.persisted(candidate)); err != nil {
+		return err
+	}
+	s.sessions = candidate
+	return nil
+}
+
+func (s *routeState) pruneSessions(keep map[string]struct{}) ([]string, error) {
+	if s == nil {
+		return nil, ports.ErrCodexProxyUnavailable
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := make([]string, 0)
+	candidate := cloneStringMap(s.sessions)
+	for sessionID := range candidate {
+		if _, ok := keep[sessionID]; ok {
+			continue
+		}
+		delete(candidate, sessionID)
+		removed = append(removed, sessionID)
+	}
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := s.persist(s.persisted(candidate)); err != nil {
+		return nil, err
+	}
+	s.sessions = candidate
+	sort.Strings(removed)
+	return removed, nil
 }
 
 func (s *routeState) activeAccountID() (string, bool) {

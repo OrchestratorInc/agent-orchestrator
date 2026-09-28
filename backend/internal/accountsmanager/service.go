@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,8 @@ const (
 	defaultRouteTokenEnv = ports.CodexProxyTokenEnv
 	serverReadyTimeout   = 10 * time.Second
 	serverPollInterval   = 20 * time.Millisecond
+	proxyPortFileName    = "proxy-port"
+	routingKeyFileName   = "routing.key"
 )
 
 // Options configures the daemon-owned embedded proxy. NativeAccountRoot is
@@ -140,16 +143,13 @@ func New(options Options) (*Service, error) {
 	if err := ensurePrivateDirectory(authDir); err != nil {
 		return nil, err
 	}
-	port, err := freeLoopbackPort()
+	port, err := loadOrCreateProxyPort(filepath.Join(managerRoot, proxyPortFileName))
 	if err != nil {
 		return nil, fmt.Errorf("allocate accounts manager port: %w", err)
 	}
-	routingKey, err := randomBytes(32)
+	routingKey, err := loadOrCreateRoutingKey(filepath.Join(managerRoot, routingKeyFileName))
 	if err != nil {
 		return nil, fmt.Errorf("create accounts manager routing key: %w", err)
-	}
-	if err := writePrivateFile(filepath.Join(managerRoot, "routing.key"), routingKey); err != nil {
-		return nil, err
 	}
 
 	configPath := filepath.Join(managerRoot, "config.yaml")
@@ -175,7 +175,7 @@ func New(options Options) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	capability, err := newRouteCapability(routingKey)
+	capability, err := newRouteCapability(routingKey, routes)
 	if err != nil {
 		return nil, err
 	}
@@ -278,6 +278,18 @@ func (s *Service) Start(ctx context.Context) error {
 	s.runCtx = runCtx
 	s.runDone = done
 	s.lifecycleMu.Unlock()
+	if err := waitLoopbackPortAvailable(ctx, strings.TrimPrefix(s.baseURL, "http://")); err != nil {
+		cancel()
+		s.lifecycleMu.Lock()
+		if s.runDone == done {
+			s.runCancel = nil
+			s.runCtx = nil
+			s.runDone = nil
+		}
+		s.lifecycleMu.Unlock()
+		sdkaccess.UnregisterProvider(routeAccessProviderType)
+		return err
+	}
 	go func() {
 		err := s.proxy.Run(runCtx)
 		if errors.Is(err, context.Canceled) || runCtx.Err() != nil {
@@ -484,6 +496,44 @@ func (s *Service) SessionAccount(ctx context.Context, sessionID string) (string,
 		return "", false, nil
 	}
 	return s.externalAccountID(proxyID), true, nil
+}
+
+// RevokeSession removes a session's durable account pin and all in-memory
+// bearer authorization. Existing Codex processes cannot use the old token
+// after this boundary, including after a daemon restart because Authenticate
+// checks the durable pin before accepting a token.
+func (s *Service) RevokeSession(ctx context.Context, sessionID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s == nil || s.routes == nil || s.capability == nil {
+		return ports.ErrCodexProxyUnavailable
+	}
+	if err := s.routes.removeSession(sessionID); err != nil {
+		return err
+	}
+	s.capability.RevokeSession(sessionID)
+	return nil
+}
+
+// ReconcileSessionPins removes durable pins for sessions that no longer exist
+// or have already been terminated. It runs during daemon boot so routes.json
+// cannot accumulate dead session capabilities indefinitely.
+func (s *Service) ReconcileSessionPins(ctx context.Context, keep map[string]struct{}) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s == nil || s.routes == nil || s.capability == nil {
+		return ports.ErrCodexProxyUnavailable
+	}
+	removed, err := s.routes.pruneSessions(keep)
+	if err != nil {
+		return err
+	}
+	for _, sessionID := range removed {
+		s.capability.RevokeSession(sessionID)
+	}
+	return nil
 }
 
 // Accounts returns a redacted snapshot for an AO management surface.
@@ -779,6 +829,80 @@ func freeLoopbackPort() (int, error) {
 		return 0, fmt.Errorf("loopback listener did not return a TCP address")
 	}
 	return address.Port, nil
+}
+
+func loadOrCreateProxyPort(path string) (int, error) {
+	raw, err := os.ReadFile(path)
+	if err == nil {
+		port, parseErr := strconv.Atoi(strings.TrimSpace(string(raw)))
+		if parseErr != nil || port < 1 || port > 65535 {
+			return 0, fmt.Errorf("invalid persisted accounts manager port")
+		}
+		if chmodErr := os.Chmod(path, 0o600); chmodErr != nil {
+			return 0, fmt.Errorf("protect persisted accounts manager port: %w", chmodErr)
+		}
+		return port, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return 0, fmt.Errorf("read persisted accounts manager port: %w", err)
+	}
+	port, err := freeLoopbackPort()
+	if err != nil {
+		return 0, err
+	}
+	if err := writePrivateFile(path, []byte(strconv.Itoa(port))); err != nil {
+		return 0, err
+	}
+	return port, nil
+}
+
+func loadOrCreateRoutingKey(path string) ([]byte, error) {
+	raw, err := os.ReadFile(path)
+	if err == nil {
+		if len(raw) != 32 {
+			return nil, errors.New("persisted routing key has invalid length")
+		}
+		if chmodErr := os.Chmod(path, 0o600); chmodErr != nil {
+			return nil, fmt.Errorf("protect persisted accounts manager routing key: %w", chmodErr)
+		}
+		return raw, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("read persisted accounts manager routing key: %w", err)
+	}
+	raw, err = randomBytes(32)
+	if err != nil {
+		return nil, err
+	}
+	if err := writePrivateFile(path, raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+// waitLoopbackPortAvailable lets a replacement daemon wait out the graceful
+// shutdown of its predecessor without changing the endpoint retained by live
+// Codex app-servers. A different process holding the port fails closed rather
+// than silently breaking the persistent-host contract with a new port.
+func waitLoopbackPortAvailable(ctx context.Context, address string) error {
+	deadline := time.NewTimer(serverReadyTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(serverPollInterval)
+	defer ticker.Stop()
+	for {
+		listener, err := net.Listen("tcp", address)
+		if err == nil {
+			_ = listener.Close()
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("wait for accounts manager endpoint %s: %w", address, ports.ErrCodexProxyUnavailable)
+		case <-ticker.C:
+		}
+	}
 }
 
 func safePathComponent(value string) bool {

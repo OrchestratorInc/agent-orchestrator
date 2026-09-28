@@ -36,19 +36,22 @@ type routeClaims struct {
 	SessionID string `json:"session_id"`
 }
 
-// routeCapability authenticates a short-lived child-process capability and
+// routeCapability authenticates a session-scoped child-process capability and
 // remembers which AO session presented it. The account is deliberately not in
 // the token: switching an account updates the session mapping atomically, so a
-// running Codex process can use the new account on its next request.
+// running Codex process can use the new account on its next request. The
+// capability is valid only while its durable session pin exists; termination
+// removes that pin and revokes the bearer.
 type routeCapability struct {
-	aead cipher.AEAD
+	aead   cipher.AEAD
+	routes *routeState
 
 	mu     sync.Mutex
 	claims map[string]routeClaims // caller scope -> claims
 	tokens map[string]string      // AO session id -> stable child capability
 }
 
-func newRouteCapability(key []byte) (*routeCapability, error) {
+func newRouteCapability(key []byte, routes ...*routeState) (*routeCapability, error) {
 	if len(key) != 32 {
 		return nil, fmt.Errorf("routing key must be 32 bytes")
 	}
@@ -60,10 +63,13 @@ func newRouteCapability(key []byte) (*routeCapability, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize route capability: %w", err)
 	}
+	var routeStateRef *routeState
+	if len(routes) > 0 {
+		routeStateRef = routes[0]
+	}
 	return &routeCapability{
-		aead:   aead,
-		claims: make(map[string]routeClaims),
-		tokens: make(map[string]string),
+		aead: aead, routes: routeStateRef,
+		claims: make(map[string]routeClaims), tokens: make(map[string]string),
 	}, nil
 }
 
@@ -113,6 +119,9 @@ func (c *routeCapability) Authenticate(_ context.Context, request *http.Request)
 	if err != nil {
 		return nil, sdkaccess.NewInvalidCredentialError()
 	}
+	if c.routes != nil && !c.routes.hasSession(claims.SessionID) {
+		return nil, sdkaccess.NewInvalidCredentialError()
+	}
 	digest := sha256.Sum256([]byte(token))
 	principal := routeAccessProviderName + ":" + hex.EncodeToString(digest[:])
 	scope := coresession.CallerScope(principal)
@@ -120,6 +129,28 @@ func (c *routeCapability) Authenticate(_ context.Context, request *http.Request)
 	c.claims[scope] = claims
 	c.mu.Unlock()
 	return &sdkaccess.Result{Provider: routeAccessProviderName, Principal: principal}, nil
+}
+
+// RevokeSession removes all in-memory authorization derived from one AO
+// session. The durable session pin is removed by Service.RevokeSession before
+// this method is called, so a token replay is rejected after a daemon restart
+// as well as during the current process.
+func (c *routeCapability) RevokeSession(sessionID string) {
+	if c == nil {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	c.mu.Lock()
+	delete(c.tokens, sessionID)
+	for scope, claims := range c.claims {
+		if claims.SessionID == sessionID {
+			delete(c.claims, scope)
+		}
+	}
+	c.mu.Unlock()
 }
 
 func (c *routeCapability) sessionForScope(scope string) (string, bool) {

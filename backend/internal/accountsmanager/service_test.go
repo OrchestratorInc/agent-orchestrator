@@ -72,6 +72,56 @@ func TestServiceRoutesMirroredNativeCodexAccount(t *testing.T) {
 	}
 }
 
+func TestServicePreservesRouteAcrossReconstructionAndRevokesIt(t *testing.T) {
+	dataDir := t.TempDir()
+	nativeRoot := filepath.Join(dataDir, "native")
+	nativeDir := filepath.Join(nativeRoot, "native-account-1", "credential-home")
+	if err := os.MkdirAll(nativeDir, 0o700); err != nil {
+		t.Fatalf("create native account: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nativeDir, "auth.json"), []byte(`{"type":"codex","access_token":"test-token"}`), 0o600); err != nil {
+		t.Fatalf("write native credential: %v", err)
+	}
+
+	first, err := New(Options{DataDir: dataDir, NativeAccountRoot: nativeRoot})
+	if err != nil {
+		t.Fatalf("New(first): %v", err)
+	}
+	firstRoute, err := first.RouteForSession(context.Background(), "session-1")
+	if err != nil {
+		t.Fatalf("RouteForSession(first): %v", err)
+	}
+	if _, authErr := first.capability.Authenticate(context.Background(), httptestRequestWithToken(firstRoute.Token)); authErr != nil {
+		t.Fatalf("first route authentication: %v", authErr)
+	}
+	firstPort := first.baseURL
+	if err := first.Close(context.Background()); err != nil {
+		t.Fatalf("Close(first): %v", err)
+	}
+
+	second, err := New(Options{DataDir: dataDir, NativeAccountRoot: nativeRoot})
+	if err != nil {
+		t.Fatalf("New(second): %v", err)
+	}
+	defer func() { _ = second.Close(context.Background()) }()
+	if second.baseURL != firstPort {
+		t.Fatalf("proxy endpoint changed across reconstruction: first=%q second=%q", firstPort, second.baseURL)
+	}
+	if _, authErr := second.capability.Authenticate(context.Background(), httptestRequestWithToken(firstRoute.Token)); authErr != nil {
+		t.Fatalf("surviving route authentication after reconstruction: %v", authErr)
+	}
+
+	if err := second.RevokeSession(context.Background(), "session-1"); err != nil {
+		t.Fatalf("RevokeSession: %v", err)
+	}
+	if _, authErr := second.capability.Authenticate(context.Background(), httptestRequestWithToken(firstRoute.Token)); authErr == nil {
+		t.Fatal("revoked route bearer was accepted")
+	}
+	if _, ok := second.routes.accountForSession("session-1"); ok {
+		t.Fatal("revoked session pin remained durable")
+	}
+}
+
 func TestServiceGlobalSwitchPreservesExistingAndPinsFutureSessions(t *testing.T) {
 	dataDir := t.TempDir()
 	nativeRoot := filepath.Join(dataDir, "native")

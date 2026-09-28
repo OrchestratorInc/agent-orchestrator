@@ -539,6 +539,26 @@ func Run() error {
 		}
 		return fmt.Errorf("prepare Codex accounts manager: %w", err)
 	}
+	lcStack.LCM.SetSessionRouteRevoker(codexProxy)
+	allSessions, err := store.ListAllSessions(ctx)
+	if err != nil {
+		_ = codexProxy.Close(context.Background())
+		stop()
+		lcStack.Stop()
+		return fmt.Errorf("reconcile Codex account routes: list sessions: %w", err)
+	}
+	activeRouteSessions := make(map[string]struct{}, len(allSessions))
+	for _, session := range allSessions {
+		if !session.IsTerminated {
+			activeRouteSessions[string(session.ID)] = struct{}{}
+		}
+	}
+	if err := codexProxy.ReconcileSessionPins(ctx, activeRouteSessions); err != nil {
+		_ = codexProxy.Close(context.Background())
+		stop()
+		lcStack.Stop()
+		return fmt.Errorf("reconcile Codex account routes: %w", err)
+	}
 	// Older builds kept the switch journal in SQLite. Import it before wiring
 	// the agent service, then remove the legacy table; all new switch state is
 	// filesystem-owned by Accounts Manager.

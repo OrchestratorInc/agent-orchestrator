@@ -137,6 +137,10 @@ type sessionTerminator interface {
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
 }
 
+type sessionRouteRevoker interface {
+	RevokeSession(context.Context, string) error
+}
+
 type sessionUsageFinalizer interface {
 	FinalizeSession(
 		ctx context.Context,
@@ -229,6 +233,7 @@ type Manager struct {
 	// completionTerminator is late-bound because Session Manager itself depends
 	// on this lifecycle reducer. It is required before the SCM observer starts.
 	completionTerminator sessionTerminator
+	routeRevoker         sessionRouteRevoker
 	// usageFinalizer is late-bound because the usage pipeline is optional. It
 	// receives terminal intent before is_terminated makes the session ineligible
 	// for normal source discovery.
@@ -303,6 +308,16 @@ func (m *Manager) SetCompletionTerminator(terminator sessionTerminator) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.completionTerminator = terminator
+}
+
+// SetSessionRouteRevoker late-binds the daemon-owned provider route boundary.
+// Lifecycle is constructed before the Codex Accounts Manager to avoid a
+// dependency cycle, so termination revocation is wired once that manager is
+// ready.
+func (m *Manager) SetSessionRouteRevoker(revoker sessionRouteRevoker) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.routeRevoker = revoker
 }
 
 // SetUsageFinalizer wires termination and relaunches to usage collection.
@@ -1753,6 +1768,9 @@ func (m *Manager) MarkTerminated(ctx context.Context, id domain.SessionID) error
 			return err
 		}
 		if rec.IsTerminated {
+			if err := m.revokeSessionRoute(ctx, id); err != nil {
+				return err
+			}
 			m.reapSessionContainers(ctx, id)
 			return nil
 		}
@@ -1794,6 +1812,9 @@ func (m *Manager) MarkTerminated(ctx context.Context, id domain.SessionID) error
 		}
 		switch outcome {
 		case terminationApplied, terminationAlreadyApplied:
+			if err := m.revokeSessionRoute(ctx, id); err != nil {
+				return err
+			}
 			m.reapSessionContainers(ctx, id)
 			return nil
 		case terminationLaunchChanged:
@@ -1805,6 +1826,19 @@ func (m *Manager) MarkTerminated(ctx context.Context, id domain.SessionID) error
 			continue
 		}
 	}
+}
+
+func (m *Manager) revokeSessionRoute(ctx context.Context, id domain.SessionID) error {
+	m.mu.Lock()
+	revoker := m.routeRevoker
+	m.mu.Unlock()
+	if revoker == nil {
+		return nil
+	}
+	if err := revoker.RevokeSession(ctx, string(id)); err != nil {
+		return fmt.Errorf("lifecycle: revoke Codex route for %q: %w", id, err)
+	}
+	return nil
 }
 
 // reapSessionContainers is the container leg of #2652 (the container-owning
