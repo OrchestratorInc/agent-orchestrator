@@ -1468,12 +1468,15 @@ function CloudAgentSetupStep({
 }
 
 export function CloudProjectCard({
+	bare = false,
 	dialog = false,
 	onAuthRequired,
 	onBack,
 	onClose,
 	onCreated,
 }: {
+	/** Host dialog already supplies the panel, title, and close control. */
+	bare?: boolean;
 	dialog?: boolean;
 	onAuthRequired: () => void;
 	onBack: () => void;
@@ -1849,7 +1852,7 @@ export function CloudProjectCard({
 	};
 
 	return (
-		<div className={onboardingPanelClass}>
+		<div className={bare ? "relative flex min-h-0 flex-1 flex-col overflow-hidden" : onboardingPanelClass}>
 			{dialog ? (
 				<>
 					<Dialog.Title className="sr-only">{t("createProject.cloudTitle")}</Dialog.Title>
