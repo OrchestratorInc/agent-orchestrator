@@ -12,7 +12,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -238,6 +240,8 @@ const defaultInstallTimeout = 15 * time.Minute
 // defaultPersistenceTimeout keeps best-effort worker state writes from
 // consuming the daemon's entire shutdown drain budget behind a blocked DB.
 const defaultPersistenceTimeout = 2 * time.Second
+
+var devinInstalledLine = regexp.MustCompile(`Installed devin v\S+ to [^\r\n]+/devin\.`)
 
 // Job is the tracked state of one install run for a Target.
 type Job struct {
@@ -898,6 +902,12 @@ func (s *Service) runAgentInstall(parent context.Context, plan Plan, job *Job) {
 	ctx, cancel := context.WithTimeout(parent, s.installTimeout)
 	defer cancel()
 	out := &capturedOutput{max: maxOutputBytes}
+	outputWriter := io.Writer(out)
+	var devinOutput *devinInstallOutput
+	if plan.Target == TargetDevin && plan.Method == "official-installer" && plan.Script != nil {
+		devinOutput = &devinInstallOutput{dst: out, maxPending: maxOutputBytes}
+		outputWriter = devinOutput
+	}
 	env := []string{
 		"CI=1", "NONINTERACTIVE=1", "HOMEBREW_NO_AUTO_UPDATE=1",
 		"NPM_CONFIG_AUDIT=false", "NPM_CONFIG_FUND=false",
@@ -910,7 +920,7 @@ func (s *Service) runAgentInstall(parent context.Context, plan Plan, job *Job) {
 			command := *plan.Script
 			command.Env = append(append([]string(nil), env...), command.Env...)
 			var result ports.InstallScriptResult
-			result, runErr = s.installScripts.RunInstallScript(ctx, command, out, out)
+			result, runErr = s.installScripts.RunInstallScript(ctx, command, outputWriter, outputWriter)
 			if result.SHA256 != "" {
 				_, _ = fmt.Fprintf(out, "\nsource: %s\nsha256: %s\n", command.URL, result.SHA256)
 			}
@@ -931,7 +941,8 @@ func (s *Service) runAgentInstall(parent context.Context, plan Plan, job *Job) {
 		s.finishAgentJob(job, StatusInterrupted, out.String(), "daemon shutdown interrupted the install", "")
 		return
 	}
-	if runErr != nil {
+	installConfirmed := runErr != nil && devinOutput != nil && devinOutput.Confirmed()
+	if runErr != nil && !installConfirmed {
 		s.finishAgentJob(job, StatusFailed, out.String(), runErr.Error(), "")
 		return
 	}
@@ -1098,6 +1109,45 @@ func (c *capturedOutput) String() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.buf.String()
+}
+
+// devinInstallOutput remembers whether Devin reported a completed binary
+// install, even after the bounded destination evicts that line from diagnostics.
+type devinInstallOutput struct {
+	mu         sync.Mutex
+	dst        io.Writer
+	pending    []byte
+	maxPending int
+	confirmed  bool
+}
+
+func (w *devinInstallOutput) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	n, err := w.dst.Write(p)
+	if w.confirmed {
+		return n, err
+	}
+	w.pending = append(w.pending, p...)
+	if devinInstalledLine.Match(w.pending) {
+		w.confirmed = true
+		w.pending = nil
+		return n, err
+	}
+	if delimiter := bytes.LastIndexAny(w.pending, "\r\n"); delimiter >= 0 {
+		w.pending = append(w.pending[:0], w.pending[delimiter+1:]...)
+	}
+	if len(w.pending) > w.maxPending {
+		w.pending = append(w.pending[:0], w.pending[len(w.pending)-w.maxPending:]...)
+	}
+	return n, err
+}
+
+func (w *devinInstallOutput) Confirmed() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.confirmed
 }
 
 // planFor resolves the install Plan for target on the current platform,

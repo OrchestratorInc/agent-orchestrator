@@ -260,8 +260,14 @@ type Controller struct {
 	usage domain.ConversationUsage
 	// mcpServers is keyed by name; mcpServerOrder preserves first-seen order so the
 	// list a client renders does not reshuffle on every turn.
-	mcpServers     map[string]domain.ConversationMCPServer
-	mcpServerOrder []string
+	mcpServers            map[string]domain.ConversationMCPServer
+	mcpServerOrder        []string
+	mcpServerRevision     uint64
+	mcpServerSeenRevision map[string]uint64
+	// mcpPersistMu orders durable MCP replacements with individual notification
+	// writes. Reload runs outside the event pump, so c.mu alone cannot prevent an
+	// older notification write from landing after an authoritative replacement.
+	mcpPersistMu sync.Mutex
 
 	stopped  chan struct{}
 	once     sync.Once
@@ -336,6 +342,7 @@ func newController(
 		state:                  ports.ChatControllerReady,
 		settings:               conversation.Settings,
 		mcpServers:             map[string]domain.ConversationMCPServer{},
+		mcpServerSeenRevision:  map[string]uint64{},
 		stopped:                make(chan struct{}),
 	}
 	// Seeded from the durable row so a reconnect merges onto what is already known
@@ -1805,10 +1812,10 @@ func excerptDeliveryMessage(msg ports.ChatUserMessage, capabilities ports.ChatCa
 // Runs on the projection goroutine, so it observes turn completion in order with
 // everything else the provider said. One message per call: the turn it starts
 // makes the controller busy again, and the next completion drains the next.
-func (c *Controller) drain(ctx context.Context) {
+func (c *Controller) drain(ctx context.Context) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
-	c.drainLocked(ctx, true)
+	return c.drainLocked(ctx, true)
 }
 
 // drainLocked is drain with the dispatch lock already held. Turn completion
@@ -1817,7 +1824,7 @@ func (c *Controller) drain(ctx context.Context) {
 //
 // allowDispatch gates sending the next queued turn. A pending Stop cutoff forces
 // it true so messages typed after Stop still send.
-func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) {
+func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) error {
 	c.mu.Lock()
 	cutoff := c.cancelQueuedAt
 	c.cancelQueuedAt = time.Time{}
@@ -1827,7 +1834,7 @@ func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) {
 
 	if busy {
 		// Something already claimed the agent, so this drain has nothing to do.
-		return
+		return nil
 	}
 
 	if !cutoff.IsZero() {
@@ -1835,24 +1842,24 @@ func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) {
 		// cancelled; anything typed afterwards is still theirs to send.
 		if err := c.store.CancelQueuedTurns(ctx, c.conversation.ID, cutoff, c.now()); err != nil {
 			c.log.Error("failed to cancel queued turns", "session", c.sessionID, "error", err)
-			return
+			return err
 		}
 		allowDispatch = true
 	}
 	if handoff != controllerHandoffNone && handoff != controllerHandoffInterfaceDrain {
-		return
+		return nil
 	}
 	if !allowDispatch {
-		return
+		return nil
 	}
 
 	queued, err := c.store.NextQueuedTurn(ctx, c.conversation.ID)
 	if errors.Is(err, domain.ErrNoQueuedTurn) {
-		return
+		return nil
 	}
 	if err != nil {
 		c.log.Error("failed to read queued turn", "session", c.sessionID, "error", err)
-		return
+		return err
 	}
 
 	var content []ports.ChatContent
@@ -1862,7 +1869,7 @@ func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) {
 				"queued chat content is corrupt", c.now())
 			c.log.Error("failed to decode queued chat content",
 				"session", c.sessionID, "turn", queued.TurnID, "error", err)
-			return
+			return err
 		}
 	}
 	if _, err := c.dispatch(ctx, queued.TurnID, ports.ChatUserMessage{
@@ -1877,7 +1884,9 @@ func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) {
 		// discard messages the user can otherwise still see waiting.
 		c.log.Error("failed to dispatch queued turn",
 			"session", c.sessionID, "turn", queued.TurnID, "error", err)
+		return err
 	}
+	return nil
 }
 
 // ArmHandoff is the linearization point for an interface transition. It closes
@@ -1962,7 +1971,10 @@ func (c *Controller) BeginHandoff(
 		// A queued row can exist in the narrow gap after a completion was
 		// projected and before its drain ran. Claim it now so drain mode cannot
 		// report quiescent while accepted work is still waiting.
-		c.drain(ctx)
+		if err := c.drain(ctx); err != nil {
+			c.AbortHandoff()
+			return fmt.Errorf("drain queued turns before handoff: %w", err)
+		}
 	}
 
 	ticker := time.NewTicker(50 * time.Millisecond)
@@ -1987,7 +1999,11 @@ func (c *Controller) BeginHandoff(
 				c.AbortHandoff()
 				return fmt.Errorf("check queued turns before handoff: %w", err)
 			case policy == domain.SessionInterfaceTransitionDrain:
-				c.drainLocked(ctx, true)
+				if err := c.drainLocked(ctx, true); err != nil {
+					c.sendMu.Unlock()
+					c.AbortHandoff()
+					return fmt.Errorf("drain queued turns during handoff: %w", err)
+				}
 			}
 		}
 		c.sendMu.Unlock()
@@ -2042,7 +2058,9 @@ func (c *Controller) AbortHandoff() {
 		close(branchHandoffDone)
 	}
 	if resumeDispatch {
-		go c.drain(context.WithoutCancel(context.Background()))
+		go func() {
+			_ = c.drain(context.Background()) // drain logs failures; no caller waits on abort.
+		}()
 	}
 }
 
@@ -2337,8 +2355,7 @@ func (c *Controller) reconcileDurableTurnsLocked(
 	c.reportActivity(ctx, domain.ActivityIdle, "chat.interrupt.reconciled", now)
 	// drainLocked consumes cancelQueuedAt, cancels only the pre-Stop queue, and
 	// immediately dispatches the oldest surviving post-Stop prompt.
-	c.drainLocked(ctx, true)
-	return nil
+	return c.drainLocked(ctx, true)
 }
 
 // awaitAcknowledgedTurn returns the turn to interrupt once the provider has
@@ -3170,7 +3187,7 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		c.reportActivity(ctx, activityState, activityEvent, now)
 		// Only a completed turn releases queued work; a failed or recovered one holds
 		// the queue so it cannot cascade through the same outage (issue #4861).
-		c.drainLocked(ctx, settledTurnState(event) == domain.TurnStateCompleted)
+		_ = c.drainLocked(ctx, settledTurnState(event) == domain.TurnStateCompleted) // drain logs failures.
 	case ports.ChatEventApprovalRequested:
 		c.reportActivity(ctx, domain.ActivityWaitingInput, "chat.approval.requested", now)
 	case ports.ChatEventApprovalResolved:
@@ -3397,6 +3414,9 @@ func (c *Controller) applyThreadState(
 // every turn, so this is a merge by name. First-seen order is preserved so the list
 // a client renders does not reshuffle between polls.
 func (c *Controller) applyMCPServers(ctx context.Context, updates []ports.ChatMCPServer) error {
+	c.mcpPersistMu.Lock()
+	defer c.mcpPersistMu.Unlock()
+
 	c.mu.Lock()
 	for _, update := range updates {
 		if update.Name == "" {
@@ -3411,16 +3431,23 @@ func (c *Controller) applyMCPServers(ctx context.Context, updates []ports.ChatMC
 			Error:         update.Error,
 			FailureReason: update.FailureReason,
 		}
+		c.mcpServerRevision++
+		c.mcpServerSeenRevision[update.Name] = c.mcpServerRevision
 	}
+	servers := c.mcpServersLocked()
+	c.mu.Unlock()
+
+	return c.store.RecordMCPServers(ctx, c.conversation.ID, servers)
+}
+
+func (c *Controller) mcpServersLocked() []domain.ConversationMCPServer {
 	servers := make([]domain.ConversationMCPServer, 0, len(c.mcpServerOrder))
 	for _, name := range c.mcpServerOrder {
 		if server, ok := c.mcpServers[name]; ok {
 			servers = append(servers, server)
 		}
 	}
-	c.mu.Unlock()
-
-	return c.store.RecordMCPServers(ctx, c.conversation.ID, servers)
+	return servers
 }
 
 // ErrMCPReloadUnsupported reports a driver whose provider cannot restart its tool
@@ -3450,38 +3477,74 @@ func (c *Controller) ReloadMCPServers(ctx context.Context) ([]domain.Conversatio
 		return nil, ErrTurnRunning
 	}
 
-	servers, err := reloader.ReloadMCPServers(ctx)
+	c.mu.Lock()
+	reloadRevision := c.mcpServerRevision
+	c.mu.Unlock()
+
+	result, err := reloader.ReloadMCPServers(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if len(servers) == 0 {
-		// The reload succeeded and the provider did not enumerate. Its own startup
-		// notifications are the authoritative report and are already on their way, so
-		// the current list is the honest answer rather than an empty one.
+	if !result.Authoritative {
+		// Reload succeeded, but its inventory read did not. Preserve what is known:
+		// an empty unavailable result cannot distinguish no configured servers from a
+		// provider that could not enumerate them.
 		c.mu.Lock()
-		current := make([]domain.ConversationMCPServer, 0, len(c.mcpServerOrder))
-		for _, name := range c.mcpServerOrder {
-			if server, found := c.mcpServers[name]; found {
-				current = append(current, server)
-			}
-		}
+		current := c.mcpServersLocked()
 		c.mu.Unlock()
 		return current, nil
 	}
 
-	if err := c.applyMCPServers(ctx, servers); err != nil {
-		return nil, err
-	}
-
+	// Startup notifications are individual deltas, while this inventory is a full
+	// replacement. Keep only notifications observed after reload began, then overlay
+	// positively initialized inventory entries as ready. Holding mcpPersistMu through
+	// the write keeps a notification that raced the reload from persisting stale state
+	// after this replacement.
+	c.mcpPersistMu.Lock()
+	defer c.mcpPersistMu.Unlock()
 	c.mu.Lock()
-	merged := make([]domain.ConversationMCPServer, 0, len(c.mcpServerOrder))
+	fresh := make(map[string]domain.ConversationMCPServer)
+	freshOrder := make([]string, 0, len(c.mcpServerOrder))
 	for _, name := range c.mcpServerOrder {
-		if server, found := c.mcpServers[name]; found {
-			merged = append(merged, server)
+		if c.mcpServerSeenRevision[name] > reloadRevision {
+			fresh[name] = c.mcpServers[name]
+			freshOrder = append(freshOrder, name)
 		}
 	}
+	for _, server := range result.Servers {
+		if server.Name == "" {
+			continue
+		}
+		current, seen := fresh[server.Name]
+		if seen && current.Status != "ready" {
+			// The status list is a snapshot, while this non-ready state came from
+			// a startup notification observed after the reload began. Keep the
+			// newer failure/transition instead of promoting it back to ready.
+			continue
+		}
+		if !seen {
+			freshOrder = append(freshOrder, server.Name)
+		}
+		fresh[server.Name] = domain.ConversationMCPServer{
+			Name:          server.Name,
+			Status:        server.Status,
+			Error:         server.Error,
+			FailureReason: server.FailureReason,
+		}
+	}
+	c.mcpServers = fresh
+	c.mcpServerOrder = freshOrder
+	c.mcpServerSeenRevision = make(map[string]uint64, len(fresh))
+	for name := range fresh {
+		c.mcpServerSeenRevision[name] = c.mcpServerRevision
+	}
+	reconciled := c.mcpServersLocked()
 	c.mu.Unlock()
-	return merged, nil
+
+	if err := c.store.RecordMCPServers(ctx, c.conversation.ID, reconciled); err != nil {
+		return nil, err
+	}
+	return reconciled, nil
 }
 
 func (c *Controller) handoffActive() bool {

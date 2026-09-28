@@ -52,6 +52,7 @@ type lifecycleStack struct {
 	autoReviewDone <-chan struct{}
 	scmDone        <-chan struct{}
 	trackerDone    <-chan struct{}
+	automationDone <-chan struct{}
 }
 
 // startLifecycle constructs the Lifecycle Manager over the store and starts the
@@ -157,6 +158,9 @@ func (l *lifecycleStack) Stop() {
 	if l.trackerDone != nil {
 		<-l.trackerDone
 	}
+	if l.automationDone != nil {
+		<-l.automationDone
+	}
 }
 
 // sessionLifecycle is the narrow surface of sessionmanager.Manager used for
@@ -172,6 +176,7 @@ type sessionLifecycle interface {
 	ReconcileStartupSafety(ctx context.Context) error
 	ReconcileBackground(ctx context.Context) error
 	RestoreAll(ctx context.Context) error
+	WaitBackgroundWorkers(ctx context.Context) error
 	WaitAgentSwitchWorkers(ctx context.Context) error
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
@@ -486,7 +491,7 @@ func buildAgentResolver(defaultAgent string, log *slog.Logger) (ports.AgentResol
 	}
 	resolver := agentRegistry{reg: reg}
 	if _, ok := resolver.Agent(domain.AgentHarness(defaultAgent)); !ok {
-		return nil, fmt.Errorf("configured default agent %q is not a registered adapter", defaultAgent)
+		return nil, fmt.Errorf("configured agent %q is not a registered adapter", defaultAgent)
 	}
 	ids := make([]string, 0)
 	for _, mf := range reg.Manifests() {
@@ -623,6 +628,22 @@ func (c chatLauncher) RelayChatTurnWithID(
 	text, clientMessageID string,
 ) (string, error) {
 	return c.svc.RelayChatTurnWithID(ctx, id, text, clientMessageID)
+}
+
+func (c chatLauncher) QueueChatPrompt(ctx context.Context, id domain.SessionID, text string) (string, error) {
+	turn, err := c.svc.QueueUserMessage(ctx, id, ports.ChatUserMessage{
+		Text: text,
+		// The opening prompt is the user's own task brief, whatever carries it.
+		Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		return "", err
+	}
+	return turn.ID, nil
+}
+
+func (c chatLauncher) DrainChatQueue(ctx context.Context, id domain.SessionID) error {
+	return c.svc.DrainQueued(ctx, id)
 }
 
 func (c chatLauncher) HasLiveChatController(id domain.SessionID) bool {

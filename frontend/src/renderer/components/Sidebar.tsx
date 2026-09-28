@@ -15,6 +15,8 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import {
 	AlertTriangle,
+	Archive,
+	CalendarClock,
 	ChevronRight,
 	Download,
 	Folder,
@@ -123,6 +125,7 @@ import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { SessionArchiveDialog } from "./SessionArchiveDialog";
 import { CreateProjectFlow, type CloneProjectInput, type CreateProjectInput } from "./CreateProjectFlow";
 import { ResizeHandle } from "./ResizeHandle";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
@@ -450,6 +453,7 @@ function useSelection() {
 		select: (state) => state.location.pathname,
 	});
 	const goHome = useCallback(() => void navigate({ to: "/" }), [navigate]);
+	const goAutomations = useCallback(() => void navigate({ to: "/automations" }), [navigate]);
 	const goGlobalSettings = useCallback(() => openGlobalSettings(), [openGlobalSettings]);
 	const goConnectMobile = useCallback(() => openGlobalSettings("mobile"), [openGlobalSettings]);
 	const goSettings = useCallback((projectId: string) => openProjectSettings(projectId), [openProjectSettings]);
@@ -472,9 +476,11 @@ function useSelection() {
 	);
 	return useMemo(() => ({
 		isHome: pathname === "/",
+		isAutomations: pathname === "/automations",
 		activeProjectId: params.projectId,
 		activeSessionId: params.sessionId,
 		goHome,
+		goAutomations,
 		// Settings is a modal — open it in place so the current page (session
 		// terminal, board, etc.) stays underneath.
 		goGlobalSettings,
@@ -482,7 +488,7 @@ function useSelection() {
 		goSettings,
 		goProject,
 		goSession,
-	}), [goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, params.projectId, params.sessionId, pathname]);
+	}), [goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, params.projectId, params.sessionId, pathname]);
 }
 
 // Colour tracks the session's board section, preserving SCM state while the
@@ -894,6 +900,20 @@ export function Sidebar({
 						</SidebarGroupContent>
 					</SidebarGroup>
 				) : null}
+				<SidebarMenu className="mb-3 gap-0.5 group-data-[collapsible=icon]:gap-1">
+					<SidebarMenuItem>
+						<SidebarMenuButton
+							aria-label={t("automations.title")}
+							className={NAV_ROW_CLASS}
+							isActive={selection.isAutomations}
+							onClick={selection.goAutomations}
+							tooltip={isCollapsed ? t("automations.title") : undefined}
+						>
+							<CalendarClock aria-hidden="true" />
+							<span className="sidebar-expanded-chrome group-data-[collapsible=icon]:hidden">{t("automations.title")}</span>
+						</SidebarMenuButton>
+					</SidebarMenuItem>
+				</SidebarMenu>
 
 				{/* Pinned — collapsible; hidden when empty. */}
 				{pinnedSessions.length > 0 && (
@@ -2262,6 +2282,7 @@ const SessionActions = memo(function SessionActions({
 	const { t } = useTranslation();
 	const { mutate: pinSession } = usePinSession();
 	const { mutate: unpinSession } = useUnpinSession();
+	const [confirmOpen, setConfirmOpen] = useState(false);
 	// Optimistic: navigate + drop the row as soon as kill starts (onMutate),
 	// not after the daemon round-trip.
 	const onKilledRef = useRef(onKilled);
@@ -2272,8 +2293,15 @@ const SessionActions = memo(function SessionActions({
 		},
 	});
 
-	const handleKill = (event: React.MouseEvent) => {
+	// The row used to archive on the bare click while the session page asked
+	// first; both surfaces now open the same confirm before anything moves.
+	const handleArchive = (event: React.MouseEvent) => {
 		event.stopPropagation();
+		setConfirmOpen(true);
+	};
+
+	const confirmArchive = () => {
+		setConfirmOpen(false);
 		terminateSession(session);
 	};
 
@@ -2318,17 +2346,27 @@ const SessionActions = memo(function SessionActions({
 				</Tooltip>
 				<Tooltip>
 					<TooltipTrigger asChild>
-						<button
-							aria-label={t("shell.killSession")}
-							className={cn(SESSION_ACTION_CLASS, "hover:text-destructive focus-visible:text-destructive")}
-							disabled={isKilling}
-							onClick={handleKill}
-							type="button"
-						>
-							<Trash2 aria-hidden="true" />
-						</button>
+						<span className="inline-flex">
+							<SessionArchiveDialog
+								onConfirm={confirmArchive}
+								onOpenChange={setConfirmOpen}
+								open={confirmOpen}
+								session={session}
+								trigger={
+									<button
+										aria-label={t("shell.archiveSession")}
+										className={cn(SESSION_ACTION_CLASS, "focus-visible:text-foreground")}
+										disabled={isKilling}
+										onClick={handleArchive}
+										type="button"
+									>
+										<Archive aria-hidden="true" />
+									</button>
+								}
+							/>
+						</span>
 					</TooltipTrigger>
-					<TooltipContent side="top">{t("shell.killSession")}</TooltipContent>
+					<TooltipContent side="top">{t("shell.archiveSession")}</TooltipContent>
 				</Tooltip>
 			</div>
 			<SessionMessageAge session={session} />
