@@ -12,7 +12,6 @@ import type { SidebarDestination, SidebarDestinationId } from "./sidebar-navigat
  */
 const symbols: Record<Exclude<SidebarDestinationId, "prs" | "agents">, { idle: SFSymbol; active: SFSymbol }> = {
 	projects: { idle: "folder", active: "folder.fill" },
-	browser: { idle: "globe", active: "globe" },
 	settings: { idle: "gearshape", active: "gearshape.fill" },
 };
 

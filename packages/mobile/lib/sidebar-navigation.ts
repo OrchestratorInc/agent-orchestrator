@@ -1,13 +1,13 @@
 import { boardZoneOf } from "./agentsView";
 import type { DashboardSession } from "./api";
 
-export type SidebarDestinationId = "projects" | "agents" | "browser" | "prs" | "settings";
+export type SidebarDestinationId = "projects" | "agents" | "prs" | "settings";
 export type PrimarySidebarDestinationId = Exclude<SidebarDestinationId, "settings">;
 
 export type SidebarDestination = {
 	id: SidebarDestinationId;
 	label: string;
-	href: "/projects" | "/" | "/browser" | "/prs" | "/settings";
+	href: "/projects" | "/" | "/prs" | "/settings";
 };
 
 export const RECENT_WORKERS_LABEL = "Recent Workers";
@@ -15,7 +15,6 @@ export const RECENT_WORKERS_LABEL = "Recent Workers";
 export const sidebarDestinations: readonly SidebarDestination[] = [
 	{ id: "projects", label: "Projects", href: "/projects" },
 	{ id: "agents", label: "Workers", href: "/" },
-	{ id: "browser", label: "Browser", href: "/browser" },
 	{ id: "prs", label: "Pull Requests", href: "/prs" },
 	{ id: "settings", label: "Settings", href: "/settings" },
 ];

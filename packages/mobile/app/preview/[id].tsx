@@ -4,6 +4,7 @@ import { useLocalSearchParams, useNavigation } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Linking, Pressable, Share, StyleSheet, Text, View } from "react-native";
 import { WebView, type WebViewNavigation } from "react-native-webview";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getPreview } from "../../lib/api";
 import { authHeaders } from "../../lib/config";
 import { BrowserErrorBanner } from "../../lib/browser/BrowserErrorBanner";
@@ -26,6 +27,7 @@ export default function SessionPreviewScreen() {
 	const { config } = useApp();
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const insets = useSafeAreaInsets();
 	const web = useRef<WebView>(null);
 	const [preview, setPreview] = useState<{ entry: string; url: string; authenticated: boolean } | null>(null);
 	const [browserSource, setBrowserSource] = useState<BrowserSource | null>(null);
@@ -117,57 +119,65 @@ export default function SessionPreviewScreen() {
 		void Share.share({ message: currentUrl, url: currentUrl }).catch(() => undefined);
 	}, [currentUrl]);
 
-	if (!config || loading) return <View style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.copy}>Looking for a session preview…</Text></View>;
-	if (!browserSource) return <View style={styles.center}><Feather name={discoveryError ? "alert-triangle" : "globe"} size={iconSize.xl} color={discoveryError ? t.red : t.textTertiary} /><Text style={styles.title}>{discoveryError ? "Couldn't load the preview" : "No preview yet"}</Text><Text style={styles.copy}>{discoveryError || "Waiting for the agent to generate a page or document. This screen will keep checking."}</Text><Pressable onPress={() => { haptics.tap(); void refresh(); }} style={styles.retry}><Text style={styles.retryText}>Check again</Text></Pressable></View>;
-
 	return <View style={styles.screen}>
-		<WebView
-			ref={web}
-			source={source}
-			style={styles.web}
-			originWhitelist={["http://*", "https://*"]}
-			startInLoadingState
-			renderLoading={() => <View style={styles.webLoading}><ActivityIndicator color={t.accent} /></View>}
-			onLoadStart={(event) => setBrowserState((current) => browserLoadStart(current, event.nativeEvent.url))}
-			onLoadEnd={() => setBrowserState(browserLoadEnd)}
-			onNavigationStateChange={(event: WebViewNavigation) => setBrowserState((current) => browserNavigationChanged(current, {
-				url: event.url,
-				title: event.title,
-				canGoBack: event.canGoBack,
-				canGoForward: event.canGoForward,
-				loading: event.loading,
-			}))}
-			onShouldStartLoadWithRequest={(request) => {
-				if (isHttpUrl(request.url)) return true;
-				setBrowserState((current) => browserLoadError(current, "Only HTTP and HTTPS URLs can be opened."));
-				return false;
-			}}
-			onHttpError={(event) => setBrowserState((current) => browserLoadError(current, `Preview returned HTTP ${event.nativeEvent.statusCode}.`))}
-			onError={(event) => setBrowserState((current) => browserLoadError(current, event.nativeEvent.description || "Couldn't load this page."))}
-		/>
-		{browserState.error ? <BrowserErrorBanner message={browserState.error} onDismiss={() => setBrowserState((current) => ({ ...current, error: undefined }))} onRetry={retry} /> : null}
-		{toast ? <View style={styles.toast}><Text style={styles.toastText}>{toast}</Text></View> : null}
-		<BrowserToolbar
-			url={currentUrl}
-			title={browserState.title || preview?.entry}
-			loading={browserState.loading}
-			canGoBack={browserState.canGoBack}
-			canGoForward={browserState.canGoForward}
-			canOpenExternal={isHttpUrl(currentUrl)}
-			onBack={() => { haptics.tap(); web.current?.["goBack"](); }}
-			onForward={() => { haptics.tap(); web.current?.goForward(); }}
-			onReload={() => { haptics.tap(); web.current?.reload(); }}
-			onStop={() => { haptics.tap(); web.current?.stopLoading(); setBrowserState((current) => ({ ...current, loading: false })); }}
-			onSubmitUrl={navigateTo}
-			onCopy={copyCurrentUrl}
-			onOpenExternal={openCurrentUrl}
-			onShare={shareCurrentUrl}
-		/>
+		<View style={styles.content}>
+			{!config || loading ? (
+				<View style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.copy}>Looking for a session preview…</Text></View>
+			) : browserSource ? (
+				<WebView
+					ref={web}
+					source={source}
+					style={styles.web}
+					originWhitelist={["http://*", "https://*"]}
+					startInLoadingState
+					renderLoading={() => <View style={styles.webLoading}><ActivityIndicator color={t.accent} /></View>}
+					onLoadStart={(event) => setBrowserState((current) => browserLoadStart(current, event.nativeEvent.url))}
+					onLoadEnd={() => setBrowserState(browserLoadEnd)}
+					onNavigationStateChange={(event: WebViewNavigation) => setBrowserState((current) => browserNavigationChanged(current, {
+						url: event.url,
+						title: event.title,
+						canGoBack: event.canGoBack,
+						canGoForward: event.canGoForward,
+						loading: event.loading,
+					}))}
+					onShouldStartLoadWithRequest={(request) => {
+						if (isHttpUrl(request.url)) return true;
+						setBrowserState((current) => browserLoadError(current, "Only HTTP and HTTPS URLs can be opened."));
+						return false;
+					}}
+					onHttpError={(event) => setBrowserState((current) => browserLoadError(current, `Preview returned HTTP ${event.nativeEvent.statusCode}.`))}
+					onError={(event) => setBrowserState((current) => browserLoadError(current, event.nativeEvent.description || "Couldn't load this page."))}
+				/>
+			) : (
+				<View style={styles.center}><Feather name={discoveryError ? "alert-triangle" : "globe"} size={iconSize.xl} color={discoveryError ? t.red : t.textTertiary} /><Text style={styles.title}>{discoveryError ? "Couldn't load the preview" : "No preview yet"}</Text><Text style={styles.copy}>{discoveryError || "Waiting for the agent to generate a page or document. You can also enter a URL below."}</Text><Pressable onPress={() => { haptics.tap(); void refresh(); }} style={styles.retry}><Text style={styles.retryText}>Check again</Text></Pressable></View>
+			)}
+			{browserState.error ? <BrowserErrorBanner message={browserState.error} onDismiss={() => setBrowserState((current) => ({ ...current, error: undefined }))} onRetry={retry} /> : null}
+			{toast ? <View style={styles.toast}><Text style={styles.toastText}>{toast}</Text></View> : null}
+		</View>
+		<View style={{ paddingBottom: insets.bottom, backgroundColor: t.bgSurface }}>
+			<BrowserToolbar
+				url={currentUrl}
+				title={browserState.title || preview?.entry}
+				loading={browserState.loading || loading}
+				canGoBack={browserState.canGoBack}
+				canGoForward={browserState.canGoForward}
+				canOpenExternal={isHttpUrl(currentUrl)}
+				onBack={() => { haptics.tap(); web.current?.["goBack"](); }}
+				onForward={() => { haptics.tap(); web.current?.goForward(); }}
+				onReload={() => { haptics.tap(); if (browserSource) web.current?.reload(); else void refresh(); }}
+				onStop={() => { haptics.tap(); web.current?.stopLoading(); setBrowserState((current) => ({ ...current, loading: false })); }}
+				onSubmitUrl={navigateTo}
+				onCopy={copyCurrentUrl}
+				onOpenExternal={openCurrentUrl}
+				onShare={shareCurrentUrl}
+			/>
+		</View>
 	</View>;
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
+	content: { flex: 1 },
 	web: { flex: 1, backgroundColor: t.bgBase },
 	webLoading: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.md, paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },

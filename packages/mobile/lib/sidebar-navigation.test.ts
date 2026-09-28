@@ -50,7 +50,6 @@ describe("sidebar navigation", () => {
 		expect(sidebarDestinations).toEqual([
 			{ id: "projects", label: "Projects", href: "/projects" },
 			{ id: "agents", label: "Workers", href: "/" },
-			{ id: "browser", label: "Browser", href: "/browser" },
 			{ id: "prs", label: "Pull Requests", href: "/prs" },
 			{ id: "settings", label: "Settings", href: "/settings" },
 		]);
@@ -81,7 +80,6 @@ describe("sidebar navigation", () => {
 	it.each([
 		["/", "agents"],
 		["/projects", "projects"],
-		["/(tabs)/browser", "browser"],
 		["/(tabs)/prs", "prs"],
 		["/settings", "settings"],
 	])("selects the matching destination for %s", (pathname, expected) => {
@@ -147,7 +145,7 @@ describe("sidebarDestinationBadge", () => {
 
 	it("badges only Workers", () => {
 		const sessions = [session({ status: "needs_input" })];
-		for (const id of ["projects", "browser", "prs", "settings"] as const) {
+		for (const id of ["projects", "prs", "settings"] as const) {
 			expect(sidebarDestinationBadge(id, sessions)).toBeUndefined();
 		}
 	});

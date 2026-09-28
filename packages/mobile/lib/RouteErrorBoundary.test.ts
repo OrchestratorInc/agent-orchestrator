@@ -13,7 +13,6 @@ const source = (route: string) => readFileSync(new URL(route, appDir), "utf8");
 const rootLayout = "_layout.tsx";
 
 const screenRoutes = [
-	"(tabs)/browser.tsx",
 	"(tabs)/index.tsx",
 	"(tabs)/projects.tsx",
 	"(tabs)/prs.tsx",
