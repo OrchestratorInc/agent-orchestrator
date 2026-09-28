@@ -119,19 +119,20 @@ export default function SettingsScreen() {
 				{paired ? (
 					<DisconnectRow
 						onForget={async () => {
-							let failure: unknown = null;
+							let failed = false;
 							try {
 								await forgetServer();
-							} catch (error) {
-								failure = error;
-							} finally {
-								// Always re-resolve, so the screen reflects whatever
-								// forgetServer managed to clear before it threw.
-								await reloadConfig();
+							} catch {
+								failed = true;
 							}
-							if (failure) {
+							// Always re-resolve, so the screen reflects whatever
+							// forgetServer managed to clear before it threw.
+							const remaining = await reloadConfig();
+							// Only a pairing that survived is worth retrying; if it is
+							// gone this row is too, and the leftovers are best-effort.
+							if (failed && isConfigured(remaining)) {
 								haptics.error();
-								Alert.alert("Couldn't disconnect", "Some of this desktop's saved connection couldn't be removed. Try again.");
+								Alert.alert("Couldn't disconnect", "This desktop's saved connection couldn't be removed. Try again.");
 								return;
 							}
 							router.replace("/onboarding");
@@ -291,8 +292,9 @@ function ConnectionTestRow() {
 			// Poll now so the status row above lands on the same answer instead
 			// of waiting out the poll interval — unless the desktop rejected us:
 			// another request would spend a second failed attempt towards its
-			// lockout, and the poll already reports a rejection on its own.
-			if (!answered) await refresh();
+			// lockout, and the poll already reports a rejection on its own. Not
+			// awaited: against a dead address it is another full request timeout.
+			if (!answered) void refresh();
 			setTesting(false);
 		}
 	}
