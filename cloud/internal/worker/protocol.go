@@ -24,14 +24,14 @@ type LaunchContext struct {
 	AgentSessionID string `json:"agentSessionId,omitempty"`
 	// ParentSessionID is the orchestrator that spawned this session; empty for
 	// top-level sessions.
-	ParentSessionID string   `json:"parentSessionId,omitempty"`
-	Mode            string   `json:"mode"`
+	ParentSessionID string `json:"parentSessionId,omitempty"`
+	Mode            string `json:"mode"`
 	// Model is the coding-agent model the worker launches the harness with;
 	// empty uses the harness default.
-	Model           string   `json:"model,omitempty"`
-	DeniedCommands  []string `json:"deniedCommands"`
-	RepositoryURL   string   `json:"repositoryUrl"`
-	DefaultBranch   string   `json:"defaultBranch"`
+	Model          string   `json:"model,omitempty"`
+	DeniedCommands []string `json:"deniedCommands"`
+	RepositoryURL  string   `json:"repositoryUrl"`
+	DefaultBranch  string   `json:"defaultBranch"`
 	// ExtraRepos are additional repositories the worker clones alongside the
 	// primary repo (multi-repo dev kit). Empty for a single-repo session.
 	ExtraRepos []RepoRef `json:"extraRepos,omitempty"`

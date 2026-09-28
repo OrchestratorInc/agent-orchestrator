@@ -45,8 +45,8 @@ func specAcceptsCredentialType(s agentCredentialSpec, credentialType string) boo
 
 type claudeSpec struct{}
 
-func (claudeSpec) credentialTypes() []string          { return []string{"api_key", "oauth_token"} }
-func (claudeSpec) preserveRawSecret(string) bool      { return false }
+func (claudeSpec) credentialTypes() []string     { return []string{"api_key", "oauth_token"} }
+func (claudeSpec) preserveRawSecret(string) bool { return false }
 func (claudeSpec) validate(ctx context.Context, credentialType string, secret []byte, v *agentCredentialValidator) error {
 	return v.validateClaude(ctx, credentialType, secret)
 }

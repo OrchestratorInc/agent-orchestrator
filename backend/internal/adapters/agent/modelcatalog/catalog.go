@@ -100,7 +100,7 @@ func (c *signInCheck) check(ctx context.Context, agentID, binary, workingDir str
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[[:alpha:]]`)
 
 var commandSpecs = map[string]commandSpec{
-	"aider":       {args: []string{"--no-check-update", "--no-git", "--no-gitignore", "--no-analytics", "--list-models", "."}, parser: parseIDLines},
+	"aider": {args: []string{"--no-check-update", "--no-git", "--no-gitignore", "--no-analytics", "--list-models", "."}, parser: parseIDLines},
 	// `models` alone, never `--pure models`: `--pure` (skip external plugins) is
 	// a global flag whose acceptance varies across opencode builds — a binary that
 	// does not take it globally aborts with "Unrecognized flag: --pure in command
