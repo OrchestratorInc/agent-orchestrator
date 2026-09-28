@@ -38,6 +38,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 });
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
+	useWorkspaceQuery: useWorkspaceQueryMock,
 	useWorkspaceScope: () => {
 		const query = useWorkspaceQueryMock();
 		const project = query.data?.find((workspace: WorkspaceSummary) => workspace.id === paramsMock.projectId);

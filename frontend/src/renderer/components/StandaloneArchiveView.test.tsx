@@ -46,6 +46,14 @@ vi.mock("../lib/api-client", () => ({
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 }));
 
+vi.mock("../lib/platform", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../lib/platform")>();
+	return {
+		...actual,
+		usesBoardActionsInPanel: () => true,
+	};
+});
+
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
 		clipboard: { writeText: vi.fn() },
@@ -111,9 +119,12 @@ describe("StandaloneArchiveView", () => {
 		renderArchive();
 
 		expect(screen.getByTestId("standalone-archive-view")).toBeInTheDocument();
-		expect(screen.getByText("Scratchpad archive")).toBeInTheDocument();
-		expect(screen.getByText("1 archived")).toBeInTheDocument();
+		expect(screen.getByTestId("standalone-archive-title")).toHaveTextContent("1 Archived Session");
+		expect(screen.getByRole("button", { name: "New agent" }).closest(".workspace-topbar-actions")).not.toBeNull();
+		expect(screen.queryByText("1 archived")).not.toBeInTheDocument();
+		expect(screen.queryByText("Terminated")).not.toBeInTheDocument();
 		const list = screen.getByRole("list", { name: "Archived sessions" });
+		expect(list).toHaveClass("standalone-archive-grid");
 		expect(within(list).getByText("archived ad hoc")).toBeInTheDocument();
 		expect(screen.queryByText("active ad hoc")).not.toBeInTheDocument();
 		expect(screen.queryByText("project archived")).not.toBeInTheDocument();

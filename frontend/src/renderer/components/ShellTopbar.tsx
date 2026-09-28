@@ -18,7 +18,8 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { useWorkspaceScope, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { useWorkspaceQuery, useWorkspaceScope, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { archivedStandaloneSessions } from "../lib/standalone-archive";
 import {
 	clearTerminateSessionState,
 	useProjectTerminateSessionStates,
@@ -128,7 +129,7 @@ export function ShellTopbar({
 	const isProjectBoardRoute = !isSessionRoute && Boolean(projectId);
 	const isRootBoardRoute = !isSessionRoute && !isProjectBoardRoute && !isAutomationsRoute && !isStandaloneBoardRoute;
 	const project = workspaceScope?.project;
-	const projectLabel = project?.name ?? session?.workspaceName ?? (projectId ? "" : isStandaloneBoardRoute ? t("standalone.archive.title") : t("shell.board"));
+	const projectLabel = project?.name ?? session?.workspaceName ?? (projectId ? "" : t("shell.board"));
 	const orchestrator = workspaceScope?.orchestrator;
 	const supportsProjectActions = project?.kind !== STANDALONE_PROJECT_KIND && projectId !== STANDALONE_WORKSPACE_ID;
 	const projectActions = useProjectOrchestratorAction({
@@ -183,21 +184,22 @@ export function ShellTopbar({
 						</span>
 					</div>
 				) : (isProjectBoardRoute && boardActionsInPanel) ||
-				  (isMac && isRootBoardRoute && boardActionsInPanel) ? null : (
+				  (isMac && isRootBoardRoute && boardActionsInPanel) ||
+				  (isStandaloneBoardRoute && boardActionsInPanel) ? null : (
 					<div className="inline-flex min-w-0 items-center gap-1.5" data-testid="board-topbar-label">
-						<motion.span
-							layoutId="topbar-project-label"
-							layout="position"
-							className={cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5")}
-							transition={{ type: "spring", stiffness: 400, damping: 40 }}
-						>
-							{isStandaloneBoardRoute ? (
-								<Archive aria-hidden="true" className="size-icon-md" />
-							) : (
+						{isStandaloneBoardRoute ? (
+							<StandaloneArchiveTopbarLabel />
+						) : (
+							<motion.span
+								layoutId="topbar-project-label"
+								layout="position"
+								className={cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5")}
+								transition={{ type: "spring", stiffness: 400, damping: 40 }}
+							>
 								<LayoutDashboard aria-hidden="true" className="size-icon-md" />
-							)}
-							{isStandaloneBoardRoute ? t("standalone.archive.title") : t("shell.board")}
-						</motion.span>
+								{t("shell.board")}
+							</motion.span>
+						)}
 					</div>
 				)}
 				</div>
@@ -347,11 +349,43 @@ export function ShellTopbar({
 						aria-hidden="true"
 					/>
 				) : (
-					<NotificationCenter style={noDragStyle} />
+					<>
+						{!boardActionsInPanel && isStandaloneBoardRoute ? (
+							<StandaloneArchiveTopbarNewAgent style={noDragStyle} />
+						) : null}
+						<NotificationCenter style={noDragStyle} />
+					</>
 				)}
 			</div>
 		</motion.header>
 	</LayoutGroup>
+	);
+}
+
+function StandaloneArchiveTopbarLabel() {
+	const { t } = useTranslation();
+	const count = archivedStandaloneSessions(useWorkspaceQuery().data ?? []).length;
+	return (
+		<span className={topbarProjectLabelClass} data-testid="standalone-archive-title">
+			{t("standalone.archive.heading", { count })}
+		</span>
+	);
+}
+
+function StandaloneArchiveTopbarNewAgent({ style }: { style?: React.CSSProperties }) {
+	const { t } = useTranslation();
+	const requestNewTask = useUiStore((state) => state.requestNewTask);
+	return (
+		<TopbarButton
+			className="topbar-control--labeled"
+			onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
+			style={style}
+			type="button"
+			variant="primary"
+		>
+			<Plus className="size-icon-md" aria-hidden="true" />
+			{t("standalone.archive.newAgent")}
+		</TopbarButton>
 	);
 }
 

@@ -108,6 +108,7 @@ export function BoardSessionCardAdapter({
 }
 
 export function ArchivedSessionCardAdapter({
+	hideTerminatedStatus = false,
 	isRestoreDisabled,
 	isRestoring,
 	restoreAction,
@@ -115,6 +116,7 @@ export function ArchivedSessionCardAdapter({
 	session,
 	usage,
 }: {
+	hideTerminatedStatus?: boolean;
 	isRestoreDisabled: boolean;
 	isRestoring: boolean;
 	restoreAction: (event: MouseEvent<HTMLButtonElement>) => void;
@@ -125,6 +127,7 @@ export function ArchivedSessionCardAdapter({
 	const branch = session.branch ?? "";
 	return (
 		<DesktopSessionCard
+			hideTerminatedStatus={hideTerminatedStatus}
 			action={
 				<ArchiveRestoreButton
 					isDisabled={isRestoreDisabled}
@@ -146,6 +149,7 @@ function DesktopSessionCard({
 	action,
 	branchAction,
 	footer,
+	hideTerminatedStatus = false,
 	interactive = true,
 	onOpen,
 	onTerminate,
@@ -155,6 +159,7 @@ function DesktopSessionCard({
 	action?: ReactNode;
 	branchAction?: ReactNode;
 	footer?: ReactNode;
+	hideTerminatedStatus?: boolean;
 	interactive?: boolean;
 	onOpen?: () => void;
 	onTerminate?: () => void;
@@ -254,7 +259,11 @@ function DesktopSessionCard({
 				url: prBrowserUrl(pr),
 			}))}
 			renderAvatar={(provider) => <AgentAvatar provider={provider} />}
-			session={toBoardSessionPresentation(session, t)}
+			session={
+				hideTerminatedStatus
+					? hideTerminatedCardStatus(toBoardSessionPresentation(session, t))
+					: toBoardSessionPresentation(session, t)
+			}
 			translate={translate}
 			renderUsage={(usage) => (
 				<Tooltip>
@@ -267,6 +276,23 @@ function DesktopSessionCard({
 			usage={usagePresentation}
 		/>
 	);
+}
+
+function hideTerminatedCardStatus(session: BoardSessionPresentation): BoardSessionPresentation {
+	const terminated =
+		session.displayStatus === "Terminated" ||
+		(session.status === "terminated" && !session.displayStatus);
+	if (!terminated) return session;
+	return {
+		...session,
+		displayStatus: undefined,
+		statusPresentation: {
+			className: "hidden",
+			indicatorClassName: "hidden",
+			label: "",
+			tone: "transparent",
+		},
+	};
 }
 
 function pullRequestLabels(t: TFunction): BoardPullRequestLabels {

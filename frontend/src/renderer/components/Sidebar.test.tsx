@@ -763,8 +763,7 @@ describe("Sidebar", () => {
 		expect(request?.nonce ?? 0).toBeGreaterThan(before);
 	});
 
-	it("opens the standalone board from the Scratchpad archived sessions action", async () => {
-		const user = userEvent.setup();
+	it("opens the standalone board from the Scratchpad archived sessions action", () => {
 		renderSidebar({
 			workspaces: [
 				{
@@ -787,7 +786,9 @@ describe("Sidebar", () => {
 			],
 		});
 
-		await user.click(screen.getByRole("button", { name: "Archived sessions" }));
+		const archiveAction = screen.getByRole("button", { name: "Archived sessions" }).closest("[data-scratchpad-archive-action]");
+		expect(archiveAction).toHaveClass("opacity-0", "scale-[0.8]");
+		fireEvent.click(screen.getByRole("button", { name: "Archived sessions" }));
 
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/sessions" });
 	});

@@ -3,11 +3,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { Archive, Plus } from "lucide-react";
-import {
-	STANDALONE_WORKSPACE_ID,
-	workerSessions,
-	type WorkspaceSession,
-} from "../types/workspace";
+import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../types/workspace";
+import { archivedStandaloneSessions } from "../lib/standalone-archive";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import {
 	useSessionUsageSummaries,
@@ -18,20 +15,11 @@ import {
 	workspaceQueryKey,
 } from "../hooks/useWorkspaceQuery";
 import { useUiStore } from "../stores/ui-store";
-import { isMacPlatform } from "../lib/platform";
-import { cn } from "../lib/utils";
+import { isMacPlatform, usesBoardActionsInPanel } from "../lib/platform";
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 import { ArchivedSessionCardAdapter } from "./SessionsBoardAdapters";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
-import { topbarProjectLabelClass } from "./TopbarButton";
-
-function isArchivedSession(session: WorkspaceSession): boolean {
-	return (
-		session.kanbanColumn === "archive" ||
-		session.isTerminated === true ||
-		session.status === "terminated"
-	);
-}
+import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
 
 const isMac = isMacPlatform();
 const dragStyle = isMac
@@ -62,16 +50,11 @@ export function StandaloneArchiveView() {
 	>();
 	const restoreGenerationRef = useRef(0);
 	const workspaces = workspaceQuery.data ?? [];
-	const standaloneWorkspace = workspaces.find(
-		(workspace) => workspace.id === STANDALONE_WORKSPACE_ID,
-	);
 	const archivedSessions = useMemo(
-		() =>
-			workerSessions(standaloneWorkspace?.sessions ?? [])
-				.filter(isArchivedSession)
-				.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
-		[standaloneWorkspace?.sessions],
+		() => archivedStandaloneSessions(workspaces),
+		[workspaces],
 	);
+	const headerInPanel = usesBoardActionsInPanel();
 	const showStartup = !workspaceQuery.isSuccess && !workspaceQuery.isError;
 
 	useEffect(() => {
@@ -122,34 +105,31 @@ export function StandaloneArchiveView() {
 			className="relative flex h-full min-h-0 flex-col bg-background text-foreground"
 			data-testid="standalone-archive-view"
 		>
-			<div
-				className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center gap-2 border-b border-border-strong pr-2"
-				style={dragStyle}
-			>
-				<span
-					className={cn(
-						topbarProjectLabelClass,
-						"inline-flex items-center gap-1.5",
-					)}
-					data-testid="standalone-archive-title"
+			{headerInPanel ? (
+				<div
+					className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center gap-2 border-b border-border-strong pr-2"
+					style={dragStyle}
 				>
-					<Archive aria-hidden="true" className="size-icon-md" />
-					{t("standalone.archive.title")}
-				</span>
-				<span className="rounded-full bg-surface px-2 py-0.5 text-xs text-muted-foreground">
-					{t("standalone.archive.count", { count: archivedSessions.length })}
-				</span>
-				<div className="min-w-0 flex-1" />
-				<button
-					className="inline-flex h-control-md items-center gap-1.5 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-					onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
-					style={noDragStyle}
-					type="button"
-				>
-					<Plus className="size-icon-sm" aria-hidden="true" />
-					{t("home.newStandaloneAgent")}
-				</button>
-			</div>
+					<span
+						className={topbarProjectLabelClass}
+						data-testid="standalone-archive-title"
+					>
+						{t("standalone.archive.heading", { count: archivedSessions.length })}
+					</span>
+					<div className="min-w-0 flex-1" />
+					<div className="workspace-topbar-actions flex shrink-0 items-center" style={noDragStyle}>
+						<TopbarButton
+							className="topbar-control--labeled"
+							onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
+							type="button"
+							variant="primary"
+						>
+							<Plus className="size-icon-md" aria-hidden="true" />
+							{t("standalone.archive.newAgent")}
+						</TopbarButton>
+					</div>
+				</div>
+			) : null}
 
 			{workspaceQuery.isError ? (
 				<p className="py-10 text-center text-xs text-passive">
@@ -158,25 +138,26 @@ export function StandaloneArchiveView() {
 			) : archivedSessions.length === 0 && workspaceQuery.isSuccess ? (
 				<StandaloneArchiveEmpty />
 			) : (
-				<div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+				<div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
 					<div
-						className="mx-auto flex w-full max-w-3xl flex-col gap-3"
-						role="list"
 						aria-label={t("shell.archivedSessions")}
+						className="standalone-archive-grid"
+						data-testid="standalone-archive-grid"
+						role="list"
 					>
 						{archivedSessions.map((session) => (
-							<div key={session.id} role="listitem">
-								<ArchivedSessionCardAdapter
-									isRestoreDisabled={restoringSessionId !== undefined}
-									isRestoring={restoringSessionId === session.id}
-									restoreAction={(event) =>
-										void restoreArchivedSession(event, session)
-									}
-									restoreError={restoreErrors[session.id]}
-									session={session}
-									usage={usageBySession.get(session.id)}
-								/>
-							</div>
+							<ArchivedSessionCardAdapter
+								hideTerminatedStatus
+								isRestoreDisabled={restoringSessionId !== undefined}
+								isRestoring={restoringSessionId === session.id}
+								key={session.id}
+								restoreAction={(event) =>
+									void restoreArchivedSession(event, session)
+								}
+								restoreError={restoreErrors[session.id]}
+								session={session}
+								usage={usageBySession.get(session.id)}
+							/>
 						))}
 					</div>
 				</div>
@@ -203,7 +184,6 @@ export function StandaloneArchiveView() {
 
 function StandaloneArchiveEmpty() {
 	const { t } = useTranslation();
-	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	return (
 		<div
 			className="flex h-full min-h-0 items-center justify-center overflow-y-auto"
@@ -219,13 +199,6 @@ function StandaloneArchiveEmpty() {
 				<p className="mt-2 text-md-sm leading-relaxed text-muted-foreground">
 					{t("standalone.archive.empty.body")}
 				</p>
-				<button
-					className="mt-5 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-					onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
-					type="button"
-				>
-					{t("home.newStandaloneAgent")}
-				</button>
 			</div>
 		</div>
 	);

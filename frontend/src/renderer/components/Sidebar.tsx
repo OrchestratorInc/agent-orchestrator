@@ -1805,27 +1805,37 @@ function ScratchpadSection({
 				label={workspace.name}
 				open={open}
 				onToggle={onToggle}
-				className="mt-1"
+				className="group/scratchpad mt-1"
 				trailing={
-					<div className="inline-flex items-center gap-px">
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<span className="inline-flex">
-									<button
-										aria-label={t("shell.archivedSessions")}
-										className="sidebar-icon-action grid size-icon-xl shrink-0 place-items-center rounded-sm !bg-transparent text-passive hover:!bg-transparent focus:!bg-transparent focus-visible:!bg-transparent active:!bg-transparent hover:text-foreground"
-										onClick={(event) => {
-											event.stopPropagation();
-											selection.goStandaloneBoard();
-										}}
-										type="button"
-									>
-										<Archive className="size-icon-sm translate-y-px" aria-hidden="true" />
-									</button>
-								</span>
-							</TooltipTrigger>
-							<TooltipContent>{t("shell.archivedSessions")}</TooltipContent>
-						</Tooltip>
+					<div className="relative inline-flex items-center">
+						<span
+							className={cn(
+								"pointer-events-none absolute right-full top-0 flex h-full origin-center scale-[0.8] items-center opacity-0",
+								"transition-[scale] duration-normal ease-[var(--ease-out)]",
+								"motion-reduce:transition-none",
+								"group-focus-within/scratchpad:pointer-events-auto group-focus-within/scratchpad:scale-100 group-focus-within/scratchpad:opacity-100",
+							)}
+							data-scratchpad-archive-action=""
+						>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span className="inline-flex">
+										<button
+											aria-label={t("shell.archivedSessions")}
+											className="sidebar-icon-action grid size-icon-xl shrink-0 place-items-center rounded-sm !bg-transparent text-passive hover:!bg-transparent focus:!bg-transparent focus-visible:!bg-transparent active:!bg-transparent hover:text-foreground"
+											onClick={(event) => {
+												event.stopPropagation();
+												selection.goStandaloneBoard();
+											}}
+											type="button"
+										>
+											<Archive className="size-icon-sm translate-y-px" aria-hidden="true" />
+										</button>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent>{t("shell.archivedSessions")}</TooltipContent>
+							</Tooltip>
+						</span>
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<span className="inline-flex">
