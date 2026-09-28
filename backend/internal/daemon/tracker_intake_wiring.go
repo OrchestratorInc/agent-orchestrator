@@ -4,27 +4,19 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	trackerintake "github.com/aoagents/agent-orchestrator/backend/internal/observe/trackerintake"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// startTrackerIntake wires the issue-intake loop behind the daemon-wide
-// AO_TRACKER_INTAKE gate, which defaults off. A project's own
-// trackerIntake.enabled is deliberately not sufficient on its own: intake
-// starts one session per eligible issue with no concurrency bound, and its
-// prompt-assembly path still has open hardening work, so turning it on is an
-// operator decision rather than a per-project one. Returning a nil channel is
-// safe; the shutdown await in lifecycle_wiring.go nil-guards it.
-//
-// With the gate on, the observer always runs. Poll re-reads each project's
-// config on every tick and skips projects with intake disabled, so a project
-// enabling intake after daemon boot is picked up on the next tick without a
-// restart. The multi-tracker (supporting both GitHub and GitLab) is built once
-// in Run and shared between the session service and the intake observer.
-func startTrackerIntake(ctx context.Context, enabled bool, store *sqlite.Store, sessions *sessionsvc.Service, tracker ports.Tracker, logger *slog.Logger) <-chan struct{} {
-	if !enabled {
+// startTrackerIntake starts the intake observer when cfg.TrackerIntake is on.
+// The observer then runs unconditionally: Poll re-reads each project's config
+// every tick, so a project enabling intake after boot is picked up without a
+// restart.
+func startTrackerIntake(ctx context.Context, cfg config.Config, store *sqlite.Store, sessions *sessionsvc.Service, tracker ports.Tracker, logger *slog.Logger) <-chan struct{} {
+	if !cfg.TrackerIntake {
 		logGatedOffIntake(ctx, store, logger)
 		return nil
 	}
@@ -39,19 +31,15 @@ func startTrackerIntake(ctx context.Context, enabled bool, store *sqlite.Store, 
 	return observer.Start(ctx)
 }
 
-// logGatedOffIntake reports the gate, escalating to Warn when projects still
-// carry trackerIntake.enabled. Intake emits no telemetry, so this line is the
-// only signal an operator gets that automation they configured has stopped
-// running. The scan is diagnostic and gates nothing: a boot-time scan that
-// decided whether to start the loop is the regression covered by
-// TestStartTrackerIntake_RunsEvenWithoutEnabledProjects. It over-counts a
-// project whose repo would never have resolved, which is the safe direction.
 func logGatedOffIntake(ctx context.Context, store *sqlite.Store, logger *slog.Logger) {
 	const hint = "tracker intake: gated off, set AO_TRACKER_INTAKE=on to enable"
 	projects, err := store.ListProjects(ctx)
 	if err != nil {
-		// Warn rather than Info: a failed scan cannot rule out stranded
-		// projects, so it must not be quieter than finding one.
+		if ctx.Err() != nil {
+			// Boot was interrupted; the scan failed because the daemon is
+			// shutting down, not because projects are unreadable.
+			return
+		}
 		logger.Warn(hint, "projectScanErr", err)
 		return
 	}

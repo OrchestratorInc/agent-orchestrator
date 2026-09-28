@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -472,17 +473,21 @@ func TestLoadGitLabInvalidHostTokens(t *testing.T) {
 	}
 }
 
-// TestLoadTrackerIntakeDefaultsOff pins the gate's default. Intake starts one
-// session per eligible issue with no concurrency bound, so an operator has to
-// opt the daemon in before a project's own trackerIntake.enabled does anything.
 func TestLoadTrackerIntakeDefaultsOff(t *testing.T) {
-	t.Setenv("AO_TRACKER_INTAKE", "")
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.TrackerIntake {
-		t.Error("TrackerIntake = true, want false by default")
+	// A blank-but-present value counts as unset. Load() feeds every ao
+	// command, so treating it as malformed would fail `ao status`/`ao stop`
+	// over an empty export rather than just leaving intake off.
+	for _, raw := range []string{"", " ", "\t"} {
+		t.Run(fmt.Sprintf("%q", raw), func(t *testing.T) {
+			t.Setenv("AO_TRACKER_INTAKE", raw)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.TrackerIntake {
+				t.Error("TrackerIntake = true, want false by default")
+			}
+		})
 	}
 }
 

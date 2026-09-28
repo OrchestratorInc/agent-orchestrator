@@ -157,8 +157,7 @@ type Config struct {
 	// token overrides, loaded once at boot from environment variables.
 	GitLab GitLabConfig
 	// TrackerIntake gates the issue-intake observer daemon-wide
-	// (AO_TRACKER_INTAKE). It defaults off, and a project's own
-	// trackerIntake.enabled has no effect until this is switched on.
+	// (AO_TRACKER_INTAKE).
 	TrackerIntake bool
 	// Client identifies which client this deployment serves (AO_CLIENT). Empty
 	// means no client identity, which keeps client-gated offerings off.
@@ -344,7 +343,7 @@ func Load() (Config, error) {
 		cfg.GitLab.HostTokens = tokens
 	}
 
-	if raw := os.Getenv("AO_TRACKER_INTAKE"); raw != "" {
+	if raw, ok := os.LookupEnv("AO_TRACKER_INTAKE"); ok && strings.TrimSpace(raw) != "" {
 		v, err := parseToggleEnv("AO_TRACKER_INTAKE", raw)
 		if err != nil {
 			return Config{}, err

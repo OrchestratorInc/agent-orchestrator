@@ -478,7 +478,7 @@ func TestStartTrackerIntake_RunsEvenWithoutEnabledProjects(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := startTrackerIntake(ctx, true, store, svc, newMultiTracker(config.GitLabConfig{}, log), log)
+	done := startTrackerIntake(ctx, config.Config{TrackerIntake: true}, store, svc, newMultiTracker(config.GitLabConfig{}, log), log)
 
 	select {
 	case <-done:
@@ -494,12 +494,6 @@ func TestStartTrackerIntake_RunsEvenWithoutEnabledProjects(t *testing.T) {
 	}
 }
 
-// TestStartTrackerIntake_GatedOff covers the AO_TRACKER_INTAKE gate: a nil
-// channel so the observer never starts, and the operator signal. Intake emits
-// no telemetry, so a project whose configured automation silently stopped is
-// only discoverable from this log line. The disabled-project case is what keeps
-// the escalation honest: a gate that always warned would pass without it. Both
-// cases pass a real store, because that is what daemon.Run passes.
 func TestStartTrackerIntake_GatedOff(t *testing.T) {
 	enabled := domain.TrackerIntakeConfig{Enabled: true, Assignee: "octocat"}
 	tests := []struct {
@@ -537,7 +531,7 @@ func TestStartTrackerIntake_GatedOff(t *testing.T) {
 			var logs strings.Builder
 			logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-			if done := startTrackerIntake(ctx, false, store, nil, nil, logger); done != nil {
+			if done := startTrackerIntake(ctx, config.Config{}, store, nil, nil, logger); done != nil {
 				t.Fatal("startTrackerIntake returned a non-nil channel while gated off")
 			}
 
