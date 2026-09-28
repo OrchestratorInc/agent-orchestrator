@@ -13,7 +13,9 @@ describe("DownloadButton", () => {
     const link = $("a");
     const icons = link.find("[data-download-icon]");
 
-    expect(link.attr("href")).toBe("/download");
+    expect(link.attr("href")).toContain(
+      "github.com/Untrivial-ai/agent-orchestrator/releases/latest/download/",
+    );
     expect(link.find("[data-download-label]").text()).toBe("Download");
     expect(icons).toHaveLength(2);
     expect(icons.eq(0).hasClass("md:hidden")).toBe(true);

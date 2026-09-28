@@ -10,13 +10,13 @@ import {
 import { FaApple, FaLinux, FaWindows } from "react-icons/fa";
 import { isMacPlatform, Platform, usePlatform } from "../hooks/useOS";
 
-type DownloadTarget = {
+export type DownloadTarget = {
   href: string;
   label: string;
   icon: "apple" | "windows" | "linux";
 };
 
-function getDownloadTarget(platform: Platform): DownloadTarget {
+export function getDownloadTarget(platform: Platform): DownloadTarget {
   if (platform === Platform.Windows) {
     return {
       href: DOWNLOAD_URL_WINDOWS,
