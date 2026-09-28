@@ -72,3 +72,9 @@ The four-file launch/restore correction is sealed at tree `b5196dd5e49df2254df41
 All 14 final checks pass: repeated focused and full adapter races, 12 installed-binary cases, matched-shell parent/current complete session-manager races, production execution/cancellation race x3, build/vet/lint and three platform cross-compiles. The installed experiment uses synthetic state and sends no provider request. One earlier ownership-test timeout remains preserved and unclassified. No native or live-provider pass is inferred.
 
 The local freeze/request obligation is complete; independent acceptance is pending. Managed Chat remains held on exact transport ownership and containment, not enabled by a configuration-only result. Responsiveness measurement is the next independent local slice.
+
+## P5 bounded runner timing checkpoint
+
+Test-only tree `2d4e69bbd00199f87e6491420e27d90e857a170a` is sealed with two test files, one plan and 26 evidence files. REVIEW-82-NEXT-RESPONSIVENESS.md records exact hashes and all 12 passing final commands. The oracle's two midpoint false-positive cases were reproduced before correction. Fifty accounts are verified, twenty bindings exercised, and the full non-race run records 100 paired warm samples and 30 real restarts with exactly 302 streaming upstream requests and no failures.
+
+Additional first-delta p95 is 1.288 ms on this host. Capability preparation p95 is 0.253 ms; reopened runner through an authorized response p95 is 127.130 ms. These are bounded components with explicit exclusions, not complete route/controller/desktop measurements. Raw distributions, a 29.677 ms full-stream maximum and machine/process limits are preserved. G15 stays open. All six prior seals, 91 protected files and 33 generated files pass integrity checks. No production behavior changed.
