@@ -17,8 +17,9 @@ type commandRunner func(context.Context, string, ...string) ([]byte, error)
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus runs fx's documented status probe. A named, non-expired credential
-// source is the CLI's successful authentication verdict.
+// AuthStatus first reads fx's local credential state, then verifies configured
+// credentials through its provider-backed model catalog. `fx status` alone
+// proves only that a credential exists, not that the provider accepts it.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, err
@@ -48,7 +49,29 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		}
 		return ports.AgentAuthStatusUnknown, probeCtx.Err()
 	}
-	return authStatusFromJSON(output), nil
+	localStatus := authStatusFromJSON(output)
+	if localStatus != ports.AgentAuthStatusConfigured {
+		return localStatus, nil
+	}
+
+	output, runErr := runner(probeCtx, binary, "models", "--json")
+	if probeCtx.Err() != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ports.AgentAuthStatusUnknown, ctxErr
+		}
+		return localStatus, nil
+	}
+	status := authStatusFromModelsJSON(output)
+	if status == ports.AgentAuthStatusUnauthorized {
+		return status, nil
+	}
+	if runErr != nil {
+		return localStatus, nil
+	}
+	if status == ports.AgentAuthStatusAuthorized {
+		return status, nil
+	}
+	return localStatus, nil
 }
 
 func authStatusFromJSON(output []byte) ports.AgentAuthStatus {
@@ -64,6 +87,25 @@ func authStatusFromJSON(output []byte) ports.AgentAuthStatus {
 		return ports.AgentAuthStatusUnauthorized
 	}
 	if auth != "" {
+		return ports.AgentAuthStatusConfigured
+	}
+	return ports.AgentAuthStatusUnknown
+}
+
+func authStatusFromModelsJSON(output []byte) ports.AgentAuthStatus {
+	var response struct {
+		Kind  string `json:"kind"`
+		Code  string `json:"code"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(output, &response); err != nil {
+		return ports.AgentAuthStatusUnknown
+	}
+	if strings.EqualFold(strings.TrimSpace(response.Code), "AuthenticationRejected") ||
+		strings.Contains(strings.ToLower(response.Error), "authenticationrejected") {
+		return ports.AgentAuthStatusUnauthorized
+	}
+	if strings.EqualFold(strings.TrimSpace(response.Kind), "models") && strings.TrimSpace(response.Error) == "" {
 		return ports.AgentAuthStatusAuthorized
 	}
 	return ports.AgentAuthStatusUnknown
