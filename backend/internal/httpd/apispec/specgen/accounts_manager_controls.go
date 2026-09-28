@@ -13,6 +13,7 @@ func accountsManagerControlOperations() []operation {
 	account := []any{controllers.AccountsManagerAccountIDParam{}}
 	removalID := []any{controllers.AccountsManagerControlOperationIDParam{}}
 	ops := []operation{
+		{method: http.MethodGet, path: "/api/v1/sessions/account-selection", id: "getInitialAccountSelection", tag: "sessions", summary: "Read initial account selection support", resps: []respUnit{{http.StatusOK, controllers.InitialAccountSelectionResponse{}}}},
 		{method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/account", id: "getSessionAccount", tag: "sessions", summary: "Read the selected session account and current switch", pathParams: session, resps: []respUnit{{http.StatusOK, controllers.AccountsManagerSessionResponse{}}}},
 		{method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/account-switches", id: "startSessionAccountSwitch", tag: "sessions", summary: "Request an explicit session account switch", pathParams: session, reqBody: controllers.AccountsManagerSwitchRequest{}, resps: []respUnit{{http.StatusAccepted, controllers.AccountsManagerSwitchResponse{}}}},
 		{method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/account-switches/{operationId}", id: "getSessionAccountSwitch", tag: "sessions", summary: "Read a session account switch", pathParams: switchID, resps: []respUnit{{http.StatusOK, controllers.AccountsManagerSwitchResponse{}}}},

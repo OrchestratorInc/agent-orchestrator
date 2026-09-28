@@ -1,4 +1,12 @@
 {
+	"accountsManager.initial.available": "관리 계정 사용 가능",
+	"accountsManager.initial.title": "시작 계정",
+	"accountsManager.initial.checking": "세션 계정 지원 확인 중...",
+	"accountsManager.initial.choose": "기본 인증 정보 또는 관리 계정 선택",
+	"accountsManager.initial.unsupported": "이 데몬은 시작 계정 선택을 지원하지 않습니다. 기존 기본 설정이 적용됩니다.",
+	"accountsManager.initial.missing": "사용할 수 없는 계정 ({{id}})",
+	"accountsManager.initial.description": "이 선택은 세션의 첫 요청 전에 적용됩니다. 다른 세션과 저장된 기본값은 변경되지 않습니다.",
+	"accountsManager.initial.changed": "선택한 계정을 더 이상 사용할 수 없습니다. 계정을 직접 선택하세요.",
 	"accountsManager.usage.authenticationRequired": "제공업체가 사용량 요청을 인증하지 못했습니다. 이 계정을 다시 연결한 후 사용량을 새로고침하세요.",
 	"accountsManager.usage.accessDenied": "제공업체가 사용량 요청을 거부했습니다. 선택한 계정은 변경되지 않았습니다.",
 	"accountsManager.usage.rateLimited": "사용량 조회가 일시적으로 제한되었습니다. 잠시 기다린 후 다시 새로고침하세요.",

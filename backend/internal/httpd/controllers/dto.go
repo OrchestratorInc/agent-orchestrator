@@ -387,7 +387,8 @@ type SpawnSessionRequest struct {
 	// never mutates existing sessions automatically; compatible sessions may later
 	// switch through the durable interface-transition endpoint. An unsupported
 	// explicit request fails rather than quietly producing the other kind of session.
-	Mode domain.SessionMode `json:"mode,omitempty" enum:"chat,tui"`
+	Mode    domain.SessionMode  `json:"mode,omitempty" enum:"chat,tui"`
+	Account *SpawnAccountChoice `json:"account,omitempty" nullable:"false"`
 	// ApprovalMode overrides the project/default policy for this spawn.
 	ApprovalMode domain.PermissionMode `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
 	Prompt       string                `json:"prompt,omitempty" maxLength:"16384"`
@@ -1120,6 +1121,7 @@ type SendSessionMessageResponse struct {
 // DelegateTaskRequest is the body of POST /api/v1/orchestrators/delegate.
 // An omitted agent tells the orchestrator to use the project's worker default.
 type DelegateTaskRequest struct {
+	Account   *SpawnAccountChoice `json:"account,omitempty" nullable:"false"`
 	ProjectID domain.ProjectID    `json:"projectId"`
 	Brief     string              `json:"brief" maxLength:"16384"`
 	Agent     domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,fake"`

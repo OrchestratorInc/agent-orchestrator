@@ -1,4 +1,12 @@
 {
+	"accountsManager.initial.available": "Managed account available",
+	"accountsManager.initial.title": "Initial account",
+	"accountsManager.initial.checking": "Checking session account support...",
+	"accountsManager.initial.choose": "Choose native credentials or a managed account",
+	"accountsManager.initial.unsupported": "This daemon does not support an initial account choice. Existing default settings apply.",
+	"accountsManager.initial.missing": "Unavailable account ({{id}})",
+	"accountsManager.initial.description": "This choice applies before the first session request. Other sessions and saved defaults stay unchanged.",
+	"accountsManager.initial.changed": "The selected account is no longer available. Choose an account explicitly.",
 	"accountsManager.usage.authenticationRequired": "The provider could not authenticate the usage request. Reconnect this account, then refresh usage.",
 	"accountsManager.usage.accessDenied": "The provider refused the usage request. Your account selection has not changed.",
 	"accountsManager.usage.rateLimited": "Usage checks are temporarily rate-limited. Wait before refreshing again.",

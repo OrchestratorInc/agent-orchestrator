@@ -1,4 +1,12 @@
 {
+	"accountsManager.initial.available": "管理対象アカウントを利用可能",
+	"accountsManager.initial.title": "開始時のアカウント",
+	"accountsManager.initial.checking": "セッションのアカウント対応を確認中...",
+	"accountsManager.initial.choose": "ネイティブ認証情報または管理対象アカウントを選択",
+	"accountsManager.initial.unsupported": "このデーモンは開始時のアカウント選択に対応していません。既存の既定設定が適用されます。",
+	"accountsManager.initial.missing": "利用できないアカウント ({{id}})",
+	"accountsManager.initial.description": "この選択はセッションの最初のリクエスト前に適用されます。他のセッションと保存済みの既定設定は変更されません。",
+	"accountsManager.initial.changed": "選択したアカウントは利用できなくなりました。アカウントを明示的に選択してください。",
 	"accountsManager.usage.authenticationRequired": "プロバイダーが使用量リクエストを認証できませんでした。このアカウントを再接続してから使用量を更新してください。",
 	"accountsManager.usage.accessDenied": "プロバイダーが使用量リクエストを拒否しました。アカウントの選択は変更されていません。",
 	"accountsManager.usage.rateLimited": "使用量の確認は一時的に制限されています。しばらく待ってから再度更新してください。",

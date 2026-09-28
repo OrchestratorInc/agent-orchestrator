@@ -8951,6 +8951,73 @@ paths:
         decorated
       tags:
       - sessions
+  /api/v1/sessions/account-selection:
+    get:
+      operationId: getInitialAccountSelection
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InitialAccountSelectionResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Request Entity Too Large
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Read initial account selection support
+      tags:
+      - sessions
   /api/v1/sessions/cleanup:
     post:
       operationId: cleanupSessions
@@ -12467,6 +12534,8 @@ components:
       type: object
     DelegateTaskRequest:
       properties:
+        account:
+          $ref: '#/components/schemas/SpawnAccountChoice'
         agent:
           enum:
           - claude-code
@@ -13032,6 +13101,13 @@ components:
       - blockingErrors
       - root
       - nextStep
+      type: object
+    InitialAccountSelectionResponse:
+      properties:
+        initialSelection:
+          type: boolean
+      required:
+      - initialSelection
       type: object
     InitializeRepositoryInput:
       properties:
@@ -15236,6 +15312,19 @@ components:
       - title
       - createdAt
       type: object
+    SpawnAccountChoice:
+      properties:
+        accountId:
+          maxLength: 256
+          type: string
+        mode:
+          enum:
+          - native
+          - managed
+          type: string
+      required:
+      - mode
+      type: object
     SpawnOrchestratorRequest:
       properties:
         approvalMode:
@@ -15266,6 +15355,8 @@ components:
       type: object
     SpawnSessionRequest:
       properties:
+        account:
+          $ref: '#/components/schemas/SpawnAccountChoice'
         approvalMode:
           enum:
           - default

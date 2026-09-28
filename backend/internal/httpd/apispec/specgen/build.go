@@ -245,6 +245,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersCleanupSessionsQuery":                     "CleanupSessionsQuery",
 	"ControllersListSessionsResponse":                     "ListSessionsResponse",
 	"ControllersSpawnSessionRequest":                      "SpawnSessionRequest",
+	"ControllersSpawnAccountChoice":                       "SpawnAccountChoice",
+	"ControllersInitialAccountSelectionResponse":          "InitialAccountSelectionResponse",
 	"ControllersSpawnSessionResponse":                     "SpawnSessionResponse",
 	"ControllersSessionResponse":                          "SessionResponse",
 	"ControllersSessionPreviewResponse":                   "SessionPreviewResponse",

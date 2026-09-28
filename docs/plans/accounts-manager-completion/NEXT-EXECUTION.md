@@ -15,8 +15,8 @@ User authorization: 2026-09-28. Continue implementation through the plan with re
 | Slice | State | Next acceptance evidence |
 | --- | --- | --- |
 | P0 integration | Source sealed, independent review requested | Frozen merge/migration correction; support matrix and wider release checks remain open |
-| P1 selection/isolation | Pending | Atomic initial binding and production A/B identity tests |
-| P2 switch readiness | Pending | Deterministic readiness/cancellation correction and independent review |
+| P1 selection/isolation | Initial-choice slice sealed, review requested | Managed app-server and actual A/B provider execution remain open |
+| P2 switch readiness | Source sealed, independent review requested | P2 cancellation/readiness correction passes; independent verdict remains unconfirmed |
 | P3 retirement/platforms | Pending | Escaped-descendant correction, durable recovery and native proof |
 | P4 credentials/controls | Pending | Supported kinds, usage, Harness scope and UI contracts |
 | P5 integrated evidence | Pending | Complete checks, actual desktop/provider runs and final review |
@@ -47,4 +47,12 @@ Reviewer coordination and native Windows/Mac host availability were requested th
 - Untouched main reproduced the inherited-shell runtime failure with a test-owned tmux socket. With `SHELL=/bin/sh`, unchanged main and the integrated branch both pass the full selected tmux/observer/terminal matrix three times under race. Logs: `main-inherited-shell-control.log`, `main-runtime-controls.log`, `branch-runtime-controls.log`. No user shell configuration or shared runtime service was changed. This classifies the observed environment-sensitive failures, not arbitrary runtime errors.
 - The first frontend command had an invalid Fish PATH expansion and did not start the compiler. Its red log is retained. The corrected scoped Node 24 PATH starts the compiler and exits 0 in `integration-frontend-typecheck-final.log`.
 
-Still open: final integration checks/review, readiness and cancellation validation, escaped-descendant retirement, initial account selection, credential experience, native platforms and live-provider/desktop evidence. No release-completion claim is made.
+## P1 local checkpoint
+
+The initial-selection source is frozen at tree `47243d155de8668ae63018879b547978f9cce64d`, with a 44-file implementation manifest and 5,695-file full source manifest. REVIEW-82-NEXT-INITIAL-SELECTION.md names the exact archives, hashes, red logs and verification. Atomic creation, prepared promotion, explicit CLI/desktop choice and native background admission are implemented. The six affected backend packages pass full race and repeated focused checks. The final renderer passes 5,583 tests with seven skips, both typechecks and Linux packaging.
+
+Real isolated Electron exposed and helped correct a managed harness menu and unbound model-discovery gap. The final capture uses an empty credential inventory and proves unavailable-state behavior only. No live managed credentials were copied or used, and no provider task ran. Public positive-account execution, managed app-server support and real A/B identity proof remain open.
+
+P0/P2 review requests and the request for a live reviewer were accepted by AO without confirmed provider delivery. Independent verdicts are not assumed. Deletion remains held. Source archives, protected manifests and native platform gaps are preserved; all work remains local.
+
+Still open: independent integration/switching/initial-selection review, managed app-server execution, escaped-descendant retirement, credential experience, native platforms, full branch checks, responsiveness and live-provider/desktop evidence. No release-completion claim is made.

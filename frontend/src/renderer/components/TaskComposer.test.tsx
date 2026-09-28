@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
 	ensureReadiness: vi.fn(),
 	ensureTargetedReadiness: vi.fn(),
 	agentValues: [] as string[],
+	initialAccountSelection: false,
 	agentCatalog: undefined as { agents: ReturnType<typeof import("../test/agent-readiness-fixtures").agentReadiness>[] } | undefined,
 	cloudProjects: [] as Array<{ id: string; displayName: string; repositoryUrl: string; defaultBranch: string; config: Record<string, unknown> }>,
 }));
@@ -56,7 +57,8 @@ vi.mock("./CreateProjectAgentSheet", () => ({
 vi.mock("../lib/api-client", () => ({
 	apiClient: {
 		DELETE: h.delete,
-		GET: h.get,
+		GET: (...args: unknown[]) => args[0] === "/api/v1/sessions/account-selection" && !h.initialAccountSelection
+			? Promise.resolve({ data: { initialSelection: false } }) : h.get(...args),
 		POST: h.post,
 	},
 	apiErrorCode: (error: { code?: string }) => error?.code,
@@ -124,6 +126,7 @@ afterEach(() => {
 	h.ensureReadiness.mockReset();
 	h.ensureTargetedReadiness.mockReset();
 	h.agentCatalog = undefined;
+	h.initialAccountSelection = false;
 	h.cloudProjects.length = 0;
 	vi.unstubAllGlobals();
 	h.agentValues.length = 0;
@@ -131,6 +134,100 @@ afterEach(() => {
 });
 
 describe("TaskComposer", () => {
+	it("requires an explicit initial account and forwards it through task delegation", async () => {
+		h.initialAccountSelection = true;
+		const baseGet = h.get.getMockImplementation();
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex", { authentication: "unauthorized" })] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/sessions/account-selection") return { data: { initialSelection: true } };
+			if (path === "/api/v1/accounts-manager/accounts") return { data: initialAccounts() };
+			if (path === "/api/v1/projects/{id}") return { data: { status: "ok", project: { config: { worker: { agent: "codex" } } } } };
+			return baseGet?.(path);
+		});
+		let complete!: (value: unknown) => void;
+		h.post.mockImplementation((path: string) => path === "/api/v1/orchestrators/delegate"
+			? new Promise(resolve => { complete = resolve; }) : Promise.resolve({ data: {} }));
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="demo" onCreated={onCreated} /></Wrap>);
+		const picker = await screen.findByLabelText("Initial account");
+		expect(picker).toHaveValue("");
+		expect(startTask()).toBeDisabled();
+		await screen.findByRole("option", { name: "Work (account-b)" });
+		fireEvent.change(picker, { target: { value: "managed:account-b" } });
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "Keep my account choice" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.objectContaining({ body: expect.objectContaining({ account: { mode: "managed", accountId: "account-b" } }) })));
+		expect(onCreated).not.toHaveBeenCalled();
+		await act(async () => complete({ data: { workerId: "demo-1" } }));
+		expect(onCreated).toHaveBeenCalledWith("demo-1");
+	});
+
+	it("rechecks a selected account at submission without replacing a removed choice", async () => {
+		h.initialAccountSelection = true;
+		const baseGet = h.get.getMockImplementation();
+		let inventory = initialAccounts();
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/sessions/account-selection") return { data: { initialSelection: true } };
+			if (path === "/api/v1/accounts-manager/accounts") return { data: inventory };
+			if (path === "/api/v1/projects/{id}") return { data: { status: "ok", project: { config: { worker: { agent: "codex" } } } } };
+			return baseGet?.(path);
+		});
+		h.post.mockResolvedValue({ data: {} });
+		render(<Wrap><TaskComposer projectId="demo" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByLabelText("Initial account");
+		await screen.findByRole("option", { name: "Work (account-b)" });
+		fireEvent.change(picker, { target: { value: "managed:account-b" } });
+		await waitForTaskReady();
+		inventory = { ...inventory, revision: 2, accounts: [] };
+		fireEvent.click(startTask());
+		await screen.findAllByText("The selected account is no longer available. Choose an account explicitly.");
+		expect(h.post.mock.calls.some(([path]) => path === "/api/v1/orchestrators/delegate")).toBe(false);
+		expect(picker).toHaveValue("managed:account-b");
+	});
+
+	it("sends an explicit native choice for standalone creation", async () => {
+		h.initialAccountSelection = true;
+		const baseGet = h.get.getMockImplementation();
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/sessions/account-selection") return { data: { initialSelection: true } };
+			if (path === "/api/v1/accounts-manager/accounts") return { data: initialAccounts() };
+			return baseGet?.(path);
+		});
+		h.post.mockResolvedValue({ data: { session: { id: "scratch-1" } } });
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		fireEvent.change(await screen.findByLabelText("Initial account"), { target: { value: "native" } });
+		await waitForTaskReady();
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/sessions", expect.objectContaining({ body: expect.objectContaining({ account: { mode: "native" } }) })));
+	});
+
+	it("preserves request IDs and redacts daemon details for an unconfirmed initial choice", async () => {
+		h.initialAccountSelection = true;
+		const baseGet = h.get.getMockImplementation();
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/sessions/account-selection") return { data: { initialSelection: true } };
+			if (path === "/api/v1/accounts-manager/accounts") return { data: initialAccounts() };
+			return baseGet?.(path);
+		});
+		h.post.mockResolvedValue({ error: { code: "ACCOUNT_DELETING", requestId: "initial-renderer-request", message: "private-runtime-secret at http://127.0.0.1:23456" }, response: new Response(null, { status: 409 }) });
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={onCreated} /></Wrap>);
+		const picker = await screen.findByLabelText("Initial account");
+		await screen.findByRole("option", { name: "Work (account-b)" });
+		fireEvent.change(picker, { target: { value: "managed:account-b" } });
+		await waitForTaskReady();
+		fireEvent.click(startTask());
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("initial-renderer-request"));
+		expect(screen.getByRole("alert")).not.toHaveTextContent("private-runtime-secret");
+		expect(screen.getByRole("alert")).not.toHaveTextContent("127.0.0.1");
+		expect(picker).toHaveValue("managed:account-b");
+		expect(onCreated).not.toHaveBeenCalled();
+	});
+
 	it("preselects the highest-ranked ready agent for a standalone task", async () => {
 		h.agentCatalog = {
 			agents: [
@@ -1752,3 +1849,10 @@ describe("TaskComposer", () => {
 		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
 	});
 });
+
+function initialAccounts() {
+	return { revision: 1, availability: "ready", stale: false, routing: [], oauthSessions: [], accounts: [
+		{ id: "account-a", provider: "codex", label: "Personal", status: "active", verification: "verified", disabled: false, unavailable: false },
+		{ id: "account-b", provider: "codex", label: "Work", status: "active", verification: "verified", disabled: false, unavailable: false },
+	] };
+}

@@ -1,4 +1,12 @@
 {
+	"accountsManager.initial.available": "Cuenta administrada disponible",
+	"accountsManager.initial.title": "Cuenta inicial",
+	"accountsManager.initial.checking": "Comprobando el soporte de cuentas por sesión...",
+	"accountsManager.initial.choose": "Elige credenciales nativas o una cuenta administrada",
+	"accountsManager.initial.unsupported": "Este daemon no admite elegir una cuenta inicial. Se aplican los ajustes predeterminados existentes.",
+	"accountsManager.initial.missing": "Cuenta no disponible ({{id}})",
+	"accountsManager.initial.description": "Esta elección se aplica antes de la primera solicitud de la sesión. Las demás sesiones y los valores guardados no cambian.",
+	"accountsManager.initial.changed": "La cuenta seleccionada ya no está disponible. Elige una cuenta explícitamente.",
 	"accountsManager.usage.authenticationRequired": "El proveedor no pudo autenticar la consulta de uso. Vuelve a conectar esta cuenta y actualiza el uso.",
 	"accountsManager.usage.accessDenied": "El proveedor rechazó la consulta de uso. La selección de cuenta no ha cambiado.",
 	"accountsManager.usage.rateLimited": "Las consultas de uso están limitadas temporalmente. Espera antes de actualizar de nuevo.",

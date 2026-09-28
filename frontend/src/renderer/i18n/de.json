@@ -1,4 +1,12 @@
 {
+	"accountsManager.initial.available": "Verwaltetes Konto verfügbar",
+	"accountsManager.initial.title": "Anfangskonto",
+	"accountsManager.initial.checking": "Kontounterstützung für Sitzungen wird geprüft...",
+	"accountsManager.initial.choose": "Lokale Zugangsdaten oder ein verwaltetes Konto wählen",
+	"accountsManager.initial.unsupported": "Dieser Daemon unterstützt keine anfängliche Kontowahl. Die bisherigen Standardeinstellungen gelten.",
+	"accountsManager.initial.missing": "Nicht verfügbares Konto ({{id}})",
+	"accountsManager.initial.description": "Diese Auswahl gilt vor der ersten Sitzungsanfrage. Andere Sitzungen und gespeicherte Standards bleiben unverändert.",
+	"accountsManager.initial.changed": "Das gewählte Konto ist nicht mehr verfügbar. Wähle ausdrücklich ein Konto.",
 	"accountsManager.usage.authenticationRequired": "Der Anbieter konnte die Nutzungsabfrage nicht authentifizieren. Verbinde dieses Konto erneut und aktualisiere dann die Nutzung.",
 	"accountsManager.usage.accessDenied": "Der Anbieter hat die Nutzungsabfrage abgelehnt. Deine Kontoauswahl wurde nicht geändert.",
 	"accountsManager.usage.rateLimited": "Nutzungsabfragen sind vorübergehend begrenzt. Warte vor der nächsten Aktualisierung.",

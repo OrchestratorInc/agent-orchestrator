@@ -19,6 +19,12 @@ type accountsManagerControlCommander interface {
 	CancelAccountsManagerRemoval(context.Context, string) (domain.AccountsManagerRemoval, error)
 }
 
+// InitialAccountSelectionAvailable requires the production creation boundary.
+func (s *Service) InitialAccountSelectionAvailable() bool {
+	capability, ok := s.manager.(interface{ InitialAccountSelectionAvailable() bool })
+	return ok && capability.InitialAccountSelectionAvailable()
+}
+
 type accountsManagerControlReader interface {
 	GetAccountsManagerSessionRoute(context.Context, domain.SessionID, domain.AccountsManagerProvider) (domain.AccountsManagerSessionRoute, bool, error)
 	GetAccountsManagerSwitch(context.Context, string) (domain.AccountsManagerSwitch, bool, error)

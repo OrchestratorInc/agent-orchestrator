@@ -1,4 +1,12 @@
 {
+	"accountsManager.initial.available": "Conta gerenciada disponível",
+	"accountsManager.initial.title": "Conta inicial",
+	"accountsManager.initial.checking": "Verificando o suporte a contas por sessão...",
+	"accountsManager.initial.choose": "Escolha credenciais nativas ou uma conta gerenciada",
+	"accountsManager.initial.unsupported": "Este daemon não permite escolher uma conta inicial. As configurações padrão existentes se aplicam.",
+	"accountsManager.initial.missing": "Conta indisponível ({{id}})",
+	"accountsManager.initial.description": "Esta escolha se aplica antes da primeira solicitação da sessão. Outras sessões e os padrões salvos permanecem inalterados.",
+	"accountsManager.initial.changed": "A conta selecionada não está mais disponível. Escolha uma conta explicitamente.",
 	"accountsManager.usage.authenticationRequired": "O provedor não conseguiu autenticar a consulta de uso. Reconecte esta conta e atualize o uso.",
 	"accountsManager.usage.accessDenied": "O provedor recusou a consulta de uso. Sua seleção de conta não foi alterada.",
 	"accountsManager.usage.rateLimited": "As consultas de uso estão temporariamente limitadas. Aguarde antes de atualizar novamente.",

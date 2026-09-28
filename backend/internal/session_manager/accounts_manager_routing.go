@@ -30,8 +30,11 @@ func (m *Manager) prepareAccountsManagerRoute(
 	env map[string]string,
 ) (*ports.AgentProviderRoute, error) {
 	provider, supported := accountsManagerProvider(harness)
-	if !supported || m.accountsManager == nil {
+	if !supported {
 		return nil, nil
+	}
+	if m.accountsManager == nil {
+		return nil, m.requireNativeAccount(ctx, sessionID, provider)
 	}
 	route, err := m.accountsManager.PrepareAgentLaunchRoute(ctx, sessionID, provider, model)
 	if err != nil {

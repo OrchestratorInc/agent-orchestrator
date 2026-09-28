@@ -391,6 +391,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	onChange,
 	placeholder,
 	manageAgents = true,
+	managedAccountAgentIds = [],
 	triggerClassName,
 	labelClassName,
 	contentClassName,
@@ -409,6 +410,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	placeholder: string;
 	/** Cloud tasks use remote availability, not this computer's Harness settings. */
 	manageAgents?: boolean;
+	managedAccountAgentIds?: readonly string[];
 	triggerClassName?: string;
 	labelClassName?: string;
 	contentClassName?: string;
@@ -417,16 +419,21 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 }) {
 	const { t } = useTranslation();
 	const fallbackAgents: AgentInfo[] = AGENT_OPTIONS.map((agent) => unknownAgentReadiness(agent, agentLabel(agent)));
+	const supportsManagedAccount = (agent: AgentInfo) => manageAgents && agent.installation.state === "installed" &&
+		agent.installation.freshness === "fresh" && managedAccountAgentIds.includes(agent.id);
 	const options = buildRankedAgentOptions({
 		agents,
 		priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
 		fallbackAgents,
-	});
+	}).map((agent) => supportsManagedAccount(agent) ? {
+		...agent, disabled: false, status: t("accountsManager.initial.available"), statusTone: "muted" as const,
+	} : agent);
 
 	const selectedOption = options.find((agent) => agent.id === value) ?? (value ? unknownAgentReadiness(value, agentLabel(value)) : undefined);
 	const hasReadinessSnapshot = agents !== undefined;
-	const needsSetup = manageAgents && hasReadinessSnapshot && Boolean(selectedOption && !isLaunchableAgent(selectedOption));
-	const visibleOptions = manageAgents && hasReadinessSnapshot ? options.filter(isLaunchableAgent) : options;
+	const selectable = (agent: AgentInfo) => isLaunchableAgent(agent) || supportsManagedAccount(agent);
+	const needsSetup = manageAgents && hasReadinessSnapshot && Boolean(selectedOption && !selectable(selectedOption));
+	const visibleOptions = manageAgents && hasReadinessSnapshot ? options.filter(selectable) : options;
 	const management = useAgentManagementMenu(needsSetup ? value : undefined);
 	const managementAction = manageAgents ? { label: t("agentSelector.manage"), onSelect: management.requestManagement } : undefined;
 	const setupHint = needsSetup ? <span className="text-xs text-muted-foreground">{t("agentSelector.needsSetup")}</span> : null;

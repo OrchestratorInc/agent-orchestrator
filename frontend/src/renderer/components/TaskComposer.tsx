@@ -10,6 +10,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
+import { InitialAccountPicker } from "./InitialAccountPicker";
+import { initialAccountProvider, InitialAccountChoiceUnavailable, useInitialAccountChoice, type InitialAccountChoice } from "../hooks/useInitialAccountChoice";
+import { AccountControlError, accountControlMessage, accountRequestError } from "../lib/accounts-manager-controls";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { captureRendererEvent } from "../lib/telemetry";
@@ -52,6 +55,7 @@ type Project = components["schemas"]["Project"];
 type DelegateAgent = components["schemas"]["DelegateTaskRequest"]["agent"];
 
 type CreateTaskInput = {
+	account?: InitialAccountChoice;
 	projectId: string;
 	brief: string;
 	agent?: DelegateAgent;
@@ -125,6 +129,7 @@ export function TaskComposer({
 	const [mode, setMode] = useState("");
 	const [effort, setEffort] = useState("");
 	const [agent, setAgent] = useState("");
+	const [accountDraft, setAccountDraft] = useState({ context: "", value: "" });
 	const [agentTouched, setAgentTouched] = useState(false);
 	const [modelTouched, setModelTouched] = useState(false);
 	const [effortTouched, setEffortTouched] = useState(false);
@@ -196,11 +201,12 @@ export function TaskComposer({
 		async (input: CreateTaskInput): Promise<string> => {
 			void captureRendererEvent("ao.renderer.task_create_requested", { project_id: input.projectId });
 			try {
-				const { data, error } = await apiClient.POST("/api/v1/orchestrators/delegate", {
+				const { data, error, response } = await apiClient.POST("/api/v1/orchestrators/delegate", {
 					headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 					body: {
 						projectId: input.projectId,
 						brief: input.brief,
+						...(input.account ? { account: input.account } : {}),
 						agent: input.agent,
 						...(input.model ? { model: input.model } : {}),
 						...(input.effort !== undefined ? { effort: input.effort } : {}),
@@ -212,7 +218,7 @@ export function TaskComposer({
 				});
 				if (error) {
 					throw new TaskCreateError(
-						apiErrorMessage(error, t("newTask.unableToStart")),
+						input.account ? accountControlMessage(accountRequestError(error, response?.status), t) : apiErrorMessage(error, t("newTask.unableToStart")),
 						apiErrorCode(error),
 						error.details,
 					);
@@ -245,10 +251,11 @@ export function TaskComposer({
 		async (input: CreateTaskInput): Promise<string> => {
 			void captureRendererEvent("ao.renderer.task_create_requested", { scope: "standalone" });
 			const displayName = input.brief.trim().slice(0, 100) || input.agent || "Standalone agent";
-			const { data, error } = await apiClient.POST("/api/v1/sessions", {
+			const { data, error, response } = await apiClient.POST("/api/v1/sessions", {
 				headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 				body: {
 					kind: "worker",
+					...(input.account ? { account: input.account } : {}),
 					harness: input.agent as components["schemas"]["SpawnSessionRequest"]["harness"],
 					prompt: input.brief,
 					displayName,
@@ -260,7 +267,7 @@ export function TaskComposer({
 				},
 			});
 			if (error) {
-				throw new TaskCreateError(apiErrorMessage(error, t("newTask.unableToStart")), apiErrorCode(error), error.details);
+				throw new TaskCreateError(input.account ? accountControlMessage(accountRequestError(error, response?.status), t) : apiErrorMessage(error, t("newTask.unableToStart")), apiErrorCode(error), error.details);
 			}
 			if (!data?.session.id) throw new Error(t("newTask.noSession"));
 			void captureRendererEvent("ao.renderer.task_create_succeeded", { scope: "standalone" });
@@ -359,6 +366,13 @@ export function TaskComposer({
 	);
 	const defaultWorkerAgent = rememberedAgentIsAvailable ? rememberedAgent : configuredDefaultAgent;
 	const selectedAgent = agent || defaultWorkerAgent;
+	const accountContext = `${preferenceContext}:${selectedAgent}`;
+	const accountValue = accountDraft.context === accountContext ? accountDraft.value : "";
+	const initialAccount = useInitialAccountChoice(selectedAgent, !isCloudProject, accountValue);
+	const managedAccountAgentIds = (availableAgents ?? []).filter(candidate =>
+		candidate.installation.state === "installed" && candidate.installation.freshness === "fresh" &&
+		initialAccount.managedProviders.some(provider => provider === initialAccountProvider(candidate.id)),
+	).map(candidate => candidate.id);
 	const defaultWorkerModel =
 		projectConfig?.worker?.agentConfig?.model ?? projectConfig?.agentConfig?.model ?? "";
 	const defaultWorkerMode = projectConfig?.worker?.agentConfig?.mode ?? projectConfig?.agentConfig?.mode ?? "";
@@ -371,63 +385,70 @@ export function TaskComposer({
 		? defaultWorkerMode
 		: "";
 	// Shares the picker's query key, so this is the same fetch, not a second one.
-	const modelCatalogQuery = useQuery(agentModelsQueryOptions(selectedAgent, modelsProjectId));
+	const nativeCatalogEnabled = !initialAccount.enabled || (!initialAccount.capability.isError &&
+		(initialAccount.capability.data === false ||
+			(initialAccount.capability.data === true && accountValue === "native")));
+	const modelCatalogQuery = useQuery({
+		...agentModelsQueryOptions(selectedAgent, modelsProjectId),
+		enabled: selectedAgent !== "" && nativeCatalogEnabled,
+	});
+	const modelCatalogData = nativeCatalogEnabled ? modelCatalogQuery.data : undefined;
 	const revalidationQuery = useQuery({
 		queryKey: [
 			"agent-model-revalidation",
 			selectedAgent,
 			modelsProjectId,
-			modelCatalogQuery.data?.validatedAt ?? "",
+			modelCatalogData?.validatedAt ?? "",
 		],
 		queryFn: () => revalidateAgentModels(selectedAgent, modelsProjectId),
-		enabled: selectedAgent !== "" && modelCatalogQuery.data?.refreshRecommended === true,
+		enabled: nativeCatalogEnabled && selectedAgent !== "" && modelCatalogData?.refreshRecommended === true,
 		staleTime: Number.POSITIVE_INFINITY,
 		retry: false,
 	});
 	useEffect(() => {
-		if (revalidationQuery.data) {
+		if (nativeCatalogEnabled && revalidationQuery.data) {
 			queryClient.setQueryData(
 				agentModelsQueryKey(selectedAgent, modelsProjectId),
 				revalidationQuery.data,
 			);
 		}
-	}, [modelsProjectId, queryClient, revalidationQuery.data, selectedAgent]);
-	const modelWarning =
+	}, [modelsProjectId, nativeCatalogEnabled, queryClient, revalidationQuery.data, selectedAgent]);
+	const modelWarning = nativeCatalogEnabled ? (
 		(revalidationQuery.isError
 			? revalidationQuery.error instanceof Error
 				? revalidationQuery.error.message
 				: t("settings.models.validateFailed")
 			: undefined) ??
-		modelCatalogQuery.data?.warning ??
+		modelCatalogData?.warning ??
 		(modelCatalogQuery.isError
 			? modelCatalogQuery.error instanceof Error
 				? modelCatalogQuery.error.message
 				: t("settings.models.loadFailed")
-			: undefined);
-	const modelCatalog: TaskComposerModelCatalog | undefined = modelCatalogQuery.data
+			: undefined)) : undefined;
+	const modelCatalog: TaskComposerModelCatalog | undefined = modelCatalogData
 		? {
-				allowCustom: modelCatalogQuery.data.allowCustom,
-				customModelEntry: modelCatalogQuery.data.customModelEntry,
-				models: modelCatalogQuery.data.models,
-				refreshError: modelCatalogQuery.data.refreshError,
-				refreshState: modelCatalogQuery.data.refreshState,
-				retryAt: modelCatalogQuery.data.retryAt,
-				selectionMode: modelCatalogQuery.data.selectionMode,
+				allowCustom: modelCatalogData.allowCustom,
+				customModelEntry: modelCatalogData.customModelEntry,
+				models: modelCatalogData.models,
+				refreshError: modelCatalogData.refreshError,
+				refreshState: modelCatalogData.refreshState,
+				retryAt: modelCatalogData.retryAt,
+				selectionMode: modelCatalogData.selectionMode,
 			}
-		: undefined;
+		: nativeCatalogEnabled ? undefined : { models: [], allowCustom: true, customModelEntry: "direct", selectionMode: "catalog" };
 	// An unmarked first row is not evidence of what the provider will run.
-	const catalogModels = modelCatalogQuery.data?.models?.filter((item) => isConcreteModelID(item.id)) ?? [];
+	const catalogModels = modelCatalogData?.models?.filter((item) => isConcreteModelID(item.id)) ?? [];
 	const catalogDefaultOption =
 		catalogModels.find((item) => item.isDefault)?.id ?? "";
-	const catalogUsesModes = modelCatalogQuery.data?.selectionMode === "mode";
+	const catalogUsesModes = modelCatalogData?.selectionMode === "mode";
 	const rememberedConfigForSelectedAgent = agentDrafts[selectedAgent];
 	const rememberedModel = rememberedConfigForSelectedAgent?.model ?? "";
 	const rememberedMode = rememberedConfigForSelectedAgent?.mode ?? "";
 	const rememberedModelIsValid =
 		isConcreteModelID(rememberedModel) &&
 		Boolean(
-			modelCatalogQuery.data &&
-				(modelCatalogQuery.data.allowCustom || catalogModels.some((item) => item.id === rememberedModel)),
+			modelCatalog &&
+				(modelCatalog.allowCustom || catalogModels.some((item) => item.id === rememberedModel)),
 		);
 	const rememberedModeIsValid =
 		isConcreteModelID(rememberedMode) && catalogModels.some((item) => item.id === rememberedMode);
@@ -476,12 +497,14 @@ export function TaskComposer({
 		!settings.chatHarnesses.includes(selectedAgent);
 	const canSubmit =
 		Boolean(projectId) &&
+		initialAccount.ready &&
 		(!isStandalone || selectedAgent !== "") &&
 		(isCloudProject || isStandalone || projectQuery.data !== undefined);
 	const refreshSelectedModels = useCallback(async () => {
+		if (!nativeCatalogEnabled) return;
 		const refreshed = await refreshAgentModels(selectedAgent, modelsProjectId);
 		queryClient.setQueryData(agentModelsQueryKey(selectedAgent, modelsProjectId), refreshed);
-	}, [modelsProjectId, queryClient, selectedAgent]);
+	}, [modelsProjectId, nativeCatalogEnabled, queryClient, selectedAgent]);
 	useEffect(() => {
 		if (!agentTouched) setAgent(defaultWorkerAgent);
 	}, [agentTouched, defaultWorkerAgent]);
@@ -522,7 +545,8 @@ export function TaskComposer({
 		setError(undefined);
 		setFallbackAction(undefined);
 		try {
-			if (!isCloudProject && selectedAgent) {
+			const account = await initialAccount.confirm();
+			if (!isCloudProject && selectedAgent && account?.mode !== "managed") {
 				try {
 					const completed = await ensureAgentReadiness([selectedAgent], "launch");
 					cacheAgentReadiness(queryClient, completed);
@@ -534,6 +558,7 @@ export function TaskComposer({
 			const attachmentPayloads = await toSettledPayload();
 			const submittedPreparation = taskPreparationRef.current;
 			const sessionId = await createTask({
+				account,
 				projectId,
 				brief,
 				agent: selectedAgent ? (selectedAgent as CreateTaskInput["agent"]) : undefined,
@@ -577,7 +602,9 @@ export function TaskComposer({
 						? "tui"
 						: undefined,
 			);
-			setError(err instanceof Error ? err.message : t("newTask.unableToStart"));
+			setError(err instanceof InitialAccountChoiceUnavailable ? t("accountsManager.initial.changed")
+				: err instanceof AccountControlError ? accountControlMessage(err, t)
+					: err instanceof Error ? err.message : t("newTask.unableToStart"));
 		} finally {
 			setIsSubmitting(false);
 		}
@@ -585,6 +612,7 @@ export function TaskComposer({
 
 	return (
 		<TaskComposerView
+			context={<InitialAccountPicker state={initialAccount} value={accountValue} disabled={isSubmitting} onChange={value => setAccountDraft({ context: accountContext, value })} />}
 			autoFocusPrompt={autoFocusTitle}
 			canSubmit={canSubmit}
 			onPromptChange={handlePromptChange}
@@ -633,11 +661,11 @@ export function TaskComposer({
 				value: selectedModel,
 				mode: selectedMode,
 				catalog: modelCatalog,
-				fetching: modelCatalogQuery.isFetching,
+				fetching: nativeCatalogEnabled && modelCatalogQuery.isFetching,
 				loading:
-					selectedAgent !== "" &&
-					modelCatalogQuery.isFetching &&
-					modelCatalogQuery.data === undefined,
+					(initialAccount.enabled && initialAccount.capability.isPending) ||
+					(nativeCatalogEnabled && selectedAgent !== "" &&
+						modelCatalogQuery.isFetching && modelCatalogQuery.data === undefined),
 				onModelChange: (value) => {
 					setModel(value);
 					setMode("");
@@ -683,9 +711,9 @@ export function TaskComposer({
 						: submitTask(brief, "tui")),
 				onSubmit: (brief) => void submitTask(brief, selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined),
 			}}
-			renderAgentControl={(control) => <DesktopAgentControl {...control} manageAgents={!isCloudProject} />}
+			renderAgentControl={(control) => <DesktopAgentControl {...control} manageAgents={!isCloudProject} managedAccountAgentIds={managedAccountAgentIds} />}
 			renderEffortControl={(control) => <TaskEffortPicker {...control} defaultEffort={effortModel?.defaultEffort} />}
-			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
+			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={nativeCatalogEnabled ? refreshSelectedModels : undefined}
 				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
 			showEffort={!requiresTuiFallback && effortOptions.length > 0}
 		/>
@@ -722,11 +750,12 @@ function formatEffortLabel(value: string): string {
 	return value === "xhigh" ? "Extra high" : value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function DesktopAgentControl({ manageAgents, ...control }: TaskComposerAgentControl & { manageAgents: boolean }) {
+function DesktopAgentControl({ manageAgents, managedAccountAgentIds, ...control }: TaskComposerAgentControl & { manageAgents: boolean; managedAccountAgentIds: readonly string[] }) {
 	return (
 		<RequiredAgentField
 			{...control}
 			manageAgents={manageAgents}
+			managedAccountAgentIds={managedAccountAgentIds}
 			variant="chip"
 			triggerClassName="composer-toolbar-option w-full justify-between"
 		/>
@@ -745,7 +774,7 @@ function TaskModelPicker({
 	onModeChange,
 	onRefresh,
 	showFollowAgentAction,
-}: TaskComposerModelControl & { onRefresh: () => Promise<void>; showFollowAgentAction: boolean }) {
+}: TaskComposerModelControl & { onRefresh?: () => Promise<void>; showFollowAgentAction: boolean }) {
 	const { t } = useTranslation();
 
 	// No agent selected: there is nothing loading and no model to choose yet, so

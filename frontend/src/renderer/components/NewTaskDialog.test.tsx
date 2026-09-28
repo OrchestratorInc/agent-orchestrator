@@ -37,11 +37,11 @@ vi.mock("../lib/api-client", () => ({
 			: undefined,
 }));
 
-function renderDialog() {
+function renderDialog(client = new QueryClient()) {
 	const onCreated = vi.fn();
 	const onOpenChange = vi.fn();
 	const view = render(
-		<QueryClientProvider client={new QueryClient()}>
+		<QueryClientProvider client={client}>
 			<NewTaskDialog open projectId="proj-1" onCreated={onCreated} onOpenChange={onOpenChange} />
 		</QueryClientProvider>,
 	);
@@ -87,6 +87,9 @@ beforeEach(() => {
 	ensureAgentReadinessMock.mockReset();
 	deleteMock.mockReset().mockResolvedValue({ data: undefined, error: undefined });
 	getMock.mockReset().mockImplementation(async (path: string) => {
+		if (path === "/api/v1/sessions/account-selection") {
+			return { data: { initialSelection: false }, error: undefined };
+		}
 		if (path === "/api/v1/agents/readiness") {
 			return { data: agentInventory, error: undefined };
 		}
@@ -119,6 +122,108 @@ beforeEach(() => {
 });
 
 afterEach(() => vi.restoreAllMocks());
+
+function managedAccountDiscovery(defaultAgent = "cursor") {
+	const capability = { initialSelection: true };
+	const agents = { agents: [agentReadiness("cursor", "Cursor"), agentReadiness("codex", "Codex", { authentication: "unauthorized" })] };
+	const inventory = { revision: 1, availability: "ready", stale: false, routing: [], oauthSessions: [], accounts: [
+		{ id: "account-a", provider: "codex", label: "Work", status: "active", verification: "verified", disabled: false, unavailable: false, quotaSupported: false },
+	] };
+	const fallback = getMock.getMockImplementation();
+	getMock.mockImplementation(async (path: string, options?: unknown) => {
+		if (path === "/api/v1/sessions/account-selection") return { data: capability };
+		if (path === "/api/v1/accounts-manager/accounts") return { data: inventory };
+		if (path === "/api/v1/agents/readiness") return { data: agents };
+		if (path === "/api/v1/projects/{id}") return { data: { status: "ok", project: { id: "proj-1", name: "scratch", config: { worker: { agent: defaultAgent } } } } };
+		return fallback?.(path, options);
+	});
+	return { agents, inventory, capability };
+}
+
+describe("managed account discovery", () => {
+	it("offers an installed harness without a device login and preserves an explicit account choice", async () => {
+		const { agents } = managedAccountDiscovery();
+		const { onCreated } = renderDialog();
+		const user = userEvent.setup();
+		await waitFor(() => expect(screen.getByRole("button", { name: "Agent" })).toHaveTextContent("Cursor"));
+		await user.click(screen.getByRole("button", { name: "Agent" }));
+		await user.click(await screen.findByRole("menuitem", { name: /Codex/ }));
+		const picker = await screen.findByLabelText("Initial account");
+		expect(picker).toHaveValue("");
+		await user.type(screen.getByLabelText("Task"), "Use the selected account");
+		expect(screen.getByRole("button", { name: "Start task" })).toBeDisabled();
+		await user.selectOptions(picker, "managed:account-a");
+		await user.click(screen.getByRole("button", { name: "Start task" }));
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("worker-1"));
+		expect(requestBody()).toMatchObject({ agent: "codex", account: { mode: "managed", accountId: "account-a" } });
+		expect(agents.agents[1].authentication.state).toBe("unauthorized");
+		expect(postMock.mock.calls.some(([path]) => path === "/api/v1/agents/readiness/ensure")).toBe(false);
+	});
+
+	it.each(["not installed", "installation stale", "no capability", "stale inventory", "disabled account", "unverified account", "wrong provider", "no accounts"])("does not unlock a managed harness with %s", async failure => {
+		const { agents, inventory, capability } = managedAccountDiscovery();
+		switch (failure) {
+			case "not installed": agents.agents[1].installation.state = "not_installed"; break;
+			case "installation stale": agents.agents[1].installation.freshness = "stale"; break;
+			case "no capability": capability.initialSelection = false; break;
+			case "stale inventory": inventory.stale = true; break;
+			case "disabled account": inventory.accounts[0].disabled = true; break;
+			case "unverified account": inventory.accounts[0].verification = "unverified"; break;
+			case "wrong provider": inventory.accounts[0].provider = "other"; break;
+			case "no accounts": inventory.accounts = []; break;
+		}
+		renderDialog();
+		const user = userEvent.setup();
+		await waitFor(() => expect(screen.getByRole("button", { name: "Agent" })).toHaveTextContent("Cursor"));
+		await user.click(screen.getByRole("button", { name: "Agent" }));
+		await screen.findByRole("menuitem", { name: /Cursor/ });
+		expect(screen.queryByRole("menuitem", { name: /Codex/ })).not.toBeInTheDocument();
+		expect(delegateCalls()).toHaveLength(0);
+	});
+});
+
+describe("account model isolation", () => {
+	it("does not discover or inherit a cached device catalog before a managed choice", async () => {
+		managedAccountDiscovery("codex");
+		const client = new QueryClient();
+		client.setQueryData(["agent-models", "codex", "proj-1"], {
+			...directModelCatalog, agentId: "codex", refreshRecommended: true,
+			models: [{ id: "device-only-default", label: "Device model", isDefault: true }],
+		});
+		const { onCreated } = renderDialog(client);
+		const user = userEvent.setup();
+		await screen.findByRole("option", { name: "Work (account-a)" });
+		expect(getMock.mock.calls.some(([path, options]) => path === "/api/v1/agents/{agent}/models" && options?.params?.path?.agent === "codex")).toBe(false);
+		expect(postMock.mock.calls.some(([path]) => path === "/api/v1/agents/{agent}/models/refresh")).toBe(false);
+		expect(screen.getByRole("button", { name: "Model" })).not.toHaveTextContent("Device model");
+		await user.selectOptions(screen.getByLabelText("Initial account"), "managed:account-a");
+		await user.click(screen.getByRole("button", { name: "Model" }));
+		expect(screen.queryByRole("button", { name: /Refresh/ })).not.toBeInTheDocument();
+		await user.type(screen.getByRole("searchbox", { name: "Search model" }), "explicit-model");
+		await user.click(screen.getByRole("menuitem", { name: "Use “explicit-model” as a custom model" }));
+		await user.type(screen.getByLabelText("Task"), "Use only account A");
+		await user.click(screen.getByRole("button", { name: "Start task" }));
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("worker-1"));
+		expect(requestBody()).toMatchObject({ model: "explicit-model", account: { mode: "managed", accountId: "account-a" } });
+		expect(getMock.mock.calls.some(([path, options]) => path === "/api/v1/agents/{agent}/models" && options?.params?.path?.agent === "codex")).toBe(false);
+	});
+
+	it("retains model discovery and device preflight for an explicit native choice", async () => {
+		const { agents } = managedAccountDiscovery("codex");
+		agents.agents[1] = agentReadiness("codex", "Codex");
+		renderDialog();
+		const user = userEvent.setup();
+		await screen.findByRole("option", { name: "Work (account-a)" });
+		expect(getMock.mock.calls.some(([path]) => path === "/api/v1/agents/{agent}/models")).toBe(false);
+		await user.selectOptions(screen.getByLabelText("Initial account"), "native");
+		await waitFor(() => expect(getMock).toHaveBeenCalledWith("/api/v1/agents/{agent}/models", expect.objectContaining({ params: expect.objectContaining({ path: { agent: "codex" } }) })));
+		await user.type(screen.getByLabelText("Task"), "Use device credentials explicitly");
+		await user.click(screen.getByRole("button", { name: "Start task" }));
+		await waitFor(() => expect(delegateCalls()).toHaveLength(1));
+		expect(requestBody()).toMatchObject({ account: { mode: "native" } });
+		expect(postMock).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", { body: { agentIds: ["codex"], purpose: "launch" } });
+	});
+});
 
 describe("NewTaskDialog", () => {
 	it("renders one continuous composer surface with a visible settings-style title", async () => {
@@ -330,6 +435,9 @@ describe("NewTaskDialog", () => {
 
 	it("shows an empty Model field for scratch projects and omits it from delegation", async () => {
 		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/sessions/account-selection") {
+				return { data: { initialSelection: false }, error: undefined };
+			}
 			if (path === "/api/v1/agents/readiness") {
 				return {
 					data: {

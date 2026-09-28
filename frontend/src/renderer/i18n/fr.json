@@ -1,4 +1,12 @@
 {
+	"accountsManager.initial.available": "Compte géré disponible",
+	"accountsManager.initial.title": "Compte initial",
+	"accountsManager.initial.checking": "Vérification de la prise en charge des comptes par session...",
+	"accountsManager.initial.choose": "Choisir les identifiants natifs ou un compte géré",
+	"accountsManager.initial.unsupported": "Ce daemon ne permet pas de choisir un compte initial. Les paramètres par défaut existants s'appliquent.",
+	"accountsManager.initial.missing": "Compte indisponible ({{id}})",
+	"accountsManager.initial.description": "Ce choix s'applique avant la première requête de la session. Les autres sessions et les paramètres enregistrés restent inchangés.",
+	"accountsManager.initial.changed": "Le compte sélectionné n'est plus disponible. Choisissez explicitement un compte.",
 	"accountsManager.usage.authenticationRequired": "Le fournisseur n’a pas pu authentifier la demande d’utilisation. Reconnectez ce compte, puis actualisez l’utilisation.",
 	"accountsManager.usage.accessDenied": "Le fournisseur a refusé la demande d’utilisation. Votre sélection de compte n’a pas changé.",
 	"accountsManager.usage.rateLimited": "Les demandes d’utilisation sont temporairement limitées. Patientez avant d’actualiser à nouveau.",

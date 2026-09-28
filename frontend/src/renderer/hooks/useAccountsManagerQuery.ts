@@ -69,8 +69,8 @@ function accountsManagerQueryOptions(client: QueryClient) {
   });
 }
 
-export function useAccountsManagerQuery() {
-  return useQuery(accountsManagerQueryOptions(useQueryClient()));
+export function useAccountsManagerQuery(enabled = true) {
+  return useQuery({ ...accountsManagerQueryOptions(useQueryClient()), enabled });
 }
 
 export function useAccountsManagerEvents(): void {

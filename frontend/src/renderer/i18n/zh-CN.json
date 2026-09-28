@@ -1,4 +1,12 @@
 {
+	"accountsManager.initial.available": "托管账户可用",
+	"accountsManager.initial.title": "初始账户",
+	"accountsManager.initial.checking": "正在检查会话账户支持...",
+	"accountsManager.initial.choose": "选择原生凭据或托管账户",
+	"accountsManager.initial.unsupported": "此守护进程不支持选择初始账户，将使用现有默认设置。",
+	"accountsManager.initial.missing": "账户不可用 ({{id}})",
+	"accountsManager.initial.description": "此选择在会话首次请求前生效。其他会话和已保存的默认设置保持不变。",
+	"accountsManager.initial.changed": "所选账户已不可用。请明确选择一个账户。",
 	"accountsManager.usage.authenticationRequired": "提供商无法验证用量请求。请重新连接此账户，然后刷新用量。",
 	"accountsManager.usage.accessDenied": "提供商拒绝了用量请求。您选择的账户未更改。",
 	"accountsManager.usage.rateLimited": "用量查询暂时受到速率限制。请稍候再刷新。",

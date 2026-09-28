@@ -889,6 +889,10 @@ func New(d Deps) *Manager {
 // materialization fails the still-seed row is deleted outright; a later failure
 // parks the row as terminated and rolls back what was built.
 func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	if cfg.Account != nil {
+		choice := *cfg.Account
+		cfg.Account = &choice
+	}
 	project, err := m.loadProject(ctx, cfg.ProjectID)
 	if err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
@@ -952,6 +956,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if err := validateSpawnModel(cfg.Harness, agentConfig.Model); err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %s", ErrUnsupportedModel, err.Error())
 	}
+	if err := m.validateInitialAccountChoice(ctx, cfg, agentConfig.Model); err != nil {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
+	}
 	// Resolve the controller mode here, before anything durable is created, for
 	// the same reason an unknown harness is rejected above: an explicit Chat
 	// request AO cannot honor should cost nothing, not leave a terminated row and
@@ -959,6 +966,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// if it is unavailable for this harness or installation, fall back to TUI.
 	modeExplicitlyRequested := cfg.RequestedMode.Valid()
 	mode := m.resolveSessionMode(ctx, cfg.RequestedMode)
+	if mode == domain.SessionModeChat && cfg.Account != nil && cfg.Account.Mode == domain.AccountsManagerManaged && cfg.Harness == domain.HarnessCodex {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: managed Chat is not supported", ports.ErrChatUnsupported)
+	}
 	if mode == domain.SessionModeChat {
 		if m.chat == nil {
 			if modeExplicitlyRequested {
@@ -971,7 +981,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			// A routed Claude ACP process authenticates with its child-scoped
 			// gateway token, so native device auth is not a prerequisite.
 			routedClaude := errors.Is(preflightErr, ports.ErrChatAuthRequired) &&
-				cfg.Harness == domain.HarnessClaudeCode && m.accountsManagerRoutingEnabled(ctx, cfg.Harness)
+				cfg.Harness == domain.HarnessClaudeCode && m.accountsManagerSpawnRoutingEnabled(ctx, cfg)
 			if !routedClaude {
 				fallbackAllowed := errors.Is(preflightErr, ports.ErrChatUnsupported) ||
 					errors.Is(preflightErr, ports.ErrChatDriverUnavailable) ||
@@ -1041,17 +1051,13 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			seed.Metadata.Model = cfg.AgentConfig.Model
 			seed.Metadata.Effort = cfg.AgentConfig.Effort
 		}
-		if cfg.AutomationRunID != nil {
-			var fresh bool
-			rec, fresh, err = m.store.CreateAutomationSession(ctx, seed)
-			if err == nil && !fresh {
-				if rec.AutomationLaunchCompleted {
-					return rec, promptBytes, systemPromptBytes, nil
-				}
-				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: automation session %s has an incomplete prior launch", rec.ID)
+		var fresh bool
+		rec, fresh, err = m.createSpawnSeed(ctx, seed, cfg.Account)
+		if err == nil && cfg.AutomationRunID != nil && !fresh {
+			if rec.AutomationLaunchCompleted {
+				return rec, promptBytes, systemPromptBytes, nil
 			}
-		} else {
-			rec, err = m.store.CreateSession(ctx, seed)
+			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: automation session %s has an incomplete prior launch", rec.ID)
 		}
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStageEarly(ErrSpawnCreate, err)
@@ -1090,7 +1096,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		if asyncChat {
 			seed.ProvisionState = domain.SessionProvisionProvisioning
 		}
-		rec, err = m.promoteTaskPreparation(ctx, prep, seed)
+		rec, err = m.promoteTaskPreparation(ctx, prep, seed, cfg.Account)
 		if err != nil {
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
 			m.discardClaimedTaskPreparation(cleanupCtx, prep)

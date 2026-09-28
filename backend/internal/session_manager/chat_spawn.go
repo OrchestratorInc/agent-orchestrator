@@ -96,6 +96,17 @@ func (m *Manager) RunBackgroundTask(
 	if rec.IsTerminated {
 		return "", fmt.Errorf("session %s is terminated", id)
 	}
+	if provider, supported := accountsManagerProvider(rec.Harness); supported {
+		release, allowed := m.AcquireSessionInput(id)
+		if !allowed {
+			return "", errAgentOperationInProgress
+		}
+		defer release()
+		// Background title calls have no routed controller or revocation owner.
+		if err := m.requireNativeAccount(ctx, id, provider); err != nil {
+			return "", fmt.Errorf("background task requires native session authentication: %w", err)
+		}
+	}
 	releaseHarness, err := m.beginHarnessUse(rec.Harness)
 	if err != nil {
 		return "", err

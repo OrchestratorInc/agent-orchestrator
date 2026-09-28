@@ -304,6 +304,9 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 }
 
 func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
+	if cfg.Account != nil && !cfg.Account.Valid() {
+		return domain.Session{}, 0, 0, toSpawnAPIError(domain.ErrAccountsManagerSelectionInvalid)
+	}
 	var project domain.ProjectRecord
 	var err error
 	if cfg.ProjectID != "" {
@@ -328,6 +331,7 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return domain.Session{}, 0, 0, apierr.Invalid("AGENT_BINARY_NOT_FOUND", "The selected agent harness is not installed", map[string]any{"agentId": cfg.Harness})
 		}
 		if cfg.Harness == domain.HarnessCodex &&
+			(cfg.Account == nil || cfg.Account.Mode != domain.AccountsManagerManaged) &&
 			readiness.Authentication.State == domain.AgentAuthenticationUnauthorized &&
 			readiness.Authentication.Freshness == domain.AgentReadinessFresh {
 			return domain.Session{}, 0, 0, apierr.Conflict("CODEX_ACCOUNT_AUTH_UNVERIFIED", "Add or sign in to a Codex account in Settings before starting a Codex session", nil)
@@ -1343,6 +1347,16 @@ func mapSessionError(err error) error {
 func toSpawnAPIError(err error) error {
 	if err == nil {
 		return nil
+	}
+	switch {
+	case errors.Is(err, domain.ErrAccountsManagerSelectionInvalid):
+		return apierr.Invalid("ACCOUNT_SELECTION_INVALID", "Choose native mode or one managed account for this provider", nil)
+	case errors.Is(err, domain.ErrAccountsManagerSelectionUnavailable):
+		return apierr.NotImplemented("ACCOUNT_SELECTION_UNAVAILABLE", "Initial account selection is unavailable")
+	case errors.Is(err, domain.ErrAccountsManagerAccountDeleting):
+		return apierr.Conflict("ACCOUNT_DELETING", "The selected account is being removed", nil)
+	case errors.Is(err, domain.ErrAccountsManagerBindingConflict):
+		return apierr.Conflict("ACCOUNT_BINDING_CHANGED", "The session account choice changed", nil)
 	}
 	var already *apierr.Error
 	if errors.As(err, &already) {

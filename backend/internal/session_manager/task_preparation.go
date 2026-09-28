@@ -157,8 +157,18 @@ func (m *Manager) claimTaskPreparation(token domain.TaskPreparationToken, projec
 	return prep
 }
 
-func (m *Manager) promoteTaskPreparation(ctx context.Context, prep *taskPreparation, rec domain.SessionRecord) (domain.SessionRecord, error) {
-	updated, err := m.store.PromoteTaskPreparation(ctx, prep.record.ID, rec)
+func (m *Manager) promoteTaskPreparation(ctx context.Context, prep *taskPreparation, rec domain.SessionRecord, choice *domain.AccountsManagerAccountChoice) (domain.SessionRecord, error) {
+	var updated bool
+	var err error
+	if choice != nil {
+		creator, ok := m.store.(ports.AccountsManagerSessionCreator)
+		if !ok {
+			return domain.SessionRecord{}, domain.ErrAccountsManagerSelectionUnavailable
+		}
+		updated, err = creator.PromoteTaskPreparationWithAccount(ctx, prep.record.ID, rec, *choice)
+	} else {
+		updated, err = m.store.PromoteTaskPreparation(ctx, prep.record.ID, rec)
+	}
 	if err != nil {
 		return domain.SessionRecord{}, err
 	}

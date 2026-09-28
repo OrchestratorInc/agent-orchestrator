@@ -11,7 +11,7 @@ This ledger contains acceptance outcomes, not permission to implement or publish
 - [ ] G02: provider/version/authentication/interface matrix and setup-token support boundary are reviewed without promising unsupported storage, proxying or usage access.
   EVIDENCE: pending; P0/P4 require supported native execution versus API-key proxy decisions and explicit migration/reconnect behavior.
 - [ ] G03: explicit initial account choice is durable before provider execution across desktop, CLI and programmatic session creation.
-  EVIDENCE: pending; P1 requires creation/launch race tests, missing/default/native/managed choice tests and no first-request misrouting.
+  EVIDENCE: bounded implementation and local checks are sealed in REVIEW-82-NEXT-INITIAL-SELECTION.md; 44 source/test/generated files, repeated creation/launch races, full affected suites and real-component tests pass. Independent acceptance remains pending; native desktop positive-account execution has no authorized credentials in the isolated profile.
 - [ ] G04: simultaneous managed A/B isolation passes through actual production runner and controllers for every enabled interface, including managed app-server Chat.
   EVIDENCE: pending; P1 requires conflicting ambient auth, home/keychain separation, exact upstream identity, stale routes, resume and unrelated native preservation.
 
