@@ -12,6 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
+// AccountsManagerRemovalImpact reads matched bindings and revision in one transaction.
 func (s *Store) AccountsManagerRemovalImpact(ctx context.Context, id string) (domain.AccountsManagerRemovalImpact, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -49,6 +50,7 @@ func removalImpact(ctx context.Context, q *gen.Queries, id string) (domain.Accou
 	return impact, nil
 }
 
+// CreateAccountsManagerRemoval admits confirmed intent without recapturing an existing operation.
 func (s *Store) CreateAccountsManagerRemoval(ctx context.Context, operationID, accountID string, revision int64, confirmed bool) (domain.AccountsManagerRemoval, bool, error) {
 	if !validSwitchAtom(operationID, 128) || !validSwitchAtom(accountID, 512) {
 		return domain.AccountsManagerRemoval{}, false, domain.ErrAccountsManagerRemovalConflict
@@ -118,6 +120,7 @@ func removalFromRow(row gen.AccountsManagerRemoval) (domain.AccountsManagerRemov
 	return op, nil
 }
 
+// GetAccountsManagerRemoval distinguishes absence from unreadable durable state.
 func (s *Store) GetAccountsManagerRemoval(ctx context.Context, id string) (domain.AccountsManagerRemoval, bool, error) {
 	row, err := s.qr.GetAccountsManagerRemoval(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -130,6 +133,7 @@ func (s *Store) GetAccountsManagerRemoval(ctx context.Context, id string) (domai
 	return op, err == nil, err
 }
 
+// GetAccountsManagerAccountRemoval preserves the account tombstone after completion.
 func (s *Store) GetAccountsManagerAccountRemoval(ctx context.Context, id string) (domain.AccountsManagerRemoval, bool, error) {
 	row, err := s.qr.GetAccountsManagerAccountRemoval(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -142,6 +146,7 @@ func (s *Store) GetAccountsManagerAccountRemoval(ctx context.Context, id string)
 	return op, err == nil, err
 }
 
+// ListActiveAccountsManagerRemovals includes outstanding restart obligations.
 func (s *Store) ListActiveAccountsManagerRemovals(ctx context.Context) ([]domain.AccountsManagerRemoval, error) {
 	rows, err := s.qr.ListActiveAccountsManagerRemovals(ctx)
 	if err != nil {
@@ -199,6 +204,7 @@ func (s *Store) mutateAccountRemoval(ctx context.Context, id string, mutate func
 	})
 }
 
+// RecordAccountsManagerRemovalStopped requires the captured bindings and owner to match.
 func (s *Store) RecordAccountsManagerRemovalStopped(ctx context.Context, id string, sessionID domain.SessionID) error {
 	return s.mutateAccountRemoval(ctx, id, func(q *gen.Queries, op *domain.AccountsManagerRemoval) error {
 		if !op.StopStarted || op.Phase == domain.AccountsManagerRemovalCancelled {
@@ -223,6 +229,7 @@ func (s *Store) RecordAccountsManagerRemovalStopped(ctx context.Context, id stri
 	})
 }
 
+// RecordAccountsManagerRemovalFailure retains irreversible recovery obligations.
 func (s *Store) RecordAccountsManagerRemovalFailure(ctx context.Context, id, code string) error {
 	if !validSwitchAtom(code, 64) {
 		return domain.ErrAccountsManagerRemovalConflict
@@ -239,6 +246,7 @@ func (s *Store) RecordAccountsManagerRemovalFailure(ctx context.Context, id, cod
 	})
 }
 
+// RecordAccountsManagerRemovalRevoked requires every stop acknowledgement.
 func (s *Store) RecordAccountsManagerRemovalRevoked(ctx context.Context, id string) error {
 	return s.mutateAccountRemoval(ctx, id, func(_ *gen.Queries, op *domain.AccountsManagerRemoval) error {
 		if !op.StopStarted || !op.BindingsRevoked || op.Phase == domain.AccountsManagerRemovalCancelled {
@@ -254,6 +262,7 @@ func (s *Store) RecordAccountsManagerRemovalRevoked(ctx context.Context, id stri
 	})
 }
 
+// CompleteAccountsManagerRemoval atomically clears bindings and defaults without fallback.
 func (s *Store) CompleteAccountsManagerRemoval(ctx context.Context, id string) error {
 	return s.mutateAccountRemoval(ctx, id, func(q *gen.Queries, op *domain.AccountsManagerRemoval) error {
 		if op.Phase == domain.AccountsManagerRemovalComplete {
@@ -398,6 +407,7 @@ func validateRemovalEntry(ctx context.Context, q *gen.Queries, accountID string,
 	return nil
 }
 
+// AccountsManagerAccountDeleting includes durable tombstones that forbid resurrection.
 func (s *Store) AccountsManagerAccountDeleting(ctx context.Context, id string) (bool, error) {
 	deleting, err := s.qr.AccountsManagerAccountDeleting(ctx, id)
 	return deleting, err

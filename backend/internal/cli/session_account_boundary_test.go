@@ -22,7 +22,7 @@ func TestSessionAccountModesTimingAndOutput(t *testing.T) {
 					}
 					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						if strings.HasPrefix(r.URL.Path, "/internal/") {
-							w.WriteHeader(204)
+							w.WriteHeader(http.StatusNoContent)
 							return
 						}
 						capture.record(r)
@@ -76,7 +76,7 @@ func TestSessionAccountReadAndResponseOwnership(t *testing.T) {
 				capture := &agentSwitchRequestCapture{}
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if strings.HasPrefix(r.URL.Path, "/internal/") {
-						w.WriteHeader(204)
+						w.WriteHeader(http.StatusNoContent)
 						return
 					}
 					capture.record(r)
@@ -171,7 +171,7 @@ func TestSessionAccountRecoveryIsExplicitAndRepeatable(t *testing.T) {
 	capture := &agentSwitchRequestCapture{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/internal/") {
-			w.WriteHeader(204)
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		capture.record(r)

@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const credentialManagementPath = "/ao/internal/credentials"
+const credentialManagementPath = "/ao/internal/credentials" // #nosec G101 -- Public route path, not a credential.
 
 // RenameCredential uses a generation check without changing provider identity.
 func (c *ManagementClient) RenameCredential(ctx context.Context, ref, label string, generation uint64) error {

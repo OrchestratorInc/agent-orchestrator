@@ -132,7 +132,7 @@ func successfulCredentialCheck(request *http.Request) (*http.Response, error) {
 	if strings.HasSuffix(request.URL.Path, "/profile") {
 		body = `{"account":{"uuid":"account"},"organization":{"uuid":"org"}}`
 	}
-	return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 }
 
 func TestCredentialVerificationLifecycle(t *testing.T) {

@@ -8,10 +8,13 @@ import (
 	"path/filepath"
 )
 
+// Version is supplied by the build for daemon compatibility checks.
 var Version = "dev"
 
+// UpstreamVersion identifies the embedded engine contract.
 const UpstreamVersion = "v7.3.8"
 
+// RunCLI separates usage errors from runtime failure exit codes.
 func RunCLI(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = fmt.Fprintln(stderr, "usage: ao-accounts-manager <serve|version>")

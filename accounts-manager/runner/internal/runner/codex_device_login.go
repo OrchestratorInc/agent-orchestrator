@@ -68,7 +68,7 @@ func newCodexDeviceProcessStarter(stateDir string) func(context.Context) (codexD
 			return codexDeviceLogin{}, errDeviceLogin
 		}
 		return startDeviceProcess(ctx, func(ctx context.Context) *exec.Cmd {
-			return exec.CommandContext(ctx, executable, "_codex-device-login", "--state-dir", stateDir)
+			return exec.CommandContext(ctx, executable, "_codex-device-login", "--state-dir", stateDir) // #nosec G702 -- Self executable and fixed argument vector; no shell interpretation.
 		}, 30*time.Second)
 	}
 }
@@ -184,7 +184,7 @@ func startDeviceProcess(ctx context.Context, commandFor func(context.Context) *e
 
 func validDeviceCode(value string) bool {
 	return len(value) >= 4 && len(value) <= 64 && strings.IndexFunc(value, func(r rune) bool {
-		return !(r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-')
+		return (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-'
 	}) < 0
 }
 

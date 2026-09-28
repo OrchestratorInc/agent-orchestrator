@@ -400,10 +400,6 @@ func resolveSpawnHarness(explicit, kind string, project projectDetails) (string,
 	return "", usageError{fmt.Errorf("agent could not be resolved; pass --agent or configure `ao project set-config %s --worker-agent <agent>`", project.ID)}
 }
 
-func (c *commandContext) preflightSpawnAgentAuth(ctx context.Context, cmd *cobra.Command, agentID string) error {
-	return c.preflightSpawnAgentReadiness(ctx, cmd, agentID, false)
-}
-
 func (c *commandContext) preflightSpawnAgentReadiness(ctx context.Context, cmd *cobra.Command, agentID string, managed bool) error {
 	readiness, err := c.ensureAgentReadiness(ctx, []string{agentID}, "launch")
 	if err != nil {

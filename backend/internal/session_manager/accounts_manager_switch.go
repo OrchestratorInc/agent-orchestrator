@@ -12,6 +12,7 @@ import (
 
 const agentOperationAccountSwitch agentOperationKind = "managed_account_switch"
 
+// AccountsManagerSwitchConfig carries user intent and the observed binding revision.
 type AccountsManagerSwitchConfig struct {
 	OperationID      string
 	ExpectedRevision int64
@@ -44,6 +45,7 @@ func sameAccountSwitchRequest(op domain.AccountsManagerSwitch, id domain.Session
 		op.TargetMode == cfg.Mode && op.TargetAccountID == cfg.AccountID && op.Policy == cfg.Policy && op.NewConversation == cfg.NewConversation
 }
 
+// StartAccountsManagerSwitch reserves a controller handoff before admitting new work.
 func (m *Manager) StartAccountsManagerSwitch(ctx context.Context, id domain.SessionID, cfg AccountsManagerSwitchConfig) (domain.AccountsManagerSwitch, error) {
 	store, supported := m.store.(ports.AccountsManagerSwitchStore)
 	router, routed := m.accountsManager.(ports.AccountsManagerSwitchRouter)
@@ -89,8 +91,9 @@ func (m *Manager) StartAccountsManagerSwitch(ctx context.Context, id domain.Sess
 	if !ok || rec.IsTerminated || rec.ProvisionState.WithDefault() != domain.SessionProvisionReady {
 		return previous, domain.ErrAccountsManagerSwitchConflict
 	}
+	chatHandoff, chatSupported := m.chat.(accountsManagerChatHandoff)
 	if rec.Mode == domain.SessionModeChat {
-		if _, ok := m.chat.(accountsManagerChatHandoff); !ok {
+		if !chatSupported {
 			return previous, ErrInterfaceHandoffUnsupported
 		}
 		if provider == domain.AccountsManagerProviderCodex && cfg.Mode == domain.AccountsManagerManaged {
@@ -133,7 +136,7 @@ func (m *Manager) StartAccountsManagerSwitch(ctx context.Context, id domain.Sess
 	m.accountSwitchMu.Unlock()
 	workerOwns = true
 	if rec.Mode == domain.SessionModeChat {
-		if err := m.chat.(accountsManagerChatHandoff).ArmAccountsManagerHandoff(ctx, id, cfg.NewConversation); err != nil {
+		if err := chatHandoff.ArmAccountsManagerHandoff(ctx, id, cfg.NewConversation); err != nil {
 			m.finishAccountSwitchRun(store, op, run, "SOURCE_INTAKE_UNAVAILABLE")
 			return op, err
 		}
@@ -161,7 +164,11 @@ func (m *Manager) executeAccountSwitch(ctx context.Context, store ports.Accounts
 		}
 	}
 	if rec.Mode == domain.SessionModeChat {
-		err = m.chat.(accountsManagerChatHandoff).PrepareAccountsManagerHandoff(ctx, op.SessionID, op.Policy)
+		chatHandoff, supported := m.chat.(accountsManagerChatHandoff)
+		if !supported {
+			return "SOURCE_INTAKE_UNAVAILABLE"
+		}
+		err = chatHandoff.PrepareAccountsManagerHandoff(ctx, op.SessionID, op.Policy)
 	} else {
 		err = m.prepareAccountSwitchTerminalHandoff(ctx, rec, op.Policy, run.lastInput)
 	}
@@ -316,6 +323,10 @@ func (m *Manager) stopAccountsManagerRuntime(ctx context.Context, ref ports.Fenc
 }
 
 func (m *Manager) acknowledgeAccountSwitch(ctx context.Context, store ports.AccountsManagerSwitchStore, op domain.AccountsManagerSwitch, target domain.SessionRecord) error {
+	chatHandoff, chatSupported := m.chat.(accountsManagerChatHandoff)
+	if target.Mode == domain.SessionModeChat && !chatSupported {
+		return ErrInterfaceHandoffUnsupported
+	}
 	readyCtx, cancel := context.WithTimeout(ctx, m.switchTargetStartWait)
 	defer cancel()
 	commit := func(commitCtx context.Context) error {
@@ -327,7 +338,7 @@ func (m *Manager) acknowledgeAccountSwitch(ctx context.Context, store ports.Acco
 	idleSamples := 0
 	for {
 		if target.Mode == domain.SessionModeChat {
-			if err := m.chat.(accountsManagerChatHandoff).AcknowledgeAccountsManagerSwitch(readyCtx, op.SessionID, op.TargetGeneration, commit); err == nil {
+			if err := chatHandoff.AcknowledgeAccountsManagerSwitch(readyCtx, op.SessionID, op.TargetGeneration, commit); err == nil {
 				return nil
 			}
 		} else {

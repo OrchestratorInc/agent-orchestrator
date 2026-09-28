@@ -108,23 +108,22 @@ func newManagedAccountsLoginStateCommand(ctx *commandContext, cancel bool) *cobr
 			}
 			_, err := fmt.Fprintf(cmd.OutOrStdout(), "operation: %s\ncancellation request acknowledged; sign-in outcome not confirmed\n", args[0])
 			return err
-		} else {
-			var inventory managedAccountsDTO
-			if err := ctx.getJSON(cmd.Context(), managedAccountsPath, &inventory); err != nil {
-				return safeAccountCommandError(err)
+		}
+		var inventory managedAccountsDTO
+		if err := ctx.getJSON(cmd.Context(), managedAccountsPath, &inventory); err != nil {
+			return safeAccountCommandError(err)
+		}
+		if inventory.Stale || inventory.Availability != "ready" {
+			return errors.New("sign-in state is unavailable; refresh the account inventory")
+		}
+		for _, login := range inventory.OAuthSessions {
+			if login.ID == args[0] {
+				response = login
+				break
 			}
-			if inventory.Stale || inventory.Availability != "ready" {
-				return errors.New("sign-in state is unavailable; refresh the account inventory")
-			}
-			for _, login := range inventory.OAuthSessions {
-				if login.ID == args[0] {
-					response = login
-					break
-				}
-			}
-			if response.ID == "" {
-				return errors.New("account sign-in was not found")
-			}
+		}
+		if response.ID == "" {
+			return errors.New("account sign-in was not found")
 		}
 		if asJSON {
 			return writeJSON(cmd.OutOrStdout(), response)

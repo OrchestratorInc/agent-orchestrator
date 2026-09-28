@@ -3,6 +3,7 @@
 package runner
 
 import (
+	"errors"
 	"os"
 	"syscall"
 
@@ -34,6 +35,6 @@ func syncVaultDirectory(root *os.Root) error {
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
-	return dir.Sync()
+	syncErr := dir.Sync()
+	return errors.Join(syncErr, dir.Close())
 }

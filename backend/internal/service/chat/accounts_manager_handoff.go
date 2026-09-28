@@ -9,6 +9,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// ArmAccountsManagerHandoff pauses queue admission without discarding queued turns.
 func (s *Service) ArmAccountsManagerHandoff(ctx context.Context, id domain.SessionID, fresh bool) error {
 	c, err := s.Controller(id)
 	if errors.Is(err, ErrNoController) {
@@ -43,6 +44,7 @@ func (c *Controller) armAccountHandoff(ctx context.Context, fresh bool) error {
 	return nil
 }
 
+// PrepareAccountsManagerHandoff applies the user's drain or interrupt policy.
 func (s *Service) PrepareAccountsManagerHandoff(ctx context.Context, id domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {
 	c, err := s.Controller(id)
 	if errors.Is(err, ErrNoController) {
@@ -85,6 +87,7 @@ func (c *Controller) prepareAccountHandoff(ctx context.Context, policy domain.Se
 	}
 }
 
+// AbortAccountsManagerHandoff releases only the account handoff and resumes its queue.
 func (s *Service) AbortAccountsManagerHandoff(id domain.SessionID) {
 	if c, err := s.Controller(id); err == nil {
 		c.releaseAccountHandoff()
@@ -118,7 +121,7 @@ func (c *Controller) resumeAccountQueue() {
 	}()
 }
 
-// The durable acknowledgement runs under the same lock that admits provider work.
+// AcknowledgeAccountsManagerSwitch commits under the same lock that admits provider work.
 func (s *Service) AcknowledgeAccountsManagerSwitch(ctx context.Context, id domain.SessionID, generation string, commit func(context.Context) error) error {
 	c, err := s.Controller(id)
 	if err != nil {

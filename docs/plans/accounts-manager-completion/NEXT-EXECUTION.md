@@ -21,6 +21,8 @@ User authorization: 2026-09-28. Continue implementation through the plan with re
 | P4 credentials/controls | Pending | Supported kinds, usage, Harness scope and UI contracts |
 | P5 integrated evidence | Pending | Complete checks, actual desktop/provider runs and final review |
 
+The complete lint correction is separately sealed at tree `b730765f4fcb099a7522c97f1fe8b37df3ff87b4`. REVIEW-82-NEXT-LINT.md records the 56-file correction, full pinned backend/runner lint with zero findings, 13 affected backend race packages, full runner race, repeated boundary checks, actual-process switching checks, build/vet, generated drift and protected hashes. The broader P5 gate remains open; known containment and native/live-provider gaps are unchanged.
+
 Reviewer coordination and native Windows/Mac host availability were requested through the orchestrator. Unavailable native hosts do not block independent local work and do not count as passing platform evidence.
 
 ## P0 acceptance

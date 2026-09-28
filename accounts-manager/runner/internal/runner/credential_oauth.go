@@ -26,7 +26,7 @@ func (c *oauthCoordinator) handleManagedStart(w http.ResponseWriter, request *ht
 	if input.Mode == "" {
 		input.Mode = "callback"
 	}
-	if input.Mode != "callback" && !(input.Provider == "codex" && input.Mode == "device") {
+	if input.Mode != "callback" && (input.Provider != "codex" || input.Mode != "device") {
 		writeOAuthError(w, http.StatusBadRequest, "unsupported_mode")
 		return
 	}
@@ -59,9 +59,9 @@ func (c *oauthCoordinator) handleManagedStart(w http.ResponseWriter, request *ht
 			c.mu.Unlock()
 			writeOAuthError(w, http.StatusConflict, "oauth_busy")
 		} else {
-			copy := *current
+			snapshot := *current
 			c.mu.Unlock()
-			writeOAuthSession(w, &copy)
+			writeOAuthSession(w, &snapshot)
 		}
 		return
 	}
@@ -174,10 +174,10 @@ func (c *oauthCoordinator) handleManagedStart(w http.ResponseWriter, request *ht
 	case <-ctx.Done():
 	}
 	c.mu.Lock()
-	copy := *session
+	snapshot := *session
 	c.mu.Unlock()
-	if copy.authorizationURL != "" {
-		writeOAuthSession(w, &copy)
+	if snapshot.authorizationURL != "" {
+		writeOAuthSession(w, &snapshot)
 	} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		writeOAuthError(w, http.StatusGatewayTimeout, "oauth_start_failed")
 	} else {

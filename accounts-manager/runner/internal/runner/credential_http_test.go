@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io/fs"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -104,7 +105,7 @@ func TestCredentialDisabledImport(t *testing.T) {
 	vault := newTestVault(t)
 	runtime := &credentialRuntime{vault: vault, manager: coreauth.NewManager(vault, nil, nil), checkTransport: runnerRoundTripFunc(successfulCredentialCheck)}
 	handler := &credentialHTTP{key: "management", runtime: runtime}
-	request := httptest.NewRequest("POST", credentialPath+"/import", strings.NewReader(`{"operationId":"disabled-import","provider":"codex","credential":{"type":"codex","access_token":"token-vault-secret","disabled":true}}`))
+	request := httptest.NewRequest(http.MethodPost, credentialPath+"/import", strings.NewReader(`{"operationId":"disabled-import","provider":"codex","credential":{"type":"codex","access_token":"token-vault-secret","disabled":true}}`))
 	request.Header.Set("Authorization", "Bearer management")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -136,7 +137,7 @@ func TestCredentialHTTPRejectsUnsafeInput(t *testing.T) {
 		{"missing token", "/import", `{"operationId":"a","provider":"codex","credential":{"type":"codex"}}`, "management", 409},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest("POST", credentialPath+test.path, strings.NewReader(test.body))
+			request := httptest.NewRequest(http.MethodPost, credentialPath+test.path, strings.NewReader(test.body))
 			request.Header.Set("Authorization", "Bearer "+test.key)
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)

@@ -16,7 +16,7 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
-const credentialPath = "/ao/internal/credentials"
+const credentialPath = "/ao/internal/credentials" // #nosec G101 -- Public route path, not a credential.
 
 type credentialHTTP struct {
 	key     string
@@ -273,7 +273,7 @@ func parseCredentialCreate(input credentialCreate, apiKey bool) (*coreauth.Auth,
 				return nil, errCredentialConflict
 			}
 			for _, value := range values {
-				if len(value) == 0 || len(value) > 256 || strings.IndexFunc(value, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
+				if value == "" || len(value) > 256 || strings.IndexFunc(value, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
 					return nil, errCredentialConflict
 				}
 			}
@@ -307,7 +307,7 @@ func credentialBaseURL(provider, raw string) (string, error) {
 	parsed.Scheme, parsed.Host = strings.ToLower(parsed.Scheme), strings.ToLower(parsed.Host)
 	if parsed.Scheme != "https" {
 		ip := net.ParseIP(parsed.Hostname())
-		if parsed.Scheme != "http" || !(parsed.Hostname() == "localhost" || ip != nil && ip.IsLoopback()) {
+		if parsed.Scheme != "http" || (parsed.Hostname() != "localhost" && (ip == nil || !ip.IsLoopback())) {
 			return "", errCredentialConflict
 		}
 	}

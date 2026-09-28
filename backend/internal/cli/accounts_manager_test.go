@@ -34,13 +34,13 @@ func TestManagedAccountsPublicCommands(t *testing.T) {
 			capture := &agentSwitchRequestCapture{}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if strings.HasPrefix(r.URL.Path, "/internal/") {
-					w.WriteHeader(204)
+					w.WriteHeader(http.StatusNoContent)
 					return
 				}
 				capture.record(r)
 				w.Header().Set("Content-Type", "application/json")
 				if tt.response == "" {
-					w.WriteHeader(204)
+					w.WriteHeader(http.StatusNoContent)
 					return
 				}
 				_, _ = io.WriteString(w, tt.response)
@@ -93,7 +93,10 @@ func TestManagedAccountsRequireExplicitIntent(t *testing.T) {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			cfg := setConfigEnv(t)
 			capture := &agentSwitchRequestCapture{}
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { capture.record(r); w.WriteHeader(500) }))
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				capture.record(r)
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
 			t.Cleanup(server.Close)
 			writeRunFileFor(t, cfg, server)
 			_, _, err := executeCLI(t, Deps{In: strings.NewReader("secret-marker"), ProcessAlive: func(int) bool { return true }}, append([]string{"accounts"}, args...)...)
@@ -117,7 +120,7 @@ func TestManagedAccountsRemovalRecovery(t *testing.T) {
 				capture := &agentSwitchRequestCapture{}
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if strings.HasPrefix(r.URL.Path, "/internal/") {
-						w.WriteHeader(204)
+						w.WriteHeader(http.StatusNoContent)
 						return
 					}
 					capture.record(r)
@@ -161,7 +164,7 @@ func TestManagedAccountsRedactErrorDetails(t *testing.T) {
 	cfg := setConfigEnv(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(409)
+		w.WriteHeader(http.StatusConflict)
 		_, _ = io.WriteString(w, `{"code":"CONFLICT","message":"secret-marker at http://127.0.0.1:9988/private","requestId":"request-123"}`)
 	}))
 	t.Cleanup(server.Close)

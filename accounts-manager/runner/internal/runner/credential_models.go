@@ -40,7 +40,7 @@ func loadCredentialModels() (credentialModels, error) {
 	router.GET("/:channel", handler.GetStaticModelDefinitions)
 	for provider := range oauthProviders {
 		response := &catalogResponse{header: make(http.Header)}
-		request, err := http.NewRequest(http.MethodGet, "/"+provider, nil)
+		request, err := http.NewRequest(http.MethodGet, "/"+provider, http.NoBody)
 		if err != nil {
 			return nil, errCredentialStorage
 		}

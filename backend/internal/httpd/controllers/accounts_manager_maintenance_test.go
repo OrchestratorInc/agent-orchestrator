@@ -70,9 +70,9 @@ func TestAccountsManagerMaintenanceCommands(t *testing.T) {
 			t.Error("missing private authentication")
 		}
 		switch r.Method {
-		case "GET":
+		case http.MethodGet:
 			_ = json.NewEncoder(w).Encode(map[string]any{"files": []map[string]any{{"auth_index": "private-ref", "provider": "codex", "account_type": "oauth", "generation": 2, "label": "Work", "status": "active"}}})
-		case "POST":
+		case http.MethodPost:
 			var input struct {
 				OperationID string `json:"operationId"`
 			}
@@ -81,7 +81,7 @@ func TestAccountsManagerMaintenanceCommands(t *testing.T) {
 			}
 			operationIDs = append(operationIDs, input.OperationID)
 			_ = json.NewEncoder(w).Encode(map[string]any{"auth_index": "private-ref", "provider": "codex", "account_type": "oauth"})
-		case "PATCH":
+		case http.MethodPatch:
 			if r.URL.Path != "/ao/internal/credentials/label" || r.URL.Query().Get("ref") != "private-ref" {
 				t.Error("incorrect rename target")
 			}
@@ -93,7 +93,7 @@ func TestAccountsManagerMaintenanceCommands(t *testing.T) {
 				t.Error("rename lost generation")
 			}
 			labels = append(labels, input.Label)
-			w.WriteHeader(204)
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			t.Error("unexpected private command")
 		}

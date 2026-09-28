@@ -298,13 +298,13 @@ func writePrivateFile(t *testing.T, path, contents string) {
 	}
 }
 
-func replaceInFile(t *testing.T, path, old, new string) {
+func replaceInFile(t *testing.T, path, old, replacement string) {
 	t.Helper()
 	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated := strings.Replace(string(b), old, new, 1)
+	updated := strings.Replace(string(b), old, replacement, 1)
 	if updated == string(b) {
 		t.Fatalf("fixture did not contain %q", old)
 	}

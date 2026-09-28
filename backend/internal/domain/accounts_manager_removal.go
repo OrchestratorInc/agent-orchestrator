@@ -5,12 +5,14 @@ import (
 	"time"
 )
 
+// ErrAccountsManagerAccountInUse and related errors preserve removal admission failures.
 var (
 	ErrAccountsManagerAccountInUse    = errors.New("account is in use; confirm the affected sessions before removal")
 	ErrAccountsManagerAccountDeleting = errors.New("account removal is pending or completed")
 	ErrAccountsManagerRemovalConflict = errors.New("account removal or its affected sessions changed")
 )
 
+// AccountsManagerRemovalPhase separates cancellable intent from irreversible recovery.
 type AccountsManagerRemovalPhase string
 
 // Removal phases distinguish cancellable intent from irreversible recovery.
@@ -28,6 +30,7 @@ func (p AccountsManagerRemovalPhase) Terminal() bool {
 	return p == AccountsManagerRemovalComplete || p == AccountsManagerRemovalCancelled
 }
 
+// AccountsManagerRemovalSession captures the exact binding and controller to retire.
 type AccountsManagerRemovalSession struct {
 	SessionID       SessionID
 	Provider        AccountsManagerProvider
@@ -43,11 +46,13 @@ func (s AccountsManagerRemovalSession) OwnsController() bool {
 		(s.Provider == AccountsManagerProviderClaude && s.Owner.Harness == HarnessClaudeCode)
 }
 
+// AccountsManagerRemovalImpact binds confirmation to a snapshot revision.
 type AccountsManagerRemovalImpact struct {
 	Revision int64
 	Sessions []AccountsManagerRemovalSession
 }
 
+// AccountsManagerRemoval retains stop and revocation obligations across restart.
 type AccountsManagerRemoval struct {
 	ID              string
 	AccountID       string

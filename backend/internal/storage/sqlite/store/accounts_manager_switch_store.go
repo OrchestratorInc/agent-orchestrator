@@ -93,6 +93,7 @@ func (s *Store) CreateAccountsManagerSwitch(ctx context.Context, op domain.Accou
 	return result, created && err == nil, err
 }
 
+// GetAccountsManagerSwitch distinguishes absence from unreadable durable state.
 func (s *Store) GetAccountsManagerSwitch(ctx context.Context, id string) (domain.AccountsManagerSwitch, bool, error) {
 	row, err := s.qr.GetAccountsManagerSwitch(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -105,6 +106,7 @@ func (s *Store) GetAccountsManagerSwitch(ctx context.Context, id string) (domain
 	return op, err == nil, err
 }
 
+// GetLatestAccountsManagerSwitch retains the latest journal for public status and admission.
 func (s *Store) GetLatestAccountsManagerSwitch(ctx context.Context, id domain.SessionID) (domain.AccountsManagerSwitch, bool, error) {
 	row, err := s.qr.GetLatestAccountsManagerSwitch(ctx, string(id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -117,6 +119,7 @@ func (s *Store) GetLatestAccountsManagerSwitch(ctx context.Context, id domain.Se
 	return op, err == nil, err
 }
 
+// ListActiveAccountsManagerSwitches exposes outstanding startup recovery obligations.
 func (s *Store) ListActiveAccountsManagerSwitches(ctx context.Context) ([]domain.AccountsManagerSwitch, error) {
 	rows, err := s.qr.ListActiveAccountsManagerSwitches(ctx)
 	if err != nil {
@@ -133,6 +136,7 @@ func (s *Store) ListActiveAccountsManagerSwitches(ctx context.Context) ([]domain
 	return result, nil
 }
 
+// AdvanceAccountsManagerSwitch requires the expected durable phase.
 func (s *Store) AdvanceAccountsManagerSwitch(ctx context.Context, id string, expected, next domain.AccountsManagerSwitchPhase, code string) (domain.AccountsManagerSwitch, error) {
 	if !expected.CanAdvance(next) || (code != "" && !validSwitchAtom(code, 64)) {
 		return domain.AccountsManagerSwitch{}, domain.ErrAccountsManagerSwitchConflict
@@ -172,6 +176,7 @@ func advanceAccountsManagerSwitch(ctx context.Context, q *gen.Queries, id string
 	return nil
 }
 
+// PrepareAccountsManagerSwitchStop preserves history proof before making cancellation irreversible.
 func (s *Store) PrepareAccountsManagerSwitchStop(ctx context.Context, id string, empty bool, nativeID string, expected domain.SessionControllerOwner) (domain.AccountsManagerSwitch, error) {
 	if (empty && nativeID != "") || (nativeID != "" && !validSwitchAtom(nativeID, 512)) {
 		return domain.AccountsManagerSwitch{}, domain.ErrAccountsManagerSwitchConflict
@@ -281,7 +286,7 @@ func (s *Store) CommitAccountsManagerSwitch(ctx context.Context, id string) (dom
 	return result, err
 }
 
-// Retry rotates both controller identity and route authorization after a confirmed stop.
+// RetryAccountsManagerSwitch rotates controller identity and authorization after a confirmed stop.
 func (s *Store) RetryAccountsManagerSwitch(ctx context.Context, id, generation string, expected domain.SessionControllerOwner) (domain.AccountsManagerSwitch, error) {
 	if !validSwitchAtom(generation, 128) {
 		return domain.AccountsManagerSwitch{}, domain.ErrAccountsManagerSwitchConflict

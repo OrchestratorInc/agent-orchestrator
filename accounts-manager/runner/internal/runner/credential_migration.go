@@ -37,7 +37,7 @@ func credentialDigest(raw []byte) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func migrateDraftCredentials(ctx context.Context, state *State, vault *credentialVault) error {
+func migrateDraftCredentials(ctx context.Context, state *State, vault *credentialVault) (resultErr error) {
 	cfg := state.Config
 	if len(cfg.GeminiKey)+len(cfg.InteractionsKey)+len(cfg.OpenAICompatibility)+len(cfg.VertexCompatAPIKey)+len(cfg.XAIKey)+len(cfg.MetaKey) != 0 || cfg.SaveCooldownStatus || cfg.Home.Enabled {
 		return errors.New("unsupported legacy credential configuration; recovery requires review")
@@ -110,7 +110,11 @@ func migrateDraftCredentials(ctx context.Context, state *State, vault *credentia
 		return err
 	}
 	name := "configuration-" + id + ".pending"
-	defer vault.root.Remove(name)
+	defer func() {
+		if err := vault.root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+			resultErr = errCredentialStorage
+		}
+	}()
 	if err := vault.writeNewFile(name, clean); err != nil {
 		return err
 	}

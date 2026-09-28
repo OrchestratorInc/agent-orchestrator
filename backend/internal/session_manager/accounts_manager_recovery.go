@@ -8,6 +8,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// RetryAccountsManagerSwitch recovers only the recorded session and operation.
 func (m *Manager) RetryAccountsManagerSwitch(ctx context.Context, id domain.SessionID, operationID string) (domain.AccountsManagerSwitch, error) {
 	store, ok := m.store.(ports.AccountsManagerSwitchStore)
 	router, routed := m.accountsManager.(ports.AccountsManagerSwitchRouter)

@@ -81,7 +81,7 @@ func LoadState(root string) (*State, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load configuration: invalid private configuration")
 	}
-	if err = validateConfig(cfg, authDir); err != nil {
+	if err := validateConfig(cfg, authDir); err != nil {
 		return nil, err
 	}
 
@@ -152,7 +152,7 @@ func requirePrivateDirectory(path string) error {
 	return nil
 }
 
-func readPrivateRegularFile(path string) ([]byte, error) {
+func readPrivateRegularFile(path string) (data []byte, resultErr error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
@@ -167,7 +167,12 @@ func readPrivateRegularFile(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil && resultErr == nil {
+			clear(data)
+			data, resultErr = nil, errCredentialStorage
+		}
+	}()
 	openedInfo, err := file.Stat()
 	if err != nil {
 		return nil, err

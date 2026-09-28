@@ -36,7 +36,7 @@ func (c *routeCapability) Reconcile(snapshot routeBindingSnapshot) error {
 	bindings := make(map[string]routeBinding, len(snapshot.Bindings))
 	for _, binding := range snapshot.Bindings {
 		if !validRouteAtom(binding.SessionID, 256) || !validVaultProvider(binding.Provider) || binding.Revision <= 0 || binding.Revision > snapshot.Revision ||
-			!((binding.Mode == "native" && binding.AccountID == "") || (binding.Mode == "managed" && validRouteAtom(binding.AccountID, 128))) {
+			(binding.Mode != "native" || binding.AccountID != "") && (binding.Mode != "managed" || !validRouteAtom(binding.AccountID, 128)) {
 			return errPinnedAccountUnavailable
 		}
 		key := bindingKey(binding.SessionID, binding.Provider)

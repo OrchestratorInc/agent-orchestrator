@@ -124,7 +124,7 @@ func (r *credentialRuntime) verifyImportedCredential(ctx context.Context, auth *
 	return nil
 }
 
-func (r *credentialRuntime) credentialCheck(ctx context.Context, endpoint string, headers http.Header) ([]byte, error) {
+func (r *credentialRuntime) credentialCheck(ctx context.Context, endpoint string, headers http.Header) (data []byte, resultErr error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	if r.context != nil {
@@ -143,7 +143,7 @@ func (r *credentialRuntime) credentialCheck(ctx context.Context, endpoint string
 	case slots <- struct{}{}:
 	}
 	defer func() { <-slots }()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
 		return nil, errCredentialCheckUnavailable
 	}
@@ -154,11 +154,16 @@ func (r *credentialRuntime) credentialCheck(ctx context.Context, endpoint string
 	if err != nil {
 		return nil, errCredentialCheckUnavailable
 	}
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil && resultErr == nil {
+			clear(data)
+			data, resultErr = nil, errCredentialCheckUnavailable
+		}
+	}()
 	if response.StatusCode != http.StatusOK {
 		return nil, &credentialCheckStatusError{status: response.StatusCode}
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, credentialCheckLimit+1))
+	data, err = io.ReadAll(io.LimitReader(response.Body, credentialCheckLimit+1))
 	if err != nil || len(data) > credentialCheckLimit {
 		clear(data)
 		return nil, errCredentialCheckUnavailable

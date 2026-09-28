@@ -30,7 +30,7 @@ func Serve(ctx context.Context, stateDir string) error {
 	return serve(ctx, stateDir, nil)
 }
 
-func serve(ctx context.Context, stateDir string, beforeRoutes func(*coreauth.Manager)) error {
+func serve(ctx context.Context, stateDir string, beforeRoutes func(*coreauth.Manager)) (resultErr error) {
 	previousOutput := log.StandardLogger().Out
 	log.SetOutput(io.Discard)
 	defer log.SetOutput(previousOutput)
@@ -42,7 +42,11 @@ func serve(ctx context.Context, stateDir string, beforeRoutes func(*coreauth.Man
 	if err != nil {
 		return err
 	}
-	defer vault.Close()
+	defer func() {
+		if err := vault.Close(); err != nil {
+			resultErr = errors.Join(resultErr, errCredentialStorage)
+		}
+	}()
 	if err := migrateDraftCredentials(ctx, state, vault); err != nil {
 		return err
 	}
@@ -61,7 +65,7 @@ func serve(ctx context.Context, stateDir string, beforeRoutes func(*coreauth.Man
 		return err
 	}
 	startedAt := time.Now().UTC()
-	if err = WriteRuntimeRecord(state.Root, RuntimeRecord{
+	if err := WriteRuntimeRecord(state.Root, RuntimeRecord{
 		PID:             os.Getpid(),
 		Port:            state.Config.Port,
 		InstanceID:      instanceID,

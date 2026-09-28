@@ -5,10 +5,13 @@ import (
 	"time"
 )
 
+// ErrAccountsManagerSwitchConflict rejects changed intent or concurrent switching.
 var ErrAccountsManagerSwitchConflict = errors.New("accounts manager switch changed or is already in progress")
 
+// AccountsManagerSwitchPhase tracks durable progress independently of displayed session state.
 type AccountsManagerSwitchPhase string
 
+// AccountsManagerSwitchRequested and subsequent phases preserve the stop and commit boundaries.
 const (
 	AccountsManagerSwitchRequested        AccountsManagerSwitchPhase = "requested"
 	AccountsManagerSwitchWaiting          AccountsManagerSwitchPhase = "waiting"
@@ -22,6 +25,7 @@ const (
 	AccountsManagerSwitchRecoveryRequired AccountsManagerSwitchPhase = "recovery_required"
 )
 
+// Terminal excludes operations that still owe recovery work.
 func (p AccountsManagerSwitchPhase) Terminal() bool {
 	return p == AccountsManagerSwitchReady || p == AccountsManagerSwitchCancelled || p == AccountsManagerSwitchFailed
 }
@@ -52,6 +56,7 @@ type AccountsManagerSwitch struct {
 	UpdatedAt                  time.Time
 }
 
+// SameRequest compares client intent without trusting client-supplied controller identity.
 func (s AccountsManagerSwitch) SameRequest(other AccountsManagerSwitch) bool {
 	return s.ID == other.ID && s.SessionID == other.SessionID && s.Provider == other.Provider &&
 		s.SourceRevision == other.SourceRevision && s.TargetMode == other.TargetMode && s.TargetAccountID == other.TargetAccountID &&

@@ -183,9 +183,10 @@ func TestAccountsManagerControlMutationOwnership(t *testing.T) {
 		for _, wrong := range []string{"", "missing", "foreign"} {
 			t.Run(kind+"/"+wrong, func(t *testing.T) {
 				svc, store, manager := controlServiceFixture()
-				if wrong == "missing" {
+				switch wrong {
+				case "missing":
 					store.op.ID, store.removal.ID = "", ""
-				} else if wrong == "foreign" {
+				case "foreign":
 					store.op.SessionID, store.removal.ID = "session-b", "remove-b"
 				}
 				var err error
@@ -221,7 +222,7 @@ func TestAccountsManagerControlRemovalRevisionAndUnavailable(t *testing.T) {
 		t.Fatal("removal changed explicit zero revision or confirmation")
 	}
 	manager.err = fmt.Errorf("private endpoint: %w", accountcore.ErrUnavailable)
-	if _, err := svc.StartAccountRemoval(t.Context(), "remove-zero", "account-a", 0, true); err != accountcore.ErrUnavailable {
+	if _, err := svc.StartAccountRemoval(t.Context(), "remove-zero", "account-a", 0, true); !errors.Is(err, accountcore.ErrUnavailable) || err.Error() != accountcore.ErrUnavailable.Error() {
 		t.Fatalf("unavailable error changed category or retained private details: %v", err)
 	}
 	var typed *apierr.Error

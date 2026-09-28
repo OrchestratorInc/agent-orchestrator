@@ -592,7 +592,7 @@ func validVaultProvider(provider string) bool {
 
 func validVaultID(id string) bool {
 	return id != "" && len(id) <= 128 && strings.IndexFunc(id, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_')
+		return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_'
 	}) < 0
 }
 

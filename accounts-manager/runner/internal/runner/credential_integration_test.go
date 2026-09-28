@@ -53,7 +53,7 @@ func testRunnerDurableMigrationAndIsolation(t *testing.T, afterModelRefresh bool
 			}
 		}
 		if request.URL.Path != "/v1/responses" || keys[name] == "" || request.Header.Get("Authorization") != "Bearer "+keys[name] {
-			http.Error(w, "wrong selected account", 401)
+			http.Error(w, "wrong selected account", http.StatusUnauthorized)
 			return
 		}
 		mu.Lock()

@@ -49,6 +49,7 @@ func accountControlError(err error) error {
 	return toAPIError(err)
 }
 
+// SessionAccount refuses to pair a switch journal with a changed committed binding.
 func (s *Service) SessionAccount(ctx context.Context, id domain.SessionID) (domain.AccountsManagerSessionRoute, *domain.AccountsManagerSwitch, error) {
 	_, reader, err := s.accountControlDeps()
 	if err != nil {
@@ -99,6 +100,7 @@ func (s *Service) SessionAccount(ctx context.Context, id domain.SessionID) (doma
 	return binding, nil, nil
 }
 
+// StartAccountSwitch forwards explicit intent without accepting client ownership claims.
 func (s *Service) StartAccountSwitch(ctx context.Context, input domain.AccountsManagerSwitch) (domain.AccountsManagerSwitch, error) {
 	manager, _, err := s.accountControlDeps()
 	if err != nil {
@@ -111,6 +113,7 @@ func (s *Service) StartAccountSwitch(ctx context.Context, input domain.AccountsM
 	return op, accountControlError(err)
 }
 
+// AccountSwitch limits journal access to its owning session.
 func (s *Service) AccountSwitch(ctx context.Context, id domain.SessionID, operationID string) (domain.AccountsManagerSwitch, error) {
 	_, reader, err := s.accountControlDeps()
 	if err != nil {
@@ -126,6 +129,7 @@ func (s *Service) AccountSwitch(ctx context.Context, id domain.SessionID, operat
 	return op, nil
 }
 
+// RetryAccountSwitch validates session ownership before retry admission.
 func (s *Service) RetryAccountSwitch(ctx context.Context, id domain.SessionID, operationID string) (domain.AccountsManagerSwitch, error) {
 	if _, err := s.AccountSwitch(ctx, id, operationID); err != nil {
 		return domain.AccountsManagerSwitch{}, err
@@ -138,6 +142,7 @@ func (s *Service) RetryAccountSwitch(ctx context.Context, id domain.SessionID, o
 	return op, accountControlError(err)
 }
 
+// CancelAccountSwitch validates session ownership before cancellation.
 func (s *Service) CancelAccountSwitch(ctx context.Context, id domain.SessionID, operationID string) (domain.AccountsManagerSwitch, error) {
 	if _, err := s.AccountSwitch(ctx, id, operationID); err != nil {
 		return domain.AccountsManagerSwitch{}, err
@@ -150,6 +155,7 @@ func (s *Service) CancelAccountSwitch(ctx context.Context, id domain.SessionID, 
 	return op, accountControlError(err)
 }
 
+// AccountRemovalImpact exposes the revision required for informed confirmation.
 func (s *Service) AccountRemovalImpact(ctx context.Context, accountID string) (domain.AccountsManagerRemovalImpact, error) {
 	_, reader, err := s.accountControlDeps()
 	if err != nil {
@@ -159,6 +165,7 @@ func (s *Service) AccountRemovalImpact(ctx context.Context, accountID string) (d
 	return impact, accountControlError(err)
 }
 
+// StartAccountRemoval preserves explicit revision zero and confirmation semantics.
 func (s *Service) StartAccountRemoval(ctx context.Context, operationID, accountID string, revision int64, confirmed bool) (domain.AccountsManagerRemoval, error) {
 	manager, _, err := s.accountControlDeps()
 	if err != nil {
@@ -168,6 +175,7 @@ func (s *Service) StartAccountRemoval(ctx context.Context, operationID, accountI
 	return op, accountControlError(err)
 }
 
+// AccountRemoval rejects a mismatched operation identity.
 func (s *Service) AccountRemoval(ctx context.Context, operationID string) (domain.AccountsManagerRemoval, error) {
 	_, reader, err := s.accountControlDeps()
 	if err != nil {
@@ -183,6 +191,7 @@ func (s *Service) AccountRemoval(ctx context.Context, operationID string) (domai
 	return op, nil
 }
 
+// RetryAccountRemoval requires an existing durable operation.
 func (s *Service) RetryAccountRemoval(ctx context.Context, operationID string) (domain.AccountsManagerRemoval, error) {
 	if _, err := s.AccountRemoval(ctx, operationID); err != nil {
 		return domain.AccountsManagerRemoval{}, err
@@ -195,6 +204,7 @@ func (s *Service) RetryAccountRemoval(ctx context.Context, operationID string) (
 	return op, accountControlError(err)
 }
 
+// CancelAccountRemoval delegates the irreversible-boundary decision to the coordinator.
 func (s *Service) CancelAccountRemoval(ctx context.Context, operationID string) (domain.AccountsManagerRemoval, error) {
 	if _, err := s.AccountRemoval(ctx, operationID); err != nil {
 		return domain.AccountsManagerRemoval{}, err

@@ -43,9 +43,9 @@ func (v *credentialVault) readFile(name string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
 	raw, err := io.ReadAll(io.LimitReader(file, limit+1))
-	if err != nil || int64(len(raw)) > limit {
+	closeErr := file.Close()
+	if err != nil || closeErr != nil || int64(len(raw)) > limit {
 		clear(raw)
 		return nil, errCredentialStorage
 	}
@@ -57,7 +57,8 @@ func (v *credentialVault) writeNewFile(name string, raw []byte) error {
 	if err != nil {
 		return errCredentialStorage
 	}
-	defer file.Close()
+	// Successful writes check Close before syncing the directory; failures still release the descriptor.
+	defer func() { _ = file.Close() }()
 	if err := protectVaultFile(file); err != nil {
 		return errCredentialStorage
 	}
@@ -76,7 +77,7 @@ func (v *credentialVault) writeNewFile(name string, raw []byte) error {
 	return nil
 }
 
-func (v *credentialVault) persistLocked(next vaultState) error {
+func (v *credentialVault) persistLocked(next vaultState) (resultErr error) {
 	plain, err := json.Marshal(next)
 	if err != nil || len(plain) > vaultMaxBytes-64 {
 		return errCredentialStorage
@@ -91,7 +92,12 @@ func (v *credentialVault) persistLocked(next vaultState) error {
 		return err
 	}
 	tempName := "credentials-" + id + ".pending"
-	defer v.root.Remove(tempName)
+	defer func() {
+		if err := v.root.Remove(tempName); err != nil && !errors.Is(err, os.ErrNotExist) {
+			v.failed = true
+			resultErr = errCredentialStorage
+		}
+	}()
 	if err := v.writeNewFile(tempName, sealed); err != nil {
 		return err
 	}

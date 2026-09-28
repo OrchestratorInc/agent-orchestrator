@@ -369,7 +369,7 @@ func TestOAuthCoordinatorReusesPendingProviderAndAllowsOtherProvider(t *testing.
 		if strings.Contains(req.URL.Path, "anthropic") {
 			provider = "claude"
 		}
-		return jsonHTTPResponse(req, http.StatusOK, `{"status":"ok","url":"https://auth.example.test/`+provider+`","state":"state-`+provider+`-`+string(rune('0'+call))+`"}`), nil
+		return jsonHTTPResponse(req, http.StatusOK, `{"status":"ok","url":"https://auth.example.test/`+provider+`","state":"state-`+provider+`-`+string('0'+call)+`"}`), nil
 	})}
 	var listenersMu sync.Mutex
 	listeners := make([]*inertListener, 0, 2)

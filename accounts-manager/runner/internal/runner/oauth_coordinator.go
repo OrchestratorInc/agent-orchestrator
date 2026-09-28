@@ -170,7 +170,7 @@ func (c *oauthCoordinator) handleStart(w http.ResponseWriter, r *http.Request) {
 	if mode == "" {
 		mode = "callback"
 	}
-	if mode != "callback" && !(provider == "codex" && mode == "device") {
+	if mode != "callback" && (provider != "codex" || mode != "device") {
 		writeOAuthError(w, http.StatusBadRequest, "unsupported_mode")
 		return
 	}
@@ -258,7 +258,7 @@ func (c *oauthCoordinator) handleStart(w http.ResponseWriter, r *http.Request) {
 		_ = server.Serve(listener)
 	}()
 	go c.expireSession(state, session.expiresAt)
-	go c.observeSession(state, session.expiresAt)
+	go c.observeSession(state, session.expiresAt) // #nosec G118 -- Observation spans requests and stops on operation expiry or coordinator closure.
 	writeOAuthSession(w, session)
 }
 
@@ -650,7 +650,7 @@ func (c *oauthCoordinator) callbackHandler(session *oauthRunnerSession) http.Han
 	})
 }
 
-func (c *oauthCoordinator) upstreamJSON(ctx context.Context, method, path string, src, dst any) error {
+func (c *oauthCoordinator) upstreamJSON(ctx context.Context, method, path string, src, dst any) (resultErr error) {
 	var body io.Reader
 	if src != nil {
 		encoded, err := json.Marshal(src)
@@ -672,7 +672,11 @@ func (c *oauthCoordinator) upstreamJSON(ctx context.Context, method, path string
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil && resultErr == nil {
+			resultErr = errors.New("invalid upstream response")
+		}
+	}()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return errors.New("upstream request failed")
 	}

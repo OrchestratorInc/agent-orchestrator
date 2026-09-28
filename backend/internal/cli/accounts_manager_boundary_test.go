@@ -92,7 +92,7 @@ func TestManagedAccountsRemovalResponseOwnership(t *testing.T) {
 				capture := &agentSwitchRequestCapture{}
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if strings.HasPrefix(r.URL.Path, "/internal/") {
-						w.WriteHeader(204)
+						w.WriteHeader(http.StatusNoContent)
 						return
 					}
 					capture.record(r)

@@ -40,7 +40,7 @@ func TestBindingsRevokeOnlyChangedSessionAndCachedSelectorScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := func(token string) *http.Request {
-		r := httptest.NewRequest("POST", "/v1/responses", nil)
+		r := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 		r.Header.Set("Authorization", "Bearer "+token)
 		return r
 	}
@@ -89,7 +89,7 @@ func TestBindingLeaseExpiresAndOnlyCurrentSnapshotRenews(t *testing.T) {
 	now := time.Now()
 	capability.now = func() time.Time { return now }
 	token := mintTestRoute(t, capability, routeClaims{Provider: "codex", AuthIndex: "a", SessionID: "session"})
-	request := httptest.NewRequest("GET", "/v1/models", nil)
+	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
 	now = now.Add(5 * time.Second)
 	if _, err := capability.Authenticate(t.Context(), request); err == nil {
@@ -188,7 +188,7 @@ func TestBindingAuthorizationConcurrentReconciliation(t *testing.T) {
 	for range 8 {
 		workers.Go(func() {
 			for range 100 {
-				request := httptest.NewRequest("GET", "/v1/models", nil)
+				request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 				request.Header.Set("Authorization", "Bearer "+token)
 				_, _ = capability.Authenticate(context.Background(), request)
 			}

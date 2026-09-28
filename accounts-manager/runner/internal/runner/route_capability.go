@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	routeTokenPrefix        = "ao-route-v2."
+	routeTokenPrefix        = "ao-route-v2." // #nosec G101 -- Public format marker, not a credential.
 	routeAccessProviderType = "ao-route-capability"
 	routeAccessProviderName = "ao-route"
 )
@@ -84,13 +84,12 @@ func (c *routeCapability) Mint(claims routeClaims) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("encode route capability: %w", err)
 	}
-	nonce := make([]byte, c.aead.NonceSize())
+	nonce := make([]byte, c.aead.NonceSize(), c.aead.NonceSize()+len(payload)+c.aead.Overhead())
 	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", fmt.Errorf("generate route capability: %w", err)
 	}
-	sealed := c.aead.Seal(nil, nonce, payload, []byte(routeTokenPrefix))
-	encoded := append(nonce, sealed...)
-	return routeTokenPrefix + base64.RawURLEncoding.EncodeToString(encoded), nil
+	nonce = c.aead.Seal(nonce, nonce, payload, []byte(routeTokenPrefix))
+	return routeTokenPrefix + base64.RawURLEncoding.EncodeToString(nonce), nil
 }
 
 func (c *routeCapability) Authenticate(_ context.Context, request *http.Request) (*sdkaccess.Result, *sdkaccess.AuthError) {
@@ -166,7 +165,11 @@ func newExactRouteSelector(capability *routeCapability) *exactRouteSelector {
 func (s *exactRouteSelector) Pick(ctx context.Context, provider, model string, opts coreexecutor.Options, auths []*coreauth.Auth) (*coreauth.Auth, error) {
 	scope, _ := opts.Metadata[coreexecutor.CallerScopeMetadataKey].(string)
 	if claimsValue, ok := s.capability.claims.Load(strings.TrimSpace(scope)); ok {
-		claims := claimsValue.(routeClaimsEntry).claims
+		entry, valid := claimsValue.(routeClaimsEntry)
+		if !valid {
+			return nil, errPinnedAccountUnavailable
+		}
+		claims := entry.claims
 		if !s.capability.admitsBinding(claims) {
 			return nil, errPinnedAccountUnavailable
 		}

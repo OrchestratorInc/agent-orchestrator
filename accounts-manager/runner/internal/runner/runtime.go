@@ -23,6 +23,7 @@ type RuntimeRecord struct {
 	StartedAt       time.Time `json:"startedAt"`
 }
 
+// NewInstanceID distinguishes runner replacements independently of reusable process IDs.
 func NewInstanceID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {

@@ -39,7 +39,8 @@ func (r *credentialRuntime) ConnectBrowser(ctx context.Context, operationID stri
 	if listener == nil {
 		return nil, errCredentialConflict
 	}
-	defer listener.Close()
+	// Successful login checks closure before commit; rejected starts still release the listener.
+	defer func() { _ = listener.Close() }()
 	if authenticator == nil || deliverURL == nil || cfg == nil {
 		return nil, errCredentialConflict
 	}
@@ -66,6 +67,9 @@ func (r *credentialRuntime) ConnectBrowser(ctx context.Context, operationID stri
 			return nil, ctx.Err()
 		}
 		return nil, errors.New("credential sign-in failed")
+	}
+	if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		return nil, errCredentialStorage
 	}
 	return r.complete(ctx, operationID, auth, true)
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// ValidateAgentAccountTarget requires an explicit usable target without selecting a fallback.
 func (s *Service) ValidateAgentAccountTarget(ctx context.Context, mode domain.AccountsManagerConnectionMode, provider domain.AccountsManagerProvider, id, model string) error {
 	if !provider.Valid() {
 		return core.ErrUnsupportedProvider
@@ -33,6 +34,7 @@ func (s *Service) ValidateAgentAccountTarget(ctx context.Context, mode domain.Ac
 	return nil
 }
 
+// AdmitAgentAccountSwitch serializes idempotent intent with credential mutations.
 func (s *Service) AdmitAgentAccountSwitch(ctx context.Context, op domain.AccountsManagerSwitch, model string) (domain.AccountsManagerSwitch, bool, error) {
 	s.choiceMu.Lock()
 	defer s.choiceMu.Unlock()
@@ -56,6 +58,7 @@ func (s *Service) AdmitAgentAccountSwitch(ctx context.Context, op domain.Account
 	return store.CreateAccountsManagerSwitch(ctx, op)
 }
 
+// CommitAgentAccountSwitch revalidates the target before changing its binding.
 func (s *Service) CommitAgentAccountSwitch(ctx context.Context, id, model string) (domain.AccountsManagerSwitch, error) {
 	s.choiceMu.Lock()
 	defer s.choiceMu.Unlock()
@@ -76,10 +79,12 @@ func (s *Service) CommitAgentAccountSwitch(ctx context.Context, id, model string
 	return store.CommitAccountsManagerSwitch(ctx, id)
 }
 
+// SynchronizeAgentBindings publishes durable admission fences to the runner.
 func (s *Service) SynchronizeAgentBindings(ctx context.Context) error {
 	return s.synchronizeBindings(ctx)
 }
 
+// AgentAccountSwitchPending includes unresolved recovery obligations.
 func (s *Service) AgentAccountSwitchPending(ctx context.Context, id domain.SessionID) (bool, error) {
 	store, ok := s.routingStore.(ports.AccountsManagerSwitchStore)
 	if !ok {

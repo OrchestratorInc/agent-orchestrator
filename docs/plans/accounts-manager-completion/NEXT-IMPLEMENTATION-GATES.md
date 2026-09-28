@@ -46,7 +46,7 @@ This ledger contains acceptance outcomes, not permission to implement or publish
 ## Integrated release evidence
 
 - [ ] G13: full backend/runner/frontend and required workflow suites, builds, vet, lint, contract generation and native coexistence checks pass on one final snapshot.
-  EVIDENCE: pending; P5 must resolve/classify all five backend package failures and both full lint inventories. Record any unavailable CI environment as a gap, not a pass.
+  EVIDENCE: full backend and runner lint inventories are corrected and pass with zero findings in REVIEW-82-NEXT-LINT.md; 13 affected backend race packages, full runner race, builds/vet and bounded actual-process switching also pass on that seal. P5 still requires complete integrated branch checks, including the known containment failure and unavailable native environments. Earlier frontend/desktop evidence is separately scoped, not a new final integrated pass.
 - [ ] G14: actual concurrent A/B provider sessions, switch/retry/cancel, in-use removal, restart/revocation and queues pass in the isolated real desktop with inspected visual evidence.
   EVIDENCE: pending; P5 requires two authorized identities per supported provider, actual routing observations, native coexistence and screenshots/recording, not mock labels.
 - [ ] G15: measured responsiveness meets the original specification or a separately reviewed requirement change, with complete latency boundaries and sample counts.

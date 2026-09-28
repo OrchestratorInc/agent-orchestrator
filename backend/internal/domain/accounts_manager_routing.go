@@ -5,10 +5,13 @@ import (
 	"time"
 )
 
+// ErrAccountsManagerBindingConflict rejects mutation against a stale session choice.
 var ErrAccountsManagerBindingConflict = errors.New("accounts manager session binding changed")
 
+// AccountsManagerConnectionMode distinguishes native credentials from an explicit managed route.
 type AccountsManagerConnectionMode string
 
+// AccountsManagerNative and AccountsManagerManaged never imply automatic fallback.
 const (
 	AccountsManagerNative  AccountsManagerConnectionMode = "native"
 	AccountsManagerManaged AccountsManagerConnectionMode = "managed"
@@ -49,6 +52,7 @@ type AccountsManagerSessionRoute struct {
 	UpdatedAt time.Time
 }
 
+// AccountsManagerBindingSnapshot fences runner admission at a durable revision.
 type AccountsManagerBindingSnapshot struct {
 	Revision int64
 	Bindings []AccountsManagerSessionRoute

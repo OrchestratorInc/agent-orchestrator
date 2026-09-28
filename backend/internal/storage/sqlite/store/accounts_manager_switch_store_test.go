@@ -270,7 +270,7 @@ func TestAccountsManagerSwitchRejectsChangedSourceAndRetainsRecoveryFence(t *tes
 	if err != nil || binding.AccountID != "account-a" || binding.Revision != request.SourceRevision {
 		t.Fatal("failed commit changed binding")
 	}
-	op, err = store.AdvanceAccountsManagerSwitch(t.Context(), op.ID, op.Phase, domain.AccountsManagerSwitchRecoveryRequired, "SOURCE_CHANGED")
+	_, err = store.AdvanceAccountsManagerSwitch(t.Context(), op.ID, op.Phase, domain.AccountsManagerSwitchRecoveryRequired, "SOURCE_CHANGED")
 	if err != nil {
 		t.Fatal(err)
 	}

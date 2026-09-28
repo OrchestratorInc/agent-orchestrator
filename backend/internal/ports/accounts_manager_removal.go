@@ -6,6 +6,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+// AccountsManagerRemovalStore preserves deletion fences and acknowledgement boundaries.
 type AccountsManagerRemovalStore interface {
 	AccountsManagerRemovalImpact(context.Context, string) (domain.AccountsManagerRemovalImpact, error)
 	CreateAccountsManagerRemoval(context.Context, string, string, int64, bool) (domain.AccountsManagerRemoval, bool, error)
@@ -23,6 +24,7 @@ type AccountsManagerRemovalStore interface {
 	AccountsManagerAccountDeleting(context.Context, string) (bool, error)
 }
 
+// AccountsManagerRemovalRouter coordinates credential deletion with durable session obligations.
 type AccountsManagerRemovalRouter interface {
 	PrepareAccountRemoval(context.Context, string, string, int64, bool) (domain.AccountsManagerRemoval, bool, error)
 	FinalizeAccountRemoval(context.Context, string) error

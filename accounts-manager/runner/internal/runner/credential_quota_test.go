@@ -29,7 +29,7 @@ func TestCredentialQuotaServesManagedObservation(t *testing.T) {
 				if provider == "codex" {
 					body = `{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":25,"limit_window_seconds":18000,"reset_at":1893456000}}}`
 				}
-				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 			})
 			auth := vaultFixture()
 			auth.Provider = provider
@@ -155,7 +155,7 @@ func TestCredentialQuotaCoalescingAndRemoval(t *testing.T) {
 func TestCredentialQuotaFailureDoesNotRevokeOrSwitch(t *testing.T) {
 	vault := newTestVault(t)
 	runtime := &credentialRuntime{vault: vault, manager: coreauth.NewManager(vault, nil, nil), checkTransport: runnerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 429, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"secret":"hidden"}`)), Request: request}, nil
+		return &http.Response{StatusCode: http.StatusTooManyRequests, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"secret":"hidden"}`)), Request: request}, nil
 	})}
 	if err := vault.Begin(t.Context(), "quota-error", "codex", time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)

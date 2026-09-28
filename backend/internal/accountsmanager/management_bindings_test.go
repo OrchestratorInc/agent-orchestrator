@@ -9,15 +9,15 @@ import (
 
 func TestSynchronizeBindingsUsesPrivateOrderedSnapshot(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "PUT" || r.URL.Path != "/ao/internal/routes/bindings" || r.Header.Get("Authorization") != "Bearer management-key" {
+		if r.Method != http.MethodPut || r.URL.Path != "/ao/internal/routes/bindings" || r.Header.Get("Authorization") != "Bearer management-key" {
 			t.Error("incorrect binding transport")
-			w.WriteHeader(400)
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		var snapshot BindingSnapshot
 		if err := json.NewDecoder(r.Body).Decode(&snapshot); err != nil {
 			t.Error(err)
-			w.WriteHeader(400)
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		if snapshot.Revision != 7 || len(snapshot.Bindings) != 2 || snapshot.Bindings[0].Mode != "native" || snapshot.Bindings[1].AccountID != "public-id" || snapshot.Bindings[1].Revision != 7 {

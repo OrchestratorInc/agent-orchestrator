@@ -9,6 +9,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// PrepareAccountRemoval serializes deletion intent against account choices.
 func (s *Service) PrepareAccountRemoval(ctx context.Context, operationID, accountID string, revision int64, confirmed bool) (domain.AccountsManagerRemoval, bool, error) {
 	s.choiceMu.Lock()
 	defer s.choiceMu.Unlock()
@@ -22,6 +23,7 @@ func (s *Service) PrepareAccountRemoval(ctx context.Context, operationID, accoun
 	return store.CreateAccountsManagerRemoval(ctx, operationID, accountID, revision, confirmed)
 }
 
+// FinalizeAccountRemoval requires all stop and revocation acknowledgements before credential deletion.
 func (s *Service) FinalizeAccountRemoval(ctx context.Context, id string) error {
 	s.choiceMu.Lock()
 	defer s.choiceMu.Unlock()

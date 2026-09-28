@@ -26,6 +26,7 @@ type AccountsManagerNativeRecorder interface {
 	RecordNativeAgentSessionRoute(context.Context, domain.SessionID, domain.AccountsManagerProvider) error
 }
 
+// AccountsManagerSwitchStore makes binding changes and controller witnesses durable.
 type AccountsManagerSwitchStore interface {
 	GetAccountsManagerSessionRoute(context.Context, domain.SessionID, domain.AccountsManagerProvider) (domain.AccountsManagerSessionRoute, bool, error)
 	GetOrCreateAccountsManagerSessionRoute(context.Context, domain.AccountsManagerSessionRoute) (domain.AccountsManagerSessionRoute, bool, error)
@@ -48,6 +49,7 @@ type AccountsManagerSwitchRouter interface {
 	SynchronizeAgentBindings(context.Context) error
 }
 
+// AccountsManagerSwitchPendingReader prevents work admission while a switch is unresolved.
 type AccountsManagerSwitchPendingReader interface {
 	AgentAccountSwitchPending(context.Context, domain.SessionID) (bool, error)
 }

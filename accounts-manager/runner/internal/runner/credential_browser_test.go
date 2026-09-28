@@ -30,7 +30,7 @@ func (a memoryAuthenticator) Login(ctx context.Context, cfg *sdkconfig.Config, o
 }
 
 func TestCredentialBrowserCommitBoundary(t *testing.T) {
-	for _, outcome := range []string{"success", "failure", "cancelled", "late result"} {
+	for _, outcome := range []string{"success", "success closed", "failure", "cancelled", "late result"} {
 		t.Run(outcome, func(t *testing.T) {
 			vault := newTestVault(t)
 			manager := coreauth.NewManager(vault, nil, nil)
@@ -49,6 +49,10 @@ func TestCredentialBrowserCommitBoundary(t *testing.T) {
 					t.Fatal("credential published before sign-in completed")
 				}
 				switch outcome {
+				case "success closed":
+					if err := listener.Close(); err != nil {
+						t.Fatal(err)
+					}
 				case "failure":
 					return nil, errors.New("provider-vault-secret")
 				case "cancelled":
@@ -61,7 +65,7 @@ func TestCredentialBrowserCommitBoundary(t *testing.T) {
 				return vaultFixture(), nil
 			}}
 			auth, err := runtime.ConnectBrowser(ctx, "browser", provider, &sdkconfig.Config{}, listener, func(context.Context, string) error { return nil })
-			if outcome == "success" {
+			if outcome == "success" || outcome == "success closed" {
 				if err != nil || auth == nil || len(manager.List()) != 1 || !vault.Admit(ctx, auth) {
 					t.Fatalf("durable login failed: %v", err)
 				}

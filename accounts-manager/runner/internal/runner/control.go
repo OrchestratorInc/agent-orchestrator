@@ -30,26 +30,31 @@ type Lease struct {
 	deadline time.Time
 }
 
+// NewLease starts a bounded supervision interval at the current time.
 func NewLease(duration time.Duration) *Lease {
 	return NewLeaseAt(duration, time.Now())
 }
 
+// NewLeaseAt supplies an explicit clock boundary for supervision.
 func NewLeaseAt(duration time.Duration, now time.Time) *Lease {
 	return &Lease{duration: duration, deadline: now.Add(duration)}
 }
 
+// Renew extends supervision without exposing the control credential.
 func (l *Lease) Renew(now time.Time) {
 	l.mu.Lock()
 	l.deadline = now.Add(l.duration)
 	l.mu.Unlock()
 }
 
+// Deadline returns a synchronized supervision boundary.
 func (l *Lease) Deadline() time.Time {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.deadline
 }
 
+// Expired treats the exact deadline as expired.
 func (l *Lease) Expired(now time.Time) bool {
 	return !now.Before(l.Deadline())
 }
@@ -60,6 +65,7 @@ type controlHandler struct {
 	lease      *Lease
 }
 
+// NewControlHandler requires the private control credential for every endpoint.
 func NewControlHandler(identity ControlIdentity, controlKey string, lease *Lease) http.Handler {
 	identity.Service = "ao-accounts-manager"
 	identity.CredentialProtocol = credentialProtocolVersion

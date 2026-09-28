@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -24,7 +25,7 @@ func TestCredentialMaintenanceRename(t *testing.T) {
 	call := func(label string, generation uint64, want int) {
 		t.Helper()
 		raw, _ := json.Marshal(map[string]any{"label": label, "generation": generation})
-		req := httptest.NewRequest("PATCH", credentialPath+"/label?ref="+previous.Index, strings.NewReader(string(raw)))
+		req := httptest.NewRequest(http.MethodPatch, credentialPath+"/label?ref="+previous.Index, strings.NewReader(string(raw)))
 		req.Header.Set("Authorization", "Bearer management")
 		res := httptest.NewRecorder()
 		handler.ServeHTTP(res, req)
