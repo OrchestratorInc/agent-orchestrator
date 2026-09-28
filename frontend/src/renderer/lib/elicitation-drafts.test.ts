@@ -191,8 +191,8 @@ describe("elicitation drafts", () => {
 		expect(window.localStorage.getItem(elicitationDraftKey("conversation-1", "stale"))).toBeNull();
 	});
 
-	it("refuses a draft with no, non-numeric, or far-future updatedAt", () => {
-		const sixMinutes = 6 * 60 * 1000;
+	it("refuses a draft with no, non-numeric, or absurdly-future updatedAt", () => {
+		const twoDays = 2 * 24 * 60 * 60 * 1000;
 		window.localStorage.setItem(
 			elicitationDraftKey("conversation-1", "missing-timestamp"),
 			JSON.stringify({ schemaVersion: 1, values: { a: "one" }, activeQuestion: 0 }),
@@ -202,20 +202,19 @@ describe("elicitation drafts", () => {
 			JSON.stringify({ schemaVersion: 1, values: { a: "one" }, activeQuestion: 0, updatedAt: "yesterday" }),
 		);
 		window.localStorage.setItem(
-			elicitationDraftKey("conversation-1", "far-future-timestamp"),
-			JSON.stringify({ schemaVersion: 1, values: { a: "one" }, activeQuestion: 0, updatedAt: Date.now() + sixMinutes }),
+			elicitationDraftKey("conversation-1", "absurd-future-timestamp"),
+			JSON.stringify({ schemaVersion: 1, values: { a: "one" }, activeQuestion: 0, updatedAt: Date.now() + twoDays }),
 		);
 
 		expect(readElicitationDraft("conversation-1", "missing-timestamp")).toBeUndefined();
 		expect(readElicitationDraft("conversation-1", "bad-timestamp")).toBeUndefined();
-		expect(readElicitationDraft("conversation-1", "far-future-timestamp")).toBeUndefined();
+		expect(readElicitationDraft("conversation-1", "absurd-future-timestamp")).toBeUndefined();
 	});
 
 	it("tolerates a small future skew, for when the local clock is a little ahead of the write", () => {
-		// A clock that steps backward after the write (a manual fix, a VM or
-		// dual-boot RTC correction, an NTP step) would otherwise make a
-		// just-written draft look corrupt and destroy the exact thing this module
-		// exists to protect.
+		// A clock that steps backward after the write (a manual fix, an NTP step)
+		// would otherwise make a just-written draft look corrupt and destroy the
+		// exact thing this module exists to protect.
 		const oneMinute = 60 * 1000;
 		window.localStorage.setItem(
 			elicitationDraftKey("conversation-1", "slightly-ahead"),
@@ -223,6 +222,26 @@ describe("elicitation drafts", () => {
 		);
 
 		expect(readElicitationDraft("conversation-1", "slightly-ahead")?.values).toEqual({ a: "one" });
+	});
+
+	it("keeps and re-stamps a draft whose clock was hours ahead, rather than deleting it", () => {
+		// A dual-boot RTC offset is typically a whole timezone, hours rather than
+		// minutes. Written while the clock read an hour ahead, then the clock
+		// gets corrected: the draft is still the real, just-typed answer, not a
+		// corrupt value, so it survives — but is re-stamped so it isn't still
+		// relying on the clock that was wrong when it was written.
+		const oneHour = 60 * 60 * 1000;
+		const key = elicitationDraftKey("conversation-1", "clock-was-ahead");
+		window.localStorage.setItem(
+			key,
+			JSON.stringify({ schemaVersion: 1, values: { a: "one" }, activeQuestion: 0, updatedAt: Date.now() + oneHour }),
+		);
+
+		expect(readElicitationDraft("conversation-1", "clock-was-ahead")?.values).toEqual({ a: "one" });
+
+		const restamped = JSON.parse(window.localStorage.getItem(key) ?? "{}");
+		expect(restamped.updatedAt).toBeLessThanOrEqual(Date.now());
+		expect(restamped.updatedAt).toBeGreaterThan(Date.now() - 1000);
 	});
 
 	it("does not let a corrupt or future sweep marker wedge the sweep shut", () => {
@@ -253,7 +272,7 @@ describe("elicitation drafts", () => {
 			writeElicitationDraft("conversation-1", "q2", { values: { a: "two" }, activeQuestion: 0 });
 			writeElicitationDraft("conversation-1", "answered", { values: { a: "gone" }, activeQuestion: 0 });
 
-			reconcileElicitationDraftsForConversation("conversation-1", ["q1", "q2"]);
+			reconcileElicitationDraftsForConversation("conversation-1", ["q1", "q2"], ["answered"], true);
 
 			expect(readElicitationDraft("conversation-1", "q1")?.values).toEqual({ a: "one" });
 			expect(readElicitationDraft("conversation-1", "q2")?.values).toEqual({ a: "two" });
@@ -263,7 +282,7 @@ describe("elicitation drafts", () => {
 		it("removes every draft for a conversation when nothing is pending there anymore", () => {
 			writeElicitationDraft("conversation-1", "answered", { values: { a: "gone" }, activeQuestion: 0 });
 
-			reconcileElicitationDraftsForConversation("conversation-1", []);
+			reconcileElicitationDraftsForConversation("conversation-1", [], [], true);
 
 			expect(readElicitationDraft("conversation-1", "answered")).toBeUndefined();
 		});
@@ -275,9 +294,34 @@ describe("elicitation drafts", () => {
 			writeElicitationDraft("conversation-1", "q1", { values: { a: "one" }, activeQuestion: 0 });
 			writeElicitationDraft("other-conversation", "q1", { values: { a: "unrelated" }, activeQuestion: 0 });
 
-			reconcileElicitationDraftsForConversation("conversation-1", []);
+			reconcileElicitationDraftsForConversation("conversation-1", [], [], true);
 
 			expect(readElicitationDraft("other-conversation", "q1")?.values).toEqual({ a: "unrelated" });
+		});
+
+		it("on a partial page, deletes only requests actually seen as resolved, leaving unseen ones alone", () => {
+			// hasMoreBefore means older items than what's loaded might exist. A
+			// request id absent from the loaded page entirely could be a still-open
+			// question old enough to sit outside the window — not safe to guess
+			// about — but one seen in the page with a non-pending status is known
+			// for certain.
+			writeElicitationDraft("conversation-1", "seen-resolved", { values: { a: "gone" }, activeQuestion: 0 });
+			writeElicitationDraft("conversation-1", "not-in-loaded-page", { values: { a: "still open, presumably" }, activeQuestion: 0 });
+
+			reconcileElicitationDraftsForConversation("conversation-1", [], ["seen-resolved"], false);
+
+			expect(readElicitationDraft("conversation-1", "seen-resolved")).toBeUndefined();
+			expect(readElicitationDraft("conversation-1", "not-in-loaded-page")?.values).toEqual({
+				a: "still open, presumably",
+			});
+		});
+
+		it("on a partial page, still keeps a request that is pending", () => {
+			writeElicitationDraft("conversation-1", "q1", { values: { a: "one" }, activeQuestion: 0 });
+
+			reconcileElicitationDraftsForConversation("conversation-1", ["q1"], [], false);
+
+			expect(readElicitationDraft("conversation-1", "q1")?.values).toEqual({ a: "one" });
 		});
 	});
 });

@@ -9,21 +9,10 @@ import type { DraftStorage } from "./chat-drafts";
  * localStorage — pinned beneath AO's userData directory — keyed by conversation
  * and request id, and is removed once the request is resolved.
  *
- * The daemon itself identifies a pending input by `(conversation_id,
- * request_id)`, so the draft is scoped the same way, not by session id. A
- * reviewer-chat overlay reports the underlying worker's session id in its
- * snapshot (`review.SessionID`) while reading from its own, separate
- * conversation, so session id alone is not a precise scope for two chats that
- * can be open on the same session at once. Question ids themselves do not
- * repeat (they come from `uuid.NewString()` or a per-relay counter), so this
- * is about matching the daemon's own identity model, not guarding against a
- * collision.
- *
- * The key carries no schema version: `schemaVersion` inside the stored value
- * does that job, and both the read path and the sweep drop any entry whose
- * version they don't recognize. A version in the key (as this file used to
- * have) would need the sweep to also know every past prefix, or old entries
- * would sit outside its `startsWith` filter forever.
+ * Scoped by conversation, not session: the daemon identifies a pending input by
+ * `(conversation_id, request_id)`, and a reviewer-chat overlay can report the
+ * same session id as its underlying worker chat while reading a different
+ * conversation.
  */
 
 export type ElicitationDraftValue = string | number | boolean | string[];
@@ -46,22 +35,19 @@ const LAST_SWEEP_KEY = "ao.elicitation-draft-sweep:last";
 /** Drafts for questions this old are abandoned; the request is long gone. */
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-/**
- * A locally-written draft can look future-dated if the system clock steps
- * backward after the write (a manual fix, a VM or dual-boot RTC correction, a
- * large NTP step). This tolerance keeps that draft instead of destroying the
- * exact thing this module exists to protect; it is far too small to hide a
- * genuinely corrupt or forged far-future value.
- */
+/** A timestamp up to this far in the future is trusted as-is, no re-stamp needed (a small NTP nudge). */
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 /**
- * How long a sweep counts as recent enough to skip. There is no background
- * timer: each call to `pruneExpiredElicitationDraftsOnce` is opportunistic,
- * paid by whatever triggers it (a question appearing, a conversation
- * switching), and only actually sweeps if this much time has passed since
- * the last one that did.
+ * A timestamp beyond `MAX_CLOCK_SKEW_MS` but within this is still trusted — a
+ * dual-boot RTC offset is typically a whole timezone, hours rather than
+ * minutes — but gets re-stamped to the current time on the next read, so it
+ * stops relying on a clock that was wrong when it was written. Past this, a
+ * value is treated as corrupt rather than as a real clock error.
  */
+const MAX_FUTURE_TOLERANCE_MS = 24 * 60 * 60 * 1000;
+
+/** How often a sweep call actually walks the store; see `pruneExpiredElicitationDraftsOnce`. */
 const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
 export type ElicitationDraftStorage = DraftStorage & Partial<Pick<Storage, "key" | "length">>;
@@ -87,17 +73,23 @@ export function readElicitationDraft(
 	} catch {
 		return undefined;
 	}
-	const decoded = decodeStoredDraft(raw, Date.now());
+	const now = Date.now();
+	const decoded = decodeStoredDraft(raw, now);
 	if (decoded.kind === "missing") return undefined;
-	if (decoded.kind === "valid") return { values: decoded.values, activeQuestion: decoded.activeQuestion };
-	// Malformed, an unsupported schema version, or expired: dead weight either
-	// way, and removing it here means a later read never has to decide again.
-	try {
-		storage.removeItem(key);
-	} catch {
-		// A leftover entry that cannot be removed still fails this same check on the next read.
+	if (decoded.kind !== "valid") {
+		// Malformed, an unsupported schema version, or expired: dead weight either
+		// way, and removing it here means a later read never has to decide again.
+		try {
+			storage.removeItem(key);
+		} catch {
+			// A leftover entry that cannot be removed still fails this same check on the next read.
+		}
+		return undefined;
 	}
-	return undefined;
+	if (decoded.restamp) {
+		writeElicitationDraft(conversationId, requestId, { values: decoded.values, activeQuestion: decoded.activeQuestion }, storage);
+	}
+	return { values: decoded.values, activeQuestion: decoded.activeQuestion };
 }
 
 export function writeElicitationDraft(
@@ -117,10 +109,6 @@ export function writeElicitationDraft(
 		storage.setItem(elicitationDraftKey(conversationId, requestId), JSON.stringify(stored));
 		return { ok: true };
 	} catch {
-		// The caller reports this through setChatDraftBoundary, the same way a
-		// failed composer or queued-edit write does — switching sessions would
-		// otherwise silently drop the answer, which is the bug this module exists
-		// to fix.
 		return { ok: false };
 	}
 }
@@ -139,37 +127,35 @@ export function clearElicitationDraft(
 }
 
 /**
- * Removes every draft this conversation is holding except the ones in
- * `pendingRequestIds`. A ChatWorkspace mount only ever sees the requests that
- * come and go while it stays mounted; a question that resolves elsewhere,
- * times out, or is answered from another window while this conversation's
- * Chat surface is unmounted never fires that transition here. Reconciling
- * directly against the loaded snapshot instead — on every mount, not only on
- * a live change — catches that case too, well inside the sweep's 7-day
- * window rather than only at its end.
+ * Removes drafts this conversation is holding that are safe to remove:
+ * anything in `resolvedRequestIds` always is, since it was seen in the loaded
+ * page and is not pending. When `fullyLoaded` is true (nothing older is left
+ * unloaded), every other draft not in `pendingRequestIds` is safe too. When it
+ * is false, a draft whose request id was not seen at all is left alone — it
+ * may belong to a still-open question old enough to sit outside the loaded
+ * page, and deleting it would only be a guess.
  *
- * Every currently pending request has to be passed, not just the one on
- * screen: the daemon can have more than one `user_input` open on a
- * conversation at once (an MCP elicitation and an AskUserQuestion can both be
- * in flight), and the UI surfaces only the newest one. Reconciling against
- * that single visible id would delete a still-open question's draft the
- * moment a second question arrives, and again every time the visible one
- * changes.
+ * `pendingRequestIds` has to list every open request on the conversation, not
+ * just the one on screen: the daemon can have more than one `user_input` open
+ * at once, and the UI shows only the newest.
  */
 export function reconcileElicitationDraftsForConversation(
 	conversationId: string,
 	pendingRequestIds: Iterable<string>,
+	resolvedRequestIds: Iterable<string>,
+	fullyLoaded: boolean,
 	storage: ElicitationDraftStorage | undefined = rendererStorage(),
 ): void {
 	if (!storage || typeof storage.key !== "function" || typeof storage.length !== "number") return;
 	const prefix = `${KEY_PREFIX}${conversationId}:`;
 	const keep = new Set([...pendingRequestIds].map((requestId) => elicitationDraftKey(conversationId, requestId)));
+	const resolved = new Set([...resolvedRequestIds].map((requestId) => elicitationDraftKey(conversationId, requestId)));
 	const stale: string[] = [];
 	try {
 		for (let index = 0; index < storage.length; index += 1) {
 			const key = storage.key(index);
 			if (!key || !key.startsWith(prefix) || keep.has(key)) continue;
-			stale.push(key);
+			if (fullyLoaded || resolved.has(key)) stale.push(key);
 		}
 		for (const key of stale) storage.removeItem(key);
 	} catch {
@@ -179,12 +165,11 @@ export function reconcileElicitationDraftsForConversation(
 
 /**
  * Sweeps expired drafts, but only if it has been at least `SWEEP_INTERVAL_MS`
- * since the last sweep that ran — tracked in storage itself rather than in
- * memory, so a once-per-process guard doesn't skip every call after the
- * first for the rest of a renderer left open for days, which is exactly when
- * an abandoned draft has had the most time to accumulate. This still only
- * runs when something calls it, not on a timer of its own; see the caller
- * for what that means for the 7-day expiry in practice.
+ * since the last sweep that ran — tracked in storage itself, so a renderer
+ * left open for days does not skip every call after the first. This still
+ * only runs when something calls it, not on a timer of its own: expiry is
+ * opportunistic, paid by whatever triggers a call (a question appearing, a
+ * conversation switching), not guaranteed on a schedule.
  */
 export function pruneExpiredElicitationDraftsOnce(
 	storage: ElicitationDraftStorage | undefined = rendererStorage(),
@@ -198,18 +183,13 @@ export function pruneExpiredElicitationDraftsOnce(
 	} catch {
 		last = undefined;
 	}
-	// A marker further in the future than clock skew allows is treated as no
-	// marker at all, the same way a draft's own future-dated updatedAt is: a
-	// clock that was ahead when the marker was written (manual change, bad
-	// RTC, an NTP step) and later gets corrected would otherwise skip every
-	// sweep until real time caught up to the stale marker — for a corrupt or
-	// absurd value, that could be never. Drafts that are never reopened have
-	// no other path to expiry, so a wedged marker would keep them past their
-	// advertised seven days indefinitely.
+	// A corrupt or far-future marker is treated as no marker, the same as a
+	// draft's own bad timestamp — otherwise a clock that was briefly far ahead
+	// could wedge the sweep shut indefinitely once corrected.
 	if (
 		typeof last === "number" &&
 		Number.isFinite(last) &&
-		last <= now + MAX_CLOCK_SKEW_MS &&
+		last <= now + MAX_FUTURE_TOLERANCE_MS &&
 		now - last < SWEEP_INTERVAL_MS
 	) {
 		return;
@@ -267,7 +247,13 @@ type DecodedStoredDraft =
 	| { kind: "missing" }
 	| { kind: "invalid" }
 	| { kind: "expired" }
-	| { kind: "valid"; values: Record<string, ElicitationDraftValue>; activeQuestion: number };
+	| {
+			kind: "valid";
+			values: Record<string, ElicitationDraftValue>;
+			activeQuestion: number;
+			/** True if `updatedAt` was past the tight tolerance and should be refreshed. */
+			restamp: boolean;
+	  };
 
 /** Single source of truth for what counts as a usable stored draft, shared by every read path. */
 function decodeStoredDraft(raw: string | null, now: number): DecodedStoredDraft {
@@ -281,7 +267,8 @@ function decodeStoredDraft(raw: string | null, now: number): DecodedStoredDraft 
 	if (!isRecord(parsed)) return { kind: "invalid" };
 	if (parsed.schemaVersion !== ELICITATION_DRAFT_SCHEMA_VERSION) return { kind: "invalid" };
 	if (!isRecord(parsed.values)) return { kind: "invalid" };
-	if (!isFreshTimestamp(parsed.updatedAt, now)) return { kind: "expired" };
+	const age = timestampAge(parsed.updatedAt, now);
+	if (age === undefined) return { kind: "expired" };
 	const values: Record<string, ElicitationDraftValue> = {};
 	for (const [name, value] of Object.entries(parsed.values)) {
 		if (isDraftValue(value)) values[name] = value;
@@ -290,17 +277,17 @@ function decodeStoredDraft(raw: string | null, now: number): DecodedStoredDraft 
 		kind: "valid",
 		values,
 		activeQuestion: typeof parsed.activeQuestion === "number" && parsed.activeQuestion >= 0 ? parsed.activeQuestion : 0,
+		restamp: age > MAX_CLOCK_SKEW_MS,
 	};
 }
 
-/** A timestamp counts as fresh if it isn't further in the future than clock skew allows, and not older than MAX_AGE_MS. */
-function isFreshTimestamp(value: unknown, now: number): boolean {
-	return (
-		typeof value === "number" &&
-		Number.isFinite(value) &&
-		value - now <= MAX_CLOCK_SKEW_MS &&
-		now - value <= MAX_AGE_MS
-	);
+/** How far in the future `value` is, or undefined if it is not a usable timestamp at all. */
+function timestampAge(value: unknown, now: number): number | undefined {
+	if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+	if (now - value > MAX_AGE_MS) return undefined;
+	const future = value - now;
+	if (future > MAX_FUTURE_TOLERANCE_MS) return undefined;
+	return future;
 }
 
 function rendererStorage(): ElicitationDraftStorage | undefined {

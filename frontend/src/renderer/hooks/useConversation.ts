@@ -1073,16 +1073,19 @@ export function useConversationCommands(sessionId: string | undefined) {
 			resolve.isPending ||
 			resolveInput.isPending ||
 			(interrupt.isPending && interruptTargetsCurrentSession),
+		// resolveInput.error deliberately isn't folded in here: the dock already
+		// shows its own rejection inline, so surfacing it here a second time
+		// duplicated it, and nothing ever reset the mutation, so the message
+		// outlived the question it was about and sat ahead of interrupt/settings
+		// errors that happened after it.
 		error:
 			(sendTargetsCurrentSession && send.error) ||
 			resolve.error ||
-			resolveInput.error ||
 			(interruptTargetsCurrentSession && interrupt.error) ||
 			chooseSettings.error
 				? apiErrorMessage(
 							(sendTargetsCurrentSession ? send.error : undefined) ??
 							resolve.error ??
-							resolveInput.error ??
 							(interruptTargetsCurrentSession ? interrupt.error : undefined) ??
 							chooseSettings.error,
 					)

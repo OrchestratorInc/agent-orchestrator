@@ -114,7 +114,7 @@ import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { ActivityRun } from "./ActivityRun";
 import { TurnPlan } from "./TurnPlan";
 import { TurnSettingsBar } from "./TurnSettingsBar";
-import { ElicitationDock } from "./ElicitationDock";
+import { ElicitationDock, elicitationBoundarySource } from "./ElicitationDock";
 import {
 	pruneExpiredElicitationDraftsOnce,
 	reconcileElicitationDraftsForConversation,
@@ -1141,22 +1141,24 @@ function ChatWorkspaceContent({
 	// The dock only ever shows the newest pending question, but the daemon can
 	// have more than one open on a conversation at once (e.g. an MCP
 	// elicitation alongside an AskUserQuestion) — every one of them needs its
-	// draft kept, not only whichever is currently on screen.
-	const pendingUserInputRequestIds = useMemo(
-		() =>
-			snapshot.items
-				.filter(
-					(item): item is ConversationActivity =>
-						item.kind === "activity" && item.activityKind === "user_input" && item.status === "pending",
-				)
-				.map((item) => item.requestId)
-				.filter((requestId): requestId is string => Boolean(requestId)),
-		[snapshot.items],
-	);
+	// draft kept, not only whichever is currently on screen. Resolved ids are
+	// tracked too: on a partial page (more items than what's loaded), only a
+	// request id actually seen — pending or not — is known well enough to
+	// reconcile; see the effect below.
+	const userInputRequestIds = useMemo(() => {
+		const pending: string[] = [];
+		const resolved: string[] = [];
+		for (const item of snapshot.items) {
+			if (item.kind !== "activity" || item.activityKind !== "user_input" || !item.requestId) continue;
+			(item.status === "pending" ? pending : resolved).push(item.requestId);
+		}
+		return { pending, resolved };
+	}, [snapshot.items]);
 	const stableSettings = useStableValue(snapshot.settings);
 	const stableModelReroute = useStableValue(snapshot.modelReroute);
 	const stablePendingApproval = useStableValue(pendingApproval);
 	const stablePendingUserInput = useStableValue(pendingUserInput);
+	const stableUserInputRequestIds = useStableValue(userInputRequestIds);
 	const composerSettings = useMemo(
 		() =>
 			onChooseSettings || onChooseConfigOption ? (
@@ -1228,22 +1230,30 @@ function ChatWorkspaceContent({
 	// session switch, new question, or app restart is what actually catches
 	// it in practice.
 	//
-	// Reconciliation itself is skipped while the loaded page is partial
-	// (`hasMoreBefore`): a pending question old enough to sit outside the
-	// loaded window would look resolved by its absence from `snapshot.items`
-	// and get its draft deleted, even though it is still open. The sweep still
-	// runs regardless, since it only removes drafts that are independently
-	// stale.
-	const pendingUserInputRequestIdsKey = pendingUserInputRequestIds.join(",");
+	// On a partial page (`hasMoreBefore`), a request id that isn't in
+	// `snapshot.items` at all might just be old enough to sit outside the
+	// loaded window — still genuinely open, not resolved. Only an id actually
+	// seen is safe to act on then: pending ids are kept regardless, and
+	// resolved ids (seen, but not pending) are deleted, since those are known
+	// for certain. A fully loaded page can safely delete everything else too.
 	useEffect(() => {
 		pruneExpiredElicitationDraftsOnce();
-		if (snapshot.hasMoreBefore) return;
-		reconcileElicitationDraftsForConversation(snapshot.conversationId, pendingUserInputRequestIds);
-		// Depends on pendingUserInputRequestIdsKey, not the array itself: the
-		// array is a fresh reference on nearly every snapshot even when its
-		// contents are unchanged, but whichever render this effect runs in
-		// always has an array consistent with that render's key.
-	}, [snapshot.conversationId, snapshot.hasMoreBefore, pendingUserInputRequestIdsKey]);
+		reconcileElicitationDraftsForConversation(
+			snapshot.conversationId,
+			stableUserInputRequestIds.pending,
+			stableUserInputRequestIds.resolved,
+			!snapshot.hasMoreBefore,
+		);
+		// A resolved request also clears its own leave/quit-guard slot, if a
+		// prior failed save is still holding one open: this workspace is now
+		// the only place that ever will again. Scoped to requests seen resolved
+		// here, so the reviewer overlay's reconcile — which never sees the
+		// worker's request ids at all — can't reach into the worker's slots,
+		// and vice versa.
+		for (const requestId of stableUserInputRequestIds.resolved) {
+			setChatDraftBoundary(snapshot.sessionId, elicitationBoundarySource(requestId), undefined);
+		}
+	}, [snapshot.conversationId, snapshot.sessionId, snapshot.hasMoreBefore, stableUserInputRequestIds]);
 	const composerElicitation = useMemo(
 		() =>
 			stablePendingUserInput ? (

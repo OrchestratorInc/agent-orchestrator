@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
-import { getChatDraftBoundary } from "../../lib/chat-draft-boundary";
+import { getChatDraftBoundary, setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import {
 	elicitationDraftKey,
 	readElicitationDraft,
@@ -10,7 +10,12 @@ import {
 	writeElicitationDraft,
 } from "../../lib/elicitation-drafts";
 import type { ConversationActivity } from "../../types/conversation";
-import { ElicitationDock, resetElicitationWriteFailureTracking } from "./ElicitationDock";
+import { ElicitationDock, elicitationBoundarySource, resetUnsavedElicitationDraftMemory } from "./ElicitationDock";
+
+/** Test hygiene: chat-draft-boundary is a module-level store with no reset, so any test that sets one clears its own slot when it's done. */
+function clearElicitationBoundary(sessionId: string, requestId: string) {
+	setChatDraftBoundary(sessionId, elicitationBoundarySource(requestId), undefined);
+}
 
 function activity(detail: ConversationActivity["detail"]): ConversationActivity {
 	return {
@@ -31,7 +36,7 @@ describe("ElicitationDock", () => {
 	beforeEach(() => {
 		window.localStorage.clear();
 		resetElicitationDraftPruning();
-		resetElicitationWriteFailureTracking();
+		resetUnsavedElicitationDraftMemory();
 	});
 
 	const claudeQuestions = {
@@ -351,14 +356,15 @@ describe("ElicitationDock", () => {
 			expect(getChatDraftBoundary("session-1")).toBeUndefined();
 
 			fireEvent.click(screen.getByRole("radio", { name: /Native/ }));
-			expect(getChatDraftBoundary("session-1")).toBe("persistence-failed");
+			expect(getChatDraftBoundary("session-1")).toBe("elicitation-persistence-failed");
 			expect(screen.getByRole("alert")).toHaveTextContent(/couldn.?t be saved/i);
 
 			view.unmount();
 			// Storage is still failing: the warning must not have quietly gone away.
-			expect(getChatDraftBoundary("session-1")).toBe("persistence-failed");
+			expect(getChatDraftBoundary("session-1")).toBe("elicitation-persistence-failed");
 		} finally {
 			vi.restoreAllMocks();
+			clearElicitationBoundary("session-1", "request-1");
 		}
 	});
 
@@ -383,11 +389,11 @@ describe("ElicitationDock", () => {
 			);
 
 			fireEvent.click(screen.getByRole("radio", { name: /Native/ }));
-			expect(getChatDraftBoundary("session-1")).toBe("persistence-failed");
+			expect(getChatDraftBoundary("session-1")).toBe("elicitation-persistence-failed");
 
-			// The failure clears (quota freed elsewhere) before the 3s retry fires
-			// and before any further edit — an unmount here is the only remaining
-			// chance to save it.
+			// The failure clears (quota freed elsewhere) before the first retry
+			// fires and before any further edit — an unmount here is the only
+			// remaining chance to save it.
 			failing = false;
 			view.unmount();
 
@@ -399,10 +405,9 @@ describe("ElicitationDock", () => {
 	});
 
 	it("retries once the form re-enables after a rejected resolve, without another edit", async () => {
-		// values/activeQuestion are unchanged by a rejected resolve, and the
-		// write effect used to skip whenever content matched the last write —
-		// re-enabling the form after the rejection didn't count as a reason to
-		// retry on its own.
+		// A rejected resolve leaves values/activeQuestion unchanged, so
+		// re-enabling the form has to count as its own reason to retry — nothing
+		// about the content itself changed to prompt one.
 		const user = userEvent.setup();
 		let failing = true;
 		const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
@@ -424,7 +429,7 @@ describe("ElicitationDock", () => {
 			);
 
 			await user.click(screen.getByRole("radio", { name: /Native/ }));
-			expect(getChatDraftBoundary("session-1")).toBe("persistence-failed");
+			expect(getChatDraftBoundary("session-1")).toBe("elicitation-persistence-failed");
 
 			// Storage recovers, but nothing edits the form again — only the
 			// disable/re-enable cycle around the rejected Skip should retry.
@@ -441,11 +446,11 @@ describe("ElicitationDock", () => {
 	});
 
 	it("clears the boundary and cancels the pending retry when the answer reverts to what storage already has", async () => {
-		// Picking Native saves; a longer answer then fails to save and leaves a
-		// retry pending; picking Native again matches what storage already
-		// holds. The old code compared only against the last *successful*
-		// write and returned early on a match, leaving the stale failure
-		// flagged and the retry still armed to rewrite the same answer.
+		// Picking Native saves; Bridge then fails to save and leaves a retry
+		// pending; picking Native again matches what storage already holds. A
+		// write effect that only compares against the last *successful* write
+		// would return early on that match, leaving the failure flagged and the
+		// retry still armed to rewrite the same answer.
 		const user = userEvent.setup();
 		const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
 		vi.spyOn(window.localStorage, "setItem").mockImplementation((key: string, value: string) => {
@@ -469,7 +474,7 @@ describe("ElicitationDock", () => {
 			expect(getChatDraftBoundary("session-1")).toBeUndefined();
 
 			await user.click(screen.getByRole("radio", { name: /Bridge/ }));
-			expect(getChatDraftBoundary("session-1")).toBe("persistence-failed");
+			expect(getChatDraftBoundary("session-1")).toBe("elicitation-persistence-failed");
 
 			await user.click(screen.getByRole("radio", { name: /Native/ }));
 			expect(getChatDraftBoundary("session-1")).toBeUndefined();
@@ -482,15 +487,17 @@ describe("ElicitationDock", () => {
 	it("does not let one dock on a session clear another's still-failing boundary", async () => {
 		// The reviewer overlay reports the same session id as its underlying
 		// worker chat while running its own conversation, so two docks can be
-		// mounted under one sessionId at once. setChatDraftBoundary keeps a
-		// single "elicitation" slot per session; either dock succeeding,
+		// mounted under one sessionId at once. Each request gets its own
+		// leave/quit-guard slot for exactly this: either dock succeeding,
 		// resolving, or unmounting must not silently clear a warning that still
 		// belongs to the other one's unsaved answer.
 		const user = userEvent.setup();
-		vi.spyOn(window.localStorage, "setItem").mockImplementation((key: string) => {
+		const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
+		vi.spyOn(window.localStorage, "setItem").mockImplementation((key: string, value: string) => {
 			if (key === elicitationDraftKey("worker-conversation", "request-1")) {
 				throw new DOMException("quota exceeded", "QuotaExceededError");
 			}
+			originalSetItem(key, value);
 		});
 
 		try {
@@ -503,7 +510,7 @@ describe("ElicitationDock", () => {
 				/>,
 			);
 			await user.click(screen.getByRole("radio", { name: /Native/ }));
-			expect(getChatDraftBoundary("session-1")).toBe("persistence-failed");
+			expect(getChatDraftBoundary("session-1")).toBe("elicitation-persistence-failed");
 
 			const overlay = render(
 				<ElicitationDock
@@ -522,18 +529,142 @@ describe("ElicitationDock", () => {
 			);
 			const overlayScreen = within(overlay.container);
 			await user.type(overlayScreen.getByLabelText("Name"), "Alice");
+			// The overlay's own answer actually saved — checked directly, not just
+			// inferred later from a click succeeding — before Continue clears it.
+			expect(readElicitationDraft("overlay-conversation", "overlay-request")?.values.name).toBe("Alice");
+
 			await user.click(overlayScreen.getByRole("button", { name: "Continue" }));
 			await waitFor(() => expect(overlayScreen.getByRole("button", { name: "Sending answer" })).toBeInTheDocument());
 
-			// The overlay's own answer saved fine; the worker's is still unsaved.
-			expect(getChatDraftBoundary("session-1")).toBe("persistence-failed");
+			// The worker's is still unsaved.
+			expect(getChatDraftBoundary("session-1")).toBe("elicitation-persistence-failed");
 
 			overlay.unmount();
-			expect(getChatDraftBoundary("session-1")).toBe("persistence-failed");
+			expect(getChatDraftBoundary("session-1")).toBe("elicitation-persistence-failed");
 
 			worker.unmount();
 		} finally {
 			vi.restoreAllMocks();
+			clearElicitationBoundary("session-1", "request-1");
+		}
+	});
+
+	it("restores a not-yet-saved answer across a same-tick remount, not a stale value from storage", async () => {
+		// Starting or ending a queued-message edit re-keys the composer that
+		// contains this dock, so it unmounts and remounts in the same commit for
+		// a reason unrelated to the question itself. React renders the new
+		// instance — including this lazy read — before the old instance's own
+		// unmount effect runs, so storage can still hold the previous, already-
+		// superseded answer at the moment this reads it. The in-memory cache
+		// holds the newer one instead.
+		let failing = true;
+		vi.spyOn(window.localStorage, "setItem").mockImplementation((key: string) => {
+			if (failing && key === elicitationDraftKey("conversation-1", "request-1")) {
+				throw new DOMException("quota exceeded", "QuotaExceededError");
+			}
+		});
+
+		try {
+			const dock = (
+				<ElicitationDock
+					activity={activity({ inputMode: "form", schema: claudeQuestions })}
+					sessionId="session-1"
+					conversationId="conversation-1"
+					onResolve={vi.fn()}
+				/>
+			);
+			const first = render(dock);
+			fireEvent.click(screen.getByRole("radio", { name: /Bridge/ }));
+			// The write failed: storage still has nothing for this request.
+			expect(readElicitationDraft("conversation-1", "request-1")).toBeUndefined();
+
+			first.unmount();
+			render(dock);
+
+			// Restored from the in-memory cache, not from (empty) storage — and the
+			// still-failing state came with it, shown immediately rather than only
+			// after a future write attempt.
+			expect(screen.getByRole("radio", { name: /Bridge/ })).toBeChecked();
+			expect(screen.getByRole("alert")).toHaveTextContent(/couldn.?t be saved/i);
+			expect(getChatDraftBoundary("session-1")).toBe("elicitation-persistence-failed");
+		} finally {
+			vi.restoreAllMocks();
+			clearElicitationBoundary("session-1", "request-1");
+		}
+	});
+
+	it("backs off between retries instead of hammering storage every few seconds forever", () => {
+		vi.useFakeTimers();
+		try {
+			vi.spyOn(window.localStorage, "setItem").mockImplementation((key: string) => {
+				if (key === elicitationDraftKey("conversation-1", "request-1")) {
+					throw new DOMException("quota exceeded", "QuotaExceededError");
+				}
+			});
+
+			render(
+				<ElicitationDock
+					activity={activity({ inputMode: "form", schema: claudeQuestions })}
+					sessionId="session-1"
+					conversationId="conversation-1"
+					onResolve={vi.fn()}
+				/>,
+			);
+
+			fireEvent.click(screen.getByRole("radio", { name: /Native/ }));
+			const setItemCallsAfter = (ms: number) => {
+				const calls = vi.mocked(window.localStorage.setItem).mock.calls.length;
+				act(() => {
+					vi.advanceTimersByTime(ms);
+				});
+				return vi.mocked(window.localStorage.setItem).mock.calls.length - calls;
+			};
+
+			// First retry at the base delay (3s); a second one right after that
+			// same delay must not have fired yet — the delay has grown.
+			expect(setItemCallsAfter(3000)).toBe(1);
+			expect(setItemCallsAfter(3000)).toBe(0);
+			expect(setItemCallsAfter(3000)).toBe(1);
+		} finally {
+			vi.useRealTimers();
+			vi.restoreAllMocks();
+			clearElicitationBoundary("session-1", "request-1");
+		}
+	});
+
+	it("hides the failed-save alert once the form disables for a resolve, successful or not", async () => {
+		// The write effect bails out entirely while disabled, so nothing else
+		// would clear the underlying failure state in that window — the alert
+		// itself is hidden instead, since it's stale either way once a resolve
+		// is in flight or just delivered.
+		const user = userEvent.setup();
+		vi.spyOn(window.localStorage, "setItem").mockImplementation((key: string) => {
+			if (key === elicitationDraftKey("conversation-1", "request-1")) {
+				throw new DOMException("quota exceeded", "QuotaExceededError");
+			}
+		});
+
+		try {
+			render(
+				<ElicitationDock
+					activity={activity({ inputMode: "form", schema: claudeQuestions })}
+					sessionId="session-1"
+					conversationId="conversation-1"
+					onResolve={vi.fn().mockResolvedValue(undefined)}
+				/>,
+			);
+
+			await user.click(screen.getByRole("radio", { name: /Native/ }));
+			await user.click(screen.getByRole("button", { name: "Next" }));
+			await user.click(screen.getByRole("radio", { name: "Go" }));
+			expect(screen.getByRole("alert")).toHaveTextContent(/couldn.?t be saved/i);
+
+			await user.click(screen.getByRole("button", { name: "Continue" }));
+
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		} finally {
+			vi.restoreAllMocks();
+			clearElicitationBoundary("session-1", "request-1");
 		}
 	});
 

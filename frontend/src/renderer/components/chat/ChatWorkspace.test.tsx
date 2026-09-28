@@ -4,7 +4,7 @@ import { Activity, Profiler, type ReactElement } from "react";
 import { typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
-import { resetElicitationWriteFailureTracking } from "./ElicitationDock";
+import { elicitationBoundarySource, resetUnsavedElicitationDraftMemory } from "./ElicitationDock";
 import { AssistantMessage, HumanMessage, OriginMessage } from "./ChatTimelineItems";
 import {
 	chatFixture,
@@ -29,6 +29,7 @@ import {
 import {
 	getChatDraftBoundaries,
 	getChatDraftBoundary,
+	setChatDraftBoundary,
 } from "../../lib/chat-draft-boundary";
 import { elicitationDraftKey, readElicitationDraft } from "../../lib/elicitation-drafts";
 import { TooltipProvider } from "../ui/tooltip";
@@ -166,7 +167,7 @@ beforeEach(() => {
 	terminalPaneState.props = undefined;
 	renameSessionMock.mockReset().mockResolvedValue(undefined);
 	window.localStorage.clear();
-	resetElicitationWriteFailureTracking();
+	resetUnsavedElicitationDraftMemory();
 	setApiBaseUrl("http://127.0.0.1:3001");
 	useUiStore.setState({ isSidebarOpen: true, inspectorSessions: {} });
 });
@@ -836,6 +837,66 @@ describe("ChatWorkspace timeline", () => {
 		expect(readElicitationDraft(chatFixture.conversationId, "input-1")).toBeUndefined();
 	});
 
+	it("on a partial page, leaves a draft alone whose question isn't in the loaded items at all", async () => {
+		// hasMoreBefore is the common state for a real, tool-heavy conversation
+		// (the backend counts messages and activities together against the page
+		// size), so this is the path reconcile actually runs on most of the
+		// time. A question old enough to sit outside the loaded window must not
+		// look resolved just because it's absent.
+		const user = userEvent.setup();
+		const pending = withUserInput("pending");
+		const first = render(<ChatWorkspace snapshot={pending} onResolveInput={vi.fn()} />);
+		await user.click(screen.getByRole("radio", { name: "ACP" }));
+		first.unmount();
+
+		const partial = structuredClone(pending);
+		partial.hasMoreBefore = true;
+		partial.items = partial.items.filter((item) => !(item.kind === "activity" && item.activityKind === "user_input"));
+		render(<ChatWorkspace snapshot={partial} onResolveInput={vi.fn()} />);
+
+		expect(readElicitationDraft(chatFixture.conversationId, "input-1")?.values.question_0).toBe("acp");
+	});
+
+	it("resets a stuck leave/quit warning once the question shows resolved, even if storage never recovered", async () => {
+		// A save can fail and then the question can end some other way (a
+		// mobile answer, the 30-minute timeout, Stop) while this workspace
+		// isn't even mounted to notice a live transition. Nothing else ever
+		// revisits that specific request's own warning slot once it stops
+		// being pending, so reconcile — which already knows which request ids
+		// just resolved — clears it too, not only the draft.
+		const user = userEvent.setup();
+		const pending = withUserInput("pending");
+		const durableStorage = window.localStorage;
+		const storage = {
+			getItem: durableStorage.getItem.bind(durableStorage),
+			removeItem: durableStorage.removeItem.bind(durableStorage),
+			setItem: (key: string, value: string) => {
+				if (key === elicitationDraftKey(chatFixture.conversationId, "input-1")) {
+					throw new DOMException("full", "QuotaExceededError");
+				}
+				durableStorage.setItem(key, value);
+			},
+			key: durableStorage.key.bind(durableStorage),
+			get length() {
+				return durableStorage.length;
+			},
+		} as Storage;
+		const localStorage = vi.spyOn(window, "localStorage", "get").mockReturnValue(storage);
+
+		try {
+			const first = render(<ChatWorkspace snapshot={pending} onResolveInput={vi.fn()} />);
+			await user.click(screen.getByRole("radio", { name: "ACP" }));
+			await waitFor(() => expect(getChatDraftBoundary(chatFixture.sessionId)).toBe("elicitation-persistence-failed"));
+			first.unmount();
+
+			// Storage is still throwing — the question just isn't pending anymore.
+			render(<ChatWorkspace snapshot={withUserInput("completed")} onResolveInput={vi.fn()} />);
+			expect(getChatDraftBoundary(chatFixture.sessionId)).toBeUndefined();
+		} finally {
+			localStorage.mockRestore();
+		}
+	});
+
 	it("reports a failed elicitation draft write through the session's leave/quit boundary", async () => {
 		// Dropping the sessionId prop the dock is given, or always passing it
 		// undefined, keeps every other elicitation test in this file green —
@@ -854,21 +915,29 @@ describe("ChatWorkspace timeline", () => {
 				}
 				durableStorage.setItem(key, value);
 			},
+			// Forwarded so ChatWorkspace's own reconcile/sweep calls, which route
+			// through this same mocked storage, actually walk it instead of
+			// silently no-oping on their own key()/length guard.
+			key: durableStorage.key.bind(durableStorage),
+			get length() {
+				return durableStorage.length;
+			},
 		} as Storage;
 		const localStorage = vi.spyOn(window, "localStorage", "get").mockReturnValue(storage);
 		const view = render(<ChatWorkspace snapshot={snapshot} onResolveInput={vi.fn()} />);
 
 		try {
 			await user.click(screen.getByRole("radio", { name: "ACP" }));
-			await waitFor(() => expect(getChatDraftBoundary(chatFixture.sessionId)).toBe("persistence-failed"));
+			await waitFor(() => expect(getChatDraftBoundary(chatFixture.sessionId)).toBe("elicitation-persistence-failed"));
 			// Storage is still throwing at this point: an unmount now must not
 			// quietly drop the warning just because the dock is gone. Unmounting
 			// while storage keeps failing is exactly the case the warning exists
 			// to cover.
 			view.unmount();
-			expect(getChatDraftBoundary(chatFixture.sessionId)).toBe("persistence-failed");
+			expect(getChatDraftBoundary(chatFixture.sessionId)).toBe("elicitation-persistence-failed");
 		} finally {
 			localStorage.mockRestore();
+			setChatDraftBoundary(chatFixture.sessionId, elicitationBoundarySource("input-1"), undefined);
 		}
 	});
 
