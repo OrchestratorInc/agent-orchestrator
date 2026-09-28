@@ -11,14 +11,17 @@ import (
 )
 
 const (
-	// mergeabilityRetryDelay is how soon to re-refresh a PR whose mergeability is
-	// still unknown. The fallback scanner claims by due_at ascending, so this both
-	// resolves the PR promptly and prioritizes it ahead of routine silence polls.
-	mergeabilityRetryDelay = 20 * time.Second
-	// mergeabilityRetryMaxAge bounds the retry: mergeability still unknown long
-	// after the PR's last update is a GitHub anomaly, not a pending computation, so
-	// stop rescheduling and leave it to normal silence polling rather than loop.
-	mergeabilityRetryMaxAge = 6 * time.Hour
+	// mergeabilityRetryDelay must stay comfortably above the fallback scan interval
+	// (default 30s) so a re-armed PR is not re-claimed on the very next tick — that
+	// would tight-loop a single PR and, with a one-row-per-tick claim, starve every
+	// other refresh. Webhooks and on-demand refreshes are the fast path; this is
+	// only the backstop for the brief window where GitHub is still computing.
+	mergeabilityRetryDelay = 90 * time.Second
+	// mergeabilityRetryWindow bounds the retry. GitHub settles mergeability within
+	// seconds, so an open PR still unknown this long after its last provider update
+	// is a GitHub anomaly, not a pending computation — stop re-arming and leave it
+	// to the next webhook / on-demand refresh instead of looping.
+	mergeabilityRetryWindow = 15 * time.Minute
 )
 
 // RefreshPullRequestStatus refreshes a pull request's durable GitHub status.
@@ -54,7 +57,14 @@ func (s *Service) scheduleMergeabilityRetry(ctx context.Context, ref domain.Pull
 	if current.State != contract.PRStateOpen || current.Mergeability != contract.MergeUnknown {
 		return
 	}
-	if current.UpdatedAtProvider != nil && time.Since(*current.UpdatedAtProvider) > mergeabilityRetryMaxAge {
+	// Fail closed: without a provider timestamp we cannot bound the retry window, so
+	// do NOT re-arm (a nil timestamp must never open an unbounded loop). Fall back to
+	// the creation time when the update time is missing.
+	last := current.UpdatedAtProvider
+	if last == nil {
+		last = current.CreatedAtProvider
+	}
+	if last == nil || time.Since(*last) > mergeabilityRetryWindow {
 		return
 	}
 	dueAt := time.Now().UTC().Add(mergeabilityRetryDelay)
@@ -64,5 +74,10 @@ func (s *Service) scheduleMergeabilityRetry(ctx context.Context, ref domain.Pull
 		s.logger.Warn("schedule mergeability retry",
 			"org_id", ref.OrgID, "pull_request_id", ref.ID,
 			"repository", ref.Repository, "number", ref.Number, "error", err)
+		return
 	}
+	// Surface the retry so a PR that never resolves is observable rather than silent.
+	s.logger.Debug("mergeability still unknown; scheduled retry",
+		"org_id", ref.OrgID, "pull_request_id", ref.ID,
+		"repository", ref.Repository, "number", ref.Number, "due_at", dueAt)
 }

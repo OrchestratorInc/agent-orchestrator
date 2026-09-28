@@ -156,6 +156,18 @@ func (s *Server) mergeSessionPullRequest(w http.ResponseWriter, r *http.Request)
 		writeError(w, r, http.StatusBadGateway, "github_unavailable", "GitHub could not merge this pull request.")
 		return
 	}
+	// Reflect the merge immediately so the client flips to the merged card without
+	// waiting for GitHub's webhook round-trip (the webhook stays the backstop and the
+	// authority for terminate-on-merge). Best effort via the App, which can read the
+	// just-merged PR regardless of whether it was merged by the App or a PAT; any
+	// failure just falls back to the webhook/fallback convergence.
+	if s.github != nil {
+		if _, refreshErr := s.github.RefreshPullRequestStatus(r.Context(), domain.PullRequestRef{
+			ID: pr.ID, OrgID: orgID, Provider: pr.Provider, Repository: pr.Repository, Number: number,
+		}, domain.PullRequestRefreshContext{Source: domain.PullRequestRefreshFallback}); refreshErr != nil {
+			s.logger.Warn("refresh after merge", "error", refreshErr, "request_id", requestID(r))
+		}
+	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"status": "merge_accepted"})
 }
 
