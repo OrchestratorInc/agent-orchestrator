@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { ServerConfig } from "../config";
-import { displayBrowserUrl, isHttpUrl, normalizeBrowserInput, shouldAttachPreviewAuth } from "./browserUrl";
+import { displayBrowserUrl, inAppWebNavigation, isHttpUrl, normalizeBrowserInput, shouldAttachPreviewAuth } from "./browserUrl";
 
 const cfg: ServerConfig = { host: "192.168.1.10", httpPort: "3011", muxPort: "14801", secure: false, password: "secret" };
 
 describe("mobile browser URL helpers", () => {
+	it("keeps X's Safari-forcing redirect inside the webview", () => {
+		expect(inAppWebNavigation("x-safari-https://redirect.x.com/?ct=rw-null")).toBe("https://redirect.x.com/?ct=rw-null");
+		expect(inAppWebNavigation("mailto:test@example.com")).toBeUndefined();
+	});
+
 	it("normalizes bare hosts to HTTPS URLs", () => {
 		const result = normalizeBrowserInput("example.com/docs", cfg.host);
 		expect(result.ok).toBe(true);

@@ -9,7 +9,7 @@ import { getPreview } from "../../lib/api";
 import { authHeaders } from "../../lib/config";
 import { BrowserErrorBanner } from "../../lib/browser/BrowserErrorBanner";
 import { BrowserToolbar } from "../../lib/browser/BrowserToolbar";
-import { isHttpUrl, normalizeBrowserInput, shouldAttachPreviewAuth } from "../../lib/browser/browserUrl";
+import { inAppWebNavigation, isHttpUrl, normalizeBrowserInput, shouldAttachPreviewAuth } from "../../lib/browser/browserUrl";
 import { browserLoadEnd, browserLoadError, browserLoadStart, browserNavigationChanged, initialBrowserState, type MobileBrowserState } from "../../lib/browser/browserState";
 import { headerActionStyle, headerGlyphStyle } from "../../lib/headerAction";
 import { haptics } from "../../lib/haptics";
@@ -128,7 +128,14 @@ export default function SessionPreviewScreen() {
 					ref={web}
 					source={source}
 					style={styles.web}
-					originWhitelist={["http://*", "https://*"]}
+					// A narrow originWhitelist makes react-native-webview call
+					// Linking.openURL itself for anything else, before our navigation
+					// policy runs. Sites such as X probe an app/custom URL while loading,
+					// which escaped to Safari. Receive every request here, then allow only
+					// HTTP(S) below so no site can silently leave AO.
+					originWhitelist={["*"]}
+					setSupportMultipleWindows={false}
+					applicationNameForUserAgent="Version/18.0 Mobile/15E148 Safari/604.1 AO/1.0"
 					startInLoadingState
 					renderLoading={() => <View style={styles.webLoading}><ActivityIndicator color={t.accent} /></View>}
 					onLoadStart={(event) => {
@@ -152,7 +159,17 @@ export default function SessionPreviewScreen() {
 					}}
 					onShouldStartLoadWithRequest={(request) => {
 						if (isHttpUrl(request.url)) return true;
-						setBrowserState((current) => browserLoadError(current, "Only HTTP and HTTPS URLs can be opened."));
+						const webFallback = inAppWebNavigation(request.url);
+						if (webFallback) {
+							navigateTo(webFallback);
+							return false;
+						}
+						// Sites probe installed apps with custom schemes during page load.
+						// Block those quietly; only a link the user actually tapped merits
+						// feedback. Direct address-bar input is validated before it gets here.
+						if (request.navigationType === "click") {
+							setBrowserState((current) => browserLoadError(current, "Only HTTP and HTTPS URLs can be opened."));
+						}
 						return false;
 					}}
 					onHttpError={(event) => {
