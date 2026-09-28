@@ -30,14 +30,15 @@ type conversationIdentityPublisher interface {
 }
 
 type Supervisor struct {
-	Control         ControlPlane
-	Builder         CommandBuilder
-	Runner          Runner
-	Workspace       string
-	PollInterval    time.Duration
-	CancelInterval  time.Duration
-	CompletionRetry time.Duration
-	Logger          *slog.Logger
+	Control             ControlPlane
+	Builder             CommandBuilder
+	Runner              Runner
+	UseProviderProtocol bool
+	Workspace           string
+	PollInterval        time.Duration
+	CancelInterval      time.Duration
+	CompletionRetry     time.Duration
+	Logger              *slog.Logger
 
 	// busy is read by the transport supervisor while an interface handoff is
 	// draining Chat work. It belongs to the long-lived controller instance, not
@@ -45,8 +46,10 @@ type Supervisor struct {
 	// provider process for an idle controller.
 	busy atomic.Bool
 
-	activeMu sync.Mutex
-	active   *activeExecution
+	activeMu    sync.Mutex
+	active      *activeExecution
+	activeACP   *acpSession
+	activeCodex *codexSession
 }
 
 type activeExecution struct {
@@ -71,6 +74,22 @@ func (s *Supervisor) Interrupt() bool {
 	active.interrupted.Store(true)
 	active.cancel()
 	return true
+}
+
+// Steer delivers guidance to the exact in-flight provider turn. The transport
+// request is acknowledged only after the provider reports an injected steer.
+func (s *Supervisor) Steer(ctx context.Context, turnID, text string) error {
+	s.activeMu.Lock()
+	active := s.activeACP
+	codex := s.activeCodex
+	s.activeMu.Unlock()
+	if active != nil {
+		return active.Steer(ctx, turnID, text)
+	}
+	if codex != nil {
+		return codex.Steer(ctx, turnID, text)
+	}
+	return errors.New("there is no steerable provider turn")
 }
 
 func (s *Supervisor) Run(ctx context.Context) error {
@@ -201,15 +220,46 @@ func (s *Supervisor) execute(ctx context.Context, turn worker.Turn) error {
 		}
 	}()
 
-	runErr := s.Runner.Run(executionCtx, command, publish)
+	acpTurn := s.UseProviderProtocol && (turn.Harness == "claude-code" || turn.Harness == "cursor")
+	codexTurn := s.UseProviderProtocol && turn.Harness == "codex"
+	var runErr error
+	if acpTurn {
+		runErr = s.runACP(executionCtx, turn, command, func(output Output) error {
+			return s.Control.PublishOutput(executionCtx, worker.OutputEvent{
+				TurnID: turn.ID, Attempt: turn.Attempt, Stream: output.Stream, Text: output.Text,
+			})
+		}, func(identity string) error {
+			if publisher, ok := s.Control.(conversationIdentityPublisher); ok {
+				return publisher.PublishActivity(executionCtx, worker.ActivityEvent{
+					Harness: turn.Harness, Event: "session-start", AgentSessionID: identity,
+				})
+			}
+			return nil
+		})
+	} else if codexTurn {
+		runErr = s.runCodex(executionCtx, turn, command, func(output Output) error {
+			return s.Control.PublishOutput(executionCtx, worker.OutputEvent{
+				TurnID: turn.ID, Attempt: turn.Attempt, Stream: output.Stream, Text: output.Text,
+			})
+		}, func(identity string) error {
+			if publisher, ok := s.Control.(conversationIdentityPublisher); ok {
+				return publisher.PublishActivity(executionCtx, worker.ActivityEvent{
+					Harness: turn.Harness, Event: "session-start", AgentSessionID: identity,
+				})
+			}
+			return nil
+		})
+	} else {
+		runErr = s.Runner.Run(executionCtx, command, publish)
+	}
 	var flushed []Output
-	if runErr == nil {
+	if runErr == nil && !acpTurn && !codexTurn {
 		// Codex normally terminates JSONL records with a newline, but flush the
 		// final partial record before reading the identity so a clean process
 		// exit cannot strand a thread.started event in the projector buffer.
 		flushed = projector.Flush()
 	}
-	if identity := projector.NativeConversationID(); identity != "" {
+	if identity := projector.NativeConversationID(); identity != "" && !acpTurn && !codexTurn {
 		if publisher, ok := s.Control.(conversationIdentityPublisher); ok {
 			if err := publisher.PublishActivity(executionCtx, worker.ActivityEvent{
 				Harness:        turn.Harness,

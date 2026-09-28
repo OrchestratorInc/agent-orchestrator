@@ -51,6 +51,44 @@ func TestCodexArgsMatchesCloudSessionPermissionMode(t *testing.T) {
 	}
 }
 
+func TestCloudApprovalModesMapToProviderFlagsWithoutWideningSessionCap(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		turn    worker.Turn
+		want    []string
+		invalid bool
+	}{
+		{"codex asks", worker.Turn{Harness: "codex", Mode: "standard", ApprovalMode: "accept-edits"}, []string{"--sandbox", "workspace-write", "--ask-for-approval", "on-request"}, false},
+		{"codex auto reviewer", worker.Turn{Harness: "codex", Mode: "standard", ApprovalMode: "auto"}, []string{`approvals_reviewer="auto_review"`}, false},
+		{"codex full access", worker.Turn{Harness: "codex", Mode: "trusted", ApprovalMode: "default"}, []string{"--dangerously-bypass-approvals-and-sandbox"}, false},
+		{"codex full access exceeds cap", worker.Turn{Harness: "codex", Mode: "standard", ApprovalMode: "default"}, nil, true},
+		{"cursor bypass exceeds cap", worker.Turn{Harness: "cursor", Mode: "standard", ApprovalMode: "bypass-permissions"}, nil, true},
+		{"read only cannot widen", worker.Turn{Harness: "claude-code", Mode: "read-only", ApprovalMode: "auto"}, nil, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateApprovalMode(test.turn)
+			if (err != nil) != test.invalid {
+				t.Fatalf("validate = %v, want invalid %v", err, test.invalid)
+			}
+			if err != nil {
+				return
+			}
+			if test.turn.Harness != "codex" {
+				return
+			}
+			args, err := codexArgs(test.turn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, expected := range test.want {
+				if !slices.Contains(args, expected) {
+					t.Fatalf("Codex args %v omit %q", args, expected)
+				}
+			}
+		})
+	}
+}
+
 func TestCodexArgsResumesNativeConversation(t *testing.T) {
 	got, err := codexArgs(worker.Turn{
 		Mode:           "trusted",

@@ -573,6 +573,9 @@ export interface CloudCpSendMessageRequest {
 	text: string;
 	model?: string;
 	reasoningEffort?: string;
+	/** Per-turn permission mode, capped by the session and share grant. */
+	mode?: "read-only" | "standard" | "trusted";
+	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
 }
 
 export interface CloudCpChatModelsResponse {

@@ -212,6 +212,7 @@ func run(logger *slog.Logger) error {
 		}
 		chatRunner = &workerexec.Supervisor{
 			Control: client, Builder: b, Runner: workerexec.OSRunner{},
+			UseProviderProtocol: true,
 			// Use the supervisor's 100 ms default. A one-second worker-command
 			// poll makes every phase of a TUI <-> Chat handoff visibly laggy,
 			// particularly on remote Linux sandboxes.
@@ -643,6 +644,27 @@ func (c *client) ClaimTurn(ctx context.Context) (*worker.Turn, error) {
 		return nil, err
 	}
 	return response.Turn, nil
+}
+
+func (c *client) CreateChatApproval(ctx context.Context, request worker.ChatApproval) error {
+	return c.do(ctx, "/worker/turns/"+url.PathEscape(request.TurnID)+"/approvals", request, nil)
+}
+
+func (c *client) PublishTurnCapabilities(ctx context.Context, turnID string, attempt int, steering bool) error {
+	return c.do(ctx, "/worker/turns/"+url.PathEscape(turnID)+"/capabilities", map[string]any{
+		"attempt": attempt, "steering": steering,
+	}, nil)
+}
+
+func (c *client) ChatApprovalDecision(ctx context.Context, turnID string, attempt int, requestID string) (string, error) {
+	var response struct {
+		Decision string `json:"decision"`
+	}
+	path := "/worker/turns/" + url.PathEscape(turnID) + "/approvals/" + url.PathEscape(requestID) + "?attempt=" + strconv.Itoa(attempt)
+	if err := c.doMethod(ctx, http.MethodGet, path, nil, &response); err != nil {
+		return "", err
+	}
+	return response.Decision, nil
 }
 
 func (c *client) AgentSessionID(ctx context.Context) (string, error) {

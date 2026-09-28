@@ -12,6 +12,13 @@ describe("Cloud control-plane interface transitions", () => {
 		expect(fetchImpl.mock.calls[1]?.[0]).toContain("/turns/turn/steer");
 		expect(((fetchImpl.mock.calls[1]?.[1] as RequestInit).headers as Headers).get("Idempotency-Key")).toBe("stable-steer-id");
 	});
+	it("routes an ACP approval decision to the session request", async () => {
+		const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 202, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test/api/cloud/v1", getToken: async () => "token", fetchImpl });
+		await client.decideChatApproval("org", "session", "request", "allow-once");
+		expect(fetchImpl.mock.calls[0]?.[0]).toContain("/orgs/org/sessions/session/approvals/request/decide");
+		expect(JSON.parse((fetchImpl.mock.calls[0]?.[1] as RequestInit).body as string)).toEqual({ decisionId: "allow-once" });
+	});
 
 	it("cancels an active interface transition through the Cloud API", async () => {
 		const fetchImpl = vi.fn().mockResolvedValue(

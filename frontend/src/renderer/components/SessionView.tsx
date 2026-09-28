@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Globe2, PanelRight, Plus } from "lucide-react";
+import { Globe2, Loader2, PanelRight, Plus } from "lucide-react";
 import { useBlocker } from "@tanstack/react-router";
 import { motion, useReducedMotion } from "motion/react";
 import {
@@ -457,6 +457,18 @@ function CloudSessionLifecycleLoader() {
 				className="-translate-x-8"
 				steps={steps}
 			/>
+		</div>
+	);
+}
+
+function CloudInterfaceSwitchLoader({ target }: { target: "chat" | "tui" }) {
+	const label = `Switching to ${target === "chat" ? "Chat UI" : "Terminal UI"}`;
+	return (
+		<div className="absolute inset-0 z-chrome grid place-items-center bg-background" data-testid="cloud-interface-switch-loader-screen">
+			<div role="status" aria-live="polite" aria-label={label} className="flex flex-col items-center gap-3 text-muted-foreground">
+				<Loader2 aria-hidden="true" className="size-6 animate-spin" />
+				<span className="text-sm">{label}</span>
+			</div>
 		</div>
 	);
 }
@@ -1361,7 +1373,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	);
 
 	const activeInterfaceTransition = interfaceTransitionIsActive(interfaceSwitch.transition);
-	const hasInterfaceNotice = interfaceTransitionHasUnacknowledgedNotice(interfaceSwitch.transition);
+	const showInterfaceSwitchLoader = Boolean(
+		interfaceContext && (interfaceSwitch.starting || activeInterfaceTransition || interfaceSwitch.settling),
+	);
+	const hasInterfaceNotice = interfaceTransitionHasUnacknowledgedNotice(interfaceSwitch.transition) &&
+		!(interfaceContext && session?.mode === "tui" &&
+			interfaceSwitch.transition?.errorCode === "SOURCE_DRAIN_FAILED" &&
+			interfaceSwitch.transition.targetMode === "chat");
 	const historyRecoveryNotice = hasInterfaceNotice && interfaceTransitionOffersHistoryRecovery(interfaceSwitch.transition);
 	const restartRequiredNotice = interfaceTransitionNeedsRestart(interfaceSwitch.transition);
 	const chatLeaveLocked = Boolean(
@@ -1420,8 +1438,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 			session.activity?.state === "blocked"),
 	);
 	const chatToTerminal = session?.mode === "chat" && interfaceTarget === "tui";
-	const cloudTerminalNeedsExplicitStop = Boolean(
-		interfaceContext && session?.mode === "tui" && interfaceTarget === "chat" && interfaceBusy,
+	const cloudTerminalToChat = Boolean(
+		interfaceContext && session?.mode === "tui" && interfaceTarget === "chat",
 	);
 	const beginInterfaceSwitch = useCallback(
 		async (
@@ -1491,13 +1509,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	);
 	const requestInterfaceSwitch = useCallback(() => {
 		interfaceSwitch.resetStartError();
-		if (!interfaceBusy && !cloudTerminalNeedsExplicitStop) {
-			void beginInterfaceSwitch("drain", interfaceTarget);
+		if (cloudTerminalToChat || !interfaceBusy) {
+			void beginInterfaceSwitch(cloudTerminalToChat ? "interrupt" : "drain", interfaceTarget);
 			return;
 		}
 		if (!session) return;
 		setInterfaceSwitchDialogScope({ sessionId: session.id, targetMode: interfaceTarget });
-	}, [beginInterfaceSwitch, cloudTerminalNeedsExplicitStop, interfaceBusy, interfaceSwitch, interfaceTarget, session]);
+	}, [beginInterfaceSwitch, cloudTerminalToChat, interfaceBusy, interfaceSwitch, interfaceTarget, session]);
 	const chooseInterfaceSwitchPolicy = useCallback(
 		(policy: "drain" | "interrupt") => {
 			if (
@@ -1523,15 +1541,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 			const failed = interfaceSwitch.transition;
 			if (!session || !failed || failed.sessionId !== session.id || failed.targetMode !== interfaceTarget) return;
 			interfaceSwitch.resetStartError();
-			// A failed attempt's interrupt policy is stale consent. Ask again
-			// before stopping a Cloud Terminal, whose idle state cannot be verified.
-			if (!interfaceBusy && !cloudTerminalNeedsExplicitStop) {
-				void beginInterfaceSwitch("drain", failed.targetMode, undefined, historyPolicy);
+			if (cloudTerminalToChat || !interfaceBusy) {
+				void beginInterfaceSwitch(cloudTerminalToChat ? "interrupt" : "drain", failed.targetMode, undefined, historyPolicy);
 				return;
 			}
 			setInterfaceSwitchDialogScope({ sessionId: session.id, targetMode: failed.targetMode, historyPolicy });
 		},
-		[beginInterfaceSwitch, cloudTerminalNeedsExplicitStop, interfaceBusy, interfaceSwitch, interfaceTarget, session],
+		[beginInterfaceSwitch, cloudTerminalToChat, interfaceBusy, interfaceSwitch, interfaceTarget, session],
 	);
 	// Adapters without a Chat driver cannot offer a switch into Chat UI; hide
 	// the switch entirely rather than showing a permanently disabled control.
@@ -1700,16 +1716,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	useEffect(() => {
 		if (handoffSwitchError) setHandoffDialogOpen(true);
 	}, [handoffSwitchError]);
-	// Keep the switch visible on the session tab, rather than only in the
-	// overflow menu. In particular, a Cloud tab can be selected before its
-	// row reaches the list cache; the visible control then makes its resolving
-	// state explicit instead of looking like the feature disappeared.
+	// Local transitions retain their compact status control. Cloud switching
+	// uses the same spinner in a full-page overlay.
 	const interfaceSwitchInlineStatus = useMemo(() =>
-		showInterfaceSwitchAction && (isCloudSession || (session && activeInterfaceTransition)) ? (
+		showInterfaceSwitchAction && !isCloudSession && session && activeInterfaceTransition ? (
 			<SessionInterfaceSwitchButton
 				target={interfaceTarget}
-				showLabel={isCloudSession}
-				supported={isCloudSession ? Boolean(interfaceSwitch.status?.supported) : true}
+				supported
 				disabledReason={
 					interfaceSwitch.isLoading
 						? "Checking whether this agent can switch interfaces…"
@@ -1782,15 +1795,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 			switchError={handoffSwitchError}
 		/>
 	) : null, [handoffAgentSwitch, handoffControlPresentation, handoffDialogOpen, handoffSwitchError, handleHandoffDialogOpenChange, session]);
-	// Cloud's Chat surface does not have an interactive terminal tab to hover.
-	// Keep the handoff control in the app chrome as a direct, always-visible
-	// button so users can reliably return from Chat UI to TUI.
-	// `session` is briefly undefined while a newly-created Cloud tab is being
-	// resolved from the control plane. The route still has its Cloud org
-	// context, however, so mount the control from that context rather than from
-	// the eventually-populated row. Otherwise the very list-cache race this
-	// surface is intended to handle makes the switch disappear entirely.
-	const cloudInterfaceSwitchAction = cloudEnabled && interfaceContext ? interfaceSwitchInlineStatus : null;
 	// Hide the empty actions menu for harnesses without Chat, including when
 	// local settings identify one before transition status becomes available.
 	const sessionTabActions = useMemo(() => interfaceSwitchUnsupported ? null : (
@@ -1804,10 +1808,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 			className="session-topbar-session-chrome flex shrink-0 items-center"
 			data-compact-session-chrome="false"
 		>
-			<ShellTopbar
-				embedded
-				sessionAction={cloudInterfaceSwitchAction}
-			/>
+			<ShellTopbar embedded />
 		</div>
 	);
 	// Spinner replaces the ⋮ at the same size, so the tab title does not need a
@@ -2375,13 +2376,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 					<NotificationCenter style={noDragStyle} />
 				</div>
 			) : null}
-			{showLifecycleLoader
-				? <CloudSessionLifecycleLoader />
-				: null}
+			{showInterfaceSwitchLoader
+				? <CloudInterfaceSwitchLoader target={interfaceSwitch.transition?.targetMode ?? interfaceTarget} />
+				: showLifecycleLoader
+					? <CloudSessionLifecycleLoader />
+					: null}
 			<SessionInterfaceSwitchDialog
 				open={interfaceSwitchDialogOpen}
 				target={interfaceSwitchDialogScope?.targetMode ?? interfaceTarget}
-				requireExplicitTerminalStop={cloudTerminalNeedsExplicitStop}
+				requireExplicitTerminalStop={cloudTerminalToChat}
 				waitingForInput={interfaceWaitingForInput}
 				busy={interfaceSwitch.starting}
 				error={interfaceSwitch.startError}

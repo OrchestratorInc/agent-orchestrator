@@ -199,6 +199,7 @@ type WorkerTurn struct {
 	Model             string
 	ReasoningEffort   string
 	Mode              string
+	ApprovalMode      string
 	DeniedCommands    []string
 	Harness           string
 	Attempt           int
@@ -211,6 +212,8 @@ type WorkerTurn struct {
 type ChatTurnSettings struct {
 	Model           string `json:"model,omitempty"`
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	Mode            string `json:"mode,omitempty"`
+	ApprovalMode    string `json:"approvalMode,omitempty"`
 }
 
 // WorkerCredential is the encrypted coding-agent credential selected by the

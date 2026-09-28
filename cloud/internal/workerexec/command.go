@@ -255,6 +255,9 @@ func (b HarnessBuilder) Build(
 	if turn.Mode != "read-only" && turn.Mode != "standard" && turn.Mode != "trusted" {
 		return Command{}, fmt.Errorf("%w: unknown session mode %q", ErrUnsupportedPolicy, turn.Mode)
 	}
+	if err := validateApprovalMode(turn); err != nil {
+		return Command{}, err
+	}
 	command := Command{
 		Path: b.binary(turn.Harness),
 		Dir:  workspace,
@@ -440,6 +443,10 @@ func claudeArgs(turn worker.Turn) ([]string, error) {
 	case "trusted":
 		args = append(args, "--dangerously-skip-permissions")
 	}
+	if turn.Mode != "read-only" && turn.ApprovalMode != "" {
+		permission := map[string]string{"default": "default", "accept-edits": "acceptEdits", "auto": "auto", "bypass-permissions": "bypassPermissions"}[turn.ApprovalMode]
+		args = []string{"--print", "--output-format", "stream-json", "--verbose", "--permission-mode", permission}
+	}
 	if len(turn.DeniedCommands) > 0 {
 		deny := make([]string, 0, len(turn.DeniedCommands))
 		for _, pattern := range turn.DeniedCommands {
@@ -468,13 +475,24 @@ func codexArgs(turn worker.Turn) ([]string, error) {
 		return nil, fmt.Errorf("%w: Codex has no exact denied-command primitive", ErrUnsupportedPolicy)
 	}
 	args := []string{"exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-hook-trust"}
-	switch turn.Mode {
-	case "read-only":
-		args = append(args, "--sandbox", "read-only", "--ask-for-approval", "on-request")
-	case "standard":
-		args = append(args, "--sandbox", "workspace-write", "--ask-for-approval", "on-request", "-c", `approvals_reviewer="auto_review"`)
-	case "trusted":
-		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+	if turn.ApprovalMode == "" {
+		switch turn.Mode {
+		case "read-only":
+			args = append(args, "--sandbox", "read-only", "--ask-for-approval", "on-request")
+		case "standard":
+			args = append(args, "--sandbox", "workspace-write", "--ask-for-approval", "on-request", "-c", `approvals_reviewer="auto_review"`)
+		case "trusted":
+			args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+		}
+	} else {
+		switch turn.ApprovalMode {
+		case "default", "bypass-permissions":
+			args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+		case "accept-edits":
+			args = append(args, "--sandbox", "workspace-write", "--ask-for-approval", "on-request")
+		case "auto":
+			args = append(args, "--sandbox", "workspace-write", "--ask-for-approval", "on-request", "-c", `approvals_reviewer="auto_review"`)
+		}
 	}
 	if turn.Model != "" {
 		args = append(args, "-m", turn.Model)
@@ -496,13 +514,35 @@ func cursorArgs(turn worker.Turn) ([]string, error) {
 		return nil, fmt.Errorf("%w: Cursor has no verified read-only mode", ErrUnsupportedPolicy)
 	}
 	args := []string{"agent", "--print", "--output-format", "stream-json"}
-	if turn.Mode == "trusted" {
+	if turn.ApprovalMode == "bypass-permissions" || (turn.ApprovalMode == "" && turn.Mode == "trusted") {
 		args = append(args, "--force")
+	} else if turn.ApprovalMode == "auto" {
+		args = append(args, "--auto-review")
 	}
 	if turn.AgentSessionID != "" {
 		args = append(args, "--resume", turn.AgentSessionID)
 	}
 	return append(args, turn.Prompt), nil
+}
+
+func validateApprovalMode(turn worker.Turn) error {
+	switch turn.ApprovalMode {
+	case "":
+		return nil // older queued turns retain their launch-time policy
+	case "default", "accept-edits", "auto", "bypass-permissions":
+	default:
+		return fmt.Errorf("%w: unknown approval mode %q", ErrUnsupportedPolicy, turn.ApprovalMode)
+	}
+	if turn.Mode == "read-only" {
+		return fmt.Errorf("%w: approval policy cannot widen read-only mode", ErrUnsupportedPolicy)
+	}
+	if turn.Mode == "standard" && turn.ApprovalMode == "bypass-permissions" {
+		return fmt.Errorf("%w: bypass exceeds session permission cap", ErrUnsupportedPolicy)
+	}
+	if turn.Mode == "standard" && turn.Harness == "codex" && turn.ApprovalMode == "default" {
+		return fmt.Errorf("%w: Codex full access exceeds session permission cap", ErrUnsupportedPolicy)
+	}
+	return nil
 }
 
 func (b HarnessBuilder) configureCodexCredential(

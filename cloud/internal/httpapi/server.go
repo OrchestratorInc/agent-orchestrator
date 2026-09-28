@@ -76,8 +76,12 @@ type Store interface {
 	ClaimWorkerTurn(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (domain.WorkerTurn, bool, error)
 	RequestTurnCancellation(ctx context.Context, principal domain.Principal, orgID, sessionID, turnID string) error
 	SteerTurn(context.Context, domain.Principal, string, string, string, string, string) (domain.ClientEvent, error)
+	CreateWorkerChatApproval(context.Context, string, string, string, int64, worker.ChatApproval) error
+	WorkerChatApprovalDecision(context.Context, string, string, string, int64, string, int, string) (string, error)
+	DecideChatApproval(context.Context, domain.Principal, string, string, string, string) error
 	WorkerTurnCancellationRequested(ctx context.Context, orgID, sessionID, workerID, turnID string, epoch int64, attempt int) (bool, error)
 	AppendWorkerTurnOutput(ctx context.Context, orgID, sessionID, workerID, turnID string, epoch int64, attempt int, stream, text string) error
+	AppendWorkerTurnCapabilities(context.Context, string, string, string, string, int64, int, bool) error
 	FinishWorkerTurn(ctx context.Context, orgID, sessionID, workerID, turnID string, epoch int64, attempt int, outcome, errorMessage string) (bool, error)
 	WorkerAgentCredential(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (domain.WorkerCredential, error)
 	ListOrchestratorChildren(context.Context, string, string, bool, *domain.Cursor, int) ([]domain.Session, bool, error)
@@ -387,6 +391,9 @@ func New(options Options) *Server {
 			router.Get("/worker/session", server.workerSession)
 			router.Post("/worker/turns/claim", server.workerClaimTurn)
 			router.Get("/worker/turns/{turnId}/cancellation", server.workerTurnCancellation)
+			router.Post("/worker/turns/{turnId}/approvals", server.workerCreateChatApproval)
+			router.Post("/worker/turns/{turnId}/capabilities", server.workerTurnCapabilities)
+			router.Get("/worker/turns/{turnId}/approvals/{requestId}", server.workerChatApprovalDecision)
 			router.Post("/worker/turns/{turnId}/complete", server.workerCompleteTurn)
 			router.Post("/worker/turns/{turnId}/fail", server.workerFailTurn)
 			router.Get("/worker/credential", server.workerCredential)
@@ -456,6 +463,7 @@ func New(options Options) *Server {
 			router.Get("/sessions/{sessionId}/chat-models", server.getChatModels)
 			router.Post("/sessions/{sessionId}/turns/{turnId}/cancel", server.cancelTurn)
 			router.Post("/sessions/{sessionId}/turns/{turnId}/steer", server.steerTurn)
+			router.Post("/sessions/{sessionId}/approvals/{requestId}/decide", server.decideChatApproval)
 			router.Get("/sessions/{sessionId}/chat-events", server.replayClientEvents)
 			router.Get("/sessions/{sessionId}/events", server.streamClientEvents)
 			router.Post("/sessions/{sessionId}/terminal-ticket", server.createTerminalTicket)

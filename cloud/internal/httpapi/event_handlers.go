@@ -24,6 +24,8 @@ type sendMessageRequest struct {
 	Text            string `json:"text"`
 	Model           string `json:"model,omitempty"`
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	Mode            string `json:"mode,omitempty"`
+	ApprovalMode    string `json:"approvalMode,omitempty"`
 }
 
 var chatModelIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
@@ -39,6 +41,16 @@ func validateSendMessageRequest(request sendMessageRequest) error {
 	case "", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
 	default:
 		return errors.New("The reasoning effort selection is invalid.")
+	}
+	switch request.Mode {
+	case "", "read-only", "standard", "trusted":
+	default:
+		return errors.New("The mode selection is invalid.")
+	}
+	switch request.ApprovalMode {
+	case "", "default", "accept-edits", "auto", "bypass-permissions":
+	default:
+		return errors.New("The approval mode selection is invalid.")
 	}
 	return nil
 }
@@ -79,7 +91,7 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		sessionID,
 		key,
 		request.Text,
-		domain.ChatTurnSettings{Model: request.Model, ReasoningEffort: request.ReasoningEffort},
+		domain.ChatTurnSettings{Model: request.Model, ReasoningEffort: request.ReasoningEffort, Mode: request.Mode, ApprovalMode: request.ApprovalMode},
 	)
 	if err != nil {
 		s.writeStoreError(w, r, err)

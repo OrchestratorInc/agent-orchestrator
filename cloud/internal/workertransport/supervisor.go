@@ -497,6 +497,25 @@ func (s *Supervisor) handle(
 				response = worker.ChatModelsResponse{Models: models}
 			}
 		}
+	case "chat.steer":
+		var input struct {
+			TurnID string `json:"turnId"`
+			Text   string `json:"text"`
+		}
+		err = decodePayload(request.Payload, &input)
+		if err == nil {
+			steerer, ok := s.ChatRunner.(interface {
+				Steer(context.Context, string, string) error
+			})
+			if !ok || s.iface.Current() != InterfaceChat {
+				err = errors.New("chat steering is unavailable")
+			} else {
+				steerCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+				err = steerer.Steer(steerCtx, input.TurnID, input.Text)
+				cancel()
+			}
+			response = map[string]bool{"injected": err == nil}
+		}
 	case "terminal.open":
 		var input worker.TerminalCommand
 		err = decodePayload(request.Payload, &input)

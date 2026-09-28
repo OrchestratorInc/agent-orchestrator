@@ -54,8 +54,10 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     npm install --global \
         "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+        "@agentclientprotocol/claude-agent-acp@0.70.0" \
         "@openai/codex@${CODEX_VERSION}" && \
     claude --version && \
+    test -x "$(command -v claude-agent-acp)" && \
     codex --version && \
     gh --version && \
     groupadd --gid 10001 ao-worker && \

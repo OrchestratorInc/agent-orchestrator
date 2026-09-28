@@ -16,8 +16,9 @@ USER root
 # this approved template exposes. Copying the official Node runtime avoids a
 # package-manager install on every workspace start.
 COPY --from=node-runtime /usr/local/ /usr/local/
-RUN npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" && \
+RUN npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@agentclientprotocol/claude-agent-acp@0.70.0" && \
     claude --version && \
+    test -x "$(command -v claude-agent-acp)" && \
     mkdir -p /etc/skel/.local/bin && \
     ln -sfn "$(readlink -f "$(command -v claude)")" \
       /etc/skel/.local/bin/claude && \

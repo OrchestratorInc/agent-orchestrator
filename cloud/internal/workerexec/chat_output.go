@@ -106,6 +106,9 @@ func (p *chatOutputProjector) projectCodexJSONLine(line string) []Output {
 		} `json:"item"`
 	}
 	if err := json.Unmarshal([]byte(line), &event); err != nil {
+		if line == "Reading additional input from stdin..." {
+			return nil
+		}
 		// Preserve unexpected non-JSON output for diagnosis instead of silently
 		// dropping it. Valid Codex protocol bookkeeping is intentionally hidden.
 		return []Output{{Stream: "stdout", Text: line}}

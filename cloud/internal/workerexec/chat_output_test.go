@@ -32,6 +32,14 @@ func TestChatOutputProjectorPreservesUnexpectedCodexOutput(t *testing.T) {
 	}
 }
 
+func TestChatOutputProjectorHidesCodexStdinStatus(t *testing.T) {
+	projector := newChatOutputProjector("codex")
+	got := projector.Project(Output{Stream: "stdout", Text: "Reading additional input from stdin...\n"})
+	if len(got) != 0 {
+		t.Fatalf("stdin status = %#v, want no assistant reply", got)
+	}
+}
+
 // A Chat-first Codex session can strand the thread.started bookkeeping event
 // in an unterminated final line; Flush must still recover the native identity
 // so the later TUI restore resumes the same conversation.

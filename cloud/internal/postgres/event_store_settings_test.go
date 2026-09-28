@@ -16,12 +16,12 @@ func TestChatMessagePayloadKeepsLegacyIdempotencyShapeWithoutSettings(t *testing
 		t.Fatalf("default payload = %s", without)
 	}
 	with, err := json.Marshal(chatMessagePayload{
-		Text: "hello", ChatTurnSettings: domain.ChatTurnSettings{Model: "codex-test", ReasoningEffort: "high"},
+		Text: "hello", ChatTurnSettings: domain.ChatTurnSettings{Model: "codex-test", ReasoningEffort: "high", Mode: "standard", ApprovalMode: "auto"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(with) != `{"text":"hello","model":"codex-test","reasoningEffort":"high"}` {
+	if string(with) != `{"text":"hello","model":"codex-test","reasoningEffort":"high","mode":"standard","approvalMode":"auto"}` {
 		t.Fatalf("selected payload = %s", with)
 	}
 }

@@ -875,6 +875,7 @@ func (s *Server) workerClaimTurn(w http.ResponseWriter, r *http.Request) {
 			Model:           turn.Model,
 			ReasoningEffort: turn.ReasoningEffort,
 			Mode:            turn.Mode,
+			ApprovalMode:    turn.ApprovalMode,
 			DeniedCommands:  turn.DeniedCommands,
 			Harness:         turn.Harness,
 			Attempt:         turn.Attempt,

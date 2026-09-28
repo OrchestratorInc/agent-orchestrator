@@ -164,6 +164,7 @@ describe("SessionInterfaceSwitchButton", () => {
 		);
 
 		expect(screen.getByText("Interface switch recovered")).toBeInTheDocument();
+		expect(screen.getByRole("status").querySelector(".text-success")).toBeNull();
 		expect(screen.queryByText("Interface switch needs recovery")).not.toBeInTheDocument();
 
 		rerender(

@@ -1,6 +1,5 @@
 import {
 	ArrowRightLeft,
-	CheckCircle2,
 	Loader2,
 	MessageSquare,
 	SquareTerminal,
@@ -333,14 +332,12 @@ export function SessionInterfaceTransitionNotice({
 			aria-atomic="true"
 			className={cn(
 				"absolute left-1/2 top-3 z-20 flex w-[min(34rem,calc(100%-1.5rem))] -translate-x-1/2 items-start gap-2 rounded-lg border bg-popover px-3 py-2.5 shadow-md",
-				recovered ? "border-success/30" : "border-warning/30",
+				recovered ? "border-border" : "border-warning/30",
 			)}
 		>
-			{recovered ? (
-				<CheckCircle2 aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-success" />
-			) : (
+			{!recovered ? (
 				<TriangleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-warning" />
-			)}
+			) : null}
 			<div className="min-w-0 flex-1">
 				<strong className="block text-xs font-medium text-foreground">
 					{needsRestart

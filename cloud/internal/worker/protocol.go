@@ -1,6 +1,9 @@
 package worker
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // BootstrapRequest is what a worker sends to redeem its one-time ticket.
 type BootstrapRequest struct {
@@ -143,6 +146,7 @@ type Turn struct {
 	Model           string   `json:"model,omitempty"`
 	ReasoningEffort string   `json:"reasoningEffort,omitempty"`
 	Mode            string   `json:"mode"`
+	ApprovalMode    string   `json:"approvalMode,omitempty"`
 	DeniedCommands  []string `json:"deniedCommands"`
 	Harness         string   `json:"harness"`
 	Attempt         int      `json:"attempt"`
@@ -161,6 +165,16 @@ type ChatModel struct {
 
 type ChatModelsResponse struct {
 	Models []ChatModel `json:"models"`
+}
+
+type ChatApproval struct {
+	RequestID   string          `json:"requestId"`
+	TurnID      string          `json:"turnId"`
+	Attempt     int             `json:"attempt"`
+	WorkerEpoch int64           `json:"workerEpoch,omitempty"`
+	Summary     string          `json:"summary"`
+	ToolKind    string          `json:"toolKind,omitempty"`
+	Decisions   json.RawMessage `json:"decisions"`
 }
 
 type ClaimTurnResponse struct {

@@ -230,7 +230,7 @@ func (s *Store) ClaimWorkerRequest(
 			UPDATE ao_worker_requests request
 			SET status = 'claimed',
 				attempt_count = request.attempt_count + 1,
-				lease_until = now() + $4::interval,
+				lease_until = now() + CASE WHEN request.kind = 'chat.steer' THEN interval '30 seconds' ELSE $4::interval END,
 				updated_at = now()
 			FROM candidate
 			WHERE request.id = candidate.id
@@ -347,6 +347,30 @@ func (s *Store) finishWorkerRequest(
 					state, message, orgID, sessionID, command.TerminalID, epoch,
 				)
 			}
+		}
+		if kind == "chat.steer" {
+			var steer struct {
+				TurnID          string `json:"turnId"`
+				Text            string `json:"text"`
+				ClientMessageID string `json:"clientMessageId"`
+				CommandID       string `json:"commandId"`
+			}
+			if err := json.Unmarshal(payload, &steer); err != nil {
+				return err
+			}
+			commandStatus, eventType := "succeeded", "chat.turn_steered"
+			if status != "succeeded" {
+				commandStatus, eventType = "failed", "chat.turn_steer_failed"
+			}
+			if _, err := tx.Exec(ctx, `UPDATE ao_commands SET status = $1, error_code = $2, error_message = $3, updated_at = now()
+				WHERE org_id = $4 AND session_id = $5 AND id = $6 AND kind = 'turn.steer'`,
+				commandStatus, code, message, orgID, sessionID, steer.CommandID); err != nil {
+				return err
+			}
+			return appendTypedEvent(ctx, tx, orgID, sessionID, eventType, map[string]any{
+				"turnId": steer.TurnID, "text": steer.Text, "clientMessageId": steer.ClientMessageID,
+				"error": message,
+			})
 		}
 		return err
 	})

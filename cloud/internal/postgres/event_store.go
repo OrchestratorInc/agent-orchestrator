@@ -28,6 +28,11 @@ var clientEventTypes = []string{
 	"chat.turn_aborted",
 	"chat.interrupt_requested",
 	"chat.turn_steered",
+	"chat.turn_steer_requested",
+	"chat.turn_steer_failed",
+	"chat.approval_requested",
+	"chat.approval_decided",
+	"chat.turn_capabilities",
 }
 
 type chatMessagePayload struct {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/jackc/pgx/v5"
@@ -38,6 +39,8 @@ func (s *Store) ClaimWorkerTurn(
 
 		var state string
 		var turnModeCap string
+		var requestedMode string
+		var approvalMode string
 		var turnDeniedCommands []string
 		err := tx.QueryRow(
 			ctx,
@@ -91,7 +94,8 @@ func (s *Store) ClaimWorkerTurn(
 				claimed.state, session.agent_session_id,
 				claimed.user_message_sequence,
 				COALESCE(claimed_turn.mode_cap, ''), COALESCE(claimed_turn.denied_commands, ARRAY[]::text[]),
-				COALESCE(event.payload->>'model', ''), COALESCE(event.payload->>'reasoningEffort', '')
+				COALESCE(event.payload->>'model', ''), COALESCE(event.payload->>'reasoningEffort', ''),
+				COALESCE(event.payload->>'mode', ''), COALESCE(event.payload->>'approvalMode', '')
 			FROM claimed
 			JOIN ao_sessions session
 				ON session.org_id = $1 AND session.id = claimed.session_id
@@ -120,6 +124,8 @@ func (s *Store) ClaimWorkerTurn(
 			&turnDeniedCommands,
 			&turn.Model,
 			&turn.ReasoningEffort,
+			&requestedMode,
+			&approvalMode,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
@@ -130,7 +136,8 @@ func (s *Store) ClaimWorkerTurn(
 		// The session's own mode/denied_commands are the ceiling; a turn
 		// created from a capped share-grant holder's message narrows that
 		// ceiling further, never loosens it. See effectiveMode.
-		turn.Mode = effectiveMode(turn.Mode, turnModeCap)
+		turn.Mode = effectiveMode(effectiveMode(turn.Mode, turnModeCap), requestedMode)
+		turn.ApprovalMode = approvalMode
 		turn.DeniedCommands = effectiveDeniedCommands(turn.DeniedCommands, turnDeniedCommands)
 		turn.CancelRequested = state == "cancel_requested"
 		claimed = true
@@ -191,10 +198,8 @@ func (s *Store) RequestTurnCancellation(
 	})
 }
 
-// SteerTurn records guidance against the currently acknowledged provider turn.
-// It deliberately does not cancel or enqueue a replacement turn: steering is
-// advice for work already in flight, and every retry resolves the same durable
-// receipt before it can mutate the turn again.
+// SteerTurn queues guidance for the active worker. Delivery is recorded only
+// after its live provider connection acknowledges the injection.
 func (s *Store) SteerTurn(
 	ctx context.Context,
 	principal domain.Principal,
@@ -234,7 +239,16 @@ func (s *Store) SteerTurn(
 		if state != "running" {
 			return ErrTurnFinished
 		}
-		if err := appendTypedEvent(ctx, tx, orgID, sessionID, "chat.turn_steered", map[string]any{
+		requestPayload, err := json.Marshal(map[string]string{
+			"turnId": turnID, "text": text, "clientMessageId": idempotencyKey, "commandId": commandID,
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := createWorkerRequest(ctx, tx, orgID, sessionID, "chat.steer", requestPayload, 45*time.Second, access.ModeCap); err != nil {
+			return err
+		}
+		if err := appendTypedEvent(ctx, tx, orgID, sessionID, "chat.turn_steer_requested", map[string]any{
 			"turnId": turnID, "text": text, "clientMessageId": idempotencyKey,
 		}); err != nil {
 			return err
@@ -245,7 +259,7 @@ func (s *Store) SteerTurn(
 			return err
 		}
 		_, err = tx.Exec(ctx, `UPDATE ao_commands
-			SET status = 'succeeded', result = jsonb_build_object('eventSequence', $1::bigint), updated_at = now()
+			SET result = jsonb_build_object('eventSequence', $1::bigint), updated_at = now()
 			WHERE id = $2`, event.Sequence, commandID)
 		return err
 	})
@@ -260,7 +274,7 @@ func loadIdempotentSteer(ctx context.Context, tx pgx.Tx, orgID, sessionID, idemp
 		FROM ao_commands WHERE org_id = $1 AND idempotency_key = $2`, orgID, idempotencyKey).Scan(&storedSessionID, &kind, &status, &storedPayload, &sequence); err != nil {
 		return err
 	}
-	if storedSessionID != sessionID || kind != "turn.steer" || status != "succeeded" || !jsonEqual(storedPayload, payload) {
+	if storedSessionID != sessionID || kind != "turn.steer" || (status != "accepted" && status != "succeeded" && status != "failed") || !jsonEqual(storedPayload, payload) {
 		return ErrIdempotencyMismatch
 	}
 	return scanClientEvent(tx.QueryRow(ctx, `SELECT session_id, sequence, type, payload, created_at
@@ -333,6 +347,20 @@ func (s *Store) AppendWorkerTurnOutput(
 			"attempt": attempt,
 			"stream":  stream,
 			"text":    text,
+		})
+	})
+}
+
+func (s *Store) AppendWorkerTurnCapabilities(ctx context.Context, orgID, sessionID, workerID, turnID string, epoch int64, attempt int, steering bool) error {
+	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		if err := requireCurrentWorker(ctx, tx, orgID, sessionID, workerID, epoch); err != nil {
+			return err
+		}
+		if err := requireActiveTurnFence(ctx, tx, orgID, sessionID, turnID, epoch, attempt); err != nil {
+			return err
+		}
+		return appendTypedEvent(ctx, tx, orgID, sessionID, "chat.turn_capabilities", map[string]any{
+			"turnId": turnID, "attempt": attempt, "steering": steering,
 		})
 	})
 }
