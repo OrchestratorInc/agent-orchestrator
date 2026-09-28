@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { type MouseEvent, useEffect, useState } from "react";
 import { track } from "../../../lib/analytics";
 import { getDownloadTarget } from "../../download/PlatformDownloadButton";
 import { Platform, usePlatform } from "../../hooks/useOS";
@@ -113,6 +114,7 @@ export function DownloadButton({
   const downloadPlatform = getDownloadPlatform(platform);
   const iconKind = getDownloadIconKind(platform);
   const isMobile = iconKind === "mobile";
+  const href = isMobile ? "/download" : target.href;
   const sizeClasses =
     size === "sm"
       ? "h-8 px-3 text-sm"
@@ -126,21 +128,32 @@ export function DownloadButton({
     return () => window.clearTimeout(timeout);
   }, [showTooltip]);
 
+  function handleClick(event: MouseEvent<HTMLAnchorElement>) {
+    track("download_clicked", {
+      platform: downloadPlatform,
+      is_mobile: isMobile,
+      placement,
+      size,
+    });
+
+    if (
+      isMobile ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    setShowTooltip(true);
+    window.setTimeout(() => window.location.assign(target.href), 150);
+  }
+
   return (
     <span className="relative inline-flex">
-      <a
-        href={target.href}
-        className={buttonClasses}
-        onClick={() => {
-          track("download_clicked", {
-            platform: downloadPlatform,
-            is_mobile: isMobile,
-            placement,
-            size,
-          });
-          setShowTooltip(true);
-        }}
-      >
+      <Link href={href} className={buttonClasses} onClick={handleClick}>
         <span data-download-icon className="inline-flex md:hidden">
           <MobileIcon />
         </span>
@@ -148,13 +161,13 @@ export function DownloadButton({
           <PlatformIcon platform={downloadPlatform} />
         </span>
         <span data-download-label>Download</span>
-      </a>
-      {showTooltip && (
+      </Link>
+      {showTooltip && !isMobile && (
         <span
           role="status"
           className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 -translate-x-1/2 whitespace-nowrap rounded-md bg-foreground px-2.5 py-1.5 text-xs font-medium text-background shadow-lg"
         >
-          {isMobile ? "Opening install guide" : "Download started"}
+          Download started
         </span>
       )}
     </span>
