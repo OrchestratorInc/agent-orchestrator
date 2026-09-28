@@ -2084,8 +2084,7 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 			replacement{sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMPUnrealFX, sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMPUnrealFXMiMo},
 		}
 		for _, r := range withoutGemini {
-			repairs = append(repairs, r)
-			repairs = append(repairs, replacement{
+			repairs = append(repairs, r, replacement{
 				strings.Replace(r.old, "'omp'", "'gemini', 'omp'", 1),
 				strings.Replace(r.new, "'omp'", "'gemini', 'omp'", 1),
 			})
