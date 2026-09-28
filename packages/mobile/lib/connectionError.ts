@@ -138,12 +138,15 @@ export function describeConnectionFailure(
 				showLocalNetworkHint: false,
 			};
 		case "unreachable":
+			// Build the address string only when we have both host and port
+			const address = target.host && target.port ? `${target.host}:${target.port}` : target.host || "";
+			const messagePrefix = address ? `Reached nothing at ${address}. ` : "Could not reach your desktop. ";
 			return {
 				title: "Your desktop disconnected",
 				message: isTailscaleHost(target.host)
-					? `Reached nothing at ${target.host}:${target.port}. ` +
+					? messagePrefix +
 						"Make sure Tailscale is connected on this phone and your desktop, and that your desktop is awake."
-					: `Reached nothing at ${target.host}:${target.port}. ` +
+					: messagePrefix +
 						"Is Connect Mobile still on, and is your phone on the same Wi-Fi?",
 				showLocalNetworkHint,
 			};

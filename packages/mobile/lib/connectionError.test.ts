@@ -145,6 +145,13 @@ describe("describeConnectionFailure", () => {
 		expect(d.showLocalNetworkHint).toBe(false);
 	});
 
+	it("handles empty host/port gracefully without showing ':' with no address", () => {
+		const d = describeConnectionFailure("unreachable", target({ host: "", port: "" }));
+		// With empty host/port, the message should still be valid but not show ":"
+		expect(d.message).not.toContain("at :");
+		expect(d.message).not.toContain("at ::");
+	});
+
 	describe("the iOS Local Network hint", () => {
 		it("shows for an unreachable LAN host on iOS", () => {
 			const d = describeConnectionFailure("unreachable", target({ platform: "ios", host: "192.168.1.5" }));

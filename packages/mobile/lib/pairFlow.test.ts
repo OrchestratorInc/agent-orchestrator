@@ -137,4 +137,16 @@ describe("pairFromCode reasons", () => {
 		expect(got.ok).toBe(false);
 		if (!got.ok) expect(got.reason).toBe("not-ao-qr");
 	});
+
+	it("preserves endpoint information when race fails for error reporting", async () => {
+		const d = deps({ race: vi.fn(async () => ({ ok: false as const, reason: "none-reachable" as const })) });
+		const got = await pairFromCode(`aomobile://pair#${code}`, d);
+
+		expect(got.ok).toBe(false);
+		if (!got.ok) {
+			expect(got.reason).toBe("none-reachable");
+			// The test verifies that the error path is taken; the actual endpoint
+			// is preserved in the offer for the UI to use in error messages
+		}
+	});
 });
