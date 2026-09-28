@@ -66,7 +66,6 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
-import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 export type CreateProjectInput = {
 	path: string;
@@ -76,11 +75,6 @@ export type CreateProjectInput = {
 } & CreateProjectAgentSelection;
 export type CloneProjectInput = Pick<CloneRepositorySelection, "remoteUrl" | "destinationParent"> &
 	CreateProjectAgentSelection;
-
-export type PreparedProjectInput = Pick<
-	CreateProjectInput,
-	"path" | "clonePreparationId" | "defaultBranch" | "asWorkspace"
->;
 
 const LAST_CLONE_DESTINATION_KEY = "ao.clone.lastDestinationParent";
 const LAST_IMPORT_REMOTE_URL_KEY = "ao.import.lastRemoteUrl";
@@ -165,9 +159,6 @@ export function CreateProjectFlow({
 	onOpenExistingProject,
 	openSignal,
 	sourceSignal,
-	onboardingTrigger,
-	prepareOnly,
-	variant = "default",
 }: {
 	children?: (state: { choosePath: () => void; disabled: boolean; error: string | null; label: string }) => ReactNode;
 	existingProjectNames?: readonly string[];
@@ -192,11 +183,6 @@ export function CreateProjectFlow({
 	openSignal?: number;
 	// Home-page action cards: each new nonce jumps straight to clone/local/workspace.
 	sourceSignal?: { source: ProjectSource; nonce: number } | null;
-	// Onboarding hands its two project rows to this flow, which owns the picker,
-	// the validator and any git preparation, while keeping its own UI shell.
-	onboardingTrigger?: { kind: "folder" | "clone"; nonce: number };
-	prepareOnly?: { onPrepared: (input: PreparedProjectInput) => void };
-	variant?: "default" | "onboarding";
 }) {
 	const { t } = useTranslation();
 	const resolvedIdleLabel = idleLabel ?? t("createProject.newProject");
@@ -226,7 +212,6 @@ export function CreateProjectFlow({
 	const [isPreparingGit, setIsPreparingGit] = useState(false);
 	const [repositorySetup, setRepositorySetup] = useState<"NOT_A_GIT_REPO" | "PROJECT_UNBORN" | null>(null);
 	const [repositorySetupWarning, setRepositorySetupWarning] = useState<string | null>(null);
-	const lastPreparedPath = useRef<string | null>(null);
 	// A path that arrived via droppedPath, staged until the user confirms
 	// Workspace vs Project. Consumed exactly once by openFolderStep.
 	const [pendingDropPath, setPendingDropPath] = useState<string | null>(null);
@@ -239,9 +224,6 @@ export function CreateProjectFlow({
 	const [offering, setOffering] = useState<ProjectOffering>("local");
 
 	const hasModePicker = mode === "choose";
-	const isOnboarding = variant === "onboarding";
-	const hideSourcePicker = isOnboarding;
-	const showImportChrome = hasModePicker || isOnboarding;
 	const projectImportOpen = projectImportStep !== null && projectValidation !== null;
 	const folderDialogOpen = folderPickerOpen && validationScan !== null;
 	const isBusy = isChoosingPath || isCreating || isInitializing || isPreparingGit || preparedClone.isCleaning;
@@ -300,30 +282,6 @@ export function CreateProjectFlow({
 			}));
 			return false;
 		}
-	};
-	const completePreparation = async (path: string) => {
-		if (!prepareOnly || lastPreparedPath.current === path) return;
-		lastPreparedPath.current = path;
-		const prepared = preparedClone.current();
-		let defaultBranch: string | undefined;
-		try {
-			defaultBranch = (await aoBridge.app.getRepositoryBranch(path)) ?? undefined;
-		} catch {
-			defaultBranch = undefined;
-		}
-		prepareOnly.onPrepared({
-			path,
-			clonePreparationId: prepared?.preparationId,
-			defaultBranch,
-		});
-		setSelectedPath(null);
-		setCloneSelection(null);
-		resetProjectImportState();
-		setProjectImportStep(null);
-		setCloneDialogOpen(false);
-		setFolderPickerOpen(false);
-		setModePickerOpen(false);
-		setError(null);
 	};
 
 	const transitionToChild = (open: () => void) => {
@@ -462,10 +420,6 @@ export function CreateProjectFlow({
 			}
 			if (path) {
 				setModePickerOpen(false);
-				if (prepareOnly && kind === "single_repo") {
-					await completePreparation(path);
-					return;
-				}
 				if (preserveCurrentDialog) transitionFromFolder(() => setSelectedPath(path));
 				else {
 					setSelectedPath(path);
@@ -526,26 +480,6 @@ export function CreateProjectFlow({
 		if (isBusy || modePickerOpen || cloneDialogOpen || folderPickerOpen || selectedPath !== null) return;
 		void selectSource(sourceSignal.source);
 	}, [sourceSignal]);
-
-	const lastOnboardingTriggerNonce = useRef(onboardingTrigger?.nonce);
-	useEffect(() => {
-		if (!onboardingTrigger || onboardingTrigger.nonce === lastOnboardingTriggerNonce.current) return;
-		lastOnboardingTriggerNonce.current = onboardingTrigger.nonce;
-		lastPreparedPath.current = null;
-		if (isBusy || cloneDialogOpen || folderPickerOpen || projectImportOpen || selectedPath !== null) return;
-		if (onboardingTrigger.kind === "folder") {
-			void chooseDirectory("single_repo");
-			return;
-		}
-		setError(null);
-		setCloneSelection(null);
-		setCloneDialogOpen(true);
-	}, [onboardingTrigger]);
-
-	useEffect(() => {
-		if (!prepareOnly || !selectedPath || createProgress.open || repositorySetup) return;
-		void completePreparation(selectedPath);
-	}, [createProgress.open, prepareOnly, repositorySetup, selectedPath]);
 
 	const createProject = async (selection: CreateProjectAgentSelection) => {
 		if (!selectedPath) return;
@@ -679,10 +613,6 @@ export function CreateProjectFlow({
 		if (!(await abandonPreparedClone())) return;
 		setCloneSelection(null);
 		resetProjectImportState();
-		if (hideSourcePicker) {
-			setError(null);
-			return;
-		}
 		if (hasModePicker) {
 			setModePickerOpen(true);
 			return;
@@ -696,7 +626,7 @@ export function CreateProjectFlow({
 		setCloneDialogOpen(false);
 		setCloneSelection(null);
 		setCloneDetails(initialCloneDetails());
-		if (back && !hideSourcePicker) setModePickerOpen(true);
+		if (back) setModePickerOpen(true);
 	};
 
 	const tryProjectAsWorkspace = () => {
@@ -815,18 +745,8 @@ export function CreateProjectFlow({
 					error,
 					label,
 				})}
-			<CreateProjectFlowBackdrop open={modePickerOpen || cloneDialogOpen || folderDialogOpen || (selectedPath !== null && !prepareOnly) || createProgress.open || childTransitioning || projectImportOpen} />
-			{/* Onboarding hides the source picker but still needs the validator's
-			    answer on screen: a rejected folder otherwise reports only to
-			    screen readers. */}
-			{hideSourcePicker && error && !folderPickerOpen && selectedPath === null && (
-				<div className="flex w-full max-w-[520px] flex-col items-center">
-					<p className="text-caption leading-body text-error" role="status">
-						{error}
-					</p>
-				</div>
-			)}
-			{hasModePicker && embedded && !hideSourcePicker && !modePickerOpen && !cloneDialogOpen && selectedPath === null && (
+			<CreateProjectFlowBackdrop open={modePickerOpen || cloneDialogOpen || folderDialogOpen || selectedPath !== null || createProgress.open || childTransitioning || projectImportOpen} />
+			{hasModePicker && embedded && !modePickerOpen && !cloneDialogOpen && selectedPath === null && (
 				<div className="flex w-full flex-col items-center gap-3">
 					{cloudEnabled && offering === "cloud" ? (
 						cloudAvailable ? (
@@ -844,9 +764,8 @@ export function CreateProjectFlow({
 					)}
 				</div>
 			)}
-			{showImportChrome && (
+			{hasModePicker && (
 				<>
-					{!hideSourcePicker ? (
 					<CreateProjectSourceDialog
 						childOpen={childTransitioning || cloneDialogOpen || folderDialogOpen || projectImportOpen || selectedPath !== null}
 						cloudAvailable={cloudAvailable}
@@ -872,7 +791,6 @@ export function CreateProjectFlow({
 						}}
 						onSelect={selectSource}
 					/>
-					) : null}
 					{cloneDialogOpen ? (
 						<CloneRepositoryDialog
 							disabled={isBusy}
@@ -1010,7 +928,7 @@ export function CreateProjectFlow({
 						: undefined
 				}
 				onSubmit={createProject}
-				open={selectedPath !== null && !createProgress.open && !prepareOnly}
+				open={selectedPath !== null && !createProgress.open}
 				path={selectedPath}
 				repositorySetupNeeded={repositorySetup !== null}
 				repositorySetupWarning={repositorySetupWarning}
@@ -1268,47 +1186,11 @@ function CreateProjectSourceDialog({
 }
 
 /**
- * Local | Cloud segmented choice, shown whenever this deployment offers cloud.
- * A caption below spells out what each choice means (sessions on this machine
- * vs. each session in its own cloud sandbox) so the decision is explicit rather
- * than a subtle toggle that is easy to miss.
- */
-export function ProjectOfferingTabs({
-	disabled,
-	offering,
-	onOfferingChange,
-}: {
-	disabled: boolean;
-	offering: ProjectOffering;
-	onOfferingChange: (offering: ProjectOffering) => void;
-}) {
-	const { t } = useTranslation();
-	return (
-		<div className="flex w-full flex-col items-center gap-1.5">
-			<Tabs value={offering} onValueChange={(value) => onOfferingChange(value === "cloud" ? "cloud" : "local")}>
-				<TabsList aria-label={t("createProject.kindChoice")}>
-					<TabsTrigger disabled={disabled} value="local">
-						{t("createProject.kindLocal")}
-					</TabsTrigger>
-					<TabsTrigger disabled={disabled} value="cloud">
-						<Cloud className="size-3.5" aria-hidden="true" />
-						{t("createProject.kindCloud")}
-					</TabsTrigger>
-				</TabsList>
-			</Tabs>
-			<p className="text-caption leading-body text-secondary text-center" role="status">
-				{offering === "cloud" ? t("createProject.kindCloudHint") : t("createProject.kindLocalHint")}
-			</p>
-		</div>
-	);
-}
-
-/**
  * Shown when the user picks Cloud but is not signed in yet. Keeps the Cloud
  * option discoverable and actionable from the create-project flow instead of
  * silently hiding it: a single button starts the WorkOS sign-in.
  */
-export function CloudSignInPanel({
+function CloudSignInPanel({
 	disabled,
 	onBack,
 	onSignIn,
@@ -1365,6 +1247,7 @@ function isHttpsRepositoryUrl(raw: string): boolean {
 // Cloud project creation goes straight to the control plane
 // (client.createProject) instead of the daemon POST the local flow uses; the
 // repository is cloned in a cloud sandbox, so no folder picker or agent sheet.
+
 /** Second half of cloud project creation: which agent runs the worker and
  * which plans as orchestrator. Reuses the exact field local's own agent
  * sheet uses (RequiredAgentField) against cloud provider-connection state
@@ -1467,7 +1350,7 @@ function CloudAgentSetupStep({
 	);
 }
 
-export function CloudProjectCard({
+function CloudProjectCard({
 	dialog = false,
 	onAuthRequired,
 	onBack,

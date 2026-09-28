@@ -60,7 +60,7 @@ export async function checkRequirementsAgain(onRefetchRequirements: () => Promis
  *  interval while running. One target is ever in flight at a time — this
  *  gate only ever needs one, and serializing keeps the UI unambiguous about
  *  which command is running. */
-export function useInstallRunner(onSucceeded: () => void, startFailedFallback = "Could not start the install.") {
+function useInstallRunner(onSucceeded: () => void) {
 	const [target, setTarget] = useState<InstallTarget | null>(null);
 	const [job, setJob] = useState<InstallJob | undefined>(undefined);
 	const [previews, setPreviews] = useState<Partial<Record<InstallTarget, InstallJob>>>({});
@@ -126,12 +126,12 @@ export function useInstallRunner(onSucceeded: () => void, startFailedFallback = 
 			const { data, error } = await apiClient.POST("/api/v1/system/install/{target}", {
 				params: { path: { target: nextTarget } },
 			});
-			if (error || !data) throw new Error(apiErrorMessage(error, startFailedFallback));
+			if (error || !data) throw new Error(apiErrorMessage(error, "Could not start the install."));
 			setJob(data);
 			if (isActiveInstallJob(data)) poll(nextTarget);
 			else if (data.status === "succeeded") onSucceededRef.current();
 		} catch (err) {
-			setStartError(err instanceof Error ? err.message : startFailedFallback);
+			setStartError(err instanceof Error ? err.message : "Could not start the install.");
 		} finally {
 			setIsStarting(false);
 		}
@@ -425,7 +425,7 @@ function InstallAction({
 	);
 }
 
-export function ManualCommand({ command, t }: { command: string; t: TFunction }) {
+function ManualCommand({ command, t }: { command: string; t: TFunction }) {
 	const [copied, setCopied] = useState(false);
 	const resetTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 

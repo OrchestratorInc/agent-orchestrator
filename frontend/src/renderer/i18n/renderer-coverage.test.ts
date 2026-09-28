@@ -25,15 +25,6 @@ const approvedLiterals: Record<string, readonly string[]> = {
 		"https://github.com/owner/repo", "GitHub PAT",
 	],
 	"components/DaemonStartupLoader.tsx": ["Agent Orchestrator"],
-	// Illustrative content inside the onboarding demo preview; keep the exception exact.
-	"components/onboarding/previews/feedback-loop-demo.tsx": [
-		"github-auth", "Claude Code", "Opus 4.8 (1M context) · Claude Team",
-		"~/ao/solkit-ui/orchestrator", "&nbsp;", "Pull request", "Reviews",
-		"Completion", "Activity", "No PR yet", "Reject expired OAuth state",
-		"PR #2481", "feat/github-auth → main", "files", "Merge", "Merging…",
-		"AO Code Review", "Run", "Not run", "Terminate on merge",
-		"Created workspace", "Opened&nbsp;",
-	],
 	"components/ProjectSettingsForm.tsx": [
 		"main", "ao",
 		"No workflow settings for scratch projects.",

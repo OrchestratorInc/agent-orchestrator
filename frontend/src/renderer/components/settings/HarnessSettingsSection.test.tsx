@@ -293,8 +293,10 @@ describe("HarnessSettingsSection", () => {
 		await user.click(login);
 		await within(row).findByTestId("inline-terminal-body");
 		expect(terminalStateCallback.value).toBeDefined();
+		expect(terminalFocusRequested.value).toBe(false);
 
 		act(() => terminalStateCallback.value?.("attached"));
+		await waitFor(() => expect(terminalFocusRequested.value).toBe(true));
 
 		act(() => terminalStateCallback.value?.("exited"));
 		await waitFor(() => expect(probeCalls).toBe(1));
