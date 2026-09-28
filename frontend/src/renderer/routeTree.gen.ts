@@ -9,7 +9,6 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as ShellRouteImport } from './routes/_shell'
 import { Route as ShellIndexRouteImport } from './routes/_shell.index'
 import { Route as ShellTerminalsRouteImport } from './routes/_shell.terminals'
@@ -22,11 +21,6 @@ import { Route as ShellProjectsProjectIdRouteImport } from './routes/_shell.proj
 import { Route as ShellProjectsProjectIdSettingsRouteImport } from './routes/_shell.projects.$projectId_.settings'
 import { Route as ShellProjectsProjectIdSessionsSessionIdRouteImport } from './routes/_shell.projects.$projectId_.sessions.$sessionId'
 
-const OnboardingRoute = OnboardingRouteImport.update({
-  id: '/onboarding',
-  path: '/onboarding',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ShellRoute = ShellRouteImport.update({
   id: '/_shell',
   getParentRoute: () => rootRouteImport,
@@ -86,7 +80,6 @@ const ShellProjectsProjectIdSessionsSessionIdRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof ShellIndexRoute
-  '/onboarding': typeof OnboardingRoute
   '/automations': typeof ShellAutomationsRoute
   '/sessions': typeof ShellSessionsRouteWithChildren
   '/settings': typeof ShellSettingsRoute
@@ -98,7 +91,6 @@ export interface FileRoutesByFullPath {
   '/projects/$projectId/sessions/$sessionId': typeof ShellProjectsProjectIdSessionsSessionIdRoute
 }
 export interface FileRoutesByTo {
-  '/onboarding': typeof OnboardingRoute
   '/automations': typeof ShellAutomationsRoute
   '/settings': typeof ShellSettingsRoute
   '/terminals': typeof ShellTerminalsRoute
@@ -112,7 +104,6 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_shell': typeof ShellRouteWithChildren
-  '/onboarding': typeof OnboardingRoute
   '/_shell/automations': typeof ShellAutomationsRoute
   '/_shell/sessions': typeof ShellSessionsRouteWithChildren
   '/_shell/settings': typeof ShellSettingsRoute
@@ -128,7 +119,6 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/onboarding'
     | '/automations'
     | '/sessions'
     | '/settings'
@@ -140,7 +130,6 @@ export interface FileRouteTypes {
     | '/projects/$projectId/sessions/$sessionId'
   fileRoutesByTo: FileRoutesByTo
   to:
-    | '/onboarding'
     | '/automations'
     | '/settings'
     | '/terminals'
@@ -153,7 +142,6 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/_shell'
-    | '/onboarding'
     | '/_shell/automations'
     | '/_shell/sessions'
     | '/_shell/settings'
@@ -168,18 +156,10 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   ShellRoute: typeof ShellRouteWithChildren
-  OnboardingRoute: typeof OnboardingRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/onboarding': {
-      id: '/onboarding'
-      path: '/onboarding'
-      fullPath: '/onboarding'
-      preLoaderRoute: typeof OnboardingRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/_shell': {
       id: '/_shell'
       path: ''
@@ -301,7 +281,6 @@ const ShellRouteWithChildren = ShellRoute._addFileChildren(ShellRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   ShellRoute: ShellRouteWithChildren,
-  OnboardingRoute: OnboardingRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
