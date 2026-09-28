@@ -3242,7 +3242,7 @@ export interface components {
             generation: number;
             id: string;
             /** @enum {string} */
-            kind: "oauth" | "api_key" | "unknown";
+            kind: "oauth" | "api_key" | "access_token" | "unknown";
             label?: string;
             /** Format: date-time */
             lastRefreshedAt?: string;

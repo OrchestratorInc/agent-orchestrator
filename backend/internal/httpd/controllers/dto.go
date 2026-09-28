@@ -802,7 +802,7 @@ type AccountsManagerAccountResponse struct {
 	ReconnectSupported bool                              `json:"reconnectSupported"`
 	ID                 string                            `json:"id"`
 	Provider           string                            `json:"provider" enum:"codex,claude"`
-	Kind               string                            `json:"kind" enum:"oauth,api_key,unknown"`
+	Kind               string                            `json:"kind" enum:"oauth,api_key,access_token,unknown"`
 	Email              string                            `json:"email,omitempty"`
 	Status             string                            `json:"status" enum:"active,pending,refreshing,error,disabled,unknown"`
 	Disabled           bool                              `json:"disabled"`

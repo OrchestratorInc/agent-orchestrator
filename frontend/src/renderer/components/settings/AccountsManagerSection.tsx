@@ -71,7 +71,8 @@ export function AccountsManagerSection({
   const [cancellationReceipt, setCancellationReceipt] = useState("");
   const [requestId, setRequestId] = useState("");
   const showError = (message: MessageKey, cause: unknown) => {
-    setError(cause instanceof AccountControlError && cause.code === "ACCOUNTS_MANAGER_INVALID_CREDENTIAL" ? "accountsManager.verification.rejected"
+    setError(cause instanceof AccountControlError && cause.code === "ACCOUNTS_MANAGER_CREDENTIAL_METHOD_UNSUPPORTED" ? "accountsManager.credentials.wrongMethod"
+      : cause instanceof AccountControlError && cause.code === "ACCOUNTS_MANAGER_INVALID_CREDENTIAL" ? "accountsManager.verification.rejected"
       : cause instanceof AccountControlError && cause.code === "ACCOUNTS_MANAGER_VERIFICATION_UNAVAILABLE" ? "accountsManager.verification.unavailable" : message);
     setRequestId(cause instanceof AccountControlError ? cause.requestId : "");
   };
@@ -527,6 +528,7 @@ function RoutingPanel({
               t(
                 account.kind === "api_key"
                   ? "accountsManager.keyAccount"
+                  : account.kind === "access_token" ? "accountsManager.tokenAccount"
                   : "accountsManager.oauthAccount",
                 { provider: providerLabel(provider), id: account.id.slice(-6) },
               );
@@ -673,6 +675,7 @@ function AddAccountPanel(props: {
             value={props.baseURL}
             onChange={(e) => props.setBaseURL(e.target.value)}
           />
+          <p className="text-xs text-muted-foreground">{t("accountsManager.credentials.keyFormHint")}</p>
           <Button
             disabled={props.busy || !props.secret.trim()}
             onClick={props.submitKey}
@@ -779,6 +782,7 @@ function AccountRow({
     t(
       account.kind === "api_key"
         ? "accountsManager.keyAccount"
+        : account.kind === "access_token" ? "accountsManager.tokenAccount"
         : "accountsManager.oauthAccount",
       { provider: providerLabel(account.provider), id: account.id.slice(-6) },
     );
@@ -794,7 +798,7 @@ function AccountRow({
           ? t("accountsManager.status.error")
           : account.status === "active"
             ? t(
-                account.kind === "api_key"
+                account.kind === "api_key" || account.kind === "access_token"
                   ? account.verification === "verified" ? "accountsManager.verification.verified" : "accountsManager.status.saved"
                   : "accountsManager.status.ready",
               )
@@ -856,7 +860,7 @@ function AccountRow({
           size="icon"
           variant="ghost"
           disabled={disabled || busy}
-          aria-label={t(account.kind === "api_key" || account.verification === "unverified" || account.verification === "invalid" ? "accountsManager.verification.verify" : "accountsManager.refresh")}
+          aria-label={t(account.kind === "api_key" || account.kind === "access_token" || account.verification === "unverified" || account.verification === "invalid" ? "accountsManager.verification.verify" : "accountsManager.refresh")}
           onClick={() =>
             void action(() => refreshAccountsManagerAccount(account.id))
           }
@@ -962,6 +966,7 @@ function AccountRow({
           {account.kind === "oauth" && !account.reconnectSupported ? (
             <p>{t("accountsManager.reconnect.unavailable")}</p>
           ) : null}
+          {account.kind === "access_token" ? <p>{t("accountsManager.credentials.legacyToken")}</p> : null}
           <p>
             {details?.models === undefined && details
               ? t("accountsManager.status.unknown")

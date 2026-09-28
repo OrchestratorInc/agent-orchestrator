@@ -9652,6 +9652,7 @@ components:
           enum:
           - oauth
           - api_key
+          - access_token
           - unknown
           type: string
         label:

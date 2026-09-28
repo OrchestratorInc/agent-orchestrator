@@ -35,9 +35,9 @@ This ledger contains acceptance outcomes, not permission to implement or publish
 ## Credential experience and platforms
 
 - [ ] G09: credential input, verification, reconnect, expiry and usage eligibility have truthful capability-specific states and safe migration of existing misclassified input.
-  EVIDENCE: pending; P4 requires invalid/revoked/expired/wrong-provider/scope cases, no paid validation and no speculative identity or quota.
+  EVIDENCE: bounded 30-file input/display correction is sealed in REVIEW-82-NEXT-CREDENTIALS.md with failed-first transport/usage/cache tests, full affected checks and actual negative-path desktop evidence. Legacy bytes/admission remain unchanged. Supported isolated native profiles, explicit migration/reconnect and independent acceptance remain open; no positive live quota is claimed.
 - [ ] G10: Harness, initial picker and public session controls distinguish native login, managed availability, pending/committed state and backend capability without fallback or optimistic success.
-  EVIDENCE: pending; P4 requires API/CLI/UI boundary tests, locale/accessibility checks, request IDs and stale-response/large-revision controls.
+  EVIDENCE: initial picker and the bounded credential/Harness correction have exact local seals. The latter passes 177 focused tests, 5,606 complete frontend tests, both typechecks and Linux packaging; real Electron verifies separate native/managed availability and specific rejection/request ID. Positive managed execution and independent integrated acceptance remain open.
 - [ ] G11: native macOS arm64 and x64 establish same-boot keeper-death retirement, complete guest execution, packaging/signing and desktop compatibility.
   EVIDENCE: pending; P3 G1/G4 feasibility precedes production adoption. A design approval or compile does not meet this gate.
 - [ ] G12: native Windows passes direct kernel negative controls and the complete creation/publication/shutdown/recovery and replacement-preservation matrix.

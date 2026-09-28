@@ -117,7 +117,7 @@ func (c *ManagementClient) FetchCredentialQuota(ctx context.Context, ref string)
 	if err != nil {
 		return CredentialQuota{}, mapCredentialOperationError(err)
 	}
-	if !record.SupportsQuota {
+	if !record.SupportsQuota || normalizeCredentialKind(record.AccountType) == CredentialAccessToken {
 		return CredentialQuota{}, ErrOperationUnsupported
 	}
 	var quota CredentialQuota
@@ -154,7 +154,7 @@ func (c *ManagementClient) ResetCredentialQuota(ctx context.Context, ref string)
 	if err != nil {
 		return err
 	}
-	if !record.SupportsQuota {
+	if !record.SupportsQuota || normalizeCredentialKind(record.AccountType) == CredentialAccessToken {
 		return ErrOperationUnsupported
 	}
 	provider := Provider(strings.ToLower(strings.TrimSpace(record.Provider)))

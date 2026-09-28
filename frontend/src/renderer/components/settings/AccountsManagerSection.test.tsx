@@ -98,6 +98,33 @@ describe("AccountsManagerSection", () => {
     expect(screen.getByRole("button", { name: "Add codex account" })).toBeDisabled();
   });
 
+  it("labels a legacy sign-in token without claiming an API key or changing its account", async () => {
+    mocks.snapshot.accounts = [{ id: "legacy-token", provider: "codex", kind: "access_token", status: "active", generation: 4, verification: "verified", quotaSupported: false, cooldowns: [] }];
+    renderSection();
+    fireEvent.click(screen.getByRole("button", { name: /Codex sign-in token/ }));
+    expect(screen.getByText("Stored sign-in token. Its credential format has not been converted. Isolated native-token profiles are not available yet.")).toBeInTheDocument();
+    expect(screen.queryByText(/Codex API key/)).not.toBeInTheDocument();
+    expect(mocks.quota).not.toHaveBeenCalled();
+    expect(mocks.setDisabled).not.toHaveBeenCalled();
+    expect(mocks.updateRouting).not.toHaveBeenCalled();
+    expect(mocks.snapshot.accounts).toHaveLength(1);
+  });
+
+  it("explains wrong-method token input and preserves its request ID", async () => {
+    const transport = await vi.importActual<typeof import("../../hooks/useAccountsManagerQuery")>("../../hooks/useAccountsManagerQuery");
+    mocks.addKey.mockImplementation(transport.addAccountsManagerAPIKey);
+    mocks.POST.mockResolvedValue({ error: { code: "ACCOUNTS_MANAGER_CREDENTIAL_METHOD_UNSUPPORTED", requestId: "credential-format-79", message: "private-token" }, response: new Response(null, { status: 400 }) });
+    renderSection();
+    fireEvent.click(screen.getByRole("button", { name: "Add codex account" }));
+    fireEvent.click(screen.getByRole("button", { name: "API key" }));
+    fireEvent.change(screen.getByLabelText("API key"), { target: { value: "synthetic-token" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    expect(await screen.findByText("Sign-in tokens are not API keys. Use native sign-in in Harnesses. This does not connect a managed account; isolated native-token profiles are not available yet.")).toBeInTheDocument();
+    expect(screen.getByText("Request ID: credential-format-79")).toBeInTheDocument();
+    expect(screen.getByLabelText("API key")).toHaveValue("");
+    expect(mocks.snapshot.accounts).toEqual([]);
+  });
+
 	it("shows observed usage and reset time in expanded account details", async () => {
 		mocks.snapshot.accounts = [{id:"saved-a",provider:"codex",kind:"oauth",label:"Work",status:"active",generation:4,verification:"verified",quotaSupported:true,cooldowns:[]}];
 		mocks.quota.mockResolvedValue({observedAt:"2026-09-28T00:00:00Z",summary:[],serverTimeOffsetMs:0,groups:[{displayName:"Account",buckets:[{window:"18000s",remainingFraction:.75,resetTime:"2030-01-01T00:00:00Z",description:""}]}]});

@@ -127,6 +127,26 @@ describe("HarnessSettingsSection", () => {
 		vi.restoreAllMocks();
 	});
 
+	it("separates device login from fresh managed-account availability", async () => {
+		const readiness = { agents: [{ ...catalogWithInstalled("codex").agents[1], authentication: { state: "unauthorized", freshness: "fresh", reason: "", reasonCode: "", attemptedAt: null, checkedAt: null } }] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "codex", action: "login", launchMode: "terminal", available: true }] } } as never;
+			if (path === "/api/v1/accounts-manager/accounts") return { data: { revision: 1, availability: "ready", stale: false, accounts: [{ id: "chosen-a", provider: "codex", kind: "api_key", verification: "verified", status: "active", disabled: false, unavailable: false }] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: readiness } as never);
+		const view = renderSection();
+		const row = view.container.querySelector('[data-agent="codex"]') as HTMLElement;
+		expect(await within(row).findByText("1 managed account available")).toBeInTheDocument();
+		expect(within(row).getByText("Signed out")).toBeInTheDocument();
+		expect(within(row).getByRole("button", { name: "Login" })).toBeEnabled();
+		expect(within(row).getByText("Device login is separate. Select a managed account when starting a session; support depends on session mode.")).toBeInTheDocument();
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", expect.anything());
+	});
+
 	it("offers native login when fx is installed but unauthorized", async () => {
 		const fxCatalog = { agents: [{ ...catalogWithInstalled("claude-code").agents[0], id: "fx", label: "fx", authentication: { state: "unauthorized", freshness: "fresh", reason: "fx is not logged in.", reasonCode: "", attemptedAt: null, checkedAt: null } }] };
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {

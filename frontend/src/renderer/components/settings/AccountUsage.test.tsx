@@ -28,6 +28,37 @@ describe("AccountUsage",()=>{
   });
 
   it.each([
+    ["api_key", "Subscription usage is not available for API keys. Check usage in the provider's billing console."],
+    ["access_token", "This stored sign-in token does not establish usage permission. Setup tokens can allow model requests without account usage access."],
+  ])("explains unsupported usage for %s without requesting it", (kind, message) => {
+    show({ ...account, kind, quotaSupported: false } as AccountsManagerAccount);
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Refresh usage" })).not.toBeInTheDocument();
+    expect(fetchQuota).not.toHaveBeenCalled();
+  });
+
+  it("does not read usage for a legacy token with a contradictory capability flag", () => {
+    show({ ...account, kind: "access_token", quotaSupported: true });
+    expect(screen.getByText(/does not establish usage permission/)).toBeInTheDocument();
+    expect(fetchQuota).not.toHaveBeenCalled();
+  });
+
+  it("does not attach a late usage error to a changed credential format", async () => {
+    let reject!: (cause: unknown) => void;
+    fetchQuota.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    const view = show();
+    await waitFor(() => expect(fetchQuota).toHaveBeenCalledOnce());
+    const signal = fetchQuota.mock.calls[0][1] as AbortSignal;
+    view.rerender(view.tree({ ...account, kind: "access_token", quotaSupported: false }));
+    expect(signal.aborted).toBe(true);
+    await act(async () => reject(new AccountControlError(401, "old-usage-request", "ACCOUNTS_MANAGER_USAGE_AUTHENTICATION_REQUIRED")));
+    expect(screen.getByText(/does not establish usage permission/)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText(/old-usage-request/)).not.toBeInTheDocument();
+  });
+
+  it.each([
     [401,"ACCOUNTS_MANAGER_USAGE_AUTHENTICATION_REQUIRED","The provider could not authenticate the usage request. Reconnect this account, then refresh usage."],
     [403,"ACCOUNTS_MANAGER_USAGE_ACCESS_DENIED","The provider refused the usage request. Your account selection has not changed."],
     [429,"ACCOUNTS_MANAGER_USAGE_RATE_LIMITED","Usage checks are temporarily rate-limited. Wait before refreshing again."],

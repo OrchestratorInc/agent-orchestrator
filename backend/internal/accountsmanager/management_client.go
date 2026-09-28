@@ -33,6 +33,7 @@ var (
 	ErrCredentialNotFound      = errors.New("accounts manager credential was not found")
 	ErrCredentialConflict      = errors.New("accounts manager credential is ambiguous or already exists")
 	ErrInvalidCredential       = errors.New("accounts manager credential is invalid")
+	ErrCredentialMethod        = errors.New("sign-in token is not an API key")
 	ErrVerificationUnavailable = errors.New("accounts manager could not verify the credential")
 	ErrOperationUnsupported    = errors.New("accounts manager operation is unsupported")
 	ErrOAuthBusy               = errors.New("accounts manager OAuth login is already in progress")
@@ -75,9 +76,10 @@ type CredentialKind string
 
 // CredentialOAuth and the other credential kinds describe stored authentication formats.
 const (
-	CredentialOAuth   CredentialKind = "oauth"
-	CredentialAPIKey  CredentialKind = "api_key"
-	CredentialUnknown CredentialKind = "unknown"
+	CredentialOAuth       CredentialKind = "oauth"
+	CredentialAPIKey      CredentialKind = "api_key"
+	CredentialAccessToken CredentialKind = "access_token"
+	CredentialUnknown     CredentialKind = "unknown"
 )
 
 // CredentialState records the runner's latest status, which may be unknown.

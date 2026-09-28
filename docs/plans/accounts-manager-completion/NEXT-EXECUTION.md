@@ -18,7 +18,7 @@ User authorization: 2026-09-28. Continue implementation through the plan with re
 | P1 selection/isolation | Initial-choice slice sealed, review requested | Managed app-server and actual A/B provider execution remain open |
 | P2 switch readiness | Source sealed, independent review requested | P2 cancellation/readiness correction passes; independent verdict remains unconfirmed |
 | P3 retirement/platforms | Pending | Escaped-descendant correction, durable recovery and native proof |
-| P4 credentials/controls | Pending | Supported kinds, usage, Harness scope and UI contracts |
+| P4 credentials/controls | Bounded input/display correction sealed | Native profiles, explicit migration and independent acceptance remain open |
 | P5 integrated evidence | Pending | Complete checks, actual desktop/provider runs and final review |
 
 The complete lint correction is separately sealed at tree `b730765f4fcb099a7522c97f1fe8b37df3ff87b4`. REVIEW-82-NEXT-LINT.md records the 56-file correction, full pinned backend/runner lint with zero findings, 13 affected backend race packages, full runner race, repeated boundary checks, actual-process switching checks, build/vet, generated drift and protected hashes. The broader P5 gate remains open; known containment and native/live-provider gaps are unchanged.
@@ -57,4 +57,10 @@ Real isolated Electron exposed and helped correct a managed harness menu and unb
 
 P0/P2 review requests and the request for a live reviewer were accepted by AO without confirmed provider delivery. Independent verdicts are not assumed. Deletion remains held. Source archives, protected manifests and native platform gaps are preserved; all work remains local.
 
-Still open: independent integration/switching/initial-selection review, managed app-server execution, escaped-descendant retirement, credential experience, native platforms, full branch checks, responsiveness and live-provider/desktop evidence. No release-completion claim is made.
+## P4 local checkpoint
+
+Credential correction tree `ba2d1198a6b4e5c331491d7c996bc91f1fe9f4f4` is sealed with 30 source/test/generated files. REVIEW-82-NEXT-CREDENTIALS.md names the exact manifests, 108 evidence files and archive hashes. Known token input is rejected before API-key mutation; legacy projection preserves storage/admission and cannot invent quota permission. Usage and Harness distinguish credential capabilities from device login. Real Electron exposed the missing renderer error allowlist, reproduced and corrected with transport-level tests.
+
+Final local checks pass: focused races count 3, four complete affected backend packages, full runner race, API parity, both builds/vet and complete pinned lint; 177 focused frontend tests, 5,606 full-suite passes with seven existing skips, both typechecks and Linux packaging. API/SQL repeat has zero drift; 91 protected files and earlier archives remain unchanged. Three actual desktop screenshots and recording frames were inspected using isolated data and a real provider catalog. They prove negative/unavailable paths only. C6's local freeze/handoff obligation is recorded here; independent acceptance remains pending.
+
+Still open: independent integration/switching/initial-selection/credential review, managed app-server execution, escaped-descendant retirement, isolated native profiles and explicit migration, native platforms, full branch checks, responsiveness and live-provider/desktop evidence. No release-completion claim is made.

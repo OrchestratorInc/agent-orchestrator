@@ -9,6 +9,14 @@ const success = (data: unknown) => ({ data, response: new Response(null, { statu
 describe("account control HTTP boundary", () => {
   beforeEach(() => { vi.resetAllMocks(); localStorage.clear(); });
 
+  it("preserves the supported credential-method category without private response fields", () => {
+    const code = "ACCOUNTS_MANAGER_CREDENTIAL_METHOD_UNSUPPORTED";
+    const error = accountRequestError({ code, requestId: "credential-format-79", message: "private-token", endpoint: "http://127.0.0.1:9999" }, 400);
+    expect(error).toMatchObject({ status: 400, code, requestId: "credential-format-79" });
+    expect(JSON.stringify(error)).not.toContain("private-token");
+    expect(JSON.stringify(error)).not.toContain("127.0.0.1");
+  });
+
   it.each([
     "ACCOUNTS_MANAGER_USAGE_AUTHENTICATION_REQUIRED", "ACCOUNTS_MANAGER_USAGE_ACCESS_DENIED",
     "ACCOUNTS_MANAGER_USAGE_RATE_LIMITED", "ACCOUNTS_MANAGER_USAGE_UNAVAILABLE", "ACCOUNTS_MANAGER_USAGE_RESPONSE_INVALID",

@@ -19,7 +19,7 @@ const usageErrorKeys: Record<string, MessageKey> = {
   ACCOUNTS_MANAGER_USAGE_RESPONSE_INVALID: "accountsManager.usage.responseInvalid",
 };
 const accountErrorCodes = new Set([
-  "ACCOUNTS_MANAGER_INVALID_CREDENTIAL", "ACCOUNTS_MANAGER_VERIFICATION_UNAVAILABLE", ...Object.keys(usageErrorKeys),
+  "ACCOUNTS_MANAGER_INVALID_CREDENTIAL", "ACCOUNTS_MANAGER_CREDENTIAL_METHOD_UNSUPPORTED", "ACCOUNTS_MANAGER_VERIFICATION_UNAVAILABLE", ...Object.keys(usageErrorKeys),
 ]);
 
 export class AccountControlError extends Error {

@@ -7,11 +7,15 @@ import { Button } from "../ui/button";
 
 type Quota = NonNullable<Awaited<ReturnType<typeof fetchAccountsManagerQuota>>>;
 
+function canReadUsage(account: AccountsManagerAccount): boolean {
+  return Boolean(account.kind !== "access_token" && account.quotaSupported && account.verification === "verified" && !account.disabled && !account.unavailable);
+}
+
 export function useAccountUsage(accounts: AccountsManagerAccount[]) {
   return useQueries({ queries: accounts.map(account => ({
-    queryKey: ["accounts-manager", "quota", account.id, account.generation, account.updatedAt, account.verifiedAt],
+    queryKey: ["accounts-manager", "quota", account.id, account.generation, account.kind, account.updatedAt, account.verifiedAt],
     queryFn: ({ signal }: { signal: AbortSignal }) => fetchAccountsManagerQuota(account.id, signal),
-    enabled: Boolean(account.quotaSupported && account.verification === "verified" && !account.disabled && !account.unavailable),
+    enabled: canReadUsage(account),
     retry: false,
     staleTime: 30_000,
     gcTime: 60_000,
@@ -25,7 +29,10 @@ function remaining(value: number, locale?: string) {
 
 export function accountUsageSummary(account: AccountsManagerAccount, query: UseQueryResult<Quota | undefined>, t: TFunction, locale?: string): string {
   if (account.verification !== "verified") return t(account.verification === "invalid" ? "accountsManager.verification.invalid" : "accountsManager.verification.unverified");
-  if (!account.quotaSupported || account.disabled || account.unavailable || query.isError) return t("accountsManager.usage.unavailable");
+  if (account.disabled || account.unavailable) return t("accountsManager.usage.unavailable");
+  if (account.kind === "access_token") return t("accountsManager.usage.tokenPermission");
+  if (!account.quotaSupported) return t(account.kind === "api_key" ? "accountsManager.usage.apiKey" : "accountsManager.usage.unavailable");
+  if (query.isError) return t("accountsManager.usage.unavailable");
   const fraction = query.data?.groups?.[0]?.buckets?.[0]?.remainingFraction;
   if (typeof fraction !== "number" || !Number.isFinite(fraction) || fraction < 0 || fraction > 1) return t(query.isFetching ? "accountsManager.usage.checking" : "accountsManager.usage.unavailable");
   return t("accountsManager.usage.remaining", { percent: remaining(fraction, locale) });
@@ -35,7 +42,7 @@ export function AccountUsage({ account }: { account: AccountsManagerAccount }) {
   const { t, i18n } = useTranslation();
   const [query] = useAccountUsage([account]);
   const summary = accountUsageSummary(account, query, t, i18n.resolvedLanguage);
-  const supported = account.quotaSupported && account.verification === "verified" && !account.disabled && !account.unavailable;
+  const supported = canReadUsage(account);
   const stamp = (value: string) => Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString(i18n.resolvedLanguage) : t("accountsManager.status.unknown");
   return <section aria-label={t("accountsManager.usage.title")} className="space-y-2 rounded-md border border-border p-3">
     <div className="flex items-center justify-between gap-2">
@@ -43,7 +50,7 @@ export function AccountUsage({ account }: { account: AccountsManagerAccount }) {
       {supported ? <Button size="sm" variant="ghost" disabled={query.isFetching} onClick={() => void query.refetch()}>{t("accountsManager.usage.refresh")}</Button> : null}
     </div>
     {!query.data || query.isError || !supported ? <p role="status">{summary}</p> : null}
-    {query.error ? <p role="alert">{accountControlMessage(query.error, t)}</p> : null}
+    {query.error && supported ? <p role="alert">{accountControlMessage(query.error, t)}</p> : null}
     {query.data && supported ? <>
       {query.isError ? <p>{t("accountsManager.usage.stale")}</p> : null}
       {query.data.groups.map((group, groupIndex) => group.buckets.map((bucket, index) => {

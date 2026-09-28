@@ -344,6 +344,8 @@ func (c *AccountsManagerController) writeError(w http.ResponseWriter, r *http.Re
 		envelope.WriteAPIError(w, r, 400, "validation", "ACCOUNTS_MANAGER_PROVIDER_UNSUPPORTED", "Provider must be codex or claude", nil)
 	case errors.Is(err, accountsmanager.ErrInvalidCredential):
 		envelope.WriteAPIError(w, r, 400, "validation", "ACCOUNTS_MANAGER_INVALID_CREDENTIAL", "Credential is invalid", nil)
+	case errors.Is(err, accountsmanager.ErrCredentialMethod):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "ACCOUNTS_MANAGER_CREDENTIAL_METHOD_UNSUPPORTED", "Sign-in tokens cannot be added as API keys. Use the provider-owned native sign-in flow", nil)
 	case errors.Is(err, accountsmanager.ErrVerificationUnavailable):
 		envelope.WriteAPIError(w, r, 503, "unavailable", "ACCOUNTS_MANAGER_VERIFICATION_UNAVAILABLE", "Could not verify this credential. Check connectivity and credential permissions, then retry", nil)
 	case errors.Is(err, accountsmanager.ErrCredentialNotFound):

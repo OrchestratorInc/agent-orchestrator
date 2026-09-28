@@ -18,6 +18,8 @@ import (
 
 const credentialPath = "/ao/internal/credentials" // #nosec G101 -- Public route path, not a credential.
 
+const signInTokenPrefix = "sk-ant-oat" // #nosec G101 -- Public format prefix, not a credential.
+
 type credentialHTTP struct {
 	key     string
 	runtime *credentialRuntime
@@ -215,6 +217,9 @@ func (h *credentialHTTP) record(ctx context.Context, auth *coreauth.Auth) creden
 	record.SupportsQuota = supportsCredentialQuota(auth)
 	if auth.Attributes["api_key"] != "" {
 		record.AccountType = "api_key"
+		if strings.HasPrefix(auth.Attributes["api_key"], signInTokenPrefix) {
+			record.AccountType = "access_token"
+		}
 	}
 	if email, ok := auth.Metadata["email"].(string); ok && len(email) <= 320 {
 		record.Email = email
@@ -236,6 +241,9 @@ func parseCredentialCreate(input credentialCreate, apiKey bool) (*coreauth.Auth,
 		key := strings.TrimSpace(input.Key)
 		if key == "" || len(key)+len(input.BaseURL) > 16<<10 || len(input.Credential) != 0 || strings.IndexFunc(input.Key, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
 			return nil, errCredentialConflict
+		}
+		if strings.HasPrefix(key, signInTokenPrefix) {
+			return nil, errCredentialInvalid
 		}
 		base, err := credentialBaseURL(input.Provider, input.BaseURL)
 		if err != nil {

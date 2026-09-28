@@ -74,6 +74,9 @@ func (c *ManagementClient) AddAPIKey(ctx context.Context, input APIKeyInput) (Cr
 	if len(key)+len(input.BaseURL) > managementAPIKeyLimit {
 		return CredentialSummary{}, ErrRequestTooLarge
 	}
+	if strings.HasPrefix(key, "sk-ant-oat") {
+		return CredentialSummary{}, ErrCredentialMethod
+	}
 	baseURL, err := normalizeProviderBaseURL(input.Provider, input.BaseURL)
 	if err != nil {
 		return CredentialSummary{}, err
@@ -201,12 +204,13 @@ func summaryFromRawCredential(record rawCredentialRecord) CredentialSummary {
 	if provider == "" {
 		provider = Provider(strings.ToLower(strings.TrimSpace(record.Type)))
 	}
+	kind := normalizeCredentialKind(record.AccountType)
 	return CredentialSummary{
 		Verification: record.Verification, VerifiedAt: record.VerifiedAt,
 		Label: record.Label, Generation: record.Generation, ReconnectSupported: record.ReconnectSupported,
 		Ref:             strings.TrimSpace(record.AuthIndex),
 		Provider:        provider,
-		Kind:            normalizeCredentialKind(record.AccountType),
+		Kind:            kind,
 		Email:           strings.TrimSpace(record.Email),
 		Status:          normalizeCredentialState(record.Status, record.Disabled),
 		Disabled:        record.Disabled,
@@ -214,7 +218,7 @@ func summaryFromRawCredential(record rawCredentialRecord) CredentialSummary {
 		CreatedAt:       record.CreatedAt,
 		UpdatedAt:       record.UpdatedAt,
 		LastRefreshedAt: record.LastRefresh,
-		QuotaSupported:  record.SupportsQuota,
+		QuotaSupported:  record.SupportsQuota && kind != CredentialAccessToken,
 		Cooldowns:       append([]CredentialCooldown(nil), record.Cooldowns...),
 		Quota:           projectQuotaObservation(record.Quota),
 		ModelQuota:      projectModelQuotaObservations(record.ModelQuota),
@@ -251,6 +255,8 @@ func normalizeCredentialKind(raw string) CredentialKind {
 		return CredentialOAuth
 	case "api_key", "api-key", "apikey":
 		return CredentialAPIKey
+	case "access_token":
+		return CredentialAccessToken
 	default:
 		return CredentialUnknown
 	}
