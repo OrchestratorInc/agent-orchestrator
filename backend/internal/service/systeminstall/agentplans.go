@@ -41,6 +41,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetUnreal:     "https://github.com/unreallabsai/unreal-agent",
 	TargetMiMoCode:   "https://github.com/XiaomiMiMo/MiMo-Code",
 	TargetDeepSeek:   "https://github.com/deepseek-ai/deepseek-harness",
+	TargetZCode:      "https://github.com/zai-org/ZCode",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -236,6 +237,17 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		// DeepSeek Harness ships as one Node CLI that boots every profile
 		// (headless, ACP, web) from the same install, so npm is the only method.
 		plans = []Plan{s.planNPM(target, "@deepseek-ai/dsh")}
+	case TargetZCode:
+		// ZCode is distributed by Z.ai directly — desktop app or the CLI
+		// release package from the official open repo (github.com/zai-org/ZCode).
+		// There is no official npm package (the npm names are unrelated
+		// placeholders / community clients), so AO surfaces a manual plan
+		// pointing at the official docs instead of a package install.
+		plans = []Plan{manualPlan(
+			target,
+			"ZCode is distributed by Z.ai: install the desktop app from https://zcode.z.ai or the CLI from the official repo releases (github.com/zai-org/ZCode), which provides the `zcode` binary (TUI; `zcode --web`).",
+			agentDocumentationURLs[target],
+		)}
 	default:
 		plans = []Plan{{Target: target, Unsupported: true, Method: "manual", Reason: "unknown install target"}}
 	}

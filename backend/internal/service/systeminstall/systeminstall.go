@@ -75,6 +75,7 @@ const (
 	TargetUnreal     Target = "unreal-agent"
 	TargetMiMoCode   Target = "mimo-code"
 	TargetDeepSeek   Target = "deepseek-harness"
+	TargetZCode      Target = "zcode"
 	// TargetCloudflared is the optional connector that makes a paired phone
 	// reachable from outside the local network.
 	TargetCloudflared Target = "cloudflared"
@@ -88,6 +89,8 @@ var agentTargets = []Target{
 	TargetContinue, TargetDevin, TargetKiro, TargetKilocode, TargetVibe,
 	TargetMuse, TargetAgy, TargetAutohand, TargetKimchi, TargetPrimeAgent,
 	TargetOMP, TargetFX, TargetUnreal, TargetMiMoCode, TargetDeepSeek,
+	TargetOMP, TargetFX, TargetUnreal,
+	TargetZCode,
 }
 
 var agentTargetSet = func() map[Target]bool {
@@ -263,6 +266,7 @@ var devinInstalledLine = regexp.MustCompile(`Installed devin v\S+ to [^\r\n]+/de
 // Job is the tracked state of one install run for a Target.
 type Job struct {
 	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,mimo-code,deepseek-harness,cloudflared" description:"Fixed install target this job ran (or is running) for."`
+	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,zcode,cloudflared" description:"Fixed install target this job ran (or is running) for."`
 	Status              Status `json:"status" enum:"idle,running,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job."`
 	Method              string `json:"method,omitempty" description:"Server-owned installation method selected for this harness job."`
 	Command             string `json:"command,omitempty" description:"Human-readable install command, e.g. \"brew install tmux\", for display even before/without output."`

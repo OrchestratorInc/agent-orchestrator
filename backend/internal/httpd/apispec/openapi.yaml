@@ -11891,6 +11891,7 @@ components:
           - unreal-agent
           - mimo-code
           - deepseek-harness
+          - zcode
           - fake
           type: string
         approvalMode:
@@ -12529,6 +12530,7 @@ components:
           - unreal-agent
           - mimo-code
           - deepseek-harness
+          - zcode
           - cloudflared
           type: string
         updatedAt:
@@ -15036,6 +15038,7 @@ components:
           - unreal-agent
           - mimo-code
           - deepseek-harness
+          - zcode
           type: string
         issueId:
           type: string
