@@ -133,9 +133,6 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		}
 	case TargetGemini:
 		plans = []Plan{s.planNPM(target, "@google/gemini-cli@latest")}
-		if s.goos == "darwin" {
-			plans = append([]Plan{s.planBrew(target, "gemini-cli")}, plans...)
-		}
 	case TargetQwen:
 		official := s.officialByOS(target, "https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh", "bash", "https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.ps1", agentDocumentationURLs[target])
 		if s.goos == "darwin" {

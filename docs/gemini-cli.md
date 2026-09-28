@@ -1,8 +1,10 @@
 # Gemini CLI
 
 AO supports Gemini CLI 0.60.0 and newer in Terminal UI mode. Install or update
-Gemini from Settings → Agents, then use **Set up Gemini CLI** to authenticate
+Gemini with npm from Settings → Agents, then use **Set up Gemini CLI** to authenticate
 with the native `/auth` chooser. AO does not read or copy Gemini credentials.
+AO currently omits Homebrew as an install method because its formula trails the
+minimum supported Gemini CLI version.
 
 Choose `gemini` as a project's agent or pass `ao spawn --harness gemini`.
 The model field forwards a native Gemini model ID through `--model`.
