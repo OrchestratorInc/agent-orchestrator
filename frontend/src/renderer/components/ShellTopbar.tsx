@@ -128,7 +128,7 @@ export function ShellTopbar({
 	const isProjectBoardRoute = !isSessionRoute && Boolean(projectId);
 	const isRootBoardRoute = !isSessionRoute && !isProjectBoardRoute && !isAutomationsRoute && !isStandaloneBoardRoute;
 	const project = workspaceScope?.project;
-	const projectLabel = project?.name ?? session?.workspaceName ?? (projectId ? "" : isStandaloneBoardRoute ? t("standalone.workspaceName") : t("shell.board"));
+	const projectLabel = project?.name ?? session?.workspaceName ?? (projectId ? "" : isStandaloneBoardRoute ? t("standalone.archive.title") : t("shell.board"));
 	const orchestrator = workspaceScope?.orchestrator;
 	const supportsProjectActions = project?.kind !== STANDALONE_PROJECT_KIND && projectId !== STANDALONE_WORKSPACE_ID;
 	const projectActions = useProjectOrchestratorAction({
@@ -191,8 +191,12 @@ export function ShellTopbar({
 							className={cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5")}
 							transition={{ type: "spring", stiffness: 400, damping: 40 }}
 						>
-							<LayoutDashboard aria-hidden="true" className="size-icon-md" />
-							{isStandaloneBoardRoute ? t("standalone.workspaceName") : t("shell.board")}
+							{isStandaloneBoardRoute ? (
+								<Archive aria-hidden="true" className="size-icon-md" />
+							) : (
+								<LayoutDashboard aria-hidden="true" className="size-icon-md" />
+							)}
+							{isStandaloneBoardRoute ? t("standalone.archive.title") : t("shell.board")}
 						</motion.span>
 					</div>
 				)}

@@ -3,8 +3,6 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-	STANDALONE_PROJECT_KIND,
-	STANDALONE_WORKSPACE_ID,
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
@@ -87,17 +85,17 @@ import { SessionsBoard } from "./SessionsBoard";
 import { toBoardSessionPresentation } from "./SessionsBoardAdapters";
 import { TooltipProvider } from "./ui/tooltip";
 
-function renderBoard(projectId?: string, standaloneOnly = false) {
+function renderBoard(projectId?: string) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	renderBoardWithClient(queryClient, projectId, standaloneOnly);
+	renderBoardWithClient(queryClient, projectId);
 	return queryClient;
 }
 
-function renderBoardWithClient(queryClient: QueryClient, projectId?: string, standaloneOnly = false) {
+function renderBoardWithClient(queryClient: QueryClient, projectId?: string) {
 	return render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
-				<SessionsBoard projectId={projectId} standaloneOnly={standaloneOnly} />
+				<SessionsBoard projectId={projectId} />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -1017,36 +1015,6 @@ describe("SessionsBoard", () => {
 		expect(screen.queryByRole("button", { name: "Open dead worker" })).not.toBeInTheDocument();
 	});
 
-	it("opens standalone session cards on the projectless session route", async () => {
-		workspaceQueryMock.mockReturnValue({
-			data: [
-				workspaceWithSessions([boardSession({ id: "project-live", title: "project worker", status: "idle" })]),
-				standaloneWorkspaceWithSessions([
-					boardSession({
-						id: "standalone-live",
-						title: "ad hoc worker",
-						status: "idle",
-						workspaceId: STANDALONE_WORKSPACE_ID,
-						workspaceName: "Scratchpad",
-						branch: undefined,
-					}),
-				]),
-			],
-			isError: false,
-			isSuccess: true,
-		});
-
-		renderBoard(undefined, true);
-
-		expect(screen.queryByText("project worker")).not.toBeInTheDocument();
-		await userEvent.click(screen.getByText("ad hoc worker"));
-
-		expect(navigateMock).toHaveBeenCalledWith({
-			to: "/sessions/$sessionId",
-			params: { sessionId: "standalone-live" },
-		});
-	});
-
 	it("restores a terminated session, refreshes workspace data, and opens the restored terminal", async () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([terminatedSession()])],
@@ -1068,38 +1036,6 @@ describe("SessionsBoard", () => {
 		expect(navigateMock).toHaveBeenCalledWith({
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "p1", sessionId: "s-dead" },
-		});
-	});
-
-	it("restores a standalone archived session on the projectless session route", async () => {
-		workspaceQueryMock.mockReturnValue({
-			data: [
-				standaloneWorkspaceWithSessions([
-					terminatedSession({
-						id: "standalone-dead",
-						title: "archived ad hoc",
-						workspaceId: STANDALONE_WORKSPACE_ID,
-						workspaceName: "Scratchpad",
-						branch: undefined,
-					}),
-				]),
-			],
-			isError: false,
-			isSuccess: true,
-		});
-		renderBoard(undefined, true);
-
-		await expandArchive();
-		await userEvent.click(screen.getByRole("button", { name: "Restore archived ad hoc" }));
-
-		await waitFor(() =>
-			expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/restore", {
-				params: { path: { sessionId: "standalone-dead" } },
-			}),
-		);
-		expect(navigateMock).toHaveBeenCalledWith({
-			to: "/sessions/$sessionId",
-			params: { sessionId: "standalone-dead" },
 		});
 	});
 
@@ -1677,16 +1613,6 @@ function workspaceWithSessions(sessions: WorkspaceSession[]): WorkspaceSummary {
 		id: "p1",
 		name: "radic",
 		path: "/tmp/radic",
-		sessions,
-	};
-}
-
-function standaloneWorkspaceWithSessions(sessions: WorkspaceSession[]): WorkspaceSummary {
-	return {
-		id: STANDALONE_WORKSPACE_ID,
-		name: "Scratchpad",
-		kind: STANDALONE_PROJECT_KIND,
-		path: "Not attached to a project",
 		sessions,
 	};
 }
