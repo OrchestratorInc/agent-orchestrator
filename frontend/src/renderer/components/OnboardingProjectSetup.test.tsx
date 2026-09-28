@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 
@@ -16,7 +16,6 @@ const cloudMocks = vi.hoisted(() => ({
 // flow, so the contract here is the trigger it gets handed.
 vi.mock("./CreateProjectFlow", () => ({
 	CloudProjectCard: () => <div data-testid="cloud-project-card" />,
-	CloudSignInPanel: () => <div data-testid="cloud-sign-in-panel" />,
 	CreateProjectFlow: (props: { onboardingTrigger?: { kind: string; nonce: number } }) => {
 		flowMocks.triggers.push(props.onboardingTrigger);
 		return null;
@@ -45,6 +44,7 @@ function renderStep() {
 beforeEach(() => {
 	cloudMocks.cloudEnabled = false;
 	cloudMocks.status = "unauthenticated";
+	cloudMocks.signIn.mockClear();
 	flowMocks.triggers = [];
 });
 
@@ -78,9 +78,11 @@ it("offers cloud as a project source once the cloud step enabled it", async () =
 	cloudMocks.cloudEnabled = true;
 	renderStep();
 
-	expect(screen.queryByTestId("cloud-sign-in-panel")).not.toBeInTheDocument();
+	expect(screen.queryByRole("dialog", { name: "Create a cloud project" })).not.toBeInTheDocument();
 	await userEvent.click(screen.getByRole("button", { name: "Create a cloud project" }));
-	expect(await screen.findByTestId("cloud-sign-in-panel")).toBeInTheDocument();
+	const dialog = await screen.findByRole("dialog", { name: "Create a cloud project" });
+	await userEvent.click(within(dialog).getByRole("button", { name: "Sign in to AO Cloud" }));
+	expect(cloudMocks.signIn).toHaveBeenCalledOnce();
 });
 
 it("goes straight to the cloud project form when the account is signed in", async () => {
