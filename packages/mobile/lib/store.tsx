@@ -93,7 +93,8 @@ type AppState = {
 	 */
 	getLastSyncAt: () => number;
 	// actions
-	reloadConfig: () => Promise<void>;
+	/** Races the active machine again and resolves to the config it settled on. */
+	reloadConfig: () => Promise<ServerConfig>;
 	refresh: () => Promise<void>;
 	setActiveProject: (id: string) => void;
 	spawn: (opts: SpawnOptions) => Promise<DashboardSession>;
@@ -224,7 +225,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// Set when the app returns to the foreground, consumed by the upgrade check.
 	const resumedRef = useRef(false);
 
-	const reloadConfig = useCallback(async () => {
+	const reloadConfig = useCallback(async (): Promise<ServerConfig> => {
 		// Races the active machine's endpoints rather than reading one stored
 		// address, so the app lands on LAN at home and the tunnel from anywhere
 		// else without the user choosing. Always resolves to something: every
@@ -252,6 +253,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// tunnel that no longer answers is a rotated hostname, not a machine
 			// that is merely out of range.
 			setActiveEndpoints((await activeHost())?.endpoints ?? []);
+			return next;
 		} finally {
 			setConfigResolved(true);
 		}

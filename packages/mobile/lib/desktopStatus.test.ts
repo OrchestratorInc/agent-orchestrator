@@ -1,0 +1,40 @@
+import { describe, expect, it } from "vitest";
+import { describeDesktopStatus } from "./desktopStatus";
+
+describe("describeDesktopStatus", () => {
+	it("offers setup when nothing is paired, whatever the poll says", () => {
+		expect(describeDesktopStatus({ configured: false, connection: "closed", failure: "unreachable" })).toEqual({
+			label: "Set up",
+			tone: "neutral",
+		});
+	});
+
+	it("reports a live connection", () => {
+		expect(describeDesktopStatus({ configured: true, connection: "open", failure: null })).toEqual({
+			label: "Connected",
+			tone: "ok",
+		});
+	});
+
+	it("reports an attempt in progress", () => {
+		expect(describeDesktopStatus({ configured: true, connection: "connecting", failure: null }).label).toBe("Connecting…");
+	});
+
+	// The reported bug: a desktop that stopped answering still read "Paired".
+	it("never calls an unreachable desktop paired", () => {
+		expect(describeDesktopStatus({ configured: true, connection: "closed", failure: "unreachable" })).toEqual({
+			label: "Offline",
+			tone: "error",
+		});
+		expect(describeDesktopStatus({ configured: true, connection: "closed", failure: null }).label).toBe("Offline");
+	});
+
+	it("names the cause when the desktop answered with a rejection", () => {
+		const label = (failure: Parameters<typeof describeDesktopStatus>[0]["failure"]) =>
+			describeDesktopStatus({ configured: true, connection: "closed", failure }).label;
+		expect(label("auth")).toBe("Password rejected");
+		expect(label("rate-limited")).toBe("Locked out");
+		expect(label("server-error")).toBe("Desktop error");
+		expect(label("tunnel-rotated")).toBe("Address changed");
+	});
+});
