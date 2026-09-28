@@ -1519,7 +1519,7 @@ describe("SessionInspector Activity section", () => {
   it.each([
     ["ci_failed", "CI Failed"],
     ["changes_requested", "Changes Requested"],
-    ["review_feedback", "Review Feedback"],
+    ["commented", "Commented"],
   ] as const)(
     "renders %s as an SCM state in the current Activity row",
     (status, label) => {
@@ -1539,7 +1539,7 @@ describe("SessionInspector Activity section", () => {
     },
   );
 
-  it("keeps an unresolved, non-blocking review comment visible as Review Feedback while the agent is working (#5765)", () => {
+  it("keeps an unresolved, non-blocking review comment visible as Commented feedback while the agent is working (#5765)", () => {
     renderWithQuery(
       <SessionInspector
         session={session(
@@ -1555,7 +1555,7 @@ describe("SessionInspector Activity section", () => {
     const activityRow = activitySection()
       .getByText("Working")
       .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
-    expect(within(activityRow).getByText("Review Feedback")).toBeInTheDocument();
+    expect(within(activityRow).getByText("Commented")).toBeInTheDocument();
     expect(within(activityRow).queryByText("Changes Requested")).not.toBeInTheDocument();
   });
 

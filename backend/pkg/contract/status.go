@@ -25,19 +25,19 @@ const (
 	StatusCIFailed         SessionStatus = "ci_failed"
 	StatusReviewPending    SessionStatus = "review_pending"
 	StatusChangesRequested SessionStatus = "changes_requested"
-	// StatusReviewFeedback marks a pull request with an unresolved comment
+	// StatusCommented marks a pull request with an unresolved comment
 	// thread from a review that did not formally request changes (e.g. a
 	// GitHub COMMENTED review). It is distinct from StatusChangesRequested,
 	// which is reserved for a formal provider decision.
-	StatusReviewFeedback SessionStatus = "review_feedback"
-	StatusApproved       SessionStatus = "approved"
-	StatusMergeable      SessionStatus = "mergeable"
-	StatusMerged         SessionStatus = "merged"
-	StatusNeedsInput     SessionStatus = "needs_input"
-	StatusExited         SessionStatus = "exited"
-	StatusIdle           SessionStatus = "idle"
-	StatusTerminated     SessionStatus = "terminated"
-	StatusNoSignal       SessionStatus = "no_signal"
+	StatusCommented  SessionStatus = "commented"
+	StatusApproved   SessionStatus = "approved"
+	StatusMergeable  SessionStatus = "mergeable"
+	StatusMerged     SessionStatus = "merged"
+	StatusNeedsInput SessionStatus = "needs_input"
+	StatusExited     SessionStatus = "exited"
+	StatusIdle       SessionStatus = "idle"
+	StatusTerminated SessionStatus = "terminated"
+	StatusNoSignal   SessionStatus = "no_signal"
 )
 
 // SessionFacts are the durable-agnostic facts used to derive session status.
@@ -221,7 +221,7 @@ func aggregatePRStatus(open []PRFacts) SessionStatus {
 
 func isActionableChildSignal(status SessionStatus) bool {
 	switch status {
-	case StatusCIFailed, StatusDraft, StatusChangesRequested, StatusReviewFeedback:
+	case StatusCIFailed, StatusDraft, StatusChangesRequested, StatusCommented:
 		return true
 	default:
 		return false
@@ -234,7 +234,7 @@ func statusSeverity(status SessionStatus) int {
 		return 0
 	case StatusChangesRequested:
 		return 1
-	case StatusReviewFeedback:
+	case StatusCommented:
 		return 2
 	case StatusDraft:
 		return 3
@@ -264,7 +264,7 @@ func prPipelineStatus(pr PRFacts) SessionStatus {
 	case pr.Review == ReviewChangesRequest:
 		return StatusChangesRequested
 	case pr.ReviewComments:
-		return StatusReviewFeedback
+		return StatusCommented
 	case pr.Mergeability == MergeMergeable:
 		return StatusMergeable
 	case pr.Review == ReviewRequired:
