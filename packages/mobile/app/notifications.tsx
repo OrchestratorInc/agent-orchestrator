@@ -1,6 +1,6 @@
 import { Feather } from "../lib/icons";
 import { useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActivityIndicator,
 	Alert,
@@ -30,7 +30,7 @@ import { useApp } from "../lib/store";
 import { MINUTE_MS, useNow } from "../lib/useNow";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
-import { Dot, EmptyState, HeaderIconButton, ScreenHeader } from "../lib/ui";
+import { Button, Dot, EmptyState, HeaderIconButton, ScreenHeader } from "../lib/ui";
 import { press, space, type } from "../lib/tokens";
 import { backOr } from "../lib/backNavigation";
 import { userFacingError } from "../lib/connectionError";
@@ -104,6 +104,21 @@ export default function NotificationsScreen() {
 		// Paging state changes must not refetch the first page.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [config]);
+
+	// A load that failed while the desktop was unreachable retries as soon as the
+	// board's poll reconnects, which is what the offline state promises. Keyed on
+	// the reconnect itself: `load` clears `error` as it starts, so keying on the
+	// error would loop against an endpoint that keeps failing while connected.
+	const previousConnection = useRef(connection);
+	useEffect(() => {
+		const reconnected = previousConnection.current !== "open" && connection === "open";
+		previousConnection.current = connection;
+		if (reconnected && error) void load("refresh");
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [connection]);
+	// The board's poll is the app's view of the link: when it is down, say so in
+	// the board's words rather than as a failed load.
+	const offline = Boolean(config) && connection === "closed" && Boolean(error);
 
 	function open(notification: NotificationRecord) {
 		haptics.tap();
@@ -219,7 +234,7 @@ export default function NotificationsScreen() {
 						error && items.length > 0 ? (
 							<View style={styles.inlineError}>
 								<Feather name="alert-circle" size={15} color={t.red} />
-								<Text selectable style={styles.inlineErrorText}>{error}</Text>
+								<Text selectable style={styles.inlineErrorText}>{offline ? "Not connected to your desktop. Showing the last notifications loaded." : error}</Text>
 							</View>
 						) : null
 					}
@@ -246,16 +261,26 @@ export default function NotificationsScreen() {
 						) : null
 					}
 					ListEmptyComponent={
-						<EmptyState
-							icon={error ? "alert-circle" : config ? "check-circle" : "server"}
-							title={error ? "Couldn't load notifications" : config ? "All caught up" : "No desktop paired"}
-							message={
-								error ??
-								(config
-									? "Updates from workers and pull requests will appear here when they need you."
-									: "Pair this phone with AO to receive worker and pull request updates.")
-							}
-						/>
+						offline ? (
+							<EmptyState
+								icon="wifi-off"
+								title="Not connected to your desktop"
+								message="Notifications load once the app reconnects."
+								action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={() => void load("refresh")} />}
+							/>
+						) : (
+							<EmptyState
+								icon={error ? "alert-circle" : config ? "check-circle" : "server"}
+								title={error ? "Couldn't load notifications" : config ? "All caught up" : "No desktop paired"}
+								message={
+									error ??
+									(config
+										? "Updates from workers and pull requests will appear here when they need you."
+										: "Pair this phone with AO to receive worker and pull request updates.")
+								}
+								action={error ? <Button title="Retry" icon="refresh-cw" variant="ghost" onPress={() => void load("refresh")} /> : undefined}
+							/>
+						)
 					}
 				/>
 			)}
