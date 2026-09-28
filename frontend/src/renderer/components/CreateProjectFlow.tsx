@@ -66,6 +66,7 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 export type CreateProjectInput = {
 	path: string;
@@ -1284,7 +1285,7 @@ export function ProjectOfferingTabs({
 	const { t } = useTranslation();
 	return (
 		<div className="flex w-full flex-col items-center gap-1.5">
-			<Tabs value={offering} onValueChange={(value) => onOfferingChange(value === "cloud" ? "cloud" : "local")}>
+			<Tabs value={offering} onValueChange={(value: string) => onOfferingChange(value === "cloud" ? "cloud" : "local")}>
 				<TabsList aria-label={t("createProject.kindChoice")}>
 					<TabsTrigger disabled={disabled} value="local">
 						{t("createProject.kindLocal")}

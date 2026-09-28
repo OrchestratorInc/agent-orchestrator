@@ -2,7 +2,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { ChevronLeft, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useCloudSession } from "../lib/cloud-session";
-import { CloudProjectCard } from "./CreateProjectFlow";
+import { CloudProjectCard, CloudSignInPanel } from "./CreateProjectFlow";
 import { Button } from "./ui/button";
 
 /** Creating a cloud project from onboarding. Built on Clone Repository's chrome:
@@ -48,22 +48,9 @@ export function OnboardingCloudDialog({ onClose, onCreated }: { onClose: () => v
 					</div>
 
 					{signedIn ? (
-						<CloudProjectCard bare onCreated={onCreated} />
+						<CloudProjectCard onAuthRequired={() => signIn()} onBack={onClose} onCreated={onCreated} />
 					) : (
-						<>
-							<div className="min-h-0 overflow-y-auto">
-								<div className="space-y-4 px-4 pb-1 pt-4">
-									<p className="text-pretty text-[13px] leading-5 text-[var(--color-text-import-subtitle)]">
-										{t("createProject.cloudSignInPrompt")}
-									</p>
-								</div>
-							</div>
-							<div className="flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3">
-								<Button type="button" variant="primary" onClick={() => signIn()}>
-									{t("shell.signInToAOCloud")}
-								</Button>
-							</div>
-						</>
+						<CloudSignInPanel disabled={false} onBack={onClose} onSignIn={signIn} />
 					)}
 				</Dialog.Content>
 			</Dialog.Portal>
