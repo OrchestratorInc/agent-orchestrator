@@ -73,6 +73,7 @@ import type {
 import type {
 	BrowserHistorySuggestion,
 	BrowserImportDiscovery,
+	BrowserImportDiscoveryRequest,
 	BrowserImportProgress,
 	BrowserImportRequest,
 	BrowserImportResult,
@@ -539,8 +540,10 @@ const api = {
 			ipcRenderer.invoke("browserProfiles:rename", input) as Promise<BrowserProfile>,
 		clear: (id: string) => ipcRenderer.invoke("browserProfiles:clear", { id }) as Promise<void>,
 		delete: (id: string) => ipcRenderer.invoke("browserProfiles:delete", { id }) as Promise<void>,
-		discoverImportSources: () =>
-			ipcRenderer.invoke("browserProfiles:import:discover") as Promise<BrowserImportDiscovery>,
+		discoverImportSources: (input?: BrowserImportDiscoveryRequest) =>
+			(input === undefined
+				? ipcRenderer.invoke("browserProfiles:import:discover")
+				: ipcRenderer.invoke("browserProfiles:import:discover", input)) as Promise<BrowserImportDiscovery>,
 		import: (input: BrowserImportRequest) =>
 			ipcRenderer.invoke("browserProfiles:import:start", input) as Promise<BrowserImportResult>,
 		onImportProgress: (listener: (progress: BrowserImportProgress) => void) => {

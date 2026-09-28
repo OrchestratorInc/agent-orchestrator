@@ -2230,5 +2230,11 @@
 	"settings.models.useAgentMode": "Utiliser le mode de l’agent",
 	"settings.models.useAgentEffort": "Utiliser l’effort de l’agent",
 	"settings.models.effortNotReported": "Effort non indiqué",
-	"settings.models.modeNotReported": "Mode non indiqué"
+	"settings.models.modeNotReported": "Mode non indiqué",
+	"standalone.archive.heading_one": "{{count}} session archivée",
+	"standalone.archive.heading_many": "{{count}} sessions archivées",
+	"standalone.archive.heading_other": "{{count}} sessions archivées",
+	"standalone.archive.newAgent": "Nouvel agent",
+	"standalone.archive.empty.title": "Aucun agent autonome archivé",
+	"standalone.archive.empty.body": "Les agents autonomes que vous archivez depuis le bloc-notes apparaîtront ici. Les agents autonomes actifs restent dans la liste du bloc-notes."
 }

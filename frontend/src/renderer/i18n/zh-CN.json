@@ -2182,5 +2182,10 @@
 	"settings.models.useAgentMode": "使用智能体模式",
 	"settings.models.useAgentEffort": "使用智能体推理强度",
 	"settings.models.effortNotReported": "未报告推理强度",
-	"settings.models.modeNotReported": "未报告模式"
+	"settings.models.modeNotReported": "未报告模式",
+	"standalone.archive.heading_one": "{{count}} 个已归档会话",
+	"standalone.archive.heading_other": "{{count}} 个已归档会话",
+	"standalone.archive.newAgent": "新建代理",
+	"standalone.archive.empty.title": "没有已归档的独立代理",
+	"standalone.archive.empty.body": "从草稿区归档的独立代理会显示在这里。活跃的独立代理会保留在草稿区列表中。"
 }

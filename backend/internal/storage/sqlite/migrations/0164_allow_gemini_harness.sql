@@ -1,4 +1,6 @@
 -- Widen the sessions.harness CHECK to allow the Gemini CLI adapter.
+-- Migration 0163 adds fx first; the Unreal Agent anchor below remains present
+-- in both current and legacy qm schema variants, preserving fx on rewrite.
 -- SQLite cannot ALTER an existing CHECK constraint, so this applies the same
 -- surgical sqlite_master rewrite used by the earlier harness migrations.
 -- writable_schema changes run outside a transaction; RESET forces SQLite to

@@ -2230,5 +2230,11 @@
 	"settings.models.useAgentMode": "Usar modo del agente",
 	"settings.models.useAgentEffort": "Usar esfuerzo de razonamiento del agente",
 	"settings.models.effortNotReported": "Esfuerzo no informado",
-	"settings.models.modeNotReported": "Modo no informado"
+	"settings.models.modeNotReported": "Modo no informado",
+	"standalone.archive.heading_one": "{{count}} sesión archivada",
+	"standalone.archive.heading_many": "{{count}} sesiones archivadas",
+	"standalone.archive.heading_other": "{{count}} sesiones archivadas",
+	"standalone.archive.newAgent": "Nuevo agente",
+	"standalone.archive.empty.title": "No hay agentes independientes archivados",
+	"standalone.archive.empty.body": "Los agentes independientes que archives desde el Bloc de notas aparecerán aquí. Los agentes independientes activos permanecen en la lista del Bloc de notas."
 }

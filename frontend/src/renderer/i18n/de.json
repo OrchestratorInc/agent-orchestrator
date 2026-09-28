@@ -2200,5 +2200,10 @@
 	"settings.models.useAgentMode": "Agentenmodus verwenden",
 	"settings.models.useAgentEffort": "Denkaufwand des Agenten verwenden",
 	"settings.models.effortNotReported": "Aufwand nicht gemeldet",
-	"settings.models.modeNotReported": "Modus nicht gemeldet"
+	"settings.models.modeNotReported": "Modus nicht gemeldet",
+	"standalone.archive.heading_one": "{{count}} archivierte Sitzung",
+	"standalone.archive.heading_other": "{{count}} archivierte Sitzungen",
+	"standalone.archive.newAgent": "Neuer Agent",
+	"standalone.archive.empty.title": "Keine archivierten eigenständigen Agenten",
+	"standalone.archive.empty.body": "Eigenständige Agenten, die du aus dem Notizblock archivierst, erscheinen hier. Aktive eigenständige Agenten bleiben in der Notizblockliste."
 }

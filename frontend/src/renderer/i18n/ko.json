@@ -2200,5 +2200,10 @@
 	"settings.models.useAgentMode": "에이전트 모드 사용",
 	"settings.models.useAgentEffort": "에이전트 추론 수준 사용",
 	"settings.models.effortNotReported": "추론 수준 정보가 제공되지 않음",
-	"settings.models.modeNotReported": "모드 정보가 제공되지 않음"
+	"settings.models.modeNotReported": "모드 정보가 제공되지 않음",
+	"standalone.archive.heading_one": "보관된 세션 {{count}}개",
+	"standalone.archive.heading_other": "보관된 세션 {{count}}개",
+	"standalone.archive.newAgent": "새 에이전트",
+	"standalone.archive.empty.title": "보관된 독립 실행형 에이전트가 없습니다",
+	"standalone.archive.empty.body": "스크래치패드에서 보관한 독립 실행형 에이전트가 여기에 표시됩니다. 활성 독립 실행형 에이전트는 스크래치패드 목록에 남아 있습니다."
 }

@@ -681,6 +681,17 @@
 	min-height: var(--size-toolbar);
 }
 
+/* Four columns in a wide center pane, then three, two, or one as it narrows. */
+.standalone-archive-grid {
+	display: grid;
+	align-content: start;
+	gap: var(--space-2);
+	grid-template-columns: repeat(
+		auto-fill,
+		minmax(max(12.5rem, calc((100% - 3 * var(--space-2)) / 4)), 1fr)
+	);
+}
+
 /* Sidebar chrome clearance: size tokens only — set by data-topbar-offset on the
  * fixed sidebar container so top/height/overlay pad share one offset. */
 [data-topbar-offset="toolbar"] {
@@ -2289,7 +2300,8 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 		rotate: 90deg;
 	}
 
-	.group\/session-row:hover [data-session-action-buttons] {
+	.group\/session-row:hover [data-session-action-buttons],
+	.group\/scratchpad:hover [data-scratchpad-archive-action] {
 		scale: 1;
 		opacity: 1;
 		pointer-events: auto;

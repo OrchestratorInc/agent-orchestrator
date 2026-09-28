@@ -108,6 +108,13 @@ type AgentBinaryResolver interface {
 	ResolveBinary(ctx context.Context) (path string, err error)
 }
 
+// AgentRuntimeLaunchEnv augments a terminal launch after its generation has
+// been assigned. Native reporters can then carry that generation in their
+// own protocol identity. Implementations only modify the supplied environment.
+type AgentRuntimeLaunchEnv interface {
+	AugmentRuntimeLaunchEnv(env map[string]string, dataDir string, sessionID domain.SessionID, launchID string)
+}
+
 // AgentBinaryResolutionInvalidator is an optional capability for adapters that
 // cache the executable path. Install and reinstall flows use it to make the
 // next readiness, model-discovery, or launch operation resolve the current
@@ -323,6 +330,14 @@ type AgentExitDetector interface {
 // detection takes precedence over the fallback text patterns.
 type AgentPromptReadinessProvider interface {
 	PromptReadinessHints(ctx context.Context, cfg LaunchConfig) (PromptReadinessHints, error)
+}
+
+// AgentAfterStartPromptBuilder is an optional capability for interactive
+// adapters that need to combine launch-only context with the first user turn.
+// AO calls it exactly once per after-start delivery and sends the returned
+// value only after the runtime is ready.
+type AgentAfterStartPromptBuilder interface {
+	BuildAfterStartPrompt(ctx context.Context, cfg LaunchConfig) (string, error)
 }
 
 // TerminalActivityDetector derives activity only from authoritative terminal UI markers.

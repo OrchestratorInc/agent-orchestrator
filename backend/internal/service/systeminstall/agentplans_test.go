@@ -101,8 +101,8 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 29 {
-		t.Fatalf("got %d plans, want 29", len(plans))
+	if len(plans) != 30 {
+		t.Fatalf("got %d plans, want 30", len(plans))
 	}
 	seen := make(map[string]bool, len(plans))
 	for _, plan := range plans {
