@@ -13,6 +13,54 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 )
 
+func TestReadCodexTurnStatusFindsExactCompletedTurn(t *testing.T) {
+	requestReader, requestWriter := io.Pipe()
+	responseReader, responseWriter := io.Pipe()
+	defer requestReader.Close()
+	defer requestWriter.Close()
+	defer responseReader.Close()
+	defer responseWriter.Close()
+	conn := newCodexRPC(requestWriter, responseReader)
+	served := make(chan error, 1)
+	go func() {
+		line, err := bufio.NewReader(requestReader).ReadBytes('\n')
+		if err != nil {
+			served <- err
+			return
+		}
+		var request struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				ThreadID     string `json:"threadId"`
+				IncludeTurns bool   `json:"includeTurns"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal(line, &request); err != nil {
+			served <- err
+			return
+		}
+		if request.Method != "thread/read" || request.Params.ThreadID != "thread-1" || !request.Params.IncludeTurns {
+			served <- errors.New("thread status read omitted the exact thread or turns")
+			return
+		}
+		_, err = responseWriter.Write([]byte(`{"id":1,"result":{"thread":{"id":"thread-1","turns":[{"id":"older","status":"completed"},{"id":"current","status":"completed"}]}}}` + "\n"))
+		served <- err
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	status, err := readCodexTurnStatus(ctx, conn, "thread-1", "current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "completed" {
+		t.Fatalf("turn status = %q, want completed", status)
+	}
+	if err := <-served; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCodexSteerWaitsForProviderAcknowledgement(t *testing.T) {
 	requestReader, requestWriter := io.Pipe()
 	responseReader, responseWriter := io.Pipe()

@@ -1,6 +1,10 @@
 package postgres
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+)
 
 func TestTerminalExitStatePreservesInterfaceHandoff(t *testing.T) {
 	for _, tc := range []struct {
@@ -64,5 +68,24 @@ func TestIsWorkspaceWriteKind(t *testing.T) {
 		if isWorkspaceWriteKind(kind) {
 			t.Errorf("isWorkspaceWriteKind(%q) = true, want false", kind)
 		}
+	}
+}
+
+func TestAgentTerminalInputMarksSessionActive(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		terminalKind string
+		requestKind  string
+		want         bool
+	}{
+		{name: "agent keystroke", terminalKind: "agent", requestKind: "terminal.input", want: true},
+		{name: "workspace keystroke", terminalKind: "workspace", requestKind: "terminal.input"},
+		{name: "agent resize", terminalKind: "agent", requestKind: "terminal.resize"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := agentTerminalInputMarksSessionActive(domain.TerminalSession{Kind: tc.terminalKind}, tc.requestKind); got != tc.want {
+				t.Fatalf("mark session active = %t, want %t", got, tc.want)
+			}
+		})
 	}
 }

@@ -292,7 +292,7 @@ describe("CloudSessionChatSurface", () => {
 		expect(snapshot.items).toContainEqual(expect.objectContaining({
 			kind: "activity",
 			turnId: "turn-1",
-			summary: "Prefer tests first",
+			summary: "Steered: Prefer tests first",
 			detail: { event: "steer", text: "Prefer tests first", origin: "human", clientMessageId: "message-1" },
 		}));
 	});

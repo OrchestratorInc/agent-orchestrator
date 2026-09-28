@@ -271,6 +271,10 @@ func (c *Coordinator) reconcile(ctx context.Context, transition *postgres.Coordi
 			if transition.ErrorCode == "TARGET_START_FAILED" {
 				return c.restoreSource(runCtx, *transition)
 			}
+			if transition.ErrorCode == "SOURCE_STOP_FAILED" || transition.ErrorCode == "NATIVE_ID_RESOLUTION_FAILED" ||
+				transition.ErrorCode == "SESSION_COMMIT_FAILED" || transition.ErrorCode == "SESSION_NOT_FOUND" {
+				return c.restoreUncommittedSource(runCtx, *transition)
+			}
 			// Recovery is terminal until a replacement worker proves that the
 			// committed controller is live. Only then may the store atomically
 			// release prompts held by this transition.
@@ -289,6 +293,31 @@ func (c *Coordinator) reconcile(ctx context.Context, transition *postgres.Coordi
 			return nil
 		}
 	}
+}
+
+// Before the session interface is committed, only the source may have run.
+// A timed-out stop leaves its state uncertain, so restart and verify that
+// source before ending the failed handoff and releasing held prompts.
+func (c *Coordinator) restoreUncommittedSource(ctx context.Context, transition postgres.CoordinatedInterfaceTransition) error {
+	source := transition
+	source.TargetInterface = transition.SourceInterface
+	if err := c.driver.VerifyControllerReady(ctx, source); err != nil {
+		if err := c.driver.StartTarget(ctx, source, transition.NativeConversationID); err != nil {
+			return fmt.Errorf("restart uncommitted source controller: %w", err)
+		}
+		if err := c.driver.VerifyControllerReady(ctx, source); err != nil {
+			return fmt.Errorf("verify uncommitted source controller: %w", err)
+		}
+	}
+	err := c.store.AdvanceCoordinatedInterfaceTransition(
+		ctx, c.owner, transition.ID, domain.SessionInterfaceTransitionRecovery,
+		domain.SessionInterfaceTransitionFailed, transition.NativeConversationID,
+		transition.ErrorCode, transition.ErrorDetail, true,
+	)
+	if errors.Is(err, postgres.ErrTransitionStale) {
+		return errCoordinationLost
+	}
+	return err
 }
 
 // restoreSource follows the local handoff's rollback rule. Each operation is

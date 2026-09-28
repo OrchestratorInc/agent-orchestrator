@@ -171,12 +171,39 @@ func (s *codexSession) Steer(ctx context.Context, turnID, text string) error {
 	return nil
 }
 
+// Codex may finish a turn without a completion notification reaching this
+// connection. Its durable thread state is authoritative for that exact turn.
+func readCodexTurnStatus(ctx context.Context, conn *codexRPC, threadID, turnID string) (string, error) {
+	var result struct {
+		Thread struct {
+			ID    string `json:"id"`
+			Turns []struct {
+				ID     string `json:"id"`
+				Status string `json:"status"`
+			} `json:"turns"`
+		} `json:"thread"`
+	}
+	if err := conn.request(ctx, "thread/read", map[string]any{"threadId": threadID, "includeTurns": true}, &result); err != nil {
+		return "", err
+	}
+	if result.Thread.ID != threadID {
+		return "", errors.New("Codex returned a different thread")
+	}
+	for _, providerTurn := range result.Thread.Turns {
+		if providerTurn.ID == turnID {
+			return providerTurn.Status, nil
+		}
+	}
+	return "", nil
+}
+
 func (s *Supervisor) runCodex(ctx context.Context, turn worker.Turn, command Command, publish func(Output) error, identity func(string) error) error {
 	control, ok := s.Control.(approvalControl)
 	if !ok {
 		return errors.New("Cloud approval control is unavailable")
 	}
 	process := exec.CommandContext(ctx, command.Path, "app-server")
+	configureProviderProcess(process)
 	process.Dir = command.Dir
 	process.Env = mergedEnvironment(command.Env)
 	stdin, err := process.StdinPipe()
@@ -192,7 +219,7 @@ func (s *Supervisor) runCodex(ctx context.Context, turn worker.Turn, command Com
 	if err := process.Start(); err != nil {
 		return fmt.Errorf("start Codex app-server: %w", err)
 	}
-	defer func() { _ = process.Process.Kill(); _ = process.Wait() }()
+	defer func() { _ = stopProviderProcess(process); _ = process.Wait() }()
 	conn := newCodexRPC(stdin, stdout)
 	openCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -327,13 +354,30 @@ func (s *Supervisor) runCodex(ctx context.Context, turn worker.Turn, command Com
 			return err
 		}
 	}
-	select {
-	case err := <-completed:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-conn.done:
-		return errors.New("Codex app-server disconnected before completing the turn")
+	completionPoll := time.NewTicker(2 * time.Second)
+	defer completionPoll.Stop()
+	for {
+		select {
+		case err := <-completed:
+			return err
+		case <-completionPoll.C:
+			readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			status, readErr := readCodexTurnStatus(readCtx, conn, threadID, started.Turn.ID)
+			cancel()
+			if readErr != nil {
+				continue
+			}
+			switch status {
+			case "completed":
+				return nil
+			case "failed", "interrupted":
+				return fmt.Errorf("Codex turn ended with %s", status)
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-conn.done:
+			return errors.New("Codex app-server disconnected before completing the turn")
+		}
 	}
 }
 

@@ -147,7 +147,7 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			const clientMessageID = eventPayload(event).clientMessageId;
 			items.push({
 				kind: "activity", id: `cloud-steer-${event.sequence}`, turnId: turnID, sequence: event.sequence,
-				revision: 1, activityKind: "system", status: "completed", summary: text,
+				revision: 1, activityKind: "system", status: "completed", summary: `Steered: ${text}`,
 				detail: { event: "steer", text, origin: "human", clientMessageId: typeof clientMessageID === "string" ? clientMessageID : undefined },
 				createdAt: event.createdAt,
 			});
@@ -377,6 +377,7 @@ export function CloudSessionChatSurface({
 				return steer.mutateAsync({ text, clientMessageId });
 			} : undefined}
 			steerPending={steer.isPending}
+			showSteerButton
 			onSend={(text, _attachments, clientMessageId) => send.mutateAsync({ text, clientMessageId })}
 			session={session}
 			sessionRole={session.kind}

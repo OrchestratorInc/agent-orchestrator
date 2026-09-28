@@ -437,6 +437,7 @@ export interface ChatWorkspaceProps {
 		clientMessageId?: string,
 		recoverOnly?: boolean,
 	) => Promise<ChatSteerOutcome | void>;
+	showSteerButton?: boolean;
 	sendPending?: boolean;
 	steerPending?: boolean;
 	/** Why the last steer was refused, from the daemon's typed answer. */
@@ -616,6 +617,7 @@ function ChatWorkspaceContent({
 	onStageAttachments,
 	nativeImages,
 	onSteer,
+	showSteerButton,
 	sendPending,
 	steerPending,
 	steerRefusal,
@@ -1506,6 +1508,7 @@ function ChatWorkspaceContent({
 									// Steering is only meaningful into a turn that is running. A queued turn
 									// has not reached the provider, so there is nothing to steer.
 									onSteer={newWorkDisabled ? undefined : steer}
+									showSteerButton={showSteerButton}
 									canSteer={Boolean(onSteer) && turn?.state === "running"}
 									sendPending={sendPending}
 									steerPending={steerPending}

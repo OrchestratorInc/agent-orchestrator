@@ -31,6 +31,13 @@ func TestShouldApplyWorkerActivity(t *testing.T) {
 			wantApply: true,
 		},
 		{
+			name:  "chat ignores late tagged TUI active event after handoff",
+			iface: domain.SessionInterfaceChat,
+			activity: worker.ActivityEvent{
+				Harness: "claude-code", Event: "user-prompt-submit", State: contract.ActivityActive, SourceInterface: "tui",
+			},
+		},
+		{
 			name:  "chat keeps late tagged TUI shutdown",
 			iface: domain.SessionInterfaceChat,
 			activity: worker.ActivityEvent{

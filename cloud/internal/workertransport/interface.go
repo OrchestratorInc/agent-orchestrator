@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
@@ -276,6 +277,20 @@ func (s *Supervisor) nativeConversationID(ctx context.Context, input interfacePa
 }
 
 func (s *Supervisor) stopChat(ctx context.Context) error {
+	// The turn records its interrupted/completed result before Idle becomes true.
+	// Cancelling the controller first also cancels that durable write, leaving
+	// the old turn visibly running after the interface has changed.
+	if activity, ok := s.ChatRunner.(chatActivity); ok {
+		ticker := time.NewTicker(25 * time.Millisecond)
+		defer ticker.Stop()
+		for !activity.Idle() {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-ticker.C:
+			}
+		}
+	}
 	s.iface.mu.Lock()
 	cancel := s.iface.chatRun
 	done := s.iface.chatDone

@@ -939,6 +939,10 @@ func (s *Store) QueueTerminalResize(
 	return s.queueTerminalRequest(ctx, terminal, "terminal.resize", "", payload)
 }
 
+func agentTerminalInputMarksSessionActive(terminal domain.TerminalSession, kind string) bool {
+	return terminal.Kind == "agent" && kind == "terminal.input"
+}
+
 func (s *Store) queueTerminalRequest(
 	ctx context.Context,
 	terminal domain.TerminalSession,
@@ -1019,6 +1023,17 @@ func (s *Store) queueTerminalRequest(
 			ctx, tx, terminal.OrgID, terminal.SessionID, kind, payload, 15*time.Second, "",
 		); err != nil {
 			return err
+		}
+		if agentTerminalInputMarksSessionActive(terminal, kind) {
+			// Terminal keystrokes bypass the chat-message path. Record agent
+			// activity in the same transaction as input admission so a prompt
+			// submitted in TUI cannot appear idle to the switch policy UI.
+			if _, err := tx.Exec(ctx, `UPDATE ao_sessions
+				SET activity_state = 'active', updated_at = now()
+				WHERE org_id = $1 AND id = $2 AND interface = 'tui'
+				  AND is_terminated = false`, terminal.OrgID, terminal.SessionID); err != nil {
+				return err
+			}
 		}
 		if kind == "terminal.input" {
 			// Wake the replica holding this terminal's worker stream so it can

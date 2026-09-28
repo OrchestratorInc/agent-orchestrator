@@ -1072,13 +1072,16 @@ func (s *Store) SetWorkerActivity(
 }
 
 func shouldApplyWorkerActivity(sessionInterface domain.SessionInterface, activity worker.ActivityEvent) bool {
-	if activity.SourceInterface == "tui" {
-		return true
-	}
 	if sessionInterface.Normalized() == domain.SessionInterfaceTUI {
 		return true
 	}
-	return activity.State == "" && strings.TrimSpace(activity.AgentSessionID) != ""
+	if activity.State == "" && strings.TrimSpace(activity.AgentSessionID) != "" {
+		return true
+	}
+	// A terminal hook can arrive after Chat has taken ownership. Its stop
+	// acknowledgement may settle activity, but late active work belongs to
+	// the old controller and must not make Chat appear to be working.
+	return activity.SourceInterface == "tui" && activity.State == "idle"
 }
 
 func matchingBlockedTool(

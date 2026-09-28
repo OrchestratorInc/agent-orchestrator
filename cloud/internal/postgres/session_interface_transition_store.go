@@ -37,7 +37,11 @@ const renewCoordinatedInterfaceClaimSQL = `UPDATE ao_interface_transitions
 			WHERE id = $2 AND claimed_by = $1`
 
 const commitCoordinatedSessionInterfaceSQL = `UPDATE ao_sessions AS session
-			SET interface = $1, updated_at = now()
+			SET interface = $1,
+				activity_state = 'idle',
+				activity_blocked_tool_name = '',
+				activity_blocked_tool_use_id = '',
+				updated_at = now()
 			FROM ao_interface_transitions AS transition
 			WHERE transition.id = $2
 			  AND transition.org_id = $3

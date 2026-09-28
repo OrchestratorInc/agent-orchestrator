@@ -73,7 +73,7 @@ func (d *TransportDriver) InterruptSource(
 	transition postgres.CoordinatedInterfaceTransition,
 ) error {
 	payload, _ := json.Marshal(map[string]any{"sourceInterface": transition.SourceInterface})
-	return d.dispatchAck(ctx, transition, "interface.interrupt", payload)
+	return d.dispatch(ctx, transition, "interface.interrupt", payload, nil)
 }
 
 func (d *TransportDriver) StopSource(
@@ -171,21 +171,6 @@ func (d *TransportDriver) dispatch(
 		return fmt.Errorf("dispatch %s: %w", kind, err)
 	}
 	return d.awaitResult(ctx, transition, request, out)
-}
-
-func (d *TransportDriver) dispatchAck(
-	ctx context.Context,
-	transition postgres.CoordinatedInterfaceTransition,
-	kind string,
-	payload json.RawMessage,
-) error {
-	_, err := d.store.CreateCoordinatedInterfaceRequest(
-		ctx, transition.OrgID, transition.SessionID, kind, payload,
-	)
-	if err != nil {
-		return fmt.Errorf("dispatch %s: %w", kind, err)
-	}
-	return nil
 }
 
 func (d *TransportDriver) awaitResult(

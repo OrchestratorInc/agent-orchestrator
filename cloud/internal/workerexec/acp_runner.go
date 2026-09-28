@@ -87,6 +87,7 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 		return err
 	}
 	process := exec.CommandContext(ctx, path, args...)
+	configureProviderProcess(process)
 	process.Dir = command.Dir
 	process.Env = mergedEnvironment(env)
 	stdin, err := process.StdinPipe()
@@ -102,7 +103,7 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 	if err := process.Start(); err != nil {
 		return fmt.Errorf("start ACP agent: %w", err)
 	}
-	defer func() { _ = process.Process.Kill(); _ = process.Wait() }()
+	defer func() { _ = stopProviderProcess(process); _ = process.Wait() }()
 	client := &cloudACPClient{control: control, turn: turn, publish: publish}
 	conn := acp.NewClientSideConnection(client, stdin, stdout)
 	handshakeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)

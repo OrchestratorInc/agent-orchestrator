@@ -185,6 +185,24 @@ func (fakeRequestStore) CreateCoordinatedInterfaceRequest(context.Context, strin
 func (fakeRequestStore) GetCoordinatedInterfaceRequestResult(context.Context, string, string, string) (domain.WorkerRequest, error) {
 	return domain.WorkerRequest{}, errors.New("no requests expected")
 }
+
+type failedInterruptRequestStore struct{}
+
+func (failedInterruptRequestStore) CreateCoordinatedInterfaceRequest(_ context.Context, _, _, kind string, _ json.RawMessage) (domain.WorkerRequest, error) {
+	return domain.WorkerRequest{Kind: kind, Status: "failed", ErrorCode: "INTERRUPT_FAILED"}, nil
+}
+func (failedInterruptRequestStore) GetCoordinatedInterfaceRequestResult(context.Context, string, string, string) (domain.WorkerRequest, error) {
+	return domain.WorkerRequest{}, errors.New("unexpected poll")
+}
+
+func TestInterruptSourceWaitsForWorkerResult(t *testing.T) {
+	transition := testTransition(domain.SessionInterfaceTransitionDraining)
+	driver := NewTransportDriver(failedInterruptRequestStore{}, "owner", time.Second, nil)
+	if err := driver.InterruptSource(context.Background(), transition); err == nil {
+		t.Fatal("interrupt returned success before the worker reported failure")
+	}
+}
+
 func TestReconcileHappyPath(t *testing.T) {
 	store := &fakeStore{transitions: []postgres.CoordinatedInterfaceTransition{testTransition(domain.SessionInterfaceTransitionRequested)}}
 	driver := &fakeDriver{Inspection: SourceInspection{Idle: true}, nativeID: "native-1"}
@@ -468,6 +486,27 @@ func TestReconcilePreflightFailure(t *testing.T) {
 	}
 	if !store.heldMessagesReleased {
 		t.Fatal("expected prompts held during preflight failure to be released atomically")
+	}
+}
+
+func TestReconcileSourceStopFailureRestoresUncommittedSource(t *testing.T) {
+	transition := testTransition(domain.SessionInterfaceTransitionRecovery)
+	transition.SourceInterface = domain.SessionInterfaceChat
+	transition.TargetInterface = domain.SessionInterfaceTUI
+	transition.ErrorCode = "SOURCE_STOP_FAILED"
+	store := &fakeStore{transitions: []postgres.CoordinatedInterfaceTransition{transition}, committed: domain.SessionInterfaceChat}
+	driver := &fakeDriver{}
+	if err := newCoordinator(store, driver).ReconcileOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if store.committed != domain.SessionInterfaceChat || store.transitions[0].Phase != domain.SessionInterfaceTransitionFailed {
+		t.Fatalf("source recovery did not fail the handoff: interface=%q phase=%q", store.committed, store.transitions[0].Phase)
+	}
+	if !store.heldMessagesReleased || store.transitions[0].ErrorCode != "SOURCE_STOP_FAILED" {
+		t.Fatalf("held messages or failure reason lost: released=%t code=%q", store.heldMessagesReleased, store.transitions[0].ErrorCode)
+	}
+	if len(driver.startedInterfaces) != 0 || driver.readyCalls != 1 {
+		t.Fatalf("ready source was restarted or not verified: started=%v ready=%d", driver.startedInterfaces, driver.readyCalls)
 	}
 }
 

@@ -18,6 +18,7 @@ const navigateMock = vi.hoisted(() => vi.fn());
 const openShellTerminalMock = vi.hoisted(() => vi.fn());
 const closeShellTerminalMock = vi.hoisted(() => vi.fn());
 const cloudResumeMock = vi.hoisted(() => vi.fn(async () => ({ session: {} })));
+const cloudGetSessionMock = vi.hoisted(() => vi.fn(async () => ({ session: { activityState: "idle", status: "idle" } })));
 const nativeFullScreenMock = vi.hoisted(() => vi.fn(() => false));
 const interfaceTransitionMock = vi.hoisted(() => ({
 	start: vi.fn(),
@@ -90,7 +91,7 @@ vi.mock("../hooks/useCloudGate", () => ({
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
 		baseUrl: "https://cloud.example.test",
-		client: { resumeSession: cloudResumeMock },
+		client: { resumeSession: cloudResumeMock, getSession: cloudGetSessionMock },
 		ready: true,
 	}),
 }));
@@ -790,6 +791,8 @@ describe("SessionView", () => {
 		closeShellTerminalMock.mockReset();
 		cloudResumeMock.mockReset();
 		cloudResumeMock.mockResolvedValue({ session: {} });
+		cloudGetSessionMock.mockReset();
+		cloudGetSessionMock.mockResolvedValue({ session: { activityState: "idle", status: "idle" } });
 		interfaceTransitionMock.start.mockReset();
 		interfaceTransitionMock.refreshStatus.mockReset();
 		interfaceTransitionMock.refreshStatus.mockImplementation(
@@ -1390,7 +1393,7 @@ describe("SessionView", () => {
 	});
 
 	it.each(["working"] as const)(
-		"stops a Cloud Terminal that appears %s and switches directly",
+		"asks how to switch a Cloud Terminal that appears %s",
 		async (status) => {
 			interfaceTransitionState.status = { supported: true, targetMode: "chat" };
 			const session = workerSession("sess-1");
@@ -1405,12 +1408,11 @@ describe("SessionView", () => {
 			render(<SessionView sessionId="sess-1" />);
 			await chooseSessionAction("Switch to chat UI");
 
-			expect(screen.queryByRole("dialog", { name: "Switch to Chat UI?" })).not.toBeInTheDocument();
-			expect(interfaceTransitionMock.start).toHaveBeenCalledWith({
-				targetMode: "chat",
-				policy: "interrupt",
-				historyPolicy: "strict",
-			});
+			const dialog = screen.getByRole("dialog", { name: "Switch to Chat UI?" });
+			expect(within(dialog).getByRole("button", { name: /^Finish work, then switch/ })).toBeInTheDocument();
+			expect(interfaceTransitionMock.start).not.toHaveBeenCalled();
+			fireEvent.click(within(dialog).getByRole("button", { name: /^Stop now and switch/ }));
+			expect(interfaceTransitionMock.start).toHaveBeenCalledWith({ targetMode: "chat", policy: "interrupt", historyPolicy: "strict" });
 		},
 	);
 
@@ -1430,6 +1432,45 @@ describe("SessionView", () => {
 			targetMode: "chat", policy: "interrupt", historyPolicy: "strict",
 		});
 	});
+
+	it("asks for a switch policy when fresh Cloud activity is busy despite an idle session list", async () => {
+		interfaceTransitionState.status = { supported: true, targetMode: "chat" };
+		const session = workerSession("sess-1");
+		session.cloud = { orgId: "org-1", sandboxProvider: "docker" };
+		session.mode = "tui";
+		session.status = "idle";
+		session.activity = { state: "idle", lastActivityAt: "2026-08-06T00:00:00Z" };
+		cloudGetSessionMock.mockResolvedValueOnce({ session: { activityState: "active", status: "working" } });
+
+		render(<SessionView sessionId="sess-1" />);
+		await chooseSessionAction("Switch to chat UI");
+
+		expect(cloudGetSessionMock).toHaveBeenCalledWith("org-1", "sess-1");
+		const dialog = screen.getByRole("dialog", { name: "Switch to Chat UI?" });
+		expect(within(dialog).getByRole("button", { name: /^Finish work, then switch/ })).toBeInTheDocument();
+		expect(within(dialog).getByRole("button", { name: /^Stop now and switch/ })).toBeInTheDocument();
+		expect(interfaceTransitionMock.start).not.toHaveBeenCalled();
+	});
+
+	it("ignores a Cloud activity check after navigating to another session", async () => {
+		interfaceTransitionState.status = { supported: true, targetMode: "chat" };
+		const session = workerSession("sess-1");
+		session.cloud = { orgId: "org-1", sandboxProvider: "docker" };
+		session.mode = "tui";
+		session.status = "idle";
+		session.activity = { state: "idle", lastActivityAt: "2026-08-06T00:00:00Z" };
+		let finishCheck!: (value: { session: { activityState: string; status: string } }) => void;
+		cloudGetSessionMock.mockImplementationOnce(() => new Promise((resolve) => { finishCheck = resolve; }));
+
+		const view = render(<SessionView sessionId="sess-1" />);
+		await chooseSessionAction("Switch to chat UI");
+		view.rerender(<SessionView sessionId="sess-2" />);
+		await act(async () => finishCheck({ session: { activityState: "idle", status: "idle" } }));
+
+		expect(interfaceTransitionMock.start).not.toHaveBeenCalled();
+		expect(screen.queryByRole("dialog", { name: "Switch to Chat UI?" })).not.toBeInTheDocument();
+	});
+
 
 	it.each([
 		["tui", "chat", "Switching to Chat UI"],
@@ -1474,6 +1515,25 @@ describe("SessionView", () => {
 		const loader = screen.getByTestId("cloud-interface-switch-loader-screen");
 		expect(within(loader).getByRole("status", { name: "Switching to Chat UI" })).toBeInTheDocument();
 		expect(loader.querySelector(".lucide-loader-circle.animate-spin")).not.toBeNull();
+	});
+
+	it("keeps the Cloud switch loader over the stopped terminal until the session mode catches up", () => {
+		const session = workerSession("sess-1");
+		session.cloud = { orgId: "org-1", sandboxProvider: "docker" };
+		session.mode = "tui";
+		interfaceTransitionState.status = {
+			supported: true,
+			targetMode: "chat",
+			transition: {
+				id: "completed-cloud-switch", sessionId: session.id, sourceMode: "tui", targetMode: "chat",
+				policy: "interrupt", historyPolicy: "strict", phase: "completed", createdAt: "2026-09-28T00:00:00Z", updatedAt: "2026-09-28T00:00:01Z",
+			},
+		};
+		const view = render(<SessionView sessionId="sess-1" />);
+		expect(screen.getByTestId("cloud-interface-switch-loader-screen")).toBeInTheDocument();
+		session.mode = "chat";
+		view.rerender(<SessionView sessionId="sess-1" />);
+		expect(screen.queryByTestId("cloud-interface-switch-loader-screen")).not.toBeInTheDocument();
 	});
 
 	it("hides interface switching when the Cloud offering is disabled", () => {

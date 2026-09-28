@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -511,6 +512,51 @@ func TestInterruptInterfaceUsesActiveChatController(t *testing.T) {
 	}
 	if !runner.interrupted {
 		t.Fatal("chat runner was not interrupted")
+	}
+}
+
+type handoffChatRunner struct {
+	busy      atomic.Bool
+	started   chan struct{}
+	cancelled chan struct{}
+}
+
+func (r *handoffChatRunner) Run(ctx context.Context) error {
+	close(r.started)
+	<-ctx.Done()
+	close(r.cancelled)
+	return nil
+}
+
+func (r *handoffChatRunner) Idle() bool { return !r.busy.Load() }
+
+func TestStopChatWaitsForRunningTurnToFinishBeforeCancellingController(t *testing.T) {
+	runner := &handoffChatRunner{started: make(chan struct{}), cancelled: make(chan struct{})}
+	runner.busy.Store(true)
+	supervisor := &Supervisor{ChatRunner: runner}
+	if err := supervisor.startChat(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-runner.started
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	stopped := make(chan error, 1)
+	go func() { stopped <- supervisor.stopInterface(stopCtx, "interrupt") }()
+	select {
+	case <-runner.cancelled:
+		t.Fatal("chat controller cancelled before the active turn finished")
+	case err := <-stopped:
+		t.Fatalf("chat controller stopped before active turn finished: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	runner.busy.Store(false)
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-stopCtx.Done():
+		t.Fatal("chat controller did not stop after the turn finished")
 	}
 }
 

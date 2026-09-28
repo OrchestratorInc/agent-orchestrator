@@ -163,6 +163,8 @@ type InterfaceSwitchDialogScope = {
 	sessionId: string;
 	targetMode: "chat" | "tui";
 	historyPolicy?: "strict" | "provider_history";
+	sourceBusy?: boolean;
+	sourceWaitingForInput?: boolean;
 };
 
 type WorkspaceLayoutMode = "utility" | "browser" | "files";
@@ -498,6 +500,11 @@ function CloudPausedStatus() {
 }
 
 export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewProps) {
+	const currentSessionIdRef = useRef<string | null>(sessionId);
+	useEffect(() => {
+		currentSessionIdRef.current = sessionId;
+		return () => { currentSessionIdRef.current = null; };
+	}, [sessionId]);
 	const { t } = useTranslation();
 	const [confirmedDraftDiscard, setConfirmedDraftDiscard] = useState<{
 		sessionId: string;
@@ -1374,7 +1381,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 
 	const activeInterfaceTransition = interfaceTransitionIsActive(interfaceSwitch.transition);
 	const showInterfaceSwitchLoader = Boolean(
-		interfaceContext && (interfaceSwitch.starting || activeInterfaceTransition || interfaceSwitch.settling),
+		interfaceContext && (interfaceSwitch.starting || activeInterfaceTransition || interfaceSwitch.settling ||
+			(interfaceSwitch.transition?.phase === "completed" &&
+				session?.mode !== interfaceSwitch.transition.targetMode)),
 	);
 	const hasInterfaceNotice = interfaceTransitionHasUnacknowledgedNotice(interfaceSwitch.transition) &&
 		!(interfaceContext && session?.mode === "tui" &&
@@ -1509,13 +1518,34 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	);
 	const requestInterfaceSwitch = useCallback(() => {
 		interfaceSwitch.resetStartError();
-		if (cloudTerminalToChat || !interfaceBusy) {
+		if (cloudTerminalToChat && !interfaceBusy && session?.cloud) {
+			// The Cloud session list polls, while terminal input is delivered on a
+			// separate stream. Check the current row before an implicit stop so a
+			// newly submitted TUI prompt cannot bypass the policy dialog.
+			void cloudCpClient.getSession(session.cloud.orgId, session.id).then(({ session: latest }) => {
+				if (currentSessionIdRef.current !== session.id) return;
+				if (["active", "waiting_input", "blocked"].includes(latest.activityState) ||
+					latest.status === "working" || latest.status === "needs_input") {
+					setInterfaceSwitchDialogScope({
+						sessionId: session.id, targetMode: interfaceTarget, sourceBusy: true,
+						sourceWaitingForInput: latest.activityState === "waiting_input" || latest.activityState === "blocked" || latest.status === "needs_input",
+					});
+					return;
+				}
+				void beginInterfaceSwitch("interrupt", interfaceTarget);
+			}).catch(() => {
+				if (currentSessionIdRef.current !== session.id) return;
+				setInterfaceSwitchDialogScope({ sessionId: session.id, targetMode: interfaceTarget });
+			});
+			return;
+		}
+		if (!interfaceBusy) {
 			void beginInterfaceSwitch(cloudTerminalToChat ? "interrupt" : "drain", interfaceTarget);
 			return;
 		}
 		if (!session) return;
 		setInterfaceSwitchDialogScope({ sessionId: session.id, targetMode: interfaceTarget });
-	}, [beginInterfaceSwitch, cloudTerminalToChat, interfaceBusy, interfaceSwitch, interfaceTarget, session]);
+	}, [beginInterfaceSwitch, cloudCpClient, cloudTerminalToChat, interfaceBusy, interfaceSwitch, interfaceTarget, session]);
 	const chooseInterfaceSwitchPolicy = useCallback(
 		(policy: "drain" | "interrupt") => {
 			if (
@@ -1541,7 +1571,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 			const failed = interfaceSwitch.transition;
 			if (!session || !failed || failed.sessionId !== session.id || failed.targetMode !== interfaceTarget) return;
 			interfaceSwitch.resetStartError();
-			if (cloudTerminalToChat || !interfaceBusy) {
+			if (!interfaceBusy) {
 				void beginInterfaceSwitch(cloudTerminalToChat ? "interrupt" : "drain", failed.targetMode, undefined, historyPolicy);
 				return;
 			}
@@ -2384,8 +2414,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 			<SessionInterfaceSwitchDialog
 				open={interfaceSwitchDialogOpen}
 				target={interfaceSwitchDialogScope?.targetMode ?? interfaceTarget}
-				requireExplicitTerminalStop={cloudTerminalToChat}
-				waitingForInput={interfaceWaitingForInput}
+				requireExplicitTerminalStop={cloudTerminalToChat && !(interfaceBusy || interfaceSwitchDialogScope?.sourceBusy)}
+				waitingForInput={interfaceWaitingForInput || interfaceSwitchDialogScope?.sourceWaitingForInput}
 				busy={interfaceSwitch.starting}
 				error={interfaceSwitch.startError}
 				onOpenChange={(open) => {
