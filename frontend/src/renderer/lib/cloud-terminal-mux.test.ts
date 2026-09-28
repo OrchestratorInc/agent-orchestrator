@@ -123,6 +123,21 @@ describe("createCloudTerminalMux direct open", () => {
 		expect(sentJSON(ws)).toEqual([{ type: "resize", columns: 120, rows: 40 }]);
 		mux.dispose();
 	});
+
+	it("does not cache an implausibly small pre-open resize for replay on connect", async () => {
+		FakeWebSocket.instances = [];
+		const mux = makeMux();
+		// Resize BEFORE the socket is dialed — the pending-resize caching path that is
+		// flushed on (re)connect. A mis-fit here must not be cached, so it is never
+		// replayed when the socket opens; a plausible one is.
+		mux.resize("agent", 2, 2);
+		mux.resize("agent", 110, 44);
+		await settle();
+		const ws = FakeWebSocket.instances[0];
+		ws.emit("open", {}); // drive the on-open replay of the cached resize
+		expect(sentJSON(ws)).toEqual([{ type: "resize", columns: 110, rows: 44 }]);
+		mux.dispose();
+	});
 });
 
 describe("createCloudTerminalMux cursor resume", () => {
