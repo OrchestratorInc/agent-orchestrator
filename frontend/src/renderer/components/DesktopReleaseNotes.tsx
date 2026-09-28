@@ -8,8 +8,11 @@ const AO_RELEASE_LINK_PATTERN =
 
 const releaseNoteComponents: Components = {
 	h3: ({ children }) => (
-		<h3 className="mt-4 text-sm font-semibold text-foreground first:mt-0">{children}</h3>
+		<h3 className="mt-4 text-sm font-medium text-foreground first:mt-0">{children}</h3>
 	),
+	// Generated notes use bold paragraphs as section headings; keep them below
+	// the dialog title's weight so the notes never outrank it.
+	strong: ({ children }) => <strong className="font-medium text-foreground">{children}</strong>,
 	p: ({ children }) => <p className="mt-2 first:mt-0">{children}</p>,
 	ul: ({ children }) => <ul className="mt-2 list-disc space-y-1 pl-5">{children}</ul>,
 	ol: ({ children }) => <ol className="mt-2 list-decimal space-y-1 pl-5">{children}</ol>,

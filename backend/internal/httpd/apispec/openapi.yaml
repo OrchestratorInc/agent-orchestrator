@@ -12722,6 +12722,8 @@ components:
           maxLength: 4096
           minLength: 1
           type: string
+        userAuthored:
+          type: boolean
       required:
       - message
       type: object

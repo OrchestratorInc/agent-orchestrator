@@ -129,6 +129,10 @@ type SessionService interface {
 	Unpin(ctx context.Context, id domain.SessionID) (domain.Session, error)
 }
 
+type sessionMessageOptionsSender interface {
+	SendWithOptions(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error
+}
+
 // ActivityRecorder applies an agent activity-state signal to a session. It is
 // satisfied directly by *lifecycle.Manager: an activity signal is a pure
 // lifecycle reduction (no runtime/workspace teardown), so it bypasses
@@ -1604,7 +1608,18 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 		attachment = &decoded
 	}
 	message := domain.SanitizeControlChars(in.Message)
-	if err := c.Svc.Send(r.Context(), sessionID(r), message, attachment); err != nil {
+	var err error
+	if in.UserAuthored {
+		sender, ok := c.Svc.(sessionMessageOptionsSender)
+		if !ok {
+			apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/send")
+			return
+		}
+		err = sender.SendWithOptions(r.Context(), sessionID(r), message, attachment, ports.MessageDeliveryOptions{AuthoredByUser: true})
+	} else {
+		err = c.Svc.Send(r.Context(), sessionID(r), message, attachment)
+	}
+	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}

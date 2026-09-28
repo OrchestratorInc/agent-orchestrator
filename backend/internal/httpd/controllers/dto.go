@@ -956,6 +956,9 @@ type CleanupSessionsResponse struct {
 // SendSessionMessageRequest is the body of POST /api/v1/sessions/{sessionId}/send.
 type SendSessionMessageRequest struct {
 	Message string `json:"message" minLength:"1" maxLength:"4096"`
+	// UserAuthored marks content written directly by the user but delivered via
+	// AO's automation relay, such as inline document feedback.
+	UserAuthored bool `json:"userAuthored,omitempty"`
 	// Attachment is an optional inline image (e.g. a browser-annotation
 	// snapshot) delivered alongside the message. The daemon writes it into the
 	// session worktree and appends a path reference to the message.

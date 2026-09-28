@@ -128,6 +128,14 @@ describe("SettingsDialog", () => {
 		expect(dialog).not.toHaveClass("z-overlay");
 	});
 
+	it("does not apply a backdrop filter behind settings content", async () => {
+		useUiStore.getState().openGlobalSettings("mobile");
+		renderSettingsDialog();
+
+		const overlay = screen.getByTestId("settings-dialog-overlay");
+		expect(overlay.style.backdropFilter).toBe("none");
+	});
+
 	it("opens Harness and forwards its agent focus target without redirecting to Codex Accounts", async () => {
 		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "claude-code" });
 		renderSettingsDialog();
