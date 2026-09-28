@@ -180,6 +180,7 @@ export interface CloudCpClient {
 		sessionId: string,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpSessionPullRequestsResponse>;
+	mergePullRequest(orgId: string, sessionId: string, number: number, prUrl: string, expectedHeadSha: string, options?: CloudCpRequestOptions): Promise<{ status: string }>;
 	deleteSession(
 		orgId: string,
 		sessionId: string,
@@ -535,6 +536,10 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		listSessionPullRequests: (orgId, sessionId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/pull-requests`, {
 				signal: o?.signal,
+			}),
+		mergePullRequest: (orgId, sessionId, number, prUrl, expectedHeadSha, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/pull-requests/${seg(String(number))}/merge`, {
+				body: { prUrl, expectedHeadSha }, signal: o?.signal,
 			}),
 		deleteSession: (orgId, sessionId, o) =>
 			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, { signal: o?.signal }),

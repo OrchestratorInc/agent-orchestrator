@@ -519,6 +519,17 @@ func (c *Client) GetPullRequestRecord(
 	return pullRequest, nil
 }
 
+// MergePullRequest asks GitHub to squash the exact head the user reviewed.
+// GitHub rejects a moved head or unmet branch protection atomically.
+func (c *Client) MergePullRequest(ctx context.Context, token, owner, repo string, number int, expectedHeadSHA string) error {
+	if owner == "" || repo == "" || number <= 0 || expectedHeadSHA == "" {
+		return errors.New("pull request identity and expected head are required")
+	}
+	return c.userJSON(ctx, token, http.MethodPut,
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/pulls/"+strconv.Itoa(number)+"/merge",
+		map[string]string{"sha": expectedHeadSHA, "merge_method": "squash"}, nil)
+}
+
 // CreatePullRequestInput is the request to open a pull request.
 type CreatePullRequestInput struct {
 	Title string

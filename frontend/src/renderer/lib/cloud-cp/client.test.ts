@@ -70,6 +70,24 @@ describe("cloud control-plane session lifecycle", () => {
 		);
 	});
 
+	it("merges a cloud pull request with its URL and reviewed head", async () => {
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "merge_accepted" }), {
+			status: 202,
+			headers: { "Content-Type": "application/json" },
+		}));
+		const client = createCloudCpClient({
+			baseUrl: "https://cloud.example.test",
+			getToken: async () => "token",
+			fetchImpl: fetchMock as typeof fetch,
+		});
+		await expect(client.mergePullRequest("org/1", "session/1", 7, "https://github.com/acme/repo/pull/7", "abc123"))
+			.resolves.toEqual({ status: "merge_accepted" });
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/pull-requests/7/merge",
+			expect.objectContaining({ method: "POST", body: JSON.stringify({ prUrl: "https://github.com/acme/repo/pull/7", expectedHeadSha: "abc123" }) }),
+		);
+	});
+
 	it("posts explicit resume intent for one encoded session", async () => {
 		const fetchMock = vi.fn(async () =>
 			new Response(

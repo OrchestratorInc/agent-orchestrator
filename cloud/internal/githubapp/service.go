@@ -90,6 +90,23 @@ type CheckoutGrant struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
+// MergePullRequest uses the installation's repository-scoped write token.
+func (s *Service) MergePullRequest(ctx context.Context, orgID, repository string, number int, expectedHeadSHA string) error {
+	installationID, repositoryID, err := s.store.GitHubInstallationForRepository(ctx, orgID, repository)
+	if err != nil {
+		return err
+	}
+	owner, repo, ok := strings.Cut(repository, "/")
+	if !ok || owner == "" || repo == "" {
+		return postgres.ErrInvalid
+	}
+	access, err := s.client.repositoryWriteToken(ctx, installationID, repositoryID)
+	if err != nil {
+		return err
+	}
+	return s.client.MergePullRequest(ctx, access.Token, owner, repo, number, expectedHeadSHA)
+}
+
 type Service struct {
 	store                    Store
 	client                   *Client

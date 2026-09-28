@@ -367,6 +367,7 @@ const SummaryView = memo(function SummaryView({
 								onOpenReviews={onOpenReviews}
 								pr={pr}
 								sessionId={session.id}
+								cloudOrgId={session.cloud?.orgId}
 							/>
 						))
 					) : (
@@ -1228,22 +1229,29 @@ function updateSessionMergePolicy(
 
 function PRSummaryCard({
 	canOpenReviews,
+	cloudOrgId,
 	onOpenReviews,
 	pr,
 	sessionId,
 }: {
 	canOpenReviews: boolean;
+	cloudOrgId?: string;
 	onOpenReviews: () => void;
 	pr: SessionPRSummary;
 	sessionId: string;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
+	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp();
 	const presentation = prCardPresentation(pr);
 	const canMerge = prCanMerge(pr) && Boolean(pr.url && pr.headSha);
 	const mergePr = useMutation({
 		mutationFn: async () => {
 			if (usePreviewData) return;
+			if (cloudOrgId) {
+				await cloudClient.mergePullRequest(cloudOrgId, sessionId, pr.number, pr.url, pr.headSha);
+				return;
+			}
 			const { error } = await apiClient.POST("/api/v1/prs/{id}/merge", {
 				params: { path: { id: String(pr.number) } },
 				body: { prUrl: pr.url, expectedHeadSha: pr.headSha },
@@ -1252,7 +1260,7 @@ function PRSummaryCard({
 		},
 		onSuccess: async () => {
 			await Promise.all([
-				queryClient.invalidateQueries({ queryKey: sessionScmSummaryQueryKey(sessionId) }),
+				queryClient.invalidateQueries({ queryKey: cloudOrgId ? ["cloud-session-scm-summary", cloudBaseUrl, cloudOrgId, sessionId] : sessionScmSummaryQueryKey(sessionId) }),
 				queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
 			]);
 		},

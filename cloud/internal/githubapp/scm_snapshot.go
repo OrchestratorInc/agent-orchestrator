@@ -125,9 +125,13 @@ func (s *Service) FetchPullRequestSnapshot(ctx context.Context, ref domain.PullR
 	if err != nil {
 		return domain.PullRequestSnapshot{}, err
 	}
+	return s.client.FetchPullRequestSnapshotWithToken(ctx, access.Token, owner, repo, ref.Number)
+}
+
+func (c *Client) FetchPullRequestSnapshotWithToken(ctx context.Context, token, owner, repo string, number int) (domain.PullRequestSnapshot, error) {
 	var response githubPullRequestSnapshotResponse
-	if err := s.client.graphQL(ctx, access.Token, pullRequestSnapshotQuery,
-		map[string]any{"owner": owner, "repo": repo, "number": ref.Number}, &response); err != nil {
+	if err := c.graphQL(ctx, token, pullRequestSnapshotQuery,
+		map[string]any{"owner": owner, "repo": repo, "number": number}, &response); err != nil {
 		return domain.PullRequestSnapshot{}, err
 	}
 	if len(response.Errors) > 0 {
