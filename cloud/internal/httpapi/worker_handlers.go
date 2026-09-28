@@ -599,20 +599,25 @@ func (s *Server) workerRaisePullRequest(w http.ResponseWriter, r *http.Request) 
 		HeadBranch: input.HeadBranch,
 		BaseBranch: input.BaseBranch,
 	}
-	// Prefer the user's PAT when one is configured: it can write back to GitHub
-	// even where the checkout broker is read-only (e.g. staging reaches GitHub
-	// through the remote capability broker, whose write methods are stubbed).
-	// This mirrors the PAT-first read/push grant path.
+	// Prefer the GitHub App (checkout broker) to open the PR: it uses a fresh
+	// installation token that can't go stale. Fall back to the user's PAT only when
+	// the broker cannot complete the write — a repository authorized through the
+	// remote capability broker returns errRemotePushNotSupported, and some projects
+	// are not App-connected. A PAT-first order let a cached-valid-but-rotted PAT
+	// (validation_state is a cached snapshot) shadow a healthy App installation and
+	// fail every PR with "pull request could not be opened", the same class of bug
+	// the credential-grant endpoints avoid by being App-first.
 	var (
 		pr  domain.PullRequest
 		err error
 	)
-	if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
-		pr, err = s.patWrites.RaisePullRequest(
-			r.Context(), claims.OrgID, claims.SessionID, grant.CloneURL, grant.Token, raiseInput,
-		)
-	} else {
-		pr, err = s.checkoutBroker.RaisePullRequest(r.Context(), claims.OrgID, claims.SessionID, raiseInput)
+	pr, err = s.checkoutBroker.RaisePullRequest(r.Context(), claims.OrgID, claims.SessionID, raiseInput)
+	if err != nil {
+		if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
+			pr, err = s.patWrites.RaisePullRequest(
+				r.Context(), claims.OrgID, claims.SessionID, grant.CloneURL, grant.Token, raiseInput,
+			)
+		}
 	}
 	if errors.Is(err, postgres.ErrForbidden) || errors.Is(err, postgres.ErrNotFound) {
 		writeError(w, r, http.StatusForbidden, "PULL_REQUEST_NOT_AUTHORIZED", "This session does not have an active repository grant.")
