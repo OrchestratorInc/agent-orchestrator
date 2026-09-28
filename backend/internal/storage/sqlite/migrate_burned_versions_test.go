@@ -167,6 +167,7 @@ var shippedMigrations = map[int64]string{
 	162: "0162_drop_pr_discussion_columns.sql",
 	163: "0163_allow_fx_harness.sql",
 	164: "0164_allow_gemini_harness.sql",
+	166: "0166_add_user_config.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
