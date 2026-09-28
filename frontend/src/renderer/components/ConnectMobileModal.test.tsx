@@ -125,6 +125,24 @@ test("encodes the LAN address by default", async () => {
 	);
 });
 
+test("shows a quiet preparing state instead of a blurred QR while startup is incomplete", async () => {
+	mobileStatus.endpoints = [];
+	mobileStatus.tunnel = {
+		supported: true,
+		running: false,
+		ready: false,
+		hostname: "",
+		location: "",
+		lastError: "",
+	};
+
+	renderMobileSettings();
+
+	expect(await screen.findByTestId("mobile-pairing-preparing")).toBeInTheDocument();
+	expect(screen.queryByText(/Preparing remote access/i)).not.toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: "Generate" })).not.toBeInTheDocument();
+});
+
 test("can turn off the generated mobile connection", async () => {
 	renderMobileSettings();
 	const button = await screen.findByRole("button", { name: "Turn off mobile connection" });
@@ -453,19 +471,17 @@ test("emits only v2, never a raw JSON v1 payload", () => {
 	expect(decodeQr(value).v).toBe(2);
 });
 
-// The trap that produced a pairing which worked on Wi-Fi and failed on
-// cellular: the QR renders as soon as the LAN listener is up, but the tunnel
-// takes ~30s more to become advertisable. A code scanned in that window
-// carries no tunnel endpoint at all, so the phone has nothing to fall back to
-// once it leaves the network.
-test("holds the QR back while remote access is still starting", () => {
+// Local pairing should not wait on optional remote access. The status query
+// keeps polling while the tunnel starts, so the rendered offer gains the
+// remote endpoint when it becomes available without blocking the LAN code.
+test("shows the LAN QR while remote access is still starting", () => {
 	expect(
 		qrIsReady({
 			enabled: true,
 			endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
 			tunnel: { running: true, ready: false, hostname: "", location: "", lastError: "" },
 		}),
-	).toBe(false);
+	).toBe(true);
 });
 
 test("shows the QR once the tunnel is advertisable", () => {
@@ -488,7 +504,17 @@ test("shows the QR when there is no tunnel to wait for", () => {
 		qrIsReady({
 			enabled: true,
 			endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
-			tunnel: { running: false, ready: false, hostname: "", location: "", lastError: "" },
+			tunnel: { supported: false, running: false, ready: false, hostname: "", location: "", lastError: "" },
+		}),
+	).toBe(true);
+});
+
+test("shows the LAN QR before a supported tunnel starts", () => {
+	expect(
+		qrIsReady({
+			enabled: true,
+			endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
+			tunnel: { supported: true, running: false, ready: false, hostname: "", location: "", lastError: "" },
 		}),
 	).toBe(true);
 });
@@ -512,7 +538,18 @@ test("withholds the QR from a daemon that reports no endpoints", () => {
 // daemon went advertisable seconds later.
 test("polls while the connector is starting", () => {
 	expect(
-		mobileStatusRefetchInterval({ tunnel: { running: true, ready: false } }),
+		mobileStatusRefetchInterval({
+			enabled: true,
+			endpoints: [],
+			tunnel: { supported: true, running: false, ready: false },
+		}),
+	).toBeGreaterThan(0);
+	expect(
+		mobileStatusRefetchInterval({
+			enabled: true,
+			endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
+			tunnel: { supported: true, running: true, ready: false },
+		}),
 	).toBeGreaterThan(0);
 });
 
@@ -520,12 +557,25 @@ test("polls while the connector is starting", () => {
 // there is no transient state left, and the modal should not keep hitting the
 // daemon for the rest of the session.
 test("stops polling once the tunnel is advertisable", () => {
-	expect(mobileStatusRefetchInterval({ tunnel: { running: true, ready: true } })).toBe(false);
+	expect(
+		mobileStatusRefetchInterval({
+			enabled: true,
+			endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
+			tunnel: { supported: true, running: true, ready: true },
+		}),
+	).toBe(false);
 });
 
 test("does not poll when there is no tunnel to wait for", () => {
-	expect(mobileStatusRefetchInterval({ tunnel: { running: false, ready: false } })).toBe(false);
-	expect(mobileStatusRefetchInterval({ tunnel: undefined })).toBe(false);
+	const endpoints = [{ kind: "lan" as const, host: "192.168.1.42", port: 3011, secure: false }];
+	expect(
+		mobileStatusRefetchInterval({
+			enabled: true,
+			endpoints,
+			tunnel: { supported: false, running: false, ready: false },
+		}),
+	).toBe(false);
+	expect(mobileStatusRefetchInterval({ enabled: true, endpoints, tunnel: undefined })).toBe(false);
 	expect(mobileStatusRefetchInterval(undefined)).toBe(false);
 });
 

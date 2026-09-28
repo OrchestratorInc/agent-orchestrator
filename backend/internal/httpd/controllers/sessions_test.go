@@ -37,6 +37,7 @@ type fakeSessionService struct {
 	sessions                   map[domain.SessionID]domain.Session
 	sent                       string
 	sentAttachment             *ports.SpawnAttachment
+	sentDeliveryOptions        ports.MessageDeliveryOptions
 	delegationInput            sessionsvc.DelegateTaskInput
 	delegationErr              error
 	preparedProject            domain.ProjectID
@@ -59,6 +60,9 @@ type fakeSessionService struct {
 	workspaceRevisionVersion   string
 	workspaceExpectedRevision  string
 	workspaceRevisionCommitSHA string
+	prFiles                    sessionsvc.PRFiles
+	prFileCommitSHA            string
+	prRevisionCommitSHA        string
 	workspaceSearch            sessionsvc.WorkspaceFileSearch
 	workspaceSearchQuery       string
 	workspaceSearchCursor      string
@@ -483,6 +487,13 @@ func (f *fakeSessionService) Send(_ context.Context, _ domain.SessionID, message
 	return nil
 }
 
+func (f *fakeSessionService) SendWithOptions(_ context.Context, _ domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error {
+	f.sent = message
+	f.sentAttachment = attachment
+	f.sentDeliveryOptions = options
+	return nil
+}
+
 func (f *fakeSessionService) DelegateTask(_ context.Context, in sessionsvc.DelegateTaskInput) (sessionsvc.DelegateTaskOutcome, error) {
 	f.delegationInput = in
 	if f.delegationErr != nil {
@@ -600,6 +611,9 @@ func (f *fakeSessionService) ListPRFiles(_ context.Context, id domain.SessionID,
 	if _, ok := f.sessions[id]; !ok {
 		return sessionsvc.PRFiles{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
+	if f.prFiles.SessionID != "" {
+		return f.prFiles, nil
+	}
 	return sessionsvc.PRFiles{SessionID: id}, nil
 }
 
@@ -608,6 +622,11 @@ func (f *fakeSessionService) GetPRFile(_ context.Context, id domain.SessionID, _
 		return sessionsvc.WorkspaceFileDetail{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
 	return sessionsvc.WorkspaceFileDetail{SessionID: id, Path: path}, nil
+}
+
+func (f *fakeSessionService) GetPRFileAtCommit(ctx context.Context, id domain.SessionID, number int, sourceURL, path, commitSHA string) (sessionsvc.WorkspaceFileDetail, error) {
+	f.prFileCommitSHA = commitSHA
+	return f.GetPRFile(ctx, id, number, sourceURL, path, nil)
 }
 
 func (f *fakeSessionService) WorkspaceWatchPaths(_ context.Context, id domain.SessionID) ([]string, error) {
@@ -701,6 +720,11 @@ func (f *fakeSessionService) GetWorkspaceFileRevision(_ context.Context, id doma
 
 func (f *fakeSessionService) GetPRFileRevision(ctx context.Context, id domain.SessionID, number int, _ string, path string, side sessionsvc.WorkspaceFileBlobSide) (sessionsvc.WorkspaceFileRevision, error) {
 	return f.GetWorkspaceFileRevision(ctx, id, path, sessionsvc.WorkspaceDiffCommitted, side, "", "")
+}
+
+func (f *fakeSessionService) GetPRFileRevisionAtCommit(ctx context.Context, id domain.SessionID, number int, sourceURL, path string, side sessionsvc.WorkspaceFileBlobSide, commitSHA string) (sessionsvc.WorkspaceFileRevision, error) {
+	f.prRevisionCommitSHA = commitSHA
+	return f.GetPRFileRevision(ctx, id, number, sourceURL, path, side)
 }
 
 func (f *fakeSessionService) GetWorkspaceFileRevisionAtCommit(ctx context.Context, id domain.SessionID, path string, side sessionsvc.WorkspaceFileBlobSide, workspaceVersion, expectedRevision, commitSHA string) (sessionsvc.WorkspaceFileRevision, error) {
@@ -2624,6 +2648,16 @@ func TestSessionsAPI_ListWorkspaceFiles(t *testing.T) {
 
 func TestSessionsAPI_ListPRFiles(t *testing.T) {
 	svc := newFakeSessionService()
+	svc.prFiles = sessionsvc.PRFiles{
+		SessionID: "ao-1",
+		Files:     []sessionsvc.WorkspaceFileSummary{{Path: "README.md", Status: sessionsvc.WorkspaceFileModified, Additions: 1}},
+		Commits: []sessionsvc.CommitSummary{{
+			SHA:     "abc123",
+			Subject: "docs: update readme",
+			Author:  "Ada",
+			Files:   []sessionsvc.WorkspaceFileSummary{{Path: "README.md", Status: sessionsvc.WorkspaceFileModified, Additions: 1}},
+		}},
+	}
 	srv := newSessionTestServer(t, svc)
 	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/pr/42/files", "")
 	if status != http.StatusOK {
@@ -2635,6 +2669,32 @@ func TestSessionsAPI_ListPRFiles(t *testing.T) {
 	}
 	if got.SessionID != "ao-1" {
 		t.Fatalf("response = %+v", got)
+	}
+	if len(got.Commits) != 1 || got.Commits[0].SHA != "abc123" || len(got.Commits[0].Files) != 1 || got.Commits[0].Files[0].Path != "README.md" {
+		t.Fatalf("commits = %+v, want abc123 changing README.md", got.Commits)
+	}
+}
+
+func TestSessionsAPI_GetPRFileAtCommit(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/pr/42/file?path=README.md", "")
+	if status != http.StatusOK || svc.prFileCommitSHA != "" {
+		t.Fatalf("GET PR file = %d, commitSha %q; want 200 and the whole-PR read; body=%s", status, svc.prFileCommitSHA, body)
+	}
+	body, status, _ = doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/pr/42/file?path=README.md&commitSha=abc123", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET PR commit file = %d, want 200; body=%s", status, body)
+	}
+	if svc.prFileCommitSHA != "abc123" {
+		t.Fatalf("commitSha = %q, want abc123", svc.prFileCommitSHA)
+	}
+	body, status, _ = doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/pr/42/file/revision?path=README.md&side=before&commitSha=abc123", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET PR commit revision = %d, want 200; body=%s", status, body)
+	}
+	if svc.prRevisionCommitSHA != "abc123" || svc.workspaceRevisionSide != sessionsvc.WorkspaceBlobBefore {
+		t.Fatalf("commit revision args = sha:%q side:%q", svc.prRevisionCommitSHA, svc.workspaceRevisionSide)
 	}
 }
 
@@ -3281,6 +3341,22 @@ func TestSessionsAPI_SendWithAttachment(t *testing.T) {
 	}
 	if svc.sentAttachment.Ext != ".png" || string(svc.sentAttachment.Data) != "snapshot" {
 		t.Fatalf("sentAttachment = %+v, want Ext=.png Data=snapshot", svc.sentAttachment)
+	}
+	if svc.sentDeliveryOptions.AuthoredByUser {
+		t.Fatal("ordinary automation send was marked user-authored")
+	}
+}
+
+func TestSessionsAPI_SendCarriesUserAuthorshipSeparatelyFromDelivery(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", `{"message":"Move this control.","userAuthored":true}`)
+	if status != http.StatusOK {
+		t.Fatalf("send = %d, want 200; body=%s", status, body)
+	}
+	if !svc.sentDeliveryOptions.AuthoredByUser {
+		t.Fatal("send dropped user-authored delivery fact")
 	}
 }
 

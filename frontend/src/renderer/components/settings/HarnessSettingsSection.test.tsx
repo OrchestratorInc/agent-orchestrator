@@ -127,6 +127,44 @@ describe("HarnessSettingsSection", () => {
 		vi.restoreAllMocks();
 	});
 
+	it("offers native login when fx is installed but unauthorized", async () => {
+		const fxCatalog = { agents: [{ ...catalogWithInstalled("claude-code").agents[0], id: "fx", label: "fx", authentication: { state: "unauthorized", freshness: "fresh", reason: "fx is not logged in.", reasonCode: "", attemptedAt: null, checkedAt: null } }] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: fxCatalog } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "fx", action: "login", launchMode: "terminal", available: true, displayCommand: "fx login", documentationUrl: "https://fx.sh/docs" }] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [{ agentId: "fx", available: true, automatic: true, method: "official-installer", documentationUrl: "https://fx.sh/docs", methods: [] }] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: fxCatalog } as never);
+		renderSection();
+		const row = (await screen.findByText("fx")).closest("[data-agent]") as HTMLElement;
+		expect(await within(row).findByRole("button", { name: "Login" })).toBeInTheDocument();
+		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
+	});
+
+	it("offers fx installation while readiness refreshes automatically", async () => {
+		const fxCatalog = { agents: [{ ...catalogWithInstalled().agents[0], id: "fx", label: "fx" }] };
+		const fxPlan = { agentId: "fx", available: true, automatic: true, method: "official-installer", command: "bash <downloaded from https://fx.sh/setup.sh>", documentationUrl: "https://fx.sh/docs", expectedDestination: "~/.local/bin/fx", methods: [{ id: "official-installer", label: "Official installer", available: true, recommended: true, command: "bash <downloaded from https://fx.sh/setup.sh>", reinstallAvailable: false }] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "fx", action: "login", launchMode: "terminal", available: true, displayCommand: "fx login", documentationUrl: "https://fx.sh/docs" }] } } as never;
+			if (path === "/api/v1/agents/readiness") return { data: fxCatalog } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [fxPlan] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/{agent}/install") return { data: { target: "fx", status: "installing", method: "official-installer" } } as never;
+			return { data: fxCatalog } as never;
+		});
+		renderSection();
+		const row = (await screen.findByText("fx")).closest("[data-agent]") as HTMLElement;
+		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/refresh"));
+		await userEvent.click(await within(row).findByRole("button", { name: "Install" }));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "fx" } }, body: { method: "official-installer", operation: "install" } });
+	});
+
 	it("keeps a targeted harness visible, scrolls it, focuses Install, and highlights it for two seconds once", async () => {
 		const scrollIntoView = vi.fn();
 		const setTimeoutSpy = vi.spyOn(window, "setTimeout");

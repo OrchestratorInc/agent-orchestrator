@@ -34,6 +34,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"crush", "Log in to Crush", "crush", "Native Charm Hyper login flow; GitHub Copilot remains available as a platform option", "https://github.com/charmbracelet/crush", "", ActionLogin, []string{"crush", "login"}},
 		{"cline", "Log in to Cline", "cline", "Native authentication flow", "https://github.com/cline/cline", "", ActionLogin, []string{"cline", "auth"}},
 		{"goose", "Set up Goose", "goose", "Native provider configuration; AO forwards terminal input without persisting or logging the raw input, while Goose controls credential storage", "https://block.github.io/goose/index.html", "", ActionSetup, []string{"goose", "configure"}},
+		{"gemini", "Set up Gemini CLI", "gemini", "Select Open setup after Gemini finishes starting to sign in or choose a provider", "https://geminicli.com/docs/get-started/authentication/", "/auth\r", ActionSetup, []string{"gemini"}},
 		{"qwen", "Set up Qwen", "qwen", "Select Open setup after Qwen finishes starting to configure a model provider", "https://qwenlm.github.io/qwen-code-docs/en/users/configuration/auth/", "i\x7f/auth\r", ActionSetup, []string{"qwen"}},
 		{"continue", "Log in to Continue", "cn", "Native browser flow", "https://docs.continue.dev/cli/quickstart", "", ActionLogin, []string{"cn", "login"}},
 		{"devin", "Log in to Devin", "devin", "Native browser flow; manual-token flow remains available from the CLI", "https://docs.devin.ai/get-started/devin-intro", "", ActionLogin, []string{"devin", "auth", "login"}},
@@ -46,6 +47,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"kimchi", "Log in to Kimchi", "kimchi", "Native browser login flow", "https://docs.kimchi.dev/docs/service-keys", "", ActionLogin, []string{"kimchi", "login"}},
 		{"prime-agent", "Log in to Prime Agent", "prime-agent", "Select Open login after Prime Agent finishes starting", "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md", "/login\r", ActionLogin, []string{"prime-agent"}},
 		{"omp", "Log in to OMP", "omp", "Select Open login after OMP finishes starting", "https://github.com/can1357/oh-my-pi", "/login\r", ActionLogin, []string{"omp"}},
+		{"fx", "Log in to fx", "fx", "Select Vercel, Codex, or Grok in fx's native login flow", "https://fx.sh/docs", "", ActionLogin, []string{"fx", "login"}},
 	}
 
 	svc := New(foundExecutables(cases), nil)

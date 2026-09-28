@@ -1917,29 +1917,38 @@ func gitUntrackedFiles(ctx context.Context, root string) ([]string, error) {
 }
 
 // gitCommitLog lists the commits reachable from HEAD but not base, newest
-// first. Metadata/name-status and numstat are collected in two bounded Git
-// passes, rather than spawning Git once or twice for every commit.
+// first.
 func gitCommitLog(ctx context.Context, root, base string) ([]CommitSummary, error) {
-	var statusOutput, numstatOutput string
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() (err error) {
-		statusOutput, err = gitWorkspaceOutput(gctx, root, "log", "--format=%x1e%H%x1f%s%x1f%an%x1f%aI", "--name-status", "--find-renames", "-z", base+"..HEAD")
-		return err
-	})
-	g.Go(func() (err error) {
-		numstatOutput, err = gitWorkspaceOutput(gctx, root, "log", "--format=%x1e%H", "--numstat", "--find-renames", "-z", base+"..HEAD")
-		return err
-	})
-	if err := g.Wait(); err != nil {
+	commits, changes, counts, err := gitCommitLogChanges(ctx, root, base+"..HEAD")
+	if err != nil {
 		return nil, err
 	}
-	commits, changes := parseCommitStatusLog(statusOutput)
-	counts := parseCommitNumstatLog(numstatOutput)
 	for i := range commits {
 		change := changes[commits[i].SHA]
 		commits[i].Files = buildSectionSummaries(root, change.statuses, counts[commits[i].SHA], change.previous)
 	}
 	return commits, nil
+}
+
+// gitCommitLogChanges lists the commits in revRange, newest first, with each
+// commit's name-status changes and numstat counts. Both are collected in two
+// bounded Git passes, rather than spawning Git once or twice for every commit.
+func gitCommitLogChanges(ctx context.Context, root, revRange string) ([]CommitSummary, map[string]commitChangeSet, map[string]map[string][2]int, error) {
+	var statusOutput, numstatOutput string
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) {
+		statusOutput, err = gitWorkspaceOutput(gctx, root, "log", "--format=%x1e%H%x1f%s%x1f%an%x1f%aI", "--name-status", "--find-renames", "-z", revRange)
+		return err
+	})
+	g.Go(func() (err error) {
+		numstatOutput, err = gitWorkspaceOutput(gctx, root, "log", "--format=%x1e%H", "--numstat", "--find-renames", "-z", revRange)
+		return err
+	})
+	if err := g.Wait(); err != nil {
+		return nil, nil, nil, err
+	}
+	commits, changes := parseCommitStatusLog(statusOutput)
+	return commits, changes, parseCommitNumstatLog(numstatOutput), nil
 }
 
 type commitChangeSet struct {

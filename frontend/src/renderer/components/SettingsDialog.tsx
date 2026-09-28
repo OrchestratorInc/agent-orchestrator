@@ -8,7 +8,7 @@ import { ensureCodexAccounts } from "../hooks/useCodexAccountsQuery";
 import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection } from "./ProjectSettingsForm";
-import { DialogHeader, settingsDialogBodyClass, settingsDialogContentClass, settingsDialogHeaderClass } from "./ui/dialog";
+import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, settingsDialogSurfaceClass } from "./ui/dialog";
 import { type GlobalSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
 import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
@@ -173,12 +173,13 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 				<Dialog.Overlay
 					className="dialog-overlay animate-overlay-in motion-reduce:animate-none"
 					data-testid="settings-dialog-overlay"
+					style={{ backdropFilter: "none", WebkitBackdropFilter: "none" }}
 					onWheel={(event) => event.preventDefault()}
 				/>
 				<Dialog.Content
 					aria-modal="true"
 					className={cn(
-						settingsDialogContentClass,
+						settingsDialogSurfaceClass,
 						"fixed left-1/2 top-1/2 z-[calc(var(--z-overlay)+1)] h-(--size-settings-dialog-height) w-(--size-settings-dialog-wide) max-h-none -translate-x-1/2 -translate-y-1/2 origin-center overflow-hidden p-0 animate-modal-in motion-reduce:animate-none sm:rounded-lg",
 						isProjectSettings && "h-[min(40rem,calc(100vh-3rem))]",
 					)}

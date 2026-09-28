@@ -14,7 +14,7 @@ import { workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
 import {
 	buildRankedAgentOptions,
-	isReadyAgent,
+	isLaunchableAgent,
 	DEFAULT_AGENT_PRIORITY_RANK,
 	defaultAuthorizedAgentForRole,
 	type AgentInfo,
@@ -425,8 +425,8 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 
 	const selectedOption = options.find((agent) => agent.id === value) ?? (value ? unknownAgentReadiness(value, agentLabel(value)) : undefined);
 	const hasReadinessSnapshot = agents !== undefined;
-	const needsSetup = manageAgents && hasReadinessSnapshot && Boolean(selectedOption && !isReadyAgent(selectedOption));
-	const visibleOptions = manageAgents && hasReadinessSnapshot ? options.filter(isReadyAgent) : options;
+	const needsSetup = manageAgents && hasReadinessSnapshot && Boolean(selectedOption && !isLaunchableAgent(selectedOption));
+	const visibleOptions = manageAgents && hasReadinessSnapshot ? options.filter(isLaunchableAgent) : options;
 	const management = useAgentManagementMenu(needsSetup ? value : undefined);
 	const managementAction = manageAgents ? { label: t("agentSelector.manage"), onSelect: management.requestManagement } : undefined;
 	const setupHint = needsSetup ? <span className="text-xs text-muted-foreground">{t("agentSelector.needsSetup")}</span> : null;

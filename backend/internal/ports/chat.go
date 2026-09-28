@@ -397,12 +397,21 @@ type ChatUserMessage struct {
 	// ClientMessageID makes delivery idempotent: a retry with the same key must
 	// not produce a second provider turn.
 	ClientMessageID string
-	// Origin records who is speaking. Automation shares the queue with the user
-	// and can never resolve an approval.
+	// Origin records the timeline attribution and delivery source. Automation
+	// shares the queue with the user and can never resolve an approval.
 	Origin domain.MessageOrigin
+	// AuthoredByUser distinguishes user-written content carried through AO's
+	// automation delivery path from content authored by automation itself.
+	AuthoredByUser bool
 	// Settings are the per-turn provider choices for this message. Zero means the
 	// conversation's own defaults.
 	Settings ChatTurnSettings
+}
+
+// MessageDeliveryOptions describes facts about the message independent of the
+// mechanism AO uses to deliver it.
+type MessageDeliveryOptions struct {
+	AuthoredByUser bool
 }
 
 // ChatTurnSettings are the per-turn choices a provider accepts alongside the

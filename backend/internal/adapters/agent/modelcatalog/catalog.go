@@ -124,6 +124,7 @@ var commandSpecs = map[string]commandSpec{
 	"copilot":     {args: []string{"help", "config"}, parser: parseCopilotConfigModels},
 	"droid":       {args: []string{"exec", "--help"}, parser: parseDroidHelpModels},
 	"crush":       {args: []string{"models"}, parser: parseIDLines},
+	"fx":          {args: []string{"models", "--json"}, parser: parseFXModels},
 }
 
 // Base returns the picker behavior AO can provide without executing a CLI.
@@ -185,8 +186,8 @@ func Manual(agentID string) ports.AgentModelCatalog {
 // availability remain agent-owned and are never listed here.
 func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	switch agentID {
-	case "claude-code", "codex", "opencode", "grok", "cursor", "qwen",
-		"kimi", "muse", "aider", "goose", "autohand", "unreal-agent":
+	case "claude-code", "codex", "opencode", "grok", "cursor", "qwen", "gemini",
+		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent":
 		return ports.CustomModelEntryDirect
 	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured
@@ -386,10 +387,25 @@ func applyClaudeConfiguredDefault(models []ports.AgentModelInfo, configured stri
 	}
 	if !matched {
 		// Claude accepts custom aliases and pinned snapshots beyond the static
-		// picker snapshot. Keep the effective configured model visible.
-		models = append(models, ports.AgentModelInfo{ID: configured, Label: configured, IsDefault: true})
+		// picker snapshot. Keep the effective configured model visible. When it
+		// is one of Claude Code's known aliases (the common case: settings.json
+		// pins "sonnet" while provider discovery returns concrete snapshot IDs),
+		// carry the human label so the picker reads "Sonnet" rather than a raw
+		// id — this is the local CLI's configured default, shown verbatim.
+		models = append(models, ports.AgentModelInfo{ID: configured, Label: claudeConfiguredLabel(configured), IsDefault: true})
 	}
 	return models
+}
+
+// claudeConfiguredLabel returns the human label Claude Code uses for a known
+// alias, falling back to the raw id for custom aliases and pinned snapshots.
+func claudeConfiguredLabel(id string) string {
+	for _, model := range claudeCodeModels() {
+		if strings.EqualFold(model.ID, id) {
+			return model.Label
+		}
+	}
+	return id
 }
 
 // CatalogFingerprint returns a stable fingerprint of the discovery inputs: the
@@ -975,6 +991,23 @@ func parsePiModels(output []byte) ([]ports.AgentModelInfo, error) {
 		models = append(models, ports.AgentModelInfo{ID: id, Label: modelID, Provider: provider})
 	}
 	return normalize(models), nil
+}
+
+func parseFXModels(output []byte) ([]ports.AgentModelInfo, error) {
+	var response struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.Unmarshal(output, &response); err != nil {
+		return nil, err
+	}
+	models := make([]ports.AgentModelInfo, 0, len(response.IDs))
+	for _, id := range response.IDs {
+		if id == "" {
+			continue
+		}
+		models = append(models, ports.AgentModelInfo{ID: id, Label: id})
+	}
+	return models, nil
 }
 
 func looksLikeModelID(value string) bool {
