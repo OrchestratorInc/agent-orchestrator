@@ -25,7 +25,11 @@ import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { isConcreteModelID } from "../lib/agent-model-choices";
 import { AGENT_LABELS, AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
-import type { AgentSwitchSummary, WorkspaceSession } from "../types/workspace";
+import {
+	STANDALONE_WORKSPACE_ID,
+	type AgentSwitchSummary,
+	type WorkspaceSession,
+} from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
 import { AgentModelPicker } from "./AgentModelPicker";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
@@ -213,9 +217,11 @@ export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpe
 	const [mode, setMode] = useState("");
 	const [modelTouched, setModelTouched] = useState(false);
 	const hostId = session.hostId;
+	const isStandalone = session.workspaceId === STANDALONE_WORKSPACE_ID;
+	const catalogProjectId = isStandalone ? "" : session.workspaceId;
 	const projectQuery = useQuery({
 		queryKey: hostId ? ["project", hostId, session.workspaceId] : ["project", session.workspaceId],
-		enabled: open,
+		enabled: open && !isStandalone,
 		staleTime: 30_000,
 		queryFn: async () => {
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/projects/{id}", {
@@ -226,7 +232,7 @@ export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpe
 			return data.project as components["schemas"]["Project"];
 		},
 	});
-	const modelCatalog = useQuery(agentModelsQueryOptions(targetHarness, session.workspaceId, hostId)).data;
+	const modelCatalog = useQuery(agentModelsQueryOptions(targetHarness, catalogProjectId, hostId)).data;
 	const projectKnown = Boolean(projectQuery.data);
 	const role = session.kind === "orchestrator" ? projectQuery.data?.config?.orchestrator : projectQuery.data?.config?.worker;
 	const roleMatches = !role?.agent || role.agent === targetHarness;
@@ -473,7 +479,7 @@ export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpe
 											setModelTouched(true);
 										}}
 										onWarningChange={setModelWarning}
-										projectId={session.workspaceId}
+										projectId={catalogProjectId}
 										hostId={hostId}
 										value={modelCatalog?.selectionMode === "mode" ? "" : visibleChoice}
 									/>
