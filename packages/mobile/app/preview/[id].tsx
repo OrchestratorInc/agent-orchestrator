@@ -131,22 +131,38 @@ export default function SessionPreviewScreen() {
 					originWhitelist={["http://*", "https://*"]}
 					startInLoadingState
 					renderLoading={() => <View style={styles.webLoading}><ActivityIndicator color={t.accent} /></View>}
-					onLoadStart={(event) => setBrowserState((current) => browserLoadStart(current, event.nativeEvent.url))}
+					onLoadStart={(event) => {
+						// React Native synthetic events are pooled after this callback. Copy
+						// values now rather than dereferencing a released event inside the
+						// asynchronous state updater.
+						const nextUrl = event?.nativeEvent?.url;
+						setBrowserState((current) => browserLoadStart(current, nextUrl));
+					}}
 					onLoadEnd={() => setBrowserState(browserLoadEnd)}
-					onNavigationStateChange={(event: WebViewNavigation) => setBrowserState((current) => browserNavigationChanged(current, {
-						url: event.url,
-						title: event.title,
-						canGoBack: event.canGoBack,
-						canGoForward: event.canGoForward,
-						loading: event.loading,
-					}))}
+					onNavigationStateChange={(event: WebViewNavigation | null) => {
+						if (!event) return;
+						const update = {
+							url: event.url,
+							title: event.title,
+							canGoBack: event.canGoBack,
+							canGoForward: event.canGoForward,
+							loading: event.loading,
+						};
+						setBrowserState((current) => browserNavigationChanged(current, update));
+					}}
 					onShouldStartLoadWithRequest={(request) => {
 						if (isHttpUrl(request.url)) return true;
 						setBrowserState((current) => browserLoadError(current, "Only HTTP and HTTPS URLs can be opened."));
 						return false;
 					}}
-					onHttpError={(event) => setBrowserState((current) => browserLoadError(current, `Preview returned HTTP ${event.nativeEvent.statusCode}.`))}
-					onError={(event) => setBrowserState((current) => browserLoadError(current, event.nativeEvent.description || "Couldn't load this page."))}
+					onHttpError={(event) => {
+						const status = event?.nativeEvent?.statusCode;
+						setBrowserState((current) => browserLoadError(current, status ? `Preview returned HTTP ${status}.` : "Preview returned an HTTP error."));
+					}}
+					onError={(event) => {
+						const description = event?.nativeEvent?.description || "Couldn't load this page.";
+						setBrowserState((current) => browserLoadError(current, description));
+					}}
 				/>
 			) : (
 				<View style={styles.center}><Feather name={discoveryError ? "alert-triangle" : "globe"} size={iconSize.xl} color={discoveryError ? t.red : t.textTertiary} /><Text style={styles.title}>{discoveryError ? "Couldn't load the preview" : "No preview yet"}</Text><Text style={styles.copy}>{discoveryError || "Waiting for the agent to generate a page or document. You can also enter a URL below."}</Text><Pressable onPress={() => { haptics.tap(); void refresh(); }} style={styles.retry}><Text style={styles.retryText}>Check again</Text></Pressable></View>
