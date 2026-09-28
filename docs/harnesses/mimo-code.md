@@ -10,13 +10,15 @@ Install the official npm package:
 
 ```bash
 npm install -g @mimo-ai/cli
-mimo auth login
+mimo
 ```
 
-AO checks local credential presence with `mimo auth list`. A discovered
-credential is reported as **configured**, not authorized, because this local
-command does not make a provider request. MiMo's anonymous free model may work
-even when readiness is unknown.
+MiMo Auto is available without login. To use paid or premium models, run
+`mimo auth login` and choose MiMo browser login.
+
+AO checks credentials with `mimo auth list` and the free channel with
+`mimo models mimo`. Either makes readiness **configured**, not authorized,
+because these local commands do not make a provider request.
 
 ## AO integration
 
