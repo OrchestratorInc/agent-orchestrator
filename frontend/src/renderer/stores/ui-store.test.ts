@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "./ui-store";
+import { rememberedFileDisplayMode, sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "./ui-store";
 import { sessionUiKey } from "../lib/hosts";
 
 describe("sidebar visibility", () => {
@@ -143,5 +143,28 @@ describe("project UI state across hosts", () => {
 		expect(useUiStore.getState().newTaskRequest).toBeNull();
 		state.requestNewTask("project", "host-b");
 		expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: "project", hostId: "host-b" });
+	});
+});
+
+describe("file display modes", () => {
+	beforeEach(() => {
+		useUiStore.setState({ inspectorSessions: {} });
+	});
+
+	it("restores a pick only for the same session, path, and open request", () => {
+		useUiStore.getState().setFileDisplayMode("sess-1", "README.md", "rendered", 3);
+		const state = useUiStore.getState();
+
+		expect(rememberedFileDisplayMode(state, "sess-1", "README.md", 3)).toBe("rendered");
+		expect(rememberedFileDisplayMode(state, "sess-1", "README.md", 4)).toBeUndefined();
+		expect(rememberedFileDisplayMode(state, "sess-2", "README.md", 3)).toBeUndefined();
+		expect(rememberedFileDisplayMode(state, "sess-1", "docs/guide.md", 3)).toBeUndefined();
+		expect(rememberedFileDisplayMode(state, "sess-1", null, 3)).toBeUndefined();
+	});
+
+	it("keeps the rest of the session's Files state", () => {
+		useUiStore.getState().setFilesChangedOnly("sess-1", false);
+		useUiStore.getState().setFileDisplayMode("sess-1", "README.md", "rendered", 1);
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesChangedOnly).toBe(false);
 	});
 });

@@ -71,9 +71,15 @@ export type InspectorSessionState = {
 	filesChangedOnly?: boolean;
 	/** Files tab: source shared by the docked and maximized explorers. */
 	filesSource?: FilesSource;
+	/** Files: display mode picked per path in a centre tab, restored for the same open request after a remount. */
+	fileDisplayModes?: Record<string, RememberedFileDisplayMode>;
 	/** The session-entry defaulting (Summary tab, baseline browser reveal) has already run once for this session's lifetime. */
 	initialized?: boolean;
 };
+
+export type FileDisplayMode = "diff" | "file" | "rendered";
+
+export type RememberedFileDisplayMode = { mode: FileDisplayMode; requestKey: number };
 
 export type GlobalToast = {
 	title: string;
@@ -181,6 +187,7 @@ export type UiState = {
 	setBrowserUnseen: (sessionId: string, unseen: boolean) => void;
 	setFilesChangedOnly: (sessionId: string, changedOnly: boolean) => void;
 	setFilesSource: (sessionId: string, source: FilesSource) => void;
+	setFileDisplayMode: (sessionId: string, path: string, mode: FileDisplayMode, requestKey: number) => void;
 	setCommandPaletteOpen: (open: boolean) => void;
 	setProjectRestarting: (projectId: string, restarting: boolean, hostId?: string) => void;
 	setProjectProvisioning: (projectId: string, provisioning: boolean, hostId?: string) => void;
@@ -243,6 +250,21 @@ function inspectorState(sessions: Record<string, InspectorSessionState>, session
  *  reveal) opens it; read every open check through here so that default can't drift. */
 export function inspectorIsOpen(sessions: Record<string, InspectorSessionState>, sessionId: string): boolean {
 	return sessions[sessionId]?.isOpen ?? false;
+}
+
+/**
+ * The display mode the user picked for this file in this open request, if any.
+ * A newer open request (a different key) chooses its own mode instead.
+ */
+export function rememberedFileDisplayMode(
+	state: Pick<UiState, "inspectorSessions">,
+	sessionId: string,
+	path: string | null,
+	requestKey: number,
+): FileDisplayMode | undefined {
+	if (!path) return undefined;
+	const remembered = state.inspectorSessions[sessionId]?.fileDisplayModes?.[path];
+	return remembered?.requestKey === requestKey ? remembered.mode : undefined;
 }
 
 export function sidebarIsVisible(state: Pick<UiState, "isSidebarOpen">): boolean {
@@ -453,6 +475,18 @@ export const useUiStore = create<UiState>((set, get) => ({
 				inspectorSessions: {
 					...state.inspectorSessions,
 					[sessionId]: { ...current, filesSource },
+				},
+			};
+		}),
+	setFileDisplayMode: (sessionId, path, mode, requestKey) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			const previous = current.fileDisplayModes?.[path];
+			if (previous?.mode === mode && previous.requestKey === requestKey) return state;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, fileDisplayModes: { ...current.fileDisplayModes, [path]: { mode, requestKey } } },
 				},
 			};
 		}),

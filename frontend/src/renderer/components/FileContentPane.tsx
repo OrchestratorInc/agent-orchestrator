@@ -14,7 +14,9 @@ import {
 	type FilesSource,
 } from "../hooks/useSessionWorkspaceFiles";
 import { usePierreFileHighlightReady } from "../hooks/usePierreFileHighlight";
+import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
+import { rememberedFileDisplayMode, useUiStore, type FileDisplayMode } from "../stores/ui-store";
 import { statusLabel, statusTone } from "../lib/workspace-file-status";
 import {
 	canSplitCompare,
@@ -36,7 +38,7 @@ import { MarkdownFileView } from "./markdown/MarkdownFileView";
 // height with small text and icons so they do not dwarf the toolbar.
 const EDIT_ACTION_CLASS = "h-6 gap-1 px-2 text-xs";
 
-export type FileViewMode = "diff" | "file" | "rendered";
+export type FileViewMode = FileDisplayMode;
 export type FileOpenOptions = { commitSha?: string; editing?: boolean; mode?: FileViewMode; scope?: WorkspaceDiffScope };
 
 const DEFAULT_FILES_SOURCE: FilesSource = { kind: "workspace" };
@@ -57,6 +59,7 @@ export function FileContentPane({
 	onDirtyChange,
 	path,
 	previousPath,
+	rememberDisplayMode = false,
 	sessionId,
 	hostId,
 	split,
@@ -71,6 +74,8 @@ export function FileContentPane({
 	onDirtyChange?: (dirty: boolean) => void;
 	path: string | null;
 	previousPath?: string;
+	/** Restore the display mode picked in the toolbar when this pane remounts (centre file tabs). */
+	rememberDisplayMode?: boolean;
 	sessionId: string;
 	hostId?: string;
 	split: boolean;
@@ -84,7 +89,13 @@ export function FileContentPane({
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	const [mode, setMode] = useState<FileViewMode>(initialMode);
+	const setFileDisplayMode = useUiStore((state) => state.setFileDisplayMode);
+	const uiSessionId = sessionUiKey(sessionId, hostId);
+	// A mode picked in the toolbar outlives the pane: switching sessions
+	// unmounts it, and coming back should not drop Rich preview.
+	const restoredMode = () =>
+		(rememberDisplayMode ? rememberedFileDisplayMode(useUiStore.getState(), uiSessionId, path, initialRequestKey) : undefined) ?? initialMode;
+	const [mode, setMode] = useState<FileViewMode>(restoredMode);
 	const [editing, setEditing] = useState(false);
 	const [draft, setDraft] = useState("");
 	const [saving, setSaving] = useState(false);
@@ -99,11 +110,15 @@ export function FileContentPane({
 	});
 	const hasUnsavedChanges = Boolean(editing && query.data && draft !== query.data.content);
 	useEffect(() => {
-		setMode(initialMode);
+		setMode(restoredMode());
 		setEditing(initialEditing);
 		setDraft("");
 		setSaveError("");
-	}, [commitSha, hostId, initialEditing, initialMode, initialRequestKey, path, scope, source]);
+	}, [commitSha, hostId, initialEditing, initialMode, initialRequestKey, path, rememberDisplayMode, scope, sessionId, source, uiSessionId]);
+	const selectMode = (next: FileViewMode) => {
+		setMode(next);
+		if (rememberDisplayMode && path) setFileDisplayMode(uiSessionId, path, next, initialRequestKey);
+	};
 	useEffect(() => {
 		if (initialEditing && query.data) setDraft(query.data.content);
 	}, [initialEditing, initialRequestKey, path, query.data]);
@@ -234,7 +249,7 @@ export function FileContentPane({
 					aria-selected={effectiveMode === mode}
 					className={cn("text-muted-foreground hover:text-foreground", effectiveMode === mode && "bg-interactive-active text-foreground")}
 					disabled={editing}
-					onClick={() => setMode(mode)}
+					onClick={() => selectMode(mode)}
 					role="tab"
 					size="icon-sm"
 					type="button"

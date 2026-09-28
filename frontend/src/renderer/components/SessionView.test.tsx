@@ -539,7 +539,7 @@ vi.mock("./SessionFileExplorer", () => ({
 	},
 }));
 vi.mock("./SessionFileWorkspace", () => ({
-	SessionFileWorkspace: ({ annotation, initialEditing, initialMode, path, scope, split }: {
+	SessionFileWorkspace: ({ annotation, initialEditing, initialMode, initialRequestKey, path, scope, split }: {
 		annotation: {
 			begin: (target: { path: string; scope: string; side: string; surface: string }) => void;
 			draft: string;
@@ -548,11 +548,12 @@ vi.mock("./SessionFileWorkspace", () => ({
 		};
 		initialEditing?: boolean;
 		initialMode?: string;
+		initialRequestKey?: number;
 		path: string;
 		scope?: string;
 		split: boolean;
 	}) => (
-		<div data-editing={String(Boolean(initialEditing))} data-mode={initialMode} data-split={String(split)} data-testid="session-file-workspace">
+		<div data-editing={String(Boolean(initialEditing))} data-mode={initialMode} data-request-key={initialRequestKey} data-split={String(split)} data-testid="session-file-workspace">
 			{path}
 			<button onClick={() => annotation.begin({ path, scope: scope ?? "combined", side: "file", surface: "focused" })} type="button">header feedback</button>
 			{annotation.target ? <input aria-label="feedback draft" onChange={(event) => annotation.setDraft(event.target.value)} value={annotation.draft} /> : null}
@@ -1513,6 +1514,23 @@ describe("SessionView", () => {
 		fireEvent.click(screen.getByRole("button", { name: "select chat tab" }));
 		expect(screen.getByText("chat surface")).toBeInTheDocument();
 		expect(screen.queryByTestId("terminal-target")).not.toBeInTheDocument();
+	});
+
+	it("keeps a tree-opened file tab's request across session navigation", async () => {
+		workerSession("sess-1").mode = "chat";
+		workerSession("sess-2").mode = "chat";
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+		const view = render(<SessionView sessionId="sess-1" />);
+
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(screen.getByRole("button", { name: "select src/App.tsx" }));
+		const requestKey = (await screen.findByTestId("session-file-workspace")).getAttribute("data-request-key");
+		expect(requestKey).toBeTruthy();
+
+		view.rerender(<SessionView sessionId="sess-2" />);
+		view.rerender(<SessionView sessionId="sess-1" />);
+
+		expect(await screen.findByTestId("session-file-workspace")).toHaveAttribute("data-request-key", requestKey);
 	});
 
 	it("preserves mixed tab order across session navigation and interface changes", async () => {

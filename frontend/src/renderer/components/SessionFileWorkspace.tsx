@@ -48,6 +48,7 @@ export function SessionFileWorkspace({
 					annotation={annotation}
 					commitSha={commitSha}
 					hostId={hostId}
+					rememberDisplayMode
 					initialEditing={initialEditing}
 					initialMode={initialMode}
 					initialRequestKey={initialRequestKey}
