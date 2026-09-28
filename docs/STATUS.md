@@ -126,8 +126,7 @@ surface (`npm run sqlc`, `npm run api`).
   remains experimental while its upstream CLI is pre-1.0. The fixed macOS/Linux
   installer is `curl -fsSL https://fx.sh/setup.sh | bash`, with expected binary
   `~/.local/bin/fx`; Windows users receive WSL guidance. AO treats a named,
-  non-expired credential source from `fx status --json` as configured, then
-  marks it authorized only when `fx models --json` verifies provider access.
+  non-expired credential source from `fx status --json` as authorized.
   Interactive fx lacks a per-session system-prompt flag: AO does
   not overwrite project `AGENTS.md` or user `~/.fx/AGENTS.md`, so TUI standing
   instructions have reduced coverage. fx Chat and interface switching are not
