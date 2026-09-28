@@ -32,7 +32,7 @@ func TestProtocolStateTranslation(t *testing.T) {
 		state string
 		want  domain.ActivityState
 	}{
-		{"working", domain.ActivityActive}, {"idle", domain.ActivityWaitingInput}, {"blocked", domain.ActivityBlocked},
+		{"working", domain.ActivityActive}, {"idle", domain.ActivityIdle}, {"blocked", domain.ActivityBlocked},
 	} {
 		t.Run(tc.state, func(t *testing.T) {
 			sink := &captureSink{}

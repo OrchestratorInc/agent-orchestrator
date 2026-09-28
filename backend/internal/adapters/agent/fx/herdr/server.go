@@ -19,6 +19,10 @@ const (
 	maxMessageBytes = 16 * 1024
 	maxConnections  = 32
 	clientDuration  = 2 * time.Second
+	// Accept failures such as EMFILE/ENFILE are transient; back off like
+	// net/http rather than abandoning every future fx report.
+	minAcceptBackoff = 5 * time.Millisecond
+	maxAcceptBackoff = time.Second
 )
 
 // Server owns a private Unix socket and submits native reports exclusively to
@@ -27,7 +31,7 @@ const (
 type Server struct {
 	sink       activitySink
 	logger     *slog.Logger
-	listener   *net.UnixListener
+	listener   net.Listener
 	path       string
 	socketInfo os.FileInfo
 	ctx        context.Context
@@ -141,15 +145,25 @@ func (s *Server) serve() {
 	defer close(s.done)
 	defer removeOwnedSocket(s.path, s.socketInfo, s.logger)
 	defer s.workers.Wait()
+	var backoff time.Duration
 	for {
-		conn, err := s.listener.AcceptUnix()
+		conn, err := s.listener.Accept()
 		if err != nil {
-			if s.ctx.Err() == nil {
-				s.logger.Warn("accept fx Herdr client", "error", err)
-				s.shutdown()
+			if s.ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				return
 			}
-			return
+			backoff = min(max(2*backoff, minAcceptBackoff), maxAcceptBackoff)
+			s.logger.Warn("accept fx Herdr client; retrying", "error", err, "backoff", backoff)
+			timer := time.NewTimer(backoff)
+			select {
+			case <-s.ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			continue
 		}
+		backoff = 0
 		s.mu.Lock()
 		if s.ctx.Err() != nil {
 			s.mu.Unlock()

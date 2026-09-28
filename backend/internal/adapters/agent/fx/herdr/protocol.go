@@ -84,7 +84,9 @@ func (s *Server) handle(ctx context.Context, line []byte) response {
 		case "working":
 			signal.State = domain.ActivityActive
 		case "idle":
-			signal.State = domain.ActivityWaitingInput
+			// End of turn, like every other harness. Waiting-input would mark
+			// the session as needing the user and suppress automated nudges.
+			signal.State = domain.ActivityIdle
 		case "blocked":
 			signal.State = domain.ActivityBlocked
 		default:

@@ -91,7 +91,7 @@ func TestHerdrSocketPersistsNativeMetadataAndFencesRuntimeGenerations(t *testing
 	for _, tc := range []struct {
 		state string
 		want  domain.ActivityState
-	}{{"working", domain.ActivityActive}, {"blocked", domain.ActivityBlocked}, {"idle", domain.ActivityWaitingInput}} {
+	}{{"working", domain.ActivityActive}, {"blocked", domain.ActivityBlocked}, {"idle", domain.ActivityIdle}} {
 		report("mer-1", "launch-1", "pane.report_agent", "state", tc.state)
 		if got := store.session("mer-1"); got.Activity.State != tc.want {
 			t.Fatalf("state %s mapped to %s", tc.state, got.Activity.State)
