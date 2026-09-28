@@ -14,6 +14,7 @@ import type { SidebarDestination, SidebarDestinationId } from "./sidebar-navigat
  */
 const glyphs: Record<Exclude<SidebarDestinationId, "prs" | "agents">, { idle: FeatherIconName; active: FeatherIconName }> = {
 	projects: { idle: "folder", active: "folder-open" },
+	browser: { idle: "globe", active: "globe" },
 	settings: { idle: "settings", active: "settings" },
 };
 

@@ -85,10 +85,10 @@ export function BrowserToolbar({
 						/>
 					</View>
 				) : (
-					<Pressable accessibilityRole="button" accessibilityLabel="Edit browser URL" disabled={!url} onPress={() => setEditing(true)} style={styles.location}>
+					<Pressable accessibilityRole="button" accessibilityLabel={url ? "Edit browser URL" : "Enter browser URL"} onPress={() => setEditing(true)} style={styles.location}>
 						{loading ? <ActivityIndicator size="small" color={styles.colors.accent} style={styles.locationSpinner} /> : <Feather name="globe" size={iconSize.xs} color={styles.colors.textTertiary} />}
 						<View style={styles.locationText}>
-							<Text numberOfLines={1} style={styles.title}>{title || displayBrowserUrl(url) || "No page loaded"}</Text>
+							<Text numberOfLines={1} style={styles.title}>{title || displayBrowserUrl(url) || "Enter a URL"}</Text>
 							{url ? <Text numberOfLines={1} style={styles.url}>{displayBrowserUrl(url)}</Text> : null}
 						</View>
 					</Pressable>
