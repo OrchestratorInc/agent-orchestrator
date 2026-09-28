@@ -1982,8 +1982,14 @@ const (
 )
 
 const (
-	sessionsHarnessCheckWithMuseKimchiPrimeAgentOMPUnreal   = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'omp', 'unreal-agent', 'fake'))`
-	sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMPUnreal = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'omp', 'unreal-agent', 'qm', 'fake'))`
+	sessionsHarnessCheckWithMuseKimchiPrimeAgentOMPUnreal         = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'omp', 'unreal-agent', 'fake'))`
+	sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMPUnreal       = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'omp', 'unreal-agent', 'qm', 'fake'))`
+	sessionsHarnessCheckWithMuseKimchiPrimeAgentOMPUnrealMiMo     = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'omp', 'unreal-agent', 'mimo-code', 'fake'))`
+	sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMPUnrealMiMo   = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'omp', 'unreal-agent', 'mimo-code', 'qm', 'fake'))`
+	sessionsHarnessCheckWithMuseKimchiPrimeAgentOMPUnrealFX       = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'omp', 'unreal-agent', 'fx', 'fake'))`
+	sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMPUnrealFX     = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'omp', 'unreal-agent', 'fx', 'qm', 'fake'))`
+	sessionsHarnessCheckWithMuseKimchiPrimeAgentOMPUnrealFXMiMo   = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'omp', 'unreal-agent', 'fx', 'mimo-code', 'fake'))`
+	sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMPUnrealFXMiMo = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'omp', 'unreal-agent', 'fx', 'mimo-code', 'qm', 'fake'))`
 )
 
 func reconcileHarnessConstraint(db *sql.DB) error {
@@ -1999,7 +2005,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsOMP := !strings.Contains(schema, "'omp'")
 	needsGemini := !strings.Contains(schema, "'gemini'")
 	needsUnreal := !strings.Contains(schema, "'unreal-agent'")
-	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal {
+	needsMiMo := !strings.Contains(schema, "'mimo-code'")
+	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsMiMo {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2044,7 +2051,18 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		// Goose runs before reconciliation. A legacy constraint can therefore
 		// miss migration 0163, then reach the OMP shape through repairs above.
 		// Widen both known variants here without dropping the legacy QM value.
-		for _, old := range []string{sessionsHarnessCheckWithMuseKimchiPrimeAgentOMP, sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMP} {
+		for _, old := range []string{
+			sessionsHarnessCheckWithMuseKimchiPrimeAgentOMP,
+			sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMP,
+			sessionsHarnessCheckWithMuseKimchiPrimeAgentOMPUnreal,
+			sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMPUnreal,
+			sessionsHarnessCheckWithMuseKimchiPrimeAgentOMPUnrealFX,
+			sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMPUnrealFX,
+			sessionsHarnessCheckWithMuseKimchiPrimeAgentOMPUnrealMiMo,
+			sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMPUnrealMiMo,
+			sessionsHarnessCheckWithMuseKimchiPrimeAgentOMPUnrealFXMiMo,
+			sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMPUnrealFXMiMo,
+		} {
 			repairs = append(repairs, replacement{old, strings.Replace(old, "'omp'", "'gemini', 'omp'", 1)})
 		}
 	}
@@ -2056,6 +2074,21 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		for _, old := range []string{sessionsHarnessCheckWithMuseKimchiPrimeAgentOMP, sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMP} {
 			withGemini := strings.Replace(old, "'omp'", "'gemini', 'omp'", 1)
 			repairs = append(repairs, replacement{withGemini, strings.Replace(withGemini, "'omp'", "'omp', 'unreal-agent'", 1)})
+		}
+	}
+	if needsMiMo {
+		withoutGemini := []replacement{
+			replacement{sessionsHarnessCheckWithMuseKimchiPrimeAgentOMPUnreal, sessionsHarnessCheckWithMuseKimchiPrimeAgentOMPUnrealMiMo},
+			replacement{sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMPUnreal, sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMPUnrealMiMo},
+			replacement{sessionsHarnessCheckWithMuseKimchiPrimeAgentOMPUnrealFX, sessionsHarnessCheckWithMuseKimchiPrimeAgentOMPUnrealFXMiMo},
+			replacement{sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMPUnrealFX, sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMPUnrealFXMiMo},
+		}
+		for _, r := range withoutGemini {
+			repairs = append(repairs, r)
+			repairs = append(repairs, replacement{
+				strings.Replace(r.old, "'omp'", "'gemini', 'omp'", 1),
+				strings.Replace(r.new, "'omp'", "'gemini', 'omp'", 1),
+			})
 		}
 	}
 	for _, r := range repairs {
@@ -2094,6 +2127,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'unreal-agent'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Unreal Agent and did not match known pre-Unreal-Agent schema")
+	}
+	if !strings.Contains(schema, "'mimo-code'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing MiMo Code and did not match known pre-MiMo-Code schema")
 	}
 	return nil
 }

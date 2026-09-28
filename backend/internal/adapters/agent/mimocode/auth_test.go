@@ -40,7 +40,7 @@ func TestAuthStatusUsesDocumentedProviderListCommand(t *testing.T) {
 	old := runAuthProbe
 	t.Cleanup(func() { runAuthProbe = old })
 	runAuthProbe = func(_ context.Context, binary string, args ...string) ([]byte, error) {
-		if binary != "mimo" || !reflect.DeepEqual(args, []string{"providers", "list"}) {
+		if binary != "mimo" || !reflect.DeepEqual(args, []string{"auth", "list"}) {
 			t.Fatalf("probe = %q %q", binary, args)
 		}
 		return []byte("1 credential\n"), nil

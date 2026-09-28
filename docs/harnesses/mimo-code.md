@@ -10,10 +10,10 @@ Install the official npm package:
 
 ```bash
 npm install -g @mimo-ai/cli
-mimo providers login
+mimo auth login
 ```
 
-AO checks local credential presence with `mimo providers list`. A discovered
+AO checks local credential presence with `mimo auth list`. A discovered
 credential is reported as **configured**, not authorized, because this local
 command does not make a provider request. MiMo's anonymous free model may work
 even when readiness is unknown.

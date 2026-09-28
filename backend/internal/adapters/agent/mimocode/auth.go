@@ -24,7 +24,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, authProbeTimeout)
 	defer cancel()
-	out, _ := runAuthProbe(probeCtx, binary, "providers", "list")
+	out, _ := runAuthProbe(probeCtx, binary, "auth", "list")
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
