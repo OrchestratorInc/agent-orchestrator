@@ -4730,6 +4730,7 @@ export interface components {
         SendSessionMessageRequest: {
             attachment?: components["schemas"]["AttachmentInput"];
             message: string;
+            userAuthored?: boolean;
         };
         SendSessionMessageResponse: {
             message: string;

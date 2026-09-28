@@ -2611,6 +2611,9 @@ func (f *fakeCommander) Send(_ context.Context, id domain.SessionID, message str
 	f.sentMessages = append(f.sentMessages, message)
 	return nil
 }
+func (f *fakeCommander) SendWithOptions(_ context.Context, id domain.SessionID, message string, _ *ports.SpawnAttachment, _ ports.MessageDeliveryOptions) error {
+	return f.Send(context.Background(), id, message, nil)
+}
 func (f *fakeCommander) RunBackgroundTask(ctx context.Context, id domain.SessionID, systemPrompt, prompt string) (string, error) {
 	call := backgroundTaskCall{
 		ctx: ctx, id: id, systemPrompt: systemPrompt, prompt: prompt,

@@ -37,6 +37,7 @@ type fakeSessionService struct {
 	sessions                   map[domain.SessionID]domain.Session
 	sent                       string
 	sentAttachment             *ports.SpawnAttachment
+	sentDeliveryOptions        ports.MessageDeliveryOptions
 	delegationInput            sessionsvc.DelegateTaskInput
 	delegationErr              error
 	preparedProject            domain.ProjectID
@@ -483,6 +484,13 @@ func (f *fakeSessionService) Rename(_ context.Context, id domain.SessionID, disp
 func (f *fakeSessionService) Send(_ context.Context, _ domain.SessionID, message string, attachment *ports.SpawnAttachment) error {
 	f.sent = message
 	f.sentAttachment = attachment
+	return nil
+}
+
+func (f *fakeSessionService) SendWithOptions(_ context.Context, _ domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error {
+	f.sent = message
+	f.sentAttachment = attachment
+	f.sentDeliveryOptions = options
 	return nil
 }
 
@@ -3333,6 +3341,22 @@ func TestSessionsAPI_SendWithAttachment(t *testing.T) {
 	}
 	if svc.sentAttachment.Ext != ".png" || string(svc.sentAttachment.Data) != "snapshot" {
 		t.Fatalf("sentAttachment = %+v, want Ext=.png Data=snapshot", svc.sentAttachment)
+	}
+	if svc.sentDeliveryOptions.AuthoredByUser {
+		t.Fatal("ordinary automation send was marked user-authored")
+	}
+}
+
+func TestSessionsAPI_SendCarriesUserAuthorshipSeparatelyFromDelivery(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", `{"message":"Move this control.","userAuthored":true}`)
+	if status != http.StatusOK {
+		t.Fatalf("send = %d, want 200; body=%s", status, body)
+	}
+	if !svc.sentDeliveryOptions.AuthoredByUser {
+		t.Fatal("send dropped user-authored delivery fact")
 	}
 }
 
