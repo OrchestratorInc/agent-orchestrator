@@ -28,7 +28,7 @@ This ledger contains acceptance outcomes, not permission to implement or publish
   CHECK: go test -v -race -count=3 -timeout=180s ./internal/adapters/chatdriver/persistenthost -run TestProviderOwnerEscapedDescendantBlocksRetirement
   EXPECT: /ok\s+github\.com\/aoagents\/agent-orchestrator\/backend\/internal\/adapters\/chatdriver\/persistenthost/
   CWD: backend
-  EVIDENCE: pending; Linux only. Prove both leaf cases actually ran; absence under another OS cannot count as success.
+  EVIDENCE: production correction remains pending. NEXT-LINUX-CONTAINMENT-FEASIBILITY.md records a separate sealed candidate: six deliberately failing placement/migration controls and nine passing namespace/late-fork/death controls under race. That fixture does not implement durable launch ownership or coordinator recovery and cannot clear this gate. Prove both production leaf cases actually run; absence under another OS cannot count as success.
 - [ ] G08: reviewed containment and deletion proof covers every matched managed execution, restart/crash cut, refresh worker and revocation lease while preserving unrelated/native/replacement processes.
   EVIDENCE: pending; P3 requires durable identity, no membership/host-execution escape, cancelled-generation admission, idempotent vault removal, final database cleanup and legacy upgrade handling.
 
