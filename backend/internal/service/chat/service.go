@@ -1467,7 +1467,7 @@ func (s *Service) StopForOwner(ctx context.Context, owner domain.ConversationOwn
 // StopAll closes every controller, for daemon shutdown.
 func (s *Service) StopAll(ctx context.Context) {
 	if s.sides != nil {
-		s.sides.stopAll(ctx)
+		s.sides.stopAll()
 	}
 	s.mu.Lock()
 	type shutdownTarget struct {

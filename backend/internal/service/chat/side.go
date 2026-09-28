@@ -13,6 +13,7 @@ import (
 )
 
 var (
+	// ErrSideUnavailable indicates that independent side chats are not configured.
 	ErrSideUnavailable         = errors.New("independent side chats are unavailable")
 	ErrSideAnchorUnavailable   = errors.New("exact side-chat fork anchor is unavailable")
 	ErrSideProviderUnsupported = errors.New("provider cannot isolate an independent side chat")
@@ -56,6 +57,7 @@ type SideStore interface {
 	SetSideReference(context.Context, string, ports.ChatExcerptReference, string, string, time.Time) error
 }
 
+// SideCreateRequest specifies the anchor and idempotency key for a new side chat.
 type SideCreateRequest struct {
 	IdempotencyKey string
 	Label          string
@@ -117,6 +119,7 @@ func (s *Service) InitializeSideChats(ctx context.Context) error {
 	return s.sides.claim(ctx, s.sides.launchID())
 }
 
+// ClaimSideChatLaunch claims side chat ownership for the current desktop launch.
 func (s *Service) ClaimSideChatLaunch(ctx context.Context, runID string) error {
 	if s.sides == nil {
 		return ErrSideUnavailable
@@ -124,13 +127,19 @@ func (s *Service) ClaimSideChatLaunch(ctx context.Context, runID string) error {
 	return s.sides.claim(ctx, runID)
 }
 
+// ExportSideChatLaunch exports ephemeral side state for Electron recovery.
 func (s *Service) ExportSideChatLaunch(_ context.Context, runID string) ([]SideRecoveryRecord, error) {
 	if s.sides == nil || runID == "" || runID != s.sides.launchID() {
 		return nil, ErrSideLaunchUnclaimed
 	}
-	return s.sides.store.(*memorySideStore).export(runID), nil
+	store, ok := s.sides.store.(*memorySideStore)
+	if !ok {
+		return nil, ErrSideUnavailable
+	}
+	return store.export(runID), nil
 }
 
+// RetireSideChatLaunch stops and removes sides belonging to a desktop launch.
 func (s *Service) RetireSideChatLaunch(ctx context.Context, runID string) error {
 	if s.sides == nil || runID == "" || runID != s.sides.launchID() {
 		return ErrSideLaunchUnclaimed
@@ -148,6 +157,7 @@ func (s *Service) RetireSideChatLaunch(ctx context.Context, runID string) error 
 	return errors.Join(failures...)
 }
 
+// RecoverSideChatLaunch restores Electron-held side state after a daemon restart.
 func (s *Service) RecoverSideChatLaunch(ctx context.Context, runID string, records []SideRecoveryRecord) error {
 	if s.sides == nil || runID == "" || runID != s.sides.launchID() {
 		return ErrSideLaunchUnclaimed
@@ -164,7 +174,11 @@ func (s *Service) RecoverSideChatLaunch(ctx context.Context, runID string, recor
 			return ErrSideUnavailable
 		}
 	}
-	created, err := s.sides.store.(*memorySideStore).recover(runID, records, s.now())
+	store, ok := s.sides.store.(*memorySideStore)
+	if !ok {
+		return ErrSideUnavailable
+	}
+	created, err := store.recover(runID, records, s.now())
 	if err != nil {
 		return err
 	}
@@ -220,6 +234,7 @@ func (m *sideManager) claim(ctx context.Context, runID string) error {
 	return nil
 }
 
+// ListIndependentSideChats lists open sides belonging to the main chat.
 func (s *Service) ListIndependentSideChats(ctx context.Context, session domain.SessionID) ([]domain.SideConversation, error) {
 	if s.sides == nil {
 		return nil, ErrSideUnavailable
@@ -230,6 +245,7 @@ func (s *Service) ListIndependentSideChats(ctx context.Context, session domain.S
 	return s.sides.store.ListSideConversations(ctx, session, s.sides.launchID())
 }
 
+// WatchSideChat subscribes to events from one side chat generation.
 func (s *Service) WatchSideChat(ctx context.Context, session domain.SessionID, sideID string) (string, <-chan struct{}, func(), error) {
 	if s.sides == nil {
 		return "", nil, nil, ErrSideUnavailable
@@ -260,6 +276,7 @@ func (m *sideManager) announce(sideID string) {
 	}
 }
 
+// CreateIndependentSideChat opens or reuses a side anchored to a completed main turn.
 func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.SessionID, req SideCreateRequest) (domain.SideConversation, error) {
 	if s.sides == nil || s.sides.launchID() == "" {
 		return domain.SideConversation{}, ErrSideUnavailable
@@ -560,9 +577,7 @@ func (m *sideManager) open(side domain.SideConversation, source *Controller, cfg
 			return
 		}
 	}
-	if conv != nil {
-		// The native fork is already running in its independent side host.
-	} else if providerID != "" {
+	if conv == nil && providerID != "" {
 		conv, err = driver.Resume(ctx, ports.ChatResumeConfig{
 			SessionID: domain.SessionID(side.ProviderHostID), ProviderConversationID: providerID,
 			DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env,
@@ -782,7 +797,8 @@ func (m *sideManager) projectSideActivity(runtime *sideRuntime, event ports.Chat
 	if event.ActivityStatus != "" {
 		activity.Status = string(event.ActivityStatus)
 	}
-	if event.Kind == ports.ChatEventApprovalRequested || event.Kind == ports.ChatEventApprovalResolved {
+	switch event.Kind {
+	case ports.ChatEventApprovalRequested, ports.ChatEventApprovalResolved:
 		activity.Kind = "approval"
 		activity.Status = "pending"
 		if event.Kind == ports.ChatEventApprovalResolved {
@@ -792,7 +808,7 @@ func (m *sideManager) projectSideActivity(runtime *sideRuntime, event ports.Chat
 			activity.Decisions = append(activity.Decisions,
 				domain.SideDecision{ID: decision.ID, Label: decision.Label, Kind: string(decision.Kind), Raw: decision.Raw})
 		}
-	} else if event.Kind == ports.ChatEventInputRequested || event.Kind == ports.ChatEventInputResolved {
+	case ports.ChatEventInputRequested, ports.ChatEventInputResolved:
 		activity.Kind = "user_input"
 		activity.Status = "pending"
 		if event.Kind == ports.ChatEventInputResolved {
@@ -801,7 +817,7 @@ func (m *sideManager) projectSideActivity(runtime *sideRuntime, event ports.Chat
 		if event.Input != nil {
 			activity.Input = &domain.SideInput{Mode: string(event.Input.Mode), Message: event.Input.Message, URL: event.Input.URL, Schema: event.Input.Schema}
 		}
-	} else if event.Kind == ports.ChatEventActivityCompleted {
+	case ports.ChatEventActivityCompleted:
 		activity.Status = "completed"
 	}
 	if err := m.store.UpsertSideActivity(runtime.side.ID, runtime.side.Generation, activity); err != nil {
@@ -994,7 +1010,7 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 	}
 }
 
-func (m *sideManager) stopAll(ctx context.Context) {
+func (m *sideManager) stopAll() {
 	m.cancel()
 	m.mu.Lock()
 	runtimes := m.runtimes
@@ -1008,6 +1024,7 @@ func (m *sideManager) stopAll(ctx context.Context) {
 	}
 }
 
+// SideSnapshot returns a paginated side transcript.
 func (s *Service) SideSnapshot(ctx context.Context, session domain.SessionID, sideID string, before time.Time, limit int) (domain.SideSnapshot, error) {
 	if s.sides == nil {
 		return domain.SideSnapshot{}, ErrSideUnavailable
@@ -1035,6 +1052,7 @@ func (s *Service) SideSnapshot(ctx context.Context, session domain.SessionID, si
 		Activities: s.sides.store.SideActivities(sideID, ids), HasMore: more}, nil
 }
 
+// ResolveSideApproval forwards an approval decision to the side provider.
 func (s *Service) ResolveSideApproval(ctx context.Context, session domain.SessionID, sideID, requestID, decisionID string) error {
 	if s.sides == nil {
 		return ErrSideUnavailable
@@ -1065,6 +1083,7 @@ func (s *Service) ResolveSideApproval(ctx context.Context, session domain.Sessio
 	return runtime.conv.ResolveRequest(ctx, requestID, decision)
 }
 
+// ResolveSideInput forwards requested input to the side provider.
 func (s *Service) ResolveSideInput(ctx context.Context, session domain.SessionID, sideID, requestID string, response ports.ChatInputResponse) error {
 	if s.sides == nil {
 		return ErrSideUnavailable
@@ -1102,6 +1121,7 @@ func (m *sideManager) ownedSide(ctx context.Context, session domain.SessionID, s
 	return side, nil
 }
 
+// SendSideQuestion accepts a question for the side provider.
 func (s *Service) SendSideQuestion(ctx context.Context, session domain.SessionID, sideID string, msg ports.ChatUserMessage) (domain.SideTurn, error) {
 	if s.sides == nil {
 		return domain.SideTurn{}, ErrSideUnavailable
@@ -1182,6 +1202,7 @@ func (s *Service) SendSideQuestion(ctx context.Context, session domain.SessionID
 	return turn, nil
 }
 
+// EditQueuedSideQuestion replaces the text of a queued side question.
 func (s *Service) EditQueuedSideQuestion(ctx context.Context, session domain.SessionID, sideID, turnID, text string) error {
 	if s.sides == nil {
 		return ErrSideUnavailable
@@ -1199,6 +1220,7 @@ func (s *Service) EditQueuedSideQuestion(ctx context.Context, session domain.Ses
 	return nil
 }
 
+// RetrySideQuestion requeues a failed side question.
 func (s *Service) RetrySideQuestion(ctx context.Context, session domain.SessionID, sideID, turnID string) error {
 	if s.sides == nil {
 		return ErrSideUnavailable
@@ -1214,6 +1236,7 @@ func (s *Service) RetrySideQuestion(ctx context.Context, session domain.SessionI
 	return nil
 }
 
+// UpdateSideSettings updates model and effort for a side chat.
 func (s *Service) UpdateSideSettings(ctx context.Context, session domain.SessionID, sideID, model, effort string) error {
 	if s.sides == nil {
 		return ErrSideUnavailable
@@ -1228,6 +1251,7 @@ func (s *Service) UpdateSideSettings(ctx context.Context, session domain.Session
 	return nil
 }
 
+// SaveSideDraft keeps a side draft in launch-scoped memory.
 func (s *Service) SaveSideDraft(ctx context.Context, session domain.SessionID, sideID, contentJSON string) error {
 	if s.sides == nil {
 		return ErrSideUnavailable
@@ -1245,6 +1269,7 @@ func (s *Service) SaveSideDraft(ctx context.Context, session domain.SessionID, s
 	return nil
 }
 
+// SideDraft returns a side draft from launch-scoped memory.
 func (s *Service) SideDraft(ctx context.Context, session domain.SessionID, sideID string) (string, error) {
 	if s.sides == nil {
 		return "", ErrSideUnavailable
@@ -1292,6 +1317,7 @@ func (s *Service) CompactSideChat(ctx context.Context, session domain.SessionID,
 	return result, nil
 }
 
+// InterruptSideQuestion interrupts the active side question.
 func (s *Service) InterruptSideQuestion(ctx context.Context, session domain.SessionID, sideID string) error {
 	if s.sides == nil {
 		return ErrSideUnavailable
@@ -1308,6 +1334,7 @@ func (s *Service) InterruptSideQuestion(ctx context.Context, session domain.Sess
 	return runtime.conv.Interrupt(ctx, "")
 }
 
+// CloseIndependentSideChat stops and removes one side chat.
 func (s *Service) CloseIndependentSideChat(ctx context.Context, session domain.SessionID, sideID string) error {
 	if s.sides == nil {
 		return ErrSideUnavailable

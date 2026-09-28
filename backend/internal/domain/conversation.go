@@ -243,10 +243,12 @@ type ConversationBranchStrategy string
 type ConversationBranchPurpose string
 
 const (
+	// ConversationBranchPurposeMain marks a branch as ordinary main history.
 	ConversationBranchPurposeMain ConversationBranchPurpose = "main"
 	ConversationBranchPurposeSide ConversationBranchPurpose = "side"
 )
 
+// NormalizeConversationBranchPurpose treats the legacy empty purpose as main.
 func NormalizeConversationBranchPurpose(purpose ConversationBranchPurpose) ConversationBranchPurpose {
 	if purpose == "" {
 		return ConversationBranchPurposeMain

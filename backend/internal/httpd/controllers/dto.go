@@ -2253,6 +2253,7 @@ type ConversationContentSummaryResponse struct {
 	Excerpt  *ConversationExcerptSummaryResponse `json:"excerpt,omitempty"`
 }
 
+// ConversationExcerptSummaryResponse summarizes the selected conversation excerpt.
 type ConversationExcerptSummaryResponse struct {
 	Selection  string                               `json:"selection"`
 	SourceRole string                               `json:"sourceRole"`
@@ -2260,6 +2261,7 @@ type ConversationExcerptSummaryResponse struct {
 	Messages   []ConversationExcerptMessageResponse `json:"messages"`
 }
 
+// ConversationExcerptMessageResponse represents one message in an excerpt source turn.
 type ConversationExcerptMessageResponse struct {
 	Role string `json:"role"`
 	Text string `json:"text"`
@@ -2641,6 +2643,7 @@ type CreateConversationSideChatResponse struct {
 	Side domain.SideConversation `json:"side"`
 }
 
+// SendSideQuestionRequest carries a side question and its references.
 type SendSideQuestionRequest struct {
 	Text            string                                `json:"text"`
 	ClientMessageID string                                `json:"clientMessageId"`
@@ -2649,39 +2652,54 @@ type SendSideQuestionRequest struct {
 	Resources       []ConversationResourceContentRequest  `json:"resources,omitempty"`
 }
 
+// SideQuestionResponse returns an accepted side question.
 type SideQuestionResponse struct {
 	Turn domain.SideTurn `json:"turn"`
 }
+
+// SideChatSnapshotResponse returns a side conversation snapshot.
 type SideChatSnapshotResponse struct {
 	Snapshot domain.SideSnapshot `json:"snapshot"`
 }
+
+// SideChatListResponse lists side conversations for a main chat.
 type SideChatListResponse struct {
 	Sides []domain.SideConversation `json:"sides"`
 }
+
+// SideSettingsRequest updates model settings for a side chat.
 type SideSettingsRequest struct {
 	Model  string `json:"model"`
 	Effort string `json:"effort"`
 }
+
+// SideDraftRequest saves a launch-scoped side draft.
 type SideDraftRequest struct {
 	ContentJSON string `json:"contentJson"`
 }
+
+// SideDraftResponse returns a launch-scoped side draft.
 type SideDraftResponse struct {
 	ContentJSON string `json:"contentJson"`
 }
 
+// SideChatIDParam identifies a side chat in a route.
 type SideChatIDParam struct {
 	SideID string `path:"sideId" description:"Independent side chat identifier."`
 }
 
+// SideChatPageQuery controls side transcript pagination.
 type SideChatPageQuery struct {
 	Before string `query:"before,omitempty" description:"Read side turns older than this RFC3339 timestamp."`
 	Limit  *int   `query:"limit,omitempty" minimum:"1" maximum:"500"`
 }
 
+// SideChatLaunchClaimRequest claims a desktop launch for side chat recovery.
 type SideChatLaunchClaimRequest struct {
 	AppRunID string `json:"appRunId"`
 }
 
+// SideChatLaunchState carries the side state retained by Electron for recovery.
 type SideChatLaunchState struct {
 	AppRunID string                       `json:"appRunId"`
 	Sides    []chatsvc.SideRecoveryRecord `json:"sides"`

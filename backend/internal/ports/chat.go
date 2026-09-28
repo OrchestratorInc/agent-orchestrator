@@ -394,6 +394,7 @@ type ChatExcerptContext struct {
 	Messages        []ChatExcerptMessage `json:"messages"`
 }
 
+// ChatExcerptMessage represents one source message included with a selection.
 type ChatExcerptMessage struct {
 	Role string `json:"role"`
 	Text string `json:"text"`
@@ -722,6 +723,7 @@ type (
 	ChatIsolatedForker interface {
 		ForkIntoHost(ctx context.Context, sourceProviderConversationID, lastProviderTurnID string, cfg ChatStartConfig) (ChatConversation, error)
 	}
+	// ChatNativeTurnID resolves a completed provider turn to its native turn ID.
 	ChatNativeTurnID interface {
 		NativeTurnID(providerTurnID string) string
 	}

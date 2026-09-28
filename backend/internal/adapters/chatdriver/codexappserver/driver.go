@@ -350,8 +350,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	return conv, nil
 }
 
-// Resume reattaches to a stored Codex thread after a daemon or app-server
-// restart. A thread that is still running is rejoined rather than restarted.
+// ForkIntoHost starts an inclusive native fork in an independent provider host.
 func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID, lastProviderTurnID string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
 	if sourceProviderConversationID == "" || lastProviderTurnID == "" {
 		return nil, errors.New("source thread and completed turn are required")
@@ -407,6 +406,8 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 	return conv, nil
 }
 
+// Resume reattaches to a stored Codex thread after a daemon or app-server restart.
+// A thread that is still running is rejoined rather than restarted.
 func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
 	if !cfg.ProviderIDsScoped {
 		cfg.ProviderScopeID = ""

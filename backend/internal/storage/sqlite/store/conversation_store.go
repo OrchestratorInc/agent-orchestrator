@@ -3208,27 +3208,7 @@ func conversationBranchToDomain(row gen.SelectConversationBranchRow) domain.Conv
 }
 
 func conversationBranchListToDomain(row gen.SelectConversationBranchesRow) domain.ConversationBranch {
-	return domain.ConversationBranch{
-		ID:                     row.ID,
-		ConversationID:         row.ConversationID,
-		SessionID:              domain.SessionID(row.SessionID.String),
-		ProviderConversationID: row.ProviderConversationID,
-		ParentBranchID:         row.ParentBranchID.String,
-		ForkAfterTurnID:        row.ForkAfterTurnID.String,
-		ReplacedTurnID:         row.ReplacedTurnID.String,
-		ReplacementTurnID:      row.ReplacementTurnID.String,
-		ForkAfterSequence:      row.ForkAfterSequence,
-		Strategy:               domain.NormalizeConversationBranchStrategy(domain.ConversationBranchStrategy(row.Strategy)),
-		ReplayCutoffSequence:   row.ReplayCutoffSequence,
-		ReplayTruncated:        row.ReplayTruncated != 0,
-		Purpose:                domain.NormalizeConversationBranchPurpose(domain.ConversationBranchPurpose(row.Purpose)),
-		Label:                  row.Label,
-		ProviderBindingID:      row.ProviderBindingID,
-		ProviderScopeID:        row.EffectiveProviderScopeID,
-		ProviderIDsScoped:      row.ProviderIdsScoped != 0,
-		Active:                 row.Active,
-		CreatedAt:              row.CreatedAt,
-	}
+	return conversationBranchToDomain(gen.SelectConversationBranchRow(row))
 }
 
 // decodeJSONColumn reads one of the conversation's latest-wins JSON columns.

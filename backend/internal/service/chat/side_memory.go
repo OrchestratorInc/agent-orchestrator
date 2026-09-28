@@ -13,6 +13,7 @@ import (
 )
 
 var (
+	// ErrSideClosed indicates that a side is closed or has a stale generation.
 	ErrSideClosed              = errors.New("side chat is closed")
 	ErrSideLaunchUnclaimed     = errors.New("desktop launch has not claimed side chats")
 	ErrSideIdempotencyConflict = errors.New("side request key belongs to another question")
@@ -49,6 +50,7 @@ type SideRecoveryRecord struct {
 	Draft            string                  `json:"draft"`
 }
 
+// SideRecoveryTurn pairs a recoverable side turn with its structured content.
 type SideRecoveryTurn struct {
 	Turn    domain.SideTurn      `json:"turn"`
 	Content []domain.SideContent `json:"content,omitempty"`
@@ -297,7 +299,7 @@ func (m *memorySideStore) CompleteSideProviderCleanup(_ context.Context, id stri
 func (m *memorySideStore) SideProviderCleanupPending(_ context.Context) ([]domain.SideProviderCleanup, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := []domain.SideProviderCleanup{}
+	out := make([]domain.SideProviderCleanup, 0, len(m.cleanup))
 	for _, item := range m.cleanup {
 		out = append(out, item)
 	}
@@ -370,14 +372,15 @@ func (m *memorySideStore) SettleSideTurn(_ context.Context, sideID, turnID, gene
 		return ErrSideClosed
 	}
 	for i := range m.turns[sideID] {
-		if m.turns[sideID][i].ID == turnID {
-			turn := &m.turns[sideID][i]
-			turn.State = state
-			turn.ProviderTurnID = providerID
-			turn.ErrorMessage = message
-			turn.CompletedAt = &now
-			return nil
+		if m.turns[sideID][i].ID != turnID {
+			continue
 		}
+		turn := &m.turns[sideID][i]
+		turn.State = state
+		turn.ProviderTurnID = providerID
+		turn.ErrorMessage = message
+		turn.CompletedAt = &now
+		return nil
 	}
 	return ErrSideClosed
 }
@@ -463,17 +466,18 @@ func (m *memorySideStore) UpsertSideMessage(_ context.Context, msg domain.SideMe
 		return ErrSideClosed
 	}
 	for i := range m.messages[msg.SideID] {
-		if m.messages[msg.SideID][i].ID == msg.ID {
-			previous := m.messages[msg.SideID][i]
-			msg.Revision = previous.Revision
-			if previous.Text != msg.Text || previous.Streaming != msg.Streaming {
-				msg.Revision++
-			}
-			msg.Sequence = m.messages[msg.SideID][i].Sequence
-			msg.CreatedAt = m.messages[msg.SideID][i].CreatedAt
-			m.messages[msg.SideID][i] = msg
-			return nil
+		if m.messages[msg.SideID][i].ID != msg.ID {
+			continue
 		}
+		previous := m.messages[msg.SideID][i]
+		msg.Revision = previous.Revision
+		if previous.Text != msg.Text || previous.Streaming != msg.Streaming {
+			msg.Revision++
+		}
+		msg.Sequence = m.messages[msg.SideID][i].Sequence
+		msg.CreatedAt = m.messages[msg.SideID][i].CreatedAt
+		m.messages[msg.SideID][i] = msg
+		return nil
 	}
 	msg.Sequence = int64(len(m.messages[msg.SideID]) + 1)
 	msg.Revision = 1
@@ -503,33 +507,34 @@ func (m *memorySideStore) UpsertSideActivity(sideID, generation string, activity
 		return ErrSideClosed
 	}
 	for i := range m.activities[sideID] {
-		if m.activities[sideID][i].ID == activity.ID {
-			old := m.activities[sideID][i]
-			if activity.Status == "running" && old.Status != "running" && old.Status != "pending" {
-				activity.Status = old.Status
-			}
-			if activity.Kind == "system" && old.Kind != "" {
-				activity.Kind = old.Kind
-			}
-			if len(activity.Detail) == 0 {
-				activity.Detail = old.Detail
-			}
-			if activity.Summary == "" {
-				activity.Summary = old.Summary
-			}
-			if activity.RequestID == "" {
-				activity.RequestID = old.RequestID
-			}
-			if len(activity.Decisions) == 0 {
-				activity.Decisions = old.Decisions
-			}
-			if activity.Input == nil {
-				activity.Input = old.Input
-			}
-			activity.CreatedAt = old.CreatedAt
-			m.activities[sideID][i] = activity
-			return nil
+		if m.activities[sideID][i].ID != activity.ID {
+			continue
 		}
+		old := m.activities[sideID][i]
+		if activity.Status == "running" && old.Status != "running" && old.Status != "pending" {
+			activity.Status = old.Status
+		}
+		if activity.Kind == "system" && old.Kind != "" {
+			activity.Kind = old.Kind
+		}
+		if len(activity.Detail) == 0 {
+			activity.Detail = old.Detail
+		}
+		if activity.Summary == "" {
+			activity.Summary = old.Summary
+		}
+		if activity.RequestID == "" {
+			activity.RequestID = old.RequestID
+		}
+		if len(activity.Decisions) == 0 {
+			activity.Decisions = old.Decisions
+		}
+		if activity.Input == nil {
+			activity.Input = old.Input
+		}
+		activity.CreatedAt = old.CreatedAt
+		m.activities[sideID][i] = activity
+		return nil
 	}
 	m.activities[sideID] = append(m.activities[sideID], activity)
 	return nil

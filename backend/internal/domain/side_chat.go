@@ -37,6 +37,7 @@ type SideConversation struct {
 	ClosedAt           *time.Time   `json:"-"`
 }
 
+// SideTurn records one question and its execution state in a side conversation.
 type SideTurn struct {
 	ID               string          `json:"id"`
 	SideID           string          `json:"sideId"`
@@ -65,6 +66,7 @@ type SideReference struct {
 	Context        string `json:"context,omitempty"`
 }
 
+// SideContent records structured input attached to a side turn.
 type SideContent struct {
 	Type     string `json:"type"`
 	MIMEType string `json:"mimeType,omitempty"`
@@ -74,6 +76,7 @@ type SideContent struct {
 	Text     string `json:"text,omitempty"`
 }
 
+// SideMessage records a visible message produced in a side conversation.
 type SideMessage struct {
 	ID             string    `json:"id"`
 	SideID         string    `json:"sideId"`
@@ -88,6 +91,7 @@ type SideMessage struct {
 	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
+// SideSnapshot contains a page of side turns and their visible messages.
 type SideSnapshot struct {
 	Side       SideConversation `json:"side"`
 	Turns      []SideTurn       `json:"turns"`
@@ -96,6 +100,7 @@ type SideSnapshot struct {
 	HasMore    bool             `json:"hasMore"`
 }
 
+// SideDecision describes an available response to a side approval request.
 type SideDecision struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
@@ -103,6 +108,7 @@ type SideDecision struct {
 	Raw   []byte `json:"-"`
 }
 
+// SideActivity records a side turn activity such as a command or approval.
 type SideActivity struct {
 	ID             string          `json:"id"`
 	SideID         string          `json:"sideId"`
@@ -119,6 +125,7 @@ type SideActivity struct {
 	CreatedAt      time.Time       `json:"createdAt"`
 }
 
+// SideInput describes input requested by a side provider.
 type SideInput struct {
 	Mode    string         `json:"mode"`
 	Message string         `json:"message"`
@@ -126,6 +133,7 @@ type SideInput struct {
 	Schema  map[string]any `json:"schema,omitempty"`
 }
 
+// SideProviderCleanup identifies a registered provider fork pending deletion.
 type SideProviderCleanup struct {
 	ForkID    string
 	SessionID SessionID

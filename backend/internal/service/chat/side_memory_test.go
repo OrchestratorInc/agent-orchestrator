@@ -289,10 +289,10 @@ func TestClosedSideRejectsLateProviderEvents(t *testing.T) {
 	_, _ = store.ClaimSideLaunch(ctx, "launch-1", now)
 	_, _, _ = store.CreateSideConversation(ctx, domain.SideConversation{ID: "side-1", MainConversationID: "main-1", AppRunID: "launch-1", Generation: "generation-1"})
 	_, _ = store.CloseSideConversation(ctx, "side-1", now)
-	if err := store.UpsertSideMessage(ctx, domain.SideMessage{ID: "late", SideID: "side-1"}, "generation-1"); err != ErrSideClosed {
+	if err := store.UpsertSideMessage(ctx, domain.SideMessage{ID: "late", SideID: "side-1"}, "generation-1"); !errors.Is(err, ErrSideClosed) {
 		t.Fatalf("late message err=%v", err)
 	}
-	if err := store.UpsertSideActivity("side-1", "generation-1", domain.SideActivity{ID: "late"}); err != ErrSideClosed {
+	if err := store.UpsertSideActivity("side-1", "generation-1", domain.SideActivity{ID: "late"}); !errors.Is(err, ErrSideClosed) {
 		t.Fatalf("late activity err=%v", err)
 	}
 }
