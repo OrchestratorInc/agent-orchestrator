@@ -14,12 +14,17 @@ import (
 
 var (
 	// ErrSideUnavailable indicates that independent side chats are not configured.
-	ErrSideUnavailable         = errors.New("independent side chats are unavailable")
-	ErrSideAnchorUnavailable   = errors.New("exact side-chat fork anchor is unavailable")
+	ErrSideUnavailable = errors.New("independent side chats are unavailable")
+	// ErrSideAnchorUnavailable indicates that an exact completed-turn anchor cannot be found.
+	ErrSideAnchorUnavailable = errors.New("exact side-chat fork anchor is unavailable")
+	// ErrSideProviderUnsupported indicates that the provider cannot isolate a side host.
 	ErrSideProviderUnsupported = errors.New("provider cannot isolate an independent side chat")
-	ErrSideCreateKeyRequired   = errors.New("side chat idempotency key is required")
-	ErrSideQuestionInvalid     = errors.New("side question and client message ID are required")
-	ErrSideDraftTooLarge       = errors.New("side draft is too large")
+	// ErrSideCreateKeyRequired indicates that creation lacked an idempotency key.
+	ErrSideCreateKeyRequired = errors.New("side chat idempotency key is required")
+	// ErrSideQuestionInvalid indicates that a question or its client ID is missing.
+	ErrSideQuestionInvalid = errors.New("side question and client message ID are required")
+	// ErrSideDraftTooLarge indicates that a side draft exceeds its size limit.
+	ErrSideDraftTooLarge = errors.New("side draft is too large")
 )
 
 // SideStore is the launch-scoped in-memory storage boundary. Side rows never become

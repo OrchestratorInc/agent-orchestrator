@@ -14,8 +14,10 @@ import (
 
 var (
 	// ErrSideClosed indicates that a side is closed or has a stale generation.
-	ErrSideClosed              = errors.New("side chat is closed")
-	ErrSideLaunchUnclaimed     = errors.New("desktop launch has not claimed side chats")
+	ErrSideClosed = errors.New("side chat is closed")
+	// ErrSideLaunchUnclaimed indicates that no desktop launch owns the side state.
+	ErrSideLaunchUnclaimed = errors.New("desktop launch has not claimed side chats")
+	// ErrSideIdempotencyConflict indicates that a request key was reused for another question.
 	ErrSideIdempotencyConflict = errors.New("side request key belongs to another question")
 )
 

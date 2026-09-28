@@ -245,6 +245,7 @@ type ConversationBranchPurpose string
 const (
 	// ConversationBranchPurposeMain marks a branch as ordinary main history.
 	ConversationBranchPurposeMain ConversationBranchPurpose = "main"
+	// ConversationBranchPurposeSide marks a legacy side branch.
 	ConversationBranchPurposeSide ConversationBranchPurpose = "side"
 )
 
