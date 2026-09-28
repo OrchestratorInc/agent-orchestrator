@@ -737,6 +737,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/automations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List recurring automations */
+        get: operations["listAutomations"];
+        put?: never;
+        /** Create a recurring automation */
+        post: operations["createAutomation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/automations/{automationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get one recurring automation */
+        get: operations["getAutomation"];
+        put?: never;
+        post?: never;
+        /** Delete an automation and its run history */
+        delete: operations["deleteAutomation"];
+        options?: never;
+        head?: never;
+        /** Update a recurring automation */
+        patch: operations["updateAutomation"];
+        trace?: never;
+    };
+    "/api/v1/automations/{automationId}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List durable automation run history */
+        get: operations["listAutomationRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/browser/commands": {
         parameters: {
             query?: never;
@@ -1057,6 +1111,23 @@ export interface paths {
         put?: never;
         /** Enable the Connect Mobile LAN bridge and issue a fresh password */
         post: operations["enableMobile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mobile/keep-awake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Keep this Mac from idle-sleeping while Connect Mobile is on */
+        post: operations["setMobileKeepAwake"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3525,6 +3596,67 @@ export interface components {
             data: string;
             mimeType?: string;
         };
+        AutomationEnvelope: {
+            automation: components["schemas"]["AutomationResponse"];
+        };
+        AutomationResponse: {
+            /** Format: date-time */
+            createdAt: string;
+            displayName: string;
+            enabled: boolean;
+            harness?: string;
+            id: string;
+            /** @enum {string} */
+            kind: "worker" | "orchestrator";
+            /** Format: date-time */
+            lastRunAt?: null | string;
+            latestRun?: components["schemas"]["AutomationRunSummaryResponse"];
+            /** Format: date-time */
+            nextRunAt: string;
+            projectId: string;
+            prompt: string;
+            rrule: string;
+            timezone: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        AutomationRunResponse: {
+            /** Format: int64 */
+            attemptCount: number;
+            automationId: string;
+            /** Format: date-time */
+            claimedAt?: null | string;
+            /** Format: date-time */
+            createdAt: string;
+            errorMessage?: string;
+            /** Format: date-time */
+            finishedAt?: null | string;
+            id: string;
+            /** Format: date-time */
+            leaseExpiresAt?: null | string;
+            /** Format: date-time */
+            scheduledFor: string;
+            sessionId?: string;
+            /** Format: date-time */
+            startedAt?: null | string;
+            /** @enum {string} */
+            status: "pending" | "spawning" | "running" | "completed" | "failed";
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        AutomationRunSummaryResponse: {
+            errorMessage?: string;
+            /** Format: date-time */
+            finishedAt?: null | string;
+            id: string;
+            /** Format: date-time */
+            scheduledFor: string;
+            sessionId?: string;
+            /** Format: date-time */
+            startedAt?: null | string;
+            /** @enum {string} */
+            status: "pending" | "spawning" | "running" | "completed" | "failed";
+        };
         BrowserCommandRequest: {
             action: string;
             args?: {
@@ -3788,6 +3920,12 @@ export interface components {
         ContainerReapConfig: {
             disabled?: boolean;
         };
+        ControllersKeepAwakeStatus: {
+            active: boolean;
+            enabled: boolean;
+            hasBattery: boolean;
+            supported: boolean;
+        };
         ControllersRequestRereviewRequest: {
             /** @description Tracked pull request URL. Required when the session has multiple PRs. */
             pullRequestUrl?: string;
@@ -3864,6 +4002,9 @@ export interface components {
             terminateOnPrMerge: boolean;
             /** Format: date-time */
             updatedAt: string;
+        };
+        ControllersSetKeepAwakeRequest: {
+            enabled: boolean;
         };
         ControllersSetSecurePairingRequest: {
             enabled: boolean;
@@ -4117,6 +4258,18 @@ export interface components {
             /** Format: int64 */
             totalTokens: number;
         };
+        CreateAutomationRequest: {
+            cron?: string;
+            displayName: string;
+            enabled?: null | boolean;
+            harness?: string;
+            /** @enum {string} */
+            kind: "worker" | "orchestrator";
+            projectId: string;
+            prompt: string;
+            rrule?: string;
+            timezone: string;
+        };
         CreateReportRequest: {
             message?: string;
             note?: string;
@@ -4138,7 +4291,7 @@ export interface components {
         };
         DelegateTaskRequest: {
             /** @enum {string} */
-            agent?: "claude-code" | "codex" | "aider" | "opencode" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "prime-agent" | "autohand" | "unreal-agent" | "fake";
+            agent?: "claude-code" | "codex" | "aider" | "opencode" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "fake";
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             attachments?: components["schemas"]["AttachmentInput"][];
@@ -4372,7 +4525,7 @@ export interface components {
              * @description Fixed install target this job ran (or is running) for.
              * @enum {string}
              */
-            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "unreal-agent" | "cloudflared";
+            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "cloudflared";
             /** Format: date-time */
             updatedAt?: null | string;
         };
@@ -4409,6 +4562,14 @@ export interface components {
             /** @description Agents supported by this daemon build. */
             supported: components["schemas"]["AgentInfo"][];
         };
+        ListAutomationRunsResponse: {
+            nextCursor?: string;
+            runs: components["schemas"]["AutomationRunResponse"][];
+        };
+        ListAutomationsResponse: {
+            automations: components["schemas"]["AutomationResponse"][];
+            nextCursor?: string;
+        };
         ListCompactSessionUsageResponse: {
             sessions: components["schemas"]["CompactSessionUsageResponse"][];
         };
@@ -4429,6 +4590,7 @@ export interface components {
             unresolvedCount: number;
         };
         ListPRFilesResponse: {
+            commits: components["schemas"]["WorkspaceCommitSummary"][];
             files: components["schemas"]["WorkspaceFileSummary"][];
             sessionId: string;
             summary: components["schemas"]["WorkspaceSummary"];
@@ -4541,6 +4703,7 @@ export interface components {
             endpoints: components["schemas"]["MobileEndpoint"][];
             host: string;
             hostId: string;
+            keepAwake: components["schemas"]["ControllersKeepAwakeStatus"];
             password: string;
             port: number;
             securePairing: components["schemas"]["ControllersSecurePairingStatus"];
@@ -4878,6 +5041,7 @@ export interface components {
         SendSessionMessageRequest: {
             attachment?: components["schemas"]["AttachmentInput"];
             message: string;
+            userAuthored?: boolean;
         };
         SendSessionMessageResponse: {
             message: string;
@@ -4994,8 +5158,6 @@ export interface components {
             /** Format: date-time */
             createdAt?: null | string;
             deletions: number;
-            discussionCommentCount?: number;
-            discussionCommenters?: string[];
             headSha: string;
             htmlUrl?: string;
             mergeability: components["schemas"]["SessionPRMergeabilitySummary"];
@@ -5200,7 +5362,7 @@ export interface components {
             displayName?: string;
             effort?: string;
             /** @enum {string} */
-            harness?: "claude-code" | "codex" | "aider" | "opencode" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "prime-agent" | "autohand" | "unreal-agent";
+            harness?: "claude-code" | "codex" | "aider" | "opencode" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent";
             issueId?: string;
             /** @enum {string} */
             kind?: "worker" | "orchestrator";
@@ -5329,7 +5491,7 @@ export interface components {
              * @description Agent harness to continue the logical AO session with.
              * @enum {string}
              */
-            targetHarness: "claude-code" | "codex";
+            targetHarness: "claude-code" | "codex" | "fx";
         };
         SystemRequirement: {
             /** @description Extra context: the resolved path when satisfied, or why it is not. */
@@ -5384,6 +5546,17 @@ export interface components {
         UpdateAccountsManagerRoutingRequest: {
             accountIds: string[];
             enabled: boolean;
+        };
+        UpdateAutomationRequest: {
+            cron?: null | string;
+            displayName?: null | string;
+            enabled?: null | boolean;
+            harness?: null | string;
+            /** @enum {null|string} */
+            kind?: "worker" | "orchestrator" | null;
+            prompt?: null | string;
+            rrule?: null | string;
+            timezone?: null | string;
         };
         UpdateProjectSettingsInput: {
             config: components["schemas"]["ProjectConfig"];
@@ -7932,6 +8105,368 @@ export interface operations {
             };
         };
     };
+    listAutomations: {
+        parameters: {
+            query?: {
+                projectId?: string;
+                enabled?: null | boolean;
+                limit?: number;
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListAutomationsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    createAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAutomationRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationEnvelope"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Automation identifier. */
+                automationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationEnvelope"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    deleteAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Automation identifier. */
+                automationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Automation identifier. */
+                automationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAutomationRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationEnvelope"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listAutomationRuns: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Automation identifier. */
+                automationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListAutomationRunsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     executeBrowserCommand: {
         parameters: {
             query?: never;
@@ -8913,6 +9448,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MobileStatusResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setMobileKeepAwake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ControllersSetKeepAwakeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MobileStatusResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Forbidden */
@@ -14286,6 +14872,8 @@ export interface operations {
                 previousPath?: string;
                 /** @description Stable URL of the selected associated pull request. */
                 sourceUrl?: string;
+                /** @description Exact SHA of one of the pull request's commits; reads that commit's change instead of the whole pull request. */
+                commitSha?: string;
             };
             header?: never;
             path: {
@@ -14345,6 +14933,8 @@ export interface operations {
                 side?: "before" | "after";
                 /** @description Stable URL of the selected associated pull request. */
                 sourceUrl?: string;
+                /** @description Exact SHA of one of the pull request's commits; before is its first parent, after is the commit. */
+                commitSha?: string;
             };
             header?: never;
             path: {

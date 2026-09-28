@@ -80,6 +80,7 @@ type commander interface {
 	RetireForReplacement(ctx context.Context, id domain.SessionID) error
 	WaitForMessageDeliveryReady(ctx context.Context, id domain.SessionID) error
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
+	SendWithOptions(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error
 	Cleanup(ctx context.Context, project domain.ProjectID) (sessionmanager.CleanupResult, error)
 	RollbackSpawn(ctx context.Context, id domain.SessionID) (deleted, killed bool, err error)
 	StageAttachments(ctx context.Context, id domain.SessionID, attachments []ports.SpawnAttachment) ([]string, error)
@@ -284,6 +285,18 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return domain.Session{}, 0, 0, err
 		}
 		if len(existing) > 0 {
+			if cfg.AutomationRunID != nil {
+				for _, candidate := range existing {
+					if candidate.AutomationRunID != nil && *candidate.AutomationRunID == *cfg.AutomationRunID {
+						return candidate, 0, 0, nil
+					}
+				}
+				return domain.Session{}, 0, 0, apierr.Conflict(
+					"ORCHESTRATOR_ALREADY_ACTIVE",
+					"Another orchestrator is already active for this project",
+					nil,
+				)
+			}
 			return newestSession(existing), 0, 0, nil
 		}
 	}
@@ -798,6 +811,11 @@ func (s *Service) RollbackSpawn(ctx context.Context, id domain.SessionID) (Rollb
 // session worktree and referenced from the delivered message.
 func (s *Service) Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error {
 	return toAPIError(s.manager.Send(ctx, id, message, attachment))
+}
+
+// SendWithOptions preserves authorship facts supplied by trusted UI surfaces.
+func (s *Service) SendWithOptions(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error {
+	return toAPIError(s.manager.SendWithOptions(ctx, id, message, attachment, options))
 }
 
 // Rename updates the user-facing session display name.

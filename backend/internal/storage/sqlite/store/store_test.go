@@ -68,6 +68,22 @@ func TestSessionCreateAllowsPrimeAgentHarness(t *testing.T) {
 	}
 }
 
+func TestSessionCreateAndReadFXHarness(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "fx-project")
+	rec := sampleRecord("fx-project")
+	rec.Harness = domain.HarnessFX
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatalf("create fx session: %v", err)
+	}
+	got, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok || got.Harness != domain.HarnessFX {
+		t.Fatalf("read fx session = %+v, %v, %v", got, ok, err)
+	}
+}
+
 func TestTaskPreparationPromotionPreservesWorkspace(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -1205,7 +1221,7 @@ func TestPRCRUD(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, ok, err := s.GetPR(ctx, pr.URL)
-	if err != nil || !ok || !reflect.DeepEqual(got, pr) {
+	if err != nil || !ok || got != pr {
 		t.Fatalf("get pr: ok=%v err=%v got=%+v", ok, err, got)
 	}
 	if list, _ := s.ListPRsBySession(ctx, r.ID); len(list) != 1 {
@@ -1248,14 +1264,12 @@ func TestWriteSCMObservationPersistsAuthorAvatarURL(t *testing.T) {
 	seedProject(t, s, "mer")
 	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
 	pr := domain.PullRequest{
-		URL:                    "https://github.com/o/r/pull/1",
-		SessionID:              r.ID,
-		Number:                 1,
-		Author:                 "octocat",
-		AuthorAvatarURL:        "https://avatars.githubusercontent.com/u/583231?v=4",
-		DiscussionCommentCount: 9,
-		DiscussionCommenters:   []string{"alice", "bob"},
-		UpdatedAt:              time.Now().UTC().Truncate(time.Second),
+		URL:             "https://github.com/o/r/pull/1",
+		SessionID:       r.ID,
+		Number:          1,
+		Author:          "octocat",
+		AuthorAvatarURL: "https://avatars.githubusercontent.com/u/583231?v=4",
+		UpdatedAt:       time.Now().UTC().Truncate(time.Second),
 	}
 
 	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
@@ -1265,11 +1279,8 @@ func TestWriteSCMObservationPersistsAuthorAvatarURL(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("get pr: ok=%v err=%v", ok, err)
 	}
-	if got.Author != pr.Author || got.AuthorAvatarURL != pr.AuthorAvatarURL || got.DiscussionCommentCount != 9 {
-		t.Fatalf("author = %q avatar = %q discussion comments = %d", got.Author, got.AuthorAvatarURL, got.DiscussionCommentCount)
-	}
-	if !reflect.DeepEqual(got.DiscussionCommenters, pr.DiscussionCommenters) {
-		t.Fatalf("discussion commenters = %v", got.DiscussionCommenters)
+	if got.Author != pr.Author || got.AuthorAvatarURL != pr.AuthorAvatarURL {
+		t.Fatalf("author = %q avatar = %q", got.Author, got.AuthorAvatarURL)
 	}
 }
 

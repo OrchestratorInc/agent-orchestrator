@@ -26,4 +26,15 @@ describe("pull request file query keys", () => {
 		expect(sessionSourceFileQueryOptions("session-1", source, "README.md").queryKey).toContain("head-2");
 		expect(sessionSourceFileRevisionQueryOptions({ path: "README.md", scope: "combined", sessionId: "session-1", side: "after", source }).queryKey).toContain("head-2");
 	});
+
+	it("isolates one commit's detail and revision caches from the whole pull request", () => {
+		const wholeDetail = sessionSourceFileQueryOptions("session-1", source, "README.md").queryKey;
+		const commitDetail = sessionSourceFileQueryOptions("session-1", source, "README.md", undefined, "combined", "abc123").queryKey;
+		expect(commitDetail).toContain("abc123");
+		expect(commitDetail).not.toEqual(wholeDetail);
+		const wholeRevision = sessionSourceFileRevisionQueryOptions({ path: "README.md", scope: "combined", sessionId: "session-1", side: "after", source }).queryKey;
+		const commitRevision = sessionSourceFileRevisionQueryOptions({ commitSha: "abc123", path: "README.md", scope: "combined", sessionId: "session-1", side: "after", source }).queryKey;
+		expect(commitRevision).toContain("abc123");
+		expect(commitRevision).not.toEqual(wholeRevision);
+	});
 });

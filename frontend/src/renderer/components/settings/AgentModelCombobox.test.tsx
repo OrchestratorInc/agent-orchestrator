@@ -297,7 +297,6 @@ describe("AgentModelCombobox", () => {
 		const onRefresh = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
 		renderCombobox(Array.from({ length: 10 }, (_, index) => ({ id: `model-${index}`, label: `Model ${index}` })), {
 			onRefresh,
-			lastSuccessAt: "2026-09-07T08:00:00Z",
 		});
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		const search = screen.getByRole("searchbox", { name: "Search worker model" });
@@ -305,7 +304,7 @@ describe("AgentModelCombobox", () => {
 		await userEvent.type(search, "missing-model");
 		const refresh = screen.getByRole("button", { name: "Refresh models" });
 		expect(search.parentElement?.parentElement).toContainElement(refresh);
-		expect(screen.getByText(/Last updated/)).toBeInTheDocument();
+		expect(screen.queryByText(/Last updated/)).not.toBeInTheDocument();
 		await userEvent.click(refresh);
 		const busy = screen.getByRole("button", { name: /Refreshing/ });
 		expect(busy).toBeDisabled();

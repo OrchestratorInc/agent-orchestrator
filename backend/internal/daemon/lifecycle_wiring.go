@@ -11,6 +11,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/activitydispatch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/fx/herdr"
 	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/container/dockerreap"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer"
@@ -52,13 +53,15 @@ type lifecycleStack struct {
 	autoReviewDone <-chan struct{}
 	scmDone        <-chan struct{}
 	trackerDone    <-chan struct{}
+	herdr          *herdr.Server
+	automationDone <-chan struct{}
 }
 
 // startLifecycle constructs the Lifecycle Manager over the store and starts the
 // reaper. The goroutine stops when ctx is cancelled; Stop waits for it to drain.
 // The messenger is the per-daemon agent messenger the LCM uses to nudge agents
 // in response to SCM observations (CI failure, review feedback, merge conflict).
-func startLifecycle(ctx context.Context, store *sqlite.Store, runtime ports.Runtime, messenger ports.AgentMessenger, notifier notificationSink, telemetry ports.EventSink, agents ports.AgentResolver, logger *slog.Logger) *lifecycleStack {
+func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, runtime ports.Runtime, messenger ports.AgentMessenger, notifier notificationSink, telemetry ports.EventSink, agents ports.AgentResolver, logger *slog.Logger) *lifecycleStack {
 	lcm := lifecycle.New(store, messenger,
 		lifecycle.WithNotificationSink(notifier),
 		lifecycle.WithTelemetry(telemetry),
@@ -69,11 +72,18 @@ func startLifecycle(ctx context.Context, store *sqlite.Store, runtime ports.Runt
 	)
 	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger})
 	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger})
+	herdrServer, err := herdr.Start(ctx, dataDir, lcm, logger)
+	if err != nil {
+		// fx treats reporting as best effort; an occupied or unavailable socket
+		// must not prevent the daemon or ordinary agent sessions from starting.
+		logger.Warn("fx Herdr listener unavailable", "error", err)
+	}
 	return &lifecycleStack{
 		LCM:           lcm,
 		runtimeReaper: rp,
 		reaperDone:    rp.Start(ctx),
 		activityDone:  activityPoller.Start(ctx),
+		herdr:         herdrServer,
 	}
 }
 
@@ -144,6 +154,9 @@ func activeTurnSteering(agents ports.AgentResolver) func(domain.AgentHarness) bo
 // Stop waits for the reaper goroutine to exit. The caller must cancel the ctx
 // passed to startLifecycle before calling Stop.
 func (l *lifecycleStack) Stop() {
+	if l.herdr != nil {
+		l.herdr.Stop()
+	}
 	<-l.reaperDone
 	if l.activityDone != nil {
 		<-l.activityDone
@@ -156,6 +169,9 @@ func (l *lifecycleStack) Stop() {
 	}
 	if l.trackerDone != nil {
 		<-l.trackerDone
+	}
+	if l.automationDone != nil {
+		<-l.automationDone
 	}
 }
 
@@ -466,6 +482,8 @@ func (r reviewerAgentAuth) AuthStatus(ctx context.Context, harness domain.Review
 	switch snapshot.Authentication.State {
 	case domain.AgentAuthenticationAuthorized, domain.AgentAuthenticationNotApplicable:
 		return ports.AgentAuthStatusAuthorized, true, nil
+	case domain.AgentAuthenticationConfigured:
+		return ports.AgentAuthStatusConfigured, true, nil
 	case domain.AgentAuthenticationUnauthorized:
 		return ports.AgentAuthStatusUnauthorized, true, nil
 	default:

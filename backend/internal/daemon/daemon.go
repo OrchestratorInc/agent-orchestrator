@@ -386,7 +386,7 @@ func Run() error {
 		return fmt.Errorf("wire agent resolver: %w", err)
 	}
 
-	lcStack := startLifecycle(ctx, store, runtimeAdapter, lifecycleMessenger, notificationWriter, telemetrySink, agents, log)
+	lcStack := startLifecycle(ctx, cfg.DataDir, store, runtimeAdapter, lifecycleMessenger, notificationWriter, telemetrySink, agents, log)
 
 	// Wire the controller-facing session service over the same store + LCM, the
 	// selected runtime, routed git/scratch workspaces, the per-session agent
@@ -777,6 +777,8 @@ func Run() error {
 		log.Warn("reviewer chat recovery deferred", "err", reconcileErr)
 	}
 	agentSvc.WarmCodexAccounts()
+	automationSvc, automationDone := startAutomations(ctx, store, sessionSvc, log)
+	lcStack.automationDone = automationDone
 	autoReview := autoreview.New(store, reviewSvc, autoreview.Config{Logger: log})
 	lcStack.autoReviewDone = autoReview.Start(ctx)
 	// Push-device registry: persisted phones that receive OS push notifications.
@@ -860,6 +862,9 @@ func Run() error {
 	}
 
 	bs.HostID = hostIdentity.HostID
+	if mobilebridge.KeepAwakeSupported() {
+		bs.KeepAwake = mobilebridge.NewKeepAwake(os.Getpid())
+	}
 
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
 		AccountsManagerStatus:   accountsManager,
@@ -873,6 +878,7 @@ func Run() error {
 		SystemChecks:            systemChecks,
 		Installer:               systemInstall,
 		Sessions:                sessionSvc,
+		Automations:             automationSvc,
 		DesktopWorkspaces:       sessionSvc,
 		PRs:                     prActions,
 		Reviews:                 reviewSvc,
@@ -1071,6 +1077,7 @@ func Run() error {
 	// public hostname resolving to a port that is about to close. Stopping it
 	// does not disable the bridge — boot restore starts a new one.
 	bs.ShutdownTunnel()
+	bs.ShutdownKeepAwake()
 	lanStopCtx, lanCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer lanCancel()
 	if err := lan.Stop(lanStopCtx); err != nil {

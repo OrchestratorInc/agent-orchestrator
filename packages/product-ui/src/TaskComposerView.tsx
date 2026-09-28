@@ -67,7 +67,6 @@ export type TaskComposerModelOption = {
 export type TaskComposerModelCatalog = {
 	allowCustom: boolean;
 	customModelEntry: "none" | "direct" | "configured";
-	lastSuccessAt?: string | null;
 	models: TaskComposerModelOption[];
 	refreshError?: string;
 	refreshState?: "idle" | "queued" | "refreshing" | "error";

@@ -1419,6 +1419,7 @@ function ChatWorkspaceContent({
 					/>
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
 					<McpServerBanner
+						sessionId={snapshot.sessionId}
 						servers={brokenServers}
 						onReload={newWorkDisabled ? undefined : onReloadMcpServers}
 						reloading={reloadingMcpServers}

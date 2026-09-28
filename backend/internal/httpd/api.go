@@ -31,6 +31,7 @@ type APIDeps struct {
 	CodexAccounts           controllers.CodexAccountService
 	Projects                projectsvc.Manager
 	Sessions                controllers.SessionService
+	Automations             controllers.AutomationService
 	DesktopWorkspaces       controllers.DesktopWorkspaceService
 	Activity                controllers.ActivityRecorder
 	UsageHooks              controllers.UsageHookRecorder
@@ -120,6 +121,7 @@ type API struct {
 	codexAccounts   *controllers.CodexAccountsController
 	projects        *controllers.ProjectsController
 	sessions        *controllers.SessionsController
+	automations     *controllers.AutomationsController
 	desktop         *controllers.DesktopWorkspaceController
 	usage           *controllers.UsageController
 	prs             *controllers.PRsController
@@ -173,6 +175,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			PreviewServer: deps.PreviewServer,
 			Capabilities:  deps.SessionCapabilities,
 		},
+		automations:   &controllers.AutomationsController{Svc: deps.Automations},
 		desktop:       &controllers.DesktopWorkspaceController{Svc: deps.DesktopWorkspaces},
 		usage:         &controllers.UsageController{Svc: deps.UsageSummary, Log: loggerOrDefault(log)},
 		prs:           &controllers.PRsController{Svc: deps.PRs},
@@ -232,6 +235,7 @@ func (a *API) Register(root chi.Router) {
 			a.codexAccounts.Register(r)
 			a.projects.Register(r)
 			a.sessions.Register(r)
+			a.automations.Register(r)
 			a.desktop.Register(r)
 			a.usage.Register(r)
 			a.prs.Register(r)

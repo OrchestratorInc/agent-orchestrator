@@ -30,6 +30,19 @@ import (
 
 var ctx = context.Background()
 
+// The scheduler's durable run identity must cross the existing spawn boundary
+// into the seed row so retries can adopt the same session.
+func TestSeedRecordPreservesAutomationRunIdentity(t *testing.T) {
+	runID := domain.AutomationRunID("run-1")
+	rec := seedRecord(ports.SpawnConfig{
+		ProjectID: "scheduled", Kind: domain.KindWorker,
+		AutomationRunID: &runID,
+	}, domain.ProjectConfig{}, time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC))
+	if rec.AutomationRunID == nil || *rec.AutomationRunID != runID {
+		t.Fatalf("automation run id = %v, want %q", rec.AutomationRunID, runID)
+	}
+}
+
 type fakeStore struct {
 	sessions         map[domain.SessionID]domain.SessionRecord
 	pr               map[domain.SessionID]domain.PRFacts
@@ -83,6 +96,15 @@ func (f *fakeStore) CreateSession(_ context.Context, rec domain.SessionRecord) (
 	rec.ID = domain.SessionID(fmt.Sprintf("%s-%d", prefix, f.num))
 	f.sessions[rec.ID] = rec
 	return rec, nil
+}
+func (f *fakeStore) CreateAutomationSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error) {
+	for _, existing := range f.sessions {
+		if existing.AutomationRunID != nil && rec.AutomationRunID != nil && *existing.AutomationRunID == *rec.AutomationRunID {
+			return existing, false, nil
+		}
+	}
+	created, err := f.CreateSession(ctx, rec)
+	return created, err == nil, err
 }
 func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) error {
 	if f.updateSessionErr != nil {
@@ -313,6 +335,9 @@ func (l *fakeLCM) MarkSpawned(_ context.Context, id domain.SessionID, metadata d
 func (l *fakeLCM) MarkChatReconnected(_ context.Context, id domain.SessionID, metadata domain.SessionMetadata) error {
 	rec := l.store.sessions[id]
 	rec.Metadata = metadata
+	if rec.AutomationRunID != nil {
+		rec.AutomationLaunchCompleted = true
+	}
 	l.store.sessions[id] = rec
 	return nil
 }
@@ -825,6 +850,16 @@ type readinessAgent struct {
 
 func (a readinessAgent) PromptReadinessHints(context.Context, ports.LaunchConfig) (ports.PromptReadinessHints, error) {
 	return a.hints, nil
+}
+
+type composedAfterStartAgent struct {
+	afterStartAgent
+	buildCalls int
+}
+
+func (a *composedAfterStartAgent) BuildAfterStartPrompt(_ context.Context, cfg ports.LaunchConfig) (string, error) {
+	a.buildCalls++
+	return "STANDING:\n" + cfg.SystemPrompt + "\nTASK:\n" + cfg.Prompt, nil
 }
 
 type promptStrategyErrorAgent struct {
@@ -2294,6 +2329,126 @@ func TestSpawn_AssignsIDAndGoesIdle(t *testing.T) {
 	}
 }
 
+func TestSpawnAutomationAdoptsOnlyCompletedLaunch(t *testing.T) {
+	m, st, rt, _ := newManager()
+	runID := domain.AutomationRunID("run-1")
+	cfg := ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "do it", AutomationRunID: &runID}
+	first, _, _, err := m.Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.sessions[first.ID].AutomationLaunchCompleted {
+		t.Fatal("successful automation spawn did not persist launch completion")
+	}
+	adopted, _, _, err := m.Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adopted.ID != first.ID || rt.created != 1 {
+		t.Fatalf("retry session=%q runtime creates=%d, want %q and 1", adopted.ID, rt.created, first.ID)
+	}
+}
+
+func TestSpawnAutomationRejectsIncompletePriorLaunch(t *testing.T) {
+	m, st, rt, ws := newManager()
+	runID := domain.AutomationRunID("run-1")
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", AutomationRunID: &runID}
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, AutomationRunID: &runID})
+	if err == nil || !strings.Contains(err.Error(), "incomplete prior launch") {
+		t.Fatalf("Spawn error = %v, want incomplete prior launch", err)
+	}
+	if rt.created != 0 || ws.lastCfg.SessionID != "" {
+		t.Fatalf("runtime creates=%d workspace session=%q, want no duplicate launch", rt.created, ws.lastCfg.SessionID)
+	}
+}
+
+func TestSpawnAutomationProvisionFailureDeletesPrelaunchRow(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
+		Symlinks: []string{"../outside"},
+		Worker:   domain.RoleOverride{Harness: domain.HarnessClaudeCode},
+	}}
+	ws.path = t.TempDir()
+	runID := domain.AutomationRunID("run-1")
+
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "do it", AutomationRunID: &runID})
+	if err == nil || !strings.Contains(err.Error(), "provision") {
+		t.Fatalf("Spawn error = %v, want provisioning failure", err)
+	}
+	for id, rec := range st.sessions {
+		if rec.AutomationRunID != nil && *rec.AutomationRunID == runID {
+			t.Fatalf("automation prelaunch row %s survived failed provisioning: %#v", id, rec)
+		}
+	}
+}
+
+func TestSpawnAutomationAfterStartPromptFailureDoesNotCompleteLaunch(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	msg := &fakeMessenger{err: errors.New("delivery failed")}
+	agent := &recordingAgent{}
+	m := New(Deps{
+		Runtime:   &fakeRuntime{},
+		Agents:    singleAgent{agent: afterStartAgent{recordingAgent: agent}},
+		Workspace: &fakeWorkspace{},
+		Store:     st,
+		Messenger: msg,
+		Lifecycle: &fakeLCM{store: st},
+		LookPath:  func(string) (string, error) { return "/bin/true", nil },
+	})
+	runID := domain.AutomationRunID("run-1")
+
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "do it", AutomationRunID: &runID})
+	if err == nil || !strings.Contains(err.Error(), "deliver prompt") {
+		t.Fatalf("Spawn error = %v, want prompt delivery failure", err)
+	}
+	var found bool
+	for _, rec := range st.sessions {
+		if rec.AutomationRunID == nil || *rec.AutomationRunID != runID {
+			continue
+		}
+		found = true
+		if rec.AutomationLaunchCompleted {
+			t.Fatalf("automation launch was marked completed after failed prompt delivery: %#v", rec)
+		}
+	}
+	if !found {
+		t.Fatal("automation session row missing; want incomplete row for scheduler rollback")
+	}
+}
+
+func TestSpawnAutomationChatMarksLaunchCompletedAfterPromptDelivery(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	chat := &recordingLauncher{}
+	m := New(Deps{
+		Runtime:   &fakeRuntime{},
+		Agents:    fakeAgents{},
+		Workspace: &fakeWorkspace{},
+		Store:     st,
+		Messenger: &fakeMessenger{},
+		Lifecycle: &fakeLCM{store: st},
+		Chat:      chat,
+		LookPath:  func(string) (string, error) { return "/bin/true", nil },
+	})
+	runID := domain.AutomationRunID("run-chat")
+
+	session, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+		ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		RequestedMode: domain.SessionModeChat, Prompt: "do it", AutomationRunID: &runID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chat.turns) != 1 || chat.turns[0] != "do it" {
+		t.Fatalf("chat turns = %v, want initial prompt", chat.turns)
+	}
+	rec := st.sessions[session.ID]
+	if !rec.AutomationLaunchCompleted || !session.AutomationLaunchCompleted {
+		t.Fatalf("automation launch completed store=%v returned=%v, want both true", rec.AutomationLaunchCompleted, session.AutomationLaunchCompleted)
+	}
+}
+
 func TestSpawnWorkspaceRecordFailurePreservesDirtyWorkspace(t *testing.T) {
 	m, st, _, ws := newManager()
 	project := st.projects["mer"]
@@ -2315,6 +2470,7 @@ func TestSpawnWorkspaceRecordFailurePreservesDirtyWorkspace(t *testing.T) {
 	if !ok || rec.Metadata.WorkspacePath != path || !rec.IsTerminated {
 		t.Fatalf("dirty worktree lost its session record: found=%v session=%+v", ok, rec)
 	}
+
 }
 
 func TestSpawn_ReturnsFinalPromptByteMetrics(t *testing.T) {
@@ -2371,6 +2527,38 @@ func TestSpawn_DeliversPromptAfterStartWhenAgentRequestsIt(t *testing.T) {
 	}
 	if st.sessions["mer-1"].Metadata.Prompt != "fix the button" {
 		t.Fatalf("stored prompt = %q, want original prompt", st.sessions["mer-1"].Metadata.Prompt)
+	}
+}
+
+func TestSpawn_AfterStartPromptBuilderCombinesStandingInstructionsAndTaskOnce(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rt := &fakeRuntime{}
+	msg := &fakeMessenger{}
+	recording := &recordingAgent{}
+	agent := &composedAfterStartAgent{afterStartAgent: afterStartAgent{recordingAgent: recording}}
+	m := New(Deps{
+		Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: msg, Lifecycle: &fakeLCM{store: st},
+		LookPath: func(string) (string, error) { return "/bin/true", nil },
+	})
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "fix the button"}); err != nil {
+		t.Fatal(err)
+	}
+	if agent.buildCalls != 1 {
+		t.Fatalf("BuildAfterStartPrompt calls = %d, want 1", agent.buildCalls)
+	}
+	if len(msg.msgs) != 1 || !strings.HasPrefix(msg.msgs[0], "STANDING:\n") ||
+		!strings.Contains(msg.msgs[0], "## AO Worker Role") ||
+		!strings.HasSuffix(msg.msgs[0], "TASK:\nfix the button") {
+		t.Fatalf("delivered prompts = %#v, want one combined bootstrap turn", msg.msgs)
+	}
+	if recording.lastLaunch.Prompt != "" {
+		t.Fatalf("launch prompt = %q, want empty for after-start delivery", recording.lastLaunch.Prompt)
+	}
+	if got := st.sessions["mer-1"].Metadata.Prompt; got != "fix the button" {
+		t.Fatalf("stored prompt = %q, want original task", got)
 	}
 }
 
@@ -5524,10 +5712,11 @@ func TestRestore_FallbackLaunchDeliversPromptAfterStartWhenAgentRequestsIt(t *te
 	}
 	rt := &fakeRuntime{}
 	msg := &fakeMessenger{}
-	agent := &recordingAgent{}
+	recording := &recordingAgent{}
+	agent := &composedAfterStartAgent{afterStartAgent: afterStartAgent{recordingAgent: recording}}
 	m := New(Deps{
 		Runtime:   rt,
-		Agents:    singleAgent{agent: afterStartAgent{recordingAgent: agent}},
+		Agents:    singleAgent{agent: agent},
 		Workspace: &fakeWorkspace{},
 		Store:     st,
 		Messenger: msg,
@@ -5538,14 +5727,56 @@ func TestRestore_FallbackLaunchDeliversPromptAfterStartWhenAgentRequestsIt(t *te
 	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
 		t.Fatal(err)
 	}
-	if agent.lastLaunch.Prompt != "" {
-		t.Fatalf("fallback launch prompt = %q, want empty for after-start delivery", agent.lastLaunch.Prompt)
+	if agent.buildCalls != 1 {
+		t.Fatalf("BuildAfterStartPrompt calls = %d, want 1", agent.buildCalls)
 	}
-	if len(msg.msgs) != 1 || msg.msgs[0] != "continue the task" {
-		t.Fatalf("delivered prompts = %#v, want saved prompt", msg.msgs)
+	if recording.lastLaunch.Prompt != "" {
+		t.Fatalf("fallback launch prompt = %q, want empty for after-start delivery", recording.lastLaunch.Prompt)
+	}
+	if len(msg.msgs) != 1 || !strings.HasPrefix(msg.msgs[0], "STANDING:\n") ||
+		!strings.Contains(msg.msgs[0], "## AO Worker Role") ||
+		!strings.HasSuffix(msg.msgs[0], "TASK:\ncontinue the task") {
+		t.Fatalf("delivered prompts = %#v, want one combined fallback turn", msg.msgs)
 	}
 	if rt.created != 1 {
 		t.Fatalf("runtime.Create = %d, want 1", rt.created)
+	}
+}
+
+func TestRestore_NativeAfterStartAgentResumesPassively(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		Metadata: domain.SessionMetadata{
+			WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "native-1", Prompt: "continue the task",
+		},
+	}
+	rt := &fakeRuntime{}
+	msg := &fakeMessenger{}
+	recording := &recordingAgent{}
+	agent := &composedAfterStartAgent{afterStartAgent: afterStartAgent{recordingAgent: recording}}
+	m := New(Deps{
+		Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: msg, Lifecycle: &fakeLCM{store: st},
+		LookPath: func(string) (string, error) { return "/bin/true", nil },
+	})
+
+	res, err := m.RestoreWithMode(ctx, "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Mode != RestoreModeNative {
+		t.Fatalf("restore mode = %q, want %q", res.Mode, RestoreModeNative)
+	}
+	if recording.restoreCalls != 1 || recording.launchCalls != 0 {
+		t.Fatalf("adapter calls = restore %d launch %d, want restore 1 launch 0", recording.restoreCalls, recording.launchCalls)
+	}
+	if agent.buildCalls != 0 {
+		t.Fatalf("BuildAfterStartPrompt calls = %d, want 0 for passive native resume", agent.buildCalls)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("delivered prompts = %#v, want no new user turn for passive native resume", msg.msgs)
 	}
 }
 
@@ -5916,6 +6147,14 @@ func (lostConversationAgent) NativeConversationExists(
 	return false, nil
 }
 
+type lostComposedAfterStartAgent struct{ *composedAfterStartAgent }
+
+func (lostComposedAfterStartAgent) NativeConversationExists(
+	context.Context, ports.SessionRef, string, map[string]string,
+) (bool, error) {
+	return false, nil
+}
+
 type lostDerivedConversationAgent struct {
 	fakeAgent
 	probedID string
@@ -5968,6 +6207,46 @@ func TestRestore_LostNativeConversationRelaunchesFresh(t *testing.T) {
 	}
 	if rt.created != 1 {
 		t.Errorf("runtime.Create = %d, want 1: the workspace holds real work", rt.created)
+	}
+}
+
+func TestRestore_PromptlessLostNativeConversationDeliversStandingInstructions(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		Metadata: domain.SessionMetadata{
+			WorkspacePath: "/ws/mer-1", Branch: "ao/mer-1/root", AgentSessionID: "reserved-but-empty",
+		},
+		Activity: domain.Activity{State: domain.ActivityExited},
+	}
+	recording := &recordingAgent{}
+	composed := &composedAfterStartAgent{afterStartAgent: afterStartAgent{recordingAgent: recording}}
+	agent := lostComposedAfterStartAgent{composedAfterStartAgent: composed}
+	msg := &fakeMessenger{}
+	m := New(Deps{
+		Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: msg, Lifecycle: &fakeLCM{store: st},
+		LookPath: func(string) (string, error) { return "/bin/true", nil },
+	})
+
+	res, err := m.RestoreWithMode(ctx, "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Mode != RestoreModeFresh {
+		t.Fatalf("restore mode = %q, want %q", res.Mode, RestoreModeFresh)
+	}
+	if composed.buildCalls != 1 {
+		t.Fatalf("BuildAfterStartPrompt calls = %d, want 1", composed.buildCalls)
+	}
+	if recording.lastLaunch.Prompt != "" {
+		t.Fatalf("fresh launch prompt = %q, want empty for after-start delivery", recording.lastLaunch.Prompt)
+	}
+	if len(msg.msgs) != 1 || !strings.HasPrefix(msg.msgs[0], "STANDING:\n") ||
+		!strings.Contains(msg.msgs[0], "## AO Worker Role") ||
+		!strings.HasSuffix(msg.msgs[0], "TASK:\n") {
+		t.Fatalf("delivered prompts = %#v, want one instruction-only bootstrap turn", msg.msgs)
 	}
 }
 

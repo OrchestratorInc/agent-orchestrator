@@ -8,11 +8,11 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-func TestMigration0168RetainsDeletionProof(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 167)
+func TestMigration0172RetainsDeletionProof(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 171)
 	now := time.Now().UTC()
 	mustExec(t, db, `INSERT INTO accounts_manager_removals(id,account_id,impact,phase,error_code,created_at,updated_at) VALUES ('pending','account-a','{"Revision":1,"Sessions":[]}','stopping','',?,?)`, now, now)
-	upTo(t, db, 168)
+	upTo(t, db, 172)
 	var started, revoked int
 	var phase string
 	if err := db.QueryRow(`SELECT phase,stop_started,bindings_revoked FROM accounts_manager_removals WHERE id='pending'`).Scan(&phase, &started, &revoked); err != nil {
@@ -22,7 +22,7 @@ func TestMigration0168RetainsDeletionProof(t *testing.T) {
 		t.Fatal("migration fabricated cancellation or revocation proof")
 	}
 	gooseMu.Lock()
-	err := goose.DownToContext(context.Background(), db, "migrations", 167)
+	err := goose.DownToContext(context.Background(), db, "migrations", 171)
 	gooseMu.Unlock()
 	if err == nil {
 		t.Fatal("downgrade discarded irreversible deletion obligations")

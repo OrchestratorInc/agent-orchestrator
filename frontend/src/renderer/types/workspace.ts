@@ -276,23 +276,19 @@ function sessionNewer(a: WorkspaceSession, b: WorkspaceSession): boolean {
 	return a.id > b.id;
 }
 
-function sessionRecentlyUpdatedNewer(a: WorkspaceSession, b: WorkspaceSession): boolean {
+function sessionRecentlyMessagedNewer(a: WorkspaceSession, b: WorkspaceSession): boolean {
+	const aMessaged = sessionLastMessageTimestamp(a);
+	const bMessaged = sessionLastMessageTimestamp(b);
+	if (aMessaged !== bMessaged) return aMessaged > bMessaged;
 	const aUpdated = timestamp(a.updatedAt);
 	const bUpdated = timestamp(b.updatedAt);
 	if (aUpdated !== bUpdated) return aUpdated > bUpdated;
-	const aLastActive = sessionLastActiveTimestamp(a);
-	const bLastActive = sessionLastActiveTimestamp(b);
-	if (aLastActive !== bLastActive) return aLastActive > bLastActive;
 	return a.id > b.id;
 }
 
-function sessionLastActiveTimestamp(session: WorkspaceSession): number {
-	return (
-		validTimestamp(session.activity?.lastActivityAt) ??
-		validTimestamp(session.updatedAt) ??
-		validTimestamp(session.createdAt) ??
-		0
-	);
+/** The sidebar's message-age label reads lastUserMessageAt, so the sort must too. */
+function sessionLastMessageTimestamp(session: WorkspaceSession): number {
+	return validTimestamp(session.lastUserMessageAt) ?? validTimestamp(session.createdAt) ?? 0;
 }
 
 function timestamp(value?: string): number {
@@ -309,10 +305,10 @@ export function workerSessions(sessions: WorkspaceSession[]): WorkspaceSession[]
 	return sessions.filter((s) => !isOrchestratorSession(s));
 }
 
-/** Worker sessions ordered by session update time, newest first. */
+/** Worker sessions ordered by the user's latest message (else creation), newest first. */
 export function sortedWorkerSessions(sessions: WorkspaceSession[]): WorkspaceSession[] {
 	return workerSessions(sessions).sort((a, b) =>
-		sessionRecentlyUpdatedNewer(b, a) ? 1 : sessionRecentlyUpdatedNewer(a, b) ? -1 : 0,
+		sessionRecentlyMessagedNewer(b, a) ? 1 : sessionRecentlyMessagedNewer(a, b) ? -1 : 0,
 	);
 }
 
