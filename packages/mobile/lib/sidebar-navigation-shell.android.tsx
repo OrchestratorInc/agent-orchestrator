@@ -63,6 +63,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	const insets = useSafeAreaInsets();
 	const { width } = useWindowDimensions();
 	const [open, setOpen] = useState(retainedDrawerOpen);
+	const [scrimVisible, setScrimVisible] = useState(retainedDrawerOpen);
 	const reduceMotion = useReducedMotion();
 	const progress = useRef(new Animated.Value(retainedDrawerOpen ? 1 : 0)).current;
 	const gestureStartedOpen = useRef(false);
@@ -84,14 +85,17 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 
 	const animateSidebar = useCallback((nextOpen: boolean) => {
 		retainedDrawerOpen = nextOpen;
-		setOpen(nextOpen);
+		setScrimVisible(nextOpen);
+		if (nextOpen) setOpen(true);
 		Animated.spring(progress, {
 			toValue: nextOpen ? 1 : 0,
 			useNativeDriver: true,
 			damping: 24,
 			stiffness: 240,
 			mass: 0.8,
-		}).start();
+		}).start(({ finished }) => {
+			if (finished && !nextOpen) setOpen(false);
+		});
 	}, [progress]);
 
 	const openSidebar = useCallback(() => {
@@ -265,12 +269,16 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 					<View style={[styles.contentSurface, open && styles.contentSurfaceOpen]}>
 						{children}
 						{open ? (
-							<Pressable
-								accessibilityRole="button"
-								accessibilityLabel="Close navigation"
-								onPress={closeSidebar}
-								style={styles.dismissLayer}
-							/>
+							scrimVisible ? (
+								<Pressable
+									accessibilityRole="button"
+									accessibilityLabel="Close navigation"
+									onPress={closeSidebar}
+									style={styles.dismissLayer}
+								/>
+							) : (
+								<View style={styles.dismissBlocker} />
+							)
 						) : null}
 					</View>
 				</Animated.View>
@@ -371,6 +379,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	dismissLayer: {
 		...StyleSheet.absoluteFill,
 		backgroundColor: t.scrim,
+	},
+	dismissBlocker: {
+		...StyleSheet.absoluteFill,
 	},
 	edgeGestureTarget: {
 		position: "absolute",
