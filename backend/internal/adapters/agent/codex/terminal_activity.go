@@ -22,7 +22,7 @@ func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bo
 // an active turn remains interruptible.
 func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObservation {
 	observation := ports.TerminalSurfaceObservation{
-		Composer: codexComposerState(terminalui.LastPromptComposerState(codexComposerFrame(output), "›")),
+		Composer: codexComposerState(terminalui.LastPromptComposerState(codexComposerFrame(output), "›", "Ask Codex to do anything")),
 	}
 	lines := terminalLines(output)
 	if len(lines) < 2 {
