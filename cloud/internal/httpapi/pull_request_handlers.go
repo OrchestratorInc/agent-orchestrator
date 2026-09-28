@@ -80,10 +80,34 @@ func (s *Server) mergeSessionPullRequest(w http.ResponseWriter, r *http.Request)
 		writeError(w, r, http.StatusUnprocessableEntity, "invalid_repository", "The pull request repository is invalid.")
 		return
 	}
-	// A caller's PAT is preferred where the control plane has no local GitHub App.
-	// The webhook remains responsible for recording the merged state.
+	// Credential precedence: prefer the GitHub App when the control plane has one
+	// configured. The App is the installation-scoped credential that opened the PR
+	// and is always current; a caller's stored PAT is a cached snapshot that can be
+	// revoked while still recorded as validation_state=valid — preferring it let a
+	// dead PAT shadow a healthy App and fail every merge with a 401 ("GitHub could
+	// not refresh this pull request"). The PAT is used only when there is no App
+	// (an App-less deployment) or as a fallback when the App path cannot serve the
+	// merge (e.g. the App is not installed on that repository). This mirrors the
+	// worker checkout/push/pull-request credential precedence. The webhook remains
+	// responsible for recording the merged state.
 	merged := false
-	if s.patWrites != nil && s.secretCipher != nil {
+	appTried := false
+	if s.github != nil {
+		appTried = true
+		fresh, fetchErr := s.github.FetchPullRequestSnapshot(r.Context(), domain.PullRequestRef{ID: pr.ID, OrgID: orgID, Provider: pr.Provider, Repository: pr.Repository, Number: number})
+		if fetchErr != nil {
+			// Do not fail outright: fall through to a PAT fallback if one exists.
+			s.logger.Warn("refresh pull request via GitHub App before merge; will try PAT fallback", "error", fetchErr, "request_id", requestID(r))
+		} else {
+			if !pullRequestSnapshotReadyForMerge(fresh, input.ExpectedHeadSHA) {
+				writeError(w, r, http.StatusConflict, "pr_not_mergeable", "The pull request has changed. Refresh its status before merging.")
+				return
+			}
+			err = s.github.MergePullRequest(r.Context(), orgID, pr.Repository, number, input.ExpectedHeadSHA)
+			merged = true
+		}
+	}
+	if !merged && s.patWrites != nil && s.secretCipher != nil {
 		if credentialStore, ok := s.store.(userProviderConnectionStore); ok {
 			principal := principalFrom(r)
 			encrypted, nonce, credentialErr := credentialStore.UserProviderConnectionSecret(r.Context(), principal, githubPATProvider, defaultAgentConnectionLabel)
@@ -113,21 +137,14 @@ func (s *Server) mergeSessionPullRequest(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if !merged {
-		if s.github == nil {
-			writeError(w, r, http.StatusServiceUnavailable, "github_unavailable", "GitHub merge is not configured for this account.")
-			return
-		}
-		fresh, fetchErr := s.github.FetchPullRequestSnapshot(r.Context(), domain.PullRequestRef{ID: pr.ID, OrgID: orgID, Provider: pr.Provider, Repository: pr.Repository, Number: number})
-		if fetchErr != nil {
-			s.logger.Error("refresh pull request before merge", "error", fetchErr, "request_id", requestID(r))
+		if appTried {
+			// An App was configured but its refresh failed and no PAT could serve
+			// the merge as a fallback — surface the refresh failure.
 			writeError(w, r, http.StatusBadGateway, "github_unavailable", "GitHub could not refresh this pull request.")
 			return
 		}
-		if !pullRequestSnapshotReadyForMerge(fresh, input.ExpectedHeadSHA) {
-			writeError(w, r, http.StatusConflict, "pr_not_mergeable", "The pull request has changed. Refresh its status before merging.")
-			return
-		}
-		err = s.github.MergePullRequest(r.Context(), orgID, pr.Repository, number, input.ExpectedHeadSHA)
+		writeError(w, r, http.StatusServiceUnavailable, "github_unavailable", "GitHub merge is not configured for this account.")
+		return
 	}
 	if err != nil {
 		var githubErr *githubapp.HTTPError

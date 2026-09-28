@@ -56,6 +56,10 @@ func mergePRRequest(body string) *http.Request {
 	return request.WithContext(context.WithValue(context.WithValue(request.Context(), chi.RouteCtxKey, ctx), principalKey, domain.Principal{UserID: "33333333-3333-3333-3333-333333333333"}))
 }
 
+// No GitHub App is configured here (Options.GitHub is nil), so the handler uses
+// the caller's PAT — the App-less-deployment path. When an App IS configured it
+// is preferred over the PAT; that precedence is verified live on staging (the
+// App path needs a full githubapp.Service harness to unit-test).
 func TestMergeSessionPullRequestUsesPATAndLeavesStatusForWebhook(t *testing.T) {
 	var gotMethod, gotPath, gotAuth string
 	var gotBody map[string]string
