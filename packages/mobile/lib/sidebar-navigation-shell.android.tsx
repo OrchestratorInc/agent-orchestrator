@@ -275,7 +275,12 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 					</View>
 				</Animated.View>
 
-				{!open ? <View style={styles.edgeGestureTarget} {...panResponder.panHandlers} /> : null}
+				{!open ? (
+					<View
+						style={[styles.edgeGestureTarget, { top: insets.top + 64 }]}
+						{...panResponder.panHandlers}
+					/>
+				) : null}
 			</View>
 		</SidebarNavigationContext.Provider>
 	);
@@ -370,9 +375,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	edgeGestureTarget: {
 		position: "absolute",
 		left: 0,
-		// Leave both the header control and the floating footer actions tappable;
-		// edge swipes only need the page-content strip between them.
-		top: 96,
 		bottom: 88,
 		width: 64,
 	},

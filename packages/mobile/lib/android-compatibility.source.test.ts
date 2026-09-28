@@ -12,14 +12,17 @@ describe("Android native compatibility boundaries", () => {
 		expect(existsSync(path)).toBe(true);
 		const android = existsSync(path) ? source("./sidebar-navigation-shell.android.tsx") : "";
 		expect(android).toContain("PanResponder");
+		// The closed drawer's swipe responder starts below the safe-area-adjusted
+		// header. A fixed top offset overlaps the menu button on tall cutouts.
 		expect(android).toContain("edgeGestureTarget");
+		expect(android).toContain("top: insets.top + 64");
+		expect(android).toContain("(open ? panResponder.panHandlers : {})");
 		expect(android).toContain("retainedDrawerOpen");
 		expect(android).not.toContain("DrawerLayoutAndroid");
 		expect(android).not.toContain("@expo/ui");
 		expect(android).not.toContain("RNHostView");
 		expect(android).toContain('pointerEvents={open ? "auto" : "none"}');
 		expect(android).toContain('importantForAccessibility={open ? "yes" : "no-hide-descendants"}');
-		expect(android).toMatch(/edgeGestureTarget:[\s\S]*bottom:\s*88/);
 	});
 
 	it("uses Android-native pressable icon controls rather than Unicode Expo buttons", () => {
