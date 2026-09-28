@@ -64,3 +64,11 @@ Credential correction tree `ba2d1198a6b4e5c331491d7c996bc91f1fe9f4f4` is sealed 
 Final local checks pass: focused races count 3, four complete affected backend packages, full runner race, API parity, both builds/vet and complete pinned lint; 177 focused frontend tests, 5,606 full-suite passes with seven existing skips, both typechecks and Linux packaging. API/SQL repeat has zero drift; 91 protected files and earlier archives remain unchanged. Three actual desktop screenshots and recording frames were inspected using isolated data and a real provider catalog. They prove negative/unavailable paths only. C6's local freeze/handoff obligation is recorded here; independent acceptance remains pending.
 
 Still open: independent integration/switching/initial-selection/credential review, managed app-server execution, escaped-descendant retirement, isolated native profiles and explicit migration, native platforms, full branch checks, responsiveness and live-provider/desktop evidence. No release-completion claim is made.
+
+## P1 managed route configuration checkpoint
+
+The four-file launch/restore correction is sealed at tree `b5196dd5e49df2254df41e5dd1760a1957d6b57a`. REVIEW-82-NEXT-CODEX-ROUTE.md records the exact 5,712-file source, correction, plan and 29-file evidence manifests. Non-nil invalid managed intent no longer falls back to native argv; valid routes explicitly request process-memory credentials. Native commands and protected files remain unchanged.
+
+All 14 final checks pass: repeated focused and full adapter races, 12 installed-binary cases, matched-shell parent/current complete session-manager races, production execution/cancellation race x3, build/vet/lint and three platform cross-compiles. The installed experiment uses synthetic state and sends no provider request. One earlier ownership-test timeout remains preserved and unclassified. No native or live-provider pass is inferred.
+
+The local freeze/request obligation is complete; independent acceptance is pending. Managed Chat remains held on exact transport ownership and containment, not enabled by a configuration-only result. Responsiveness measurement is the next independent local slice.

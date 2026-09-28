@@ -13,7 +13,7 @@ This ledger contains acceptance outcomes, not permission to implement or publish
 - [ ] G03: explicit initial account choice is durable before provider execution across desktop, CLI and programmatic session creation.
   EVIDENCE: bounded implementation and local checks are sealed in REVIEW-82-NEXT-INITIAL-SELECTION.md; 44 source/test/generated files, repeated creation/launch races, full affected suites and real-component tests pass. Independent acceptance remains pending; native desktop positive-account execution has no authorized credentials in the isolated profile.
 - [ ] G04: simultaneous managed A/B isolation passes through actual production runner and controllers for every enabled interface, including managed app-server Chat.
-  EVIDENCE: pending; P1 requires conflicting ambient auth, home/keychain separation, exact upstream identity, stale routes, resume and unrelated native preservation.
+  EVIDENCE: bounded terminal route correction sealed in REVIEW-82-NEXT-CODEX-ROUTE.md; invalid managed intent rejects before launch/restore fallback, and installed-binary synthetic checks confirm effective route/storage without changing native state. All 14 final checks pass. P1 still requires conflicting ambient auth/helpers, home/keychain separation, exact upstream identity, managed app-server execution, stale routes, resume and unrelated native preservation. Independent acceptance remains pending.
 
 ## Switching and exact retirement
 

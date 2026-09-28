@@ -122,18 +122,22 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 // instructions, and the initial prompt (passed after `--` so a leading "-" is
 // not read as a flag).
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
+	routeArgs, err := accountsManagerRouteFlags(cfg.Route)
+	if err != nil {
+		return nil, err
+	}
 	binary, err := p.codexBinary(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	var providerArgs []string
+	providerArgs := make([]string, 0, len(routeArgs))
 	if err := appendSessionHookFlags(&providerArgs); err != nil {
 		return nil, err
 	}
 	appendTerminalCompatibilityFlags(&providerArgs)
 	appendReasoningEffortFlag(&providerArgs, cfg.Config.Effort)
-	appendAccountsManagerRouteFlags(&providerArgs, cfg.Route)
+	providerArgs = append(providerArgs, routeArgs...)
 	return agentruntime.BuildLaunchCommand(agentruntime.LaunchConfig{
 		Harness:          agentruntime.HarnessCodex,
 		Binary:           binary,
@@ -155,6 +159,10 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
+	routeArgs, err := accountsManagerRouteFlags(cfg.Route)
+	if err != nil {
+		return nil, false, err
+	}
 	if _, ok := agentruntime.RestoreIdentity(
 		agentruntime.HarnessCodex,
 		cfg.Session.ID,
@@ -167,13 +175,13 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 
-	var providerArgs []string
+	providerArgs := make([]string, 0, len(routeArgs))
 	if err := appendSessionHookFlags(&providerArgs); err != nil {
 		return nil, false, err
 	}
 	appendTerminalCompatibilityFlags(&providerArgs)
 	appendReasoningEffortFlag(&providerArgs, cfg.Config.Effort)
-	appendAccountsManagerRouteFlags(&providerArgs, cfg.Route)
+	providerArgs = append(providerArgs, routeArgs...)
 	return agentruntime.BuildRestoreCommand(agentruntime.RestoreConfig{
 		Harness:          agentruntime.HarnessCodex,
 		Binary:           binary,
@@ -192,24 +200,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 func appendReasoningEffortFlag(args *[]string, effort string) {
 	if effort = strings.TrimSpace(effort); effort != "" {
 		*args = append(*args, "-c", "model_reasoning_effort="+codexTOMLConfigString(effort))
-	}
-}
-
-func appendAccountsManagerRouteFlags(args *[]string, route *ports.AgentProviderRoute) {
-	if route == nil || strings.TrimSpace(route.BaseURL) == "" || strings.TrimSpace(route.TokenEnv) == "" {
-		return
-	}
-	baseURL := strings.TrimRight(strings.TrimSpace(route.BaseURL), "/") + "/v1"
-	values := []string{
-		"model_provider=" + codexTOMLConfigString("ao_accounts_manager"),
-		"model_providers.ao_accounts_manager.name=" + codexTOMLConfigString("AO Accounts Manager"),
-		"model_providers.ao_accounts_manager.base_url=" + codexTOMLConfigString(baseURL),
-		"model_providers.ao_accounts_manager.env_key=" + codexTOMLConfigString(strings.TrimSpace(route.TokenEnv)),
-		"model_providers.ao_accounts_manager.wire_api=" + codexTOMLConfigString("responses"),
-		"model_providers.ao_accounts_manager.requires_openai_auth=false",
-	}
-	for _, value := range values {
-		*args = append(*args, "-c", value)
 	}
 }
 
