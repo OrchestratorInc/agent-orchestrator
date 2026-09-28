@@ -7,7 +7,9 @@ GitHub is the only tracker provider supported by the current backend. The adapte
 
 ## Configure intake
 
-Tracker intake is disabled by default and requires an assignee rule so enabling it cannot consume an entire backlog accidentally.
+Tracker intake needs two separate opt-ins, and both default to off. The daemon must be started with `AO_TRACKER_INTAKE=on`, and the project must carry an assignee rule. The assignee rule keeps one project from draining its whole backlog. The daemon flag exists because intake starts one worker session per eligible issue with nothing bounding how many run at once, so the decision belongs to whoever runs the daemon rather than to each project.
+
+Configure the project:
 
 ```bash
 ao project set-config my-app \
@@ -17,6 +19,8 @@ ao project set-config my-app \
 ```
 
 The provider defaults to `github`. When the repository is omitted, AO can derive it from the project's Git remote. Use `ao project get my-app --json` to inspect the stored configuration.
+
+With `AO_TRACKER_INTAKE` unset, that configuration is still stored and validated, but no sessions are spawned. The daemon logs a warning at startup naming how many projects are in that state.
 
 ## Current boundary
 
