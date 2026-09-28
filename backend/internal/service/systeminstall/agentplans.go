@@ -39,6 +39,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetFX:         "https://fx.sh/docs",
 	TargetUnreal:     "https://github.com/unreallabsai/unreal-agent",
 	TargetMiMoCode:   "https://github.com/XiaomiMiMo/MiMo-Code",
+	TargetDeepSeek:   "https://github.com/deepseek-ai/deepseek-harness",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -221,6 +222,10 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		}}
 	case TargetMiMoCode:
 		plans = []Plan{s.planNPM(target, "@mimo-ai/cli")}
+	case TargetDeepSeek:
+		// DeepSeek Harness ships as one Node CLI that boots every profile
+		// (headless, ACP, web) from the same install, so npm is the only method.
+		plans = []Plan{s.planNPM(target, "@deepseek-ai/dsh")}
 	default:
 		plans = []Plan{{Target: target, Unsupported: true, Method: "manual", Reason: "unknown install target"}}
 	}

@@ -31,6 +31,14 @@ describe("AgentAvatar", () => {
 		expect(img).toHaveAttribute("src", expect.stringContaining("Gemini"));
 	});
 
+	it("renders the DeepSeek Harness brand asset", () => {
+		render(<AgentAvatar provider="deepseek-harness" />);
+
+		const img = screen.getByRole("img", { name: "deepseek-harness" });
+		expect(img).toHaveAttribute("src", expect.stringContaining("data:image/svg+xml"));
+		expect(img).toHaveAttribute("src", expect.stringContaining("DeepSeek"));
+	});
+
 	it("renders the Unreal Agent brand asset", () => {
 		render(<AgentAvatar provider="unreal-agent" />);
 

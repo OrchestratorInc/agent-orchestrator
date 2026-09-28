@@ -45,6 +45,11 @@ var plans = []Plan{
 	terminalInputPlan("prime-agent", ActionLogin, "Log in to Prime Agent", []string{"prime-agent"}, "/login\r", "Select Open login after Prime Agent finishes starting", "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md"),
 	terminalInputPlan("omp", ActionLogin, "Log in to OMP", []string{"omp"}, "/login\r", "Select Open login after OMP finishes starting", "https://github.com/can1357/oh-my-pi"),
 	plan("fx", ActionLogin, "Log in to fx", []string{"fx", "login"}, "Select Vercel, Codex, or Grok in fx's native login flow", "https://fx.sh/docs"),
+	// DeepSeek Harness has no credential subcommand: credentials are records in
+	// its own store (~/.dsh/.credentials.yaml), written by the profile's LLM
+	// plugin, and its ACP server exposes no authentication surface at all. AO
+	// therefore documents the setup instead of driving a login it cannot run.
+	documentationPlan("deepseek-harness", ActionSetup, "Set up DeepSeek Harness", "Configure the model route and credentials in DeepSeek Harness itself, then choose a model in the session", "https://github.com/deepseek-ai/deepseek-harness"),
 }
 
 func terminalInputPlan(agentID string, action Action, title string, command []string, terminalInput, guidance, docs string) Plan {

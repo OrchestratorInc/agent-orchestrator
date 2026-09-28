@@ -10760,6 +10760,7 @@ components:
           - autohand
           - unreal-agent
           - mimo-code
+          - deepseek-harness
           - fake
           type: string
         approvalMode:
@@ -11389,6 +11390,7 @@ components:
           - fx
           - unreal-agent
           - mimo-code
+          - deepseek-harness
           - cloudflared
           type: string
         updatedAt:
@@ -13580,6 +13582,7 @@ components:
           - autohand
           - unreal-agent
           - mimo-code
+          - deepseek-harness
           type: string
         issueId:
           type: string

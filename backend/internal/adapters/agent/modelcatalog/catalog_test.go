@@ -567,7 +567,7 @@ func TestCodexDiscoveryListsNewestModelsFirst(t *testing.T) {
 }
 
 func TestClineDiscoveryUsesACPModelOptions(t *testing.T) {
-	discoverer := Discoverer{ClineOptions: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+	discoverer := Discoverer{ACPOptions: map[string]ACPOptionListFunc{"cline": func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
 		return []ports.ChatConfigOption{
 			{
 				ID: "model", Name: "Model", Category: "model", Type: ports.ChatConfigOptionSelect,
@@ -579,7 +579,7 @@ func TestClineDiscoveryUsesACPModelOptions(t *testing.T) {
 			},
 			{ID: "mode", Name: "Mode", Category: "mode", Type: ports.ChatConfigOptionSelect},
 		}, nil
-	}}
+	}}}
 	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "cline", Binary: "/bin/cline"})
 	if err != nil {
 		t.Fatal(err)

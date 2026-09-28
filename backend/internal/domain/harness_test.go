@@ -62,3 +62,22 @@ func TestMiMoCodeHarnessIsKnown(t *testing.T) {
 		t.Fatal("HarnessMiMoCode.IsKnown() = false, want true")
 	}
 }
+
+func TestDeepSeekHarnessIsKnown(t *testing.T) {
+	if HarnessDeepSeek != AgentHarness("deepseek-harness") {
+		t.Fatalf("HarnessDeepSeek = %q, want deepseek-harness", HarnessDeepSeek)
+	}
+	if !HarnessDeepSeek.IsKnown() {
+		t.Fatal("HarnessDeepSeek.IsKnown() = false, want true")
+	}
+	found := false
+	for _, harness := range AllHarnesses {
+		if harness == HarnessDeepSeek {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("AllHarnesses does not contain HarnessDeepSeek")
+	}
+}
