@@ -5,6 +5,7 @@ export const SESSION_STATUSES = [
 	"ci_failed",
 	"review_pending",
 	"changes_requested",
+	"review_feedback",
 	"approved",
 	"mergeable",
 	"merged",

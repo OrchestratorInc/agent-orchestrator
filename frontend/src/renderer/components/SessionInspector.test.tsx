@@ -1519,6 +1519,7 @@ describe("SessionInspector Activity section", () => {
   it.each([
     ["ci_failed", "CI Failed"],
     ["changes_requested", "Changes Requested"],
+    ["review_feedback", "Review Feedback"],
   ] as const)(
     "renders %s as an SCM state in the current Activity row",
     (status, label) => {
@@ -1537,6 +1538,26 @@ describe("SessionInspector Activity section", () => {
       expect(within(activityRow).getByText(label)).toBeInTheDocument();
     },
   );
+
+  it("keeps an unresolved, non-blocking review comment visible as Review Feedback while the agent is working (#5765)", () => {
+    renderWithQuery(
+      <SessionInspector
+        session={session(
+          [pr(5765, "open", { review: "review_required", reviewComments: true })],
+          {
+            status: "working",
+            activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" },
+          },
+        )}
+      />,
+    );
+
+    const activityRow = activitySection()
+      .getByText("Working")
+      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
+    expect(within(activityRow).getByText("Review Feedback")).toBeInTheDocument();
+    expect(within(activityRow).queryByText("Changes Requested")).not.toBeInTheDocument();
+  });
 
   it("ignores stale failing CI from a merged PR when the open PR is passing", () => {
     renderWithQuery(
