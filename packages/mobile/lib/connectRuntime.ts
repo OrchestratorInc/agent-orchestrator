@@ -112,16 +112,30 @@ async function fetchAdvertisedEndpoints(base: string, token: string): Promise<En
 	return body.endpoints ?? [];
 }
 
+export type ConnectOptions = {
+	/**
+	 * Whether to re-read the daemon's advertised endpoints after the race. On by
+	 * default. The refresh is authenticated, so a stale password spends a failed
+	 * attempt towards the daemon's lockout; a caller about to send its own
+	 * authenticated request (Settings' Test connection) turns it off so one tap
+	 * costs one attempt.
+	 */
+	refreshEndpoints?: boolean;
+};
+
 /** The production dependency set for connectHost. */
-export function runtimeConnectDeps(): ConnectDeps {
+export function runtimeConnectDeps(options: ConnectOptions = {}): ConnectDeps {
 	return {
 		findHost,
 		race: (host) => raceEndpoints(host.endpoints, host.id, probeEndpoint),
+		// Skipped as nothing advertised: merged, that leaves the stored list as is.
 		refreshEndpoints: (config) =>
-			fetchAdvertisedEndpoints(
-				`${config.secure ? "https" : "http"}://${config.host}:${config.httpPort}`,
-				config.password,
-			),
+			options.refreshEndpoints === false
+				? Promise.resolve([])
+				: fetchAdvertisedEndpoints(
+						`${config.secure ? "https" : "http"}://${config.host}:${config.httpPort}`,
+						config.password,
+					),
 		saveEndpoints: updateHostEndpoints,
 		adoptIdentity: adoptHostIdentity,
 		touch: touchHost,
@@ -129,6 +143,6 @@ export function runtimeConnectDeps(): ConnectDeps {
 }
 
 /** Connects to a paired machine using the real network and storage. */
-export function connectToHost(hostId: string): Promise<ConnectResult> {
-	return connectHost(hostId, runtimeConnectDeps());
+export function connectToHost(hostId: string, options?: ConnectOptions): Promise<ConnectResult> {
+	return connectHost(hostId, runtimeConnectDeps(options));
 }

@@ -11,7 +11,7 @@ import { ActivityIndicator, Alert, Linking, Platform, Pressable, ScrollView, Sty
 import { ApiError, pingServer } from "../lib/api";
 import { formatVersionLine, type BuildInfo } from "../lib/appInfo";
 import { bugReportClipboard, bugReportOpenUrl, bugReportUrl } from "../lib/bugReport";
-import { isConfigured } from "../lib/config";
+import { isConfigured, type ServerConfig } from "../lib/config";
 import { classifyConnectionFailure, describeConnectionFailure } from "../lib/connectionError";
 import { describeDesktopStatus } from "../lib/desktopStatus";
 import { discordFeatureRequestURL } from "../lib/discord";
@@ -126,11 +126,16 @@ export default function SettingsScreen() {
 								failed = true;
 							}
 							// Always re-resolve, so the screen reflects whatever
-							// forgetServer managed to clear before it threw.
-							const remaining = await reloadConfig();
+							// forgetServer managed to clear before it threw. Null when
+							// storage could not be read either.
+							let remaining: ServerConfig | null = null;
+							try {
+								remaining = await reloadConfig();
+							} catch {}
 							// Only a pairing that survived is worth retrying; if it is
 							// gone this row is too, and the leftovers are best-effort.
-							if (failed && isConfigured(remaining)) {
+							// Unknown counts as survived when the forget itself failed.
+							if (failed && (remaining === null || isConfigured(remaining))) {
 								haptics.error();
 								Alert.alert("Couldn't disconnect", "This desktop's saved connection couldn't be removed. Try again.");
 								return;
@@ -237,12 +242,15 @@ function CardRow({
 function DesktopStatusRow() {
 	const t = useTheme();
 	const router = useRouter();
-	const { configured, connection, errorStatus, activeEndpoints } = useApp();
-	const classified = errorStatus === null ? null : classifyConnectionFailure(errorStatus);
+	const { configured, connection, error, errorStatus, activeEndpoints } = useApp();
+	// Only a poll that actually failed is a failure. Before the first tick lands
+	// errorStatus is null too, which on its own would read as unreachable. Same
+	// gate as the board, which only shows its failure copy behind `error`.
+	const classified = error ? classifyConnectionFailure(errorStatus ?? undefined) : null;
 	// Same rule as the board's failure copy: a dead tunnel with nothing else to
 	// reach the machine by is a rotated address, not an unreachable machine.
 	const failure =
-		(classified ?? "unreachable") === "unreachable" && tunnelMayHaveRotated(activeEndpoints, connection === "open")
+		classified === "unreachable" && tunnelMayHaveRotated(activeEndpoints, connection === "open")
 			? "tunnel-rotated"
 			: classified;
 	const status = describeDesktopStatus({ configured, connection, failure });
@@ -270,19 +278,22 @@ function ConnectionTestRow() {
 		setTesting(true);
 		setResult(null);
 		// Race every known path first, like the app itself does, rather than
-		// pinging only the last address that happened to win.
+		// pinging only the last address that happened to win. Without the
+		// endpoint refresh: it is authenticated, so with a stale password it and
+		// the ping would spend two failed attempts per tap towards the lockout.
 		let target = config;
-		let answered = false;
+		let rejected = false;
 		try {
-			target = await reloadConfig();
+			target = await reloadConfig({ refreshEndpoints: false });
 			await pingServer(target);
 			haptics.success();
 			setResult({ ok: true, msg: "Connected" });
 		} catch (error) {
 			haptics.error();
 			const status = error instanceof ApiError ? error.status : undefined;
-			answered = status !== undefined;
-			const { title } = describeConnectionFailure(classifyConnectionFailure(status), {
+			const failure = classifyConnectionFailure(status);
+			rejected = failure === "auth" || failure === "rate-limited";
+			const { title } = describeConnectionFailure(failure, {
 				host: target?.host ?? "",
 				port: target?.httpPort ?? "",
 				platform: Platform.OS,
@@ -290,11 +301,12 @@ function ConnectionTestRow() {
 			setResult({ ok: false, msg: title });
 		} finally {
 			// Poll now so the status row above lands on the same answer instead
-			// of waiting out the poll interval — unless the desktop rejected us:
-			// another request would spend a second failed attempt towards its
-			// lockout, and the poll already reports a rejection on its own. Not
-			// awaited: against a dead address it is another full request timeout.
-			if (!answered) void refresh();
+			// of waiting out the poll interval — unless the desktop rejected the
+			// password: another request would spend a second failed attempt
+			// towards its lockout, and the poll already reports a rejection on its
+			// own. Not awaited: against a dead address it is another full request
+			// timeout.
+			if (!rejected) void refresh();
 			setTesting(false);
 		}
 	}

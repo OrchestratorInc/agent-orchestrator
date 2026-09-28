@@ -26,7 +26,15 @@ describe("describeDesktopStatus", () => {
 			label: "Offline",
 			tone: "error",
 		});
-		expect(describeDesktopStatus({ configured: true, connection: "closed", failure: null }).label).toBe("Offline");
+	});
+
+	// Before the first poll, errorStatus is null exactly as it is after an
+	// unreachable one; nothing has failed yet, so nothing is red.
+	it("does not report a failure before any poll has failed", () => {
+		expect(describeDesktopStatus({ configured: true, connection: "closed", failure: null })).toEqual({
+			label: "Connecting…",
+			tone: "neutral",
+		});
 	});
 
 	it("names the cause when the desktop answered with a rejection", () => {

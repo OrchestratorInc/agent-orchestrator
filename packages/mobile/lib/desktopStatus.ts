@@ -10,8 +10,8 @@ export type DesktopStatusTone = "neutral" | "ok" | "error";
 export type DesktopStatus = { label: string; tone: DesktopStatusTone };
 
 /**
- * `failure` is what the last failed poll was classified as; null when the
- * poll has not failed (or has not reported a status).
+ * `failure` is what the last failed poll was classified as; null when no poll
+ * has failed, which while not yet connected means one is still on its way.
  */
 export function describeDesktopStatus(input: {
 	configured: boolean;
@@ -20,7 +20,9 @@ export function describeDesktopStatus(input: {
 }): DesktopStatus {
 	if (!input.configured) return { label: "Set up", tone: "neutral" };
 	if (input.connection === "open") return { label: "Connected", tone: "ok" };
-	if (input.connection === "connecting") return { label: "Connecting…", tone: "neutral" };
+	// "closed" with no failure is the gap between pairing and the first poll
+	// starting — not an offline desktop.
+	if (input.connection === "connecting" || input.failure === null) return { label: "Connecting…", tone: "neutral" };
 	switch (input.failure) {
 		case "auth":
 			return { label: "Password rejected", tone: "error" };

@@ -30,6 +30,7 @@ import {
 import { isConfigured, loadConfig, machineIdentity, type ServerConfig } from "./config";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
 import { pollIntervalFor } from "./pollInterval";
+import type { ConnectOptions } from "./connectRuntime";
 import type { Endpoint } from "./endpoints";
 import { activeHost, loadHosts } from "./hosts";
 import { shouldReRace } from "./reRace";
@@ -93,8 +94,11 @@ type AppState = {
 	 */
 	getLastSyncAt: () => number;
 	// actions
-	/** Races the active machine again and resolves to the config it settled on. */
-	reloadConfig: () => Promise<ServerConfig>;
+	/**
+	 * Races the active machine again and resolves to the config it settled on.
+	 * Rejects only if local storage cannot be read.
+	 */
+	reloadConfig: (options?: ConnectOptions) => Promise<ServerConfig>;
 	refresh: () => Promise<void>;
 	setActiveProject: (id: string) => void;
 	spawn: (opts: SpawnOptions) => Promise<DashboardSession>;
@@ -225,16 +229,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// Set when the app returns to the foreground, consumed by the upgrade check.
 	const resumedRef = useRef(false);
 
-	const reloadConfig = useCallback(async (): Promise<ServerConfig> => {
+	const reloadConfig = useCallback(async (options?: ConnectOptions): Promise<ServerConfig> => {
 		// Races the active machine's endpoints rather than reading one stored
 		// address, so the app lands on LAN at home and the tunnel from anywhere
-		// else without the user choosing. Always resolves to something: every
-		// failure path inside falls back to the last stored config.
+		// else without the user choosing. An unreachable machine falls back to
+		// the last stored config; only a failed storage read rejects.
 		// Marked resolved whatever happens below. An unhandled failure here would
 		// otherwise leave the loader up forever, which is a worse failure than
 		// the blank screen this flag exists to prevent.
 		try {
-			const c = (await resolveActiveConfig(runtimeResolveDeps())) ?? (await loadConfig());
+			const c = (await resolveActiveConfig(runtimeResolveDeps(options))) ?? (await loadConfig());
 		// Keep the previous object when the endpoint has not actually changed.
 		// Resolution builds a fresh one every time, and the live conversation
 		// stream, the poll loop and the terminal mux all key on this value's
