@@ -78,6 +78,13 @@ export function getDownloadIconKind(platform: Platform): DownloadIconKind {
   return getDownloadPlatform(platform);
 }
 
+export function getDownloadHref(platform: Platform): string {
+  if (platform === Platform.Mobile || platform === Platform.Unknown) {
+    return "/download";
+  }
+  return getDownloadTarget(platform).href;
+}
+
 function MobileIcon() {
   return (
     <svg
@@ -114,7 +121,7 @@ export function DownloadButton({
   const downloadPlatform = getDownloadPlatform(platform);
   const iconKind = getDownloadIconKind(platform);
   const isMobile = iconKind === "mobile";
-  const href = isMobile ? "/download" : target.href;
+  const href = getDownloadHref(platform);
   const sizeClasses =
     size === "sm"
       ? "h-8 px-3 text-sm"
@@ -138,6 +145,7 @@ export function DownloadButton({
 
     if (
       isMobile ||
+      platform === Platform.Unknown ||
       event.metaKey ||
       event.ctrlKey ||
       event.shiftKey ||

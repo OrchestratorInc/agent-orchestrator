@@ -5,7 +5,11 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("../../../lib/analytics", () => ({ track: vi.fn() }));
 
 import { Platform } from "../../hooks/useOS";
-import { DownloadButton, getDownloadIconKind } from "./DownloadButton";
+import {
+  DownloadButton,
+  getDownloadHref,
+  getDownloadIconKind,
+} from "./DownloadButton";
 
 describe("DownloadButton", () => {
   it("renders stable copy with CSS-selected mobile and desktop icons", () => {
@@ -13,9 +17,7 @@ describe("DownloadButton", () => {
     const link = $("a");
     const icons = link.find("[data-download-icon]");
 
-    expect(link.attr("href")).toContain(
-      "github.com/Untrivial-ai/agent-orchestrator/releases/latest/download/",
-    );
+    expect(link.attr("href")).toBe("/download");
     expect(link.find("[data-download-label]").text()).toBe("Download");
     expect(icons).toHaveLength(2);
     expect(icons.eq(0).hasClass("md:hidden")).toBe(true);
@@ -30,5 +32,11 @@ describe("DownloadButton", () => {
     expect(getDownloadIconKind(Platform.MacAppleSilicon)).toBe("apple");
     expect(getDownloadIconKind(Platform.MacIntel)).toBe("apple");
     expect(getDownloadIconKind(Platform.Unknown)).toBe("apple");
+  });
+
+  it("routes mobile and unresolved platform detection to the download page", () => {
+    expect(getDownloadHref(Platform.Mobile)).toBe("/download");
+    expect(getDownloadHref(Platform.Unknown)).toBe("/download");
+    expect(getDownloadHref(Platform.Windows)).toContain("win32-x64.exe");
   });
 });
