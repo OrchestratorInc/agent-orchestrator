@@ -50,7 +50,9 @@ func logGatedOffIntake(ctx context.Context, store *sqlite.Store, logger *slog.Lo
 	const hint = "tracker intake: gated off, set AO_TRACKER_INTAKE=on to enable"
 	projects, err := store.ListProjects(ctx)
 	if err != nil {
-		logger.Info(hint, "projectScanErr", err)
+		// Warn rather than Info: a failed scan cannot rule out stranded
+		// projects, so it must not be quieter than finding one.
+		logger.Warn(hint, "projectScanErr", err)
 		return
 	}
 	stranded := 0
