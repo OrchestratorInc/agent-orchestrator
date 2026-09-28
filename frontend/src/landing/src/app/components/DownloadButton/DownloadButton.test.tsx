@@ -34,9 +34,12 @@ describe("DownloadButton", () => {
     expect(getDownloadIconKind(Platform.Unknown)).toBe("apple");
   });
 
-  it("routes mobile and unresolved platform detection to the download page", () => {
+  it("routes every detected platform to the download page", () => {
     expect(getDownloadHref(Platform.Mobile)).toBe("/download");
     expect(getDownloadHref(Platform.Unknown)).toBe("/download");
-    expect(getDownloadHref(Platform.Windows)).toContain("win32-x64.exe");
+    expect(getDownloadHref(Platform.Windows)).toBe("/download");
+    expect(getDownloadHref(Platform.Linux)).toBe("/download");
+    expect(getDownloadHref(Platform.MacAppleSilicon)).toBe("/download");
+    expect(getDownloadHref(Platform.MacIntel)).toBe("/download");
   });
 });

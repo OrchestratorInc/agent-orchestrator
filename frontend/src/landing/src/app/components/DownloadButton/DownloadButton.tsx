@@ -1,9 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { type MouseEvent, useEffect, useState } from "react";
+import { type MouseEvent } from "react";
 import { track } from "../../../lib/analytics";
-import { getDownloadTarget } from "../../download/PlatformDownloadButton";
 import { Platform, usePlatform } from "../../hooks/useOS";
 
 interface DownloadButtonProps {
@@ -70,7 +69,9 @@ function LinuxIcon() {
 }
 
 function getDownloadPlatform(platform: Platform): DownloadPlatform {
-  return getDownloadTarget(platform).icon;
+  if (platform === Platform.Windows) return "windows";
+  if (platform === Platform.Linux) return "linux";
+  return "apple";
 }
 
 export function getDownloadIconKind(platform: Platform): DownloadIconKind {
@@ -79,10 +80,7 @@ export function getDownloadIconKind(platform: Platform): DownloadIconKind {
 }
 
 export function getDownloadHref(platform: Platform): string {
-  if (platform === Platform.Mobile || platform === Platform.Unknown) {
-    return "/download";
-  }
-  return getDownloadTarget(platform).href;
+  return "/download";
 }
 
 function MobileIcon() {
@@ -116,52 +114,27 @@ export function DownloadButton({
   placement = "unknown",
 }: DownloadButtonProps) {
   const { platform } = usePlatform();
-  const [showTooltip, setShowTooltip] = useState(false);
-  const target = getDownloadTarget(platform);
   const downloadPlatform = getDownloadPlatform(platform);
   const iconKind = getDownloadIconKind(platform);
   const isMobile = iconKind === "mobile";
-  const href = getDownloadHref(platform);
   const sizeClasses =
     size === "sm"
       ? "h-8 px-3 text-sm"
       : "px-3 sm:px-6 py-2 sm:py-3 text-sm sm:text-base";
   const buttonClasses = `bg-foreground text-background ${sizeClasses} rounded-2xl tracking-[-0.5px] font-semibold hover:opacity-90 transition-opacity flex items-center gap-2 whitespace-nowrap shrink-0 ${className}`;
 
-  useEffect(() => {
-    if (!showTooltip) return;
-
-    const timeout = window.setTimeout(() => setShowTooltip(false), 2500);
-    return () => window.clearTimeout(timeout);
-  }, [showTooltip]);
-
-  function handleClick(event: MouseEvent<HTMLAnchorElement>) {
+  function handleClick(_event: MouseEvent<HTMLAnchorElement>) {
     track("download_clicked", {
       platform: downloadPlatform,
       is_mobile: isMobile,
       placement,
       size,
     });
-
-    if (
-      isMobile ||
-      platform === Platform.Unknown ||
-      event.metaKey ||
-      event.ctrlKey ||
-      event.shiftKey ||
-      event.altKey
-    ) {
-      return;
-    }
-
-    event.preventDefault();
-    setShowTooltip(true);
-    window.setTimeout(() => window.location.assign(target.href), 150);
   }
 
   return (
     <span className="relative inline-flex">
-      <Link href={href} className={buttonClasses} onClick={handleClick}>
+      <Link href="/download" className={buttonClasses} onClick={handleClick}>
         <span data-download-icon className="inline-flex md:hidden">
           <MobileIcon />
         </span>
@@ -170,14 +143,6 @@ export function DownloadButton({
         </span>
         <span data-download-label>Download</span>
       </Link>
-      {showTooltip && !isMobile && (
-        <span
-          role="status"
-          className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 -translate-x-1/2 whitespace-nowrap rounded-md bg-foreground px-2.5 py-1.5 text-xs font-medium text-background shadow-lg"
-        >
-          Download started
-        </span>
-      )}
     </span>
   );
 }
