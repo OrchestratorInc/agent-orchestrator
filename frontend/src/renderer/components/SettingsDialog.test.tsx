@@ -28,16 +28,32 @@ vi.mock("./ProjectSettingsForm", () => ({
 	}: {
 		onSaveState?: (state: ProjectSettingsSaveState) => void;
 	}) => (
-		<button
-			type="button"
-			onClick={() =>
-				onSaveState?.({
-					phase: "pending",
-				})
-			}
-		>
-			Start pending save
-		</button>
+		<>
+			<button
+				type="button"
+				onClick={() =>
+					onSaveState?.({
+						phase: "pending",
+					})
+				}
+			>
+				Start pending save
+			</button>
+			<button
+				type="button"
+				onClick={() =>
+					onSaveState?.({
+						phase: "failed",
+						error: "Display name must be 100 characters or fewer",
+					})
+				}
+			>
+				Trigger failed save
+			</button>
+			<button type="button" onClick={() => onSaveState?.({ phase: "saved" })}>
+				Complete save
+			</button>
+		</>
 	),
 }));
 
@@ -72,10 +88,21 @@ describe("SettingsDialog", () => {
 
 		await userEvent.click(await screen.findByRole("button", { name: "Start pending save" }));
 		const closeButton = screen.getByRole("button", { name: "Close settings" });
-		expect(closeButton).toBeDisabled();
+		await userEvent.click(closeButton);
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
 
 		await userEvent.keyboard("{Escape}");
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
+		await userEvent.click(screen.getByRole("button", { name: "Complete save" }));
+		expect(useUiStore.getState().settingsModal).toBeNull();
+	});
+
+	it("renders visible error message when project settings save fails", async () => {
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderSettingsDialog();
+
+		await userEvent.click(await screen.findByRole("button", { name: "Trigger failed save" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Display name must be 100 characters or fewer");
 	});
 
 	it("opens the requested global settings page", async () => {
@@ -88,6 +115,25 @@ describe("SettingsDialog", () => {
 			"/api/v1/agents/codex/accounts/ensure",
 			{ body: { accountIds: [], includeUsage: true, forceAuthentication: true, forceDeviceReconciliation: true } },
 		));
+	});
+
+	it("keeps the settings surface above its blurred backdrop", async () => {
+		useUiStore.getState().openGlobalSettings("mobile");
+		renderSettingsDialog();
+
+		const overlay = screen.getByTestId("settings-dialog-overlay");
+		const dialog = await screen.findByRole("dialog");
+		expect(overlay).toHaveClass("dialog-overlay");
+		expect(dialog).toHaveClass("z-[calc(var(--z-overlay)+1)]");
+		expect(dialog).not.toHaveClass("z-overlay");
+	});
+
+	it("does not apply a backdrop filter behind settings content", async () => {
+		useUiStore.getState().openGlobalSettings("mobile");
+		renderSettingsDialog();
+
+		const overlay = screen.getByTestId("settings-dialog-overlay");
+		expect(overlay.style.backdropFilter).toBe("none");
 	});
 
 	it("opens Harness and forwards its agent focus target without redirecting to Codex Accounts", async () => {

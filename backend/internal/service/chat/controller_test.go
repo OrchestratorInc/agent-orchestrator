@@ -749,6 +749,48 @@ func TestServicePersistsAndPassesInitialModelTuningBeforeProviderStart(t *testin
 	}
 }
 
+func TestReviewerChatUsesItsOwnProviderHost(t *testing.T) {
+	st := openStore(t)
+	now := time.Now().UTC()
+	if err := st.UpsertReview(context.Background(), domain.Review{
+		ID: "review-1", SessionID: testSession, ProjectID: testProject,
+		Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertReview: %v", err)
+	}
+
+	provider := newFakeConversation()
+	var closed atomic.Bool
+	provider.onClose = func() { closed.Store(true) }
+	var started ports.ChatStartConfig
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st,
+		Drivers: fakeRegistry{driver: fakeDriver{conv: provider, startCfg: &started}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   func() string { return "review-conversation" },
+	})
+	owner := domain.ReviewConversationOwner("review-1")
+	t.Cleanup(func() { _ = svc.StopForOwner(context.Background(), owner) })
+
+	_, err := svc.Start(context.Background(), chatsvc.StartConfig{
+		Owner: owner, SessionID: testSession, ProjectID: testProject,
+		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("Start reviewer chat: %v", err)
+	}
+	if started.SessionID != "review-review-1" {
+		t.Fatalf("reviewer provider host = %q, want review-review-1", started.SessionID)
+	}
+	if !started.ReadOnly {
+		t.Fatal("reviewer provider was not launched read-only")
+	}
+	svc.StopAll(context.Background())
+	if !closed.Load() {
+		t.Fatal("StopAll did not close the review-owned controller")
+	}
+}
+
 func TestPendingAgentSwitchFreshStartUsesReservedProviderScope(t *testing.T) {
 	st := openStore(t)
 	now := time.Date(2026, 8, 21, 10, 0, 0, 0, time.UTC)
@@ -4013,6 +4055,14 @@ func TestSetTurnSettingsPersistsModelBeforeRouting(t *testing.T) {
 	if !reflect.DeepEqual(log, []string{string(testSession) + ":5.6-luna", string(testSession) + ":5.6-full"}) {
 		t.Fatalf("model persistence log = %v, want luna then full", log)
 	}
+
+	// Clearing the override must clear session metadata for a later TUI rebuild.
+	if _, err := svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{}); err != nil {
+		t.Fatalf("SetTurnSettings (clear): %v", err)
+	}
+	if !reflect.DeepEqual(log, []string{string(testSession) + ":5.6-luna", string(testSession) + ":5.6-full", string(testSession) + ":"}) {
+		t.Fatalf("model persistence log = %v, want model override cleared", log)
+	}
 }
 
 type failConversationReadStore struct {
@@ -5255,6 +5305,40 @@ func TestServiceLiveReconnectKeepsDurableRunningTurnBusy(t *testing.T) {
 	if after.Metadata.ControllerGeneration == before.Metadata.ControllerGeneration {
 		t.Fatal("generation did not rotate")
 	}
+	// ACP adapters emit their initialized ready state before live reconnect
+	// restores ownership of the durable turn. The queued notification is stale
+	// once that ownership has been restored and must not make the controller
+	// claim it is ready while the durable turn is still running.
+	secondProvider.emit(ports.ChatEvent{
+		Kind: ports.ChatEventControllerState, ProviderEventID: "reconnect-ready",
+		ControllerState: ports.ChatControllerReady,
+	})
+	deadline := time.Now().Add(time.Second)
+	readyProjected := false
+	for time.Now().Before(deadline) {
+		events, readErr := st.ProviderEventsSince(context.Background(), secondController.ConversationID(), 0, 10_000)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		seen := false
+		for _, event := range events {
+			if event.ProviderEventID == "reconnect-ready" {
+				seen = true
+				break
+			}
+		}
+		if seen {
+			readyProjected = true
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !readyProjected {
+		t.Fatal("reconnect ready event was not projected")
+	}
+	if got := secondController.State(); got != ports.ChatControllerBusy {
+		t.Fatalf("controller state after reconnect ready event = %q, want busy for durable running turn", got)
+	}
 	queued, err := secondController.Send(context.Background(), ports.ChatUserMessage{Text: "after restart"})
 	if err != nil {
 		t.Fatalf("reconnect Send: %v", err)
@@ -5520,6 +5604,37 @@ func TestRelayedMessageIsAttributedToAutomation(t *testing.T) {
 	}
 	if got := h.conv.sentTexts(); len(got) != 1 || got[0] != "orchestrator: rebase onto main" {
 		t.Fatalf("provider received %v, want the relayed text dispatched", got)
+	}
+	rec, ok, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !ok {
+		t.Fatalf("get session: ok=%v err=%v", ok, err)
+	}
+	if !rec.Metadata.LatestUserPromptAt.IsZero() {
+		t.Fatalf("automation advanced latest user prompt time to %s", rec.Metadata.LatestUserPromptAt)
+	}
+}
+
+func TestUserAuthoredRelayAdvancesUserActivityWithoutChangingOrigin(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	if _, err := h.svc.RelayUserAuthoredChatTurn(ctx, testSession, "move this control closer to the heading"); err != nil {
+		t.Fatalf("RelayUserAuthoredChatTurn: %v", err)
+	}
+
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Messages) >= 1
+	})
+	if got := snapshot.Messages[0].Origin; got != domain.MessageOriginAutomation {
+		t.Fatalf("user-authored relay origin = %q, want %q", got, domain.MessageOriginAutomation)
+	}
+	rec, ok, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !ok {
+		t.Fatalf("get session: ok=%v err=%v", ok, err)
+	}
+	if rec.Metadata.LatestUserPrompt != "move this control closer to the heading" || !rec.Metadata.LatestUserPromptAt.Equal(h.now()) {
+		t.Fatalf("latest user prompt = %q at %s, want annotation at %s",
+			rec.Metadata.LatestUserPrompt, rec.Metadata.LatestUserPromptAt, h.now())
 	}
 }
 
@@ -6112,6 +6227,11 @@ func TestStartSettlesWorkLeftByAKilledController(t *testing.T) {
 		Now:      h.now,
 	})
 	t.Cleanup(func() { _ = next.Stop(context.Background(), testSession) })
+	// Retry moves an interrupted async start back to provisioning. That state
+	// must not hide the running turn left by its previous controller.
+	if _, err := h.st.SetSessionProvisionState(ctx, testSession, domain.SessionProvisionProvisioning, "", h.now()); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := next.Start(ctx, chatsvc.StartConfig{
 		SessionID:              testSession,

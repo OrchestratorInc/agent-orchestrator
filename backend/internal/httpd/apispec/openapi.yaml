@@ -960,6 +960,296 @@ paths:
       summary: Refresh the cached local agent adapter catalog
       tags:
       - agents
+  /api/v1/automations:
+    get:
+      operationId: listAutomations
+      parameters:
+      - in: query
+        name: projectId
+        schema:
+          type: string
+      - in: query
+        name: enabled
+        schema:
+          type:
+          - "null"
+          - boolean
+      - in: query
+        name: limit
+        schema:
+          maximum: 100
+          minimum: 1
+          type: integer
+      - in: query
+        name: cursor
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListAutomationsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List recurring automations
+      tags:
+      - automations
+    post:
+      operationId: createAutomation
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAutomationRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationEnvelope'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Create a recurring automation
+      tags:
+      - automations
+  /api/v1/automations/{automationId}:
+    delete:
+      operationId: deleteAutomation
+      parameters:
+      - description: Automation identifier.
+        in: path
+        name: automationId
+        required: true
+        schema:
+          description: Automation identifier.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Delete an automation and its run history
+      tags:
+      - automations
+    get:
+      operationId: getAutomation
+      parameters:
+      - description: Automation identifier.
+        in: path
+        name: automationId
+        required: true
+        schema:
+          description: Automation identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get one recurring automation
+      tags:
+      - automations
+    patch:
+      operationId: updateAutomation
+      parameters:
+      - description: Automation identifier.
+        in: path
+        name: automationId
+        required: true
+        schema:
+          description: Automation identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAutomationRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Update a recurring automation
+      tags:
+      - automations
+  /api/v1/automations/{automationId}/runs:
+    get:
+      operationId: listAutomationRuns
+      parameters:
+      - description: Automation identifier.
+        in: path
+        name: automationId
+        required: true
+        schema:
+          description: Automation identifier.
+          type: string
+      - in: query
+        name: limit
+        schema:
+          maximum: 100
+          minimum: 1
+          type: integer
+      - in: query
+        name: cursor
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListAutomationRunsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List durable automation run history
+      tags:
+      - automations
   /api/v1/browser/commands:
     post:
       operationId: executeBrowserCommand
@@ -1222,6 +1512,155 @@ paths:
       summary: Stream CDC events with durable replay
       tags:
       - events
+  /api/v1/fs/dirs:
+    get:
+      operationId: listDirs
+      parameters:
+      - description: Absolute directory on the daemon host to list. When omitted,
+          the daemon user's home directory.
+        in: query
+        name: path
+        schema:
+          description: Absolute directory on the daemon host to list. When omitted,
+            the daemon user's home directory.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListDirsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: List the subdirectories of a directory on the daemon host
+      tags:
+      - fs
+  /api/v1/github/pat:
+    delete:
+      operationId: deleteGitHubPAT
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                type: object
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Remove the stored GitHub personal access token
+      tags:
+      - github
+    put:
+      operationId: putGitHubPAT
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutGitHubPATRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                type: object
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Store a GitHub personal access token locally
+      tags:
+      - github
+  /api/v1/github/repos:
+    get:
+      operationId: listGitHubRepos
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  items:
+                    $ref: '#/components/schemas/GitHubRepo'
+                  type: array
+                type: object
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unauthorized
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: List repositories accessible with the stored GitHub token
+      tags:
+      - github
+  /api/v1/github/status:
+    get:
+      operationId: getGitHubStatus
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: boolean
+                type: object
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Check whether a GitHub personal access token is stored locally
+      tags:
+      - github
   /api/v1/identity:
     get:
       operationId: getIdentity
@@ -1544,6 +1983,43 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
       summary: Enable the Connect Mobile LAN bridge and issue a fresh password
+      tags:
+      - mobile
+  /api/v1/mobile/keep-awake:
+    post:
+      operationId: setMobileKeepAwake
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersSetKeepAwakeRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobileStatusResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Keep this Mac from idle-sleeping while Connect Mobile is on
       tags:
       - mobile
   /api/v1/mobile/regenerate:
@@ -2046,7 +2522,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Start a worker task and ask the orchestrator to title it
+      summary: Start a worker task and refine its title in the background
       tags:
       - sessions
   /api/v1/projects:
@@ -2307,6 +2783,45 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
       summary: Remember project permissions for future sessions
+      tags:
+      - projects
+  /api/v1/projects/{id}/tasks/prepare:
+    post:
+      operationId: prepareTask
+      parameters:
+      - description: Project identifier (registry key).
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Project identifier (registry key).
+          type: string
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrepareTaskResponse'
+          description: Accepted
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Speculatively create the next task's worktree
       tags:
       - projects
   /api/v1/projects/clone:
@@ -2642,6 +3157,381 @@ paths:
       summary: Unpair this phone from the daemon, removing it from the roster
       tags:
       - push
+  /api/v1/reports:
+    get:
+      operationId: listReports
+      parameters:
+      - description: Stable project identifier.
+        in: query
+        name: projectId
+        required: true
+        schema:
+          description: Stable project identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListReportsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List persisted project reports without changing delivery state
+      tags:
+      - reports
+    post:
+      operationId: createReport
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReportRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateReportResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Persist a worker report for later orchestrator delivery
+      tags:
+      - reports
+  /api/v1/reviews/{reviewId}/conversation:
+    get:
+      operationId: getReviewerConversation
+      parameters:
+      - description: Reviewer conversation identifier.
+        in: path
+        name: reviewId
+        required: true
+        schema:
+          description: Reviewer conversation identifier.
+          type: string
+      - description: Read items older than this conversation sequence. Omit for the
+          newest page.
+        in: query
+        name: beforeSequence
+        schema:
+          description: Read items older than this conversation sequence. Omit for
+            the newest page.
+          minimum: 1
+          type:
+          - "null"
+          - integer
+      - description: Maximum combined messages and activities to return. Defaults
+          to 200.
+        in: query
+        name: limit
+        schema:
+          description: Maximum combined messages and activities to return. Defaults
+            to 200.
+          maximum: 500
+          minimum: 1
+          type:
+          - "null"
+          - integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationSnapshotResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read a reviewer's durable Chat conversation
+      tags:
+      - conversations
+  /api/v1/reviews/{reviewId}/conversation/approvals/{requestId}/resolve:
+    post:
+      operationId: resolveReviewerConversationApproval
+      parameters:
+      - description: Reviewer conversation identifier.
+        in: path
+        name: reviewId
+        required: true
+        schema:
+          description: Reviewer conversation identifier.
+          type: string
+      - description: Provider approval request identifier. Zero is a legitimate value.
+        in: path
+        name: requestId
+        required: true
+        schema:
+          description: Provider approval request identifier. Zero is a legitimate
+            value.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveConversationApprovalRequest'
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Answer a pending approval in a reviewer conversation
+      tags:
+      - conversations
+  /api/v1/reviews/{reviewId}/conversation/inputs/{requestId}/resolve:
+    post:
+      operationId: resolveReviewerConversationInput
+      parameters:
+      - description: Reviewer conversation identifier.
+        in: path
+        name: reviewId
+        required: true
+        schema:
+          description: Reviewer conversation identifier.
+          type: string
+      - description: Provider approval request identifier. Zero is a legitimate value.
+        in: path
+        name: requestId
+        required: true
+        schema:
+          description: Provider approval request identifier. Zero is a legitimate
+            value.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveConversationInputRequest'
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Answer a structured reviewer input request
+      tags:
+      - conversations
+  /api/v1/reviews/{reviewId}/conversation/interrupt:
+    post:
+      operationId: interruptReviewerConversationTurn
+      parameters:
+      - description: Reviewer conversation identifier.
+        in: path
+        name: reviewId
+        required: true
+        schema:
+          description: Reviewer conversation identifier.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Cancel the in-flight reviewer turn
+      tags:
+      - conversations
+  /api/v1/reviews/{reviewId}/conversation/messages:
+    post:
+      operationId: sendReviewerConversationMessage
+      parameters:
+      - description: Reviewer conversation identifier.
+        in: path
+        name: reviewId
+        required: true
+        schema:
+          description: Reviewer conversation identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendConversationMessageRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendConversationMessageResponse'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Send a message to a Chat reviewer
+      tags:
+      - conversations
   /api/v1/reviews/{reviewSessionID}/activity:
     post:
       operationId: setReviewActivity
@@ -4982,6 +5872,212 @@ paths:
       summary: List pull requests owned by a session
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/pr/{prNumber}/file:
+    get:
+      operationId: getSessionPRFile
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Associated pull request number.
+        in: path
+        name: prNumber
+        required: true
+        schema:
+          description: Associated pull request number.
+          minimum: 1
+          type: integer
+      - description: Repository-relative file path.
+        in: query
+        name: path
+        required: true
+        schema:
+          description: Repository-relative file path.
+          type: string
+      - description: Previous repository-relative path supplied by the selected PR
+          file summary for rename detection.
+        in: query
+        name: previousPath
+        schema:
+          description: Previous repository-relative path supplied by the selected
+            PR file summary for rename detection.
+          type: string
+      - description: Stable URL of the selected associated pull request.
+        in: query
+        name: sourceUrl
+        schema:
+          description: Stable URL of the selected associated pull request.
+          type: string
+      - description: Exact SHA of one of the pull request's commits; reads that commit's
+          change instead of the whole pull request.
+        in: query
+        name: commitSha
+        schema:
+          description: Exact SHA of one of the pull request's commits; reads that
+            commit's change instead of the whole pull request.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceFileResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Read one file from an associated pull request base-to-head diff
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/pr/{prNumber}/file/revision:
+    get:
+      operationId: getSessionPRFileRevision
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Associated pull request number.
+        in: path
+        name: prNumber
+        required: true
+        schema:
+          description: Associated pull request number.
+          minimum: 1
+          type: integer
+      - description: Repository-relative file path.
+        in: query
+        name: path
+        required: true
+        schema:
+          description: Repository-relative file path.
+          type: string
+      - description: Comparison side. Defaults to after.
+        in: query
+        name: side
+        schema:
+          description: Comparison side. Defaults to after.
+          enum:
+          - before
+          - after
+          type: string
+      - description: Stable URL of the selected associated pull request.
+        in: query
+        name: sourceUrl
+        schema:
+          description: Stable URL of the selected associated pull request.
+          type: string
+      - description: Exact SHA of one of the pull request's commits; before is its
+          first parent, after is the commit.
+        in: query
+        name: commitSha
+        schema:
+          description: Exact SHA of one of the pull request's commits; before is its
+            first parent, after is the commit.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceFileRevisionResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Read one text-capable side of a pull request comparison
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/pr/{prNumber}/files:
+    get:
+      operationId: listSessionPRFiles
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Associated pull request number.
+        in: path
+        name: prNumber
+        required: true
+        schema:
+          description: Associated pull request number.
+          minimum: 1
+          type: integer
+      - description: Stable URL of the selected associated pull request.
+        in: query
+        name: sourceUrl
+        schema:
+          description: Stable URL of the selected associated pull request.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListPRFilesResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: List the exact base-to-head changed files for an associated pull request
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/pr/claim:
     post:
       operationId: claimSessionPR
@@ -7127,6 +8223,35 @@ paths:
       summary: Check local machine readiness (git, tmux, agent harness, gh)
       tags:
       - system
+  /api/v1/task-preparations/{token}:
+    delete:
+      operationId: cancelTaskPreparation
+      parameters:
+      - description: Opaque speculative task-worktree token.
+        in: path
+        name: token
+        required: true
+        schema:
+          description: Opaque speculative task-worktree token.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Cancel an unclaimed speculative task worktree
+      tags:
+      - projects
   /api/v1/usage/sessions:
     get:
       operationId: listCompactSessionUsage
@@ -7320,6 +8445,7 @@ components:
           - unauthorized
           - unknown
           - not_applicable
+          - configured
           type: string
       required:
       - state
@@ -7343,12 +8469,15 @@ components:
     AgentInfo:
       properties:
         authStatus:
-          description: Advisory local auth probe result. authorized means a recent
-            local probe passed; spawn remains the authoritative validation point.
+          description: Auth probe result. authorized means a provider round-trip accepted
+            the credential; configured means a credential exists locally but was never
+            validated, and must not be presented as ready; spawn remains the authoritative
+            validation point.
           enum:
           - authorized
           - unauthorized
           - unknown
+          - configured
           type: string
         id:
           type: string
@@ -7518,12 +8647,37 @@ components:
         fetchedAt:
           format: date-time
           type: string
+        inputFingerprint:
+          type: string
+        lastSuccessAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        metadata:
+          additionalProperties:
+            type: string
+          type: object
         models:
           items:
             $ref: '#/components/schemas/AgentModelInfo'
           type: array
+        refreshError:
+          type: string
         refreshRecommended:
           type: boolean
+        refreshState:
+          enum:
+          - idle
+          - queued
+          - refreshing
+          - error
+          type: string
+        retryAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         selectionMode:
           enum:
           - catalog
@@ -7686,6 +8840,158 @@ components:
           type: string
       required:
       - data
+      type: object
+    AutomationEnvelope:
+      properties:
+        automation:
+          $ref: '#/components/schemas/AutomationResponse'
+      required:
+      - automation
+      type: object
+    AutomationResponse:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        displayName:
+          type: string
+        enabled:
+          type: boolean
+        harness:
+          type: string
+        id:
+          type: string
+        kind:
+          enum:
+          - worker
+          - orchestrator
+          type: string
+        lastRunAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        latestRun:
+          $ref: '#/components/schemas/AutomationRunSummaryResponse'
+        nextRunAt:
+          format: date-time
+          type: string
+        projectId:
+          type: string
+        prompt:
+          type: string
+        rrule:
+          type: string
+        timezone:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - id
+      - projectId
+      - displayName
+      - prompt
+      - kind
+      - rrule
+      - timezone
+      - enabled
+      - nextRunAt
+      - createdAt
+      - updatedAt
+      type: object
+    AutomationRunResponse:
+      properties:
+        attemptCount:
+          format: int64
+          type: integer
+        automationId:
+          type: string
+        claimedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        createdAt:
+          format: date-time
+          type: string
+        errorMessage:
+          type: string
+        finishedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          type: string
+        leaseExpiresAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        scheduledFor:
+          format: date-time
+          type: string
+        sessionId:
+          type: string
+        startedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        status:
+          enum:
+          - pending
+          - spawning
+          - running
+          - completed
+          - failed
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - id
+      - automationId
+      - scheduledFor
+      - status
+      - attemptCount
+      - createdAt
+      - updatedAt
+      type: object
+    AutomationRunSummaryResponse:
+      properties:
+        errorMessage:
+          type: string
+        finishedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          type: string
+        scheduledFor:
+          format: date-time
+          type: string
+        sessionId:
+          type: string
+        startedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        status:
+          enum:
+          - pending
+          - spawning
+          - running
+          - completed
+          - failed
+          type: string
+      required:
+      - id
+      - status
+      - scheduledFor
       type: object
     BrowserCommandRequest:
       properties:
@@ -8400,6 +9706,22 @@ components:
         disabled:
           type: boolean
       type: object
+    ControllersKeepAwakeStatus:
+      properties:
+        active:
+          type: boolean
+        enabled:
+          type: boolean
+        hasBattery:
+          type: boolean
+        supported:
+          type: boolean
+      required:
+      - supported
+      - enabled
+      - active
+      - hasBattery
+      type: object
     ControllersRequestRereviewRequest:
       properties:
         pullRequestUrl:
@@ -8493,6 +9815,7 @@ components:
           - Needs review
           - Review scheduled
           - Reviewing
+          - Review failed
           - Review pending
           - Draft
           - CI failing
@@ -8548,6 +9871,14 @@ components:
         previewUrl:
           type: string
         projectId:
+          type: string
+        provisionError:
+          type: string
+        provisionState:
+          enum:
+          - provisioning
+          - ready
+          - failed
           type: string
         prs:
           items:
@@ -8641,6 +9972,13 @@ components:
       - kanbanColumn
       - displayStatus
       - prs
+      type: object
+    ControllersSetKeepAwakeRequest:
+      properties:
+        enabled:
+          type: boolean
+      required:
+      - enabled
       type: object
     ControllersSetSecurePairingRequest:
       properties:
@@ -9301,6 +10639,69 @@ components:
       - cachedTokens
       - totalTokens
       type: object
+    CreateAutomationRequest:
+      properties:
+        cron:
+          type: string
+        displayName:
+          type: string
+        enabled:
+          type:
+          - "null"
+          - boolean
+        harness:
+          type: string
+        kind:
+          enum:
+          - worker
+          - orchestrator
+          type: string
+        projectId:
+          type: string
+        prompt:
+          type: string
+        rrule:
+          type: string
+        timezone:
+          type: string
+      required:
+      - projectId
+      - displayName
+      - prompt
+      - kind
+      - timezone
+      type: object
+    CreateReportRequest:
+      properties:
+        message:
+          maxLength: 1000
+          type: string
+        note:
+          maxLength: 1000
+          type: string
+        outputs:
+          items:
+            $ref: '#/components/schemas/ReportOutputRequest'
+          type: array
+        sessionId:
+          type: string
+        state:
+          enum:
+          - checkpoint
+          - needs_input
+          - stuck
+          - done
+          type: string
+      required:
+      - sessionId
+      type: object
+    CreateReportResponse:
+      properties:
+        id:
+          type: string
+      required:
+      - id
+      type: object
     DegradedProject:
       properties:
         id:
@@ -9356,6 +10757,7 @@ components:
           - omp
           - prime-agent
           - autohand
+          - unreal-agent
           - fake
           type: string
         approvalMode:
@@ -9386,6 +10788,8 @@ components:
           maxLength: 256
           type: string
         projectId:
+          type: string
+        taskPreparation:
           type: string
       required:
       - projectId
@@ -9494,6 +10898,23 @@ components:
       required:
       - harness
       type: object
+    DomainReviewerSurface:
+      properties:
+        controllerError:
+          type: string
+        handleId:
+          type: string
+        harness:
+          type: string
+        mode:
+          type: string
+        reviewId:
+          type: string
+      required:
+      - mode
+      - reviewId
+      - harness
+      type: object
     EditConversationMessageRequest:
       properties:
         clientMessageId:
@@ -9567,7 +10988,6 @@ components:
         purpose:
           enum:
           - display
-          - settings
           - launch
           type: string
       required:
@@ -9644,6 +11064,42 @@ components:
       - ok
       - sessionId
       - session
+      type: object
+    FSEntry:
+      properties:
+        gitRepo:
+          description: True when the directory carries a .git entry (clone or worktree
+            checkout).
+          type: boolean
+        name:
+          description: Directory name.
+          type: string
+        path:
+          description: Absolute path of the directory on the daemon host.
+          type: string
+      required:
+      - name
+      - path
+      - gitRepo
+      type: object
+    GitHubRepo:
+      properties:
+        clone_url:
+          type: string
+        default_branch:
+          type: string
+        full_name:
+          type: string
+        name:
+          type: string
+        private:
+          type: boolean
+      required:
+      - name
+      - full_name
+      - private
+      - default_branch
+      - clone_url
       type: object
     GitHubRepositoryPreparation:
       properties:
@@ -9928,6 +11384,7 @@ components:
           - kimchi
           - prime-agent
           - omp
+          - unreal-agent
           - cloudflared
           type: string
         updatedAt:
@@ -10030,6 +11487,28 @@ components:
       - installed
       - authorized
       type: object
+    ListAutomationRunsResponse:
+      properties:
+        nextCursor:
+          type: string
+        runs:
+          items:
+            $ref: '#/components/schemas/AutomationRunResponse'
+          type: array
+      required:
+      - runs
+      type: object
+    ListAutomationsResponse:
+      properties:
+        automations:
+          items:
+            $ref: '#/components/schemas/AutomationResponse'
+          type: array
+        nextCursor:
+          type: string
+      required:
+      - automations
+      type: object
     ListCompactSessionUsageResponse:
       properties:
         sessions:
@@ -10038,6 +11517,29 @@ components:
           type: array
       required:
       - sessions
+      type: object
+    ListDirsResponse:
+      properties:
+        entries:
+          description: Subdirectories, excluding dotted names.
+          items:
+            $ref: '#/components/schemas/FSEntry'
+          type: array
+        parent:
+          description: Absolute path of the listed directory's parent; equals path
+            at the filesystem root.
+          type: string
+        path:
+          description: Absolute path that was listed.
+          type: string
+        truncated:
+          description: True when the listing hit the entry cap and more subdirectories
+            exist.
+          type: boolean
+      required:
+      - path
+      - parent
+      - entries
       type: object
     ListNotificationsResponse:
       properties:
@@ -10056,6 +11558,29 @@ components:
       - unreadCount
       - unresolvedCount
       type: object
+    ListPRFilesResponse:
+      properties:
+        commits:
+          items:
+            $ref: '#/components/schemas/WorkspaceCommitSummary'
+          type: array
+        files:
+          items:
+            $ref: '#/components/schemas/WorkspaceFileSummary'
+          type: array
+        sessionId:
+          type: string
+        summary:
+          $ref: '#/components/schemas/WorkspaceSummary'
+        truncated:
+          type: boolean
+      required:
+      - sessionId
+      - files
+      - commits
+      - truncated
+      - summary
+      type: object
     ListProjectsResponse:
       properties:
         projects:
@@ -10064,6 +11589,15 @@ components:
           type: array
       required:
       - projects
+      type: object
+    ListReportsResponse:
+      properties:
+        reports:
+          items:
+            $ref: '#/components/schemas/ReportResponse'
+          type: array
+      required:
+      - reports
       type: object
     ListReviewsResponse:
       properties:
@@ -10079,6 +11613,8 @@ components:
           type: string
         reviewerHarness:
           type: string
+        reviewerSurface:
+          $ref: '#/components/schemas/DomainReviewerSurface'
         reviews:
           items:
             $ref: '#/components/schemas/PRReviewState'
@@ -10145,6 +11681,10 @@ components:
           - base
           - head_fallback
           type: string
+        degraded:
+          type: boolean
+        degradedCode:
+          type: string
         files:
           items:
             $ref: '#/components/schemas/WorkspaceFileSummary'
@@ -10167,6 +11707,7 @@ components:
       - sections
       - commits
       - summary
+      - degraded
       type: object
     ListWorkspaceTreeResponse:
       properties:
@@ -10319,6 +11860,8 @@ components:
           type: string
         hostId:
           type: string
+        keepAwake:
+          $ref: '#/components/schemas/ControllersKeepAwakeStatus'
         password:
           type: string
         port:
@@ -10342,6 +11885,7 @@ components:
       - password
       - warning
       - securePairing
+      - keepAwake
       type: object
     MobileTunnelStatus:
       properties:
@@ -10510,6 +12054,15 @@ components:
       - title
       - targetSha
       - status
+      type: object
+    PrepareTaskResponse:
+      properties:
+        ok:
+          type: boolean
+        taskPreparation:
+          type: string
+      required:
+      - ok
       type: object
     PreviewServerStatusResponse:
       properties:
@@ -10746,6 +12299,19 @@ components:
       - createdAt
       - lastSeenAt
       type: object
+    PutGitHubPATRequest:
+      properties:
+        expiresIn:
+          type: integer
+        pat:
+          type: string
+        refreshToken:
+          type: string
+        refreshTokenExpiresIn:
+          type: integer
+      required:
+      - pat
+      type: object
     RegisterPushDeviceRequest:
       properties:
         deviceName:
@@ -10789,6 +12355,7 @@ components:
     RenameSessionRequest:
       properties:
         displayName:
+          maxLength: 100
           minLength: 1
           type: string
       required:
@@ -10847,6 +12414,66 @@ components:
       - needsGitInit
       - requiredActions
       - blockingErrors
+      type: object
+    ReportOutputRequest:
+      properties:
+        kind:
+          enum:
+          - artifact
+          - pr_created
+          - pr_reviewed
+          type: string
+        label:
+          type: string
+        reference:
+          minLength: 1
+          type: string
+      required:
+      - kind
+      - reference
+      type: object
+    ReportOutputResponse:
+      properties:
+        kind:
+          type: string
+        label:
+          type: string
+        reference:
+          type: string
+      required:
+      - kind
+      - reference
+      type: object
+    ReportResponse:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        message:
+          type: string
+        note:
+          type: string
+        outputs:
+          items:
+            $ref: '#/components/schemas/ReportOutputResponse'
+          type: array
+        projectId:
+          type: string
+        repeatCount:
+          format: int64
+          type: integer
+        sessionId:
+          type: string
+        state:
+          type: string
+      required:
+      - id
+      - sessionId
+      - projectId
+      - createdAt
+      - repeatCount
       type: object
     ResolveCommentsResponse:
       properties:
@@ -11097,6 +12724,8 @@ components:
           maxLength: 4096
           minLength: 1
           type: string
+        userAuthored:
+          type: boolean
       required:
       - message
       type: object
@@ -11555,6 +13184,10 @@ components:
           - human
           - coordination
           type: string
+        coordinationId:
+          description: Opaque identity of an AO-authored semantic prompt accepted
+            by the native agent.
+          type: string
         event:
           description: AO hook sub-command that produced this state (e.g. post-tool-use).
           type: string
@@ -11891,6 +13524,13 @@ components:
       type: object
     SpawnSessionRequest:
       properties:
+        approvalMode:
+          enum:
+          - default
+          - accept-edits
+          - auto
+          - bypass-permissions
+          type: string
         attachments:
           items:
             $ref: '#/components/schemas/AttachmentInput'
@@ -11898,7 +13538,10 @@ components:
         branch:
           type: string
         displayName:
-          maxLength: 20
+          maxLength: 100
+          type: string
+        effort:
+          maxLength: 32
           type: string
         harness:
           enum:
@@ -11930,6 +13573,7 @@ components:
           - omp
           - prime-agent
           - autohand
+          - unreal-agent
           type: string
         issueId:
           type: string
@@ -12300,6 +13944,8 @@ components:
           type: boolean
         reviewerHandleId:
           type: string
+        reviewerSurface:
+          $ref: '#/components/schemas/DomainReviewerSurface'
         reviews:
           items:
             $ref: '#/components/schemas/PRReviewState'
@@ -12324,12 +13970,50 @@ components:
       - token
       - deleted
       type: object
+    UpdateAutomationRequest:
+      properties:
+        cron:
+          type:
+          - "null"
+          - string
+        displayName:
+          type:
+          - "null"
+          - string
+        enabled:
+          type:
+          - "null"
+          - boolean
+        harness:
+          type:
+          - "null"
+          - string
+        kind:
+          enum:
+          - worker
+          - orchestrator
+          type:
+          - "null"
+          - string
+        prompt:
+          type:
+          - "null"
+          - string
+        rrule:
+          type:
+          - "null"
+          - string
+        timezone:
+          type:
+          - "null"
+          - string
+      type: object
     UpdateProjectSettingsInput:
       properties:
         config:
           $ref: '#/components/schemas/ProjectConfig'
         displayName:
-          maxLength: 20
+          maxLength: 100
           minLength: 1
           type: string
       required:
@@ -12876,12 +14560,16 @@ tags:
   name: projects
 - description: Agent session lifecycle and messaging
   name: sessions
+- description: Recurring daemon-owned session schedules and durable run history
+  name: automations
 - description: Pull-request actions (SCM lane)
   name: prs
 - description: Code-review runs and findings
   name: reviews
 - description: Durable dashboard notifications
   name: notifications
+- description: Durable worker reports
+  name: reports
 - description: Token usage telemetry for AO sessions
   name: usage
 - description: Mobile push-device registration for OS push notifications
@@ -12896,8 +14584,12 @@ tags:
   name: mobile
 - description: Target-isolated desktop browser runtime (loopback only)
   name: browser
+- description: Read-only filesystem browsing for remote clients
+  name: fs
 - description: Local machine readiness checks the desktop app runs before showing
     the board
   name: system
 - description: Server-side unfurl of external links for the CSP-locked renderer
   name: link-preview
+- description: Local GitHub personal access token storage and repository listing
+  name: github

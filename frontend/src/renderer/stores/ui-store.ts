@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { aoBridge } from "../lib/bridge";
 import type { TerminalTarget } from "../types/terminal";
+import type { FilesSource } from "../hooks/useSessionWorkspaceFiles";
 import {
 	applyDocumentTheme,
 	applyDocumentThemeStyle,
@@ -56,6 +57,8 @@ export type InspectorSessionState = {
 	browserUnseen?: boolean;
 	/** Files tab: review changed files directly. Defaults to true; false shows the full tree. */
 	filesChangedOnly?: boolean;
+	/** Files tab: source shared by the docked and maximized explorers. */
+	filesSource?: FilesSource;
 	/** The session-entry defaulting (Summary tab, baseline browser reveal) has already run once for this session's lifetime. */
 	initialized?: boolean;
 };
@@ -65,6 +68,16 @@ export type GlobalToast = {
 	body?: string;
 	tone?: "info" | "error";
 	placement?: "bottom-right" | "top-center";
+	nonce: number;
+};
+
+export type OnboardingFinishRequest = {
+	path: string;
+	orchestratorAgent: string;
+	workerAgent: string;
+	clonePreparationId?: string;
+	defaultBranch?: string;
+	asWorkspace?: boolean;
 	nonce: number;
 };
 
@@ -86,6 +99,10 @@ export type UiState = {
 	themeStyle: ThemeStyle;
 	/** When true, developer-only release controls are available. Default off. */
 	developerMode: boolean;
+	/** Experimental: connect to AO daemons on other machines. Default off. */
+	remoteHosts: boolean;
+	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
+	terminalCopyOnSelect: boolean;
 	restartingProjectIds: ReadonlySet<string>;
 	// Projects whose initial orchestrator spawn (after import/clone) is still
 	// running in the background. The board renders a progress banner and gates
@@ -110,6 +127,12 @@ export type UiState = {
 	// re-fires. Consumed by the same CreateProjectFlow instance that owns
 	// openSignal for ⌘N (Sidebar's CreateProjectButton).
 	folderDropRequest: { path: string; nonce: number } | null;
+	// One-shot signal raised when onboarding finishes: the shell creates the
+	// chosen project and opens the orchestrator chat.
+	onboardingFinishRequest: OnboardingFinishRequest | null;
+	// Set when the finish handoff fails. The request is deliberately kept so the
+	// flow can retry with the same choices rather than making the user redo them.
+	onboardingFinishError: { nonce: number; message: string } | null;
 	// Bumps to ask for a new standalone shell terminal. Like newTaskRequest this
 	// is a one-shot signal, not state: the tab-strip + button and Ctrl+Shift+` both
 	// raise it so they cannot drift apart, and a repeat press re-fires because
@@ -130,6 +153,8 @@ export type UiState = {
 	setThemePreference: (theme: ThemePreference) => void;
 	setThemeStyle: (style: ThemeStyle) => void;
 	setDeveloperMode: (enabled: boolean) => void;
+	setRemoteHosts: (enabled: boolean) => void;
+	setTerminalCopyOnSelect: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
@@ -154,6 +179,7 @@ export type UiState = {
 	setBrowserContentRevealed: (sessionId: string, revealed: boolean) => void;
 	setBrowserUnseen: (sessionId: string, unseen: boolean) => void;
 	setFilesChangedOnly: (sessionId: string, changedOnly: boolean) => void;
+	setFilesSource: (sessionId: string, source: FilesSource) => void;
 	setCommandPaletteOpen: (open: boolean) => void;
 	setProjectRestarting: (projectId: string, restarting: boolean) => void;
 	setProjectProvisioning: (projectId: string, provisioning: boolean) => void;
@@ -165,6 +191,10 @@ export type UiState = {
 	requestNewTask: (projectId: string) => void;
 	requestCreateProject: () => void;
 	requestCreateProjectFromPath: (path: string) => void;
+	requestOnboardingFinish: (input: Omit<OnboardingFinishRequest, "nonce">) => void;
+	clearOnboardingFinishRequest: (nonce: number) => void;
+	setOnboardingFinishError: (error: { nonce: number; message: string }) => void;
+	clearOnboardingFinishError: () => void;
 	requestNewShellTerminal: () => void;
 	setActiveShellTerminal: (handleId: string | null) => void;
 	setVisibleTerminalKind: (sessionId: string, kind: TerminalTarget["kind"]) => void;
@@ -180,6 +210,8 @@ export type OrchestratorReplacementFailure = {
 
 const sidebarStorageKey = "ao.sidebar.open";
 const developerModeStorageKey = "ao.developerMode";
+const remoteHostsStorageKey = "ao.remoteHosts";
+const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
 	return window.localStorage;
@@ -191,6 +223,14 @@ function initialSidebarOpen() {
 
 function initialDeveloperMode() {
 	return getLocalStorage()?.getItem(developerModeStorageKey) === "true";
+}
+
+function initialRemoteHosts() {
+	return getLocalStorage()?.getItem(remoteHostsStorageKey) === "true";
+}
+
+function initialTerminalCopyOnSelect() {
+	return getLocalStorage()?.getItem(terminalCopyOnSelectStorageKey) !== "false";
 }
 
 function syncDeveloperModeToUpdater(enabled: boolean): void {
@@ -225,6 +265,8 @@ export const useUiStore = create<UiState>((set, get) => ({
 	resolvedTheme: resolveTheme(initialThemePreference),
 	themeStyle: initialThemeStyle,
 	developerMode: initialDeveloperModeValue,
+	remoteHosts: initialRemoteHosts(),
+	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
 	orchestratorReplacementErrors: {},
@@ -235,6 +277,8 @@ export const useUiStore = create<UiState>((set, get) => ({
 	newTaskRequest: null,
 	createProjectNonce: 0,
 	folderDropRequest: null,
+	onboardingFinishRequest: null,
+	onboardingFinishError: null,
 	newShellTerminalNonce: 0,
 	activeShellTerminalHandleId: null,
 	visibleTerminalKindBySession: {},
@@ -260,6 +304,14 @@ export const useUiStore = create<UiState>((set, get) => ({
 		getLocalStorage()?.setItem(developerModeStorageKey, String(developerMode));
 		set({ developerMode });
 		syncDeveloperModeToUpdater(developerMode);
+	},
+	setRemoteHosts: (remoteHosts) => {
+		getLocalStorage()?.setItem(remoteHostsStorageKey, String(remoteHosts));
+		set({ remoteHosts });
+	},
+	setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
+		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));
+		set({ terminalCopyOnSelect });
 	},
 	updateInstallPromptOpen: false,
 	openUpdateInstallPrompt: () => set({ updateInstallPromptOpen: true }),
@@ -384,6 +436,16 @@ export const useUiStore = create<UiState>((set, get) => ({
 				},
 			};
 		}),
+	setFilesSource: (sessionId, filesSource) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, filesSource },
+				},
+			};
+		}),
 	setCommandPaletteOpen: (isCommandPaletteOpen) => set({ isCommandPaletteOpen }),
 	setProjectRestarting: (projectId, restarting) =>
 		set((state) => {
@@ -456,6 +518,19 @@ export const useUiStore = create<UiState>((set, get) => ({
 	requestCreateProject: () => set((state) => ({ createProjectNonce: state.createProjectNonce + 1 })),
 	requestCreateProjectFromPath: (path) =>
 		set((state) => ({ folderDropRequest: { path, nonce: (state.folderDropRequest?.nonce ?? 0) + 1 } })),
+	requestOnboardingFinish: (input) =>
+		set((state) => ({
+			onboardingFinishRequest: {
+				...input,
+				nonce: (state.onboardingFinishRequest?.nonce ?? 0) + 1,
+			},
+		})),
+	clearOnboardingFinishRequest: (nonce) =>
+		set((state) => state.onboardingFinishRequest?.nonce === nonce
+			? { onboardingFinishRequest: null }
+			: state),
+	setOnboardingFinishError: (error) => set({ onboardingFinishError: error }),
+	clearOnboardingFinishError: () => set({ onboardingFinishError: null }),
 	requestNewShellTerminal: () => set((state) => ({ newShellTerminalNonce: state.newShellTerminalNonce + 1 })),
 	setActiveShellTerminal: (activeShellTerminalHandleId) => set({ activeShellTerminalHandleId }),
 	setVisibleTerminalKind: (sessionId, kind) =>

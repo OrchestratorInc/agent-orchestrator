@@ -339,6 +339,18 @@
 	backdrop-filter: blur(var(--blur-overlay));
 }
 
+/* The landing previews carry their own scroll containers and hide the bar with
+ * this class. The renderer renders those previews in onboarding, so the utility
+ * has to exist here too, not only in the landing app's stylesheet. */
+@utility scrollbar-hide {
+	-ms-overflow-style: none;
+	scrollbar-width: none;
+
+	&::-webkit-scrollbar {
+		display: none;
+	}
+}
+
 @utility modal-shake {
 	animation: project-import-shake 280ms ease-in-out;
 }
@@ -576,6 +588,30 @@
 	background: linear-gradient(270deg, transparent 0%, var(--color-bg-primary) 82%);
 }
 
+/* Vertical section caps resolve against the actual sidebar space between chrome. */
+.sidebar-sections-container {
+	container-type: size;
+}
+
+/* Persistent edge fades show when a sidebar section has more content to scroll. */
+.sidebar-section-scroll-fade {
+	position: absolute;
+	inset-inline: 0;
+	z-index: 10;
+	height: var(--space-4);
+	pointer-events: none;
+}
+
+.sidebar-section-scroll-fade--top {
+	top: 0;
+	background: linear-gradient(180deg, var(--color-bg-sidebar) 0%, transparent 100%);
+}
+
+.sidebar-section-scroll-fade--bottom {
+	bottom: 0;
+	background: linear-gradient(0deg, var(--color-bg-sidebar) 0%, transparent 100%);
+}
+
 /* Session actions are portaled into the center pane. Make their responsive
  * labels follow that pane's width instead of the full window width. */
 .workspace-topbar-container {
@@ -752,6 +788,31 @@ button.settings-row-bar {
  * gutter or their labels drift from the dialog title and section headings. */
 .settings-dialog-body .settings-row-bar {
 	padding-inline: 0;
+}
+
+/* Match the open row layout used by the main Settings pages. */
+.project-settings-form > section {
+	gap: var(--space-2);
+}
+
+.project-settings-form > section > h2 {
+	padding-inline: 0;
+	font-size: var(--font-size-xs);
+	font-weight: 500;
+	color: var(--color-text-settings-muted);
+}
+
+.project-settings-form > section > .settings-grouped-rows {
+	background: transparent;
+}
+
+.project-settings-form > section > .settings-grouped-rows .settings-row-bar {
+	min-height: 3.5rem;
+	padding-inline: 0;
+}
+
+.project-settings-form > section > .settings-grouped-rows > .settings-row-bar + .settings-row-bar {
+	border-top: 0;
 }
 
 /* The update summary is a content row, not a compact control row. */
@@ -1569,6 +1630,38 @@ textarea,
 	background-color: color-mix(in srgb, var(--color-scrollbar) 28%, transparent);
 }
 
+/* Repository pickers keep a visible scroll track so a long grant list is
+   discoverable even before the user starts scrolling. */
+.repository-picker-scrollbar {
+	scrollbar-width: auto;
+	scrollbar-color: var(--color-scrollbar) color-mix(in srgb, var(--color-scrollbar) 16%, transparent);
+	scrollbar-gutter: stable;
+}
+
+.repository-picker-scrollbar::-webkit-scrollbar {
+	width: 10px;
+}
+
+.repository-picker-scrollbar::-webkit-scrollbar-track {
+	background: color-mix(in srgb, var(--color-scrollbar) 16%, transparent);
+	border-radius: 999px;
+}
+
+.repository-picker-scrollbar::-webkit-scrollbar-thumb {
+	border-radius: 999px;
+	background: var(--color-scrollbar);
+	/* Keep the thumb grabbable and clearly visible even for a long list, so it
+	   is obvious there are more rows below the fold. */
+	min-height: 28px;
+	border: 2px solid transparent;
+	background-clip: padding-box;
+}
+
+.repository-picker-scrollbar::-webkit-scrollbar-thumb:hover {
+	background: color-mix(in srgb, var(--color-scrollbar) 80%, var(--color-foreground));
+	background-clip: padding-box;
+}
+
 /* Chromium uses the desktop theme's chunky native horizontal scrollbar on
    Linux. Keep the board scroller compact and rounded there without changing
    macOS overlay scrollbars or Windows behavior. */
@@ -1706,6 +1799,80 @@ textarea,
 .terminal-surface .xterm-screen,
 .terminal-surface .xterm-helpers {
 	background-color: var(--color-bg-terminal-opaque) !important;
+}
+
+.multi-step-loader__step {
+	/* `both`: hold the final keyframe (opacity 0) after the exit and pre-apply
+	   the 0% keyframe before the entry. Without it the element snaps back to its
+	   base style (opacity 1) at animation end, flashing the outgoing sentence
+	   fully opaque for a frame before the swap. */
+	animation: multi-step-loader-step var(--multi-step-loader-duration, 3500ms) ease-in-out both;
+}
+
+.multi-step-loader__dot {
+	animation: multi-step-loader-dot var(--multi-step-loader-duration, 3500ms) ease-in-out both;
+}
+
+.multi-step-loader__check {
+	animation: multi-step-loader-check var(--multi-step-loader-duration, 3500ms) ease-out both;
+}
+
+@keyframes multi-step-loader-step {
+	0% {
+		filter: blur(3px);
+		opacity: 0;
+		transform: translateY(4px);
+	}
+	8%,
+	86% {
+		filter: blur(0);
+		opacity: 1;
+		transform: translateY(0);
+	}
+	94%,
+	100% {
+		filter: blur(2px);
+		opacity: 0;
+		transform: translateY(-2px);
+	}
+}
+
+@keyframes multi-step-loader-dot {
+	0%,
+	82% {
+		opacity: 1;
+		transform: scale(1);
+	}
+	90%,
+	100% {
+		opacity: 0;
+		transform: scale(0.72);
+	}
+}
+
+@keyframes multi-step-loader-check {
+	0%,
+	82% {
+		opacity: 0;
+		transform: scale(0.72);
+	}
+	90%,
+	100% {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.multi-step-loader__step,
+	.multi-step-loader__dot,
+	.multi-step-loader__check {
+		animation: none;
+	}
+
+	.multi-step-loader__check {
+		display: none;
+	}
 }
 
 @keyframes status-pulse {
@@ -3750,6 +3917,69 @@ html.sidebar-reordering * {
 	}
 }
 
+/* Files filter field. Visually matches the browser address field, but is its
+   own rule set so browser styles never change because of the Files panel. */
+.inspector-field-input {
+	width: 100%;
+	box-sizing: border-box;
+	height: var(--size-control-md);
+	border-color: var(--color-border);
+	border-radius: var(--radius-md);
+	background: var(--bg);
+	font-family: var(--font-family-base);
+	font-size: 12px;
+	transition:
+		border-color var(--duration-fast) ease,
+		box-shadow var(--duration-fast) ease;
+}
+
+.inspector-field-input:focus,
+.inspector-field-input:focus-visible {
+	border-color: color-mix(in oklab, var(--ring) 60%, var(--color-border));
+	box-shadow: 0 0 0 2px color-mix(in oklab, var(--ring) 45%, transparent);
+	outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.inspector-field-input {
+		transition: none;
+	}
+}
+
+/* Files tab: the filter field sits in the inspector top bar exactly where the
+   browser's address field does, with the same centered track and focus
+   widening. It always stays on the top row; the panel shares the browser's
+   minimum width, so the track shrinks instead of wrapping. */
+.session-inspector__topbar:has(> .files-panel__topbar-host) {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 240px) minmax(0, 1fr);
+	padding-left: 0;
+	transition: grid-template-columns var(--duration-fast) ease;
+}
+
+.session-inspector__topbar:has(> .files-panel__topbar-host :focus) {
+	grid-template-columns: minmax(0, 1fr) clamp(240px, 52cqw, 560px) minmax(0, 1fr);
+}
+
+.session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector__tablist {
+	grid-column: 1;
+	padding-left: var(--space-1);
+}
+
+.session-inspector__topbar > .files-panel__topbar-host {
+	grid-column: 2;
+	width: 100%;
+}
+
+.session-inspector__topbar > .files-panel__topbar-host > * {
+	transform: translateX(clamp(32px, 6cqw, 48px));
+}
+
+.session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector-actions-spacer {
+	grid-column: 3;
+	justify-self: end;
+}
+
 .session-inspector__tab-button {
 	flex: none;
 	gap: 0;
@@ -4378,14 +4608,21 @@ html.sidebar-reordering * {
    hides the shell topbar; windowed mode reserves the native traffic-light band,
    while native fullscreen keeps a 0px top inset. Linux keeps its ShellTopbar
    offset below. */
+/* Maximized files use the same geometry as the maximized browser (backdrop,
+   titlebar band, inset frame) but their own rules, so the native-view
+   composition overrides for the browser never reach the files overlay. */
 .files-popout-overlay {
+	--browser-popout-top: env(titlebar-area-height, 0px);
+	--browser-popout-inline-inset: var(--size-center-panel-inline-inset);
+	box-sizing: border-box;
 	position: fixed;
-	inset: env(titlebar-area-height, 0px) 0 0;
+	inset: var(--browser-popout-top) 0 0;
 	z-index: 40;
-	background: color-mix(in srgb, var(--bg) 94%, black);
+	overflow: hidden;
+	background: transparent;
 	/* The macOS shell has a separate traffic-light drag strip. Keep the
-	   maximized browser surface interactive even if those regions overlap while
-	   the window is transitioning between layouts. */
+	   maximized surface interactive even if those regions overlap while the
+	   window is transitioning between layouts. */
 	-webkit-app-region: no-drag;
 }
 
@@ -4427,6 +4664,29 @@ html.sidebar-reordering * {
 	box-shadow: none;
 }
 
+.files-popout-backdrop {
+	position: absolute;
+	inset: 0;
+	background: color-mix(in srgb, var(--bg) 94%, black);
+}
+
+.files-popout-frame {
+	position: absolute;
+	top: 0;
+	right: var(--browser-popout-inline-inset);
+	left: var(--browser-popout-inline-inset);
+	display: flex;
+	height: 100%;
+	flex-direction: column;
+	overflow: hidden;
+	background: var(--bg);
+}
+
+.files-popout-frame > * {
+	min-height: 0;
+	flex: 1 1 auto;
+}
+
 /* Keep native browser/files surfaces below the custom Windows titlebar. The
    Browser frame is positioned inside that inset overlay, so its measured dock
    top subtracts this same value during the geometry transition. */
@@ -4457,6 +4717,10 @@ body:has(#root .platform-windows) > .files-popout-overlay {
 	--browser-popout-inline-inset: var(--size-center-panel-inset-mac);
 }
 
+.files-popout-overlay--mac-windowed {
+	--browser-popout-inline-inset: var(--size-center-panel-inset-mac);
+}
+
 .browser-popout-overlay .browser-panel__toolbar,
 .browser-popout-overlay .browser-panel__toolbar *,
 .browser-panel__address-bar,
@@ -4471,6 +4735,11 @@ body:has(#root .platform-windows) > .files-popout-overlay {
 }
 
 body:has(#root .platform-linux) > .browser-popout-overlay {
+	top: var(--size-shell-topbar);
+	--browser-popout-top: var(--size-shell-topbar);
+}
+
+body:has(#root .platform-linux) > .files-popout-overlay {
 	top: var(--size-shell-topbar);
 	--browser-popout-top: var(--size-shell-topbar);
 }
@@ -4542,6 +4811,63 @@ body:has(#root .platform-linux) > .browser-popout-overlay {
 .browser-popout-frame > .browser-panel {
 	min-height: 0;
 	flex: 1 1 auto;
+}
+
+/* The Files filter takes the browser address bar's slot: centred in the
+   titlebar band and widening the same way while focused. */
+.files-popout-titlebar {
+	position: fixed;
+	top: 0;
+	right: 0;
+	left: 0;
+	z-index: 41;
+	display: flex;
+	height: var(--browser-popout-top);
+	min-width: 0;
+	align-items: center;
+	border-bottom: 1px solid var(--border);
+	background: var(--bg);
+	-webkit-app-region: no-drag;
+}
+
+.files-popout-titlebar--mac-windowed {
+	padding-right: var(--space-3);
+	padding-left: var(--size-titlebar-content-offset);
+}
+
+.files-popout-titlebar > label {
+	position: absolute;
+	left: 50%;
+	width: min(480px, calc(100vw - 32px));
+	transform: translateX(-50%);
+	transition: width var(--duration-fast) ease;
+}
+
+.files-popout-titlebar > label:focus-within {
+	width: min(760px, calc(100vw - 32px));
+}
+
+.files-popout-titlebar--mac-windowed > label {
+	max-width: calc(100vw - (2 * var(--size-titlebar-content-offset)));
+}
+
+/* Without the traffic-light reserve (native macOS fullscreen) the band is at
+   least a tab row tall; the frame starts right below it. Subtracting the
+   overlay's own top keeps that exact where the overlay already sits below a
+   Windows or Linux titlebar. */
+.files-popout-overlay:not(.files-popout-overlay--mac-windowed) .files-popout-titlebar {
+	height: max(var(--browser-popout-top), var(--size-inspector-tabs));
+}
+
+.files-popout-overlay:not(.files-popout-overlay--mac-windowed) .files-popout-frame {
+	top: calc(max(var(--browser-popout-top), var(--size-inspector-tabs)) - var(--browser-popout-top));
+	height: calc(100% - (max(var(--browser-popout-top), var(--size-inspector-tabs)) - var(--browser-popout-top)));
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.files-popout-titlebar > label {
+		transition: none;
+	}
 }
 
 .browser-panel__topbar-host,

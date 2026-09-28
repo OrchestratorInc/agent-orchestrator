@@ -151,7 +151,21 @@ var shippedMigrations = map[int64]string{
 	146: "0146_codex_account_management_simplification.sql",
 	147: "0147_native_history_provenance.sql",
 	148: "0148_notification_dismissal.sql",
-	149: "0149_allow_gemini_harness.sql",
+	149: "0149_reviewer_chat_conversations.sql",
+	150: "0150_agent_model_catalog_cache_state.sql",
+	151: "0151_global_agent_model_catalog_cdc.sql",
+	152: "0152_session_effort.sql",
+	153: "0153_reports.sql",
+	154: "0154_report_delivery.sql",
+	155: "0155_allow_unreal_agent_harness.sql",
+	156: "0156_session_provisioning.sql",
+	157: "0157_task_preparations.sql",
+	158: "0158_prepared_worktree_creation_sha.sql",
+	159: "0159_pr_discussion_comment_count.sql",
+	160: "0160_pr_discussion_commenters.sql",
+	161: "0161_automations.sql",
+	162: "0162_drop_pr_discussion_columns.sql",
+	163: "0163_allow_gemini_harness.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
