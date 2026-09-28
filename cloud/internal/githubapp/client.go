@@ -487,6 +487,11 @@ type PullRequestResponse struct {
 	Base struct {
 		Ref string `json:"ref"`
 	} `json:"base"`
+	// Mergeable and MergeableState come from the REST pulls endpoint, which — unlike
+	// GraphQL — triggers GitHub's async mergeability computation. They resolve the
+	// GraphQL "UNKNOWN" that otherwise strands a PR at mergeability=unknown.
+	Mergeable      *bool  `json:"mergeable"`
+	MergeableState string `json:"mergeable_state"`
 }
 
 // GetPullRequestRecord fetches the full pull request fields required to

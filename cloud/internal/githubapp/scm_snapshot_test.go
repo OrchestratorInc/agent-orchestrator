@@ -1,8 +1,11 @@
 package githubapp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
@@ -11,6 +14,72 @@ import (
 func TestPullRequestSnapshotQueryHasBalancedDelimiters(t *testing.T) {
 	if err := validateGraphQLDelimiters(pullRequestSnapshotQuery); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMapRESTMergeability(t *testing.T) {
+	yes, no := true, false
+	cases := []struct {
+		name      string
+		mergeable *bool
+		state     string
+		want      contract.Mergeability
+	}{
+		{"clean+mergeable", &yes, "clean", contract.MergeMergeable},
+		{"has_hooks+mergeable", &yes, "has_hooks", contract.MergeMergeable},
+		{"dirty", &no, "dirty", contract.MergeConflicting},
+		{"blocked", &yes, "blocked", contract.MergeBlocked},
+		{"behind", &yes, "behind", contract.MergeBlocked},
+		{"unstable", &yes, "unstable", contract.MergeUnstable},
+		{"nil mergeable stays unknown", nil, "unknown", contract.MergeUnknown},
+		{"clean but not mergeable stays unknown", &no, "clean", contract.MergeUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mapRESTMergeability(tc.mergeable, tc.state); got != tc.want {
+				t.Fatalf("mapRESTMergeability(%v,%q) = %q, want %q", tc.mergeable, tc.state, got, tc.want)
+			}
+		})
+	}
+}
+
+// When GraphQL reports mergeable=UNKNOWN for an open PR, the fetch must fall back
+// to the REST pulls endpoint (which forces GitHub's computation) and adopt its
+// mergeable_state — the fix for a PR stranded at mergeability=unknown forever.
+func TestFetchPullRequestSnapshotRESTFallbackResolvesUnknownMergeability(t *testing.T) {
+	var restHits int
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/graphql" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+				"number": 7, "id": "PR_7", "url": "https://github.com/acme/widgets/pull/7", "state": "OPEN",
+				"mergeable": "UNKNOWN", "mergeStateStatus": "UNKNOWN", "reviewDecision": "REVIEW_REQUIRED",
+				"headRefName": "feature", "headRefOid": "head123", "baseRefName": "main", "baseRefOid": "base123",
+			}}}})
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/pulls/7" {
+			restHits++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"number": 7, "html_url": "https://github.com/acme/widgets/pull/7", "state": "open",
+				"mergeable": true, "mergeable_state": "clean",
+				"head": map[string]any{"sha": "head123", "ref": "feature"}, "base": map[string]any{"ref": "main"},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer gh.Close()
+
+	client := NewRESTClient(gh.URL, gh.Client())
+	snapshot, err := client.FetchPullRequestSnapshotWithToken(context.Background(), "token", "acme", "widgets", 7)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if restHits != 1 {
+		t.Fatalf("REST pulls endpoint hit %d times, want 1 (fallback on GraphQL UNKNOWN)", restHits)
+	}
+	if snapshot.Observation.Mergeability != contract.MergeMergeable {
+		t.Fatalf("mergeability = %q, want mergeable (resolved via REST fallback)", snapshot.Observation.Mergeability)
 	}
 }
 

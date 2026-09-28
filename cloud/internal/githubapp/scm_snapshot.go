@@ -137,7 +137,40 @@ func (c *Client) FetchPullRequestSnapshotWithToken(ctx context.Context, token, o
 	if len(response.Errors) > 0 {
 		return domain.PullRequestSnapshot{}, errors.New("GitHub GraphQL pull request snapshot failed")
 	}
-	return normalizePullRequestSnapshot(response)
+	snapshot, err := normalizePullRequestSnapshot(response)
+	if err != nil {
+		return domain.PullRequestSnapshot{}, err
+	}
+	// GitHub computes mergeability asynchronously and GraphQL reports UNKNOWN until it
+	// settles — and, unlike the REST pulls endpoint, querying GraphQL does not trigger
+	// the computation, so a PR can sit at mergeability=unknown indefinitely. On an
+	// UNKNOWN result for an open PR, fall back to a REST GET (which forces the
+	// computation and returns mergeable_state). Best effort: a REST failure leaves the
+	// GraphQL result untouched and the refresh-retry resolves it on a later pass.
+	if snapshot.Observation.Mergeability == contract.MergeUnknown && snapshot.Observation.State == contract.PRStateOpen {
+		if record, restErr := c.GetPullRequestRecord(ctx, token, owner, repo, number); restErr == nil {
+			if resolved := mapRESTMergeability(record.Mergeable, record.MergeableState); resolved != contract.MergeUnknown {
+				snapshot.Observation.Mergeability = resolved
+			}
+		}
+	}
+	return snapshot, nil
+}
+
+// mapRESTMergeability maps the REST pulls endpoint's mergeable (bool) and
+// mergeable_state (lowercase) onto the same contract states as the GraphQL
+// mapping, so the REST fallback resolves the UNKNOWN GraphQL returns while
+// mergeability is still pending.
+func mapRESTMergeability(mergeable *bool, state string) contract.Mergeability {
+	mergeableStr := "UNKNOWN"
+	if mergeable != nil {
+		if *mergeable {
+			mergeableStr = "MERGEABLE"
+		} else {
+			mergeableStr = "CONFLICTING"
+		}
+	}
+	return mapSnapshotMergeability(mergeableStr, strings.ToUpper(state))
 }
 
 func normalizePullRequestSnapshot(response githubPullRequestSnapshotResponse) (domain.PullRequestSnapshot, error) {

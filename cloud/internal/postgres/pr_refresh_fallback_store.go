@@ -67,7 +67,8 @@ func (s *Store) ClaimPullRequestRefresh(
 					(fallback.due_at IS NOT NULL AND fallback.due_at <= $2)
 					OR (fallback.due_at IS NULL AND pull_request.observed_at <= $2 - $4::interval)
 				  )
-				ORDER BY COALESCE(fallback.due_at, pull_request.observed_at + $4::interval), pull_request.id
+				ORDER BY (pull_request.mergeability = 'unknown') DESC,
+					COALESCE(fallback.due_at, pull_request.observed_at + $4::interval), pull_request.id
 				FOR UPDATE OF fallback SKIP LOCKED
 				LIMIT 1
 			), claimed AS (
