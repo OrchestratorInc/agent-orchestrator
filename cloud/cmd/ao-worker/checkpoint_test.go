@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -260,4 +261,195 @@ func trimNL(s string) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+// recordingGitRunner wraps a real runner and records every command so tests can
+// assert which git operations (if any) a checkpoint performed.
+type recordingGitRunner struct {
+	inner worker.GitRunner
+	calls [][]string
+}
+
+func (r *recordingGitRunner) Run(ctx context.Context, dir string, env map[string]string, args ...string) (string, error) {
+	r.calls = append(r.calls, append([]string(nil), args...))
+	return r.inner.Run(ctx, dir, env, args...)
+}
+
+func (r *recordingGitRunner) pushCalls() [][]string {
+	var out [][]string
+	for _, c := range r.calls {
+		if len(c) > 0 && c[0] == "push" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// newPushFixture builds a bare origin plus a workspace clone whose default
+// branch is main, and returns both paths. The workspace is left on main at the
+// origin tip with no session commits.
+func newPushFixture(t *testing.T, ctx context.Context) (root, origin, workspace string) {
+	t.Helper()
+	git := worker.ExecGitRunner{}
+	root = t.TempDir()
+	origin = filepath.Join(root, "origin.git")
+	mustGit(t, ctx, git, root, "init", "--bare", origin)
+
+	seed := filepath.Join(root, "seed")
+	mustGit(t, ctx, git, root, "clone", origin, seed)
+	configIdentity(t, ctx, git, seed)
+	if err := os.WriteFile(filepath.Join(seed, "tracked.txt"), []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, ctx, git, seed, "add", "-A")
+	mustGit(t, ctx, git, seed, "commit", "-m", "base")
+	mustGit(t, ctx, git, seed, "push", "origin", "HEAD:refs/heads/main")
+
+	workspace = filepath.Join(root, "workspace")
+	mustGit(t, ctx, git, root, "clone", origin, workspace)
+	configIdentity(t, ctx, git, workspace)
+	return root, origin, workspace
+}
+
+// TestPushSessionBranchPublishesCommittedWork: a session branch with no
+// commits past the default branch is not published, a committed branch is
+// pushed to origin (reachable from the bare remote, exactly once, never
+// force), and re-pushing an unchanged tip performs no network operation.
+func TestPushSessionBranchPublishesCommittedWork(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	ctx := context.Background()
+	git := worker.ExecGitRunner{}
+	_, origin, workspace := newPushFixture(t, ctx)
+	rec := &recordingGitRunner{inner: git}
+	cp := &checkpointer{
+		git:           rec,
+		workspace:     workspace,
+		sessionID:     "sess-push",
+		branch:        "ao/sess-push",
+		defaultBranch: "main",
+		logger:        discardLogger(),
+	}
+
+	// Local branch at the default tip (no session commits): not published.
+	mustGit(t, ctx, git, workspace, "checkout", "-b", "ao/sess-push")
+	cp.pushSessionBranch(ctx)
+	if got := rec.pushCalls(); len(got) != 0 {
+		t.Fatalf("pushed with no session commits: %v", got)
+	}
+	if out, err := exec.Command("git", "--git-dir", origin, "rev-parse", "--verify", "refs/heads/ao/sess-push").CombinedOutput(); err == nil {
+		t.Fatalf("origin already has session branch: %s", out)
+	}
+
+	// Commit on the session branch: the branch must land on origin.
+	if err := os.WriteFile(filepath.Join(workspace, "feature.go"), []byte("package x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, ctx, git, workspace, "add", "-A")
+	mustGit(t, ctx, git, workspace, "commit", "-m", "feature")
+	localTip := strings.TrimSpace(mustGit(t, ctx, git, workspace, "rev-parse", "HEAD"))
+
+	cp.pushSessionBranch(ctx)
+	pushes := rec.pushCalls()
+	if len(pushes) != 1 {
+		t.Fatalf("push calls = %v, want exactly one push", pushes)
+	}
+	for _, push := range pushes {
+		for _, arg := range push {
+			if strings.Contains(arg, "force") {
+				t.Fatalf("push must never force: %v", push)
+			}
+		}
+	}
+	remoteTip := strings.TrimSpace(mustGit(t, ctx, git, origin, "rev-parse", "refs/heads/ao/sess-push"))
+	if remoteTip != localTip {
+		t.Fatalf("origin tip %s, want %s", remoteTip, localTip)
+	}
+
+	// Unchanged tip: no further push (the 25s safety tick stays local).
+	pushesBefore := len(rec.pushCalls())
+	callsBefore := len(rec.calls)
+	cp.pushSessionBranch(ctx)
+	if got := len(rec.pushCalls()); got != pushesBefore {
+		t.Fatalf("re-pushed unchanged tip: %v", rec.pushCalls()[pushesBefore:])
+	}
+	if len(rec.calls) == callsBefore {
+		t.Fatalf("expected local rev-parse calls on the idempotent path")
+	}
+}
+
+// TestPushSessionBranchSkipsScratch locks that scratch repositories (no
+// origin) never attempt a push.
+func TestPushSessionBranchSkipsScratch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	ctx := context.Background()
+	git := worker.ExecGitRunner{}
+	_, _, workspace := newPushFixture(t, ctx)
+
+	mustGit(t, ctx, git, workspace, "checkout", "-b", "ao/sess")
+	if err := os.WriteFile(filepath.Join(workspace, "f.txt"), []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, ctx, git, workspace, "add", "-A")
+	mustGit(t, ctx, git, workspace, "commit", "-m", "c")
+
+	scratchRec := &recordingGitRunner{inner: git}
+	scratch := &checkpointer{
+		git: scratchRec, workspace: workspace, sessionID: "s",
+		branch: "ao/sess", defaultBranch: "main", scratch: true, logger: discardLogger(),
+	}
+	scratch.pushSessionBranch(ctx)
+	if got := scratchRec.pushCalls(); len(got) != 0 {
+		t.Fatalf("scratch pushed: %v", got)
+	}
+}
+
+// TestPushSessionBranchToleratesNonFastForward: when origin's branch has
+// diverged, the push must fail without force and leave the remote untouched —
+// and the checkpointer must not panic, since it is a best-effort step.
+func TestPushSessionBranchToleratesNonFastForward(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	ctx := context.Background()
+	git := worker.ExecGitRunner{}
+	root, origin, workspace := newPushFixture(t, ctx)
+
+	// Local commit on the session branch.
+	mustGit(t, ctx, git, workspace, "checkout", "-b", "ao/div")
+	if err := os.WriteFile(filepath.Join(workspace, "local.txt"), []byte("local\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, ctx, git, workspace, "add", "-A")
+	mustGit(t, ctx, git, workspace, "commit", "-m", "local")
+
+	// Diverged remote: an unrelated commit already on origin's ao/div.
+	other := filepath.Join(root, "other")
+	mustGit(t, ctx, git, root, "clone", origin, other)
+	configIdentity(t, ctx, git, other)
+	mustGit(t, ctx, git, other, "checkout", "-b", "ao/div", "origin/main")
+	if err := os.WriteFile(filepath.Join(other, "remote.txt"), []byte("remote\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, ctx, git, other, "add", "-A")
+	mustGit(t, ctx, git, other, "commit", "-m", "remote")
+	mustGit(t, ctx, git, other, "push", "origin", "ao/div")
+	remoteTip := strings.TrimSpace(mustGit(t, ctx, git, origin, "rev-parse", "refs/heads/ao/div"))
+
+	rec := &recordingGitRunner{inner: git}
+	cp := &checkpointer{
+		git: rec, workspace: workspace, sessionID: "s",
+		branch: "ao/div", defaultBranch: "main", logger: discardLogger(),
+	}
+	cp.pushSessionBranch(ctx) // must not panic; failure is logged only
+
+	if got := len(rec.pushCalls()); got != 1 {
+		t.Fatalf("push attempts = %d, want 1", got)
+	}
+	if got := strings.TrimSpace(mustGit(t, ctx, git, origin, "rev-parse", "refs/heads/ao/div")); got != remoteTip {
+		t.Fatalf("remote tip changed to %s, want %s (non-fast-forward must not overwrite)", got, remoteTip)
+	}
 }

@@ -247,3 +247,72 @@ func TestCloneExtraRepoDoesNotPersistToken(t *testing.T) {
 		t.Fatalf("origin url is credentialed: %s", origin)
 	}
 }
+
+// TestCheckoutSessionBranchStartPoints covers the three start-point cases for
+// the session branch checkout: an existing local branch is switched to (never
+// reset), a branch that exists only on origin is recreated from origin/<branch>
+// so previously pushed commits stay in the lineage, and a brand-new branch
+// starts at the current HEAD.
+func TestCheckoutSessionBranchStartPoints(t *testing.T) {
+	t.Run("local branch exists: switch only", func(t *testing.T) {
+		repo := initReviewBaseRepository(t)
+		gitRun(t, repo, "checkout", "-b", "ao/sess")
+		if err := os.WriteFile(filepath.Join(repo, "work.txt"), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gitRun(t, repo, "add", "work.txt")
+		gitRun(t, repo, "commit", "-m", "session commit")
+		branchTip := gitOutput(t, repo, "rev-parse", "HEAD")
+		gitRun(t, repo, "checkout", "main")
+
+		if err := checkoutSessionBranch(context.Background(), ExecGitRunner{}, repo, "ao/sess"); err != nil {
+			t.Fatalf("checkoutSessionBranch: %v", err)
+		}
+		if got := gitOutput(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "ao/sess" {
+			t.Fatalf("HEAD=%q, want ao/sess", got)
+		}
+		if got := gitOutput(t, repo, "rev-parse", "HEAD"); got != branchTip {
+			t.Fatalf("branch tip %s, want %s (local branch must not be reset)", got, branchTip)
+		}
+	})
+
+	t.Run("origin-only branch: recreate from origin", func(t *testing.T) {
+		repo := initReviewBaseRepository(t)
+		// Build a commit that exists only as origin/ao/sess: main tip + one commit.
+		gitRun(t, repo, "checkout", "-b", "tmp")
+		if err := os.WriteFile(filepath.Join(repo, "pushed.txt"), []byte("p\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gitRun(t, repo, "add", "pushed.txt")
+		gitRun(t, repo, "commit", "-m", "pushed commit")
+		remoteTip := gitOutput(t, repo, "rev-parse", "HEAD")
+		gitRun(t, repo, "checkout", "main")
+		gitRun(t, repo, "branch", "-D", "tmp")
+		gitRun(t, repo, "update-ref", "refs/remotes/origin/ao/sess", remoteTip)
+
+		if err := checkoutSessionBranch(context.Background(), ExecGitRunner{}, repo, "ao/sess"); err != nil {
+			t.Fatalf("checkoutSessionBranch: %v", err)
+		}
+		if got := gitOutput(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "ao/sess" {
+			t.Fatalf("HEAD=%q, want ao/sess", got)
+		}
+		if got := gitOutput(t, repo, "rev-parse", "HEAD"); got != remoteTip {
+			t.Fatalf("branch tip %s, want %s (must start at origin/ao/sess, not default tip)", got, remoteTip)
+		}
+	})
+
+	t.Run("new branch: start at HEAD", func(t *testing.T) {
+		repo := initReviewBaseRepository(t)
+		mainTip := gitOutput(t, repo, "rev-parse", "HEAD")
+
+		if err := checkoutSessionBranch(context.Background(), ExecGitRunner{}, repo, "ao/newsession"); err != nil {
+			t.Fatalf("checkoutSessionBranch: %v", err)
+		}
+		if got := gitOutput(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "ao/newsession" {
+			t.Fatalf("HEAD=%q, want ao/newsession", got)
+		}
+		if got := gitOutput(t, repo, "rev-parse", "HEAD"); got != mainTip {
+			t.Fatalf("branch tip %s, want %s", got, mainTip)
+		}
+	})
+}

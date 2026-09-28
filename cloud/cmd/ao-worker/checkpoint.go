@@ -25,14 +25,16 @@ const preservedRefPrefix = "refs/ao/preserved/"
 // best-effort: a failure is logged and never blocks the agent or crashes the
 // worker.
 type checkpointer struct {
-	client    *client
-	resolver  transcriptResolver
-	git       worker.GitRunner
-	workspace string
-	sessionID string
-	harness   string
-	scratch   bool
-	logger    *slog.Logger
+	client        *client
+	resolver      transcriptResolver
+	git           worker.GitRunner
+	workspace     string
+	sessionID     string
+	branch        string
+	defaultBranch string
+	harness       string
+	scratch       bool
+	logger        *slog.Logger
 
 	mu sync.Mutex
 	// change detection: an identical checkpoint is neither re-pushed nor re-sent.
@@ -59,9 +61,14 @@ func newCheckpointer(
 		git:       worker.ExecGitRunner{},
 		workspace: workspace,
 		sessionID: bootstrap.SessionID,
-		harness:   bootstrap.Launch.Harness,
-		scratch:   worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL),
-		logger:    logger,
+		branch:    strings.TrimSpace(bootstrap.Launch.Branch),
+		// defaultBranch lets pushSessionBranch skip a branch that has not moved
+		// past the freshly cloned default (no commits yet), so no empty ao/* branch
+		// is published for sessions that never committed.
+		defaultBranch: strings.TrimSpace(bootstrap.Launch.DefaultBranch),
+		harness:       bootstrap.Launch.Harness,
+		scratch:       worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL),
+		logger:        logger,
 	}
 }
 
@@ -69,6 +76,12 @@ func newCheckpointer(
 // the checkpoint bridge on each turn-completion (Stop hook) event; the capture is
 // change-detected, so a poke with nothing new to save is a no-op.
 func (cp *checkpointer) checkpoint(ctx context.Context) {
+	// Publish committed work first, and independently of the transcript: a
+	// committed-but-unpushed branch has no other backup (the preserve ref only
+	// carries uncommitted changes), and the session may not have produced a
+	// transcript yet when its first commit lands.
+	cp.pushSessionBranch(ctx)
+
 	agentSessionID, path, ok := cp.resolver.locate()
 	if !ok {
 		// No transcript yet (agent still booting or first turn incomplete).
@@ -113,6 +126,66 @@ func (cp *checkpointer) checkpoint(ctx context.Context) {
 	cp.mu.Unlock()
 	cp.logger.Info("captured durable checkpoint",
 		"agent_session_id", agentSessionID, "preserved_ref", ref)
+}
+
+// pushSessionBranch publishes the session's branch (refs/heads/<branch>) to
+// origin so committed work survives a sandbox destroy and the branch is visible
+// on GitHub even when the agent never opened a pull request. It never
+// force-pushes: a non-fast-forward update (someone else advanced the remote
+// branch) fails loudly instead of discarding remote commits. The decision is a
+// local comparison of the branch tip against the origin remote-tracking ref (or
+// the default branch when the remote does not have the branch yet), so the 25s
+// safety-net tick costs no network when there is nothing new to publish, and it
+// stays correct across worker restarts and after the agent pushes manually.
+// Scratch repositories have no origin, so this is skipped entirely.
+// Best-effort like every checkpoint step: failures are logged and never block
+// the agent.
+func (cp *checkpointer) pushSessionBranch(ctx context.Context) {
+	if cp.scratch || cp.branch == "" {
+		return
+	}
+	ref := "refs/heads/" + cp.branch
+	out, err := cp.git.Run(ctx, cp.workspace, nil, "rev-parse", "--verify", ref)
+	if err != nil {
+		// The branch does not exist locally yet — nothing committed.
+		return
+	}
+	tip := strings.TrimSpace(out)
+
+	if remoteTip, ok := cp.revParse(ctx, "refs/remotes/origin/"+cp.branch); ok {
+		if remoteTip == tip {
+			// The remote already has this exact commit (our last push, or the
+			// agent's own git push — which updates the remote-tracking ref).
+			return
+		}
+	} else if cp.defaultBranch != "" {
+		// The remote does not have the branch yet. Publish only once the branch
+		// has moved past the freshly cloned default, so a session that never
+		// committed does not litter the repository with an empty ao/* branch.
+		if defaultTip, ok := cp.revParse(ctx, "refs/remotes/origin/"+cp.defaultBranch); ok && defaultTip == tip {
+			return
+		}
+	}
+
+	// GIT_TERMINAL_PROMPT=0 makes a missing credential helper fail fast instead
+	// of hanging the single checkpoint consumer; the repo-local helper written by
+	// ConfigureWorkerGit brokers a fresh write-scoped token on demand.
+	if _, err := cp.git.Run(ctx, cp.workspace,
+		map[string]string{"GIT_TERMINAL_PROMPT": "0"},
+		"push", "--", "origin", ref+":"+ref); err != nil {
+		cp.logger.Warn("checkpoint: push session branch", "branch", cp.branch, "error", err)
+		return
+	}
+	cp.logger.Info("checkpoint: pushed session branch", "branch", cp.branch, "sha", tip)
+}
+
+// revParse resolves a ref to its commit SHA; ok is false when the ref is absent.
+func (cp *checkpointer) revParse(ctx context.Context, ref string) (string, bool) {
+	out, err := cp.git.Run(ctx, cp.workspace, nil, "rev-parse", "--verify", "--quiet", ref)
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(out), true
 }
 
 // preserveWork commits any uncommitted work in the checkout to

@@ -344,14 +344,44 @@ GH_TOKEN="$github_token" exec "$real_gh" "$@"
 		{"config", "--local", "--replace-all", "credential.useHttpPath", "true"},
 		{"config", "--local", "--replace-all", "user.name", cloudGitAuthorName},
 		{"config", "--local", "--replace-all", "user.email", cloudGitAuthorEmail},
-		{"checkout", "-B", branch},
 	}
 	for _, command := range commands {
 		if _, err := runner.Run(ctx, workspace, nil, command...); err != nil {
 			return fmt.Errorf("configure worker Git repository: %w", err)
 		}
 	}
+	return checkoutSessionBranch(ctx, runner, workspace, branch)
+}
+
+// checkoutSessionBranch puts the workspace on the session's branch without ever
+// discarding commits it already has. A local branch wins (switch only); a branch
+// that exists only on origin — a fresh clone of a session whose branch was
+// pushed before the sandbox was destroyed — is recreated from origin/<branch>,
+// not from the default-branch tip, so previously pushed commits stay in the
+// lineage and the next push is not rejected as non-fast-forward. A branch that
+// exists nowhere yet starts at the current HEAD (the freshly cloned default).
+func checkoutSessionBranch(ctx context.Context, runner GitRunner, workspace, branch string) error {
+	if refExists(ctx, runner, workspace, "refs/heads/"+branch) {
+		if _, err := runner.Run(ctx, workspace, nil, "checkout", branch); err != nil {
+			return fmt.Errorf("checkout session branch %q: %w", branch, err)
+		}
+		return nil
+	}
+	if refExists(ctx, runner, workspace, "refs/remotes/origin/"+branch) {
+		if _, err := runner.Run(ctx, workspace, nil, "checkout", "-B", branch, "origin/"+branch); err != nil {
+			return fmt.Errorf("checkout session branch %q from origin: %w", branch, err)
+		}
+		return nil
+	}
+	if _, err := runner.Run(ctx, workspace, nil, "checkout", "-B", branch); err != nil {
+		return fmt.Errorf("checkout session branch %q: %w", branch, err)
+	}
 	return nil
+}
+
+func refExists(ctx context.Context, runner GitRunner, workspace, ref string) bool {
+	_, err := runner.Run(ctx, workspace, nil, "rev-parse", "--verify", "--quiet", ref)
+	return err == nil
 }
 
 func ToolingBinDir(dataDir string) string {
