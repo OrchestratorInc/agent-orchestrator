@@ -616,7 +616,20 @@ export function HarnessSettingsSection({
 						>
 							<AgentAvatar className="size-7 shrink-0" decorative provider={agentId} />
 							<div className="min-w-0 flex-1">
-								<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
+								<div className="flex items-center gap-1.5">
+									<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
+									{isCloudCapable ? (
+										<span
+											className="inline-flex size-5 shrink-0 cursor-help items-center justify-center rounded-full text-settings-muted transition hover:bg-interactive-hover hover:text-settings-label"
+											role="img"
+											tabIndex={0}
+											aria-label={t("settings.harness.unifiedAuthHint", { defaultValue: "One login for both local and cloud sessions. Your credentials are used on this machine and securely copied to your cloud sandboxes." })}
+											title={t("settings.harness.unifiedAuthHint", { defaultValue: "One login for both local and cloud sessions. Your credentials are used on this machine and securely copied to your cloud sandboxes." })}
+										>
+											<Info className="size-3.5" aria-hidden="true" />
+										</span>
+									) : null}
+								</div>
 								<p className={cn("truncate text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? authPlan?.reason ?? plan?.reason}>
 									{isInstalled ? authSummary : installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired")))}
 								</p>
@@ -641,15 +654,6 @@ export function HarnessSettingsSection({
 											{authState?.pending ? t("settings.harness.loggingIn") : t("settings.harness.login")}
 										</Button>
 									)}
-									<span
-										className="inline-flex size-6 shrink-0 cursor-help items-center justify-center rounded-full text-settings-muted transition hover:bg-interactive-hover hover:text-settings-label"
-										role="img"
-										tabIndex={0}
-										aria-label={t("settings.harness.unifiedAuthHint", { defaultValue: "One login for both local and cloud sessions. Your credentials are used on this machine and securely copied to your cloud sandboxes." })}
-										title={t("settings.harness.unifiedAuthHint", { defaultValue: "One login for both local and cloud sessions. Your credentials are used on this machine and securely copied to your cloud sandboxes." })}
-									>
-										<Info className="size-4" aria-hidden="true" />
-									</span>
 								</div>
 							) : active ? (
 				<span className="inline-flex items-center gap-1.5 text-xs text-settings-muted" role="status"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{job?.status === "installing" ? t("settings.harness.installing") : t("settings.harness.verifying")}</span>
