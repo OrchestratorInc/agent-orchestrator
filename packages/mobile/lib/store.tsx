@@ -36,7 +36,7 @@ import { shouldReRace } from "./reRace";
 import { shouldRaceForUpgrade, UPGRADE_RACE_CHECK_MS } from "./upgradeRace";
 import { pollResultIsCurrent, sameServerConfig } from "./sameConfig";
 import { shouldShowLoading } from "./configLoading";
-import { shouldKeepPolling } from "./connectionError";
+import { shouldKeepPolling, userFacingError } from "./connectionError";
 import { primeInstallId } from "./installId";
 import { collectPRs } from "./prView";
 import { ALL_PROJECTS, NO_PROJECTS_KNOWN, projectsForMachine, resolveActiveProject, retainProjects, type KnownProjects } from "./projectFilter";
@@ -363,7 +363,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		} catch (e) {
 			if (!pollResultIsCurrent(c, cfgRef.current)) return false;
 			lastTickOkRef.current = false;
-			const msg = e instanceof Error ? e.message : "Failed to load";
+			const msg = userFacingError(e, "Failed to load");
 			setError(msg);
 			// Keep the HTTP status alongside the raw message so screens can render
 			// human copy via describeConnectionFailure instead of surfacing strings

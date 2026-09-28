@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
 	classifyConnectionFailure,
+	daemonDetail,
 	describeConnectionFailure,
 	isLocalNetworkHost,
 	isTailscaleHost,
 	shouldKeepPolling,
+	UNREACHABLE_ACTION_COPY,
+	UnreachableError,
+	userFacingError,
 } from "./connectionError";
 
 const target = (over: Partial<{ host: string; port: string; platform: string }> = {}) => ({
@@ -192,5 +196,64 @@ describe("shouldKeepPolling", () => {
 	// silently turned the guard off.
 	it("catches 403, which prefix-matching on the message never did", () => {
 		expect(shouldKeepPolling(403)).toBe(false);
+	});
+});
+
+describe("userFacingError", () => {
+	const answered = (status: number, extra: Record<string, unknown> = {}) =>
+		Object.assign(new Error(`${status} Some Reason - wire text`), { status, ...extra });
+
+	it("never shows fetch's own wording or a timeout as-is", () => {
+		expect(userFacingError(new UnreachableError("offline"))).toBe(UNREACHABLE_ACTION_COPY);
+		expect(userFacingError(new UnreachableError("timeout"))).toBe(UNREACHABLE_ACTION_COPY);
+		expect(userFacingError(new TypeError("Network request failed"))).toBe(UNREACHABLE_ACTION_COPY);
+	});
+
+	it("uses the pairing copy for rejected passwords and lockouts", () => {
+		expect(userFacingError(answered(401))).toMatch(/rejected this phone's password/);
+		expect(userFacingError(answered(403))).toMatch(/rejected this phone's password/);
+		expect(userFacingError(answered(429))).toMatch(/about a minute/);
+	});
+
+	it("shows the daemon's own message for other rejections, without the status line", () => {
+		expect(userFacingError(answered(409, { detail: "branch is checked out elsewhere" }))).toBe("Branch is checked out elsewhere.");
+		// An error without the detail field still loses its envelope prefix.
+		expect(userFacingError(answered(400))).toBe("Wire text.");
+	});
+
+	it("falls back to status-specific copy when the daemon said nothing", () => {
+		const bare = (status: number) => Object.assign(new Error(`${status} `), { status });
+		expect(userFacingError(bare(404))).toBe("That's no longer on your desktop. Refresh and try again.");
+		expect(userFacingError(bare(409))).toMatch(/changed on your desktop/);
+		expect(userFacingError(bare(422))).toMatch(/couldn't complete that/);
+	});
+
+	it("hides internal server text but keeps the request ID for the logs", () => {
+		const copy = userFacingError(answered(500, { detail: "pq: relation does not exist", requestId: "req-42" }));
+		expect(copy).not.toContain("pq:");
+		expect(copy).not.toContain("500");
+		expect(copy).toContain("Reference: req-42");
+		expect(userFacingError(answered(503))).toMatch(/still starting up/);
+	});
+
+	it("passes the app's own errors through and uses the fallback otherwise", () => {
+		expect(userFacingError(new Error("Pick a project first"))).toBe("Pick a project first");
+		expect(userFacingError("boom", "Couldn't start the worker.")).toBe("Couldn't start the worker.");
+	});
+
+	it("never renders an HTTP status or reason phrase", () => {
+		for (const status of [400, 401, 403, 404, 409, 410, 422, 429, 500, 502, 503]) {
+			const copy = userFacingError(Object.assign(new Error(`${status} Not Found`), { status }));
+			expect(copy).not.toMatch(/\b[45]\d\d\b/);
+			expect(copy).not.toMatch(/Not Found/);
+		}
+	});
+});
+
+describe("daemonDetail", () => {
+	it("reads the detail field, else strips the envelope, and ignores unanswered errors", () => {
+		expect(daemonDetail(Object.assign(new Error("409 Conflict - x"), { status: 409, detail: "Clean" }))).toBe("Clean");
+		expect(daemonDetail(Object.assign(new Error("409 Conflict - Stripped"), { status: 409 }))).toBe("Stripped");
+		expect(daemonDetail(new Error("409 Conflict - no status field"))).toBeUndefined();
 	});
 });

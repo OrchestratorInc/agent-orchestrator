@@ -17,7 +17,7 @@ import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-cont
 import { agentErrorCopy } from "../lib/agentError";
 import { defaultAgent, rankAgents } from "../lib/agentPicker";
 import { ApiError, getAgentModels, getAgents, getProject, getSettings, type AgentCatalog, type AgentModelCatalog, type ProjectDetail, type SessionMode } from "../lib/api";
-import { classifyConnectionFailure, describeConnectionFailure } from "../lib/connectionError";
+import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { haptics } from "../lib/haptics";
 import { resolveSpawnProject } from "../lib/projectFilter";
@@ -146,7 +146,7 @@ export default function SpawnModal() {
 		setProjectDetailLoadedFor(null);
 		getProject(config, projectId)
 			.then((nextProject) => { if (!cancelled) setProjectDetail(nextProject); })
-			.catch((cause) => { if (!cancelled) setModelError(cause instanceof Error ? cause.message : String(cause)); })
+			.catch((cause) => { if (!cancelled) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled) setProjectDetailLoadedFor(projectId); });
 		return () => { cancelled = true; };
 	}, [config, projectId]);
@@ -168,7 +168,7 @@ export default function SpawnModal() {
 		setModelLoading(true);
 		getAgentModels(config, harness, projectId)
 			.then((nextCatalog) => { if (!cancelled) { setModelCatalog(nextCatalog); setModelError(nextCatalog.warning); } })
-			.catch((cause) => { if (!cancelled) setModelError(cause instanceof Error ? cause.message : String(cause)); })
+			.catch((cause) => { if (!cancelled) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled) setModelLoading(false); });
 		return () => { cancelled = true; };
 	}, [config, harness, projectId]);
@@ -244,7 +244,7 @@ export default function SpawnModal() {
 			setAttachments(merged.attachments);
 			setAttachmentError(next.error ?? merged.error);
 		} catch (cause) {
-			setAttachmentError(cause instanceof Error ? cause.message : "Couldn't read that file.");
+			setAttachmentError(userFacingError(cause, "Couldn't read that file."));
 		} finally {
 			pickingAttachments.current = false;
 
@@ -398,21 +398,14 @@ export default function SpawnModal() {
 	return <View style={styles.screen}>{content}</View>;
 }
 
-// Human copy for a failed spawn, matching every other screen. This one used to
-// render `e.message` — the wire string, e.g. "401 - missing or invalid
-// connection password".
+// Human copy for a failed spawn, matching every other screen. Never the wire
+// string ("401 Unauthorized - missing or invalid connection password").
 function spawnErrorCopy(e: unknown): string {
 	if (isChatPreflightError(e)) return chatErrorCopy(e);
 	if (e instanceof ApiError && e.code === "PROMPT_TOO_LONG") {
 		return "Task prompt is too long. Keep it to 16 KiB or fewer (emoji and other non-English characters use more than one byte). Shorten it and try again.";
 	}
-	const status = e instanceof ApiError ? e.status : undefined;
-	const { title, message } = describeConnectionFailure(classifyConnectionFailure(status), {
-		host: "",
-		port: "",
-		platform: Platform.OS,
-	});
-	return `${title} ${message}`;
+	return userFacingError(e, "Couldn't start the worker. Try again.");
 }
 
 // Android's compact field height and the iOS host's minimum layout height.

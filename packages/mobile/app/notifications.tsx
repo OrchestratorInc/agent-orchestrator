@@ -33,6 +33,7 @@ import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
 import { Dot, EmptyState, HeaderIconButton, ScreenHeader } from "../lib/ui";
 import { press, space, type } from "../lib/tokens";
 import { backOr } from "../lib/backNavigation";
+import { userFacingError } from "../lib/connectionError";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
@@ -88,7 +89,7 @@ export default function NotificationsScreen() {
 				setNextCursor(page.nextCursor);
 				setUnreadCount(page.unreadCount);
 			} catch (cause) {
-				setError(cause instanceof Error ? cause.message : "Couldn't load notifications.");
+				setError(userFacingError(cause, "Couldn't load notifications."));
 			} finally {
 				setLoading(false);
 				setRefreshing(false);
@@ -147,7 +148,7 @@ export default function NotificationsScreen() {
 				haptics.success();
 				router.navigate(`/session/${sessionId}`);
 			})
-			.catch((cause) => Alert.alert("Couldn't restore the session", cause instanceof Error ? cause.message : String(cause)))
+			.catch((cause) => Alert.alert("Couldn't restore the session", userFacingError(cause)))
 			.finally(() => setRestoringId(undefined));
 	}
 
