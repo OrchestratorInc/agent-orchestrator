@@ -10,28 +10,42 @@ package registry
 import (
 	"log/slog"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/auggie"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/autohand"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cline"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/goose"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kilocode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimchi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kiro"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/omp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/qwen"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/unrealagent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/vibe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/auggieacp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/autohandacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/claudeacp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/clineacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/cursoracp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/droidacp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/gooseacp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/kilocodeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/kimchiacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/kimiacp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/kiroacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/ompacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/opencodeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/piacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/qwenacp"
 	unrealchat "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/unrealagent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/vibeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -60,8 +74,9 @@ func New(drivers ...ports.ChatDriver) *Registry {
 //
 // Codex uses its native app-server protocol. Claude Code uses AO's reusable ACP
 // transport plus claude-agent-acp, pointed at the user's own Claude executable.
-// Cursor, OpenCode, Droid, Kimi, Kimchi, Pi, OMP, and Qwen expose ACP themselves,
-// so AO launches the exact executable resolved by each existing agent plugin. No
+// Auggie, Autohand, Cline, Cursor, Goose, Kilo Code, Kiro, OpenCode, Droid,
+// Kimi, Kimchi, Pi, Qwen, Vibe, and OMP expose ACP themselves, so
+// AO launches the exact executable resolved by each existing agent plugin. No
 // path scrapes terminal output or packages a second provider CLI.
 // Unreal Agent is compiled into AO and runs behind the same detached host seam.
 //
@@ -72,6 +87,13 @@ func Build(log *slog.Logger, onClaudeAuthRejected func()) *Registry {
 	return New(
 		codexappserver.New(codex.New(), log),
 		claudeacp.New(claudecode.New(), log, onClaudeAuthRejected),
+		auggieacp.New(auggie.New(), log),
+		autohandacp.New(autohand.New(), log),
+		clineacp.New(cline.New(), log),
+		gooseacp.New(goose.New(), log),
+		kilocodeacp.New(kilocode.New(), log),
+		kiroacp.New(kiro.New(), log),
+		vibeacp.New(vibe.New(), log),
 		opencodeacp.New(opencode.New(), log),
 		droidacp.New(droid.New(), log),
 		kimiacp.New(kimi.New(), log),

@@ -64,7 +64,10 @@ surface (`npm run sqlc`, `npm run api`).
   archive/projection, controller-generation fencing, turns, messages,
   activities, approvals, structured input, usage, compaction, and rollback.
 - Chat drivers for the user's installed Codex (native app-server), Claude Code
-  (claude-agent-acp), Cursor, OpenCode, Droid, Kimchi, Kimi, Pi, OMP, Qwen, and
+  (claude-agent-acp), Auggie (native `auggie --acp`), Autohand
+  (`autohand-acp`), Cline (native `cline --acp`), Goose (native `goose acp`),
+  Kilo Code (native `kilocode acp`), Kiro (native `kiro-cli acp`), Vibe
+  (native `vibe-acp`), Cursor, OpenCode, Droid, Kimchi, Kimi, Pi, OMP, Qwen, and
   the built-in Unreal Agent library. Unreal Agent Chat runs on macOS and Linux
   behind AO's detached provider host, persists its native session plus an
   acknowledged AO event journal, and currently requires an explicit
@@ -76,12 +79,15 @@ surface (`npm run sqlc`, `npm run api`).
   permission modes onto Qwen's (default to Ask Permissions) and admits Qwen Chat
   in every mode. OMP Chat uses native `omp acp` and requires OMP
   15.0.0 or newer. Pi's independently installed pi-acp adapter does not enforce
-  approval modes, so AO admits Pi Chat only after the user explicitly chooses the
-  per-session bypass-permissions fallback. The binding reuses the existing Pi config environment and auth
-  probe and is never downloaded by AO. AO reuses each harness's existing
-  binary/auth/environment resolution and does not bundle provider CLIs; Unreal
-  Agent is the library-backed exception. Cursor
+  approval modes, so AO admits Pi Chat only after the user explicitly chooses
+  the per-session bypass-permissions fallback. The binding reuses the existing
+  Pi config environment and auth probe and is never downloaded by AO. AO reuses
+  each harness's existing binary/auth/environment resolution and does not bundle
+  provider CLIs; Unreal Agent is the library-backed exception. Cursor
   is Chat-only until its ACP and TUI conversation ids are proven to share identity.
+  Per-binding launch shapes, permission mappings, standing-instruction handling,
+  and the TUI-only harness blocker matrix are in
+  [docs/harnesses/acp-bindings.md](harnesses/acp-bindings.md).
 - Project CRUD plus per-project config (`PUT /projects/{id}/config`).
 - PR action engine wired into the API: `POST /prs/{id}/merge` and
   `/prs/{id}/resolve-comments`.
