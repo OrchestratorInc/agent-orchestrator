@@ -44,6 +44,12 @@ export default function SessionPreviewScreen() {
 		resolve: (result: MobileBrowserCommandResult) => void;
 		timer: ReturnType<typeof setTimeout>;
 	}>());
+	const pendingNavigation = useRef<{
+		requestId: string;
+		started: boolean;
+		resolve: (result: MobileBrowserCommandResult) => void;
+		timer: ReturnType<typeof setTimeout>;
+	} | null>(null);
 
 	const showToast = useCallback((message: string) => {
 		setToast(message);
@@ -125,13 +131,31 @@ export default function SessionPreviewScreen() {
 			if (!url) return Promise.resolve({ ok: false, error: { code: "URL_REQUIRED", message: "A URL is required." } });
 			const normalized = config ? normalizeBrowserInput(url, config.host) : undefined;
 			if (!normalized?.ok) return Promise.resolve({ ok: false, error: { code: "INVALID_URL", message: normalized?.message ?? "Browser is not connected." } });
-			navigateTo(normalized.url.href);
-			return Promise.resolve({ ok: true, result: { url: normalized.url.href } });
+			return new Promise((resolve) => {
+				const previous = pendingNavigation.current;
+				if (previous) {
+					clearTimeout(previous.timer);
+					previous.resolve({ ok: false, error: { code: "BROWSER_COMMAND_CANCELLED", message: "Browser navigation was replaced." } });
+				}
+				const timer = setTimeout(() => {
+					if (pendingNavigation.current?.requestId === command.requestId) pendingNavigation.current = null;
+					resolve({ ok: false, error: { code: "BROWSER_COMMAND_TIMEOUT", message: "The mobile browser did not finish navigating in time." } });
+				}, 55_000);
+				pendingNavigation.current = { requestId: command.requestId, started: false, resolve, timer };
+				navigateTo(normalized.url.href);
+			});
 		}
 		if (command.action === "act") return executeMobileBrowserAct(command, executeWebCommand);
 		return executeWebCommand(command);
 	}, [config, executeWebCommand, navigateTo]);
 	const cancelAgentCommand = useCallback((requestId: string) => {
+		const navigation = pendingNavigation.current;
+		if (navigation?.requestId === requestId) {
+			pendingNavigation.current = null;
+			clearTimeout(navigation.timer);
+			navigation.resolve({ ok: false, error: { code: "BROWSER_COMMAND_CANCELLED", message: "Browser navigation was cancelled." } });
+			return;
+		}
 		const pending = commandResults.current.get(requestId);
 		if (!pending) return;
 		commandResults.current.delete(requestId);
@@ -166,6 +190,12 @@ export default function SessionPreviewScreen() {
 				pending.resolve({ ok: false, error: { code: "BROWSER_TARGET_UNAVAILABLE", message: "The mobile browser closed." } });
 			}
 			commandResults.current.clear();
+			const navigation = pendingNavigation.current;
+			pendingNavigation.current = null;
+			if (navigation) {
+				clearTimeout(navigation.timer);
+				navigation.resolve({ ok: false, error: { code: "BROWSER_TARGET_UNAVAILABLE", message: "The mobile browser closed." } });
+			}
 		};
 	}, [cancelAgentCommand, config, executeAgentCommand, id]);
 
@@ -226,9 +256,19 @@ export default function SessionPreviewScreen() {
 						// values now rather than dereferencing a released event inside the
 						// asynchronous state updater.
 						const nextUrl = event?.nativeEvent?.url;
+						if (nextUrl && pendingNavigation.current) pendingNavigation.current.started = true;
 						setBrowserState((current) => browserLoadStart(current, nextUrl));
 					}}
-					onLoadEnd={() => { setBrowserState(browserLoadEnd); web.current?.injectJavaScript(MOBILE_BROWSER_BOOTSTRAP); }}
+					onLoadEnd={(event) => {
+						setBrowserState(browserLoadEnd);
+						web.current?.injectJavaScript(MOBILE_BROWSER_BOOTSTRAP);
+						const navigation = pendingNavigation.current;
+						if (navigation?.started) {
+							pendingNavigation.current = null;
+							clearTimeout(navigation.timer);
+							navigation.resolve({ ok: true, result: { url: event.nativeEvent.url, title: event.nativeEvent.title } });
+						}
+					}}
 					onNavigationStateChange={(event: WebViewNavigation | null) => {
 						if (!event) return;
 						const update = {
