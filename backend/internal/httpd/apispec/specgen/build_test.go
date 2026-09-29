@@ -134,6 +134,25 @@ func TestBuild_DelegateAgentEnumIncludesPrimeAgent(t *testing.T) {
 	}
 }
 
+func TestBuild_OpenCodeV2HarnessContracts(t *testing.T) {
+	doc := buildSchemas(t)
+	for schema, field := range map[string]string{
+		"SpawnSessionRequest":       "harness",
+		"DelegateTaskRequest":       "agent",
+		"ControllersSessionView":    "reviewerHarness",
+		"SetSessionReviewerRequest": "harness",
+		"TriggerReviewRequest":      "harness",
+	} {
+		values := doc.Components.Schemas[schema].Properties[field].Enum
+		if !slices.Contains(values, "opencode-v2") {
+			t.Errorf("%s.%s enum = %v, missing opencode-v2", schema, field, values)
+		}
+		if !slices.Contains(values, "opencode") {
+			t.Errorf("%s.%s enum = %v, missing existing opencode", schema, field, values)
+		}
+	}
+}
+
 func TestBuild_UsageEstimatedCostIsNamedReusableAndNullable(t *testing.T) {
 	got, err := specgen.Build()
 	if err != nil {

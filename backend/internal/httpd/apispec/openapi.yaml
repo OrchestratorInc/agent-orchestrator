@@ -9894,6 +9894,7 @@ components:
           - cursor
           - kilocode
           - opencode
+          - opencode-v2
           - kiro
           - pi
           - agy
@@ -10733,6 +10734,7 @@ components:
           - codex
           - aider
           - opencode
+          - opencode-v2
           - grok
           - droid
           - amp
@@ -13425,6 +13427,7 @@ components:
           - cursor
           - kilocode
           - opencode
+          - opencode-v2
           - kiro
           - pi
           - agy
@@ -13555,6 +13558,7 @@ components:
           - codex
           - aider
           - opencode
+          - opencode-v2
           - grok
           - droid
           - amp
@@ -13929,6 +13933,7 @@ components:
           - cursor
           - kilocode
           - opencode
+          - opencode-v2
           - kiro
           - pi
           - agy

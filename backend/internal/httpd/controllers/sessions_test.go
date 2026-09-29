@@ -1545,6 +1545,42 @@ func TestSessionsAPI_SpawnsOMPChat(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_SpawnsOpenCodeV2(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions",
+		`{"projectId":"ao","harness":"opencode-v2","mode":"tui","prompt":"fix"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("spawn OpenCode 2 = %d, want 201; body=%s", status, body)
+	}
+	if svc.lastSpawn.Harness != domain.HarnessOpenCodeV2 || svc.lastSpawn.RequestedMode != domain.SessionModeTUI {
+		t.Fatalf("spawn config = %#v, want OpenCode 2 TUI", svc.lastSpawn)
+	}
+}
+
+func TestSessionsAPI_SpawnPreservesUnknownHarnessErrorEnvelope(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.spawnErr = apierr.Invalid("UNKNOWN_HARNESS", "Unknown agent harness", nil)
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions",
+		`{"projectId":"ao","harness":"not-a-harness","mode":"tui","prompt":"fix"}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("invalid harness status = %d, want 400; body=%s", status, body)
+	}
+	var got struct {
+		Error     string `json:"error"`
+		Code      string `json:"code"`
+		Message   string `json:"message"`
+		RequestID string `json:"requestId"`
+	}
+	mustJSON(t, body, &got)
+	if got.Error != "bad_request" || got.Code != "UNKNOWN_HARNESS" || got.Message != "Unknown agent harness" || got.RequestID == "" {
+		t.Fatalf("invalid harness envelope = %#v", got)
+	}
+}
+
 func TestSessionsAPI_SpawnsStandaloneWorkerWithoutProjectID(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
