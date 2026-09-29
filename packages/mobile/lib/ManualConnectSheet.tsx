@@ -4,7 +4,7 @@ import { Linking, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, Tex
 import { ApiError, pingServer } from "./api";
 import { DEFAULT_CONFIG, loadConfig, saveConfig, type ServerConfig } from "./config";
 import { saveHost, setActiveHost } from "./hosts";
-import { adoptManualConnection, normalizeManualConfig } from "./manualConnect";
+import { adoptManualConnection } from "./manualConnect";
 import { probeIdentity } from "./connectRuntime";
 import {
 	classifyConnectionFailure,
@@ -46,8 +46,7 @@ export function ManualConnectSheet({ onConnected }: { onConnected: () => void })
 	async function connect() {
 		setBusy(true);
 		setFailure(null);
-		const target = normalizeManualConfig(cfg);
-		setCfg(target);
+		const target = { ...cfg, host: cfg.host.trim() };
 		try {
 			// Verify BEFORE persisting. pingServer takes the config it is handed, so
 			// nothing needs to be saved to test it — and saving first would leave

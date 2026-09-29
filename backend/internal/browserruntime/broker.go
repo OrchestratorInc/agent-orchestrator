@@ -353,28 +353,17 @@ func (b *Broker) resolve(msg wireMessage) {
 	if ch == nil {
 		return
 	}
-	deliverPendingResult(ch, msg.OK, msg.Result, msg.Error, "Browser command failed", "browser")
-}
-
-func deliverPendingResult(
-	ch chan pendingResult,
-	ok bool,
-	raw json.RawMessage,
-	commandErr *CommandError,
-	defaultMessage string,
-	decodeSubject string,
-) {
-	if !ok {
-		if commandErr == nil {
-			commandErr = &CommandError{Code: "BROWSER_COMMAND_FAILED", Message: defaultMessage}
+	if !msg.OK {
+		if msg.Error == nil {
+			msg.Error = &CommandError{Code: "BROWSER_COMMAND_FAILED", Message: "Browser command failed"}
 		}
-		ch <- pendingResult{err: *commandErr}
+		ch <- pendingResult{err: *msg.Error}
 		return
 	}
 	var value interface{} = map[string]interface{}{}
-	if len(raw) > 0 && string(raw) != "null" {
-		if err := json.Unmarshal(raw, &value); err != nil {
-			ch <- pendingResult{err: fmt.Errorf("decode %s result: %w", decodeSubject, err)}
+	if len(msg.Result) > 0 && string(msg.Result) != "null" {
+		if err := json.Unmarshal(msg.Result, &value); err != nil {
+			ch <- pendingResult{err: fmt.Errorf("decode browser result: %w", err)}
 			return
 		}
 	}

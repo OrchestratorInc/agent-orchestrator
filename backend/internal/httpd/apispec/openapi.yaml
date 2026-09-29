@@ -1315,7 +1315,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
-      summary: Execute a target-scoped command in a session browser
+      summary: Execute a target-scoped command in a session's desktop browser
       tags:
       - browser
   /api/v1/browser/status:
@@ -1327,18 +1327,6 @@ paths:
         name: sessionId
         schema:
           description: AO session identifier.
-          type: string
-      - description: Browser surface selection. Auto prefers a connected foreground
-          mobile target.
-        in: query
-        name: surface
-        schema:
-          description: Browser surface selection. Auto prefers a connected foreground
-            mobile target.
-          enum:
-          - auto
-          - desktop
-          - mobile
           type: string
       - description: Opaque browser capability injected into the owning AO worker.
         in: header
@@ -1383,7 +1371,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Check whether the selected browser runtime is connected for a session
+      summary: Check whether the desktop browser runtime is connected for a session
       tags:
       - browser
   /api/v1/desktop/sessions/{sessionId}/workspace:
@@ -9013,12 +9001,6 @@ components:
           additionalProperties: {}
           type: object
         sessionId:
-          type: string
-        surface:
-          enum:
-          - auto
-          - desktop
-          - mobile
           type: string
       required:
       - sessionId

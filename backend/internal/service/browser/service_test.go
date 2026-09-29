@@ -20,23 +20,20 @@ func (f fakeSessions) Get(_ context.Context, _ domain.SessionID) (domain.Session
 }
 
 type fakeRuntime struct {
-	action  string
-	surface string
+	action string
 }
 
-func (f *fakeRuntime) Status(_ domain.SessionID, surface string) (browserruntime.Status, string) {
-	f.surface = surface
-	return browserruntime.Status{Connected: true}, surface
+func (f *fakeRuntime) Status() browserruntime.Status {
+	return browserruntime.Status{Connected: true}
 }
 
 func (f *fakeRuntime) Execute(
 	_ context.Context,
 	_ domain.SessionID,
-	surface string,
 	action string,
 	_ map[string]interface{},
 ) (browserruntime.Result, error) {
-	f.action, f.surface = action, surface
+	f.action = action
 	return browserruntime.Result{RequestID: "r1"}, nil
 }
 
@@ -52,33 +49,33 @@ func TestServiceRequiresOwningCapabilityAndLiveSession(t *testing.T) {
 		Metadata: domain.SessionMetadata{BrowserCapabilityVerifier: verifier},
 	}}}, runtime, authority)
 
-	if _, _, err := service.Status(context.Background(), "s1", "wrong", "auto"); apiErrorCode(err) != "BROWSER_CAPABILITY_INVALID" {
+	if _, err := service.Status(context.Background(), "s1", "wrong"); apiErrorCode(err) != "BROWSER_CAPABILITY_INVALID" {
 		t.Fatalf("wrong capability error = %v", err)
 	}
-	if _, _, err := service.Status(context.Background(), "s1", token, "mobile"); err != nil {
+	if _, err := service.Status(context.Background(), "s1", token); err != nil {
 		t.Fatalf("valid capability: %v", err)
 	}
-	if _, action, err := service.Execute(context.Background(), "s1", token, "mobile", " SNAPSHOT ", nil); err != nil || action != "snapshot" || runtime.action != "snapshot" || runtime.surface != "mobile" {
+	if _, action, err := service.Execute(context.Background(), "s1", token, " SNAPSHOT ", nil); err != nil || action != "snapshot" || runtime.action != "snapshot" {
 		t.Fatalf("execute action=%q runtime=%q err=%v", action, runtime.action, err)
 	}
-	if _, action, err := service.Execute(context.Background(), "s1", token, "auto", "dblclick", nil); err != nil || action != "dblclick" || runtime.action != "dblclick" {
+	if _, action, err := service.Execute(context.Background(), "s1", token, "dblclick", nil); err != nil || action != "dblclick" || runtime.action != "dblclick" {
 		t.Fatalf("expanded action=%q runtime=%q err=%v", action, runtime.action, err)
 	}
-	if _, action, err := service.Execute(context.Background(), "s1", token, "auto", "act", nil); err != nil || action != "act" || runtime.action != "act" {
+	if _, action, err := service.Execute(context.Background(), "s1", token, "act", nil); err != nil || action != "act" || runtime.action != "act" {
 		t.Fatalf("act action=%q runtime=%q err=%v", action, runtime.action, err)
 	}
-	if _, action, err := service.Execute(context.Background(), "s1", token, "desktop", "DEVTOOLS-OPEN", nil); err != nil || action != "devtools-open" || runtime.action != "devtools-open" {
+	if _, action, err := service.Execute(context.Background(), "s1", token, "DEVTOOLS-OPEN", nil); err != nil || action != "devtools-open" || runtime.action != "devtools-open" {
 		t.Fatalf("devtools action=%q runtime=%q err=%v", action, runtime.action, err)
 	}
 	for _, action := range []string{"devtools-toggle", "devtools-focus"} {
-		if _, _, err := service.Execute(context.Background(), "s1", token, "auto", action, nil); apiErrorCode(err) != "BROWSER_ACTION_UNSUPPORTED" {
+		if _, _, err := service.Execute(context.Background(), "s1", token, action, nil); apiErrorCode(err) != "BROWSER_ACTION_UNSUPPORTED" {
 			t.Fatalf("agent-facing %s error = %v", action, err)
 		}
 	}
-	if _, _, err := service.Execute(context.Background(), "s1", token, "auto", "agent-browser-run", nil); apiErrorCode(err) != "BROWSER_ACTION_UNSUPPORTED" {
+	if _, _, err := service.Execute(context.Background(), "s1", token, "agent-browser-run", nil); apiErrorCode(err) != "BROWSER_ACTION_UNSUPPORTED" {
 		t.Fatalf("removed nested action error = %v", err)
 	}
-	if _, _, err := service.Execute(context.Background(), "s1", token, "auto", "eval", nil); apiErrorCode(err) != "BROWSER_ACTION_UNSUPPORTED" {
+	if _, _, err := service.Execute(context.Background(), "s1", token, "eval", nil); apiErrorCode(err) != "BROWSER_ACTION_UNSUPPORTED" {
 		t.Fatalf("unsupported action error = %v", err)
 	}
 
@@ -87,7 +84,7 @@ func TestServiceRequiresOwningCapabilityAndLiveSession(t *testing.T) {
 		runtime,
 		authority,
 	)
-	if _, _, err := terminated.Status(context.Background(), "s1", token, "auto"); apiErrorCode(err) != "SESSION_TERMINATED" {
+	if _, err := terminated.Status(context.Background(), "s1", token); apiErrorCode(err) != "SESSION_TERMINATED" {
 		t.Fatalf("terminated error = %v", err)
 	}
 }
@@ -126,10 +123,10 @@ func TestServiceRotationRejectsOldBearerAndDispatchesNewBearer(t *testing.T) {
 		ID:       "s1",
 		Metadata: domain.SessionMetadata{BrowserCapabilityVerifier: newVerifier},
 	}}}, runtime, authority)
-	if _, _, err := service.Execute(context.Background(), "s1", oldToken, "auto", "snapshot", nil); apiErrorCode(err) != "BROWSER_CAPABILITY_INVALID" {
+	if _, _, err := service.Execute(context.Background(), "s1", oldToken, "snapshot", nil); apiErrorCode(err) != "BROWSER_CAPABILITY_INVALID" {
 		t.Fatalf("old bearer error = %v, want BROWSER_CAPABILITY_INVALID", err)
 	}
-	if _, _, err := service.Execute(context.Background(), "s1", newToken, "auto", "snapshot", nil); err != nil {
+	if _, _, err := service.Execute(context.Background(), "s1", newToken, "snapshot", nil); err != nil {
 		t.Fatalf("new bearer execute: %v", err)
 	}
 	if runtime.action != "snapshot" {
