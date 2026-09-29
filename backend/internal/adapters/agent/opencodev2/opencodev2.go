@@ -25,6 +25,7 @@ func New() *Plugin { return &Plugin{} }
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
+var _ ports.AgentBinaryResolver = (*Plugin)(nil)
 var _ ports.SemanticMessageAcceptanceSignaler = (*Plugin)(nil)
 
 func (p *Plugin) Manifest() adapters.Manifest {
@@ -32,6 +33,13 @@ func (p *Plugin) Manifest() adapters.Manifest {
 }
 
 func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
+
+// ResolveBinary resolves the shared opencode executable and requires the v2
+// command contract before catalog, authentication, install verification, or a
+// session can use it.
+func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
+	return opencode.ResolveBinaryForMajor(ctx, 2)
+}
 
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Model override for the OpenCode 2 session agent.")

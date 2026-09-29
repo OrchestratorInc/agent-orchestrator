@@ -1556,6 +1556,7 @@
 	"startup.agentDescCodex": "OpenAI command-line agent",
 	"startup.agentDescCopilot": "GitHub Copilot CLI",
 	"startup.agentDescOpencode": "Open-source terminal agent",
+	"startup.installOpencodeV2ReplacementWarning": "Installing OpenCode 2 to the default opencode command replaces the default OpenCode 1 installation.",
 	"startup.allChecksPassed": "All checks passed",
 	"startup.aria": "{{brand}} is starting",
 	"startup.blockedBody": "Agent Orchestrator needs a few things on this machine before it can run sessions. Install what's missing below, or quit and finish setup yourself.",

@@ -55,6 +55,9 @@ func TestOpenCodeMajorsAreIndependentlySelectable(t *testing.T) {
 		if _, ok := adapter.(ports.AgentAuthChecker); !ok {
 			t.Fatalf("%s does not report authentication", id)
 		}
+		if _, ok := adapter.(ports.AgentBinaryResolver); !ok {
+			t.Fatalf("%s does not expose its major-aware binary resolver", id)
+		}
 	}
 }
 

@@ -8105,19 +8105,20 @@ paths:
       operationId: getSystemInstallStatus
       parameters:
       - description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-          copilot, or cloudflared.'
+          opencode-v2, copilot, or cloudflared.'
         in: path
         name: target
         required: true
         schema:
           description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-            copilot, or cloudflared.'
+            opencode-v2, copilot, or cloudflared.'
           enum:
           - tmux
           - gh
           - claude
           - codex
           - opencode
+          - opencode-v2
           - copilot
           - cloudflared
           type: string
@@ -8153,19 +8154,20 @@ paths:
       operationId: startSystemInstall
       parameters:
       - description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-          copilot, or cloudflared.'
+          opencode-v2, copilot, or cloudflared.'
         in: path
         name: target
         required: true
         schema:
           description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-            copilot, or cloudflared.'
+            opencode-v2, copilot, or cloudflared.'
           enum:
           - tmux
           - gh
           - claude
           - codex
           - opencode
+          - opencode-v2
           - copilot
           - cloudflared
           type: string
@@ -8518,6 +8520,8 @@ components:
           type: string
         label:
           type: string
+        notice:
+          type: string
         reason:
           type: string
         recommended:
@@ -8555,6 +8559,8 @@ components:
           items:
             $ref: '#/components/schemas/AgentInstallMethod'
           type: array
+        notice:
+          type: string
         reason:
           type: string
       required:
@@ -9894,7 +9900,6 @@ components:
           - cursor
           - kilocode
           - opencode
-          - opencode-v2
           - kiro
           - pi
           - agy
@@ -11334,6 +11339,10 @@ components:
           description: Server-owned installation method selected for this harness
             job.
           type: string
+        notice:
+          description: Fixed user-visible consequence to acknowledge before running
+            this install.
+          type: string
         output:
           description: Combined stdout+stderr from the install command, tail-capped
             to the last ~4000 bytes.
@@ -11365,6 +11374,7 @@ components:
           - codex
           - cursor
           - opencode
+          - opencode-v2
           - aider
           - copilot
           - grok
@@ -13427,7 +13437,6 @@ components:
           - cursor
           - kilocode
           - opencode
-          - opencode-v2
           - kiro
           - pi
           - agy
@@ -13933,7 +13942,6 @@ components:
           - cursor
           - kilocode
           - opencode
-          - opencode-v2
           - kiro
           - pi
           - agy

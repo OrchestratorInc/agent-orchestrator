@@ -2887,6 +2887,7 @@ export interface components {
             expectedDestination?: string;
             id: string;
             label: string;
+            notice?: string;
             reason?: string;
             recommended: boolean;
             reinstallAvailable: boolean;
@@ -2902,6 +2903,7 @@ export interface components {
             expectedDestination?: string;
             method: string;
             methods: components["schemas"]["AgentInstallMethod"][];
+            notice?: string;
             reason?: string;
         };
         AgentInstallationObservation: {
@@ -3392,7 +3394,7 @@ export interface components {
             prs: components["schemas"]["SessionPRFacts"][];
             reviewerConfig?: components["schemas"]["AgentConfig"];
             /** @enum {string} */
-            reviewerHarness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "opencode-v2" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
+            reviewerHarness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
             /** @enum {string} */
             scmStatus?: "pr_open" | "draft" | "ci_failed" | "review_pending" | "changes_requested" | "approved" | "mergeable" | "merged";
             /** @enum {string} */
@@ -3914,6 +3916,8 @@ export interface components {
             finishedAt?: null | string;
             /** @description Server-owned installation method selected for this harness job. */
             method?: string;
+            /** @description Fixed user-visible consequence to acknowledge before running this install. */
+            notice?: string;
             /** @description Combined stdout+stderr from the install command, tail-capped to the last ~4000 bytes. */
             output?: string;
             /** Format: date-time */
@@ -3927,7 +3931,7 @@ export interface components {
              * @description Fixed install target this job ran (or is running) for.
              * @enum {string}
              */
-            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "mimo-code" | "deepseek-harness" | "cloudflared";
+            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "opencode-v2" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "mimo-code" | "deepseek-harness" | "cloudflared";
             /** Format: date-time */
             updatedAt?: null | string;
         };
@@ -4721,7 +4725,7 @@ export interface components {
         SetSessionReviewerRequest: {
             agentConfig?: components["schemas"]["AgentConfig"];
             /** @enum {string} */
-            harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "opencode-v2" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
+            harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
         };
         SettingsResponse: {
             chatHarnesses: string[];
@@ -4918,7 +4922,7 @@ export interface components {
         TriggerReviewRequest: {
             agentConfig?: components["schemas"]["AgentConfig"];
             /** @enum {string} */
-            harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "opencode-v2" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
+            harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
         };
         TriggerReviewResponse: {
             /** @description True when a new review pass was started; false when an existing run for the same commit was reused. */
@@ -15308,8 +15312,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description Install target identifier: tmux, gh, claude, codex, opencode, copilot, or cloudflared. */
-                target: "tmux" | "gh" | "claude" | "codex" | "opencode" | "copilot" | "cloudflared";
+                /** @description Install target identifier: tmux, gh, claude, codex, opencode, opencode-v2, copilot, or cloudflared. */
+                target: "tmux" | "gh" | "claude" | "codex" | "opencode" | "opencode-v2" | "copilot" | "cloudflared";
             };
             cookie?: never;
         };
@@ -15358,8 +15362,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description Install target identifier: tmux, gh, claude, codex, opencode, copilot, or cloudflared. */
-                target: "tmux" | "gh" | "claude" | "codex" | "opencode" | "copilot" | "cloudflared";
+                /** @description Install target identifier: tmux, gh, claude, codex, opencode, opencode-v2, copilot, or cloudflared. */
+                target: "tmux" | "gh" | "claude" | "codex" | "opencode" | "opencode-v2" | "copilot" | "cloudflared";
             };
             cookie?: never;
         };
