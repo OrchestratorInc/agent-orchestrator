@@ -4,6 +4,7 @@ import { Play } from "lucide-react";
 import { aoBridge } from "../lib/bridge";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
+import { isWorkspaceDefinitelyUnavailable, useEditorHandoffState } from "../hooks/useEditorHandoff";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCanResumeAgent } from "../hooks/useCanResumeAgent";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
@@ -30,6 +31,11 @@ export function ResumeAgentControl({
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
+	const workspaceHandoff = useEditorHandoffState(hostId ? "" : session.id, {
+		sessionCreatedAt: session.createdAt,
+		sessionTerminated: session.isTerminated,
+	});
+	const workspaceUnavailable = !hostId && isWorkspaceDefinitelyUnavailable(workspaceHandoff.data);
 	const canResume = useCanResumeAgent(session, hostId);
 	const mutationKey = hostId ? ["resume-agent", hostId, session.id] as const : ["resume-agent", session.id] as const;
 	const resume = useMutation({
@@ -65,7 +71,7 @@ export function ResumeAgentControl({
 	// Cloud sessions re-provision through the control plane (useRestoreSession),
 	// not this local-daemon route — the local daemon has never heard of them and
 	// would answer "Unknown session".
-	if (!canResume) return null;
+	if (!canResume || (workspaceUnavailable && session.provisionState !== "failed")) return null;
 
 	const resumeError = resume.error ?? sharedResumeState?.error;
 	const error = resumeError instanceof Error ? resumeError.message : null;
