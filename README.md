@@ -47,6 +47,9 @@ Download the latest AO desktop app for your platform. AO checks for updates auto
 | Linux (Debian/Ubuntu) | [Download](https://github.com/Untrivial-ai/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.deb)      |
 | Linux (Fedora/RHEL)   | [Download](https://github.com/Untrivial-ai/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.rpm)      |
 
+On macOS, if the app will not open and says the developer cannot be verified, right-click it and choose **Open**, then **Open** again.
+If that still does not open it, please [open an issue](https://github.com/Untrivial-ai/agent-orchestrator/issues/new?template=bug_report.yml) with Gatekeeper diagnostics — see the [installation guide](https://docs.aoagents.dev/installation) for what to include.
+
 Open Agent Orchestrator and point it at the repository you want AO to manage. The desktop app runs the daemon for you, so no CLI is required. See the [installation guide](https://docs.aoagents.dev/installation) for agent CLI setup and troubleshooting.
 
 <img src="docs/assets/readme/tui.png" alt="Agent Orchestrator workspace showing a coding agent's native terminal UI" width="100%" />
@@ -175,8 +178,8 @@ AO works with the coding agents and source-control workflow you already use. Age
     <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/omp.png" alt="OMP" width="24" height="24" align="middle" /> &nbsp; <b>OMP</b></td>
   </tr>
   <tr valign="middle">
+    <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/fx.svg" alt="fx" width="24" height="24" align="middle" /> &nbsp; <b>fx (experimental)</b></td>
     <td valign="middle" nowrap><b>Unreal Agent</b></td>
-    <td></td>
     <td></td>
   </tr>
 </table>

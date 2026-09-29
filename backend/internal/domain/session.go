@@ -156,11 +156,18 @@ type SessionMetadata struct {
 // facts: identity, agent harness, activity_state, is_terminated, and operational
 // metadata. The user-facing Status is derived from these facts plus PR facts.
 type SessionRecord struct {
-	ID        SessionID    `json:"id"`
-	ProjectID ProjectID    `json:"projectId,omitempty"`
-	IssueID   IssueID      `json:"issueId,omitempty"`
-	Kind      SessionKind  `json:"kind"`
-	Harness   AgentHarness `json:"harness,omitempty"`
+	ID        SessionID `json:"id"`
+	ProjectID ProjectID `json:"projectId,omitempty"`
+	// AutomationRunID is the optional durable origin for an unattended spawn.
+	// It is internal lifecycle data, not part of the session API read model.
+	AutomationRunID *AutomationRunID `json:"-"`
+	// AutomationLaunchCompleted is set atomically with the final lifecycle
+	// commit. A seed carrying AutomationRunID alone is not proof that its
+	// workspace/controller launch completed.
+	AutomationLaunchCompleted bool         `json:"-"`
+	IssueID                   IssueID      `json:"issueId,omitempty"`
+	Kind                      SessionKind  `json:"kind"`
+	Harness                   AgentHarness `json:"harness,omitempty"`
 	// ReviewerHarness is this session's preferred reviewer. Empty delegates to
 	// the project configuration.
 	ReviewerHarness   ReviewerHarness `json:"reviewerHarness,omitempty" enum:"claude-code,codex,copilot,cursor,kilocode,opencode,kiro,pi,agy,devin,droid,kimi,kimchi,muse,amp,aider,grok,crush,auggie,cline,autohand"`
@@ -198,6 +205,55 @@ type SessionRecord struct {
 	UpdatedAt         time.Time  `json:"updatedAt"`
 	IsPinned          bool       `json:"isPinned"`
 	PinnedAt          *time.Time `json:"pinnedAt,omitempty"`
+	// IsTaskPreparation marks a hidden row that only reserves identity and a
+	// speculative worktree for the New Task dialog. Claiming it clears the flag
+	// before the session becomes visible; cancellation and startup reconciliation
+	// delete it after reclaiming the worktree.
+	IsTaskPreparation bool `json:"-"`
+	// ProvisionState is how far a Chat spawn has got. A Chat spawn answers the
+	// API as soon as the row and its conversation exist, so a session can be
+	// visible — and receive queued messages — before its worktree and controller
+	// do. Sessions written before asynchronous spawn existed read back as
+	// SessionProvisionReady.
+	ProvisionState SessionProvisionState `json:"provisionState,omitempty" enum:"provisioning,ready,failed"`
+	// ProvisionError explains a failed start in the user's terms. It is kept on
+	// the row rather than discarded with it, because the user is already looking
+	// at the session by the time the start can fail.
+	ProvisionError string `json:"provisionError,omitempty"`
+}
+
+// SessionProvisionState is a session's start-up progress.
+type SessionProvisionState string
+
+// TaskPreparationToken identifies one speculative task workspace. It is opaque
+// outside the session manager even though the current implementation reserves a
+// session id as its value.
+type TaskPreparationToken string
+
+const (
+	// SessionProvisionProvisioning means the row and its conversation exist; the
+	// worktree, the agent controller, or both do not yet. Messages sent now are
+	// queued and dispatched by the controller when it arrives.
+	SessionProvisionProvisioning SessionProvisionState = "provisioning"
+	// SessionProvisionReady means the session owns everything a spawn creates. This is
+	// the zero value's meaning, so rows predating asynchronous spawn are ready.
+	SessionProvisionReady SessionProvisionState = "ready"
+	// SessionProvisionFailed means the start did not complete. The row, its
+	// conversation, and anything queued into it survive so the user can retry.
+	SessionProvisionFailed SessionProvisionState = "failed"
+)
+
+// WithDefault resolves the zero value to ready.
+func (s SessionProvisionState) WithDefault() SessionProvisionState {
+	if s == "" {
+		return SessionProvisionReady
+	}
+	return s
+}
+
+// IsProvisioning reports whether the session is still being built.
+func (s SessionProvisionState) IsProvisioning() bool {
+	return s == SessionProvisionProvisioning
 }
 
 // IsStandalone reports whether the session has no registered project owner.

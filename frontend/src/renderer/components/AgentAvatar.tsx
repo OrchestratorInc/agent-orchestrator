@@ -18,6 +18,8 @@ import crushLogo from "../assets/agents/crush.png";
 import cursorLogo from "../assets/agents/cursor.svg";
 import devinLogo from "../assets/agents/devin.png";
 import droidLogo from "../assets/agents/droid.png";
+import fxLogo from "../assets/agents/fx.svg";
+import geminiLogo from "../assets/agents/gemini.svg";
 import gooseLogo from "../assets/agents/goose.svg";
 import grokLogo from "../assets/agents/grok.png";
 import kilocodeLogo from "../assets/agents/kilocode.svg";
@@ -30,6 +32,7 @@ import opencodeLogo from "../assets/agents/opencode.svg";
 import piLogo from "../assets/agents/pi.png";
 import primeAgentLogo from "../assets/agents/prime-agent.png";
 import qwenLogo from "../assets/agents/qwen.png";
+import unrealAgentLogo from "../assets/agents/unreal-agent.png";
 import vibeLogo from "../assets/agents/vibe.png";
 
 // Real brand logos keyed by the harness name AO stores on session.provider.
@@ -43,7 +46,9 @@ const LOGOS: AgentLogoSources = {
 	copilot: copilotLogo,
 	aider: aiderLogo,
 	grok: grokLogo,
+	gemini: geminiLogo,
 	droid: droidLogo,
+	fx: fxLogo,
 	crush: crushLogo,
 	qwen: qwenLogo,
 	goose: gooseLogo,
@@ -63,6 +68,7 @@ const LOGOS: AgentLogoSources = {
 	agy: agyLogo,
 	auggie: auggieLogo,
 	autohand: autohandLogo,
+	"unreal-agent": unrealAgentLogo,
 };
 
 /**

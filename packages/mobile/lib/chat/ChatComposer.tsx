@@ -31,6 +31,7 @@ import { RequestCard } from "./RequestCard";
 import type { RequestDockModel } from "./requestDockModel";
 import { createRequestGate } from "./requestGate";
 import { queuedConversationMessages } from "./timelineModel";
+import { userFacingError } from "../connectionError";
 
 type Attachment =
 	| { id: string; kind: "image"; name: string; bytes: number; image: ChatImage }
@@ -207,12 +208,14 @@ export function ChatComposer({
 			const route = composerDeliveryRoute(intent, steerEligible);
 			if (route === "steer") await onSteer(trimmed);
 			else await onSend(trimmed, images.length ? images : undefined, resources.length ? resources : undefined);
+			latestText.current = "";
 			setText("");
+			setFieldHeight(COMPOSER_FIELD_HEIGHT);
 			setAttachments([]);
 			void AsyncStorage.removeItem(draftKey);
 			haptics.success();
 		} catch (cause) {
-			setLocalError(cause instanceof Error ? cause.message : String(cause));
+			setLocalError(userFacingError(cause));
 			haptics.error();
 		} finally { setSubmitting(false); }
 	}, [text, attachments, steerEligible, onSteer, onSend, draftKey, submitting, pending, disabled]);
@@ -242,7 +245,7 @@ export function ChatComposer({
 			setAttachments(accepted);
 			setLocalError(errors.size ? [...errors].join(" ") : undefined);
 		} catch (cause) {
-			setLocalError(cause instanceof Error ? cause.message : "Couldn't open your photo library.");
+			setLocalError(userFacingError(cause, "Couldn't open your photo library."));
 		}
 	};
 	const addFile = async () => {
@@ -260,7 +263,7 @@ export function ChatComposer({
 				added.push({ id: `${asset.uri}-${Date.now()}`, kind: "resource", name: asset.name, bytes, resource: { uri: `mobile-attachment://${encodeURIComponent(asset.name)}`, name: asset.name, mimeType: asset.mimeType || "text/plain", text: body } });
 			}
 			setAttachments((old) => [...old, ...added]);
-		} catch (cause) { setLocalError(cause instanceof Error ? cause.message : String(cause)); }
+		} catch (cause) { setLocalError(userFacingError(cause)); }
 	};
 
 	const openPicker = useCallback(async (kind: "skills" | "files", activeTrigger?: ComposerSuggestion) => {
@@ -394,9 +397,13 @@ export function ChatComposer({
 					accessibilityLabel="Message the agent"
 					editable={!stopped}
 					value={text}
-					onChangeText={setText}
+					onChangeText={(value) => { latestText.current = value; setText(value); }}
 					onSelectionChange={(event) => setCursor(event.nativeEvent.selection.start)}
 					onContentSizeChange={(event) => {
+						if (!latestText.current) {
+							setFieldHeight(COMPOSER_FIELD_HEIGHT);
+							return;
+						}
 						// Native contentSize already includes the TextInput's vertical
 						// padding. Treat it as the field's full height; converting it to
 						// lines counted the padding as an extra line on the first render.
@@ -405,7 +412,7 @@ export function ChatComposer({
 					}}
 					placeholder={stopped ? "Agent is stopped" : deliveryPresentation.placeholder}
 					placeholderTextColor={t.textFaint}
-					style={[styles.input, { height: fieldHeight }]}
+					style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}
 					multiline
 					maxLength={40_000}
 				/>

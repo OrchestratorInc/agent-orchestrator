@@ -127,7 +127,7 @@ describe("CreateProjectAgentSheet", () => {
 		);
 	});
 
-	it.each(["stacked", "chip", "settings-row"] as const)("%s lists only ready agents and opens Harness without changing a saved selection", async (variant) => {
+	it.each(["stacked", "chip", "settings-row"] as const)("%s lists ready and configured agents and opens Harness without changing a saved selection", async (variant) => {
 		const onChange = vi.fn();
 		useUiStore.setState({ settingsModal: null });
 		render(<RequiredAgentField
@@ -136,6 +136,7 @@ describe("CreateProjectAgentSheet", () => {
 				agentReadiness("claude-code", "Claude Code", { freshness: "stale" }),
 				agentReadiness("codex", "Codex", { authentication: "unauthorized" }),
 				agentReadiness("aider", "Aider", { authentication: "not_applicable" }),
+				agentReadiness("fx", "fx", { authentication: "configured" }),
 				agentReadiness("cursor", "Cursor", { installation: "not_installed" }),
 				agentReadiness("opencode", "OpenCode", { authentication: "unknown" }),
 			]}
@@ -148,6 +149,7 @@ describe("CreateProjectAgentSheet", () => {
 		const role = variant === "stacked" ? "option" : "menuitem";
 		expect(screen.getByRole(role, { name: /Claude Code/ })).toBeInTheDocument();
 		expect(screen.getByRole(role, { name: /Aider/ })).toBeInTheDocument();
+		expect(screen.getByRole(role, { name: /fx.*Unverified/ })).toBeInTheDocument();
 		for (const name of [/Codex/, /Cursor/, /OpenCode/]) expect(screen.queryByRole(role, { name })).not.toBeInTheDocument();
 		await userEvent.keyboard("{End}{Enter}");
 		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "harness", focusAgentId: "codex" }));
@@ -161,6 +163,14 @@ describe("CreateProjectAgentSheet", () => {
 		await userEvent.click(screen.getByLabelText("Agent"));
 		expect(screen.getByRole("menuitem", { name: /Codex/ })).not.toHaveAttribute("aria-disabled", "true");
 		expect(screen.queryByRole("menuitem", { name: "Manage agents…" })).not.toBeInTheDocument();
+	});
+
+	it("does not send an installed configured agent back to setup", () => {
+		render(<RequiredAgentField id="agent" label="Agent" placeholder="Choose agent" value="fx" variant="chip" onChange={() => undefined}
+			agents={[agentReadiness("fx", "fx", { authentication: "configured" })]} />);
+
+		expect(screen.getByLabelText("Agent")).toHaveTextContent("fx");
+		expect(screen.getByLabelText("Agent")).not.toHaveTextContent("Needs setup");
 	});
 
 	it("keeps agent management available with an empty ready list", async () => {

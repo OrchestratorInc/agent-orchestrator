@@ -1191,6 +1191,7 @@ func (r *Reconciler) workerSpec(ctx context.Context, record domain.Sandbox) (san
 			"worker:orchestrate",
 			"worker:report",
 			"worker:transport",
+			"worker:notification",
 		},
 		bootstrapTicketTTL,
 	)
