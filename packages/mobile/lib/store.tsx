@@ -36,7 +36,7 @@ import { shouldReRace } from "./reRace";
 import { shouldRaceForUpgrade, UPGRADE_RACE_CHECK_MS } from "./upgradeRace";
 import { pollResultIsCurrent, sameServerConfig } from "./sameConfig";
 import { shouldShowLoading } from "./configLoading";
-import { shouldKeepPolling, userFacingError } from "./connectionError";
+import { isDesktopUnreachable, shouldKeepPolling, userFacingError } from "./connectionError";
 import { primeInstallId } from "./installId";
 import { collectPRs } from "./prView";
 import { ALL_PROJECTS, NO_PROJECTS_KNOWN, projectsForMachine, resolveActiveProject, retainProjects, type KnownProjects } from "./projectFilter";
@@ -84,6 +84,11 @@ type AppState = {
 	error: string | null;
 	// HTTP status behind `error`, or null when the server was never reached.
 	errorStatus: number | null;
+	/**
+	 * The last poll failed because nothing answered, so a reconnect can clear it.
+	 * False for rejections (401/403/429), which stop the poll, and for 5xx.
+	 */
+	unreachable: boolean;
 	/**
 	 * When the last successful poll landed, in epoch milliseconds. 0 if none has.
 	 *
@@ -591,6 +596,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			loading,
 			error,
 			errorStatus,
+			unreachable: isDesktopUnreachable({ connection, error, errorStatus }),
 			getLastSyncAt,
 			reloadConfig,
 			refresh,

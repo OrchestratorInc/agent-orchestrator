@@ -28,6 +28,11 @@ describe("spawnNotices", () => {
 		expect(spawnNotices({ ...base, agentCount: 0, loading: true })).toEqual([]);
 	});
 
+	it("lets a rejected password through, since no reconnect will fix it", () => {
+		const rescan = "Your desktop rejected this phone's password. Re-scan the pairing code on your desktop.";
+		expect(spawnNotices({ ...base, offline: false, catalogLoaded: false, catalogError: rescan, agentCount: 0 })).toEqual([rescan]);
+	});
+
 	it("collapses the same failure reported by two requests", () => {
 		const copy = "Couldn't reach your desktop.";
 		expect(spawnNotices({ ...base, catalogError: copy, modelError: copy })).toEqual([copy]);

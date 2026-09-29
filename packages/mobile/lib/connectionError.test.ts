@@ -3,6 +3,7 @@ import {
 	classifyConnectionFailure,
 	daemonDetail,
 	describeConnectionFailure,
+	isDesktopUnreachable,
 	isLocalNetworkHost,
 	isTailscaleHost,
 	shouldKeepPolling,
@@ -262,5 +263,29 @@ describe("daemonDetail", () => {
 		expect(daemonDetail(Object.assign(new Error("409 Conflict - x"), { status: 409, detail: "Clean" }))).toBe("Clean");
 		expect(daemonDetail(Object.assign(new Error("409 Conflict - Stripped"), { status: 409 }))).toBe("Stripped");
 		expect(daemonDetail(new Error("409 Conflict - no status field"))).toBeUndefined();
+	});
+});
+
+describe("isDesktopUnreachable", () => {
+	const poll = (errorStatus: number | null, over: Partial<{ connection: string; error: string | null }> = {}) => ({
+		connection: "closed",
+		error: "failed",
+		errorStatus,
+		...over,
+	});
+
+	it("is true only when the last poll got no answer", () => {
+		expect(isDesktopUnreachable(poll(null))).toBe(true);
+	});
+
+	// A rejection stops the poll for good, so promising a reconnect would be a lie
+	// and would hide the copy that says to re-scan the pairing code.
+	it("is false for rejections and for errors the desktop answered with", () => {
+		for (const status of [401, 403, 429, 500, 503]) expect(isDesktopUnreachable(poll(status))).toBe(false);
+	});
+
+	it("is false while connected and before any poll has failed", () => {
+		expect(isDesktopUnreachable(poll(null, { connection: "open", error: null }))).toBe(false);
+		expect(isDesktopUnreachable(poll(null, { error: null }))).toBe(false);
 	});
 });

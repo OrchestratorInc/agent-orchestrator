@@ -48,6 +48,24 @@ export function shouldKeepPolling(status: number | undefined): boolean {
 }
 
 /**
+ * Whether the board's last poll failed because nothing answered, the only
+ * failure that clears on its own when the desktop comes back.
+ *
+ * `connection` alone can't say this: the store closes it on every failed tick,
+ * including a 401/403/429 that stops the poll for good (see shouldKeepPolling)
+ * and a 5xx that did answer. Screens that promise "loads once the app
+ * reconnects" must only say so when a reconnect can actually happen, and must
+ * leave rejections to their own copy (re-scan the pairing code).
+ */
+export function isDesktopUnreachable(poll: {
+	connection: string;
+	error: string | null;
+	errorStatus: number | null;
+}): boolean {
+	return poll.connection === "closed" && poll.error !== null && classifyConnectionFailure(poll.errorStatus ?? undefined) === "unreachable";
+}
+
+/**
  * Whether a failed request is the daemon's word that the session no longer
  * exists. Only a 404 or 410 says that. A timeout, a refused connection or a 5xx
  * is a fact about the link, not the session, and a link comes back — so none of

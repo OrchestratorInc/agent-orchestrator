@@ -47,7 +47,7 @@ export default function NotificationsScreen() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { config, connection, sessions, loading: sessionsLoading, restore } = useApp();
+	const { config, connection, unreachable, sessions, loading: sessionsLoading, restore } = useApp();
 	const [restoringId, setRestoringId] = useState<string>();
 	// A brief line rather than an Alert: the row is still there to act on, and
 	// a modal would make a dead tap feel like an error.
@@ -118,7 +118,7 @@ export default function NotificationsScreen() {
 	}, [connection]);
 	// The board's poll is the app's view of the link: when it is down, say so in
 	// the board's words rather than as a failed load.
-	const offline = Boolean(config) && connection === "closed" && Boolean(error);
+	const offline = Boolean(config) && unreachable && Boolean(error);
 
 	function open(notification: NotificationRecord) {
 		haptics.tap();

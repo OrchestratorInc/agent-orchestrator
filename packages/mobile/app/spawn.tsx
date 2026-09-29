@@ -41,7 +41,7 @@ export default function SpawnModal() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const { projectId: routeProjectId } = useLocalSearchParams<{ projectId?: string }>();
-	const { projects, projectsKnown, activeProjectId, config, connection, spawn } = useApp();
+	const { projects, projectsKnown, activeProjectId, config, connection, unreachable, spawn } = useApp();
 
 	const [projectId, setProjectId] = useState<string | null>(null);
 	const [harness, setHarness] = useState("");
@@ -133,7 +133,9 @@ export default function SpawnModal() {
 	const displayedModelLabel = displayedModel ? modelCatalog?.models.find((item) => item.id === displayedModel)?.label ?? displayedModel : "Automatic";
 	const modelSelection = modelTouched ? model : "__auto__";
 	const notices = spawnNotices({
-		offline: connection === "closed",
+		// Only when a reconnect can fix it: a rejected password stops the poll for
+		// good, and its catalog error already says to re-scan the pairing code.
+		offline: unreachable,
 		mode,
 		loading,
 		catalogLoaded: catalog !== null,
