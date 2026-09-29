@@ -63,11 +63,11 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		case "windows":
 			plans = []Plan{s.planWinget(target, "SST.opencode")}
 		case "darwin":
-			plans = []Plan{s.planBrew(target, "anomalyco/tap/opencode"), s.planNPM(target, "opencode-ai@latest"), s.planShellInstaller(target, "https://opencode.ai/install", "bash")}
+			plans = []Plan{s.planBrew(target, "anomalyco/tap/opencode"), s.planNPM(target, "@opencode/cli@latest"), s.planShellInstaller(target, "https://opencode.ai/install", "bash")}
 		case "linux":
-			plans = []Plan{s.planNPM(target, "opencode-ai@latest"), s.planShellInstaller(target, "https://opencode.ai/install", "bash")}
+			plans = []Plan{s.planNPM(target, "@opencode/cli@latest"), s.planShellInstaller(target, "https://opencode.ai/install", "bash")}
 		default:
-			plans = []Plan{s.planNPM(target, "opencode-ai@latest")}
+			plans = []Plan{s.planNPM(target, "@opencode/cli@latest")}
 		}
 	case TargetCopilot:
 		switch s.goos {

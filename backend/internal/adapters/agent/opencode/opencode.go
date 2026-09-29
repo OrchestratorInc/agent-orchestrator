@@ -10,12 +10,17 @@
 //     plugin file (see hooks.go) instead of merging JSON. The same install also
 //     materializes using-ao under .opencode/skills/ so opencode's skill tool
 //     can discover it (the data-dir skill path alone is invisible to opencode).
-//   - Its CLI exposes only one approval flag (--dangerously-skip-permissions)
-//     and no system-prompt flag, so AO injects standing instructions by writing
-//     an AO-owned per-session config and selecting the generated agent.
+//   - Its CLI (opencode v2, @opencode/cli) has no flag for a system prompt,
+//     model, or agent (v1's --model/--agent/--dangerously-skip-permissions were
+//     removed), so AO injects standing instructions, the model override, and the
+//     approval mode by writing an AO-owned per-session config: it selects the
+//     generated agent via `default_agent`, carries the override as `model`, and
+//     approves with `--auto` plus the agent's own permission rule.
 //
 // AO-managed sessions derive native session identity and display metadata from
-// the opencode plugin's reported events, mirroring the Codex adapter.
+// the opencode plugin's reported events, mirroring the Codex adapter. The
+// adapter targets opencode v2 and refuses an older binary loudly (see
+// verifyOpenCodeMajorVersion).
 package opencode
 
 import (
@@ -26,7 +31,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -94,38 +101,39 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec reports opencode's optional provider/model override.
+// GetConfigSpec reports opencode's optional provider/model override. opencode v2
+// dropped the top-level `--model` flag, so the override is written into the
+// AO-owned config file as `model` (provider/model) instead of a launch flag.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
-	return agentbase.ModelConfigSpec(ctx, "Model override passed to `opencode --model`.")
+	return agentbase.ModelConfigSpec(ctx, "Model override written to the opencode config as `model` (provider/model).")
 }
 
 // GetLaunchCommand builds the argv to start a new interactive opencode session.
 // Shape:
 //
-//	[env OPENCODE_CONFIG=<ao-config>] opencode [--dangerously-skip-permissions] [--agent <ao-agent>] [--prompt <prompt>]
+//	[env OPENCODE_CONFIG=<ao-config>] opencode [--auto] [--prompt <prompt>]
 //
 // The session runs in the worktree (cwd is set by the runtime, as for Claude
-// Code and Codex). opencode has no CLI flag to set a system prompt, so AO writes
-// an opencode config into the AO prompt artifact directory, points OPENCODE_CONFIG
-// at it, and selects the generated agent with --agent. The initial task prompt
-// is delivered via --prompt (its argument, so a leading "-" is not read as a flag).
+// Code and Codex). opencode v2 has no CLI flag to set a system prompt, model, or
+// agent (the v1 `--model`/`--agent`/`--dangerously-skip-permissions` flags are
+// gone), so AO writes an opencode config into the AO prompt artifact directory,
+// points OPENCODE_CONFIG at it, and selects the generated agent via the config's
+// `default_agent` while carrying the model as the config's `model`. The initial
+// task prompt is delivered via --prompt (its argument, so a leading "-" is not
+// read as a flag).
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
 	binary, err := p.opencodeBinary(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	envPrefix, agentName, err := opencodeConfigEnvPrefix(cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.SessionID)
+	envPrefix, _, err := opencodeConfigEnvPrefix(cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.SessionID, cfg.Config.Model)
 	if err != nil {
 		return nil, err
 	}
 	cmd = envPrefix
 	cmd = append(cmd, binary)
 	appendPermissionFlags(&cmd, cfg.Permissions)
-	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
-	if agentName != "" {
-		cmd = append(cmd, "--agent", agentName)
-	}
 	if cfg.Prompt != "" {
 		cmd = append(cmd, "--prompt", cfg.Prompt)
 	}
@@ -133,14 +141,16 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 }
 
 // GetRestoreCommand rebuilds the argv that continues an existing opencode
-// session: `[env OPENCODE_CONFIG=<ao-config>] opencode [--dangerously-skip-permissions] [--agent <ao-agent>] --session <agentSessionId> [--prompt <prompt>]`.
+// session: `[env OPENCODE_CONFIG=<ao-config>] opencode [--auto] --session <agentSessionId> [--prompt <prompt>]`.
 // It re-applies the permission flag and the generated AO agent config (resume
-// otherwise reverts to configured defaults). ok is false when the plugin-derived
+// otherwise reverts to configured defaults; the model and agent ride in that
+// config, since v2 dropped the flags). ok is false when the plugin-derived
 // native session id has not landed yet, so callers fall back to fresh launch
 // behavior — mirroring the Codex adapter. The optional resume-time prompt is
 // applied the same way GetLaunchCommand does, so a review task submitted
 // alongside a resume starts atomically with the process instead of racing a
-// post-launch terminal injection.
+// post-launch terminal injection. `--session <id>` continues that session (or
+// creates it if it does not exist), which is opencode v2's resume contract.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -155,17 +165,13 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 
-	envPrefix, agentName, err := opencodeConfigEnvPrefix(cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.Session.ID)
+	envPrefix, _, err := opencodeConfigEnvPrefix(cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.Session.ID, cfg.Config.Model)
 	if err != nil {
 		return nil, false, err
 	}
 	cmd = envPrefix
 	cmd = append(cmd, binary)
 	appendPermissionFlags(&cmd, cfg.Permissions)
-	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
-	if agentName != "" {
-		cmd = append(cmd, "--agent", agentName)
-	}
 	cmd = append(cmd, "--session", agentSessionID)
 	if cfg.Prompt != "" {
 		cmd = append(cmd, "--prompt", cfg.Prompt)
@@ -208,10 +214,14 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		return ports.AgentAuthStatusUnknown, probeCtx.Err()
 	}
 	text := strings.ToLower(string(out))
-	if strings.Contains(text, "0 credentials") || strings.Contains(text, "no credentials") || strings.Contains(text, "not authenticated") {
+	// v2 `auth list` prints "No authenticated integrations" when empty and lists
+	// "Authenticated integrations" otherwise; v1 printed "N credentials". Match
+	// the empty forms of both first so the authorized check below can rely on the
+	// remaining "authenticated"/"credential" tokens meaning a populated list.
+	if strings.Contains(text, "no authenticated") || strings.Contains(text, "0 credentials") || strings.Contains(text, "no credentials") || strings.Contains(text, "not authenticated") {
 		return ports.AgentAuthStatusUnknown, nil
 	}
-	if strings.Contains(text, "credential") && err == nil {
+	if err == nil && (strings.Contains(text, "authenticated") || strings.Contains(text, "credential")) {
 		return ports.AgentAuthStatusAuthorized, nil
 	}
 	if err != nil {
@@ -372,14 +382,15 @@ func opencodeDBCount(ctx context.Context, db *sql.DB, query string) (int, error)
 // appendPermissionFlags uses OpenCode's own approval flags where it has them.
 // --auto approves whatever is not explicitly denied, which is exactly AO's auto
 // mode, so the Terminal UI runs the provider's implementation rather than an
-// emulation of it. Bypass keeps the established alias and carries its
-// full-access rule on the AO agent, which outranks every config layer.
+// emulation of it. opencode v2 removed the `--dangerously-skip-permissions`
+// alias, so bypass's true full access (which also overrides explicit denies)
+// comes from the `permission: "allow"` rule on the AO agent in the config, and
+// --auto rides along as a belt-and-suspenders backstop for anything the agent
+// ruleset doesn't cover. Both auto and bypass therefore pass --auto here.
 func appendPermissionFlags(cmd *[]string, permissions ports.PermissionMode) {
 	switch ports.NormalizePermissionMode(permissions) {
-	case ports.PermissionModeAuto:
+	case ports.PermissionModeAuto, ports.PermissionModeBypassPermissions:
 		*cmd = append(*cmd, "--auto")
-	case ports.PermissionModeBypassPermissions:
-		*cmd = append(*cmd, "--dangerously-skip-permissions")
 	}
 }
 
@@ -387,8 +398,12 @@ const opencodeConfigEnvVar = "OPENCODE_CONFIG"
 
 type opencodeInlineConfig struct {
 	Schema     string                           `json:"$schema,omitempty"`
+	Model      string                           `json:"model,omitempty"`
 	Permission map[string]string                `json:"permission,omitempty"`
 	Agent      map[string]opencodeAgentSettings `json:"agent,omitempty"`
+	// DefaultAgent selects the AO-generated agent at launch. v2 removed the
+	// `--agent` flag, so the generated agent must be chosen here instead.
+	DefaultAgent string `json:"default_agent,omitempty"`
 }
 
 type opencodeAgentSettings struct {
@@ -420,7 +435,8 @@ func opencodePermissionConfig(mode ports.PermissionMode) map[string]string {
 	return nil
 }
 
-func opencodeConfigEnvPrefix(permissions ports.PermissionMode, inlinePrompt, promptFile, sessionID string) ([]string, string, error) {
+func opencodeConfigEnvPrefix(permissions ports.PermissionMode, inlinePrompt, promptFile, sessionID, model string) ([]string, string, error) {
+	model = strings.TrimSpace(model)
 	permission := opencodePermissionConfig(permissions)
 	// Bypass goes on the agent, not in the config body. OpenCode's native flag
 	// is an alias of --auto, which still enforces explicit deny rules, and a
@@ -437,6 +453,12 @@ func opencodeConfigEnvPrefix(permissions ports.PermissionMode, inlinePrompt, pro
 	// policy there, and a launch prefix setting the same variable would replace
 	// it at exec time. Writing to OPENCODE_CONFIG instead also keeps a single
 	// answer for precedence: a worktree opencode.json always overrides AO.
+	// Every AO customization opencode v2 exposes — the standing-instructions
+	// agent, the model override (v2 dropped `--model`), and the permission
+	// overlay — rides this one AO-owned config file, which is written next to the
+	// system prompt. A session with no system prompt therefore gets no AO config
+	// and runs on opencode's own configuration; AO always injects standing
+	// instructions for its sessions, so promptFile is set for every managed run.
 	if promptFile == "" {
 		if inlinePrompt != "" {
 			return nil, "", fmt.Errorf("opencode: system prompt file required to build agent config")
@@ -452,10 +474,13 @@ func opencodeConfigEnvPrefix(permissions ports.PermissionMode, inlinePrompt, pro
 	}
 	config := opencodeInlineConfig{
 		Schema:     "https://opencode.ai/config.json",
+		Model:      model,
 		Permission: permission,
 		Agent: map[string]opencodeAgentSettings{
 			agentName: {Mode: "primary", Prompt: prompt, Permission: agentPermission},
 		},
+		// v2 has no --agent flag; select the generated agent via the config.
+		DefaultAgent: agentName,
 	}
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -640,6 +665,50 @@ func (p *Plugin) opencodeBinary(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := verifyOpenCodeMajorVersion(ctx, binary); err != nil {
+		return "", err
+	}
 	p.resolvedBinary = binary
 	return binary, nil
+}
+
+// minOpenCodeMajorVersion is the lowest opencode major AO's adapter supports.
+// opencode v2 (@opencode/cli) rewrote the plugin API, the config surface, and
+// the launch flags this adapter depends on. Against a v1 binary (opencode-ai,
+// frozen at 1.18.33) the activity plugin silently fails to load and the model
+// override is dropped, so AO refuses a too-old binary loudly here rather than
+// running degraded — matching the "fail loud, not silent" contract.
+const minOpenCodeMajorVersion = 2
+
+// opencodeVersionRE extracts the semantic version from `opencode --version`
+// output (e.g. "opencode v2.0.19" or "2.0.19").
+var opencodeVersionRE = regexp.MustCompile(`(\d+)\.(\d+)\.(\d+)`)
+
+// verifyOpenCodeMajorVersion errors when the resolved binary is older than v2.
+// It is best-effort about *reading* the version: a probe that times out or fails
+// to exec, or output it can't parse, is treated as "unknown" and allowed through
+// so a transient hiccup never blocks a launch — only a confidently-detected v1
+// (or older) is rejected.
+func verifyOpenCodeMajorVersion(ctx context.Context, binary string) error {
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := aoprocess.CommandContext(probeCtx, binary, "--version").CombinedOutput()
+	if err != nil {
+		return nil // can't determine — don't block on a probe failure
+	}
+	match := opencodeVersionRE.FindStringSubmatch(string(out))
+	if match == nil {
+		return nil // unrecognized format — don't block
+	}
+	major, convErr := strconv.Atoi(match[1])
+	if convErr != nil {
+		return nil
+	}
+	if major < minOpenCodeMajorVersion {
+		return fmt.Errorf(
+			"opencode %s detected, but AO requires opencode v%d or newer (the @opencode/cli package). Reinstall opencode v2, e.g. `npm install -g @opencode/cli@%d`",
+			strings.TrimSpace(string(out)), minOpenCodeMajorVersion, minOpenCodeMajorVersion,
+		)
+	}
+	return nil
 }

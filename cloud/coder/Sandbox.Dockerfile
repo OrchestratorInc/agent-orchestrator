@@ -11,9 +11,9 @@ FROM node:22-bookworm-slim AS node-runtime
 FROM codercom/enterprise-base:ubuntu
 ARG CLAUDE_CODE_VERSION=2.1.228
 # OpenCode v2 ships as a NEW package, @opencode/cli (v1 was opencode-ai, whose
-# `latest` never crosses to v2). Pinned to the v2 major. NOTE: the shared adapter
-# (backend/internal/adapters/agent/opencode) must be ported to v2's plugin/CLI
-# surface before an image built from this is deployed — see the v1->v2 memo.
+# `latest` never crosses to v2). Pinned to the v2 major. The shared adapter
+# (backend/internal/adapters/agent/opencode) is ported to v2's plugin/CLI surface
+# and gates a too-old binary loudly. Keep in lockstep with cloud/Dockerfile.
 ARG OPENCODE_VERSION=2
 USER root
 

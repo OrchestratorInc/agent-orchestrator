@@ -18,18 +18,19 @@ import (
 
 const (
 	// opencode scans both `.opencode/plugin/` and `.opencode/plugins/` for
-	// `*.js`/`*.ts` files (see opencode's ConfigPlugin glob
-	// "{plugin,plugins}/*.{ts,js}"). AO writes the plural `plugins/`, matching
-	// the directory the upstream opencode tooling (and the entire-cli reference
-	// integration) uses.
+	// `*.js`/`*.ts` files (opencode's ConfigPlugin glob "{plugin,plugins}/*.{ts,js}";
+	// verified live against opencode v2.0.19 — a plugin dropped in either dir
+	// loads). AO writes the plural `plugins/`, matching the directory the upstream
+	// opencode tooling (and the entire-cli reference integration) uses.
 	opencodePluginDirName = ".opencode"
 	opencodePluginSubDir  = "plugins"
 
 	// opencodePluginFileName is the AO-owned plugin file. AO fully owns this
 	// filename: install overwrites it and uninstall deletes it (guarded by the
 	// sentinel), so user-authored plugins in other files are never touched.
-	// It is TypeScript (opencode runs on Bun); the file's only import is a
-	// type-only import, which Bun erases at runtime.
+	// It is TypeScript (opencode runs on Bun); the v2 plugin has no imports at
+	// all — it default-exports a plain `{ id, setup }` object, so it loads even
+	// though @opencode/plugin is not resolvable in the sandbox.
 	opencodePluginFileName = "ao-activity.ts"
 
 	// opencodePluginSentinel marks the file as AO-managed. AreHooksInstalled and

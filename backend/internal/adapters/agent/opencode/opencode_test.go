@@ -419,11 +419,13 @@ func TestGetLaunchCommandBuildsArgv(t *testing.T) {
 	}
 
 	configPath := filepath.Join(filepath.Dir(promptFile), "opencode.json")
+	// v2 dropped --agent (selected via config default_agent) and
+	// --dangerously-skip-permissions (bypass rides the agent's "allow" rule with
+	// --auto as backstop).
 	want := []string{
 		"env", "OPENCODE_CONFIG=" + configPath,
 		"opencode",
-		"--dangerously-skip-permissions",
-		"--agent", "ao-sess-1",
+		"--auto",
 		"--prompt", "-fix this",
 	}
 	if !reflect.DeepEqual(cmd, want) {
@@ -441,6 +443,9 @@ func TestGetLaunchCommandBuildsArgv(t *testing.T) {
 	if agent.Mode != "primary" || agent.Prompt != "follow AO rules" {
 		t.Fatalf("agent config = %#v, want primary inline prompt", agent)
 	}
+	if config.DefaultAgent != "ao-sess-1" {
+		t.Fatalf("default_agent = %q, want ao-sess-1", config.DefaultAgent)
+	}
 }
 
 func TestGetLaunchCommandSystemPromptFileConfig(t *testing.T) {
@@ -456,7 +461,8 @@ func TestGetLaunchCommandSystemPromptFileConfig(t *testing.T) {
 	}
 
 	configPath := filepath.Join(filepath.Dir(promptFile), "opencode.json")
-	want := []string{"env", "OPENCODE_CONFIG=" + configPath, "opencode", "--agent", "ao-sess-2"}
+	// v2: no --agent flag; the generated agent is selected via config default_agent.
+	want := []string{"env", "OPENCODE_CONFIG=" + configPath, "opencode"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -470,6 +476,9 @@ func TestGetLaunchCommandSystemPromptFileConfig(t *testing.T) {
 	}
 	if got := config.Agent["ao-sess-2"].Prompt; got != "{file:./system.md}" {
 		t.Fatalf("agent prompt = %q, want file reference", got)
+	}
+	if config.DefaultAgent != "ao-sess-2" {
+		t.Fatalf("default_agent = %q, want ao-sess-2", config.DefaultAgent)
 	}
 }
 
@@ -490,7 +499,9 @@ func TestGetLaunchCommandMapsPermissionModes(t *testing.T) {
 		// Auto is OpenCode's own --auto, so the launch carries the flag and no
 		// rules of AO's: the provider decides what "not explicitly denied" means.
 		{name: "auto", permission: ports.PermissionModeAuto, wantFlag: "--auto"},
-		{name: "bypass-permissions", permission: ports.PermissionModeBypassPermissions, wantFlag: "--dangerously-skip-permissions"},
+		// v2 removed --dangerously-skip-permissions; bypass rides --auto (with the
+		// agent's "allow" rule carrying the true full access).
+		{name: "bypass-permissions", permission: ports.PermissionModeBypassPermissions, wantFlag: "--auto"},
 	}
 
 	for _, tt := range tests {
@@ -574,14 +585,33 @@ func TestGetConfigSpecReportsModel(t *testing.T) {
 	}
 }
 
-func TestGetLaunchCommandForwardsModel(t *testing.T) {
+// opencode v2 has no --model flag, so a model override is written into the
+// AO-owned config as `model` (trimmed), not appended to the launch argv.
+func TestGetLaunchCommandWritesModelToConfig(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "opencode"}
-	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{Config: ports.AgentConfig{Model: "  anthropic/claude-sonnet  "}})
+	promptFile := filepath.Join(t.TempDir(), "system.md")
+	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		SessionID:        "sess-1",
+		SystemPromptFile: promptFile,
+		Config:           ports.AgentConfig{Model: "  anthropic/claude-sonnet  "},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"opencode", "--model", "anthropic/claude-sonnet"}; !reflect.DeepEqual(cmd, want) {
-		t.Fatalf("cmd = %#v, want %#v", cmd, want)
+	if contains(cmd, "--model") {
+		t.Fatalf("cmd must not carry a --model flag in v2: %#v", cmd)
+	}
+	configPath := filepath.Join(filepath.Dir(promptFile), "opencode.json")
+	var config opencodeInlineConfig
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	if config.Model != "anthropic/claude-sonnet" {
+		t.Fatalf("config model = %q, want trimmed anthropic/claude-sonnet", config.Model)
 	}
 }
 
@@ -629,22 +659,24 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 			t.Fatalf("installed plugin missing hook command %q:\n%s", want, body)
 		}
 	}
-	// The opencode-native lifecycle events the plugin subscribes to. Stop maps
-	// to session.status(idle) — NOT the deprecated session.idle — and the user
-	// prompt is detected from message.updated/message.part.updated.
-	for _, marker := range []string{"session.created", "message.updated", "message.part.updated", "session.status"} {
+	// The opencode v2 lifecycle events the plugin subscribes to (verified live
+	// against opencode 2.0.19): stop maps to session.execution.succeeded (and
+	// failed/interrupted), the user prompt to session.inbox.enqueued, and
+	// activity to session.execution.started / session.tool.called.
+	for _, marker := range []string{"session.created", "session.inbox.enqueued", "session.execution.started", "session.execution.succeeded", "session.tool.called"} {
 		if !strings.Contains(body, marker) {
 			t.Fatalf("installed plugin missing opencode event %q:\n%s", marker, body)
 		}
 	}
-	// Tool execution is exposed as named plugin hooks. Permission approvals and
-	// explicit questions are emitted through opencode's generic event callback.
-	for _, hook := range []string{`"tool.execute.before":`, `"tool.execute.after":`} {
+	// Tool execution is registered via v2's ctx.tool.hook(...) API.
+	for _, hook := range []string{`ctx.tool.hook("execute.before"`, `ctx.tool.hook("execute.after"`} {
 		if !strings.Contains(body, hook) {
-			t.Fatalf("installed plugin missing opencode hook %q:\n%s", hook, body)
+			t.Fatalf("installed plugin missing opencode tool hook %q:\n%s", hook, body)
 		}
 	}
-	for _, eventCase := range []string{`case "permission.asked":`, `case "permission.replied":`, `case "question.asked":`, `case "question.replied":`, `case "question.rejected":`} {
+	// Permission approvals ride the generic event stream (v2 dropped v1's
+	// question.* events).
+	for _, eventCase := range []string{`case "permission.asked":`, `case "permission.replied":`} {
 		if !strings.Contains(body, eventCase) {
 			t.Fatalf("installed plugin missing opencode event handler %q:\n%s", eventCase, body)
 		}
@@ -668,11 +700,11 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 	if !strings.Contains(body, "AO_RUNTIME_LAUNCH_ID") {
 		t.Fatalf("installed plugin missing AO_RUNTIME_LAUNCH_ID reference:\n%s", body)
 	}
-	// Guard against regressing back to subscribing to the deprecated/unreliable
-	// session.idle event (the quoted event string is how a `case` would name it;
-	// the explanatory comment mentions it unquoted, which is fine).
+	// Guard against reintroducing session.idle: it is not a confirmed v2 event
+	// (verified live — the turn-complete signal is session.execution.succeeded),
+	// so the stop mapping must not depend on it.
 	if strings.Contains(body, `"session.idle"`) {
-		t.Fatalf("plugin subscribes to deprecated session.idle; use session.status(idle):\n%s", body)
+		t.Fatalf("plugin subscribes to session.idle; use session.execution.succeeded/failed/interrupted:\n%s", body)
 	}
 	// A hung `ao hooks` call must not block opencode forever, so each spawn is
 	// time-boxed (parity with the claude/codex 30s hook timeout).
@@ -902,9 +934,10 @@ func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
+	// v2: bypass → --auto (no --dangerously-skip-permissions).
 	want := []string{
 		"opencode",
-		"--dangerously-skip-permissions",
+		"--auto",
 		"--session", "ses_abc123",
 	}
 	if !reflect.DeepEqual(cmd, want) {
@@ -934,10 +967,11 @@ func TestGetRestoreCommandReappliesSystemPromptConfig(t *testing.T) {
 		t.Fatal("ok = false, want true")
 	}
 	configPath := filepath.Join(filepath.Dir(promptFile), "opencode.json")
+	// v2: default permissions carry no flag, and the agent is selected via
+	// config default_agent (no --agent flag).
 	want := []string{
 		"env", "OPENCODE_CONFIG=" + configPath,
 		"opencode",
-		"--agent", "ao-sess-1",
 		"--session", "ses_abc123",
 	}
 	if !reflect.DeepEqual(cmd, want) {
@@ -953,6 +987,9 @@ func TestGetRestoreCommandReappliesSystemPromptConfig(t *testing.T) {
 	}
 	if got := config.Agent["ao-sess-1"].Prompt; got != "restore AO rules" {
 		t.Fatalf("agent prompt = %q, want restore rules", got)
+	}
+	if config.DefaultAgent != "ao-sess-1" {
+		t.Fatalf("default_agent = %q, want ao-sess-1", config.DefaultAgent)
 	}
 }
 
@@ -976,9 +1013,10 @@ func TestGetRestoreCommandAppendsResumeTimePrompt(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
+	// v2: bypass → --auto (no --dangerously-skip-permissions).
 	want := []string{
 		"opencode",
-		"--dangerously-skip-permissions",
+		"--auto",
 		"--session", "ses_abc123",
 		"--prompt", "review the new commit",
 	}
@@ -1078,17 +1116,18 @@ func contains(values []string, needle string) bool {
 }
 
 // Bypass promises full access on both surfaces. A config-level rule would lose
-// to a project policy and the native flag is an alias of --auto, which still
-// enforces explicit denies, so the rule rides the agent, which outranks both.
+// to a project policy, and v2's only approve flag (--auto) still enforces
+// explicit denies, so the true full-access rule rides the agent, which outranks
+// every config layer.
 func TestGetLaunchCommandBypassesEvenAWorktreePolicy(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "opencode"}
 	workspace := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workspace, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// An explicit deny, which the flag alone would still enforce: OpenCode
-	// treats --dangerously-skip-permissions as an alias of --auto, and a denied
-	// tool never becomes a request to auto-approve.
+	// An explicit deny, which --auto alone would still enforce: a denied tool
+	// never becomes a request to auto-approve, so only the agent's "allow" rule
+	// can override it.
 	if err := os.WriteFile(filepath.Join(workspace, "opencode.json"),
 		[]byte(`{"permission":{"bash":"deny"}}`), 0o600); err != nil {
 		t.Fatal(err)
