@@ -70,6 +70,18 @@ func (s *Store) StartSessionInterfaceTransition(
 	}
 	var transition domain.SessionInterfaceTransition
 	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+		// Message admission updates this session row before choosing its route.
+		// Hold the same lock before checking for a transition so a concurrent
+		// message is either held by this handoff or settled before it starts.
+		var lockedSession int
+		if err := tx.QueryRow(ctx, `SELECT 1 FROM ao_sessions
+			WHERE org_id = $1 AND id = $2 AND is_terminated = false
+			FOR UPDATE`, orgID, sessionID).Scan(&lockedSession); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
 		var active bool
 		if err := tx.QueryRow(
 			ctx,

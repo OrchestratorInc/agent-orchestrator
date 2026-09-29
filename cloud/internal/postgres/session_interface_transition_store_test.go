@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/jackc/pgx/v5"
@@ -53,6 +54,75 @@ func TestInterruptTransitionFinishesQueuedChatTurns(t *testing.T) {
 				t.Fatalf("drain left queued=%d, interrupted=%d; want 2, 0", queued, interrupted)
 			}
 		})
+	}
+}
+
+func TestStartTransitionWaitsForMessageAdmission(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	if err := store.withTenant(ctx, principal, fixture.orgID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE ao_sessions SET interface = 'chat'
+			WHERE org_id = $1 AND id = $2`, fixture.orgID, fixture.sessionID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	messageTx, err := store.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer messageTx.Rollback(context.Background())
+	if _, err := messageTx.Exec(ctx,
+		`SELECT set_config('ao.user_id', $1, true), set_config('ao.org_id', $2, true)`,
+		fixture.userID, fixture.orgID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sendMessageTx(ctx, messageTx, fixture.orgID, fixture.sessionID,
+		"concurrent-message", "queued before switch", fixture.userID, "", "", nil,
+		domain.ChatTurnSettings{}); err != nil {
+		t.Fatal(err)
+	}
+
+	transitionDone := make(chan error, 1)
+	go func() {
+		_, err := store.StartSessionInterfaceTransition(ctx, principal, fixture.orgID,
+			fixture.sessionID, domain.SessionInterfaceChat, domain.SessionInterfaceTUI,
+			domain.SessionInterfaceTransitionInterrupt, "")
+		transitionDone <- err
+	}()
+	select {
+	case err := <-transitionDone:
+		t.Fatalf("transition started before message committed: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+	if err := messageTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-transitionDone:
+		if err != nil {
+			t.Fatalf("start transition: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("transition did not resume after message committed")
+	}
+	var queued, interrupted int
+	if err := store.withTenant(ctx, principal, fixture.orgID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM ao_turns
+			WHERE org_id = $1 AND session_id = $2 AND state = 'queued'`, fixture.orgID, fixture.sessionID).Scan(&queued); err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx, `SELECT count(*) FROM ao_events
+			WHERE org_id = $1 AND session_id = $2 AND type = 'chat.turn_interrupted'`, fixture.orgID, fixture.sessionID).Scan(&interrupted)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 0 || interrupted != 1 {
+		t.Fatalf("after interrupt: queued=%d, interrupted=%d; want 0, 1", queued, interrupted)
 	}
 }
 

@@ -1,7 +1,7 @@
 -- +goose Up
 
--- Interface handoff commands use the durable worker request queue. Keep every
--- workspace and terminal kind already allowed by migration 00041.
+-- Interface handoff commands use the durable worker request queue. Keep the
+-- workspace, terminal, and harness kinds allowed by migration 00048.
 ALTER TABLE ao_worker_requests
     DROP CONSTRAINT ao_worker_requests_kind_check;
 ALTER TABLE ao_worker_requests
@@ -14,10 +14,10 @@ ALTER TABLE ao_worker_requests
         'workspace.review.diffs', 'workspace.review.revision',
         'workspace.review.write',
         'terminal.open', 'terminal.input', 'terminal.resize', 'terminal.close',
-        'browser.fetch',
+        'browser.fetch', 'harness.inspect', 'harness.install',
         'interface.inspect', 'interface.interrupt', 'interface.stop',
         'interface.native-id', 'interface.start', 'interface.ready'
-    ));
+    )) NOT VALID;
 
 -- +goose Down
 
@@ -34,5 +34,5 @@ ALTER TABLE ao_worker_requests
         'workspace.review.diffs', 'workspace.review.revision',
         'workspace.review.write',
         'terminal.open', 'terminal.input', 'terminal.resize', 'terminal.close',
-        'browser.fetch'
-    ));
+        'browser.fetch', 'harness.inspect', 'harness.install'
+    )) NOT VALID;

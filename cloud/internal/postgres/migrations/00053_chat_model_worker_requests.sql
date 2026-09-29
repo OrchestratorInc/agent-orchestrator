@@ -12,11 +12,11 @@ ALTER TABLE ao_worker_requests
         'workspace.review.diffs', 'workspace.review.revision',
         'workspace.review.write',
         'terminal.open', 'terminal.input', 'terminal.resize', 'terminal.close',
-        'browser.fetch',
+        'browser.fetch', 'harness.inspect', 'harness.install',
         'interface.inspect', 'interface.interrupt', 'interface.stop',
         'interface.native-id', 'interface.start', 'interface.ready',
         'chat.models'
-    ));
+    )) NOT VALID;
 
 -- +goose Down
 
@@ -33,7 +33,7 @@ ALTER TABLE ao_worker_requests
         'workspace.review.diffs', 'workspace.review.revision',
         'workspace.review.write',
         'terminal.open', 'terminal.input', 'terminal.resize', 'terminal.close',
-        'browser.fetch',
+        'browser.fetch', 'harness.inspect', 'harness.install',
         'interface.inspect', 'interface.interrupt', 'interface.stop',
         'interface.native-id', 'interface.start', 'interface.ready'
-    ));
+    )) NOT VALID;
