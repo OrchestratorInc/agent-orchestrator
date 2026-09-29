@@ -13,7 +13,7 @@ WHERE t.conversation_id = sqlc.arg(conversation_id)
 
 -- name: ListDueWorkerTurnFailures :many
 SELECT d.turn_id, d.session_id, d.project_id, d.attempts,
-       t.error_message, s.display_name
+       d.target_session_id, t.error_message, s.display_name
 FROM worker_turn_failure_delivery AS d
 JOIN conversation_turns AS t ON t.id = d.turn_id
 JOIN sessions AS s ON s.id = d.session_id
@@ -26,25 +26,11 @@ UPDATE worker_turn_failure_delivery
 SET accepted_at = sqlc.arg(accepted_at), last_error = ''
 WHERE turn_id = sqlc.arg(turn_id) AND accepted_at IS NULL;
 
--- name: HasSettledFailedPrimaryTurn :one
-SELECT EXISTS (
-    SELECT 1 FROM conversations AS c
-    JOIN conversation_turns AS t ON t.conversation_id = c.id
-    WHERE c.current_session_id = sqlc.arg(session_id)
-      AND t.handled_by_session_id = sqlc.arg(session_id)
-      AND t.handled_by_review_id IS NULL
-      AND t.state = 'failed'
-      AND t.id = (
-          SELECT latest.id FROM conversation_turns AS latest
-          WHERE latest.conversation_id = c.id AND latest.state <> 'queued'
-          ORDER BY latest.requested_at DESC, latest.rowid DESC LIMIT 1
-      )
-      AND NOT EXISTS (
-          SELECT 1 FROM conversation_activities AS a
-          WHERE a.conversation_id = c.id
-            AND a.kind IN ('approval', 'user_input') AND a.status = 'pending'
-      )
-);
+-- name: BindWorkerTurnFailureTarget :execrows
+UPDATE worker_turn_failure_delivery
+SET target_session_id = sqlc.arg(target_session_id)
+WHERE turn_id = sqlc.arg(turn_id)
+  AND target_session_id IS NULL AND accepted_at IS NULL;
 
 -- name: RetryWorkerTurnFailure :execrows
 UPDATE worker_turn_failure_delivery

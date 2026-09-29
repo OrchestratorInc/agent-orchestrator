@@ -4304,6 +4304,37 @@ func TestActivity_LeavingNeedsInputResolvesNotification(t *testing.T) {
 	}
 }
 
+func TestFailedChatTurnNotifiesOnceAndNextTurnResolves(t *testing.T) {
+	st := newFakeStore()
+	sink := &fakeNotificationSink{}
+	m := New(st, nil, WithNotificationSink(sink))
+	now := time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker,
+		Activity:      domain.Activity{State: domain.ActivityActive, LastActivityAt: now.Add(-time.Minute)},
+		FirstSignalAt: now.Add(-time.Minute),
+	}
+	ctx := context.Background()
+	failed := ports.ActivitySignal{Valid: true, State: domain.ActivityWaitingInput, Event: "chat.turn.failed"}
+	for i := 0; i < 2; i++ {
+		if err := m.ApplyActivitySignal(ctx, "mer-1", failed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(sink.intents) != 1 || sink.intents[0].Type != domain.NotificationNeedsInput {
+		t.Fatalf("failed-turn notification intents = %+v", sink.intents)
+	}
+	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{
+		Valid: true, State: domain.ActivityActive, Event: "chat.turn.started",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.resolutions) != 1 || sink.resolutions[0].Type != domain.NotificationNeedsInput {
+		t.Fatalf("retry resolutions = %+v", sink.resolutions)
+	}
+}
+
 // An in-family escalation is still the same pause: nothing was answered, so
 // there is nothing to resolve.
 func TestActivity_WaitingInputToBlockedDoesNotResolve(t *testing.T) {

@@ -126,6 +126,9 @@ func (c *integrationChatConversation) SendTurn(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.sent = append(c.sent, message)
+	if c.providerID == chatSwitchIntegrationTargetProvider {
+		return ports.ChatTurnRef{ProviderTurnID: fmt.Sprintf("target-turn-%d", len(c.sent))}, nil
+	}
 	return ports.ChatTurnRef{ProviderTurnID: fmt.Sprintf("provider-turn-%d", len(c.sent))}, nil
 }
 
@@ -288,6 +291,7 @@ type chatSwitchIntegrationFixture struct {
 	manager    *Manager
 	lifecycle  *observingActivationLifecycle
 	session    domain.SessionRecord
+	sourceChat *integrationChatConversation
 	targetChat *integrationChatConversation
 }
 
@@ -337,13 +341,14 @@ func newChatSwitchIntegrationFixture(t *testing.T, stale bool) *chatSwitchIntegr
 		t.Fatalf("seed integration conversation: %v", err)
 	}
 
+	sourceChat := newIntegrationChatConversation(chatSwitchIntegrationSourceProvider)
 	sourceDriver := integrationChatDriver{
 		harness: domain.HarnessClaudeCode,
 		start: func() ports.ChatConversation {
-			return newIntegrationChatConversation(chatSwitchIntegrationSourceProvider)
+			return sourceChat
 		},
 		resume: func() ports.ChatConversation {
-			return newIntegrationChatConversation(chatSwitchIntegrationSourceProvider)
+			return sourceChat
 		},
 	}
 	targetChat := newIntegrationChatConversation(chatSwitchIntegrationTargetProvider)
@@ -419,7 +424,7 @@ func newChatSwitchIntegrationFixture(t *testing.T, stale bool) *chatSwitchIntegr
 
 	return &chatSwitchIntegrationFixture{
 		store: store, service: service, manager: manager, lifecycle: observedLifecycle,
-		session: session, targetChat: targetChat,
+		session: session, sourceChat: sourceChat, targetChat: targetChat,
 	}
 }
 
@@ -438,6 +443,91 @@ func (f *chatSwitchIntegrationFixture) runSwitch(t *testing.T, key string) domai
 		t.Fatalf("wait for SwitchAgent worker: %v", err)
 	}
 	return admitted
+}
+
+func TestSwitchAgentAfterSettledFailedChatTurn(t *testing.T) {
+	fixture := newChatSwitchIntegrationFixture(t, false)
+	ctx := context.Background()
+	if _, err := fixture.service.Send(ctx, fixture.session.ID, ports.ChatUserMessage{
+		Text: "work", ClientMessageID: "failed-before-switch",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.sourceChat.events <- ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"}
+	fixture.sourceChat.events <- ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateFailed,
+		Err: errors.New("gateway timeout"),
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		snapshot, err := fixture.store.LoadConversationSnapshot(ctx, "chat-switch-integration-conversation")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(snapshot.Turns) == 1 && snapshot.Turns[0].State == domain.TurnStateFailed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("source turn did not settle as failed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	admitted := fixture.runSwitch(t, "switch-after-failure")
+	completed, found, err := fixture.store.GetAgentSwitch(ctx, admitted.ID)
+	if err != nil || !found || completed.State != domain.AgentSwitchCompleted {
+		t.Fatalf("switch after failed Chat turn = %+v, found=%v, err=%v", completed, found, err)
+	}
+}
+
+func TestSwitchAgentDoesNotApprovePendingChatRequest(t *testing.T) {
+	fixture := newChatSwitchIntegrationFixture(t, false)
+	ctx := context.Background()
+	if _, err := fixture.service.Send(ctx, fixture.session.ID, ports.ChatUserMessage{
+		Text: "work", ClientMessageID: "approval-before-switch",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.sourceChat.events <- ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"}
+	fixture.sourceChat.events <- ports.ChatEvent{
+		Kind: ports.ChatEventApprovalRequested, ProviderTurnID: "provider-turn-1", RequestID: "approval-1",
+		ProviderItemID: "approval-1", Summary: "Run command",
+		Decisions: []ports.ChatDecisionOption{{ID: "accept", Kind: ports.ChatDecisionAllowOnce}},
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		snapshot, err := fixture.store.LoadConversationSnapshot(ctx, "chat-switch-integration-conversation")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(snapshot.Activities) == 1 && snapshot.Activities[0].Status == domain.ActivityStatusPending {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("approval was not recorded as pending")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	admitted, switchErr := fixture.manager.SwitchAgent(ctx, fixture.session.ID, SwitchAgentConfig{
+		TargetHarness: domain.HarnessCodex, IdempotencyKey: "switch-with-pending-approval",
+	})
+	if switchErr == nil {
+		waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if err := fixture.manager.WaitAgentSwitchWorkers(waitCtx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	completed, found, err := fixture.store.GetAgentSwitch(ctx, admitted.ID)
+	if err != nil || !found {
+		t.Fatalf("switch record: found=%v err=%v", found, err)
+	}
+	snapshot, err := fixture.store.LoadConversationSnapshot(ctx, "chat-switch-integration-conversation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Activities) != 1 || snapshot.Activities[0].Status == domain.ActivityStatusCompleted {
+		t.Fatalf("pending approval silently accepted during switch: switch=%+v activities=%+v", completed, snapshot.Activities)
+	}
 }
 
 func TestSwitchAgentRealChatServiceSQLiteActivationCAS(t *testing.T) {
