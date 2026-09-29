@@ -569,6 +569,95 @@ func TestReconcileLive_ChatFailureAfterGenerationClaimLeavesSessionExited(t *tes
 	}
 }
 
+type hostProbingLauncher struct {
+	*generationClaimFailureLauncher
+	alive bool
+	err   error
+}
+
+func (l *hostProbingLauncher) ProviderHostAlive(context.Context, domain.SessionID) (bool, bool, error) {
+	return l.alive, true, l.err
+}
+
+// Issue #5790: startup reconcile claimed a replacement generation, the live
+// reattachment failed, and failed-relaunch preservation recorded Exited while
+// the persistent host kept running the agent. A live (or unverifiable) host is
+// not a stopped controller: preserve the session as inconclusive instead.
+func TestReconcileLive_ChatFailureWithLiveProviderHostPreservesActivity(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		alive bool
+		err   error
+	}{
+		{name: "alive", alive: true},
+		{name: "probe inconclusive", err: errors.New("descriptor unreadable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := &recordingLauncher{}
+			m, st, rt := newChatManager(base)
+			launcher := &hostProbingLauncher{
+				generationClaimFailureLauncher: &generationClaimFailureLauncher{
+					recordingLauncher: base, store: st, generation: "claimed-generation",
+					err: errors.New("commit chat controller: attachment closed"),
+				},
+				alive: tc.alive, err: tc.err,
+			}
+			m.chat = launcher
+			ws := m.workspace.(*fakeWorkspace)
+			lcm := m.lcm.(*fakeLCM)
+			rec := domain.SessionRecord{
+				ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker,
+				Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+				Activity: domain.Activity{State: domain.ActivityActive},
+				Metadata: domain.SessionMetadata{
+					Branch: "ao/mer-1/root", WorkspacePath: "/ws/mer-1",
+					ProviderConversationID: "thread-existing", ControllerGeneration: "old-generation",
+				},
+			}
+			st.sessions[rec.ID] = rec
+
+			err := m.reconcileLive(context.Background(), rec)
+			if !errors.Is(err, ports.ErrChatRecoveryInconclusive) {
+				t.Fatalf("reconcileLive error = %v, want inconclusive live-host preservation", err)
+			}
+			got := st.sessions[rec.ID]
+			if got.IsTerminated || got.Activity.State != domain.ActivityActive {
+				t.Fatalf("session = %+v, want live activity preserved while its provider host runs", got)
+			}
+			if rt.destroyed != 0 || ws.stashCalls != 0 || lcm.terminated[rec.ID] != 0 {
+				t.Fatalf("live-host preservation tore down state: destroyed=%d stash=%d terminated=%d",
+					rt.destroyed, ws.stashCalls, lcm.terminated[rec.ID])
+			}
+		})
+	}
+}
+
+func TestReconcileLive_ChatFailureWithDeadProviderHostRecordsExit(t *testing.T) {
+	base := &recordingLauncher{}
+	m, st, _ := newChatManager(base)
+	m.chat = &hostProbingLauncher{generationClaimFailureLauncher: &generationClaimFailureLauncher{
+		recordingLauncher: base, store: st, generation: "claimed-generation",
+		err: errors.New("read native history: provider unavailable"),
+	}}
+	rec := domain.SessionRecord{
+		ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker,
+		Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+		Activity: domain.Activity{State: domain.ActivityActive},
+		Metadata: domain.SessionMetadata{
+			Branch: "ao/mer-1/root", WorkspacePath: "/ws/mer-1",
+			ProviderConversationID: "thread-existing", ControllerGeneration: "old-generation",
+		},
+	}
+	st.sessions[rec.ID] = rec
+
+	if err := m.reconcileLive(context.Background(), rec); err == nil || errors.Is(err, ports.ErrChatRecoveryInconclusive) {
+		t.Fatalf("reconcileLive error = %v, want a conclusive relaunch failure", err)
+	}
+	if got := st.sessions[rec.ID]; got.IsTerminated || got.Activity.State != domain.ActivityExited {
+		t.Fatalf("session = %+v, want live/exited so Resume Agent can retry", got)
+	}
+}
+
 func TestRestoreTerminatedChatOrchestratorAfterCompatibilityRecoveryKeepsIdentity(t *testing.T) {
 	launcher := &recordingLauncher{startErr: fmt.Errorf("read Codex version: exit status 127: %w", ports.ErrChatDriverIncompatible)}
 	m, st, rt := newChatManager(launcher)

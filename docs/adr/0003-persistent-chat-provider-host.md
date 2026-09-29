@@ -48,6 +48,15 @@ Codex app-server uses the original raw protocol profile:
   fail pending input. A live reconnect also skips the native-history settled
   barrier; buffered protocol events continue the turn immediately on the same
   initialized connection.
+- An attachment that ends without AO closing it is provider death only when the
+  host is conclusively gone. While the host process lives (or its descriptor is
+  unreadable), AO releases the attachment without projecting `ActivityExited`
+  or settling work, then reattaches to the same live provider under a new
+  generation; it never launches a replacement from that path. Startup
+  reconciliation likewise preserves a failed Chat relaunch as unverified rather
+  than exited while its host lives, and a live reconnect clears a stale durable
+  exit. ACP reads apply backpressure so a replayed journal cannot overflow the
+  SDK's bounded notification queue (issue #5790).
 - Startup orphan reconciliation only destroys a compatible host when durable
   state proves its Chat session is terminated, absent, or no longer Chat. An unreadable
   store, incompatible descriptor, live PID with an unreachable endpoint, or

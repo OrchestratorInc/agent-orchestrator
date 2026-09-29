@@ -3204,6 +3204,13 @@ func (m *Manager) reconcileLive(ctx context.Context, rec domain.SessionRecord) e
 	// identity, but expose the stopped controller as an exited workload so the
 	// existing Resume Agent path can retry it in place.
 	committed, preserveErr := m.preserveFailedReconcileRelaunch(ctx, rec)
+	if errors.Is(preserveErr, errChatProviderHostAlive) {
+		// The relaunch failed but the agent did not: its persistent host is
+		// still running it. Preserve the session as unverified, exactly as an
+		// inconclusive attachment is, so Resume Agent can retry the reattach.
+		return fmt.Errorf("reconcile %s: preserve live Chat provider host: %w", rec.ID,
+			errors.Join(ports.ErrChatRecoveryInconclusive, restoreErr))
+	}
 	if preserveErr != nil {
 		return fmt.Errorf("reconcile %s: relaunch failed and commit state became uncertain: %w", rec.ID, errors.Join(restoreErr, preserveErr))
 	}
@@ -3245,6 +3252,7 @@ func (m *Manager) relaunchCommitted(before, after domain.SessionRecord) bool {
 // while the session is still active and exposed to the reaper.
 func (m *Manager) preserveFailedReconcileRelaunch(ctx context.Context, before domain.SessionRecord) (bool, error) {
 	const maxAttempts = 3
+	isChat := domain.NormalizeSessionMode(before.Mode) == domain.SessionModeChat
 	for range maxAttempts {
 		current, ok, err := m.store.GetSession(ctx, before.ID)
 		if err != nil {
@@ -3259,6 +3267,9 @@ func (m *Manager) preserveFailedReconcileRelaunch(ctx context.Context, before do
 		if current.IsTerminated || current.Activity.State == domain.ActivityExited {
 			return false, nil
 		}
+		if isChat && m.chatProviderHostSurvives(ctx, before.ID) {
+			return false, errChatProviderHostAlive
+		}
 
 		signal := ports.ActivitySignal{
 			Valid:            true,
@@ -3270,6 +3281,8 @@ func (m *Manager) preserveFailedReconcileRelaunch(ctx context.Context, before do
 		} else {
 			signal.LaunchID = current.Metadata.RuntimeLaunchID
 		}
+		m.logger.Warn("reconcile: recording failed relaunch as agent exited",
+			"sessionID", before.ID, "controllerGeneration", signal.ControllerGeneration, "launchID", signal.LaunchID)
 		if err := m.lcm.ApplyActivitySignal(ctx, before.ID, signal); err != nil {
 			return false, err
 		}
@@ -3289,6 +3302,31 @@ func (m *Manager) preserveFailedReconcileRelaunch(ctx context.Context, before do
 		}
 	}
 	return false, errors.New("session changed while recording failed relaunch")
+}
+
+// errChatProviderHostAlive reports that a failed Chat relaunch left its
+// persistent provider host running, so the agent has not exited.
+var errChatProviderHostAlive = errors.New("chat provider host is still running")
+
+// chatProviderHostProber is implemented by Chat launchers that can observe the
+// persistent host behind a session's provider.
+type chatProviderHostProber interface {
+	ProviderHostAlive(ctx context.Context, id domain.SessionID) (alive, ok bool, err error)
+}
+
+// chatProviderHostSurvives reports whether a session's persistent provider
+// host may still be running. A failed probe is not proof that it died.
+func (m *Manager) chatProviderHostSurvives(ctx context.Context, id domain.SessionID) bool {
+	prober, ok := m.chat.(chatProviderHostProber)
+	if !ok {
+		return false
+	}
+	alive, known, err := prober.ProviderHostAlive(ctx, id)
+	if err != nil {
+		m.logger.Warn("reconcile: Chat provider host probe inconclusive; preserving session", "sessionID", id, "error", err)
+		return true
+	}
+	return known && alive
 }
 
 // reconcileReap kills the leaked tmux session of a session the DB already marks
