@@ -1,6 +1,68 @@
 import { describe, expect, it } from "vitest";
 import { bridgeResult, browserCommandScript, parseBrowserBridgeMessage, parseBrowserContentAppearance } from "./mobileBrowserBridge";
 
+function runPageGet(property: "url" | "title" | "text", bodyText = "Example body") {
+	let posted: string | undefined;
+	const location = { href: "https://example.com/current" };
+	const document = {
+		title: "Example title",
+		body: { innerText: bodyText, textContent: bodyText },
+	};
+	const window = {
+		ReactNativeWebView: {
+			postMessage(raw: string) {
+				posted = raw;
+			},
+		},
+	};
+	const script = browserCommandScript({
+		type: "command",
+		requestId: "get-1",
+		sessionId: "s1",
+		action: "get",
+		args: { property },
+	});
+	new Function("window", "document", "location", script)(window, document, location);
+	return posted ? parseBrowserBridgeMessage(posted) : undefined;
+}
+
+function runElementGet(property: "text" | "value" | "checked") {
+	let posted: string | undefined;
+	const element = {
+		tagName: "INPUT",
+		type: "text",
+		innerText: "Visible label",
+		textContent: "Visible label",
+		value: "input value",
+		checked: true,
+		isConnected: true,
+		getBoundingClientRect: () => ({ width: 100, height: 24 }),
+		getAttribute: () => null,
+		matches: () => true,
+	};
+	const location = { href: "https://example.com/current" };
+	const document = {
+		title: "Example title",
+		body: { innerText: "Example body", textContent: "Example body" },
+		querySelectorAll: () => [element],
+	};
+	const window = {
+		getComputedStyle: () => ({ visibility: "visible", display: "block" }),
+		ReactNativeWebView: {
+			postMessage(raw: string) {
+				posted = raw;
+			},
+		},
+	};
+	const run = (action: string, args: Record<string, unknown>) => {
+		const script = browserCommandScript({ type: "command", requestId: action, sessionId: "s1", action, args });
+		new Function("window", "document", "location", script)(window, document, location);
+	};
+	run("snapshot", { interactive: true });
+	run("get", { property, ref: "e1" });
+	return posted ? parseBrowserBridgeMessage(posted) : undefined;
+}
+
 describe("mobile browser bridge protocol", () => {
 	it("embeds commands as JSON rather than executable text", () => {
 		const script = browserCommandScript({
@@ -17,6 +79,22 @@ describe("mobile browser bridge protocol", () => {
 	it("returns structured ref metadata for one-command act matching", () => {
 		expect(browserCommandScript({ type: "command", requestId: "r1", sessionId: "s1", action: "snapshot" }))
 			.toContain("refs: refInfo");
+	});
+
+	it("returns only the requested get property in the CLI value shape", () => {
+		expect(runPageGet("url")?.result).toEqual({ value: "https://example.com/current" });
+		expect(runPageGet("title")?.result).toEqual({ value: "Example title" });
+		expect(runElementGet("text")?.result).toEqual({ value: "Visible label" });
+		expect(runElementGet("value")?.result).toEqual({ value: "input value" });
+		expect(runElementGet("checked")?.result).toEqual({ value: true });
+	});
+
+	it("keeps page reads at the 20,000-character limit instead of snapshot-label length", () => {
+		const body = "word ".repeat(6_000);
+		const value = runPageGet("text", body)?.result?.value;
+		expect(typeof value).toBe("string");
+		expect((value as string).length).toBe(20_000);
+		expect((value as string).length).toBeGreaterThan(240);
 	});
 
 	it("accepts only tagged correlated results", () => {

@@ -66,7 +66,9 @@ export const MOBILE_BROWSER_BOOTSTRAP = `
     var r = el.getBoundingClientRect(), s = window.getComputedStyle(el);
     return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
   }
-  function clean(value) { return String(value || '').replace(/\\s+/g, ' ').trim().slice(0, 240); }
+  function normalizedText(value, limit) { return String(value || '').replace(/\\s+/g, ' ').trim().slice(0, limit); }
+  function clean(value) { return normalizedText(value, 240); }
+  function readableText(value) { return normalizedText(value, 20000); }
   function role(el) {
     return el.getAttribute('role') || ({A:'link',BUTTON:'button',INPUT:el.type === 'checkbox' ? 'checkbox' : 'textbox',TEXTAREA:'textbox',SELECT:'combobox'}[el.tagName] || el.tagName.toLowerCase());
   }
@@ -135,7 +137,38 @@ export const MOBILE_BROWSER_BOOTSTRAP = `
           case 'press': var active=document.activeElement || document.body, key=String(a.key || ''); active.dispatchEvent(new KeyboardEvent('keydown',{key:key,bubbles:true})); active.dispatchEvent(new KeyboardEvent('keyup',{key:key,bubbles:true})); result={ pressed:key }; break;
           case 'scroll': var amount=Number(a.amount || 500), x=0,y=0; if(a.direction==='up')y=-amount;else if(a.direction==='left')x=-amount;else if(a.direction==='right')x=amount;else y=amount; window.scrollBy({left:x,top:y,behavior:'smooth'}); result={ scrolled:true }; break;
           case 'scrollintoview': target(a.ref).scrollIntoView({block:'center',behavior:'smooth'}); result={ scrolled:a.ref }; break;
-          case 'get': if(!a.ref){result={url:location.href,title:document.title,text:document.body?clean(document.body.innerText).slice(0,20000):''};}else{var g=target(a.ref);result={text:clean(g.innerText||g.textContent),value:g.value,checked:!!g.checked};} break;
+          case 'get': {
+            var property = String(a.property || '').toLowerCase(), value;
+            switch (property) {
+              case 'url':
+                if (a.ref) { var urlRef = new Error('url does not accept an element ref'); urlRef.code = 'INVALID_ARGUMENT'; throw urlRef; }
+                value = location.href;
+                break;
+              case 'title':
+                if (a.ref) { var titleRef = new Error('title does not accept an element ref'); titleRef.code = 'INVALID_ARGUMENT'; throw titleRef; }
+                value = document.title;
+                break;
+              case 'text': {
+                var textTarget = a.ref ? target(a.ref) : document.body;
+                value = textTarget ? readableText(textTarget.innerText || textTarget.textContent) : '';
+                break;
+              }
+              case 'value':
+                if (!a.ref) { var valueRef = new Error('value requires an element ref'); valueRef.code = 'REFERENCE_REQUIRED'; throw valueRef; }
+                value = target(a.ref).value;
+                break;
+              case 'checked':
+                if (!a.ref) { var checkedRef = new Error('checked requires an element ref'); checkedRef.code = 'REFERENCE_REQUIRED'; throw checkedRef; }
+                value = !!target(a.ref).checked;
+                break;
+              default:
+                var invalidProperty = new Error('Unsupported browser property: ' + property);
+                invalidProperty.code = 'INVALID_ARGUMENT';
+                throw invalidProperty;
+            }
+            result = { value: value };
+            break;
+          }
           case 'wait': return wait(a).then(function(v){ post(command.requestId,true,v); },function(e){ post(command.requestId,false,null,e); });
           default: var unsupported=new Error('This command is not available on the mobile browser yet.'); unsupported.code='BROWSER_ACTION_UNSUPPORTED'; throw unsupported;
         }
