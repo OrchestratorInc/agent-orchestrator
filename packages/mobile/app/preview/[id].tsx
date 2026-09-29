@@ -11,6 +11,7 @@ import { BrowserToolbar } from "../../lib/browser/BrowserToolbar";
 import { browserSessionUrlKey, loadBrowserSessionUrl, saveBrowserSessionUrl } from "../../lib/browser/browserSessionStore";
 import { executeMobileBrowserAct } from "../../lib/browser/mobileBrowserAct";
 import { bridgeResult, browserCommandScript, MOBILE_BROWSER_APPEARANCE_SCRIPT, MOBILE_BROWSER_BOOTSTRAP, parseBrowserBridgeMessage, parseBrowserContentAppearance, type BrowserContentAppearance } from "../../lib/browser/mobileBrowserBridge";
+import { failPendingMobileBrowserNavigation, type PendingMobileBrowserNavigation } from "../../lib/browser/mobileBrowserNavigation";
 import { MobileBrowserRuntimeClient, type MobileBrowserCommand, type MobileBrowserCommandResult } from "../../lib/browser/mobileBrowserRuntime";
 import { inAppWebNavigation, isHttpUrl, normalizeBrowserInput, shouldAttachPreviewAuth } from "../../lib/browser/browserUrl";
 import { browserLoadEnd, browserLoadError, browserLoadStart, browserNavigationChanged, initialBrowserState, type MobileBrowserState } from "../../lib/browser/browserState";
@@ -45,12 +46,7 @@ export default function SessionPreviewScreen() {
 		resolve: (result: MobileBrowserCommandResult) => void;
 		timer: ReturnType<typeof setTimeout>;
 	}>());
-	const pendingNavigation = useRef<{
-		requestId: string;
-		started: boolean;
-		resolve: (result: MobileBrowserCommandResult) => void;
-		timer: ReturnType<typeof setTimeout>;
-	} | null>(null);
+	const pendingNavigation = useRef<PendingMobileBrowserNavigation | null>(null);
 	const browserDidNavigate = useRef(false);
 	const browserStorageKey = useMemo(() => config && id ? browserSessionUrlKey(config.host, config.httpPort, id) : "", [config, id]);
 
@@ -319,11 +315,18 @@ export default function SessionPreviewScreen() {
 					}}
 					onHttpError={(event) => {
 						const status = event?.nativeEvent?.statusCode;
-						setBrowserState((current) => browserLoadError(current, status ? `Preview returned HTTP ${status}.` : "Preview returned an HTTP error."));
+						const message = status ? `Preview returned HTTP ${status}.` : "Preview returned an HTTP error.";
+						setBrowserState((current) => browserLoadError(current, message));
+						if (failPendingMobileBrowserNavigation(pendingNavigation.current, { code: "BROWSER_NAVIGATION_HTTP_ERROR", message })) {
+							pendingNavigation.current = null;
+						}
 					}}
 					onError={(event) => {
 						const description = event?.nativeEvent?.description || "Couldn't load this page.";
 						setBrowserState((current) => browserLoadError(current, description));
+						if (failPendingMobileBrowserNavigation(pendingNavigation.current, { code: "BROWSER_NAVIGATION_FAILED", message: description })) {
+							pendingNavigation.current = null;
+						}
 					}}
 				/>
 			) : (
