@@ -3,6 +3,7 @@ package opencode
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -30,17 +31,17 @@ func versionBinary(t *testing.T, script string) string {
 func TestResolveBinaryForMajor(t *testing.T) {
 	for _, tc := range []struct {
 		name, output, wantErr string
-		major                 int
+		major, wantFoundMajor int
 	}{
-		{"v1", "1.18.33", "", 1},
-		{"v2", "2.0.0", "", 2},
-		{"prerelease", "2.0.0-beta.3", "", 2},
-		{"label", "opencode 2.1.0", "", 2},
-		{"v1 rejects v2", "2.0.0", "requires OpenCode 1", 1},
-		{"v2 rejects v1", "1.18.33", "requires OpenCode 2", 2},
-		{"malformed", "development", "version", 2},
-		{"unrelated numbers", "error 2.0.0 failed", "version", 2},
-		{"empty", "", "version", 2},
+		{"v1", "1.18.33", "", 1, 0},
+		{"v2", "2.0.0", "", 2, 0},
+		{"prerelease", "2.0.0-beta.3", "", 2, 0},
+		{"label", "opencode 2.1.0", "", 2, 0},
+		{"v1 rejects v2", "2.0.0", "requires OpenCode 1", 1, 2},
+		{"v2 rejects v1", "1.18.33", "requires OpenCode 2", 2, 1},
+		{"malformed", "development", "version", 2, 0},
+		{"unrelated numbers", "error 2.0.0 failed", "version", 2, 0},
+		{"empty", "", "version", 2, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			binary := versionBinary(t, "[ \"$1\" = --version ] || exit 99\nprintf '%s\\n' '"+tc.output+"'\n")
@@ -51,6 +52,20 @@ func TestResolveBinaryForMajor(t *testing.T) {
 				}
 				if errors.Is(err, ports.ErrAgentBinaryNotFound) {
 					t.Fatal("installed incompatible binary reported as missing")
+				}
+				if tc.wantFoundMajor != 0 {
+					var incompatible *IncompatibleVersionError
+					if !errors.As(err, &incompatible) {
+						t.Fatalf("error type = %T, want *IncompatibleVersionError", err)
+					}
+					if incompatible.ExpectedMajor != tc.major || incompatible.FoundMajor != tc.wantFoundMajor || incompatible.FoundVersion != tc.output || incompatible.Path != binary {
+						t.Fatalf("incompatible version error = %#v, want expected=%d found=%d version=%q path=%q", incompatible, tc.major, tc.wantFoundMajor, tc.output, binary)
+					}
+					for _, detail := range []string{binary, tc.output, fmt.Sprintf("OpenCode %d", tc.wantFoundMajor), "select the matching harness"} {
+						if !strings.Contains(err.Error(), detail) {
+							t.Fatalf("error = %q, want actionable detail %q", err, detail)
+						}
+					}
 				}
 				return
 			}

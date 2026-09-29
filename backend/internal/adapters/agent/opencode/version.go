@@ -14,6 +14,19 @@ import (
 
 var versionPattern = regexp.MustCompile(`^(?:opencode\s+)?v?([0-9]+)\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]+)?$`)
 
+// IncompatibleVersionError reports that the selected OpenCode executable is
+// installed, but its major version does not match the selected harness.
+type IncompatibleVersionError struct {
+	ExpectedMajor int
+	FoundMajor    int
+	FoundVersion  string
+	Path          string
+}
+
+func (e *IncompatibleVersionError) Error() string {
+	return fmt.Sprintf("opencode: selected harness requires OpenCode %d, but %q reports OpenCode %d (%s); select the matching harness or put OpenCode %d on PATH", e.ExpectedMajor, e.Path, e.FoundMajor, e.FoundVersion, e.ExpectedMajor)
+}
+
 // ResolveBinaryForMajor resolves and probes one executable. It deliberately
 // does not search past an incompatible PATH selection or cache a result across
 // attempts: both official majors use the same executable name.
@@ -44,8 +57,16 @@ func ResolveBinaryForMajor(ctx context.Context, major int) (string, error) {
 		return "", fmt.Errorf("opencode: cannot determine version of %q", binary)
 	}
 	found, err := strconv.Atoi(match[1])
-	if err != nil || found != major {
-		return "", fmt.Errorf("opencode: selected harness requires OpenCode %d, but %q reports %s; select the matching harness or put OpenCode %d on PATH", major, binary, version, major)
+	if err != nil {
+		return "", fmt.Errorf("opencode: cannot determine version of %q", binary)
+	}
+	if found != major {
+		return "", &IncompatibleVersionError{
+			ExpectedMajor: major,
+			FoundMajor:    found,
+			FoundVersion:  version,
+			Path:          binary,
+		}
 	}
 	return binary, nil
 }
