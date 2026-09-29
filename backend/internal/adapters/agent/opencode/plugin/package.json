@@ -1,0 +1,19 @@
+{
+  "name": "@aoagents/opencode-activity",
+  "version": "0.0.1",
+  "description": "Agent Orchestrator managed activity plugin for OpenCode v2 (bridges opencode lifecycle events to `ao hooks opencode`).",
+  "type": "module",
+  "main": "index.ts",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "files": [
+    "index.ts"
+  ],
+  "peerDependencies": {
+    "@opencode/plugin": ">=2 <3"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "^2.0.19"
+  }
+}
