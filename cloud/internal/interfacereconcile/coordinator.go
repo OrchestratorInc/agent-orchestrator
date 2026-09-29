@@ -158,6 +158,9 @@ var errCoordinationLost = errors.New("interface transition coordination lost")
 // resuming from the durable phase row. No terminal phase is written.
 var errPendingWorkerCommand = errors.New("interface transition worker command pending")
 
+// A busy drain keeps its durable phase and gives other sessions a turn.
+var errSourceBusy = errors.New("source controller is still active")
+
 func (c *Coordinator) reconcile(ctx context.Context, transition *postgres.CoordinatedInterfaceTransition) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -213,6 +216,9 @@ func (c *Coordinator) reconcile(ctx context.Context, transition *postgres.Coordi
 			}
 		case domain.SessionInterfaceTransitionDraining:
 			if err, sourceUsable := c.drain(runCtx, *transition); err != nil {
+				if errors.Is(err, errSourceBusy) {
+					return nil
+				}
 				return c.retryOrFail(*transition, "SOURCE_DRAIN_FAILED", err, sourceUsable)
 			}
 			if err := c.advance(runCtx, transition, domain.SessionInterfaceTransitionSourceStopping, "", ""); err != nil {
@@ -397,8 +403,9 @@ func isRetryable(err error) bool {
 	return errors.Is(err, errPendingWorkerCommand) || errors.Is(err, errCoordinationLost)
 }
 
-// drain waits for the source controller to be quiescent. An interrupt policy
-// cancels in-flight work first.
+// drain checks whether the source controller is quiescent. A busy source is
+// retried on the next pass so it cannot hold up another session's handoff.
+// An interrupt policy cancels in-flight work first.
 func (c *Coordinator) drain(ctx context.Context, transition postgres.CoordinatedInterfaceTransition) (error, bool) {
 	if transition.Policy == domain.SessionInterfaceTransitionInterrupt {
 		// Stop-now is the explicit opt-in to ending a source that cannot prove it
@@ -406,29 +413,23 @@ func (c *Coordinator) drain(ctx context.Context, transition postgres.Coordinated
 		// controller process to exit before starting the target.
 		return c.driver.InterruptSource(ctx, transition), false
 	}
-	for {
-		inspection, err := c.driver.InspectSource(ctx, transition)
-		if err != nil {
-			return err, false
-		}
-		if inspection.DecisionPending {
-			return errors.New("source controller is waiting for a decision; answer it in the source interface"), true
-		}
-		if inspection.DraftPresent {
-			return errors.New("source controller has unsent text; submit or clear it in the source interface"), true
-		}
-		if inspection.QuiescenceUnverified {
-			return errors.New("source controller activity cannot be verified; use stop now to interrupt it"), true
-		}
-		if inspection.Idle {
-			return nil, true
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err(), false
-		case <-time.After(c.options.Interval):
-		}
+	inspection, err := c.driver.InspectSource(ctx, transition)
+	if err != nil {
+		return err, false
 	}
+	if inspection.DecisionPending {
+		return errors.New("source controller is waiting for a decision; answer it in the source interface"), true
+	}
+	if inspection.DraftPresent {
+		return errors.New("source controller has unsent text; submit or clear it in the source interface"), true
+	}
+	if inspection.QuiescenceUnverified {
+		return errors.New("source controller activity cannot be verified; use stop now to interrupt it"), true
+	}
+	if inspection.Idle {
+		return nil, true
+	}
+	return errSourceBusy, true
 }
 
 func (c *Coordinator) advance(

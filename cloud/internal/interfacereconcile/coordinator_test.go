@@ -219,6 +219,50 @@ func TestReconcileHappyPath(t *testing.T) {
 	}
 }
 
+type busyFirstDriver struct {
+	*fakeDriver
+	busy bool
+}
+
+func (d *busyFirstDriver) InspectSource(_ context.Context, transition postgres.CoordinatedInterfaceTransition) (SourceInspection, error) {
+	if transition.ID == "transition-1" && d.busy {
+		return SourceInspection{Idle: false}, nil
+	}
+	return SourceInspection{Idle: true}, nil
+}
+
+func TestReconcileBusyDrainYieldsToOtherSession(t *testing.T) {
+	busy := testTransition(domain.SessionInterfaceTransitionDraining)
+	ready := testTransition(domain.SessionInterfaceTransitionRequested)
+	ready.ID, ready.SessionID = "transition-2", "session-2"
+	store := &fakeStore{transitions: []postgres.CoordinatedInterfaceTransition{busy, ready}}
+	driver := &busyFirstDriver{fakeDriver: &fakeDriver{nativeID: "native-1"}, busy: true}
+	coordinator := New(store, driver, Options{
+		Interval: time.Millisecond, MaxPendingRetries: 1, Logger: slog.New(slog.DiscardHandler),
+	})
+	for range 3 {
+		if err := coordinator.ReconcileOnce(context.Background()); err != nil {
+			t.Fatalf("reconcile busy source: %v", err)
+		}
+	}
+	if got := store.transitions[0].Phase; got != domain.SessionInterfaceTransitionDraining {
+		t.Fatalf("busy transition phase = %q, want draining", got)
+	}
+	if got := store.transitions[1].Phase; got != domain.SessionInterfaceTransitionCompleted {
+		t.Fatalf("independent transition phase = %q, want completed", got)
+	}
+	if len(coordinator.retries) != 0 {
+		t.Fatalf("busy drain counted as failed worker command: %v", coordinator.retries)
+	}
+	driver.busy = false
+	if err := coordinator.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile idle source: %v", err)
+	}
+	if got := store.transitions[0].Phase; got != domain.SessionInterfaceTransitionCompleted {
+		t.Fatalf("formerly busy transition phase = %q, want completed", got)
+	}
+}
+
 func TestReconcileTreatsStaleCommitAsCoordinationLoss(t *testing.T) {
 	store := &fakeStore{
 		transitions: []postgres.CoordinatedInterfaceTransition{testTransition(domain.SessionInterfaceTransitionSourceStopped)},

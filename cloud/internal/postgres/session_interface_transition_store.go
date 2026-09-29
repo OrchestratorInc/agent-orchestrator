@@ -437,7 +437,9 @@ func (s *Store) ClaimCoordinatedInterfaceTransitions(
 						OR (t.claimed_by = $1 AND t.claimed_at > now() - $3::interval)
 						OR t.claimed_at < now() - $3::interval
 					)
-				ORDER BY t.created_at, t.id
+				-- A busy drain releases its claim after each inspection. Rotate
+				-- it behind transitions that have not yet had a turn.
+				ORDER BY COALESCE(t.claimed_at, t.created_at), t.id
 				FOR UPDATE OF t SKIP LOCKED
 				LIMIT $2
 			)
@@ -633,7 +635,7 @@ func (s *Store) ReleaseCoordinatedInterfaceClaim(
 	return s.withService(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
 			`UPDATE ao_interface_transitions
-			SET claimed_by = '', claimed_at = NULL, updated_at = now()
+				SET claimed_by = '', updated_at = now()
 			WHERE id = $1 AND claimed_by = $2`, transitionID, owner)
 		return err
 	})

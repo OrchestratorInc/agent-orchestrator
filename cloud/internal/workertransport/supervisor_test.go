@@ -440,6 +440,30 @@ func TestInspectInterfaceDoesNotTreatOpenTUIAsIdle(t *testing.T) {
 	}
 }
 
+func TestAbsentTUITerminalCanHandoffWithoutStopHook(t *testing.T) {
+	for _, policy := range []string{"drain", "interrupt"} {
+		t.Run(policy, func(t *testing.T) {
+			supervisor := &Supervisor{
+				DataDir: t.TempDir(), AgentTerminalID: "agent",
+				terminals: make(map[string]*terminalProcess),
+			}
+			supervisor.iface.current = InterfaceTUI
+			result, err := supervisor.inspectInterface()
+			if err != nil || !result.(interfaceInspectResult).Idle {
+				t.Fatalf("absent terminal inspection = %+v, %v", result, err)
+			}
+			if policy == "interrupt" {
+				if err := supervisor.interruptInterface(context.Background()); err != nil {
+					t.Fatalf("interrupt absent terminal: %v", err)
+				}
+			}
+			if err := supervisor.stopInterface(context.Background(), policy); err != nil {
+				t.Fatalf("stop absent terminal: %v", err)
+			}
+		})
+	}
+}
+
 func TestInspectInterfaceAcceptsNativeStopOnlyAfterLatestTerminalInput(t *testing.T) {
 	dataDir := t.TempDir()
 	supervisor := &Supervisor{DataDir: dataDir, AgentTerminalID: "agent", terminals: map[string]*terminalProcess{"agent": {}}}

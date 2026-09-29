@@ -142,7 +142,7 @@ func (s *Supervisor) interruptInterface(ctx context.Context) error {
 	terminal := s.terminals[agentTerminalID]
 	s.mu.Unlock()
 	if terminal == nil {
-		return errors.New("agent terminal is not open")
+		return nil
 	}
 	_, err := terminal.pty.Write([]byte{0x03})
 	return err
@@ -167,7 +167,9 @@ func (s *Supervisor) stopInterface(ctx context.Context, policy string) error {
 		// keystroke arriving between inspect and stop must not be interrupted.
 		stopAt, stopErr := worker.ReadTUIStop(s.DataDir)
 		s.mu.Lock()
-		if policy != "interrupt" {
+		id := s.AgentTerminalID
+		_, open := s.terminals[id]
+		if open && policy != "interrupt" {
 			verified := stopErr == nil && !s.tuiStartedAt.IsZero() &&
 				stopAt.After(s.tuiStartedAt) && stopAt.After(s.lastTUIInputAt)
 			if !verified {
@@ -176,7 +178,6 @@ func (s *Supervisor) stopInterface(ctx context.Context, policy string) error {
 			}
 		}
 		s.tuiHandoffClosing = true
-		id := s.AgentTerminalID
 		s.mu.Unlock()
 		err := s.closeTerminalForInterfaceHandoff(ctx, id)
 		if err != nil {
