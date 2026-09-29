@@ -292,16 +292,29 @@ while IFS='=' read -r key value; do
     path) req_path="$value" ;;
   esac
 done
+# Only ever hand the GitHub installation token to github.com. This helper is
+# registered unscoped and credential.useHttpPath makes git invoke it for EVERY
+# host, so without this gate a sandbox git operation against a non-github remote
+# (which the coding agent can add) would be handed the installation token. exit 0
+# returns no credential, so git falls through rather than leaking it.
+[ "$req_host" = "github.com" ] || exit 0
 repo_query=""
-if [ "$req_host" = "github.com" ] && [ -n "$req_path" ]; then
+if [ -n "$req_path" ]; then
   repo="${req_path%%.git}"
   repo="${repo#/}"
-  owner="${repo%%%%/*}"
-  name="${repo#*/}"
-  case "$name" in */*) name="" ;; esac
-  if [ -n "$owner" ] && [ -n "$name" ]; then
-    repo_query="?repo=${owner}/${name}"
-  fi
+  # Only a real owner/repo (exactly two segments) is forwarded; a single-segment
+  # or multi-segment path leaves repo_query empty → the broad multi-repository
+  # grant, never a bogus scoped request.
+  case "$repo" in
+    */*)
+      owner="${repo%%%%/*}"
+      name="${repo#*/}"
+      case "$name" in */*) name="" ;; esac
+      if [ -n "$owner" ] && [ -n "$name" ]; then
+        repo_query="?repo=${owner}/${name}"
+      fi
+      ;;
+  esac
 fi
 worker_token="$(tr -d '\r\n' < %s)"
 token_url=%s

@@ -132,14 +132,19 @@ func TestConfigureWorkerGitCredentialHelperScopesRepo(t *testing.T) {
 
 	base := "https://cp.example.com/api/cloud/v1/worker/github-token"
 	cases := []struct {
-		name    string
-		stdin   string
-		wantURL string
+		name      string
+		stdin     string
+		wantURL   string // expected token-endpoint URL when a credential is issued
+		wantToken bool   // false = helper must NOT contact the token endpoint (host gate)
 	}{
-		{"primary", "protocol=https\nhost=github.com\npath=octo/app.git\n\n", base + "?repo=octo/app"},
-		{"extra", "protocol=https\nhost=github.com\npath=octo/extra.git\n\n", base + "?repo=octo/extra"},
-		{"no path", "protocol=https\nhost=github.com\n\n", base},
-		{"non-github host", "protocol=https\nhost=example.com\npath=octo/app.git\n\n", base},
+		{"primary", "protocol=https\nhost=github.com\npath=octo/app.git\n\n", base + "?repo=octo/app", true},
+		{"extra", "protocol=https\nhost=github.com\npath=octo/extra.git\n\n", base + "?repo=octo/extra", true},
+		{"no path", "protocol=https\nhost=github.com\n\n", base, true},
+		// A single-segment path is not a real owner/repo → broad grant, not a bogus scoped request.
+		{"single segment", "protocol=https\nhost=github.com\npath=octoonly\n\n", base, true},
+		// Host gate: a non-github remote (which the agent can add) must never be handed the token.
+		{"non-github host", "protocol=https\nhost=example.com\npath=octo/app.git\n\n", "", false},
+		{"gitlab host", "protocol=https\nhost=gitlab.com\npath=octo/app.git\n\n", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -147,8 +152,19 @@ func TestConfigureWorkerGitCredentialHelperScopesRepo(t *testing.T) {
 			cmd := exec.Command("sh", helperPath, "get")
 			cmd.Stdin = strings.NewReader(tc.stdin)
 			cmd.Env = env
-			if out, err := cmd.CombinedOutput(); err != nil {
+			out, err := cmd.CombinedOutput()
+			if err != nil {
 				t.Fatalf("helper get: %v\n%s", err, out)
+			}
+			if !tc.wantToken {
+				// The gate must short-circuit before curl and emit no credential.
+				if u, statErr := os.ReadFile(urlFile); statErr == nil {
+					t.Fatalf("host %q must not fetch a token, but curl was called with %q", tc.name, u)
+				}
+				if strings.Contains(string(out), "password=") {
+					t.Fatalf("host %q must not emit a credential; got %q", tc.name, out)
+				}
+				return
 			}
 			got, err := os.ReadFile(urlFile)
 			if err != nil {
