@@ -631,6 +631,10 @@ type ConversationMessage struct {
 	Role     MessageRole   `json:"role"`
 	Origin   MessageOrigin `json:"origin"`
 	Text     string        `json:"text"`
+	// AuthoredByUser is an intake-only fact used to project user activity when
+	// AO delivered the message as automation. It is not part of the persisted
+	// delivery origin or the conversation API representation.
+	AuthoredByUser bool `json:"-"`
 	// Streaming is true while more deltas are expected.
 	Streaming bool `json:"streaming"`
 	// ProviderItemID deduplicates provider observations of the same message.

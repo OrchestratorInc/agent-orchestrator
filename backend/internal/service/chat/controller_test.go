@@ -5605,6 +5605,37 @@ func TestRelayedMessageIsAttributedToAutomation(t *testing.T) {
 	if got := h.conv.sentTexts(); len(got) != 1 || got[0] != "orchestrator: rebase onto main" {
 		t.Fatalf("provider received %v, want the relayed text dispatched", got)
 	}
+	rec, ok, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !ok {
+		t.Fatalf("get session: ok=%v err=%v", ok, err)
+	}
+	if !rec.Metadata.LatestUserPromptAt.IsZero() {
+		t.Fatalf("automation advanced latest user prompt time to %s", rec.Metadata.LatestUserPromptAt)
+	}
+}
+
+func TestUserAuthoredRelayAdvancesUserActivityWithoutChangingOrigin(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	if _, err := h.svc.RelayUserAuthoredChatTurn(ctx, testSession, "move this control closer to the heading"); err != nil {
+		t.Fatalf("RelayUserAuthoredChatTurn: %v", err)
+	}
+
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Messages) >= 1
+	})
+	if got := snapshot.Messages[0].Origin; got != domain.MessageOriginAutomation {
+		t.Fatalf("user-authored relay origin = %q, want %q", got, domain.MessageOriginAutomation)
+	}
+	rec, ok, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !ok {
+		t.Fatalf("get session: ok=%v err=%v", ok, err)
+	}
+	if rec.Metadata.LatestUserPrompt != "move this control closer to the heading" || !rec.Metadata.LatestUserPromptAt.Equal(h.now()) {
+		t.Fatalf("latest user prompt = %q at %s, want annotation at %s",
+			rec.Metadata.LatestUserPrompt, rec.Metadata.LatestUserPromptAt, h.now())
+	}
 }
 
 // interruptRecorder answers turn/interrupt the way the provider does: it refuses

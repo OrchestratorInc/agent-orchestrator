@@ -18,6 +18,7 @@ import { WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
 import { Spinning } from "./ui";
 import { normalizeConversationTitle } from "./chat/conversationMenuModel";
 import { iconSize, press, space, type } from "./tokens";
+import { userFacingError } from "./connectionError";
 
 type ReadOnlyWorkerProps = { session: DashboardSession; projectName?: string; nowBucket?: number };
 type WorkerListRowProps =
@@ -174,7 +175,7 @@ const InteractiveWorkerListRow = memo(function InteractiveWorkerListRow({
 			onRenameCancel();
 		} catch (cause) {
 			haptics.error();
-			setRenameError(cause instanceof Error ? cause.message : "Couldn't rename this worker.");
+			setRenameError(userFacingError(cause, "Couldn't rename this worker."));
 			setRenameSaving(false);
 		}
 	}, [onRename, onRenameCancel, renameSaving, renameTitle]);

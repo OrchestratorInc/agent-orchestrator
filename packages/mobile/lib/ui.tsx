@@ -806,21 +806,27 @@ export function EmptyState({
 	title,
 	message,
 	action,
+	pulse = false,
 }: {
 	icon?: keyof typeof Feather.glyphMap;
 	title: string;
 	message?: string;
 	action?: ReactNode;
+	/** Breathe the icon, for a state that is waiting on something. */
+	pulse?: boolean;
 }) {
 	const t = useTheme();
 	const s = useThemedStyles(makeStyles);
+	const breathing = useBreathing(pulse);
 	// An empty state appears once per screen and then sits still, so it can afford
 	// a quiet entrance. Lists and rows stay unstaggered.
 	const enter = useEnterTransition(space.xxs);
 	return (
 		<Animated.View style={[s.empty, enter]}>
 			<View style={s.emptyIcon}>
-				<Feather name={icon} size={24} color={t.textTertiary} />
+				<Animated.View style={breathing ? { opacity: breathing } : undefined}>
+					<Feather name={icon} size={24} color={t.textTertiary} />
+				</Animated.View>
 			</View>
 			<Text maxFontSizeMultiplier={fontScaleCap.body} style={s.emptyTitle}>
 				{title}

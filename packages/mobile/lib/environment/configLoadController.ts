@@ -1,4 +1,5 @@
 import type { ServerConfig } from "../config";
+import type { ConnectOptions } from "../connectRuntime";
 import type { Endpoint } from "../endpoints";
 import { configLoadPlan } from "./configLoad";
 import type { EnvironmentKind } from "./types";
@@ -11,7 +12,7 @@ export type ConfigLoadPublication = {
 
 export type ConfigLoadControllerDeps = {
 	loadSaved(): Promise<ServerConfig>;
-	resolveActive(): Promise<ServerConfig | null>;
+	resolveActive(options?: ConnectOptions): Promise<ServerConfig | null>;
 	loadEndpoints(): Promise<Endpoint[]>;
 };
 
@@ -35,22 +36,24 @@ export class ConfigLoadController {
 		this.generation += 1;
 	}
 
-	async reload(): Promise<void> {
+	async reload(options?: ConnectOptions): Promise<ServerConfig | null> {
 		const environment = this.environment;
 		const plan = configLoadPlan(environment);
-		if (plan === "wait" || environment === null) return;
+		if (plan === "wait" || environment === null) return null;
 		const generation = this.generation;
 		const current = () => this.environment === environment && this.generation === generation;
 
 		if (plan === "hydrate") {
 			const config = await this.deps.loadSaved();
 			if (current()) this.publish({ config, endpoints: [], raced: false });
-			return;
+			return current() ? config : null;
 		}
 
-		const config = (await this.deps.resolveActive()) ?? (current() ? await this.deps.loadSaved() : null);
-		if (!config || !current()) return;
+		const config = (await this.deps.resolveActive(options)) ?? (current() ? await this.deps.loadSaved() : null);
+		if (!config || !current()) return null;
 		const endpoints = await this.deps.loadEndpoints();
-		if (current()) this.publish({ config, endpoints, raced: true });
+		if (!current()) return null;
+		this.publish({ config, endpoints, raced: true });
+		return config;
 	}
 }

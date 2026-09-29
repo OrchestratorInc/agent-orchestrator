@@ -25,6 +25,7 @@ export default function ProjectsScreen() {
 	const {
 		environment,
 		configured,
+		configResolved,
 		loading,
 		error,
 		errorStatus,
@@ -97,7 +98,7 @@ export default function ProjectsScreen() {
 			<View style={styles.screen}>
 				<View style={{ height: insets.top }} />
 				<ScreenHeader title="Projects" />
-				<UnpairedState />
+				<UnpairedState resolving={!configResolved} />
 			</View>
 		);
 	}
@@ -146,9 +147,9 @@ export default function ProjectsScreen() {
 					ListEmptyComponent={
 						error ? (
 							<EmptyState
-								icon="wifi-off"
+								icon={failure.icon}
 								title={failure.title}
-								message={failure.message}
+								message={failure.hint}
 								action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />}
 							/>
 						) : (

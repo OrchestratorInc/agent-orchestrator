@@ -46,13 +46,14 @@ import { shouldMaintainLocalConnection, shouldPollLocal } from "./environment/sh
 import type { EnvironmentKind, SessionSource } from "./environment/types";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
 import { cloudBoardPollInterval, pollIntervalFor } from "./pollInterval";
+import type { ConnectOptions } from "./connectRuntime";
 import type { Endpoint } from "./endpoints";
 import { activeHost, loadHosts } from "./hosts";
 import { shouldReRace } from "./reRace";
 import { shouldRaceForUpgrade, UPGRADE_RACE_CHECK_MS } from "./upgradeRace";
 import { pollResultIsCurrent, sameServerConfig } from "./sameConfig";
 import { shouldShowLoading } from "./configLoading";
-import { shouldKeepPolling } from "./connectionError";
+import { isDesktopUnreachable, shouldKeepPolling, userFacingError } from "./connectionError";
 import { primeInstallId } from "./installId";
 import { collectPRs } from "./prView";
 import { ALL_PROJECTS, NO_PROJECTS_KNOWN, projectsForMachine, resolveActiveProject, retainProjects, type KnownProjects } from "./projectFilter";
@@ -99,6 +100,9 @@ type AppState = {
 	setEnvironment: (kind: EnvironmentKind) => void;
 	/** The active environment's data source. Undefined until one is configured. */
 	sessionSource: SessionSource | undefined;
+	/** Whether the first config resolution has finished. Until it has, an
+	 *  unconfigured store means "still finding the machine", not "unpaired". */
+	configResolved: boolean;
 	/** Every way the active machine says it can be reached, for telling a
 	 *  rotated tunnel hostname apart from being simply out of range. */
 	activeEndpoints: Endpoint[];
@@ -118,6 +122,11 @@ type AppState = {
 	// HTTP status behind `error`, or null when the server was never reached.
 	errorStatus: number | null;
 	/**
+	 * The last poll failed because nothing answered, so a reconnect can clear it.
+	 * False for rejections (401/403/429), which stop the poll, and for 5xx.
+	 */
+	unreachable: boolean;
+	/**
 	 * When the last successful poll landed, in epoch milliseconds. 0 if none has.
 	 *
 	 * Deliberately a getter rather than a value: a timestamp that changed on every
@@ -126,7 +135,11 @@ type AppState = {
 	 */
 	getLastSyncAt: () => number;
 	// actions
-	reloadConfig: () => Promise<void>;
+	/**
+	 * Races the active machine again and resolves to the config it settled on.
+	 * Rejects only if local storage cannot be read.
+	 */
+	reloadConfig: (options?: ConnectOptions) => Promise<ServerConfig>;
 	refresh: () => Promise<void>;
 	setActiveProject: (id: string) => void;
 	spawn: (opts: SpawnOptions) => Promise<{ id: string; projectId: string }>;
@@ -318,7 +331,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		configLoadControllerRef.current = new ConfigLoadController(
 			{
 				loadSaved: loadConfig,
-				resolveActive: () => resolveActiveConfig(runtimeResolveDeps()),
+				resolveActive: (options) => resolveActiveConfig(runtimeResolveDeps(options)),
 				loadEndpoints: async () => {
 					try {
 						return (await activeHost())?.endpoints ?? [];
@@ -343,7 +356,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		configLoadControllerRef.current?.setEnvironment(environment);
 	}, [environment]);
 
-	const reloadConfig = useCallback(() => configLoadControllerRef.current?.reload() ?? Promise.resolve(), []);
+	const reloadConfig = useCallback(async (options?: ConnectOptions): Promise<ServerConfig> => {
+		const loaded = await configLoadControllerRef.current?.reload(options);
+		return loaded ?? loadConfig();
+	}, []);
 
 	useEffect(() => {
 		void reloadConfig();
@@ -515,7 +531,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		} catch (e) {
 			if (!pollResultIsCurrent(c, cfgRef.current)) return false;
 			lastTickOkRef.current = false;
-			const msg = e instanceof Error ? e.message : "Failed to load";
+			const msg = userFacingError(e, "Failed to load");
 			setError(msg);
 			// Keep the HTTP status alongside the raw message so screens can render
 			// human copy via describeConnectionFailure instead of surfacing strings
@@ -770,12 +786,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
 	const value = useMemo<AppState>(
 		() => ({
-			config: cloudEnvironment ? null : config,
+			config,
 			...boardReadiness(environment, sessionSource?.kind, !!config && isConfigured(config)),
+			configResolved,
 			environment,
 			setEnvironment,
 			sessionSource,
-			activeEndpoints: cloudEnvironment ? [] : activeEndpoints,
+			activeEndpoints,
 			projects,
 			projectsKnown,
 			sessions: activeSessions,
@@ -788,6 +805,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			loading: activeLoading,
 			error: activeError,
 			errorStatus: cloudEnvironment ? null : errorStatus,
+			unreachable: cloudEnvironment ? false : isDesktopUnreachable({ connection, error, errorStatus }),
 			getLastSyncAt: cloudEnvironment ? () => 0 : getLastSyncAt,
 			reloadConfig,
 			refresh,
@@ -804,6 +822,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		}),
 		[
 			config,
+			configResolved,
 			cloudEnvironment,
 			environment,
 			setEnvironment,

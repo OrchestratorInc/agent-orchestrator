@@ -3,7 +3,7 @@ import { ActivityIndicator, Platform, RefreshControl, SectionList, StyleSheet, V
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Theme } from "../../lib/theme";
-import { classifyConnectionFailure, describeConnectionFailure } from "../../lib/connectionError";
+import { boardFailure } from "../../lib/board-presentation";
 import { haptics } from "../../lib/haptics";
 import { PRCard } from "../../lib/PRCard";
 import { PRFilterDock } from "../../lib/pr-filter-dock";
@@ -36,7 +36,7 @@ export default function PRsScreen() {
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
 	const router = useRouter();
-	const { environment, configured, loading, error, errorStatus, connection, config, refresh, notificationsUnread } = useApp();
+	const { environment, configured, configResolved, loading, error, errorStatus, config, refresh, notificationsUnread } = useApp();
 	const prs = usePRs();
 	const [filter, setFilter] = useState<Filter>("open");
 	const [refreshing, setRefreshing] = useState(false);
@@ -54,13 +54,12 @@ export default function PRsScreen() {
 	const sessionIds = useMemo(() => [...new Set(filtered.map(({ session }) => session.id))], [filtered]);
 	const summaries = usePRSummaries(sessionIds);
 	const failure = useMemo(
-		() =>
-			describeConnectionFailure(classifyConnectionFailure(errorStatus ?? undefined), {
-				host: config?.host ?? "",
-				port: config?.httpPort ?? "",
-				platform: Platform.OS,
-			}),
-		[errorStatus, config?.host, config?.httpPort],
+		() => boardFailure(environment, errorStatus ?? undefined, {
+			host: config?.host ?? "",
+			port: config?.httpPort ?? "",
+			platform: Platform.OS,
+		}),
+		[environment, errorStatus, config?.host, config?.httpPort],
 	);
 
 	const onRefresh = async () => {
@@ -103,7 +102,7 @@ export default function PRsScreen() {
 				    screen dropped it, so the tab lost its title and connection lamp exactly
 				    when a user most needs to know what they are looking at. */}
 				<ScreenHeader title="Pull Requests" />
-				<UnpairedState />
+				<UnpairedState resolving={!configResolved} />
 			</View>
 		);
 	}
@@ -151,9 +150,9 @@ export default function PRsScreen() {
 						filtered.length === 0 ? (
 							error ? (
 								<EmptyState
-									icon="wifi-off"
+									icon={failure.icon}
 									title={failure.title}
-									message={failure.message}
+									message={failure.hint}
 									action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />}
 								/>
 							) : (

@@ -1247,7 +1247,13 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPromptDelivery, err)
 	}
+	afterStartPrompt := prompt
 	if delivery == ports.PromptDeliveryAfterStart {
+		afterStartPrompt, err = buildAfterStartPrompt(ctx, agent, launchCfg)
+		if err != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
+			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPromptDelivery, err)
+		}
 		launchCfg.Prompt = ""
 	}
 	argv, err := agent.GetLaunchCommand(ctx, launchCfg)
@@ -1329,8 +1335,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		m.markSpawnFailedTerminatedAfterFailure(ctx, id, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
 	}
-	if delivery == ports.PromptDeliveryAfterStart && prompt != "" {
-		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, id, prompt); err != nil {
+	if delivery == ports.PromptDeliveryAfterStart && afterStartPrompt != "" {
+		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, id, afterStartPrompt); err != nil {
 			runtimeDestroyed := m.destroySpawnRuntimeAfterFailure(ctx, handle)
 			workspaceDestroyed := m.rollbackPreparedSpawnWorkspaceAfterFailure(ctx, rec, ws, workspaceProject, runtimeDestroyed)
 			m.markSpawnFailedTerminatedAfterFailure(ctx, id, runtimeDestroyed && workspaceDestroyed)
@@ -2847,6 +2853,25 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, ErrNotResumable)
 	}
+	launchCfg := ports.LaunchConfig{
+		DataDir:          m.dataDir,
+		SessionID:        string(rec.ID),
+		WorkspacePath:    ws.Path,
+		Kind:             rec.Kind,
+		Prompt:           rec.Metadata.Prompt,
+		SystemPrompt:     systemPrompt,
+		SystemPromptFile: systemPromptFile,
+		Config:           agentConfig,
+		Permissions:      agentConfig.Permissions,
+	}
+	afterStartPrompt := rec.Metadata.Prompt
+	if delivery == ports.PromptDeliveryAfterStart && mode != RestoreModeNative {
+		afterStartPrompt, err = buildAfterStartPrompt(ctx, agent, launchCfg)
+		if err != nil {
+			m.cleanupSystemPromptDir(rec.ID)
+			return RestoreResult{}, fmt.Errorf("%s %s: after-start prompt: %w", operation, rec.ID, err)
+		}
+	}
 	if err := m.validateAgentBinary(argv); err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
@@ -2917,19 +2942,8 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, fmt.Errorf("%s %s: completed: %w", operation, rec.ID, err)
 	}
-	if delivery == ports.PromptDeliveryAfterStart && rec.Metadata.Prompt != "" {
-		launchCfg := ports.LaunchConfig{
-			DataDir:          m.dataDir,
-			SessionID:        string(rec.ID),
-			WorkspacePath:    ws.Path,
-			Kind:             rec.Kind,
-			Prompt:           rec.Metadata.Prompt,
-			SystemPrompt:     systemPrompt,
-			SystemPromptFile: systemPromptFile,
-			Config:           agentConfig,
-			Permissions:      agentConfig.Permissions,
-		}
-		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, rec.ID, rec.Metadata.Prompt); err != nil {
+	if delivery == ports.PromptDeliveryAfterStart && afterStartPrompt != "" {
+		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, rec.ID, afterStartPrompt); err != nil {
 			m.destroySpawnRuntimeAfterFailure(ctx, handle)
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
 			_ = m.lcm.MarkTerminated(cleanupCtx, rec.ID)
@@ -4003,6 +4017,14 @@ func (m *Manager) applyWorkspaceProjectPreserved(ctx context.Context, rows []por
 // the session is active or the budget is exhausted. Confirmation never fails
 // the send: it only decides whether to nudge again.
 func (m *Manager) Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error {
+	// Chat keeps its established automation relay attribution unless a trusted
+	// caller supplies the explicit user-authored fact through SendWithOptions.
+	return m.SendWithOptions(ctx, id, message, attachment, ports.MessageDeliveryOptions{})
+}
+
+// SendWithOptions delivers a message with caller-supplied authorship facts that
+// are independent of the mechanism AO uses to carry it.
+func (m *Manager) SendWithOptions(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error {
 	if attachment != nil {
 		// Reuses StageAttachments rather than a bespoke writer: it already owns the
 		// empty-workspace guard (refusing beats writing under the daemon's cwd),
@@ -4014,7 +4036,7 @@ func (m *Manager) Send(ctx context.Context, id domain.SessionID, message string,
 		}
 		message = appendAttachmentReferences(message, refs)
 	}
-	return m.send(ctx, id, message, "")
+	return m.send(ctx, id, message, "", options.AuthoredByUser)
 }
 
 // SendSemantic delivers an internal message and returns only after the target
@@ -4030,7 +4052,7 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 		return ErrNotFound
 	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
-		handled, sendErr := m.sendChat(ctx, id, message, clientMessageID)
+		handled, sendErr := m.sendChat(ctx, id, message, clientMessageID, false)
 		if !handled {
 			return ErrSemanticAcceptanceUnsupported
 		}
@@ -4043,7 +4065,7 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 		return nil
 	}
 	wrapped := domain.WrapReportDelivery(clientMessageID, message)
-	if err := m.send(ctx, id, wrapped, clientMessageID); err != nil {
+	if err := m.send(ctx, id, wrapped, clientMessageID, false); err != nil {
 		return err
 	}
 	deadline := time.NewTimer(10 * time.Second)
@@ -4112,7 +4134,7 @@ func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 // send carries an optional idempotency key used by durable transition-message
 // retries. Ordinary callers leave it empty; the outbox preserves the key across
 // restart, rollback, and even a second overlapping handoff.
-func (m *Manager) send(ctx context.Context, id domain.SessionID, message, clientMessageID string) error {
+func (m *Manager) send(ctx context.Context, id domain.SessionID, message, clientMessageID string, authoredByUser bool) error {
 	// A controller transition deliberately has a short interval with no writer.
 	// Queue internal/lifecycle sends durably instead of racing either controller
 	// or dropping coordination work; the transition worker drains this outbox
@@ -4127,7 +4149,7 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 	// refused as "missing runtime handles" — true of the handles, wrong about the
 	// session, and it left `ao send` and orchestrator-to-worker relay unable to
 	// reach a chat worker.
-	if handled, err := m.sendChat(ctx, id, message, clientMessageID); handled {
+	if handled, err := m.sendChat(ctx, id, message, clientMessageID, authoredByUser); handled {
 		return err
 	}
 
@@ -4972,7 +4994,7 @@ func (m *Manager) prepareSystemPromptFile(id domain.SessionID, harness domain.Ag
 
 func systemPromptFileRequired(harness domain.AgentHarness) bool {
 	switch harness {
-	case domain.HarnessAider,
+	case domain.HarnessGemini, domain.HarnessAider,
 		domain.HarnessAgy,
 		domain.HarnessAuggie,
 		domain.HarnessKiro,
@@ -5480,6 +5502,13 @@ func (m *Manager) deliverAfterStartPrompt(ctx context.Context, agent ports.Agent
 	}
 }
 
+func buildAfterStartPrompt(ctx context.Context, agent ports.Agent, cfg ports.LaunchConfig) (string, error) {
+	if builder, ok := agent.(ports.AgentAfterStartPromptBuilder); ok {
+		return builder.BuildAfterStartPrompt(ctx, cfg)
+	}
+	return cfg.Prompt, nil
+}
+
 func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent, cfg ports.LaunchConfig, handle ports.RuntimeHandle) error {
 	provider, ok := agent.(ports.AgentPromptReadinessProvider)
 	if !ok {
@@ -5796,6 +5825,9 @@ func (m *Manager) wrapAgentProcessWithLaunchID(agent ports.Agent, id domain.Sess
 	// Without this env value an old source hook can overwrite the target's
 	// native session id after an in-place switch.
 	env[EnvRuntimeLaunchID] = launchID
+	if augmenter, ok := agent.(ports.AgentRuntimeLaunchEnv); ok {
+		augmenter.AugmentRuntimeLaunchEnv(env, m.dataDir, id, launchID)
+	}
 	detector, ok := agent.(ports.AgentExitDetector)
 	if !force && (!ok || detector.ExitDetectionMode() != ports.AgentExitDetectionSupervisor) {
 		return argv, nil

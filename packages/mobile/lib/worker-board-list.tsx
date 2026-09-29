@@ -15,6 +15,7 @@ import { ListSectionHeader } from "./ui";
 import { WorkerListRow } from "./worker-list-row";
 import { filterWorkerSessions } from "./worker-search";
 import { type, space } from "./tokens";
+import { userFacingError } from "./connectionError";
 
 // The archive rides along as one more section so it scrolls with the board
 // rather than being pinned like desktop's strip — a phone has no room for a
@@ -198,7 +199,7 @@ export function WorkerBoardList({
 			haptics.success();
 		} catch (cause) {
 			haptics.error();
-			Alert.alert("Couldn't update pin", cause instanceof Error ? cause.message : "Please try again.");
+			Alert.alert("Couldn't update pin", userFacingError(cause, "Please try again."));
 		}
 	}, [setWorkerPinned]);
 
@@ -214,7 +215,7 @@ export function WorkerBoardList({
 			haptics.error();
 			Alert.alert(
 				kind === "resume" ? "Couldn't resume the agent" : "Couldn't restore the session",
-				cause instanceof Error ? cause.message : "Please try again.",
+				userFacingError(cause, "Please try again."),
 			);
 		}
 	}, [restore, resumeAgent]);

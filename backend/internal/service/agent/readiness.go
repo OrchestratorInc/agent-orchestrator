@@ -262,10 +262,10 @@ func readinessInfo(snapshot domain.AgentReadinessSnapshot) Info {
 	switch snapshot.Authentication.State {
 	case domain.AgentAuthenticationAuthorized, domain.AgentAuthenticationNotApplicable:
 		status = ports.AgentAuthStatusAuthorized
-	case domain.AgentAuthenticationUnauthorized:
-		status = ports.AgentAuthStatusUnauthorized
 	case domain.AgentAuthenticationConfigured:
 		status = ports.AgentAuthStatusConfigured
+	case domain.AgentAuthenticationUnauthorized:
+		status = ports.AgentAuthStatusUnauthorized
 	}
 	return Info{
 		ID: snapshot.ID, Label: snapshot.Label, AuthStatus: status,

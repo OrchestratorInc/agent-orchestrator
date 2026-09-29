@@ -59,6 +59,7 @@ func (s *Service) queueWithoutController(
 		Origin:              normalizeOrigin(msg.Origin),
 		ClientMessageID:     msg.ClientMessageID,
 		DeliveryContentJSON: deliveryContent,
+		AuthoredByUser:      msg.AuthoredByUser,
 	}, turnID, now)
 	if err != nil {
 		return domain.ConversationTurn{}, fmt.Errorf("queue message for %s: %w", record.ID, err)

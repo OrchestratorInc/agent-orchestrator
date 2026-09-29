@@ -18,13 +18,25 @@ import { Button, EmptyState } from "./ui";
  * not a restatement of the welcome screen: someone reaching this has already
  * read that and chosen to move past it.
  */
-export function UnpairedState() {
+export function UnpairedState({ resolving = false }: { resolving?: boolean }) {
 	const router = useRouter();
+	// On launch the store has no config until the endpoint race finishes, which
+	// on a slow network takes seconds. Offering the scanner during that window
+	// told a paired user their phone had forgotten the desktop, moments before it
+	// connected on its own.
+	if (resolving) {
+		return (
+			<EmptyState
+				icon="monitor-smartphone"
+				pulse
+				title="Connecting to your desktop…"
+			/>
+		);
+	}
 	return (
 		<EmptyState
-			icon="server"
+			icon="monitor-smartphone"
 			title="No desktop paired"
-			message="Scan the pairing code from AO → Settings → Connect Mobile to drive your agents from here."
 			action={<Button title="Scan pairing code" icon="maximize" onPress={() => router.push("/pair")} />}
 		/>
 	);

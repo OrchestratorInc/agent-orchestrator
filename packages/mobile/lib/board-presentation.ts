@@ -1,4 +1,4 @@
-import { classifyConnectionFailure, describeConnectionFailure } from "./connectionError";
+import { classifyConnectionFailure, describeConnectionFailure, type ConnectionErrorCopy } from "./connectionError";
 import type { EnvironmentKind } from "./environment/types";
 import type { OrchestratorProjectAction } from "./orchestratorView";
 
@@ -45,10 +45,12 @@ export function boardFailure(
 	status: number | undefined,
 	target: Parameters<typeof describeConnectionFailure>[1],
 	tunnelRotated = false,
-) {
+): ConnectionErrorCopy {
 	if (environment === "cloud") {
 		return {
 			title: "Couldn't refresh Cloud",
+			icon: "cloud",
+			hint: "Check your internet connection and try again.",
 			message: "Cloud data couldn't be loaded. Check your internet connection and try again.",
 			showLocalNetworkHint: false,
 		};

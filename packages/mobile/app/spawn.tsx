@@ -17,7 +17,7 @@ import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-cont
 import { agentErrorCopy } from "../lib/agentError";
 import { defaultAgent, rankAgents } from "../lib/agentPicker";
 import { ApiError, getAgentModels, getAgents, getProject, getSettings, type AgentCatalog, type AgentInfo, type AgentModelCatalog, type ProjectDetail, type SessionMode } from "../lib/api";
-import { classifyConnectionFailure, describeConnectionFailure } from "../lib/connectionError";
+import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { readyHarnesses } from "../lib/cloud/agentReadiness";
 import { useCloudAuth } from "../lib/cloud/authStore";
@@ -26,6 +26,7 @@ import { resolveSpawnProject } from "../lib/projectFilter";
 import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
 import { appendSpawnAttachments, readSpawnAttachments, type SpawnAttachment } from "../lib/spawn-attachments";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
+import { spawnNotices } from "../lib/spawnNotices";
 import { SpawnPromptInput } from "../lib/spawn-prompt-input";
 import { useApp } from "../lib/store";
 import { useVoiceInput } from "../lib/voice/useVoiceInput";
@@ -42,7 +43,7 @@ export default function SpawnModal() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const { projectId: routeProjectId } = useLocalSearchParams<{ projectId?: string }>();
-	const { environment, projects, projectsKnown, activeProjectId, config, spawn } = useApp();
+	const { environment, projects, projectsKnown, activeProjectId, config, connection, unreachable, spawn } = useApp();
 	const { client: cloudClient, orgId: cloudOrgId } = useCloudAuth();
 	const cloudSpawn = environment === "cloud";
 
@@ -70,6 +71,8 @@ export default function SpawnModal() {
 	const [catalogError, setCatalogError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [offerTUI, setOfferTUI] = useState(false);
+	// Bumped to re-run the loads below after the desktop comes back.
+	const [reloadKey, setReloadKey] = useState(0);
 	// Spoken text lands in the prompt the way it does in the chat composer:
 	// appended, so dictation can extend what was typed rather than replace it.
 	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => setPrompt((old) => old ? `${old} ${spoken}` : spoken), []) });
@@ -161,7 +164,7 @@ export default function SpawnModal() {
 		return () => {
 			cancelled = true;
 		};
-	}, [environment, config, cloudClient, cloudOrgId]);
+	}, [environment, config, cloudClient, cloudOrgId, reloadKey]);
 
 	// Refreshing the catalog moved into the agent sheet route, which owns its own
 	// copy of it — see app/sheets/agent.tsx.
@@ -176,10 +179,25 @@ export default function SpawnModal() {
 	// provider picks, and naming a model here promised one the session never ran.
 	const displayedModelLabel = displayedModel ? modelCatalog?.models.find((item) => item.id === displayedModel)?.label ?? displayedModel : "Automatic";
 	const modelSelection = modelTouched ? model : "__auto__";
+	const notices = cloudSpawn
+		? [...new Set([
+			mode === "chat" && !loading && agents.length === 0 ? "Connect a Cloud coding agent before starting a worker." : null,
+			catalogError,
+			modelError ?? null,
+		].filter((notice): notice is string => Boolean(notice)))]
+		: spawnNotices({
+			// Only when a reconnect can fix it: a rejected password stops the poll for
+			// good, and its catalog error already says to re-scan the pairing code.
+			offline: unreachable,
+			mode,
+			loading,
+			catalogLoaded: catalog !== null,
+			catalogError,
+			agentCount: agents.length,
+			modelError,
+		});
 	const hasComposerMessage = Boolean(
-		(mode === "chat" && !loading && agents.length === 0)
-		|| catalogError
-		|| modelError
+		notices.length > 0
 		|| attachmentError
 		|| (Platform.OS === "android" && listening)
 		|| voice.error
@@ -193,10 +211,10 @@ export default function SpawnModal() {
 		setProjectDetailLoadedFor(null);
 		getProject(config, projectId)
 			.then((nextProject) => { if (!cancelled) setProjectDetail(nextProject); })
-			.catch((cause) => { if (!cancelled) setModelError(cause instanceof Error ? cause.message : String(cause)); })
+			.catch((cause) => { if (!cancelled) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled) setProjectDetailLoadedFor(projectId); });
 		return () => { cancelled = true; };
-	}, [environment, config, projectId]);
+	}, [environment, config, projectId, reloadKey]);
 
 	useEffect(() => {
 		if (agentTouched || loading || !catalog) return;
@@ -215,10 +233,21 @@ export default function SpawnModal() {
 		setModelLoading(true);
 		getAgentModels(config, harness, projectId)
 			.then((nextCatalog) => { if (!cancelled) { setModelCatalog(nextCatalog); setModelError(nextCatalog.warning); } })
-			.catch((cause) => { if (!cancelled) setModelError(cause instanceof Error ? cause.message : String(cause)); })
+			.catch((cause) => { if (!cancelled) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled) setModelLoading(false); });
 		return () => { cancelled = true; };
-	}, [environment, config, harness, projectId]);
+	}, [environment, config, harness, projectId, reloadKey]);
+
+	// Loads that failed while the desktop was unreachable run again once the
+	// board's poll reconnects. Keyed on the reconnect, not on the errors, so an
+	// endpoint that keeps failing while connected can't loop.
+	const previousConnection = useRef(connection);
+	useEffect(() => {
+		const reconnected = previousConnection.current !== "open" && connection === "open";
+		previousConnection.current = connection;
+		if (environment === "local" && reconnected && (catalogError || modelError)) setReloadKey((key) => key + 1);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [connection, environment]);
 
 	const clearModelOverride = () => { setModel(""); setModelTouched(false); };
 	const resetModelSource = () => { clearModelOverride(); setModelCatalog(undefined); setModelError(undefined); };
@@ -291,7 +320,7 @@ export default function SpawnModal() {
 			setAttachments(merged.attachments);
 			setAttachmentError(next.error ?? merged.error);
 		} catch (cause) {
-			setAttachmentError(cause instanceof Error ? cause.message : "Couldn't read that file.");
+			setAttachmentError(userFacingError(cause, "Couldn't read that file."));
 		} finally {
 			pickingAttachments.current = false;
 
@@ -376,9 +405,7 @@ export default function SpawnModal() {
 				) : null}
 
 		{hasComposerMessage ? <View style={styles.messages}>
-					{mode === "chat" && !loading && agents.length === 0 ? <Text style={styles.warn}>{cloudSpawn ? "Connect a Cloud coding agent before starting a worker." : "No installed agent on this AO host currently supports Chat. Choose Terminal UI or install/authenticate a Chat-capable agent."}</Text> : null}
-					{catalogError ? <Text style={styles.warn}>{catalogError}</Text> : null}
-					{modelError ? <Text style={styles.warn}>{modelError}</Text> : null}
+					{notices.map((notice) => <Text key={notice} style={styles.warn}>{notice}</Text>)}
 					{attachmentError ? <Text style={styles.warn}>{attachmentError}</Text> : null}
 					{Platform.OS === "android" ? voiceFeedback : null}
 					{voice.error ? <Text accessibilityRole="alert" style={styles.warn}>{voice.error}</Text> : null}
@@ -456,13 +483,7 @@ function spawnErrorCopy(e: unknown, environment: "local" | "cloud" | null): stri
 		return "Task prompt is too long. Keep it to 16 KiB or fewer (emoji and other non-English characters use more than one byte). Shorten it and try again.";
 	}
 	if (environment === "cloud") return e instanceof Error ? e.message : "Could not start the Cloud worker.";
-	const status = e instanceof ApiError ? e.status : undefined;
-	const { title, message } = describeConnectionFailure(classifyConnectionFailure(status), {
-		host: "",
-		port: "",
-		platform: Platform.OS,
-	});
-	return `${title} ${message}`;
+	return userFacingError(e, "Couldn't start the worker. Try again.");
 }
 
 const CLOUD_AGENT_LABELS: Record<string, string> = {

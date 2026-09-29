@@ -1365,7 +1365,7 @@ func (m *Manager) deliverTransitionMessages(
 		}
 	}
 	for _, message := range messages {
-		if err := m.send(ctx, transition.SessionID, message.Message, message.ClientMessageID); err != nil {
+		if err := m.send(ctx, transition.SessionID, message.Message, message.ClientMessageID, false); err != nil {
 			return fmt.Errorf("deliver transition %s message %d: %w", transition.ID, message.ID, err)
 		}
 		if err := store.MarkSessionInterfaceTransitionMessageDelivered(ctx, message.ID, m.clock()); err != nil {

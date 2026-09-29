@@ -35,7 +35,7 @@ export default function FleetScreen() {
 
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { environment, configured, loading, error, errorStatus, connection, config, refresh, sessions, projects, notificationsUnread, activeEndpoints } =
+	const { environment, configured, configResolved, loading, error, errorStatus, connection, config, refresh, sessions, projects, notificationsUnread, activeEndpoints } =
 		useApp();
 	const presentation = boardPresentation(environment, configured);
 	const [refreshing, setRefreshing] = useState(false);
@@ -102,9 +102,9 @@ export default function FleetScreen() {
 					port: config?.httpPort ?? "",
 					platform: Platform.OS,
 				},
-				tunnelMayHaveRotated(activeEndpoints, connection === "open"),
+				tunnelMayHaveRotated(activeEndpoints, config?.endpointKind, connection === "open"),
 			),
-		[environment, errorStatus, config?.host, config?.httpPort, activeEndpoints, connection],
+		[environment, errorStatus, config?.host, config?.httpPort, config?.endpointKind, activeEndpoints, connection],
 	);
 
 	const onRefresh = useCallback(async () => {
@@ -156,7 +156,7 @@ export default function FleetScreen() {
 			<View style={styles.screen}>
 				<View style={{ height: insets.top }} />
 				<ScreenHeader title="Workers" />
-				<UnpairedState />
+				<UnpairedState resolving={!configResolved} />
 			</View>
 		);
 	}
@@ -199,9 +199,9 @@ export default function FleetScreen() {
 							<EmptyState icon="search" title="No workers found" message={`No workers match “${query.trim()}”.`} />
 						) : error ? (
 							<EmptyState
-								icon="wifi-off"
+								icon={failure.icon}
 								title={failure.title}
-								message={failure.message}
+								message={failure.hint}
 								action={
 									<View style={styles.errorActions}>
 										<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />
