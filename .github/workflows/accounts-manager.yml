@@ -1,0 +1,76 @@
+name: Accounts Manager
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "accounts-manager/**"
+      - "backend/go.mod"
+      - ".github/workflows/accounts-manager.yml"
+  pull_request:
+    paths:
+      - "accounts-manager/**"
+      - "backend/go.mod"
+      - ".github/workflows/accounts-manager.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: accounts-manager-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GOWORK: "off"
+  GOMAXPROCS: "2"
+
+jobs:
+  modules:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [engine, runner]
+    defaults:
+      run:
+        working-directory: accounts-manager/${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: |
+            accounts-manager/engine/go.sum
+            accounts-manager/runner/go.sum
+      - run: go mod tidy -diff
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race -count=1 -timeout=20m ./...
+
+  runner-cross-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+    defaults:
+      run:
+        working-directory: accounts-manager/runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: |
+            accounts-manager/engine/go.sum
+            accounts-manager/runner/go.sum
+      - run: go build ./...
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}

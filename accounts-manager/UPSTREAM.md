@@ -13,9 +13,40 @@ AO-specific lifecycle, API, storage, and product integration should live outside
 `engine/`. Keeping the snapshot isolated makes upstream updates reviewable and
 prevents AO-specific behavior from being mixed into the provider engine.
 
-When updating the snapshot, replace `engine/` from a clean upstream checkout,
-excluding only its `.git` directory, and update the tag and commit above in the
-same change.
+This is an embedded-library distribution. The standalone server, terminal UI,
+alternate credential stores, examples and upstream release tooling are omitted.
+AO builds `runner/cmd/ao-accounts-manager`; it does not run the upstream server.
+
+When updating the snapshot, copy a clean upstream checkout without `.git` or
+the following paths, then update the tag and commit above in the same change:
+
+```text
+.github/
+cmd/
+examples/
+internal/auth/empty/
+internal/cmd/
+internal/store/
+internal/tui/
+.dockerignore
+Dockerfile
+docker-build.ps1
+docker-build.sh
+docker-compose.cluster.yml
+docker-compose.yml
+```
+
+These private packages are used only by the omitted standalone entry points.
+Keep `internal/homeplugins`, all public SDK packages, embedded catalogs,
+`config.example.yaml`, test fixtures, the license and local patches below.
+The example configuration is read by an executor regression. Original upstream
+reference documentation may describe commands omitted from this distribution.
+
+After updating, run `go mod tidy` in the engine and runner modules. Review the
+module diff without upgrading versions. Compare the runner's production/test
+dependency closure on Linux amd64/arm64, Windows amd64 and Mac amd64/arm64,
+then build and test both modules and verify desktop runner/license packaging.
+An exclusion must be revisited if a new upstream version imports that path.
 
 ## Local callback extension
 
