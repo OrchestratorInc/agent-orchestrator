@@ -263,6 +263,20 @@ describe("elicitation drafts", () => {
 		expect(window.localStorage.getItem(elicitationDraftKey("conversation-1", "stale"))).toBeNull();
 	});
 
+	it("treats even a slightly future sweep marker as no marker", () => {
+		const twoHours = 2 * 60 * 60 * 1000;
+		window.localStorage.setItem("ao.elicitation-draft-sweep:last", String(Date.now() + twoHours));
+		const eightDays = 8 * 24 * 60 * 60 * 1000;
+		window.localStorage.setItem(
+			elicitationDraftKey("conversation-1", "stale"),
+			JSON.stringify({ schemaVersion: 1, values: { a: "one" }, activeQuestion: 0, updatedAt: Date.now() - eightDays }),
+		);
+
+		pruneExpiredElicitationDraftsOnce(window.localStorage);
+
+		expect(window.localStorage.getItem(elicitationDraftKey("conversation-1", "stale"))).toBeNull();
+	});
+
 	describe("reconcileElicitationDraftsForConversation", () => {
 		it("keeps a draft for every request that is still pending, not only the one shown", () => {
 			// The daemon can have more than one user_input open on a conversation

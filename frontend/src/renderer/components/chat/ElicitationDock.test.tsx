@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Fragment } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
 import { getChatDraftBoundary, setChatDraftBoundary } from "../../lib/chat-draft-boundary";
@@ -557,11 +558,13 @@ describe("ElicitationDock", () => {
 		// unmount effect runs, so storage can still hold the previous, already-
 		// superseded answer at the moment this reads it. The in-memory cache
 		// holds the newer one instead.
-		let failing = true;
-		vi.spyOn(window.localStorage, "setItem").mockImplementation((key: string) => {
+		let failing = false;
+		const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
+		vi.spyOn(window.localStorage, "setItem").mockImplementation((key: string, value: string) => {
 			if (failing && key === elicitationDraftKey("conversation-1", "request-1")) {
 				throw new DOMException("quota exceeded", "QuotaExceededError");
 			}
+			originalSetItem(key, value);
 		});
 
 		try {
@@ -573,17 +576,20 @@ describe("ElicitationDock", () => {
 					onResolve={vi.fn()}
 				/>
 			);
-			const first = render(dock);
+			// Re-keying the host remounts the dock in a single commit, the way a
+			// queued edit re-keys the composer.
+			const Host = ({ generation }: { generation: number }) => <Fragment key={generation}>{dock}</Fragment>;
+			const view = render(<Host generation={1} />);
+			fireEvent.click(screen.getByRole("radio", { name: /Native/ }));
+			expect(readElicitationDraft("conversation-1", "request-1")?.values.question_0).toBe("Native");
+
+			failing = true;
 			fireEvent.click(screen.getByRole("radio", { name: /Bridge/ }));
-			// The write failed: storage still has nothing for this request.
-			expect(readElicitationDraft("conversation-1", "request-1")).toBeUndefined();
 
-			first.unmount();
-			render(dock);
+			view.rerender(<Host generation={2} />);
 
-			// Restored from the in-memory cache, not from (empty) storage — and the
-			// still-failing state came with it, shown immediately rather than only
-			// after a future write attempt.
+			// Storage still holds the older Native; the newer, unsaved Bridge comes
+			// from the in-memory cache, along with its still-failing state.
 			expect(screen.getByRole("radio", { name: /Bridge/ })).toBeChecked();
 			expect(screen.getByRole("alert")).toHaveTextContent(/couldn.?t be saved/i);
 			expect(getChatDraftBoundary("session-1")).toBe("elicitation-persistence-failed");

@@ -183,15 +183,10 @@ export function pruneExpiredElicitationDraftsOnce(
 	} catch {
 		last = undefined;
 	}
-	// A corrupt or far-future marker is treated as no marker, the same as a
-	// draft's own bad timestamp — otherwise a clock that was briefly far ahead
-	// could wedge the sweep shut indefinitely once corrected.
-	if (
-		typeof last === "number" &&
-		Number.isFinite(last) &&
-		last <= now + MAX_FUTURE_TOLERANCE_MS &&
-		now - last < SWEEP_INTERVAL_MS
-	) {
+	// Any future marker counts as no marker: it's ours, an early sweep costs
+	// nothing, and trusting one written while the clock was ahead would block
+	// sweeps until real time caught up.
+	if (typeof last === "number" && Number.isFinite(last) && last <= now && now - last < SWEEP_INTERVAL_MS) {
 		return;
 	}
 	pruneExpiredElicitationDrafts(storage, now);

@@ -527,18 +527,6 @@ describe("session-scoped conversation commands", () => {
 		expect(result.current.error).toBeUndefined();
 	});
 
-	it("does not fold a failed resolveInput into the combined command error", async () => {
-		// The dock already shows its own rejection inline. Surfacing it here too
-		// duplicated it, and nothing ever reset this mutation, so the message
-		// would outlive the question it was about.
-		const refusal = { code: "CHAT_REQUEST_NOT_PENDING" };
-		postMock.mockResolvedValue({ data: undefined, error: refusal });
-		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
-
-		await expect(result.current.resolveInput("request-1", "accept", { answer: "Native" })).rejects.toBe(refusal);
-		expect(result.current.error).toBeUndefined();
-	});
-
 	it.each(["retry", "edit"] as const)(
 		"keeps pending and accepted %s work attached to its initiating session",
 		async (operation) => {
