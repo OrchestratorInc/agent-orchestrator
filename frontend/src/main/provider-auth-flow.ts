@@ -9,15 +9,34 @@ import crypto from "node:crypto";
 
 const MAX_AUTH_DOCUMENT_BYTES = 64 << 10;
 
-// A Claude Code setup token. `claude setup-token` emits one of these for use in
-// headless/cloud contexts; matching on the token shape (rather than a specific
-// storage file) keeps extraction stable across claude versions, which have moved
-// the credential between settings.json, .credentials.json, and the OS keychain.
-const CLAUDE_OAUTH_TOKEN_PATTERN = /sk-ant-[0-9A-Za-z_-]{10,}/;
+// Claude Code emits two distinct token shapes:
+//   sk-ant-oat*  – OAuth/setup-token tied to a Pro/Max subscription → CLAUDE_CODE_OAUTH_TOKEN
+//   sk-ant-api*  – standard API key from the Anthropic console → ANTHROPIC_API_KEY
+// Matching on shape (rather than a fixed file path) keeps extraction stable across claude
+// versions that have moved credentials between settings.json, .credentials.json, and the
+// OS keychain.
+const CLAUDE_OAUTH_TOKEN_PATTERN = /sk-ant-oat[0-9A-Za-z_-]{10,}/;
+const CLAUDE_API_KEY_PATTERN      = /sk-ant-api[0-9A-Za-z_-]{10,}/;
 
-export function extractClaudeOAuthToken(text: string): string | null {
-	const match = text.match(CLAUDE_OAUTH_TOKEN_PATTERN);
-	return match ? match[0] : null;
+export type ClaudeTokenResult = {
+	secret: string;
+	credentialType: "oauth_token" | "api_key";
+};
+
+/**
+ * Extracts a Claude credential from text (e.g. `claude setup-token` stdout/stderr or a
+ * credential file) and returns the token together with the credential type inferred from
+ * its shape.  Returns null when no recognised token is present.
+ *
+ * Invariant: an `sk-ant-api*` value is NEVER classified as `oauth_token`, and an
+ * `sk-ant-oat*` value is NEVER classified as `api_key`.
+ */
+export function extractClaudeOAuthToken(text: string): ClaudeTokenResult | null {
+	const oatMatch = text.match(CLAUDE_OAUTH_TOKEN_PATTERN);
+	if (oatMatch) return { secret: oatMatch[0], credentialType: "oauth_token" };
+	const apiMatch = text.match(CLAUDE_API_KEY_PATTERN);
+	if (apiMatch) return { secret: apiMatch[0], credentialType: "api_key" };
+	return null;
 }
 
 // Fallback for claude builds that write the setup token to a file instead of (or
@@ -35,8 +54,8 @@ export async function readClaudeOAuthTokenFromDir(dir: string): Promise<string |
 		try {
 			const stat = await lstat(full);
 			if (!stat.isFile() || stat.size === 0 || stat.size > MAX_AUTH_DOCUMENT_BYTES) continue;
-			const token = extractClaudeOAuthToken(await readFile(full, "utf8"));
-			if (token) return token;
+			const result = extractClaudeOAuthToken(await readFile(full, "utf8"));
+			if (result) return result.secret;
 		} catch {
 			// unreadable entry; keep scanning
 		}
@@ -334,7 +353,7 @@ const claudeAuthFlow: ProviderAuthFlow = {
 			// exact failure the browser-login button hit. So watch stdout AND the
 			// isolated config dir, and finish the moment a token appears; the process
 			// `exit` becomes only the terminal-error signal.
-			const secret = await new Promise<string>((resolve, reject) => {
+			const credential = await new Promise<ClaudeTokenResult>((resolve, reject) => {
 				const child = spawnAgentBinary(binary.path, ["setup-token"], {
 					env: { ...process.env, PATH: binary.pathEnv, CLAUDE_CONFIG_DIR: pending },
 					stdio: ["ignore", "pipe", "pipe"],
@@ -353,11 +372,11 @@ const claudeAuthFlow: ProviderAuthFlow = {
 						// already gone
 					}
 				};
-				const succeed = (token: string) => {
+				const succeed = (result: ClaudeTokenResult) => {
 					if (settled) return;
 					settled = true;
 					cleanup();
-					resolve(token);
+					resolve(result);
 				};
 				const fail = (err: Error) => {
 					if (settled) return;
@@ -368,8 +387,8 @@ const claudeAuthFlow: ProviderAuthFlow = {
 
 				const capture = (chunk: Buffer) => {
 					if (captured.length <= MAX_AUTH_DOCUMENT_BYTES) captured += chunk.toString();
-					const token = extractClaudeOAuthToken(captured);
-					if (token) succeed(token);
+					const result = extractClaudeOAuthToken(captured);
+					if (result) succeed(result);
 				};
 				child.stdout?.on("data", capture);
 				child.stderr?.on("data", capture);
@@ -378,8 +397,9 @@ const claudeAuthFlow: ProviderAuthFlow = {
 				// instead of stdout; poll for it so that path resolves promptly too.
 				poll = setInterval(() => {
 					void readClaudeOAuthTokenFromDir(pending)
-						.then((token) => {
-							if (token) succeed(token);
+						.then((secret) => {
+							// Tokens read from files are always OAuth — setup-token writes oat* tokens
+							if (secret) succeed({ secret, credentialType: "oauth_token" });
 						})
 						.catch(() => {});
 				}, 1000);
@@ -396,11 +416,11 @@ const claudeAuthFlow: ProviderAuthFlow = {
 				child.once("exit", (code) => {
 					// Last-chance check for a token the CLI wrote just before exiting,
 					// then treat the exit as terminal.
-					const token = extractClaudeOAuthToken(captured);
-					if (token) return succeed(token);
+					const result = extractClaudeOAuthToken(captured);
+					if (result) return succeed(result);
 					void readClaudeOAuthTokenFromDir(pending)
-						.then((fileToken) => {
-							if (fileToken) return succeed(fileToken);
+						.then((fileSecret) => {
+							if (fileSecret) return succeed({ secret: fileSecret, credentialType: "oauth_token" });
 							fail(
 								new Error(
 									code === 0
@@ -412,7 +432,7 @@ const claudeAuthFlow: ProviderAuthFlow = {
 						.catch(() => fail(new Error("Claude sign-in did not complete.")));
 				});
 			});
-			return { provider: "claude-code", credentialType: "oauth_token", secret };
+			return { provider: "claude-code", credentialType: credential.credentialType, secret: credential.secret };
 		} finally {
 			await rm(pending, { recursive: true, force: true });
 		}
