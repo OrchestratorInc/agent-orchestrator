@@ -56,7 +56,8 @@ export async function raceEndpoints(
 	if (endpoints.length === 0) return { ok: false, reason: "no-candidates" };
 	const graceMs = options.graceMs ?? DEFAULT_RACE_GRACE_MS;
 
-	if (typeof __DEV__ !== "undefined" && __DEV__) {
+	const isDev = typeof __DEV__ !== "undefined" && __DEV__;
+	if (isDev) {
 		console.log("[race] Racing endpoints:", {
 			count: endpoints.length,
 			expectedHostId,
@@ -82,25 +83,25 @@ export async function raceEndpoints(
 			const result: RaceOutcome = best
 				? { ok: true, endpoint: best, hostId: bestHostId }
 				: { ok: false, reason: "none-reachable" };
-			if (typeof __DEV__ !== "undefined" && __DEV__) {
+			if (isDev) {
 				console.log("[race] Race finished:", result);
 			}
 			resolve(result);
 		};
 
 		for (const endpoint of endpoints) {
-			if (typeof __DEV__ !== "undefined" && __DEV__) {
+			if (isDev) {
 				console.log("[race] Probing endpoint:", `${endpoint.kind}://${endpoint.host}:${endpoint.port}`);
 			}
 			probe(endpoint, controller.signal)
 				.then((answer) => {
-					if (typeof __DEV__ !== "undefined" && __DEV__) {
+					if (isDev) {
 						console.log("[race] Endpoint answered:", `${endpoint.kind}://${endpoint.host}:${endpoint.port}`, answer);
 					}
 					// Answering as someone else is not an error to report — it is
 					// simply not our machine, so the endpoint is discarded.
 					if (expectedHostId !== "" && answer.hostId !== expectedHostId) {
-						if (typeof __DEV__ !== "undefined" && __DEV__) {
+						if (isDev) {
 							console.log("[race] Endpoint discarded: hostId mismatch", {
 								expected: expectedHostId,
 								got: answer.hostId,
@@ -119,7 +120,7 @@ export async function raceEndpoints(
 					if (endpointRank(endpoint.kind) === 0) finish();
 				})
 				.catch((err) => {
-					if (typeof __DEV__ !== "undefined" && __DEV__) {
+					if (isDev) {
 						console.log("[race] Endpoint failed:", `${endpoint.kind}://${endpoint.host}:${endpoint.port}`, err);
 					}
 				})

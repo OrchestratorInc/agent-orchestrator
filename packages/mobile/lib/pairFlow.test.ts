@@ -11,7 +11,7 @@ vi.mock("expo-secure-store", () => ({
 
 import type { Endpoint } from "./endpoints";
 import { pairFromCode } from "./pairFlow";
-import { encodePairingCode } from "./pairingCode";
+import { encodePairingCode, parsePairingCode } from "./pairingCode";
 
 const lan: Endpoint = { kind: "lan", host: "192.168.1.42", port: 3011, secure: false };
 const tunnel: Endpoint = { kind: "tunnel", host: "abc.trycloudflare.com", port: 443, secure: true };
@@ -145,8 +145,20 @@ describe("pairFromCode reasons", () => {
 		expect(got.ok).toBe(false);
 		if (!got.ok) {
 			expect(got.reason).toBe("none-reachable");
-			// The test verifies that the error path is taken; the actual endpoint
-			// is preserved in the offer for the UI to use in error messages
 		}
+	});
+
+	it("makes parsed endpoints available for error reporting in the UI layer", () => {
+		// Verify that parsePairingCode correctly extracts endpoints that can be
+		// used in error messages when the race fails. This is the contract that
+		// pair.tsx relies on when constructing error targets.
+		const parsed = parsePairingCode(`aomobile://pair#${code}`);
+		expect(parsed).not.toBeNull();
+		expect(parsed?.endpoints).toHaveLength(2);
+		expect(parsed?.endpoints[0]).toEqual(lan);
+		expect(parsed?.endpoints[1]).toEqual(tunnel);
+		// The UI extracts the first endpoint for error reporting: host:port
+		expect(parsed?.endpoints[0].host).toBe("192.168.1.42");
+		expect(parsed?.endpoints[0].port).toBe(3011);
 	});
 });

@@ -137,7 +137,7 @@ export function describeConnectionFailure(
 				message: "That QR code isn't an AO pairing code.",
 				showLocalNetworkHint: false,
 			};
-		case "unreachable":
+		case "unreachable": {
 			// Build the address string only when we have both host and port
 			const address = target.host && target.port ? `${target.host}:${target.port}` : target.host || "";
 			const messagePrefix = address ? `Reached nothing at ${address}. ` : "Could not reach your desktop. ";
@@ -150,6 +150,7 @@ export function describeConnectionFailure(
 						"Is Connect Mobile still on, and is your phone on the same Wi-Fi?",
 				showLocalNetworkHint,
 			};
+		}
 		case "auth":
 			// The connection itself worked, so "disconnected" would be wrong here —
 			// and re-scanning is the actual fix, not retrying the same password.
