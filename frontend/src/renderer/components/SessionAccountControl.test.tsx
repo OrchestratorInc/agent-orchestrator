@@ -167,7 +167,8 @@ describe("SessionAccountControl", () => {
     ["waiting", "cancel", "Cancel account switch", "cancelled"],
     ["recovery_required", "retry", "Retry account switch", "starting"],
   ])("uses the exact %s operation for %s and observes the returned phase", async (phase, action, label, nextPhase) => {
-    mockState({ ...binding, switch: { ...operation, phase, recoveryRequired: phase === "recovery_required" } });
+    const state = { ...operation, phase, canRetry: phase === "recovery_required", recoveryRequired: phase === "recovery_required" };
+    mockState({ ...binding, switch: state });
     let resolve!: (value: unknown) => void;
     api.POST.mockImplementation(() => new Promise(done => { resolve = done; }));
     show();
@@ -183,5 +184,32 @@ describe("SessionAccountControl", () => {
     resolve(success(next));
     await waitFor(() => expect(screen.getByRole("region", { name: "Switch operation" })).toHaveTextContent(`Phase: ${nextPhase}`));
     expect(screen.getByRole("region", { name: "Committed account" })).toHaveTextContent("account-a");
+  });
+
+  it.each(["requested", "waiting"])("offers explicit retry for recovered %s without changing committed state", async phase => {
+    const recovered = { ...operation, phase, canRetry: true };
+    mockState({ ...binding, switch: recovered });
+    api.POST.mockResolvedValue({ error: { code: "ACCOUNTS_MANAGER_CONTROL_CONFLICT", requestId: "retry-race-79" }, response: new Response(null, { status: 409 }) });
+    show();
+    const retry = await screen.findByRole("button", { name: "Retry account switch" });
+    await waitFor(() => expect(retry).toBeEnabled());
+    fireEvent.click(retry);
+    expect(await screen.findByRole("alert")).toHaveTextContent("retry-race-79");
+    expect(api.POST).toHaveBeenCalledExactlyOnceWith("/api/v1/sessions/{sessionId}/account-switches/{operationId}/retry", { params: { path: { sessionId: "session-a", operationId: operation.id } } });
+    expect(screen.getByRole("region", { name: "Committed account" })).toHaveTextContent("account-a");
+    expect(screen.getByRole("region", { name: "Switch operation" })).toHaveTextContent(operation.id);
+    expect(screen.getByRole("button", { name: "Cancel account switch" })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["waiting", false], ["recovery_required", false], ["recovery_required", undefined],
+    ["cancelled", true], ["failed", true], ["ready", true], ["stopping", true],
+  ] as const)("does not infer retry for phase %s and capability %s", async (phase, canRetry) => {
+    const state = { ...operation, phase, canRetry };
+    mockState({ ...binding, switch: state });
+    show();
+    await screen.findByRole("region", { name: "Switch operation" });
+    expect(screen.queryByRole("button", { name: "Retry account switch" })).not.toBeInTheDocument();
+    expect(api.POST).not.toHaveBeenCalled();
   });
 });

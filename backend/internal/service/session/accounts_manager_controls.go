@@ -7,8 +7,15 @@ import (
 	accountcore "github.com/aoagents/agent-orchestrator/backend/internal/accountsmanager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
+
+// AccountSwitchCanRetry leaves eligibility unknown to unsupported managers.
+func (s *Service) AccountSwitchCanRetry(op domain.AccountsManagerSwitch) bool {
+	reader, supported := s.manager.(ports.AccountsManagerSwitchRetryReader)
+	return supported && reader.AccountsManagerSwitchCanRetry(op)
+}
 
 type accountsManagerControlCommander interface {
 	StartAccountsManagerSwitch(context.Context, domain.SessionID, sessionmanager.AccountsManagerSwitchConfig) (domain.AccountsManagerSwitch, error)

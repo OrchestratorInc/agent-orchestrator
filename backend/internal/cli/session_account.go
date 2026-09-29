@@ -32,6 +32,7 @@ type sessionAccountSwitchDTO struct {
 	NewConversation  bool      `json:"newConversation"`
 	Phase            string    `json:"phase"`
 	RecoveryRequired bool      `json:"recoveryRequired"`
+	CanRetry         bool      `json:"canRetry"`
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt"`
 }
@@ -180,6 +181,6 @@ func writeSessionAccountSwitch(cmd *cobra.Command, response sessionAccountSwitch
 	if asJSON {
 		return writeJSON(cmd.OutOrStdout(), response)
 	}
-	_, err := fmt.Fprintf(cmd.OutOrStdout(), "operation: %s\nsession: %s\nsource mode: %s\nsource account: %s\ntarget mode: %s\ntarget account: %s\npolicy: %s\nnew conversation: %t\nphase: %s\nrecovery required: %t\n", response.ID, response.SessionID, response.SourceMode, response.SourceAccountID, response.TargetMode, response.TargetAccountID, response.Policy, response.NewConversation, response.Phase, response.RecoveryRequired)
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), "operation: %s\nsession: %s\nsource mode: %s\nsource account: %s\ntarget mode: %s\ntarget account: %s\npolicy: %s\nnew conversation: %t\nphase: %s\nrecovery required: %t\nretry available: %t\n", response.ID, response.SessionID, response.SourceMode, response.SourceAccountID, response.TargetMode, response.TargetAccountID, response.Policy, response.NewConversation, response.Phase, response.RecoveryRequired, response.CanRetry)
 	return err
 }

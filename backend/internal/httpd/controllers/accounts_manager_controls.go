@@ -83,7 +83,7 @@ func (c *AccountsManagerController) sessionAccount(w http.ResponseWriter, r *htt
 	}
 	view := AccountsManagerSessionResponse{SessionID: string(id), Provider: string(binding.Provider), Mode: string(binding.Mode), AccountID: binding.AccountID, Revision: binding.Revision, Blocked: binding.Blocked}
 	if pending != nil {
-		operation := accountSwitchResponse(*pending)
+		operation := c.observedAccountSwitchResponse(*pending)
 		view.Switch = &operation
 	}
 	envelope.WriteJSON(w, http.StatusOK, view)
@@ -116,7 +116,7 @@ func (c *AccountsManagerController) startSessionAccountSwitch(w http.ResponseWri
 		c.controlError(w, r, errAccountControlNotFound)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusAccepted, accountSwitchResponse(op))
+	envelope.WriteJSON(w, http.StatusAccepted, c.observedAccountSwitchResponse(op))
 }
 
 func (c *AccountsManagerController) sessionAccountSwitch(w http.ResponseWriter, r *http.Request) {
@@ -153,7 +153,7 @@ func (c *AccountsManagerController) sessionAccountSwitch(w http.ResponseWriter, 
 		c.controlError(w, r, errAccountControlNotFound)
 		return
 	}
-	envelope.WriteJSON(w, status, accountSwitchResponse(op))
+	envelope.WriteJSON(w, status, c.observedAccountSwitchResponse(op))
 }
 
 func (c *AccountsManagerController) accountRemovalImpact(w http.ResponseWriter, r *http.Request) {
@@ -336,6 +336,16 @@ func emptyAccountControlBody(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	return decodeAccountControl(w, r, &struct{}{}, nil)
+}
+
+func (c *AccountsManagerController) observedAccountSwitchResponse(op domain.AccountsManagerSwitch) AccountsManagerSwitchResponse {
+	view := accountSwitchResponse(op)
+	if reader, ok := c.Controls.(interface {
+		AccountSwitchCanRetry(domain.AccountsManagerSwitch) bool
+	}); ok {
+		view.CanRetry = reader.AccountSwitchCanRetry(op)
+	}
+	return view
 }
 
 func accountSwitchResponse(op domain.AccountsManagerSwitch) AccountsManagerSwitchResponse {

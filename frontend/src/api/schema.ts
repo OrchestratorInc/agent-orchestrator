@@ -3413,6 +3413,7 @@ export interface components {
             policy: "drain" | "interrupt";
         };
         AccountsManagerSwitchResponse: {
+            canRetry: boolean;
             /** Format: date-time */
             createdAt: string;
             id: string;

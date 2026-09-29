@@ -58,3 +58,8 @@ type AccountsManagerSwitchRouter interface {
 type AccountsManagerSwitchPendingReader interface {
 	AgentAccountSwitchPending(context.Context, domain.SessionID) (bool, error)
 }
+
+// AccountsManagerSwitchRetryReader reports an observation, not mutation admission.
+type AccountsManagerSwitchRetryReader interface {
+	AccountsManagerSwitchCanRetry(domain.AccountsManagerSwitch) bool
+}

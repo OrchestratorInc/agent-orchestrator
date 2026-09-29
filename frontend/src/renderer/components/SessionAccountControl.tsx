@@ -81,6 +81,7 @@ function SessionAccountPanel({ sessionId }: { sessionId: string }) {
     refetchInterval: query => query.state.data && !accountSwitchIsActive(query.state.data) ? false : 1500,
   });
   const operation: AccountSwitch | undefined = observed.data ?? (binding?.switch?.id === trackedId ? binding?.switch : undefined);
+  const canRetry = operation?.canRetry === true && ["requested", "waiting", "recovery_required"].includes(operation.phase);
   const active = accountSwitchIsActive(operation);
   const serverActive = accountSwitchIsActive(binding?.switch);
   const unconfirmed = Boolean(submitted && !operation);
@@ -117,6 +118,7 @@ function SessionAccountPanel({ sessionId }: { sessionId: string }) {
   };
   const change = (action: "retry" | "cancel") => {
     if (!operation || unavailable || busy || observed.isFetching || observed.isError || inFlight.current) return;
+    if (action === "retry" && !canRetry) return;
     inFlight.current = true;
     mutation.mutate({ operationId: operation.id, action });
   };
@@ -161,7 +163,7 @@ function SessionAccountPanel({ sessionId }: { sessionId: string }) {
           <p className="text-xs text-muted-foreground">{t("accountsManager.controls.accepted")}</p>
           {operation.recoveryRequired ? <p role="status">{t("accountsManager.controls.switchRecovery")}</p> : null}
           <div className="flex gap-2">
-            {operation.phase === "recovery_required" ? <Button size="sm" disabled={busy || unavailable || observed.isFetching || observed.isError} onClick={() => change("retry")}>{t("accountsManager.controls.retrySwitch")}</Button> : null}
+            {canRetry ? <Button size="sm" disabled={busy || unavailable || observed.isFetching || observed.isError} onClick={() => change("retry")}>{t("accountsManager.controls.retrySwitch")}</Button> : null}
             {["requested", "waiting"].includes(operation.phase) ? <Button size="sm" variant="outline" disabled={busy || unavailable || observed.isFetching || observed.isError} onClick={() => change("cancel")}>{t("accountsManager.controls.cancelSwitch")}</Button> : null}
           </div>
         </section>

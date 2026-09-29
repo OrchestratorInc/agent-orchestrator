@@ -78,7 +78,8 @@ function ownSwitch(operation: AccountSwitch, sessionId: string, operationId?: st
     || !validID(operation.provider) || !switchPhases.has(operation.phase) || !["drain", "interrupt"].includes(operation.policy)
     || !validMode(operation.sourceMode, operation.sourceAccountId) || !validMode(operation.targetMode, operation.targetAccountId)
     || !validRevision(operation.sourceRevision) || !validRevision(operation.targetRevision, true)
-    || typeof operation.newConversation !== "boolean" || typeof operation.recoveryRequired !== "boolean") {
+    || typeof operation.newConversation !== "boolean" || typeof operation.recoveryRequired !== "boolean"
+    || (operation.canRetry !== undefined && typeof operation.canRetry !== "boolean")) {
     throw new AccountControlError(502);
   }
   return operation;

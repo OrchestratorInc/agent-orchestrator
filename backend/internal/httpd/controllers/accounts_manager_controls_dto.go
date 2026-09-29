@@ -50,6 +50,7 @@ type AccountsManagerSwitchResponse struct {
 	NewConversation  bool      `json:"newConversation"`
 	Phase            string    `json:"phase"`
 	RecoveryRequired bool      `json:"recoveryRequired"`
+	CanRetry         bool      `json:"canRetry"`
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt"`
 }

@@ -9,6 +9,17 @@ const success = (data: unknown) => ({ data, response: new Response(null, { statu
 describe("account control HTTP boundary", () => {
   beforeEach(() => { vi.resetAllMocks(); localStorage.clear(); });
 
+  it.each(["true", 1, null, {}, []])("rejects malformed retry capability %j", async canRetry => {
+    api.GET.mockResolvedValue(success({ ...operation, canRetry }));
+    await expect(fetchSessionAccountSwitch("session-a", "switch-a")).rejects.toMatchObject({ status: 502 });
+    expect(api.POST).not.toHaveBeenCalled();
+  });
+
+  it("accepts an older response without inferring retry capability", async () => {
+    api.GET.mockResolvedValue(success(operation));
+    expect((await fetchSessionAccountSwitch("session-a", "switch-a")).canRetry).toBeUndefined();
+  });
+
   it("preserves the supported credential-method category without private response fields", () => {
     const code = "ACCOUNTS_MANAGER_CREDENTIAL_METHOD_UNSUPPORTED";
     const error = accountRequestError({ code, requestId: "credential-format-79", message: "private-token", endpoint: "http://127.0.0.1:9999" }, 400);

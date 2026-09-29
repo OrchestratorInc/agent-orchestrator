@@ -10111,6 +10111,8 @@ components:
       type: object
     AccountsManagerSwitchResponse:
       properties:
+        canRetry:
+          type: boolean
         createdAt:
           format: date-time
           type: string
@@ -10157,6 +10159,7 @@ components:
       - newConversation
       - phase
       - recoveryRequired
+      - canRetry
       - createdAt
       - updatedAt
       type: object
