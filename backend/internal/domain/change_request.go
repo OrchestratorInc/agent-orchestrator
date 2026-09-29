@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// ErrInvalidChangeRequestURL reports an unsupported or malformed PR/MR URL.
 var ErrInvalidChangeRequestURL = errors.New("invalid pull request or merge request URL")
 
 // ChangeRequestReference is a normalized, reference-only PR/MR identity.
@@ -19,6 +20,7 @@ type ChangeRequestReference struct {
 	Number     int
 }
 
+// Key returns the provider-neutral identity used to deduplicate references.
 func (r ChangeRequestReference) Key() string {
 	return fmt.Sprintf("%s|%s|%s|%d", r.Provider, r.Host, r.Repository, r.Number)
 }
