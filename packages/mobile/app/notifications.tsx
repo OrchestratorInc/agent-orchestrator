@@ -33,7 +33,7 @@ import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
 import { Button, Dot, EmptyState, HeaderIconButton, ScreenHeader } from "../lib/ui";
 import { press, space, type } from "../lib/tokens";
 import { backOr } from "../lib/backNavigation";
-import { userFacingError } from "../lib/connectionError";
+import { shouldKeepPolling, userFacingError } from "../lib/connectionError";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
@@ -47,7 +47,7 @@ export default function NotificationsScreen() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { config, connection, unreachable, sessions, loading: sessionsLoading, restore } = useApp();
+	const { config, connection, unreachable, errorStatus, sessions, loading: sessionsLoading, restore } = useApp();
 	const [restoringId, setRestoringId] = useState<string>();
 	// A brief line rather than an Alert: the row is still there to act on, and
 	// a modal would make a dead tap feel like an error.
@@ -119,6 +119,10 @@ export default function NotificationsScreen() {
 	// The board's poll is the app's view of the link: when it is down, say so in
 	// the board's words rather than as a failed load.
 	const offline = Boolean(config) && unreachable && Boolean(error);
+	// A rejected password (or the lockout it leads to) stops the board's poll for
+	// good. Retrying would only spend another failed attempt toward the lockout,
+	// so offer the fix instead, as the board does.
+	const rejected = errorStatus !== null && !shouldKeepPolling(errorStatus);
 
 	function open(notification: NotificationRecord) {
 		haptics.tap();
@@ -278,7 +282,11 @@ export default function NotificationsScreen() {
 										? "Updates from workers and pull requests will appear here when they need you."
 										: "Pair this phone with AO to receive worker and pull request updates.")
 								}
-								action={error ? <Button title="Retry" icon="refresh-cw" variant="ghost" onPress={() => void load("refresh")} /> : undefined}
+								action={
+									!error ? undefined
+										: rejected ? <Button title="Scan pairing code" icon="maximize" onPress={() => router.push("/pair")} />
+										: <Button title="Retry" icon="refresh-cw" variant="ghost" onPress={() => void load("refresh")} />
+								}
 							/>
 						)
 					}
