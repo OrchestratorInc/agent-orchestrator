@@ -48,10 +48,12 @@ type MobileHub struct {
 	targets map[domain.SessionID]*mobileTarget
 }
 
+// NewMobileHub creates an empty registry of foreground mobile browser targets.
 func NewMobileHub() *MobileHub {
 	return &MobileHub{targets: make(map[domain.SessionID]*mobileTarget)}
 }
 
+// Status returns the foreground mobile runtime state for one session.
 func (h *MobileHub) Status(sessionID domain.SessionID) Status {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -62,6 +64,7 @@ func (h *MobileHub) Status(sessionID domain.SessionID) Status {
 	return Status{Connected: true, ConnectedAt: target.connectedAt}
 }
 
+// Execute sends one browser command to the foreground mobile runtime for a session.
 func (h *MobileHub) Execute(ctx context.Context, sessionID domain.SessionID, action string, args map[string]interface{}) (Result, error) {
 	h.mu.Lock()
 	target := h.targets[sessionID]
@@ -153,6 +156,7 @@ func (h *MobileHub) disconnect(target *mobileTarget) {
 	_ = target.conn.Close("disconnected")
 }
 
+// DestroySession disconnects the mobile runtime and fails its pending commands.
 func (h *MobileHub) DestroySession(sessionID domain.SessionID) {
 	h.mu.Lock()
 	target := h.targets[sessionID]
@@ -188,21 +192,7 @@ func (t *mobileTarget) resolve(message mobileResultMessage) {
 	if ch == nil {
 		return
 	}
-	if !message.OK {
-		if message.Error == nil {
-			message.Error = &CommandError{Code: "BROWSER_COMMAND_FAILED", Message: "Mobile browser command failed"}
-		}
-		ch <- pendingResult{err: *message.Error}
-		return
-	}
-	var value interface{} = map[string]interface{}{}
-	if len(message.Result) > 0 && string(message.Result) != "null" {
-		if err := json.Unmarshal(message.Result, &value); err != nil {
-			ch <- pendingResult{err: fmt.Errorf("decode mobile browser result: %w", err)}
-			return
-		}
-	}
-	ch <- pendingResult{value: value}
+	deliverPendingResult(ch, message.OK, message.Result, message.Error, "Mobile browser command failed", "mobile browser")
 }
 
 // Router selects a concrete browser surface. Auto prefers a foreground mobile
@@ -212,10 +202,12 @@ type Router struct {
 	mobile  *MobileHub
 }
 
+// NewRouter creates a browser runtime router backed by desktop and mobile surfaces.
 func NewRouter(desktop *Broker, mobile *MobileHub) *Router {
 	return &Router{desktop: desktop, mobile: mobile}
 }
 
+// Status returns the selected browser surface state and transport name.
 func (r *Router) Status(sessionID domain.SessionID, surface string) (Status, string) {
 	switch surface {
 	case "mobile":
@@ -230,6 +222,7 @@ func (r *Router) Status(sessionID domain.SessionID, surface string) (Status, str
 	}
 }
 
+// Execute dispatches one command to the selected browser surface.
 func (r *Router) Execute(ctx context.Context, sessionID domain.SessionID, surface, action string, args map[string]interface{}) (Result, error) {
 	switch surface {
 	case "mobile":
