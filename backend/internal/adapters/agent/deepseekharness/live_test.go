@@ -39,7 +39,7 @@ func liveBinary(t *testing.T) string {
 // inherited by the node child the dsh shim spawns on Windows, so reading one
 // can outlive the process the test is waiting on. It reports timedOut instead of
 // hanging when the run does not finish.
-func runLive(t *testing.T, timeout time.Duration, args ...string) (out string, err error, timedOut bool) {
+func runLive(t *testing.T, timeout time.Duration, args ...string) (out string, timedOut bool, err error) {
 	t.Helper()
 	sink, err := os.CreateTemp(t.TempDir(), "dsh-*.log")
 	if err != nil {
@@ -67,7 +67,7 @@ func runLive(t *testing.T, timeout time.Duration, args ...string) (out string, e
 	if readErr != nil {
 		t.Fatalf("read capture: %v", readErr)
 	}
-	return string(body), err, timedOut
+	return string(body), timedOut, err
 }
 
 // TestLiveHeadlessRejectsAnUnknownSessionID is why a fresh launch must not pass
@@ -76,7 +76,7 @@ func runLive(t *testing.T, timeout time.Duration, args ...string) (out string, e
 // fail the launch outright.
 func TestLiveHeadlessRejectsAnUnknownSessionID(t *testing.T) {
 	binary := liveBinary(t)
-	out, err, timedOut := runLive(t, time.Minute, binary, "--profile", headlessProfile,
+	out, timedOut, err := runLive(t, time.Minute, binary, "--profile", headlessProfile,
 		"--session-id", "ao-sess-unknown-"+t.Name(), "print ok")
 	if timedOut {
 		t.Fatalf("run did not finish; output: %s", out)
@@ -142,7 +142,7 @@ func TestLiveLaunchCommandIsAcceptedByTheBinary(t *testing.T) {
 		t.Fatalf("launch command: %v", err)
 	}
 
-	out, runErr, timedOut := runLive(t, time.Minute, argv...)
+	out, timedOut, runErr := runLive(t, time.Minute, argv...)
 	if timedOut {
 		t.Fatalf("the launch argv blocked instead of running the task: %s", out)
 	}
@@ -183,7 +183,7 @@ func TestLiveCredentialStoreLayoutIsAccepted(t *testing.T) {
 	}
 
 	// Harness loads the same document rather than rejecting it.
-	out, _, timedOut := runLive(t, time.Minute, binary, "--profile", headlessProfile, "print ok")
+	out, timedOut, _ := runLive(t, time.Minute, binary, "--profile", headlessProfile, "print ok")
 	if timedOut {
 		t.Fatalf("run did not finish; output: %s", out)
 	}
