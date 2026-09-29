@@ -304,7 +304,11 @@ func (s *Server) readTerminalInput(
 			return err
 		}
 		if !operate {
-			return connection.Close(websocket.StatusPolicyViolation, "terminal is read-only")
+			// A read-only (viewer) socket drops every client frame instead of
+			// closing: the desktop pane sends a resize the moment it attaches, so
+			// closing here made every viewer attach fail and reconnect forever.
+			// Dropping resizes also keeps a viewer from reshaping the owner's PTY.
+			continue
 		}
 		if len(data) == 0 || len(data) > maxTerminalFrame {
 			return connection.Close(websocket.StatusMessageTooBig, "terminal input is too large")

@@ -19,6 +19,12 @@ import type {
 	CloudCpCreateOrganizationRequest,
 	CloudCpCreateOrganizationResponse,
 	CloudCpCreateProjectRequest,
+	CloudCpCreateSessionShareDeepLinkResponse,
+	CloudCpRedeemShareResponse,
+	CloudCpSessionShareAccess,
+	CloudCpSessionShareInviteResponse,
+	CloudCpShareDeepLinkRequest,
+	CloudCpSharedProjectsResponse,
 	CloudCpCreateSessionRequest,
 	CloudCpErrorEnvelope,
 	CloudCpInvitationsResponse,
@@ -193,6 +199,29 @@ export interface CloudCpClient {
 		sessionId: string,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpRestoreSessionResponse>;
+
+	/** Mint a single-use, 10-minute share deep link for one recipient. */
+	createSessionShareDeepLink(
+		orgId: string,
+		sessionId: string,
+		recipientEmail: string,
+		access: CloudCpSessionShareAccess,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpCreateSessionShareDeepLinkResponse>;
+	/** Validate a share deep link for the signed-in user without consuming it. */
+	previewSessionShareDeepLink(
+		body: CloudCpShareDeepLinkRequest,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpSessionShareInviteResponse>;
+	/** Consume a share deep link, granting the signed-in user read-only access. */
+	redeemSessionShareDeepLink(
+		body: CloudCpShareDeepLinkRequest,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpRedeemShareResponse>;
+	/** Projects and sessions other users have shared with the signed-in user. */
+	listSharedProjects(options?: CloudCpRequestOptions): Promise<CloudCpSharedProjectsResponse>;
+	/** Remove a session shared with you from your list (revokes only your own grant). */
+	leaveSharedSession(grantId: string, options?: CloudCpRequestOptions): Promise<void>;
 
 	sendSessionMessage(
 		orgId: string,
@@ -526,6 +555,18 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/restore`, {
 				signal: o?.signal,
 			}),
+		createSessionShareDeepLink: (orgId, sessionId, recipientEmail, access, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/share-deeplinks`, {
+				body: { recipientEmail, access },
+				signal: o?.signal,
+			}),
+		previewSessionShareDeepLink: (body, o) =>
+			requestJson("POST", "/share-deeplinks/preview", { body, signal: o?.signal }),
+		redeemSessionShareDeepLink: (body, o) =>
+			requestJson("POST", "/share-deeplinks/redeem", { body, signal: o?.signal }),
+		listSharedProjects: (o) => requestJson("GET", "/shared/projects", { signal: o?.signal }),
+		leaveSharedSession: (grantId, o) =>
+			requestVoid("DELETE", `/shared/grants/${seg(grantId)}`, { signal: o?.signal }),
 
 		sendSessionMessage: (orgId, sessionId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/messages`, {

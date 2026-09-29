@@ -21,3 +21,28 @@ func TestIsWorkspaceWriteKind(t *testing.T) {
 		}
 	}
 }
+
+// A viewer holds read-only access: the browser proxy forwards arbitrary HTTP
+// methods to the sandbox dev server, so only safe fetches may pass.
+func TestViewerForbiddenRequest(t *testing.T) {
+	for _, test := range []struct {
+		kind    string
+		payload string
+		want    bool
+	}{
+		{"workspace.write", `{}`, true},
+		{"workspace.review.write", `{}`, true},
+		{"workspace.read", `{}`, false},
+		{"workspace.review.diffs", `{}`, false},
+		{"browser.fetch", `{"method":"GET"}`, false},
+		{"browser.fetch", `{"method":"head"}`, false},
+		{"browser.fetch", `{}`, false},
+		{"browser.fetch", `{"method":"POST"}`, true},
+		{"browser.fetch", `{"method":"delete"}`, true},
+		{"browser.fetch", `not json`, true},
+	} {
+		if got := viewerForbiddenRequest(test.kind, []byte(test.payload)); got != test.want {
+			t.Errorf("viewerForbiddenRequest(%q, %s) = %v, want %v", test.kind, test.payload, got, test.want)
+		}
+	}
+}

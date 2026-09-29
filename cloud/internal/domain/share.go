@@ -66,3 +66,19 @@ type SharedProject struct {
 	SharedByEmail string
 	SharedByName  string
 }
+
+// SessionShareInvite is what a signed-in recipient sees before accepting a
+// deep-link share: who is inviting them, to which session, as what role, and
+// for how long the invitation stays redeemable.
+type SessionShareInvite struct {
+	LinkID       string
+	OrgID        string
+	ProjectID    string
+	SessionID    string
+	ProjectName  string
+	SessionName  string
+	InviterEmail string
+	InviterName  string
+	Role         string
+	ExpiresAt    time.Time
+}

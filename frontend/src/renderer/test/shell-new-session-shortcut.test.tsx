@@ -228,6 +228,9 @@ vi.mock("../components/TitlebarNav", async () => {
 });
 vi.mock("../components/WindowTitlebar", () => ({ WindowTitlebar: () => null }));
 vi.mock("../components/SettingsDialog", () => ({ SettingsDialog: () => null }));
+vi.mock("../components/ShareSessionDialog", () => ({ ShareSessionDialog: () => null }));
+vi.mock("../components/ShareInviteDialog", () => ({ ShareInviteDialog: () => null }));
+vi.mock("../components/ShareLinkPasteDialog", () => ({ ShareLinkPasteDialog: () => null }));
 vi.mock("../components/KeyboardShortcutsDialog", () => ({
 	KeyboardShortcutsDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="keyboard-shortcuts" /> : null),
 }));

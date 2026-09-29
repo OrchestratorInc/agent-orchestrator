@@ -14,6 +14,9 @@ import { TrayRuntime } from "../components/TrayRuntime";
 import { GlobalNewTaskDialog } from "../components/GlobalNewTaskDialog";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsDialog } from "../components/SettingsDialog";
+import { ShareInviteDialog } from "../components/ShareInviteDialog";
+import { ShareLinkPasteDialog } from "../components/ShareLinkPasteDialog";
+import { ShareSessionDialog } from "../components/ShareSessionDialog";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { KeyboardShortcutsSettingsDialog } from "../components/settings/KeyboardShortcutsSettingsDialog";
 import { ShellTopbar } from "../components/ShellTopbar";
@@ -1011,6 +1014,9 @@ function ShellLayout() {
 				<GlobalNewTaskDialog />
 				<GlobalToast />
 				<SettingsDialog />
+				<ShareSessionDialog />
+				<ShareInviteDialog />
+				<ShareLinkPasteDialog />
 				<RestartToUpdateDialog />
 				<TelemetryConsentRenewalDialog />
 				<KeyboardShortcutsDialog

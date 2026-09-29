@@ -74,26 +74,33 @@ printf 'Building and starting the control plane, PostgreSQL, and migrations...\n
 compose up --build -d
 wait_for_ready
 
-# Seed a default dev account so you can just sign in — no register step needed.
+# Seed default dev accounts so you can just sign in — no register step needed.
+# The second account (a separate user in its own org) is the recipient side of
+# session sharing: share a session from dev@ to viewer@ to exercise the
+# read-only deep-link flow with two real identities.
 # Best-effort and idempotent: a 201 means it was created, anything else means it
 # already exists (or the seed was skipped); never fail the bring-up over it.
 DEV_EMAIL="dev@local.test"
 DEV_PASSWORD="localdevpass123"
+VIEWER_EMAIL="viewer@local.test"
+VIEWER_PASSWORD="localviewerpass123"
 seed_dev_account() {
+	local email="$1" password="$2" display_name="$3" org_slug="$4" org_name="$5"
 	local code
 	code="$(curl -s -o /dev/null -w '%{http_code}' \
 		-X POST -H 'Content-Type: application/json' \
-		-d "{\"email\":\"${DEV_EMAIL}\",\"displayName\":\"Dev\",\"password\":\"${DEV_PASSWORD}\",\"orgSlug\":\"dev-org\",\"orgName\":\"Dev Org\"}" \
+		-d "{\"email\":\"${email}\",\"displayName\":\"${display_name}\",\"password\":\"${password}\",\"orgSlug\":\"${org_slug}\",\"orgName\":\"${org_name}\"}" \
 		"http://127.0.0.1:${AO_CLOUD_PORT}/api/cloud/v1/auth/local/register" 2>/dev/null || echo 000)"
 	if [ "$code" = "201" ]; then
-		echo "Seeded default dev account (${DEV_EMAIL})."
+		echo "Seeded dev account (${email})."
 	elif [ "$code" = "000" ]; then
-		echo "Note: could not reach the CP to seed a dev account; register in-app if needed." >&2
+		echo "Note: could not reach the CP to seed ${email}; register in-app if needed." >&2
 	else
-		echo "Default dev account already exists (${DEV_EMAIL})."
+		echo "Dev account already exists (${email})."
 	fi
 }
-seed_dev_account
+seed_dev_account "$DEV_EMAIL" "$DEV_PASSWORD" "Dev" "dev-org" "Dev Org"
+seed_dev_account "$VIEWER_EMAIL" "$VIEWER_PASSWORD" "Viewer" "viewer-org" "Viewer Org"
 
 cat <<EOF
 
@@ -106,12 +113,14 @@ Launch the desktop app against it, from the frontend/ directory:
 
   AO_CLOUD_OFFERING=on AO_CLOUD_CONTROL_PLANE_URL=http://127.0.0.1:${AO_CLOUD_PORT} npm run dev
 
-A default account is ready — just SIGN IN with:
+Two accounts are ready — just SIGN IN (no register step needed):
 
-  Email    : ${DEV_EMAIL}
-  Password : ${DEV_PASSWORD}
+  Owner    : ${DEV_EMAIL} / ${DEV_PASSWORD}
+  Viewer   : ${VIEWER_EMAIL} / ${VIEWER_PASSWORD}
 
-(No register step needed. You can still use Register in-app for another account.)
+The viewer account is the recipient for read-only session share links. To run
+it side by side with the owner, see cloud/docs/share-deeplinks.md
+(cloud/scripts/share-demo.sh drives the whole flow from the shell).
 
 Stop it (data retained) : npm run cloud:local:down
 Reset it (data deleted) : npm run cloud:local:reset

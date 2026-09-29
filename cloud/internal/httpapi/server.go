@@ -114,6 +114,10 @@ type Store interface {
 	RedeemProjectShareLink(context.Context, domain.Principal, string, string) (domain.SharedProject, error)
 	ListSharedProjects(context.Context, domain.Principal) ([]domain.SharedProject, error)
 	ListSharedProjectSessions(context.Context, domain.Principal, string, string) ([]domain.Session, error)
+	CreateSessionShareDeepLink(context.Context, domain.Principal, string, string, string, postgres.SessionShareAccess, time.Duration) (domain.ShareLink, string, error)
+	PreviewSessionShareDeepLink(context.Context, domain.Principal, string, string, string) (domain.SessionShareInvite, error)
+	RedeemSessionShareDeepLink(context.Context, domain.Principal, string, string, string) (domain.SharedProject, error)
+	LeaveSharedSession(context.Context, domain.Principal, string) error
 }
 
 // WorkerTokens issues and verifies the short-lived credentials sandbox workers
@@ -139,6 +143,7 @@ type Server struct {
 	localAuthEnabled bool
 	localSessionTTL  time.Duration
 	localAuthLimiter *fixedWindowLimiter
+	shareLinkLimiter *fixedWindowLimiter
 	sandboxProvider  string
 	// availableSandboxProviders is every provider a client may select for a
 	// session, always including sandboxProvider (the default). It gates the
@@ -271,6 +276,7 @@ func New(options Options) *Server {
 		localAuthEnabled:          options.LocalAuthEnabled,
 		localSessionTTL:           options.LocalSessionTTL,
 		localAuthLimiter:          newFixedWindowLimiter(10, time.Minute, 4096),
+		shareLinkLimiter:          newFixedWindowLimiter(10, time.Minute, 4096),
 		sandboxProvider:           sandboxProvider,
 		availableSandboxProviders: availableSandboxProviders,
 		capabilityGatedProviders:  capabilityGatedProviders,
@@ -354,6 +360,9 @@ func New(options Options) *Server {
 		router.With(server.authenticate).Post("/me/github-pat/validate-saved-repository", server.validateSavedRepository)
 		router.With(server.authenticate).Post("/share-links/redeem", server.redeemProjectShareLink)
 		router.With(server.authenticate).Get("/shared/projects", server.listSharedProjects)
+		router.With(server.authenticate).Post("/share-deeplinks/preview", server.previewSessionShareDeepLink)
+		router.With(server.authenticate).Post("/share-deeplinks/redeem", server.redeemSessionShareDeepLink)
+		router.With(server.authenticate).Delete("/shared/grants/{grantId}", server.leaveSharedSession)
 		if server.github != nil {
 			router.With(server.authenticate).Get("/github/user", server.getGitHubUser)
 			router.With(server.authenticate).Post("/github/user/authorize", server.startGitHubUserAuthorization)
@@ -448,6 +457,7 @@ func New(options Options) *Server {
 			router.Get("/sessions/{sessionId}/chat-events", server.replayClientEvents)
 			router.Get("/sessions/{sessionId}/events", server.streamClientEvents)
 			router.Post("/sessions/{sessionId}/terminal-ticket", server.createTerminalTicket)
+			router.Post("/sessions/{sessionId}/share-deeplinks", server.createSessionShareDeepLink)
 			for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
 				router.MethodFunc(method, "/sessions/{sessionId}/browser/{origin}", server.proxyBrowser)
 				router.MethodFunc(method, "/sessions/{sessionId}/browser/{origin}/*", server.proxyBrowser)

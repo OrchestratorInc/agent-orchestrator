@@ -723,3 +723,71 @@ export interface CloudCpCreateGitHubProjectRequest {
 	displayName?: string;
 	config?: Record<string, unknown>;
 }
+
+// Read-only session sharing via ao-app://share deep links.
+
+export interface CloudCpSessionShareDeepLink {
+	id: string;
+	orgId: string;
+	projectId: string;
+	sessionId: string;
+	recipient: string;
+	/** "viewer" (read-only) or "editor" (can interact). */
+	role: string;
+	expiresAt: string;
+	/** ao-app://share/<orgId>/<linkId>#<secret> — the secret is only returned once. */
+	deepLink: string;
+}
+
+export interface CloudCpCreateSessionShareDeepLinkResponse {
+	share: CloudCpSessionShareDeepLink;
+}
+
+/** "view" is read-only; "interact" lets the recipient type, message the agent, and edit files. */
+export type CloudCpSessionShareAccess = "view" | "interact";
+
+export interface CloudCpShareDeepLinkRequest {
+	orgId: string;
+	linkId: string;
+	token: string;
+}
+
+export interface CloudCpSessionShareInvite {
+	linkId: string;
+	orgId: string;
+	projectId: string;
+	sessionId: string;
+	projectName: string;
+	sessionName: string;
+	inviterEmail: string;
+	inviterName: string;
+	role: string;
+	expiresAt: string;
+}
+
+export interface CloudCpSessionShareInviteResponse {
+	invite: CloudCpSessionShareInvite;
+}
+
+export interface CloudCpSharedProject {
+	grant: {
+		id: string;
+		role: string;
+		status: string;
+		modeCap?: string;
+		redeemedAt: string;
+	};
+	project: CloudCpProject;
+	sessionId?: string;
+	sessionName?: string;
+	sharedByEmail?: string;
+	sharedByName?: string;
+}
+
+export interface CloudCpSharedProjectsResponse {
+	shared: CloudCpSharedProject[];
+}
+
+export interface CloudCpRedeemShareResponse {
+	shared: CloudCpSharedProject;
+}

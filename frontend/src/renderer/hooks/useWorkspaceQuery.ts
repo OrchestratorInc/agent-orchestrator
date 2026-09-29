@@ -3,7 +3,7 @@ import type { TraySessionEntry } from "../../shared/tray";
 import { useEffect, useMemo } from "react";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
-import type { CloudCpProject, CloudCpSession } from "../lib/cloud-cp";
+import type { CloudCpProject, CloudCpSession, CloudCpSharedProject } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
 import { useCloudOrg } from "./useCloudOrg";
 import { mockWorkspaces } from "../lib/mock-data";
@@ -277,6 +277,9 @@ export const workspaceQueryOptions = {
 // items. Invalidated by the cloud create flow (CreateProjectFlow).
 export const cloudProjectsQueryKey = ["cloud-projects"] as const;
 export const cloudSessionsQueryKey = ["cloud-sessions"] as const;
+export const sharedCloudSessionsQueryKey = ["cloud-shared-sessions"] as const;
+/** Sidebar group id for sessions other users shared with you (read-only). */
+export const SHARED_WITH_ME_WORKSPACE_ID = "cloud-shared-with-me";
 
 // Maps one control-plane session onto the board's session shape. Cloud sessions
 // carry the same status/activity/harness vocabulary as local ones, so the same
@@ -341,6 +344,34 @@ function toCloudWorkspace(
 	};
 }
 
+type SharedCloudSession = { shared: CloudCpSharedProject; session: CloudCpSession };
+
+function toSharedWorkspaceSession({ shared, session }: SharedCloudSession): WorkspaceSession {
+	const base = toCloudWorkspaceSession(session, shared.project, shared.project.orgId);
+	return {
+		...base,
+		workspaceId: SHARED_WITH_ME_WORKSPACE_ID,
+		workspaceName: shared.project.displayName,
+		cloud: {
+			...base.cloud!,
+			sharedBy: shared.sharedByName || shared.sharedByEmail || "",
+			sharedRole: shared.grant.role,
+			shareGrantId: shared.grant.id,
+		},
+	};
+}
+
+function toSharedWorkspace(items: SharedCloudSession[]): WorkspaceSummary {
+	return {
+		id: SHARED_WITH_ME_WORKSPACE_ID,
+		name: appI18n.t("share.sharedWithMe"),
+		kind: "cloud",
+		path: "",
+		sharedWithMe: true,
+		sessions: items.map(toSharedWorkspaceSession),
+	};
+}
+
 type WorkspaceSubscriptionOptions = {
 	subscribed?: boolean;
 };
@@ -384,29 +415,67 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 	});
 }
 
+/**
+ * Sessions other users shared with the signed-in user through a read-only
+ * deep link. Each lives in the sharer's org, so it is fetched with that org id
+ * (the control plane authorizes it via the share grant, not membership).
+ */
+export function useSharedCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}) {
+	const { client, ready, baseUrl } = useCloudCp();
+	return useQuery({
+		queryKey: [...sharedCloudSessionsQueryKey, baseUrl],
+		enabled: ready,
+		subscribed: options.subscribed,
+		retry: 1,
+		refetchInterval: 10_000,
+		queryFn: async (): Promise<SharedCloudSession[]> => {
+			const response = await client.listSharedProjects();
+			const sessionShares = response.shared.filter((shared) => shared.sessionId);
+			const resolved = await Promise.all(
+				sessionShares.map(async (shared) => {
+					try {
+						const { session } = await client.getSession(shared.project.orgId, shared.sessionId!);
+						return { shared, session };
+					} catch {
+						// A revoked grant or deleted session drops out of the list.
+						return null;
+					}
+				}),
+			);
+			return resolved.filter((item): item is SharedCloudSession => item !== null);
+		},
+	});
+}
+
 export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const local = useQuery({ ...workspaceQueryOptions, subscribed: options.subscribed });
 	const cloud = useCloudProjectsQuery(options);
 	const cloudSessions = useCloudSessionsQuery(options);
+	const sharedSessions = useSharedCloudSessionsQuery(options);
 	const { org, ready } = useCloudOrg();
 	const orgId = org?.id;
 	const localData = local.data;
 	const cloudData = cloud.data;
 	const cloudSessionData = cloudSessions.data;
+	const sharedData = sharedSessions.data;
 	const data = useMemo(() => {
 		// Local stays authoritative for loading/error semantics: cloud items only
 		// render once the local list exists, and never replace it.
-		if (localData === undefined || cloudData === undefined || cloudData.length === 0) return localData;
+		if (localData === undefined) return localData;
 		// Signing out (or turning the offering off) disables the cloud queries,
 		// but react-query keeps their last data; without this gate the stale
 		// cloud projects would keep rendering for a signed-out user.
 		if (!ready || orgId === undefined) return localData;
+		const ownCloud = cloudData ?? [];
+		const shared = sharedData ?? [];
+		if (ownCloud.length === 0 && shared.length === 0) return localData;
 		const sessions = cloudSessionData ?? [];
 		return placeStandaloneWorkspaceLast([
 			...localData,
-			...cloudData.map((project) => toCloudWorkspace(project, sessions, orgId)),
+			...ownCloud.map((project) => toCloudWorkspace(project, sessions, orgId)),
+			...(shared.length > 0 ? [toSharedWorkspace(shared)] : []),
 		]);
-	}, [localData, cloudData, cloudSessionData, orgId, ready]);
+	}, [localData, cloudData, cloudSessionData, sharedData, orgId, ready]);
 	return { ...local, data };
 }
 
@@ -445,6 +514,7 @@ export function useWorkspaceSession(sessionId: string) {
 	});
 	const cloud = useCloudProjectsQuery();
 	const cloudSessions = useCloudSessionsQuery();
+	const sharedSessions = useSharedCloudSessionsQuery();
 	const { org, ready } = useCloudOrg();
 	const resolvedDirectSession = useMemo(() => {
 		if (!direct.data) return undefined;
@@ -453,12 +523,15 @@ export function useWorkspaceSession(sessionId: string) {
 		return { ...direct.data, workspaceName: workspace.name };
 	}, [direct.data, localWorkspaces.data]);
 	const cloudSession = useMemo(() => {
-		if (!ready || !org?.id || !cloud.data || !cloudSessions.data) return undefined;
+		if (!ready || !org?.id) return undefined;
+		const shared = sharedSessions.data?.find((candidate) => candidate.session.id === sessionId);
+		if (shared) return toSharedWorkspaceSession(shared);
+		if (!cloud.data || !cloudSessions.data) return undefined;
 		const session = cloudSessions.data.find((candidate) => candidate.id === sessionId);
 		if (!session) return undefined;
 		const project = cloud.data.find((candidate) => candidate.id === session.projectId);
 		return project ? toCloudWorkspaceSession(session, project, org.id) : undefined;
-	}, [cloud.data, cloudSessions.data, org?.id, ready, sessionId]);
+	}, [cloud.data, cloudSessions.data, sharedSessions.data, org?.id, ready, sessionId]);
 	useEffect(() => {
 		if (!resolvedDirectSession) return;
 		queryClient.setQueryData<WorkspaceSummary[]>(workspaceQueryKey, (current) => {

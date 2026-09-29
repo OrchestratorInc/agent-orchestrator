@@ -69,6 +69,7 @@ import { promisify } from "node:util";
 import { type DaemonLaunchSpec, bundledDaemonIdentityError, resolveDaemonLaunch } from "./shared/daemon-launch";
 import { createListenPortScanner, defaultRunFilePath, parseRunFile } from "./shared/daemon-discovery";
 import type { DaemonStatus } from "./shared/daemon-status";
+import { parseShareDeepLink, type ShareInvite } from "./shared/share-deeplink";
 import {
 	refreshSlowDaemonStartupDetails,
 	slowDaemonStartupStatus,
@@ -2586,7 +2587,11 @@ ipcMain.on(TRAY_RENDERER_READY_CHANNEL, (event) => {
 
 // Cloud auth IPC — cloud:getSession, cloud:signIn, cloud:signOut.
 // Data dir resolves to ~/.ao (prod) or ~/.ao/dev (dev) matching daemon conventions.
+// AO_DEV_CLOUD_DIR (dev builds only) gives a second side-by-side dev instance
+// its own cloud sign-in, e.g. to demo session sharing between two accounts.
+// Like AO_DEV_ELECTRON_DIR, packaged builds are deliberately not overridable.
 function cloudDataDir(): string {
+	if (isDev && process.env.AO_DEV_CLOUD_DIR?.trim()) return process.env.AO_DEV_CLOUD_DIR.trim();
 	return isDev
 		? path.join(os.homedir(), ".ao", DEV_STATE_SUBDIR)
 		: path.join(os.homedir(), ".ao");
@@ -2617,8 +2622,38 @@ function focusCloudWindow(): void {
 	window.focus();
 }
 
+// A share invite parsed from an ao-app://share link. It is only ever handed to
+// the renderer to show a consent dialog; nothing is redeemed here. Held until
+// the shell renderer asks for it so a link that cold-starts the app is not lost.
+let pendingShareInvite: ShareInvite | null = null;
+
+ipcMain.handle("cloud:takePendingShareInvite", () => {
+	const invite = pendingShareInvite;
+	pendingShareInvite = null;
+	return invite;
+});
+
+// Always queue, then nudge: the renderer pulls the invite both on mount and on
+// each nudge, so a link that lands before React subscribes is not dropped.
+function handleShareDeepLink(invite: ShareInvite): void {
+	pendingShareInvite = invite;
+	const contents = getShellWebContents();
+	if (contents && !contents.isDestroyed()) contents.send("cloud:shareInvitePending");
+}
+
 async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 	focusCloudWindow();
+	// Share links are routed before the WorkOS callback handler, which throws
+	// when WorkOS is not configured (every local Docker control plane).
+	const shareInvite = parseShareDeepLink(url);
+	if (shareInvite) {
+		handleShareDeepLink(shareInvite);
+		return;
+	}
+	if (url.startsWith("ao-app://share")) {
+		console.warn("Ignored a malformed ao-app://share link.");
+		return;
+	}
 	try {
 		const session = await handleCloudDeepLink(url, cloudDataDir());
 		if (!session) return;

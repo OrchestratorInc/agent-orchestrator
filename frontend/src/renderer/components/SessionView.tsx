@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Globe2, PanelRight, Plus } from "lucide-react";
+import { Globe2, PanelRight, Plus, Share2 } from "lucide-react";
 import { useBlocker } from "@tanstack/react-router";
 import { motion, useReducedMotion } from "motion/react";
 import {
@@ -69,6 +69,8 @@ import { useAgentSwitchRouteVisibility } from "../hooks/useAgentSwitchVisibility
 import { useWorkspaceSession, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { cloudLifecycleStage } from "../lib/cloud-lifecycle";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
+import { useShareDialogStore } from "../stores/share-dialog-store";
+import { DropdownMenuItem } from "./ui/dropdown-menu";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
 import { useSettings } from "../hooks/useSettings";
@@ -1725,12 +1727,41 @@ export function SessionView({ sessionId }: SessionViewProps) {
 	// The ⋮ only holds the Chat/Terminal switch and Switch agent, and agent
 	// switching is limited to Claude Code and Codex, which both have Chat. A
 	// harness without Chat therefore gets no ⋮ instead of an empty menu.
-	const sessionTabActions = useMemo(() => interfaceSwitchUnsupported ? null : (
+	// A cloud session can be shared through a one-time deep link, view-only or
+	// interactive. Sessions someone shared with you carry no Share or handoff
+	// action (they belong to the owner), and a view-only share also disables
+	// terminal input.
+	const openShareSession = useShareDialogStore((state) => state.openShareSession);
+	const sharedWithMe = session?.cloud?.sharedBy !== undefined;
+	const sharedReadOnly = sharedWithMe && session?.cloud?.sharedRole !== "editor";
+	const shareMenuItem = useMemo(() => session?.cloud && !sharedWithMe ? (
+		<DropdownMenuItem
+			key="share-read-only"
+			onSelect={() => openShareSession({ orgId: session.cloud!.orgId, sessionId: session.id, title: session.title })}
+		>
+			<Share2 aria-hidden="true" className="size-icon-md" />
+			{t("share.menuItem")}
+		</DropdownMenuItem>
+	) : null, [openShareSession, session, sharedWithMe, t]);
+	const readOnlyBadge = useMemo(() => sharedWithMe ? (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<span className="inline-flex h-5 shrink-0 items-center rounded border border-border px-1.5 text-2xs font-medium text-muted-foreground">
+					{sharedReadOnly ? t("share.readOnlyBadge") : t("share.sharedBadge")}
+				</span>
+			</TooltipTrigger>
+			<TooltipContent>
+				{t(sharedReadOnly ? "share.readOnlyBanner" : "share.interactBanner", { name: session?.cloud?.sharedBy ?? "" })}
+			</TooltipContent>
+		</Tooltip>
+	) : null, [session?.cloud?.sharedBy, sharedReadOnly, sharedWithMe, t]);
+	const sessionTabActions = useMemo(() => sharedWithMe ? readOnlyBadge : (interfaceSwitchUnsupported && !shareMenuItem) ? null : (
 		<SessionActionsMenu inlineStatus={interfaceSwitchInlineStatus}>
-			{interfaceSwitchMenuItem}
-			{handoffMenuItem}
+			{interfaceSwitchUnsupported ? null : interfaceSwitchMenuItem}
+			{interfaceSwitchUnsupported ? null : handoffMenuItem}
+			{shareMenuItem}
 		</SessionActionsMenu>
-	), [handoffMenuItem, interfaceSwitchInlineStatus, interfaceSwitchMenuItem, interfaceSwitchUnsupported]);
+	), [handoffMenuItem, interfaceSwitchInlineStatus, interfaceSwitchMenuItem, interfaceSwitchUnsupported, readOnlyBadge, shareMenuItem, sharedWithMe]);
 	// Spinner replaces the ⋮ at the same size, so the tab title does not need a
 	// wider action slot while switching.
 	const sessionTabActionWide = false;
@@ -2090,7 +2121,7 @@ export function SessionView({ sessionId }: SessionViewProps) {
 							) : (
 								<CenterPane
 									agentInputDisabled={
-										(interfaceSwitch.starting || activeInterfaceTransition) && session?.mode === "tui"
+										sharedReadOnly || ((interfaceSwitch.starting || activeInterfaceTransition) && session?.mode === "tui")
 									}
 									daemonReady={daemonStatus.state === "ready"}
 									onCloseShellTerminal={closeShellTerminalByHandle}
