@@ -20,17 +20,20 @@ or new global database. The existing AO Cloud path is separate.
    in the normal sidebar with a host badge. Use **Projects → +** or **Add project
    on [machine]** to register code on a host, then use that project's **New
    task** action to start a worker there.
-4. On mobile, pair the machine in **Settings → Machines**. Switch the selected
-   machine there to view and continue its sessions. Pair the same machine on a
-   second laptop to continue the same host-owned session.
+4. On mobile, pair each machine in **Settings → Machines**. Projects and workers
+   from connected hosts appear together; opening one targets its owning host
+   without switching machines. Pair the same machine on a second laptop to
+   continue the same host-owned session.
 
 The daemon's normal unauthenticated listener remains on `127.0.0.1`. The
 opt-in remote listener is password-protected but plain HTTP, intended only for
 a trusted private network or an encrypted tunnel. Do not expose it directly
 to the public internet. Clients remember a stable daemon-installation ID and
-reject an address that later answers as a different host. This protects
-against accidental address reassignment, not an active network attacker or a
-copied AO data directory. Desktop connection passwords live in
+reject an address that later answers as a different host when connecting.
+An address reassigned while a client stays connected may receive one
+credentialed request before the client detects it. Use only a trusted private
+network or encrypted tunnel; this is not protection against an active network
+attacker or a copied AO data directory. Desktop connection passwords live in
 `~/.ao/remotes.json` (or `AO_DATA_DIR/remotes.json`) with owner-only permissions.
 
 The desktop reuses the normal project creation, settings, board, Chat,

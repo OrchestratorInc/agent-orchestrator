@@ -30,7 +30,7 @@ import {
 import { isConfigured, machineIdentity, type ServerConfig } from "./config";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
 import { pollIntervalFor } from "./pollInterval";
-import type { ConnectOptions } from "./connectRuntime";
+import { rejectedEndpointNeedsRace, type ConnectOptions } from "./connectRuntime";
 import type { Endpoint } from "./endpoints";
 import { activeHost, loadHosts, sameHostConnections, setActiveHost, type Host } from "./hosts";
 import { shouldReRace } from "./reRace";
@@ -527,11 +527,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// Auth failures are not transient — don't keep polling into a lockout.
 			// Network/other errors are transient, so keep polling for recovery.
 			// Decided from the status, not the message text: see shouldKeepPolling.
-			return shouldKeepPolling(status);
+			const keepPolling = shouldKeepPolling(status);
+			if (await rejectedEndpointNeedsRace(c, status) && pollResultIsCurrent(c, cfgRef.current)) {
+				// A different machine can acquire the same LAN address while the app
+				// stays foregrounded. Drop that URL before racing verified endpoints.
+				cfgRef.current = null;
+				setConfig(null);
+				void reloadConfig().catch(() => {});
+			}
+			return keepPolling;
 		} finally {
 			if (pollResultIsCurrent(c, cfgRef.current)) setLoading(false);
 		}
-	}, []);
+	}, [reloadConfig]);
 
 	// (Re)start the REST poll whenever the config changes. Stops polling on an
 	// auth failure so the phone can't lock itself out by hammering a bad password.

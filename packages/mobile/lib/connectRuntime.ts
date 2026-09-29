@@ -9,6 +9,7 @@
  * until it has been run. See docs for the local end-to-end check.
  */
 import { type ConnectDeps, connectHost, type ConnectResult } from "./connect";
+import type { ServerConfig } from "./config";
 import { type Endpoint, endpointBaseUrl } from "./endpoints";
 import { shouldRetryProbe, TUNNEL_PROBE_RETRY_DELAY_MS } from "./probeRetry";
 import { adoptHostIdentity, findHost, touchHost, updateHostEndpoints } from "./hosts";
@@ -94,6 +95,24 @@ export async function probeIdentity(cfg: {
 	if (!res.ok) throw new Error(`identity probe returned ${res.status}`);
 	const body = (await res.json()) as { hostId?: unknown };
 	return typeof body.hostId === "string" ? body.hostId : "";
+}
+
+/** On a 401/403, check whether the saved address still names this host. */
+export async function rejectedEndpointNeedsRace(cfg: ServerConfig, status: number | undefined): Promise<boolean> {
+	// A 429 is a lockout, and an unidentified legacy config cannot be checked.
+	if (!cfg.hostId || (status !== 401 && status !== 403)) return false;
+	try {
+		// The rejected URL just answered, so one bounded probe is enough here.
+		const answer = await probeOnce({
+			kind: cfg.endpointKind ?? "lan",
+			host: cfg.host,
+			port: Number(cfg.httpPort),
+			secure: !!cfg.secure,
+		}, new AbortController().signal);
+		return answer.hostId !== cfg.hostId;
+	} catch {
+		return true;
+	}
 }
 
 /**
