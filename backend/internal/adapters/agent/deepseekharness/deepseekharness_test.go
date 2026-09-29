@@ -244,14 +244,26 @@ records:
 			want: ports.AgentAuthStatusUnknown,
 		},
 		{
-			// The pre-release flat layout. AO reads it leniently, which is
-			// harmless, but Harness itself rejects the document outright, so a
-			// store in this shape is not a working install.
-			name: "pre-release flat layout",
+			// The pre-release flat layout. Harness refuses to load a document
+			// with no `version: 1`, and the failure takes its whole credentials
+			// service down, so reading this as authorization would badge the
+			// harness ready for a session that cannot start.
+			name: "pre-release flat layout is not evidence",
 			store: `
 DEEPSEEK_API_KEY: sk-live
 `,
-			want: ports.AgentAuthStatusAuthorized,
+			want: ports.AgentAuthStatusUnknown,
+		},
+		{
+			// A version this build does not read is refused by Harness the same
+			// way, so it is not evidence either.
+			name: "unsupported store version",
+			store: `
+version: 2
+refs:
+  DEEPSEEK_API_KEY: sk-live
+`,
+			want: ports.AgentAuthStatusUnknown,
 		},
 		{
 			name:  "malformed store is reported",

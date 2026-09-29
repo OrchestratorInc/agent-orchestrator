@@ -237,12 +237,24 @@ func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscov
 		return discoverCodexCatalog(ctx, request, d.CodexModels)
 	}
 	if list := d.ACPOptions[request.AgentID]; list != nil {
-		if catalog, err := discoverACPOptionCatalog(ctx, request, list); err == nil {
+		catalog, err := discoverACPOptionCatalog(ctx, request, list)
+		if err == nil {
 			return catalog, nil
 		}
 		// A harness that also keeps configured provider selections (Cline) may be
 		// an older release with no ACP config options. Fall back to those rather
 		// than emptying the picker.
+		//
+		// A harness whose only source is ACP (DeepSeek Harness) has nothing to
+		// fall back to: the generic path below has no command and no config
+		// parser for it, so it would answer with an empty catalog and no error.
+		// The caller records that as a successful discovery, which parks the
+		// catalog until the next calendar day and never runs the retry ladder —
+		// so an ACP session that merely needed a workspace looks like a harness
+		// with no models. Report the failure instead.
+		if !hasConfigDiscoverySource(request.AgentID) {
+			return catalog, err
+		}
 	}
 	if request.AgentID == "opencode" && request.CredentialType != "" {
 		return Discover(ctx, request.AgentID, request.Binary, request.WorkingDir,
@@ -795,6 +807,12 @@ func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env 
 	}
 	if agentID == "claude-code" {
 		return "config=" + claudeCodeDiscoveryFingerprint(ctx, workingDir, env)
+	}
+	if agentID == "deepseek-harness" {
+		// Not routed through configDiscoveryFingerprint: the profile is what the
+		// ACP session reads, not a catalog AO parses itself, so the harness has
+		// no config discovery source to declare.
+		return "config=" + fingerprintConfigPaths(modelConfigPaths(agentID, workingDir, env))
 	}
 	if config := configDiscoveryFingerprint(agentID, workingDir, env); config != "" {
 		return "config=" + config

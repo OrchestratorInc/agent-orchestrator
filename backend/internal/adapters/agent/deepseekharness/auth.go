@@ -100,10 +100,36 @@ func deepseekCredentialsStatus(path string) (ports.AgentAuthStatus, bool, error)
 	if err := yaml.Unmarshal(data, &store); err != nil {
 		return ports.AgentAuthStatusUnknown, false, fmt.Errorf("parse DeepSeek Harness credential store: %w", err)
 	}
+	if !supportedStoreLayout(store) {
+		return ports.AgentAuthStatusUnknown, false, nil
+	}
 	if credentialEntryHasSecret(store, deepseekCredentialKey) {
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
+}
+
+// supportedStoreLayout reports whether the document is one a current DeepSeek
+// Harness can load. Anything without `version: 1` — notably the pre-release
+// flat layout of bare name/secret pairs — is refused outright by Harness
+// ("uses the pre-release flat layout"), taking its whole credentials service
+// down with it. Reading such a file as authorization would badge the harness
+// ready for a session that cannot start, so it is not evidence.
+func supportedStoreLayout(store any) bool {
+	root, ok := store.(map[string]any)
+	if !ok {
+		return false
+	}
+	switch version := root["version"].(type) {
+	case int:
+		return version == 1
+	case float64:
+		return version == 1
+	case string:
+		return strings.TrimSpace(version) == "1"
+	default:
+		return false
+	}
 }
 
 // credentialEntryHasSecret walks the store for the entry named key and reports

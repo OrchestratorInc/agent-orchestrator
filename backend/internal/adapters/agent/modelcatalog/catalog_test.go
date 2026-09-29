@@ -1002,3 +1002,55 @@ func TestCatalogFingerprintKeepsTheExecutableOnlyValueForConfiglessAgents(t *tes
 		t.Fatalf("fingerprint = %q, want the executable fingerprint %q", got, want)
 	}
 }
+
+// TestACPOnlyHarnessReportsDiscoveryFailure guards the difference between the
+// two ACP harnesses. Cline keeps configured provider selections, so an ACP
+// failure falls back to those. DeepSeek Harness has no second source, and the
+// generic path answers with an empty catalog and no error — which the caller
+// stores as a successful discovery, parking the picker until the next calendar
+// day and skipping the retry ladder. The error has to survive instead.
+func TestACPOnlyHarnessReportsDiscoveryFailure(t *testing.T) {
+	boom := errors.New("workspace path must be absolute")
+	discoverer := Discoverer{ACPOptions: map[string]ACPOptionListFunc{
+		"deepseek-harness": func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+			return nil, boom
+		},
+	}}
+	_, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{
+		AgentID: "deepseek-harness", Binary: "/bin/dsh",
+	})
+	if err == nil {
+		t.Fatal("an ACP-only harness swallowed its discovery failure; the caller will cache an empty catalog as success")
+	}
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want it to wrap %v", err, boom)
+	}
+}
+
+// TestCatalogFingerprintTracksTheDeepSeekProfile pins the invalidation the ACP
+// catalog depends on: the models come from a live `dsh --profile acp` session,
+// so a profile edit — a model route changed in the web setup flow — must not
+// leave the day's cached choices in place.
+func TestCatalogFingerprintTracksTheDeepSeekProfile(t *testing.T) {
+	home := t.TempDir()
+	profile := filepath.Join(home, "profiles", "acp")
+	if err := os.MkdirAll(profile, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(profile, "cordis.patch.yml")
+	if err := os.WriteFile(manifest, []byte("llm:\n  route: deepseek-v4-flash\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"DSH_HOME": home}
+
+	first := CatalogFingerprint(context.Background(), "deepseek-harness", "", "", env)
+	if first == "" {
+		t.Fatal("fingerprint is empty for a present profile")
+	}
+	if err := os.WriteFile(manifest, []byte("llm:\n  route: deepseek-v4-pro\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if second := CatalogFingerprint(context.Background(), "deepseek-harness", "", "", env); second == first {
+		t.Fatalf("fingerprint unchanged (%q) after the profile's model route changed", second)
+	}
+}
