@@ -2,6 +2,7 @@ package workertransport
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -540,9 +541,12 @@ func TestInterruptInterfaceUsesActiveChatController(t *testing.T) {
 }
 
 type handoffChatRunner struct {
-	busy      atomic.Bool
-	started   chan struct{}
-	cancelled chan struct{}
+	busy              atomic.Bool
+	fenced            atomic.Bool
+	wasFenced         atomic.Bool
+	inspectedUnfenced atomic.Bool
+	started           chan struct{}
+	cancelled         chan struct{}
 }
 
 func (r *handoffChatRunner) Run(ctx context.Context) error {
@@ -552,7 +556,18 @@ func (r *handoffChatRunner) Run(ctx context.Context) error {
 	return nil
 }
 
-func (r *handoffChatRunner) Idle() bool { return !r.busy.Load() }
+func (r *handoffChatRunner) FenceClaims() func() {
+	r.fenced.Store(true)
+	r.wasFenced.Store(true)
+	return func() { r.fenced.Store(false) }
+}
+
+func (r *handoffChatRunner) Idle() bool {
+	if !r.fenced.Load() {
+		r.inspectedUnfenced.Store(true)
+	}
+	return !r.busy.Load()
+}
 
 func TestStopChatWaitsForRunningTurnToFinishBeforeCancellingController(t *testing.T) {
 	runner := &handoffChatRunner{started: make(chan struct{}), cancelled: make(chan struct{})}
@@ -581,6 +596,38 @@ func TestStopChatWaitsForRunningTurnToFinishBeforeCancellingController(t *testin
 		}
 	case <-stopCtx.Done():
 		t.Fatal("chat controller did not stop after the turn finished")
+	}
+	if !runner.wasFenced.Load() || runner.inspectedUnfenced.Load() || runner.fenced.Load() {
+		t.Fatal("chat claims were not fenced before the idle check")
+	}
+}
+
+func TestStopChatReleasesClaimFenceWhenDrainTimesOut(t *testing.T) {
+	runner := &handoffChatRunner{started: make(chan struct{}), cancelled: make(chan struct{})}
+	runner.busy.Store(true)
+	supervisor := &Supervisor{ChatRunner: runner}
+	if err := supervisor.startChat(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-runner.started
+	stopCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := supervisor.stopChat(stopCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stopChat error = %v, want deadline exceeded", err)
+	}
+	if runner.fenced.Load() {
+		t.Fatal("timed-out drain left the source unable to claim turns")
+	}
+	select {
+	case <-runner.cancelled:
+		t.Fatal("timed-out drain cancelled the source controller")
+	default:
+	}
+	runner.busy.Store(false)
+	secondCtx, secondCancel := context.WithTimeout(context.Background(), time.Second)
+	defer secondCancel()
+	if err := supervisor.stopChat(secondCtx); err != nil {
+		t.Fatal(err)
 	}
 }
 
