@@ -9777,6 +9777,10 @@ components:
       properties:
         displayName:
           type: string
+        efforts:
+          items:
+            type: string
+          type: array
         id:
           type: string
         owner:

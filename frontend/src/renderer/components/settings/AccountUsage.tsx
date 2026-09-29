@@ -8,7 +8,7 @@ import { Button } from "../ui/button";
 type Quota = NonNullable<Awaited<ReturnType<typeof fetchAccountsManagerQuota>>>;
 
 function canReadUsage(account: AccountsManagerAccount): boolean {
-  return Boolean(account.kind !== "access_token" && account.quotaSupported && account.verification === "verified" && !account.disabled && !account.unavailable);
+  return Boolean(account.kind !== "access_token" && account.quotaSupported && account.verification === "verified" && !account.disabled);
 }
 
 export function useAccountUsage(accounts: AccountsManagerAccount[]) {
@@ -29,7 +29,7 @@ function remaining(value: number, locale?: string) {
 
 export function accountUsageSummary(account: AccountsManagerAccount, query: UseQueryResult<Quota | undefined>, t: TFunction, locale?: string): string {
   if (account.verification !== "verified") return t(account.verification === "invalid" ? "accountsManager.verification.invalid" : "accountsManager.verification.unverified");
-  if (account.disabled || account.unavailable) return t("accountsManager.usage.unavailable");
+  if (account.disabled) return t("accountsManager.usage.unavailable");
   if (account.kind === "access_token") return t("accountsManager.usage.tokenPermission");
   if (!account.quotaSupported) return t(account.kind === "api_key" ? "accountsManager.usage.apiKey" : "accountsManager.usage.unavailable");
   if (query.isError) return t("accountsManager.usage.unavailable");

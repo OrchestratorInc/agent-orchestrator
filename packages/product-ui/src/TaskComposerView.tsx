@@ -138,6 +138,7 @@ export type TaskComposerViewProps = {
 	autoFocusPrompt?: boolean;
 	canSubmit: boolean;
 	context?: ReactNode;
+	accountControl?: ReactNode;
 	initialPrompt?: string;
 	labels: TaskComposerLabels;
 	model: Omit<TaskComposerModelControl, "id">;
@@ -217,6 +218,7 @@ export function TaskComposerView({
 	autoFocusPrompt,
 	canSubmit,
 	context,
+	accountControl,
 	initialPrompt = "",
 	labels,
 	model,
@@ -408,7 +410,7 @@ export function TaskComposerView({
 
 			<div className="composer-toolbar">
 				<div
-					className={`composer-run-controls${showEffort ? " composer-run-controls-with-effort" : ""}`}
+					className={`composer-run-controls${showEffort ? " composer-run-controls-with-effort" : ""}${accountControl ? " composer-run-controls-with-account" : ""}`}
 					role="group"
 					aria-label={labels.runsWith}
 				>
@@ -423,6 +425,7 @@ export function TaskComposerView({
 							{renderEffortControl({ ...effort, id: effortId, label: labels.effort })}
 						</div>
 					) : null}
+					{accountControl ? <div className="composer-toolbar-slot composer-toolbar-account-slot">{accountControl}</div> : null}
 				</div>
 
 				<button

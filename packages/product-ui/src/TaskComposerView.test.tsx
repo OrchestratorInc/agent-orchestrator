@@ -157,6 +157,20 @@ describe("TaskComposerView", () => {
 		expect(screen.queryByRole("button", { name: "Effort" })).not.toBeInTheDocument();
 	});
 
+	it("keeps optional account control after model and effort without changing clients that omit it", () => {
+		const { rerender } = render(<TaskComposerView {...viewProps({ accountControl: <select aria-label="Account"><option>Account A</option></select> })} />);
+		const group = screen.getByRole("group", { name: "Runs with" });
+		const account = screen.getByRole("combobox", { name: "Account" });
+		expect(group).toContainElement(account);
+		expect(group).toHaveClass("composer-run-controls-with-account");
+		for (const control of [screen.getByRole("textbox", { name: "Model" }), screen.getByRole("button", { name: "Effort" })]) {
+			expect(Boolean(control.compareDocumentPosition(account) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+		}
+		rerender(<TaskComposerView {...viewProps()} />);
+		expect(group).not.toHaveClass("composer-run-controls-with-account");
+		expect(screen.queryByRole("combobox", { name: "Account" })).not.toBeInTheDocument();
+	});
+
 	it("claims the caret when asked to autofocus, and reclaims it from a surface that steals it", async () => {
 		render(<TaskComposerView {...viewProps({ autoFocusPrompt: true })} />);
 		const prompt = screen.getByRole("textbox", { name: "Task" });

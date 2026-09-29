@@ -101,8 +101,17 @@ async function waitForTaskReady() {
 	await waitFor(() => expect(startTask()).toBeEnabled());
 }
 
+async function chooseManagedModel() {
+	const user = userEvent.setup();
+	await user.click(await screen.findByRole("button", { name: "Model" }));
+	await user.click(await screen.findByRole("menuitem", { name: "Managed model" }));
+}
+
 beforeEach(() => {
 	h.get.mockImplementation(async (path: string) => {
+		if (path === "/api/v1/accounts-manager/accounts/{accountId}/models") {
+			return { data: { models: [{ id: "managed-model", displayName: "Managed model" }] } };
+		}
 		if (path.includes("/models")) {
 			return {
 				data: {
@@ -154,6 +163,7 @@ describe("TaskComposer", () => {
 		expect(startTask()).toBeDisabled();
 		await screen.findByRole("option", { name: "Work (account-b)" });
 		fireEvent.change(picker, { target: { value: "managed:account-b" } });
+		await chooseManagedModel();
 		await waitForTaskReady();
 		fireEvent.change(task(), { target: { value: "Keep my account choice" } });
 		fireEvent.click(startTask());
@@ -179,6 +189,7 @@ describe("TaskComposer", () => {
 		const picker = await screen.findByLabelText("Initial account");
 		await screen.findByRole("option", { name: "Work (account-b)" });
 		fireEvent.change(picker, { target: { value: "managed:account-b" } });
+		await chooseManagedModel();
 		await waitForTaskReady();
 		inventory = { ...inventory, revision: 2, accounts: [] };
 		fireEvent.click(startTask());
@@ -219,6 +230,7 @@ describe("TaskComposer", () => {
 		const picker = await screen.findByLabelText("Initial account");
 		await screen.findByRole("option", { name: "Work (account-b)" });
 		fireEvent.change(picker, { target: { value: "managed:account-b" } });
+		await chooseManagedModel();
 		await waitForTaskReady();
 		fireEvent.click(startTask());
 		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("initial-renderer-request"));

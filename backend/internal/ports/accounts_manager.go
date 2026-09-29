@@ -21,6 +21,11 @@ type AccountsManagerLaunchRouter interface {
 	HasAgentSessionRoute(context.Context, domain.SessionID, domain.AccountsManagerProvider) (bool, error)
 }
 
+// AccountsManagerModelCatalog scopes managed launch validation to the chosen credential.
+type AccountsManagerModelCatalog interface {
+	AgentAccountModels(context.Context, domain.AccountsManagerProvider, string) (AgentModelCatalog, error)
+}
+
 // AccountsManagerNativeRecorder freezes native intent for an unsupported managed mode.
 type AccountsManagerNativeRecorder interface {
 	RecordNativeAgentSessionRoute(context.Context, domain.SessionID, domain.AccountsManagerProvider) error

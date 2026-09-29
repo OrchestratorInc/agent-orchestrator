@@ -1,4 +1,5 @@
 {
+	"accountsManager.initial.shortChoose": "アカウント",
 	"accountsManager.browser.link": "サインインリンク",
 	"accountsManager.browser.open": "サインインページを開く",
 	"accountsManager.browser.copy": "サインインリンクをコピー",
@@ -40,7 +41,7 @@
 	"accountsManager.usage.fiveHour": "5時間の期間",
 	"accountsManager.usage.week": "週間の期間",
 	"accountsManager.usage.stale": "前回の情報です。更新に失敗しました。",
-	"accountsManager.usage.description": "プロバイダーが報告した利用枠です。選択したアカウントは変更されません。",
+	"accountsManager.usage.description": "プロバイダーが報告した利用枠です。残りトークン数の正確な値は提供されません。選択したアカウントは変更されません。",
 	"accountsManager.verification.unverified": "未確認",
 	"accountsManager.verification.verified": "確認済み",
 	"accountsManager.verification.invalid": "認証情報が拒否されました",

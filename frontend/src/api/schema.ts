@@ -3289,6 +3289,7 @@ export interface components {
         };
         AccountsManagerModelResponse: {
             displayName?: string;
+            efforts?: string[];
             id: string;
             owner?: string;
             type?: string;

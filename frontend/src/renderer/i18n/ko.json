@@ -1,4 +1,5 @@
 {
+	"accountsManager.initial.shortChoose": "계정",
 	"accountsManager.browser.link": "로그인 링크",
 	"accountsManager.browser.open": "로그인 페이지 열기",
 	"accountsManager.browser.copy": "로그인 링크 복사",
@@ -40,7 +41,7 @@
 	"accountsManager.usage.fiveHour": "5시간 구간",
 	"accountsManager.usage.week": "주간 구간",
 	"accountsManager.usage.stale": "마지막 관측값입니다. 새로고침에 실패했습니다.",
-	"accountsManager.usage.description": "공급자가 보고한 할당량입니다. 선택한 계정은 변경되지 않습니다.",
+	"accountsManager.usage.description": "공급자가 보고한 할당량입니다. 정확한 남은 토큰 수는 제공되지 않습니다. 선택한 계정은 변경되지 않습니다.",
 	"accountsManager.verification.unverified": "미확인",
 	"accountsManager.verification.verified": "확인됨",
 	"accountsManager.verification.invalid": "인증 정보 거부됨",

@@ -34,6 +34,22 @@ func (s *Service) ValidateAgentAccountTarget(ctx context.Context, mode domain.Ac
 	return nil
 }
 
+// AgentAccountModels keeps managed launches independent of native login discovery.
+func (s *Service) AgentAccountModels(ctx context.Context, provider domain.AccountsManagerProvider, id string) (ports.AgentModelCatalog, error) {
+	if err := s.ValidateAgentAccountTarget(ctx, domain.AccountsManagerManaged, provider, id, ""); err != nil {
+		return ports.AgentModelCatalog{}, err
+	}
+	models, err := s.Models(ctx, id)
+	if err != nil {
+		return ports.AgentModelCatalog{}, err
+	}
+	catalog := ports.AgentModelCatalog{Models: make([]ports.AgentModelInfo, 0, len(models))}
+	for _, model := range models {
+		catalog.Models = append(catalog.Models, ports.AgentModelInfo{ID: model.ID, Label: model.DisplayName, Efforts: append([]string(nil), model.Efforts...)})
+	}
+	return catalog, nil
+}
+
 // AdmitAgentAccountSwitch serializes idempotent intent with credential mutations.
 func (s *Service) AdmitAgentAccountSwitch(ctx context.Context, op domain.AccountsManagerSwitch, model string) (domain.AccountsManagerSwitch, bool, error) {
 	s.choiceMu.Lock()

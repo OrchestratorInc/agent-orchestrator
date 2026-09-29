@@ -1,4 +1,5 @@
 {
+	"accountsManager.initial.shortChoose": "账户",
 	"accountsManager.browser.link": "登录链接",
 	"accountsManager.browser.open": "打开登录页面",
 	"accountsManager.browser.copy": "复制登录链接",
@@ -40,7 +41,7 @@
 	"accountsManager.usage.fiveHour": "5 小时窗口",
 	"accountsManager.usage.week": "每周窗口",
 	"accountsManager.usage.stale": "仅为上次观测值，刷新失败。",
-	"accountsManager.usage.description": "服务商报告的配额，不会改变您选择的账户。",
+	"accountsManager.usage.description": "服务商报告的配额。服务商不提供确切的剩余 token 数量。您选择的账户不会改变。",
 	"accountsManager.verification.unverified": "未验证",
 	"accountsManager.verification.verified": "已验证",
 	"accountsManager.verification.invalid": "凭据被拒绝",

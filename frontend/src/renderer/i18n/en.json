@@ -1,4 +1,5 @@
 {
+	"accountsManager.initial.shortChoose": "Account",
 	"accountsManager.browser.link": "Sign-in link",
 	"accountsManager.browser.open": "Open sign-in page",
 	"accountsManager.browser.copy": "Copy sign-in link",
@@ -40,7 +41,7 @@
 	"accountsManager.usage.fiveHour": "5-hour window",
 	"accountsManager.usage.week": "Weekly window",
 	"accountsManager.usage.stale": "Last observation only. The refresh failed.",
-	"accountsManager.usage.description": "Provider-reported quota. Your account selection does not change.",
+	"accountsManager.usage.description": "Provider-reported quota. The provider does not report an exact remaining-token count. Your account selection does not change.",
 	"accountsManager.verification.unverified": "Not verified",
 	"accountsManager.verification.verified": "Verified",
 	"accountsManager.verification.invalid": "Credential rejected",

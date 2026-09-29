@@ -133,6 +133,7 @@ function managedAccountDiscovery(defaultAgent = "cursor") {
 	getMock.mockImplementation(async (path: string, options?: unknown) => {
 		if (path === "/api/v1/sessions/account-selection") return { data: capability };
 		if (path === "/api/v1/accounts-manager/accounts") return { data: inventory };
+		if (path === "/api/v1/accounts-manager/accounts/{accountId}/models") return { data: { models: [{ id: "explicit-model", displayName: "Managed model" }] } };
 		if (path === "/api/v1/agents/readiness") return { data: agents };
 		if (path === "/api/v1/projects/{id}") return { data: { status: "ok", project: { id: "proj-1", name: "scratch", config: { worker: { agent: defaultAgent } } } } };
 		return fallback?.(path, options);
@@ -153,6 +154,8 @@ describe("managed account discovery", () => {
 		await user.type(screen.getByLabelText("Task"), "Use the selected account");
 		expect(screen.getByRole("button", { name: "Start task" })).toBeDisabled();
 		await user.selectOptions(picker, "managed:account-a");
+		await user.click(await screen.findByRole("button", { name: "Model" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Managed model" }));
 		await user.click(screen.getByRole("button", { name: "Start task" }));
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("worker-1"));
 		expect(requestBody()).toMatchObject({ agent: "codex", account: { mode: "managed", accountId: "account-a" } });
@@ -183,6 +186,83 @@ describe("managed account discovery", () => {
 });
 
 describe("account model isolation", () => {
+	it("shows all account emails and quota without making an unavailable account selectable", async () => {
+		const { inventory } = managedAccountDiscovery("codex");
+		Object.assign(inventory.accounts[0], { email: "one@example.test", quotaSupported: true });
+		inventory.accounts.push(Object.assign({}, inventory.accounts[0], { id: "account-b", email: "two@example.test" }));
+		inventory.accounts.push(Object.assign({}, inventory.accounts[0], { id: "account-c", email: "three@example.test", unavailable: true, status: "error" }));
+		const fallback = getMock.getMockImplementation();
+		getMock.mockImplementation(async (path: string, options?: unknown) => {
+			if (path.endsWith("/quota")) return { data: { observedAt: "2026-09-29T15:00:00Z", groups: [{ displayName: "Account", buckets: [{ window: "five_hour", remainingFraction: 0 }] }] } };
+			return fallback?.(path, options);
+		});
+		renderDialog();
+		for (const email of ["one", "two", "three"]) expect(await screen.findByRole("option", { name: new RegExp(`${email}@example.test.*0% remaining`) })).toBeInTheDocument();
+		expect(screen.getByRole("option", { name: /three@example.test/ })).toBeDisabled();
+		expect(screen.getByLabelText("Initial account")).toHaveValue("");
+		expect(screen.getByRole("button", { name: "Start task" })).toBeDisabled();
+	});
+
+	it("ignores late models from the previous account and resets model and effort on account changes", async () => {
+		const { inventory } = managedAccountDiscovery("codex");
+		inventory.accounts.push({ ...inventory.accounts[0], id: "account-b", label: "Personal" });
+		let finishA!: (value: unknown) => void;
+		const fallback = getMock.getMockImplementation();
+		getMock.mockImplementation(async (path: string, options?: { params?: { path?: { accountId?: string } } }) => {
+			if (path.endsWith("/models") && path.startsWith("/api/v1/accounts-manager/")) {
+				if (options?.params?.path?.accountId === "account-a") return new Promise(resolve => { finishA = resolve; });
+				return { data: { models: [{ id: "b-model", displayName: "B model", efforts: ["low", "high"] }] } };
+			}
+			return fallback?.(path, options);
+		});
+		renderDialog();
+		const user = userEvent.setup();
+		await screen.findByRole("option", { name: "Work (account-a)" });
+		const account = screen.getByLabelText("Initial account");
+		await user.selectOptions(account, "managed:account-a");
+		await waitFor(() => expect(finishA).toBeDefined());
+		await user.selectOptions(account, "managed:account-b");
+		await user.click(await screen.findByRole("button", { name: "Model" }));
+		await user.click(await screen.findByRole("menuitem", { name: "B model" }));
+		await user.click(screen.getByRole("button", { name: "Effort" }));
+		await user.click(screen.getByRole("menuitem", { name: "High" }));
+		await act(async () => finishA({ data: { models: [{ id: "a-private-model", displayName: "A model" }] } }));
+		expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("B model");
+		expect(screen.queryByText("A model")).not.toBeInTheDocument();
+		await user.selectOptions(account, "native");
+		expect(screen.getByRole("button", { name: "Model" })).not.toHaveTextContent("B model");
+		expect(screen.queryByRole("button", { name: "Effort" })).not.toBeInTheDocument();
+	});
+
+	it("keeps account choice after model and effort in the compact controls", async () => {
+		const { inventory } = managedAccountDiscovery("codex");
+		inventory.accounts.push({ ...inventory.accounts[0], id: "account-b", label: "Personal" });
+		const fallback = getMock.getMockImplementation();
+		getMock.mockImplementation(async (path: string, options?: unknown) => {
+			if (path === "/api/v1/accounts-manager/accounts/{accountId}/models") return { data: { models: [{ id: "managed-model", displayName: "Managed model", efforts: ["low", "high"] }] } };
+			return fallback?.(path, options);
+		});
+		renderDialog();
+		const user = userEvent.setup();
+		const account = await screen.findByLabelText("Initial account");
+		const controls = screen.getByRole("group", { name: "Runs with" });
+		expect(controls).toContainElement(account);
+		expect(account.compareDocumentPosition(screen.getByRole("button", { name: "Model" })) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+		await screen.findByRole("option", { name: "Work (account-a)" });
+		await user.selectOptions(account, "managed:account-a");
+		await user.click(await screen.findByRole("button", { name: "Model" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Managed model" }));
+		expect(controls).toContainElement(screen.getByRole("button", { name: "Effort" }));
+		expect(account.compareDocumentPosition(screen.getByRole("button", { name: "Effort" })) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+		await user.click(screen.getByRole("button", { name: "Effort" }));
+		await user.click(screen.getByRole("menuitem", { name: "High" }));
+		await user.type(screen.getByLabelText("Task"), "Use this exact account, model and effort");
+		await user.click(screen.getByRole("button", { name: "Start task" }));
+		await waitFor(() => expect(delegateCalls()).toHaveLength(1));
+		expect(requestBody()).toMatchObject({ account: { mode: "managed", accountId: "account-a" }, model: "managed-model", effort: "high" });
+		expect(getMock.mock.calls.some(([path]) => path === "/api/v1/agents/{agent}/models")).toBe(false);
+	});
+
 	it("does not discover or inherit a cached device catalog before a managed choice", async () => {
 		managedAccountDiscovery("codex");
 		const client = new QueryClient();
@@ -199,8 +279,8 @@ describe("account model isolation", () => {
 		await user.selectOptions(screen.getByLabelText("Initial account"), "managed:account-a");
 		await user.click(screen.getByRole("button", { name: "Model" }));
 		expect(screen.queryByRole("button", { name: /Refresh/ })).not.toBeInTheDocument();
-		await user.type(screen.getByRole("searchbox", { name: "Search model" }), "explicit-model");
-		await user.click(screen.getByRole("menuitem", { name: "Use “explicit-model” as a custom model" }));
+		expect(screen.queryByRole("searchbox", { name: "Search model" })).not.toBeInTheDocument();
+		await user.click(await screen.findByRole("menuitem", { name: "Managed model" }));
 		await user.type(screen.getByLabelText("Task"), "Use only account A");
 		await user.click(screen.getByRole("button", { name: "Start task" }));
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("worker-1"));

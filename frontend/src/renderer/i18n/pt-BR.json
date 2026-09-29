@@ -1,4 +1,5 @@
 {
+	"accountsManager.initial.shortChoose": "Conta",
 	"accountsManager.browser.link": "Link de login",
 	"accountsManager.browser.open": "Abrir página de login",
 	"accountsManager.browser.copy": "Copiar link de login",
@@ -40,7 +41,7 @@
 	"accountsManager.usage.fiveHour": "Janela de 5 horas",
 	"accountsManager.usage.week": "Janela semanal",
 	"accountsManager.usage.stale": "Apenas a última leitura. A atualização falhou.",
-	"accountsManager.usage.description": "Cota informada pelo provedor. Sua seleção de conta não muda.",
+	"accountsManager.usage.description": "Cota informada pelo provedor. O provedor não informa uma contagem exata de tokens restantes. Sua seleção de conta não muda.",
 	"accountsManager.verification.unverified": "Não verificada",
 	"accountsManager.verification.verified": "Verificada",
 	"accountsManager.verification.invalid": "Credencial rejeitada",

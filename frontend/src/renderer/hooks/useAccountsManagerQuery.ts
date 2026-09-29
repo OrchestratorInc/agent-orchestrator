@@ -214,10 +214,10 @@ export async function removeAccountsManagerAccount(accountId: string) {
   if (error) throw accountRequestError(error, response?.status);
   return data as AccountsManagerSnapshot;
 }
-export async function fetchAccountsManagerModels(accountId: string) {
+export async function fetchAccountsManagerModels(accountId: string, signal?: AbortSignal) {
   const { data, error, response } = await apiClient.GET(
     "/api/v1/accounts-manager/accounts/{accountId}/models",
-    { params: { path: { accountId } } },
+    { params: { path: { accountId } }, signal },
   );
   if (error) throw accountRequestError(error, response?.status);
   return data;

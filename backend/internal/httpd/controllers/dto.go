@@ -898,10 +898,11 @@ type UpdateAccountsManagerAccountRequest struct {
 
 // AccountsManagerModelResponse describes a model available to the selected account.
 type AccountsManagerModelResponse struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"displayName,omitempty"`
-	Type        string `json:"type,omitempty"`
-	Owner       string `json:"owner,omitempty"`
+	ID          string   `json:"id"`
+	DisplayName string   `json:"displayName,omitempty"`
+	Type        string   `json:"type,omitempty"`
+	Owner       string   `json:"owner,omitempty"`
+	Efforts     []string `json:"efforts,omitempty"`
 }
 
 // AccountsManagerModelsResponse bounds model discovery to one resolved account.

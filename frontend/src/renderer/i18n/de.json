@@ -1,4 +1,5 @@
 {
+	"accountsManager.initial.shortChoose": "Konto",
 	"accountsManager.browser.link": "Anmeldelink",
 	"accountsManager.browser.open": "Anmeldeseite öffnen",
 	"accountsManager.browser.copy": "Anmeldelink kopieren",
@@ -40,7 +41,7 @@
 	"accountsManager.usage.fiveHour": "5-Stunden-Fenster",
 	"accountsManager.usage.week": "Wochenfenster",
 	"accountsManager.usage.stale": "Nur letzte Beobachtung. Die Aktualisierung ist fehlgeschlagen.",
-	"accountsManager.usage.description": "Vom Anbieter gemeldetes Kontingent. Ihre Kontoauswahl bleibt unverändert.",
+	"accountsManager.usage.description": "Vom Anbieter gemeldetes Kontingent. Der Anbieter meldet keine genaue Anzahl verbleibender Tokens. Ihre Kontoauswahl bleibt unverändert.",
 	"accountsManager.verification.unverified": "Nicht geprüft",
 	"accountsManager.verification.verified": "Geprüft",
 	"accountsManager.verification.invalid": "Zugangsdaten abgelehnt",

@@ -1412,22 +1412,34 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		return resolved, nil
 	}
 	modelID := strings.TrimSpace(resolved.Model)
-	validateClaudeModel := cfg.Harness == domain.HarnessClaudeCode && modelID != ""
-	if resolved.Effort == "" && !validateClaudeModel {
+	managed := cfg.Account != nil && cfg.Account.Mode == domain.AccountsManagerManaged
+	validateModel := (cfg.Harness == domain.HarnessClaudeCode || managed) && modelID != ""
+	if resolved.Effort == "" && !validateModel {
 		return resolved, nil
 	}
-	if m.modelCatalog == nil {
-		if validateClaudeModel {
+	if m.modelCatalog == nil && !managed {
+		if validateModel {
 			return ports.AgentConfig{}, fmt.Errorf("%w: model catalog is unavailable", ports.ErrModelCapabilitiesUnavailable)
 		}
 		return resolved, nil
 	}
-	catalog, err := m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), true)
+	var catalog ports.AgentModelCatalog
+	var err error
+	if managed {
+		reader, ok := m.accountsManager.(ports.AccountsManagerModelCatalog)
+		provider, supported := accountsManagerProvider(cfg.Harness)
+		if !ok || !supported {
+			return ports.AgentConfig{}, ports.ErrModelCapabilitiesUnavailable
+		}
+		catalog, err = reader.AgentAccountModels(ctx, provider, cfg.Account.AccountID)
+	} else {
+		catalog, err = m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), true)
+	}
 	if err != nil {
 		if modelChangedWithoutExplicitEffort {
 			resolved.Effort = ""
 		}
-		if validateClaudeModel || resolved.Effort != "" {
+		if validateModel || resolved.Effort != "" {
 			return ports.AgentConfig{}, fmt.Errorf("%w: %w", ports.ErrModelCapabilitiesUnavailable, err)
 		}
 		return resolved, nil
@@ -1440,7 +1452,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			}
 		}
 	}
-	if catalog.Stale && validateClaudeModel {
+	if catalog.Stale && validateModel {
 		return ports.AgentConfig{}, fmt.Errorf("%w for model %q: catalog is stale", ports.ErrModelCapabilitiesUnavailable, modelID)
 	}
 	var selected *ports.AgentModelInfo
@@ -1450,7 +1462,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			break
 		}
 	}
-	if validateClaudeModel && selected == nil {
+	if validateModel && selected == nil {
 		return ports.AgentConfig{}, fmt.Errorf("%w: model %q is not in the active provider catalog", ErrUnsupportedModel, modelID)
 	}
 	if modelChangedWithoutExplicitEffort {

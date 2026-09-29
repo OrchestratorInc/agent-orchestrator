@@ -27,6 +27,12 @@ describe("AccountUsage",()=>{
     expect(fetchQuota).not.toHaveBeenCalled();
   });
 
+  it.each([{ disabled: true }, { verification: "invalid" }, { verification: "unverified" }])("does not bypass usage admission for %s", flags => {
+    show({ ...account, ...flags } as AccountsManagerAccount);
+    expect(fetchQuota).not.toHaveBeenCalled();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
   it.each([
     ["api_key", "Subscription usage is not available for API keys. Check usage in the provider's billing console."],
     ["access_token", "This stored sign-in token does not establish usage permission. Setup tokens can allow model requests without account usage access."],
@@ -102,5 +108,14 @@ describe("AccountUsage",()=>{
     fireEvent.click(screen.getByRole("button",{name:"Refresh usage"}));
     expect(await screen.findByText("Usage unavailable")).toBeInTheDocument();
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("reads provider quota when generation is unavailable without inventing a token balance", async () => {
+    fetchQuota.mockResolvedValueOnce(quota(0));
+    show({ ...account, unavailable: true, status: "error" });
+    expect(await screen.findByText(/0% remaining/)).toBeInTheDocument();
+    expect(fetchQuota).toHaveBeenCalledWith(account.id, expect.any(AbortSignal));
+    expect(screen.getByText(/does not report an exact remaining-token count/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh usage" })).toBeEnabled();
   });
 });

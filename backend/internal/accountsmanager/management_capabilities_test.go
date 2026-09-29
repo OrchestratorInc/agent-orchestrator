@@ -2,8 +2,10 @@ package accountsmanager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -26,8 +28,42 @@ func TestListCredentialModelsReturnsSafeProjection(t *testing.T) {
 		t.Fatalf("ListCredentialModels() error = %v", err)
 	}
 	want := CredentialModel{ID: "gpt-safe", DisplayName: "GPT Safe", Type: "chat", Owner: "openai"}
-	if len(models) != 1 || models[0] != want {
+	if len(models) != 1 || !reflect.DeepEqual(models[0], want) {
 		t.Fatalf("models = %#v, want %#v", models, want)
+	}
+}
+
+func TestCredentialModelsPreserveAdvertisedEfforts(t *testing.T) {
+	client := managementTestClient(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == credentialManagementPath {
+			return managementJSONResponse(req, http.StatusOK, `{"files":[{"auth_index":"account-ref","provider":"codex"}]}`), nil
+		}
+		return managementJSONResponse(req, http.StatusOK, `{"models":[{"id":"managed-model","thinking":{"levels":["low","high"],"private":"secret-value"}}]}`), nil
+	})
+	models, err := client.ListCredentialModels(t.Context(), "account-ref")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(models)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"Efforts":["low","high"]`) || strings.Contains(string(data), "secret-value") {
+		t.Fatalf("safe advertised efforts were not preserved: %s", data)
+	}
+}
+
+func TestCredentialModelsRejectUnboundedOrUnknownEfforts(t *testing.T) {
+	for _, levels := range []string{`["private-token"]`, `[` + strings.Repeat(`"high",`, 16) + `"low"]`} {
+		client := managementTestClient(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path == credentialManagementPath {
+				return managementJSONResponse(req, http.StatusOK, `{"files":[{"auth_index":"account-ref","provider":"codex"}]}`), nil
+			}
+			return managementJSONResponse(req, http.StatusOK, `{"models":[{"id":"managed-model","thinking":{"levels":`+levels+`}}]}`), nil
+		})
+		if _, err := client.ListCredentialModels(t.Context(), "account-ref"); !errors.Is(err, ErrInvalidResponse) {
+			t.Fatalf("unsafe effort projection: %v", err)
+		}
 	}
 }
 

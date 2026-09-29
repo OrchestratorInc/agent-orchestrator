@@ -10,7 +10,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
-import { InitialAccountPicker } from "./InitialAccountPicker";
+import { InitialAccountPicker, InitialAccountStatus } from "./InitialAccountPicker";
+import { fetchAccountsManagerModels } from "../hooks/useAccountsManagerQuery";
 import { initialAccountProvider, InitialAccountChoiceUnavailable, useInitialAccountChoice, type InitialAccountChoice } from "../hooks/useInitialAccountChoice";
 import { AccountControlError, accountControlMessage, accountRequestError } from "../lib/accounts-manager-controls";
 import type { components } from "../../api/schema";
@@ -393,6 +394,16 @@ export function TaskComposer({
 		enabled: selectedAgent !== "" && nativeCatalogEnabled,
 	});
 	const modelCatalogData = nativeCatalogEnabled ? modelCatalogQuery.data : undefined;
+	const managedModels = useQuery({
+		queryKey: ["accounts-manager", "models", initialAccount.selected?.id, initialAccount.selected?.generation, initialAccount.selected?.updatedAt],
+		enabled: Boolean(initialAccount.selected && initialAccount.ready && !nativeCatalogEnabled),
+		retry: false,
+		queryFn: async ({ signal }) => {
+			const data = await fetchAccountsManagerModels(initialAccount.selected!.id, signal);
+			if (!data || !Array.isArray(data.models)) throw new AccountControlError(502);
+			return data;
+		},
+	});
 	const revalidationQuery = useQuery({
 		queryKey: [
 			"agent-model-revalidation",
@@ -424,7 +435,7 @@ export function TaskComposer({
 			? modelCatalogQuery.error instanceof Error
 				? modelCatalogQuery.error.message
 				: t("settings.models.loadFailed")
-			: undefined)) : undefined;
+			: undefined)) : managedModels.error ? accountControlMessage(managedModels.error, t) : undefined;
 	const modelCatalog: TaskComposerModelCatalog | undefined = modelCatalogData
 		? {
 				allowCustom: modelCatalogData.allowCustom,
@@ -435,9 +446,12 @@ export function TaskComposer({
 				retryAt: modelCatalogData.retryAt,
 				selectionMode: modelCatalogData.selectionMode,
 			}
-		: nativeCatalogEnabled ? undefined : { models: [], allowCustom: true, customModelEntry: "direct", selectionMode: "catalog" };
+		: nativeCatalogEnabled ? undefined : {
+			models: initialAccount.ready && !managedModels.isError ? (managedModels.data?.models ?? []).map(item => ({ id: item.id, label: item.displayName || item.id, efforts: item.efforts })) : [],
+			allowCustom: false, customModelEntry: "none", selectionMode: "catalog",
+		};
 	// An unmarked first row is not evidence of what the provider will run.
-	const catalogModels = modelCatalogData?.models?.filter((item) => isConcreteModelID(item.id)) ?? [];
+	const catalogModels = modelCatalog?.models?.filter((item) => isConcreteModelID(item.id)) ?? [];
 	const catalogDefaultOption =
 		catalogModels.find((item) => item.isDefault)?.id ?? "";
 	const catalogUsesModes = modelCatalogData?.selectionMode === "mode";
@@ -464,7 +478,7 @@ export function TaskComposer({
 	const selectedMode = mode || (modelTouched ? (catalogUsesModes ? catalogDefaultOption : "") : defaultModeForSelectedAgent);
 	const selectedModelOrMode = (selectedModel || selectedMode).trim();
 	const projectModelOrMode = projectModelForSelectedAgent || projectModeForSelectedAgent;
-	const requestedModel = selectedModelOrMode && selectedModelOrMode !== projectModelOrMode && (
+	const requestedModel = !nativeCatalogEnabled && selectedModelOrMode ? selectedModelOrMode : selectedModelOrMode && selectedModelOrMode !== projectModelOrMode && (
 		selectedModelOrMode !== catalogDefaultOption || isConcreteModelID(projectModelOrMode)
 	) ? selectedModelOrMode : undefined;
 	const rememberedEffortIsExplicit = Boolean(
@@ -498,6 +512,7 @@ export function TaskComposer({
 	const canSubmit =
 		Boolean(projectId) &&
 		initialAccount.ready &&
+		(!accountValue.startsWith("managed:") || !managedModels.isFetching && !managedModels.isError && catalogModels.some(item => item.id === selectedModel)) &&
 		(!isStandalone || selectedAgent !== "") &&
 		(isCloudProject || isStandalone || projectQuery.data !== undefined);
 	const refreshSelectedModels = useCallback(async () => {
@@ -612,7 +627,11 @@ export function TaskComposer({
 
 	return (
 		<TaskComposerView
-			context={<InitialAccountPicker state={initialAccount} value={accountValue} disabled={isSubmitting} onChange={value => setAccountDraft({ context: accountContext, value })} />}
+			context={<InitialAccountStatus state={initialAccount} value={accountValue} disabled={isSubmitting} />}
+			accountControl={initialAccount.enabled && initialAccount.capability.data !== false ? <InitialAccountPicker state={initialAccount} value={accountValue} disabled={isSubmitting} onChange={value => {
+				setAccountDraft({ context: accountContext, value });
+				setModel(""); setMode(""); setEffort(""); setModelTouched(true); setEffortTouched(true);
+			}} /> : undefined}
 			autoFocusPrompt={autoFocusTitle}
 			canSubmit={canSubmit}
 			onPromptChange={handlePromptChange}
@@ -657,13 +676,13 @@ export function TaskComposer({
 				agentId: selectedAgent,
 				agentLabel: selectedAgentLabel,
 				projectId: isStandalone ? "" : (projectId ?? ""),
-				disabled: isSubmitting,
+				disabled: isSubmitting || !nativeCatalogEnabled && (!initialAccount.ready || managedModels.isError),
 				value: selectedModel,
 				mode: selectedMode,
 				catalog: modelCatalog,
-				fetching: nativeCatalogEnabled && modelCatalogQuery.isFetching,
+				fetching: nativeCatalogEnabled ? modelCatalogQuery.isFetching : managedModels.isFetching,
 				loading:
-					(initialAccount.enabled && initialAccount.capability.isPending) ||
+					(initialAccount.enabled && initialAccount.capability.isPending) || managedModels.isFetching ||
 					(nativeCatalogEnabled && selectedAgent !== "" &&
 						modelCatalogQuery.isFetching && modelCatalogQuery.data === undefined),
 				onModelChange: (value) => {
@@ -714,7 +733,8 @@ export function TaskComposer({
 			renderAgentControl={(control) => <DesktopAgentControl {...control} manageAgents={!isCloudProject} managedAccountAgentIds={managedAccountAgentIds} />}
 			renderEffortControl={(control) => <TaskEffortPicker {...control} defaultEffort={effortModel?.defaultEffort} />}
 			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={nativeCatalogEnabled ? refreshSelectedModels : undefined}
-				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
+				emptyLabel={!nativeCatalogEnabled ? t("newTask.model") : undefined}
+				showFollowAgentAction={nativeCatalogEnabled && Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
 			showEffort={!requiresTuiFallback && effortOptions.length > 0}
 		/>
 	);
@@ -773,8 +793,9 @@ function TaskModelPicker({
 	onModelChange,
 	onModeChange,
 	onRefresh,
+	emptyLabel,
 	showFollowAgentAction,
-}: TaskComposerModelControl & { onRefresh?: () => Promise<void>; showFollowAgentAction: boolean }) {
+}: TaskComposerModelControl & { onRefresh?: () => Promise<void>; emptyLabel?: string; showFollowAgentAction: boolean }) {
 	const { t } = useTranslation();
 
 	// No agent selected: there is nothing loading and no model to choose yet, so
@@ -857,6 +878,7 @@ function TaskModelPicker({
 			key={agentId}
 			aria-label={t("newTask.model")}
 			value={value}
+			emptyLabel={emptyLabel}
 			models={displayModels}
 			allowCustom={catalog?.allowCustom}
 			customModelEntry={customModelEntry}

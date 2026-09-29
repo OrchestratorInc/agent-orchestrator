@@ -192,7 +192,7 @@ func (c *AccountsManagerController) models(w http.ResponseWriter, r *http.Reques
 	}
 	result := make([]AccountsManagerModelResponse, 0, len(models))
 	for _, m := range models {
-		result = append(result, AccountsManagerModelResponse{ID: m.ID, DisplayName: m.DisplayName, Type: m.Type, Owner: m.Owner})
+		result = append(result, AccountsManagerModelResponse{ID: m.ID, DisplayName: m.DisplayName, Type: m.Type, Owner: m.Owner, Efforts: m.Efforts})
 	}
 	envelope.WriteJSON(w, http.StatusOK, AccountsManagerModelsResponse{Models: result})
 }

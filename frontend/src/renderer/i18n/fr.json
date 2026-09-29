@@ -1,4 +1,5 @@
 {
+	"accountsManager.initial.shortChoose": "Compte",
 	"accountsManager.browser.link": "Lien de connexion",
 	"accountsManager.browser.open": "Ouvrir la page de connexion",
 	"accountsManager.browser.copy": "Copier le lien de connexion",
@@ -40,7 +41,7 @@
 	"accountsManager.usage.fiveHour": "Fenêtre de 5 heures",
 	"accountsManager.usage.week": "Fenêtre hebdomadaire",
 	"accountsManager.usage.stale": "Dernière observation uniquement. L’actualisation a échoué.",
-	"accountsManager.usage.description": "Quota indiqué par le fournisseur. Votre sélection de compte ne change pas.",
+	"accountsManager.usage.description": "Quota indiqué par le fournisseur. Le fournisseur ne donne pas le nombre exact de tokens restants. Votre sélection de compte ne change pas.",
 	"accountsManager.verification.unverified": "Non vérifié",
 	"accountsManager.verification.verified": "Vérifié",
 	"accountsManager.verification.invalid": "Identifiant refusé",

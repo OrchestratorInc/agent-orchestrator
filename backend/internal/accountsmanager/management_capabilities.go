@@ -15,6 +15,7 @@ type CredentialModel struct {
 	DisplayName string
 	Type        string
 	Owner       string
+	Efforts     []string
 }
 
 // QuotaSubscription carries provider-reported plan information, not local billing state.
@@ -82,6 +83,9 @@ func (c *ManagementClient) ListCredentialModels(ctx context.Context, ref string)
 			DisplayName string `json:"display_name"`
 			Type        string `json:"type"`
 			Owner       string `json:"owned_by"`
+			Thinking    *struct {
+				Levels []string `json:"levels"`
+			} `json:"thinking"`
 		} `json:"models"`
 	}
 	if err = c.doJSON(ctx, "list credential models", http.MethodGet, credentialManagementPath+"/models?"+query.Encode(), nil, &response); err != nil {
@@ -101,11 +105,26 @@ func (c *ManagementClient) ListCredentialModels(ctx context.Context, ref string)
 			continue
 		}
 		seen[id] = struct{}{}
+		var efforts []string
+		if raw.Thinking != nil {
+			if len(raw.Thinking.Levels) > 16 {
+				return nil, ErrInvalidResponse
+			}
+			for _, effort := range raw.Thinking.Levels {
+				switch effort {
+				case "none", "minimal", "low", "medium", "high", "xhigh", "max", "auto":
+					efforts = append(efforts, effort)
+				default:
+					return nil, ErrInvalidResponse
+				}
+			}
+		}
 		models = append(models, CredentialModel{
 			ID:          id,
 			DisplayName: strings.TrimSpace(raw.DisplayName),
 			Type:        strings.TrimSpace(raw.Type),
 			Owner:       strings.TrimSpace(raw.Owner),
+			Efforts:     efforts,
 		})
 	}
 	return models, nil
