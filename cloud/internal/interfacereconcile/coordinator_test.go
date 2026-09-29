@@ -422,8 +422,8 @@ func TestReconcilePendingStopResumesAtSourceStopping(t *testing.T) {
 
 func TestReconcileDrainWaitsForSourceToBecomeIdle(t *testing.T) {
 	for name, inspection := range map[string]SourceInspection{
-		"decision pending": {DecisionPending: true},
-		"draft present": {DraftPresent: true},
+		"decision pending":      {DecisionPending: true},
+		"draft present":         {DraftPresent: true},
 		"quiescence unverified": {QuiescenceUnverified: true},
 	} {
 		t.Run(name, func(t *testing.T) {
