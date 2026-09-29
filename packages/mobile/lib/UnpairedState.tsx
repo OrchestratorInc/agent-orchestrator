@@ -31,7 +31,6 @@ export function UnpairedState() {
 				icon="monitor-smartphone"
 				pulse
 				title="Connecting to your desktop…"
-				message="Finding the fastest way to reach it. This can take a few seconds on a slow network."
 			/>
 		);
 	}
@@ -39,7 +38,6 @@ export function UnpairedState() {
 		<EmptyState
 			icon="monitor-smartphone"
 			title="No desktop paired"
-			message="Scan the pairing code from AO → Settings → Connect Mobile to drive your agents from here."
 			action={<Button title="Scan pairing code" icon="maximize" onPress={() => router.push("/pair")} />}
 		/>
 	);
