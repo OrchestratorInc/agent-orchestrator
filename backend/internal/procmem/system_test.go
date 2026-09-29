@@ -25,6 +25,17 @@ func TestParseCPUTicksSkipsIdleAndIOWait(t *testing.T) {
 	}
 }
 
+// TestParseCPUTicksExcludesGuestTime guards against double-counting: the
+// kernel already folds VM time into user and nice, so a guest-heavy line
+// must not inflate busy past what idle alone implies. 100 user ticks
+// (entirely guest) plus 100 idle ticks is 50% busy, not ~67%.
+func TestParseCPUTicksExcludesGuestTime(t *testing.T) {
+	busy, total := ParseCPUTicks("cpu  100 0 0 100 0 0 0 0 100 0\n")
+	if busy != 100 || total != 200 {
+		t.Fatalf("busy=%d total=%d, want 100/200", busy, total)
+	}
+}
+
 func TestAvailablePressureIsUsedShare(t *testing.T) {
 	if got := availablePressure(System{TotalBytes: 16 << 30, AvailableBytes: 4 << 30}); got != 75 {
 		t.Fatalf("pressure = %v, want 75", got)

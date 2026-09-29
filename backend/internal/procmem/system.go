@@ -84,7 +84,10 @@ func ParsePSISome10(contents string) (float64, bool) {
 }
 
 // ParseCPUTicks sums the whole-machine "cpu" line of /proc/stat: user nice
-// system idle iowait irq softirq steal. Idle and iowait are the unused part.
+// system idle iowait irq softirq steal guest guest_nice. Idle and iowait are
+// the unused part; guest and guest_nice are excluded entirely (fields 8 and
+// 9) because the kernel already counts VM time inside user and nice, so
+// adding them again would overstate both busy and total.
 func ParseCPUTicks(contents string) (busy, total uint64) {
 	for _, line := range strings.Split(contents, "\n") {
 		fields := strings.Fields(line)
@@ -92,6 +95,9 @@ func ParseCPUTicks(contents string) (busy, total uint64) {
 			continue
 		}
 		for i, f := range fields[1:] {
+			if i == 8 || i == 9 {
+				continue
+			}
 			n, err := strconv.ParseUint(f, 10, 64)
 			if err != nil {
 				return 0, 0

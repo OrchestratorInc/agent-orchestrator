@@ -34,7 +34,7 @@ import {
 	type SystemMemoryReading,
 } from "../hooks/useSessionMemory";
 import { useSessionUsageSummaries, type SessionUsageSummary } from "../hooks/useSessionUsageSummaries";
-import { isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
+import { isOrchestratorSession, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import { Button } from "./ui/button";
 import {
 	Dialog,
@@ -47,6 +47,11 @@ import {
 	settingsDialogHeaderClass,
 } from "./ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+
+// Stable identity for the loading state: `data ?? []` would hand useMemo a
+// fresh array every render, invalidating it (and the onRows effect below)
+// in a loop until the workspace query resolves.
+const EMPTY_WORKSPACES: readonly WorkspaceSummary[] = [];
 
 /** True once the daemon has produced an app-wide reading; gates the archive bar. */
 export function useHasAppMemory(): boolean {
@@ -79,7 +84,7 @@ const stateText: Record<PressureState, string> = {
 
 /** The single fix the monitor offers. */
 function useSuggestion(projectId?: string) {
-	const workspaces = useWorkspaceQuery().data ?? [];
+	const workspaces = useWorkspaceQuery().data ?? EMPTY_WORKSPACES;
 	const readings = useSessionMemory().data;
 	const memory = useAppMemory().data;
 	const now = Date.now();
@@ -206,7 +211,7 @@ export function MachineSection({ action, projectId }: { action?: ReactNode; proj
 /** Every live session and AO's own processes, largest first. */
 export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow[]) => void; projectId?: string }) {
 	const { t } = useTranslation();
-	const workspaces = useWorkspaceQuery().data ?? [];
+	const workspaces = useWorkspaceQuery().data ?? EMPTY_WORKSPACES;
 	const readings = useSessionMemory(projectId).data;
 	const app = useAppMemory().data?.app;
 	// Cost belongs in a shared report even though the window never shows it.

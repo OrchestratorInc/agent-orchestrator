@@ -222,6 +222,25 @@ describe("AppMemoryIndicator", () => {
 		expect(postMock).not.toHaveBeenCalled();
 	});
 
+	it("opens before workspaces load without looping: workspaces start undefined, rows appear once they arrive", async () => {
+		workspaceQueryMock.mockReturnValue({ data: undefined, isError: false, isSuccess: false });
+		const { rerender } = renderButton();
+		await userEvent.click(screen.getByTestId("app-memory-indicator"));
+		// Nothing to show yet, but it must render (and stay rendered) without
+		// the onRows effect and the loading fallback array fighting each other
+		// into a re-render loop.
+		expect(screen.queryByTestId("session-memory-row")).not.toBeInTheDocument();
+		const workspace: WorkspaceSummary = {
+			id: "p1",
+			name: "radic",
+			sessions: [session("s-small", "small worker"), session("s-big", "big worker")],
+		} as WorkspaceSummary;
+		workspaceQueryMock.mockReturnValue({ data: [workspace], isError: false, isSuccess: true });
+		rerender();
+		const table = await screen.findByTestId("session-memory-table");
+		expect(within(table).getAllByTestId("session-memory-row")).toHaveLength(2);
+	});
+
 	it("hides the load figure on a platform with no load average, in the graph and in the copied report", async () => {
 		appMemoryMock.mockReturnValue(appReading(20, 0, 2, 40, 160, -1));
 		renderButton();
