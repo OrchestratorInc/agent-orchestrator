@@ -142,7 +142,12 @@ describe("another paired host's live runner", () => {
 		vi.mocked(connectToHost)
 			.mockResolvedValueOnce({ ok: true, hostId: host.id, endpoint: tunnel, config: tunnelConfig })
 			.mockResolvedValueOnce({ ok: true, hostId: host.id, endpoint: lan, config: lanConfig });
-		vi.mocked(getSessions).mockResolvedValue({ projects: [], sessions: [], orchestrators: [], orchestratorId: null, stats: {} });
+		const answer = { projects: [], sessions: [], orchestrators: [], orchestratorId: null, stats: {} };
+		let finishOldPoll!: (value: typeof answer) => void;
+		vi.mocked(getSessions)
+			.mockResolvedValueOnce(answer)
+			.mockImplementationOnce(() => new Promise((resolve) => { finishOldPoll = resolve; }))
+			.mockResolvedValue(answer);
 		vi.mocked(getNotifications).mockResolvedValue({ notifications: [], unreadCount: 0, nextCursor: undefined });
 		const { emptyHostSnapshot, startOtherHost } = await import("./otherHosts");
 		let snapshot = emptyHostSnapshot(paired);
@@ -152,6 +157,9 @@ describe("another paired host's live runner", () => {
 			expect(snapshot.config).toBe(tunnelConfig);
 			await vi.advanceTimersByTimeAsync(60_001);
 			expect(connectToHost).toHaveBeenCalledTimes(2);
+			expect(snapshot.connection).toBe("connecting");
+			finishOldPoll(answer);
+			await vi.advanceTimersByTimeAsync(1);
 			expect(snapshot.config).toBe(lanConfig);
 			expect(snapshot.connection).toBe("open");
 			expect(getSessions).toHaveBeenCalledWith(lanConfig, "all");

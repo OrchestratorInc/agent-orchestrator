@@ -123,7 +123,10 @@ export function startOtherHost(host: Host, previous: HostSnapshot | undefined, p
 			runner.config = result.config;
 			connected = false;
 			update({ config: result.config, connection: "connecting", loading: true, endpoints: known });
-			schedule(0);
+			// An old-endpoint poll may still own `busy`; wait for it to finish
+			// before starting the first poll on the verified upgrade path.
+			if (busy) await busy;
+			if (!stopped && runner.config === result.config) void runner.refresh();
 		} catch {
 			// A failed upgrade must leave the working endpoint alone.
 		} finally {
