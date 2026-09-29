@@ -38,11 +38,7 @@ export default function SessionPreviewScreen() {
 	const [loading, setLoading] = useState(true);
 	const [discoveryError, setDiscoveryError] = useState<string>();
 	const [toast, setToast] = useState<string>();
-	const [runtimeConnected, setRuntimeConnected] = useState(false);
-	const [agentActive, setAgentActive] = useState(false);
-	const [controlEnabled, setControlEnabled] = useState(true);
 	const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const runtime = useRef<MobileBrowserRuntimeClient | null>(null);
 	const commandResults = useRef(new Map<string, {
 		resolve: (result: MobileBrowserCommandResult) => void;
 		timer: ReturnType<typeof setTimeout>;
@@ -143,7 +139,7 @@ export default function SessionPreviewScreen() {
 		let client: MobileBrowserRuntimeClient | null = null;
 		const sync = () => {
 			if (!client) return;
-			if (AppState.currentState === "active" && controlEnabled) client.start();
+			if (AppState.currentState === "active") client.start();
 			else client.stop();
 		};
 		void getInstallId().then((deviceId) => {
@@ -151,10 +147,7 @@ export default function SessionPreviewScreen() {
 			client = new MobileBrowserRuntimeClient(config, id, deviceId, {
 				execute: executeAgentCommand,
 				onCancel: cancelAgentCommand,
-				onStatus: setRuntimeConnected,
-				onActivity: setAgentActive,
 			});
-			runtime.current = client;
 			sync();
 		});
 		const subscription = AppState.addEventListener("change", sync);
@@ -162,14 +155,13 @@ export default function SessionPreviewScreen() {
 			disposed = true;
 			subscription.remove();
 			client?.stop();
-			if (runtime.current === client) runtime.current = null;
 			for (const pending of commandResults.current.values()) {
 				clearTimeout(pending.timer);
 				pending.resolve({ ok: false, error: { code: "BROWSER_TARGET_UNAVAILABLE", message: "The mobile browser closed." } });
 			}
 			commandResults.current.clear();
 		};
-	}, [cancelAgentCommand, config, controlEnabled, executeAgentCommand, id]);
+	}, [cancelAgentCommand, config, executeAgentCommand, id]);
 
 	const onBridgeMessage = useCallback((event: WebViewMessageEvent) => {
 		const message = parseBrowserBridgeMessage(event.nativeEvent.data);
@@ -203,10 +195,6 @@ export default function SessionPreviewScreen() {
 
 	return <View style={styles.screen}>
 		<View style={styles.content}>
-			<Pressable accessibilityRole="switch" accessibilityLabel="Allow agent browser control" accessibilityState={{ checked: controlEnabled }} onPress={() => setControlEnabled((enabled) => !enabled)} style={[styles.agentStatus, agentActive && styles.agentStatusActive]}>
-				<View style={[styles.agentDot, !runtimeConnected && styles.agentDotOff, agentActive && styles.agentDotActive]} />
-				<Text style={styles.agentStatusText}>{!controlEnabled ? "Agent control off — tap to enable" : agentActive ? "Agent controlling this browser" : runtimeConnected ? "Ready for agent control" : "Connecting agent control…"}</Text>
-			</Pressable>
 			{!config || loading ? (
 				<View style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.copy}>Looking for a session preview…</Text></View>
 			) : browserSource ? (
@@ -309,12 +297,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	retryText: { fontFamily: "Geist_600SemiBold", color: t.onAccent, fontSize: type.caption1.fontSize, fontWeight: "600" },
 	toast: { position: "absolute", alignSelf: "center", bottom: 150, borderRadius: 999, borderCurve: "continuous", backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderDefault, paddingHorizontal: space.md, paddingVertical: space.sm },
 	toastText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption1.fontSize, fontWeight: "600" },
-	agentStatus: { minHeight: 28, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, borderBottomWidth: 1, borderBottomColor: t.borderDefault, backgroundColor: t.bgSurface },
-	agentStatusActive: { backgroundColor: t.accentTint },
-	agentDot: { width: 7, height: 7, borderRadius: 999, backgroundColor: t.green },
-	agentDotOff: { backgroundColor: t.textFaint },
-	agentDotActive: { backgroundColor: t.accent },
-	agentStatusText: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.caption2.fontSize, fontWeight: "600" },
 });
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
