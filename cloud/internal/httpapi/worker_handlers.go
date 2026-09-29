@@ -15,6 +15,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/roleprompt"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
@@ -537,7 +538,23 @@ func (s *Server) workerGitHubToken(w http.ResponseWriter, r *http.Request) {
 	// projects the App cannot serve (no installation / not App-connected / a remote
 	// broker that cannot push).
 	if s.checkoutBroker != nil {
-		grant, err := s.checkoutBroker.IssuePushGrant(r.Context(), claims.OrgID, claims.SessionID)
+		// git invokes the credential helper with credential.useHttpPath=true, so
+		// it can name the exact repository it is fetching or pushing. When it does,
+		// mint an App token scoped to that repository (primary or a declared extra
+		// the App is installed on); an App-uninstalled extra returns ErrForbidden
+		// here and falls through to the PAT, giving the same App-first/PAT-fallback
+		// precedence per repository. Without a repository (older helpers, the gh
+		// CLI wrapper), fall back to the broad multi-repository push grant.
+		repo := workerRequestedRepository(r)
+		var (
+			grant githubapp.CheckoutGrant
+			err   error
+		)
+		if repo != "" {
+			grant, err = s.checkoutBroker.IssuePushGrantForRepo(r.Context(), claims.OrgID, claims.SessionID, repo)
+		} else {
+			grant, err = s.checkoutBroker.IssuePushGrant(r.Context(), claims.OrgID, claims.SessionID)
+		}
 		if err == nil && grant.Token != "" && grant.ExpiresAt.After(time.Now()) {
 			writeJSON(w, http.StatusOK, worker.GitHubTokenResponse{Token: grant.Token, ExpiresAt: grant.ExpiresAt})
 			return
@@ -565,6 +582,28 @@ func (s *Server) workerGitHubToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "GitHub credentials are not available.")
+}
+
+// workerRequestedRepository extracts the "owner/repo" the git credential helper
+// named via the ?repo= query parameter (git supplies host+path because the
+// helper runs with credential.useHttpPath=true). It returns "" for a missing or
+// malformed value, so the caller falls back to the broad multi-repository push
+// grant rather than failing — the repository hint only ever narrows the grant's
+// scope, it is never a hard requirement.
+func workerRequestedRepository(r *http.Request) string {
+	raw := strings.TrimSpace(r.URL.Query().Get("repo"))
+	if raw == "" {
+		return ""
+	}
+	raw = strings.TrimSuffix(strings.Trim(raw, "/"), ".git")
+	owner, repo, ok := strings.Cut(raw, "/")
+	if !ok ||
+		owner == "" || repo == "" ||
+		strings.ContainsAny(owner, "/ \t") ||
+		strings.ContainsAny(repo, "/ \t") {
+		return ""
+	}
+	return owner + "/" + repo
 }
 
 func (s *Server) workerRaisePullRequest(w http.ResponseWriter, r *http.Request) {

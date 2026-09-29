@@ -116,6 +116,16 @@ export async function rejectedEndpointNeedsRace(cfg: ServerConfig, status: numbe
 }
 
 /**
+ * How long the post-race endpoint refresh may take.
+ *
+ * The refresh runs inside the launch resolution, so without a bound a slow
+ * network held the app in "connecting" for as long as the OS let a request
+ * hang — after the race had already found a working endpoint. A refresh that
+ * does not land in time is simply skipped; the stored endpoints still work.
+ */
+export const ENDPOINT_REFRESH_TIMEOUT_MS = 5_000;
+
+/**
  * Re-reads what the daemon advertises now.
  *
  * Deliberately GET /api/v1/endpoints and not /api/v1/mobile/status: the mobile
@@ -123,12 +133,19 @@ export async function rejectedEndpointNeedsRace(cfg: ServerConfig, status: numbe
  * phone can reach.
  */
 async function fetchAdvertisedEndpoints(base: string, token: string): Promise<Endpoint[]> {
-	const res = await fetch(`${base}/api/v1/endpoints`, {
-		headers: token ? { Authorization: `Bearer ${token}` } : {},
-	});
-	if (!res.ok) throw new Error(`endpoint refresh returned ${res.status}`);
-	const body = (await res.json()) as { endpoints?: Endpoint[] };
-	return body.endpoints ?? [];
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), ENDPOINT_REFRESH_TIMEOUT_MS);
+	try {
+		const res = await fetch(`${base}/api/v1/endpoints`, {
+			headers: token ? { Authorization: `Bearer ${token}` } : {},
+			signal: controller.signal,
+		});
+		if (!res.ok) throw new Error(`endpoint refresh returned ${res.status}`);
+		const body = (await res.json()) as { endpoints?: Endpoint[] };
+		return body.endpoints ?? [];
+	} finally {
+		clearTimeout(timeout);
+	}
 }
 
 export type ConnectOptions = {

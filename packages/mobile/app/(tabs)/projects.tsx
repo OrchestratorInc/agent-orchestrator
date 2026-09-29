@@ -118,9 +118,9 @@ export default function ProjectsScreen() {
 					ListEmptyComponent={
 						fleetError ? (
 							<EmptyState
-								icon="wifi-off"
+								icon={hostStates.length > 1 ? "unplug" : failure.icon}
 								title={hostStates.length > 1 ? "No machines connected" : failure.title}
-								message={hostStates.length > 1 ? "Retry your paired machines to load projects." : failure.message}
+								message={hostStates.length > 1 ? undefined : failure.hint}
 								action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />}
 							/>
 						) : (

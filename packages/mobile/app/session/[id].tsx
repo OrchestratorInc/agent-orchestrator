@@ -146,9 +146,8 @@ function SessionRouteContent() {
 			return (
 				<View style={styles.center}>
 					<EmptyState
-						icon="server"
+						icon="monitor-smartphone"
 						title="No desktop paired"
-						message="Scan the pairing code from AO → Settings → Connect Mobile to drive your agents from here."
 						action={<Button title="Scan pairing code" icon="maximize" onPress={() => router.push("/pair")} />}
 					/>
 				</View>
@@ -157,9 +156,8 @@ function SessionRouteContent() {
 			return (
 				<View style={styles.center}>
 					<EmptyState
-						icon="wifi-off"
+						icon="unplug"
 						title="Not connected to your desktop"
-						message="This session loads once the app reconnects."
 						action={<Button title="Open board" icon="activity" variant="ghost" onPress={() => router.navigate("/")} />}
 					/>
 				</View>

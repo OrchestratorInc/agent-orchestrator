@@ -164,9 +164,9 @@ export default function FleetScreen() {
 							<EmptyState icon="search" title="No workers found" message={`No workers match “${query.trim()}”.`} />
 						) : fleetError ? (
 							<EmptyState
-								icon="wifi-off"
+								icon={hostStates.length > 1 ? "unplug" : failure.icon}
 								title={hostStates.length > 1 ? "No machines connected" : failure.title}
-								message={hostStates.length > 1 ? "Retry your paired machines to load workers." : failure.message}
+								message={hostStates.length > 1 ? undefined : failure.hint}
 								action={
 									<View style={styles.errorActions}>
 										<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />

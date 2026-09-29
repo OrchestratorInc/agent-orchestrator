@@ -80,6 +80,9 @@ type AppState = {
 	allSessions: HostedSession[];
 	allProjects: HostedProject[];
 	allOrchestrators: HostedOrchestrator[];
+	/** Whether the first config resolution has finished. Until it has, an
+	 *  unconfigured store means "still finding the machine", not "unpaired". */
+	configResolved: boolean;
 	/** Every way the active machine says it can be reached, for telling a
 	 *  rotated tunnel hostname apart from being simply out of range. */
 	activeEndpoints: Endpoint[];
@@ -796,6 +799,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			allSessions,
 			allProjects,
 			allOrchestrators,
+			configResolved,
 			activeEndpoints,
 			projects,
 			projectsKnown,
@@ -836,6 +840,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			allSessions,
 			allProjects,
 			allOrchestrators,
+			configResolved,
 			projects,
 			projectsKnown,
 			visibleSessions,
