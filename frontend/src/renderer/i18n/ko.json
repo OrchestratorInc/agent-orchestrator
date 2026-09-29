@@ -1,4 +1,9 @@
 {
+	"accountsManager.browser.link": "로그인 링크",
+	"accountsManager.browser.open": "로그인 페이지 열기",
+	"accountsManager.browser.copy": "로그인 링크 복사",
+	"accountsManager.browser.openFailed": "브라우저를 열 수 없습니다. 로그인 링크를 열거나 복사하여 계속하세요.",
+	"accountsManager.browser.linkExpired": "로그인 링크가 만료되었습니다. 이 시도를 취소하고 다시 시작하세요.",
 	"accountsManager.tokenAccount": "{{provider}} 로그인 토큰 ({{id}})",
 	"accountsManager.credentials.wrongMethod": "로그인 토큰은 API 키가 아닙니다. Harnesses에서 네이티브 로그인을 사용하세요. 관리 계정이 연결되는 것은 아니며, 격리된 네이티브 토큰 프로필은 아직 사용할 수 없습니다.",
 	"accountsManager.credentials.keyFormHint": "설정 토큰이 아닌 API 키를 사용하세요. 공급자 기본 주소를 사용하려면 기본 URL을 비워 두세요. 신뢰할 수 있는 대상에만 사용자 지정 URL을 사용하세요.",

@@ -36,6 +36,7 @@ import { AgentProviderGroup } from "./AgentProviderGroup";
 import { SettingsSection } from "./SettingsSection";
 import { AccountRemovalDialog, AccountRemovalRecovery } from "./AccountRemovalControl";
 import { AccountUsage } from "./AccountUsage";
+import { SignInBrowserRecovery, signInAuthorizationURL } from "./SignInBrowserRecovery";
 
 type Provider = "codex" | "claude";
 type AddMethod = "device" | "browser" | "api-key" | "json";
@@ -81,6 +82,7 @@ export function AccountsManagerSection({
   const cancellations = useRef(new Map<string, Promise<void>>());
   const addGeneration = useRef(0);
   const activeOAuthID = useRef<string | null>(null);
+  const [startedOAuth, setStartedOAuth] = useState<AccountsManagerSnapshot["oauthSessions"][number] | null>(null);
   const data = query.data;
   const update = (next: AccountsManagerSnapshot) =>
     client.setQueryData<AccountsManagerSnapshot>(
@@ -120,29 +122,35 @@ export function AccountsManagerSection({
             generation: reconnecting.generation,
           })
         : await startAccountsManagerOAuth(provider, mode);
-      activeOAuthID.current = session.id;
       if (generation !== addGeneration.current) {
         try {
           await cancelOAuthOnce(session.id);
-          activeOAuthID.current = null;
         } catch (cause) {
+          activeOAuthID.current = session.id;
           setAdding(provider);
           showError("accountsManager.errors.cancel", cause);
         }
         return;
       }
-      try {
-        if (!session.authorizationUrl)
-          throw new Error("Missing authorization URL");
-        await aoBridge.app.openExternal(session.authorizationUrl);
-      } catch (openError) {
+      activeOAuthID.current = session.id;
+      const authorizationURL = signInAuthorizationURL(session.authorizationUrl);
+      if (!authorizationURL) {
         await cancelOAuthOnce(session.id).catch(() => undefined);
-        throw openError;
+        throw new Error("Missing authorization URL");
+      }
+      setStartedOAuth(session);
+      try {
+        await aoBridge.app.openExternal(authorizationURL);
+      } catch {
+        if (generation === addGeneration.current) {
+          setError("accountsManager.browser.openFailed");
+          setRequestId("");
+        }
       }
     } catch (cause) {
-      showError("accountsManager.errors.start", cause);
+      if (generation === addGeneration.current) showError("accountsManager.errors.start", cause);
     } finally {
-      setBusy(false);
+      if (generation === addGeneration.current) setBusy(false);
     }
   };
   const submitKey = async (provider: Provider) => {
@@ -188,7 +196,10 @@ export function AccountsManagerSection({
 
   const waiting = data?.oauthSessions.find(
     (session) => session.status === "pending",
-  );
+  ) ?? (startedOAuth && !data?.oauthSessions.some(session => session.id === startedOAuth.id) ? startedOAuth : undefined);
+  useEffect(() => {
+    if (startedOAuth && data?.oauthSessions.some(session => session.id === startedOAuth.id)) setStartedOAuth(null);
+  }, [data?.oauthSessions, startedOAuth]);
   useEffect(() => {
     if (waiting) {
       activeOAuthID.current ??= waiting.id;
@@ -209,6 +220,7 @@ export function AccountsManagerSection({
       (active?.status === "expired" && active.failureCode === "cancelled")
     ) {
       activeOAuthID.current = null;
+      setStartedOAuth(null);
       setAdding(null);
       setReconnecting(null);
       setError(null);
@@ -218,6 +230,7 @@ export function AccountsManagerSection({
       (active?.status === "expired" && active.failureCode !== "cancelled")
     ) {
       activeOAuthID.current = null;
+      setStartedOAuth(null);
       setError(
         active.status === "expired"
           ? "accountsManager.errors.expired"
@@ -230,7 +243,7 @@ export function AccountsManagerSection({
                 : "accountsManager.errors.signIn",
       );
     }
-  }, [data?.revision]);
+  }, [data?.oauthSessions]);
   const closeAdd = async (provider: Provider) => {
     addGeneration.current++;
     const pending = data?.oauthSessions.find(
@@ -250,6 +263,8 @@ export function AccountsManagerSection({
       }
     }
     activeOAuthID.current = null;
+    setStartedOAuth(null);
+    setBusy(false);
     setAdding(null);
     setReconnecting(null);
     setError(null);
@@ -405,6 +420,9 @@ export function AccountsManagerSection({
                     dismissError={() => {
                       setError(null);
                       clearSensitive();
+                    }}
+                    browserOpened={() => {
+                      if (activeOAuthID.current === waiting?.id) setError(null);
                     }}
                     close={() => void closeAdd(provider)}
                     startOAuth={(mode) => void startOAuth(provider, mode)}
@@ -588,6 +606,7 @@ function AddAccountPanel(props: {
   waiting?: AccountsManagerSnapshot["oauthSessions"][number];
   error: MessageKey | null;
   dismissError: () => void;
+  browserOpened: () => void;
   close: () => void;
   startOAuth: (mode: "device" | "callback") => void;
   submitKey: () => void;
@@ -633,7 +652,7 @@ function AddAccountPanel(props: {
         ))}
       </div>
       {props.waiting ? (
-        <DeviceOrBrowserWaiting session={props.waiting} />
+        <DeviceOrBrowserWaiting key={props.waiting.id} session={props.waiting} browserOpened={props.browserOpened} />
       ) : props.method === "device" ? (
         <div className="space-y-2">
           <p className="text-sm text-muted-foreground">
@@ -718,15 +737,16 @@ function AddAccountPanel(props: {
 
 function DeviceOrBrowserWaiting({
   session,
+  browserOpened,
 }: {
   session: AccountsManagerSnapshot["oauthSessions"][number];
+  browserOpened: () => void;
 }) {
   const { t } = useTranslation();
   const userCode = session?.userCode;
-  if (!userCode)
-    return <p className="text-sm">{t("accountsManager.waiting")}</p>;
   return (
     <div className="space-y-2">
+      {userCode ? <>
       <p className="text-sm text-muted-foreground">
         {t("accountsManager.device.enterCode")}
       </p>
@@ -744,6 +764,8 @@ function DeviceOrBrowserWaiting({
           {t("diffSelection.copy")}
         </Button>
       </div>
+      </> : null}
+      <SignInBrowserRecovery authorizationUrl={session.authorizationUrl} expiresAt={session.expiresAt} onOpened={browserOpened} />
       <p className="text-sm">{t("accountsManager.waiting")}</p>
     </div>
   );

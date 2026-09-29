@@ -1,4 +1,9 @@
 {
+	"accountsManager.browser.link": "Link de login",
+	"accountsManager.browser.open": "Abrir página de login",
+	"accountsManager.browser.copy": "Copiar link de login",
+	"accountsManager.browser.openFailed": "Não foi possível abrir o navegador. Abra ou copie o link de login para continuar.",
+	"accountsManager.browser.linkExpired": "Este link de login expirou. Cancele esta tentativa e comece novamente.",
 	"accountsManager.tokenAccount": "Token de login de {{provider}} ({{id}})",
 	"accountsManager.credentials.wrongMethod": "Tokens de login não são chaves de API. Use o login nativo em Harnesses. Isso não conecta uma conta gerenciada; perfis nativos de token isolados ainda não estão disponíveis.",
 	"accountsManager.credentials.keyFormHint": "Use uma chave de API, não um token de configuração. Deixe a URL base vazia para usar o padrão do provedor. Use uma URL personalizada somente para um destino confiável.",

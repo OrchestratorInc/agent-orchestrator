@@ -1,4 +1,9 @@
 {
+	"accountsManager.browser.link": "Anmeldelink",
+	"accountsManager.browser.open": "Anmeldeseite öffnen",
+	"accountsManager.browser.copy": "Anmeldelink kopieren",
+	"accountsManager.browser.openFailed": "Der Browser konnte nicht geöffnet werden. Öffne oder kopiere den Anmeldelink, um fortzufahren.",
+	"accountsManager.browser.linkExpired": "Dieser Anmeldelink ist abgelaufen. Brich diesen Versuch ab und starte erneut.",
 	"accountsManager.tokenAccount": "{{provider}} Anmeldetoken ({{id}})",
 	"accountsManager.credentials.wrongMethod": "Anmeldetoken sind keine API-Schlüssel. Verwenden Sie die native Anmeldung unter Harnesses. Dadurch wird kein verwaltetes Konto verbunden; isolierte native Tokenprofile sind noch nicht verfügbar.",
 	"accountsManager.credentials.keyFormHint": "Verwenden Sie einen API-Schlüssel, kein Setup-Token. Lassen Sie die Basis-URL für den Anbieterstandard leer. Verwenden Sie eine eigene URL nur für einen vertrauenswürdigen Endpunkt.",

@@ -1,4 +1,9 @@
 {
+	"accountsManager.browser.link": "Sign-in link",
+	"accountsManager.browser.open": "Open sign-in page",
+	"accountsManager.browser.copy": "Copy sign-in link",
+	"accountsManager.browser.openFailed": "Could not open your browser. Open or copy the sign-in link to continue.",
+	"accountsManager.browser.linkExpired": "This sign-in link has expired. Cancel this attempt and start again.",
 	"accountsManager.tokenAccount": "{{provider}} sign-in token ({{id}})",
 	"accountsManager.credentials.wrongMethod": "Sign-in tokens are not API keys. Use native sign-in in Harnesses. This does not connect a managed account; isolated native-token profiles are not available yet.",
 	"accountsManager.credentials.keyFormHint": "Use an API key, not a setup token. Leave Base URL empty for the provider default; use a custom URL only for an endpoint you trust.",

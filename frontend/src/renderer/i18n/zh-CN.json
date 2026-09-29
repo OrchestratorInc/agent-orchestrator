@@ -1,4 +1,9 @@
 {
+	"accountsManager.browser.link": "登录链接",
+	"accountsManager.browser.open": "打开登录页面",
+	"accountsManager.browser.copy": "复制登录链接",
+	"accountsManager.browser.openFailed": "无法打开浏览器。请打开或复制登录链接以继续。",
+	"accountsManager.browser.linkExpired": "此登录链接已过期。请取消此次尝试并重新开始。",
 	"accountsManager.tokenAccount": "{{provider}} 登录令牌 ({{id}})",
 	"accountsManager.credentials.wrongMethod": "登录令牌不是 API 密钥。请在 Harnesses 中使用原生登录。这不会连接托管账户；隔离的原生令牌配置尚不可用。",
 	"accountsManager.credentials.keyFormHint": "请使用 API 密钥，而非设置令牌。将基础 URL 留空即可使用提供方默认地址。仅对可信端点使用自定义 URL。",

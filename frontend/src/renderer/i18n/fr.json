@@ -1,4 +1,9 @@
 {
+	"accountsManager.browser.link": "Lien de connexion",
+	"accountsManager.browser.open": "Ouvrir la page de connexion",
+	"accountsManager.browser.copy": "Copier le lien de connexion",
+	"accountsManager.browser.openFailed": "Impossible d'ouvrir le navigateur. Ouvrez ou copiez le lien de connexion pour continuer.",
+	"accountsManager.browser.linkExpired": "Ce lien de connexion a expiré. Annulez cette tentative et recommencez.",
 	"accountsManager.tokenAccount": "Jeton de connexion {{provider}} ({{id}})",
 	"accountsManager.credentials.wrongMethod": "Les jetons de connexion ne sont pas des clés API. Utilisez la connexion native dans Harnesses. Cela ne connecte pas de compte géré ; les profils natifs de jetons isolés ne sont pas encore disponibles.",
 	"accountsManager.credentials.keyFormHint": "Utilisez une clé API, pas un jeton de configuration. Laissez l'URL de base vide pour utiliser celle du fournisseur. N'indiquez une URL personnalisée que pour une destination de confiance.",

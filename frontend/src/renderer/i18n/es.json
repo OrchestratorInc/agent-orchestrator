@@ -1,4 +1,9 @@
 {
+	"accountsManager.browser.link": "Enlace de inicio de sesión",
+	"accountsManager.browser.open": "Abrir página de inicio de sesión",
+	"accountsManager.browser.copy": "Copiar enlace de inicio de sesión",
+	"accountsManager.browser.openFailed": "No se pudo abrir el navegador. Abre o copia el enlace de inicio de sesión para continuar.",
+	"accountsManager.browser.linkExpired": "Este enlace ha caducado. Cancela este intento y vuelve a empezar.",
 	"accountsManager.tokenAccount": "Token de inicio de sesión de {{provider}} ({{id}})",
 	"accountsManager.credentials.wrongMethod": "Los tokens de inicio de sesión no son claves API. Use el inicio de sesión nativo en Harnesses. Esto no conecta una cuenta administrada; los perfiles nativos de token aislados aún no están disponibles.",
 	"accountsManager.credentials.keyFormHint": "Use una clave API, no un token de configuración. Deje la URL base vacía para usar la predeterminada del proveedor; use una URL personalizada solo para un destino de confianza.",

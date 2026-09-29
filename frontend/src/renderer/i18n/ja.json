@@ -1,4 +1,9 @@
 {
+	"accountsManager.browser.link": "サインインリンク",
+	"accountsManager.browser.open": "サインインページを開く",
+	"accountsManager.browser.copy": "サインインリンクをコピー",
+	"accountsManager.browser.openFailed": "ブラウザーを開けませんでした。サインインリンクを開くかコピーして続行してください。",
+	"accountsManager.browser.linkExpired": "このサインインリンクの有効期限が切れました。この試行をキャンセルして、やり直してください。",
 	"accountsManager.tokenAccount": "{{provider}} サインイントークン ({{id}})",
 	"accountsManager.credentials.wrongMethod": "サインイントークンは API キーではありません。Harnesses でネイティブのサインインを使用してください。管理アカウントは接続されません。分離されたネイティブトークンプロファイルはまだ利用できません。",
 	"accountsManager.credentials.keyFormHint": "セットアップトークンではなく API キーを使用してください。プロバイダーの既定 URL を使う場合はベース URL を空欄にしてください。カスタム URL は信頼できる接続先にのみ使用してください。",

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nextProvider } from "react-i18next";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -64,13 +64,15 @@ vi.mock("../../hooks/useAccountsManagerQuery", async () => {
 });
 
 function renderSection(locale: AppLocale = "en", client = new QueryClient()) {
-  return render(
+  const tree = () => (
     <I18nextProvider i18n={createAppI18n(locale)}>
       <QueryClientProvider client={client}>
         <AccountsManagerSection />
       </QueryClientProvider>
-    </I18nextProvider>,
+    </I18nextProvider>
   );
+  const view = render(tree());
+  return { ...view, refresh: () => view.rerender(tree()) };
 }
 
 describe("AccountsManagerSection", () => {
@@ -170,7 +172,7 @@ describe("AccountsManagerSection", () => {
   it.each(["pending", "pruned"])("separates cancellation acknowledgement from %s sign-in status and keeps saved accounts", async state => {
     mocks.snapshot.accounts = [{ id: "saved-a", provider: "codex", kind: "api_key", label: "Work", status: "active", verification: "verified", generation: 4, cooldowns: [] }];
     mocks.snapshot.oauthSessions = state === "pending" ? [{ id: "login-a", provider: "codex", status: "pending" }] : [];
-    mocks.startOAuth.mockResolvedValue({ id: "login-a", authorizationUrl: "https://provider.example/login" });
+    mocks.startOAuth.mockResolvedValue({ id: "login-a", authorizationUrl: "https://provider.example/login", provider: "codex", mode: "device", status: "pending", userCode: "ABCD-EFGH", expiresAt: new Date(Date.now() + 600_000).toISOString() });
     mocks.openExternal.mockResolvedValue(undefined);
     renderSection();
     if (state === "pruned") {
@@ -375,26 +377,38 @@ describe("AccountsManagerSection", () => {
     },
   );
 
-  it("cancels the OAuth operation if the browser cannot be opened", async () => {
+  it.each(["callback", "device"])("keeps the accepted %s operation recoverable when the browser opener fails before inventory arrives", async mode => {
+    const authorizationUrl = "https://auth.example.test/authorize?state=public-fixture";
     mocks.startOAuth.mockResolvedValue({
       id: "safe-operation",
-      authorizationUrl: "https://auth.example.test",
+      authorizationUrl,
       provider: "codex",
       status: "pending",
+      mode,
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+      ...(mode === "device" ? { userCode: "ABCD-EFGH" } : {}),
     });
-    mocks.openExternal.mockRejectedValue(new Error("no browser"));
+    mocks.openExternal.mockRejectedValueOnce(new Error("private opener details")).mockResolvedValue(undefined);
     renderSection();
     fireEvent.click(screen.getByRole("button", { name: "Add codex account" }));
-    fireEvent.click(screen.getByRole("button", { name: "Browser sign-in" }));
+    if (mode === "callback") fireEvent.click(screen.getByRole("button", { name: "Browser sign-in" }));
     fireEvent.click(
-      screen.getByRole("button", { name: "Continue in browser" }),
+      screen.getByRole("button", { name: mode === "callback" ? "Continue in browser" : "Continue with device code" }),
     );
+    expect(await screen.findByLabelText("Sign-in link")).toHaveValue(authorizationUrl);
+    expect(screen.getByText("Could not open your browser. Open or copy the sign-in link to continue.")).toBeInTheDocument();
+    expect(screen.queryByText("private opener details")).not.toBeInTheDocument();
+    expect(mocks.cancelOAuth).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Open sign-in page" }));
+    await waitFor(() => expect(mocks.openExternal).toHaveBeenCalledTimes(2));
+    expect(mocks.openExternal).toHaveBeenLastCalledWith(authorizationUrl);
+    expect(mocks.startOAuth).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(mocks.cancelOAuth).toHaveBeenCalledTimes(1));
     expect(mocks.cancelOAuth).toHaveBeenCalledWith("safe-operation");
-    expect(
-      await screen.findByText("Could not start sign-in. Try again."),
-    ).toBeInTheDocument();
-    expect(mocks.startOAuth).toHaveBeenCalledWith("codex", "callback");
+    await waitFor(() => expect(screen.queryByLabelText("Sign-in link")).not.toBeInTheDocument());
+    expect(screen.queryByText("Sign-in cancelled")).not.toBeInTheDocument();
+    expect(mocks.startOAuth).toHaveBeenCalledWith("codex", mode);
   });
 
   it("starts Codex device sign-in by default", async () => {
@@ -418,6 +432,63 @@ describe("AccountsManagerSection", () => {
     expect(mocks.openExternal).toHaveBeenCalledWith(
       "https://auth.openai.com/codex/device",
     );
+  });
+
+  it.each([undefined, "file:///private/secret", "http://example.test/login", "https://user:password@example.test/login"])("rejects an unusable authorization link before the browser handoff: %s", async authorizationUrl => {
+    mocks.startOAuth.mockResolvedValue({ id: "invalid-link", authorizationUrl, provider: "codex", mode: "callback", status: "pending", expiresAt: new Date(Date.now() + 600_000).toISOString() });
+    mocks.openExternal.mockResolvedValue(undefined);
+    renderSection();
+    fireEvent.click(screen.getByRole("button", { name: "Add codex account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Browser sign-in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue in browser" }));
+    await waitFor(() => expect(mocks.cancelOAuth).toHaveBeenCalledWith("invalid-link"));
+    expect(mocks.openExternal).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Sign-in link")).not.toBeInTheDocument();
+    expect(await screen.findByText("Could not start sign-in. Try again.")).toBeInTheDocument();
+  });
+
+  it.each(["completed", "failed", "expired"])("retires a transient link on a rounded-equal %s observation and never resurrects it after pruning", async status => {
+    const session = { id: "local-start", provider: "codex", mode: "callback", status: "pending", authorizationUrl: "https://provider.example/login", expiresAt: new Date(Date.now() + 600_000).toISOString() };
+    mocks.snapshot.revision = Number.MAX_SAFE_INTEGER + 1;
+    mocks.startOAuth.mockResolvedValue(session);
+    mocks.openExternal.mockRejectedValue(new Error("private opener details"));
+    const view = renderSection();
+    fireEvent.click(screen.getByRole("button", { name: "Add codex account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Browser sign-in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue in browser" }));
+    expect(await screen.findByLabelText("Sign-in link")).toHaveValue(session.authorizationUrl);
+    mocks.snapshot = { ...mocks.snapshot, oauthSessions: [{ ...session, status }] };
+    view.refresh();
+    await waitFor(() => expect(screen.queryByLabelText("Sign-in link")).not.toBeInTheDocument());
+    mocks.snapshot = { ...mocks.snapshot, oauthSessions: [] };
+    view.refresh();
+    expect(screen.queryByLabelText("Sign-in link")).not.toBeInTheDocument();
+    expect(mocks.cancelOAuth).not.toHaveBeenCalled();
+    expect(mocks.startOAuth).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not unlock a new sign-in when a cancelled operation's browser handoff returns late", async () => {
+    let finishOpen!: () => void;
+    let finishStart!: (session: object) => void;
+    const session = { id: "old-operation", provider: "codex", mode: "callback", status: "pending", authorizationUrl: "https://provider.example/login", expiresAt: new Date(Date.now() + 600_000).toISOString() };
+    mocks.startOAuth.mockResolvedValueOnce(session).mockReturnValueOnce(new Promise(resolve => { finishStart = resolve; }));
+    mocks.openExternal.mockReturnValueOnce(new Promise<void>(resolve => { finishOpen = resolve; })).mockResolvedValue(undefined);
+    renderSection();
+    const start = () => {
+      fireEvent.click(screen.getByRole("button", { name: "Add codex account" }));
+      fireEvent.click(screen.getByRole("button", { name: "Browser sign-in" }));
+      fireEvent.click(screen.getByRole("button", { name: "Continue in browser" }));
+    };
+    start();
+    await waitFor(() => expect(mocks.openExternal).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument());
+    start();
+    expect(screen.getByRole("button", { name: "Continue in browser" })).toBeDisabled();
+    await act(async () => finishOpen());
+    expect(screen.getByRole("button", { name: "Continue in browser" })).toBeDisabled();
+    expect(mocks.startOAuth).toHaveBeenCalledTimes(2);
+    await act(async () => finishStart({ ...session, id: "new-operation" }));
   });
 
   it("shows the pending device code inline", () => {
@@ -452,7 +523,7 @@ describe("AccountsManagerSection", () => {
     fireEvent.change(input, { target: { value: "secret-value" } });
     fireEvent.click(screen.getByRole("button", { name: "Add account" }));
     await waitFor(() => expect(mocks.addKey).toHaveBeenCalled());
-    expect(input.value).toBe("");
+    await waitFor(() => expect(input.value).toBe(""));
   });
 
   it("requires an explicit default instead of choosing available accounts", async () => {
