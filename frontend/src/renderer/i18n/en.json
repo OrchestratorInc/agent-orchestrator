@@ -674,7 +674,6 @@
 	"notify.loadFailed": "Could not load notifications.",
 	"notify.loading": "Loading notifications…",
 	"notify.loadingEarlier": "Loading earlier notifications…",
-	"notify.markCloudRead": "Mark cloud read",
 	"notify.openPR": "Open pull request",
 	"notify.openSessionTitle": "Open session",
 	"notify.retry": "Retry",

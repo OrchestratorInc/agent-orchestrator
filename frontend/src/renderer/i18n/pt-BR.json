@@ -699,7 +699,6 @@
 	"notify.loading": "Carregando notificações…",
 	"notify.loadingUnread": "Carregando notificações não lidas…",
 	"notify.loadingEarlier": "Carregando notificações anteriores…",
-	"notify.markCloudRead": "Marcar notificações da nuvem como lidas",
 	"notify.markAllRead": "Marcar todas as notificações como lidas",
 	"notify.markAllReadShort": "Marcar todas como lidas",
 	"notify.markRead": "Marcar como lida",

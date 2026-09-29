@@ -696,7 +696,6 @@
 	"notify.loading": "通知を読み込み中…",
 	"notify.loadingUnread": "未読通知を読み込み中…",
 	"notify.loadingEarlier": "以前の通知を読み込み中…",
-	"notify.markCloudRead": "クラウド通知を既読にする",
 	"notify.markAllRead": "すべての通知を既読にする",
 	"notify.markAllReadShort": "すべて既読",
 	"notify.markRead": "既読にする",

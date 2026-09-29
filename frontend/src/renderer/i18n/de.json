@@ -696,7 +696,6 @@
 	"notify.loading": "Benachrichtigungen werden geladen…",
 	"notify.loadingUnread": "Ungelesene Benachrichtigungen werden geladen…",
 	"notify.loadingEarlier": "Frühere Benachrichtigungen werden geladen…",
-	"notify.markCloudRead": "Cloud-Benachrichtigungen als gelesen markieren",
 	"notify.markAllRead": "Alle Benachrichtigungen als gelesen markieren",
 	"notify.markAllReadShort": "Alle als gelesen",
 	"notify.markRead": "Als gelesen markieren",

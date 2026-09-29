@@ -691,7 +691,6 @@
 	"notify.loadFailed": "无法加载通知。",
 	"notify.loading": "正在加载通知…",
 	"notify.loadingEarlier": "正在加载更早的通知…",
-	"notify.markCloudRead": "将云端通知标记为已读",
 	"notify.openPR": "打开拉取请求",
 	"notify.openSessionTitle": "打开会话",
 	"notify.retry": "重试",
