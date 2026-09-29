@@ -294,7 +294,7 @@ function DesktopStatusRow() {
 	// Same rule as the board's failure copy: a dead tunnel with nothing else to
 	// reach the machine by is a rotated address, not an unreachable machine.
 	const failure =
-		classified === "unreachable" && tunnelMayHaveRotated(activeEndpoints, connection === "open")
+		classified === "unreachable" && tunnelMayHaveRotated(activeEndpoints, config?.endpointKind, connection === "open")
 			? "tunnel-rotated"
 			: classified ?? (paired && !config && !loading ? "unreachable" : null);
 	const status = describeDesktopStatus({ configured: paired, connection, failure });
@@ -388,6 +388,7 @@ function LayoutGridRow() {
 
 function AppearanceRow() {
 	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
 	const { preference, scheme, setPreference } = useThemeState();
 	const [open, setOpen] = useState(false);
 	if (Platform.OS === "android") {
@@ -410,21 +411,23 @@ function AppearanceRow() {
 			icon="sun"
 			label="Appearance"
 			right={
-				<Host style={{ width: 124, height: 38 }} colorScheme={scheme} seedColor={t.accent}>
-					<Picker
-						selectedValue={preference}
-						onValueChange={(value) => {
-							haptics.select();
-							setPreference(String(value) as ThemePreference);
-						}}
-						appearance="menu"
-						testID="settings-appearance"
-					>
-						<Picker.Item label="System" value="system" />
-						<Picker.Item label="Light" value="light" />
-						<Picker.Item label="Dark" value="dark" />
-					</Picker>
-				</Host>
+				<View style={styles.appearancePicker}>
+					<Host matchContents={{ horizontal: true }} style={{ height: 38 }} colorScheme={scheme} seedColor={t.accent}>
+						<Picker
+							selectedValue={preference}
+							onValueChange={(value) => {
+								haptics.select();
+								setPreference(String(value) as ThemePreference);
+							}}
+							appearance="menu"
+							testID="settings-appearance"
+						>
+							<Picker.Item label="System" value="system" />
+							<Picker.Item label="Light" value="light" />
+							<Picker.Item label="Dark" value="dark" />
+						</Picker>
+					</Host>
+				</View>
 			}
 		/>
 	);
@@ -713,6 +716,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	rowIcon: { fontFamily: "Geist_400Regular", width: 26, textAlign: "center" },
 	rowLabel: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600", flex: 1 },
 	rowValue: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, maxWidth: "42%" },
+	appearancePicker: { width: 124, height: 38, alignItems: "flex-end", justifyContent: "center" },
 	disabled: { opacity: 0.45 },
 	disconnect: { minHeight: 52, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md, borderRadius: 16, borderCurve: "continuous" },
 	disconnectText: { fontFamily: "Geist_600SemiBold", color: t.red, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
