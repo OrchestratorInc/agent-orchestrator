@@ -1,5 +1,5 @@
 // agent-orchestrator: managed opencode-v2 activity plugin (do not edit)
-import { spawnSync } from "node:child_process"
+import { spawn } from "node:child_process"
 import { Plugin } from "@opencode/plugin"
 
 const HOOK_TIMEOUT_MS = 1_250
@@ -11,19 +11,35 @@ export default Plugin.define({
     const seenSessions = new Set()
     const controller = new AbortController()
 
+    let queue = Promise.resolve()
+
+    function send(event, sessionID, payload) {
+      return new Promise((resolve) => {
+        try {
+          const child = spawn("ao", ["hooks", "opencode-v2", event], {
+            cwd: context.location.directory,
+            env: { ...process.env, AO_RUNTIME_LAUNCH_ID: launchID },
+            stdio: ["pipe", "ignore", "ignore"],
+          })
+          const timer = setTimeout(() => child.kill(), HOOK_TIMEOUT_MS)
+          const done = () => {
+            clearTimeout(timer)
+            resolve()
+          }
+          child.on("error", done)
+          child.on("close", done)
+          child.stdin.on("error", () => {})
+          child.stdin.end(JSON.stringify({ ...payload, session_id: sessionID, launch_id: launchID }) + "\n")
+        } catch {
+          resolve()
+        }
+      })
+    }
+
+    // Activity is observational: report in order but asynchronously so it never blocks OpenCode.
     function report(event, sessionID, payload = {}) {
       if (!sessionID) return
-      try {
-        spawnSync("ao", ["hooks", "opencode-v2", event], {
-          cwd: context.location.directory,
-          env: { ...process.env, AO_RUNTIME_LAUNCH_ID: launchID },
-          input: JSON.stringify({ ...payload, session_id: sessionID, launch_id: launchID }) + "\n",
-          timeout: HOOK_TIMEOUT_MS,
-          stdio: ["pipe", "ignore", "ignore"],
-        })
-      } catch {
-        // Activity is observational. It must never fail the OpenCode session.
-      }
+      queue = queue.then(() => send(event, sessionID, payload))
     }
 
     function ensureSession(sessionID) {
@@ -84,6 +100,7 @@ export default Plugin.define({
 
     return async () => {
       controller.abort()
+      await queue
       await Promise.allSettled(registrations.map((registration) => registration.dispose()))
       await eventLoop
     }

@@ -1461,6 +1461,7 @@
 	"startup.installTmux": "Installer tmux",
 	"startup.installingCommand": "Installation en cours — {{command}}",
 	"startup.installingEllipsis": "Installation en cours…",
+	"startup.installOpencodeV2ReplacementWarning": "Installer OpenCode 2 comme commande opencode par défaut remplace l'installation par défaut d'OpenCode 1.",
 	"startup.loadingWorkspaces": "Chargement des espaces de travail",
 	"startup.preparingBoard": "Préparation de votre tableau",
 	"startup.quit": "Quitter",

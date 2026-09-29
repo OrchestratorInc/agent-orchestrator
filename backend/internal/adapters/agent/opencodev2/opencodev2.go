@@ -18,8 +18,10 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
+// Plugin is the OpenCode 2 TUI agent adapter.
 type Plugin struct{ agentbase.Base }
 
+// New returns an OpenCode 2 adapter.
 func New() *Plugin { return &Plugin{} }
 
 var _ adapters.Adapter = (*Plugin)(nil)
@@ -28,10 +30,12 @@ var _ ports.AgentAuthChecker = (*Plugin)(nil)
 var _ ports.AgentBinaryResolver = (*Plugin)(nil)
 var _ ports.SemanticMessageAcceptanceSignaler = (*Plugin)(nil)
 
+// Manifest describes the adapter.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{ID: string(domain.HarnessOpenCodeV2), Name: "OpenCode 2", Description: "Run OpenCode 2 worker sessions.", Version: "0.0.1", Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
 }
 
+// EmitsSemanticMessageAcceptance reports that hooks signal message acceptance.
 func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
 
 // ResolveBinary resolves the shared opencode executable and requires the v2
@@ -41,10 +45,12 @@ func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return opencode.ResolveBinaryForMajor(ctx, 2)
 }
 
+// GetConfigSpec returns the model override spec.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Model override for the OpenCode 2 session agent.")
 }
 
+// GetLaunchCommand builds the OpenCode 2 launch argv.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	binary, err := opencode.ResolveBinaryForMajor(ctx, 2)
 	if err != nil {
@@ -53,6 +59,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return command(ctx, binary, cfg, "")
 }
 
+// GetRestoreCommand builds the OpenCode 2 restore argv.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -144,7 +151,9 @@ func prepareConfigContent(existing, sessionID, prompt, model string, mode ports.
 		}
 	}
 	agent["mode"] = "primary"
-	agent["system"] = prompt
+	if prompt != "" {
+		agent["system"] = prompt
+	}
 	delete(agent, "model")
 	if model != "" {
 		agent["model"] = model
@@ -260,6 +269,7 @@ func aoAgentName(sessionID string) string {
 	return "ao-" + name
 }
 
+// SessionInfo returns the standard session info.
 func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
@@ -268,7 +278,7 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
-// V2 reports authenticated integrations, including environment connections.
+// AuthStatus reports authenticated integrations, including environment connections.
 // Keep this probe private so readiness never starts/replaces a shared service.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	binary, err := opencode.ResolveBinaryForMajor(ctx, 2)

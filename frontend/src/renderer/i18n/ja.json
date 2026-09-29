@@ -1438,6 +1438,7 @@
 	"startup.installTmux": "tmux をインストール",
 	"startup.installingCommand": "インストール中 — {{command}}",
 	"startup.installingEllipsis": "インストール中…",
+	"startup.installOpencodeV2ReplacementWarning": "OpenCode 2 を既定の opencode コマンドとしてインストールすると、既定の OpenCode 1 が置き換えられます。",
 	"startup.loadingWorkspaces": "ワークスペースを読み込み中",
 	"startup.preparingBoard": "ボードを準備中",
 	"startup.quit": "終了",
