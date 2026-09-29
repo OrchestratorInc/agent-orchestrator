@@ -67,6 +67,9 @@ export type SpawnOptions = {
 type AppState = {
 	config: ServerConfig | null;
 	configured: boolean;
+	/** Whether the first config resolution has finished. Until it has, an
+	 *  unconfigured store means "still finding the machine", not "unpaired". */
+	configResolved: boolean;
 	/** Every way the active machine says it can be reached, for telling a
 	 *  rotated tunnel hostname apart from being simply out of range. */
 	activeEndpoints: Endpoint[];
@@ -589,6 +592,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		() => ({
 			config,
 			configured: !!config && isConfigured(config),
+			configResolved,
 			activeEndpoints,
 			projects,
 			projectsKnown,
@@ -619,6 +623,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		}),
 		[
 			config,
+			configResolved,
 			projects,
 			projectsKnown,
 			sessions,
