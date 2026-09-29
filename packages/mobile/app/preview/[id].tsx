@@ -1,5 +1,5 @@
 import { Feather } from "../../lib/icons";
-import { useLocalSearchParams, useNavigation } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useNavigation } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, AppState, Linking, Platform, Pressable, Share, StyleSheet, Text, View } from "react-native";
 import { WebView, type WebViewMessageEvent, type WebViewNavigation } from "react-native-webview";
@@ -180,7 +180,7 @@ export default function SessionPreviewScreen() {
 		pending.resolve({ ok: false, error: { code: "BROWSER_COMMAND_CANCELLED", message: "Browser command was cancelled." } });
 	}, []);
 
-	useEffect(() => {
+	useFocusEffect(useCallback(() => {
 		if (!config || !id) return;
 		let disposed = false;
 		let client: MobileBrowserRuntimeClient | null = null;
@@ -214,7 +214,7 @@ export default function SessionPreviewScreen() {
 				navigation.resolve({ ok: false, error: { code: "BROWSER_TARGET_UNAVAILABLE", message: "The mobile browser closed." } });
 			}
 		};
-	}, [cancelAgentCommand, config, executeAgentCommand, id]);
+	}, [cancelAgentCommand, config, executeAgentCommand, id]));
 
 	const onBridgeMessage = useCallback((event: WebViewMessageEvent) => {
 		const appearance = parseBrowserContentAppearance(event.nativeEvent.data);
