@@ -70,11 +70,16 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 	const hostKey = host.id === "" ? outcome.hostId : host.id;
 
 	try {
+		const advertised = await deps.refreshEndpoints(config);
+		// The daemon cannot advertise a client-side NAT or proxy address that just worked.
+		const refreshed = advertised.some((e) => e.kind === outcome.endpoint.kind) &&
+			!advertised.some((e) => e.kind === outcome.endpoint.kind && e.host === outcome.endpoint.host && e.port === outcome.endpoint.port && e.secure === outcome.endpoint.secure)
+			? [...advertised, outcome.endpoint] : advertised;
 		// Merged, not replaced: a kind the daemon omits — a tunnel mid-restart,
 		// above all — is unknown rather than gone. See mergeEndpoints.
 		await deps.saveEndpoints(
 			hostKey,
-			mergeEndpoints(host.endpoints, await deps.refreshEndpoints(config)),
+			mergeEndpoints(host.endpoints, refreshed),
 		);
 	} catch {
 		// A failed refresh must not cost us a working connection: the endpoints
