@@ -2,17 +2,20 @@ import * as Clipboard from "expo-clipboard";
 import { Feather } from "../../lib/icons";
 import { useLocalSearchParams, useNavigation } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Linking, Pressable, Share, StyleSheet, Text, View } from "react-native";
-import { WebView, type WebViewNavigation } from "react-native-webview";
+import { ActivityIndicator, AppState, Linking, Pressable, Share, StyleSheet, Text, View } from "react-native";
+import { WebView, type WebViewMessageEvent, type WebViewNavigation } from "react-native-webview";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getPreview } from "../../lib/api";
 import { authHeaders } from "../../lib/config";
 import { BrowserErrorBanner } from "../../lib/browser/BrowserErrorBanner";
 import { BrowserToolbar } from "../../lib/browser/BrowserToolbar";
+import { bridgeResult, browserCommandScript, MOBILE_BROWSER_BOOTSTRAP, parseBrowserBridgeMessage } from "../../lib/browser/mobileBrowserBridge";
+import { MobileBrowserRuntimeClient, type MobileBrowserCommand, type MobileBrowserCommandResult } from "../../lib/browser/mobileBrowserRuntime";
 import { inAppWebNavigation, isHttpUrl, normalizeBrowserInput, shouldAttachPreviewAuth } from "../../lib/browser/browserUrl";
 import { browserLoadEnd, browserLoadError, browserLoadStart, browserNavigationChanged, initialBrowserState, type MobileBrowserState } from "../../lib/browser/browserState";
 import { headerActionStyle, headerGlyphStyle } from "../../lib/headerAction";
 import { haptics } from "../../lib/haptics";
+import { getInstallId } from "../../lib/installId";
 import { useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
@@ -35,7 +38,15 @@ export default function SessionPreviewScreen() {
 	const [loading, setLoading] = useState(true);
 	const [discoveryError, setDiscoveryError] = useState<string>();
 	const [toast, setToast] = useState<string>();
+	const [runtimeConnected, setRuntimeConnected] = useState(false);
+	const [agentActive, setAgentActive] = useState(false);
+	const [controlEnabled, setControlEnabled] = useState(true);
 	const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const runtime = useRef<MobileBrowserRuntimeClient | null>(null);
+	const commandResults = useRef(new Map<string, {
+		resolve: (result: MobileBrowserCommandResult) => void;
+		timer: ReturnType<typeof setTimeout>;
+	}>());
 
 	const showToast = useCallback((message: string) => {
 		setToast(message);
@@ -99,6 +110,77 @@ export default function SessionPreviewScreen() {
 		setBrowserState((current) => browserLoadStart({ ...current, url }, url));
 	}, [config]);
 
+	const executeAgentCommand = useCallback((command: MobileBrowserCommand): Promise<MobileBrowserCommandResult> => {
+		if (command.action === "open") {
+			const url = typeof command.args?.url === "string" ? command.args.url : "";
+			if (!url) return Promise.resolve({ ok: false, error: { code: "URL_REQUIRED", message: "A URL is required." } });
+			const normalized = config ? normalizeBrowserInput(url, config.host) : undefined;
+			if (!normalized?.ok) return Promise.resolve({ ok: false, error: { code: "INVALID_URL", message: normalized?.message ?? "Browser is not connected." } });
+			navigateTo(normalized.url.href);
+			return Promise.resolve({ ok: true, result: { url: normalized.url.href } });
+		}
+		if (!web.current) return Promise.resolve({ ok: false, error: { code: "BROWSER_TARGET_UNAVAILABLE", message: "The mobile browser page is not ready." } });
+		return new Promise((resolve) => {
+			const timer = setTimeout(() => {
+				commandResults.current.delete(command.requestId);
+				resolve({ ok: false, error: { code: "BROWSER_COMMAND_TIMEOUT", message: "The mobile browser did not answer in time." } });
+			}, 55_000);
+			commandResults.current.set(command.requestId, { resolve, timer });
+			web.current?.injectJavaScript(browserCommandScript(command));
+		});
+	}, [config, navigateTo]);
+	const cancelAgentCommand = useCallback((requestId: string) => {
+		const pending = commandResults.current.get(requestId);
+		if (!pending) return;
+		commandResults.current.delete(requestId);
+		clearTimeout(pending.timer);
+		pending.resolve({ ok: false, error: { code: "BROWSER_COMMAND_CANCELLED", message: "Browser command was cancelled." } });
+	}, []);
+
+	useEffect(() => {
+		if (!config || !id) return;
+		let disposed = false;
+		let client: MobileBrowserRuntimeClient | null = null;
+		const sync = () => {
+			if (!client) return;
+			if (AppState.currentState === "active" && controlEnabled) client.start();
+			else client.stop();
+		};
+		void getInstallId().then((deviceId) => {
+			if (disposed) return;
+			client = new MobileBrowserRuntimeClient(config, id, deviceId, {
+				execute: executeAgentCommand,
+				onCancel: cancelAgentCommand,
+				onStatus: setRuntimeConnected,
+				onActivity: setAgentActive,
+			});
+			runtime.current = client;
+			sync();
+		});
+		const subscription = AppState.addEventListener("change", sync);
+		return () => {
+			disposed = true;
+			subscription.remove();
+			client?.stop();
+			if (runtime.current === client) runtime.current = null;
+			for (const pending of commandResults.current.values()) {
+				clearTimeout(pending.timer);
+				pending.resolve({ ok: false, error: { code: "BROWSER_TARGET_UNAVAILABLE", message: "The mobile browser closed." } });
+			}
+			commandResults.current.clear();
+		};
+	}, [cancelAgentCommand, config, controlEnabled, executeAgentCommand, id]);
+
+	const onBridgeMessage = useCallback((event: WebViewMessageEvent) => {
+		const message = parseBrowserBridgeMessage(event.nativeEvent.data);
+		if (!message) return;
+		const pending = commandResults.current.get(message.requestId);
+		if (!pending) return;
+		commandResults.current.delete(message.requestId);
+		clearTimeout(pending.timer);
+		pending.resolve(bridgeResult(message));
+	}, []);
+
 	const currentUrl = browserState.url || browserSource?.url || "";
 	const retry = useCallback(() => {
 		haptics.tap();
@@ -121,6 +203,10 @@ export default function SessionPreviewScreen() {
 
 	return <View style={styles.screen}>
 		<View style={styles.content}>
+			<Pressable accessibilityRole="switch" accessibilityLabel="Allow agent browser control" accessibilityState={{ checked: controlEnabled }} onPress={() => setControlEnabled((enabled) => !enabled)} style={[styles.agentStatus, agentActive && styles.agentStatusActive]}>
+				<View style={[styles.agentDot, !runtimeConnected && styles.agentDotOff, agentActive && styles.agentDotActive]} />
+				<Text style={styles.agentStatusText}>{!controlEnabled ? "Agent control off — tap to enable" : agentActive ? "Agent controlling this browser" : runtimeConnected ? "Ready for agent control" : "Connecting agent control…"}</Text>
+			</Pressable>
 			{!config || loading ? (
 				<View style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.copy}>Looking for a session preview…</Text></View>
 			) : browserSource ? (
@@ -136,6 +222,9 @@ export default function SessionPreviewScreen() {
 					originWhitelist={["*"]}
 					setSupportMultipleWindows={false}
 					applicationNameForUserAgent="Version/18.0 Mobile/15E148 Safari/604.1 AO/1.0"
+					injectedJavaScriptBeforeContentLoaded={MOBILE_BROWSER_BOOTSTRAP}
+					injectedJavaScript={MOBILE_BROWSER_BOOTSTRAP}
+					onMessage={onBridgeMessage}
 					startInLoadingState
 					renderLoading={() => <View style={styles.webLoading}><ActivityIndicator color={t.accent} /></View>}
 					onLoadStart={(event) => {
@@ -145,7 +234,7 @@ export default function SessionPreviewScreen() {
 						const nextUrl = event?.nativeEvent?.url;
 						setBrowserState((current) => browserLoadStart(current, nextUrl));
 					}}
-					onLoadEnd={() => setBrowserState(browserLoadEnd)}
+					onLoadEnd={() => { setBrowserState(browserLoadEnd); web.current?.injectJavaScript(MOBILE_BROWSER_BOOTSTRAP); }}
 					onNavigationStateChange={(event: WebViewNavigation | null) => {
 						if (!event) return;
 						const update = {
@@ -220,6 +309,12 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	retryText: { fontFamily: "Geist_600SemiBold", color: t.onAccent, fontSize: type.caption1.fontSize, fontWeight: "600" },
 	toast: { position: "absolute", alignSelf: "center", bottom: 150, borderRadius: 999, borderCurve: "continuous", backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderDefault, paddingHorizontal: space.md, paddingVertical: space.sm },
 	toastText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption1.fontSize, fontWeight: "600" },
+	agentStatus: { minHeight: 28, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, borderBottomWidth: 1, borderBottomColor: t.borderDefault, backgroundColor: t.bgSurface },
+	agentStatusActive: { backgroundColor: t.accentTint },
+	agentDot: { width: 7, height: 7, borderRadius: 999, backgroundColor: t.green },
+	agentDotOff: { backgroundColor: t.textFaint },
+	agentDotActive: { backgroundColor: t.accent },
+	agentStatusText: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.caption2.fontSize, fontWeight: "600" },
 });
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
