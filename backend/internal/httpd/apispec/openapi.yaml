@@ -9900,6 +9900,7 @@ components:
           - cursor
           - kilocode
           - opencode
+          - opencode-v2
           - kiro
           - pi
           - agy
@@ -13437,6 +13438,7 @@ components:
           - cursor
           - kilocode
           - opencode
+          - opencode-v2
           - kiro
           - pi
           - agy
@@ -13942,6 +13944,7 @@ components:
           - cursor
           - kilocode
           - opencode
+          - opencode-v2
           - kiro
           - pi
           - agy

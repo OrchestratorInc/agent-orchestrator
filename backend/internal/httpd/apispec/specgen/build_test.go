@@ -154,8 +154,8 @@ func TestBuild_OpenCodeV2HarnessContracts(t *testing.T) {
 		"TriggerReviewRequest":      "harness",
 	} {
 		values := doc.Components.Schemas[schema].Properties[field].Enum
-		if slices.Contains(values, "opencode-v2") {
-			t.Errorf("%s.%s enum = %v, OpenCode 2 must remain worker-only", schema, field, values)
+		if !slices.Contains(values, "opencode-v2") {
+			t.Errorf("%s.%s enum = %v, missing opencode-v2", schema, field, values)
 		}
 		if !slices.Contains(values, "opencode") {
 			t.Errorf("%s.%s enum = %v, missing existing opencode reviewer", schema, field, values)
