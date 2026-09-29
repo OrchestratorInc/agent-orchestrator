@@ -1,6 +1,9 @@
 import type { MobileBrowserCommand, MobileBrowserCommandResult } from "./mobileBrowserRuntime";
 
 const MESSAGE_KEY = "__aoMobileBrowser";
+const APPEARANCE_KEY = "__aoMobileBrowserAppearance";
+
+export type BrowserContentAppearance = "light" | "dark";
 
 export type BrowserBridgeMessage = {
 	__aoMobileBrowser: true;
@@ -9,6 +12,47 @@ export type BrowserBridgeMessage = {
 	result?: Record<string, unknown>;
 	error?: { code: string; message: string };
 };
+
+// Samples the rendered page rather than the AO theme so native glass can use
+// dark ink over bright pages and light ink over dark pages without a fixed tint.
+export const MOBILE_BROWSER_APPEARANCE_SCRIPT = `
+(function () {
+  function rgba(value) {
+    var match = String(value || '').match(/rgba?\\(([^)]+)\\)/i);
+    if (!match) return null;
+    var parts = match[1].split(',').map(Number);
+    if (parts.length < 3 || parts.some(function (part) { return !Number.isFinite(part); })) return null;
+    return { r: parts[0], g: parts[1], b: parts[2], a: parts.length > 3 ? parts[3] : 1 };
+  }
+  function report() {
+    var node = document.body, color = null;
+    while (node && !color) {
+      var candidate = rgba(window.getComputedStyle(node).backgroundColor);
+      if (candidate && candidate.a > 0.05) color = candidate;
+      node = node.parentElement;
+    }
+    var appearance = 'light';
+    if (color) {
+      function channel(value) { value /= 255; return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4); }
+      appearance = 0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b) < 0.42 ? 'dark' : 'light';
+    } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) appearance = 'dark';
+    window.ReactNativeWebView.postMessage(JSON.stringify({ ${JSON.stringify(APPEARANCE_KEY)}: appearance }));
+  }
+  report();
+  clearTimeout(window.__aoAppearanceTimer);
+  window.__aoAppearanceTimer = setTimeout(report, 250);
+  return true;
+})(); true;
+`;
+
+export function parseBrowserContentAppearance(raw: string): BrowserContentAppearance | undefined {
+	try {
+		const value = (JSON.parse(raw) as Record<string, unknown>)[APPEARANCE_KEY];
+		return value === "light" || value === "dark" ? value : undefined;
+	} catch {
+		return undefined;
+	}
+}
 
 // Installed in every document before its content loads. It intentionally uses
 // no eval and exposes only the bounded command vocabulary implemented below.

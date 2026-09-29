@@ -9,7 +9,7 @@ import { authHeaders } from "../../lib/config";
 import { BrowserErrorBanner } from "../../lib/browser/BrowserErrorBanner";
 import { BrowserToolbar } from "../../lib/browser/BrowserToolbar";
 import { executeMobileBrowserAct } from "../../lib/browser/mobileBrowserAct";
-import { bridgeResult, browserCommandScript, MOBILE_BROWSER_BOOTSTRAP, parseBrowserBridgeMessage } from "../../lib/browser/mobileBrowserBridge";
+import { bridgeResult, browserCommandScript, MOBILE_BROWSER_APPEARANCE_SCRIPT, MOBILE_BROWSER_BOOTSTRAP, parseBrowserBridgeMessage, parseBrowserContentAppearance, type BrowserContentAppearance } from "../../lib/browser/mobileBrowserBridge";
 import { MobileBrowserRuntimeClient, type MobileBrowserCommand, type MobileBrowserCommandResult } from "../../lib/browser/mobileBrowserRuntime";
 import { inAppWebNavigation, isHttpUrl, normalizeBrowserInput, shouldAttachPreviewAuth } from "../../lib/browser/browserUrl";
 import { browserLoadEnd, browserLoadError, browserLoadStart, browserNavigationChanged, initialBrowserState, type MobileBrowserState } from "../../lib/browser/browserState";
@@ -17,7 +17,7 @@ import { haptics } from "../../lib/haptics";
 import { getInstallId } from "../../lib/installId";
 import { useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
-import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
+import { useTheme, useThemeState, useThemedStyles } from "../../lib/ThemeProvider";
 import { iconSize, space, type } from "../../lib/tokens";
 
 type BrowserSource = { url: string; entry: string };
@@ -28,12 +28,14 @@ export default function SessionPreviewScreen() {
 	const navigation = useNavigation();
 	const { config } = useApp();
 	const t = useTheme();
+	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
 	const web = useRef<WebView>(null);
 	const [preview, setPreview] = useState<{ entry: string; url: string; authenticated: boolean } | null>(null);
 	const [browserSource, setBrowserSource] = useState<BrowserSource | null>(null);
 	const [browserState, setBrowserState] = useState<MobileBrowserState>(initialBrowserState);
+	const [contentAppearance, setContentAppearance] = useState<BrowserContentAppearance>(scheme);
 	const [loading, setLoading] = useState(true);
 	const [discoveryError, setDiscoveryError] = useState<string>();
 	const [toast, setToast] = useState<string>();
@@ -60,9 +62,10 @@ export default function SessionPreviewScreen() {
 		setPreview(null);
 		setBrowserSource(null);
 		setBrowserState(initialBrowserState);
+		setContentAppearance(scheme);
 		setLoading(true);
 		setDiscoveryError(undefined);
-	}, [id, previewUrl]);
+	}, [id, previewUrl, scheme]);
 
 	const refresh = useCallback(async () => {
 		if (!config || !id) return;
@@ -198,6 +201,11 @@ export default function SessionPreviewScreen() {
 	}, [cancelAgentCommand, config, executeAgentCommand, id]);
 
 	const onBridgeMessage = useCallback((event: WebViewMessageEvent) => {
+		const appearance = parseBrowserContentAppearance(event.nativeEvent.data);
+		if (appearance) {
+			setContentAppearance(appearance);
+			return;
+		}
 		const message = parseBrowserBridgeMessage(event.nativeEvent.data);
 		if (!message) return;
 		const pending = commandResults.current.get(message.requestId);
@@ -255,7 +263,7 @@ export default function SessionPreviewScreen() {
 					}}
 					onLoadEnd={(event) => {
 						setBrowserState(browserLoadEnd);
-						web.current?.injectJavaScript(MOBILE_BROWSER_BOOTSTRAP);
+						web.current?.injectJavaScript(`${MOBILE_BROWSER_BOOTSTRAP}\n${MOBILE_BROWSER_APPEARANCE_SCRIPT}`);
 						const navigation = pendingNavigation.current;
 						if (navigation?.started) {
 							pendingNavigation.current = null;
@@ -308,6 +316,7 @@ export default function SessionPreviewScreen() {
 			<BrowserToolbar
 				url={currentUrl}
 				title={browserState.title || preview?.entry}
+				contentColorScheme={contentAppearance}
 				loading={browserState.loading || loading}
 				canGoBack={browserState.canGoBack}
 				canGoForward={browserState.canGoForward}

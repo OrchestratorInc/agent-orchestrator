@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bridgeResult, browserCommandScript, parseBrowserBridgeMessage } from "./mobileBrowserBridge";
+import { bridgeResult, browserCommandScript, parseBrowserBridgeMessage, parseBrowserContentAppearance } from "./mobileBrowserBridge";
 
 describe("mobile browser bridge protocol", () => {
 	it("embeds commands as JSON rather than executable text", () => {
@@ -42,5 +42,11 @@ describe("mobile browser bridge protocol", () => {
 			ok: false,
 			error: { code: "STALE_REFERENCE", message: "snapshot again" },
 		});
+	});
+
+	it("accepts only valid page appearance reports", () => {
+		expect(parseBrowserContentAppearance(JSON.stringify({ __aoMobileBrowserAppearance: "light" }))).toBe("light");
+		expect(parseBrowserContentAppearance(JSON.stringify({ __aoMobileBrowserAppearance: "dark" }))).toBe("dark");
+		expect(parseBrowserContentAppearance(JSON.stringify({ __aoMobileBrowserAppearance: "sepia" }))).toBeUndefined();
 	});
 });

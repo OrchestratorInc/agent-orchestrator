@@ -17,9 +17,7 @@ export function BrowserGlassSurface({ shape }: { shape: "field" | "circle" }) {
 			<Host style={StyleSheet.absoluteFill} colorScheme={scheme} seedColor={t.accent}>
 				<Group modifiers={[
 					frame({ maxWidth: 2000, maxHeight: 2000 }),
-					// A theme tint keeps dark chrome legible over bright sites (and light
-					// chrome legible over dark sites) without replacing the live material.
-					shape === "circle" ? glassCircle(t.bgSurface, false) : glassPanel(22, t.bgSurface, false),
+					shape === "circle" ? glassCircle(undefined, false) : glassPanel(22, undefined, false),
 				]}>
 					<Spacer />
 				</Group>
