@@ -50,7 +50,6 @@ import { CopyButton } from "./chat/CopyButton";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import {
 	sessionScmSummaryQueryKey,
-	useSessionPRReferences,
 	useSessionScmSummary,
 	type SessionPRReference,
 	type SessionPRSummary,
@@ -345,7 +344,7 @@ const SummaryView = memo(function SummaryView({
 }) {
 	const { t } = useTranslation();
 	const query = useSessionScmSummary(session.id, true, session.cloud?.orgId, session.autoInjectCI === true);
-	const linkedPRs = useSessionPRReferences(session.id, !session.cloud?.orgId).data ?? [];
+	const linkedPRs = query.data?.linkedPrs ?? [];
 	const developerMode = useUiStore((state) => state.developerMode);
 	const usageQuery = useSessionUsage(session.id, developerMode);
 	const showUsage =
@@ -354,7 +353,7 @@ const SummaryView = memo(function SummaryView({
 		!usageQuery.isError &&
 		hasMeaningfulSessionUsage(usageQuery.data);
 	const showUsageError = developerMode && usageQuery.isError;
-	const prSummaries = sessionPRDisplaySummaries(session, query.data);
+	const prSummaries = sessionPRDisplaySummaries(session, query.data?.prs);
 	const prCount = prSummaries.length + linkedPRs.length;
 	const prSectionTitle = prCount > 1 ? t("inspector.pullRequests", { count: prCount }) : t("inspector.pullRequest");
 	const hasPRs = prCount > 0;
@@ -1704,7 +1703,7 @@ function ReviewsSection({
 	const reviewStates = reviewsQuery.data?.reviews ?? [];
 	const autoReviewEnabled = session.autoReviewEnabled === true;
 	const scmSummary = useSessionScmSummary(session.id, true, session.cloud?.orgId, session.autoInjectCI === true);
-	const prSummaries = sessionPRDisplaySummaries(session, scmSummary.data);
+	const prSummaries = sessionPRDisplaySummaries(session, scmSummary.data?.prs);
 	const githubReviews = prSummaries.filter(
 		(pr) =>
 			(pr.state === "open" || pr.state === "draft") &&

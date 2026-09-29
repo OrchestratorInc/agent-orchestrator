@@ -227,7 +227,6 @@ describe("createEventTransport", () => {
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-agent-switches"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-scm-summary"] }, { cancelRefetch: false });
-			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-pr-references"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-usage"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["editor-handoff"] }, { cancelRefetch: false });
 		} finally {
