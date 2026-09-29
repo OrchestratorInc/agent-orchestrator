@@ -420,21 +420,33 @@ func TestReconcilePendingStopResumesAtSourceStopping(t *testing.T) {
 	}
 }
 
-func TestReconcileDrainDecisionPendingFails(t *testing.T) {
-	store := &fakeStore{transitions: []postgres.CoordinatedInterfaceTransition{testTransition(domain.SessionInterfaceTransitionRequested)}}
-	driver := &fakeDriver{Inspection: SourceInspection{DecisionPending: true}}
-	err := newCoordinator(store, driver).ReconcileOnce(context.Background())
-	if err != nil {
-		t.Fatalf("expected decision-pending to be surfaced as a recovered failure, got err: %v", err)
-	}
-	if store.committed != "" {
-		t.Fatalf("no session interface should be committed on drain failure, got %q", store.committed)
-	}
-	if last := store.advances[len(store.advances)-1]; last != domain.SessionInterfaceTransitionFailed {
-		t.Fatalf("expected terminal phase failed, got %q", last)
-	}
-	if !store.heldMessagesReleased {
-		t.Fatal("expected prompts held during the usable source failure to be released atomically")
+func TestReconcileDrainWaitsForSourceToBecomeIdle(t *testing.T) {
+	for name, inspection := range map[string]SourceInspection{
+		"decision pending": {DecisionPending: true},
+		"draft present": {DraftPresent: true},
+		"quiescence unverified": {QuiescenceUnverified: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := &fakeStore{transitions: []postgres.CoordinatedInterfaceTransition{testTransition(domain.SessionInterfaceTransitionRequested)}}
+			driver := &fakeDriver{Inspection: inspection}
+			coordinator := newCoordinator(store, driver)
+			if err := coordinator.ReconcileOnce(context.Background()); err != nil {
+				t.Fatalf("reconcile while source is active: %v", err)
+			}
+			if got := store.transitions[0].Phase; got != domain.SessionInterfaceTransitionDraining {
+				t.Fatalf("phase while source is active = %q, want draining", got)
+			}
+			if store.committed != "" || store.heldMessagesReleased {
+				t.Fatalf("source was changed while waiting: committed=%q released=%t", store.committed, store.heldMessagesReleased)
+			}
+			driver.Inspection = SourceInspection{Idle: true}
+			if err := coordinator.ReconcileOnce(context.Background()); err != nil {
+				t.Fatalf("reconcile after source becomes idle: %v", err)
+			}
+			if got := store.transitions[0].Phase; got != domain.SessionInterfaceTransitionCompleted {
+				t.Fatalf("phase after source becomes idle = %q, want completed", got)
+			}
+		})
 	}
 }
 

@@ -31,6 +31,7 @@ const interfaceTransitionMock = vi.hoisted(() => ({
 }));
 const interfaceTransitionState = vi.hoisted(() => ({
 	starting: false,
+	startingPolicy: undefined as "drain" | "interrupt" | undefined,
 	settling: false,
 	startError: undefined as string | undefined,
 	status: undefined as SessionInterfaceTransitionStatus | undefined,
@@ -107,6 +108,7 @@ vi.mock("../hooks/useSessionInterfaceTransition", async (importOriginal) => ({
 		start: interfaceTransitionMock.start,
 		refreshStatus: interfaceTransitionMock.refreshStatus,
 		starting: interfaceTransitionState.starting,
+		startingPolicy: interfaceTransitionState.startingPolicy,
 		settling: interfaceTransitionState.settling,
 		startError: interfaceTransitionState.startError,
 		resetStartError: interfaceTransitionMock.resetStartError,
@@ -354,8 +356,8 @@ vi.mock("./chat/SessionChatSurface", async () => {
 });
 
 vi.mock("./chat/CloudSessionChatSurface", () => ({
-	CloudSessionChatSurface: ({ sessionTabAction }: { sessionTabAction?: ReactNode }) => (
-		<div data-testid="cloud-chat-surface">{sessionTabAction}</div>
+	CloudSessionChatSurface: ({ sessionTabAction, controllerTransitioning, newWorkDisabled }: { sessionTabAction?: ReactNode; controllerTransitioning?: boolean; newWorkDisabled?: boolean }) => (
+		<div data-testid="cloud-chat-surface" data-transitioning={controllerTransitioning ? "true" : "false"} data-new-work-disabled={newWorkDisabled ? "true" : "false"}>{sessionTabAction}</div>
 	),
 }));
 vi.mock("./chat/ReviewerChatSurface", () => ({
@@ -806,6 +808,7 @@ describe("SessionView", () => {
 		interfaceTransitionMock.cancel.mockReset();
 		interfaceTransitionMock.acknowledgeNotice.mockReset();
 		interfaceTransitionState.starting = false;
+		interfaceTransitionState.startingPolicy = undefined;
 		interfaceTransitionState.settling = false;
 		interfaceTransitionState.startError = undefined;
 		interfaceTransitionState.status = undefined;
@@ -1507,6 +1510,50 @@ describe("SessionView", () => {
 		expect(loader.querySelector(".lucide-loader-circle.animate-spin")).not.toBeNull();
 		expect(loader.querySelector("[data-testid='multi-step-loader']")).toBeNull();
 		expect(loader.querySelector(".text-success")).toBeNull();
+	});
+
+	it.each([
+		["tui", "chat", "Waiting to switch… Switching to Chat UI."],
+		["chat", "tui", "Waiting to switch… Switching to Terminal UI."],
+	] as const)("keeps the Cloud %s surface usable while work finishes before switching to %s", (mode, targetMode, label) => {
+		const session = workerSession("sess-1");
+		session.cloud = { orgId: "org-1", sandboxProvider: "docker" };
+		session.mode = mode;
+		interfaceTransitionState.status = {
+			supported: true,
+			targetMode,
+			transition: {
+				id: "waiting-cloud-interface", sessionId: session.id, sourceMode: mode, targetMode,
+				policy: "drain", historyPolicy: "strict", phase: "draining",
+				createdAt: "2026-09-28T00:00:00Z", updatedAt: "2026-09-28T00:00:01Z",
+			},
+		};
+
+		const view = render(<SessionView sessionId="sess-1" />);
+		expect(screen.queryByTestId("cloud-interface-switch-loader-screen")).not.toBeInTheDocument();
+		expect(screen.getByRole("status", { name: label })).toBeInTheDocument();
+		if (mode === "tui") {
+			expect(screen.getByTestId("terminal-center")).toHaveAttribute("data-agent-input-disabled", "false");
+		} else {
+			expect(screen.getByTestId("cloud-chat-surface")).toHaveAttribute("data-transitioning", "false");
+		}
+
+		interfaceTransitionState.status.transition!.phase = "source_stopping";
+		view.rerender(<SessionView sessionId="sess-1" />);
+		expect(screen.getByTestId("cloud-interface-switch-loader-screen")).toBeInTheDocument();
+	});
+
+	it("shows the compact wait spinner while a Cloud drain request is pending", () => {
+		const session = workerSession("sess-1");
+		session.cloud = { orgId: "org-1", sandboxProvider: "docker" };
+		session.mode = "tui";
+		interfaceTransitionState.status = { supported: true, targetMode: "chat" };
+		interfaceTransitionState.starting = true;
+		interfaceTransitionState.startingPolicy = "drain";
+		render(<SessionView sessionId="sess-1" />);
+		expect(screen.queryByTestId("cloud-interface-switch-loader-screen")).not.toBeInTheDocument();
+		expect(screen.getByTestId("terminal-center")).toHaveAttribute("data-agent-input-disabled", "false");
+		expect(screen.getByRole("button", { name: "Switch to chat UI" }).querySelector(".animate-spin")).not.toBeNull();
 	});
 
 	it("shows the full-page Cloud switch loader while the request is starting", () => {

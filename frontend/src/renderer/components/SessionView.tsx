@@ -1385,8 +1385,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	);
 
 	const activeInterfaceTransition = interfaceTransitionIsActive(interfaceSwitch.transition);
+	const cloudDrainWaiting = Boolean(
+		interfaceContext &&
+			((interfaceSwitch.starting && interfaceSwitch.startingPolicy === "drain") ||
+				(interfaceSwitch.transition?.policy === "drain" &&
+					["requested", "preflighting", "draining"].includes(interfaceSwitch.transition.phase))),
+	);
 	const showInterfaceSwitchLoader = Boolean(
-		interfaceContext && (interfaceSwitch.starting || activeInterfaceTransition || interfaceSwitch.settling ||
+		interfaceContext && !cloudDrainWaiting && (interfaceSwitch.starting || activeInterfaceTransition || interfaceSwitch.settling ||
 			(interfaceSwitch.transition?.phase === "completed" &&
 				session?.mode !== interfaceSwitch.transition.targetMode)),
 	);
@@ -1401,10 +1407,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	);
 	const chatControllerTransitioning = Boolean(
 		session?.mode === "chat" &&
-			(chatLeaveLocked ||
-				interfaceSwitch.starting ||
+			((chatLeaveLocked && !cloudDrainWaiting) ||
+				(interfaceSwitch.starting && !cloudDrainWaiting) ||
 				(interfaceSwitch.transition?.targetMode === "tui" &&
-					(activeInterfaceTransition || interfaceSwitch.transition.phase === "completed")) ||
+					((activeInterfaceTransition && !cloudDrainWaiting) || interfaceSwitch.transition.phase === "completed")) ||
 				(interfaceSwitch.transition?.targetMode === "chat" &&
 					(activeInterfaceTransition || interfaceSwitch.settling))),
 	);
@@ -1751,10 +1757,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	useEffect(() => {
 		if (handoffSwitchError) setHandoffDialogOpen(true);
 	}, [handoffSwitchError]);
-	// Local transitions retain their compact status control. Cloud switching
-	// uses the same spinner in a full-page overlay.
+	// Keep the source interface visible while Cloud waits for work to finish.
 	const interfaceSwitchInlineStatus = useMemo(() =>
-		showInterfaceSwitchAction && !isCloudSession && session && activeInterfaceTransition ? (
+		showInterfaceSwitchAction && session && (cloudDrainWaiting || (!isCloudSession && activeInterfaceTransition)) ? (
 			<SessionInterfaceSwitchButton
 				target={interfaceTarget}
 				supported
@@ -1775,6 +1780,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 		) : null,
 		[
 			activeInterfaceTransition,
+			cloudDrainWaiting,
 			interfaceSwitch.cancelError,
 			interfaceSwitch.cancelling,
 			interfaceSwitch.isLoading,
@@ -1833,11 +1839,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	// Hide the empty actions menu for harnesses without Chat, including when
 	// local settings identify one before transition status becomes available.
 	const sessionTabActions = useMemo(() => interfaceSwitchUnsupported ? null : (
-		<SessionActionsMenu inlineStatus={isCloudSession ? undefined : interfaceSwitchInlineStatus}>
+		<SessionActionsMenu inlineStatus={interfaceSwitchInlineStatus}>
 			{interfaceSwitchMenuItem}
 			{handoffMenuItem}
 		</SessionActionsMenu>
-	), [handoffMenuItem, interfaceSwitchInlineStatus, interfaceSwitchMenuItem, interfaceSwitchUnsupported, isCloudSession]);
+	), [handoffMenuItem, interfaceSwitchInlineStatus, interfaceSwitchMenuItem, interfaceSwitchUnsupported]);
 	const sessionHeaderActions = (
 		<div
 			className="session-topbar-session-chrome flex shrink-0 items-center"
@@ -2223,7 +2229,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 							) : (
 								<CenterPane
 									agentInputDisabled={
-										(interfaceSwitch.starting || activeInterfaceTransition) && session?.mode === "tui"
+										(interfaceSwitch.starting || activeInterfaceTransition) && !cloudDrainWaiting && session?.mode === "tui"
 									}
 									daemonReady={daemonStatus.state === "ready"}
 									onCloseShellTerminal={closeShellTerminalByHandle}

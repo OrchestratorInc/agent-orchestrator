@@ -95,6 +95,7 @@ function summarizeInterfaceTransitionMutations<
 		error: errored ? apiErrorMessage(errored.error) : undefined,
 		errorAt: errored?.submittedAt,
 		isPending: Boolean(pending),
+		pendingInput: pending?.input,
 	};
 }
 
@@ -170,6 +171,7 @@ function useSessionInterfaceTransitionStatusQuery(
 	cloud?: { orgId: string } | null,
 	hasSessionContext = false,
 ) {
+	const queryClient = useQueryClient();
 	const isCloud = Boolean(cloud && cloudCp.ready);
 	const isLocal = cloud === null || !hasSessionContext;
 	return useQuery({
@@ -181,12 +183,23 @@ function useSessionInterfaceTransitionStatusQuery(
 					cloudCp.client.getSession(cloud.orgId, sessionId as string),
 					cloudCp.client.getInterfaceTransition(cloud.orgId, sessionId as string),
 				]);
+				const previousTransition = queryClient.getQueryData<SessionInterfaceTransitionStatus>(
+					sessionInterfaceTransitionQueryKey(sessionId as string),
+				)?.transition;
+				// Cloud omits completed transitions from status. Keep the handoff
+				// visible until the workspace session list reflects its target mode;
+				// otherwise the old surface flashes after the loader disappears.
+				const completedTransition = !transitionStatus.transition && previousTransition &&
+					(interfaceTransitionIsActive(previousTransition) || previousTransition.phase === "completed") &&
+					sessionResponse.session.interfaceMode === previousTransition.targetMode
+					? { ...previousTransition, phase: "completed" as const }
+					: undefined;
 				return {
 					supported: transitionStatus.supported,
 					targetMode: transitionStatus.targetMode,
 					reasonCode: transitionStatus.reasonCode,
 					reason: transitionStatus.reason,
-					transition: toSessionInterfaceTransition(transitionStatus.transition),
+					transition: toSessionInterfaceTransition(transitionStatus.transition) ?? completedTransition,
 					currentMode: sessionResponse.session.interfaceMode,
 				} as SessionInterfaceTransitionStatus & { currentMode?: SessionInterfaceMode };
 			}
@@ -474,6 +487,7 @@ export function useSessionInterfaceTransition(
 			return start.mutateAsync({ ...input, targetSessionId: sessionId });
 		},
 		starting: startState.isPending,
+		startingPolicy: startState.pendingInput?.policy,
 		startError: startErrorSuperseded ? undefined : startState.error,
 		resetStartError: () => {
 			clearInterfaceTransitionMutationState(

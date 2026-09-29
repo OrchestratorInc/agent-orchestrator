@@ -1445,7 +1445,11 @@ func (s *Store) CreateCoordinatedInterfaceRequest(
 				response, error_code, error_message, attempt_count, expires_at`,
 			orgID, sessionID, epoch, kind, payload,
 		), &request)
-		return normalizeConstraintError(err)
+		if err != nil {
+			return normalizeConstraintError(err)
+		}
+		_, err = tx.Exec(ctx, `SELECT pg_notify('ao_worker_work', $1)`, sessionID)
+		return err
 	})
 	return request, err
 }

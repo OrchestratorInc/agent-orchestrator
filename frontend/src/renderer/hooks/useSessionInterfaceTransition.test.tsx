@@ -52,6 +52,59 @@ beforeEach(() => {
 });
 
 describe("session-scoped interface transition mutations", () => {
+	it.each([
+		["tui", "chat"],
+		["chat", "tui"],
+	] as const)("retains a completed Cloud %s to %s handoff until the session list catches up", async (sourceMode, targetMode) => {
+		const transition = {
+			id: "transition-1", sessionId: "session-a", sourceMode, targetMode,
+			policy: "interrupt" as const, phase: "target_starting" as const,
+			createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:01Z",
+		};
+		const getSession = vi.fn()
+			.mockResolvedValueOnce({ session: { interfaceMode: sourceMode } })
+			.mockResolvedValue({ session: { interfaceMode: targetMode } });
+		const getInterfaceTransition = vi.fn()
+			.mockResolvedValueOnce({ supported: true, targetMode, transition })
+			.mockResolvedValue({ supported: true, targetMode: sourceMode });
+		cloudCpMock.client = { getSession, getInterfaceTransition };
+		cloudCpMock.ready = true;
+
+		const { result } = renderHook(
+			() => useSessionInterfaceTransition("session-a", { orgId: "org-a" }),
+			{ wrapper },
+		);
+		await waitFor(() => expect(result.current.transition?.phase).toBe("target_starting"));
+		await act(async () => { await result.current.refreshStatus(); });
+		await waitFor(() => expect(result.current.transition?.phase).toBe("completed"));
+		expect(result.current.transition?.targetMode).toBe(targetMode);
+		await act(async () => { await result.current.refreshStatus(); });
+		await waitFor(() => expect(result.current.transition?.phase).toBe("completed"));
+	});
+
+	it("clears a cancelled Cloud handoff when the source mode remains selected", async () => {
+		const transition = {
+			id: "transition-1", sessionId: "session-a", sourceMode: "tui" as const,
+			targetMode: "chat" as const, policy: "drain" as const,
+			phase: "draining" as const, createdAt: "2026-09-01T00:00:00Z",
+			updatedAt: "2026-09-01T00:00:01Z",
+		};
+		const getSession = vi.fn().mockResolvedValue({ session: { interfaceMode: "tui" } });
+		const getInterfaceTransition = vi.fn()
+			.mockResolvedValueOnce({ supported: true, targetMode: "chat", transition })
+			.mockResolvedValue({ supported: true, targetMode: "chat" });
+		cloudCpMock.client = { getSession, getInterfaceTransition };
+		cloudCpMock.ready = true;
+
+		const { result } = renderHook(
+			() => useSessionInterfaceTransition("session-a", { orgId: "org-a" }),
+			{ wrapper },
+		);
+		await waitFor(() => expect(result.current.transition?.phase).toBe("draining"));
+		await act(async () => { await result.current.refreshStatus(); });
+		await waitFor(() => expect(result.current.transition).toBeUndefined());
+	});
+
 	it("keeps a Cloud handoff active across its status refetch", async () => {
 		const transition = {
 			id: "transition-1",

@@ -417,14 +417,8 @@ func (c *Coordinator) drain(ctx context.Context, transition postgres.Coordinated
 	if err != nil {
 		return err, false
 	}
-	if inspection.DecisionPending {
-		return errors.New("source controller is waiting for a decision; answer it in the source interface"), true
-	}
-	if inspection.DraftPresent {
-		return errors.New("source controller has unsent text; submit or clear it in the source interface"), true
-	}
-	if inspection.QuiescenceUnverified {
-		return errors.New("source controller activity cannot be verified; use stop now to interrupt it"), true
+	if inspection.DecisionPending || inspection.DraftPresent || inspection.QuiescenceUnverified {
+		return errSourceBusy, true
 	}
 	if inspection.Idle {
 		return nil, true
