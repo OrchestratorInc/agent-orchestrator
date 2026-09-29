@@ -100,9 +100,20 @@ func (o *Observer) Poll(ctx context.Context) error {
 	}
 	now := o.clock()
 	for _, session := range sessions {
-		o.reconcile(ctx, session, now)
+		o.reconcileSession(ctx, session, now)
 	}
 	return nil
+}
+
+// reconcileSession turns a panic while reading one session's pane into a
+// skipped tick for that session, instead of stopping the observer.
+func (o *Observer) reconcileSession(ctx context.Context, session domain.SessionRecord, now time.Time) {
+	defer func() {
+		if r := recover(); r != nil {
+			o.logger.Error("activity observer: reconciliation panicked", "session", session.ID, "panic", r)
+		}
+	}()
+	o.reconcile(ctx, session, now)
 }
 
 func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, now time.Time) {

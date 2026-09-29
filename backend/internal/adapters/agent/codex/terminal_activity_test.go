@@ -1,6 +1,9 @@
 package codex
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -23,14 +26,26 @@ func TestDetectTerminalActivity(t *testing.T) {
 		{
 			name:   "working composer",
 			output: "• Working (2m 10s • esc to interrupt)\n› Add tests\n\ngpt-5.6-sol low · ~/project\n",
+			want:   domain.ActivityActive,
+			ok:     true,
 		},
 		{
 			name:   "approval picker",
 			output: "› 1. Approve once\n  2. Deny\nPress enter to confirm or esc to go back\n",
+			want:   domain.ActivityWaitingInput,
+			ok:     true,
 		},
 		{
 			name:   "assistant text",
 			output: "The symbol is:\n›\nnot a composer footer\n",
+		},
+		{
+			name:   "empty pane output",
+			output: "",
+		},
+		{
+			name:   "single line pane output",
+			output: "› ",
 		},
 	}
 	for _, tt := range tests {
@@ -40,6 +55,81 @@ func TestDetectTerminalActivity(t *testing.T) {
 				t.Fatalf("DetectTerminalActivity() = (%q, %v), want (%q, %v)", got, ok, tt.want, tt.ok)
 			}
 		})
+	}
+}
+
+func readCodexFixture(t *testing.T, name string) string {
+	t.Helper()
+	output, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(output)
+}
+
+// Fixtures are codex-cli 0.146.0 TUI renders taken from the openai/codex
+// rust-v0.146.0 insta snapshots (status_widget_and_approval_modal,
+// network_exec_prompt, mcp_server_elicitation_approval_form_without_schema,
+// request_user_input_footer_wrap, image_generation_begin_restores_working_status). Codex replaces the working
+// status line with the approval modal, so exec_approval.txt is what a running
+// turn looks like while an approval is pending.
+func TestDetectTerminalActivityCapturedCodexFrames(t *testing.T) {
+	tests := []struct {
+		name    string
+		fixture string
+		want    domain.ActivityState
+		ok      bool
+	}{
+		{"exec approval during a running turn", "exec_approval.txt", domain.ActivityWaitingInput, true},
+		{"network approval", "network_approval.txt", domain.ActivityWaitingInput, true},
+		{"resumed generation", "active_generation.txt", domain.ActivityActive, true},
+		{"mcp elicitation form", "mcp_elicitation.txt", domain.ActivityWaitingInput, true},
+		{"agent question with options", "user_input_question.txt", domain.ActivityWaitingInput, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := (&Plugin{}).DetectTerminalActivity(readCodexFixture(t, tt.fixture))
+			if got != tt.want || ok != tt.ok {
+				t.Fatalf("DetectTerminalActivity(%s) = (%q, %v), want (%q, %v)", tt.fixture, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
+// Codex styles the selected picker row, "›" included, bold (the accent style
+// in rust-v0.146.0's selection_popup_common.rs). A capture taken before the
+// picker's hint row is drawn, or in a viewport too short to show it, is not a
+// recognized picker; the bold-marker fallback must not then read the selected
+// option as the current prompt and report idle or active.
+func TestDetectTerminalActivityFailsClosedOnStyledPartialPicker(t *testing.T) {
+	styled := strings.Replace(readCodexFixture(t, "exec_approval.txt"), "› 1.", "\x1b[1m›\x1b[0m 1.", 1)
+	partial := strings.Replace(styled, "Press enter to confirm or esc to cancel", "", 1)
+	tests := []struct {
+		name   string
+		output string
+	}{
+		{"styled picker without its hint row", partial},
+		{"styled picker without its hint row under a stale working line", strings.Replace(partial, "\x1b[1m›", "• Working (3s • esc to interrupt)\n\x1b[1m›", 1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, ok := (&Plugin{}).DetectTerminalActivity(tt.output); ok {
+				t.Fatalf("DetectTerminalActivity() = (%q, true), want no signal", got)
+			}
+		})
+	}
+	if got, ok := (&Plugin{}).DetectTerminalActivity(styled); got != domain.ActivityWaitingInput || !ok {
+		t.Fatalf("complete styled picker = (%q, %v), want (%q, true)", got, ok, domain.ActivityWaitingInput)
+	}
+}
+
+// A live approval picker must read as waiting even with a working line above
+// it: the picker is checked first, so an approval can never become active.
+func TestDetectTerminalActivityPrefersApprovalPickerOverWorkingLine(t *testing.T) {
+	output := "• Working (6m 13s • esc to interrupt)\n" + readCodexFixture(t, "exec_approval.txt")
+	got, ok := (&Plugin{}).DetectTerminalActivity(output)
+	if got != domain.ActivityWaitingInput || !ok {
+		t.Fatalf("DetectTerminalActivity() = (%q, %v), want (%q, true)", got, ok, domain.ActivityWaitingInput)
 	}
 }
 
@@ -175,5 +265,18 @@ func TestInspectTerminalSurfaceOnlyProvesAnUnstartedConversationOnInitialFrame(t
 				t.Fatalf("NativeConversationNotStarted = %v, want %v; observation=%+v", got.NativeConversationNotStarted, tt.want, got)
 			}
 		})
+	}
+}
+
+// Codex's PermissionRequest hook records waiting_input, and Codex installs no
+// post-tool-use hook that could clear it before Stop. The adapter must opt into
+// terminal reconciliation while waiting, or an approved turn stays needs_input.
+func TestCodexReconcilesTerminalActivityWhileWaiting(t *testing.T) {
+	detector, ok := any(&Plugin{}).(ports.WaitingTerminalActivityDetector)
+	if !ok {
+		t.Fatal("codex does not implement ports.WaitingTerminalActivityDetector")
+	}
+	if !detector.ContinuouslyDetectTerminalActivityWhileWaiting() {
+		t.Fatal("ContinuouslyDetectTerminalActivityWhileWaiting() = false, want true")
 	}
 }
