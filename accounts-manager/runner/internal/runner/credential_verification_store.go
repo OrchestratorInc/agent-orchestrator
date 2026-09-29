@@ -15,7 +15,7 @@ func (v *credentialVault) verification(ctx context.Context, auth *coreauth.Auth)
 		return "unverified", time.Time{}
 	}
 	entry, exists := v.state.Records[auth.ID]
-	if !exists || entry.Deleted || strconv.FormatUint(entry.Generation, 10) != auth.Attributes[vaultGenerationAttribute] {
+	if !exists || entry.Deleted || v.removingLocked(auth.ID) || strconv.FormatUint(entry.Generation, 10) != auth.Attributes[vaultGenerationAttribute] {
 		return "unverified", time.Time{}
 	}
 	stored, err := v.authLocked(auth.ID, entry)
@@ -38,7 +38,7 @@ func (v *credentialVault) recordVerification(ctx context.Context, auth *coreauth
 		return err
 	}
 	entry, exists := v.state.Records[auth.ID]
-	if !exists || entry.Deleted || strconv.FormatUint(entry.Generation, 10) != auth.Attributes[vaultGenerationAttribute] {
+	if !exists || entry.Deleted || v.removingLocked(auth.ID) || strconv.FormatUint(entry.Generation, 10) != auth.Attributes[vaultGenerationAttribute] {
 		return errCredentialFenced
 	}
 	stored, err := v.authLocked(auth.ID, entry)

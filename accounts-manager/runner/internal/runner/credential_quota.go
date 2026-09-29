@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -38,14 +39,24 @@ type credentialQuotaFlight struct {
 	until       time.Time
 	result      credentialQuota
 	err         error
+	context     context.Context
+	cancel      context.CancelFunc
+	waiters     int
+	complete    bool
 }
 
 func supportsCredentialQuota(auth *coreauth.Auth) bool {
+	if auth == nil {
+		return false
+	}
 	token, _ := auth.Metadata["access_token"].(string)
 	return validVaultProvider(auth.Provider) && auth.Attributes["api_key"] == "" && token != ""
 }
 
 func (r *credentialRuntime) quota(ctx context.Context, auth *coreauth.Auth) (credentialQuota, error) {
+	if err := ctx.Err(); err != nil {
+		return credentialQuota{}, err
+	}
 	if !supportsCredentialQuota(auth) || !r.vault.admitVerified(ctx, auth) {
 		return credentialQuota{}, errCredentialFenced
 	}
@@ -54,35 +65,118 @@ func (r *credentialRuntime) quota(ctx context.Context, auth *coreauth.Auth) (cre
 		return credentialQuota{}, err
 	}
 	r.quotaMu.Lock()
+	if r.quotaClosed || !r.vault.admitVerified(ctx, auth) {
+		r.quotaMu.Unlock()
+		return credentialQuota{}, errCredentialFenced
+	}
 	if r.quotas == nil {
 		r.quotas = make(map[string]*credentialQuotaFlight)
+		r.quotaPending = make(map[string]map[*credentialQuotaFlight]struct{})
 	}
-	if flight := r.quotas[auth.ID]; flight != nil && flight.fingerprint == fingerprint && time.Now().Before(flight.until) {
-		r.quotaMu.Unlock()
-		select {
-		case <-ctx.Done():
-			return credentialQuota{}, ctx.Err()
-		case <-flight.done:
+	flight := r.quotas[auth.ID]
+	if flight == nil || flight.fingerprint != fingerprint || flight.complete && !time.Now().Before(flight.until) {
+		if flight != nil {
+			flight.cancel()
 		}
-		if !r.vault.admitVerified(ctx, auth) {
+		parent := r.context
+		if parent == nil {
+			parent = context.WithoutCancel(ctx)
+		}
+		flight = &credentialQuotaFlight{done: make(chan struct{}), fingerprint: fingerprint}
+		flight.context, flight.cancel = context.WithTimeout(parent, 3*time.Second)
+		r.quotas[auth.ID] = flight
+		if r.quotaPending[auth.ID] == nil {
+			r.quotaPending[auth.ID] = make(map[*credentialQuotaFlight]struct{})
+		}
+		r.quotaPending[auth.ID][flight] = struct{}{}
+		r.quotaWorkers.Add(1)
+		go r.runQuota(auth.Clone(), flight)
+	}
+	flight.waiters++
+	r.quotaMu.Unlock()
+	defer r.releaseQuotaWaiter(auth.ID, flight)
+	select {
+	case <-ctx.Done():
+		return credentialQuota{}, ctx.Err()
+	case <-flight.done:
+	case <-flight.context.Done():
+		select {
+		case <-flight.done:
+		default:
+			if err := ctx.Err(); err != nil {
+				return credentialQuota{}, err
+			}
+			if r.vault.admitVerified(ctx, auth) && errors.Is(flight.context.Err(), context.DeadlineExceeded) {
+				return credentialQuota{}, errCredentialCheckUnavailable
+			}
 			return credentialQuota{}, errCredentialFenced
 		}
-		return flight.result, flight.err
 	}
-	flight := &credentialQuotaFlight{done: make(chan struct{}), fingerprint: fingerprint, until: time.Now().Add(30 * time.Second)}
-	r.quotas[auth.ID] = flight
-	r.quotaMu.Unlock()
-	flight.result, flight.err = r.fetchQuota(ctx, auth)
+	if err := ctx.Err(); err != nil {
+		return credentialQuota{}, err
+	}
 	if !r.vault.admitVerified(ctx, auth) {
-		flight.result, flight.err = credentialQuota{}, errCredentialFenced
+		return credentialQuota{}, errCredentialFenced
+	}
+	return flight.result, flight.err
+}
+
+func (r *credentialRuntime) runQuota(auth *coreauth.Auth, flight *credentialQuotaFlight) {
+	defer r.quotaWorkers.Done()
+	result, err := r.fetchQuota(flight.context, auth)
+	if !r.vault.admitVerified(context.WithoutCancel(flight.context), auth) {
+		result, err = credentialQuota{}, errCredentialFenced
+	} else if errors.Is(flight.context.Err(), context.DeadlineExceeded) {
+		result, err = credentialQuota{}, errCredentialCheckUnavailable
+	} else if flight.context.Err() != nil {
+		result, err = credentialQuota{}, errCredentialFenced
 	}
 	r.quotaMu.Lock()
-	if flight.err != nil {
+	flight.result, flight.err = result, err
+	flight.until = time.Now().Add(30 * time.Second)
+	if err != nil {
 		flight.until = time.Now().Add(time.Second)
 	}
+	flight.complete = true
+	delete(r.quotaPending[auth.ID], flight)
+	if len(r.quotaPending[auth.ID]) == 0 {
+		delete(r.quotaPending, auth.ID)
+	}
 	close(flight.done)
+	flight.cancel()
 	r.quotaMu.Unlock()
-	return flight.result, flight.err
+}
+
+func (r *credentialRuntime) releaseQuotaWaiter(id string, flight *credentialQuotaFlight) {
+	r.quotaMu.Lock()
+	defer r.quotaMu.Unlock()
+	flight.waiters--
+	if flight.waiters == 0 && !flight.complete {
+		if r.quotas[id] == flight {
+			delete(r.quotas, id)
+		}
+		flight.cancel()
+	}
+}
+
+func (r *credentialRuntime) cancelQuota(id string) {
+	r.quotaMu.Lock()
+	defer r.quotaMu.Unlock()
+	if flight := r.quotas[id]; flight != nil {
+		flight.cancel()
+		delete(r.quotas, id)
+	}
+}
+
+func (r *credentialRuntime) stopQuota() {
+	r.quotaMu.Lock()
+	r.quotaClosed = true
+	for _, pending := range r.quotaPending {
+		for flight := range pending {
+			flight.cancel()
+		}
+	}
+	r.quotaMu.Unlock()
 }
 
 func (r *credentialRuntime) fetchQuota(ctx context.Context, auth *coreauth.Auth) (credentialQuota, error) {

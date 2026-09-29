@@ -9,11 +9,30 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+type streamFramingState struct {
+	pendingData bool
+}
+
 // ConvertCodexResponseToOpenAIResponses converts OpenAI Chat Completions streaming chunks
 // to OpenAI Responses SSE events (response.*).
-
-func ConvertCodexResponseToOpenAIResponses(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) [][]byte {
+func ConvertCodexResponseToOpenAIResponses(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) [][]byte {
+	var state *streamFramingState
+	if param != nil {
+		state, _ = (*param).(*streamFramingState)
+		if state == nil {
+			state = &streamFramingState{}
+			*param = state
+		}
+	}
+	if len(rawJSON) == 0 && state != nil && state.pendingData {
+		state.pendingData = false
+		// Scanning strips line endings; an empty chunk would lose the event boundary.
+		return [][]byte{[]byte("\n\n")}
+	}
 	if bytes.HasPrefix(rawJSON, []byte("data:")) {
+		if state != nil {
+			state.pendingData = true
+		}
 		rawJSON = bytes.TrimSpace(rawJSON[5:])
 		rawJSON = setResponsesModel(rawJSON, modelName, originalRequestRawJSON, requestRawJSON)
 		out := make([]byte, 0, len(rawJSON)+len("data: "))

@@ -31,8 +31,14 @@ type credentialRuntime struct {
 	checkTransport http.RoundTripper
 	checkMu        sync.Mutex
 	checkSlots     chan struct{}
+	rechecks       map[string]map[*credentialRecheck]struct{}
+	recheckWorkers sync.WaitGroup
+	recheckClosed  bool
 	quotaMu        sync.Mutex
 	quotas         map[string]*credentialQuotaFlight
+	quotaPending   map[string]map[*credentialQuotaFlight]struct{}
+	quotaWorkers   sync.WaitGroup
+	quotaClosed    bool
 }
 
 func (r *credentialRuntime) ConnectBrowser(ctx context.Context, operationID string, authenticator sdkauth.Authenticator, cfg *sdkconfig.Config, listener net.Listener, deliverURL func(context.Context, string) error) (_ *coreauth.Auth, resultErr error) {
@@ -110,15 +116,22 @@ func (r *credentialRuntime) completeObserved(ctx context.Context, operationID st
 
 func (r *credentialRuntime) Remove(ctx context.Context, id string) error {
 	r.mu.Lock()
+	err := r.vault.beginRemoval(ctx, id)
+	r.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	// The durable fence closes admission before joining without blocking other accounts.
+	if err := r.drainAccountWorkers(ctx, id); err != nil {
+		return err
+	}
+	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.vault.Delete(ctx, id); err != nil {
 		return err
 	}
 	r.manager.Remove(ctx, id)
 	cliproxy.GlobalModelRegistry().UnregisterClient(id)
-	r.quotaMu.Lock()
-	delete(r.quotas, id)
-	r.quotaMu.Unlock()
 	return nil
 }
 
@@ -128,6 +141,9 @@ func (r *credentialRuntime) SetEnabled(ctx context.Context, id string, enabled b
 	auth, err := r.vault.setEnabled(ctx, id, enabled)
 	if err != nil {
 		return err
+	}
+	if !enabled {
+		r.cancelQuota(id)
 	}
 	registered, err := r.manager.Register(ctx, auth)
 	if err != nil || !r.vault.matchesCommitted(ctx, registered, false) {

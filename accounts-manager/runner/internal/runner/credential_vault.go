@@ -186,6 +186,12 @@ func openCredentialVault(path string) (_ *credentialVault, resultErr error) {
 		if !validVaultID(id) {
 			return nil, errCredentialStorage
 		}
+		if reservedRemovalOperation(id) || operation.Status == "removing" {
+			if !v.validRemovalLocked(id, operation) {
+				return nil, errCredentialStorage
+			}
+			continue
+		}
 		switch operation.Status {
 		case "pending", "committed":
 			if !validVaultProvider(operation.Provider) || operation.ExpiresAt.IsZero() {
@@ -243,7 +249,7 @@ func (v *credentialVault) Begin(ctx context.Context, operationID, provider strin
 	if err := v.readyLocked(ctx); err != nil {
 		return err
 	}
-	if !validVaultID(operationID) || !validVaultProvider(provider) || expiresAt.IsZero() {
+	if !validVaultID(operationID) || reservedRemovalOperation(operationID) || !validVaultProvider(provider) || expiresAt.IsZero() {
 		return errCredentialConflict
 	}
 	if prior, exists := v.state.Operations[operationID]; exists {
@@ -269,7 +275,7 @@ func (v *credentialVault) Cancel(ctx context.Context, operationID string) error 
 	if err := v.readyLocked(ctx); err != nil {
 		return err
 	}
-	if !validVaultID(operationID) {
+	if !validVaultID(operationID) || reservedRemovalOperation(operationID) {
 		return errCredentialConflict
 	}
 	op, exists := v.state.Operations[operationID]
@@ -316,7 +322,7 @@ func (v *credentialVault) commit(ctx context.Context, operationID string, incomi
 	}
 	if op.Status == "committed" {
 		entry, found := v.state.Records[op.AccountID]
-		if !found || entry.Deleted {
+		if !found || entry.Deleted || v.removingLocked(op.AccountID) {
 			return nil, errCredentialFenced
 		}
 		if op.Fingerprint != fingerprint {
@@ -340,6 +346,9 @@ func (v *credentialVault) commit(ctx context.Context, operationID string, incomi
 		}
 		if previous.Attributes["api_key"] != auth.Attributes["api_key"] || previous.Attributes["base_url"] != auth.Attributes["base_url"] {
 			continue
+		}
+		if v.removingLocked(id) {
+			return nil, errCredentialFenced
 		}
 		next := v.cloneLocked()
 		op.Status, op.AccountID, op.Fingerprint = "committed", id, fingerprint
@@ -387,7 +396,7 @@ func (v *credentialVault) Save(ctx context.Context, auth *coreauth.Auth) (string
 		return "", errCredentialFenced
 	}
 	entry, exists := v.state.Records[auth.ID]
-	if !exists || entry.Deleted || auth.Provider != entry.Provider || auth.Attributes[vaultGenerationAttribute] != strconv.FormatUint(entry.Generation, 10) {
+	if !exists || entry.Deleted || v.removingLocked(auth.ID) || auth.Provider != entry.Provider || auth.Attributes[vaultGenerationAttribute] != strconv.FormatUint(entry.Generation, 10) {
 		return "", errCredentialFenced
 	}
 	previous, err := v.authLocked(auth.ID, entry)
@@ -434,6 +443,7 @@ func (v *credentialVault) Delete(ctx context.Context, id string) error {
 	entry.Generation++
 	next := v.cloneLocked()
 	next.Records[id] = entry
+	delete(next.Operations, removalOperationID(id))
 	return v.persistLocked(next)
 }
 
@@ -451,6 +461,9 @@ func (v *credentialVault) List(ctx context.Context) ([]*coreauth.Auth, error) {
 		auth, err := v.authLocked(id, entry)
 		if err != nil {
 			return nil, err
+		}
+		if v.removingLocked(id) {
+			auth.Disabled, auth.Status = true, coreauth.StatusDisabled
 		}
 		items = append(items, auth)
 	}

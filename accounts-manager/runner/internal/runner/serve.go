@@ -31,6 +31,10 @@ func Serve(ctx context.Context, stateDir string) error {
 }
 
 func serve(ctx context.Context, stateDir string, beforeRoutes func(*coreauth.Manager)) (resultErr error) {
+	return serveWithCredentialSetup(ctx, stateDir, beforeRoutes, nil)
+}
+
+func serveWithCredentialSetup(ctx context.Context, stateDir string, beforeRoutes func(*coreauth.Manager), configureCredentials func(*credentialRuntime)) (resultErr error) {
 	previousOutput := log.StandardLogger().Out
 	log.SetOutput(io.Discard)
 	defer log.SetOutput(previousOutput)
@@ -102,6 +106,9 @@ func serve(ctx context.Context, stateDir string, beforeRoutes func(*coreauth.Man
 	coreManager.SetRetryConfig(state.Config.RequestRetry, time.Duration(state.Config.MaxRetryInterval)*time.Second, state.Config.MaxRetryCredentials)
 	credentials := &credentialRuntime{vault: vault, manager: coreManager, models: models, context: ctx}
 	defer credentials.Close()
+	if configureCredentials != nil {
+		configureCredentials(credentials)
+	}
 	if err := credentials.Reload(ctx); err != nil {
 		return err
 	}

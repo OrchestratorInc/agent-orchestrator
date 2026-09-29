@@ -27,6 +27,9 @@ func (r *credentialRuntime) Refresh(ctx context.Context, id string) (*coreauth.A
 	r.initRefreshLocked(context.WithoutCancel(ctx))
 	flight := r.startRefreshLocked(id)
 	r.refreshMu.Unlock()
+	if flight == nil {
+		return nil, errCredentialFenced
+	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -60,6 +63,9 @@ func (r *credentialRuntime) initRefreshLocked(parent context.Context) {
 }
 
 func (r *credentialRuntime) startRefreshLocked(id string) *credentialRefresh {
+	if !r.vault.admitsAccountWork(r.refreshContext, id) {
+		return nil
+	}
 	flight := r.refreshes[id]
 	if flight == nil {
 		flight = &credentialRefresh{done: make(chan struct{})}
@@ -74,12 +80,12 @@ func (r *credentialRuntime) startRefreshLocked(id string) *credentialRefresh {
 func (r *credentialRuntime) refreshCredential(id string, flight *credentialRefresh) {
 	defer r.refreshWorkers.Done()
 	ctx := flight.context
-	defer flight.cancel()
 	flight.err = errCredentialFenced
 	defer func() {
 		r.refreshMu.Lock()
 		delete(r.refreshes, id)
 		close(flight.done)
+		flight.cancel()
 		r.refreshMu.Unlock()
 	}()
 	select {
@@ -115,5 +121,9 @@ func (r *credentialRuntime) Close() {
 		r.refreshCancel()
 	}
 	r.refreshMu.Unlock()
+	r.stopRechecks()
+	r.stopQuota()
+	r.recheckWorkers.Wait()
+	r.quotaWorkers.Wait()
 	r.refreshWorkers.Wait()
 }

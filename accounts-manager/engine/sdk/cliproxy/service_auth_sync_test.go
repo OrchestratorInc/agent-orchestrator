@@ -685,6 +685,19 @@ func TestHandleAuthUpdates_StaleDisableRegistrationDoesNotDropNewerEnable(t *tes
 }
 
 func TestHandleAuthUpdates_SameRevisionWaitDoesNotWaitForOtherAuthInBatch(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		name := "forward"
+		if reverse {
+			name = "reverse"
+		}
+		t.Run(name, func(t *testing.T) { testSameRevisionWaitForCompletedAuth(t, reverse) })
+	}
+}
+
+func testSameRevisionWaitForCompletedAuth(t *testing.T, reverse bool) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	reg := internalregistry.GetGlobalRegistry()
 	authAID := "codex-batch-wait-a-auth"
 	authBID := "codex-batch-wait-b-auth"
@@ -717,22 +730,36 @@ func TestHandleAuthUpdates_SameRevisionWaitDoesNotWaitForOtherAuthInBatch(t *tes
 
 	service := &Service{cfg: &config.Config{}, coreManager: manager}
 
-	bStarted := make(chan struct{})
-	bBlock := make(chan struct{})
+	secondStarted := make(chan struct{})
+	blockedTask := make(chan struct{})
+	finishedBatch := make(chan struct{})
+	var sameRevisionDone chan struct{}
 	var started atomic.Int32
 	modelRegistrationTaskHook = func() {
 		if started.Add(1) == 2 {
-			close(bStarted)
-			<-bBlock
+			close(secondStarted)
+			<-blockedTask
 		}
 	}
 	t.Cleanup(func() {
-		modelRegistrationTaskHook = nil
 		select {
-		case <-bBlock:
+		case <-blockedTask:
 		default:
-			close(bBlock)
+			close(blockedTask)
 		}
+		select {
+		case <-finishedBatch:
+		case <-time.After(2 * time.Second):
+			t.Error("batch registration cleanup did not finish")
+		}
+		if sameRevisionDone != nil {
+			select {
+			case <-sameRevisionDone:
+			case <-time.After(2 * time.Second):
+				t.Error("same-revision waiter cleanup did not finish")
+			}
+		}
+		modelRegistrationTaskHook = nil
 	})
 
 	updateA := watcher.AuthUpdate{Action: watcher.AuthUpdateActionModify, ID: authAID, Auth: authA}
@@ -740,30 +767,61 @@ func TestHandleAuthUpdates_SameRevisionWaitDoesNotWaitForOtherAuthInBatch(t *tes
 	updateB := watcher.AuthUpdate{Action: watcher.AuthUpdateActionModify, ID: authBID, Auth: authB}
 	updateB.SetRevision(1)
 
-	finishedBatch := make(chan struct{})
+	updates := []watcher.AuthUpdate{updateA, updateB}
+	if reverse {
+		updates = []watcher.AuthUpdate{updateB, updateA}
+	}
 	go func() {
 		defer close(finishedBatch)
-		service.handleAuthUpdates(context.Background(), []watcher.AuthUpdate{updateA, updateB})
+		service.handleAuthUpdates(ctx, updates)
 	}()
 
 	select {
-	case <-bStarted:
+	case <-secondStarted:
 	case <-time.After(2 * time.Second):
 		t.Fatal("second auth registration in batch did not start")
 	}
 
-	doneA := make(chan struct{})
-	go func() {
-		service.handleAuthUpdate(context.Background(), updateA)
-		close(doneA)
-	}()
-	select {
-	case <-doneA:
-	case <-time.After(2 * time.Second):
-		t.Fatal("auth A hook wait blocked on unrelated auth B registration")
+	aWait := service.authRegistrationWaitCh(authAID)
+	bWait := service.authRegistrationWaitCh(authBID)
+	completedUpdate, pendingID := updateA, authBID
+	switch {
+	case aWait == nil && bWait == nil:
+		t.Fatal("blocked registration was acknowledged before completion")
+	case aWait == nil:
+	case bWait == nil:
+		completedUpdate, pendingID = updateB, authAID
+	default:
+		select {
+		case <-aWait:
+		case <-bWait:
+			completedUpdate, pendingID = updateB, authAID
+		case <-time.After(2 * time.Second):
+			t.Fatal("completed registration waits for the unrelated blocked task")
+		}
 	}
 
-	close(bBlock)
+	sameRevisionDone = make(chan struct{})
+	go func() {
+		service.handleAuthUpdate(ctx, completedUpdate)
+		close(sameRevisionDone)
+	}()
+	select {
+	case <-sameRevisionDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("same-revision hook waits for the unrelated blocked registration")
+	}
+
+	pending := service.authRegistrationWaitCh(pendingID)
+	if pending == nil {
+		t.Fatal("blocked registration lost its completion fence")
+	}
+	select {
+	case <-pending:
+		t.Fatal("blocked registration was acknowledged before release")
+	default:
+	}
+	close(blockedTask)
 	select {
 	case <-finishedBatch:
 	case <-time.After(2 * time.Second):

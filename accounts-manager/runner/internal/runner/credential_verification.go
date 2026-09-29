@@ -172,7 +172,37 @@ func (r *credentialRuntime) credentialCheck(ctx context.Context, endpoint string
 }
 
 func (r *credentialRuntime) recheckCredential(ctx context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
+	r.checkMu.Lock()
+	if r.recheckClosed || !r.vault.matchesCommitted(ctx, auth, false) {
+		r.checkMu.Unlock()
+		return nil, errCredentialFenced
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	flight := &credentialRecheck{done: make(chan struct{}), cancel: cancel}
+	if r.rechecks == nil {
+		r.rechecks = make(map[string]map[*credentialRecheck]struct{})
+	}
+	if r.rechecks[auth.ID] == nil {
+		r.rechecks[auth.ID] = make(map[*credentialRecheck]struct{})
+	}
+	r.rechecks[auth.ID][flight] = struct{}{}
+	r.recheckWorkers.Add(1)
+	r.checkMu.Unlock()
+	defer r.recheckWorkers.Done()
+	defer func() {
+		cancel()
+		r.checkMu.Lock()
+		delete(r.rechecks[auth.ID], flight)
+		if len(r.rechecks[auth.ID]) == 0 {
+			delete(r.rechecks, auth.ID)
+		}
+		close(flight.done)
+		r.checkMu.Unlock()
+	}()
 	err := r.verifyCredential(ctx, auth)
+	if !r.vault.matchesCommitted(ctx, auth, false) {
+		return nil, errCredentialFenced
+	}
 	if err != nil && !errors.Is(err, errCredentialInvalid) {
 		return nil, err
 	}

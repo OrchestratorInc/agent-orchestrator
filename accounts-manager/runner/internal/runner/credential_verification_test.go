@@ -140,6 +140,7 @@ func TestCredentialVerificationLifecycle(t *testing.T) {
 		t.Run(change, func(t *testing.T) {
 			vault := newTestVault(t)
 			runtime := &credentialRuntime{vault: vault, manager: coreauth.NewManager(vault, nil, nil)}
+			t.Cleanup(runtime.Close)
 			if err := vault.Begin(t.Context(), "stored", "codex", time.Now().Add(time.Minute)); err != nil {
 				t.Fatal(err)
 			}
@@ -151,8 +152,20 @@ func TestCredentialVerificationLifecycle(t *testing.T) {
 				t.Fatal("unverified saved key authorizes requests")
 			}
 			started, release := make(chan struct{}), make(chan struct{})
+			cancelled := make(chan struct{})
+			t.Cleanup(func() {
+				select {
+				case <-release:
+				default:
+					close(release)
+				}
+			})
 			runtime.checkTransport = runnerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 				close(started)
+				if change == "removed" {
+					<-request.Context().Done()
+					close(cancelled)
+				}
 				<-release
 				return successfulCredentialCheck(request)
 			})
@@ -163,13 +176,24 @@ func TestCredentialVerificationLifecycle(t *testing.T) {
 			case "disabled":
 				err = runtime.SetEnabled(t.Context(), auth.ID, false)
 			case "removed":
-				err = runtime.Remove(t.Context(), auth.ID)
+				removed := make(chan error, 1)
+				go func() { removed <- runtime.Remove(t.Context(), auth.ID) }()
+				select {
+				case <-cancelled:
+					close(release)
+					err = <-removed
+				case err = <-removed:
+					close(release)
+					t.Error("removal returned without cancelling the recheck")
+				}
 			case "replaced":
 				updated := auth.Clone()
 				updated.Attributes["api_key"] = "different-key"
 				_, err = vault.Save(t.Context(), updated)
 			}
-			close(release)
+			if change != "removed" {
+				close(release)
+			}
 			if err != nil {
 				t.Fatal(err)
 			}

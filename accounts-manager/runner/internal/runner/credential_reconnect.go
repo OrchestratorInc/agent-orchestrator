@@ -87,7 +87,7 @@ func (v *credentialVault) reconnectVersion(ctx context.Context, auth *coreauth.A
 		return 0, false
 	}
 	entry, exists := v.state.Records[auth.ID]
-	if !exists || entry.Deleted || strconv.FormatUint(entry.Generation, 10) != auth.Attributes[vaultGenerationAttribute] {
+	if !exists || entry.Deleted || v.removingLocked(auth.ID) || strconv.FormatUint(entry.Generation, 10) != auth.Attributes[vaultGenerationAttribute] {
 		return 0, false
 	}
 	return entry.Generation, entry.Identity != ""
@@ -99,19 +99,22 @@ func (v *credentialVault) beginProviderLogin(ctx context.Context, operationID, p
 	if err := v.readyLocked(ctx); err != nil {
 		return err
 	}
-	if !validVaultID(operationID) || !validVaultProvider(provider) || !time.Now().Before(expiresAt) || (targetID == "") != (generation == 0) {
+	if !validVaultID(operationID) || reservedRemovalOperation(operationID) || !validVaultProvider(provider) || !time.Now().Before(expiresAt) || (targetID == "") != (generation == 0) {
 		return errCredentialConflict
 	}
 	if prior, exists := v.state.Operations[operationID]; exists {
 		if !prior.ProviderLogin || prior.Provider != provider || prior.Status != "pending" || (targetID != "" && (prior.TargetID != targetID || prior.ExpectedGeneration != generation)) {
 			return errCredentialConflict
 		}
+		if prior.TargetID != "" && v.removingLocked(prior.TargetID) {
+			return errCredentialFenced
+		}
 		return nil
 	}
 	op := vaultOperation{Provider: provider, ExpiresAt: expiresAt, Status: "pending", ProviderLogin: true}
 	if targetID != "" {
 		entry, exists := v.state.Records[targetID]
-		if !exists || entry.Deleted || entry.Provider != provider || entry.Generation != generation {
+		if !exists || entry.Deleted || v.removingLocked(targetID) || entry.Provider != provider || entry.Generation != generation {
 			return errCredentialFenced
 		}
 		if entry.Identity == "" {
@@ -134,7 +137,7 @@ func (v *credentialVault) beginProviderLogin(ctx context.Context, operationID, p
 
 func (v *credentialVault) commitReconnectLocked(operationID string, op vaultOperation, auth *coreauth.Auth, fingerprint string) (*coreauth.Auth, error) {
 	entry, exists := v.state.Records[op.TargetID]
-	if !op.ProviderLogin || !exists || entry.Deleted || entry.Generation != op.ExpectedGeneration || entry.Provider != auth.Provider {
+	if !op.ProviderLogin || !exists || entry.Deleted || v.removingLocked(op.TargetID) || entry.Generation != op.ExpectedGeneration || entry.Provider != auth.Provider {
 		return nil, errCredentialFenced
 	}
 	if entry.Identity == "" || providerCredentialIdentity(auth) != entry.Identity {

@@ -22,7 +22,7 @@ func (v *credentialVault) setLabel(ctx context.Context, id, label string, genera
 		return nil, errCredentialConflict
 	}
 	entry, exists := v.state.Records[id]
-	if !exists || entry.Deleted || entry.Generation != generation {
+	if !exists || entry.Deleted || v.removingLocked(id) || entry.Generation != generation {
 		return nil, errCredentialFenced
 	}
 	auth, err := v.authLocked(id, entry)

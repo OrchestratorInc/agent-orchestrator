@@ -26,7 +26,7 @@ func (v *credentialVault) matchesAdmitted(ctx context.Context, incoming *coreaut
 		return false
 	}
 	entry, exists := v.state.Records[incoming.ID]
-	if !exists || entry.Deleted || entry.Provider != incoming.Provider || incoming.Attributes[vaultGenerationAttribute] != strconv.FormatUint(entry.Generation, 10) {
+	if !exists || entry.Deleted || v.removingLocked(incoming.ID) || entry.Provider != incoming.Provider || incoming.Attributes[vaultGenerationAttribute] != strconv.FormatUint(entry.Generation, 10) {
 		return false
 	}
 	if requireVerified && (entry.Verification != "verified" || entry.VerifiedAt.IsZero()) {
@@ -60,7 +60,7 @@ func (v *credentialVault) setEnabled(ctx context.Context, id string, enabled boo
 		return nil, err
 	}
 	entry, exists := v.state.Records[id]
-	if !exists || entry.Deleted {
+	if !exists || entry.Deleted || v.removingLocked(id) {
 		return nil, errCredentialFenced
 	}
 	auth, err := v.authLocked(id, entry)
