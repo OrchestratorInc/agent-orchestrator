@@ -401,7 +401,10 @@ func (m *Manager) finishAccountSwitchRun(store ports.AccountsManagerSwitchStore,
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	op, found, err := store.GetAccountsManagerSwitch(ctx, initial.ID)
-	if err == nil && found && !op.Phase.Terminal() {
+	// Shutdown does not invalidate durable proof that stopping has not begun.
+	shutdownBeforeStop := m.backgroundContext.Err() != nil &&
+		(op.Phase == domain.AccountsManagerSwitchRequested || op.Phase == domain.AccountsManagerSwitchWaiting)
+	if err == nil && found && !op.Phase.Terminal() && !shutdownBeforeStop {
 		phase := domain.AccountsManagerSwitchRecoveryRequired
 		if op.Phase == domain.AccountsManagerSwitchRequested || op.Phase == domain.AccountsManagerSwitchWaiting {
 			phase = domain.AccountsManagerSwitchFailed
