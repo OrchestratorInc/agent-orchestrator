@@ -89,6 +89,7 @@ type Service struct {
 
 	runPromptSuggestion   func(context.Context, domain.SessionID, string, string, string) (string, error)
 	promptSuggestionSlots chan struct{}
+	turnFailureWake  func()
 
 	mu               sync.RWMutex
 	controllers      map[domain.SessionID]*Controller
@@ -104,6 +105,11 @@ type Service struct {
 // has constructed both services.
 func (s *Service) SetReportCoordinator(coordinator *reportsvc.Coordinator) {
 	s.reports = coordinator
+}
+
+// SetTurnFailureWake schedules delivery after a failed turn commits.
+func (s *Service) SetTurnFailureWake(wake func()) {
+	s.turnFailureWake = wake
 }
 
 // controllerGate serializes start/stop for one session without making provider
@@ -887,6 +893,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	// replaced can be told apart from the current one's.
 	controller := newController(
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
+	controller.turnFailureWake = s.turnFailureWake
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		providerTurnID := controller.restoreLiveTurnOwnership(liveRows.Turns)

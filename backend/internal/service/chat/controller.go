@@ -77,6 +77,7 @@ type Store interface {
 	MarkTurnDispatching(ctx context.Context, turnID string) error
 	BindTurnToProvider(ctx context.Context, turnID, providerTurnID string, now time.Time) error
 	SettleTurn(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, now time.Time) error
+	EnqueueWorkerTurnFailure(ctx context.Context, conversationID, providerTurnID string, at time.Time) error
 	SettleTurnByID(ctx context.Context, turnID string, state domain.TurnState, errMessage string, now time.Time) error
 	SettleOrphanedTurns(ctx context.Context, session domain.SessionID, now time.Time) error
 	SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error
@@ -209,6 +210,7 @@ type Controller struct {
 	now                    Clock
 	onAccountChanged       func(domain.SessionID, string, domain.AgentHarness)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
+	turnFailureWake        func()
 
 	// sendMu serializes command dispatch so only one operation mutates the
 	// provider conversation at a time.
@@ -2817,6 +2819,13 @@ func (c *Controller) cleanupOwnedControllerWork(ctx context.Context, now time.Ti
 // projectEvent archives one normalized provider event and applies its durable
 // projection in the same SQLite transaction.
 func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (bool, bool, error) {
+	primaryFailure := false
+	if event.Kind == ports.ChatEventTurnCompleted && settledTurnState(event) == domain.TurnStateFailed && c.reviewID == "" &&
+		(event.ProviderConversationID == "" || event.ProviderConversationID == c.conv.ProviderConversationID()) {
+		c.mu.Lock()
+		primaryFailure = c.pendingTurnID != "" && c.pendingTurnID == event.ProviderTurnID
+		c.mu.Unlock()
+	}
 	record := map[string]any{
 		"kind":                   event.Kind,
 		"providerEventId":        event.ProviderEventID,
@@ -2867,7 +2876,7 @@ func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (b
 	if err != nil {
 		return false, false, fmt.Errorf("encode provider event archive: %w", err)
 	}
-	project := func(txCtx context.Context) error { return c.apply(txCtx, event) }
+	project := func(txCtx context.Context) error { return c.apply(txCtx, event, primaryFailure) }
 	var projected bool
 	if c.reviewID != "" {
 		projected, err = c.store.ProjectReviewProviderEvent(ctx, c.conversation.ID, c.sessionID,
@@ -2930,7 +2939,7 @@ func (c *Controller) applyCommittedTurnLifecycle(event ports.ChatEvent) bool {
 	}
 }
 
-func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
+func (c *Controller) apply(ctx context.Context, event ports.ChatEvent, primaryFailure bool) error {
 	now := c.now()
 
 	switch event.Kind {
@@ -2986,6 +2995,11 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		if err := c.store.SettleTurn(
 			ctx, c.conversation.ID, event.ProviderTurnID, state, message, now); err != nil {
 			return err
+		}
+		if primaryFailure {
+			if err := c.store.EnqueueWorkerTurnFailure(ctx, c.conversation.ID, event.ProviderTurnID, now); err != nil {
+				return err
+			}
 		}
 		if errors.Is(event.Err, ports.ErrChatAuthRequired) {
 			if err := c.recordAccount(ctx, ports.ChatAccount{
@@ -3360,8 +3374,14 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		if reauthRequired {
 			activityState = domain.ActivityWaitingInput
 			activityEvent = "chat.account.reauth"
+		} else if settledTurnState(event) == domain.TurnStateFailed {
+			activityState = domain.ActivityWaitingInput
+			activityEvent = "chat.turn.failed"
 		}
 		c.reportActivity(ctx, activityState, activityEvent, now)
+		if activityEvent == "chat.turn.failed" && c.turnFailureWake != nil {
+			c.turnFailureWake()
+		}
 		// Only a completed turn releases queued work; a failed or recovered one holds
 		// the queue so it cannot cascade through the same outage (issue #4861).
 		_ = c.drainLocked(ctx, settledTurnState(event) == domain.TurnStateCompleted) // drain logs failures.
