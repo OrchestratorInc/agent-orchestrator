@@ -97,6 +97,33 @@ describe("mobile browser bridge protocol", () => {
 		expect((value as string).length).toBeGreaterThan(240);
 	});
 
+	it("reports native key presses as unsupported instead of claiming synthetic success", () => {
+		let posted: string | undefined;
+		const window = {
+			ReactNativeWebView: {
+				postMessage(raw: string) {
+					posted = raw;
+				},
+			},
+		};
+		const script = browserCommandScript({
+			type: "command",
+			requestId: "press-1",
+			sessionId: "s1",
+			action: "press",
+			args: { key: "Control+A" },
+		});
+		new Function("window", "document", "location", script)(window, {}, { href: "https://example.com" });
+		const message = posted ? parseBrowserBridgeMessage(posted) : undefined;
+		expect(message && bridgeResult(message)).toEqual({
+			ok: false,
+			error: {
+				code: "BROWSER_ACTION_UNSUPPORTED",
+				message: "Native key presses are not available on the mobile browser surface.",
+			},
+		});
+	});
+
 	it("accepts only tagged correlated results", () => {
 		expect(parseBrowserBridgeMessage("{}")).toBeUndefined();
 		const message = parseBrowserBridgeMessage(JSON.stringify({

@@ -134,7 +134,10 @@ export const MOBILE_BROWSER_BOOTSTRAP = `
           case 'type': var t=target(a.ref); t.focus(); inputValue(t, String(t.value || '') + String(a.text || a.value || '')); result={ typed:a.ref }; break;
           case 'check': var c=target(a.ref); if(!c.checked)c.click(); result={ checked:a.ref }; break;
           case 'uncheck': var u=target(a.ref); if(u.checked)u.click(); result={ unchecked:a.ref }; break;
-          case 'press': var active=document.activeElement || document.body, key=String(a.key || ''); active.dispatchEvent(new KeyboardEvent('keydown',{key:key,bubbles:true})); active.dispatchEvent(new KeyboardEvent('keyup',{key:key,bubbles:true})); result={ pressed:key }; break;
+          case 'press':
+            var unsupportedKey = new Error('Native key presses are not available on the mobile browser surface.');
+            unsupportedKey.code = 'BROWSER_ACTION_UNSUPPORTED';
+            throw unsupportedKey;
           case 'scroll': var amount=Number(a.amount || 500), x=0,y=0; if(a.direction==='up')y=-amount;else if(a.direction==='left')x=-amount;else if(a.direction==='right')x=amount;else y=amount; window.scrollBy({left:x,top:y,behavior:'smooth'}); result={ scrolled:true }; break;
           case 'scrollintoview': target(a.ref).scrollIntoView({block:'center',behavior:'smooth'}); result={ scrolled:a.ref }; break;
           case 'get': {
