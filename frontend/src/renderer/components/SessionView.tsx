@@ -432,16 +432,109 @@ function SessionInspectorRail({
 // x-transform). Summary/Reviews/Files share a utility width, while Browser
 // automatically grows into a co-work canvas. Chat readability clamps either
 // profile before the conversation can become unusably narrow.
-function CloudSessionLifecycleLoader() {
+function cloudStartupStage(observedState: string | undefined, workerConnected: boolean, terminalOnly = false): number {
+	return terminalOnly || (observedState === "running" && workerConnected) ? 3
+		: (observedState === "bootstrapping" && workerConnected) || observedState === "running" ? 2
+		: observedState === "provisioning" || observedState === "bootstrapping" ? 1
+		: 0;
+}
+
+function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly }: { sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean }) {
 	const { t } = useTranslation();
+	const { client } = useCloudCp();
+	const factIndex = cloudStartupStage(observedState, workerConnected, terminalOnly);
+	const [factProgress, setFactProgress] = useState({ index: factIndex, since: createdAt ?? new Date().toISOString() });
+	const [remoteProgress, setRemoteProgress] = useState({ index: factIndex, since: createdAt ?? new Date().toISOString() });
+	const [progress, setProgress] = useState({ index: terminalOnly ? 3 : 0, since: createdAt ?? new Date().toISOString() });
+	const replayCutoff = useRef(Date.now() - 60 * 60 * 1_000);
+	useEffect(() => {
+		setFactProgress((current) => current.index === factIndex ? current : { index: factIndex, since: new Date().toISOString() });
+	}, [factIndex]);
+	useEffect(() => {
+		if (!orgId || terminalOnly) return;
+		const controller = new AbortController();
+		let timer: number | undefined;
+		const poll = async () => {
+			try {
+				const { session } = await client.getSession(orgId, sessionId, { signal: controller.signal });
+				if (controller.signal.aborted) return;
+				const index = cloudStartupStage(session.observedState, session.runtimeConnected);
+				setRemoteProgress((current) => current.index === index ? current : { index, since: new Date().toISOString() });
+			} catch {
+				// Keep the last confirmed stage and retry while the loader is visible.
+			} finally {
+				if (!controller.signal.aborted) timer = window.setTimeout(() => void poll(), 2_000);
+			}
+		};
+		void poll();
+		return () => {
+			controller.abort();
+			if (timer !== undefined) window.clearTimeout(timer);
+		};
+	}, [client, orgId, sessionId, terminalOnly]);
+	useEffect(() => {
+		if (!orgId || terminalOnly) return;
+		const controller = new AbortController();
+		let after = 0;
+		let timer: number | undefined;
+		const poll = async () => {
+			try {
+				let latest: { index: number; since: string } | undefined;
+				for (;;) {
+					const page = await client.listChatEvents(orgId, sessionId, { after, limit: 500 }, { signal: controller.signal });
+					if (controller.signal.aborted) return;
+					for (const event of page.events) {
+						// Complete the replay before painting a stage. Old epochs can
+						// contain agent.ready long before this workspace restart.
+						const occurredAt = Date.parse(event.createdAt);
+						if (!Number.isFinite(occurredAt) || occurredAt < replayCutoff.current) continue;
+						const index = event.type === "sandbox.provisioning" ? 1
+							: event.type === "worker.connected" || event.type === "worker.ready" ? 2
+							: event.type === "agent.ready" ? 3
+							: undefined;
+						if (index !== undefined) latest = { index, since: event.createdAt };
+					}
+					after = page.nextAfter;
+					if (!page.hasMore) break;
+				}
+				if (latest) setProgress(latest);
+			} catch {
+				// Keep the current stage and retry while the session is loading.
+			} finally {
+				if (!controller.signal.aborted) timer = window.setTimeout(() => void poll(), 2_000);
+			}
+		};
+		void poll();
+		return () => {
+			controller.abort();
+			if (timer !== undefined) window.clearTimeout(timer);
+		};
+	}, [client, orgId, sessionId, terminalOnly]);
 	const steps = useMemo(() => [
-		t("terminal.sessionLoader.orchestrating"),
-		t("terminal.sessionLoader.coordinating"),
-		t("terminal.sessionLoader.arranging"),
-		t("terminal.sessionLoader.synchronizing"),
-		t("terminal.sessionLoader.preparing"),
-		t("terminal.sessionLoader.finishing"),
+		t("terminal.sessionLoader.building"),
+		t("terminal.sessionLoader.worker"),
+		t("terminal.sessionLoader.repositoryAgent"),
+		t("terminal.sessionLoader.terminal"),
 	], [t]);
+	const confirmedFacts = remoteProgress.index > factProgress.index ? remoteProgress : factProgress;
+	const target = confirmedFacts.index > progress.index ? confirmedFacts : progress;
+	const [display, setDisplay] = useState(target);
+	useEffect(() => {
+		if (display.index === target.index) {
+			if (display.since !== target.since) setDisplay(target);
+			return;
+		}
+		if (target.index < display.index || target.index === display.index + 1) {
+			setDisplay(target);
+			return;
+		}
+		// A replay page can contain several milestones. Let each real stage
+		// appear briefly instead of jumping straight to the final phrase.
+		const timer = window.setTimeout(() => {
+			setDisplay({ index: display.index + 1, since: new Date().toISOString() });
+		}, 650);
+		return () => window.clearTimeout(timer);
+	}, [display, target]);
 	return (
 		<div
 			// Sits at the session-pane chrome level: it must cover the loading
@@ -456,6 +549,8 @@ function CloudSessionLifecycleLoader() {
 		>
 			<MultiStepLoader
 				ariaLabel={t("terminal.sessionLoader.label")}
+				activeIndex={display.index}
+				activeSince={display.since}
 				className="-translate-x-8"
 				steps={steps}
 			/>
@@ -738,6 +833,13 @@ export function SessionView({ sessionId }: SessionViewProps) {
 	const session = workspaceQuery.data;
 	const cloudStage = cloudLifecycleStage(session);
 	const cloudReconnecting = useTerminalResetStore((state) => Boolean(state.reconnecting[sessionId]));
+	const [terminalAttachment, setTerminalAttachment] = useState({ sessionId: "", attached: false });
+	const terminalAttached = terminalAttachment.sessionId === sessionId && terminalAttachment.attached;
+	const onSessionTerminalAttached = useCallback((attached: boolean) => {
+		setTerminalAttachment((current) => current.sessionId === sessionId && current.attached === attached
+			? current
+			: { sessionId, attached });
+	}, [sessionId]);
 	// Latch the session that has reached "connected" at least once (keyed on
 	// sessionId so it resets cleanly when the view switches sessions). After the
 	// first successful connect, a transient runtime-connection drop while the
@@ -746,16 +848,12 @@ export function SessionView({ sessionId }: SessionViewProps) {
 	// full-screen lifecycle loader over the terminal for the rest of the turn.
 	// Only a genuine workspace (re)start — VM stopped/resuming/provisioning/
 	// bootstrapping — should block after the session has connected once.
-	// "Connected enough to show the terminal": either the lifecycle stage is
-	// fully connected, OR the agent terminal is already live -- a worker epoch has
-	// been minted (terminalGeneration set) and the relay is connected -- even
-	// while the sandbox still reports "bootstrapping". On a fresh spawn the agent
-	// runs its first turn DURING bootstrapping (observed flips to "running" only
-	// afterwards), so gating on the live terminal instead of observed keeps the
-	// streaming terminal visible instead of a full-screen loader over it.
-	const agentTerminalLive = Boolean(session?.runtimeConnected) && Boolean(session?.terminalGeneration);
+	// Checkout and agent startup continue after the worker connects. Wait for
+	// the actual terminal attachment before dismissing the startup view.
+	const expectsTerminal = session?.mode !== "chat" && !browserOnly;
+	const sessionReady = expectsTerminal ? terminalAttached : cloudStage === "connected";
 	const connectedSessionRef = useRef("");
-	if (cloudStage === "connected" || agentTerminalLive) connectedSessionRef.current = sessionId;
+	if (sessionReady) connectedSessionRef.current = sessionId;
 	const hasConnectedOnce = connectedSessionRef.current === sessionId;
 	const workspaceRestarting = cloudStage === "resuming_workspace"
 		|| cloudStage === "waiting_for_coder_agent"
@@ -766,7 +864,7 @@ export function SessionView({ sessionId }: SessionViewProps) {
 	// flash) and a genuine workspace restart still raise the loader.
 	const showLifecycleLoader = hasConnectedOnce
 		? (cloudReconnecting || workspaceRestarting)
-		: (cloudReconnecting || (cloudStage != null && cloudStage !== "paused_by_coder" && cloudStage !== "connected"));
+		: (cloudReconnecting || (cloudStage != null && cloudStage !== "paused_by_coder" && !sessionReady));
 	const cloudResumeRef = useRef("");
 	const requestCloudResume = useCallback(async () => {
 		if (!session?.cloud) return;
@@ -2096,6 +2194,7 @@ export function SessionView({ sessionId }: SessionViewProps) {
 									onCloseShellTerminal={closeShellTerminalByHandle}
 									onRenameShellTerminal={renameShellTerminalByHandle}
 									onSelectSessionTerminal={selectSessionTerminal}
+									onSessionTerminalAttached={onSessionTerminalAttached}
 									onSelectReviewerTerminal={selectReviewerTerminal}
 									onSelectReviewerChat={(target) => selectReviewerChat(target.reviewId)}
 									onSelectShellTerminal={selectShellTerminal}
@@ -2279,7 +2378,15 @@ export function SessionView({ sessionId }: SessionViewProps) {
 				</div>
 			) : null}
 			{showLifecycleLoader
-				? <CloudSessionLifecycleLoader />
+				? <CloudSessionLifecycleLoader
+					key={`${sessionId}:${(cloudReconnecting && !workspaceRestarting) || cloudStage === "connected" ? "terminal" : "startup"}`}
+					sessionId={sessionId}
+					orgId={session?.cloud?.orgId ?? ""}
+					createdAt={session?.cloud?.observedState === "requested" ? session.createdAt : undefined}
+					observedState={session?.cloud?.observedState}
+					workerConnected={Boolean(session?.runtimeConnected)}
+					terminalOnly={(cloudReconnecting && !workspaceRestarting) || cloudStage === "connected"}
+				/>
 				: null}
 			<SessionInterfaceSwitchDialog
 				open={interfaceSwitchDialogOpen}
