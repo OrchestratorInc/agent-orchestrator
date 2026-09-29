@@ -2,7 +2,7 @@ import { Host } from "@expo/ui";
 import { Group, Spacer } from "@expo/ui/swift-ui";
 import { frame } from "@expo/ui/swift-ui/modifiers";
 import { Platform, StyleSheet, View } from "react-native";
-import { glassCircle, glassField } from "../glass";
+import { glassCircle, glassPanel } from "../glass";
 import { useTheme, useThemeState } from "../ThemeProvider";
 
 export const browserGlassSupported = parseInt(String(Platform.Version), 10) >= 26;
@@ -17,7 +17,9 @@ export function BrowserGlassSurface({ shape }: { shape: "field" | "circle" }) {
 			<Host style={StyleSheet.absoluteFill} colorScheme={scheme} seedColor={t.accent}>
 				<Group modifiers={[
 					frame({ maxWidth: 2000, maxHeight: 2000 }),
-					shape === "circle" ? glassCircle(undefined, false) : glassField(44),
+					// A theme tint keeps dark chrome legible over bright sites (and light
+					// chrome legible over dark sites) without replacing the live material.
+					shape === "circle" ? glassCircle(t.bgSurface, false) : glassPanel(22, t.bgSurface, false),
 				]}>
 					<Spacer />
 				</Group>
