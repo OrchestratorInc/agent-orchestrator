@@ -27,6 +27,8 @@ export interface Settings {
 	cloudEnabled: boolean;
 	/** Cloud control plane base URL; empty when cloud is not configured. */
 	cloudControlPlaneUrl: string;
+	/** Whether the daemon's AO_TRACKER_INTAKE gate is on. Off hides intake controls. */
+	trackerIntakeEnabled: boolean;
 }
 
 export function useSettings() {
@@ -52,6 +54,10 @@ export function useSettings() {
 				cloudOffering: data?.cloudOffering ?? false,
 				cloudEnabled: data?.cloudEnabled ?? false,
 				cloudControlPlaneUrl: data?.cloudControlPlaneUrl ?? "",
+				// Fails open, unlike the cloud gates: a daemon predating
+				// AO_TRACKER_INTAKE has no gate and does run intake, so hiding the
+				// control there would hide a feature that works.
+				trackerIntakeEnabled: data?.trackerIntakeEnabled ?? true,
 			};
 		},
 	});

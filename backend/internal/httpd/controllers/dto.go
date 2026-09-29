@@ -2777,6 +2777,9 @@ type SettingsResponse struct {
 	// CloudControlPlaneURL is the cloud control plane base URL; empty when no
 	// control plane is configured.
 	CloudControlPlaneURL string `json:"cloudControlPlaneUrl"`
+	// TrackerIntakeEnabled reports the AO_TRACKER_INTAKE gate, so a client can
+	// avoid offering a per-project intake control the daemon will ignore.
+	TrackerIntakeEnabled bool `json:"trackerIntakeEnabled"`
 }
 
 // AgentInstallerCatalogResponse is the body of GET /api/v1/agents/installers.
