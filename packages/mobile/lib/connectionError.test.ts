@@ -304,3 +304,18 @@ describe("isDesktopUnreachable", () => {
 		expect(isDesktopUnreachable(poll(null, { error: null }))).toBe(false);
 	});
 });
+
+describe("connection failure icons", () => {
+	const target = { host: "192.168.1.5", port: "3011", platform: "ios" };
+	// Every cause used to share "wifi-off", so a rotated password looked like a
+	// network problem at a glance. Each board-facing cause now has its own glyph.
+	it.each([
+		["auth", "monitor-off"],
+		["unreachable", "unplug"],
+		["rate-limited", "timer"],
+		["server-error", "monitor-cog"],
+		["tunnel-rotated", "route-off"],
+	] as const)("%s shows %s", (reason, icon) => {
+		expect(describeConnectionFailure(reason, target).icon).toBe(icon);
+	});
+});

@@ -154,7 +154,7 @@ export default function FleetScreen() {
 							<EmptyState icon="search" title="No workers found" message={`No workers match “${query.trim()}”.`} />
 						) : error ? (
 							<EmptyState
-								icon="wifi-off"
+								icon={failure.icon}
 								title={failure.title}
 								message={failure.message}
 								action={
