@@ -500,7 +500,6 @@ function LinkedPRCard({ pr }: { pr: SessionPRReference }) {
 				<CopyButton compact label={t("link.copy")} text={pr.url} />
 			</div>
 			<p className="mt-1.5 text-2xs text-settings-muted text-pretty">{t("inspector.linkedPR")}</p>
-			<p className="mt-1 text-2xs text-settings-muted text-pretty">{t("inspector.reportedPRReference")}</p>
 		</article>
 	);
 }

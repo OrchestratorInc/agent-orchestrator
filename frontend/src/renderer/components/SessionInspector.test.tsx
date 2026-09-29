@@ -521,7 +521,7 @@ describe("SessionInspector PR section", () => {
 
     const section = prSection("Pull request");
     expect(section.getByRole("link", { name: /gitlab.com\/release\/notes MR #9/ })).toHaveAttribute("href", "https://gitlab.com/release/notes/-/merge_requests/9");
-    expect(section.getByText("Linked for reference")).toBeInTheDocument();
+    expect(section.getByText("Reference only")).toBeInTheDocument();
     expect(section.getByRole("button", { name: "Copy link" })).toBeInTheDocument();
     expect(section.queryByRole("button", { name: /merge/i })).not.toBeInTheDocument();
     expect(section.queryByText("No pull request opened yet.")).not.toBeInTheDocument();

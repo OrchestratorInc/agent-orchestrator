@@ -463,7 +463,6 @@
 	"inspector.pullRequest": "풀 리퀘스트",
 	"inspector.pullRequests": "풀 리퀘스트 ({{count}})",
 	"inspector.linkedPR": "참고용 링크",
-	"inspector.reportedPRReference": "작업 에이전트가 보고했습니다. AO는 이 링크의 검사, 리뷰 또는 병합을 추적하지 않습니다.",
 	"inspector.resumeAgent": "에이전트 재개",
 	"inspector.resumeFallbackBody": "AO가 네이티브 에이전트 세션을 재개할 수 없어, 저장된 프롬프트로 새 대화를 시작했습니다.",
 	"inspector.resumingAgent": "에이전트 재개 중…",

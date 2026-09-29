@@ -466,7 +466,6 @@
 	"inspector.pullRequest": "Pull request",
 	"inspector.pullRequests": "Pull requests ({{count}})",
 	"inspector.linkedPR": "Lien de référence",
-	"inspector.reportedPRReference": "Signalé par l’agent. AO ne suit pas les vérifications, les revues ni les fusions de ce lien.",
 	"inspector.resumeAgent": "Reprendre l'agent",
 	"inspector.resumeFallbackBody": "AO n'a pas pu reprendre la session native de l'agent, il a donc démarré une nouvelle conversation à partir du prompt enregistré.",
 	"inspector.resumingAgent": "Reprise de l'agent…",

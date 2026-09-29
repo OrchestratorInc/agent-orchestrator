@@ -462,7 +462,6 @@
 	"inspector.pullRequest": "拉取请求",
 	"inspector.pullRequests": "拉取请求（{{count}}）",
 	"inspector.linkedPR": "仅作参考的链接",
-	"inspector.reportedPRReference": "由工作代理报告。AO 不会跟踪此链接的检查、评审或合并。",
 	"inspector.resumeAgent": "恢复代理",
 	"inspector.resumeFallbackBody": "AO 无法恢复原生代理会话，因此已从已保存的提示重新开始对话。",
 	"inspector.resumingAgent": "正在恢复代理…",
