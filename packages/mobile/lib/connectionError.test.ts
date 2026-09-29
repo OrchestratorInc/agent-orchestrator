@@ -319,3 +319,22 @@ describe("connection failure icons", () => {
 		expect(describeConnectionFailure(reason, target).icon).toBe(icon);
 	});
 });
+
+describe("connection failure hint", () => {
+	// The board's empty states show only a title and buttons; a disconnect is the
+	// one cause that keeps a short line, because the fix is on the user's side.
+	it("gives a disconnect one short line, matched to the network in use", () => {
+		expect(describeConnectionFailure("unreachable", { host: "192.168.1.5", port: "3011", platform: "ios" }).hint).toBe(
+			"Check you're on the same Wi-Fi.",
+		);
+		expect(describeConnectionFailure("unreachable", { host: "100.101.102.103", port: "3011", platform: "ios" }).hint).toBe(
+			"Check Tailscale is on for both devices.",
+		);
+	});
+
+	it("leaves every other cause without one", () => {
+		for (const reason of ["auth", "rate-limited", "server-error", "tunnel-rotated"] as const) {
+			expect(describeConnectionFailure(reason, { host: "192.168.1.5", port: "3011", platform: "ios" }).hint).toBeUndefined();
+		}
+	});
+});

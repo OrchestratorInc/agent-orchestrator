@@ -123,6 +123,10 @@ export type ConnectionErrorCopy = {
 	// password no longer wears the same "no Wi-Fi" icon as a desktop that is
 	// simply out of range.
 	icon: FeatherIconName;
+	// One short line under the title on the board's empty state. Most causes
+	// leave it out and let the title and buttons speak; a disconnect keeps one
+	// because the fix is on the user's side and not obvious from the title.
+	hint?: string;
 	// When true the screen appends the Local Network hint and offers a button
 	// that opens the OS settings page for AO.
 	showLocalNetworkHint: boolean;
@@ -172,6 +176,9 @@ export function describeConnectionFailure(
 			return {
 				title: "Your desktop disconnected",
 				icon: "unplug",
+				hint: isTailscaleHost(target.host)
+					? "Check Tailscale is on for both devices."
+					: "Check you're on the same Wi-Fi.",
 				message: isTailscaleHost(target.host)
 					? messagePrefix +
 						"Make sure Tailscale is connected on this phone and your desktop, and that your desktop is awake."

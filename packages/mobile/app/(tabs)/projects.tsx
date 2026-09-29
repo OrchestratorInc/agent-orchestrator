@@ -111,6 +111,7 @@ export default function ProjectsScreen() {
 							<EmptyState
 								icon={failure.icon}
 								title={failure.title}
+								message={failure.hint}
 								action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />}
 							/>
 						) : (

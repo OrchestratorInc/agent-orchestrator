@@ -156,6 +156,7 @@ export default function FleetScreen() {
 							<EmptyState
 								icon={failure.icon}
 								title={failure.title}
+								message={failure.hint}
 								action={
 									<View style={styles.errorActions}>
 										<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />
