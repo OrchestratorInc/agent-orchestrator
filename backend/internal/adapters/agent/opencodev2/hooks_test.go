@@ -112,6 +112,35 @@ func TestV2HooksValidateWorkspaceAndContext(t *testing.T) {
 	}
 }
 
+func TestManagedV2PluginLoadsWithoutWorkspaceNodeModules(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("plugin loading fixture uses Unix PATH semantics")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the OpenCode 2 plugin fixture")
+	}
+
+	workspace := t.TempDir()
+	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace}); err != nil {
+		t.Fatal(err)
+	}
+	fixture := t.TempDir()
+	modulePath := filepath.Join(fixture, "ao-activity.mjs")
+	source, err := os.ReadFile(v2PluginPath(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeV2TestFile(t, modulePath, string(source), 0o600)
+	harness := writeV2Harness(t, fixture)
+
+	cmd := exec.CommandContext(context.Background(), node, harness, modulePath, workspace, "single")
+	cmd.Env = append(envWithoutPath(os.Environ()), "PATH="+t.TempDir())
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("standalone managed plugin did not load: %v\n%s", err, output)
+	}
+}
+
 func TestManagedV2PluginReportsLifecycleInOrderAndIgnoresHookFailures(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake ao executable fixture uses a Unix shebang")
@@ -136,7 +165,6 @@ func TestManagedV2PluginReportsLifecycleInOrderAndIgnoresHookFailures(t *testing
 	// timeout test below runs the unmodified source.
 	source = []byte(strings.Replace(string(source), "const HOOK_TIMEOUT_MS = 1_250", "const HOOK_TIMEOUT_MS = 10_000", 1))
 	writeV2TestFile(t, modulePath, string(source), 0o600)
-	writeV2PluginPackage(t, fixture)
 	capture := filepath.Join(fixture, "calls.jsonl")
 	writeV2TestFile(t, filepath.Join(fixture, "ao"), `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -212,7 +240,6 @@ func TestManagedV2PluginBoundsHungHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeV2TestFile(t, modulePath, string(source), 0o600)
-	writeV2PluginPackage(t, fixture)
 	writeV2TestFile(t, filepath.Join(fixture, "ao"), "#!/bin/sh\nexec sleep 10\n", 0o755)
 	harness := writeV2Harness(t, fixture)
 
@@ -257,13 +284,6 @@ func readV2HookCalls(t *testing.T, path string) []v2HookCall {
 		t.Fatal(err)
 	}
 	return calls
-}
-
-func writeV2PluginPackage(t *testing.T, root string) {
-	t.Helper()
-	dir := filepath.Join(root, "node_modules", "@opencode", "plugin")
-	writeV2TestFile(t, filepath.Join(dir, "package.json"), `{"type":"module","exports":"./index.js"}`, 0o600)
-	writeV2TestFile(t, filepath.Join(dir, "index.js"), `export const Plugin = { define(value) { return value } };`, 0o600)
 }
 
 func writeV2Harness(t *testing.T, root string) string {

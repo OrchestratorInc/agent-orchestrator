@@ -1,10 +1,9 @@
 // agent-orchestrator: managed opencode-v2 activity plugin (do not edit)
 import { spawn } from "node:child_process"
-import { Plugin } from "@opencode/plugin"
 
 const HOOK_TIMEOUT_MS = 1_250
 
-export default Plugin.define({
+export default {
   id: "agent-orchestrator.activity.v2",
   async setup(context) {
     const launchID = (process.env.AO_RUNTIME_LAUNCH_ID ?? "").trim()
@@ -105,4 +104,4 @@ export default Plugin.define({
       await eventLoop
     }
   },
-})
+}
