@@ -1076,13 +1076,15 @@ func (r *Runtime) runWithRetainedClient(ctx context.Context, socketName string, 
 	}
 
 	if unexpectedExit && !protocolMismatch {
-		causes := []error{ports.ErrRuntimeProbeInconclusive, currentErr}
+		causes := make([]error, 0, 2+len(candidateErrs))
+		causes = append(causes, ports.ErrRuntimeProbeInconclusive, currentErr)
 		causes = append(causes, candidateErrs...)
 		return currentOut, fmt.Errorf("tmux runtime: no client could inspect private server %q after unexpected server exit: %w", socketName, errors.Join(causes...))
 	}
 
 	mismatch := fmt.Errorf("%w: %s", ports.ErrRuntimeProtocolMismatch, strings.TrimSpace(string(currentOut)))
-	causes := []error{ports.ErrRuntimeCompatibleClientUnavailable, mismatch, currentErr}
+	causes := make([]error, 0, 3+len(candidateErrs))
+	causes = append(causes, ports.ErrRuntimeCompatibleClientUnavailable, mismatch, currentErr)
 	causes = append(causes, candidateErrs...)
 	return currentOut, fmt.Errorf("tmux runtime: no compatible client for private server %q: %w", socketName, errors.Join(causes...))
 }

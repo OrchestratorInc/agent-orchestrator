@@ -10,6 +10,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
+// GetTmuxServerClient returns the recorded compatible client for a tmux socket.
 func (s *Store) GetTmuxServerClient(ctx context.Context, socketName string) (binaryPath, binarySHA256 string, managedRetained, found bool, err error) {
 	row, err := s.qr.GetTmuxServerClient(ctx, socketName)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -21,6 +22,7 @@ func (s *Store) GetTmuxServerClient(ctx context.Context, socketName string) (bin
 	return row.BinaryPath, row.BinarySha256, row.ManagedRetained, true, nil
 }
 
+// UpsertTmuxServerClient records the client confirmed compatible with a tmux socket.
 func (s *Store) UpsertTmuxServerClient(ctx context.Context, socketName, binaryPath, binarySHA256 string, managedRetained bool, confirmedAt time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -36,6 +38,7 @@ func (s *Store) UpsertTmuxServerClient(ctx context.Context, socketName, binaryPa
 	return nil
 }
 
+// DeleteTmuxServerClient removes the recorded compatible client for a tmux socket.
 func (s *Store) DeleteTmuxServerClient(ctx context.Context, socketName string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
