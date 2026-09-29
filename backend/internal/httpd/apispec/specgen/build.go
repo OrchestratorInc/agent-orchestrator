@@ -2183,6 +2183,43 @@ func sessionOperations() []operation {
 			contentTypes: map[int]string{http.StatusOK: "text/html"},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/preview/app/*", id: "getSessionPreviewApp", tag: "sessions",
+			summary:      "Proxy the running session-owned application preview",
+			pathParams:   []any{controllers.SessionIDParam{}},
+			resps:        []respUnit{{http.StatusOK, ""}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}},
+			contentTypes: map[int]string{http.StatusOK: "text/html"},
+		},
+		{
+			method: http.MethodHead, path: "/api/v1/sessions/{sessionId}/preview/app/*", id: "headSessionPreviewApp", tag: "sessions",
+			summary:    "Read headers from the running session-owned application preview",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps:      []respUnit{{http.StatusOK, ""}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/preview/app/*", id: "postSessionPreviewApp", tag: "sessions",
+			summary:    "Send a request to the running session-owned application preview",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps:      []respUnit{{http.StatusOK, ""}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/sessions/{sessionId}/preview/app/*", id: "putSessionPreviewApp", tag: "sessions",
+			summary:    "Send a request to the running session-owned application preview",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps:      []respUnit{{http.StatusOK, ""}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/sessions/{sessionId}/preview/app/*", id: "patchSessionPreviewApp", tag: "sessions",
+			summary:    "Send a request to the running session-owned application preview",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps:      []respUnit{{http.StatusOK, ""}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/sessions/{sessionId}/preview/app/*", id: "deleteSessionPreviewApp", tag: "sessions",
+			summary:    "Send a request to the running session-owned application preview",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps:      []respUnit{{http.StatusOK, ""}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/attachments", id: "stageSessionAttachments", tag: "sessions",
 			summary:    "Write images into a running session's worktree and return their paths",
 			pathParams: []any{controllers.SessionIDParam{}},

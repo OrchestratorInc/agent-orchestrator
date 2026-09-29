@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { shellTerminalsQueryKey, type ShellTerminal } from "../hooks/useShellTerminals";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import type { AttachableTerminal } from "../hooks/useTerminalSession";
+import type { TerminalMux } from "../lib/terminal-mux";
 import type { TerminalTarget } from "../types/terminal";
 import type { WorkspaceSession } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
@@ -299,12 +300,14 @@ function renderCachedPane({
 	shellTerminals = [],
 	terminalTarget,
 	focusRequested = false,
+	createMux,
 }: {
 	session?: WorkspaceSession;
 	sessions: WorkspaceSession[];
 	shellTerminals?: ShellTerminal[];
 	terminalTarget?: TerminalTarget;
 	focusRequested?: boolean;
+	createMux?: () => TerminalMux;
 }) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	queryClient.setQueryData(workspaceQueryKey, workspaceWithSessions(sessions));
@@ -324,6 +327,7 @@ function renderCachedPane({
 							terminalTarget={nextTarget}
 							theme="dark"
 							focusRequested={focusRequested}
+							createMux={createMux}
 						/>
 					) : (
 						<div data-testid="away" />
@@ -623,6 +627,21 @@ describe("TerminalPane replay cover", () => {
 describe("TerminalCacheProvider", () => {
 	const sessionA = { ...worker, id: "sess-a", title: "session A", terminalHandleId: "handle-a" };
 	const sessionB = { ...worker, id: "sess-b", title: "session B", terminalHandleId: "handle-b" };
+
+	it("uses a caller-provided mux without retaining a remote shell in the local cache", async () => {
+		const shell = { handleId: "auth-a", title: "Log in", workingDir: "/host-a", createdAt: "2026-09-29T00:00:00Z" } satisfies ShellTerminal;
+		const createMux = vi.fn(() => ({} as TerminalMux));
+		const view = renderCachedPane({
+			sessions: [], shellTerminals: [shell], createMux,
+			terminalTarget: { kind: "shell", handleId: shell.handleId, generation: `box-a:${shell.createdAt}`, title: shell.title },
+		});
+		try {
+			await waitFor(() => expect(terminalSessionOptions.find((options) => options.shellTerminalHandleId === shell.handleId)?.createMux).toBe(createMux));
+			expect(document.querySelector("[data-terminal-cache-key]")).toBeNull();
+		} finally {
+			view.restore();
+		}
+	});
 
 	it("removes externally-created terminal hosts when the shell provider unmounts", async () => {
 		const view = renderCachedPane({ session: sessionA, sessions: [sessionA, sessionB] });

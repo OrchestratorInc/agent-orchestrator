@@ -270,7 +270,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 									displaySettings?.scope === "project" ? (
 										<ProjectSettingsForm projectId={displaySettings.projectId} hostId={displaySettings.hostId} section={activeProjectSection} onSaveState={setProjectSaveState} />
 									) : (
-										<GlobalSettingsForm cloudEnabled={cloudEnabled} focusAgentId={focusAgentId} section={activeSection} />
+										<GlobalSettingsForm cloudEnabled={cloudEnabled} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} section={activeSection} />
 									)
 								) : (
 									<div aria-hidden="true" className="h-full" data-testid="settings-dialog-body-pending" />

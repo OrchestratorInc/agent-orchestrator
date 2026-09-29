@@ -110,6 +110,7 @@ describe("registerRemotesIpc", () => {
 			"remotes:connect",
 			"remotes:disconnect",
 			"remotes:list",
+			"remotes:previewUrl",
 			"remotes:remove",
 			"remotes:update",
 		]);
@@ -144,7 +145,7 @@ describe("registerRemotesIpc", () => {
 	it("drops the proxy of a removed host", async () => {
 		const ipc = fakeIpc();
 		const closed = vi.fn().mockResolvedValue(undefined);
-		const registry = new RemoteRegistry(async () => ({ base: "http://127.0.0.1:7654/token", close: closed }));
+		const registry = new RemoteRegistry(async () => ({ base: "http://127.0.0.1:7654/token", previewUrl: (_sessionId, sourceUrl) => sourceUrl, close: closed }));
 		await registry.connect({ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: "old" });
 		registerRemotesIpc(ipc.ipcMain, { file: await tempFile(), registry });
 		await ipc.invoke("remotes:remove", "http://192.0.2.1:1");

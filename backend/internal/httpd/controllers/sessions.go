@@ -11,7 +11,9 @@ import (
 	"io/fs"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"path"
@@ -180,6 +182,9 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/preview/server", c.startPreviewServer)
 	r.Delete("/sessions/{sessionId}/preview/server", c.stopPreviewServer)
 	r.Get("/sessions/{sessionId}/preview/files/*", c.previewFile)
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		r.Method(method, "/sessions/{sessionId}/preview/app/*", http.HandlerFunc(c.previewApp))
+	}
 	r.Post("/sessions/{sessionId}/attachments", c.stageAttachments)
 	r.Get("/sessions/{sessionId}/workspace/files", c.listWorkspaceFiles)
 	r.Get("/sessions/{sessionId}/workspace/file", c.getWorkspaceFile)
@@ -467,6 +472,84 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	c.serveWorkspacePreviewFile(w, r, sess.Metadata.WorkspacePath, assetPath)
+}
+
+// previewApp reaches only the running, session-owned managed preview process.
+// The selected URL comes from the manager, never from a caller-supplied port.
+func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil || c.PreviewServer == nil {
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_NOT_FOUND", "Preview not found", nil)
+		return
+	}
+	sess, err := c.Svc.Get(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	status := c.PreviewServer.Status(sess.ID)
+	target, err := url.Parse(status.URL)
+	if err != nil || status.State != previewserver.StateReady || status.TargetKind != previewserver.TargetApp ||
+		status.URL != sess.Metadata.PreviewURL || target == nil || target.Scheme != "http" ||
+		!isPreviewLoopback(target.Hostname()) || target.User != nil || target.Port() == "" ||
+		strconv.Itoa(status.Port) != target.Port() || sess.IsTerminated {
+		w.Header().Set("X-AO-Preview-Managed-Required", "1")
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "PREVIEW_MANAGED_REQUIRED", "Run ao preview start in this session to open a remote live preview", nil)
+		return
+	}
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(req *httputil.ProxyRequest) {
+			appAuthorization := req.Out.Header.Get("X-AO-Preview-App-Authorization")
+			hadPreviewOrigin := req.Out.Header.Get("X-AO-Preview-App-Origin") != ""
+			req.SetURL(target)
+			req.Out.Host = target.Host
+			req.Out.URL.Path = "/" + strings.TrimPrefix(chi.URLParam(r, "*"), "/")
+			req.Out.URL.RawPath = ""
+			req.Out.URL.RawQuery = req.In.URL.RawQuery
+			// AO credentials authenticate the tunnel, not the agent-run web app.
+			req.Out.Header.Del("Authorization")
+			req.Out.Header.Del("Proxy-Authorization")
+			req.Out.Header.Del("X-AO-Preview-App-Authorization")
+			req.Out.Header.Del("X-AO-Preview-App-Origin")
+			req.Out.Header.Del("Origin")
+			if appAuthorization != "" {
+				req.Out.Header.Set("Authorization", appAuthorization)
+			}
+			if hadPreviewOrigin {
+				req.Out.Header.Set("Origin", target.Scheme+"://"+target.Host)
+			}
+			req.Out.Header.Del(browserCapabilityHeader)
+			cookies := req.Out.Cookies()
+			req.Out.Header.Del("Cookie")
+			for _, cookie := range cookies {
+				if cookie.Name != "ao_conn" {
+					req.Out.AddCookie(cookie)
+				}
+			}
+		},
+		ModifyResponse: func(res *http.Response) error {
+			if location := res.Header.Get("Location"); location != "" {
+				if redirect, parseErr := url.Parse(location); parseErr == nil && redirect.IsAbs() && isPreviewLoopback(redirect.Hostname()) {
+					if redirect.Port() != target.Port() {
+						return errors.New("preview redirect to another local port")
+					}
+					res.Header.Set("Location", redirect.RequestURI())
+				}
+			}
+			return nil
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
+			http.Error(w, "Preview target unavailable or redirected to another local port", http.StatusBadGateway)
+		},
+	}
+	proxy.ServeHTTP(w, r)
+}
+
+func isPreviewLoopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // PreviewOrigin serves a workspace preview from its isolated *.localhost

@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+	"github.com/coder/websocket"
 )
 
 type fakeSessionService struct {
@@ -2460,6 +2462,137 @@ func TestSessionsAPI_ManagedPreviewStartsExactApplicationAndPersistsTarget(t *te
 	}
 	if got := svc.sessions["ao-1"].Metadata.PreviewURL; got != managed.status.URL {
 		t.Fatalf("persisted preview URL = %q, want %q", got, managed.status.URL)
+	}
+}
+
+func TestSessionsAPI_ManagedPreviewAppProxy(t *testing.T) {
+	type observed struct{ path, host, authorization, origin, cookie, relay string }
+	var seenMu sync.Mutex
+	var seen observed
+	readSeen := func() observed {
+		seenMu.Lock()
+		defer seenMu.Unlock()
+		return seen
+	}
+	var app *httptest.Server
+	app = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenMu.Lock()
+		seen = observed{
+			path: r.URL.RequestURI(), host: r.Host,
+			authorization: r.Header.Get("Authorization"), origin: r.Header.Get("Origin"), cookie: r.Header.Get("Cookie"),
+			relay: r.Header.Get("X-AO-Preview-App-Authorization") + r.Header.Get("X-AO-Preview-App-Origin"),
+		}
+		seenMu.Unlock()
+		if r.URL.Path == "/ws" {
+			conn, err := websocket.Accept(w, r, nil)
+			if err != nil {
+				t.Errorf("accept websocket: %v", err)
+				return
+			}
+			defer func() { _ = conn.CloseNow() }()
+			kind, message, err := conn.Read(r.Context())
+			if err == nil {
+				err = conn.Write(r.Context(), kind, message)
+			}
+			if err != nil {
+				t.Errorf("echo websocket: %v", err)
+			}
+			return
+		}
+		if r.URL.Path == "/redirect" {
+			w.Header().Set("Location", app.URL+"/app/next")
+			w.WriteHeader(http.StatusFound)
+			return
+		}
+		_, _ = io.WriteString(w, "managed app")
+	}))
+	t.Cleanup(app.Close)
+	parsed, err := url.Parse(app.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := newFakeSessionService()
+	session := svc.sessions["ao-1"]
+	session.Metadata.PreviewURL = app.URL + "/app/"
+	svc.sessions["ao-1"] = session
+	managed := &fakeManagedPreviewServer{status: previewserver.Status{State: previewserver.StateReady, TargetKind: previewserver.TargetApp, URL: session.Metadata.PreviewURL, Port: port}}
+	srv := newSessionTestServerWithPreview(t, svc, managed)
+	request, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/sessions/ao-1/preview/app/app/?q=1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer host-password")
+	request.Header.Set("Cookie", "ao_conn=host-password; app_session=ok")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	first := readSeen()
+	if response.StatusCode != http.StatusOK || first.path != "/app/?q=1" || first.host != parsed.Host || first.authorization != "" || first.origin != "" || first.cookie != "app_session=ok" || first.relay != "" {
+		t.Fatalf("app proxy: status=%d observed=%+v", response.StatusCode, first)
+	}
+	request, err = http.NewRequest(http.MethodPost, srv.URL+"/api/v1/sessions/ao-1/preview/app/submit", strings.NewReader("data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer host-password")
+	request.Header.Set("Origin", "http://ao-preview-client.localhost:4321")
+	request.Header.Set("X-AO-Preview-App-Authorization", "Basic app-token")
+	request.Header.Set("X-AO-Preview-App-Origin", "http://ao-preview-client.localhost:4321")
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	posted := readSeen()
+	if response.StatusCode != http.StatusOK || posted.authorization != "Basic app-token" || posted.origin != app.URL || posted.relay != "" {
+		t.Fatalf("app headers: status=%d observed=%+v", response.StatusCode, posted)
+	}
+
+	redirectClient := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	redirect, err := redirectClient.Get(srv.URL + "/api/v1/sessions/ao-1/preview/app/redirect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = redirect.Body.Close()
+	if got := redirect.Header.Get("Location"); got != "/app/next" {
+		t.Fatalf("redirect Location = %q", got)
+	}
+
+	conn, _, err := websocket.Dial(context.Background(), "ws"+strings.TrimPrefix(srv.URL, "http")+"/api/v1/sessions/ao-1/preview/app/ws", &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Authorization":                  []string{"Bearer host-password"},
+			"Origin":                         []string{"http://ao-preview-client.localhost:4321"},
+			"X-Ao-Preview-App-Authorization": []string{"Basic ws-token"},
+			"X-Ao-Preview-App-Origin":        []string{"http://ao-preview-client.localhost:4321"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("websocket dial: %v", err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+	if err := conn.Write(context.Background(), websocket.MessageText, []byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	_, message, err := conn.Read(context.Background())
+	if err != nil || string(message) != "hello" {
+		t.Fatalf("websocket echo = %q, %v", message, err)
+	}
+	upgraded := readSeen()
+	if upgraded.authorization != "Basic ws-token" || upgraded.origin != app.URL || upgraded.relay != "" {
+		t.Fatalf("websocket app headers: %+v", upgraded)
+	}
+
+	managed.status.State = previewserver.StateStopped
+	body, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/app/", "")
+	assertErrorCode(t, body, status, http.StatusConflict, "PREVIEW_MANAGED_REQUIRED")
+	if headers.Get("X-AO-Preview-Managed-Required") != "1" {
+		t.Fatal("missing managed-preview guidance marker")
 	}
 }
 

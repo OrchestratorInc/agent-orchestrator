@@ -267,6 +267,7 @@ export const aoBridge: AoBridge =
 			remove: async () => undefined,
 			connect: async () => { throw new Error("remote hosts need the desktop app"); },
 			disconnect: async () => undefined,
+			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 		},
 		cloud: {
 			getSession: async () => null,

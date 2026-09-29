@@ -111,8 +111,7 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 		}
 	}
 
-	// Agent install mutations are loopback-only, while the adjacent GET
-	// catalog/status routes remain available to authenticated mobile clients.
+	// Paired clients can request the daemon's fixed harness installer.
 	req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/api/v1/agents/cursor/install", port), nil)
 	req.Host = "127.0.0.1"
 	req.Header.Set("Authorization", "Bearer secret12")
@@ -120,8 +119,36 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agent install request failed: %v", err)
 	}
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("agent install: got %d want 404", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("agent install: got %d want 200", resp.StatusCode)
+	}
+	for _, path := range []string{"/api/v1/agents/unknown/install", "/api/v1/agents/cursor/other/install"} {
+		blockedInstall, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d%s", port, path), nil)
+		blockedInstall.Header.Set("Authorization", "Bearer secret12")
+		blockedResp, err := http.DefaultClient.Do(blockedInstall)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		if blockedResp.StatusCode != http.StatusNotFound {
+			t.Fatalf("%s: got %d want 404", path, blockedResp.StatusCode)
+		}
+	}
+	unauthenticatedInstall, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/api/v1/agents/cursor/install", port), nil)
+	unauthenticatedResp, err := http.DefaultClient.Do(unauthenticatedInstall)
+	if err != nil {
+		t.Fatalf("unauthenticated agent install: %v", err)
+	}
+	if unauthenticatedResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated agent install: got %d want 401", unauthenticatedResp.StatusCode)
+	}
+	previewReq, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/api/v1/sessions/ao-1/preview/app/index.html", port), nil)
+	previewReq.Header.Set("Authorization", "Bearer secret12")
+	previewResp, err := http.DefaultClient.Do(previewReq)
+	if err != nil {
+		t.Fatalf("preview app: %v", err)
+	}
+	if previewResp.StatusCode != http.StatusOK {
+		t.Fatalf("preview app: got %d want 200", previewResp.StatusCode)
 	}
 
 	// The read-only Codex model routes are not credential surfaces and must

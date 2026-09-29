@@ -43,6 +43,12 @@ export class RemoteRegistry {
 		});
 	}
 
+	previewUrl(hostId: string, sessionId: string, sourceUrl: string): string {
+		const connected = [...this.live.values()].find(({ view }) => view.hostId === hostId);
+		if (!connected) throw new Error(`Host ${hostId} is not connected`);
+		return connected.proxy.previewUrl(sessionId, sourceUrl);
+	}
+
 	disconnect(url: string): Promise<void> {
 		return this.enqueue(async () => {
 			const entry = this.live.get(url);

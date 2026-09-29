@@ -37,6 +37,7 @@ export type SettingsModal =
 			scope: "global";
 			section?: GlobalSettingsSection;
 			focusAgentId?: string;
+			hostId?: string;
 			/** Preserve the project form while global recovery settings is above it. */
 			returnTo?: Extract<SettingsModal, { scope: "project" }>;
 	}
@@ -145,7 +146,7 @@ export type UiState = {
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; preserveProject?: boolean }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; preserveProject?: boolean }) => void;
 	openProjectSettings: (projectId: string, hostId?: string) => void;
 	closeSettings: () => void;
 	/** Refresh resolvedTheme from OS without writing light/dark to storage. */
@@ -301,6 +302,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			scope: "global",
 			section,
 			...(options?.focusAgentId ? { focusAgentId: options.focusAgentId } : {}),
+			...(options?.hostId && options.hostId !== "local" ? { hostId: options.hostId } : {}),
 			...(options?.preserveProject && state.settingsModal?.scope === "project"
 				? { returnTo: state.settingsModal }
 				: options?.preserveProject && state.settingsModal?.scope === "global" && state.settingsModal.returnTo

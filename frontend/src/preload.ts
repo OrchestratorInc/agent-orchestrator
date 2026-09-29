@@ -651,6 +651,8 @@ const api = {
 		remove: (url: string) => ipcRenderer.invoke("remotes:remove", url) as Promise<void>,
 		connect: (url: string) => ipcRenderer.invoke("remotes:connect", url) as Promise<ConnectedHostView>,
 		disconnect: (url: string) => ipcRenderer.invoke("remotes:disconnect", url) as Promise<void>,
+		previewUrl: (hostId: string, sessionId: string, sourceUrl: string) =>
+			ipcRenderer.invoke("remotes:previewUrl", hostId, sessionId, sourceUrl) as Promise<string>,
 	},
 	cloud: {
 		getSession: () => ipcRenderer.invoke("cloud:getSession") as Promise<CloudAccount | null>,

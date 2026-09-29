@@ -58,8 +58,8 @@ vi.mock("./ProjectSettingsForm", () => ({
 }));
 
 vi.mock("./GlobalSettingsForm", () => ({
-	GlobalSettingsForm: ({ focusAgentId, section }: { focusAgentId?: string; section: string }) => (
-		<div data-focus-agent={focusAgentId} data-testid="global-settings-section">{section}</div>
+	GlobalSettingsForm: ({ focusAgentId, hostId, section }: { focusAgentId?: string; hostId?: string; section: string }) => (
+		<div data-focus-agent={focusAgentId} data-host={hostId} data-testid="global-settings-section">{section}</div>
 	),
 }));
 
@@ -145,6 +145,14 @@ describe("SettingsDialog", () => {
 		expect(form).toHaveAttribute("data-focus-agent", "claude-code");
 		expect(screen.getByRole("button", { name: "Harness" })).toHaveAttribute("aria-current", "page");
 		expect(screen.getByRole("button", { name: "Subscriptions" })).not.toHaveAttribute("aria-current", "page");
+	});
+
+	it("forwards the remote host from a Manage agents action to Harness", async () => {
+		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "codex", hostId: "box-a" });
+		renderSettingsDialog();
+		const form = await screen.findByTestId("global-settings-section");
+		expect(form).toHaveAttribute("data-focus-agent", "codex");
+		expect(form).toHaveAttribute("data-host", "box-a");
 	});
 
 	it("does not replay the Harness focus target after navigating away during the same modal opening", async () => {

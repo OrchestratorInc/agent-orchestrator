@@ -272,7 +272,7 @@ export function CreateProjectAgentSheet({
 									labelClassName="agents-sheet-label"
 									triggerClassName="agents-sheet-control"
 									contentClassName="agents-sheet-menu"
-									manageAgents={!hostId}
+									hostId={hostId}
 									onChange={(value) => {
 										setWorkerAgent(value);
 										setWorkerAgentTouched(true);
@@ -290,7 +290,7 @@ export function CreateProjectAgentSheet({
 									labelClassName="agents-sheet-label"
 									triggerClassName="agents-sheet-control"
 									contentClassName="agents-sheet-menu"
-									manageAgents={!hostId}
+									hostId={hostId}
 									onChange={(value) => {
 										setOrchestratorAgent(value);
 										setOrchestratorAgentTouched(true);
@@ -400,6 +400,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	label,
 	onChange,
 	placeholder,
+	hostId,
 	manageAgents = true,
 	triggerClassName,
 	labelClassName,
@@ -417,6 +418,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	label: string;
 	onChange: (value: string) => void;
 	placeholder: string;
+	hostId?: string;
 	/** Cloud tasks use remote availability, not this computer's Harness settings. */
 	manageAgents?: boolean;
 	triggerClassName?: string;
@@ -437,7 +439,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	const hasReadinessSnapshot = agents !== undefined;
 	const needsSetup = manageAgents && hasReadinessSnapshot && Boolean(selectedOption && !isReadyAgent(selectedOption));
 	const visibleOptions = manageAgents && hasReadinessSnapshot ? options.filter(isReadyAgent) : options;
-	const management = useAgentManagementMenu(needsSetup ? value : undefined);
+	const management = useAgentManagementMenu(needsSetup ? value : undefined, hostId);
 	const managementAction = manageAgents ? { label: t("agentSelector.manage"), onSelect: management.requestManagement } : undefined;
 	const setupHint = needsSetup ? <span className="text-xs text-muted-foreground">{t("agentSelector.needsSetup")}</span> : null;
 

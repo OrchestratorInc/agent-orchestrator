@@ -8,14 +8,17 @@ export type GlobalSettingsSection = GlobalSettingsPage | "all";
 export function GlobalSettingsForm({
 	cloudEnabled = true,
 	focusAgentId,
+	hostId,
 	section = "all",
 }: {
 	cloudEnabled?: boolean;
 	focusAgentId?: string;
+	hostId?: string;
 	section?: GlobalSettingsSection;
 }) {
 	const { t } = useTranslation();
 	const all = section === "all";
+	const context = { cloudEnabled, focusAgentId, ...(hostId ? { hostId } : {}) };
 	// One section per page means the dialog header already names it, so a
 	// leading in-page heading would just repeat that title.
 	const titleHidden = !all;
@@ -26,9 +29,9 @@ export function GlobalSettingsForm({
 			className="flex w-full flex-col gap-(--size-settings-section-gap)"
 			data-testid="settings-page"
 		>
-			{globalSettingsItemsFor(section, { cloudEnabled, focusAgentId }).map((item) => (
+			{globalSettingsItemsFor(section, context).map((item) => (
 				<Fragment key={item.id}>
-					<Suspense fallback={null}>{item.render(t, titleHidden, { cloudEnabled, focusAgentId })}</Suspense>
+					<Suspense fallback={null}>{item.render(t, titleHidden, context)}</Suspense>
 				</Fragment>
 			))}
 		</div>

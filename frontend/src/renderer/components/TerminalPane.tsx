@@ -682,6 +682,7 @@ export function TerminalPane({
 	onTerminalStateChange,
 	inputRequest,
 	onInputRequestResult,
+	createMux,
 }: TerminalPaneProps) {
 	const { t } = useTranslation();
 	const terminalTarget =
@@ -782,9 +783,12 @@ export function TerminalPane({
 		onTerminalStateChange,
 		inputRequest,
 		onInputRequestResult,
+		createMux,
 	};
 	const descriptor = cacheDescriptor(session, terminalTarget);
-	if (cache && descriptor) {
+	// The retained cache validates shells against the local daemon's shell list.
+	// A caller-owned transport may belong to another host.
+	if (cache && descriptor && !createMux) {
 		return <CachedTerminalSlot descriptor={descriptor} props={props} />;
 	}
 
@@ -803,6 +807,7 @@ export function TerminalPane({
 			onTerminalStateChange={onTerminalStateChange}
 			inputRequest={inputRequest}
 			onInputRequestResult={onInputRequestResult}
+			createMux={createMux}
 			terminalTarget={terminalTarget}
 		/>
 	);

@@ -3,6 +3,7 @@ import { request as httpsRequest } from "node:https";
 import { connect as netConnect, isIP, type AddressInfo, type Socket } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import path from "node:path";
 import { readRemoteIdentity } from "./remote-request";
 import type { RemoteEntry } from "./remotes-store";
 
@@ -18,8 +19,37 @@ import type { RemoteEntry } from "./remotes-store";
 // stripped before forwarding: the remote daemon and its logs never see it.
 export type ActiveProxy = {
 	base: string;
+	previewUrl: (sessionId: string, sourceUrl: string) => string;
 	close: () => Promise<void>;
 };
+
+type PreviewTarget = { sessionId: string; kind: "static" | "app"; entry: string };
+
+function previewHostForSession(id: string): string {
+	const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+	let bits = 0;
+	let value = 0;
+	let encoded = "";
+	for (const byte of Buffer.from(id, "utf8")) {
+		value = (value << 8) | byte;
+		bits += 8;
+		while (bits >= 5) {
+			encoded += alphabet[(value >>> (bits -= 5)) & 31];
+		}
+	}
+	if (bits) encoded += alphabet[(value << (5 - bits)) & 31];
+	return `ao-preview.${encoded.match(/.{1,50}/g)?.join(".")}.localhost`;
+}
+
+function previewAssetPath(entry: string, requested: string): string {
+	const file = path.posix.normalize(entry).replace(/^\/+/, "");
+	const clean = path.posix.normalize(requested).replace(/^\/+/, "");
+	if (!clean) return file;
+	const root = path.posix.dirname(file);
+	if (root === ".") return clean;
+	if (clean === root) return file;
+	return path.posix.join(root, clean.startsWith(`${root}/`) ? clean.slice(root.length + 1) : clean);
+}
 
 const RENDERER_ORIGIN = "app://renderer";
 // Hop-by-hop or wrong-machine headers that must not transit the proxy.
@@ -31,6 +61,8 @@ const STRIP_REQUEST_HEADERS = [
 	"transfer-encoding",
 	"upgrade",
 	"proxy-authorization",
+	"x-ao-preview-app-authorization",
+	"x-ao-preview-app-origin",
 ];
 
 // Nothing in this file may log a secret. Not the connection password, not the
@@ -44,6 +76,10 @@ function log(message: string): void {
 
 function warn(message: string): void {
 	console.warn(`[remote-proxy] ${message}`);
+}
+
+function safeLogPath(path: string, previewKind?: PreviewTarget["kind"]): string {
+	return previewKind ? `preview/${previewKind}` : path.split("?", 1)[0];
 }
 
 function equalsToken(candidate: string, token: string): boolean {
@@ -82,6 +118,8 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	// lands on whatever else that vhost serves at /api/v1.
 	const prefix = upstream.pathname.replace(/\/+$/, "");
 	const server: Server = createServer();
+	const previewHosts = new Map<string, PreviewTarget>();
+	const previewSessions = new Map<string, { host: string; sourceUrl: string; url: string }>();
 	const tunnels = new Set<() => void>();
 	// Allow slow uploads; SSE response timeouts are disabled on the upstream request below.
 	server.requestTimeout = 0;
@@ -94,15 +132,35 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		return prefix + (slash === -1 ? "/" : rawUrl.slice(slash));
 	};
 
-	const forwardHeaders = (incoming: NodeJS.Dict<string | string[]>): NodeJS.Dict<string | string[]> => {
+	const previewPath = (rawHost: string | undefined, rawUrl: string | undefined, method: string | undefined): { path: string; kind: PreviewTarget["kind"] } | null => {
+		if (!rawHost || !rawUrl?.startsWith("/")) return null;
+		const target = previewHosts.get(rawHost.toLowerCase());
+		if (!target) return null;
+		if (target.kind === "static" && method !== "GET" && method !== "HEAD") return null;
+		const parsed = new URL(rawUrl, "http://localhost");
+		const asset = target.kind === "static" ? previewAssetPath(target.entry, parsed.pathname) : parsed.pathname.replace(/^\/+/, "");
+		const route = target.kind === "static" ? "files" : "app";
+		return { path: `${prefix}/api/v1/sessions/${encodeURIComponent(target.sessionId)}/preview/${route}/${asset}${parsed.search}`, kind: target.kind };
+	};
+
+	const forwardHeaders = (incoming: NodeJS.Dict<string | string[]>, previewKind?: PreviewTarget["kind"]): NodeJS.Dict<string | string[]> => {
 		const out: NodeJS.Dict<string | string[]> = {};
 		for (const [name, value] of Object.entries(incoming)) {
 			if (!STRIP_REQUEST_HEADERS.includes(name.toLowerCase())) out[name] = value;
+		}
+		// The outer Authorization authenticates to AO. Keep app credentials and
+		// same-origin intent in separate headers for the managed-app proxy only.
+		if (previewKind === "app") {
+			if (incoming.authorization) out["x-ao-preview-app-authorization"] = incoming.authorization;
+			if (incoming.origin) out["x-ao-preview-app-origin"] = incoming.origin;
 		}
 		out.host = upstream.host;
 		out.authorization = `Bearer ${entry.password}`;
 		return out;
 	};
+
+	const validPreviewOrigin = (host: string | undefined, origin: string | undefined, kind?: PreviewTarget["kind"]): boolean =>
+		kind !== "app" || !origin || origin === `http://${host}`;
 
 	// Addresses can be reassigned while the desktop stays open. Check on every
 	// new HTTP or WebSocket connection, not only when the proxy is first created.
@@ -113,13 +171,19 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	};
 
 	server.on("request", async (req, res) => {
-		const path = stripToken(req.url);
+		const preview = previewPath(req.headers.host, req.url, req.method);
+		const path = preview?.path ?? stripToken(req.url);
 		if (path === null) {
 			res.writeHead(404, {
 				"content-type": "application/json",
 				...corsHeaders,
 			});
 			res.end('{"error":"unknown path"}');
+			return;
+		}
+		if (!validPreviewOrigin(req.headers.host, req.headers.origin, preview?.kind)) {
+			res.writeHead(403, { "content-type": "application/json" });
+			res.end('{"error":"preview origin mismatch"}');
 			return;
 		}
 		if (req.method === "OPTIONS") {
@@ -137,7 +201,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		try {
 			await verifyUpstream();
 		} catch (error) {
-			warn(`upstream ${upstream.host} identity check failed on ${req.method} ${path} (${(error as Error).message})`);
+			warn(`upstream ${upstream.host} identity check failed on ${req.method} ${safeLogPath(path, preview?.kind)} (${(error as Error).message})`);
 			res.writeHead(502, { "content-type": "application/json", ...corsHeaders });
 			res.end('{"error":"remote host identity not verified"}');
 			return;
@@ -149,14 +213,20 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 				port: upstreamPort,
 				method: req.method,
 				path,
-				headers: forwardHeaders(req.headers),
+				headers: forwardHeaders(req.headers, preview?.kind),
 			},
 			(upstreamRes) => {
+				if (preview?.kind === "app" && upstreamRes.statusCode === 409 && upstreamRes.headers["x-ao-preview-managed-required"] === "1") {
+					upstreamRes.resume();
+					res.writeHead(409, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+					res.end("<main style='font:16px system-ui;padding:24px'><h1>Remote preview needs a managed server</h1><p>Run <code>ao preview start</code> in this session on the host.</p></main>");
+					return;
+				}
 				let dropped = false;
 				const closeDroppedStream = () => {
 					if (dropped) return;
 					dropped = true;
-					warn(`upstream ${upstream.host} stream ended on ${req.method} ${path}`);
+					warn(`upstream ${upstream.host} stream ended on ${req.method} ${safeLogPath(path, preview?.kind)}`);
 					res.destroy();
 				};
 				upstreamRes.on("aborted", closeDroppedStream);
@@ -167,6 +237,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 				};
 				delete headers.connection;
 				delete headers["keep-alive"];
+				if (preview?.kind === "static") delete headers["set-cookie"];
 				res.writeHead(upstreamRes.statusCode ?? 502, headers);
 				// Node holds the header block until the first body byte or an explicit
 				// flush. An SSE upstream (GET /api/v1/events) can go arbitrarily long
@@ -179,7 +250,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		);
 		proxied.setTimeout(0);
 		proxied.on("error", (error: Error) => {
-			warn(`upstream ${upstream.host} failed on ${req.method} ${path} (${error.message}); answering 502`);
+			warn(`upstream ${upstream.host} failed on ${req.method} ${safeLogPath(path, preview?.kind)} (${error.message}); answering 502`);
 			if (res.headersSent) {
 				res.destroy();
 				return;
@@ -200,8 +271,13 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	});
 
 	server.on("upgrade", (req, socket: Socket, head: Buffer) => {
-		const path = stripToken(req.url);
+		const preview = previewPath(req.headers.host, req.url, req.method);
+		const path = preview?.kind === "app" ? preview.path : stripToken(req.url);
 		if (path === null) {
+			socket.destroy();
+			return;
+		}
+		if (!validPreviewOrigin(req.headers.host, req.headers.origin, preview?.kind)) {
 			socket.destroy();
 			return;
 		}
@@ -216,7 +292,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			socket.off("close", stopPending);
 			if (socket.destroyed) return;
 			const upstreamSocket = dialUpstream(() => {
-				const headers = forwardHeaders(req.headers);
+				const headers = forwardHeaders(req.headers, preview?.kind);
 				const lines = [`${req.method} ${path} HTTP/1.1`];
 				// The WebSocket-specific headers were stripped as hop-by-hop; restore
 				// the two the handshake requires, with the credential injected above.
@@ -231,7 +307,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 				upstreamSocket.pipe(socket);
 			});
 			upstreamSocket.on("error", (error: Error) => {
-				warn(`upstream ${upstream.host} tunnel failed on ${path} (${error.message})`);
+				warn(`upstream ${upstream.host} tunnel failed on ${safeLogPath(path, preview?.kind)} (${error.message})`);
 			});
 			const drop = () => {
 				tunnels.delete(drop);
@@ -247,7 +323,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 				socket.on(event, drop);
 			}
 		}).catch((error: Error) => {
-			warn(`upstream ${upstream.host} identity check failed on ${path} (${error.message})`);
+			warn(`upstream ${upstream.host} identity check failed on ${safeLogPath(path, preview?.kind)} (${error.message})`);
 			stopPending();
 		});
 	});
@@ -257,6 +333,34 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	log(`started on 127.0.0.1:${port} for ${upstream.host}`);
 	return {
 		base: `http://127.0.0.1:${port}/${token}`,
+		previewUrl: (sessionId, sourceUrl) => {
+			if (!sessionId || sessionId.length > 256) throw new Error("invalid preview session");
+			const previous = previewSessions.get(sessionId);
+			if (previous?.sourceUrl === sourceUrl) return previous.url;
+			if (previous) {
+				previewHosts.delete(previous.host);
+				previewSessions.delete(sessionId);
+			}
+			const raw = sourceUrl.trim();
+			if (!raw) return "";
+			const parsed = new URL(/^(?:localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(raw) ? `http://${raw}` : raw);
+			if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("unsupported preview URL");
+			let kind: PreviewTarget["kind"];
+			const previewHost = parsed.hostname.replace(/^\[|\]$/g, "").replace(/\.+$/, "");
+			const loopback = previewHost === "localhost" || previewHost === "0.0.0.0" || previewHost === "::1" ||
+				(isIP(previewHost) === 4 && previewHost.startsWith("127.")) ||
+				(isIP(previewHost) === 6 && /^::ffff:7f[0-9a-f]{2}:/i.test(previewHost));
+			if (previewHost === previewHostForSession(sessionId)) kind = "static";
+			else if (parsed.protocol === "http:" && loopback) kind = "app";
+			else if (loopback) throw new Error("unsupported local preview protocol");
+			else if (previewHost.endsWith(".localhost")) throw new Error("preview does not belong to this session");
+			else return sourceUrl;
+			const host = `ao-preview-${randomBytes(16).toString("hex")}.localhost:${port}`;
+			previewHosts.set(host, { sessionId, kind, entry: parsed.pathname });
+			const url = `http://${host}${parsed.pathname}${parsed.search}${parsed.hash}`;
+			previewSessions.set(sessionId, { host, sourceUrl, url });
+			return url;
+		},
 		close: () =>
 			new Promise((resolve) => {
 				// close() alone waits on keep-alive and tunnelled sockets forever;

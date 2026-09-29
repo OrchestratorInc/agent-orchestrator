@@ -349,6 +349,7 @@ if (typeof window !== "undefined") {
 			remove: async () => undefined,
 			connect: async () => { throw new Error("no remote hosts in test bridge"); },
 			disconnect: async () => undefined,
+			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 		},
 		cloud: {
 			getSession: async () => null,

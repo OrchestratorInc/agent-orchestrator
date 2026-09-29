@@ -239,7 +239,7 @@ export const SessionInspector = memo(function SessionInspector({
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
 	const availableViewDefs = onlyBrowser ? VIEW_DEFS.filter((entry) => entry.id === "browser")
-		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser") && (reviewsAvailable || entry.id !== "reviews"));
+		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews"));
 	const view: InspectorView = onlyBrowser ? "browser" : availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	useEffect(() => {
 		if (view === requestedView) return;
@@ -271,7 +271,7 @@ export const SessionInspector = memo(function SessionInspector({
 				ariaLabel={t("inspector.aria")}
 				browserPoppedOut={browserPoppedOut}
 				browserView={
-					session && !hostId ? (
+					session && (!hostId || browserView) ? (
 						<BrowserView
 							browserPoppedOut={browserPoppedOut}
 							browserAnnotationQueue={browserAnnotationQueue}
@@ -2361,7 +2361,7 @@ function ReviewPanel({
 							model={reviewerModel}
 							mode={reviewerMode}
 							hostId={hostId}
-							manageAgents={!hostId}
+							manageAgents
 							projectId={session.workspaceId}
 							triggerClassName="review-run-agent-select ml-auto h-control-md w-auto min-w-0 max-w-[11rem] shrink-0 justify-end px-2 text-right text-xs"
 							value={reviewerOverride}

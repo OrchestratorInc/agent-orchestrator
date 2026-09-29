@@ -11,6 +11,7 @@ import { aoBridge } from "../lib/bridge";
 import { chatDraftDialogCopy, confirmDiscardChatDrafts, getChatDraftBoundaries, subscribeChatDraftBoundaries } from "../lib/chat-draft-boundary";
 import { useWorkspaceSession, remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
+import { useBrowserView } from "../hooks/useBrowserView";
 import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
 import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
 import { useCloseShellTerminal, useOpenShellTerminal, useRenameShellTerminal, useShellTerminals } from "../hooks/useShellTerminals";
@@ -31,6 +32,7 @@ import { SessionFileExplorer } from "./SessionFileExplorer";
 import { SessionFileTab } from "./SessionFileTabs";
 import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import { SessionInspector } from "./SessionInspector";
+import { useBrowserAnnotationQueue } from "./BrowserPanel";
 import { ShellTerminalTab } from "./ShellTerminalTab";
 import { SessionActionsMenu } from "./SessionActionsMenu";
 import { SwitchAgentDialog, canSwitchAgentHarness } from "./SwitchAgentDialog";
@@ -99,6 +101,16 @@ export function RemoteSessionView({ hostId, sessionId }: { hostId: string; sessi
 	}, [handoffSwitchError, hostId, queryClient, sessionId]);
 	useEffect(() => setHandoffDialogOpen(false), [sessionRefKey]);
 	const [inspectorView, setInspectorView] = useState<InspectorView>("summary");
+	const browserView = useBrowserView({
+		sessionId: sessionUiKey(sessionId, hostId),
+		origin: { hostId, sessionId, proxyBase: proxyBase ?? "" },
+		active: Boolean(proxyBase && inspectorOpen && inspectorView === "browser"),
+		poppedOut: false,
+		terminated: !session.data || !sessionIsActive(session.data),
+		previewUrl: session.data?.previewUrl,
+		previewRevision: session.data?.previewRevision,
+	});
+	const browserAnnotationQueue = useBrowserAnnotationQueue({ sessionId, hostId, sourcePreviewUrl: session.data?.previewUrl, navUrl: browserView.navState.url });
 	const [fileTabs, setFileTabs] = useState(EMPTY_SESSION_FILE_TABS);
 	const [fileRequests, setFileRequests] = useState<Record<string, FileOpenOptions & { key: number }>>({});
 	const [dirtyFiles, setDirtyFiles] = useState<Record<string, true>>({});
@@ -274,7 +286,7 @@ export function RemoteSessionView({ hostId, sessionId }: { hostId: string; sessi
 		</div>
 		{interfaceUi.dialogs}
 		{session.data && proxyBase && !session.isError && inspectorOpen ? <div className="w-[min(20rem,40%)] shrink-0 overflow-hidden border-l border-border-strong bg-background 2xl:w-[min(24rem,40%)]" data-testid="panel-inspector">
-			<SessionInspector key={sessionRefKey} hostId={hostId} session={session.data} filesView={<SessionFileExplorer hostId={hostId} onOpenFile={openCenterFile} sessionId={sessionId} />} onOpenReviewFile={({ path }) => openCenterFile(path)} onOpenReviewerTerminal={selectReviewerTerminal} onOpenReviewerChat={selectReviewerChat} onWorkerMessageSent={selectWorker} onViewChange={setInspectorView} view={inspectorView} />
+			<SessionInspector key={sessionRefKey} browserAnnotationQueue={browserAnnotationQueue} browserView={browserView} hostId={hostId} session={session.data} filesView={<SessionFileExplorer hostId={hostId} onOpenFile={openCenterFile} sessionId={sessionId} />} onOpenReviewFile={({ path }) => openCenterFile(path)} onOpenReviewerTerminal={selectReviewerTerminal} onOpenReviewerChat={selectReviewerChat} onWorkerMessageSent={selectWorker} onViewChange={setInspectorView} view={inspectorView} />
 		</div> : null}
 	</div>;
 }

@@ -301,6 +301,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						throw new Error(`No fake remote for ${url}`);
 					},
 					disconnect: async () => undefined,
+					previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 				},
 				cloud: {
 					getSession: async () => null,
@@ -868,6 +869,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						throw new Error(`No fake remote for ${url}`);
 					},
 					disconnect: async () => undefined,
+					previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 				},
 				cloud: {
 					getSession: async () => null,

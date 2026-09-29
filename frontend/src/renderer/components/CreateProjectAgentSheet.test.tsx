@@ -174,6 +174,15 @@ describe("CreateProjectAgentSheet", () => {
 		expect(onChange).not.toHaveBeenCalled();
 	});
 
+	it("opens management on the remote host for an unavailable selected agent", async () => {
+		useUiStore.setState({ settingsModal: null });
+		render(<RequiredAgentField id="agent" label="Agent" placeholder="Choose agent" value="codex" hostId="box-a" onChange={() => undefined}
+			agents={[agentReadiness("codex", "Codex", { authentication: "unauthorized" })]} />);
+		await userEvent.click(screen.getByLabelText("Agent"));
+		await userEvent.click(screen.getByRole("option", { name: "Manage agents…" }));
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "harness", focusAgentId: "codex", hostId: "box-a" }));
+	});
+
 	it("keeps fallback agents usable until a readiness snapshot arrives", async () => {
 		render(<RequiredAgentField id="agent" label="Agent" placeholder="Choose agent" value="codex" variant="settings-row" onChange={() => undefined} />);
 

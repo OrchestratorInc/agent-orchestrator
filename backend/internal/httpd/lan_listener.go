@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 )
 
 // LANManager owns the daemon's second, network-facing HTTP listener. It binds
@@ -86,9 +87,11 @@ func lanControlBlock(next http.Handler) http.Handler {
 
 func isLANControlBlockedRequest(method, path string) bool {
 	trimmed := strings.TrimSuffix(path, "/")
-	return method == http.MethodPost &&
-		strings.HasPrefix(trimmed, "/api/v1/agents/") &&
-		strings.HasSuffix(trimmed, "/install")
+	if method != http.MethodPost || !strings.HasPrefix(trimmed, "/api/v1/agents/") || !strings.HasSuffix(trimmed, "/install") {
+		return false
+	}
+	target := strings.TrimSuffix(strings.TrimPrefix(trimmed, "/api/v1/agents/"), "/install")
+	return !systeminstall.IsAgentTarget(systeminstall.Target(target))
 }
 
 // isLANControlBlockedPath reports whether path matches a blocked prefix on an

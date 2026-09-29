@@ -606,7 +606,7 @@ function SettingsBody({
 								placeholder={t("settings.project.selectWorker")}
 								label={t("settings.project.defaultWorker")}
 								agents={selectableAgents}
-								manageAgents={!hostId}
+								hostId={hostId}
 								disabled={agentsQuery.isFetching && agentCatalog === undefined}
 								invalid={validationError !== null && form.workerAgent === ""}
 								onChange={(workerAgent) =>
@@ -646,7 +646,7 @@ function SettingsBody({
 								placeholder={t("settings.project.selectOrchestrator")}
 								label={t("settings.project.defaultOrchestrator")}
 								agents={selectableAgents}
-								manageAgents={!hostId}
+								hostId={hostId}
 								disabled={agentsQuery.isFetching && agentCatalog === undefined}
 								invalid={validationError !== null && form.orchestratorAgent === ""}
 								onChange={(orchestratorAgent) =>
@@ -691,7 +691,6 @@ function SettingsBody({
 									mode={form.reviewerMode}
 									projectId={projectId}
 									hostId={hostId}
-									manageAgents={!hostId}
 									harnessOnly
 									defaultHarness={defaultReviewerHarness}
 									triggerClassName="w-full"

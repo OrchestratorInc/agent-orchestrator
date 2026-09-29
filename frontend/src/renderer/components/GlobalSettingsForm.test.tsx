@@ -14,7 +14,7 @@ import { TooltipProvider } from "./ui/tooltip";
 const { harnessSettingsSectionMock } = vi.hoisted(() => ({ harnessSettingsSectionMock: vi.fn() }));
 
 vi.mock("./settings/HarnessSettingsSection", () => ({
-	HarnessSettingsSection: (props: { focusAgentId?: string; titleHidden?: boolean }) => {
+	HarnessSettingsSection: (props: { focusAgentId?: string; hostId?: string; titleHidden?: boolean }) => {
 		harnessSettingsSectionMock(props);
 		return <div data-testid="harness-settings-section" />;
 	},
@@ -120,12 +120,12 @@ vi.mock("../lib/bridge", () => ({
 	},
 }));
 
-function renderForm(section: GlobalSettingsSection = "all", focusAgentId?: string) {
+function renderForm(section: GlobalSettingsSection = "all", focusAgentId?: string, hostId?: string) {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	render(
 		<QueryClientProvider client={qc}>
 			<TooltipProvider>
-				<GlobalSettingsForm focusAgentId={focusAgentId} section={section} />
+				<GlobalSettingsForm focusAgentId={focusAgentId} hostId={hostId} section={section} />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -215,6 +215,12 @@ describe("GlobalSettingsForm", () => {
 		expect(harnessSettingsSectionMock).toHaveBeenCalledWith({ focusAgentId: "cursor", titleHidden: true });
 	});
 
+	it("propagates a remote host through the settings catalog", async () => {
+		renderForm("harness", "codex", "box-a");
+		expect(await screen.findByTestId("harness-settings-section")).toBeInTheDocument();
+		expect(harnessSettingsSectionMock).toHaveBeenCalledWith({ focusAgentId: "codex", hostId: "box-a", titleHidden: true });
+	});
+
 	it("keeps Browser in its dedicated settings page", async () => {
 		renderForm("general");
 		expect(await screen.findByLabelText("Settings")).toBeInTheDocument();
@@ -234,7 +240,8 @@ describe("GlobalSettingsForm", () => {
 		expect(await screen.findByLabelText("Settings")).toBeInTheDocument();
 		expect(screen.getByText("Appearance")).toBeInTheDocument();
 		expect(screen.getByText("Language")).toBeInTheDocument();
-		expect(await screen.findByText("Updates")).toBeInTheDocument();
+		// UpdatesSection is lazy-loaded and can take longer than the default async query timeout.
+		expect(await screen.findByText("Updates", {}, { timeout: 5_000 })).toBeInTheDocument();
 		expect(screen.getByText("Advanced")).toBeInTheDocument();
 		expect(screen.getByText("Report a problem")).toBeInTheDocument();
 		// Report form is inline — no dialog, fields directly present.
@@ -250,7 +257,7 @@ describe("GlobalSettingsForm", () => {
 		await user.click(toggle);
 		expect(window.localStorage.getItem("ao.developerMode")).toBe("true");
 		expect(setMacDifferentialUpdates).toHaveBeenCalledWith(true);
-		await user.click(screen.getByLabelText("Updates channel"));
+		await user.click(await screen.findByLabelText("Updates channel", {}, { timeout: 5_000 }));
 		expect(await screen.findByRole("menuitem", { name: "Feature Releases" })).toBeInTheDocument();
 	});
 
@@ -272,7 +279,7 @@ describe("GlobalSettingsForm", () => {
 		useUiStore.getState().setDeveloperMode(true);
 		renderForm();
 
-		await user.click(await screen.findByLabelText("Updates channel"));
+		await user.click(await screen.findByLabelText("Updates channel", {}, { timeout: 5_000 }));
 		await user.click(await screen.findByRole("menuitem", { name: "Feature Releases" }));
 		expect(await screen.findByText("No live feature releases.")).toBeInTheDocument();
 		expect(featListBuilds).toHaveBeenCalled();
@@ -825,7 +832,7 @@ describe("GlobalSettingsForm", () => {
 		});
 		renderForm();
 
-		const returnBtn = await screen.findByRole("button", { name: "Return to Stable" });
+		const returnBtn = await screen.findByRole("button", { name: "Return to Stable" }, { timeout: 5_000 });
 		await userEvent.click(returnBtn);
 
 		await waitFor(() => expect(updReturnHome).toHaveBeenCalledWith(expect.any(String)));

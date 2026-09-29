@@ -12,6 +12,7 @@ import {
 import { reorderBrowserTabs } from "../lib/browser-tab-order";
 import { useBrowserView, type BrowserNavState } from "../hooks/useBrowserView";
 import { useUiStore } from "../stores/ui-store";
+import { aoBridge } from "../lib/bridge";
 import type { WorkspaceSession } from "../types/workspace";
 import { TooltipProvider } from "./ui/tooltip";
 import type {
@@ -33,6 +34,8 @@ vi.mock("../lib/api-client", () => ({
 			? String((error as { message: unknown }).message)
 			: fallback,
 }));
+
+vi.mock("../lib/host-clients", () => ({ clientForSessionHost: () => ({ POST: postMock }) }));
 
 const hookState = vi.hoisted(() => ({
 	navigate: vi.fn(),
@@ -1601,6 +1604,29 @@ describe("BrowserPanel", () => {
 
 		expect(await screen.findByText("Sent")).toBeInTheDocument();
 		expect(postMock).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		{ viewedHost: `ao-preview-${"a".repeat(32)}.localhost`, expectedUrl: "http://localhost:5173/design?x=1" },
+		{ viewedHost: `ao-preview-${"b".repeat(32)}.localhost`, expectedUrl: "(unknown)" },
+	])("maps only this session's preview URL in annotation chat ($viewedHost)", async ({ viewedHost, expectedUrl }) => {
+		const ownPreview = `http://ao-preview-${"a".repeat(32)}.localhost:4321/`;
+		const previewUrl = vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue(ownPreview);
+		try {
+			const { result } = renderHook(() => useBrowserAnnotationQueue({
+				sessionId: "sess-1", hostId: "host-1", sourcePreviewUrl: "http://localhost:5173/", navUrl: ownPreview,
+			}));
+			const payload = annotationPayload("Fix this.");
+			payload.session.page.url = `http://${viewedHost}:4321/design?x=1`;
+			act(() => result.current.enqueue(payload));
+			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+			const message = (postMock.mock.calls[0][1].body as { message: string }).message;
+			expect(message).toContain(`URL: ${expectedUrl}`);
+			expect(message).not.toContain(viewedHost);
+			expect(previewUrl).toHaveBeenCalledWith("host-1", "sess-1", "http://localhost:5173/");
+		} finally {
+			previewUrl.mockRestore();
+		}
 	});
 
 	it("clears the annotation delivery confirmation after two seconds", async () => {

@@ -741,7 +741,7 @@ export function TaskComposer({
 						: submitTask(brief, "tui")),
 				onSubmit: (brief) => void submitTask(brief, selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined),
 			}}
-			renderAgentControl={(control) => <DesktopAgentControl {...control} manageAgents={!isCloudProject && !hostId} />}
+			renderAgentControl={(control) => <DesktopAgentControl {...control} hostId={hostId} manageAgents={!isCloudProject} />}
 			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
 				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))}
 				tuning={modelTuning} />}
@@ -749,10 +749,11 @@ export function TaskComposer({
 	);
 }
 
-function DesktopAgentControl({ manageAgents, ...control }: TaskComposerAgentControl & { manageAgents: boolean }) {
+function DesktopAgentControl({ hostId, manageAgents, ...control }: TaskComposerAgentControl & { hostId?: string; manageAgents: boolean }) {
 	return (
 		<RequiredAgentField
 			{...control}
+			hostId={hostId}
 			manageAgents={manageAgents}
 			variant="chip"
 			triggerClassName="composer-toolbar-option w-full justify-between"

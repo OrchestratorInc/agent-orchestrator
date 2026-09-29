@@ -36,11 +36,17 @@ copied AO data directory. Desktop connection passwords live in
 The desktop reuses the normal project creation, settings, board, Chat,
 inspector, and file surfaces, with requests routed to the owning host. The
 host badge indicates where the daemon runs; it does not change the project or
-session workflow. Host-local browser previews and native editor actions are
-not available until AO can map or proxy those resources to the client safely.
-Install and sign in to agent harnesses on the host itself; the desktop's
-global Harness settings still manage only the local machine.
+session workflow. Choose the host in desktop Harness settings to install and
+sign in to agents there. Device-code and terminal login flows can run on a
+headless host; provider logins that require a browser callback on the host
+still need a browser or forwarding there. The Browser tab can show host
+workspace files and managed app previews started with `ao preview start`.
+Manually registered host-local URLs are not proxied to the client. AO's Files
+editor works remotely; opening a host file in an editor installed on the
+client still needs a separately configured remote workspace connection.
+Previewed apps should use relative asset and API URLs; hard-coded
+`localhost` URLs still point at the viewing device.
+
 Push notifications carry the owning host ID; a tap for a different selected
 host opens the board instead of acting on a same-ID session there. Older pushes
-without a host ID also open the board. AO Cloud placement remains a separate
-flow; this slice does not unify all three placements into one picker.
+without a host ID also open the board.

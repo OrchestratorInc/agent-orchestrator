@@ -110,7 +110,7 @@ export function ReviewerSelect({
 	const defaultHarnessLabel = catalogDefaultLabel && catalogDefaultLabel !== defaultHarness ? catalogDefaultLabel : agentLabel(defaultHarness);
 	const effectiveHarness = value || defaultHarness;
 	const needsSetup = agents !== undefined && Boolean(effectiveHarness && !options.some((agent) => agent.id === effectiveHarness && isReadyAgent(agent)));
-	const management = useAgentManagementMenu(needsSetup ? effectiveHarness : undefined);
+	const management = useAgentManagementMenu(needsSetup ? effectiveHarness : undefined, hostId);
 	const menuProjectID = projectId ?? "";
 	const triggerCatalog = useQuery(agentModelsQueryOptions(effectiveHarness, menuProjectID, hostId));
 

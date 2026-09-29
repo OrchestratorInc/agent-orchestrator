@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createServer, type IncomingMessage, type Server } from "node:http";
+import { createServer, request as httpRequest, type IncomingMessage, type Server } from "node:http";
 import { connect as netConnect, type AddressInfo } from "node:net";
 import { startRemoteProxy, type ActiveProxy } from "./remote-proxy";
 
@@ -7,6 +7,8 @@ type Seen = {
 	url: string;
 	auth: string | undefined;
 	origin: string | undefined;
+	appAuth: string | undefined;
+	appOrigin: string | undefined;
 	body: string;
 };
 
@@ -39,7 +41,7 @@ afterEach(async () => {
 });
 
 async function startUpstream(
-	handler: (req: IncomingMessage, seen: Seen[]) => { status: number; body: string },
+	handler: (req: IncomingMessage, seen: Seen[]) => { status: number; body: string; headers?: Record<string, string> },
 ): Promise<{ port: number; seen: Seen[] }> {
 	const seen: Seen[] = [];
 	upstream = createServer((req, res) => {
@@ -50,10 +52,12 @@ async function startUpstream(
 				url: req.url ?? "",
 				auth: req.headers.authorization,
 				origin: req.headers.origin,
+				appAuth: req.headers["x-ao-preview-app-authorization"] as string | undefined,
+				appOrigin: req.headers["x-ao-preview-app-origin"] as string | undefined,
 				body,
 			});
 			const out = handler(req, seen);
-			res.writeHead(out.status, { "content-type": "application/json" });
+			res.writeHead(out.status, { "content-type": "application/json", ...out.headers });
 			res.end(out.body);
 		});
 	});
@@ -62,6 +66,149 @@ async function startUpstream(
 }
 
 describe("startRemoteProxy", () => {
+	it("scopes a stable static preview origin to one session and serves root assets", async () => {
+		const { port, seen } = await startUpstream((request) => ({
+			status: request.url === "/api/v1/projects" ? 200 : 200,
+			body: request.url === "/api/v1/projects" ? "SECRET API" : "preview file",
+		}));
+		proxy = await startRemoteProxy({ label: "workbox", url: `http://127.0.0.1:${port}`, password: "pw" });
+		const source = `http://ao-preview.mfxs2mi.localhost:${port}/dist/index.html`;
+		const preview = proxy.previewUrl("ao-1", source);
+		expect(proxy.previewUrl("ao-1", source)).toBe(preview);
+		expect(new URL(preview).hostname).not.toBe(new URL(proxy.base).hostname);
+		expect(preview).not.toContain(new URL(proxy.base).pathname.slice(1));
+		const request = async (url: string): Promise<{ status: number; body: string }> => {
+			const target = new URL(url);
+			return new Promise((resolve, reject) => {
+				const req = httpRequest({ hostname: "127.0.0.1", port: Number(new URL(proxy!.base).port), path: target.pathname + target.search, headers: { Host: target.host } }, (res) => {
+					let body = "";
+					res.on("data", (chunk) => { body += chunk.toString(); });
+					res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+				});
+				req.on("error", reject);
+				req.end();
+			});
+		};
+		const asset = await request(new URL("/assets/app.css", preview).href);
+		expect(asset.body).toBe("preview file");
+		expect(seen.at(-1)?.url).toBe("/api/v1/sessions/ao-1/preview/files/dist/assets/app.css");
+		const attemptedAPI = await request(new URL("/api/v1/projects", preview).href);
+		expect(attemptedAPI.body).toBe("preview file");
+		expect(seen.at(-1)?.url).toBe("/api/v1/sessions/ao-1/preview/files/dist/api/v1/projects");
+		expect(() => proxy!.previewUrl("ao-2", source)).toThrow(/unsupported|preview/i);
+		expect(new URL(proxy.previewUrl("ao-2", "http://127.0.0.2:5173/")).hostname).toMatch(/^ao-preview-[0-9a-f]{32}\.localhost$/);
+		expect(new URL(proxy.previewUrl("ao-2", "http://[::ffff:127.0.0.1]:5173/")).hostname).toMatch(/^ao-preview-[0-9a-f]{32}\.localhost$/);
+		expect(new URL(proxy.previewUrl("ao-2", "http://localhost.:5173/")).hostname).toMatch(/^ao-preview-[0-9a-f]{32}\.localhost$/);
+		const changed = proxy.previewUrl("ao-1", `http://localhost:5173/`);
+		expect(changed).not.toBe(preview);
+		expect((await request(preview)).status).toBe(404);
+		expect(proxy.previewUrl("ao-1", "https://example.com/")).toBe("https://example.com/");
+		expect((await request(changed)).status).toBe(404);
+		const clearing = proxy.previewUrl("ao-1", "http://localhost:5173/");
+		expect(proxy.previewUrl("ao-1", "")).toBe("");
+		expect((await request(clearing)).status).toBe(404);
+	});
+
+	it("relays app Authorization and same-origin intent only on preview requests", async () => {
+		const { port, seen } = await startUpstream(() => ({ status: 200, body: "ok" }));
+		proxy = await startRemoteProxy({ label: "workbox", url: `http://127.0.0.1:${port}`, password: "host-password" });
+		const preview = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/"));
+		const post = (origin?: string, authorization?: string) => new Promise<number>((resolve, reject) => {
+			const req = httpRequest({
+				hostname: "127.0.0.1", port: Number(preview.port), path: "/submit", method: "POST",
+				headers: {
+					Host: preview.host, ...(origin ? { Origin: origin } : {}), ...(authorization ? { Authorization: authorization } : {}),
+					"X-AO-Preview-App-Authorization": "forged", "X-AO-Preview-App-Origin": "forged",
+				},
+			}, (res) => { res.resume(); res.on("end", () => resolve(res.statusCode ?? 0)); });
+			req.on("error", reject);
+			req.end("data");
+		});
+		expect(await post(preview.origin, "Basic app-token")).toBe(200);
+		expect(seen.at(-1)).toMatchObject({
+			url: "/api/v1/sessions/ao-1/preview/app/submit", auth: "Bearer host-password", origin: undefined,
+			appAuth: "Basic app-token", appOrigin: preview.origin, body: "data",
+		});
+		expect(await post()).toBe(200);
+		expect(seen.at(-1)).toMatchObject({ appAuth: undefined, appOrigin: undefined });
+		expect(await post("http://evil.example")).toBe(403);
+		expect(seen).toHaveLength(2);
+	});
+
+	it("does not log preview paths or query secrets on connection failure", async () => {
+		const { port } = await startUpstream(() => ({ status: 200, body: '{"hostId":"wrong","apiVersion":1}' }));
+		proxy = await startRemoteProxy({ hostId: "expected", label: "workbox", url: `http://127.0.0.1:${port}`, password: "pw" });
+		const preview = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/reset/path-secret?code=query-secret"));
+		const status = await new Promise<number>((resolve, reject) => {
+			const req = httpRequest({ hostname: "127.0.0.1", port: Number(preview.port), path: preview.pathname + preview.search, headers: { Host: preview.host } }, (res) => {
+				res.resume();
+				res.on("end", () => resolve(res.statusCode ?? 0));
+			});
+			req.on("error", reject);
+			req.end();
+		});
+		expect(status).toBe(502);
+		expect(warned.join("\n")).toContain("preview/app");
+		expect(warned.join("\n")).not.toMatch(/path-secret|query-secret/);
+	});
+
+	it("shows managed-server guidance only for AO's own preview conflict", async () => {
+		let managed = false;
+		const { port } = await startUpstream(() => ({
+			status: 409, body: managed ? '{"code":"PREVIEW_MANAGED_REQUIRED"}' : "app conflict",
+			headers: managed ? { "x-ao-preview-managed-required": "1" } : undefined,
+		}));
+		proxy = await startRemoteProxy({ label: "workbox", url: `http://127.0.0.1:${port}`, password: "pw" });
+		const preview = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/"));
+		const request = () => new Promise<string>((resolve, reject) => {
+			const req = httpRequest({ hostname: "127.0.0.1", port: Number(preview.port), path: "/", headers: { Host: preview.host } }, (res) => {
+				let body = "";
+				res.on("data", (chunk) => { body += chunk.toString(); });
+				res.on("end", () => resolve(body));
+			});
+			req.on("error", reject);
+			req.end();
+		});
+		expect(await request()).toBe("app conflict");
+		managed = true;
+		expect(await request()).toContain("ao preview start");
+	});
+
+	it("forwards a managed preview websocket on its preview-only origin", async () => {
+		upstream = createServer((_request, response) => response.end("ok"));
+		let upgradePath = "";
+		let upgradeAuth = "";
+		let upgradeAppAuth = "";
+		let upgradeAppOrigin = "";
+		upstream.on("upgrade", (request, socket) => {
+			upgradePath = request.url ?? "";
+			upgradeAuth = String(request.headers.authorization ?? "");
+			upgradeAppAuth = String(request.headers["x-ao-preview-app-authorization"] ?? "");
+			upgradeAppOrigin = String(request.headers["x-ao-preview-app-origin"] ?? "");
+			socket.write("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n");
+			socket.end();
+		});
+		await new Promise<void>((resolve) => upstream?.listen(0, "127.0.0.1", resolve));
+		const port = (upstream.address() as AddressInfo).port;
+		proxy = await startRemoteProxy({ label: "workbox", url: `http://127.0.0.1:${port}`, password: "pw" });
+		const preview = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/"));
+		const socket = netConnect(Number(preview.port), "127.0.0.1");
+		const reply = await new Promise<string>((resolve, reject) => {
+			let data = "";
+			socket.on("error", reject);
+			socket.on("data", (chunk) => {
+				data += chunk.toString();
+				if (data.includes("\r\n\r\n")) resolve(data);
+			});
+			socket.on("connect", () => socket.write(`GET /socket HTTP/1.1\r\nHost: ${preview.host}\r\nOrigin: ${preview.origin}\r\nAuthorization: Basic app-token\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGVzdA==\r\nSec-WebSocket-Version: 13\r\n\r\n`));
+		});
+		socket.destroy();
+		expect(reply).toContain("101 Switching Protocols");
+		expect(upgradePath).toBe("/api/v1/sessions/ao-1/preview/app/socket");
+		expect(upgradeAuth).toBe("Bearer pw");
+		expect(upgradeAppAuth).toBe("Basic app-token");
+		expect(upgradeAppOrigin).toBe(preview.origin);
+	});
 	it("proxies an IPv6 host instead of dialing its URL brackets", async (context) => {
 		upstream = createServer((_request, response) => response.end("ok"));
 		try {
@@ -130,10 +277,11 @@ describe("startRemoteProxy", () => {
 			url: `http://127.0.0.1:${port}`,
 			password: "secret",
 		});
-		const response = await fetch(`${proxy.base}/api/v1/projects`);
+		const response = await fetch(`${proxy.base}/api/v1/projects?code=secret-code`);
 		expect(response.status).toBe(502);
 		expect(seen.map((request) => request.url)).toEqual(["/api/v1/identity"]);
 		expect(seen[0].auth).toBeUndefined();
+		expect(warned.join("\n")).not.toContain("secret-code");
 	});
 
 	it("connects a saved address without an explicit scheme", async () => {
