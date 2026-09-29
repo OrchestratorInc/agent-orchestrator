@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -1578,6 +1580,26 @@ func TestModelsPassesProjectEnvironmentToDiscovery(t *testing.T) {
 	}
 	if len(got.Models) != 1 || discoverer.lastRequest.WorkingDir != "/work/project" || discoverer.lastRequest.Env["OPENCODE_CONFIG"] != "/work/project/opencode.json" {
 		t.Fatalf("catalog=%#v request=%#v, want project discovery", got, discoverer.lastRequest)
+	}
+}
+
+func TestGlobalModelDiscoveryUsesAODirectoryWithoutProject(t *testing.T) {
+	discoveryDir := filepath.Join(t.TempDir(), "model-discovery")
+	svc := NewWithDeps(Deps{ModelDiscoveryDir: discoveryDir})
+
+	request, err := svc.modelDiscoveryRequest(context.Background(), "deepseek-harness", "", "/usr/local/bin/dsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.WorkingDir != discoveryDir {
+		t.Fatalf("working directory = %q, want %q", request.WorkingDir, discoveryDir)
+	}
+	info, err := os.Stat(discoveryDir)
+	if err != nil {
+		t.Fatalf("stat model discovery directory: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("model discovery directory permissions = %o, want 700", got)
 	}
 }
 

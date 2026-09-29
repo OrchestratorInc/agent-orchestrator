@@ -75,7 +75,7 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 	fx: "fx",
 	"unreal-agent": "Unreal Agent",
 	"mimo-code": "MiMo Code",
-	"deepseek-harness": "DeepSeek Harness",
+	"deepseek-harness": "DeepSeek",
 };
 
 export const AGENT_IDENTITIES: ReadonlyMap<AgentId, AgentIdentity> = new Map(

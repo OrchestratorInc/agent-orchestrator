@@ -84,7 +84,7 @@ var _ ports.Agent = (*Plugin)(nil)
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          adapterID,
-		Name:        "DeepSeek Harness",
+		Name:        "DeepSeek",
 		Description: "Run DeepSeek Harness (dsh) worker sessions.",
 		Version:     "0.0.1",
 		Capabilities: []adapters.Capability{

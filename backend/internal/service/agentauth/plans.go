@@ -51,7 +51,7 @@ var plans = []Plan{
 	// ("store DEEPSEEK_API_KEY through the credentials service (the web Models
 	// page writes it)"). The profile prints a tokenised URL and opens it, so
 	// setup lands on the page that does the work rather than on a docs link.
-	plan("deepseek-harness", ActionSetup, "Set up DeepSeek Harness", []string{"dsh", "--profile", "web"}, "Opens DeepSeek Harness's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness"),
+	plan("deepseek-harness", ActionSetup, "Set up DeepSeek", []string{"dsh", "--profile", "web"}, "Opens DeepSeek's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness"),
 }
 
 func terminalInputPlan(agentID string, action Action, title string, command []string, terminalInput, guidance, docs string) Plan {

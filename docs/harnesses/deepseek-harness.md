@@ -79,8 +79,8 @@ surface is normally not the case, so terminal resume falls back to a fresh run.
   Harness rejects additional directories, and AO reports that rather than
   launching a session with the wrong working set.
 - The model catalog is read from a session, and a session needs a working
-  directory. Asking for Harness models without a project therefore lists nothing;
-  the model field still accepts a value typed by hand.
+  directory. Project-free discovery uses a private AO-owned directory under the
+  configured data root so the catalog remains available before a project exists.
 - AO standing instructions have no Harness surface in terminal mode. The headless
   profile takes no system-prompt flag and has no hook file, so AO does not pass
   the prompt file as a task argument that would be executed as work.

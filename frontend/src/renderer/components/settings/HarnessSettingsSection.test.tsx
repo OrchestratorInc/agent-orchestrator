@@ -154,7 +154,7 @@ describe("HarnessSettingsSection", () => {
 		});
 		renderSection();
 		const row = (await screen.findByText("MiMo Code")).closest('[data-agent="mimo-code"]') as HTMLElement;
-		expect(await within(row).findByRole("button", { name: "Set up" })).toBeDisabled();
+		expect(await within(row).findByRole("button", { name: "Configured" })).toBeDisabled();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
 	});
 
@@ -391,7 +391,7 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: "auth-mimo" } },
 		}));
-		expect(await within(row).findByRole("button", { name: "Set up" })).toBeDisabled();
+		expect(await within(row).findByRole("button", { name: "Configured" })).toBeDisabled();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
@@ -443,7 +443,7 @@ describe("HarnessSettingsSection", () => {
 		await within(row).findByRole("button", { name: "Authorized" });
 	});
 
-	it("uses Set up for a completed setup action", async () => {
+	it("uses Configured for a completed setup action", async () => {
 		const authorized = catalogWithInstalled("codex");
 		authorized.agents[1].authentication.state = "authorized";
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
@@ -464,7 +464,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
 
-		await within(row).findByText("Set up");
+		await within(row).findByText("Configured");
 	});
 
 	it("does not expose manual readiness controls", async () => {

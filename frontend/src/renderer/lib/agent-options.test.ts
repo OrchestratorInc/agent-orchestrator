@@ -1,4 +1,4 @@
-import { AGENT_OPTIONS } from "./agent-options";
+import { agentLabel, AGENT_OPTIONS } from "./agent-options";
 
 describe("AGENT_OPTIONS", () => {
 	it("offers fx as a spawn harness exactly once", () => {
@@ -8,5 +8,8 @@ describe("AGENT_OPTIONS", () => {
 		expect(AGENT_OPTIONS.filter((agent) => agent === "prime-agent")).toHaveLength(1);
 		expect(AGENT_OPTIONS.filter((agent) => agent === "omp")).toHaveLength(1);
 		expect(new Set(AGENT_OPTIONS).size).toBe(AGENT_OPTIONS.length);
+	});
+	it("uses the concise DeepSeek display name", () => {
+		expect(agentLabel("deepseek-harness")).toBe("DeepSeek");
 	});
 });

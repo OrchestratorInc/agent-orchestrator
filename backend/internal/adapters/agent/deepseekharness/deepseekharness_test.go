@@ -12,9 +12,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func TestManifestIdentifiesDeepSeekHarness(t *testing.T) {
+func TestManifestUsesConciseDeepSeekDisplayName(t *testing.T) {
 	m := (&Plugin{}).Manifest()
-	if m.ID != "deepseek-harness" || m.Name != "DeepSeek Harness" {
+	if m.ID != "deepseek-harness" || m.Name != "DeepSeek" {
 		t.Fatalf("manifest = %#v", m)
 	}
 }
