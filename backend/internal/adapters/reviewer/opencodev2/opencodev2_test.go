@@ -99,6 +99,30 @@ func TestReviewCommandAppliesFinalReadOnlyAgentPermissions(t *testing.T) {
 		{Action: "shell", Resource: "gh api *`*", Effect: "deny"},
 		{Action: "shell", Resource: "gh api *$(*", Effect: "deny"},
 		{Action: "shell", Resource: "printf * | gh api *", Effect: "deny"},
+		{Action: "shell", Resource: "git *>*", Effect: "deny"},
+		{Action: "shell", Resource: "git *<*", Effect: "deny"},
+		{Action: "shell", Resource: "git *|*", Effect: "deny"},
+		{Action: "shell", Resource: "git *;*", Effect: "deny"},
+		{Action: "shell", Resource: "git *&*", Effect: "deny"},
+		{Action: "shell", Resource: "git *`*", Effect: "deny"},
+		{Action: "shell", Resource: "git *$(*", Effect: "deny"},
+		{Action: "shell", Resource: "ao review submit *>*", Effect: "deny"},
+		{Action: "shell", Resource: "ao review submit *<*", Effect: "deny"},
+		{Action: "shell", Resource: "ao review submit *|*", Effect: "deny"},
+		{Action: "shell", Resource: "ao review submit *;*", Effect: "deny"},
+		{Action: "shell", Resource: "ao review submit *&*", Effect: "deny"},
+		{Action: "shell", Resource: "ao review submit *`*", Effect: "deny"},
+		{Action: "shell", Resource: "ao review submit *$(*", Effect: "deny"},
+		{Action: "shell", Resource: "printf * | ao review submit *>*", Effect: "deny"},
+		{Action: "shell", Resource: "printf * | ao review submit *;*", Effect: "deny"},
+		{Action: "shell", Resource: "printf * | ao review submit *&*", Effect: "deny"},
+		{Action: "shell", Resource: "printf * | ao review submit *`*", Effect: "deny"},
+		{Action: "shell", Resource: "printf * | ao review submit *$(*", Effect: "deny"},
+		{Action: "shell", Resource: "printf * | gh api *>*", Effect: "deny"},
+		{Action: "shell", Resource: "printf * | gh api *;*", Effect: "deny"},
+		{Action: "shell", Resource: "printf * | gh api *&*", Effect: "deny"},
+		{Action: "shell", Resource: "printf * | gh api *`*", Effect: "deny"},
+		{Action: "shell", Resource: "printf * | gh api *$(*", Effect: "deny"},
 		{Action: "shell", Resource: "git diff *--output*", Effect: "deny"},
 		{Action: "shell", Resource: "git log *--output*", Effect: "deny"},
 		{Action: "shell", Resource: "git show *--output*", Effect: "deny"},
@@ -126,7 +150,7 @@ func TestReviewCommandAppliesFinalReadOnlyAgentPermissions(t *testing.T) {
 			t.Errorf("allowed shell command %q was denied", command)
 		}
 	}
-	for _, command := range []string{"gh api --method PUT repos/o/r/pulls/1/merge", "gh api -fbody=x repos/o/r/issues/1/comments", "gh api repos/o/r/issues/1/comments -Fbody=x", "gh api repos/o/r/pulls/1 --method=PUT", "gh api repos/o/r/pulls/1; gh pr merge 1", "gh api graphql", "gh api -XPUT repos/o/r/pulls/1/merge", "gh api repos/o/r/issues/1/comments -f body=x", "printf x | gh api --method PUT repos/o/r/pulls/1/merge --input -", "git diff --output=x.txt HEAD", "git show --output=x HEAD", "git push origin main", "rm -rf /", "gh pr merge 1", "ao session kill worker-1"} {
+	for _, command := range []string{"gh api --method PUT repos/o/r/pulls/1/merge", "gh api -fbody=x repos/o/r/issues/1/comments", "gh api repos/o/r/issues/1/comments -Fbody=x", "gh api repos/o/r/pulls/1 --method=PUT", "gh api repos/o/r/pulls/1; gh pr merge 1", "gh api graphql", "gh api -XPUT repos/o/r/pulls/1/merge", "gh api repos/o/r/issues/1/comments -f body=x", "printf x | gh api --method PUT repos/o/r/pulls/1/merge --input -", "git diff --output=x.txt HEAD", "git show HEAD > README.md", "git diff HEAD >README.md", "git log | tee f", "git show HEAD; rm -rf x", "ao review submit --run r > f", "printf x | ao review submit --reviews - > f", "printf x | gh api --method POST repos/o/r/pulls/1/reviews --input - > f", "git show --output=x HEAD", "git push origin main", "rm -rf /", "gh pr merge 1", "ao session kill worker-1"} {
 		if permissionEffect(agent.Permissions, "shell", command) != "deny" {
 			t.Errorf("unlisted shell command %q was allowed", command)
 		}
