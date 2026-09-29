@@ -404,7 +404,8 @@ func TestResolveOpenCodeBinaryContextCanceled(t *testing.T) {
 }
 
 func TestGetLaunchCommandBuildsArgv(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "opencode"}
+	binary := versionBinary(t, "echo 1.18.33\n")
+	plugin := New()
 	promptFile := filepath.Join(t.TempDir(), "system.md")
 
 	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
@@ -421,7 +422,7 @@ func TestGetLaunchCommandBuildsArgv(t *testing.T) {
 	configPath := filepath.Join(filepath.Dir(promptFile), "opencode.json")
 	want := []string{
 		"env", "OPENCODE_CONFIG=" + configPath,
-		"opencode",
+		binary,
 		"--dangerously-skip-permissions",
 		"--agent", "ao-sess-1",
 		"--prompt", "-fix this",
@@ -444,7 +445,8 @@ func TestGetLaunchCommandBuildsArgv(t *testing.T) {
 }
 
 func TestGetLaunchCommandSystemPromptFileConfig(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "opencode"}
+	binary := versionBinary(t, "echo 1.18.33\n")
+	plugin := New()
 	promptFile := filepath.Join(t.TempDir(), "system.md")
 
 	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
@@ -456,7 +458,7 @@ func TestGetLaunchCommandSystemPromptFileConfig(t *testing.T) {
 	}
 
 	configPath := filepath.Join(filepath.Dir(promptFile), "opencode.json")
-	want := []string{"env", "OPENCODE_CONFIG=" + configPath, "opencode", "--agent", "ao-sess-2"}
+	want := []string{"env", "OPENCODE_CONFIG=" + configPath, binary, "--agent", "ao-sess-2"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -474,6 +476,7 @@ func TestGetLaunchCommandSystemPromptFileConfig(t *testing.T) {
 }
 
 func TestGetLaunchCommandMapsPermissionModes(t *testing.T) {
+	versionBinary(t, "echo 1.18.33\n")
 	tests := []struct {
 		name       string
 		permission ports.PermissionMode
@@ -527,6 +530,7 @@ func TestGetLaunchCommandMapsPermissionModes(t *testing.T) {
 // own it: the reviewer harness passes its read-only policy there. A launch
 // prefix setting the same variable would replace that policy at exec time.
 func TestGetLaunchCommandNeverSetsInlineConfigContent(t *testing.T) {
+	versionBinary(t, "echo 1.18.33\n")
 	for _, mode := range []ports.PermissionMode{
 		ports.PermissionModeDefault, ports.PermissionModeAcceptEdits,
 		ports.PermissionModeAuto, ports.PermissionModeBypassPermissions,
@@ -575,12 +579,13 @@ func TestGetConfigSpecReportsModel(t *testing.T) {
 }
 
 func TestGetLaunchCommandForwardsModel(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "opencode"}
+	binary := versionBinary(t, "echo 1.18.33\n")
+	plugin := New()
 	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{Config: ports.AgentConfig{Model: "  anthropic/claude-sonnet  "}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"opencode", "--model", "anthropic/claude-sonnet"}; !reflect.DeepEqual(cmd, want) {
+	if want := []string{binary, "--model", "anthropic/claude-sonnet"}; !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
 }
@@ -888,7 +893,8 @@ func TestUninstallHooksLeavesForeignFile(t *testing.T) {
 }
 
 func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "opencode"}
+	binary := versionBinary(t, "echo 1.18.33\n")
+	plugin := New()
 
 	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Permissions: ports.PermissionModeBypassPermissions,
@@ -903,7 +909,7 @@ func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
 		t.Fatal("ok = false, want true")
 	}
 	want := []string{
-		"opencode",
+		binary,
 		"--dangerously-skip-permissions",
 		"--session", "ses_abc123",
 	}
@@ -916,7 +922,8 @@ func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
 }
 
 func TestGetRestoreCommandReappliesSystemPromptConfig(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "opencode"}
+	binary := versionBinary(t, "echo 1.18.33\n")
+	plugin := New()
 	promptFile := filepath.Join(t.TempDir(), "system.md")
 
 	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
@@ -936,7 +943,7 @@ func TestGetRestoreCommandReappliesSystemPromptConfig(t *testing.T) {
 	configPath := filepath.Join(filepath.Dir(promptFile), "opencode.json")
 	want := []string{
 		"env", "OPENCODE_CONFIG=" + configPath,
-		"opencode",
+		binary,
 		"--agent", "ao-sess-1",
 		"--session", "ses_abc123",
 	}
@@ -961,7 +968,8 @@ func TestGetRestoreCommandReappliesSystemPromptConfig(t *testing.T) {
 // resume argv (mirroring GetLaunchCommand's --prompt), or the resumed session
 // would sit idle with no work to act on.
 func TestGetRestoreCommandAppendsResumeTimePrompt(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "opencode"}
+	binary := versionBinary(t, "echo 1.18.33\n")
+	plugin := New()
 
 	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Permissions: ports.PermissionModeBypassPermissions,
@@ -977,7 +985,7 @@ func TestGetRestoreCommandAppendsResumeTimePrompt(t *testing.T) {
 		t.Fatal("ok = false, want true")
 	}
 	want := []string{
-		"opencode",
+		binary,
 		"--dangerously-skip-permissions",
 		"--session", "ses_abc123",
 		"--prompt", "review the new commit",
@@ -1081,6 +1089,7 @@ func contains(values []string, needle string) bool {
 // to a project policy and the native flag is an alias of --auto, which still
 // enforces explicit denies, so the rule rides the agent, which outranks both.
 func TestGetLaunchCommandBypassesEvenAWorktreePolicy(t *testing.T) {
+	versionBinary(t, "echo 1.18.33\n")
 	plugin := &Plugin{resolvedBinary: "opencode"}
 	workspace := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workspace, ".git"), 0o755); err != nil {
