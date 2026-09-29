@@ -9,6 +9,7 @@ import { getPreview } from "../../lib/api";
 import { authHeaders } from "../../lib/config";
 import { BrowserErrorBanner } from "../../lib/browser/BrowserErrorBanner";
 import { BrowserToolbar } from "../../lib/browser/BrowserToolbar";
+import { executeMobileBrowserAct } from "../../lib/browser/mobileBrowserAct";
 import { bridgeResult, browserCommandScript, MOBILE_BROWSER_BOOTSTRAP, parseBrowserBridgeMessage } from "../../lib/browser/mobileBrowserBridge";
 import { MobileBrowserRuntimeClient, type MobileBrowserCommand, type MobileBrowserCommandResult } from "../../lib/browser/mobileBrowserRuntime";
 import { inAppWebNavigation, isHttpUrl, normalizeBrowserInput, shouldAttachPreviewAuth } from "../../lib/browser/browserUrl";
@@ -106,15 +107,7 @@ export default function SessionPreviewScreen() {
 		setBrowserState((current) => browserLoadStart({ ...current, url }, url));
 	}, [config]);
 
-	const executeAgentCommand = useCallback((command: MobileBrowserCommand): Promise<MobileBrowserCommandResult> => {
-		if (command.action === "open") {
-			const url = typeof command.args?.url === "string" ? command.args.url : "";
-			if (!url) return Promise.resolve({ ok: false, error: { code: "URL_REQUIRED", message: "A URL is required." } });
-			const normalized = config ? normalizeBrowserInput(url, config.host) : undefined;
-			if (!normalized?.ok) return Promise.resolve({ ok: false, error: { code: "INVALID_URL", message: normalized?.message ?? "Browser is not connected." } });
-			navigateTo(normalized.url.href);
-			return Promise.resolve({ ok: true, result: { url: normalized.url.href } });
-		}
+	const executeWebCommand = useCallback((command: MobileBrowserCommand): Promise<MobileBrowserCommandResult> => {
 		if (!web.current) return Promise.resolve({ ok: false, error: { code: "BROWSER_TARGET_UNAVAILABLE", message: "The mobile browser page is not ready." } });
 		return new Promise((resolve) => {
 			const timer = setTimeout(() => {
@@ -124,7 +117,20 @@ export default function SessionPreviewScreen() {
 			commandResults.current.set(command.requestId, { resolve, timer });
 			web.current?.injectJavaScript(browserCommandScript(command));
 		});
-	}, [config, navigateTo]);
+	}, []);
+
+	const executeAgentCommand = useCallback((command: MobileBrowserCommand): Promise<MobileBrowserCommandResult> => {
+		if (command.action === "open") {
+			const url = typeof command.args?.url === "string" ? command.args.url : "";
+			if (!url) return Promise.resolve({ ok: false, error: { code: "URL_REQUIRED", message: "A URL is required." } });
+			const normalized = config ? normalizeBrowserInput(url, config.host) : undefined;
+			if (!normalized?.ok) return Promise.resolve({ ok: false, error: { code: "INVALID_URL", message: normalized?.message ?? "Browser is not connected." } });
+			navigateTo(normalized.url.href);
+			return Promise.resolve({ ok: true, result: { url: normalized.url.href } });
+		}
+		if (command.action === "act") return executeMobileBrowserAct(command, executeWebCommand);
+		return executeWebCommand(command);
+	}, [config, executeWebCommand, navigateTo]);
 	const cancelAgentCommand = useCallback((requestId: string) => {
 		const pending = commandResults.current.get(requestId);
 		if (!pending) return;

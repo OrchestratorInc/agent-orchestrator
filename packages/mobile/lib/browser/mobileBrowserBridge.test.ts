@@ -14,6 +14,11 @@ describe("mobile browser bridge protocol", () => {
 		expect(script).toContain(JSON.stringify("'); alert(1); ('"));
 	});
 
+	it("returns structured ref metadata for one-command act matching", () => {
+		expect(browserCommandScript({ type: "command", requestId: "r1", sessionId: "s1", action: "snapshot" }))
+			.toContain("refs: refInfo");
+	});
+
 	it("accepts only tagged correlated results", () => {
 		expect(parseBrowserBridgeMessage("{}")).toBeUndefined();
 		const message = parseBrowserBridgeMessage(JSON.stringify({

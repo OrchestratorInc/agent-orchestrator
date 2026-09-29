@@ -15,7 +15,7 @@ export type BrowserBridgeMessage = {
 export const MOBILE_BROWSER_BOOTSTRAP = `
 (function () {
   if (window.__aoMobileBrowserBridge) return true;
-  var refs = Object.create(null);
+  var refs = Object.create(null), refInfo = Object.create(null);
   var generation = 0;
   function visible(el) {
     if (!el || !el.getBoundingClientRect) return false;
@@ -28,7 +28,7 @@ export const MOBILE_BROWSER_BOOTSTRAP = `
   }
   function name(el) { return clean(el.getAttribute('aria-label') || el.getAttribute('alt') || el.getAttribute('placeholder') || el.innerText || el.value || el.title); }
   function snapshot(interactive) {
-    generation += 1; refs = Object.create(null);
+    generation += 1; refs = Object.create(null); refInfo = Object.create(null);
     var selector = interactive ? 'a,button,input,textarea,select,[role],[tabindex]' : 'a,button,input,textarea,select,[role],[tabindex],h1,h2,h3,p,li';
     var nodes = Array.prototype.slice.call(document.querySelectorAll(selector));
     var lines = [], count = 0;
@@ -37,10 +37,10 @@ export const MOBILE_BROWSER_BOOTSTRAP = `
       var interactiveEl = el.matches('a,button,input,textarea,select,[role],[tabindex]');
       var label = name(el); if (!label) return;
       var ref = '';
-      if (interactiveEl) { ref = 'e' + (++count); refs[ref] = el; }
+      if (interactiveEl) { ref = 'e' + (++count); refs[ref] = el; refInfo[ref] = { role: role(el), name: label }; }
       lines.push('- ' + role(el) + ' "' + label.replace(/"/g, '\\"') + '"' + (ref ? ' [ref=' + ref + ']' : ''));
     });
-    return { text: lines.join('\\n'), generation: generation, url: location.href, title: document.title };
+    return { text: lines.join('\\n'), refs: refInfo, generation: generation, url: location.href, title: document.title };
   }
   function target(ref) {
     var el = refs[String(ref || '')];
@@ -83,8 +83,11 @@ export const MOBILE_BROWSER_BOOTSTRAP = `
           case 'click': target(a.ref).click(); result = { clicked: a.ref }; break;
           case 'dblclick': target(a.ref).dispatchEvent(new MouseEvent('dblclick', { bubbles:true, cancelable:true, view:window })); result = { clicked: a.ref }; break;
           case 'focus': target(a.ref).focus(); result = { focused: a.ref }; break;
+          case 'hover': target(a.ref).dispatchEvent(new MouseEvent('mouseover', { bubbles:true, cancelable:true, view:window })); result = { hovered:a.ref }; break;
           case 'fill': var f=target(a.ref); f.focus(); inputValue(f, String(a.text || a.value || '')); result={ filled:a.ref }; break;
           case 'type': var t=target(a.ref); t.focus(); inputValue(t, String(t.value || '') + String(a.text || a.value || '')); result={ typed:a.ref }; break;
+          case 'check': var c=target(a.ref); if(!c.checked)c.click(); result={ checked:a.ref }; break;
+          case 'uncheck': var u=target(a.ref); if(u.checked)u.click(); result={ unchecked:a.ref }; break;
           case 'press': var active=document.activeElement || document.body, key=String(a.key || ''); active.dispatchEvent(new KeyboardEvent('keydown',{key:key,bubbles:true})); active.dispatchEvent(new KeyboardEvent('keyup',{key:key,bubbles:true})); result={ pressed:key }; break;
           case 'scroll': var amount=Number(a.amount || 500), x=0,y=0; if(a.direction==='up')y=-amount;else if(a.direction==='left')x=-amount;else if(a.direction==='right')x=amount;else y=amount; window.scrollBy({left:x,top:y,behavior:'smooth'}); result={ scrolled:true }; break;
           case 'scrollintoview': target(a.ref).scrollIntoView({block:'center',behavior:'smooth'}); result={ scrolled:a.ref }; break;

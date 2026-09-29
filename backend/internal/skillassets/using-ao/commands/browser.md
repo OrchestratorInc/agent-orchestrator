@@ -2,7 +2,7 @@
 
 Inspect and control the current AO session's target-isolated browser. By default (`--surface auto`), AO uses a foreground mobile browser registered to this session and otherwise falls back to the desktop Browser panel. Use `--surface mobile` or `--surface desktop` when the user names a specific surface. The agent and user share the same live page and navigation state.
 
-The first mobile runtime supports `status`, `open`, `snapshot`, `click`, `dblclick`, `focus`, `fill`, `type`, `press`, `scroll`, `scrollintoview`, `get`, and `wait`. It is available only while that session's Preview screen is foregrounded with Agent control enabled. Use the desktop surface for tabs, screenshots, DevTools, dialogs, network/console inspection, and other commands not yet implemented on mobile.
+The first mobile runtime supports `status`, `open`, `snapshot`, `act`, `click`, `dblclick`, `focus`, `hover`, `fill`, `type`, `check`, `uncheck`, `press`, `scroll`, `scrollintoview`, `get`, and `wait`. It is available automatically while that session's Preview screen is foregrounded. Use the desktop surface for tabs, screenshots, DevTools, dialogs, network/console inspection, and other commands not yet implemented on mobile.
 
 `AO_SESSION_ID` selects the target, so run these commands from inside an AO worker session.
 
@@ -27,11 +27,12 @@ command, connection flag, profile, or setup step:
 
 ```bash
 ao browser open http://localhost:5173
-ao browser status --surface mobile
 ao browser act "the submit button"
 ao browser wait --text "Saved"
 ao browser errors
 ```
+
+Do not run `status`, `--help`, or an exploratory `snapshot` before a known action. Start with `open`, `act`, or the requested primitive directly; the daemon selects a connected foreground mobile Preview automatically. Use `status` only to diagnose a command that actually failed, and specify `--surface` only when the user explicitly distinguishes mobile from desktop. This keeps the first visible action on the shortest path.
 
 For "click/fill/etc. this element," reach for `ao browser act "<description>"`
 first instead of manually chaining `snapshot` then `click`/`fill`: it snapshots,
