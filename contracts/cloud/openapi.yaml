@@ -648,6 +648,34 @@ paths:
                     $ref: "#/components/schemas/TurnSteeredEvent"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/approvals/{requestId}/decide:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - name: requestId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: decideChatApproval
+      tags: [Sessions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatApprovalDecisionInput"
+      responses:
+        "202":
+          description: Approval decision accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerOKResponse"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-events:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -2872,6 +2900,20 @@ components:
         reasoningEffort:
           type: string
           enum: [none, minimal, low, medium, high, xhigh, max, ultra]
+        mode:
+          $ref: "#/components/schemas/SessionMode"
+        approvalMode:
+          type: string
+          enum: [default, accept-edits, auto, bypass-permissions]
+    ChatApprovalDecisionInput:
+      type: object
+      additionalProperties: false
+      required: [decisionId]
+      properties:
+        decisionId:
+          type: string
+          minLength: 1
+          maxLength: 256
     ChatModel:
       type: object
       additionalProperties: false
@@ -3375,6 +3417,7 @@ components:
         - branch
         - mode
         - deniedCommands
+        - interfaceMode
         - activityState
         - status
         - runtimeConnected
@@ -3410,6 +3453,8 @@ components:
           type: array
           items:
             type: string
+        interfaceMode:
+          $ref: "#/components/schemas/SessionInterfaceMode"
         activityState:
           $ref: "#/components/schemas/SessionActivityState"
         status:

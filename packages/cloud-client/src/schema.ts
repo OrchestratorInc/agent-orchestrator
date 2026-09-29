@@ -464,6 +464,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/approvals/{requestId}/decide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["decideChatApproval"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-events": {
         parameters: {
             query?: never;
@@ -1580,6 +1600,12 @@ export interface components {
             model?: string;
             /** @enum {string} */
             reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            mode?: components["schemas"]["SessionMode"];
+            /** @enum {string} */
+            approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+        };
+        ChatApprovalDecisionInput: {
+            decisionId: string;
         };
         ChatModel: {
             id: string;
@@ -1845,6 +1871,7 @@ export interface components {
             /** @description Coding-agent model the session launched with; empty means the harness default. */
             model?: string;
             deniedCommands: string[];
+            interfaceMode: components["schemas"]["SessionInterfaceMode"];
             activityState: components["schemas"]["SessionActivityState"];
             status: components["schemas"]["SessionStatus"];
             capabilities?: components["schemas"]["AgentCapability"][];
@@ -3216,6 +3243,35 @@ export interface operations {
                     "application/json": {
                         event: components["schemas"]["TurnSteeredEvent"];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    decideChatApproval: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatApprovalDecisionInput"];
+            };
+        };
+        responses: {
+            /** @description Approval decision accepted. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerOKResponse"];
                 };
             };
             default: components["responses"]["Error"];

@@ -3,6 +3,7 @@ import type {
   ClientEvent,
   ClientEventPage,
   ChatMessageInput,
+  ChatApprovalDecisionInput,
   ChatModelsResponse,
   CreateWorkerChildInput,
   CreateGitHubProjectInput,
@@ -34,8 +35,10 @@ import type {
   SessionPage,
   SessionPullRequests,
   SessionReviewState,
+  SendMessageInput,
   TerminalKind,
   TerminalTicket,
+  TurnSteeredEvent,
   UpdateProjectInput,
   UserMessageEvent,
   WorkerBootstrapInput,
@@ -481,6 +484,47 @@ export class CloudClient {
       {
         method: "POST",
         idempotencyKey: options.idempotencyKey,
+        signal: options.signal,
+      },
+    );
+  }
+
+  steerTurn(
+    orgId: string,
+    sessionId: string,
+    turnId: string,
+    message: string | SendMessageInput,
+    options: IdempotentRequestOptions,
+  ): Promise<{ event: TurnSteeredEvent }> {
+    return this.request(
+      this.orgPath(
+        orgId,
+        `/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/steer`,
+      ),
+      {
+        method: "POST",
+        body: typeof message === "string" ? { text: message } : message,
+        idempotencyKey: options.idempotencyKey,
+        signal: options.signal,
+      },
+    );
+  }
+
+  decideChatApproval(
+    orgId: string,
+    sessionId: string,
+    requestId: string,
+    decision: string | ChatApprovalDecisionInput,
+    options: RequestOptions = {},
+  ): Promise<WorkerOKResponse> {
+    return this.request(
+      this.orgPath(
+        orgId,
+        `/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(requestId)}/decide`,
+      ),
+      {
+        method: "POST",
+        body: typeof decision === "string" ? { decisionId: decision } : decision,
         signal: options.signal,
       },
     );
