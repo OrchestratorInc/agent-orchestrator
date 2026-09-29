@@ -15,10 +15,14 @@ mimo
 
 MiMo Auto is available without login. To use paid or premium models, run
 `mimo auth login` and choose MiMo browser login.
+Other providers can be connected by API key through MiMo Code's `/connect`
+flow; see the official [provider guide](https://github.com/XiaomiMiMo/MiMo-Code/blob/main/packages/opencode/src/skill/builtin/.bundle/mimocode-docs/reference/providers.md).
 
 AO checks credentials with `mimo auth list` and the free channel with
 `mimo models mimo`. Either makes readiness **configured**, not authorized,
 because these local commands do not make a provider request.
+Harness Settings shows a detected key as **Set up** without requiring another
+login. A model request is still needed to verify that the key works.
 
 ## AO integration
 

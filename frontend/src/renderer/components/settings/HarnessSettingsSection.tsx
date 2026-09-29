@@ -396,7 +396,8 @@ export function HarnessSettingsSection({
 		setAuthWorkflow((current) => current?.terminal.handleId === workflow.terminal.handleId ? { ...current, phase: "verifying", reason: undefined } : current);
 		const result = await checkAuth(workflow.agentId, { fresh: true });
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
-		if (result?.agent.authStatus === "authorized") {
+		// MiMo can confirm a stored provider key locally without validating it upstream.
+		if (result?.agent.authStatus === "authorized" || (workflow.agentId === "mimo-code" && result?.agent.authStatus === "configured")) {
 			try {
 				await closeAuthTerminal(workflow.terminal.handleId);
 			} catch (error) {
@@ -496,11 +497,14 @@ export function HarnessSettingsSection({
 						const isSetupAction = authPlan?.action === "setup";
 						const authState = authStates[agentId];
 						const authStatus = readinessAgent?.authentication.state;
+						const mimoConfigured = agentId === "mimo-code" && authStatus === "configured";
 						const installationStatusLabel = authStatus === "authorized"
 							? t("settings.harness.authorized")
+							: mimoConfigured ? t("settings.harness.configured")
 							: t("settings.harness.installed");
 						const showInstallationStatus = authStatus === "authorized"
 							|| authStatus === "not_applicable"
+							|| mimoConfigured
 							|| (!authPlans.isPending && (!authPlan || authPlan.action === "instructions"));
 						const rowHasError = failed || Boolean(authState?.error);
 						const rowAuthWorkflow = authWorkflow?.agentId === agentId ? authWorkflow : null;
@@ -537,7 +541,7 @@ export function HarnessSettingsSection({
 						) : null;
 						const authControls = authPlan && authPlan.action !== "instructions" ? (
 							<>
-								{authStatus !== "authorized" ? (
+								{authStatus !== "authorized" && !mimoConfigured ? (
 									<Button data-harness-primary-action="" data-terminal-focus-handoff="true" disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} size="sm" onClick={() => void startAuth(agentId)}>
 										{authState?.pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
 										{authState?.pending ? t("settings.harness.loggingIn") : isSetupAction ? t("settings.harness.setup") : t("settings.harness.login")}
