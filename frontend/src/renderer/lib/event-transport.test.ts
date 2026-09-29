@@ -654,6 +654,23 @@ describe("bounded live refresh", () => {
 	});
 });
 
+it("does not cancel an unrelated inactive workspace fetch on CDC", async () => {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const key = ["workspaces"];
+	let finish!: (value: number) => void;
+	const disconnect = createEventTransport(client).connect();
+	const pending = client.fetchQuery({
+		queryKey: key,
+		queryFn: () => new Promise<number>((resolve) => { finish = resolve; }),
+	});
+	const result = pending.then((value) => ({ value }), (error: unknown) => ({ error }));
+	try {
+		cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId: "another-session", payload: {} }));
+		finish(1);
+		expect(await result).toEqual({ value: 1 });
+	} finally { disconnect(); client.clear(); }
+});
+
 it("keeps a prefetched conversation stale when CDC arrives before its response", async () => {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 10_000 } } });
 	const key = ["conversation", "prefetched-chat"];

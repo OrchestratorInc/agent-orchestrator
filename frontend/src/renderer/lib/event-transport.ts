@@ -86,9 +86,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				// A fetch from polling/mounting may already predate this event. Wait
 				// for it, then refresh once so joining its promise cannot lose the event.
 				const state = { dirty: queryClient.isFetching({ queryKey, type: "active" }) > 0 };
-				// An inactive hover prefetch cannot refresh itself after this event. Cancel
-				// its older response before invalidating so a later mount reads fresh data.
-				if (queryClient.isFetching({ queryKey, type: "inactive" }) > 0) {
+				// An inactive Chat hover prefetch cannot refresh itself after this event.
+				// Cancel it without interrupting unrelated imperative queries.
+				if (queryKey[0] === conversationQueryRoot[0] && queryClient.isFetching({ queryKey, type: "inactive" }) > 0) {
 					void queryClient.cancelQueries({ queryKey, type: "inactive" });
 				}
 				refreshes.set(key, state);

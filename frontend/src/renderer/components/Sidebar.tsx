@@ -73,6 +73,7 @@ import {
 import { getSessionStatusDotView } from "../lib/session-presentation";
 import { deriveSessionAgentSwitchPresentation } from "../lib/agent-switch-presentation";
 import { aoBridge } from "../lib/bridge";
+import { hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useCanResumeAgent } from "../hooks/useCanResumeAgent";
 import { cloudSessionsQueryKey, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
@@ -2102,7 +2103,7 @@ function SessionRow({
 	const canPrefetch = session.mode === "chat" && !session.cloud && !active && !listIsDragging && !reorder?.isDragging;
 	useEffect(() => () => clearTimeout(hoverTimerRef.current), [canPrefetch]);
 	const prefetchConversation = () => {
-		if (!canPrefetch || queryClient.getQueryData(conversationQueryKey(session.id))) return;
+		if (!canPrefetch || !hasTrustedApiBaseUrl() || queryClient.getQueryData(conversationQueryKey(session.id))) return;
 		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(session.id));
 	};
 	const beginRename = useCallback(() => {
