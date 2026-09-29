@@ -13477,6 +13477,8 @@ components:
           type: string
         localEnabled:
           type: boolean
+        trackerIntakeEnabled:
+          type: boolean
       required:
       - defaultSessionMode
       - chatHarnesses
@@ -13485,6 +13487,7 @@ components:
       - cloudOffering
       - cloudEnabled
       - cloudControlPlaneUrl
+      - trackerIntakeEnabled
       type: object
     ShellTerminalEnvelope:
       properties:
