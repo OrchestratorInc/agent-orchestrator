@@ -9,7 +9,7 @@ const source = readFileSync(
 
 describe("settings screen density", () => {
 	it("renders from the already-resolved app config without a second storage loader", () => {
-		expect(source).toMatch(/const \{ config, reloadConfig \} = useApp\(\);/);
+		expect(source).toMatch(/const \{ config,[^}]*reloadConfig \} = useApp\(\);/);
 		expect(source).not.toMatch(/\bloadConfig\(\)/);
 	});
 
