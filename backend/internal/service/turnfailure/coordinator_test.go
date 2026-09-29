@@ -16,6 +16,7 @@ type fakeStore struct {
 	accepted bool
 	next     time.Time
 	retries  int
+	ackErr   error
 }
 
 func (s *fakeStore) ListDueWorkerTurnFailures(_ context.Context, now time.Time, _ int64) ([]domain.WorkerTurnFailure, error) {
@@ -24,9 +25,19 @@ func (s *fakeStore) ListDueWorkerTurnFailures(_ context.Context, now time.Time, 
 	}
 	return []domain.WorkerTurnFailure{s.row}, nil
 }
+func (s *fakeStore) BindWorkerTurnFailureTarget(_ context.Context, id string, target domain.SessionID) (bool, error) {
+	if id != s.row.TurnID || s.accepted || s.row.TargetSessionID != "" {
+		return false, nil
+	}
+	s.row.TargetSessionID = target
+	return true, nil
+}
 func (s *fakeStore) AcknowledgeWorkerTurnFailure(_ context.Context, id string, _ time.Time) error {
 	if id != s.row.TurnID {
 		return errors.New("wrong turn")
+	}
+	if s.ackErr != nil {
+		return s.ackErr
 	}
 	s.accepted = true
 	return nil
@@ -94,6 +105,9 @@ func TestCoordinatorRetriesWithStableKeyAndAcknowledgesOnce(t *testing.T) {
 	if strings.Contains(d.message, "secret") || !strings.Contains(d.message, "partially landed") || !strings.Contains(d.message, "timeout") {
 		t.Fatalf("unsafe or incomplete message: %q", d.message)
 	}
+	// A replacement orchestrator must not receive a second copy after an
+	// earlier attempt could have been accepted but its reply was lost.
+	s.sessions = []domain.SessionRecord{{ID: "replacement", Kind: domain.KindOrchestrator, CreatedAt: now.Add(2 * time.Hour)}}
 	d.err = nil
 	now = s.next
 	// This simulates a fresh daemon coordinator reading the same durable row.
@@ -105,11 +119,44 @@ func TestCoordinatorRetriesWithStableKeyAndAcknowledgesOnce(t *testing.T) {
 	if !s.accepted || d.calls != 2 {
 		t.Fatalf("accepted=%v calls=%d", s.accepted, d.calls)
 	}
+	if d.id != "orchestrator" {
+		t.Fatalf("uncertain retry moved to %s", d.id)
+	}
 	if err := restarted.RunDue(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if d.calls != 2 {
 		t.Fatalf("duplicate accepted delivery: %d", d.calls)
+	}
+}
+
+func TestCoordinatorKeepsRecipientAfterLostAcknowledgement(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	s := &fakeStore{
+		row:      domain.WorkerTurnFailure{TurnID: "turn-ack", ProjectID: "project-1"},
+		sessions: []domain.SessionRecord{{ID: "original", Kind: domain.KindOrchestrator, CreatedAt: now}},
+		ackErr:   errors.New("acknowledgement response lost"),
+	}
+	d := &fakeDelivery{}
+	c := New(s, d, nil)
+	c.now = func() time.Time { return now }
+	if err := c.RunDue(ctx); err == nil {
+		t.Fatal("expected acknowledgement error")
+	}
+	if s.row.TargetSessionID != "original" || s.accepted || d.calls != 1 {
+		t.Fatalf("after uncertain acknowledgement: row=%+v accepted=%v calls=%d", s.row, s.accepted, d.calls)
+	}
+	key := d.key
+	s.sessions = []domain.SessionRecord{{ID: "replacement", Kind: domain.KindOrchestrator, CreatedAt: now.Add(time.Hour)}}
+	s.ackErr = nil
+	restarted := New(s, d, nil)
+	restarted.now = func() time.Time { return now.Add(time.Second) }
+	if err := restarted.RunDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !s.accepted || d.calls != 2 || d.id != "original" || d.key != key {
+		t.Fatalf("retry moved recipient or identity: accepted=%v delivery=%+v", s.accepted, d)
 	}
 }
 

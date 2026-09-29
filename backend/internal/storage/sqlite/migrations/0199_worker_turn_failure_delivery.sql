@@ -7,6 +7,9 @@ CREATE TABLE worker_turn_failure_delivery (
     created_at TIMESTAMP NOT NULL,
     next_attempt_at TIMESTAMP NOT NULL,
     attempts INTEGER NOT NULL DEFAULT 0,
+    -- Pin the first attempted recipient before sending. A lost acknowledgement
+    -- must not move the same semantic key to another orchestrator session.
+    target_session_id TEXT,
     accepted_at TIMESTAMP,
     last_error TEXT NOT NULL DEFAULT ''
 );

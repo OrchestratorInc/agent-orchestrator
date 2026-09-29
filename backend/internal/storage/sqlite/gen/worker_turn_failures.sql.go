@@ -9,8 +9,6 @@ import (
 	"context"
 	"database/sql"
 	"time"
-
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 const acknowledgeWorkerTurnFailure = `-- name: AcknowledgeWorkerTurnFailure :execrows
@@ -26,6 +24,26 @@ type AcknowledgeWorkerTurnFailureParams struct {
 
 func (q *Queries) AcknowledgeWorkerTurnFailure(ctx context.Context, arg AcknowledgeWorkerTurnFailureParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, acknowledgeWorkerTurnFailure, arg.AcceptedAt, arg.TurnID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const bindWorkerTurnFailureTarget = `-- name: BindWorkerTurnFailureTarget :execrows
+UPDATE worker_turn_failure_delivery
+SET target_session_id = ?1
+WHERE turn_id = ?2
+  AND target_session_id IS NULL AND accepted_at IS NULL
+`
+
+type BindWorkerTurnFailureTargetParams struct {
+	TargetSessionID sql.NullString
+	TurnID          string
+}
+
+func (q *Queries) BindWorkerTurnFailureTarget(ctx context.Context, arg BindWorkerTurnFailureTargetParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindWorkerTurnFailureTarget, arg.TargetSessionID, arg.TurnID)
 	if err != nil {
 		return 0, err
 	}
@@ -57,37 +75,9 @@ func (q *Queries) EnqueueWorkerTurnFailure(ctx context.Context, arg EnqueueWorke
 	return err
 }
 
-const hasSettledFailedPrimaryTurn = `-- name: HasSettledFailedPrimaryTurn :one
-SELECT EXISTS (
-    SELECT 1 FROM conversations AS c
-    JOIN conversation_turns AS t ON t.conversation_id = c.id
-    WHERE c.current_session_id = ?1
-      AND t.handled_by_session_id = ?1
-      AND t.handled_by_review_id IS NULL
-      AND t.state = 'failed'
-      AND t.id = (
-          SELECT latest.id FROM conversation_turns AS latest
-          WHERE latest.conversation_id = c.id AND latest.state <> 'queued'
-          ORDER BY latest.requested_at DESC, latest.rowid DESC LIMIT 1
-      )
-      AND NOT EXISTS (
-          SELECT 1 FROM conversation_activities AS a
-          WHERE a.conversation_id = c.id
-            AND a.kind IN ('approval', 'user_input') AND a.status = 'pending'
-      )
-)
-`
-
-func (q *Queries) HasSettledFailedPrimaryTurn(ctx context.Context, sessionID *domain.SessionID) (bool, error) {
-	row := q.db.QueryRowContext(ctx, hasSettledFailedPrimaryTurn, sessionID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
 const listDueWorkerTurnFailures = `-- name: ListDueWorkerTurnFailures :many
 SELECT d.turn_id, d.session_id, d.project_id, d.attempts,
-       t.error_message, s.display_name
+       d.target_session_id, t.error_message, s.display_name
 FROM worker_turn_failure_delivery AS d
 JOIN conversation_turns AS t ON t.id = d.turn_id
 JOIN sessions AS s ON s.id = d.session_id
@@ -102,12 +92,13 @@ type ListDueWorkerTurnFailuresParams struct {
 }
 
 type ListDueWorkerTurnFailuresRow struct {
-	TurnID       string
-	SessionID    string
-	ProjectID    string
-	Attempts     int64
-	ErrorMessage string
-	DisplayName  string
+	TurnID          string
+	SessionID       string
+	ProjectID       string
+	Attempts        int64
+	TargetSessionID sql.NullString
+	ErrorMessage    string
+	DisplayName     string
 }
 
 func (q *Queries) ListDueWorkerTurnFailures(ctx context.Context, arg ListDueWorkerTurnFailuresParams) ([]ListDueWorkerTurnFailuresRow, error) {
@@ -124,6 +115,7 @@ func (q *Queries) ListDueWorkerTurnFailures(ctx context.Context, arg ListDueWork
 			&i.SessionID,
 			&i.ProjectID,
 			&i.Attempts,
+			&i.TargetSessionID,
 			&i.ErrorMessage,
 			&i.DisplayName,
 		); err != nil {

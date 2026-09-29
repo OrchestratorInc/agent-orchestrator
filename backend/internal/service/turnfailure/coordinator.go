@@ -17,6 +17,7 @@ const pollInterval = 2 * time.Second
 // Store is the durable failed-turn and session lookup surface.
 type Store interface {
 	ListDueWorkerTurnFailures(context.Context, time.Time, int64) ([]domain.WorkerTurnFailure, error)
+	BindWorkerTurnFailureTarget(context.Context, string, domain.SessionID) (bool, error)
 	AcknowledgeWorkerTurnFailure(context.Context, string, time.Time) error
 	RetryWorkerTurnFailure(context.Context, string, time.Time, string) error
 	ListSessions(context.Context, domain.ProjectID) ([]domain.SessionRecord, error)
@@ -90,12 +91,24 @@ func (c *Coordinator) RunDue(ctx context.Context) error {
 		return err
 	}
 	failure := rows[0]
-	target, err := c.orchestrator(ctx, failure.ProjectID)
-	if err != nil {
-		return c.deferFailure(ctx, failure, now, "orchestrator lookup failed", err)
-	}
+	target := failure.TargetSessionID
 	if target == "" {
-		return c.deferFailure(ctx, failure, now, "no active orchestrator", nil)
+		target, err = c.orchestrator(ctx, failure.ProjectID)
+		if err != nil {
+			return c.deferFailure(ctx, failure, now, "orchestrator lookup failed", err)
+		}
+		if target == "" {
+			return c.deferFailure(ctx, failure, now, "no active orchestrator", nil)
+		}
+		bound, bindErr := c.store.BindWorkerTurnFailureTarget(ctx, failure.TurnID, target)
+		if bindErr != nil {
+			return bindErr
+		}
+		if !bound {
+			// Another coordinator may have bound or acknowledged this turn.
+			// Re-read the durable recipient on the next pass.
+			return nil
+		}
 	}
 	key := "worker-turn-failed:" + failure.TurnID
 	if err := c.delivery.SendSemantic(ctx, target, failureMessage(failure), key); err != nil {

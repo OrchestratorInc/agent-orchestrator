@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -35,9 +36,21 @@ func (s *Store) ListDueWorkerTurnFailures(ctx context.Context, at time.Time, lim
 			TurnID: row.TurnID, SessionID: domain.SessionID(row.SessionID),
 			ProjectID: domain.ProjectID(row.ProjectID), DisplayName: row.DisplayName,
 			ErrorMessage: row.ErrorMessage, Attempts: row.Attempts,
+			TargetSessionID: domain.SessionID(row.TargetSessionID.String),
 		})
 	}
 	return out, nil
+}
+
+// BindWorkerTurnFailureTarget records the recipient before attempting delivery.
+// An existing binding must survive retries and daemon restarts.
+func (s *Store) BindWorkerTurnFailureTarget(ctx context.Context, turnID string, target domain.SessionID) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	count, err := s.qw.BindWorkerTurnFailureTarget(ctx, gen.BindWorkerTurnFailureTargetParams{
+		TurnID: turnID, TargetSessionID: sql.NullString{String: string(target), Valid: true},
+	})
+	return count == 1, err
 }
 
 // AcknowledgeWorkerTurnFailure records semantic acceptance.
@@ -58,10 +71,4 @@ func (s *Store) RetryWorkerTurnFailure(ctx context.Context, turnID string, next 
 		NextAttemptAt: next, LastError: reason, TurnID: turnID,
 	})
 	return err
-}
-
-// HasSettledFailedPrimaryTurn permits recovery only when the latest non-queued
-// Chat turn failed and no approval or structured input still needs a decision.
-func (s *Store) HasSettledFailedPrimaryTurn(ctx context.Context, sessionID domain.SessionID) (bool, error) {
-	return s.qr.HasSettledFailedPrimaryTurn(ctx, &sessionID)
 }

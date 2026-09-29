@@ -829,14 +829,15 @@ type UsageSource struct {
 }
 
 type WorkerTurnFailureDelivery struct {
-	TurnID        string
-	SessionID     string
-	ProjectID     string
-	CreatedAt     time.Time
-	NextAttemptAt time.Time
-	Attempts      int64
-	AcceptedAt    sql.NullTime
-	LastError     string
+	TurnID          string
+	SessionID       string
+	ProjectID       string
+	CreatedAt       time.Time
+	NextAttemptAt   time.Time
+	Attempts        int64
+	TargetSessionID sql.NullString
+	AcceptedAt      sql.NullTime
+	LastError       string
 }
 
 type WorkspaceRepo struct {
