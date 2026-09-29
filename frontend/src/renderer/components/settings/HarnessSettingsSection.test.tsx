@@ -143,6 +143,21 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
 	});
 
+	it("shows configured MiMo Code without asking for login again", async () => {
+		const configured = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "configured" })] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: configured } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "mimo-code", action: "login", launchMode: "terminal", available: true }] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		renderSection();
+		const row = (await screen.findByText("MiMo Code")).closest('[data-agent="mimo-code"]') as HTMLElement;
+		expect(await within(row).findByRole("button", { name: "Set up" })).toBeDisabled();
+		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
+	});
+
 	it("offers fx installation while readiness refreshes automatically", async () => {
 		const fxCatalog = { agents: [{ ...catalogWithInstalled().agents[0], id: "fx", label: "fx" }] };
 		const fxPlan = { agentId: "fx", available: true, automatic: true, method: "official-installer", command: "bash <downloaded from https://fx.sh/setup.sh>", documentationUrl: "https://fx.sh/docs", expectedDestination: "~/.local/bin/fx", methods: [{ id: "official-installer", label: "Official installer", available: true, recommended: true, command: "bash <downloaded from https://fx.sh/setup.sh>", reinstallAvailable: false }] };
@@ -342,6 +357,42 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: "auth-terminal-1" } },
 		}));
+		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
+	});
+
+	it("completes MiMo Code login when the key is configured locally", async () => {
+		const initial = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "unknown" })] };
+		const configured = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "configured" })] };
+		let probed = false;
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: initial } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "mimo-code", action: "login", launchMode: "terminal", available: true }] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/{agent}/auth") return { data: {
+				agentId: "mimo-code", action: "login", terminal: { handleId: "auth-mimo", projectId: null, sessionId: null, workingDir: "/tmp", title: "MiMo Code login", createdAt: "2026-09-29T00:00:00Z" },
+			} } as never;
+			if (path === "/api/v1/agents/{agent}/probe") {
+				probed = true;
+				return { data: { agent: { id: "mimo-code", authStatus: "configured" }, installed: true } } as never;
+			}
+			if (path === "/api/v1/agents/readiness/ensure") return { data: probed ? configured : initial } as never;
+			return { data: undefined } as never;
+		});
+		const close = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
+		renderSection();
+		const row = (await screen.findByText("MiMo Code")).closest('[data-agent="mimo-code"]') as HTMLElement;
+		await userEvent.click(await within(row).findByRole("button", { name: "Login" }));
+		await userEvent.click(await within(row).findByRole("button", { name: "Complete login terminal" }));
+
+		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
+			params: { path: { handleId: "auth-mimo" } },
+		}));
+		expect(await within(row).findByRole("button", { name: "Set up" })).toBeDisabled();
+		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
 
