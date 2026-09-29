@@ -22,9 +22,15 @@ describe("Android native compatibility boundaries", () => {
 		// of that delayed interaction state, or it flashes over the settled screen.
 		expect(android).toContain("useNativeDriver: true");
 		expect(android).toContain("const [scrimVisible, setScrimVisible] = useState(retainedDrawerOpen);");
-		expect(android).toMatch(/setScrimVisible\(nextOpen\);[\s\S]*if \(nextOpen\) setOpen\(true\);[\s\S]*if \(finished && !nextOpen\) setOpen\(false\);/);
+		expect(android).toMatch(/setScrimVisible\(nextOpen\);[\s\S]*if \(nextOpen\) setOpen\(true\);[\s\S]*if \(!finished\) return;[\s\S]*if \(!nextOpen\) setOpen\(false\);/);
 		expect(android).toMatch(/open \? \([\s\S]*scrimVisible \? \([\s\S]*styles\.dismissLayer[\s\S]*styles\.dismissBlocker/);
 		expect(android).toContain("(open ? panResponder.panHandlers : {})");
+		// A gesture can reverse an in-flight spring, but it must continue from the
+		// drawer's live position rather than snapping to an open/closed endpoint.
+		expect(android).toContain("settling: drawerSettling.current");
+		expect(android).toContain("progress.stopAnimation((value) => {");
+		expect(android).toContain("gestureStartProgress.current = value");
+		expect(android).toContain("startProgress: gestureStartProgress.current");
 		expect(android).toContain("retainedDrawerOpen");
 		expect(android).not.toContain("DrawerLayoutAndroid");
 		expect(android).not.toContain("@expo/ui");
