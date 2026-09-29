@@ -60,10 +60,7 @@ export function BrowserToolbar({
 
 	return (
 		<View style={styles.toolbar}>
-			<View style={styles.row}>
-				<IconButton label="Back" icon="chevron-left" disabled={!canGoBack} onPress={onBack} />
-				<IconButton label="Forward" icon="chevron-right" disabled={!canGoForward} onPress={onForward} />
-				<IconButton label={loading ? "Stop loading" : "Reload"} icon={loading ? "x" : "refresh-cw"} disabled={!url && !loading} onPress={loading ? onStop : onReload} />
+			<View style={styles.addressRow}>
 				{editing ? (
 					<View style={styles.inputWrap}>
 						<TextInput
@@ -94,39 +91,35 @@ export function BrowserToolbar({
 					</Pressable>
 				)}
 			</View>
-			<View style={styles.secondaryRow}>
-				<SmallAction label="Copy" icon="copy" disabled={!url} onPress={onCopy} />
-				<SmallAction label="Open" icon="external-link" disabled={!canOpenExternal} onPress={onOpenExternal} />
-				<SmallAction label="Share" icon="link" disabled={!url} onPress={onShare} />
+			<View style={styles.controlsRow}>
+				<ToolbarButton label="Back" icon="chevron-left" disabled={!canGoBack} onPress={onBack} />
+				<ToolbarButton label="Forward" icon="chevron-right" disabled={!canGoForward} onPress={onForward} />
+				<ToolbarButton label={loading ? "Stop loading" : "Reload"} icon={loading ? "x" : "refresh-cw"} disabled={!url && !loading} onPress={loading ? onStop : onReload} />
+				<View style={styles.controlDivider} />
+				<ToolbarButton label="Copy URL" icon="copy" disabled={!url} onPress={onCopy} />
+				<ToolbarButton label="Open externally" icon="external-link" disabled={!canOpenExternal} onPress={onOpenExternal} />
+				<ToolbarButton label="Share URL" icon="link" disabled={!url} onPress={onShare} />
 			</View>
 		</View>
 	);
 }
 
-function IconButton({ disabled, icon, label, onPress }: { disabled?: boolean; icon: string; label: string; onPress: () => void }) {
+function ToolbarButton({ disabled, icon, label, onPress }: { disabled?: boolean; icon: string; label: string; onPress: () => void }) {
 	const styles = useThemedStyles(makeStyles);
 	return (
-		<Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled }} disabled={disabled} hitSlop={8} onPress={onPress} style={[styles.iconButton, disabled && styles.disabled]}>
+		<Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled }} disabled={disabled} hitSlop={6} onPress={onPress} style={({ pressed }) => [styles.toolbarButton, pressed && !disabled && styles.pressed, disabled && styles.disabled]}>
 			<Feather name={icon} size={iconSize.md} color={disabled ? styles.colors.textFaint : styles.colors.textPrimary} />
 		</Pressable>
 	);
 }
 
-function SmallAction({ disabled, icon, label, onPress }: { disabled?: boolean; icon: string; label: string; onPress: () => void }) {
-	const styles = useThemedStyles(makeStyles);
-	return (
-		<Pressable accessibilityRole="button" accessibilityLabel={`${label} current browser URL`} accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={[styles.smallAction, disabled && styles.disabled]}>
-			<Feather name={icon} size={iconSize.xs} color={disabled ? styles.colors.textFaint : styles.colors.textSecondary} />
-			<Text style={[styles.smallActionText, disabled && { color: styles.colors.textFaint }]}>{label}</Text>
-		</Pressable>
-	);
-}
-
 const makeStyles = (t: Theme) => Object.assign(StyleSheet.create({
-	toolbar: { borderTopWidth: 1, borderTopColor: t.borderDefault, backgroundColor: t.bgSurface, paddingHorizontal: space.md, paddingTop: space.sm, paddingBottom: space.md, gap: space.sm },
-	row: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.sm },
-	secondaryRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.sm },
-	iconButton: { width: 36, height: 36, alignItems: "center", justifyContent: "center", borderRadius: 10, borderCurve: "continuous", backgroundColor: t.bgElevated },
+	toolbar: { borderTopWidth: 1, borderTopColor: t.borderDefault, backgroundColor: t.bgSurface, paddingHorizontal: space.md, paddingTop: space.sm, paddingBottom: space.sm, gap: space.xs },
+	addressRow: { minHeight: 44, flexDirection: "row", alignItems: "center" },
+	controlsRow: { minHeight: 42, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+	toolbarButton: { flex: 1, maxWidth: 56, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 10, borderCurve: "continuous" },
+	controlDivider: { width: 1, height: 22, marginHorizontal: space.xxs, backgroundColor: t.borderDefault },
+	pressed: { backgroundColor: t.bgElevated },
 	disabled: { opacity: 0.45 },
 	location: { flex: 1, minHeight: 40, flexDirection: "row", alignItems: "center", gap: space.sm, borderRadius: 12, borderCurve: "continuous", backgroundColor: t.bgElevated, paddingHorizontal: space.md },
 	locationSpinner: { width: iconSize.xs, height: iconSize.xs },
@@ -135,6 +128,4 @@ const makeStyles = (t: Theme) => Object.assign(StyleSheet.create({
 	url: { fontFamily: t.fontMono, color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
 	inputWrap: { flex: 1, minHeight: 40, justifyContent: "center", borderRadius: 12, borderCurve: "continuous", borderWidth: 1, borderColor: t.accentBorder, backgroundColor: t.bgElevated, paddingHorizontal: space.md },
 	input: { minHeight: 38, padding: 0, fontFamily: t.fontMono, color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-	smallAction: { minHeight: 30, flexDirection: "row", alignItems: "center", gap: space.xs, borderRadius: 8, borderCurve: "continuous", backgroundColor: t.bgElevated, paddingHorizontal: space.sm },
-	smallActionText: { fontFamily: "Geist_500Medium", color: t.textSecondary, fontSize: type.caption2.fontSize, fontWeight: "500" },
 }), { colors: t });
