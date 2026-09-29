@@ -27,7 +27,7 @@ export function usePersistentGutterUtility(containerRef: RefObject<HTMLElement |
 			frameRef.current = null;
 			const pointer = pointerRef.current;
 			const container = containerRef.current;
-			if (!pointer || !container || typeof window.PointerEvent === "undefined") return;
+			if (!pointer || !container || typeof window.PointerEvent === "undefined" || typeof document.elementFromPoint !== "function") return;
 			const surfaceTarget = document.elementFromPoint(pointer.clientX, pointer.clientY);
 			if (!(surfaceTarget instanceof Element) || !container.contains(surfaceTarget)) return;
 			let target = surfaceTarget;
