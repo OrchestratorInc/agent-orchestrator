@@ -342,7 +342,7 @@ export async function streamGlobalConversationEvents(
 		signal,
 	});
 	if (!res.ok) throw await streamError(res);
-	if (!res.body) throw new Error("The mobile network stack did not provide an event stream");
+	if (!res.body) throw new Error("Couldn't open live updates from your desktop.");
 	const advertisedAfterHeader = res.headers.get("X-AO-Event-After");
 	const advertisedAfter = advertisedAfterHeader === null ? Number.NaN : Number(advertisedAfterHeader);
 	const effectiveAfter = Number.isSafeInteger(advertisedAfter) && advertisedAfter >= 0
@@ -442,13 +442,16 @@ function readDecisions(detail: ActivityDetail): DecisionOption[] | undefined {
 async function streamError(res: Response): Promise<ApiError> {
 	let message = `${res.status} ${res.statusText}`;
 	let code: string | undefined;
+	let detail: string | undefined;
+	let requestId: string | undefined;
 	try {
-		const body = (await res.json()) as { message?: string; error?: string; code?: string };
-		const detail = body.message ?? body.error;
+		const body = (await res.json()) as { message?: string; error?: string; code?: string; requestId?: string };
+		detail = body.message ?? body.error;
 		if (detail) message += ` - ${detail}`;
 		code = body.code;
+		requestId = typeof body.requestId === "string" ? body.requestId : undefined;
 	} catch {
 		// A proxy may answer HTML; the status remains enough to classify it.
 	}
-	return new ApiError(res.status, message, code);
+	return new ApiError(res.status, message, code, requestId, detail || undefined);
 }

@@ -47,7 +47,6 @@ export type PRCardPresentation = {
 	readiness?: {
 		label: string;
 		detail: string;
-		href?: string;
 		tone: PRDisplayTone;
 	};
 };

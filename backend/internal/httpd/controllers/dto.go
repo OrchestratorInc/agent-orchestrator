@@ -283,6 +283,7 @@ type PRFileQuery struct {
 	Path         string `query:"path" required:"true" description:"Repository-relative file path."`
 	PreviousPath string `query:"previousPath,omitempty" description:"Previous repository-relative path supplied by the selected PR file summary for rename detection."`
 	SourceURL    string `query:"sourceUrl,omitempty" description:"Stable URL of the selected associated pull request."`
+	CommitSHA    string `query:"commitSha,omitempty" description:"Exact SHA of one of the pull request's commits; reads that commit's change instead of the whole pull request."`
 }
 
 // PRFileRevisionQuery selects one immutable side of a pull-request comparison.
@@ -290,6 +291,7 @@ type PRFileRevisionQuery struct {
 	Path      string `query:"path" required:"true" description:"Repository-relative file path."`
 	Side      string `query:"side,omitempty" enum:"before,after" description:"Comparison side. Defaults to after."`
 	SourceURL string `query:"sourceUrl,omitempty" description:"Stable URL of the selected associated pull request."`
+	CommitSHA string `query:"commitSha,omitempty" description:"Exact SHA of one of the pull request's commits; before is its first parent, after is the commit."`
 }
 
 // WorkspaceSearchQuery is the query string accepted by the workspace path search.
@@ -375,7 +377,7 @@ type SpawnSessionRequest struct {
 	ParentSessionID domain.SessionID       `json:"parentSessionId,omitempty"`
 	TrackerProvider domain.TrackerProvider `json:"trackerProvider,omitempty" enum:"github,gitlab"`
 	Kind            domain.SessionKind     `json:"kind,omitempty" enum:"worker,orchestrator"`
-	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,grok,droid,amp,agy,crush,cursor,qwen,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,prime-agent,autohand,unreal-agent"`
+	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,mimo-code"`
 	Branch          string                 `json:"branch,omitempty"`
 	// Mode picks the conversation controller: chat talks to the agent over a
 	// structured connection, tui opens the agent's native terminal interface.
@@ -432,7 +434,7 @@ type SpawnSessionResponse struct {
 
 // SwitchAgentRequest is the body of POST /api/v1/sessions/{sessionId}/switch-agent.
 type SwitchAgentRequest struct {
-	TargetHarness  domain.AgentHarness `json:"targetHarness" enum:"claude-code,codex" description:"Agent harness to continue the logical AO session with."`
+	TargetHarness  domain.AgentHarness `json:"targetHarness" enum:"claude-code,codex,fx" description:"Agent harness to continue the logical AO session with."`
 	Model          string              `json:"model,omitempty" maxLength:"256" description:"Optional model override for the target agent launch or resume."`
 	IdempotencyKey string              `json:"idempotencyKey,omitempty" maxLength:"128" description:"Optional retry key. Reusing it with a different request is rejected."`
 }
@@ -526,8 +528,11 @@ type ListWorkspaceFilesResponse struct {
 type ListPRFilesResponse struct {
 	SessionID domain.SessionID       `json:"sessionId"`
 	Files     []WorkspaceFileSummary `json:"files"`
-	Truncated bool                   `json:"truncated"`
-	Summary   WorkspaceSummary       `json:"summary"`
+	// Commits are the pull request's own commits (base..head), newest first.
+	// File sizes are not read for commit files.
+	Commits   []WorkspaceCommitSummary `json:"commits"`
+	Truncated bool                     `json:"truncated"`
+	Summary   WorkspaceSummary         `json:"summary"`
 }
 
 // WorkspaceFileSections groups a session workspace's changed files by git
@@ -951,6 +956,9 @@ type CleanupSessionsResponse struct {
 // SendSessionMessageRequest is the body of POST /api/v1/sessions/{sessionId}/send.
 type SendSessionMessageRequest struct {
 	Message string `json:"message" minLength:"1" maxLength:"4096"`
+	// UserAuthored marks content written directly by the user but delivered via
+	// AO's automation relay, such as inline document feedback.
+	UserAuthored bool `json:"userAuthored,omitempty"`
 	// Attachment is an optional inline image (e.g. a browser-annotation
 	// snapshot) delivered alongside the message. The daemon writes it into the
 	// session worktree and appends a path reference to the message.
@@ -969,7 +977,7 @@ type SendSessionMessageResponse struct {
 type DelegateTaskRequest struct {
 	ProjectID domain.ProjectID    `json:"projectId"`
 	Brief     string              `json:"brief" maxLength:"16384"`
-	Agent     domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,grok,droid,amp,agy,crush,cursor,qwen,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,prime-agent,autohand,unreal-agent,fake"`
+	Agent     domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,mimo-code,fake"`
 	Model     string              `json:"model,omitempty" maxLength:"256"`
 	// Effort is an explicit, provider-advertised model tuning override. Nil
 	// inherits the project default; an empty string selects the provider default.
@@ -1020,32 +1028,30 @@ type SessionPRFacts struct {
 // /sessions/{sessionId}/pr. It intentionally omits CI log tails and review
 // comment bodies.
 type SessionPRSummary struct {
-	URL                    string                       `json:"url"`
-	HTMLURL                string                       `json:"htmlUrl,omitempty"`
-	Number                 int                          `json:"number"`
-	Title                  string                       `json:"title"`
-	State                  domain.PRState               `json:"state" enum:"draft,open,merged,closed"`
-	Provider               string                       `json:"provider" enum:"github,gitlab"`
-	Repo                   string                       `json:"repo"`
-	Author                 string                       `json:"author"`
-	AuthorAvatarURL        string                       `json:"authorAvatarUrl,omitempty"`
-	DiscussionCommentCount int                          `json:"discussionCommentCount,omitempty"`
-	DiscussionCommenters   []string                     `json:"discussionCommenters,omitempty"`
-	SourceBranch           string                       `json:"sourceBranch"`
-	TargetBranch           string                       `json:"targetBranch"`
-	HeadSHA                string                       `json:"headSha"`
-	Additions              int                          `json:"additions"`
-	Deletions              int                          `json:"deletions"`
-	ChangedFiles           int                          `json:"changedFiles"`
-	CI                     SessionPRCISummary           `json:"ci"`
-	Review                 SessionPRReviewSummary       `json:"review"`
-	Mergeability           SessionPRMergeabilitySummary `json:"mergeability"`
-	StateChangedAt         *time.Time                   `json:"stateChangedAt,omitempty"`
-	CreatedAt              *time.Time                   `json:"createdAt,omitempty"`
-	UpdatedAt              time.Time                    `json:"updatedAt"`
-	ObservedAt             time.Time                    `json:"observedAt,omitempty"`
-	CIObservedAt           time.Time                    `json:"ciObservedAt,omitempty"`
-	ReviewObservedAt       time.Time                    `json:"reviewObservedAt,omitempty"`
+	URL              string                       `json:"url"`
+	HTMLURL          string                       `json:"htmlUrl,omitempty"`
+	Number           int                          `json:"number"`
+	Title            string                       `json:"title"`
+	State            domain.PRState               `json:"state" enum:"draft,open,merged,closed"`
+	Provider         string                       `json:"provider" enum:"github,gitlab"`
+	Repo             string                       `json:"repo"`
+	Author           string                       `json:"author"`
+	AuthorAvatarURL  string                       `json:"authorAvatarUrl,omitempty"`
+	SourceBranch     string                       `json:"sourceBranch"`
+	TargetBranch     string                       `json:"targetBranch"`
+	HeadSHA          string                       `json:"headSha"`
+	Additions        int                          `json:"additions"`
+	Deletions        int                          `json:"deletions"`
+	ChangedFiles     int                          `json:"changedFiles"`
+	CI               SessionPRCISummary           `json:"ci"`
+	Review           SessionPRReviewSummary       `json:"review"`
+	Mergeability     SessionPRMergeabilitySummary `json:"mergeability"`
+	StateChangedAt   *time.Time                   `json:"stateChangedAt,omitempty"`
+	CreatedAt        *time.Time                   `json:"createdAt,omitempty"`
+	UpdatedAt        time.Time                    `json:"updatedAt"`
+	ObservedAt       time.Time                    `json:"observedAt,omitempty"`
+	CIObservedAt     time.Time                    `json:"ciObservedAt,omitempty"`
+	ReviewObservedAt time.Time                    `json:"reviewObservedAt,omitempty"`
 }
 
 // SessionPRCISummary is the CI status block for a session PR summary.
@@ -1127,32 +1133,30 @@ type ListSessionPRsResponse struct {
 // NewSessionPRSummary maps the service PR summary model to its HTTP DTO.
 func NewSessionPRSummary(in sessionsvc.PRSummary) SessionPRSummary {
 	return SessionPRSummary{
-		URL:                    in.URL,
-		HTMLURL:                in.HTMLURL,
-		Number:                 in.Number,
-		Title:                  in.Title,
-		State:                  in.State,
-		Provider:               in.Provider,
-		Repo:                   in.Repo,
-		Author:                 in.Author,
-		AuthorAvatarURL:        in.AuthorAvatarURL,
-		DiscussionCommentCount: in.DiscussionCommentCount,
-		DiscussionCommenters:   in.DiscussionCommenters,
-		SourceBranch:           in.SourceBranch,
-		TargetBranch:           in.TargetBranch,
-		HeadSHA:                in.HeadSHA,
-		Additions:              in.Additions,
-		Deletions:              in.Deletions,
-		ChangedFiles:           in.ChangedFiles,
-		CI:                     newSessionPRCISummary(in.CI),
-		Review:                 newSessionPRReviewSummary(in.Review),
-		Mergeability:           newSessionPRMergeabilitySummary(in.Mergeability),
-		StateChangedAt:         optionalTime(in.StateChangedAt),
-		CreatedAt:              optionalTime(in.CreatedAt),
-		UpdatedAt:              in.UpdatedAt,
-		ObservedAt:             in.ObservedAt,
-		CIObservedAt:           in.CIObservedAt,
-		ReviewObservedAt:       in.ReviewObservedAt,
+		URL:              in.URL,
+		HTMLURL:          in.HTMLURL,
+		Number:           in.Number,
+		Title:            in.Title,
+		State:            in.State,
+		Provider:         in.Provider,
+		Repo:             in.Repo,
+		Author:           in.Author,
+		AuthorAvatarURL:  in.AuthorAvatarURL,
+		SourceBranch:     in.SourceBranch,
+		TargetBranch:     in.TargetBranch,
+		HeadSHA:          in.HeadSHA,
+		Additions:        in.Additions,
+		Deletions:        in.Deletions,
+		ChangedFiles:     in.ChangedFiles,
+		CI:               newSessionPRCISummary(in.CI),
+		Review:           newSessionPRReviewSummary(in.Review),
+		Mergeability:     newSessionPRMergeabilitySummary(in.Mergeability),
+		StateChangedAt:   optionalTime(in.StateChangedAt),
+		CreatedAt:        optionalTime(in.CreatedAt),
+		UpdatedAt:        in.UpdatedAt,
+		ObservedAt:       in.ObservedAt,
+		CIObservedAt:     in.CIObservedAt,
+		ReviewObservedAt: in.ReviewObservedAt,
 	}
 }
 

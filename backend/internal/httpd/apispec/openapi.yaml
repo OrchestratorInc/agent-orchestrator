@@ -5912,6 +5912,14 @@ paths:
         schema:
           description: Stable URL of the selected associated pull request.
           type: string
+      - description: Exact SHA of one of the pull request's commits; reads that commit's
+          change instead of the whole pull request.
+        in: query
+        name: commitSha
+        schema:
+          description: Exact SHA of one of the pull request's commits; reads that
+            commit's change instead of the whole pull request.
+          type: string
       responses:
         "200":
           content:
@@ -5980,6 +5988,14 @@ paths:
         name: sourceUrl
         schema:
           description: Stable URL of the selected associated pull request.
+          type: string
+      - description: Exact SHA of one of the pull request's commits; before is its
+          first parent, after is the commit.
+        in: query
+        name: commitSha
+        schema:
+          description: Exact SHA of one of the pull request's commits; before is its
+            first parent, after is the commit.
           type: string
       responses:
         "200":
@@ -10775,6 +10791,7 @@ components:
           - crush
           - cursor
           - qwen
+          - gemini
           - copilot
           - goose
           - auggie
@@ -10789,9 +10806,11 @@ components:
           - pi
           - kimchi
           - omp
+          - fx
           - prime-agent
           - autohand
           - unreal-agent
+          - mimo-code
           - fake
           type: string
         approvalMode:
@@ -11406,6 +11425,7 @@ components:
           - cline
           - goose
           - qwen
+          - gemini
           - continue
           - devin
           - kiro
@@ -11417,7 +11437,9 @@ components:
           - kimchi
           - prime-agent
           - omp
+          - fx
           - unreal-agent
+          - mimo-code
           - cloudflared
           type: string
         updatedAt:
@@ -11593,6 +11615,10 @@ components:
       type: object
     ListPRFilesResponse:
       properties:
+        commits:
+          items:
+            $ref: '#/components/schemas/WorkspaceCommitSummary'
+          type: array
         files:
           items:
             $ref: '#/components/schemas/WorkspaceFileSummary'
@@ -11606,6 +11632,7 @@ components:
       required:
       - sessionId
       - files
+      - commits
       - truncated
       - summary
       type: object
@@ -12765,6 +12792,8 @@ components:
           maxLength: 4096
           minLength: 1
           type: string
+        userAuthored:
+          type: boolean
       required:
       - message
       type: object
@@ -13161,12 +13190,6 @@ components:
           - string
         deletions:
           type: integer
-        discussionCommentCount:
-          type: integer
-        discussionCommenters:
-          items:
-            type: string
-          type: array
         headSha:
           type: string
         htmlUrl:
@@ -13690,6 +13713,7 @@ components:
           - crush
           - cursor
           - qwen
+          - gemini
           - copilot
           - goose
           - auggie
@@ -13704,9 +13728,11 @@ components:
           - pi
           - kimchi
           - omp
+          - fx
           - prime-agent
           - autohand
           - unreal-agent
+          - mimo-code
           type: string
         issueId:
           type: string
@@ -13976,6 +14002,7 @@ components:
           enum:
           - claude-code
           - codex
+          - fx
           type: string
       required:
       - targetHarness

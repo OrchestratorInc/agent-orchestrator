@@ -508,6 +508,15 @@ const UNTRUSTED_END = "<<<END UNTRUSTED EXTERNAL CONTENT>>>";
 // address bar; workspace files arrive through the daemon's confined HTTP
 // preview origin instead.
 const ALLOWED_PROTOCOLS = new Set(["http:", "https:"]);
+const TEMPORARY_BROWSER_PARTITION_PREFIX = "persist:ao-browser-temporary-";
+
+function temporaryBrowserPartition(): string {
+	return `${TEMPORARY_BROWSER_PARTITION_PREFIX}${randomUUID()}`;
+}
+
+function isTemporaryBrowserPartition(partition: string): boolean {
+	return partition.startsWith(TEMPORARY_BROWSER_PARTITION_PREFIX);
+}
 export function normalizeBrowserURL(input: string): URL {
 	const raw = input.trim();
 	if (raw === "") {
@@ -575,6 +584,7 @@ export function createBrowserViewHost(options: BrowserViewHostOptions): BrowserV
 	const viewIdsBySessionId = new Map<string, string>();
 	const rendererOwnersByViewId = new Map<string, Set<number>>();
 	const tabsByWebContentsId = new Map<number, BrowserEntry>();
+	const pendingTemporaryPartitionClears = new Set<Promise<void>>();
 	const ipcDisposers: Array<() => void> = [];
 	let disposePromise: Promise<void> | null = null;
 	// viewId of the panel that most recently held native focus; cleared when the
@@ -665,6 +675,9 @@ export function createBrowserViewHost(options: BrowserViewHostOptions): BrowserV
 				contextIsolation: true,
 				nodeIntegration: false,
 				partition: session.profilePartition,
+				// Chromium's built-in PDF viewer is plugin-backed in Electron. Keep it
+				// enabled for AO's browser surface so HTTP(S) PDFs render in-panel.
+				plugins: true,
 				preload: options.annotatePreloadPath,
 				sandbox: true,
 			},
@@ -825,10 +838,10 @@ export function createBrowserViewHost(options: BrowserViewHostOptions): BrowserV
 				sessionId,
 				viewId,
 				profileId,
-				// A non-persist: Electron partition is memory-only. Every tab in
-				// this worker shares it, while a fresh worker runtime receives a
-				// different partition even if a session ID is ever reused.
-				profilePartition: profileId ? browserProfilePartition(profileId) : `ao-browser-${randomUUID()}`,
+				// Temporary workers still use a persist: partition: Electron's built-in
+				// PDF viewer does not reliably render in in-memory partitions, while AO
+				// clears this session-scoped partition when the browser session ends.
+				profilePartition: profileId ? browserProfilePartition(profileId) : temporaryBrowserPartition(),
 				tabs: new Map(),
 				activeTabId: "",
 				nextTabNumber: 1,
@@ -1606,9 +1619,21 @@ export function createBrowserViewHost(options: BrowserViewHostOptions): BrowserV
 		return { mimeType: "image/png", data: resized.toPNG().toString("base64") };
 	};
 
+	const clearTemporaryPartition = (partition: string): Promise<void> => {
+		const clearBrowserProfileData = options.clearBrowserProfileData;
+		if (!isTemporaryBrowserPartition(partition) || !clearBrowserProfileData) return Promise.resolve();
+		const cleanup = Promise.resolve().then(() => clearBrowserProfileData(partition)).catch((error) => {
+			console.warn("temporary browser profile cleanup failed:", error);
+		});
+		pendingTemporaryPartitionClears.add(cleanup);
+		void cleanup.finally(() => pendingTemporaryPartitionClears.delete(cleanup));
+		return cleanup;
+	};
+
 	const destroy = (viewId: string): void => {
 		const session = entries.get(viewId);
 		if (!session) return;
+		const partitionToClear = session.profileId === null ? session.profilePartition : undefined;
 		session.signals.entries.length = 0;
 		unregisterBrowserSignalWatcher(session);
 		if (options.mainWindow.isDestroyed?.()) session.devtools = undefined;
@@ -1627,6 +1652,7 @@ export function createBrowserViewHost(options: BrowserViewHostOptions): BrowserV
 				tabsByWebContentsId.delete(entry.view.webContents.id);
 				disposeNetworkCapture(entry, "session-closed");
 			}
+			if (partitionToClear) clearTemporaryPartition(partitionToClear);
 			return;
 		}
 		for (const entry of session.tabs.values()) {
@@ -1634,6 +1660,7 @@ export function createBrowserViewHost(options: BrowserViewHostOptions): BrowserV
 			disposeNetworkCapture(entry, "session-closed");
 			destroyTabView(entry);
 		}
+		if (partitionToClear) clearTemporaryPartition(partitionToClear);
 	};
 
 	const destroyTabView = (entry: BrowserEntry): void => {
@@ -1780,13 +1807,14 @@ export function createBrowserViewHost(options: BrowserViewHostOptions): BrowserV
 			session.profileId = normalizedRequestedProfileId;
 			session.profilePartition = normalizedRequestedProfileId
 				? browserProfilePartition(normalizedRequestedProfileId)
-				: `ao-browser-${randomUUID()}`;
+				: temporaryBrowserPartition();
 			await rebuildSessionTabs(session, savedTabs, previousActiveTabId, previousNextTabNumber, assertCurrentSession);
 			registerBrowserSignalWatcher(session);
 			pushTabsState(options, session);
 			pushProfileState(session);
 			pushDevToolsState(session);
 			pushNavState(options, activeEntry(session));
+			if (previousProfileId === null) await clearTemporaryPartition(previousPartition);
 			return profileStateForSession(session);
 		} catch (error) {
 			if (bindingChanged) {
@@ -2575,6 +2603,9 @@ export function createBrowserViewHost(options: BrowserViewHostOptions): BrowserV
 					destroy(viewId);
 				}
 				if (options.browserHistoryStore) await options.browserHistoryStore.drain();
+				while (pendingTemporaryPartitionClears.size > 0) {
+					await Promise.all([...pendingTemporaryPartitionClears]);
+				}
 				await options.agentBrowserRuntime?.dispose();
 			})();
 			return disposePromise;

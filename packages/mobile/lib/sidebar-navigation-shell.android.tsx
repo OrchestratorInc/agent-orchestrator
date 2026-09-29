@@ -40,7 +40,11 @@ import {
 	type SidebarDestination,
 	type SidebarDestinationId,
 } from "./sidebar-navigation";
-import { sidebarGestureTarget, shouldCaptureSidebarGesture } from "./sidebar-gesture";
+import {
+	sidebarGestureProgress,
+	sidebarGestureTarget,
+	shouldCaptureSidebarGesture,
+} from "./sidebar-gesture";
 import { SidebarSettingsButton } from "./sidebar-settings-button";
 import { SidebarSpawnButton } from "./sidebar-spawn-button";
 import { useReducedMotion } from "./useReducedMotion";
@@ -63,9 +67,14 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	const insets = useSafeAreaInsets();
 	const { width } = useWindowDimensions();
 	const [open, setOpen] = useState(retainedDrawerOpen);
+	const [scrimVisible, setScrimVisible] = useState(retainedDrawerOpen);
 	const reduceMotion = useReducedMotion();
 	const progress = useRef(new Animated.Value(retainedDrawerOpen ? 1 : 0)).current;
-	const gestureStartedOpen = useRef(false);
+	const drawerSettling = useRef(false);
+	const gestureStartProgress = useRef(retainedDrawerOpen ? 1 : 0);
+	const gestureLatestDx = useRef(0);
+	const gestureReady = useRef(false);
+	const pendingGestureEnd = useRef<{ dx: number; velocityX: number; cancelled: boolean } | null>(null);
 	const pendingClosePath = useRef<string | null>(null);
 	const [scrollRequest, setScrollRequest] = useState<SidebarScrollRequest | null>(null);
 	const activeDestination = activeSidebarDestination(pathname);
@@ -84,14 +93,20 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 
 	const animateSidebar = useCallback((nextOpen: boolean) => {
 		retainedDrawerOpen = nextOpen;
-		setOpen(nextOpen);
+		drawerSettling.current = true;
+		setScrimVisible(nextOpen);
+		if (nextOpen) setOpen(true);
 		Animated.spring(progress, {
 			toValue: nextOpen ? 1 : 0,
 			useNativeDriver: true,
 			damping: 24,
 			stiffness: 240,
 			mass: 0.8,
-		}).start();
+		}).start(({ finished }) => {
+			if (!finished) return;
+			drawerSettling.current = false;
+			if (!nextOpen) setOpen(false);
+		});
 	}, [progress]);
 
 	const openSidebar = useCallback(() => {
@@ -106,38 +121,75 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 		closeSidebar();
 	}, [closeSidebar, pathname]);
 
-	const panResponder = useMemo(
-		() => PanResponder.create({
+	const panResponder = useMemo(() => {
+		const settleGesture = (dx: number, velocityX: number, cancelled: boolean) => {
+			const startedOpen = gestureStartProgress.current >= 0.5;
+			const nextOpen = cancelled
+				? startedOpen
+				: sidebarGestureTarget({
+						open: startedOpen,
+						startProgress: gestureStartProgress.current,
+						dx,
+						velocityX,
+						drawerWidth,
+					});
+			if (!cancelled && nextOpen !== startedOpen) haptics.select();
+			animateSidebar(nextOpen);
+		};
+
+		return PanResponder.create({
 			onMoveShouldSetPanResponderCapture: (event, gesture) =>
 				shouldCaptureSidebarGesture({
 					open,
+					settling: drawerSettling.current,
 					startX: event.nativeEvent.pageX - gesture.dx,
 					dx: gesture.dx,
 					dy: gesture.dy,
 					edgeWidth: 64,
 				}),
 			onPanResponderGrant: () => {
-				gestureStartedOpen.current = open;
-				progress.stopAnimation();
+				gestureLatestDx.current = 0;
+				gestureReady.current = false;
+				pendingGestureEnd.current = null;
+				progress.stopAnimation((value) => {
+					gestureStartProgress.current = value;
+					gestureReady.current = true;
+					progress.setValue(sidebarGestureProgress({
+						startProgress: value,
+						dx: gestureLatestDx.current,
+						drawerWidth,
+					}));
+					const pendingEnd = pendingGestureEnd.current;
+					if (!pendingEnd) return;
+					pendingGestureEnd.current = null;
+					settleGesture(pendingEnd.dx, pendingEnd.velocityX, pendingEnd.cancelled);
+				});
 			},
 			onPanResponderMove: (_event, gesture) => {
-				const initialProgress = gestureStartedOpen.current ? 1 : 0;
-				progress.setValue(Math.max(0, Math.min(1, initialProgress + gesture.dx / drawerWidth)));
+				gestureLatestDx.current = gesture.dx;
+				if (!gestureReady.current) return;
+				progress.setValue(sidebarGestureProgress({
+					startProgress: gestureStartProgress.current,
+					dx: gesture.dx,
+					drawerWidth,
+				}));
 			},
 			onPanResponderRelease: (_event, gesture) => {
-				const nextOpen = sidebarGestureTarget({
-					open: gestureStartedOpen.current,
-					dx: gesture.dx,
-					velocityX: gesture.vx,
-					drawerWidth,
-				});
-				if (nextOpen !== gestureStartedOpen.current) haptics.select();
-				animateSidebar(nextOpen);
+				if (!gestureReady.current) {
+					pendingGestureEnd.current = { dx: gesture.dx, velocityX: gesture.vx, cancelled: false };
+					return;
+				}
+				settleGesture(gesture.dx, gesture.vx, false);
 			},
-			onPanResponderTerminate: () => animateSidebar(gestureStartedOpen.current),
-		}),
-		[animateSidebar, drawerWidth, open, progress],
-	);
+			onPanResponderTerminate: (_event, gesture) => {
+				if (!gestureReady.current) {
+					pendingGestureEnd.current = { dx: gesture.dx, velocityX: gesture.vx, cancelled: true };
+					return;
+				}
+				settleGesture(gesture.dx, gesture.vx, true);
+			},
+		});
+	}, [animateSidebar, drawerWidth, open, progress]);
 
 	useEffect(() => {
 		if (!open || pathname === "/settings") return;
@@ -265,17 +317,26 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 					<View style={[styles.contentSurface, open && styles.contentSurfaceOpen]}>
 						{children}
 						{open ? (
-							<Pressable
-								accessibilityRole="button"
-								accessibilityLabel="Close navigation"
-								onPress={closeSidebar}
-								style={styles.dismissLayer}
-							/>
+							scrimVisible ? (
+								<Pressable
+									accessibilityRole="button"
+									accessibilityLabel="Close navigation"
+									onPress={closeSidebar}
+									style={styles.dismissLayer}
+								/>
+							) : (
+								<View style={styles.dismissBlocker} />
+							)
 						) : null}
 					</View>
 				</Animated.View>
 
-				{!open ? <View style={styles.edgeGestureTarget} {...panResponder.panHandlers} /> : null}
+				{!open ? (
+					<View
+						style={[styles.edgeGestureTarget, { top: insets.top + 64 }]}
+						{...panResponder.panHandlers}
+					/>
+				) : null}
 			</View>
 		</SidebarNavigationContext.Provider>
 	);
@@ -367,12 +428,12 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 		...StyleSheet.absoluteFill,
 		backgroundColor: t.scrim,
 	},
+	dismissBlocker: {
+		...StyleSheet.absoluteFill,
+	},
 	edgeGestureTarget: {
 		position: "absolute",
 		left: 0,
-		// Leave both the header control and the floating footer actions tappable;
-		// edge swipes only need the page-content strip between them.
-		top: 96,
 		bottom: 88,
 		width: 64,
 	},
