@@ -17,6 +17,8 @@ import (
 	"github.com/google/uuid"
 )
 
+var errProviderContainmentRequired = errors.New("provider retirement requires a contained execution boundary")
+
 type providerProcessIdentity struct {
 	PID   int    `json:"pid"`
 	Start uint64 `json:"start"`
@@ -199,6 +201,17 @@ func confirmProviderOwnersStopped(dataDir, sessionID string) error {
 		if err != nil || owner.State != "stopped" {
 			return errors.Join(ErrOwnershipInconclusive, err)
 		}
+		if err := confirmProviderOwnerStopped(owner); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func confirmProviderOwnerStopped(owner providerOwner) error {
+	stopped, err := providerGroupStopped(owner)
+	if err != nil || !stopped {
+		return errors.Join(ErrOwnershipInconclusive, err)
 	}
 	return nil
 }
@@ -209,8 +222,11 @@ func finishProviderOwner(ctx context.Context, dataDir string, owner providerOwne
 	}
 	return withProviderOwnerLock(ctx, dataDir, owner.Session, owner.Identity, func() error {
 		current, err := readProviderOwner(dataDir, owner.Session, owner.Identity)
-		if err != nil || current.State == "stopped" {
+		if err != nil {
 			return err
+		}
+		if current.State == "stopped" {
+			return confirmProviderOwnerStopped(current)
 		}
 		for {
 			stopped, err := providerGroupStopped(current)

@@ -288,7 +288,7 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			if cfg.AutomationRunID != nil {
 				for _, candidate := range existing {
 					if candidate.AutomationRunID != nil && *candidate.AutomationRunID == *cfg.AutomationRunID {
-						return candidate, 0, 0, nil
+						return s.reuseOrchestratorWithAccount(ctx, cfg, candidate)
 					}
 				}
 				return domain.Session{}, 0, 0, apierr.Conflict(
@@ -297,7 +297,7 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 					nil,
 				)
 			}
-			return newestSession(existing), 0, 0, nil
+			return s.reuseOrchestratorWithAccount(ctx, cfg, newestSession(existing))
 		}
 	}
 	return s.spawn(ctx, cfg)

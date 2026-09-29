@@ -6,9 +6,28 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func requireEvidencePlatformRetirement(t *testing.T, dataDir string, owner providerOwner) {
+	t.Helper()
+	supported := (runtime.GOOS == "windows" && owner.Proof == "windows-job-v1") ||
+		((runtime.GOOS == "linux" || runtime.GOOS == "darwin") && owner.Proof == "")
+	for _, err := range []error{
+		ShutdownExact(t.Context(), dataDir, owner.Session, owner.Identity),
+		confirmProviderOwnersStopped(dataDir, owner.Session),
+	} {
+		if supported {
+			if err != nil {
+				t.Fatal("complete native-platform evidence rejected", err)
+			}
+		} else if !errors.Is(err, ErrOwnershipInconclusive) {
+			t.Fatal("foreign-platform receipt authorized retirement", err)
+		}
+	}
+}
 
 func TestProviderOwnerEvidenceOversizedValidPrefix(t *testing.T) {
 	dataDir, sessionID := t.TempDir(), "owner-evidence"
@@ -31,12 +50,7 @@ func TestProviderOwnerEvidenceOversizedValidPrefix(t *testing.T) {
 	if _, err := readProviderOwner(dataDir, sessionID, identity); err != nil {
 		t.Fatal("exactly-limit complete proof rejected", err)
 	}
-	if err := ShutdownExact(t.Context(), dataDir, sessionID, identity); err != nil {
-		t.Fatal("exactly-limit retirement proof rejected", err)
-	}
-	if err := confirmProviderOwnersStopped(dataDir, sessionID); err != nil {
-		t.Fatal("exactly-limit unbound retirement proof rejected", err)
-	}
+	requireEvidencePlatformRetirement(t, dataDir, owner)
 	for _, suffix := range []string{" ", "incomplete second record", "{}"} {
 		if err := os.WriteFile(path, append(append([]byte(nil), raw...), []byte(suffix)...), 0o600); err != nil {
 			t.Fatal(err)
@@ -85,9 +99,10 @@ func TestProviderOwnerEvidenceIncompleteStopped(t *testing.T) {
 			if err := writeProviderOwner(dataDir, owner); err != nil {
 				t.Fatal(err)
 			}
-			if err := ShutdownExact(t.Context(), dataDir, sessionID, identity); err != nil {
-				t.Fatal("valid stopped control rejected", err)
+			if _, err := readProviderOwner(dataDir, sessionID, identity); err != nil {
+				t.Fatal("complete control evidence rejected", err)
 			}
+			requireEvidencePlatformRetirement(t, dataDir, owner)
 			tc.change(&owner)
 			raw, err := json.Marshal(owner)
 			if err != nil {
@@ -123,9 +138,10 @@ func TestProviderOwnerEvidenceWindowsPIDRange(t *testing.T) {
 			if err := writeProviderOwner(dataDir, owner); err != nil {
 				t.Fatal(err)
 			}
-			if err := ShutdownExact(t.Context(), dataDir, sessionID, identity); err != nil {
-				t.Fatal("complete in-range proof rejected", err)
+			if _, err := readProviderOwner(dataDir, sessionID, identity); err != nil {
+				t.Fatal("complete in-range evidence rejected", err)
 			}
+			requireEvidencePlatformRetirement(t, dataDir, owner)
 			raw, err := json.Marshal(owner)
 			if err != nil {
 				t.Fatal(err)

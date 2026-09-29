@@ -38,8 +38,11 @@ func ShutdownExact(ctx context.Context, dataDir, sessionID, identity string) err
 	defer cancel()
 	return withProviderOwnerLock(ctx, dataDir, sessionID, identity, func() error {
 		owner, err := readProviderOwner(dataDir, sessionID, identity)
-		if err != nil || owner.State == "stopped" {
+		if err != nil {
 			return err
+		}
+		if owner.State == "stopped" {
+			return confirmProviderOwnerStopped(owner)
 		}
 		if owner.State != "active" {
 			return ErrOwnershipInconclusive

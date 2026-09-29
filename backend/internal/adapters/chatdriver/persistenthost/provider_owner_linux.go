@@ -138,16 +138,9 @@ func providerGroupAbsent(owner providerOwner) (bool, error) {
 	if boot != owner.Boot {
 		return true, nil
 	}
-	// A census can miss a child forked by a listed member before that member
-	// exits. Only kernel-confirmed group absence excludes that survivor.
-	err = unix.Kill(-owner.Group, 0)
-	if errors.Is(err, unix.ESRCH) {
-		return true, nil
-	}
-	if err != nil {
-		return false, errors.Join(ErrOwnershipInconclusive, err)
-	}
-	return false, nil
+	// An unobserved descendant can leave the group before its parent exits.
+	// Group absence cannot prove retirement of this uncontained launch.
+	return false, errors.Join(ErrOwnershipInconclusive, errProviderContainmentRequired)
 }
 
 func stopProviderOwner(ctx context.Context, dataDir string, owner providerOwner) error {

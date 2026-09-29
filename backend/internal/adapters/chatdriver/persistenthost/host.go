@@ -633,9 +633,7 @@ func Run(ctx context.Context, cfg Config) error {
 		_ = stdin.Close()
 		select {
 		case <-providerDone:
-			// Wrapper adapters may exit before their provider child. The hosted
-			// process group is the ownership boundary, so explicit shutdown reaps
-			// any descendant that did not follow stdin closure.
+			// A wrapper can exit before its provider child follows stdin closure.
 			_ = ownedChild.stop(context.WithoutCancel(ctx))
 		case <-time.After(3 * time.Second):
 			_ = ownedChild.stop(context.WithoutCancel(ctx))
@@ -661,7 +659,13 @@ func Run(ctx context.Context, cfg Config) error {
 	_ = ownedChild.wait()
 	proofCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return errors.Join(runErr, finishProviderOwner(proofCtx, cfg.DataDir, owner))
+	proofErr := finishProviderOwner(proofCtx, cfg.DataDir, owner)
+	if errors.Is(proofErr, errProviderContainmentRequired) {
+		// Ordinary host exit is not an exact-retirement acknowledgement.
+		// Preserve the unresolved owner without changing native shutdown.
+		proofErr = nil
+	}
+	return errors.Join(runErr, proofErr)
 }
 
 type host struct {

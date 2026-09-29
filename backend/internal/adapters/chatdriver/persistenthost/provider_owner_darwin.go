@@ -78,15 +78,8 @@ func providerGroupStopped(owner providerOwner) (bool, error) {
 			}
 		}
 	}
-	// The census is advisory; only the kernel can confirm that no group member remains.
-	err = unix.Kill(-owner.Group, 0)
-	if errors.Is(err, unix.ESRCH) {
-		return true, nil
-	}
-	if err != nil {
-		return false, errors.Join(ErrOwnershipInconclusive, err)
-	}
-	return false, nil
+	// A child can leave the recorded group without appearing in this census.
+	return false, errors.Join(ErrOwnershipInconclusive, errProviderContainmentRequired)
 }
 
 func stopProviderOwner(ctx context.Context, dataDir string, owner providerOwner) error {
