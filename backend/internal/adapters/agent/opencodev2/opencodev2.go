@@ -35,8 +35,9 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{ID: string(domain.HarnessOpenCodeV2), Name: "OpenCode 2", Description: "Run OpenCode 2 worker sessions.", Version: "0.0.1", Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
 }
 
-// EmitsSemanticMessageAcceptance reports that hooks signal message acceptance.
-func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
+// EmitsSemanticMessageAcceptance is false: OpenCode 2's prompt hook runs before
+// durable prompt admission, so no hook can confirm a prompt was accepted.
+func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return false }
 
 // ResolveBinary resolves the shared opencode executable and requires the v2
 // command contract before catalog, authentication, install verification, or a
@@ -211,16 +212,36 @@ func PrepareACPConfigContent(existing, systemPrompt string, _ ports.PermissionMo
 			return "", fmt.Errorf("opencode-v2: OPENCODE_CONFIG_CONTENT agent %q must be an object", name)
 		}
 	}
+	userAgentPermissions, _ := json.Marshal(agent["permissions"])
+	if agent["permissions"] == nil {
+		userAgentPermissions = nil
+	}
 	agent["mode"] = "primary"
 	if systemPrompt != "" {
 		agent["system"] = systemPrompt
 	}
-	agent["permissions"] = []permissionRule{
-		{Action: "*", Resource: "*", Effect: "ask"},
-		{Action: "read", Resource: "*", Effect: "allow"},
-		{Action: "glob", Resource: "*", Effect: "allow"},
-		{Action: "grep", Resource: "*", Effect: "allow"},
+	// Agent rules are evaluated after top-level rules and the last match wins, so
+	// the user's own top-level and agent rules are re-appended after AO's
+	// defaults to keep their explicit denies effective.
+	permissions := []any{
+		permissionRule{Action: "*", Resource: "*", Effect: "ask"},
+		permissionRule{Action: "read", Resource: "*", Effect: "allow"},
+		permissionRule{Action: "glob", Resource: "*", Effect: "allow"},
+		permissionRule{Action: "grep", Resource: "*", Effect: "allow"},
 	}
+	for _, source := range []json.RawMessage{config["permissions"], userAgentPermissions} {
+		if len(source) == 0 {
+			continue
+		}
+		var rules []json.RawMessage
+		if err := json.Unmarshal(source, &rules); err != nil {
+			return "", fmt.Errorf("opencode-v2: OPENCODE_CONFIG_CONTENT permissions must be an array")
+		}
+		for _, rule := range rules {
+			permissions = append(permissions, rule)
+		}
+	}
+	agent["permissions"] = permissions
 	raw, err := json.Marshal(agent)
 	if err != nil {
 		return "", err

@@ -167,7 +167,7 @@ func reviewerPermissions(taskPromptRoot string) []permissionRule {
 		})
 	}
 	for _, resource := range []string{
-		"gh api *",
+		"gh api repos/*",
 		"git diff *",
 		"git log *",
 		"git show *",
@@ -178,16 +178,16 @@ func reviewerPermissions(taskPromptRoot string) []permissionRule {
 		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "allow"})
 	}
 	// Later rules win, so the mutating shapes below override the broad allows
-	// above; only the review-submission endpoint is re-allowed afterwards.
+	// above. Any gh api flag is denied (a positive shape, not a flag blocklist);
+	// only the review-submission endpoint is re-allowed afterwards.
 	for _, resource := range []string{
-		"gh api *--method*",
-		"gh api *-X*",
-		"gh api *--input*",
-		"gh api *--field*",
-		"gh api *--raw-field*",
-		"gh api *-f *",
-		"gh api *-F *",
-		"gh api graphql*",
+		"gh api -*",
+		"gh api * -*",
+		"gh api *;*",
+		"gh api *&*",
+		"gh api *|*",
+		"gh api *`*",
+		"gh api *$(*",
 		"printf * | gh api *",
 		"git diff *--output*",
 		"git log *--output*",

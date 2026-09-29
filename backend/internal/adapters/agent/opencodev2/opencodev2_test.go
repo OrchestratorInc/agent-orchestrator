@@ -217,6 +217,7 @@ func TestPrepareACPConfigContentPreservesUserConfigAndConstrainsTheBuiltInAgent(
 				{Action: "read", Resource: "*", Effect: "allow"},
 				{Action: "glob", Resource: "*", Effect: "allow"},
 				{Action: "grep", Resource: "*", Effect: "allow"},
+				{Action: "shell", Resource: "git push *", Effect: "deny"},
 			}
 			if !reflect.DeepEqual(build.Permissions, want) {
 				t.Fatalf("build permissions = %#v, want %#v", build.Permissions, want)
@@ -314,5 +315,13 @@ func TestV2AuthStatusUsesPrivateServerAndConnections(t *testing.T) {
 				t.Fatalf("auth=%q %v, want %q", status, err, tc.want)
 			}
 		})
+	}
+}
+
+func TestSemanticMessageAcceptanceIsNotAdvertised(t *testing.T) {
+	var agent ports.Agent = New()
+	signaler, ok := agent.(ports.SemanticMessageAcceptanceSignaler)
+	if !ok || signaler.EmitsSemanticMessageAcceptance() {
+		t.Fatal("OpenCode 2 must not advertise semantic acceptance without a post-admission signal")
 	}
 }
