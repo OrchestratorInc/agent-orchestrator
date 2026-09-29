@@ -219,7 +219,13 @@ function syncDeveloperModeToUpdater(enabled: boolean): void {
 }
 
 function inspectorState(sessions: Record<string, InspectorSessionState>, sessionId: string): InspectorSessionState {
-	return sessions[sessionId] ?? { isOpen: true, view: "summary" };
+	return sessions[sessionId] ?? { isOpen: false, view: "summary" };
+}
+
+/** Opening a session keeps the inspector closed until the user (or a browser
+ *  reveal) opens it; read every open check through here so that default can't drift. */
+export function inspectorIsOpen(sessions: Record<string, InspectorSessionState>, sessionId: string): boolean {
+	return sessions[sessionId]?.isOpen ?? false;
 }
 
 export function sidebarIsVisible(state: Pick<UiState, "isSidebarOpen">): boolean {

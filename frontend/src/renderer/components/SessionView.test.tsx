@@ -9,7 +9,7 @@ import { useFilesTopbarHost } from "./files-topbar-host";
 import { SessionTopbarProvider } from "./SessionTopbarPortal";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
-import { useUiStore, type InspectorView } from "../stores/ui-store";
+import { inspectorIsOpen, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { setChatDraftBoundary } from "../lib/chat-draft-boundary";
@@ -666,7 +666,7 @@ function testInterfaceTransition(
 }
 
 function inspectorOpen(sessionId: string): boolean {
-	return useUiStore.getState().inspectorSessions[sessionId]?.isOpen ?? true;
+	return inspectorIsOpen(useUiStore.getState().inspectorSessions, sessionId);
 }
 
 function browserUnseen(sessionId: string): boolean {
