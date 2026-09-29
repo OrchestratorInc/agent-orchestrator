@@ -151,3 +151,16 @@ function removeFile(path) {
 		if (error?.code !== "ENOENT") throw error;
 	}
 }
+
+export function archiveExtraction(archivePath, workDir, { platform = process.platform } = {}) {
+	// Windows ships bsdtar as System32\tar.exe and it reads zip. PowerShell's
+	// Expand-Archive is the obvious alternative but is bound by MAX_PATH: with
+	// LongPathsEnabled=0 and a deep checkout, Node's bundled npm tree exceeds
+	// 260 characters and extraction fails without a non-zero exit, so the build
+	// only discovers it later, as a missing directory. bsdtar handles the same
+	// archive at the same depth.
+	if (platform === "win32") {
+		return { command: "tar.exe", args: ["-xf", archivePath, "-C", workDir] };
+	}
+	return { command: "tar", args: ["-xzf", archivePath, "-C", workDir] };
+}
