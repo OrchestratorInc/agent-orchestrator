@@ -23,7 +23,7 @@ import {
 import type { DaemonStatus } from "./shared/daemon-status";
 import type { RemoteHostView } from "./main/remotes-ipc";
 import type { ConnectedHostView } from "./main/remote-registry";
-import type { RemoteHealth, RemoteRequestInit, RemoteResponse } from "./main/remote-request";
+import type { RemoteHealth } from "./main/remote-request";
 import type {
 	EditorHandoffState,
 	OpenSessionTargetInput,
@@ -649,12 +649,8 @@ const api = {
 		update: (url: string, changes: { label?: string; url?: string; password?: string }) =>
 			ipcRenderer.invoke("remotes:update", url, changes) as Promise<RemoteHealth>,
 		remove: (url: string) => ipcRenderer.invoke("remotes:remove", url) as Promise<void>,
-		probe: (url: string) => ipcRenderer.invoke("remotes:probe", url) as Promise<RemoteHealth>,
-		request: (url: string, init: RemoteRequestInit) =>
-			ipcRenderer.invoke("remotes:request", url, init) as Promise<RemoteResponse>,
 		connect: (url: string) => ipcRenderer.invoke("remotes:connect", url) as Promise<ConnectedHostView>,
 		disconnect: (url: string) => ipcRenderer.invoke("remotes:disconnect", url) as Promise<void>,
-		connected: () => ipcRenderer.invoke("remotes:connected") as Promise<ConnectedHostView[]>,
 	},
 	cloud: {
 		getSession: () => ipcRenderer.invoke("cloud:getSession") as Promise<CloudAccount | null>,

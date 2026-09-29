@@ -28,8 +28,6 @@ import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../src/shared/ui-local
 // these specs. Treat green here as "the renderer renders the injected state,"
 // not "the boundary works."
 
-export type FakeRemoteHost = { hostId: string; label: string; url: string; base: string };
-
 export type FakeBridgeOptions = {
 	/** Version string surfaced by app.getVersion() (Settings > Updates). */
 	version?: string;
@@ -41,8 +39,6 @@ export type FakeBridgeOptions = {
 	updateStatus?: UpdateStatus;
 	/** Persisted automatic-update policy surfaced in Settings > Updates. */
 	updateSettings?: UpdateSettings;
-	/** Saved desktop remotes; page.route can serve each base independently. */
-	remoteHosts?: FakeRemoteHost[];
 };
 
 export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}): Promise<void> {
@@ -53,10 +49,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 	const updateSettings =
 		opts.updateSettings ??
 		({ enabled: false, channel: "latest", nightlyAck: false, feature: null } satisfies UpdateSettings);
-	const remoteHosts = opts.remoteHosts ?? [];
-
 	await page.addInitScript(
-		({ version, daemonState, daemonPort, updateStatus, updateSettings, remoteHosts }) => {
+		({ version, daemonState, daemonPort, updateStatus, updateSettings }) => {
 			const unsubscribe = () => () => undefined;
 			const updateListeners = new Set<(status: UpdateStatus) => void>();
 			let currentUpdateSettings = updateSettings;
@@ -299,19 +293,14 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					getActive: async () => null,
 				},
 				remotes: {
-					list: async () => remoteHosts.map(({ hostId, label, url }) => ({ hostId, label, url })),
+					list: async () => [],
 					add: async () => "offline" as const,
 					update: async () => "offline" as const,
 					remove: async () => undefined,
-					probe: async () => "offline" as const,
-					request: async () => ({ status: 0, body: null }),
 					connect: async (url: string) => {
-						const host = remoteHosts.find((candidate) => candidate.url === url);
-						if (!host) throw new Error(`No fake remote for ${url}`);
-						return host;
+						throw new Error(`No fake remote for ${url}`);
 					},
 					disconnect: async () => undefined,
-					connected: async () => remoteHosts,
 				},
 				cloud: {
 					getSession: async () => null,
@@ -340,7 +329,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			};
 			(window as unknown as { ao: unknown }).ao = ao;
 		},
-		{ version, daemonState, daemonPort, updateStatus, updateSettings, remoteHosts },
+		{ version, daemonState, daemonPort, updateStatus, updateSettings },
 	);
 }
 
@@ -388,7 +377,6 @@ export type FakeAgentOptions = {
 	platform?: string;
 	/** Worker sessions present at first paint. */
 	workers?: FakeWorker[];
-	remoteHosts?: FakeRemoteHost[];
 };
 
 /**
@@ -430,12 +418,11 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 	const projectName = opts.projectName ?? "fake-proj";
 	const platform = opts.platform ?? null;
 	const workers = opts.workers ?? [];
-	const remoteHosts = opts.remoteHosts ?? [];
 	// Renderer reload does not create a new daemon session incarnation.
 	const nowIso = new Date().toISOString();
 
 	await page.addInitScript(
-		({ version, daemonPort, projectId, projectName, platform, workers, nowIso, remoteHosts }) => {
+		({ version, daemonPort, projectId, projectName, platform, workers, nowIso }) => {
 			if (platform) {
 				try {
 					Object.defineProperty(navigator, "platform", { get: () => platform, configurable: true });
@@ -873,19 +860,14 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					getActive: async () => null,
 				},
 				remotes: {
-					list: async () => remoteHosts.map(({ hostId, label, url }) => ({ hostId, label, url })),
+					list: async () => [],
 					add: async () => "offline" as const,
 					update: async () => "offline" as const,
 					remove: async () => undefined,
-					probe: async () => "offline" as const,
-					request: async () => ({ status: 0, body: null }),
 					connect: async (url: string) => {
-						const host = remoteHosts.find((candidate) => candidate.url === url);
-						if (!host) throw new Error(`No fake remote for ${url}`);
-						return host;
+						throw new Error(`No fake remote for ${url}`);
 					},
 					disconnect: async () => undefined,
-					connected: async () => remoteHosts,
 				},
 				cloud: {
 					getSession: async () => null,
@@ -911,6 +893,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;
 		},
-		{ version, daemonPort, projectId, projectName, platform, workers, nowIso, remoteHosts },
+		{ version, daemonPort, projectId, projectName, platform, workers, nowIso },
 	);
 }

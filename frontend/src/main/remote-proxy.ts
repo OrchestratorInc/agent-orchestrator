@@ -18,7 +18,6 @@ import type { RemoteEntry } from "./remotes-store";
 // stripped before forwarding: the remote daemon and its logs never see it.
 export type ActiveProxy = {
 	base: string;
-	url: string;
 	close: () => Promise<void>;
 };
 
@@ -84,7 +83,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	const prefix = upstream.pathname.replace(/\/+$/, "");
 	const server: Server = createServer();
 	const tunnels = new Set<() => void>();
-	// SSE connections outlive any fixed request timeout.
+	// Allow slow uploads; SSE response timeouts are disabled on the upstream request below.
 	server.requestTimeout = 0;
 
 	const stripToken = (rawUrl: string | undefined): string | null => {
@@ -258,7 +257,6 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	log(`started on 127.0.0.1:${port} for ${upstream.host}`);
 	return {
 		base: `http://127.0.0.1:${port}/${token}`,
-		url: entry.url,
 		close: () =>
 			new Promise((resolve) => {
 				// close() alone waits on keep-alive and tunnelled sockets forever;

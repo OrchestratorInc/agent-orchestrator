@@ -52,10 +52,6 @@ export class RemoteRegistry {
 		});
 	}
 
-	views(): ConnectedHostView[] {
-		return [...this.live.values()].map(({ view }) => view);
-	}
-
 	closeAll(): Promise<void> {
 		this.closing = true;
 		return this.enqueue(async () => {

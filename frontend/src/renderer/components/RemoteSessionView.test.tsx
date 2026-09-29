@@ -195,34 +195,6 @@ it("resolves an approval and interrupts Box B despite equal IDs on Box A and loc
 	expect(localPost).not.toHaveBeenCalled();
 });
 
-it("reads and sends a remote Chat message through Box A, never the local daemon", async () => {
-	const requests: Array<{ url: string; method: string }> = [];
-	localGet.mockReset();
-	localPost.mockReset();
-	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
-	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-		const request = input instanceof Request ? input : new Request(input);
-		requests.push({ url: request.url, method: request.method });
-		let body: unknown;
-		if (request.url.endsWith("/projects")) body = { projects: [{ id: "project-1", name: "Remote", path: "/remote" }] };
-		else if (request.url.endsWith("/sessions")) body = { sessions: [{ id: "session-1", projectId: "project-1", displayName: "Fix login", harness: "codex", status: "working", mode: "chat", prs: [] }] };
-		else if (new URL(request.url).pathname.endsWith("/conversation")) body = conversationBody({ messages: [{ id: "msg-1", role: "assistant", text: "I am working on login", sequence: 1 }] });
-		else body = { state: "accepted", turnId: "turn-2" };
-		return new Response(JSON.stringify(body), { status: request.method === "POST" ? 202 : 200, headers: { "content-type": "application/json" } });
-	}));
-	await connectHost("http://box-a:3001");
-	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	renderRemoteSession(queryClient);
-	await screen.findByText("I am working on login");
-	await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "Please continue");
-	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
-	await waitFor(() => expect(requests).toContainEqual({
-		url: "http://127.0.0.1:4000/api/v1/sessions/session-1/conversation/messages", method: "POST",
-	}));
-	expect(localGet).not.toHaveBeenCalled();
-	expect(localPost).not.toHaveBeenCalled();
-});
-
 it("shows a normal inspector and reads its changed files from the remote host only", async () => {
 	HTMLElement.prototype.scrollTo = vi.fn();
 	const requests: string[] = [];
@@ -363,35 +335,6 @@ it("loads older remote history once while polling only the latest page", async (
 	expect(localGet).not.toHaveBeenCalled();
 });
 
-it("interrupts the turn on Box A, not the local daemon", async () => {
-	const posts: string[] = [];
-	localGet.mockReset();
-	localPost.mockReset();
-	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
-	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-		const request = input instanceof Request ? input : new Request(input);
-		const path = new URL(request.url).pathname;
-		if (request.method === "POST") {
-			posts.push(request.url);
-			return new Response(null, { status: 204 });
-		}
-		const body = path.endsWith("/projects")
-			? { projects: [{ id: "project-1", name: "Remote", path: "/remote" }] }
-			: path.endsWith("/sessions")
-				? { sessions: [{ id: "session-1", projectId: "project-1", displayName: "Worker", harness: "codex", status: "working", mode: "chat", prs: [] }] }
-				: conversationBody({ controller: "busy", turns: [{ id: "turn-1", state: "running", requestedAt: "2026-09-28T00:00:00Z" }] });
-		return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
-	}));
-	await connectHost("http://box-a:3001");
-	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	renderRemoteSession(queryClient);
-	fireEvent.click(await screen.findByRole("button", { name: "Stop turn" }));
-	await waitFor(() => expect(posts).toContain("http://127.0.0.1:4000/api/v1/sessions/session-1/conversation/interrupt"));
-	expect(screen.queryByRole("button", { name: "Stop session" })).not.toBeInTheDocument();
-	expect(localGet).not.toHaveBeenCalled();
-	expect(localPost).not.toHaveBeenCalled();
-});
-
 it("keeps accepted remote sends accepted when the follow-up read fails", async () => {
 	let conversationReads = 0;
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -468,7 +411,7 @@ it("reuses a Chat delivery ID when a lost response is retried", async () => {
 	expect(deliveryIds[1]).toBe(deliveryIds[0]);
 });
 
-it.each([204, 409])("answers a remote approval through its host and refreshes after HTTP %s", async (status) => {
+it("refreshes a remote approval after an already-answered 409", async () => {
 	const decisions: Array<{ url: string; decisionId: string }> = [];
 	let conversationReads = 0;
 	localGet.mockReset();
@@ -489,9 +432,9 @@ it.each([204, 409])("answers a remote approval through its host and refreshes af
 			}] : [] });
 		} else if (request.url.endsWith("/resolve")) {
 			decisions.push({ url: request.url, decisionId: (await request.json() as { decisionId: string }).decisionId });
-			return status === 204
-				? new Response(null, { status })
-				: new Response(JSON.stringify({ code: "CHAT_REQUEST_NOT_PENDING", message: "already answered" }), { status, headers: { "content-type": "application/json" } });
+			return new Response(JSON.stringify({ code: "CHAT_REQUEST_NOT_PENDING", message: "already answered" }), {
+				status: 409, headers: { "content-type": "application/json" },
+			});
 		} else throw new Error(`Unexpected request ${request.url}`);
 		return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 	}));

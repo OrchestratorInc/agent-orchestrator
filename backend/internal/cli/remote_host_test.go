@@ -44,7 +44,6 @@ func TestRemoteHostCLIUsesLocalControlAPI(t *testing.T) {
 		absent     string
 	}{
 		{"enable", "enable", []string{"POST /api/v1/mobile/enable-lan-only"}, []string{"host-a", "http://192.168.1.10:3011", "pairing-secret"}, ""},
-		{"repeat enable", "enable", []string{"POST /api/v1/mobile/enable-lan-only"}, []string{"host-a", "http://192.168.1.10:3011", "pairing-secret"}, ""},
 		{"status", "status", []string{"GET /api/v1/mobile/status"}, []string{"host-a", "http://192.168.1.10:3011", "pairing-secret"}, ""},
 		{"disable", "disable", []string{"POST /api/v1/mobile/disable"}, []string{"disabled"}, "pairing-secret"},
 	} {

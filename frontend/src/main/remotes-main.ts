@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { probeRemote, readRemoteIdentity, remoteRequest, type RemoteHealth, type RemoteRequestInit } from "./remote-request";
+import { probeRemote, readRemoteIdentity, type RemoteHealth } from "./remote-request";
 import { findRemote, removeSavedRemote, toHostViews, updateSavedRemote } from "./remotes-ipc";
 import type { RemoteRegistry } from "./remote-registry";
 import { addRemote, readRemotes, type RemoteChanges, type RemoteEntry } from "./remotes-store";
@@ -74,12 +74,6 @@ export function registerRemotesIpc(
 		}
 		return health;
 	}));
-	ipcMain.handle("remotes:probe", async (_event, url: string) => checkedProbe(await findRemote(file, url)));
-	ipcMain.handle("remotes:request", async (_event, url: string, init: RemoteRequestInit) => {
-		const entry = await findRemote(file, url);
-		await verify(entry);
-		return remoteRequest(entry, init);
-	});
 	ipcMain.handle("remotes:update", async (_event, url: string, changes: RemoteChanges) => ordered(() =>
 		updateSavedRemote(file, url, changes, disconnect, checkedProbe),
 	));
@@ -93,5 +87,4 @@ export function registerRemotesIpc(
 		return registry.connect(entry);
 	}));
 	ipcMain.handle("remotes:disconnect", async (_event, url: string) => ordered(() => disconnect(url)));
-	ipcMain.handle("remotes:connected", async () => registry.views());
 }
