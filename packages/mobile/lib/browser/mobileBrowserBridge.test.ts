@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { bridgeResult, browserCommandScript, parseBrowserBridgeMessage, parseBrowserContentAppearance } from "./mobileBrowserBridge";
 
 function runPageGet(property: "url" | "title" | "text", bodyText = "Example body") {
@@ -122,6 +122,58 @@ describe("mobile browser bridge protocol", () => {
 				message: "Native key presses are not available on the mobile browser surface.",
 			},
 		});
+	});
+
+	it("resets the DOM-stable quiet interval whenever the document mutates", async () => {
+		vi.useFakeTimers();
+		let posted: string | undefined;
+		let mutated: (() => void) | undefined;
+		const disconnect = vi.fn();
+		vi.stubGlobal("MutationObserver", class {
+			constructor(callback: () => void) {
+				mutated = callback;
+			}
+			observe() {}
+			disconnect() {
+				disconnect();
+			}
+		});
+		try {
+			const window = {
+				ReactNativeWebView: {
+					postMessage(raw: string) {
+						posted = raw;
+					},
+				},
+			};
+			const document = {
+				documentElement: {},
+				body: { innerText: "" },
+			};
+			const script = browserCommandScript({
+				type: "command",
+				requestId: "wait-1",
+				sessionId: "s1",
+				action: "wait",
+				args: { stableMs: 100, timeoutMs: 1_000 },
+			});
+			new Function("window", "document", "location", script)(window, document, { href: "https://example.com" });
+
+			await vi.advanceTimersByTimeAsync(90);
+			mutated?.();
+			await vi.advanceTimersByTimeAsync(20);
+			expect(posted).toBeUndefined();
+
+			await vi.advanceTimersByTimeAsync(90);
+			expect(parseBrowserBridgeMessage(posted ?? "")?.result).toEqual({
+				matched: true,
+				url: "https://example.com",
+			});
+			expect(disconnect).toHaveBeenCalledOnce();
+		} finally {
+			vi.useRealTimers();
+			vi.unstubAllGlobals();
+		}
 	});
 
 	it("accepts only tagged correlated results", () => {

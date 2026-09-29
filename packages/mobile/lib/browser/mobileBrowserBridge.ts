@@ -102,7 +102,21 @@ export const MOBILE_BROWSER_BOOTSTRAP = `
   }
   function wait(args) {
     var timeout = Math.min(Number(args.timeoutMs || 10000), 55000), started = Date.now();
+    var stableFor = Math.max(Number(args.stableMs || 0), 0), lastMutation = started, observer = null;
     return new Promise(function (resolve, reject) {
+      function finish(value, error) {
+        if (observer) observer.disconnect();
+        if (error) reject(error); else resolve(value);
+      }
+      if (stableFor > 0) {
+        observer = new MutationObserver(function () { lastMutation = Date.now(); });
+        observer.observe(document.documentElement || document.body, {
+          subtree: true,
+          childList: true,
+          attributes: true,
+          characterData: true
+        });
+      }
       function check() {
         var body = document.body ? document.body.innerText : '';
         var ok = args.ms ? Date.now() - started >= Number(args.ms) :
@@ -112,9 +126,9 @@ export const MOBILE_BROWSER_BOOTSTRAP = `
           args.selectorGone ? !document.querySelector(String(args.selectorGone)) :
           args.url ? location.href.indexOf(String(args.url)) >= 0 :
           args.load ? document.readyState === 'complete' :
-          args.stableMs ? Date.now() - started >= Number(args.stableMs) : false;
-        if (ok) return resolve({ matched: true, url: location.href });
-        if (Date.now() - started >= timeout) { var e = new Error('Timed out waiting for page condition.'); e.code = 'WAIT_TIMEOUT'; return reject(e); }
+          stableFor > 0 ? Date.now() - lastMutation >= stableFor : false;
+        if (ok) return finish({ matched: true, url: location.href });
+        if (Date.now() - started >= timeout) { var e = new Error('Timed out waiting for page condition.'); e.code = 'WAIT_TIMEOUT'; return finish(null, e); }
         setTimeout(check, 100);
       }
       check();
