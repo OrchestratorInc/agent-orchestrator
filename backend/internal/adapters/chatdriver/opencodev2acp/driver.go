@@ -13,6 +13,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/opencodeidentity"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -28,6 +29,12 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 		SessionOptions:       sessionOptions,
 		PermissionPolicy:     permissionPolicy,
 		ValidateTurnSettings: validateTurnSettings,
+		EncodeProviderConversationID: func(providerID string) string {
+			return opencodeidentity.Encode(domain.HarnessOpenCodeV2, providerID)
+		},
+		DecodeProviderConversationID: func(providerID string) (string, error) {
+			return opencodeidentity.Decode(domain.HarnessOpenCodeV2, providerID)
+		},
 	}, log)
 }
 

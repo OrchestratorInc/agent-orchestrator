@@ -2130,7 +2130,7 @@ func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatCo
 				case "bypassPermissions":
 					choice.PermissionMode = domain.PermissionModeBypassPermissions
 				}
-			case domain.HarnessOpenCode:
+			case domain.HarnessOpenCode, domain.HarnessOpenCodeV2:
 				// AO's own permission tiers, injected as OpenCode agents. OpenCode
 				// reports an agent's key as its display name, so they are relabelled
 				// here into the vocabulary the rest of AO uses. Its native build and

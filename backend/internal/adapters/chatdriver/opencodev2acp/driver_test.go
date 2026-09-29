@@ -61,7 +61,8 @@ func TestOpenCodeV2ACPProviderHelper(t *testing.T) {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
 			Params struct {
-				ModeID string `json:"modeId"`
+				ModeID    string `json:"modeId"`
+				SessionID string `json:"sessionId"`
 			} `json:"params"`
 		}
 		if json.Unmarshal(scanner.Bytes(), &request) != nil || len(request.ID) == 0 {
@@ -71,7 +72,11 @@ func TestOpenCodeV2ACPProviderHelper(t *testing.T) {
 		if record != "" {
 			f, err := os.OpenFile(record, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 			if err == nil {
-				_, _ = fmt.Fprintf(f, "%s:%s\n", request.Method, request.Params.ModeID)
+				detail := request.Params.ModeID
+				if detail == "" {
+					detail = request.Params.SessionID
+				}
+				_, _ = fmt.Fprintf(f, "%s:%s\n", request.Method, detail)
 				_ = f.Close()
 			}
 		}
@@ -266,6 +271,7 @@ func TestOtherOpenCodeHarnessCannotResumePersistentConversation(t *testing.T) {
 			if err != nil {
 				t.Fatalf("owner Start: %v", err)
 			}
+			providerID := owner.ProviderConversationID()
 			if err := owner.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -277,10 +283,79 @@ func TestOtherOpenCodeHarnessCannotResumePersistentConversation(t *testing.T) {
 
 			_, err = test.other().Resume(context.Background(), ports.ChatResumeConfig{
 				SessionID: "shared-ao-session", DataDir: dataDir, WorkspacePath: workspace,
-				ProviderConversationID: "opencode-v2-provider",
+				ProviderConversationID: providerID,
 			})
-			if !errors.Is(err, ports.ErrChatRecoveryInconclusive) {
-				t.Fatalf("cross-harness Resume error = %v, want ErrChatRecoveryInconclusive", err)
+			if !errors.Is(err, ports.ErrChatResumeFailed) {
+				t.Fatalf("cross-harness Resume error = %v, want ErrChatResumeFailed", err)
+			}
+		})
+	}
+}
+
+func TestOtherOpenCodeHarnessCannotResumeColdConversation(t *testing.T) {
+	for _, test := range []struct {
+		name, version, otherVersion string
+		owner, other                func() ports.ChatDriver
+	}{
+		{name: "v1 as v2", version: "1.18.33", otherVersion: "2.0.0", owner: func() ports.ChatDriver { return opencodeacp.New(opencode.New(), nil) }, other: func() ports.ChatDriver { return New(opencodev2.New(), nil) }},
+		{name: "v2 as v1", version: "2.0.0", otherVersion: "1.18.33", owner: func() ports.ChatDriver { return New(opencodev2.New(), nil) }, other: func() ports.ChatDriver { return opencodeacp.New(opencode.New(), nil) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, calls := writeOpenCodeACPExecutable(t, test.version)
+			dataDir, workspace := t.TempDir(), t.TempDir()
+			owner, err := test.owner().Start(context.Background(), ports.ChatStartConfig{
+				SessionID: "cold-ao-session", DataDir: dataDir, WorkspacePath: workspace,
+			})
+			if err != nil {
+				t.Fatalf("owner Start: %v", err)
+			}
+			providerID := owner.ProviderConversationID()
+			if err := owner.Close(); err != nil {
+				t.Fatal(err)
+			}
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := persistenthost.Shutdown(shutdownCtx, dataDir, "cold-ao-session"); err != nil {
+				t.Fatalf("stop original host: %v", err)
+			}
+			same, err := test.owner().Resume(context.Background(), ports.ChatResumeConfig{
+				SessionID: "cold-ao-session", DataDir: dataDir, WorkspacePath: workspace,
+				ProviderConversationID: providerID,
+			})
+			if err != nil {
+				t.Fatalf("same-harness cold Resume: %v", err)
+			}
+			if same.ProviderConversationID() != providerID {
+				t.Fatalf("durable provider ID changed: got %q want %q", same.ProviderConversationID(), providerID)
+			}
+			data, err := os.ReadFile(calls)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), "session/resume:opencode-v2-provider\n") ||
+				strings.Contains(string(data), "session/resume:ao-harness:") {
+				t.Fatalf("resume did not send the raw provider ID:\n%s", data)
+			}
+			if err := same.Close(); err != nil {
+				t.Fatal(err)
+			}
+			shutdownCtx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := persistenthost.Shutdown(shutdownCtx, dataDir, "cold-ao-session"); err != nil {
+				t.Fatalf("stop same-harness resumed host: %v", err)
+			}
+			t.Setenv("AO_TEST_OPENCODE_VERSION", test.otherVersion)
+
+			resumed, err := test.other().Resume(context.Background(), ports.ChatResumeConfig{
+				SessionID: "cold-ao-session", DataDir: dataDir, WorkspacePath: workspace,
+				ProviderConversationID: providerID,
+			})
+			if err == nil {
+				_ = resumed.(ports.ChatProviderTerminator).Terminate()
+				t.Fatal("cross-harness cold Resume succeeded")
+			}
+			if !errors.Is(err, ports.ErrChatResumeFailed) {
+				t.Fatalf("cross-harness cold Resume error = %v, want ErrChatResumeFailed", err)
 			}
 		})
 	}

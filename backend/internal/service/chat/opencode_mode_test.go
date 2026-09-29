@@ -22,7 +22,14 @@ type modeConversation struct {
 }
 
 func (c *modeConversation) ListConfigOptions(context.Context) ([]ports.ChatConfigOption, error) {
-	return []ports.ChatConfigOption{{ID: "mode", Current: ports.ChatConfigOptionValue{Select: c.mode}}}, nil
+	return []ports.ChatConfigOption{{
+		ID: "mode", Current: ports.ChatConfigOptionValue{Select: c.mode},
+		Choices: []ports.ChatConfigOptionChoice{
+			{Value: "build"}, {Value: "plan"},
+			{Value: "ao-default"}, {Value: "ao-accept-edits"},
+			{Value: "ao-auto"}, {Value: "ao-bypass"},
+		},
+	}}, nil
 }
 
 func (c *modeConversation) SetConfigOption(ctx context.Context, _ string, value ports.ChatConfigOptionValue) ([]ports.ChatConfigOption, error) {
@@ -36,8 +43,14 @@ func (c *modeConversation) SetConfigOption(ctx context.Context, _ string, value 
 }
 
 func TestOpenCodeModeSurvivesControllerRestart(t *testing.T) {
+	approvalModes := map[string]domain.PermissionMode{
+		"ao-default":      domain.PermissionModeDefault,
+		"ao-accept-edits": domain.PermissionModeAcceptEdits,
+		"ao-auto":         domain.PermissionModeAuto,
+		"ao-bypass":       domain.PermissionModeBypassPermissions,
+	}
 	for _, harness := range []domain.AgentHarness{domain.HarnessOpenCode, domain.HarnessOpenCodeV2} {
-		for _, mode := range []string{"plan", "build", "ao-plan-project-1"} {
+		for _, mode := range []string{"plan", "build", "ao-plan-project-1", "ao-default", "ao-accept-edits", "ao-auto", "ao-bypass"} {
 			t.Run(string(harness)+"/"+mode, func(t *testing.T) {
 				ctx := context.Background()
 				st := openStore(t)
@@ -60,10 +73,18 @@ func TestOpenCodeModeSurvivesControllerRestart(t *testing.T) {
 				if _, err := svc.SetConfigOption(ctx, id, "mode", ports.ChatConfigOptionValue{Select: mode}); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := svc.SetTurnSettings(ctx, id, domain.ConversationSettings{Model: "another-model"}); err != nil {
+				wantApproval, approvalMode := approvalModes[mode]
+				stored, err := st.ConversationForSession(ctx, id)
+				if err != nil {
 					t.Fatal(err)
 				}
-				stored, err := st.ConversationForSession(ctx, id)
+				if approvalMode && stored.Settings.ApprovalMode != wantApproval {
+					t.Fatalf("stored approval = %q, want %q", stored.Settings.ApprovalMode, wantApproval)
+				}
+				if _, err := svc.SetTurnSettings(ctx, id, domain.ConversationSettings{Model: "another-model", ApprovalMode: stored.Settings.ApprovalMode}); err != nil {
+					t.Fatal(err)
+				}
+				stored, err = st.ConversationForSession(ctx, id)
 				if err != nil {
 					t.Fatal(err)
 				}
