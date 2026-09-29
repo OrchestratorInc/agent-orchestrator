@@ -288,8 +288,9 @@ func (c *cloudACPClient) SessionUpdate(_ context.Context, notification acp.Sessi
 func (c *cloudACPClient) RequestPermission(ctx context.Context, request acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
-	if c.turn.Mode == "read-only" {
-		return acp.RequestPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeCancelled()}, nil
+	cancelled := acp.RequestPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeCancelled()}
+	if ctx.Err() != nil || c.turn.Mode == "read-only" {
+		return cancelled, nil
 	}
 	if selected, ok := automaticACPDecision(c.turn, request); ok {
 		return acp.RequestPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeSelected(selected)}, nil
@@ -315,6 +316,9 @@ func (c *cloudACPClient) RequestPermission(ctx context.Context, request acp.Requ
 		RequestID: requestID, TurnID: c.turn.ID, Attempt: c.turn.Attempt,
 		Summary: summary, ToolKind: toolKind, Decisions: decisions,
 	}); err != nil {
+		if ctx.Err() != nil {
+			return cancelled, nil
+		}
 		return acp.RequestPermissionResponse{}, err
 	}
 	ticker := time.NewTicker(500 * time.Millisecond)
@@ -322,7 +326,13 @@ func (c *cloudACPClient) RequestPermission(ctx context.Context, request acp.Requ
 	for {
 		decision, err := c.control.ChatApprovalDecision(ctx, c.turn.ID, c.turn.Attempt, requestID)
 		if err != nil {
+			if ctx.Err() != nil {
+				return cancelled, nil
+			}
 			return acp.RequestPermissionResponse{}, err
+		}
+		if ctx.Err() != nil {
+			return cancelled, nil
 		}
 		if decision != "" {
 			for _, option := range request.Options {
@@ -334,7 +344,7 @@ func (c *cloudACPClient) RequestPermission(ctx context.Context, request acp.Requ
 		}
 		select {
 		case <-ctx.Done():
-			return acp.RequestPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeCancelled()}, ctx.Err()
+			return cancelled, nil
 		case <-ticker.C:
 		}
 	}
