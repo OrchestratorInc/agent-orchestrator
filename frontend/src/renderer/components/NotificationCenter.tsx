@@ -736,6 +736,7 @@ const NotificationItem = memo(function NotificationItem({
 				}}
 				role={canOpenSession ? "button" : undefined}
 				tabIndex={canOpenSession ? 0 : undefined}
+				// Row actions set title="" so this native tooltip does not show over them.
 				title={canOpenSession ? t("notify.openSessionTitle") : undefined}
 			>
 				<div
@@ -805,6 +806,7 @@ const NotificationItem = memo(function NotificationItem({
 							<TooltipTrigger asChild>
 								<button
 									aria-label={t("shell.restoreSession")}
+									title=""
 									className="grid size-notification-icon place-items-center rounded-md text-passive transition-colors hover:bg-interactive-active hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
 									disabled={restoreDisabled}
 									onClick={(event) => {
@@ -825,6 +827,7 @@ const NotificationItem = memo(function NotificationItem({
 						<TooltipTrigger asChild>
 							<button
 								aria-label={t("notify.clearOne", { title: copy.title })}
+								title=""
 								className="grid size-notification-icon place-items-center rounded-md text-passive transition-colors hover:bg-interactive-active hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
 								disabled={clearDisabled}
 								onClick={(event) => {
@@ -917,6 +920,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 				}}
 				role={canOpenSession ? "button" : undefined}
 				tabIndex={canOpenSession ? 0 : undefined}
+				// Row actions set title="" so this native tooltip does not show over them.
 				title={canOpenSession ? t("notify.openSessionTitle") : undefined}
 			>
 				<div
@@ -968,6 +972,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 							<TooltipTrigger asChild>
 								<button
 									aria-label={t("shell.restoreSession")}
+									title=""
 									className="grid size-notification-icon place-items-center rounded-md text-passive transition-colors hover:bg-interactive-active hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
 									disabled={restoreDisabled}
 									onClick={(event) => {
@@ -988,6 +993,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 						<TooltipTrigger asChild>
 							<button
 								aria-label={t("notify.clearOne", { title: notification.title })}
+								title=""
 								className="grid size-notification-icon place-items-center rounded-md text-passive transition-colors hover:bg-interactive-active hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
 								disabled={clearDisabled}
 								onClick={(event) => {

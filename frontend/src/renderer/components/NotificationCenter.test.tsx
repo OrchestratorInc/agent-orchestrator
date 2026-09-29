@@ -396,6 +396,18 @@ describe("NotificationCenter", () => {
 		expect(clearAllMock).toHaveBeenCalledTimes(1);
 	});
 
+	it("keeps the row's Open session tooltip off its action buttons", async () => {
+		cloudNotificationsMock.mockReturnValue(cloudNotificationsResult(cloudNotifications));
+		renderNotificationCenter();
+		await clickOpen();
+
+		const localClear = screen.getByRole("button", { name: "Clear notification: Checkout flow needs input" });
+		expect(localClear.closest("[title='Open session']")).not.toBeNull();
+		expect(localClear).toHaveAttribute("title", "");
+		expect(screen.getByRole("button", { name: "Clear notification: Pull request ready to merge" })).toHaveAttribute("title", "");
+		expect(screen.getByRole("button", { name: "Restore session" })).toHaveAttribute("title", "");
+	});
+
 	it("clears one notification without opening its session", async () => {
 		renderNotificationCenter();
 		await clickOpen();
