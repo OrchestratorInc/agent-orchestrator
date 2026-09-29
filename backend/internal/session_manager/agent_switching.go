@@ -1916,6 +1916,19 @@ func (m *Manager) interruptTimedOutSourceHandoff(ctx context.Context, rec domain
 		if current.Activity.State == domain.ActivityIdle || current.Activity.State == domain.ActivityExited {
 			return nil
 		}
+		if current.Activity.State == domain.ActivityWaitingInput {
+			if failedTurns, ok := m.store.(interface {
+				HasSettledFailedPrimaryTurn(context.Context, domain.SessionID) (bool, error)
+			}); ok {
+				settled, checkErr := failedTurns.HasSettledFailedPrimaryTurn(interruptCtx, rec.ID)
+				if checkErr != nil {
+					return checkErr
+				}
+				if settled {
+					return nil
+				}
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

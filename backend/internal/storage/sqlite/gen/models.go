@@ -797,6 +797,17 @@ type UsageSource struct {
 	UpdatedAt       time.Time
 }
 
+type WorkerTurnFailureDelivery struct {
+	TurnID        string
+	SessionID     string
+	ProjectID     string
+	CreatedAt     time.Time
+	NextAttemptAt time.Time
+	Attempts      int64
+	AcceptedAt    sql.NullTime
+	LastError     string
+}
+
 type WorkspaceRepo struct {
 	ProjectID     domain.ProjectID
 	Name          string
