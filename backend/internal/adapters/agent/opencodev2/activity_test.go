@@ -17,6 +17,7 @@ func TestDeriveActivityState(t *testing.T) {
 		{"accepted prompt", "user-prompt-submit", domain.ActivityActive, true},
 		{"active work", "active", domain.ActivityActive, true},
 		{"permission blocked", "permission-blocked", domain.ActivityBlocked, true},
+		{"permission resolved", "permission-resolved", domain.ActivityActive, true},
 		{"settled turn", "stop", domain.ActivityIdle, true},
 		{"unknown event", "unknown", "", false},
 	}

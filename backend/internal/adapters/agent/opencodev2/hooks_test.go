@@ -61,31 +61,42 @@ func TestGetAgentHooksInstallsV2AndRemovesOnlyManagedV1(t *testing.T) {
 	}
 }
 
-func TestV2HooksPreserveForeignFilesAndRejectOwnedPathCollision(t *testing.T) {
+func TestV2HooksRejectOwnedPathCollision(t *testing.T) {
 	workspace := t.TempDir()
-	v1Path := filepath.Join(workspace, ".opencode", "plugins", "ao-activity.ts")
 	v2Path := filepath.Join(workspace, ".opencode", "plugins", "ao-activity-v2.ts")
-	writeV2TestFile(t, v1Path, "export default { id: 'user-v1-path' }\n", 0o600)
 	writeV2TestFile(t, v2Path, "export default { id: 'user-v2-path' }\n", 0o600)
 
 	err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace})
 	if err == nil {
 		t.Fatal("GetAgentHooks overwrote foreign v2 path")
 	}
-	for path, want := range map[string]string{
-		v1Path: "export default { id: 'user-v1-path' }\n",
-		v2Path: "export default { id: 'user-v2-path' }\n",
-	} {
-		data, readErr := os.ReadFile(path)
-		if readErr != nil || string(data) != want {
-			t.Fatalf("foreign file %s changed: data=%q err=%v", path, data, readErr)
-		}
+	data, readErr := os.ReadFile(v2Path)
+	if readErr != nil || string(data) != "export default { id: 'user-v2-path' }\n" {
+		t.Fatalf("foreign file changed: data=%q err=%v", data, readErr)
 	}
 	if err := New().UninstallHooks(context.Background(), workspace); err != nil {
 		t.Fatal(err)
 	}
 	if data, err := os.ReadFile(v2Path); err != nil || string(data) != "export default { id: 'user-v2-path' }\n" {
 		t.Fatalf("uninstall changed foreign v2 file: data=%q err=%v", data, err)
+	}
+}
+
+func TestV2HooksSuccessfulInstallPreservesForeignV1Plugin(t *testing.T) {
+	workspace := t.TempDir()
+	v1Path := filepath.Join(workspace, ".opencode", "plugins", "ao-activity.ts")
+	foreign := "export default { id: 'user-v1-path' }\n"
+	writeV2TestFile(t, v1Path, foreign, 0o600)
+
+	p := New()
+	if err := p.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace}); err != nil {
+		t.Fatalf("GetAgentHooks: %v", err)
+	}
+	if installed, err := p.AreHooksInstalled(context.Background(), workspace); err != nil || !installed {
+		t.Fatalf("v2 install = (%v, %v), want (true, nil)", installed, err)
+	}
+	if data, err := os.ReadFile(v1Path); err != nil || string(data) != foreign {
+		t.Fatalf("successful v2 install changed foreign v1-path plugin: data=%q err=%v", data, err)
 	}
 }
 
@@ -149,7 +160,7 @@ process.stdin.on("end", () => {
 	}
 
 	calls := readV2HookCalls(t, capture)
-	wantEvents := []string{"session-start", "user-prompt-submit", "active", "permission-blocked", "active", "stop"}
+	wantEvents := []string{"session-start", "user-prompt-submit", "active", "permission-blocked", "permission-resolved", "stop"}
 	if len(calls) != len(wantEvents) {
 		t.Fatalf("calls = %#v, want %d", calls, len(wantEvents))
 	}

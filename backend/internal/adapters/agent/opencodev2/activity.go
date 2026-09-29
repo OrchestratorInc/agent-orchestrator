@@ -6,7 +6,7 @@ import "github.com/aoagents/agent-orchestrator/backend/internal/domain"
 // plugin onto AO activity states.
 func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 	switch event {
-	case "session-start", "user-prompt-submit", "active":
+	case "session-start", "user-prompt-submit", "active", "permission-resolved":
 		return domain.ActivityActive, true
 	case "permission-blocked":
 		return domain.ActivityBlocked, true

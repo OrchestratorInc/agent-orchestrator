@@ -1035,6 +1035,29 @@ func TestHooks_OpenCodeUserPromptReportsActive(t *testing.T) {
 	}
 }
 
+func TestHooks_OpenCodeV2UserPromptReportsLatestUserPrompt(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"session_id":"ses-v2","prompt":"fix the v2 queue"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "opencode-v2", "user-prompt-submit")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	if req.State != string(domain.ActivityActive) || req.AgentSessionID != "ses-v2" ||
+		req.LatestUserPrompt != "fix the v2 queue" || req.ConversationCheckpointOrigin != domain.ConversationCheckpointOriginHuman {
+		t.Fatalf("OpenCode 2 prompt activity = %#v", req)
+	}
+}
+
 func TestHooks_CodexSessionStartReportsAgentSessionID(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	cfg := setConfigEnv(t)

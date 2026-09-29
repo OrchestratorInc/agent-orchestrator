@@ -54,7 +54,7 @@ export default Plugin.define({
           break
         case "permission.replied":
           ensureSession(sessionID)
-          report("active", sessionID, { permission_id: data?.requestID ?? "", reply: data?.reply ?? "" })
+          report("permission-resolved", sessionID, { permission_id: data?.requestID ?? "", reply: data?.reply ?? "" })
           break
       }
     }
