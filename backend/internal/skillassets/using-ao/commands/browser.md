@@ -34,6 +34,17 @@ ao browser errors
 
 Do not run `status`, `--help`, or an exploratory `snapshot` before a known action. Start with `open`, `act`, or the requested primitive directly; the daemon selects a connected foreground mobile Preview automatically. Use `status` only to diagnose a command that actually failed, and specify `--surface` only when the user explicitly distinguishes mobile from desktop. This keeps the first visible action on the shortest path.
 
+When the requested sequence is already known, run it as one shell invocation instead of pausing for a new reasoning/tool round trip between every browser command. This is especially important in a sandboxed session because the local daemon connection may otherwise incur a separate permission review for each invocation. `act` removes the ref dependency, so common flows can be safely chained:
+
+```bash
+ao browser open https://example.com && \
+  ao browser act "the More information link" && \
+  ao browser get title && \
+  ao browser get url
+```
+
+Do not chain when a later action genuinely depends on inspecting an ambiguous/no-match result or making a new decision from page content.
+
 For "click/fill/etc. this element," reach for `ao browser act "<description>"`
 first instead of manually chaining `snapshot` then `click`/`fill`: it snapshots,
 finds the best-matching element by role/name/text (deterministic matching, not
