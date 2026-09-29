@@ -36,6 +36,7 @@ vi.mock("../../lib/platform", async (importOriginal) => ({
 }));
 
 vi.mock("../../lib/spawn-orchestrator", () => ({
+	isChatPreflightCode: (code?: string) => code === "CHAT_DRIVER_UNAVAILABLE",
 	isChatPreflightError: (error: unknown) =>
 		error instanceof Error && (error as Error & { code?: string }).code === "CHAT_DRIVER_UNAVAILABLE",
 	spawnOrchestrator: spawnOrchestratorMock,
