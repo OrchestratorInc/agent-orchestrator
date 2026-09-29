@@ -5,6 +5,7 @@ import {
 	describeConnectionFailure,
 	isDesktopUnreachable,
 	isLocalNetworkHost,
+	isUnreachableError,
 	isTailscaleHost,
 	shouldKeepPolling,
 	UNREACHABLE_ACTION_COPY,
@@ -242,6 +243,20 @@ describe("userFacingError", () => {
 		expect(copy).not.toContain("500");
 		expect(copy).toContain("Reference: req-42");
 		expect(userFacingError(answered(503))).toMatch(/still starting up/);
+	});
+
+	it("does not mistake a code defect for a lost connection, or show its text", () => {
+		const defect = new TypeError("undefined is not a function (evaluating 'x.fetchPage()')");
+		expect(isUnreachableError(defect)).toBe(false);
+		expect(userFacingError(defect, "Couldn't do that.")).toBe("Couldn't do that.");
+		expect(userFacingError(new ReferenceError("foo is not defined"), "Couldn't do that.")).toBe("Couldn't do that.");
+	});
+
+	it("recognizes fetch's own failure messages exactly", () => {
+		for (const message of ["Network request failed", "Network request timed out", "Failed to fetch", "Load failed"]) {
+			expect(isUnreachableError(new TypeError(message))).toBe(true);
+		}
+		expect(isUnreachableError(new TypeError("Network request failed badly in fetchPage"))).toBe(false);
 	});
 
 	it("passes the app's own errors through and uses the fallback otherwise", () => {

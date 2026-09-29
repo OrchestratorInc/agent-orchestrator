@@ -240,9 +240,22 @@ function answeredFailure(error: unknown): AnsweredFailure | undefined {
 /** True when a request failed without the desktop ever answering. */
 export function isUnreachableError(error: unknown): boolean {
 	if (error instanceof UnreachableError) return true;
-	// fetch used directly (event streams, the identity probe) throws a TypeError
-	// whose text differs per platform; any TypeError from a request is "no answer".
-	return error instanceof TypeError && /network|fetch|connection|timed? ?out|offline/i.test(error.message);
+	// `req()` wraps its own fetch failures, so this only catches fetch used
+	// directly (event streams, the identity probe). Anchored on fetch's exact
+	// messages: a looser match also caught code defects such as
+	// "undefined is not a function (evaluating 'x.fetchPage()')".
+	return error instanceof TypeError && FETCH_FAILURE_MESSAGES.test(error.message.trim());
+}
+
+// React Native's fetch ("Network request failed"/"timed out") and the WebKit /
+// Chromium wording, in case a WebView-backed path surfaces one.
+const FETCH_FAILURE_MESSAGES = /^(network request (failed|timed out)|failed to fetch|load failed)$/i;
+
+// Errors the JS engine throws for code defects. Their text ("undefined is not a
+// function (evaluating …)") is for developers, never for the person holding the
+// phone, so they get the generic line instead.
+function isEngineError(error: Error): boolean {
+	return error instanceof TypeError || error instanceof ReferenceError || error instanceof RangeError || error instanceof SyntaxError;
 }
 
 /**
@@ -268,6 +281,7 @@ export function daemonDetail(error: unknown): string | undefined {
  * - 5xx → a generic line; the daemon's text there is internal, so only its
  *   request ID is kept, for matching against the desktop's logs
  * - an error the app threw itself → its message, which is already user copy
+ * - a JS engine error (a code defect) → the fallback, never its text
  */
 export function userFacingError(error: unknown, fallback = "Something went wrong. Try again."): string {
 	if (isUnreachableError(error)) return UNREACHABLE_ACTION_COPY;
@@ -287,7 +301,7 @@ export function userFacingError(error: unknown, fallback = "Something went wrong
 		if (status === 409) return "That changed on your desktop in the meantime. Refresh and try again.";
 		return "Your desktop couldn't complete that. Refresh and try again.";
 	}
-	if (error instanceof Error && error.message.trim()) return error.message.trim();
+	if (error instanceof Error && !isEngineError(error) && error.message.trim()) return error.message.trim();
 	return fallback;
 }
 
