@@ -12,12 +12,15 @@ type ProjectMode = "folder" | "git";
 export function OnboardingProjectSetup({
 	onPrepared,
 	onCloudProjectCreated,
+	cloudAvailable,
 }: {
 	onPrepared: (input: PreparedProjectInput | null) => void;
 	onCloudProjectCreated: () => void;
+	cloudAvailable?: boolean;
 }) {
 	const { t } = useTranslation();
 	const { cloudEnabled } = useCloudGate();
+	const showCloudOption = cloudAvailable ?? cloudEnabled;
 	const [trigger, setTrigger] = useState<{ kind: "clone" | "folder"; nonce: number } | undefined>(undefined);
 	const [showCloud, setShowCloud] = useState(false);
 
@@ -49,22 +52,22 @@ export function OnboardingProjectSetup({
 		<>
 			<div className="flex w-full max-w-[520px] flex-col gap-3">
 				<SetupRow
-					variant="card"
+					variant="action"
 					icon={<GitFork aria-hidden="true" />}
 					label={t("createProject.cloneFromGit")}
 					description={t("createProject.cloneFromGitDesc")}
 					onClick={() => startImport("git")}
 				/>
 				<SetupRow
-					variant="card"
+					variant="action"
 					icon={<FolderOpen aria-hidden="true" />}
 					label={t("createProject.openLocal")}
 					description={t("createProject.openLocalDesc")}
 					onClick={() => startImport("folder")}
 				/>
-				{cloudEnabled ? (
+				{showCloudOption ? (
 					<SetupRow
-						variant="card"
+						variant="action"
 						icon={<Cloud aria-hidden="true" />}
 						label={t("onboarding.createCloudProject")}
 						description={t("onboarding.createCloudProjectDetail")}
@@ -72,7 +75,7 @@ export function OnboardingProjectSetup({
 					/>
 				) : null}
 			</div>
-			{cloudEnabled && showCloud ? (
+			{showCloudOption && showCloud ? (
 				<OnboardingCloudDialog onClose={() => setShowCloud(false)} onCreated={onCloudProjectCreated} />
 			) : null}
 			<CreateProjectFlow

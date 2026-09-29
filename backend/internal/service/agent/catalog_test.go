@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -1104,6 +1105,52 @@ func TestRefreshReportsAuthorizedInstalledAgents(t *testing.T) {
 	}
 	if byID["broken-auth"].AuthStatus != ports.AgentAuthStatusUnknown {
 		t.Fatalf("broken-auth authStatus = %q", byID["broken-auth"].AuthStatus)
+	}
+}
+
+func TestProbeReconcilesCodexCredentialsChangedByExternalLogin(t *testing.T) {
+	root := t.TempDir()
+	globalHome := filepath.Join(root, "global-codex")
+	if err := ensurePrivateDirectory(globalHome); err != nil {
+		t.Fatal(err)
+	}
+	manager := newCodexAccountManager(
+		context.Background(),
+		filepath.Join(root, "accounts"),
+		filepath.Join(root, "pending"),
+		filepath.Join(root, "staging"),
+		globalHome,
+		nil,
+		nil,
+		nil,
+	)
+	manager.accountStoreReady = true
+	manager.reconciliation = domain.CodexDeviceReconciliation{
+		Status: domain.CodexDeviceReconciliationVerified, ReasonCode: "verified",
+	}
+	manager.catalog.newID = func() string { return testAccountID }
+	manager.factory = &fakeCodexAccountFactory{open: func(ports.CodexAccountContext) (ports.CodexAccountClient, error) {
+		return &fakeCodexAccountClient{readFn: func(context.Context, bool) (ports.CodexAccountObservation, error) {
+			return ports.CodexAccountObservation{Authentication: domain.AgentAuthenticationAuthorized, Method: domain.CodexAuthMethodAPIKey}, nil
+		}}, nil
+	}}
+
+	agents := []agentregistry.HarnessAgent{harnessAuthAgent("codex", "Codex", ports.AgentAuthStatusUnauthorized, nil)}
+	svc := NewWithAgents(agents)
+	svc.codexAccounts = manager
+	svc.readiness = newReadinessCoordinator(readinessCoordinatorConfig{
+		Agents: agents, AuthenticationCheck: svc.structuredCodexAuthentication,
+	})
+	if err := writeGlobalCredentialAtomic(manager.globalCredentialPath(), testAPIKeyCredential("new-device-login")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.Probe(context.Background(), "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Agent.AuthStatus != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("auth status = %q, want externally authenticated Codex", got.Agent.AuthStatus)
 	}
 }
 

@@ -203,6 +203,16 @@ func (s *Service) Probe(ctx context.Context, agentID string) (ProbeResult, error
 	if _, ok := s.agent(agentID); !ok {
 		return ProbeResult{Agent: Info{ID: agentID}, Supported: false, Installed: false}, nil
 	}
+	// Native `codex login` writes the device-global credential outside AO's
+	// account APIs. A user-requested probe must reconcile that credential before
+	// readiness classifies Codex, otherwise a freshly completed login remains
+	// hidden behind the prior "no device account" snapshot. This is best-effort:
+	// native readiness remains the fallback when account management is unavailable.
+	if agentID == string(domain.HarnessCodex) && s.codexAccounts != nil {
+		if err := s.WaitCodexAccountStoreReady(ctx); err == nil {
+			_ = s.codexAccounts.reconcileGlobalWithPolicy(ctx, true)
+		}
+	}
 	s.InvalidateAgentAuthentication(agentID)
 	readiness, err := s.EnsureReadiness(ctx, []string{agentID}, domain.AgentReadinessPurposeLaunch)
 	if err != nil {

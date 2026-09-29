@@ -39,7 +39,10 @@ export function useGitHubSetup({ poll = false }: { poll?: boolean } = {}) {
 	// The gh install is a system install, the same one the startup gate runs, so
 	// it uses that runner rather than a second POST-and-poll of its own.
 	const installRunner = useInstallRunner(
-		() => void requirementsRef.current(),
+		() => {
+			void requirementsRef.current();
+			startSignIn.mutate();
+		},
 		t("onboarding.installStartFailed"),
 	);
 

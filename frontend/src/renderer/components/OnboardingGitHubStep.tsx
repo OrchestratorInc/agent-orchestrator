@@ -5,7 +5,6 @@ import { AuthTerminalPanel } from "./AuthTerminalPanel";
 import { ManualCommand } from "./InstallDependencyDialog";
 import { SetupList, SetupRow } from "./SetupList";
 import { GitHubMarkIcon } from "./icons";
-import { Button } from "./ui/button";
 
 /** Step: GitHub. One page handles both halves of the prerequisite, because
  *  installing the CLI and signing in are one intention. The checks run from
@@ -43,27 +42,30 @@ export function OnboardingGitHubStep({ setup }: { setup: ReturnType<typeof useGi
 
 	return (
 		<div className="flex w-full max-w-[420px] flex-col text-left">
-			{setup.cliMissing ? (
-				<SetupList>
-				<SetupRow
-					icon={<GitHubMarkIcon aria-hidden="true" />}
-					label={installFailed ? t("onboarding.tryAgain") : t("startup.installGh")}
-					description={t("onboarding.githubInstallDetail")}
-					disabled={setup.installing}
-					onClick={() => void setup.install()}
-					trailing={setup.installing ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" /> : undefined}
-				/>
-				</SetupList>
-			) : (
-				<Button
-					className="self-center rounded-xl px-4"
-					disabled={setup.signInPending || setup.loginRunning}
-					onClick={setup.signIn}
-				>
-					{setup.signInPending || setup.loginRunning ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" /> : null}
-					{setup.loginEnded ? t("onboarding.tryAgain") : t("cloudCredential.connect")}
-				</Button>
-			)}
+			<SetupList>
+				{setup.cliMissing ? (
+					<SetupRow
+						icon={<GitHubMarkIcon aria-hidden="true" />}
+						label={installFailed ? t("onboarding.tryAgain") : t("startup.installGh")}
+						description={t("onboarding.githubInstallDetail")}
+						variant="action"
+						disabled={setup.installing}
+						onClick={() => void setup.install()}
+						trailing={setup.installing ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" /> : undefined}
+					/>
+				) : (
+					<SetupRow
+						icon={<GitHubMarkIcon aria-hidden="true" />}
+						label={setup.loginEnded ? t("startup.githubLoginTryAgain") : t("startup.githubLogin")}
+						description={t("onboarding.githubSignInDetail")}
+						variant="action"
+						disabled={setup.signInPending || setup.loginRunning}
+						onClick={setup.signIn}
+						trailing={setup.signInPending && !setup.loginRunning ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" /> : undefined}
+						trailingAction={setup.loginRunning ? { label: t("confirm.cancel"), onClick: setup.closeSignIn } : undefined}
+					/>
+				)}
+			</SetupList>
 			{installDetail ? (
 				<p className="px-4 text-caption leading-snug text-warning" role="status">
 					{installDetail}
@@ -82,6 +84,7 @@ export function OnboardingGitHubStep({ setup }: { setup: ReturnType<typeof useGi
 					onRetry={setup.signIn}
 					onTerminalState={setup.handleTerminalState}
 					closeLabel={t("common.close")}
+					showHeader={false}
 					terminalHeightClass="h-[200px]"
 					testId="github-auth-terminal"
 				/>

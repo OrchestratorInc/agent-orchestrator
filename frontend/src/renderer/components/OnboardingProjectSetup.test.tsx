@@ -33,9 +33,10 @@ vi.mock("../lib/cloud-session", () => ({
 
 import { OnboardingProjectSetup } from "./OnboardingProjectSetup";
 
-function renderStep() {
+function renderStep(cloudAvailable?: boolean) {
 	render(
 		<OnboardingProjectSetup
+			cloudAvailable={cloudAvailable}
 			onCloudProjectCreated={vi.fn()}
 			onPrepared={vi.fn()}
 		/>,
@@ -78,9 +79,15 @@ it("offers cloud as a project source once the cloud step enabled it", async () =
 	cloudMocks.cloudEnabled = true;
 	renderStep();
 
-	expect(screen.queryByTestId("cloud-sign-in-panel")).not.toBeInTheDocument();
 	await userEvent.click(screen.getByRole("button", { name: "Create a cloud project" }));
-	expect(await screen.findByTestId("cloud-sign-in-panel")).toBeInTheDocument();
+	expect(await screen.findByRole("button", { name: "Sign in to AO Cloud" })).toBeInTheDocument();
+});
+
+it("can keep cloud unavailable even when the global gate is enabled", () => {
+	cloudMocks.cloudEnabled = true;
+	renderStep(false);
+
+	expect(screen.queryByRole("button", { name: "Create a cloud project" })).not.toBeInTheDocument();
 });
 
 it("goes straight to the cloud project form when the account is signed in", async () => {

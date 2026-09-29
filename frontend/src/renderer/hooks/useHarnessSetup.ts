@@ -5,8 +5,9 @@ import type { components } from "../../api/schema";
 import type { AuthWorkflow } from "../components/AuthTerminalPanel";
 import { isActiveInstallJob } from "../components/InstallDependencyDialog";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
-import { agentsQueryKey, refreshAgents } from "./useAgentsQuery";
-import { useAgentAuthPlans, useStartAgentAuth } from "./useAgentAuth";
+import { aoBridge } from "../lib/bridge";
+import { agentsQueryKey } from "./useAgentsQuery";
+import { agentAuthPlansQueryKey, probeAgentAuth, useAgentAuthPlans, useStartAgentAuth } from "./useAgentAuth";
 import { closeShellTerminal, shellTerminalsQueryKey } from "./useShellTerminals";
 import type { TerminalSessionState } from "./useTerminalSession";
 
@@ -16,6 +17,7 @@ type InstallJob = components["schemas"]["InstallJob"];
 export const agentInstallersQueryKey = ["agent-installers"] as const;
 export const agentInstallJobsQueryKey = ["agent-install-jobs"] as const;
 const POLL_INTERVAL_MS = 1_000;
+const AUTH_VERIFY_DELAYS_MS = [0, 300, 700, 1_500, 2_500] as const;
 
 async function fetchInstallers(): Promise<AgentInstallPlan[]> {
 	const { data, error } = await apiClient.GET("/api/v1/agents/installers");
@@ -81,7 +83,13 @@ export function useHarnessSetup({ enabled = true }: { enabled?: boolean } = {}) 
 				delete next[agentId];
 				return next;
 			});
-			void queryClient.invalidateQueries({ queryKey: agentsQueryKey });
+			void Promise.all([
+				queryClient.invalidateQueries({ queryKey: agentsQueryKey }),
+				// Auth availability is executable-dependent. A plan fetched before
+				// installation still says the login command is unavailable until it is
+				// refreshed, which previously stranded onboarding on “Setup guide.”
+				queryClient.invalidateQueries({ queryKey: agentAuthPlansQueryKey }),
+			]);
 		}
 	}, [queryClient, succeededJobsKey]);
 
@@ -147,18 +155,25 @@ export function useHarnessSetup({ enabled = true }: { enabled?: boolean } = {}) 
 
 	const finishAuth = useCallback(async (workflow: AuthWorkflow) => {
 		setAuthWorkflow((current) => (current?.terminal.handleId === workflow.terminal.handleId ? { ...current, phase: "verifying", reason: undefined } : current));
-		let authorized = false;
-		try {
-			const catalog = await refreshAgents();
-			authorized = catalog.authorized.some((agent) => agent.id === workflow.agentId);
-		} catch {
-			authorized = false;
+		for (const delay of AUTH_VERIFY_DELAYS_MS) {
+			if (delay > 0) await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
+			if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
+			try {
+				const result = await probeAgentAuth(workflow.agentId);
+				if (result.agent.authStatus === "authorized") {
+					// The targeted probe updates daemon readiness. Refetch the active
+					// catalog before closing so the onboarding CTA enables immediately.
+					await queryClient.invalidateQueries({ queryKey: agentsQueryKey });
+					await closeAuth();
+					return;
+				}
+			} catch {
+				// A readiness probe may race credential persistence or briefly time
+				// out. Keep the shared verification window open for every harness.
+			}
 		}
+		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
 		await queryClient.invalidateQueries({ queryKey: agentsQueryKey });
-		if (authorized) {
-			await closeAuth();
-			return;
-		}
 		setAuthWorkflow((current) => (current?.terminal.handleId === workflow.terminal.handleId ? { ...current, phase: "unauthorized", reason: t("onboarding.authNotCompleted") } : current));
 	}, [closeAuth, queryClient, t]);
 
@@ -170,6 +185,11 @@ export function useHarnessSetup({ enabled = true }: { enabled?: boolean } = {}) 
 			return next;
 		});
 		try {
+			const plan = authPlanFor(agentId);
+			if (plan?.launchMode === "documentation") {
+				await aoBridge.app.openExternal(plan.documentationUrl);
+				return;
+			}
 			const result = await startAgentAuth.mutateAsync(agentId);
 			const workflow: AuthWorkflow = {
 				agentId,
@@ -185,7 +205,7 @@ export function useHarnessSetup({ enabled = true }: { enabled?: boolean } = {}) 
 		} catch (error) {
 			setActionErrors((current) => ({ ...current, [agentId]: error instanceof Error ? error.message : t("onboarding.authStartFailed") }));
 		}
-	}, [startAgentAuth, t]);
+	}, [authPlanFor, startAgentAuth, t]);
 
 	const retryAuth = useCallback(async () => {
 		const workflow = authWorkflowRef.current;

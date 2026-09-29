@@ -27,7 +27,7 @@ export function OnboardingCloudStep({ cloudEnabled }: { cloudEnabled: boolean })
 			    same height, so a wrapped description cannot make one taller. */}
 			<div className="grid w-full auto-rows-fr grid-cols-1 gap-3">
 				<SetupRow
-					variant="card"
+					variant="ghost"
 					icon={<Cloud aria-hidden="true" />}
 					label={t("onboarding.cloudOptionYesLabel")}
 					description={t("onboarding.cloudOptionYesDetail")}
@@ -35,7 +35,7 @@ export function OnboardingCloudStep({ cloudEnabled }: { cloudEnabled: boolean })
 					onClick={() => choose(true)}
 				/>
 				<SetupRow
-					variant="card"
+					variant="ghost"
 					icon={<Laptop aria-hidden="true" />}
 					label={t("onboarding.cloudOptionNoLabel")}
 					description={t("onboarding.cloudOptionNoDetail")}

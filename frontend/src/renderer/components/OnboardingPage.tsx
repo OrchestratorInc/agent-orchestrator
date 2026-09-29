@@ -10,17 +10,14 @@ import visibilityBackground from "../../landing/public/optimized/feature.webp";
 import { FeedbackLoopDemo } from "./onboarding/previews/feedback-loop-demo";
 import { FleetBoardDemo, type FleetBoardAssets } from "./onboarding/previews/fleet-board-demo";
 import { OnboardingProjectSetup } from "./OnboardingProjectSetup";
-import { OnboardingCloudStep } from "./OnboardingCloudStep";
 import { OnboardingGitHubStep } from "./OnboardingGitHubStep";
 import { AuthTerminalPanel } from "./AuthTerminalPanel";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { agentsQueryKey, refreshAgentsIfStale, useAgentsQuery } from "../hooks/useAgentsQuery";
 import { useHarnessSetup } from "../hooks/useHarnessSetup";
 import { useDaemonStatus } from "../hooks/useDaemonStatus";
-import { useCloudGate } from "../hooks/useCloudGate";
 import { useGitHubSetup } from "../hooks/useGitHubSetup";
 import { markOnboardingComplete } from "../lib/onboarding-finish";
-import { aoBridge } from "../lib/bridge";
 import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
 import type { MessageKey } from "../i18n";
 import { buildRankedAgentOptions, DEFAULT_AGENT_PRIORITY_RANK, isReadyAgent, type AgentInfo, unknownAgentReadiness } from "../lib/agent-select-options";
@@ -32,9 +29,8 @@ import claudeCodeLogo from "../assets/agents/claude-code.svg";
 import codexLogo from "../assets/agents/codex.svg";
 import cursorLogo from "../assets/agents/cursor.svg";
 import opencodeLogo from "../assets/agents/opencode.svg";
-import { GitHubMarkIcon } from "./icons";
 
-type Step = "welcome" | "feedback" | "github" | "cloud" | "project" | "agents" | "guide";
+type Step = "welcome" | "feedback" | "github" | "project" | "agent-setup" | "agents" | "guide";
 
 type StepDetails = {
 	title: MessageKey;
@@ -42,18 +38,16 @@ type StepDetails = {
 	nextLabel: MessageKey;
 };
 
-const STEPS: Step[] = ["welcome", "feedback", "github", "cloud", "project", "agents", "guide"];
+type AgentSetupEntry = "required" | "optional";
 
-/** Project setup is one stage of the flow: pick a project, then configure
- * both agent roles together. */
-const STAGES: Step[][] = [
-	["welcome"],
-	["feedback"],
-	["github"],
-	["cloud"],
-	["project", "agents"],
-	["guide"],
-];
+// Cloud onboarding is intentionally disabled until the product has an explicit
+// entitlement signal. Keep the standalone cloud step available for that later
+// decision, but do not route any onboarding user through it today.
+const STEPS: Step[] = ["welcome", "feedback", "github", "project", "agent-setup", "agents", "guide"];
+
+/** Project setup is one stage of the flow: pick a project, conditionally set
+ * up a harness, then choose the agent used for both roles. */
+const STAGES: Step[][] = [["welcome"], ["feedback"], ["github"], ["project", "agent-setup", "agents"], ["guide"]];
 
 const STEP_DETAILS: Record<Step, StepDetails> = {
 	welcome: {
@@ -71,15 +65,15 @@ const STEP_DETAILS: Record<Step, StepDetails> = {
 		subtitle: "onboarding.step.github.subtitle",
 		nextLabel: "onboarding.step.github.next",
 	},
-	cloud: {
-		title: "onboarding.step.cloud.title",
-		subtitle: "onboarding.step.cloud.subtitle",
-		nextLabel: "onboarding.step.cloud.next",
-	},
 	project: {
 		title: "onboarding.step.project.title",
 		subtitle: "onboarding.step.project.subtitle",
 		nextLabel: "onboarding.step.project.next",
+	},
+	"agent-setup": {
+		title: "onboarding.step.agentSetup.title",
+		subtitle: "onboarding.step.agentSetup.subtitle",
+		nextLabel: "onboarding.step.agentSetup.next",
 	},
 	agents: {
 		title: "onboarding.step.agents.title",
@@ -91,6 +85,12 @@ const STEP_DETAILS: Record<Step, StepDetails> = {
 		subtitle: "onboarding.step.guide.subtitle",
 		nextLabel: "onboarding.step.guide.next",
 	},
+};
+
+const OPTIONAL_AGENT_SETUP_DETAILS: StepDetails = {
+	title: "onboarding.step.agentSetupOptional.title",
+	subtitle: "onboarding.step.agentSetupOptional.subtitle",
+	nextLabel: "onboarding.step.agentSetupOptional.next",
 };
 
 const ALL_IMAGES = [visibilityBackground, feedbackBackground];
@@ -127,14 +127,14 @@ export function OnboardingPage() {
 	// which left every probe on this screen answering 503.
 	useDaemonStatus();
 	const harnessSetup = useHarnessSetup();
-	const { cloudEnabled } = useCloudGate();
 	const queryClient = useQueryClient();
 	const [step, setStep] = useState<Step>("welcome");
+	const [agentSetupEntry, setAgentSetupEntry] = useState<AgentSetupEntry>("required");
 	// The GitHub checks run from the first step's mount, so that page opens
 	// already knowing its state; polling only runs while the page is showing.
 	const githubSetup = useGitHubSetup({ poll: step === "github" });
-	const [orchestratorAgent, setOrchestratorAgent] = useState<string | null>(null);
-	const [workerAgent, setWorkerAgent] = useState<string | null>(null);
+	const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+	const [hoveredAgent, setHoveredAgent] = useState<string | null>(null);
 	const [preparedProject, setPreparedProject] = useState<PreparedProjectInput | null>(null);
 	const [agentCheckIndicatorTimedOut, setAgentCheckIndicatorTimedOut] = useState(false);
 	const stepIndex = STEPS.indexOf(step);
@@ -142,7 +142,7 @@ export function OnboardingPage() {
 		0,
 		STAGES.findIndex((stage) => stage.includes(step)),
 	);
-	const details = STEP_DETAILS[step];
+	const details = step === "agent-setup" && agentSetupEntry === "optional" ? OPTIONAL_AGENT_SETUP_DETAILS : STEP_DETAILS[step];
 	const agentCatalog = agentsQuery.data;
 	const agentOptions = useMemo<AgentInfo[]>(() => {
 		const fallbackAgents = AGENT_OPTIONS.map((id) => unknownAgentReadiness(id, agentLabel(id)));
@@ -168,15 +168,21 @@ export function OnboardingPage() {
 			fallbackAgents,
 		});
 	}, [agentCatalog]);
+	const onboardingAgents = useMemo<OnboardingAgent[]>(() => {
+		const isCatalogKnown = Boolean(agentCatalog);
+		const isCheckingCatalog = !isCatalogKnown && (agentsQuery.isLoading || agentsQuery.isFetching) && !agentCheckIndicatorTimedOut;
+		const installedIds = new Set(agentCatalog?.installed.map((agent) => agent.id));
+		return agentOptions.map((agent) => ({
+			id: agent.id,
+			installed: !isCatalogKnown || installedIds.has(agent.id),
+			name: agent.label,
+			indicator: isCheckingCatalog ? "checking" : isCatalogKnown && installedIds.has(agent.id) && !isReadyAgent(agent) ? "auth" : "none",
+		}));
+	}, [agentCatalog, agentCheckIndicatorTimedOut, agentOptions, agentsQuery.isFetching, agentsQuery.isLoading]);
 
-	// One working harness is the floor for leaving the first agent step. Picking
-	// an agent that is missing or signed out would hand a first-run user an
-	// orchestrator that cannot start, so the step holds until one is ready. A
-	// catalog that never resolved leaves every row without an indicator, and an
-	// unresponsive probe should not trap anyone here.
-	const hasReadyAgent = agentCatalog
-		? agentOptions.some(isReadyAgent)
-		: agentCheckIndicatorTimedOut || (!agentsQuery.isLoading && !agentsQuery.isFetching);
+	// The conditional setup step is a real prerequisite: the normal role picker
+	// only appears after at least one installed agent is ready to run.
+	const hasReadyAgent = Boolean(agentCatalog && agentOptions.some(isReadyAgent));
 
 	useEffect(() => {
 		if (agentCatalog || (!agentsQuery.isLoading && !agentsQuery.isFetching)) {
@@ -220,8 +226,7 @@ export function OnboardingPage() {
 			defaultBranch: onboardingFinishRequest.defaultBranch,
 			path: onboardingFinishRequest.path,
 		});
-		setOrchestratorAgent(onboardingFinishRequest.orchestratorAgent);
-		setWorkerAgent(onboardingFinishRequest.workerAgent);
+		setSelectedAgent(onboardingFinishRequest.orchestratorAgent || onboardingFinishRequest.workerAgent);
 		setStep("guide");
 	}, [onboardingFinishError, onboardingFinishRequest]);
 
@@ -231,20 +236,38 @@ export function OnboardingPage() {
 
 	const next = useCallback(() => {
 		if (step === "guide") {
-			if (!preparedProject || !orchestratorAgent || !workerAgent) return;
+			if (!preparedProject || !selectedAgent) return;
 			// Completion is recorded by the handoff itself, once the project is
 			// actually registered. Marking it here stranded anyone whose project
 			// failed to create on an empty board with onboarding already spent.
 			requestOnboardingFinish({
 				...preparedProject,
-				orchestratorAgent,
-				workerAgent,
+				orchestratorAgent: selectedAgent,
+				workerAgent: selectedAgent,
 			});
 			void navigate({ to: "/" });
 			return;
 		}
+		if (step === "agent-setup") {
+			if (agentSetupEntry === "optional" || hasReadyAgent) setStep("agents");
+			return;
+		}
 		goToStep(stepIndex + 1);
-	}, [goToStep, navigate, orchestratorAgent, preparedProject, requestOnboardingFinish, step, stepIndex, workerAgent]);
+	}, [agentSetupEntry, goToStep, hasReadyAgent, navigate, preparedProject, requestOnboardingFinish, selectedAgent, step, stepIndex]);
+
+	const back = useCallback(() => {
+		// Required setup belongs between project selection and the picker. Optional
+		// setup is launched from the picker, so both exit paths return to their source.
+		if (step === "agent-setup") {
+			setStep(agentSetupEntry === "optional" ? "agents" : "project");
+			return;
+		}
+		if (step === "agents") {
+			setStep("project");
+			return;
+		}
+		goToStep(stepIndex - 1);
+	}, [agentSetupEntry, goToStep, step, stepIndex]);
 
 	// A cloud project is created by the flow that owns it, so onboarding just
 	// records completion and hands off to the app.
@@ -252,12 +275,28 @@ export function OnboardingPage() {
 		markOnboardingComplete();
 		void navigate({ to: "/" });
 	}, [navigate]);
+	const handleInstallAgent = useCallback(
+		(agentId: string) => {
+			void harnessSetup.startInstall(agentId);
+		},
+		[harnessSetup],
+	);
+	const handleSignInAgent = useCallback(
+		(agentId: string) => {
+			void harnessSetup.startAuth(agentId);
+		},
+		[harnessSetup],
+	);
+	const handleInstallAnotherAgent = useCallback(() => {
+		setAgentSetupEntry("optional");
+		setStep("agent-setup");
+	}, []);
 
 	const isProjectStep = step === "project";
-	const isGitHubStep = step === "github";
+	const isAgentSetupStep = step === "agent-setup";
 	const isAgentStep = step === "agents";
 	const isGuideStep = step === "guide";
-	const isSetupStep = step === "github" || step === "cloud";
+	const isSetupStep = step === "github";
 	const isListStep = isProjectStep || isSetupStep;
 	// The two feature pages open on the product mark; setup pages want the space.
 	const isFeatureStep = step === "welcome" || step === "feedback";
@@ -276,10 +315,7 @@ export function OnboardingPage() {
 
 	return (
 		<main className="relative h-[100dvh] min-h-[640px] w-screen overflow-hidden bg-background text-foreground">
-			<div
-				className="fixed inset-x-0 top-0 z-titlebar h-8"
-				style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
-			/>
+			<div className="fixed inset-x-0 top-0 z-titlebar h-8" style={{ WebkitAppRegion: "drag" } as React.CSSProperties} />
 
 			<div className="mx-auto grid h-full w-full max-w-[1240px] grid-rows-[80px_minmax(0,1fr)_104px] px-8 max-[1040px]:px-6">
 				<header className="flex items-end justify-between pb-3" aria-label={t("onboarding.progressLabel")}>
@@ -290,7 +326,13 @@ export function OnboardingPage() {
 					) : (
 						<img src={aoLogo} alt={t("onboarding.logoAlt")} className="h-6 w-7 object-contain" />
 					)}
-					<div className="flex gap-1.5" aria-label={t("onboarding.stepOf", { current: stageIndex + 1, total: STAGES.length })}>
+					<div
+						className="flex gap-1.5"
+						aria-label={t("onboarding.stepOf", {
+							current: stageIndex + 1,
+							total: STAGES.length,
+						})}
+					>
 						{STAGES.map((stage, index) => (
 							<span
 								key={stage[0]}
@@ -306,83 +348,99 @@ export function OnboardingPage() {
 					</div>
 				</header>
 
-				<div className={cn(
-					"min-h-0",
-					isListStep
-						? "flex items-center justify-center overflow-y-auto"
-						: isAgentStep || isGuideStep
-							? "grid grid-cols-[minmax(360px,1.1fr)_minmax(300px,0.9fr)] items-center gap-10 max-[1040px]:grid-cols-[minmax(340px,1.15fr)_minmax(240px,0.85fr)] max-[1040px]:gap-6"
-						: "grid grid-cols-[minmax(280px,0.72fr)_minmax(520px,1.35fr)] items-center gap-14 max-[1040px]:grid-cols-[minmax(270px,0.75fr)_minmax(0,1.25fr)] max-[1040px]:gap-8",
-				)}>
+				<div
+					className={cn(
+						"min-h-0",
+						isListStep
+							? "flex items-center justify-center overflow-y-auto"
+							: isAgentSetupStep
+								? "flex items-center justify-center overflow-y-auto"
+								: isAgentStep || isGuideStep
+								? "grid grid-cols-[minmax(360px,1.1fr)_minmax(300px,0.9fr)] items-center gap-10 max-[1040px]:grid-cols-[minmax(340px,1.15fr)_minmax(240px,0.85fr)] max-[1040px]:gap-6"
+								: "grid grid-cols-[minmax(280px,0.72fr)_minmax(520px,1.35fr)] items-center gap-14 max-[1040px]:grid-cols-[minmax(270px,0.75fr)_minmax(0,1.25fr)] max-[1040px]:gap-8",
+					)}
+				>
 					<section
 						key={step}
 						className={cn(
 							"grid h-[360px] grid-rows-[180px_180px]",
-							(isAgentStep || isGuideStep) && "h-[480px] grid-rows-[210px_minmax(0,1fr)]",
+							(isAgentSetupStep || isAgentStep || isGuideStep) && "h-[480px] grid-rows-[210px_minmax(0,1fr)]",
+							isAgentSetupStep && "w-full max-w-[680px]",
 							// Setup steps size to content so a missing prerequisite adds a
 							// block instead of overflowing the fixed wizard height.
 							isListStep && "h-auto min-h-[280px] w-full max-w-[680px] grid-rows-[auto_auto] text-center",
 						)}
 						aria-labelledby={`onboarding-title-${step}`}
 					>
-						<div className={cn("flex flex-col justify-end", isGitHubStep ? "pb-3" : "pb-7", (isAgentStep || isGuideStep) && "justify-center pb-5")}>
-							{isFeatureStep ? (
-								<img src={aoLogo} alt="" aria-hidden="true" className="mb-5 h-30 w-35 object-contain" />
-							) : null}
-							<h1 id={`onboarding-title-${step}`} className={cn(
-								isAgentStep || isGuideStep ? "max-w-[500px]" : "max-w-[410px]",
-								isGitHubStep ? "text-[19px] font-medium leading-6 tracking-normal" : "text-[clamp(2rem,3.2vw,3.15rem)] font-normal leading-[1.02] tracking-[-0.045em] text-balance",
-								isListStep && "mx-auto",
-								isProjectStep && "max-w-none whitespace-nowrap",
-							)}>
+						<div className={cn("flex flex-col justify-end pb-7", (isAgentSetupStep || isAgentStep || isGuideStep) && "justify-center pb-5", isAgentSetupStep && "items-center text-center")}>
+							{isFeatureStep ? <img src={aoLogo} alt="" aria-hidden="true" className="mb-5 h-30 w-35 object-contain" /> : null}
+							<h1
+								id={`onboarding-title-${step}`}
+								className={cn(
+									isAgentSetupStep || isAgentStep || isGuideStep ? "max-w-[500px]" : "max-w-[410px]",
+									"text-[clamp(2rem,3.2vw,3.15rem)] font-normal leading-[1.02] tracking-[-0.045em] text-balance",
+									isListStep && "mx-auto",
+									isProjectStep && "max-w-none whitespace-nowrap",
+								)}
+							>
 								{t(details.title)}
 							</h1>
-							{isGitHubStep ? (
-								<div className="relative mx-auto mt-5 size-48">
-									<GitHubMarkIcon aria-hidden="true" className="absolute inset-0 size-48" />
-									<img src={aoLogo} alt="Agent Orchestrator" className="absolute -bottom-1 -left-10 size-12 object-contain" />
-								</div>
-							) : null}
-							<p className={cn(isGitHubStep ? "mt-12" : "mt-5", "max-w-[350px] text-[15px] leading-6 text-muted-foreground text-pretty", (isAgentStep || isGuideStep) && "max-w-[430px]", isListStep && "mx-auto")}>{t(details.subtitle)}</p>
+							<p className={cn("mt-5 max-w-[350px] text-[15px] leading-6 text-muted-foreground text-pretty", (isAgentSetupStep || isAgentStep || isGuideStep) && "max-w-[430px]", isListStep && "mx-auto")}>
+								{t(details.subtitle)}
+							</p>
 						</div>
 						<div className={cn("min-h-0 pt-2", isListStep && "flex justify-center")}>
+							{isAgentSetupStep && (
+								<div className="mx-auto w-full max-w-[440px] space-y-4 text-left">
+									{harnessSetup.authWorkflow ? (
+										<AuthTerminalPanel
+											workflow={harnessSetup.authWorkflow}
+											onClose={() => void harnessSetup.closeAuth()}
+											onRetry={() => void harnessSetup.retryAuth()}
+											onTerminalState={harnessSetup.handleTerminalState}
+											closeLabel={t("common.close")}
+										/>
+									) : (
+										<AgentRolePicker
+											label={t(details.title)}
+											agents={onboardingAgents}
+											harnessSetup={harnessSetup}
+											hovered={hoveredAgent}
+											onHover={setHoveredAgent}
+											onInstall={handleInstallAgent}
+											onSignIn={handleSignInAgent}
+										/>
+									)}
+								</div>
+							)}
 							{isAgentStep && (
-								<div className="w-full max-w-[440px] space-y-4 text-left">
+								<div className="w-full max-w-[440px] text-left">
 									<RequiredAgentField
-										id="onboardingOrchestratorAgent"
-										label={t("onboarding.pickerOrchestratorLabel")}
-										placeholder={t("createProject.selectOrchestrator")}
+										id="onboardingAgent"
+										label={t("newTask.agent")}
+										placeholder={t("newTask.selectAgent")}
+										variant="onboarding"
 										agents={agentCatalog ? agentOptions : undefined}
-										value={orchestratorAgent ?? ""}
-										onChange={setOrchestratorAgent}
+										value={selectedAgent ?? ""}
+										onChange={setSelectedAgent}
+										managementActionLabel={t("onboarding.installAnotherAgent")}
+										onManagementAction={handleInstallAnotherAgent}
 									/>
-									<RequiredAgentField
-										id="onboardingWorkerAgent"
-										label={t("onboarding.pickerWorkersLabel")}
-										placeholder={t("createProject.selectWorker")}
-										agents={agentCatalog ? agentOptions : undefined}
-										value={workerAgent ?? ""}
-										onChange={setWorkerAgent}
-									/>
-									{!hasReadyAgent ? (
-										<p className="mt-3 text-caption leading-snug text-muted-foreground" role="status">
-											{t("onboarding.needsAgentSetup")}
-										</p>
-									) : null}
 								</div>
 							)}
 							{step === "github" && <OnboardingGitHubStep setup={githubSetup} />}
-							{step === "cloud" && (
-								<OnboardingCloudStep cloudEnabled={cloudEnabled} />
-							)}
 							{step === "project" && (
 								<div className="flex w-full flex-col items-center gap-4">
 									<OnboardingProjectSetup
+										cloudAvailable={false}
 										onPrepared={(project) => {
-										setPreparedProject(project);
-										if (project) setStep("agents");
-									}}
-									onCloudProjectCreated={handleCloudProjectCreated}
+											setPreparedProject(project);
+											if (project) {
+												setAgentSetupEntry("required");
+												setStep(hasReadyAgent ? "agents" : "agent-setup");
+											}
+										}}
+										onCloudProjectCreated={handleCloudProjectCreated}
 									/>
 								</div>
 							)}
@@ -390,9 +448,7 @@ export function OnboardingPage() {
 								(onboardingFinishError ? (
 									<div className="w-full max-w-[500px] text-left" role="alert">
 										<p className="text-sm font-medium text-foreground">{t("onboarding.finishFailedTitle")}</p>
-										<p className="mt-1 text-caption leading-snug text-muted-foreground">
-											{onboardingFinishError.message || t("onboarding.finishFailedBody")}
-										</p>
+										<p className="mt-1 text-caption leading-snug text-muted-foreground">{onboardingFinishError.message || t("onboarding.finishFailedBody")}</p>
 										<div className="mt-3 flex flex-wrap items-center gap-2">
 											<button
 												type="button"
@@ -436,18 +492,17 @@ export function OnboardingPage() {
 								/>
 							</div>
 						) : (
-							<AgentTopologyPreview
-								orchestratorAgent={orchestratorAgent}
-								workerAgent={workerAgent}
-							/>
+							<AgentTopologyPreview orchestratorAgent={selectedAgent} workerAgent={selectedAgent} />
 						)
-					) : step === "welcome" || step === "feedback" ? <PreviewStage step={step} /> : null}
+					) : step === "welcome" || step === "feedback" ? (
+						<PreviewStage step={step} />
+					) : null}
 				</div>
 
 				<footer className="flex items-center justify-between">
 					<button
 						type="button"
-						onClick={() => goToStep(stepIndex - 1)}
+						onClick={back}
 						disabled={stepIndex === 0}
 						className="h-10 px-1 text-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-0"
 					>
@@ -456,21 +511,21 @@ export function OnboardingPage() {
 					<button
 						type="button"
 						onClick={next}
-					disabled={
-						(step === "project" && !preparedProject) ||
-						(isAgentStep && (!orchestratorAgent || !workerAgent || !hasReadyAgent)) ||
-						// GitHub is the one prerequisite the flow will not let you skip:
-						// agents cannot open pull requests or read issues without it.
-						(step === "github" && !githubSetup.authSatisfied)
-					}
+						disabled={
+							(step === "project" && !preparedProject) ||
+							(isAgentSetupStep && agentSetupEntry === "required" && !hasReadyAgent) ||
+							(isAgentStep && !selectedAgent) ||
+							// GitHub is the one prerequisite the flow will not let you skip:
+							// agents cannot open pull requests or read issues without it.
+							(step === "github" && !githubSetup.authSatisfied)
+						}
 						className="relative inline-flex w-auto items-center justify-center whitespace-nowrap rounded-xl bg-primary px-4 py-2 text-sm font-semibold! text-primary-foreground transition-[scale,opacity] duration-150 ease-out after:absolute after:inset-x-0 after:-inset-y-0.5 after:content-[''] hover:opacity-85 active:not-disabled:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-30"
 					>
 						{t(details.nextLabel)}
 					</button>
-					</footer>
-				</div>
-
-			</main>
+				</footer>
+			</div>
+		</main>
 	);
 }
 
@@ -498,9 +553,7 @@ function OnboardingGuide() {
 					</span>
 				</div>
 			</div>
-			<p className="mt-4 text-xs leading-5 text-muted-foreground">
-				{t("onboarding.guideExplainer")}
-			</p>
+			<p className="mt-4 text-xs leading-5 text-muted-foreground">{t("onboarding.guideExplainer")}</p>
 		</div>
 	);
 }
@@ -509,20 +562,16 @@ export function AgentRolePicker({
 	label,
 	agents,
 	harnessSetup,
-	value,
 	hovered,
 	onHover,
-	onSelect,
 	onInstall,
 	onSignIn,
 }: {
 	label: string;
 	agents: OnboardingAgent[];
 	harnessSetup: HarnessSetup;
-	value: string | null;
 	hovered: string | null;
 	onHover: (id: string | null) => void;
-	onSelect: (id: string) => void;
 	onInstall: (id: string) => void;
 	onSignIn: (id: string) => void;
 }) {
@@ -533,47 +582,35 @@ export function AgentRolePicker({
 	return (
 		<section aria-label={label}>
 			<div className="relative">
-				<div className="max-h-[240px] space-y-0.5 overflow-y-auto rounded-lg pb-5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" onScroll={(event) => setShowTopFade(event.currentTarget.scrollTop > 0)}>
+				<div
+					className="max-h-[240px] space-y-0.5 overflow-y-auto rounded-lg pb-5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+					onScroll={(event) => setShowTopFade(event.currentTarget.scrollTop > 0)}
+				>
 					{installed.map((agent) => (
 						<div key={agent.id} className="flex flex-col">
 							<div className="flex items-center gap-2">
-								<button
-									type="button"
-									onClick={() => onSelect(agent.id)}
+								<div
 									onMouseEnter={() => onHover(agent.id)}
 									onMouseLeave={() => onHover(null)}
-									aria-pressed={value === agent.id}
-									aria-label={agent.name}
-									className={cn(
-										"flex h-10 min-w-0 flex-1 items-center gap-3 rounded-md px-2 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-										value === agent.id && "bg-foreground/15",
-										hovered === agent.id && value !== agent.id && "bg-foreground/[0.07] text-foreground",
-									)}
+									className={cn("flex h-10 min-w-0 flex-1 items-center gap-3 rounded-md px-2 text-left text-sm", hovered === agent.id && "bg-foreground/[0.07] text-foreground")}
 								>
 									<img src={agentIcon(agent.id)} alt="" className="size-5 shrink-0 object-contain" />
 									<span className="min-w-0 flex-1 truncate">{agent.name}</span>
-									{value === agent.id ? <CheckIcon className="text-status-ready" /> : <AgentAvailabilityIndicator indicator={agent.indicator} />}
-								</button>
+									{agent.indicator === "none" ? <CheckIcon className="text-status-ready" /> : <AgentAvailabilityIndicator indicator={agent.indicator} />}
+								</div>
 								{agent.indicator === "auth" && !harnessSetup.authWorkflow ? (
-									harnessSetup.authPlanFor(agent.id)?.available ? (
+									harnessSetup.authPlanFor(agent.id) && harnessSetup.authPlanFor(agent.id)?.action !== "instructions" ? (
 										<button
 											type="button"
 											onClick={() => onSignIn(agent.id)}
-											aria-label={t("onboarding.signInToAgent", { agent: agent.name })}
-											className="shrink-0 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+											disabled={!harnessSetup.authPlanFor(agent.id)?.available}
+											title={harnessSetup.authPlanFor(agent.id)?.reason}
+											aria-label={t("onboarding.signInToAgent", {
+												agent: agent.name,
+											})}
+											className="shrink-0 rounded-md bg-foreground/[0.035] px-2 py-1 text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
 										>
-											{t("onboarding.signIn")}
-										</button>
-									) : harnessSetup.authPlanFor(agent.id)?.documentationUrl ? (
-										// Some harnesses have no terminal login flow. Sending the
-										// user to vendor setup beats a button that can only fail.
-										<button
-											type="button"
-											onClick={() => void aoBridge.app.openExternal(harnessSetup.authPlanFor(agent.id)!.documentationUrl)}
-											aria-label={t("onboarding.setupGuideForAgent", { agent: agent.name })}
-											className="shrink-0 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-										>
-											{t("onboarding.setupGuide")}
+											{harnessSetup.authPlanFor(agent.id)?.action === "setup" ? t("settings.harness.setup") : t("onboarding.signIn")}
 										</button>
 									) : (
 										<span className="shrink-0 text-[11px] text-muted-foreground">{t("onboarding.setupRequired")}</span>
@@ -588,18 +625,10 @@ export function AgentRolePicker({
 						</div>
 					))}
 					{available.map((agent) => (
-						<InstallableAgentRow
-							key={agent.id}
-							agent={agent}
-							hovered={hovered === agent.id}
-							onHover={onHover}
-							onInstall={onInstall}
-							setup={harnessSetup}
-						/>
+						<InstallableAgentRow key={agent.id} agent={agent} hovered={hovered === agent.id} onHover={onHover} onInstall={onInstall} setup={harnessSetup} />
 					))}
 				</div>
 				{showTopFade ? <div className="pointer-events-none absolute inset-x-0 top-0 h-10 bg-gradient-to-b from-background via-background/80 to-transparent" aria-hidden="true" /> : null}
-				<div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-background via-background/80 to-transparent" aria-hidden="true" />
 			</div>
 		</section>
 	);
@@ -616,7 +645,13 @@ type HarnessSetup = ReturnType<typeof useHarnessSetup>;
 
 /** A harness that is not on this machine yet. The row reports the real install
  *  job (running, failed, retrying) instead of sending the user to Settings. */
-function InstallableAgentRow({ agent, hovered, onHover, onInstall, setup }: {
+function InstallableAgentRow({
+	agent,
+	hovered,
+	onHover,
+	onInstall,
+	setup,
+}: {
 	agent: OnboardingAgent;
 	hovered: boolean;
 	onHover: (id: string | null) => void;
@@ -644,7 +679,7 @@ function InstallableAgentRow({ agent, hovered, onHover, onInstall, setup }: {
 							: t("onboarding.installAgent", { agent: agent.name })
 				}
 				className={cn(
-					"flex h-10 w-full items-center gap-3 rounded-md px-2 text-left text-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-progress disabled:opacity-80",
+					"flex h-10 w-full items-center gap-3 rounded-md bg-transparent px-2 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-progress disabled:opacity-80",
 					hovered && "bg-foreground/[0.07] text-foreground",
 				)}
 			>
@@ -659,18 +694,16 @@ function InstallableAgentRow({ agent, hovered, onHover, onInstall, setup }: {
 					<span className="shrink-0 rounded-sm bg-foreground px-2 py-1 text-[10px] font-medium text-background">{failed ? t("onboarding.tryAgain") : t("onboarding.install")}</span>
 				)}
 			</button>
-			{error ? <p className="px-2 pb-1 text-[11px] leading-4 text-warning" role="status">{error}</p> : null}
+			{error ? (
+				<p className="px-2 pb-1 text-[11px] leading-4 text-warning" role="status">
+					{error}
+				</p>
+			) : null}
 		</div>
 	);
 }
 
-function AgentTopologyPreview({
-	orchestratorAgent,
-	workerAgent,
-}: {
-	orchestratorAgent: string | null;
-	workerAgent: string | null;
-}) {
+function AgentTopologyPreview({ orchestratorAgent, workerAgent }: { orchestratorAgent: string | null; workerAgent: string | null }) {
 	const { t } = useTranslation();
 	const reduceMotion = useReducedMotion();
 	const signals = useTopologySignals(Boolean(reduceMotion));
@@ -686,7 +719,9 @@ function AgentTopologyPreview({
 		<div className="relative mx-auto aspect-[560/430] w-full max-w-[400px] overflow-hidden rounded-2xl" aria-label={t("onboarding.hierarchyIllustration")}>
 			<svg viewBox="0 0 560 430" className="absolute inset-0 size-full text-foreground/20" fill="none" aria-hidden="true">
 				<path d="M280 160v46M120 206h320M120 206v30M280 206v30M440 206v30" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
-				{signals.map((signal) => <TopologySignal key={signal.id} signal={signal} />)}
+				{signals.map((signal) => (
+					<TopologySignal key={signal.id} signal={signal} />
+				))}
 			</svg>
 
 			<div className="absolute left-1/2 top-[9.3%] -translate-x-1/2">
@@ -729,17 +764,20 @@ function useTopologySignals(reduceMotion: boolean) {
 		let active = true;
 
 		const scheduleSignal = () => {
-			scheduleTimer = window.setTimeout(() => {
-				if (!active) return;
-				const signal: TopologySignal = {
-					id: nextId.current++,
-					workerIndex: Math.floor(Math.random() * WORKER_X.length) as 0 | 1 | 2,
-					direction: Math.random() > 0.5 ? "to-orchestrator" : "to-worker",
-				};
-				setSignals([signal]);
-				signalTimer = window.setTimeout(() => setSignals([]), 920);
-				scheduleSignal();
-			}, 1800 + Math.random() * 2200);
+			scheduleTimer = window.setTimeout(
+				() => {
+					if (!active) return;
+					const signal: TopologySignal = {
+						id: nextId.current++,
+						workerIndex: Math.floor(Math.random() * WORKER_X.length) as 0 | 1 | 2,
+						direction: Math.random() > 0.5 ? "to-orchestrator" : "to-worker",
+					};
+					setSignals([signal]);
+					signalTimer = window.setTimeout(() => setSignals([]), 920);
+					scheduleSignal();
+				},
+				1800 + Math.random() * 2200,
+			);
 		};
 
 		scheduleSignal();
@@ -767,22 +805,16 @@ function TopologySignal({ signal }: { signal: TopologySignal }) {
 			fill="currentColor"
 			initial={{ opacity: 0, x: x[0], y: y[0] }}
 			animate={{ opacity: [0, 0.85, 0.85, 0], x, y }}
-			transition={{ duration: 0.86, ease: "easeInOut", times: [0, 0.12, 0.82, 1] }}
+			transition={{
+				duration: 0.86,
+				ease: "easeInOut",
+				times: [0, 0.12, 0.82, 1],
+			}}
 		/>
 	);
 }
 
-function AgentIdentity({
-	iconClassName,
-	name,
-	src,
-	textClassName,
-}: {
-	iconClassName: string;
-	name: string;
-	src?: string;
-	textClassName: string;
-}) {
+function AgentIdentity({ iconClassName, name, src, textClassName }: { iconClassName: string; name: string; src?: string; textClassName: string }) {
 	const reduceMotion = useReducedMotion();
 	return (
 		<div className="flex flex-col items-center gap-2">
@@ -814,11 +846,7 @@ function GenericWorkerIcon() {
 function PreviewStage({ step }: { step: "welcome" | "feedback" }) {
 	return (
 		<div className="relative mx-auto aspect-[4/3] w-full max-w-[720px] overflow-hidden">
-			<img
-				src={step === "welcome" ? visibilityBackground : feedbackBackground}
-				alt=""
-				className="pointer-events-none absolute inset-0 size-full select-none object-cover"
-			/>
+			<img src={step === "welcome" ? visibilityBackground : feedbackBackground} alt="" className="pointer-events-none absolute inset-0 size-full select-none object-cover" />
 			<div className="absolute inset-0 bg-background/35" />
 			<div className="relative z-10 flex size-full items-center justify-center p-6">
 				{step === "welcome" ? (
@@ -834,5 +862,9 @@ function PreviewStage({ step }: { step: "welcome" | "feedback" }) {
 }
 
 function CheckIcon({ className }: { className?: string }) {
-	return <svg viewBox="0 0 16 16" className={cn("size-3 shrink-0", className)} fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m4 8 2.5 2.5L12 5" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+	return (
+		<svg viewBox="0 0 16 16" className={cn("size-3 shrink-0", className)} fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+			<path d="m4 8 2.5 2.5L12 5" strokeLinecap="round" strokeLinejoin="round" />
+		</svg>
+	);
 }
