@@ -12,14 +12,31 @@ describe("Android native compatibility boundaries", () => {
 		expect(existsSync(path)).toBe(true);
 		const android = existsSync(path) ? source("./sidebar-navigation-shell.android.tsx") : "";
 		expect(android).toContain("PanResponder");
+		// The closed drawer's swipe responder starts below the safe-area-adjusted
+		// header. A fixed top offset overlaps the menu button on tall cutouts.
 		expect(android).toContain("edgeGestureTarget");
+		expect(android).toContain("top: insets.top + 64");
+		// Keep the smooth native animation, but commit the closed state only after
+		// it settles so Fabric measures the header button at its final position.
+		// The visible scrim must disappear as soon as closing starts, independently
+		// of that delayed interaction state, or it flashes over the settled screen.
+		expect(android).toContain("useNativeDriver: true");
+		expect(android).toContain("const [scrimVisible, setScrimVisible] = useState(retainedDrawerOpen);");
+		expect(android).toMatch(/setScrimVisible\(nextOpen\);[\s\S]*if \(nextOpen\) setOpen\(true\);[\s\S]*if \(!finished\) return;[\s\S]*if \(!nextOpen\) setOpen\(false\);/);
+		expect(android).toMatch(/open \? \([\s\S]*scrimVisible \? \([\s\S]*styles\.dismissLayer[\s\S]*styles\.dismissBlocker/);
+		expect(android).toContain("(open ? panResponder.panHandlers : {})");
+		// A gesture can reverse an in-flight spring, but it must continue from the
+		// drawer's live position rather than snapping to an open/closed endpoint.
+		expect(android).toContain("settling: drawerSettling.current");
+		expect(android).toContain("progress.stopAnimation((value) => {");
+		expect(android).toContain("gestureStartProgress.current = value");
+		expect(android).toContain("startProgress: gestureStartProgress.current");
 		expect(android).toContain("retainedDrawerOpen");
 		expect(android).not.toContain("DrawerLayoutAndroid");
 		expect(android).not.toContain("@expo/ui");
 		expect(android).not.toContain("RNHostView");
 		expect(android).toContain('pointerEvents={open ? "auto" : "none"}');
 		expect(android).toContain('importantForAccessibility={open ? "yes" : "no-hide-descendants"}');
-		expect(android).toMatch(/edgeGestureTarget:[\s\S]*bottom:\s*88/);
 	});
 
 	it("uses Android-native pressable icon controls rather than Unicode Expo buttons", () => {
@@ -35,6 +52,20 @@ describe("Android native compatibility boundaries", () => {
 			expect(android).toContain("Feather");
 			expect(android).not.toContain("@expo/ui");
 		}
+		const headerButton = source("./native-header-button.android.tsx");
+		expect(headerButton).toContain(
+			"hitSlop={{ top: space.sm, right: space.md, bottom: space.sm, left: space.xl }}",
+		);
+		// Fabric can omit Pressable.onPress when a native transform settles between
+		// touch-down and touch-up. Recover only a stationary, uncancelled touch, and
+		// wait long enough for the normal onPress path to win first.
+		expect(headerButton).toContain("onTouchStart");
+		expect(headerButton).toContain("onTouchMove");
+		expect(headerButton).toContain("onTouchEnd");
+		expect(headerButton).toContain("onTouchCancel");
+		expect(headerButton).toContain("pressHandledSequence");
+		expect(headerButton).toContain("PRESS_FALLBACK_DELAY_MS");
+		expect(headerButton).toMatch(/setTimeout\(\(\) => \{[\s\S]*pressHandledSequence\.current === sequence[\s\S]*movement > TAP_SLOP[\s\S]*onPress\(\);/);
 	});
 
 	it("keeps SwiftUI and percentage native widths out of the cross-platform Spawn route", () => {

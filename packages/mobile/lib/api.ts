@@ -1,6 +1,7 @@
 import { authHeaders, httpBase, normalizeServerHost, type ServerConfig } from "./config";
 import { cachedInstallId, getInstallId } from "./installId";
 import { captureMobileApiError, httpCategory } from "./sentry";
+import { UnreachableError } from "./connectionError";
 import type { AttentionLevel } from "./theme";
 
 // ---- Types (subset of AO's DashboardSession we use on the phone) ------------
@@ -302,6 +303,7 @@ function mapOrchestrator(s: WireSession, projectName: string): OrchestratorLink 
 // ---- Low-level fetch with friendly errors ----------------------------------
 
 const REQUEST_TIMEOUT_MS = 12000;
+const DISCONNECT_REQUEST_TIMEOUT_MS = 2000;
 // The daemon gives attachment uploads 10 minutes; allow time for its response.
 export const ATTACHMENT_REQUEST_TIMEOUT_MS = 11 * 60_000;
 
@@ -321,6 +323,9 @@ export class ApiError extends Error {
 		// Correlates a client-visible failure with daemon logs. The daemon's error
 		// envelope guarantees this field, so mobile must not discard it.
 		readonly requestId?: string,
+		// The daemon's human-readable message alone, without the status prefix.
+		// Screens render this (via userFacingError), never `message`.
+		readonly detail?: string,
 	) {
 		super(message);
 		this.name = "ApiError";
@@ -350,11 +355,11 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		if ((e as { name?: string })?.name === "AbortError") {
 			// Timed out reaching the host (commonly a sleeping Tailscale peer).
 			captureMobileApiError(path, "timeout");
-			throw new Error("Request timed out. Is the desktop reachable?", { cause: e });
+			throw new UnreachableError("timeout", { cause: e });
 		}
 		// fetch threw without reaching the server: DNS/refused/offline.
 		captureMobileApiError(path, "offline");
-		throw e;
+		throw new UnreachableError("offline", { cause: e });
 	} finally {
 		clearTimeout(timer);
 	}
@@ -379,6 +384,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 			`${res.status} ${res.statusText}${detail ? ` - ${detail}` : ""}`,
 			code,
 			requestId,
+			detail || undefined,
 		);
 	}
 	return res;
@@ -626,7 +632,7 @@ export async function unregisterPushDevice(cfg: ServerConfig, token: string): Pr
 // Prefers the install id and falls back to the token so the call still works
 // from a build that predates install ids.
 export async function unpairFromDaemon(cfg: ServerConfig, id: string): Promise<void> {
-	await req(cfg, `${API}/push/pairings/${encodeURIComponent(id)}`, { method: "DELETE" });
+	await req(cfg, `${API}/push/pairings/${encodeURIComponent(id)}`, { method: "DELETE" }, DISCONNECT_REQUEST_TIMEOUT_MS);
 }
 
 // Mark a notification read (best-effort on notification tap) so unread counts
@@ -825,7 +831,7 @@ export async function delegateTask(
 		}),
 	}, opts.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
 	const data = await res.json();
-	if (!data?.workerId) throw new Error("The daemon did not return the new worker session");
+	if (!data?.workerId) throw new Error("Your desktop didn't return the new worker. Refresh the board to check whether it started.");
 	return getSession(cfg, data.workerId);
 }
 

@@ -498,8 +498,8 @@ func Load() (Config, error) {
 	if cfg.TerminalRelayEnabled && !cfg.TerminalStreamEnabled {
 		return Config{}, errors.New("AO_CLOUD_TERMINAL_RELAY requires AO_CLOUD_TERMINAL_STREAM")
 	}
-	if cfg.IdlePauseThreshold < time.Minute {
-		return Config{}, errors.New("AO_CLOUD_IDLE_PAUSE_THRESHOLD must be at least 1m")
+	if cfg.IdlePauseThreshold != 0 && cfg.IdlePauseThreshold < time.Minute {
+		return Config{}, errors.New("AO_CLOUD_IDLE_PAUSE_THRESHOLD must be 0 (disabled) or at least 1m")
 	}
 	if cfg.PRStatusPollInterval <= 0 {
 		return Config{}, errors.New("AO_CLOUD_PR_STATUS_POLL_INTERVAL must be positive")
@@ -597,6 +597,14 @@ func Load() (Config, error) {
 func (c Config) Hosted() bool {
 	return c.Environment == "staging" || c.Environment == "production"
 }
+
+// IdlePauseDisabled reports whether idle auto-pause is turned off (keep-warm):
+// AO_CLOUD_IDLE_PAUSE_THRESHOLD=0. When disabled the idle scanner does not run
+// and the reconciler keeps sandboxes alive through idle — including extending
+// the Coder workspace deadline that would otherwise auto-stop the VM — so a
+// cloud session behaves like a local one (no teardown, no terminal reconnect on
+// resume). The cost is continuous compute for every non-terminated session.
+func (c Config) IdlePauseDisabled() bool { return c.IdlePauseThreshold == 0 }
 
 func (c Config) WorkerTokenTTL() time.Duration {
 	if c.SandboxProvider == sandbox.ProviderDocker {

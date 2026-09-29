@@ -7,6 +7,7 @@ vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 import { fetch as expoFetch } from "expo/fetch";
 import { ApiError, apiRequest, delegateTask, getAgentModels, getPreview, getSessions, getSettings, launchOrchestrator, mobileReachablePreviewURL, pinSession, renameSession, restoreSession, resumeSessionAgent, spawnSession, unpinSession } from "./api";
 import * as chatApi from "./chat/api";
+import { UNREACHABLE_ACTION_COPY, UnreachableError, userFacingError } from "./connectionError";
 import type { ServerConfig } from "./config";
 
 const {
@@ -233,6 +234,22 @@ describe("mobile Chat API boundaries", () => {
 			code: "SWITCH_IN_PROGRESS",
 			requestId: "request-mobile-1",
 		});
+	});
+
+	it("keeps the daemon's message apart from the status line for display", async () => {
+		vi.mocked(fetch).mockResolvedValue(response({ error: "conflict", message: "A controller switch is already running." }, 409));
+		const thrown = await apiRequest(cfg, "/api/v1/sessions/w-1/interface-transition", { method: "POST" }).catch((error: unknown) => error);
+		expect(thrown).toMatchObject({ status: 409, detail: "A controller switch is already running." });
+		expect((thrown as Error).message).toMatch(/^409\b/); // the log line keeps its status
+		expect(userFacingError(thrown)).toBe("A controller switch is already running.");
+	});
+
+	it("throws a typed unreachable error instead of fetch's own wording", async () => {
+		vi.mocked(fetch).mockRejectedValue(new TypeError("Network request failed"));
+		const thrown = await apiRequest(cfg, "/api/v1/projects").catch((error: unknown) => error);
+		expect(thrown).toBeInstanceOf(UnreachableError);
+		expect(thrown).toMatchObject({ reason: "offline" });
+		expect(userFacingError(thrown)).toBe(UNREACHABLE_ACTION_COPY);
 	});
 
 	it("uses daemon-advertised Chat harnesses and preserves workspace truncation", async () => {

@@ -171,6 +171,7 @@ func newSandboxReconciler(
 		StartupTimeout:         cfg.SandboxStartupTimeout,
 		HeartbeatTimeout:       cfg.WorkerHeartbeatTimeout,
 		AllowAnonymousCheckout: cfg.AllowAnonymousCheckout,
+		KeepWarm:               cfg.IdlePauseDisabled(),
 		Logger:                 logger,
 	}), nil
 }
@@ -344,9 +345,11 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	// The scanner only has anything to do where sandboxes exist to pause.
+	// The scanner only has anything to do where sandboxes exist to pause, and
+	// only when idle-pause is enabled. With AO_CLOUD_IDLE_PAUSE_THRESHOLD=0
+	// (keep-warm) it never runs, so no session is ever paused for idleness.
 	var idlePauseScanner *idlepause.Scanner
-	if reconciler != nil {
+	if reconciler != nil && !cfg.IdlePauseDisabled() {
 		idlePauseScanner = idlepause.New(store, idlepause.Options{
 			Interval:      cfg.IdlePauseInterval,
 			IdleThreshold: cfg.IdlePauseThreshold,
