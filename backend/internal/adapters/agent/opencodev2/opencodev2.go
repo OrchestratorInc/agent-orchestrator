@@ -185,10 +185,13 @@ func prepareConfigContent(existing, sessionID, prompt, model string, mode ports.
 	return string(data), nil
 }
 
-// PrepareACPConfigContent merges AO's standing instructions and four approval
-// agents into OpenCode 2's inline runtime overlay. User-owned providers,
-// top-level permission rules, and unrelated agents remain untouched.
-func PrepareACPConfigContent(existing, systemPrompt string, permissions ports.PermissionMode) (string, error) {
+// PrepareACPConfigContent merges AO's standing instructions and permission
+// boundary into OpenCode 2's built-in build agent. OpenCode's ACP bridge may
+// snapshot its built-in modes before custom agents finish loading, so AO keeps
+// the provider-visible mode stable and answers its permission requests itself.
+// User-owned providers, top-level permission rules, and unrelated agents remain
+// untouched.
+func PrepareACPConfigContent(existing, systemPrompt string, _ ports.PermissionMode) (string, error) {
 	config := map[string]json.RawMessage{}
 	if strings.TrimSpace(existing) != "" {
 		if err := json.Unmarshal([]byte(existing), &config); err != nil || config == nil {
@@ -201,37 +204,33 @@ func PrepareACPConfigContent(existing, systemPrompt string, permissions ports.Pe
 			return "", fmt.Errorf("opencode-v2: OPENCODE_CONFIG_CONTENT agents must be an object")
 		}
 	}
-	for _, mode := range []ports.PermissionMode{
-		ports.PermissionModeDefault,
-		ports.PermissionModeAcceptEdits,
-		ports.PermissionModeAuto,
-		ports.PermissionModeBypassPermissions,
-	} {
-		name := acpAgentForPermissions(mode)
-		agent := map[string]any{}
-		if raw, ok := agents[name]; ok {
-			if err := json.Unmarshal(raw, &agent); err != nil || agent == nil {
-				return "", fmt.Errorf("opencode-v2: OPENCODE_CONFIG_CONTENT agent %q must be an object", name)
-			}
+	const name = "build"
+	agent := map[string]any{}
+	if raw, ok := agents[name]; ok {
+		if err := json.Unmarshal(raw, &agent); err != nil || agent == nil {
+			return "", fmt.Errorf("opencode-v2: OPENCODE_CONFIG_CONTENT agent %q must be an object", name)
 		}
-		agent["mode"] = "primary"
-		agent["system"] = systemPrompt
-		delete(agent, "permissions")
-		if mode == ports.PermissionModeBypassPermissions {
-			agent["permissions"] = []permissionRule{{Action: "*", Resource: "*", Effect: "allow"}}
-		}
-		raw, err := json.Marshal(agent)
-		if err != nil {
-			return "", err
-		}
-		agents[name] = raw
 	}
-	var err error
+	agent["mode"] = "primary"
+	if systemPrompt != "" {
+		agent["system"] = systemPrompt
+	}
+	agent["permissions"] = []permissionRule{
+		{Action: "*", Resource: "*", Effect: "ask"},
+		{Action: "read", Resource: "*", Effect: "allow"},
+		{Action: "glob", Resource: "*", Effect: "allow"},
+		{Action: "grep", Resource: "*", Effect: "allow"},
+	}
+	raw, err := json.Marshal(agent)
+	if err != nil {
+		return "", err
+	}
+	agents[name] = raw
 	config["agents"], err = json.Marshal(agents)
 	if err != nil {
 		return "", err
 	}
-	config["default_agent"], err = json.Marshal(acpAgentForPermissions(permissions))
+	config["default_agent"], err = json.Marshal(name)
 	if err != nil {
 		return "", err
 	}
@@ -240,19 +239,6 @@ func PrepareACPConfigContent(existing, systemPrompt string, permissions ports.Pe
 		return "", fmt.Errorf("opencode-v2: encode ACP agent config: %w", err)
 	}
 	return string(data), nil
-}
-
-func acpAgentForPermissions(permissions ports.PermissionMode) string {
-	switch ports.NormalizePermissionMode(permissions) {
-	case ports.PermissionModeAcceptEdits:
-		return "ao-accept-edits"
-	case ports.PermissionModeAuto:
-		return "ao-auto"
-	case ports.PermissionModeBypassPermissions:
-		return "ao-bypass"
-	default:
-		return "ao-default"
-	}
 }
 
 func aoAgentName(sessionID string) string {

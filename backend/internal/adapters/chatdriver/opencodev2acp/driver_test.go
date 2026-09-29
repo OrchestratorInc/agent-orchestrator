@@ -84,7 +84,13 @@ func TestOpenCodeV2ACPProviderHelper(t *testing.T) {
 		case "initialize":
 			_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentCapabilities":{"sessionCapabilities":{"resume":{}}},"authMethods":[],"agentInfo":{"name":"OpenCode","version":"2.0.0"}}}`+"\n", request.ID)
 		case "session/new":
-			_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"opencode-v2-provider","configOptions":[{"id":"model","name":"Model","category":"model","type":"select","currentValue":"provider/default","options":[{"value":"provider/default","name":"Default"}]},{"id":"effort","name":"Effort","category":"thought_level","type":"select","currentValue":"default","options":[{"value":"default","name":"Default"}]},{"id":"mode","name":"Session Mode","category":"mode","type":"select","currentValue":"ao-default","options":[{"value":"ao-default","name":"Default"},{"value":"ao-accept-edits","name":"Accept Edits"},{"value":"ao-auto","name":"Auto"},{"value":"ao-bypass","name":"Bypass"}]}]}}`+"\n", request.ID)
+			_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"opencode-v2-provider","configOptions":[{"id":"model","name":"Model","category":"model","type":"select","currentValue":"provider/default","options":[{"value":"provider/default","name":"Default"}]},{"id":"effort","name":"Effort","category":"thought_level","type":"select","currentValue":"default","options":[{"value":"default","name":"Default"}]},{"id":"mode","name":"Session Mode","category":"mode","type":"select","currentValue":"build","options":[{"value":"build","name":"Build"},{"value":"plan","name":"Plan"}]}]}}`+"\n", request.ID)
+		case "session/set_mode":
+			if request.Params.ModeID != "build" && request.Params.ModeID != "plan" {
+				_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"Invalid params: mode not found: %s"}}`+"\n", request.ID, request.Params.ModeID)
+				continue
+			}
+			_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"result":{}}`+"\n", request.ID)
 		default:
 			_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"result":{}}`+"\n", request.ID)
 		}
@@ -120,7 +126,7 @@ exec "$AO_TEST_OPENCODE_V2_ACP_BINARY" -test.run=TestOpenCodeV2ACPProviderHelper
 	return binary, calls
 }
 
-func TestLaunchesOpenCodeACPThroughTheMajorTwoBinary(t *testing.T) {
+func TestLaunchesOpenCodeACPWithTheBuiltInModeAdvertisedAtStartup(t *testing.T) {
 	binary, calls := writeOpenCodeACPExecutable(t, "2.0.0")
 	driver := New(opencodev2.New(), nil)
 	if driver.Harness() != domain.HarnessOpenCodeV2 {
@@ -128,7 +134,7 @@ func TestLaunchesOpenCodeACPThroughTheMajorTwoBinary(t *testing.T) {
 	}
 	conversation, err := driver.Start(context.Background(), ports.ChatStartConfig{
 		SessionID: "v2-acp", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
-		SystemPrompt: "Follow AO rules.", Permissions: ports.PermissionModeAcceptEdits,
+		SystemPrompt: "Follow AO rules.", Permissions: ports.PermissionModeAuto,
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -142,10 +148,10 @@ func TestLaunchesOpenCodeACPThroughTheMajorTwoBinary(t *testing.T) {
 	if !strings.Contains(string(data), "argv:acp\n") {
 		t.Fatalf("v2 launch did not execute %s acp:\n%s", binary, data)
 	}
-	if !strings.Contains(string(data), `"agents"`) || !strings.Contains(string(data), `"default_agent":"ao-accept-edits"`) {
-		t.Fatalf("v2 launch config missing ACP agents:\n%s", data)
+	if !strings.Contains(string(data), `"agents"`) || !strings.Contains(string(data), `"default_agent":"build"`) {
+		t.Fatalf("v2 launch config missing the configured build agent:\n%s", data)
 	}
-	if !strings.Contains(string(data), "session/set_mode:ao-accept-edits\n") {
+	if !strings.Contains(string(data), "session/set_mode:build\n") {
 		t.Fatalf("v2 approval mode was not applied through ACP:\n%s", data)
 	}
 }
@@ -222,10 +228,10 @@ func TestApprovalModesSelectV2AgentsAndPermissionReplies(t *testing.T) {
 		mode ports.PermissionMode
 		want string
 	}{
-		{ports.PermissionModeDefault, "ao-default"},
-		{ports.PermissionModeAcceptEdits, "ao-accept-edits"},
-		{ports.PermissionModeAuto, "ao-auto"},
-		{ports.PermissionModeBypassPermissions, "ao-bypass"},
+		{ports.PermissionModeDefault, "build"},
+		{ports.PermissionModeAcceptEdits, "build"},
+		{ports.PermissionModeAuto, "build"},
+		{ports.PermissionModeBypassPermissions, "build"},
 	} {
 		if got := sessionMode(test.mode); got != test.want {
 			t.Errorf("sessionMode(%q) = %q, want %q", test.mode, got, test.want)
@@ -243,7 +249,7 @@ func TestApprovalModesSelectV2AgentsAndPermissionReplies(t *testing.T) {
 		{ports.PermissionModeAcceptEdits, &edit, true},
 		{ports.PermissionModeAcceptEdits, &execute, false},
 		{ports.PermissionModeAuto, &execute, true},
-		{ports.PermissionModeBypassPermissions, &execute, false},
+		{ports.PermissionModeBypassPermissions, &execute, true},
 	} {
 		id, handled := permissionPolicy(test.mode, acpsdk.RequestPermissionRequest{
 			ToolCall: acpsdk.ToolCallUpdate{Kind: test.kind}, Options: options,

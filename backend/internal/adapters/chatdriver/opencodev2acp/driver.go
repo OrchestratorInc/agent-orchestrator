@@ -47,20 +47,11 @@ func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[str
 	return []string{"acp"}, map[string]string{"OPENCODE_CONFIG_CONTENT": content}, nil
 }
 
-// OpenCode 2 exposes its primary agents as ACP session modes. AO injects one
-// agent per approval posture, so changing approval mode also changes the
-// provider policy that is active for the next turn.
-func sessionMode(permission ports.PermissionMode) string {
-	switch ports.NormalizePermissionMode(permission) {
-	case ports.PermissionModeAcceptEdits:
-		return "ao-accept-edits"
-	case ports.PermissionModeAuto:
-		return "ao-auto"
-	case ports.PermissionModeBypassPermissions:
-		return "ao-bypass"
-	default:
-		return "ao-default"
-	}
+// OpenCode 2's ACP bridge advertises the built-in modes before custom agents
+// have necessarily loaded. Keep the provider mode stable and implement AO's
+// approval postures through permissionPolicy.
+func sessionMode(ports.PermissionMode) string {
+	return "build"
 }
 
 func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
@@ -100,8 +91,9 @@ func permissionPolicy(
 ) (acpsdk.PermissionOptionId, bool) {
 	mode = ports.NormalizePermissionMode(mode)
 	kind := params.ToolCall.Kind
-	if mode != ports.PermissionModeAuto && (mode != ports.PermissionModeAcceptEdits || kind == nil ||
-		(*kind != acpsdk.ToolKindEdit && *kind != acpsdk.ToolKindDelete && *kind != acpsdk.ToolKindMove)) {
+	if mode != ports.PermissionModeAuto && mode != ports.PermissionModeBypassPermissions &&
+		(mode != ports.PermissionModeAcceptEdits || kind == nil ||
+			(*kind != acpsdk.ToolKindEdit && *kind != acpsdk.ToolKindDelete && *kind != acpsdk.ToolKindMove)) {
 		return "", false
 	}
 	for _, option := range params.Options {
