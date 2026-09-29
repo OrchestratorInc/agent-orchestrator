@@ -254,16 +254,16 @@ function compactEmoji(children: ReactNode): ReactNode {
 
 function MarkdownLink({ href, children }: { href?: string; children?: ReactNode }) {
 	const { open: onLinkOpen, openFile: onFileOpen, remoteHost, workspacePaths } = useContext(OpenChatLink);
-	if (remoteHost && href && (isHostLocalWebLink(href) || isPotentialWorkspaceFileLink(href))) {
+	const filePath = href && onFileOpen
+		? workspaceFilePath(href, workspacePaths) ?? findWorkspaceFilePath(href, workspacePaths) ?? explicitWorkspaceFilePath(href)
+		: undefined;
+	const openInFiles = filePath && !/\.html?$/i.test(filePath) ? filePath : undefined;
+	if (remoteHost && href && (isHostLocalWebLink(href) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
 		return <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>
 			{children}<span className="sr-only"> (remote preview unavailable)</span>
 		</span>;
 	}
-	const filePath = href && onFileOpen
-		? workspaceFilePath(href, workspacePaths) ?? findWorkspaceFilePath(href, workspacePaths) ?? explicitWorkspaceFilePath(href)
-		: undefined;
-	const browserLink = href ? isWebLink(href) || !!filePath || isPotentialWorkspaceFileLink(href) : false;
-	const openInFiles = filePath && !/\.html?$/i.test(filePath) ? filePath : undefined;
+	const browserLink = href ? isWebLink(href) || (!remoteHost && (!!filePath || isPotentialWorkspaceFileLink(href))) : false;
 	return (
 		<AppLink
 			href={href}

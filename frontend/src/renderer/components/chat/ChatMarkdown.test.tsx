@@ -247,6 +247,21 @@ describe("ChatMarkdown", () => {
 		openExternal.mockRestore();
 	});
 
+	it("opens remote source links in Files without opening the client browser", async () => {
+		const onFileOpen = vi.fn();
+		const onLinkOpen = vi.fn();
+		render(<ChatLinkProvider onFileOpen={onFileOpen} onLinkOpen={onLinkOpen} remoteHost workspacePaths={["src/App.tsx", "reports/index.html"]}>
+			<ChatMarkdown text="[source](src/App.tsx) and [new](src/new.ts#L8) and [preview](reports/index.html)" />
+		</ChatLinkProvider>);
+
+		await userEvent.click(screen.getByRole("link", { name: "source" }));
+		await userEvent.click(screen.getByRole("link", { name: "new" }));
+		expect(onFileOpen).toHaveBeenNthCalledWith(1, "src/App.tsx");
+		expect(onFileOpen).toHaveBeenNthCalledWith(2, "src/new.ts");
+		expect(screen.getByText("preview").closest("a")).toBeNull();
+		expect(onLinkOpen).not.toHaveBeenCalled();
+	});
+
 	it("blocks remote host-local links inside Mermaid diagrams", async () => {
 		vi.mocked(renderMermaidDiagram).mockResolvedValueOnce('<svg xmlns="http://www.w3.org/2000/svg"><a href="http://localhost:5173"><text>preview</text></a></svg>');
 		const onLinkOpen = vi.fn();
