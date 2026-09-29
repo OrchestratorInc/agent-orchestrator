@@ -186,21 +186,27 @@ func TestAuthStatusScopesEvidenceToTheDeepSeekRecord(t *testing.T) {
 		want    ports.AgentAuthStatus
 		wantErr bool
 	}{
+		// The fixtures below are the layout a current DeepSeek Harness writes and
+		// reads: `version: 1` with credentials under `refs:`, mapping each
+		// addressable name straight to its secret. A document without `version`
+		// is the pre-release flat layout, which Harness now refuses to load
+		// ("uses the pre-release flat layout. Add `version: 1` …"), so it is
+		// covered as a rejected document rather than as evidence.
 		{
-			name: "deepseek record with a nested secret",
+			name: "deepseek ref carries the key",
 			store: `
-records:
-  DEEPSEEK_API_KEY:
-    kind: secret
-    payload:
-      secret: sk-live
+version: 1
+refs:
+  DEEPSEEK_API_KEY: sk-live
 `,
 			want: ports.AgentAuthStatusAuthorized,
 		},
 		{
-			name: "deepseek record with a scalar secret",
+			name: "deepseek ref alongside another provider",
 			store: `
-records:
+version: 1
+refs:
+  OPENCODE_GO_API_KEY: sk-other
   DEEPSEEK_API_KEY: sk-live
 `,
 			want: ports.AgentAuthStatusAuthorized,
@@ -208,24 +214,44 @@ records:
 		{
 			name: "only another provider is populated",
 			store: `
-records:
-  OPENCODE_GO_API_KEY:
-    kind: secret
-    payload:
-      secret: sk-other
+version: 1
+refs:
+  OPENCODE_GO_API_KEY: sk-other
 `,
 			want: ports.AgentAuthStatusUnknown,
 		},
 		{
-			name: "deepseek record present but empty",
+			name: "deepseek ref present but empty",
 			store: `
-records:
-  DEEPSEEK_API_KEY:
-    kind: secret
-    payload:
-      secret: ""
+version: 1
+refs:
+  DEEPSEEK_API_KEY: ""
 `,
 			want: ports.AgentAuthStatusUnknown,
+		},
+		{
+			// A scoped api-key record is a valid store that carries no
+			// DEEPSEEK_API_KEY ref. AO cannot tell which route it serves, so it
+			// stays unknown rather than claiming authorization it has not seen.
+			name: "scoped record without a deepseek ref",
+			store: `
+version: 1
+records:
+  deepseek/official:
+    kind: api-key
+    key: sk-live
+`,
+			want: ports.AgentAuthStatusUnknown,
+		},
+		{
+			// The pre-release flat layout. AO reads it leniently, which is
+			// harmless, but Harness itself rejects the document outright, so a
+			// store in this shape is not a working install.
+			name: "pre-release flat layout",
+			store: `
+DEEPSEEK_API_KEY: sk-live
+`,
+			want: ports.AgentAuthStatusAuthorized,
 		},
 		{
 			name:  "malformed store is reported",
@@ -262,7 +288,7 @@ func TestAuthStatusHonoursDSHHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("DSH_HOME", home)
 	if err := os.WriteFile(filepath.Join(home, ".credentials.yaml"),
-		[]byte("records:\n  DEEPSEEK_API_KEY:\n    payload:\n      secret: sk-live\n"), 0o600); err != nil {
+		[]byte("version: 1\nrefs:\n  DEEPSEEK_API_KEY: sk-live\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	p := &Plugin{resolvedBinary: "dsh"}

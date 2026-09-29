@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -148,6 +149,47 @@ func TestLiveLaunchCommandIsAcceptedByTheBinary(t *testing.T) {
 	for _, trap := range []string{"does not exist", "a task is required"} {
 		if strings.Contains(out, trap) {
 			t.Fatalf("the launch argv hit %q: %s (err %v)", trap, out, runErr)
+		}
+	}
+}
+
+// TestLiveCredentialStoreLayoutIsAccepted pins the credential-store layout
+// AuthStatus reads. It writes the document AO treats as evidence into a private
+// DSH_HOME and asserts the real Harness loads it: a store AO calls authorized
+// but Harness refuses is a false ready badge.
+//
+// The key is not a real one, so the run still fails — but it fails at the
+// provider ("Authentication Fails"), which only happens once the document has
+// parsed and the key has been read out of it.
+func TestLiveCredentialStoreLayoutIsAccepted(t *testing.T) {
+	binary := liveBinary(t)
+	home := t.TempDir()
+	store := filepath.Join(home, ".credentials.yaml")
+	if err := os.WriteFile(store, []byte("version: 1\nrefs:\n  DEEPSEEK_API_KEY: sk-not-a-real-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DSH_HOME", home)
+	t.Setenv(credentialsPathEnv, store)
+	t.Setenv(deepseekCredentialKey, "")
+
+	// AO reads the document as authorization evidence.
+	p := &Plugin{resolvedBinary: binary}
+	status, err := p.AuthStatus(context.Background())
+	if err != nil {
+		t.Fatalf("auth status: %v", err)
+	}
+	if status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("status = %q, want authorized for the version-1 refs layout", status)
+	}
+
+	// Harness loads the same document rather than rejecting it.
+	out, _, timedOut := runLive(t, time.Minute, binary, "--profile", headlessProfile, "print ok")
+	if timedOut {
+		t.Fatalf("run did not finish; output: %s", out)
+	}
+	for _, rejection := range []string{"pre-release flat layout", "credentials-local:", "MISSING_CREDENTIAL"} {
+		if strings.Contains(out, rejection) {
+			t.Fatalf("Harness rejected a store AO reports as authorized (%q): %s", rejection, out)
 		}
 	}
 }

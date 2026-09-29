@@ -78,8 +78,16 @@ func deepseekCredentialsPath() (string, error) {
 }
 
 // deepseekCredentialsStatus reads the store without exposing its contents. The
-// file is YAML; a DeepSeek entry only counts as authorization evidence when it
-// carries a non-empty secret value.
+// file is YAML: a current Harness writes `version: 1` with credentials under
+// `refs:`, mapping each addressable name straight to its secret, so a
+// DEEPSEEK_API_KEY ref with a non-empty value is the evidence AO looks for. The
+// walk stays shape-tolerant on purpose — it also accepts the pre-release flat
+// layout and a nested secret — because AO only decides whether to show the
+// setup action, and Harness owns the document's real validation.
+//
+// A scoped record (`records: <scope>/<id>`) carries no such ref, so a store
+// holding only those stays unknown rather than claiming a route AO cannot
+// attribute to DeepSeek.
 func deepseekCredentialsStatus(path string) (ports.AgentAuthStatus, bool, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // path is the Harness credential store, resolved above
 	if os.IsNotExist(err) {
