@@ -188,7 +188,7 @@ process.stdin.on("end", () => {
 	}
 
 	calls := readV2HookCalls(t, capture)
-	wantEvents := []string{"session-start", "user-prompt-submit", "active", "permission-blocked", "permission-resolved", "stop"}
+	wantEvents := []string{"session-start", "active", "permission-blocked", "permission-resolved", "stop"}
 	if len(calls) != len(wantEvents) {
 		t.Fatalf("calls = %#v, want %d", calls, len(wantEvents))
 	}
@@ -206,12 +206,6 @@ process.stdin.on("end", () => {
 		if calls[i].Launch != "launch-v2-7" {
 			t.Fatalf("call %d launch env = %q", i, calls[i].Launch)
 		}
-	}
-	var prompt struct {
-		Prompt string `json:"prompt"`
-	}
-	if err := json.Unmarshal([]byte(calls[1].Input), &prompt); err != nil || prompt.Prompt != "fix the queue" {
-		t.Fatalf("prompt payload = %#v err=%v", prompt, err)
 	}
 
 	missing := exec.CommandContext(context.Background(), node, harness, modulePath, workspace, "single")
@@ -327,7 +321,6 @@ if (mode === "single") {
 } else {
   emit({ type: "session.created", data: { sessionID: "ses_native_v2" } });
   await flush();
-  await callbacks["session:prompt"]({ sessionID: "ses_native_v2", prompt: { text: "fix the queue" } });
   await callbacks["tool:execute.before"]({ sessionID: "ses_native_v2", tool: "read" });
   emit({ type: "permission.asked", data: { sessionID: "ses_native_v2", id: "per_1" } });
   await flush();

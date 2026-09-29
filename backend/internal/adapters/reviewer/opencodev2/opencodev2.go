@@ -173,8 +173,31 @@ func reviewerPermissions(taskPromptRoot string) []permissionRule {
 		"git show *",
 		"git status *",
 		"ao review submit *",
-		"printf * | gh api *",
 		"printf * | ao review submit *",
+	} {
+		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "allow"})
+	}
+	// Later rules win, so the mutating shapes below override the broad allows
+	// above; only the review-submission endpoint is re-allowed afterwards.
+	for _, resource := range []string{
+		"gh api *--method*",
+		"gh api *-X*",
+		"gh api *--input*",
+		"gh api *--field*",
+		"gh api *--raw-field*",
+		"gh api *-f *",
+		"gh api *-F *",
+		"gh api graphql*",
+		"printf * | gh api *",
+		"git diff *--output*",
+		"git log *--output*",
+		"git show *--output*",
+	} {
+		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "deny"})
+	}
+	for _, resource := range []string{
+		"gh api --method POST repos/*/pulls/*/reviews --input -",
+		"printf * | gh api --method POST repos/*/pulls/*/reviews --input -",
 	} {
 		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "allow"})
 	}

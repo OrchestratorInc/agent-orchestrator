@@ -83,10 +83,6 @@ export default {
     })()
 
     const registrations = await Promise.all([
-      context.session.hook("prompt", (input) => {
-        ensureSession(input.sessionID)
-        report("user-prompt-submit", input.sessionID, { prompt: input.prompt?.text ?? "" })
-      }),
       context.tool.hook("execute.before", (input) => {
         ensureSession(input.sessionID)
         report("active", input.sessionID, { tool_name: input.tool ?? "", tool_use_id: input.id ?? "" })

@@ -90,8 +90,21 @@ func TestReviewCommandAppliesFinalReadOnlyAgentPermissions(t *testing.T) {
 		{Action: "shell", Resource: "git show *", Effect: "allow"},
 		{Action: "shell", Resource: "git status *", Effect: "allow"},
 		{Action: "shell", Resource: "ao review submit *", Effect: "allow"},
-		{Action: "shell", Resource: "printf * | gh api *", Effect: "allow"},
 		{Action: "shell", Resource: "printf * | ao review submit *", Effect: "allow"},
+		{Action: "shell", Resource: "gh api *--method*", Effect: "deny"},
+		{Action: "shell", Resource: "gh api *-X*", Effect: "deny"},
+		{Action: "shell", Resource: "gh api *--input*", Effect: "deny"},
+		{Action: "shell", Resource: "gh api *--field*", Effect: "deny"},
+		{Action: "shell", Resource: "gh api *--raw-field*", Effect: "deny"},
+		{Action: "shell", Resource: "gh api *-f *", Effect: "deny"},
+		{Action: "shell", Resource: "gh api *-F *", Effect: "deny"},
+		{Action: "shell", Resource: "gh api graphql*", Effect: "deny"},
+		{Action: "shell", Resource: "printf * | gh api *", Effect: "deny"},
+		{Action: "shell", Resource: "git diff *--output*", Effect: "deny"},
+		{Action: "shell", Resource: "git log *--output*", Effect: "deny"},
+		{Action: "shell", Resource: "git show *--output*", Effect: "deny"},
+		{Action: "shell", Resource: "gh api --method POST repos/*/pulls/*/reviews --input -", Effect: "allow"},
+		{Action: "shell", Resource: "printf * | gh api --method POST repos/*/pulls/*/reviews --input -", Effect: "allow"},
 	}
 	if !reflect.DeepEqual(agent.Permissions, wantRules) {
 		t.Fatalf("permissions = %#v, want %#v", agent.Permissions, wantRules)
@@ -106,14 +119,15 @@ func TestReviewCommandAppliesFinalReadOnlyAgentPermissions(t *testing.T) {
 		"git show HEAD",
 		"git status --short",
 		"ao review submit --run run-1",
-		"printf '%s' '{}' | gh api --input -",
+		"gh api --method POST repos/o/r/pulls/1/reviews --input -",
+		"printf '%s' '{}' | gh api --method POST repos/o/r/pulls/1/reviews --input -",
 		"printf '%s' '{}' | ao review submit --reviews -",
 	} {
 		if permissionEffect(agent.Permissions, "shell", command) != "allow" {
 			t.Errorf("allowed shell command %q was denied", command)
 		}
 	}
-	for _, command := range []string{"git push origin main", "rm -rf /", "gh pr merge 1", "ao session kill worker-1"} {
+	for _, command := range []string{"gh api --method PUT repos/o/r/pulls/1/merge", "gh api -XPUT repos/o/r/pulls/1/merge", "gh api repos/o/r/issues/1/comments -f body=x", "printf x | gh api --method PUT repos/o/r/pulls/1/merge --input -", "git diff --output=x.txt HEAD", "git show --output=x HEAD", "git push origin main", "rm -rf /", "gh pr merge 1", "ao session kill worker-1"} {
 		if permissionEffect(agent.Permissions, "shell", command) != "deny" {
 			t.Errorf("unlisted shell command %q was allowed", command)
 		}

@@ -14,7 +14,6 @@ func TestDeriveActivityState(t *testing.T) {
 		wantOK bool
 	}{
 		{"native session startup", "session-start", domain.ActivityActive, true},
-		{"accepted prompt", "user-prompt-submit", domain.ActivityActive, true},
 		{"active work", "active", domain.ActivityActive, true},
 		{"permission blocked", "permission-blocked", domain.ActivityBlocked, true},
 		{"permission resolved", "permission-resolved", domain.ActivityActive, true},
