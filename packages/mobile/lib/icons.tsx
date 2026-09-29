@@ -35,6 +35,8 @@ import Disc from "lucide-react-native/icons/disc";
 import CloudDownload from "lucide-react-native/icons/cloud-download";
 import Pen from "lucide-react-native/icons/pen";
 import PenLine from "lucide-react-native/icons/pen-line";
+import Eye from "lucide-react-native/icons/eye";
+import EyeOff from "lucide-react-native/icons/eye-off";
 import ExternalLink from "lucide-react-native/icons/external-link";
 import FeatherGlyph from "lucide-react-native/icons/feather";
 import File from "lucide-react-native/icons/file";
@@ -149,6 +151,8 @@ export const glyphs = {
 	"download-cloud": CloudDownload,
 	"edit-2": Pen,
 	"edit-3": PenLine,
+	"eye": Eye,
+	"eye-off": EyeOff,
 	"external-link": ExternalLink,
 	"feather": FeatherGlyph,
 	"file": File,
