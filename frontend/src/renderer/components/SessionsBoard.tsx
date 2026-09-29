@@ -9,6 +9,7 @@ import {
 } from "@aoagents/product-ui";
 import { AlertTriangle, LayoutDashboard, RotateCw } from "lucide-react";
 import {
+	STANDALONE_WORKSPACE_ID,
 	type WorkspaceSession,
 	newestActiveOrchestrator,
 	orchestratorHealth,
@@ -163,7 +164,9 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			to: "/host/$hostId/project/$projectId/session/$sessionId",
 			params: { hostId, projectId: session.workspaceId, sessionId: session.id },
 		});
-		else void navigate({
+		else if (session.workspaceId === STANDALONE_WORKSPACE_ID) {
+			void navigate({ to: "/sessions/$sessionId", params: { sessionId: session.id } });
+		} else void navigate({
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: session.workspaceId, sessionId: session.id },
 		});
@@ -377,6 +380,10 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 					to: "/host/$hostId/project/$projectId/session/$sessionId",
 					params: { hostId, projectId: session.workspaceId, sessionId: session.id },
 				});
+				else if (session.workspaceId === STANDALONE_WORKSPACE_ID) {
+					void navigate({ to: "/sessions/$sessionId", params: { sessionId: session.id } });
+					return;
+				}
 				else void navigate({
 					to: "/projects/$projectId/sessions/$sessionId",
 					params: { projectId: session.workspaceId, sessionId: session.id },

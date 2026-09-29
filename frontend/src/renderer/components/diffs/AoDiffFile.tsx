@@ -97,8 +97,8 @@ export function AoDiffFile({
 	const loadDiffFiles = useCallback(
 		async (fileDiff: FileDiffMetadata) => {
 			const [before, after] = await Promise.all([
-				source.kind === "pull_request" ? fetchPRFileRevision(sessionId, source.number, source.url, detail.path, "before", hostId) : fetchWorkspaceFileRevision({ commitSha, sessionId, path: detail.path, scope, side: "before", workspaceVersion: detail.workspaceVersion, hostId }),
-				source.kind === "pull_request" ? fetchPRFileRevision(sessionId, source.number, source.url, detail.path, "after", hostId) : fetchWorkspaceFileRevision({ commitSha, sessionId, path: detail.path, scope, side: "after", workspaceVersion: detail.workspaceVersion, hostId }),
+				source.kind === "pull_request" ? fetchPRFileRevision(sessionId, source.number, source.url, detail.path, "before", commitSha, hostId) : fetchWorkspaceFileRevision({ commitSha, sessionId, path: detail.path, scope, side: "before", workspaceVersion: detail.workspaceVersion, hostId }),
+				source.kind === "pull_request" ? fetchPRFileRevision(sessionId, source.number, source.url, detail.path, "after", commitSha, hostId) : fetchWorkspaceFileRevision({ commitSha, sessionId, path: detail.path, scope, side: "after", workspaceVersion: detail.workspaceVersion, hostId }),
 			]);
 			if (before.binary || after.binary || before.truncated || after.truncated) {
 				throw new Error(t("files.explorer.tooLarge", { size: Math.max(before.size, after.size) }));

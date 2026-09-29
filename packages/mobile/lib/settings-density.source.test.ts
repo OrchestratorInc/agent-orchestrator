@@ -8,6 +8,15 @@ const source = readFileSync(
 );
 
 describe("settings screen density", () => {
+	it("renders from the already-resolved app config without a second storage loader", () => {
+		expect(source).toMatch(/const \{ config,[^}]*reloadConfig \} = useApp\(\);/);
+		expect(source).not.toMatch(/\bloadConfig\(\)/);
+	});
+
+	it("gives the native Appearance menu enough room for System on one line", () => {
+		expect(source).toContain("<Host style={{ width: 124, height: 38 }}");
+	});
+
 	it("uses the compact sizing rhythm shared by the Workers UI", () => {
 		expect(source).toMatch(/header:\s*\{\s*height:\s*64/);
 		expect(source).toMatch(/content:\s*\{[^}]*paddingHorizontal:\s*space\.lg[^}]*gap:\s*space\.lg/s);

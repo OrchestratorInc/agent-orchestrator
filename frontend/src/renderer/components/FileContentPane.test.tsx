@@ -427,6 +427,24 @@ describe("FileContentPane", () => {
 		}));
 	});
 
+	it("reads one PR commit's file and revision when a commit is picked", async () => {
+		getMock.mockImplementation(async (path: string) => path.endsWith("/revision") ? {
+			data: { sessionId: "sess-1", path: "README.md", side: "after", revision: "after-1", size: 2000000, exists: true, binary: false, truncated: false, content: "complete commit content\n" },
+		} : {
+			data: { sessionId: "sess-1", path: "README.md", status: "modified", additions: 1, deletions: 1, size: 2000000, binary: false, deleted: false, content: "", contentTruncated: true, diff: "@@ -1 +1 @@\n-hello\n+first\n", diffTruncated: false, historical: true },
+		});
+
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} commitSha="abc123" initialMode="file" path="README.md" sessionId="sess-1" source={{ kind: "pull_request", number: 42, url: "https://example.test/acme/repo/pull/42", label: "PR #42 · files" }} split={false} />);
+
+		expect(await screen.findByText("complete commit content")).toBeInTheDocument();
+		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/pr/{prNumber}/file", expect.objectContaining({
+			params: expect.objectContaining({ query: expect.objectContaining({ commitSha: "abc123", path: "README.md" }) }),
+		}));
+		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/pr/{prNumber}/file/revision", expect.objectContaining({
+			params: expect.objectContaining({ query: expect.objectContaining({ commitSha: "abc123", path: "README.md", side: "after" }) }),
+		}));
+	});
+
 	it("loads the PR after revision for a truncated file", async () => {
 		getMock.mockImplementation(async (path: string) => path.endsWith("/revision") ? {
 			data: {

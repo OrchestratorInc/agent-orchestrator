@@ -63,6 +63,10 @@ type ChatLauncher interface {
 	DrainChatQueue(ctx context.Context, id domain.SessionID) error
 }
 
+type userAuthoredChatLauncher interface {
+	RelayUserAuthoredChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error)
+}
+
 type chatBackgroundTaskRunner interface {
 	RunBackgroundTask(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
 }
@@ -339,7 +343,7 @@ func (m *Manager) stopChatBestEffort(ctx context.Context, id domain.SessionID) {
 // receive a message, and one whose controller is gone cannot either. Busy is not
 // a refusal — the controller queues a mid-turn message, which is strictly better
 // than the terminal path's habit of dropping a nudge it cannot safely deliver.
-func (m *Manager) sendChat(ctx context.Context, id domain.SessionID, message, clientMessageID string) (bool, error) {
+func (m *Manager) sendChat(ctx context.Context, id domain.SessionID, message, clientMessageID string, authoredByUser bool) (bool, error) {
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
 		return false, fmt.Errorf("send %s: session: %w", id, err)
@@ -355,7 +359,13 @@ func (m *Manager) sendChat(ctx context.Context, id domain.SessionID, message, cl
 		return true, fmt.Errorf("send %s: %w", id, ErrTerminated)
 	}
 	var relayErr error
-	if clientMessageID != "" {
+	if authoredByUser {
+		relay, ok := m.chat.(userAuthoredChatLauncher)
+		if !ok {
+			return true, fmt.Errorf("send %s: user-authored relay is not available", id)
+		}
+		_, relayErr = relay.RelayUserAuthoredChatTurn(ctx, id, message)
+	} else if clientMessageID != "" {
 		_, relayErr = m.chat.RelayChatTurnWithID(ctx, id, message, clientMessageID)
 	} else {
 		_, relayErr = m.chat.RelayChatTurn(ctx, id, message)

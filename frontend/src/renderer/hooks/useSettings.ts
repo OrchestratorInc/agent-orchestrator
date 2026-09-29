@@ -30,9 +30,10 @@ export interface Settings {
 	cloudControlPlaneUrl: string;
 }
 
-export function useSettings(hostId?: string) {
+export function useSettings(hostId?: string, enabled = true) {
 	const query = useQuery({
 		queryKey: hostId ? ["settings", hostId] : settingsQueryKey,
+		enabled,
 		// Settings gate the cloud sign-in UI, so this query must recover from a
 		// transient startup failure. The daemon can still be booting on first
 		// fetch ("AO daemon is starting"); without a refetch the whole cloud

@@ -9,6 +9,7 @@ import { TooltipProvider } from "./ui/tooltip";
 import { useUiStore } from "../stores/ui-store";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { sessionUiKey } from "../lib/hosts";
+import type { TreeNode } from "../hooks/useSessionWorkspaceTree";
 
 const { getMock, postMock, hostAGetMock, hostBGetMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn(), hostAGetMock: vi.fn(), hostBGetMock: vi.fn() }));
 
@@ -42,18 +43,22 @@ vi.mock("../lib/host-clients", () => ({
 vi.mock("./FileTree", () => ({
 	FileTree: ({
 		changedOnly,
+		changedOnlyData,
 		forceChangedOnly = false,
 		filterText,
 		onSelectPath,
 	}: {
 		changedOnly: boolean;
+		changedOnlyData: TreeNode[];
 		forceChangedOnly?: boolean;
 		filterText: string;
 		onSelectPath: (node: { path: string; type: "file" }) => void;
 	}) => {
 		const [expanded, setExpanded] = useState(false);
+		const filePaths = (nodes: TreeNode[]): string[] => nodes.flatMap((node) => node.children ? filePaths(node.children) : [node.path]);
 		return <div>
 			<span data-testid="tree-changed-only">{String(changedOnly || forceChangedOnly)}</span>
+			<span data-testid="tree-files">{filePaths(changedOnlyData).join(" ")}</span>
 			<span data-testid="tree-filter">{filterText}</span>
 			<button onClick={() => setExpanded((current) => !current)} type="button">expand src</button>
 			{expanded ? <span>src directory expanded</span> : null}
@@ -65,7 +70,7 @@ vi.mock("./FileTree", () => ({
 }));
 
 vi.mock("./FileContentPane", () => ({
-	FileContentPane: ({ initialEditing, initialMode, path, previousPath, split }: { initialEditing?: boolean; initialMode?: string; path: string | null; previousPath?: string; split?: boolean }) => <div data-editing={String(Boolean(initialEditing))} data-mode={initialMode ?? "default"} data-previous-path={previousPath} data-split={String(Boolean(split))} data-testid="content-pane">{path ?? "none"}</div>,
+	FileContentPane: ({ commitSha, initialEditing, initialMode, path, previousPath, split }: { commitSha?: string; initialEditing?: boolean; initialMode?: string; path: string | null; previousPath?: string; split?: boolean }) => <div data-commit-sha={commitSha ?? ""} data-editing={String(Boolean(initialEditing))} data-mode={initialMode ?? "default"} data-previous-path={previousPath} data-split={String(Boolean(split))} data-testid="content-pane">{path ?? "none"}</div>,
 }));
 
 vi.mock("./diffs/WorkspaceReviewPane", () => ({
@@ -348,6 +353,55 @@ describe("SessionFileExplorer", () => {
 		await waitFor(() => expect(client.getQueryData(["session-source-files", sessionId, "pull_request", url, "head-1"])).toBeDefined());
 		client.setQueryData(sessionScmSummaryQueryKey(sessionId), [{ headSha: "head-2", number: 42, url, sourceBranch: "files", title: "Files" }]);
 		await waitFor(() => expect(client.getQueryData(["session-source-files", sessionId, "pull_request", url, "head-2"])).toBeDefined());
+	});
+
+	it("lists a PR's own commits and narrows the tree and preview to the one picked", async () => {
+		const sessionId = "sess-pr-commits";
+		const url = "https://example.test/pr/42";
+		useUiStore.getState().setFilesSource(sessionId, { kind: "pull_request", number: 42, url, label: "PR #42 · files" });
+		const readme = { path: "README.md", status: "modified", additions: 1, deletions: 1, size: 0, binary: false };
+		const notes = { path: "docs/notes.md", status: "added", additions: 2, deletions: 0, size: 0, binary: false };
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/sessions/{sessionId}/pr") {
+				return { data: { sessionId, prs: [{ headSha: "head-1", number: 42, url, sourceBranch: "files", title: "Files" }] } };
+			}
+			return {
+				data: {
+					sessionId,
+					files: [readme, notes],
+					commits: [
+						{ sha: "bbbbbbb2222222", subject: "docs: add notes", author: "Ada", timestamp: "2026-09-26T10:00:00Z", files: [notes] },
+						{ sha: "aaaaaaa1111111", subject: "docs: update readme", author: "Ada", timestamp: "2026-09-26T09:00:00Z", files: [readme] },
+					],
+					truncated: false,
+				},
+			};
+		});
+		renderWithQuery(<SessionFileExplorer sessionId={sessionId} />);
+
+		await waitFor(() => expect(screen.getByTestId("tree-files")).toHaveTextContent("docs/notes.md"));
+		expect(screen.getByTestId("tree-files")).toHaveTextContent("README.md");
+		// Opened from the keyboard: in jsdom every box sits at 0,0, so the split's
+		// resize handle claims (preventDefaults) any pointerdown, including the
+		// one on the picker.
+		const openPicker = async () => {
+			screen.getByRole("button", { name: "File source" }).focus();
+			await userEvent.keyboard("{Enter}");
+		};
+		await openPicker();
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Commits" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: /docs: update readme/ }));
+
+		expect(screen.getByRole("button", { name: "File source" })).toHaveTextContent("aaaaaaa");
+		expect(screen.getByTestId("tree-files")).toHaveTextContent("README.md");
+		expect(screen.getByTestId("tree-files")).not.toHaveTextContent("docs/notes.md");
+		expect(screen.getByTestId("content-pane")).toHaveAttribute("data-commit-sha", "aaaaaaa1111111");
+
+		// Changes goes back to the whole pull request.
+		await openPicker();
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Changes" }));
+		expect(screen.getByTestId("tree-files")).toHaveTextContent("docs/notes.md");
+		expect(screen.getByTestId("content-pane")).toHaveAttribute("data-commit-sha", "");
 	});
 
 	it("passes a renamed file's previous path to the PR detail request", async () => {

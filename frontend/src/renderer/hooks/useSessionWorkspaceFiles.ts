@@ -77,7 +77,11 @@ async function fetchSessionPRFiles(sessionId: string, number: number, sourceUrl:
 		params: { path: { sessionId, prNumber: number }, query: { sourceUrl } },
 	});
 	if (error) throw new Error(apiErrorMessage(error, errorMessage));
-	return { ...data, sections: { staged: [], unstaged: [], untracked: [], committed: data?.files ?? [] }, commits: [] } as WorkspaceFilesResponse;
+	return {
+		...data,
+		sections: { staged: [], unstaged: [], untracked: [], committed: data?.files ?? [] },
+		commits: (data?.commits ?? []).map((commit) => ({ ...commit, files: commit.files ?? [] })),
+	} as WorkspaceFilesResponse;
 }
 
 export const sessionWorkspaceFileQueryKey = (sessionId: string, path: string, scope: WorkspaceDiffScope = "combined", commitSha?: string, hostId?: string) =>
@@ -93,9 +97,9 @@ async function fetchSessionWorkspaceFile(sessionId: string, path: string, scope:
 	return data as WorkspaceFileDetail;
 }
 
-async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: string, path: string, previousPath: string, errorMessage: string, hostId?: string): Promise<WorkspaceFileDetail> {
+async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: string, path: string, previousPath: string, errorMessage: string, commitSha?: string, hostId?: string): Promise<WorkspaceFileDetail> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/pr/{prNumber}/file", {
-		params: { path: { sessionId, prNumber: number }, query: { path, previousPath, sourceUrl } },
+		params: { path: { sessionId, prNumber: number }, query: { path, previousPath, sourceUrl, commitSha } },
 	});
 	if (error) throw new Error(apiErrorMessage(error, errorMessage));
 	if (!data) throw new Error(errorMessage);
@@ -114,7 +118,7 @@ export function sessionWorkspaceFileQueryOptions(sessionId: string, path: string
 export function sessionSourceFileQueryOptions(sessionId: string, source: FilesSource, path: string, errorMessage = "Unable to load file", scope: WorkspaceDiffScope = "combined", commitSha?: string, previousPath = "", hostId?: string): UseQueryOptions<WorkspaceFileDetail> {
 	return source.kind === "workspace"
 		? sessionWorkspaceFileQueryOptions(sessionId, path, errorMessage, scope, commitSha, hostId)
-		: { queryKey: hostId ? ["session-source-file", hostId, sessionId, "pull_request", source.url, source.snapshot ?? "", path] : ["session-source-file", sessionId, "pull_request", source.url, source.snapshot ?? "", path], queryFn: () => fetchSessionPRFile(sessionId, source.number, source.url, path, previousPath, errorMessage, hostId) };
+		: { queryKey: hostId ? ["session-source-file", hostId, sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", path] : ["session-source-file", sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", path], queryFn: () => fetchSessionPRFile(sessionId, source.number, source.url, path, previousPath, errorMessage, commitSha, hostId) };
 }
 
 export const sessionWorkspaceDiffsQueryKey = (
@@ -193,9 +197,9 @@ export async function fetchWorkspaceFileRevision({
 	return data;
 }
 
-export async function fetchPRFileRevision(sessionId: string, number: number, sourceUrl: string, path: string, side: "before" | "after", hostId?: string): Promise<WorkspaceFileRevision> {
+export async function fetchPRFileRevision(sessionId: string, number: number, sourceUrl: string, path: string, side: "before" | "after", commitSha?: string, hostId?: string): Promise<WorkspaceFileRevision> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/pr/{prNumber}/file/revision", {
-		params: { path: { sessionId, prNumber: number }, query: { path, side, sourceUrl } },
+		params: { path: { sessionId, prNumber: number }, query: { path, side, sourceUrl, commitSha } },
 	});
 	if (error || !data) throw new Error(apiErrorMessage(error, "Unable to load pull request file revision"));
 	return data as WorkspaceFileRevision;
@@ -247,9 +251,9 @@ export function sessionSourceFileRevisionQueryOptions({
 	return source.kind === "workspace"
 		? sessionWorkspaceFileRevisionQueryOptions({ path, scope, sessionId, side, workspaceVersion, commitSha, hostId })
 		: {
-			queryKey: hostId ? ["session-source-file-revision", hostId, sessionId, "pull_request", source.url, source.snapshot ?? "", side, path] as const
-				: ["session-source-file-revision", sessionId, "pull_request", source.url, source.snapshot ?? "", side, path] as const,
-			queryFn: () => fetchPRFileRevision(sessionId, source.number, source.url, path, side, hostId),
+			queryKey: hostId ? ["session-source-file-revision", hostId, sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", side, path] as const
+				: ["session-source-file-revision", sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", side, path] as const,
+			queryFn: () => fetchPRFileRevision(sessionId, source.number, source.url, path, side, commitSha, hostId),
 		};
 }
 

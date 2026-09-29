@@ -41,6 +41,8 @@ import { adjustTerminalViewport } from "./terminalViewport";
 import type { RouteSession } from "./sessionRoute";
 import { iconSize, press, space, type } from "../tokens";
 import { backOr } from "../backNavigation";
+import { userFacingError } from "../connectionError";
+import { isTerminalGoneError, TERMINAL_STATUS_LABEL, terminalErrorCopy, terminalExitedCopy } from "./terminalCopy";
 
 const FONT_SIZE = 12;
 
@@ -539,12 +541,6 @@ const TERMINAL_ENHANCE_JS = `
 true;
 `;
 
-const statusLabel: Record<MuxStatus, string> = {
-	connecting: "Connecting…",
-	open: "live",
-	closed: "disconnected",
-	error: "error",
-};
 const statusColorFor = (t: Theme): Record<MuxStatus, string> => ({
 	connecting: t.amber,
 	open: t.green,
@@ -827,7 +823,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				},
 				onTerminalExited: (tid, code) => {
 					if (tid === terminalHandleId) {
-						setBanner(`Session exited (code ${code})`);
+						setBanner(terminalExitedCopy(code));
 						setNotFound(true);
 					}
 				},
@@ -835,8 +831,8 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 					if (tid !== terminalHandleId) return;
 					// A missing PTY means the session is terminated - offer Restore
 					// instead of surfacing it as a raw error banner.
-					if (/not found/i.test(msg)) setNotFound(true);
-					else setBanner(msg);
+					if (isTerminalGoneError(msg)) setNotFound(true);
+					else setBanner(terminalErrorCopy(msg));
 				},
 				onTerminalResize: (tid, cols, rows) => {
 					if (tid !== terminalHandleId) return;
@@ -1007,7 +1003,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				setBanner(REROUTED_NOTICE);
 			} else {
 				haptics.error();
-				setBanner(`Send failed: ${e instanceof Error ? e.message : String(e)}`);
+				setBanner(`Message not sent. ${userFacingError(e)}`);
 			}
 		} finally {
 			setSending(false);
@@ -1082,7 +1078,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				await interfaceSwitch.start("chat", policy);
 				setBanner(null);
 			} catch (cause) {
-				setBanner(`Switch failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+				setBanner(`Couldn't switch interface. ${userFacingError(cause)}`);
 			}
 		},
 		[interfaceSwitch],
@@ -1241,7 +1237,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				leave();
 			} catch (e) {
 				haptics.error();
-				setBanner(`Kill failed: ${e instanceof Error ? e.message : String(e)}`);
+				setBanner(`Couldn't stop the session. ${userFacingError(e)}`);
 			}
 		};
 		if (Platform.OS === "web") {
@@ -1274,7 +1270,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				if (d) muxRef.current?.resize(terminalHandleId, d.cols, d.rows, projectId);
 			}, 1200);
 		} catch (e) {
-			setBanner(`Restore failed: ${e instanceof Error ? e.message : String(e)}`);
+			setBanner(`Couldn't restore the session. ${userFacingError(e)}`);
 		} finally {
 			setRestoring(false);
 		}
@@ -1323,7 +1319,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			nestedScrollEnabled: true,
 			// Surface an Android WebView render-process crash instead of a silent black
 			// screen, so the user can tell the terminal died vs. never loaded.
-			onRenderProcessGone: () => setBanner("Terminal renderer crashed. Go back and reopen the session."),
+			onRenderProcessGone: () => setBanner("The terminal view stopped working. Go back and open the session again."),
 		}),
 		[],
 	);
@@ -1331,7 +1327,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	if (activeConfig && !isConfigured(activeConfig)) {
 		return (
 			<View style={styles.center}>
-				<Text style={styles.bannerText}>No server configured.</Text>
+				<Text style={styles.bannerText}>No desktop paired.</Text>
 			</View>
 		);
 	}
@@ -1350,7 +1346,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				{/* Status-bar chrome: capped so the toolbar keeps its height and the
 				    terminal grid keeps its rows at accessibility text sizes. */}
 				<Text style={styles.statusText} numberOfLines={1} maxFontSizeMultiplier={1.4}>
-					{statusLabel[status]}
+					{TERMINAL_STATUS_LABEL[status]}
 				</Text>
 				{size && !dead && (
 					<Text style={styles.dims} numberOfLines={1} maxFontSizeMultiplier={1.4}>
@@ -1544,7 +1540,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 							source={{ uri: preview.url, headers: activeConfig ? authHeaders(activeConfig) : undefined }}
 							originWhitelist={["*"]}
 							style={styles.browserWeb}
-							onError={() => setBanner("Preview failed to load.")}
+							onError={() => setBanner("Couldn't load the preview.")}
 						/>
 					</View>
 				)}

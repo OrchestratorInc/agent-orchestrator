@@ -74,6 +74,7 @@ import type {
 import type {
 	BrowserHistorySuggestion,
 	BrowserImportDiscovery,
+	BrowserImportDiscoveryRequest,
 	BrowserImportProgress,
 	BrowserImportRequest,
 	BrowserImportResult,
@@ -540,8 +541,10 @@ const api = {
 			ipcRenderer.invoke("browserProfiles:rename", input) as Promise<BrowserProfile>,
 		clear: (id: string) => ipcRenderer.invoke("browserProfiles:clear", { id }) as Promise<void>,
 		delete: (id: string) => ipcRenderer.invoke("browserProfiles:delete", { id }) as Promise<void>,
-		discoverImportSources: () =>
-			ipcRenderer.invoke("browserProfiles:import:discover") as Promise<BrowserImportDiscovery>,
+		discoverImportSources: (input?: BrowserImportDiscoveryRequest) =>
+			(input === undefined
+				? ipcRenderer.invoke("browserProfiles:import:discover")
+				: ipcRenderer.invoke("browserProfiles:import:discover", input)) as Promise<BrowserImportDiscovery>,
 		import: (input: BrowserImportRequest) =>
 			ipcRenderer.invoke("browserProfiles:import:start", input) as Promise<BrowserImportResult>,
 		onImportProgress: (listener: (progress: BrowserImportProgress) => void) => {
@@ -659,7 +662,7 @@ const api = {
 		signIn: () => ipcRenderer.invoke("cloud:signIn") as Promise<void>,
 		signOut: () => ipcRenderer.invoke("cloud:signOut") as Promise<void>,
 		cancelProviderAuth: () => ipcRenderer.invoke("cloud:cancelProviderAuth") as Promise<void>,
-		connectProviderAuth: (input: { baseUrl: string; orgId: string; provider: string }) =>
+		connectProviderAuth: (input: { baseUrl: string; orgId: string; provider: string; pushTarget?: "org" | "me"; persistLocalClaudeToken?: boolean }) =>
 			ipcRenderer.invoke("cloud:connectProviderAuth", input) as Promise<
 				| string
 				| { secret: string; refreshToken?: string; expiresIn?: number; refreshTokenExpiresIn?: number }

@@ -30,13 +30,14 @@ import {
 import { isConfigured, machineIdentity, type ServerConfig } from "./config";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
 import { pollIntervalFor } from "./pollInterval";
+import type { ConnectOptions } from "./connectRuntime";
 import type { Endpoint } from "./endpoints";
 import { activeHost, setActiveHost } from "./hosts";
 import { shouldReRace } from "./reRace";
 import { shouldRaceForUpgrade, UPGRADE_RACE_CHECK_MS } from "./upgradeRace";
 import { pollResultIsCurrent, sameServerConfig } from "./sameConfig";
 import { shouldShowLoading } from "./configLoading";
-import { shouldKeepPolling } from "./connectionError";
+import { isDesktopUnreachable, shouldKeepPolling, userFacingError } from "./connectionError";
 import { primeInstallId } from "./installId";
 import { collectPRs } from "./prView";
 import { ALL_PROJECTS, NO_PROJECTS_KNOWN, projectsForMachine, resolveActiveProject, retainProjects, sessionRowsForMachine, type KnownProjects } from "./projectFilter";
@@ -89,6 +90,11 @@ type AppState = {
 	// HTTP status behind `error`, or null when the server was never reached.
 	errorStatus: number | null;
 	/**
+	 * The last poll failed because nothing answered, so a reconnect can clear it.
+	 * False for rejections (401/403/429), which stop the poll, and for 5xx.
+	 */
+	unreachable: boolean;
+	/**
 	 * When the last successful poll landed, in epoch milliseconds. 0 if none has.
 	 *
 	 * Deliberately a getter rather than a value: a timestamp that changed on every
@@ -97,7 +103,11 @@ type AppState = {
 	 */
 	getLastSyncAt: () => number;
 	// actions
-	reloadConfig: () => Promise<void>;
+	/**
+	 * Races the selected machine's endpoints. Null means none passed the host
+	 * identity check, so a cached address must not receive its credential.
+	 */
+	reloadConfig: (options?: ConnectOptions) => Promise<ServerConfig | null>;
 	switchHost: (id: string) => Promise<void>;
 	refresh: () => Promise<void>;
 	setActiveProject: (id: string) => void;
@@ -232,7 +242,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// Set when the app returns to the foreground, consumed by the upgrade check.
 	const resumedRef = useRef(false);
 
-	const reloadConfig = useCallback(async () => {
+	const reloadConfig = useCallback(async (options?: ConnectOptions): Promise<ServerConfig | null> => {
 		const resolution = ++configResolution.current;
 		// Races the active machine's endpoints rather than reading one stored
 		// address, so the app lands on LAN at home and the tunnel from anywhere
@@ -243,7 +253,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		// the blank screen this flag exists to prevent.
 		try {
 			const selected = await activeHost();
-			if (resolution !== configResolution.current) return;
+			if (resolution !== configResolution.current) return null;
 			setSelectedHostName(selected?.name ?? null);
 			if ((selected?.id ?? "") !== (cfgRef.current?.hostId ?? "")) {
 				// Hide the previous machine's board and stop its in-flight polls
@@ -259,8 +269,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				setNotificationsUnread(0);
 				lastSyncAtRef.current = 0;
 			}
-			const c = await resolveActiveConfig(runtimeResolveDeps());
-			if (resolution !== configResolution.current) return;
+			const c = await resolveActiveConfig(runtimeResolveDeps(options));
+			if (resolution !== configResolution.current) return null;
 		// Keep the previous object when the endpoint has not actually changed.
 		// Resolution builds a fresh one every time, and the live conversation
 		// stream, the poll loop and the terminal mux all key on this value's
@@ -278,7 +288,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// Read alongside the config so a failure can be explained: a stored
 			// tunnel that no longer answers is a rotated hostname, not a machine
 			// that is merely out of range.
-			setActiveEndpoints(selected?.endpoints ?? []);
+			const active = await activeHost().catch(() => selected);
+			if (resolution !== configResolution.current) return null;
+			setActiveEndpoints(active?.endpoints ?? []);
+			return next;
 		} finally {
 			if (resolution === configResolution.current) setConfigResolved(true);
 		}
@@ -406,7 +419,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		} catch (e) {
 			if (!pollResultIsCurrent(c, cfgRef.current)) return false;
 			lastTickOkRef.current = false;
-			const msg = e instanceof Error ? e.message : "Failed to load";
+			const msg = userFacingError(e, "Failed to load");
 			setError(msg);
 			// Keep the HTTP status alongside the raw message so screens can render
 			// human copy via describeConnectionFailure instead of surfacing strings
@@ -645,6 +658,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			loading,
 			error,
 			errorStatus,
+			unreachable: isDesktopUnreachable({ connection, error, errorStatus }),
 			getLastSyncAt,
 			reloadConfig,
 			switchHost,

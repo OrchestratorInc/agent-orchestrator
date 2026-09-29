@@ -1382,6 +1382,7 @@ describe("BrowserPanel", () => {
 			params: { path: { sessionId: "sess-1" } },
 			body: {
 				message: expect.stringContaining("Make this button blue."),
+				userAuthored: true,
 			},
 		});
 		const body = postMock.mock.calls[0][1].body as { message: string };

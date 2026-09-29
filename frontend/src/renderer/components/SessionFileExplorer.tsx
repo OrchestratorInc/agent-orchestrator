@@ -84,10 +84,12 @@ export function SessionFileExplorer({
 	const [previewRequest, setPreviewRequest] = useState<(FileOpenOptions & { key: number }) | null>(null);
 	const [sourceNotice, setSourceNotice] = useState("");
 	const [reviewMenu, setReviewMenu] = useState<ReviewSourceMenu | null>(null);
+	// Keyed by PR URL so a commit picked in one PR never applies to another.
+	const [selectedPRCommit, setSelectedPRCommit] = useState<{ url: string; sha: string } | null>(null);
 	const filesTopbarHost = useFilesTopbarHost();
 	const [treeOpen, setTreeOpen] = useState(true);
 	const uiKey = sessionUiKey(sessionId, hostId);
-	const scmQuery = useSessionScmSummary(sessionId, hostId);
+	const scmQuery = useSessionScmSummary(sessionId, true, undefined, false, hostId);
 	const queryClient = useQueryClient();
 	const connectionState = useWorkspaceFileConnectionState(sessionId, hostId);
 
@@ -106,9 +108,16 @@ export function SessionFileExplorer({
 		...sessionSourceFilesQueryOptions(sessionId, querySource, t("files.error.loadWorkspace"), hostId),
 		refetchInterval: (query) => workspaceFilesRefetchInterval(connectionState, Boolean(query.state.data?.degraded)),
 	});
+	// A PR's own commits (the Workspace's live in its Changes review). Picking one
+	// narrows the tree and the preview to that commit.
+	const prCommits = source.kind === "pull_request" ? filesQuery.data?.commits ?? [] : [];
+	const prCommit = source.kind === "pull_request" && selectedPRCommit?.url === source.url
+		? prCommits.find((commit) => commit.sha === selectedPRCommit.sha)
+		: undefined;
+	const sourceFiles = prCommit?.files ?? filesQuery.data?.files;
 	const changedOnlyData = useMemo(
-		() => (filesQuery.data ? buildChangedOnlyTree(filesQuery.data.files) : []),
-		[filesQuery.data],
+		() => (sourceFiles ? buildChangedOnlyTree(sourceFiles) : []),
+		[sourceFiles],
 	);
 	const hasChanges = filesQuery.data?.files.some((file) => file.status !== "unmodified") ?? false;
 	const showChanges = source.kind === "workspace" && changedOnly && (!filesQuery.data || hasChanges);
@@ -120,6 +129,7 @@ export function SessionFileExplorer({
 		setSelectedPath(null);
 		setFilter("");
 		setSourceNotice("");
+		setSelectedPRCommit(null);
 	}, [uiKey]);
 
 	useEffect(() => {
@@ -156,21 +166,37 @@ export function SessionFileExplorer({
 		setFilesChangedOnly(uiKey, false);
 	};
 	const treeSelectedPath = selectedPath;
-	const selectedPreviousPath = filesQuery.data?.files.find((file) => file.path === selectedPath)?.previousPath;
+	const selectedPreviousPath = sourceFiles?.find((file) => file.path === selectedPath)?.previousPath;
 	const sourceValue = source.kind === "workspace" ? "workspace" : source.url;
 	const sourceOptions: { value: string; label: string }[] = [
 		{ value: "workspace", label: t("files.explorer.workspaceSource") },
 		...(scmQuery.data ?? []).map((pr) => ({ value: pr.url, label: `PR #${pr.number} · ${pr.sourceBranch || pr.title}` })),
 	];
+	const selectPRCommit = (sha: string | null) => {
+		setPreviewRequest(null);
+		setSelectedPath(null);
+		setSelectedPRCommit(sha && source.kind === "pull_request" ? { url: source.url, sha } : null);
+	};
+	// A PR's menu mirrors the Workspace review's: Changes (the whole PR) on top,
+	// then its commits. Staged/unstaged scopes are local-only, so a PR has none.
+	const prSourceMenu: ReviewSourceMenu | null = prCommits.length > 0
+		? {
+			label: prCommit ? prCommit.sha.slice(0, 7) : t("files.reviewChanges"),
+			scopes: [{ key: "combined", label: t("files.reviewChanges"), selected: !prCommit, select: () => selectPRCommit(null) }],
+			commits: prCommits.map((commit) => ({ sha: commit.sha, subject: commit.subject, timestamp: commit.timestamp, selected: commit.sha === prCommit?.sha, select: () => selectPRCommit(commit.sha) })),
+		}
+		: null;
+	const sourceMenu = source.kind === "pull_request" ? prSourceMenu : reviewMenu;
 	// With no review scopes or commits (nothing changed) and no PR to switch to,
 	// the picker's only entry is the already-selected Workspace, so it is hidden
 	// until there is something to choose.
-	const showSourcePicker = reviewMenu !== null || source.kind !== "workspace" || sourceOptions.length > 1;
+	const showSourcePicker = sourceMenu !== null || source.kind !== "workspace" || sourceOptions.length > 1;
 	const currentSourceLabel = sourceOptions.find((option) => option.value === sourceValue)?.label;
 	const selectSource = (value: string) => {
 		setSourceNotice("");
 		setPreviewRequest(null);
 		setSelectedPath(null);
+		setSelectedPRCommit(null);
 		if (value === "workspace") {
 			setFilesSource(uiKey, WORKSPACE_SOURCE);
 			return;
@@ -225,11 +251,11 @@ export function SessionFileExplorer({
 							title={currentSourceLabel}
 						>
 							<span className="min-w-0 truncate">{currentSourceLabel}</span>
-							{reviewMenu ? <span className="shrink-0 text-caption text-passive">{reviewMenu.label}</span> : null}
+							{sourceMenu ? <span className="shrink-0 text-caption text-passive">{sourceMenu.label}</span> : null}
 						</SettingsMenuTrigger>
 					</DropdownMenuTrigger>
 					<DropdownMenuContent align="start" className="w-max max-w-72">
-						{reviewMenu?.scopes.map((scope) => (
+						{sourceMenu?.scopes.map((scope) => (
 							<DropdownMenuItem className="gap-1.5" key={scope.key} onSelect={scope.select}>
 								<span className="min-w-0 truncate">{scope.label}</span>
 								<span className="ml-auto flex size-4 shrink-0 items-center justify-center">
@@ -237,15 +263,15 @@ export function SessionFileExplorer({
 								</span>
 							</DropdownMenuItem>
 						))}
-						{reviewMenu && reviewMenu.scopes.length > 0 ? <DropdownMenuSeparator /> : null}
-						{reviewMenu && reviewMenu.commits.length > 0 ? (
+						{sourceMenu && sourceMenu.scopes.length > 0 ? <DropdownMenuSeparator /> : null}
+						{sourceMenu && sourceMenu.commits.length > 0 ? (
 							<DropdownMenuSub>
-								<DropdownMenuSubTrigger className={cn(reviewMenu.commits.some((commit) => commit.selected) && "text-foreground")}>
+								<DropdownMenuSubTrigger className={cn(sourceMenu.commits.some((commit) => commit.selected) && "text-foreground")}>
 									{t("files.commits")}
 								</DropdownMenuSubTrigger>
 								<DropdownMenuSubContent className="w-max max-w-[min(28rem,calc(100vw_-_2rem))]">
 									<div className="board-scrollbar flex max-h-72 flex-col gap-px overflow-y-auto pr-0.5">
-										{reviewMenu.commits.map((commit) => (
+										{sourceMenu.commits.map((commit) => (
 											<DropdownMenuItem className="gap-2" key={commit.sha} onSelect={commit.select}>
 												<span className="min-w-0 flex-1 truncate">{commit.subject}</span>
 												<span className="shrink-0 text-caption text-passive">{formatTimeTerse(commit.timestamp)}</span>
@@ -415,7 +441,7 @@ export function SessionFileExplorer({
 				<ResizablePanelGroup className="min-h-0 flex-1 border-t border-border">
 					<ResizablePanel defaultSize="74%" minSize="40%">
 						<ContentScrollArea>
-							<FileContentPane annotation={annotation} commitSha={previewRequest?.commitSha} hostId={hostId} initialEditing={previewRequest?.editing ?? false} initialMode={previewRequest?.mode} initialRequestKey={previewRequest?.key ?? 0} path={selectedPath} previousPath={selectedPreviousPath} scope={previewRequest?.scope} sessionId={sessionId} source={querySource} split={split} toolbar="compact" />
+							<FileContentPane annotation={annotation} commitSha={prCommit?.sha ?? previewRequest?.commitSha} hostId={hostId} initialEditing={previewRequest?.editing ?? false} initialMode={previewRequest?.mode} initialRequestKey={previewRequest?.key ?? 0} path={selectedPath} previousPath={selectedPreviousPath} scope={previewRequest?.scope} sessionId={sessionId} source={querySource} split={split} toolbar="compact" />
 						</ContentScrollArea>
 					</ResizablePanel>
 					{treeOpen ? (

@@ -75,6 +75,7 @@
 	"browser.annotationActive": "Anotando",
 	"browser.annotationCount_one": "{{count}} anotación",
 	"browser.annotationCount_other": "{{count}} anotaciones",
+	"browser.annotationEmptyHint": "Señala algo y di qué hay que cambiar",
 	"browser.annotationCount_many": "{{count}} anotaciones",
 	"browser.annotationDiscardAll": "Descartar todo",
 	"browser.annotationDiscardAllComments": "Descartar todos los comentarios",
@@ -687,6 +688,7 @@
 	"notify.clearAll": "Borrar todo",
 	"notify.clearOne": "Borrar notificación: {{title}}",
 	"notify.clearOneShort": "Borrar notificación",
+	"notify.cloud": "Nube",
 	"notify.couldNotClearAll": "No se pudieron borrar las notificaciones",
 	"notify.couldNotClearOne": "No se pudo borrar la notificación",
 	"notify.couldNotMarkAllRead": "No se pudieron marcar las notificaciones como leídas",
@@ -699,6 +701,7 @@
 	"notify.loading": "Cargando notificaciones…",
 	"notify.loadingUnread": "Cargando notificaciones no leídas…",
 	"notify.loadingEarlier": "Cargando notificaciones anteriores…",
+	"notify.markCloudRead": "Marcar notificaciones de la nube como leídas",
 	"notify.markAllRead": "Marcar todas las notificaciones como leídas",
 	"notify.markAllReadShort": "Marcar todas como leídas",
 	"notify.markRead": "Marcar como leída",
@@ -2285,5 +2288,11 @@
 	"remote.loadSpawnOptionsFailed": "No se pudieron cargar los proyectos o agentes de este equipo.",
 	"remote.starting": "Iniciando…",
 	"remote.noSessionId": "El equipo remoto no devolvió un ID de sesión",
-	"remoteHosts.loadFailed": "No se pudieron cargar las sesiones. Reintentar"
+	"remoteHosts.loadFailed": "No se pudieron cargar las sesiones. Reintentar",
+	"standalone.archive.heading_one": "{{count}} sesión archivada",
+	"standalone.archive.heading_many": "{{count}} sesiones archivadas",
+	"standalone.archive.heading_other": "{{count}} sesiones archivadas",
+	"standalone.archive.newAgent": "Nuevo agente",
+	"standalone.archive.empty.title": "No hay agentes independientes archivados",
+	"standalone.archive.empty.body": "Los agentes independientes que archives desde el Bloc de notas aparecerán aquí. Los agentes independientes activos permanecen en la lista del Bloc de notas."
 }

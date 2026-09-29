@@ -58,6 +58,7 @@ const (
 	TargetCline      Target = "cline"
 	TargetGoose      Target = "goose"
 	TargetQwen       Target = "qwen"
+	TargetGemini     Target = "gemini"
 	TargetContinue   Target = "continue"
 	TargetDevin      Target = "devin"
 	TargetKiro       Target = "kiro"
@@ -69,7 +70,9 @@ const (
 	TargetKimchi     Target = "kimchi"
 	TargetPrimeAgent Target = "prime-agent"
 	TargetOMP        Target = "omp"
+	TargetFX         Target = "fx"
 	TargetUnreal     Target = "unreal-agent"
+	TargetMiMoCode   Target = "mimo-code"
 	// TargetCloudflared is the optional connector that makes a paired phone
 	// reachable from outside the local network.
 	TargetCloudflared Target = "cloudflared"
@@ -79,10 +82,10 @@ const (
 var agentTargets = []Target{
 	TargetClaudeCode, TargetCodex, TargetCursor, TargetOpencode, TargetAider,
 	TargetCopilot, TargetGrok, TargetKimi, TargetPi, TargetAmp, TargetAuggie,
-	TargetDroid, TargetCrush, TargetCline, TargetGoose, TargetQwen,
+	TargetDroid, TargetCrush, TargetCline, TargetGoose, TargetQwen, TargetGemini,
 	TargetContinue, TargetDevin, TargetKiro, TargetKilocode, TargetVibe,
 	TargetMuse, TargetAgy, TargetAutohand, TargetKimchi, TargetPrimeAgent,
-	TargetOMP, TargetUnreal,
+	TargetOMP, TargetFX, TargetUnreal, TargetMiMoCode,
 }
 
 var agentTargetSet = func() map[Target]bool {
@@ -245,7 +248,7 @@ var devinInstalledLine = regexp.MustCompile(`Installed devin v\S+ to [^\r\n]+/de
 
 // Job is the tracked state of one install run for a Target.
 type Job struct {
-	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,unreal-agent,cloudflared" description:"Fixed install target this job ran (or is running) for."`
+	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,mimo-code,cloudflared" description:"Fixed install target this job ran (or is running) for."`
 	Status              Status `json:"status" enum:"idle,running,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job."`
 	Method              string `json:"method,omitempty" description:"Server-owned installation method selected for this harness job."`
 	Command             string `json:"command,omitempty" description:"Human-readable install command, e.g. \"brew install tmux\", for display even before/without output."`
@@ -290,6 +293,7 @@ type Service struct {
 	stopping          bool
 	workers           sync.WaitGroup
 	droidGate         sync.RWMutex
+	fxGate            sync.RWMutex
 
 	executables         ports.ExecutableFinder
 	commands            ports.CommandRunner
@@ -531,31 +535,35 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 	if !IsAgentTarget(target) {
 		return Job{}, fmt.Errorf("systeminstall: unknown harness target %q", target)
 	}
-	var releaseDroid func()
-	if target == TargetDroid {
+	var releaseHarness func()
+	if target == TargetDroid || target == TargetFX {
+		gate := &s.droidGate
+		if target == TargetFX {
+			gate = &s.fxGate
+		}
 		s.mu.Lock()
 		if current, ok := s.jobs[target]; ok && activeStatus(current.Status) {
 			s.mu.Unlock()
 			return Job{}, ErrInstallActive
 		}
 		s.mu.Unlock()
-		if !s.droidGate.TryLock() {
-			return Job{}, fmt.Errorf("%w: a Droid session is starting", ErrHarnessActive)
+		if !gate.TryLock() {
+			return Job{}, fmt.Errorf("%w: a %s session is starting", ErrHarnessActive, target)
 		}
-		releaseDroid = s.droidGate.Unlock
+		releaseHarness = gate.Unlock
 		defer func() {
-			if releaseDroid != nil {
-				releaseDroid()
+			if releaseHarness != nil {
+				releaseHarness()
 			}
 		}()
 		if s.sessions != nil {
 			sessions, err := s.sessions.ListAllSessions(ctx)
 			if err != nil {
-				return Job{}, fmt.Errorf("systeminstall: list sessions before droid install: %w", err)
+				return Job{}, fmt.Errorf("systeminstall: list sessions before %s install: %w", target, err)
 			}
 			for _, session := range sessions {
-				if session.Harness == domain.HarnessDroid && !session.IsTerminated {
-					return Job{}, fmt.Errorf("%w: end Droid session %s before installing or reinstalling Droid", ErrHarnessActive, session.ID)
+				if session.Harness == domain.AgentHarness(target) && !session.IsTerminated {
+					return Job{}, fmt.Errorf("%w: end %s session %s before installing or reinstalling %s", ErrHarnessActive, target, session.ID, target)
 				}
 			}
 		}
@@ -619,8 +627,8 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		s.finishAgentJob(job, StatusInterrupted, "", "daemon shutdown interrupted the install", "")
 		return initial, nil
 	}
-	workerRelease := releaseDroid
-	releaseDroid = nil
+	workerRelease := releaseHarness
+	releaseHarness = nil
 	go func() { //nolint:gosec // bounded daemon-owned worker intentionally outlives the request.
 		defer s.workers.Done()
 		if workerRelease != nil {
@@ -631,16 +639,22 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 	return initial, nil
 }
 
-// TryBeginHarnessUse prevents a Droid session launch from racing replacement
-// of the Droid executable. The returned release must be called after launch.
+// TryBeginHarnessUse prevents Droid and fx session launches from racing
+// replacement of their executables. The returned release must be called after launch.
 func (s *Service) TryBeginHarnessUse(harness domain.AgentHarness) (func(), bool) {
-	if harness != domain.HarnessDroid {
+	var gate *sync.RWMutex
+	switch harness {
+	case domain.HarnessDroid:
+		gate = &s.droidGate
+	case domain.HarnessFX:
+		gate = &s.fxGate
+	default:
 		return func() {}, true
 	}
-	if !s.droidGate.TryRLock() {
+	if !gate.TryRLock() {
 		return nil, false
 	}
-	return s.droidGate.RUnlock, true
+	return gate.RUnlock, true
 }
 
 // Status returns the current or last known Job for target. A target that has
@@ -1294,7 +1308,7 @@ func (p requestPlanner) planNPM(target Target, pkg string) Plan {
 
 func minimumNodeVersionForTarget(target Target) [3]int {
 	switch target {
-	case TargetAuggie, TargetDroid:
+	case TargetAuggie, TargetDroid, TargetGemini:
 		return [3]int{20, 0, 0}
 	case TargetClaudeCode, TargetQwen, TargetAutohand:
 		return [3]int{22, 0, 0}

@@ -60,11 +60,12 @@ type Store interface {
 	) (domain.PullRequest, error)
 	ClaimPullRequestRecord(context.Context, string, string, domain.PullRequest) (domain.PullRequest, error)
 	GitHubInstallationForRepository(ctx context.Context, orgID, repository string) (installationID, repositoryID int64, err error)
-	UpdatePullRequestObservation(
-		ctx context.Context,
-		orgID, pullRequestID string,
-		observation domain.PullRequestObservation,
-	) (domain.PullRequest, error)
+	PullRequestByGitHubReference(ctx context.Context, orgID string, repositoryID int64, number int) (domain.PullRequest, error)
+	PullRequestByGitHubHead(ctx context.Context, orgID string, repositoryID int64, headSHA string) (domain.PullRequest, error)
+	PullRequestsByGitHubRepository(ctx context.Context, orgID string, repositoryID int64) ([]domain.PullRequest, error)
+	RecordPullRequestOpened(ctx context.Context, orgID string, pr domain.PullRequest, deliveryID string) error
+	ApplyPullRequestSnapshot(ctx context.Context, orgID, pullRequestID string, snapshot domain.PullRequestSnapshot, refresh domain.PullRequestRefreshContext) (domain.PullRequestTransition, error)
+	SchedulePullRequestRefresh(ctx context.Context, orgID, pullRequestID string, reason domain.PullRequestRefreshReason, dueAt time.Time, message string) error
 	CreateReviewRun(ctx context.Context, orgID, pullRequestID, reviewSessionID, targetSHA string) (domain.ReviewRun, bool, error)
 	OpenReviewTerminal(ctx context.Context, orgID, sessionID, reviewRunID, prompt string) error
 	CloseReviewTerminal(ctx context.Context, orgID, sessionID, reviewRunID string) error
@@ -89,19 +90,37 @@ type CheckoutGrant struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
+// MergePullRequest uses the installation's repository-scoped write token.
+func (s *Service) MergePullRequest(ctx context.Context, orgID, repository string, number int, expectedHeadSHA string) error {
+	installationID, repositoryID, err := s.store.GitHubInstallationForRepository(ctx, orgID, repository)
+	if err != nil {
+		return err
+	}
+	owner, repo, ok := strings.Cut(repository, "/")
+	if !ok || owner == "" || repo == "" {
+		return postgres.ErrInvalid
+	}
+	access, err := s.client.repositoryWriteToken(ctx, installationID, repositoryID)
+	if err != nil {
+		return err
+	}
+	return s.client.MergePullRequest(ctx, access.Token, owner, repo, number, expectedHeadSHA)
+}
+
 type Service struct {
-	store         Store
-	client        *Client
-	stateKey      []byte
-	webhookSecret string
-	installTTL    time.Duration
-	logger        *slog.Logger
-	workerID      string
-	credentialKey []byte
-	userTokenMu   sync.Mutex
-	checkMu       sync.Mutex
-	checkAt       time.Time
-	checkErr      error
+	store                    Store
+	client                   *Client
+	stateKey                 []byte
+	webhookSecret            string
+	installTTL               time.Duration
+	logger                   *slog.Logger
+	workerID                 string
+	credentialKey            []byte
+	userTokenMu              sync.Mutex
+	checkMu                  sync.Mutex
+	checkAt                  time.Time
+	checkErr                 error
+	refreshPullRequestStatus func(context.Context, domain.PullRequestRef, domain.PullRequestRefreshContext) (domain.PullRequest, error)
 }
 
 func (s *Service) Check(ctx context.Context) error {
@@ -888,6 +907,9 @@ func (s *Service) processWebhook(
 		return err
 	}
 	switch delivery.Event {
+	case "pull_request", "check_suite", "check_run", "pull_request_review",
+		"pull_request_review_comment", "pull_request_review_thread", "status", "push":
+		return s.processSCMWebhook(ctx, orgID, delivery)
 	case "installation":
 		action := "unsuspend"
 		providerInstallation, err := s.client.GetInstallation(

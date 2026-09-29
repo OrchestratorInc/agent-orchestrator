@@ -216,8 +216,11 @@ export const SessionInspector = memo(function SessionInspector({
 		session ? Boolean(state.inspectorSessions[session.id]?.browserUnseen) : false,
 	);
 	const inspectorQueryClient = useQueryClient();
-	const workspaceFilesChangedCount = useSessionWorkspaceFilesChangedCount(onlyBrowser ? undefined : session?.id, hostId);
-	const workspaceData = session ? inspectorQueryClient.getQueryData<{ files?: unknown[] }>(sessionWorkspaceFilesQueryKey(session.id, hostId)) : undefined;
+	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
+		onlyBrowser || session?.cloud ? undefined : session?.id,
+		hostId,
+	);
+	const localWorkspaceData = session ? inspectorQueryClient.getQueryData<{ files?: unknown[] }>(sessionWorkspaceFilesQueryKey(session.id, hostId)) : undefined;
 	const { client: cloudCpClient, ready: cloudReady, baseUrl: cloudBaseUrl } = useCloudCp();
 	const cloudOrgId = session?.cloud?.orgId;
 	const cloudReview = useQuery({
@@ -227,8 +230,8 @@ export const SessionInspector = memo(function SessionInspector({
 		queryFn: () => cloudCpClient.getWorkspaceReview(cloudOrgId!, session!.id),
 	});
 	const cloudFilesChangedCount = cloudReview.data?.summary.files;
-	const filesChangedCount = session?.cloud ? (cloudFilesChangedCount ? cloudFilesChangedCount : undefined) : workspaceFilesChangedCount;
-	const hasWorkspaceInventory = session?.cloud ? Boolean(cloudReview.data?.files.length) : Boolean(workspaceData?.files?.length);
+	const filesChangedCount = session?.cloud ? (cloudFilesChangedCount ? cloudFilesChangedCount : undefined) : localFilesChangedCount;
+	const hasWorkspaceInventory = session?.cloud ? Boolean(cloudReview.data?.files.length) : Boolean(localWorkspaceData?.files?.length);
 	const setView = useCallback((next: InspectorView) => {
 		setInternalView(next);
 		onViewChange?.(next);
@@ -347,7 +350,7 @@ const SummaryView = memo(function SummaryView({
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
-	const query = useSessionScmSummary(session.id, hostId);
+	const query = useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud ? session.autoInjectCI === true : false, hostId);
 	const developerMode = useUiStore((state) => state.developerMode);
 	const usageQuery = useSessionUsage(session.id, developerMode, hostId);
 	const showUsage =
@@ -389,6 +392,7 @@ const SummaryView = memo(function SummaryView({
 								pr={pr}
 								hostId={hostId}
 								sessionId={session.id}
+								cloudOrgId={session.cloud?.orgId}
 							/>
 						))
 					) : (
@@ -627,6 +631,7 @@ function AutoInjectCIPolicyControl({ session, hostId }: { session: WorkspaceSess
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const workspaceKey = hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey;
+	const { client: cloudClient } = useCloudCp();
 	const [enabled, setEnabled] = useState(session.autoInjectCI ?? true);
 	useEffect(() => {
 		setEnabled(session.autoInjectCI ?? true);
@@ -634,6 +639,10 @@ function AutoInjectCIPolicyControl({ session, hostId }: { session: WorkspaceSess
 	const save = useMutation({
 		mutationFn: async (autoInjectCI: boolean) => {
 			if (usePreviewData) return;
+			if (session.cloud) {
+				await cloudClient.setSessionAutoInjectCI(session.cloud.orgId, session.id, autoInjectCI);
+				return;
+			}
 			const { error, response } = await clientForSessionHost(hostId).PATCH("/api/v1/sessions/{sessionId}/auto-inject-ci", {
 				params: { path: { sessionId: session.id } },
 				body: { autoInjectCI },
@@ -731,12 +740,18 @@ function AutoInjectReviewPolicyControl({ session, hostId }: { session: Workspace
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const workspaceKey = hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey;
+	const { client: cloudClient } = useCloudCp();
 	const [enabled, setEnabled] = useState(session.autoInjectReview ?? true);
 	useEffect(() => {
 		setEnabled(session.autoInjectReview ?? true);
 	}, [hostId, session.id, session.autoInjectReview]);
 	const save = useMutation({
 		mutationFn: async (autoInjectReview: boolean) => {
+			if (usePreviewData) return;
+			if (session.cloud) {
+				await cloudClient.setSessionAutoInjectReview(session.cloud.orgId, session.id, autoInjectReview);
+				return;
+			}
 			const { error } = await clientForSessionHost(hostId).PATCH("/api/v1/sessions/{sessionId}/auto-inject-review", {
 				params: { path: { sessionId: session.id } },
 				body: { autoInjectReview },
@@ -1105,9 +1120,14 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 	const workspaceKey = hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey;
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const terminate = useTerminateSession();
+	const { client: cloudClient } = useCloudCp();
 	const policy = useMutation({
 		mutationFn: async (terminateOnPrMerge: boolean) => {
 			if (usePreviewData) return;
+			if (session.cloud) {
+				await cloudClient.setSessionMergePolicy(session.cloud.orgId, session.id, terminateOnPrMerge);
+				return;
+			}
 			const { error, response } = await clientForSessionHost(hostId).PATCH("/api/v1/sessions/{sessionId}/merge-policy", {
 				params: { path: { sessionId: session.id } },
 				body: { terminateOnPrMerge },
@@ -1245,12 +1265,14 @@ function updateSessionMergePolicy(
 function PRSummaryCard({
 	canOpenReviews,
 	hostId,
+	cloudOrgId,
 	onOpenReviews,
 	pr,
 	sessionId,
 }: {
 	canOpenReviews: boolean;
 	hostId?: string;
+	cloudOrgId?: string;
 	onOpenReviews: () => void;
 	pr: SessionPRSummary;
 	sessionId: string;
@@ -1258,11 +1280,16 @@ function PRSummaryCard({
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const workspaceKey = hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey;
+	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp();
 	const presentation = prCardPresentation(pr);
 	const canMerge = prCanMerge(pr) && Boolean(pr.url && pr.headSha);
 	const mergePr = useMutation({
 		mutationFn: async () => {
 			if (usePreviewData) return;
+			if (cloudOrgId) {
+				await cloudClient.mergePullRequest(cloudOrgId, sessionId, pr.number, pr.url, pr.headSha);
+				return;
+			}
 			const { error } = await clientForSessionHost(hostId).POST("/api/v1/prs/{id}/merge", {
 				params: { path: { id: String(pr.number) } },
 				body: { prUrl: pr.url, expectedHeadSha: pr.headSha },
@@ -1271,7 +1298,7 @@ function PRSummaryCard({
 		},
 		onSuccess: async () => {
 			await Promise.all([
-				queryClient.invalidateQueries({ queryKey: sessionScmSummaryQueryKey(sessionId, hostId) }),
+				queryClient.invalidateQueries({ queryKey: cloudOrgId ? ["cloud-session-scm-summary", cloudBaseUrl, cloudOrgId, sessionId] : sessionScmSummaryQueryKey(sessionId, hostId) }),
 				queryClient.invalidateQueries({ queryKey: workspaceKey }),
 			]);
 		},
@@ -1681,7 +1708,7 @@ function ReviewsSection({
 	});
 	const reviewStates = reviewsQuery.data?.reviews ?? [];
 	const autoReviewEnabled = session.autoReviewEnabled === true;
-	const scmSummary = useSessionScmSummary(session.id, hostId);
+	const scmSummary = useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud ? session.autoInjectCI === true : false, hostId);
 	const prSummaries = sessionPRDisplaySummaries(session, scmSummary.data);
 	const githubReviews = prSummaries.filter(
 		(pr) =>
