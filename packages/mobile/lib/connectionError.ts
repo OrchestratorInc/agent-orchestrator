@@ -140,7 +140,7 @@ export function describeConnectionFailure(
 		case "unreachable": {
 			// Build the address string only when we have both host and port
 			const address = target.host && target.port ? `${target.host}:${target.port}` : target.host || "";
-			const messagePrefix = address ? `Reached nothing at ${address}. ` : "Could not reach your desktop. ";
+			const messagePrefix = address ? `Reached nothing at ${address}. ` : "Couldn't reach your desktop. ";
 			return {
 				title: "Your desktop disconnected",
 				message: isTailscaleHost(target.host)
