@@ -1,4 +1,3 @@
-import * as Clipboard from "expo-clipboard";
 import { Feather } from "../../lib/icons";
 import { useLocalSearchParams, useNavigation } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -14,7 +13,6 @@ import { bridgeResult, browserCommandScript, MOBILE_BROWSER_BOOTSTRAP, parseBrow
 import { MobileBrowserRuntimeClient, type MobileBrowserCommand, type MobileBrowserCommandResult } from "../../lib/browser/mobileBrowserRuntime";
 import { inAppWebNavigation, isHttpUrl, normalizeBrowserInput, shouldAttachPreviewAuth } from "../../lib/browser/browserUrl";
 import { browserLoadEnd, browserLoadError, browserLoadStart, browserNavigationChanged, initialBrowserState, type MobileBrowserState } from "../../lib/browser/browserState";
-import { headerActionStyle, headerGlyphStyle } from "../../lib/headerAction";
 import { haptics } from "../../lib/haptics";
 import { getInstallId } from "../../lib/installId";
 import { useApp } from "../../lib/store";
@@ -95,9 +93,9 @@ export default function SessionPreviewScreen() {
 	useLayoutEffect(() => {
 		navigation.setOptions({
 			title: pageTitle,
-			headerRight: () => <Pressable accessibilityRole="button" accessibilityLabel="Reload preview" hitSlop={10} onPress={() => { haptics.tap(); if (browserSource) web.current?.reload(); else void refresh(); }} style={headerActionStyle}><Feather name="refresh-cw" size={iconSize.md} color={t.textSecondary} style={headerGlyphStyle} /></Pressable>,
+			headerRight: undefined,
 		});
-	}, [browserSource, navigation, pageTitle, refresh, t.textSecondary]);
+	}, [navigation, pageTitle]);
 
 	const navigateTo = useCallback((value: string) => {
 		if (!config) return;
@@ -216,10 +214,6 @@ export default function SessionPreviewScreen() {
 		if (browserSource) web.current?.reload();
 		else void refresh();
 	}, [browserSource, refresh]);
-	const copyCurrentUrl = useCallback(() => {
-		if (!currentUrl) return;
-		void Clipboard.setStringAsync(currentUrl).then(() => { haptics.success(); showToast("URL copied"); }, () => { haptics.error(); showToast("Couldn't copy URL"); });
-	}, [currentUrl, showToast]);
 	const openCurrentUrl = useCallback(() => {
 		if (!isHttpUrl(currentUrl)) return;
 		void Linking.openURL(currentUrl).catch(() => { haptics.error(); showToast("Couldn't open URL"); });
@@ -323,7 +317,6 @@ export default function SessionPreviewScreen() {
 				onReload={() => { haptics.tap(); if (browserSource) web.current?.reload(); else void refresh(); }}
 				onStop={() => { haptics.tap(); web.current?.stopLoading(); setBrowserState((current) => ({ ...current, loading: false })); }}
 				onSubmitUrl={navigateTo}
-				onCopy={copyCurrentUrl}
 				onOpenExternal={openCurrentUrl}
 				onShare={shareCurrentUrl}
 			/>

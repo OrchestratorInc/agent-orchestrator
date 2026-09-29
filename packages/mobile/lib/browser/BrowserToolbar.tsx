@@ -18,7 +18,6 @@ export type BrowserToolbarProps = {
 	onReload: () => void;
 	onStop: () => void;
 	onSubmitUrl: (value: string) => void;
-	onCopy: () => void;
 	onOpenExternal: () => void;
 	onShare: () => void;
 };
@@ -35,7 +34,6 @@ export function BrowserToolbar({
 	onReload,
 	onStop,
 	onSubmitUrl,
-	onCopy,
 	onOpenExternal,
 	onShare,
 }: BrowserToolbarProps) {
@@ -82,23 +80,35 @@ export function BrowserToolbar({
 						/>
 					</View>
 				) : (
-					<Pressable accessibilityRole="button" accessibilityLabel={url ? "Edit browser URL" : "Enter browser URL"} onPress={() => setEditing(true)} style={styles.location}>
-						{loading ? <ActivityIndicator size="small" color={styles.colors.accent} style={styles.locationSpinner} /> : <Feather name="globe" size={iconSize.xs} color={styles.colors.textTertiary} />}
-						<View style={styles.locationText}>
-							<Text numberOfLines={1} style={styles.title}>{title || displayBrowserUrl(url) || "Enter a URL"}</Text>
-							{url ? <Text numberOfLines={1} style={styles.url}>{displayBrowserUrl(url)}</Text> : null}
+					<View style={styles.location}>
+						<View style={styles.locationIcon}>
+							<Feather name={url.startsWith("https://") ? "lock" : "globe"} size={iconSize.xs} color={styles.colors.textTertiary} />
 						</View>
-					</Pressable>
+						<Pressable accessibilityRole="button" accessibilityLabel={url ? "Edit browser URL" : "Enter browser URL"} onPress={() => setEditing(true)} style={({ pressed }) => [styles.locationMain, pressed && styles.locationPressed]}>
+							<View style={styles.locationText}>
+								<Text numberOfLines={1} style={styles.title}>{title || displayBrowserUrl(url) || "Enter a URL"}</Text>
+								{url ? <Text numberOfLines={1} style={styles.url}>{displayBrowserUrl(url)}</Text> : null}
+							</View>
+						</Pressable>
+						<Pressable
+							accessibilityRole="button"
+							accessibilityLabel={loading ? "Stop loading" : "Reload"}
+							accessibilityState={{ disabled: !url && !loading }}
+							disabled={!url && !loading}
+							hitSlop={6}
+							onPress={loading ? onStop : onReload}
+							style={({ pressed }) => [styles.locationAction, pressed && styles.locationPressed, !url && !loading && styles.disabled]}
+						>
+							{loading ? <ActivityIndicator size="small" color={styles.colors.accent} /> : <Feather name="refresh-cw" size={iconSize.sm} color={styles.colors.textSecondary} />}
+						</Pressable>
+					</View>
 				)}
 			</View>
 			<View style={styles.controlsRow}>
 				<ToolbarButton label="Back" icon="chevron-left" disabled={!canGoBack} onPress={onBack} />
 				<ToolbarButton label="Forward" icon="chevron-right" disabled={!canGoForward} onPress={onForward} />
-				<ToolbarButton label={loading ? "Stop loading" : "Reload"} icon={loading ? "x" : "refresh-cw"} disabled={!url && !loading} onPress={loading ? onStop : onReload} />
-				<View style={styles.controlDivider} />
-				<ToolbarButton label="Copy URL" icon="copy" disabled={!url} onPress={onCopy} />
 				<ToolbarButton label="Open externally" icon="external-link" disabled={!canOpenExternal} onPress={onOpenExternal} />
-				<ToolbarButton label="Share URL" icon="link" disabled={!url} onPress={onShare} />
+				<ToolbarButton label="Share URL" icon="share" disabled={!url} onPress={onShare} />
 			</View>
 		</View>
 	);
@@ -116,16 +126,18 @@ function ToolbarButton({ disabled, icon, label, onPress }: { disabled?: boolean;
 const makeStyles = (t: Theme) => Object.assign(StyleSheet.create({
 	toolbar: { borderTopWidth: 1, borderTopColor: t.borderDefault, backgroundColor: t.bgSurface, paddingHorizontal: space.md, paddingTop: space.sm, paddingBottom: space.sm, gap: space.xs },
 	addressRow: { minHeight: 44, flexDirection: "row", alignItems: "center" },
-	controlsRow: { minHeight: 42, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-	toolbarButton: { flex: 1, maxWidth: 56, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 10, borderCurve: "continuous" },
-	controlDivider: { width: 1, height: 22, marginHorizontal: space.xxs, backgroundColor: t.borderDefault },
+	controlsRow: { minHeight: 44, flexDirection: "row", alignItems: "center", justifyContent: "space-around", paddingHorizontal: space.sm },
+	toolbarButton: { flex: 1, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 10, borderCurve: "continuous" },
 	pressed: { backgroundColor: t.bgElevated },
 	disabled: { opacity: 0.45 },
-	location: { flex: 1, minHeight: 40, flexDirection: "row", alignItems: "center", gap: space.sm, borderRadius: 12, borderCurve: "continuous", backgroundColor: t.bgElevated, paddingHorizontal: space.md },
-	locationSpinner: { width: iconSize.xs, height: iconSize.xs },
-	locationText: { flex: 1, minWidth: 0 },
-	title: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "600" },
-	url: { fontFamily: t.fontMono, color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
+	location: { flex: 1, minHeight: 44, flexDirection: "row", alignItems: "stretch", borderRadius: 14, borderCurve: "continuous", backgroundColor: t.bgElevated, overflow: "hidden" },
+	locationIcon: { width: 48, alignItems: "center", justifyContent: "center" },
+	locationMain: { flex: 1, minWidth: 0, alignItems: "center", justifyContent: "center", paddingHorizontal: space.xs },
+	locationAction: { width: 48, alignItems: "center", justifyContent: "center" },
+	locationPressed: { backgroundColor: t.bgElevatedHover },
+	locationText: { width: "100%", minWidth: 0, alignItems: "center" },
+	title: { width: "100%", textAlign: "center", fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "600" },
+	url: { width: "100%", textAlign: "center", fontFamily: t.fontMono, color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
 	inputWrap: { flex: 1, minHeight: 40, justifyContent: "center", borderRadius: 12, borderCurve: "continuous", borderWidth: 1, borderColor: t.accentBorder, backgroundColor: t.bgElevated, paddingHorizontal: space.md },
-	input: { minHeight: 38, padding: 0, fontFamily: t.fontMono, color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	input: { minHeight: 38, padding: 0, textAlign: "center", fontFamily: t.fontMono, color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 }), { colors: t });
