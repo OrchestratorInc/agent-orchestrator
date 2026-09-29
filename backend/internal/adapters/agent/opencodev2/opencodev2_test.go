@@ -177,6 +177,55 @@ func TestV2ClearsPreviousAOAgentModelAndPermissions(t *testing.T) {
 	}
 }
 
+func TestPrepareACPConfigContentPreservesUserConfigAndAddsAllPermissionAgents(t *testing.T) {
+	existing := `{"providers":{"local":{"name":"mine"}},"permissions":[{"action":"shell","resource":"git push *","effect":"deny"}],"agents":{"mine":{"mode":"primary","system":"user rules"}}}`
+	for _, test := range []struct {
+		mode ports.PermissionMode
+		want string
+	}{
+		{ports.PermissionModeDefault, "ao-default"},
+		{ports.PermissionModeAcceptEdits, "ao-accept-edits"},
+		{ports.PermissionModeAuto, "ao-auto"},
+		{ports.PermissionModeBypassPermissions, "ao-bypass"},
+	} {
+		t.Run(string(test.mode), func(t *testing.T) {
+			content, err := PrepareACPConfigContent(existing, "AO standing rules", test.mode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var config struct {
+				DefaultAgent string              `json:"default_agent"`
+				Providers    map[string]any      `json:"providers"`
+				Permissions  []map[string]string `json:"permissions"`
+				Agents       map[string]struct {
+					Mode, System string
+					Permissions  []permissionRule
+				} `json:"agents"`
+			}
+			if err := json.Unmarshal([]byte(content), &config); err != nil {
+				t.Fatal(err)
+			}
+			if config.DefaultAgent != test.want || config.Providers["local"] == nil ||
+				len(config.Permissions) != 1 || config.Agents["mine"].System != "user rules" {
+				t.Fatalf("user/v2 config = %#v", config)
+			}
+			for _, name := range []string{"ao-default", "ao-accept-edits", "ao-auto", "ao-bypass"} {
+				agent, ok := config.Agents[name]
+				if !ok || agent.Mode != "primary" || agent.System != "AO standing rules" {
+					t.Fatalf("agent %q = %#v", name, agent)
+				}
+				if name != "ao-bypass" && len(agent.Permissions) != 0 {
+					t.Fatalf("agent %q permissions = %#v, want provider policy", name, agent.Permissions)
+				}
+			}
+			bypass := config.Agents["ao-bypass"].Permissions
+			if len(bypass) != 1 || bypass[0] != (permissionRule{Action: "*", Resource: "*", Effect: "allow"}) {
+				t.Fatalf("bypass permissions = %#v", bypass)
+			}
+		})
+	}
+}
+
 func TestV2RejectsFailuresWithoutSideEffects(t *testing.T) {
 	for _, tc := range []struct {
 		name, version, content, native string
