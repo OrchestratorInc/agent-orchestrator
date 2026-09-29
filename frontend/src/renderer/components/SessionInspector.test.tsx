@@ -525,17 +525,42 @@ describe("SessionInspector PR section", () => {
         }] } }
         : respond(path),
     );
-    renderWithQuery(<SessionInspector session={session([])} />);
+    renderWithQuery(<SessionInspector session={session([])} />, undefined, (client) => {
+      client.setQueryData(["project", "ws-1"], { repo: "https://gitlab.com/my-app/backend", config: {} });
+    });
 
     await screen.findByRole("link", { name: /gitlab.com\/release\/notes MR #9/ });
 
     const section = prSection("Pull request");
     expect(section.getByRole("link", { name: /gitlab.com\/release\/notes MR #9/ })).toHaveAttribute("href", "https://gitlab.com/release/notes/-/merge_requests/9");
-    expect(section.getByText("Reference only")).toBeInTheDocument();
+    expect(section.getByText("Reported by worker")).toBeInTheDocument();
+    expect(section.getByText("External repository")).toBeInTheDocument();
+    expect(section.getByRole("button", { name: /Linked for reference.*AO does not track checks/ })).toBeInTheDocument();
     expect(section.getByRole("button", { name: "Copy link" })).toBeInTheDocument();
-    expect(section.queryByRole("button", { name: /merge/i })).not.toBeInTheDocument();
+    expect(section.queryByRole("button", { name: /^Merge PR #/ })).not.toBeInTheDocument();
     expect(section.queryByText("No pull request opened yet.")).not.toBeInTheDocument();
     expect(getMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}/pr")).toHaveLength(1);
+  });
+
+  it("does not label a reported PR from the project repository as external", async () => {
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) =>
+      path === "/api/v1/sessions/{sessionId}/pr"
+        ? { data: { prs: [], linkedPrs: [{
+          url: "https://github.com/acme/repo/pull/9",
+          provider: "github",
+          host: "github.com",
+          repo: "acme/repo",
+          number: 9,
+        }] } }
+        : respond(path),
+    );
+    renderWithQuery(<SessionInspector session={session([])} />, undefined, (client) => {
+      client.setQueryData(["project", "ws-1"], { repo: "git@github.com:acme/repo.git", config: {} });
+    });
+
+    await screen.findByRole("link", { name: /github.com\/acme\/repo PR #9/ });
+    expect(prSection("Pull request").queryByText("External repository")).not.toBeInTheDocument();
   });
 
   it("renders one card per PR, ordered actionable-first, when a session owns a stack", () => {

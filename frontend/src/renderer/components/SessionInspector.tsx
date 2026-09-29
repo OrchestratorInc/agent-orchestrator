@@ -345,6 +345,17 @@ const SummaryView = memo(function SummaryView({
 	const { t } = useTranslation();
 	const query = useSessionScmSummary(session.id, true, session.cloud?.orgId, session.autoInjectCI === true);
 	const linkedPRs = query.data?.linkedPrs ?? [];
+	const projectQuery = useQuery({
+		queryKey: ["project", session.workspaceId],
+		enabled: linkedPRs.length > 0 && !session.cloud,
+		queryFn: async () => {
+			const { data, error } = await apiClient.GET("/api/v1/projects/{id}", {
+				params: { path: { id: session.workspaceId } },
+			});
+			if (error) throw error;
+			return data?.status === "ok" && "repo" in data.project ? data.project : undefined;
+		},
+	});
 	const developerMode = useUiStore((state) => state.developerMode);
 	const usageQuery = useSessionUsage(session.id, developerMode);
 	const showUsage =
@@ -389,7 +400,7 @@ const SummaryView = memo(function SummaryView({
 									cloudOrgId={session.cloud?.orgId}
 								/>
 							))}
-							{linkedPRs.map((pr) => <LinkedPRCard key={pr.url} pr={pr} />)}
+							{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectQuery.data)} key={pr.url} pr={pr} />)}
 						</>
 					) : (
 						<p className={inspectorEmptyClass}>{t("inspector.noPROpened")}</p>
@@ -486,7 +497,22 @@ function InspectorPolicyRow({
 	);
 }
 
-function LinkedPRCard({ pr }: { pr: SessionPRReference }) {
+function isExternalRepository(pr: SessionPRReference, project: components["schemas"]["Project"] | undefined): boolean {
+	if (!project) return false;
+	const repositories = [project.repo, project.config?.canonicalRepoURL, ...(project.workspaceRepos?.map((repo) => repo.repo) ?? [])];
+	const identities = repositories.flatMap((repository) => {
+		if (!repository) return [];
+		try {
+			const url = new URL(repository.replace(/^git@([^:]+):/, "ssh://git@$1/"));
+			return [`${url.hostname.toLowerCase()}/${url.pathname.replace(/^\/|\/$|\.git$/g, "").toLowerCase()}`];
+		} catch {
+			return [];
+		}
+	});
+	return identities.length > 0 && !identities.includes(`${pr.host.toLowerCase()}/${pr.repo.toLowerCase()}`);
+}
+
+function LinkedPRCard({ external, pr }: { external: boolean; pr: SessionPRReference }) {
 	const { t } = useTranslation();
 	return (
 		<article className="min-w-0 w-full rounded-lg border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 py-2.5">
@@ -498,7 +524,20 @@ function LinkedPRCard({ pr }: { pr: SessionPRReference }) {
 				</ProductExternalLink>
 				<CopyButton compact label={t("link.copy")} text={pr.url} />
 			</div>
-			<p className="mt-1.5 text-2xs text-settings-muted text-pretty">{t("inspector.linkedPR")}</p>
+			<div className="mt-1.5 flex items-center justify-between gap-2">
+				<div className="flex min-w-0 items-center gap-1 text-2xs text-settings-muted">
+					<span>{t("inspector.reportedByWorker")}</span>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<button aria-label={t("inspector.linkedPRInfo")} className="inline-flex size-5 shrink-0 items-center justify-center rounded-full hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" type="button">
+								<Info aria-hidden="true" className="size-icon-2xs" />
+							</button>
+						</TooltipTrigger>
+						<TooltipContent className="max-w-72 leading-normal text-pretty">{t("inspector.linkedPRInfo")}</TooltipContent>
+					</Tooltip>
+				</div>
+				{external ? <span className="shrink-0 rounded-full border border-(--color-border-settings-input) px-1.5 py-0.5 text-[9px] leading-none text-settings-muted">{t("inspector.externalRepository")}</span> : null}
+			</div>
 		</article>
 	);
 }
