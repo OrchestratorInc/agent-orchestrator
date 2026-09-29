@@ -4014,6 +4014,7 @@ export interface components {
             runs: components["schemas"]["ReviewRun"][];
         };
         ListSessionPRsResponse: {
+            linkedPrs: components["schemas"]["SessionPRReference"][];
             prs: components["schemas"]["SessionPRSummary"][];
             sessionId: string;
         };
@@ -4520,6 +4521,14 @@ export interface components {
             reasons: string[];
             /** @enum {string} */
             state: "unknown" | "mergeable" | "conflicting" | "blocked" | "unstable";
+        };
+        SessionPRReference: {
+            host: string;
+            number: number;
+            /** @enum {string} */
+            provider: "github" | "gitlab";
+            repo: string;
+            url: string;
         };
         SessionPRReviewCommentLink: {
             autoInjectReview: boolean;

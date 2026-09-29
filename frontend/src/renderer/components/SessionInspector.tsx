@@ -46,10 +46,13 @@ import { formatTimeCompact } from "../lib/format-time";
 import { AgentAvatar } from "./AgentAvatar";
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
 import { ProductExternalLink } from "./ProductExternalLink";
+import { CopyButton } from "./chat/CopyButton";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import {
 	sessionScmSummaryQueryKey,
+	useSessionPRReferences,
 	useSessionScmSummary,
+	type SessionPRReference,
 	type SessionPRSummary,
 } from "../hooks/useSessionScmSummary";
 import { useSessionUsage, type SessionUsage } from "../hooks/useSessionUsage";
@@ -342,6 +345,7 @@ const SummaryView = memo(function SummaryView({
 }) {
 	const { t } = useTranslation();
 	const query = useSessionScmSummary(session.id, true, session.cloud?.orgId, session.autoInjectCI === true);
+	const linkedPRs = useSessionPRReferences(session.id, !session.cloud?.orgId).data ?? [];
 	const developerMode = useUiStore((state) => state.developerMode);
 	const usageQuery = useSessionUsage(session.id, developerMode);
 	const showUsage =
@@ -351,8 +355,9 @@ const SummaryView = memo(function SummaryView({
 		hasMeaningfulSessionUsage(usageQuery.data);
 	const showUsageError = developerMode && usageQuery.isError;
 	const prSummaries = sessionPRDisplaySummaries(session, query.data);
-	const prSectionTitle = prSummaries.length > 1 ? t("inspector.pullRequests", { count: prSummaries.length }) : t("inspector.pullRequest");
-	const hasPRs = prSummaries.length > 0;
+	const prCount = prSummaries.length + linkedPRs.length;
+	const prSectionTitle = prCount > 1 ? t("inspector.pullRequests", { count: prCount }) : t("inspector.pullRequest");
+	const hasPRs = prCount > 0;
 	// Cloud orchestrators list the workers they spawned; local orchestrators
 	// have no parent/child model and every other session has no children.
 	const showWorkers =
@@ -374,16 +379,19 @@ const SummaryView = memo(function SummaryView({
 			pullRequestCards={
 				<div className="flex flex-col gap-1.5">
 					{hasPRs ? (
-						prSummaries.map((pr) => (
-							<PRSummaryCard
-								canOpenReviews={canOpenReviews}
-								key={pr.url || pr.htmlUrl || pr.number}
-								onOpenReviews={onOpenReviews}
-								pr={pr}
-								sessionId={session.id}
-								cloudOrgId={session.cloud?.orgId}
-							/>
-						))
+						<>
+							{prSummaries.map((pr) => (
+								<PRSummaryCard
+									canOpenReviews={canOpenReviews}
+									key={pr.url || pr.htmlUrl || pr.number}
+									onOpenReviews={onOpenReviews}
+									pr={pr}
+									sessionId={session.id}
+									cloudOrgId={session.cloud?.orgId}
+								/>
+							))}
+							{linkedPRs.map((pr) => <LinkedPRCard key={pr.url} pr={pr} />)}
+						</>
 					) : (
 						<p className={inspectorEmptyClass}>{t("inspector.noPROpened")}</p>
 					)}
@@ -476,6 +484,24 @@ function InspectorPolicyRow({
 				onCheckedChange={onCheckedChange}
 			/>
 		</div>
+	);
+}
+
+function LinkedPRCard({ pr }: { pr: SessionPRReference }) {
+	const { t } = useTranslation();
+	return (
+		<article className="min-w-0 w-full rounded-lg border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 py-2.5">
+			<div className="flex min-w-0 items-center justify-between gap-2">
+				<ProductExternalLink className="inline-flex min-w-0 items-center gap-1 font-mono text-xs font-medium text-settings-label underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" href={pr.url}>
+					<GitPullRequest className="size-icon-sm shrink-0" aria-hidden="true" />
+					<span className="truncate">{pr.host}/{pr.repo} {pr.provider === "gitlab" ? "MR" : "PR"} #{pr.number}</span>
+					<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" />
+				</ProductExternalLink>
+				<CopyButton compact label={t("link.copy")} text={pr.url} />
+			</div>
+			<p className="mt-1.5 text-2xs text-settings-muted text-pretty">{t("inspector.linkedPR")}</p>
+			<p className="mt-1 text-2xs text-settings-muted text-pretty">{t("inspector.reportedPRReference")}</p>
+		</article>
 	);
 }
 

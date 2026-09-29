@@ -11632,6 +11632,10 @@ components:
       type: object
     ListSessionPRsResponse:
       properties:
+        linkedPrs:
+          items:
+            $ref: '#/components/schemas/SessionPRReference'
+          type: array
         prs:
           items:
             $ref: '#/components/schemas/SessionPRSummary'
@@ -11641,6 +11645,7 @@ components:
       required:
       - sessionId
       - prs
+      - linkedPrs
       type: object
     ListSessionsResponse:
       properties:
@@ -12955,6 +12960,28 @@ components:
       - state
       - reasons
       - prUrl
+      type: object
+    SessionPRReference:
+      properties:
+        host:
+          type: string
+        number:
+          type: integer
+        provider:
+          enum:
+          - github
+          - gitlab
+          type: string
+        repo:
+          type: string
+        url:
+          type: string
+      required:
+      - url
+      - provider
+      - host
+      - repo
+      - number
       type: object
     SessionPRReviewCommentLink:
       properties:

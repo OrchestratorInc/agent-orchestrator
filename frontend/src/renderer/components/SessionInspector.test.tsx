@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionInspector } from "./SessionInspector";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
+import { sessionPRReferencesQueryKey, sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { settingsQueryKey } from "../hooks/useSettings";
 import { sessionWorkspaceFilesQueryKey } from "../hooks/useSessionWorkspaceFiles";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
@@ -507,6 +507,25 @@ describe("SessionInspector PR section", () => {
         .getByText(title)
         .closest("[data-testid='inspector-section']") as HTMLElement,
     );
+
+  it("shows a reported external PR as a reference without tracked actions", () => {
+    renderWithQuery(<SessionInspector session={session([])} />, undefined, (client) => {
+      client.setQueryData(sessionPRReferencesQueryKey("sess-1"), [{
+        url: "https://gitlab.com/release/notes/-/merge_requests/9",
+        provider: "gitlab",
+        host: "gitlab.com",
+        repo: "release/notes",
+        number: 9,
+      }]);
+    });
+
+    const section = prSection("Pull request");
+    expect(section.getByRole("link", { name: /gitlab.com\/release\/notes MR #9/ })).toHaveAttribute("href", "https://gitlab.com/release/notes/-/merge_requests/9");
+    expect(section.getByText("Linked for reference")).toBeInTheDocument();
+    expect(section.getByRole("button", { name: "Copy link" })).toBeInTheDocument();
+    expect(section.queryByRole("button", { name: /merge/i })).not.toBeInTheDocument();
+    expect(section.queryByText("No pull request opened yet.")).not.toBeInTheDocument();
+  });
 
   it("renders one card per PR, ordered actionable-first, when a session owns a stack", () => {
     renderWithQuery(

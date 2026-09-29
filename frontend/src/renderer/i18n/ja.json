@@ -462,6 +462,8 @@
 	"inspector.overview": "概要",
 	"inspector.pullRequest": "プルリクエスト",
 	"inspector.pullRequests": "プルリクエスト ({{count}})",
+	"inspector.linkedPR": "参照用リンク",
+	"inspector.reportedPRReference": "ワーカーから報告されました。AO はこのリンクのチェック、レビュー、マージを追跡しません。",
 	"inspector.resumeAgent": "エージェントを再開",
 	"inspector.resumeFallbackBody": "AO はネイティブのエージェントセッションを再開できなかったため、保存済みのプロンプトから新しい会話を開始しました。",
 	"inspector.resumingAgent": "エージェントを再開中…",

@@ -8,9 +8,28 @@ import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
 import { useSettings } from "./useSettings";
 
 export type SessionPRSummary = components["schemas"]["SessionPRSummary"];
+export type SessionPRReference = components["schemas"]["SessionPRReference"];
 
 export const sessionScmSummaryQueryKey = (sessionId?: string) =>
 	sessionId ? (["session-scm-summary", sessionId] as const) : (["session-scm-summary"] as const);
+
+export const sessionPRReferencesQueryKey = (sessionId?: string) =>
+	sessionId ? (["session-pr-references", sessionId] as const) : (["session-pr-references"] as const);
+
+export function useSessionPRReferences(sessionId?: string, enabled = true) {
+	return useQuery({
+		queryKey: sessionPRReferencesQueryKey(sessionId),
+		enabled: enabled && Boolean(sessionId),
+		queryFn: async (): Promise<SessionPRReference[]> => {
+			const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/pr", {
+				params: { path: { sessionId: sessionId! } },
+			});
+			if (error) throw error;
+			return data?.linkedPrs ?? [];
+		},
+		retry: 1,
+	});
+}
 
 export async function fetchSessionScmSummary(sessionId: string): Promise<SessionPRSummary[]> {
 	const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/pr", {
@@ -45,7 +64,6 @@ export function sessionScmSummaryQueryOptions(sessionId: string) {
 		retry: 1,
 	};
 }
-
 
 export function useSessionScmSummary(
 	sessionId?: string,

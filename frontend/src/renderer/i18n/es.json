@@ -465,6 +465,8 @@
 	"inspector.overview": "Resumen",
 	"inspector.pullRequest": "Pull request",
 	"inspector.pullRequests": "Pull requests ({{count}})",
+	"inspector.linkedPR": "Enlace de referencia",
+	"inspector.reportedPRReference": "Informado por el agente. AO no sigue las comprobaciones, revisiones ni fusiones de este enlace.",
 	"inspector.resumeAgent": "Reanudar agente",
 	"inspector.resumeFallbackBody": "AO no pudo reanudar la sesión nativa del agente, por lo que inició una nueva conversación a partir del prompt guardado.",
 	"inspector.resumingAgent": "Reanudando agente…",

@@ -4,7 +4,7 @@ import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-
 import { setEventsConnectionState } from "./events-connection";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
-import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
+import { sessionPRReferencesQueryKey, sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { conversationQueryKey, conversationQueryRoot } from "../hooks/useConversation";
 import {
 	reviewerConversationQueryKey,
@@ -115,6 +115,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					invalidate(workspaceQueryKey);
 					invalidate(agentSwitchesQueryRoot);
 					invalidate(sessionScmSummaryQueryKey());
+					invalidate(sessionPRReferencesQueryKey());
 					invalidate(sessionUsageQueryRoot);
 					workspaceInvalidationPending = false;
 				}
