@@ -125,6 +125,7 @@ var commandSpecs = map[string]commandSpec{
 	"droid":       {args: []string{"exec", "--help"}, parser: parseDroidHelpModels},
 	"crush":       {args: []string{"models"}, parser: parseIDLines},
 	"fx":          {args: []string{"models", "--json"}, parser: parseFXModels},
+	"mimo-code":   {args: []string{"models"}, parser: parseIDLines},
 }
 
 // Base returns the picker behavior AO can provide without executing a CLI.
@@ -187,7 +188,7 @@ func Manual(agentID string) ports.AgentModelCatalog {
 func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	switch agentID {
 	case "claude-code", "codex", "opencode", "grok", "cursor", "qwen", "gemini",
-		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent":
+		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "mimo-code":
 		return ports.CustomModelEntryDirect
 	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured

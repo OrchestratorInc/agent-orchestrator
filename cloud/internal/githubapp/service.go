@@ -535,30 +535,28 @@ func gitHubRepositoryFullName(repoURL string) (string, bool) {
 }
 
 // IssuePushGrant is IssueCheckoutGrant's write-scoped counterpart: the token
-// it mints carries contents:write (and pull_requests:write, unused for a
-// push but harmless to request once rather than adding a third token
-// shape). Only ever handed to a worker immediately before a git push, never
-// cached — see repositoryWriteToken.
+// it mints carries contents:write and pull_requests:write, scoped to the
+// project's primary repository plus any declared extra repositories that
+// resolve within the same installation — the write-side mirror of
+// IssueCheckoutGrant's multi-repository scope. One broad token backs a worker's
+// push and gh-CLI pull-request creation across every repository the session
+// checked out, so a push to an extra dev-kit repository is no longer scoped
+// out. Only ever handed to a worker immediately before a git operation, never
+// cached — see repositoryWriteTokenForRepos.
 func (s *Service) IssuePushGrant(
 	ctx context.Context,
 	orgID, sessionID string,
-) (CheckoutGrant, error) {
-	return s.issueGrant(ctx, orgID, sessionID, s.client.repositoryWriteToken)
-}
-
-// issueGrant is IssueCheckoutGrant and IssuePushGrant's shared authorization
-// and token-minting path; they differ only in which of the client's two
-// token-scope functions mints the access token.
-func (s *Service) issueGrant(
-	ctx context.Context,
-	orgID, sessionID string,
-	mintToken func(ctx context.Context, installationID, repositoryID int64) (installationAccessToken, error),
 ) (CheckoutGrant, error) {
 	authorization, err := s.resolveWorkerCheckoutAuthorization(ctx, orgID, sessionID)
 	if err != nil {
 		return CheckoutGrant{}, err
 	}
-	access, err := mintToken(ctx, authorization.GitHubInstallationID, authorization.GitHubRepositoryID)
+	repositoryIDs := s.checkoutRepositoryIDs(ctx, orgID, sessionID, authorization)
+	access, err := s.client.repositoryWriteTokenForRepos(
+		ctx,
+		authorization.GitHubInstallationID,
+		repositoryIDs,
+	)
 	if err != nil {
 		return CheckoutGrant{}, err
 	}
@@ -570,6 +568,92 @@ func (s *Service) issueGrant(
 		Token:     access.Token,
 		ExpiresAt: access.ExpiresAt,
 	}, nil
+}
+
+// IssuePushGrantForRepo is IssuePushGrant scoped to one specific repository —
+// the session's primary repository or one of its declared extra repositories.
+// It mints a write token for exactly that repository when the App installation
+// can access it, and returns postgres.ErrForbidden when it cannot (the name is
+// not declared for the session, or the App is not installed on it) so the
+// caller falls back to a stored PAT. This is the per-repository, App-first half
+// of the worker credential helper's App-first/PAT-fallback precedence: the
+// helper forwards the repository git is asking about, and an App-uninstalled
+// extra can still push through a PAT that covers it.
+func (s *Service) IssuePushGrantForRepo(
+	ctx context.Context,
+	orgID, sessionID, repoFullName string,
+) (CheckoutGrant, error) {
+	authorization, err := s.resolveWorkerCheckoutAuthorization(ctx, orgID, sessionID)
+	if err != nil {
+		return CheckoutGrant{}, err
+	}
+	repositoryID, err := s.pushRepositoryID(ctx, orgID, sessionID, authorization, repoFullName)
+	if err != nil {
+		return CheckoutGrant{}, err
+	}
+	access, err := s.client.repositoryWriteToken(ctx, authorization.GitHubInstallationID, repositoryID)
+	if err != nil {
+		return CheckoutGrant{}, err
+	}
+	if access.ExpiresAt.After(time.Now().UTC().Add(2 * time.Hour)) {
+		return CheckoutGrant{}, errors.New("GitHub returned an unexpectedly long-lived installation token")
+	}
+	return CheckoutGrant{
+		CloneURL:  authorization.CloneURL,
+		Token:     access.Token,
+		ExpiresAt: access.ExpiresAt,
+	}, nil
+}
+
+// pushRepositoryID resolves the single repository a write grant should target.
+// An empty name (or one equal to the session's primary repository) resolves to
+// the primary repository. Any other name must be one of the project's declared
+// extra repositories AND resolve within the same installation; otherwise it
+// returns postgres.ErrForbidden so the caller can fall back to a stored PAT.
+// This is the write-side, single-repository mirror of checkoutRepositoryIDs —
+// it never broadens write access beyond a repository the session already
+// checked out.
+func (s *Service) pushRepositoryID(
+	ctx context.Context,
+	orgID, sessionID string,
+	authorization domain.GitHubCheckoutContext,
+	repoFullName string,
+) (int64, error) {
+	primaryFullName := strings.Trim(authorization.FullName, "/")
+	requested := strings.Trim(strings.TrimSpace(repoFullName), "/")
+	if requested == "" || strings.EqualFold(requested, primaryFullName) {
+		return authorization.GitHubRepositoryID, nil
+	}
+	extras, err := s.store.WorkerSessionExtraRepos(ctx, orgID, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	canonical := ""
+	for _, extra := range extras {
+		fullName, ok := gitHubRepositoryFullName(extra.URL)
+		if ok && strings.EqualFold(fullName, requested) {
+			canonical = fullName
+			break
+		}
+	}
+	if canonical == "" {
+		// The requested repository is not one the session is authorized to
+		// touch. Forbid the App grant; the caller decides whether a PAT applies.
+		return 0, postgres.ErrForbidden
+	}
+	ids, unresolved, err := s.client.resolveInstallationRepositoryIDs(
+		ctx, authorization.GitHubInstallationID, []string{canonical},
+	)
+	if err != nil {
+		return 0, err
+	}
+	if len(unresolved) > 0 || len(ids) == 0 || ids[0] <= 0 {
+		// Declared for the project but the installation cannot access it (the App
+		// is not installed on it). Forbid the App grant so the caller falls back
+		// to a stored PAT that may still cover it.
+		return 0, postgres.ErrForbidden
+	}
+	return ids[0], nil
 }
 
 // resolveWorkerCheckoutAuthorization loads and re-validates a session's

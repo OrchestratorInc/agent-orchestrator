@@ -71,6 +71,9 @@ func (b *recordingCheckoutBroker) IssueCheckoutGrant(context.Context, string, st
 func (b *recordingCheckoutBroker) IssuePushGrant(context.Context, string, string) (githubapp.CheckoutGrant, error) {
 	return githubapp.CheckoutGrant{}, nil
 }
+func (b *recordingCheckoutBroker) IssuePushGrantForRepo(context.Context, string, string, string) (githubapp.CheckoutGrant, error) {
+	return githubapp.CheckoutGrant{}, nil
+}
 func (b *recordingCheckoutBroker) RaisePullRequest(context.Context, string, string, domain.RaisePullRequest) (domain.PullRequest, error) {
 	b.raiseCalls++
 	if b.raiseErr != nil {

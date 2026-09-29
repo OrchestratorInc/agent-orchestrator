@@ -27,6 +27,7 @@ import kimiLogo from "../assets/agents/kimi.png";
 import kimchiLogo from "../assets/agents/kimchi.svg";
 import kiroLogo from "../assets/agents/kiro.png";
 import museLogo from "../assets/agents/muse.png";
+import mimoCodeLogo from "../assets/agents/mimo-code.svg";
 import ompLogo from "../assets/agents/omp.png";
 import opencodeLogo from "../assets/agents/opencode.svg";
 import piLogo from "../assets/agents/pi.png";
@@ -69,6 +70,7 @@ const LOGOS: AgentLogoSources = {
 	auggie: auggieLogo,
 	autohand: autohandLogo,
 	"unreal-agent": unrealAgentLogo,
+	"mimo-code": mimoCodeLogo,
 };
 
 /**

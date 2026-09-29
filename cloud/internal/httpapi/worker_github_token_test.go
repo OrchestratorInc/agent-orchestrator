@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -21,14 +22,24 @@ import (
 // App-first preference can be exercised without a real GitHub App.
 type pushGrantBroker struct {
 	recordingCheckoutBroker
-	push      githubapp.CheckoutGrant
-	pushErr   error
-	pushCalls int
+	push          githubapp.CheckoutGrant
+	pushErr       error
+	pushCalls     int
+	repoPush      githubapp.CheckoutGrant
+	repoPushErr   error
+	repoPushCalls int
+	lastRepo      string
 }
 
 func (b *pushGrantBroker) IssuePushGrant(context.Context, string, string) (githubapp.CheckoutGrant, error) {
 	b.pushCalls++
 	return b.push, b.pushErr
+}
+
+func (b *pushGrantBroker) IssuePushGrantForRepo(_ context.Context, _, _, repo string) (githubapp.CheckoutGrant, error) {
+	b.repoPushCalls++
+	b.lastRepo = repo
+	return b.repoPush, b.repoPushErr
 }
 
 func newGitHubTokenServer(t *testing.T, push githubapp.CheckoutGrant, pushErr error, withPAT bool) (*Server, *pushGrantBroker) {
@@ -121,5 +132,79 @@ func TestWorkerGitHubTokenForbiddenWithoutAppOrPAT(t *testing.T) {
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// When git names the exact repository (credential.useHttpPath forwards it as
+// ?repo=), mint an App token scoped to that repository rather than the broad
+// multi-repository grant. This is what lets a push to a declared extra dev-kit
+// repository the App is installed on succeed with a correctly scoped token.
+func TestWorkerGitHubTokenScopedToRepoUsesAppForRepo(t *testing.T) {
+	srv, broker := newGitHubTokenServer(t, githubapp.CheckoutGrant{}, nil, true)
+	broker.repoPush = githubapp.CheckoutGrant{
+		CloneURL:  "https://github.com/octo/extra.git",
+		Token:     "APP_EXTRA_TOKEN",
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	w := httptest.NewRecorder()
+	srv.workerGitHubToken(w, workerRequest(t, http.MethodPost, "/worker/github-token?repo=octo/extra", "", "worker:git"))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if broker.repoPushCalls != 1 || broker.pushCalls != 0 {
+		t.Fatalf("repoPushCalls=%d pushCalls=%d, want 1 and 0 (repo-scoped grant only)", broker.repoPushCalls, broker.pushCalls)
+	}
+	if broker.lastRepo != "octo/extra" {
+		t.Fatalf("scoped repo = %q, want octo/extra", broker.lastRepo)
+	}
+	var resp worker.GitHubTokenResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Token != "APP_EXTRA_TOKEN" {
+		t.Fatalf("token = %q, want the repo-scoped App token", resp.Token)
+	}
+}
+
+// An extra repository the App is not installed on returns ErrForbidden from the
+// repo-scoped App grant; the credential helper must then fall back to a stored
+// PAT that may still cover it — the per-repository App-first/PAT-fallback rule.
+func TestWorkerGitHubTokenScopedToRepoFallsBackToPAT(t *testing.T) {
+	srv, broker := newGitHubTokenServer(t, githubapp.CheckoutGrant{}, nil, true)
+	broker.repoPushErr = postgres.ErrForbidden
+	w := httptest.NewRecorder()
+	srv.workerGitHubToken(w, workerRequest(t, http.MethodPost, "/worker/github-token?repo=octo/extra", "", "worker:git"))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (PAT fallback); body=%s", w.Code, w.Body.String())
+	}
+	if broker.repoPushCalls != 1 {
+		t.Fatalf("repoPushCalls = %d, want 1", broker.repoPushCalls)
+	}
+	var resp worker.GitHubTokenResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Token != grantTestPAT {
+		t.Fatalf("token = %q, want the PAT fallback", resp.Token)
+	}
+}
+
+func TestWorkerRequestedRepository(t *testing.T) {
+	cases := map[string]string{
+		"":               "",
+		"octo/extra":     "octo/extra",
+		"octo/extra.git": "octo/extra",
+		"/octo/extra/":   "octo/extra",
+		"octo":           "", // no repo segment
+		"octo/a/b":       "", // extra path segments
+		"octo /extra":    "", // whitespace
+	}
+	for query, want := range cases {
+		r := httptest.NewRequest(http.MethodPost, "/worker/github-token?repo="+url.QueryEscape(query), nil)
+		if got := workerRequestedRepository(r); got != want {
+			t.Errorf("workerRequestedRepository(%q) = %q, want %q", query, got, want)
+		}
 	}
 }
