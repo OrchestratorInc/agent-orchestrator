@@ -10740,6 +10740,7 @@ components:
           - crush
           - cursor
           - qwen
+          - gemini
           - copilot
           - goose
           - auggie
@@ -10754,6 +10755,7 @@ components:
           - pi
           - kimchi
           - omp
+          - fx
           - prime-agent
           - autohand
           - unreal-agent
@@ -11371,6 +11373,7 @@ components:
           - cline
           - goose
           - qwen
+          - gemini
           - continue
           - devin
           - kiro
@@ -11382,6 +11385,7 @@ components:
           - kimchi
           - prime-agent
           - omp
+          - fx
           - unreal-agent
           - cloudflared
           type: string
@@ -12722,6 +12726,8 @@ components:
           maxLength: 4096
           minLength: 1
           type: string
+        userAuthored:
+          type: boolean
       required:
       - message
       type: object
@@ -13552,6 +13558,7 @@ components:
           - crush
           - cursor
           - qwen
+          - gemini
           - copilot
           - goose
           - auggie
@@ -13566,6 +13573,7 @@ components:
           - pi
           - kimchi
           - omp
+          - fx
           - prime-agent
           - autohand
           - unreal-agent
@@ -13838,6 +13846,7 @@ components:
           enum:
           - claude-code
           - codex
+          - fx
           type: string
       required:
       - targetHarness

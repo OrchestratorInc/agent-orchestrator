@@ -75,6 +75,7 @@
 	"browser.annotationActive": "Annotation en cours",
 	"browser.annotationCount_one": "{{count}} annotation",
 	"browser.annotationCount_other": "{{count}} annotations",
+	"browser.annotationEmptyHint": "Pointez quelque chose et dites ce qu'il faut changer",
 	"browser.annotationCount_many": "{{count}} annotations",
 	"browser.annotationDiscardAll": "Tout supprimer",
 	"browser.annotationDiscardAllComments": "Supprimer tous les commentaires",
@@ -687,6 +688,7 @@
 	"notify.clearAll": "Tout effacer",
 	"notify.clearOne": "Effacer la notification : {{title}}",
 	"notify.clearOneShort": "Effacer la notification",
+	"notify.cloud": "Cloud",
 	"notify.couldNotClearAll": "Impossible d'effacer les notifications",
 	"notify.couldNotClearOne": "Impossible d'effacer la notification",
 	"notify.couldNotMarkAllRead": "Impossible de marquer les notifications comme lues",
@@ -699,6 +701,7 @@
 	"notify.loading": "Chargement des notifications…",
 	"notify.loadingUnread": "Chargement des notifications non lues…",
 	"notify.loadingEarlier": "Chargement des notifications antérieures…",
+	"notify.markCloudRead": "Marquer les notifications cloud comme lues",
 	"notify.markAllRead": "Marquer toutes les notifications comme lues",
 	"notify.markAllReadShort": "Tout marquer comme lu",
 	"notify.markRead": "Marquer comme lu",
@@ -2230,5 +2233,11 @@
 	"settings.models.useAgentMode": "Utiliser le mode de l’agent",
 	"settings.models.useAgentEffort": "Utiliser l’effort de l’agent",
 	"settings.models.effortNotReported": "Effort non indiqué",
-	"settings.models.modeNotReported": "Mode non indiqué"
+	"settings.models.modeNotReported": "Mode non indiqué",
+	"standalone.archive.heading_one": "{{count}} session archivée",
+	"standalone.archive.heading_many": "{{count}} sessions archivées",
+	"standalone.archive.heading_other": "{{count}} sessions archivées",
+	"standalone.archive.newAgent": "Nouvel agent",
+	"standalone.archive.empty.title": "Aucun agent autonome archivé",
+	"standalone.archive.empty.body": "Les agents autonomes que vous archivez depuis le bloc-notes apparaîtront ici. Les agents autonomes actifs restent dans la liste du bloc-notes."
 }

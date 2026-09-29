@@ -75,6 +75,7 @@
 	"browser.annotationActive": "Anotando",
 	"browser.annotationCount_one": "{{count}} anotação",
 	"browser.annotationCount_other": "{{count}} anotações",
+	"browser.annotationEmptyHint": "Aponte para algo e diga o que mudar",
 	"browser.annotationCount_many": "{{count}} anotações",
 	"browser.annotationDiscardAll": "Descartar tudo",
 	"browser.annotationDiscardAllComments": "Descartar todos os comentários",
@@ -687,6 +688,7 @@
 	"notify.clearAll": "Limpar tudo",
 	"notify.clearOne": "Limpar notificação: {{title}}",
 	"notify.clearOneShort": "Limpar notificação",
+	"notify.cloud": "Nuvem",
 	"notify.couldNotClearAll": "Não foi possível limpar as notificações",
 	"notify.couldNotClearOne": "Não foi possível limpar a notificação",
 	"notify.couldNotMarkAllRead": "Não foi possível marcar as notificações como lidas",
@@ -699,6 +701,7 @@
 	"notify.loading": "Carregando notificações…",
 	"notify.loadingUnread": "Carregando notificações não lidas…",
 	"notify.loadingEarlier": "Carregando notificações anteriores…",
+	"notify.markCloudRead": "Marcar notificações da nuvem como lidas",
 	"notify.markAllRead": "Marcar todas as notificações como lidas",
 	"notify.markAllReadShort": "Marcar todas como lidas",
 	"notify.markRead": "Marcar como lida",
@@ -2230,5 +2233,11 @@
 	"settings.models.useAgentMode": "Usar modo do agente",
 	"settings.models.useAgentEffort": "Usar esforço do agente",
 	"settings.models.effortNotReported": "Esforço não informado",
-	"settings.models.modeNotReported": "Modo não informado"
+	"settings.models.modeNotReported": "Modo não informado",
+	"standalone.archive.heading_one": "{{count}} sessão arquivada",
+	"standalone.archive.heading_many": "{{count}} sessões arquivadas",
+	"standalone.archive.heading_other": "{{count}} sessões arquivadas",
+	"standalone.archive.newAgent": "Novo agente",
+	"standalone.archive.empty.title": "Nenhum agente independente arquivado",
+	"standalone.archive.empty.body": "Os agentes independentes que você arquivar no Bloco de notas aparecerão aqui. Agentes independentes ativos permanecem na lista do Bloco de notas."
 }

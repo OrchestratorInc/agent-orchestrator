@@ -75,6 +75,7 @@
 	"browser.annotationActive": "Wird annotiert",
 	"browser.annotationCount_one": "{{count}} Annotation",
 	"browser.annotationCount_other": "{{count}} Annotationen",
+	"browser.annotationEmptyHint": "Zeigen Sie auf etwas und sagen Sie, was sich ändern soll",
 	"browser.annotationDiscardAll": "Alle verwerfen",
 	"browser.annotationDiscardAllComments": "Alle Kommentare verwerfen",
 	"browser.annotationExit": "Beenden",
@@ -684,6 +685,7 @@
 	"notify.clearAll": "Alle löschen",
 	"notify.clearOne": "Benachrichtigung löschen: {{title}}",
 	"notify.clearOneShort": "Benachrichtigung löschen",
+	"notify.cloud": "Cloud",
 	"notify.couldNotClearAll": "Benachrichtigungen konnten nicht gelöscht werden",
 	"notify.couldNotClearOne": "Benachrichtigung konnte nicht gelöscht werden",
 	"notify.couldNotMarkAllRead": "Benachrichtigungen konnten nicht als gelesen markiert werden",
@@ -696,6 +698,7 @@
 	"notify.loading": "Benachrichtigungen werden geladen…",
 	"notify.loadingUnread": "Ungelesene Benachrichtigungen werden geladen…",
 	"notify.loadingEarlier": "Frühere Benachrichtigungen werden geladen…",
+	"notify.markCloudRead": "Cloud-Benachrichtigungen als gelesen markieren",
 	"notify.markAllRead": "Alle Benachrichtigungen als gelesen markieren",
 	"notify.markAllReadShort": "Alle als gelesen",
 	"notify.markRead": "Als gelesen markieren",
@@ -2200,5 +2203,10 @@
 	"settings.models.useAgentMode": "Agentenmodus verwenden",
 	"settings.models.useAgentEffort": "Denkaufwand des Agenten verwenden",
 	"settings.models.effortNotReported": "Aufwand nicht gemeldet",
-	"settings.models.modeNotReported": "Modus nicht gemeldet"
+	"settings.models.modeNotReported": "Modus nicht gemeldet",
+	"standalone.archive.heading_one": "{{count}} archivierte Sitzung",
+	"standalone.archive.heading_other": "{{count}} archivierte Sitzungen",
+	"standalone.archive.newAgent": "Neuer Agent",
+	"standalone.archive.empty.title": "Keine archivierten eigenständigen Agenten",
+	"standalone.archive.empty.body": "Eigenständige Agenten, die du aus dem Notizblock archivierst, erscheinen hier. Aktive eigenständige Agenten bleiben in der Notizblockliste."
 }

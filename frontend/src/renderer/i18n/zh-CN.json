@@ -75,6 +75,7 @@
 	"browser.annotationActive": "正在标注",
 	"browser.annotationCount_one": "{{count}} 条标注",
 	"browser.annotationCount_other": "{{count}} 条标注",
+	"browser.annotationEmptyHint": "指向任意内容，并说明要改什么",
 	"browser.annotationDiscardAll": "全部丢弃",
 	"browser.annotationDiscardAllComments": "丢弃所有评论",
 	"browser.annotationExit": "退出",
@@ -683,6 +684,7 @@
 	"notify.clearAll": "清除全部",
 	"notify.clearOne": "清除通知：{{title}}",
 	"notify.clearOneShort": "清除通知",
+	"notify.cloud": "云端",
 	"notify.couldNotClearAll": "无法清除通知",
 	"notify.couldNotClearOne": "无法清除通知",
 	"notify.couldNotMarkAllRead": "无法将通知全部标为已读",
@@ -691,6 +693,7 @@
 	"notify.loadFailed": "无法加载通知。",
 	"notify.loading": "正在加载通知…",
 	"notify.loadingEarlier": "正在加载更早的通知…",
+	"notify.markCloudRead": "将云端通知标记为已读",
 	"notify.openPR": "打开拉取请求",
 	"notify.openSessionTitle": "打开会话",
 	"notify.retry": "重试",
@@ -2182,5 +2185,10 @@
 	"settings.models.useAgentMode": "使用智能体模式",
 	"settings.models.useAgentEffort": "使用智能体推理强度",
 	"settings.models.effortNotReported": "未报告推理强度",
-	"settings.models.modeNotReported": "未报告模式"
+	"settings.models.modeNotReported": "未报告模式",
+	"standalone.archive.heading_one": "{{count}} 个已归档会话",
+	"standalone.archive.heading_other": "{{count}} 个已归档会话",
+	"standalone.archive.newAgent": "新建代理",
+	"standalone.archive.empty.title": "没有已归档的独立代理",
+	"standalone.archive.empty.body": "从草稿区归档的独立代理会显示在这里。活跃的独立代理会保留在草稿区列表中。"
 }

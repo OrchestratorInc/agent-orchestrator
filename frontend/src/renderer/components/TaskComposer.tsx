@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	TaskComposerView,
 	type TaskComposerAgentControl,
+	type TaskComposerEffortControl,
 	type TaskComposerModelCatalog,
 	type TaskComposerModelControl,
 } from "@aoagents/product-ui";
@@ -22,7 +23,7 @@ import { useSettings } from "../hooks/useSettings";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
-import { cloudAgentInfos } from "../lib/cloud-agents";
+import { cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
 import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
 import {
 	buildRankedAgentOptions,
@@ -38,7 +39,7 @@ import {
 	revalidateAgentModels,
 } from "../hooks/useAgentModelsQuery";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
-import { AgentModelCombobox, type ModelEffortSelection } from "./settings/AgentModelCombobox";
+import { AgentModelCombobox } from "./settings/AgentModelCombobox";
 import { useModelTuning } from "./settings/ModelTuningControls";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import {
@@ -159,11 +160,6 @@ export function TaskComposer({
 	const agentDrafts = useRef<Record<string, TaskComposerAgentPreference>>({
 		...persistedPreferences?.agents,
 	}).current;
-	// A cloud project is unknown to the local daemon, so the local model catalog
-	// must be queried agent-level (no project scope); otherwise the request 404s
-	// and the model dropdown spins forever. Local projects keep their scope.
-	const modelsProjectId = isCloudProject || isStandalone ? "" : (projectId ?? "");
-
 	const createCloudTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
 			if (input.attachments?.length) throw new Error(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }));
@@ -176,6 +172,7 @@ export function TaskComposer({
 					harness: input.agent ?? "claude-code",
 					displayName: input.brief.trim().slice(0, 100) || (input.agent ?? "claude-code"),
 					prompt: input.brief,
+					...(input.model ? { model: input.model } : {}),
 					...(selectedProvider ? { provider: selectedProvider } : {}),
 				});
 				// The control plane provisions the sandbox asynchronously; surface the
@@ -334,8 +331,8 @@ export function TaskComposer({
 	const globalDefaultAgent = projectQuery.data?.agent ?? "";
 	const configuredProjectAgent = projectWorkerAgent || globalDefaultAgent;
 	const agentCatalog = agentsQuery.data;
-	// Cloud projects only support the three control-plane agents (claude-code,
-	// codex, cursor), with readiness derived from the org's provider connections.
+	// Cloud projects support the control-plane agents listed in CLOUD_AGENT_PROVIDERS
+	// (the single source), with readiness derived from the org's provider connections.
 	const cloudConnectionsQuery = useProviderConnections(isCloudProject ? cloudOrg?.id : undefined);
 	const cloudAgents = useMemo(() => cloudAgentInfos(cloudConnectionsQuery.data), [cloudConnectionsQuery.data]);
 	const standaloneDefaultAgent = useMemo(() => {
@@ -358,6 +355,20 @@ export function TaskComposer({
 	);
 	const defaultWorkerAgent = rememberedAgentIsAvailable ? rememberedAgent : configuredDefaultAgent;
 	const selectedAgent = agent || defaultWorkerAgent;
+	// A cloud project is unknown to the local daemon, so its model catalog is
+	// queried agent-level (no project scope); otherwise the request 404s and the
+	// dropdown spins forever. opencode is the exception: its catalog depends on
+	// the connected provider, so scope the query by that credential type
+	// (credentialModelScope) to show the models the cloud VM will actually run.
+	// Local projects keep their real project scope.
+	const modelsProjectId = useMemo(() => {
+		if (!isCloudProject && !isStandalone) return projectId ?? "";
+		if (isCloudProject && selectedAgent === "opencode") {
+			const credentialType = connectedCredentialType(cloudConnectionsQuery.data, "opencode");
+			if (credentialType !== "") return credentialModelScope(credentialType);
+		}
+		return "";
+	}, [isCloudProject, isStandalone, projectId, selectedAgent, cloudConnectionsQuery.data]);
 	const defaultWorkerModel =
 		projectConfig?.worker?.agentConfig?.model ?? projectConfig?.agentConfig?.model ?? "";
 	const defaultWorkerMode = projectConfig?.worker?.agentConfig?.mode ?? projectConfig?.agentConfig?.mode ?? "";
@@ -462,8 +473,6 @@ export function TaskComposer({
 		onEffortReset: setEffort,
 	});
 	const effortOptions = effortModel?.efforts?.filter((option) => option && option.toLowerCase() !== "default") ?? [];
-	const reportedEffort =
-		effortModel?.defaultEffort && effortOptions.includes(effortModel.defaultEffort) ? effortModel.defaultEffort : "";
 	const inheritedEffort = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
 	const implicitEffort = inheritedEffort || effortModel?.defaultEffort || "";
 	const requestedEffort = effortTouched || rememberedEffortIsExplicit
@@ -475,20 +484,6 @@ export function TaskComposer({
 		selectedAgent !== "" &&
 		settings?.defaultSessionMode === "chat" &&
 		!settings.chatHarnesses.includes(selectedAgent);
-	// Effort stays inside the model menu and opens only when the user asks.
-	// The menu shows only a level the selected model lists, and
-	// reports the model's own default as "" (no override): keep the level itself
-	// so choosing it still overrides an inherited project effort.
-	const modelTuning: ModelEffortSelection | undefined = requiresTuiFallback
-		? undefined
-		: {
-				effort: effortOptions.includes(effort) ? effort : "",
-				onEffortChange: (value) => {
-					setEffort(value || reportedEffort);
-					setEffortTouched(true);
-				},
-				onEffortReset: setEffort,
-			};
 	const canSubmit =
 		Boolean(projectId) &&
 		(!isStandalone || selectedAgent !== "") &&
@@ -605,6 +600,7 @@ export function TaskComposer({
 			onPromptChange={handlePromptChange}
 			labels={{
 				addFile: t("newTask.addFile"),
+				effort: t("settings.models.effort"),
 				fallbackAction: fallbackAction === "bypass-permissions"
 					? t("newTask.startWithoutApprovals", { defaultValue: "Start without approvals" })
 					: t("newTask.createAsTui"),
@@ -671,6 +667,15 @@ export function TaskComposer({
 					setEffort("");
 				},
 			}}
+			effort={{
+				disabled: isSubmitting,
+				options: effortOptions,
+				value: effort,
+				onChange: (value) => {
+					setEffort(value);
+					setEffortTouched(true);
+				},
+			}}
 			attachments={{
 				items: attachments.map(({ id, name, dataUrl }) => ({ id, name, previewUrl: dataUrl })),
 				error: attachmentError,
@@ -689,11 +694,42 @@ export function TaskComposer({
 				onSubmit: (brief) => void submitTask(brief, selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined),
 			}}
 			renderAgentControl={(control) => <DesktopAgentControl {...control} manageAgents={!isCloudProject} />}
+			renderEffortControl={(control) => <TaskEffortPicker {...control} defaultEffort={effortModel?.defaultEffort} />}
 			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
-				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))}
-				tuning={modelTuning} />}
+				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
+			showEffort={!requiresTuiFallback && effortOptions.length > 0}
 		/>
 	);
+}
+
+function TaskEffortPicker({ disabled, label, onChange, options, value, defaultEffort }: TaskComposerEffortControl & { defaultEffort?: string }) {
+	const { t } = useTranslation();
+	const explicitEffort = value.toLowerCase() === "default" ? "" : value;
+	const reportedDefault = defaultEffort && options.includes(defaultEffort) ? defaultEffort : "";
+	const effectiveEffort = explicitEffort || reportedDefault;
+	const visibleLabel = effectiveEffort ? formatEffortLabel(effectiveEffort) : t("settings.models.effortNotReported");
+
+	return (
+		<SettingsOptionMenu
+			aria-label={label}
+			disabled={disabled}
+			value={effectiveEffort}
+			options={options.map((option) => ({ value: option, label: formatEffortLabel(option) }))}
+			action={explicitEffort && !reportedDefault ? { label: t("settings.models.useAgentEffort"), onSelect: () => onChange("") } : undefined}
+			triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
+			menuAlign="end"
+			renderTrigger={() => (
+				<span className="min-w-0 truncate text-control text-foreground" title={visibleLabel}>
+					{visibleLabel}
+				</span>
+			)}
+			onChange={onChange}
+		/>
+	);
+}
+
+function formatEffortLabel(value: string): string {
+	return value === "xhigh" ? "Extra high" : value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function DesktopAgentControl({ manageAgents, ...control }: TaskComposerAgentControl & { manageAgents: boolean }) {
@@ -719,12 +755,7 @@ function TaskModelPicker({
 	onModeChange,
 	onRefresh,
 	showFollowAgentAction,
-	tuning,
-}: TaskComposerModelControl & {
-	onRefresh: () => Promise<void>;
-	showFollowAgentAction: boolean;
-	tuning?: ModelEffortSelection;
-}) {
+}: TaskComposerModelControl & { onRefresh: () => Promise<void>; showFollowAgentAction: boolean }) {
 	const { t } = useTranslation();
 
 	// No agent selected: there is nothing loading and no model to choose yet, so
@@ -821,17 +852,9 @@ function TaskModelPicker({
 			onCustom={selectCustomModel}
 			compact
 			recentScope={agentId}
-			tuning={tuning}
 			triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
 			menuAlign="start"
-			// One truncating line: when space runs out the effort is cut before the model name.
-			renderTrigger={(label, effortLabel) => effortLabel ? (
-				<span className="min-w-0 truncate text-control text-settings-muted" title={`${label} · ${effortLabel}`}>
-					<span className="text-foreground">{label}</span> · {effortLabel}
-				</span>
-			) : (
-				<span className="min-w-0 truncate text-control text-foreground" title={label}>{label}</span>
-			)}
+			renderTrigger={(label) => <span className="min-w-0 truncate text-control text-foreground" title={label}>{label}</span>}
 		/>
 	);
 }

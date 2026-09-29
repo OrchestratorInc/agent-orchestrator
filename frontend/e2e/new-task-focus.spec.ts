@@ -119,7 +119,7 @@ function openProjectMenu(page: Page) {
 }
 
 async function expectPromptTakesTyping(page: Page) {
-	const prompt = page.getByRole("dialog").getByLabel("Task", { exact: true });
+	const prompt = page.getByRole("dialog").getByLabel("Task");
 	await expect(prompt).toBeVisible();
 	await page.keyboard.type("caret is here");
 	await expect(prompt).toHaveValue("caret is here");
