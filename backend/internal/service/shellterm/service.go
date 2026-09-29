@@ -37,6 +37,7 @@ type ShellRuntime interface {
 // start in. The daemon wiring adapts the project service to it.
 type ProjectRootLocator interface {
 	ProjectRoot(ctx context.Context, id domain.ProjectID) (string, error)
+	ProjectEnv(ctx context.Context, id domain.ProjectID) (map[string]string, error)
 }
 
 // SessionWorkspaceLocator resolves a session id to the workspace it is
@@ -176,13 +177,13 @@ func NewService(runtime ShellRuntime, store Store, projects ProjectRootLocator, 
 	}
 }
 
-func (s *Service) pinnedEnv() map[string]string {
-	path, err := agentlaunch.PinnedPATH(s.executable, os.Getenv, nil, s.dataDir)
+func (s *Service) pinnedEnv(projectEnv map[string]string) map[string]string {
+	path, err := agentlaunch.PinnedPATH(s.executable, os.Getenv, projectEnv, s.dataDir)
 	if err != nil {
 		s.log.Warn("shell terminal PATH not pinned to the daemon binary; a bare `ao` may resolve to a different install", "err", err)
-		return nil
+		return agentlaunch.MergeEnv(projectEnv, nil)
 	}
-	return map[string]string{"PATH": path}
+	return agentlaunch.MergeEnv(projectEnv, map[string]string{"PATH": path})
 }
 
 // sessionGateFor returns the gate for id, creating it on first use.
@@ -244,6 +245,13 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 	if err != nil {
 		return ShellTerminal{}, err
 	}
+	var projectEnv map[string]string
+	if projectID != "" {
+		projectEnv, err = s.projects.ProjectEnv(ctx, projectID)
+		if err != nil {
+			return ShellTerminal{}, fmt.Errorf("open shell terminal: resolve project environment: %w", err)
+		}
+	}
 	openTerminals, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
 	if err != nil {
 		return ShellTerminal{}, fmt.Errorf("open shell terminal: list existing terminals: %w", err)
@@ -259,7 +267,8 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 	}
 	return s.openTerminal(ctx, openTerminalConfig{
 		argv:       argv,
-		env:        s.pinnedEnv(),
+		env:        s.pinnedEnv(projectEnv),
+		projectEnv: projectEnv,
 		projectID:  projectID,
 		sessionID:  in.SessionID,
 		workingDir: workingDir,
@@ -470,6 +479,7 @@ type openTerminalConfig struct {
 	handleID                 string
 	argv                     []string
 	env                      map[string]string
+	projectEnv               map[string]string
 	projectID                domain.ProjectID
 	sessionID                domain.SessionID
 	workingDir               string
@@ -506,7 +516,7 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		if cfg.cleanupWorkingDirOnError {
 			s.cleanupAuthWorkspace(cfg.workingDir, handleID)
 		}
-		return ShellTerminal{}, fmt.Errorf("open shell terminal %s: runtime: %w", handleID, err)
+		return ShellTerminal{}, fmt.Errorf("open shell terminal %s: runtime: %w", handleID, agentlaunch.RedactError(err, cfg.projectEnv))
 	}
 
 	rec := ShellTerminalRecord{
@@ -525,6 +535,7 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 	if err := s.store.InsertShellTerminal(ctx, rec); err != nil {
 		stillAlive, destroyErr := s.destroyRuntimeConfirmed(context.WithoutCancel(ctx), handle)
 		if stillAlive {
+			destroyErr = agentlaunch.RedactError(destroyErr, cfg.projectEnv)
 			s.log.Warn("shell terminal rollback failed; retaining workspace for live runtime",
 				"handleId", handle.ID, "workingDir", cfg.workingDir, "error", destroyErr)
 		} else if cfg.cleanupWorkingDirOnError {
