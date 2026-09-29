@@ -297,10 +297,6 @@ type startOptions struct {
 	reattachAttempts     int
 }
 
-// errProviderNotLive reports that an automatic reattachment found no live
-// provider to adopt.
-var errProviderNotLive = errors.New("chat provider host is no longer live")
-
 func (s *Service) start(ctx context.Context, cfg StartConfig, opts startOptions) (*Controller, error) {
 	owner := conversationOwner(cfg)
 	if owner.Kind == domain.ConversationOwnerReview {
@@ -682,10 +678,10 @@ func (s *Service) start(ctx context.Context, cfg StartConfig, opts startOptions)
 	if reconnected, ok := conv.(ports.ChatLiveReconnector); ok {
 		liveReconnect = reconnected.ReconnectedLive()
 	}
-	if opts.requireLiveReconnect && !liveReconnect {
+	if (opts.requireLiveReconnect || cfg.RequireLiveReconnect) && !liveReconnect {
 		// Nothing has been claimed yet. Destroy whatever the driver opened in
 		// place of the vanished provider rather than adopting it silently.
-		return nil, errors.Join(errProviderNotLive, cleanupUnpublishedConversation(conv, true))
+		return nil, errors.Join(ports.ErrChatProviderNotLive, cleanupUnpublishedConversation(conv, true))
 	}
 	if (cfg.HistoryMode == ports.ChatHistoryRequired) && liveReconnect {
 		// A TUI handoff needs a fresh, verified native-history admission. A host
@@ -964,6 +960,7 @@ func (s *Service) start(ctx context.Context, cfg StartConfig, opts startOptions)
 	// A committed reservation is consumed. Internal controller restarts must
 	// resume the now-current branch, not retry its old ownership snapshot.
 	cfg.ProviderHandoff = nil
+	cfg.RequireLiveReconnect = false
 	cfg.ProviderScopeID = ""
 	cfg.HistoryMode = ports.ChatHistoryImport
 	s.startConfigs[owner] = cloneStartConfig(cfg)
@@ -1056,14 +1053,14 @@ func (s *Service) reattachLiveProvider(owner domain.ConversationOwner, previous 
 	// Check before connecting: a driver that finds no host launches a
 	// replacement provider, which a reattachment must never do.
 	if alive, probeErr := previous.providerAlive(ctx); probeErr == nil && !alive {
-		s.recordLostProvider(ctx, previous, log, errProviderNotLive)
+		s.recordLostProvider(ctx, previous, log, ports.ErrChatProviderNotLive)
 		return
 	}
 	controller, err := s.start(ctx, cfg, startOptions{requireLiveReconnect: true, reattachAttempts: attempt})
 	switch {
 	case err == nil:
 		log.Info("reattached chat controller to live provider host", "newGeneration", controller.Generation())
-	case errors.Is(err, errProviderNotLive):
+	case errors.Is(err, ports.ErrChatProviderNotLive):
 		s.recordLostProvider(ctx, previous, log, err)
 	default:
 		log.Error("chat controller reattachment failed; provider host preserved", "error", err)

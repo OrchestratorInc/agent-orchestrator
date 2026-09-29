@@ -55,7 +55,9 @@ Codex app-server uses the original raw protocol profile:
   generation; it never launches a replacement from that path. Startup
   reconciliation likewise preserves a failed Chat relaunch as unverified rather
   than exited while its host lives, and a live reconnect clears a stale durable
-  exit. ACP reads apply backpressure so a replayed journal cannot overflow the
+  exit. A durably exited Chat row is reattached at startup only when its host
+  is demonstrably alive, through a live-only start; a dead or unverifiable host
+  leaves it exited for an explicit Resume Agent. ACP reads apply backpressure so a replayed journal cannot overflow the
   SDK's bounded notification queue (issue #5790).
 - Startup orphan reconciliation only destroys a compatible host when durable
   state proves its Chat session is terminated, absent, or no longer Chat. An unreadable
