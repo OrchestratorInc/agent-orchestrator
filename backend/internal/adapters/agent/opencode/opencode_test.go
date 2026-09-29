@@ -739,6 +739,40 @@ func TestGetAgentHooksRefusesToClobberForeignFile(t *testing.T) {
 	}
 }
 
+func TestGetAgentHooksRemovesOnlyManagedV2Plugin(t *testing.T) {
+	tests := []struct {
+		name       string
+		v2Body     string
+		wantExists bool
+	}{
+		{name: "managed", v2Body: "// agent-orchestrator: managed opencode-v2 activity plugin\n", wantExists: false},
+		{name: "foreign", v2Body: "export default { id: 'user-v2-path' }\n", wantExists: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			v2Path := filepath.Join(workspace, ".opencode", "plugins", "ao-activity-v2.ts")
+			if err := os.MkdirAll(filepath.Dir(v2Path), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(v2Path, []byte(tt.v2Body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace}); err != nil {
+				t.Fatal(err)
+			}
+			_, err := os.Stat(v2Path)
+			if tt.wantExists && err != nil {
+				t.Fatalf("foreign v2 plugin removed: %v", err)
+			}
+			if !tt.wantExists && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("managed v2 plugin survived: %v", err)
+			}
+		})
+	}
+}
+
 func TestUninstallHooksRemovesPlugin(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "opencode"}
 	workspace := t.TempDir()
