@@ -34,19 +34,34 @@ type fakeStore struct {
 	commitCalls          int
 	advances             []domain.SessionInterfaceTransitionPhase
 	claimErr             error
+	renewErr             error
 	advanceErr           error
 	commitErr            error
 	heldMessagesReleased bool
+	claimCursor          int
+	claimLimits          []int
 }
 
-func (f *fakeStore) ClaimCoordinatedInterfaceTransitions(context.Context, string, int, time.Duration) ([]postgres.CoordinatedInterfaceTransition, error) {
+func (f *fakeStore) ClaimCoordinatedInterfaceTransitions(_ context.Context, _ string, limit int, _ time.Duration) ([]postgres.CoordinatedInterfaceTransition, error) {
+	f.claimLimits = append(f.claimLimits, limit)
 	if f.claimErr != nil {
 		return nil, f.claimErr
 	}
-	return f.transitions, nil
+	for offset := range len(f.transitions) {
+		index := (f.claimCursor + offset) % len(f.transitions)
+		phase := f.transitions[index].Phase
+		if phase == domain.SessionInterfaceTransitionCompleted ||
+			phase == domain.SessionInterfaceTransitionFailed ||
+			phase == domain.SessionInterfaceTransitionCancelled {
+			continue
+		}
+		f.claimCursor = (index + 1) % len(f.transitions)
+		return []postgres.CoordinatedInterfaceTransition{f.transitions[index]}, nil
+	}
+	return nil, nil
 }
 func (f *fakeStore) RenewCoordinatedInterfaceClaim(ctx context.Context, owner, transitionID string, lease time.Duration) error {
-	return nil
+	return f.renewErr
 }
 func (f *fakeStore) AdvanceCoordinatedInterfaceTransition(ctx context.Context, owner, transitionID string, from, to domain.SessionInterfaceTransitionPhase, nativeConversationID, errorCode, errorDetail string, releaseHeldMessages bool) error {
 	if f.advanceErr != nil {
@@ -254,12 +269,61 @@ func TestReconcileBusyDrainYieldsToOtherSession(t *testing.T) {
 	if len(coordinator.retries) != 0 {
 		t.Fatalf("busy drain counted as failed worker command: %v", coordinator.retries)
 	}
+	for _, limit := range store.claimLimits {
+		if limit != 1 {
+			t.Fatalf("claimed %d transitions before processing them, want one at a time", limit)
+		}
+	}
 	driver.busy = false
 	if err := coordinator.ReconcileOnce(context.Background()); err != nil {
 		t.Fatalf("reconcile idle source: %v", err)
 	}
 	if got := store.transitions[0].Phase; got != domain.SessionInterfaceTransitionCompleted {
 		t.Fatalf("formerly busy transition phase = %q, want completed", got)
+	}
+}
+
+type claimLossDriver struct {
+	*fakeDriver
+	preflightStarted chan struct{}
+}
+
+func (d *claimLossDriver) PreflightTarget(ctx context.Context, _ postgres.CoordinatedInterfaceTransition) error {
+	close(d.preflightStarted)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestReconcileCancelsWorkerStepWhenClaimRenewalFails(t *testing.T) {
+	store := &fakeStore{
+		transitions: []postgres.CoordinatedInterfaceTransition{testTransition(domain.SessionInterfaceTransitionRequested)},
+		renewErr:    postgres.ErrTransitionStale,
+	}
+	driver := &claimLossDriver{fakeDriver: &fakeDriver{}, preflightStarted: make(chan struct{})}
+	coordinator := New(store, driver, Options{Interval: time.Millisecond, Logger: slog.New(slog.DiscardHandler)})
+	coordinator.lease = 30 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- coordinator.ReconcileOnce(ctx) }()
+	select {
+	case <-driver.preflightStarted:
+	case <-ctx.Done():
+		t.Fatal("preflight did not start")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("lost claim did not cancel the worker step")
+	}
+	if got := store.transitions[0].Phase; got != domain.SessionInterfaceTransitionPreflighting {
+		t.Fatalf("phase after lost claim = %q, want preflighting", got)
+	}
+	if driver.stopCalls != 0 || driver.startCalls != 0 {
+		t.Fatalf("worker steps continued after lost claim: stops=%d starts=%d", driver.stopCalls, driver.startCalls)
 	}
 }
 

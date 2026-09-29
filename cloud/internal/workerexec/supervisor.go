@@ -40,10 +40,8 @@ type Supervisor struct {
 	CompletionRetry     time.Duration
 	Logger              *slog.Logger
 
-	// busy is read by the transport supervisor while an interface handoff is
-	// draining Chat work. It belongs to the long-lived controller instance, not
-	// an individual turn, so a TUI handoff never mistakes a running headless
-	// provider process for an idle controller.
+	// busy covers both a claim in flight and its turn until completion. A
+	// handoff must not cancel Run between a durable claim and turn completion.
 	busy atomic.Bool
 	// stopping fences turns claimed while an interface interrupt is in flight.
 	// A turn can be busy before execute publishes its cancel function.
@@ -133,8 +131,18 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			}
 			continue
 		}
+		// Interrupt and the start of a claim share activeMu. Either stopping
+		// wins before the claim, or Idle stays false until its turn is settled.
+		s.activeMu.Lock()
+		if s.stopping.Load() {
+			s.activeMu.Unlock()
+			continue
+		}
+		s.busy.Store(true)
+		s.activeMu.Unlock()
 		turn, err := s.Control.ClaimTurn(ctx)
 		if err != nil {
+			s.busy.Store(false)
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -145,12 +153,12 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			continue
 		}
 		if turn == nil {
+			s.busy.Store(false)
 			if !wait(ctx, s.PollInterval) {
 				return nil
 			}
 			continue
 		}
-		s.busy.Store(true)
 		err = s.execute(ctx, *turn)
 		s.busy.Store(false)
 		if err != nil {

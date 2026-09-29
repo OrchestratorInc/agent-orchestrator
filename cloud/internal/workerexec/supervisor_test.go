@@ -268,6 +268,72 @@ func TestSupervisorBusyDuringTurn(t *testing.T) {
 	}
 }
 
+type claimBoundaryControl struct {
+	controlStub
+	started   chan struct{}
+	release   chan struct{}
+	completed chan bool
+}
+
+func (c *claimBoundaryControl) ClaimTurn(ctx context.Context) (*worker.Turn, error) {
+	close(c.started)
+	select {
+	case <-c.release:
+		return &worker.Turn{ID: "turn-1", Attempt: 1}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (c *claimBoundaryControl) CompleteTurn(ctx context.Context, _ string, _ int, cancelled bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.completed <- cancelled
+	return nil
+}
+
+func TestInterruptWaitsForClaimedTurnToComplete(t *testing.T) {
+	control := &claimBoundaryControl{
+		started: make(chan struct{}), release: make(chan struct{}), completed: make(chan bool, 1),
+	}
+	supervisor := &Supervisor{
+		Control: control, Builder: builderStub{}, Runner: runnerStub{},
+		Workspace: t.TempDir(), PollInterval: time.Millisecond, CompletionRetry: time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+	select {
+	case <-control.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("claim did not start")
+	}
+	supervisor.Interrupt()
+	if supervisor.Idle() {
+		t.Fatal("controller reported idle while a turn claim was in flight")
+	}
+	close(control.release)
+	select {
+	case cancelled := <-control.completed:
+		if !cancelled {
+			t.Fatal("claimed turn was completed without interruption")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("claimed turn was not completed before controller shutdown")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("controller did not stop")
+	}
+}
+
 type runnerFunc func(context.Context, Command, func(Output) error) error
 
 func (f runnerFunc) Run(ctx context.Context, command Command, emit func(Output) error) error {
