@@ -695,7 +695,7 @@ func TestSpawnAsyncChat_PreparedProvisionFailureClearsRemovedWorkspace(t *testin
 	ws := m.workspace.(*fakeWorkspace)
 	ws.path = t.TempDir()
 	project := st.projects[string(chatTestProject)]
-	project.Config.PostCreate = []string{"exit 3"}
+	project.Config.Symlinks = []string{"../outside"}
 	st.projects[string(chatTestProject)] = project
 	m.runBackground = func(work func()) { work() }
 	token, err := m.PrepareTaskWorkspace(context.Background(), project)

@@ -140,9 +140,11 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	// workspace lifecycle still serializes with spawn, restore and cleanup.
 	releaseWorkspaceGate := m.acquireWorkspaceGate(in.cfg.ProjectID)
 	defer releaseWorkspaceGate()
+	var fetchTargets []defaultBranchRefreshTarget
 	if ws.Path == "" {
-		baseRefs := m.refreshDefaultBranchesBestEffort(ctx, in.project)
-		m.logAsyncChatSpawnStage(id, "default_branch_refresh", stageStarted)
+		var baseRefs map[string]string
+		baseRefs, fetchTargets = m.resolveDefaultBranchTargets(ctx, in.project)
+		m.logAsyncChatSpawnStage(id, "default_branch_resolve", stageStarted)
 		stageStarted = time.Now()
 		ws, workspaceProject, err = m.createSessionWorkspace(ctx, in.project, in.cfg, id, in.branch, baseRefs)
 	} else {
@@ -236,6 +238,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		m.failAsyncChatSpawn(ctx, id, err)
 		return
 	}
+	m.scheduleDeferredSpawnWork(in.project, fetchTargets, ws.Path, in.project.Config.PostCreate, id)
 	m.logAsyncChatSpawnStage(id, "controller_start", stageStarted)
 	stageStarted = time.Now()
 	if err := m.chat.DrainChatQueue(ctx, id); err != nil {
