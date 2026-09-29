@@ -282,6 +282,12 @@ func (s *Supervisor) stopChat(ctx context.Context) error {
 	// Cancelling the controller first also cancels that durable write, leaving
 	// the old turn visibly running after the interface has changed.
 	if activity, ok := s.ChatRunner.(chatActivity); ok {
+		fencer, ok := s.ChatRunner.(interface{ FenceClaims() func() })
+		if !ok {
+			return errors.New("chat controller cannot fence new turns during handoff")
+		}
+		release := fencer.FenceClaims()
+		defer release()
 		ticker := time.NewTicker(25 * time.Millisecond)
 		defer ticker.Stop()
 		for !activity.Idle() {

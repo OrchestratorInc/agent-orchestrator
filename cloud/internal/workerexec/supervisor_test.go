@@ -334,6 +334,48 @@ func TestInterruptWaitsForClaimedTurnToComplete(t *testing.T) {
 	}
 }
 
+func TestFenceClaimsLetsInflightTurnFinish(t *testing.T) {
+	control := &claimBoundaryControl{
+		started: make(chan struct{}), release: make(chan struct{}), completed: make(chan bool, 1),
+	}
+	supervisor := &Supervisor{
+		Control: control, Builder: builderStub{command: Command{Path: "/bin/echo"}}, Runner: runnerStub{},
+		Workspace: t.TempDir(), PollInterval: time.Millisecond, CompletionRetry: time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+	select {
+	case <-control.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("claim did not start")
+	}
+	release := supervisor.FenceClaims()
+	defer release()
+	if supervisor.Idle() {
+		t.Fatal("controller reported idle while a fenced claim was in flight")
+	}
+	close(control.release)
+	select {
+	case cancelled := <-control.completed:
+		if cancelled {
+			t.Fatal("drain interrupted the claimed turn")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("claimed turn was not completed")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("controller did not stop")
+	}
+}
+
 type runnerFunc func(context.Context, Command, func(Output) error) error
 
 func (f runnerFunc) Run(ctx context.Context, command Command, emit func(Output) error) error {

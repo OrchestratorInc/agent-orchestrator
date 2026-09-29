@@ -23,6 +23,7 @@ type handoffPathStore struct {
 	committed   domain.SessionInterface
 	requests    []string
 	stopStarted chan struct{}
+	sourceDone  <-chan struct{}
 }
 
 func (s *handoffPathStore) ClaimCoordinatedInterfaceTransitions(_ context.Context, _ string, _ int, _ time.Duration) ([]postgres.CoordinatedInterfaceTransition, error) {
@@ -67,6 +68,13 @@ func (s *handoffPathStore) ReleaseCoordinatedInterfaceClaim(context.Context, str
 
 func (s *handoffPathStore) CreateCoordinatedInterfaceRequest(_ context.Context, _, _, kind string, payload json.RawMessage) (domain.WorkerRequest, error) {
 	s.requests = append(s.requests, kind)
+	if kind == "interface.start" && s.sourceDone != nil {
+		select {
+		case <-s.sourceDone:
+		default:
+			return domain.WorkerRequest{}, errors.New("target start dispatched before source process exited")
+		}
+	}
 	if kind == "interface.stop" && s.stopStarted != nil {
 		close(s.stopStarted)
 	}
@@ -187,6 +195,7 @@ func TestCoordinatorInterruptsBusyTUIBeforeStartingChat(t *testing.T) {
 		},
 		supervisor: supervisor,
 		workerCtx:  workerCtx,
+		sourceDone: process.done,
 	}
 	driver := interfacereconcile.NewTransportDriver(store, "owner-1", time.Second, nil)
 	coordinator := interfacereconcile.New(store, driver, interfacereconcile.Options{

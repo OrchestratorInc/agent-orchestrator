@@ -46,6 +46,9 @@ type Supervisor struct {
 	// stopping fences turns claimed while an interface interrupt is in flight.
 	// A turn can be busy before execute publishes its cancel function.
 	stopping atomic.Bool
+	// drainFences stop new claims without interrupting a turn already in flight.
+	// A timed-out handoff releases its own fence so the source can keep running.
+	drainFences atomic.Int32
 
 	activeMu    sync.Mutex
 	active      *activeExecution
@@ -67,6 +70,17 @@ func (s *Supervisor) Idle() bool {
 // completed interface handoff or rollback. The previous Run must have exited.
 func (s *Supervisor) ResetInterrupt() {
 	s.stopping.Store(false)
+}
+
+// FenceClaims lets a drain finish the current turn without starting another.
+// It shares activeMu with the claim boundary, so an in-flight claim keeps
+// Idle false until that turn has been settled.
+func (s *Supervisor) FenceClaims() func() {
+	s.activeMu.Lock()
+	s.drainFences.Add(1)
+	s.activeMu.Unlock()
+	var once sync.Once
+	return func() { once.Do(func() { s.drainFences.Add(-1) }) }
 }
 
 // Interrupt stops only the running Chat turn. It returns false when the
@@ -125,7 +139,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	}
 
 	for {
-		if s.stopping.Load() {
+		if s.stopping.Load() || s.drainFences.Load() > 0 {
 			if !wait(ctx, s.PollInterval) {
 				return nil
 			}
@@ -134,7 +148,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		// Interrupt and the start of a claim share activeMu. Either stopping
 		// wins before the claim, or Idle stays false until its turn is settled.
 		s.activeMu.Lock()
-		if s.stopping.Load() {
+		if s.stopping.Load() || s.drainFences.Load() > 0 {
 			s.activeMu.Unlock()
 			continue
 		}
