@@ -16,11 +16,18 @@
 //
 // Launch shape:
 //
-//	dsh --profile headless [--session-id <id>] <task>
+//	dsh --profile headless <task>
 //
 // The task is a positional argument; DeepSeek Harness joins multiple words with
-// spaces. A task of exactly "-" makes it read the task from stdin, which AO does
-// not supply, so that literal is rejected instead of left to block.
+// spaces. It falls back to reading the task from stdin both when no task is
+// given and when the task is exactly "-", and AO never writes to that stdin, so
+// a headless launch requires a task and rejects that literal instead of leaving
+// the session blocked until the supervisor kills it.
+//
+// --session-id adopts an already persisted Harness session and is rejected for
+// an id Harness has not seen, so it belongs to the restore path only. A fresh
+// launch omits it and lets Harness mint its own id; AO's own SessionID is never
+// passed, because it is the AO-internal id, not a Harness-native one.
 //
 // Model selection: the headless profile exposes no model or reasoning-effort
 // flag — its model route comes from the profile's own configuration. Both are
@@ -99,7 +106,13 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 
 // GetLaunchCommand builds the argv to run one headless task:
 //
-//	dsh --profile headless [--session-id <id>] <task>
+//	dsh --profile headless <task>
+//
+// No --session-id is passed: DeepSeek Harness reads that flag as "adopt this
+// already persisted session" and rejects an id it has not seen, and cfg.SessionID
+// is the AO-internal id rather than a Harness-native one. A fresh launch
+// therefore lets Harness mint its own id, which GetRestoreCommand resumes by
+// once AO has captured it.
 //
 // AO standing instructions have no DeepSeek Harness surface to attach to (no
 // system-prompt flag and no workspace hook file), so a system prompt file is
@@ -112,24 +125,17 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if err != nil {
 		return nil, err
 	}
-	cmd = []string{binary, "--profile", headlessProfile}
-	if agentSessionID := strings.TrimSpace(cfg.SessionID); agentSessionID != "" {
-		cmd = append(cmd, "--session-id", agentSessionID)
+	task, err := headlessTask(cfg.Prompt)
+	if err != nil {
+		return nil, err
 	}
-	if cfg.Prompt != "" {
-		task, err := headlessTask(cfg.Prompt)
-		if err != nil {
-			return nil, err
-		}
-		cmd = append(cmd, task)
-	}
-	return cmd, nil
+	return []string{binary, "--profile", headlessProfile, task}, nil
 }
 
 // GetRestoreCommand rebuilds the argv that continues a persisted DeepSeek
 // Harness session when its id is known:
 //
-//	dsh --profile headless --session-id <id> [task]
+//	dsh --profile headless --session-id <id> <task>
 //
 // A terminal launch only has that id when AO captured one into session metadata,
 // which needs a hook surface DeepSeek Harness does not expose; in practice the id
@@ -148,15 +154,11 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
-	cmd = []string{binary, "--profile", headlessProfile, "--session-id", agentSessionID}
-	if cfg.Prompt != "" {
-		task, err := headlessTask(cfg.Prompt)
-		if err != nil {
-			return nil, false, err
-		}
-		cmd = append(cmd, task)
+	task, err := headlessTask(cfg.Prompt)
+	if err != nil {
+		return nil, false, err
 	}
-	return cmd, true, nil
+	return []string{binary, "--profile", headlessProfile, "--session-id", agentSessionID, task}, true, nil
 }
 
 // SessionInfo surfaces the standard hook-derived session metadata. DeepSeek
@@ -170,12 +172,17 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
-// headlessTask validates the task argument. DeepSeek Harness reads a task of
-// exactly "-" from stdin, which a terminal launch never provides, so the launch
-// is rejected with an actionable error instead of blocking until the supervisor
-// kills it.
+// headlessTask validates the positional task argument. DeepSeek Harness reads
+// the task from stdin both when the argument is absent and when it is exactly
+// "-", and a terminal launch never writes to that stdin, so both cases are
+// rejected with an actionable error instead of blocking until the supervisor
+// kills the session. AO's --prompt is optional, which makes the empty case the
+// reachable one.
 func headlessTask(prompt string) (string, error) {
-	if strings.TrimSpace(prompt) == stdioTaskLiteral {
+	switch strings.TrimSpace(prompt) {
+	case "":
+		return "", fmt.Errorf("%s: a terminal session needs a task; DeepSeek Harness reads stdin when the %s profile is launched without one", adapterID, headlessProfile)
+	case stdioTaskLiteral:
 		return "", fmt.Errorf("%s: refusing to pass %q as a task; DeepSeek Harness would read stdin instead of running it", adapterID, stdioTaskLiteral)
 	}
 	return prompt, nil

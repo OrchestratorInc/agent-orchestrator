@@ -86,21 +86,67 @@ func TestGetLaunchCommandRejectsStdinTaskLiteral(t *testing.T) {
 	}
 }
 
+// TestGetLaunchCommandOmitsTheAOSessionID pins the flag's meaning: --session-id
+// adopts a session Harness has already persisted and is rejected for an id it
+// has not seen, while cfg.SessionID is AO's own id. Passing it would fail every
+// fresh spawn, because AO always supplies that id.
+func TestGetLaunchCommandOmitsTheAOSessionID(t *testing.T) {
+	p := &Plugin{resolvedBinary: "dsh"}
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		SessionID:       "ao-session-1",
+		NativeSessionID: "native-1",
+		Prompt:          "task",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"dsh", "--profile", "headless", "task"}
+	if !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
+	}
+}
+
+// TestGetLaunchCommandRejectsAPromptlessTask covers the reachable half of the
+// stdin trap: AO's --prompt is optional, and Harness reads stdin when the
+// headless profile gets no task at all, so such a session would hang instead of
+// doing work.
+func TestGetLaunchCommandRejectsAPromptlessTask(t *testing.T) {
+	p := &Plugin{resolvedBinary: "dsh"}
+	for _, prompt := range []string{"", "   \n"} {
+		_, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{Prompt: prompt})
+		if err == nil || !strings.Contains(err.Error(), "stdin") {
+			t.Fatalf("prompt %q: err = %v, want a stdin refusal", prompt, err)
+		}
+	}
+}
+
 func TestGetRestoreCommandRequiresNativeSessionID(t *testing.T) {
 	p := &Plugin{resolvedBinary: "dsh"}
-	if _, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{}); err != nil || ok {
+	cfg := ports.RestoreConfig{Prompt: "keep going"}
+	if _, ok, err := p.GetRestoreCommand(context.Background(), cfg); err != nil || ok {
 		t.Fatalf("restore without a native id = (ok %v, err %v), want (false, nil)", ok, err)
 	}
 
-	cfg := ports.RestoreConfig{}
 	cfg.Session.Metadata = map[string]string{ports.MetadataKeyAgentSessionID: " session-1 "}
 	cmd, ok, err := p.GetRestoreCommand(context.Background(), cfg)
 	if err != nil || !ok {
 		t.Fatalf("restore with a native id = (ok %v, err %v), want (true, nil)", ok, err)
 	}
-	want := []string{"dsh", "--profile", "headless", "--session-id", "session-1"}
+	want := []string{"dsh", "--profile", "headless", "--session-id", "session-1", "keep going"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("unexpected restore command\nwant: %#v\n got: %#v", want, cmd)
+	}
+}
+
+// TestGetRestoreCommandRejectsAPromptlessTask holds the same stdin guarantee on
+// the resume path: continuing a persisted session still runs one headless task,
+// so an empty turn would block exactly as a promptless launch does.
+func TestGetRestoreCommandRejectsAPromptlessTask(t *testing.T) {
+	p := &Plugin{resolvedBinary: "dsh"}
+	cfg := ports.RestoreConfig{}
+	cfg.Session.Metadata = map[string]string{ports.MetadataKeyAgentSessionID: "session-1"}
+	if _, _, err := p.GetRestoreCommand(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "stdin") {
+		t.Fatalf("err = %v, want a stdin refusal", err)
 	}
 }
 
