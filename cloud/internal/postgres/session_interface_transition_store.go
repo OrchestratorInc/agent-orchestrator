@@ -92,12 +92,57 @@ func (s *Store) StartSessionInterfaceTransition(
 		transition, err = insertInterfaceTransition(
 			ctx, tx, orgID, sessionID, source, target, policy, nativeConversationID,
 		)
-		return err
+		if err != nil {
+			return err
+		}
+		if source == domain.SessionInterfaceChat && policy == domain.SessionInterfaceTransitionInterrupt {
+			return interruptQueuedChatTurns(ctx, tx, orgID, sessionID)
+		}
+		return nil
 	})
 	if err != nil {
 		return domain.SessionInterfaceTransition{}, err
 	}
 	return transition, nil
+}
+
+// Stop-now cancels turns that have not reached the Chat controller. The active
+// turn is interrupted by the worker; queued turns must not be claimed by the
+// replacement TUI after the handoff commits.
+func interruptQueuedChatTurns(ctx context.Context, tx pgx.Tx, orgID, sessionID string) error {
+	rows, err := tx.Query(ctx, `UPDATE ao_turns
+		SET state = 'completed', completed_at = now(), updated_at = now()
+		WHERE org_id = $1 AND session_id = $2 AND state = 'queued'
+		RETURNING id, attempt_count`, orgID, sessionID)
+	if err != nil {
+		return err
+	}
+	type interruptedTurn struct {
+		id      string
+		attempt int
+	}
+	var turns []interruptedTurn
+	for rows.Next() {
+		var turn interruptedTurn
+		if err := rows.Scan(&turn.id, &turn.attempt); err != nil {
+			rows.Close()
+			return err
+		}
+		turns = append(turns, turn)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, turn := range turns {
+		if err := appendTypedEvent(ctx, tx, orgID, sessionID, "chat.turn_interrupted", map[string]any{
+			"turnId": turn.id, "attempt": turn.attempt,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // GetActiveSessionInterfaceTransition returns the active transition for a

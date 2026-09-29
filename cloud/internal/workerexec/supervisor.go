@@ -45,6 +45,9 @@ type Supervisor struct {
 	// an individual turn, so a TUI handoff never mistakes a running headless
 	// provider process for an idle controller.
 	busy atomic.Bool
+	// stopping fences turns claimed while an interface interrupt is in flight.
+	// A turn can be busy before execute publishes its cancel function.
+	stopping atomic.Bool
 
 	activeMu    sync.Mutex
 	active      *activeExecution
@@ -62,18 +65,26 @@ func (s *Supervisor) Idle() bool {
 	return !s.busy.Load()
 }
 
+// ResetInterrupt prepares this controller for a new Chat activation after a
+// completed interface handoff or rollback. The previous Run must have exited.
+func (s *Supervisor) ResetInterrupt() {
+	s.stopping.Store(false)
+}
+
 // Interrupt stops only the running Chat turn. It returns false when the
 // controller is between turns, which is still a successful stop-now boundary.
 func (s *Supervisor) Interrupt() bool {
+	s.stopping.Store(true)
 	s.activeMu.Lock()
 	active := s.active
-	s.activeMu.Unlock()
-	if active == nil {
-		return false
+	if active != nil {
+		active.interrupted.Store(true)
 	}
-	active.interrupted.Store(true)
-	active.cancel()
-	return true
+	s.activeMu.Unlock()
+	if active != nil {
+		active.cancel()
+	}
+	return active != nil
 }
 
 // Steer delivers guidance to the exact in-flight provider turn. The transport
@@ -116,6 +127,12 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	}
 
 	for {
+		if s.stopping.Load() {
+			if !wait(ctx, s.PollInterval) {
+				return nil
+			}
+			continue
+		}
 		turn, err := s.Control.ClaimTurn(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -151,27 +168,22 @@ func (s *Supervisor) Run(ctx context.Context) error {
 }
 
 func (s *Supervisor) execute(ctx context.Context, turn worker.Turn) error {
-	if turn.CancelRequested {
+	if turn.CancelRequested || s.stopping.Load() {
 		return s.retryComplete(ctx, turn.ID, turn.Attempt, true)
-	}
-	credential, err := s.Control.Credential(ctx)
-	if err != nil {
-		return s.retryFailure(ctx, turn.ID, turn.Attempt, "coding-agent credential unavailable")
-	}
-	command, err := s.Builder.Build(ctx, turn, credential, s.Workspace)
-	credential.Secret = ""
-	if err != nil {
-		return s.retryFailure(ctx, turn.ID, turn.Attempt, err.Error())
-	}
-	if command.Cleanup != nil {
-		defer command.Cleanup()
 	}
 	executionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	active := &activeExecution{cancel: cancel}
 	s.activeMu.Lock()
 	s.active = active
+	interrupted := s.stopping.Load()
+	if interrupted {
+		active.interrupted.Store(true)
+	}
 	s.activeMu.Unlock()
+	if interrupted {
+		cancel()
+	}
 	defer func() {
 		s.activeMu.Lock()
 		if s.active == active {
@@ -179,6 +191,33 @@ func (s *Supervisor) execute(ctx context.Context, turn worker.Turn) error {
 		}
 		s.activeMu.Unlock()
 	}()
+	if active.interrupted.Load() {
+		return s.retryComplete(ctx, turn.ID, turn.Attempt, true)
+	}
+	credential, err := s.Control.Credential(executionCtx)
+	if active.interrupted.Load() {
+		return s.retryComplete(ctx, turn.ID, turn.Attempt, true)
+	}
+	if err != nil {
+		return s.retryFailure(ctx, turn.ID, turn.Attempt, "coding-agent credential unavailable")
+	}
+	command, err := s.Builder.Build(executionCtx, turn, credential, s.Workspace)
+	credential.Secret = ""
+	if active.interrupted.Load() {
+		if command.Cleanup != nil {
+			command.Cleanup()
+		}
+		return s.retryComplete(ctx, turn.ID, turn.Attempt, true)
+	}
+	if err != nil {
+		return s.retryFailure(ctx, turn.ID, turn.Attempt, err.Error())
+	}
+	if command.Cleanup != nil {
+		defer command.Cleanup()
+	}
+	if active.interrupted.Load() {
+		return s.retryComplete(ctx, turn.ID, turn.Attempt, true)
+	}
 	projector := newChatOutputProjector(turn.Harness)
 	publish := func(output Output) error {
 		for _, projected := range projector.Project(output) {

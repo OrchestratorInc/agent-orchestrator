@@ -322,6 +322,9 @@ func (s *Supervisor) startChat(ctx context.Context) error {
 		s.iface.mu.Unlock()
 		return nil
 	}
+	if resetter, ok := s.ChatRunner.(interface{ ResetInterrupt() }); ok {
+		resetter.ResetInterrupt()
+	}
 	runCtx, cancel := context.WithCancel(ctx)
 	s.iface.chatGeneration++
 	generation := s.iface.chatGeneration

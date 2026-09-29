@@ -303,6 +303,46 @@ func TestInterruptCancelsTheActiveChatExecution(t *testing.T) {
 	}
 }
 
+type blockingCommandBuilder struct {
+	started chan struct{}
+}
+
+func (b blockingCommandBuilder) Build(ctx context.Context, _ worker.Turn, _ worker.CredentialResponse, _ string) (Command, error) {
+	close(b.started)
+	<-ctx.Done()
+	return Command{}, ctx.Err()
+}
+
+func TestInterruptDuringChatStartupCancelsTurn(t *testing.T) {
+	started := make(chan struct{})
+	control := &controlStub{credential: worker.CredentialResponse{Provider: "codex", Secret: "test"}}
+	supervisor := &Supervisor{
+		Control: control,
+		Builder: blockingCommandBuilder{started: started},
+		Runner: runnerFunc(func(ctx context.Context, _ Command, _ func(Output) error) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(100 * time.Millisecond):
+				return nil
+			}
+		}),
+		Workspace: t.TempDir(), CancelInterval: time.Millisecond, CompletionRetry: time.Millisecond,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- supervisor.execute(ctx, worker.Turn{ID: "turn-1", Attempt: 1}) }()
+	<-started
+	supervisor.Interrupt()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !control.completed || !control.cancelled {
+		t.Fatalf("completion = %v cancelled = %v, want interrupted turn", control.completed, control.cancelled)
+	}
+}
+
 // Process-level integration: the real OSRunner streams each harness's NDJSON
 // protocol through the projector, so chunked stdout (the OS does not guarantee
 // line-aligned reads) still produces exactly one projected reply and one
