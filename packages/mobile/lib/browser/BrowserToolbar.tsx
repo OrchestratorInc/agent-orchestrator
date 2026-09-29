@@ -4,6 +4,7 @@ import { Feather } from "../icons";
 import type { Theme } from "../theme";
 import { useThemedStyles } from "../ThemeProvider";
 import { iconSize, space, type } from "../tokens";
+import { BrowserGlassSurface, browserGlassSupported } from "./BrowserGlassSurface";
 import { displayBrowserUrl } from "./browserUrl";
 
 export type BrowserToolbarProps = {
@@ -61,6 +62,7 @@ export function BrowserToolbar({
 			<View style={styles.addressRow}>
 				{editing ? (
 					<View style={styles.inputWrap}>
+						<BrowserGlassSurface shape="field" />
 						<TextInput
 							autoCapitalize="none"
 							autoCorrect={false}
@@ -81,6 +83,7 @@ export function BrowserToolbar({
 					</View>
 				) : (
 					<View style={styles.location}>
+						<BrowserGlassSurface shape="field" />
 						<View style={styles.locationIcon}>
 							<Feather name={url.startsWith("https://") ? "lock" : "globe"} size={iconSize.xs} color={styles.colors.textTertiary} />
 						</View>
@@ -118,19 +121,20 @@ function ToolbarButton({ disabled, icon, label, onPress }: { disabled?: boolean;
 	const styles = useThemedStyles(makeStyles);
 	return (
 		<Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled }} disabled={disabled} hitSlop={6} onPress={onPress} style={({ pressed }) => [styles.toolbarButton, pressed && !disabled && styles.pressed, disabled && styles.disabled]}>
+			<BrowserGlassSurface shape="circle" />
 			<Feather name={icon} size={iconSize.md} color={disabled ? styles.colors.textFaint : styles.colors.textPrimary} />
 		</Pressable>
 	);
 }
 
 const makeStyles = (t: Theme) => Object.assign(StyleSheet.create({
-	toolbar: { borderTopWidth: 1, borderTopColor: t.borderDefault, backgroundColor: t.bgSurface, paddingHorizontal: space.md, paddingTop: space.sm, paddingBottom: space.sm, gap: space.xs },
+	toolbar: { backgroundColor: browserGlassSupported ? "transparent" : t.bgSurface, paddingHorizontal: space.md, paddingTop: space.sm, paddingBottom: space.sm, gap: space.sm },
 	addressRow: { minHeight: 44, flexDirection: "row", alignItems: "center" },
 	controlsRow: { minHeight: 44, flexDirection: "row", alignItems: "center", justifyContent: "space-around", paddingHorizontal: space.sm },
-	toolbarButton: { flex: 1, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 10, borderCurve: "continuous" },
+	toolbarButton: { width: 44, height: 44, alignItems: "center", justifyContent: "center", borderRadius: 22, borderCurve: "continuous", overflow: "hidden", backgroundColor: browserGlassSupported ? "transparent" : t.bgElevated },
 	pressed: { backgroundColor: t.bgElevated },
 	disabled: { opacity: 0.45 },
-	location: { flex: 1, minHeight: 44, flexDirection: "row", alignItems: "stretch", borderRadius: 14, borderCurve: "continuous", backgroundColor: t.bgElevated, overflow: "hidden" },
+	location: { flex: 1, minHeight: 44, flexDirection: "row", alignItems: "stretch", borderRadius: 22, borderCurve: "continuous", backgroundColor: browserGlassSupported ? "transparent" : t.bgElevated, overflow: "hidden" },
 	locationIcon: { width: 48, alignItems: "center", justifyContent: "center" },
 	locationMain: { flex: 1, minWidth: 0, alignItems: "center", justifyContent: "center", paddingHorizontal: space.xs },
 	locationAction: { width: 48, alignItems: "center", justifyContent: "center" },
@@ -138,6 +142,6 @@ const makeStyles = (t: Theme) => Object.assign(StyleSheet.create({
 	locationText: { width: "100%", minWidth: 0, alignItems: "center" },
 	title: { width: "100%", textAlign: "center", fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "600" },
 	url: { width: "100%", textAlign: "center", fontFamily: t.fontMono, color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-	inputWrap: { flex: 1, minHeight: 40, justifyContent: "center", borderRadius: 12, borderCurve: "continuous", borderWidth: 1, borderColor: t.accentBorder, backgroundColor: t.bgElevated, paddingHorizontal: space.md },
+	inputWrap: { flex: 1, minHeight: 44, justifyContent: "center", borderRadius: 22, borderCurve: "continuous", borderWidth: 1, borderColor: t.accentBorder, backgroundColor: browserGlassSupported ? "transparent" : t.bgElevated, paddingHorizontal: space.md, overflow: "hidden" },
 	input: { minHeight: 38, padding: 0, textAlign: "center", fontFamily: t.fontMono, color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 }), { colors: t });

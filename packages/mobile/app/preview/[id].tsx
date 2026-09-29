@@ -304,7 +304,7 @@ export default function SessionPreviewScreen() {
 			{browserState.error ? <BrowserErrorBanner message={browserState.error} onDismiss={() => setBrowserState((current) => ({ ...current, error: undefined }))} onRetry={retry} /> : null}
 			{toast ? <View style={styles.toast}><Text style={styles.toastText}>{toast}</Text></View> : null}
 		</View>
-		<View style={{ paddingBottom: insets.bottom, backgroundColor: t.bgSurface }}>
+		<View style={[styles.browserDock, { paddingBottom: Math.max(insets.bottom, space.sm) }]}>
 			<BrowserToolbar
 				url={currentUrl}
 				title={browserState.title || preview?.entry}
@@ -327,6 +327,7 @@ export default function SessionPreviewScreen() {
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	content: { flex: 1 },
+	browserDock: { position: "absolute", left: 0, right: 0, bottom: 0 },
 	web: { flex: 1, backgroundColor: t.bgBase },
 	webLoading: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.md, paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
