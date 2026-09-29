@@ -8,7 +8,7 @@ import { authHeaders } from "../../lib/config";
 import { headerActionStyle, headerGlyphStyle } from "../../lib/headerAction";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches, previewForConfig } from "../../lib/hostRoute";
-import { useApp } from "../../lib/store";
+import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { iconSize, space, type } from "../../lib/tokens";
@@ -17,11 +17,16 @@ import { userFacingError } from "../../lib/connectionError";
 
 /** Session-scoped counterpart of the desktop Browser inspector. */
 export default function SessionPreviewScreen() {
+	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
+	return hostId ? <HostScope key={hostId} hostId={hostId}><SessionPreviewContent /></HostScope> : <SessionPreviewContent />;
+}
+
+function SessionPreviewContent() {
 	const { id, title, previewUrl, hostId: routeHostId } = useLocalSearchParams<{ id: string; title?: string; previewUrl?: string; hostId?: string }>();
 	const navigation = useNavigation();
 	const router = useRouter();
-	const { config } = useApp();
-	const hostMatches = hostRouteMatches(routeHostId, config?.hostId);
+	const { config, currentHostId, connection } = useApp();
+	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const web = useRef<WebView>(null);
@@ -61,6 +66,7 @@ export default function SessionPreviewScreen() {
 	useLayoutEffect(() => { navigation.setOptions({ title: title || preview?.entry || "Preview", headerRight: hostMatches ? () => <Pressable accessibilityRole="button" accessibilityLabel="Reload preview" hitSlop={10} onPress={() => { haptics.tap(); if (preview) web.current?.reload(); else void refresh(); }} style={headerActionStyle}><Feather name="refresh-cw" size={iconSize.md} color={t.textSecondary} style={headerGlyphStyle} /></Pressable> : undefined }); }, [hostMatches, navigation, preview, refresh, t.textSecondary, title]);
 
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon="globe" title="Preview belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="activity" onPress={() => router.navigate("/")} />} /></View>;
+	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="This preview loads once the app reconnects." /></View>;
 	if (!config || loading) return <View style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.copy}>Looking for a session preview…</Text></View>;
 	if (!preview) return <View style={styles.center}><Feather name={error ? "alert-triangle" : "globe"} size={iconSize.xl} color={error ? t.red : t.textTertiary} /><Text style={styles.title}>{error ? "Couldn't load the preview" : "No preview yet"}</Text><Text style={styles.copy}>{error || "Waiting for the agent to generate a page or document. This screen will keep checking."}</Text><Pressable onPress={() => { haptics.tap(); void refresh(); }} style={styles.retry}><Text style={styles.retryText}>Check again</Text></Pressable></View>;
 	return <View style={styles.screen}><WebView ref={web} source={{ uri: preview.url, headers: preview.authenticated ? authHeaders(config) : undefined }} style={styles.web} startInLoadingState renderLoading={() => <View style={styles.webLoading}><ActivityIndicator color={t.accent} /></View>} onLoadStart={() => setError(undefined)} onHttpError={(event) => setError(previewHttpErrorCopy(event.nativeEvent.statusCode))} onError={(event) => setError(event.nativeEvent.description || "Couldn't load this preview.")} />{error ? <View accessibilityRole="alert" style={styles.webError}><Feather name="alert-triangle" size={iconSize.sm} color={t.red} /><Text style={styles.webErrorText}>{error}</Text><Pressable onPress={() => { haptics.tap(); setError(undefined); web.current?.reload(); }}><Text style={styles.retryText}>Retry</Text></Pressable></View> : null}</View>;

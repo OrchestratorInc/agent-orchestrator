@@ -5,6 +5,7 @@ import { Keyboard, Pressable, StyleSheet, Text, TextInput, View } from "react-na
 import type { DashboardSession } from "./api";
 import { AgentLogo } from "./AgentLogo";
 import { haptics } from "./haptics";
+import { sessionHostId } from "./hostedRows";
 import { prLine, workerRowPresentation, workerStatusGlyph } from "./agentsView";
 import { toneColor } from "./prView";
 import { statusVisual, type Theme } from "./theme";
@@ -24,6 +25,7 @@ import { userFacingError } from "./connectionError";
 export const WorkerListRow = memo(
 	function WorkerListRow({
 	session,
+	rowKey,
 	projectName,
 	isRenaming,
 	activeSwipeId,
@@ -39,6 +41,7 @@ export const WorkerListRow = memo(
 	onRestore,
 }: {
 	session: DashboardSession;
+	rowKey?: string;
 	projectName?: string;
 	isRenaming: boolean;
 	activeSwipeId?: string;
@@ -63,7 +66,7 @@ export const WorkerListRow = memo(
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
-	const { config } = useApp();
+	const { currentHostId } = useApp();
 	const closeActionRailRef = useRef<() => void>(() => {});
 	const [renameTitle, setRenameTitle] = useState("");
 	const [renameSaving, setRenameSaving] = useState(false);
@@ -128,7 +131,7 @@ export const WorkerListRow = memo(
 		haptics.tap();
 		router.push({
 			pathname: "/session/[id]",
-			params: { id: session.id, projectId: session.projectId, hostId: config?.hostId },
+			params: { id: session.id, projectId: session.projectId, hostId: sessionHostId(session) ?? currentHostId },
 		});
 	};
 
@@ -172,7 +175,7 @@ export const WorkerListRow = memo(
 
 	return (
 		<WorkerRowInteraction
-			sessionId={session.id}
+			sessionId={rowKey ?? session.id}
 			enabled={!isRenaming}
 			activeSwipeId={activeSwipeId}
 			rightActions={renderRightActions()}
@@ -231,6 +234,7 @@ export const WorkerListRow = memo(
 	 */
 	(prev, next) =>
 		prev.nowBucket === next.nowBucket &&
+		prev.rowKey === next.rowKey &&
 		prev.projectName === next.projectName &&
 		prev.isRenaming === next.isRenaming &&
 		prev.activeSwipeId === next.activeSwipeId &&

@@ -27,7 +27,7 @@ import { appendSpawnAttachments, readSpawnAttachments, type SpawnAttachment } fr
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { spawnNotices } from "../lib/spawnNotices";
 import { SpawnPromptInput } from "../lib/spawn-prompt-input";
-import { useApp } from "../lib/store";
+import { HostScope, useApp } from "../lib/store";
 import { useVoiceInput } from "../lib/voice/useVoiceInput";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
@@ -38,16 +38,21 @@ import { backOr } from "../lib/backNavigation";
 export { SheetErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
 export default function SpawnModal() {
+	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
+	return hostId ? <HostScope key={hostId} hostId={hostId}><SpawnModalContent /></HostScope> : <SpawnModalContent />;
+}
+
+function SpawnModalContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const { projectId: routeProjectId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; hostId?: string }>();
-	const { projects, projectsKnown, activeProjectId, config, connection, unreachable, spawn } = useApp();
-	const [openedHostId, setOpenedHostId] = useState(() => openingHostId(routeHostId, config?.hostId));
-	const hostMatches = spawnHostMatches({ openedHostId, currentHostId: config?.hostId, routeProjectId, routeHostId });
+	const { projects, projectsKnown, activeProjectId, config, currentHostId, connection, unreachable, spawn } = useApp();
+	const [openedHostId, setOpenedHostId] = useState(() => openingHostId(routeHostId, currentHostId ?? undefined));
+	const hostMatches = spawnHostMatches({ openedHostId, currentHostId: currentHostId ?? undefined, routeProjectId, routeHostId });
 	useEffect(() => {
-		if (!openedHostId && config?.hostId) setOpenedHostId(config.hostId);
-	}, [openedHostId, config?.hostId]);
+		if (!openedHostId && currentHostId) setOpenedHostId(currentHostId);
+	}, [openedHostId, currentHostId]);
 
 	const [projectId, setProjectId] = useState<string | null>(null);
 	const [harness, setHarness] = useState("");
@@ -283,7 +288,7 @@ export default function SpawnModal() {
 	};
 
 	const onSpawn = async () => {
-		if (!openedHostId || !spawnHostMatches({ openedHostId, currentHostId: config?.hostId, routeProjectId, routeHostId })) {
+		if (!openedHostId || !spawnHostMatches({ openedHostId, currentHostId: currentHostId ?? undefined, routeProjectId, routeHostId })) {
 			setError("Machine changed. Close and reopen this task composer.");
 			return;
 		}

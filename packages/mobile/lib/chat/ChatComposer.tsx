@@ -1,5 +1,6 @@
 import { Feather } from "../icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { machineIdentity, type ServerConfig } from "../config";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
@@ -61,6 +62,7 @@ const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "
 
 export function ChatComposer({
 	sessionId,
+	config,
 	snapshot,
 	skills,
 	filePaths,
@@ -92,6 +94,7 @@ export function ChatComposer({
 	onRestoreRequest,
 }: {
 	sessionId: string;
+	config: ServerConfig | null;
 	snapshot: ConversationSnapshot;
 	skills: ChatSkill[];
 	filePaths: string[];
@@ -140,6 +143,7 @@ export function ChatComposer({
 		transform: [{ translateY: (restingInset - KEYBOARD_DOCK_GAP) * keyboard.progress.value }],
 	}));
 	const [text, setText] = useState("");
+	const [draftLoaded, setDraftLoaded] = useState(false);
 	const [cursor, setCursor] = useState(0);
 	const [fieldHeight, setFieldHeight] = useState(COMPOSER_FIELD_HEIGHT);
 	const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -171,7 +175,7 @@ export function ChatComposer({
 	const steerEligible = Boolean(canSteer && hasDraft && attachments.length === 0);
 	const deliveryPresentation = composerDeliveryPresentation({ active, canSteer: Boolean(canSteer), hasDraft, hasAttachments: attachments.length > 0, hasQueued: visibleQueuedMessages.length > 0 });
 	const stopped = snapshot.controller.state === "stopped";
-	const draftKey = `ao.chat.draft.${sessionId}`;
+	const draftKey = config ? `ao.chat.draft.${machineIdentity(config)}.${sessionId}` : null;
 	const openingSuggestion = useRef<string | undefined>(undefined);
 	const pickerGate = useRef(createRequestGate()).current;
 	const latestText = useRef(text);
@@ -187,8 +191,20 @@ export function ChatComposer({
 		});
 	}, [queuedMessages]);
 
-	useEffect(() => { let mounted = true; void AsyncStorage.getItem(draftKey).then((value) => { if (mounted && value) setText((current) => current || value); }); return () => { mounted = false; }; }, [draftKey]);
-	useEffect(() => { const timer = setTimeout(() => void (text ? AsyncStorage.setItem(draftKey, text) : AsyncStorage.removeItem(draftKey)), 250); return () => clearTimeout(timer); }, [draftKey, text]);
+	useEffect(() => {
+		if (!draftKey) return;
+		let mounted = true;
+		void AsyncStorage.getItem(draftKey)
+			.then((value) => { if (mounted && value) setText((current) => current || value); })
+			.catch(() => {})
+			.finally(() => { if (mounted) setDraftLoaded(true); });
+		return () => { mounted = false; };
+	}, [draftKey]);
+	useEffect(() => {
+		if (!draftKey || !draftLoaded) return;
+		const timer = setTimeout(() => void (text ? AsyncStorage.setItem(draftKey, text) : AsyncStorage.removeItem(draftKey)), 250);
+		return () => clearTimeout(timer);
+	}, [draftKey, draftLoaded, text]);
 
 	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => setText((old) => old ? `${old} ${spoken}` : spoken), []) });
 
@@ -212,7 +228,7 @@ export function ChatComposer({
 			setText("");
 			setFieldHeight(COMPOSER_FIELD_HEIGHT);
 			setAttachments([]);
-			void AsyncStorage.removeItem(draftKey);
+			if (draftKey) void AsyncStorage.removeItem(draftKey);
 			haptics.success();
 		} catch (cause) {
 			setLocalError(userFacingError(cause));

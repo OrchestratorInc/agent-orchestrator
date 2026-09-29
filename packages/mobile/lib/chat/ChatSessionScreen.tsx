@@ -15,6 +15,7 @@ import {
 	View,
 } from "react-native";
 import { mobileReachablePreviewURL, restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
+import { machineIdentity } from "../config";
 import { haptics } from "../haptics";
 import { resetHeaderRightForSwap } from "../headerRightSwap";
 import { openGitHub } from "../openGitHub";
@@ -83,7 +84,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		),
 		[navigation],
 	);
-	const { config, connection, unreachable, projects, refresh: refreshBoard, setActiveProject, setWorkerPinned, renameWorker, kill } = useApp();
+	const { config, connection, unreachable, projects, refresh: refreshBoard, setWorkerPinned, renameWorker, kill } = useApp();
 	const conversation = useMobileConversation(config, session.id);
 	// A load that failed while the desktop was unreachable retries as soon as the
 	// board's poll reconnects, which is what the offline state promises.
@@ -378,7 +379,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			onMap: () => router.push(chatSheetRoute({ kind: "conversation-map", markers: conversationMarkers(actionsEntryRef.current?.snapshot ?? current), onSelect: setJumpToSequence })),
 			onOpenShell: () => void openShell(),
 			onPreview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, previewUrl: "previewUrl" in session ? session.previewUrl ?? undefined : undefined, hostId: config?.hostId } }),
-			onPullRequests: () => { setActiveProject(session.projectId); router.push("/(tabs)/prs"); },
+			onPullRequests: () => router.push({ pathname: "/(tabs)/prs", params: { hostId: config?.hostId, projectId: session.projectId } }),
 			onSettings: () => void openTurnSettings(),
 			onSwitchInterface: requestInterfaceSwitch,
 			onCompact: () => void conversation.compact().catch(() => {}),
@@ -409,7 +410,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		};
 		actionsEntryRef.current = entry;
 		void dismissKeyboardBeforeSheet(keyboardVisible).then(() => router.push(chatSheetRoute(actionsEntryRef.current ?? entry)));
-	}, [conversation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setActiveProject, setWorkerPinned, title]);
+	}, [config?.hostId, conversation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setWorkerPinned, title]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. Nothing else
@@ -540,7 +541,9 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				/>
 			</ChatLinkProvider>
 			<ChatComposer
+				key={config ? JSON.stringify([machineIdentity(config), session.id]) : session.id}
 				sessionId={session.id}
+				config={config}
 				snapshot={snapshot}
 				quotaActive={Boolean(quota)}
 				request={request}

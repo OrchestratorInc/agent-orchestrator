@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AppState } from "react-native";
 import type { ServerConfig } from "../config";
 import {
 	cancelQueuedConversationTurn,
@@ -220,7 +219,7 @@ export function useMobileConversation(
 
 	useEffect(() => {
 		if (!cfg || unavailable) return;
-		return subscribeConversationEvents(sessionId, (event) => {
+		return subscribeConversationEvents(cfg, sessionId, (event) => {
 			if (event.payload?.conversationId) scheduleRefresh();
 		});
 	}, [cfg, sessionId, scheduleRefresh, unavailable]);
@@ -236,13 +235,6 @@ export function useMobileConversation(
 		const timer = setInterval(() => scheduleRefresh(), every);
 		return () => clearInterval(timer);
 	}, [cfg, unavailable, scheduleRefresh]);
-
-	useEffect(() => {
-		const subscription = AppState.addEventListener("change", (state) => {
-			if (state === "active") void refresh();
-		});
-		return () => subscription.remove();
-	}, [refresh]);
 
 	const runAction = useCallback(
 		async <T,>(kind: ConversationAction, action: () => Promise<T>, resetHistoricalPages = false): Promise<T> => {

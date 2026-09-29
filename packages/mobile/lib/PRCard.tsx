@@ -4,7 +4,6 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { sessionTitle, shortLabel, type DashboardPR, type DashboardSession, type SessionPRSummary } from "./api";
 import { haptics } from "./haptics";
 import { openGitHub } from "./openGitHub";
-import { useApp } from "./store";
 import type { Theme } from "./theme";
 import {
 	prBlockerLine,
@@ -24,18 +23,22 @@ export function PRCard({
 	pr,
 	session,
 	summary,
+	hostId,
+	hostName,
 }: {
 	pr: DashboardPR;
 	session: DashboardSession;
 	summary?: SessionPRSummary;
+	hostId: string;
+	hostName?: string;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
-	const { config } = useApp();
 	const state = summary ? stateVisualOf(t, summary.state as PRLifecycle) : prStateVisual(t, pr);
 	const title = summary?.title?.trim() || prTitle(pr, sessionTitle(session));
 	const project = shortLabel(summary?.repo || session.projectId || "Standalone");
+	const projectLabel = hostName ? `${hostName} · ${project}` : project;
 	const branches = summary
 		? [summary.sourceBranch, summary.targetBranch].filter(Boolean).join(" → ")
 		: session.branch || "";
@@ -50,19 +53,19 @@ export function PRCard({
 	return (
 		<Pressable
 			accessibilityRole="button"
-			accessibilityLabel={`${title}. Pull request ${pr.number}. ${status.text}.`}
+			accessibilityLabel={`${title}. ${projectLabel}. Pull request ${pr.number}. ${status.text}.`}
 			onPress={() => {
 				haptics.tap();
 				router.push({
 					pathname: "/session/[id]",
-					params: { id: session.id, projectId: session.projectId, hostId: config?.hostId },
+					params: { id: session.id, projectId: session.projectId, hostId },
 				});
 			}}
 			style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
 		>
 			<View style={styles.eyebrow}>
 				<Feather name="git-pull-request" size={iconSize.sm} color={state.color} />
-				<Text style={styles.project} numberOfLines={1}>{project}</Text>
+				<Text style={styles.project} numberOfLines={1}>{projectLabel}</Text>
 				<Text style={[styles.status, { color: toneColor(t, status.tone) }]} numberOfLines={1}>{status.text}</Text>
 			</View>
 

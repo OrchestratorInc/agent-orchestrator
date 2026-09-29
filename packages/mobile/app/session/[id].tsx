@@ -14,7 +14,7 @@ import {
 	sessionRouteView,
 	type KeyedSessionLookup,
 } from "../../lib/session/sessionRoute";
-import { useApp } from "../../lib/store";
+import { HostScope, useApp } from "../../lib/store";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import type { Theme } from "../../lib/theme";
 import { Button, EmptyState } from "../../lib/ui";
@@ -27,11 +27,16 @@ import { Button, EmptyState } from "../../lib/ui";
  * `sessionRouteView`, and when the route asks is `sessionLookupDue`.
  */
 export default function MobileSessionRoute() {
+	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
+	return hostId ? <HostScope key={hostId} hostId={hostId}><SessionRouteContent /></HostScope> : <SessionRouteContent />;
+}
+
+function SessionRouteContent() {
 	const { id: rawId, hostId: routeHostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
 	const id = String(rawId ?? "");
 	const router = useRouter();
-	const { sessions, orchestrators, config, connection, loading } = useApp();
-	const hostMatches = hostRouteMatches(routeHostId, config?.hostId);
+	const { sessions, orchestrators, config, currentHostId, connection, loading } = useApp();
+	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const listed = hostMatches ? sessions.find((item) => item.id === id) ?? orchestrators.find((item) => item.id === id) : undefined;
 	const isListed = Boolean(listed);
 	const configured = config === null ? null : isConfigured(config);
@@ -110,7 +115,7 @@ export default function MobileSessionRoute() {
 		setAttempt((n) => n + 1);
 	}, []);
 
-	const view = sessionRouteView({ listed, configured, connection, loading, lookup, routeHostId, currentHostId: config?.hostId });
+	const view = sessionRouteView({ listed, configured, connection, loading, lookup, routeHostId, currentHostId: currentHostId ?? undefined });
 
 	switch (view.kind) {
 		case "screen":

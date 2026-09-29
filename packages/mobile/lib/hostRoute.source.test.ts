@@ -22,9 +22,9 @@ describe("retained-stack host routes", () => {
 	it("does not mount a terminal or preview for an unqualified route", () => {
 		const shell = source("../app/shell/[handleId].tsx");
 		const preview = source("../app/preview/[id].tsx");
-		expect(shell).toContain("hostRouteMatches(routeHostId, config?.hostId)");
+		expect(shell).toContain("hostRouteMatches(routeHostId, currentHostId)");
 		expect(shell).toContain("return <TerminalSessionScreen />");
-		expect(preview).toContain("hostRouteMatches(routeHostId, config?.hostId)");
+		expect(preview).toContain("hostRouteMatches(routeHostId, currentHostId)");
 		expect(preview).toContain("previewForConfig(");
 	});
 });

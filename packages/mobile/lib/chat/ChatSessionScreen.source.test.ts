@@ -6,6 +6,12 @@ const composerSource = readFileSync(new URL("./ChatComposer.tsx", import.meta.ur
 const apiSource = readFileSync(new URL("./api.ts", import.meta.url), "utf8");
 
 describe("active turn controls", () => {
+	it("remounts the composer when a same-ID session changes host", () => {
+		expect(screenSource).toContain('key={config ? JSON.stringify([machineIdentity(config), session.id]) : session.id}');
+		expect(composerSource).toContain('`ao.chat.draft.${machineIdentity(config)}.${sessionId}`');
+		expect(composerSource).toContain('if (!draftKey || !draftLoaded) return;');
+	});
+
 	it("keeps working state in the conversation instead of a redundant status strip", () => {
 		expect(screenSource).not.toContain("LiveTurnBar");
 		expect(screenSource).not.toContain("Agent is working");

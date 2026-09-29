@@ -31,7 +31,7 @@ vi.mock("./api", () => ({
 	unpairFromDaemon: vi.fn(async () => {}),
 }));
 
-const { getPushStatus, registerForPush, unregisterFromPush } = await import("./push");
+const { getPushStatus, onManualPushRegistration, registerForPush, unregisterFromPush } = await import("./push");
 const { registerPushDevice, unpairFromDaemon, unregisterPushDevice } = await import("./api");
 const { forgetServer } = await import("./disconnect");
 const { loadHosts, saveHost, setActiveHost } = await import("./hosts");
@@ -56,13 +56,15 @@ describe("push registration across machines", () => {
 		expect((await getPushStatus(config("h_b"))).registered).toBe(true);
 	});
 
-	it("unregisters A when its endpoint still proves A's identity", async () => {
+	it("keeps A registered when B connects", async () => {
 		await registerForPush(config("h_a"));
 		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_a" }) })));
 
 		await registerForPush(config("h_b", "100.101.102.103"));
 
-		expect(unregisterPushDevice).toHaveBeenCalledWith(config("h_a"), "ExponentPushToken[test]");
+		expect(unregisterPushDevice).not.toHaveBeenCalled();
+		expect((await getPushStatus(config("h_a"))).registered).toBe(true);
+		expect((await getPushStatus(config("h_b", "100.101.102.103"))).registered).toBe(true);
 	});
 
 	it("keeps one registration when the same machine changes address", async () => {
@@ -72,7 +74,17 @@ describe("push registration across machines", () => {
 		expect(unregisterPushDevice).not.toHaveBeenCalled();
 	});
 
-	it("keeps B registered when A's earlier registration finishes late", async () => {
+	it("refreshes connected machines after the user enables push", async () => {
+		const refresh = vi.fn();
+		const off = onManualPushRegistration(refresh);
+		await registerForPush(config("h_a"), { ask: true });
+		await registerForPush(config("h_b"), { ask: false });
+		off();
+
+		expect(refresh).toHaveBeenCalledOnce();
+	});
+
+	it("keeps both registrations when A's earlier request finishes late", async () => {
 		let signalA!: () => void;
 		let releaseA!: () => void;
 		const aStarted = new Promise<void>((resolve) => { signalA = resolve; });
@@ -93,8 +105,19 @@ describe("push registration across machines", () => {
 		releaseA();
 		await Promise.all([onA, onB]);
 
+		expect((await getPushStatus(config("h_a"))).registered).toBe(true);
 		expect((await getPushStatus(config("h_b", "100.101.102.103"))).registered).toBe(true);
-		expect(unregisterPushDevice).toHaveBeenCalledWith(config("h_a"), "ExponentPushToken[test]");
+		expect(unregisterPushDevice).not.toHaveBeenCalled();
+	});
+
+	it("migrates the saved single-host registration without losing its status", async () => {
+		const old = { token: "ExponentPushToken[test]", hostId: "h_a", host: "192.168.1.42", httpPort: "3011", secure: false, password: "token-h_a" };
+		secure.set("ao.pushRegistration", JSON.stringify(old));
+
+		expect((await getPushStatus(config("h_b"))).registered).toBe(false);
+		expect((await getPushStatus(config("h_a"))).registered).toBe(true);
+		expect(secure.has("ao.pushRegistration")).toBe(false);
+		expect(JSON.parse(secure.get("ao.pushRegistration.h_a") ?? "null")).toEqual(old);
 	});
 
 	it("replaces a legacy registration without sending its bearer to an unverified address", async () => {
@@ -130,6 +153,20 @@ describe("push registration across machines", () => {
 		expect(secure.has("ao.pushPendingUnregister")).toBe(false);
 	});
 
+	it("drops an old switch-time unregister when that host remains registered", async () => {
+		await registerForPush(config("h_a"));
+		secure.set("ao.pushPendingUnregister", JSON.stringify([{
+			token: "ExponentPushToken[test]", hostId: "h_a", host: "192.168.1.42", httpPort: "3011", secure: false, password: "token-h_a",
+		}]));
+		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_a" }) })));
+
+		await registerForPush(config("h_b"));
+
+		expect(unregisterPushDevice).not.toHaveBeenCalled();
+		expect(secure.has("ao.pushPendingUnregister")).toBe(false);
+		expect((await getPushStatus(config("h_a"))).registered).toBe(true);
+	});
+
 	it("does not show A's registration as enabled while B is selected", async () => {
 		await registerForPush(config("h_a"));
 
@@ -144,6 +181,18 @@ describe("push registration across machines", () => {
 
 		expect(unregisterPushDevice).not.toHaveBeenCalled();
 		expect((await getPushStatus(config("h_a"))).registered).toBe(true);
+	});
+
+	it("turns off B without changing A's registration", async () => {
+		await registerForPush(config("h_a"));
+		await registerForPush(config("h_b", "100.101.102.103"));
+		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_b" }) })));
+
+		await unregisterFromPush(config("h_b", "100.101.102.103"));
+
+		expect((await getPushStatus(config("h_a"))).registered).toBe(true);
+		expect((await getPushStatus(config("h_b", "100.101.102.103"))).registered).toBe(false);
+		expect(unregisterPushDevice).toHaveBeenCalledExactlyOnceWith(config("h_b", "100.101.102.103"), "ExponentPushToken[test]");
 	});
 
 	it("turns A's local switch off without sending A's bearer to a replacement host", async () => {
@@ -179,6 +228,7 @@ describe("push registration across machines", () => {
 
 	it("forgets selected B without unpairing A or clearing A's push registration", async () => {
 		await registerForPush(config("h_a"));
+		await registerForPush(config("h_b"));
 		await saveHost({ id: "h_a", name: "A", platform: "darwin", endpoints: [], token: "token-h_a", lastConnected: 1 });
 		await saveHost({
 			id: "h_b", name: "B", platform: "linux",
@@ -195,6 +245,7 @@ describe("push registration across machines", () => {
 		);
 		expect((await loadHosts()).map((host) => host.id)).toEqual(["h_a"]);
 		expect((await getPushStatus(config("h_a"))).registered).toBe(true);
+		expect((await getPushStatus(config("h_b"))).registered).toBe(false);
 	});
 
 	it("clears B's registration when forgetting B with no reachable endpoints", async () => {

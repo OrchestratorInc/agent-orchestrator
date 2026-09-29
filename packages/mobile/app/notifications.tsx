@@ -1,11 +1,12 @@
 import { Feather } from "../lib/icons";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActivityIndicator,
 	Alert,
 	Pressable,
 	RefreshControl,
+	ScrollView,
 	SectionList,
 	StyleSheet,
 	Text,
@@ -27,7 +28,7 @@ import {
 	notificationVisual,
 	relativeTime,
 } from "../lib/notificationView";
-import { useApp } from "../lib/store";
+import { HostScope, useApp } from "../lib/store";
 import { MINUTE_MS, useNow } from "../lib/useNow";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
@@ -44,6 +45,39 @@ const PAGE_SIZE = 50;
 // phone that was reachable at the time; this list is what the user can come back
 // to afterwards.
 export default function NotificationsScreen() {
+	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
+	const { hostStates } = useApp();
+	if (hostId) return <HostScope key={hostId} hostId={hostId}><NotificationsContent /></HostScope>;
+	if (hostStates.length > 1) return <NotificationsHostPicker />;
+	return <NotificationsContent />;
+}
+
+function NotificationsHostPicker() {
+	const { hostStates } = useApp();
+	const styles = useThemedStyles(makeStyles);
+	const router = useRouter();
+	const insets = useSafeAreaInsets();
+	return (
+		<View style={styles.screen}>
+			<View style={{ height: insets.top }} />
+			<ScreenHeader title="Notifications" left={<HeaderIconButton icon="back" label="Back" onPress={() => backOr(router)} />} />
+			<ScrollView contentContainerStyle={[styles.hostPicker, { paddingBottom: insets.bottom + space.lg }]}>
+				<Text style={styles.hostPickerHint}>Choose a machine to view its notifications.</Text>
+				{hostStates.map((host) => (
+					<Button
+						key={host.hostId}
+						title={`${host.name}${host.notificationsUnread > 0 ? ` · ${host.notificationsUnread} unread` : ""}`}
+						icon="server"
+						variant="ghost"
+						onPress={() => router.push({ pathname: "/notifications", params: { hostId: host.hostId } })}
+					/>
+				))}
+			</ScrollView>
+		</View>
+	);
+}
+
+function NotificationsContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
@@ -160,7 +194,7 @@ export default function NotificationsScreen() {
 		// decides: a terminated agent waiting on input is restored, not opened.
 		const action = notificationAction(notification, sessionState(notification.sessionId));
 		if (action.kind === "open") router.navigate({ pathname: "/session/[id]", params: { id: action.sessionId, hostId: config.hostId } });
-		else if (action.kind === "prs") router.navigate("/prs");
+		else if (action.kind === "prs") router.navigate({ pathname: "/prs", params: { hostId: config.hostId } });
 		else if (action.kind === "restore") {
 			haptics.warning();
 			setNotice("This session is terminated. Tap restore to bring it back.");
@@ -402,6 +436,8 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
+		hostPicker: { paddingHorizontal: space.lg, paddingTop: space.xl, gap: space.md },
+		hostPickerHint: { ...type.body, color: t.textSecondary, marginBottom: space.xs },
 		inlineError: {
 			flexDirection: "row",
 			alignItems: "center",

@@ -30,6 +30,12 @@ export type Host = {
  */
 export const MAX_HOSTS = 10;
 
+/** Ignore recency-only writes so another host reconnecting does not restart live connections. */
+export function sameHostConnections(left: Host[], right: Host[]): boolean {
+	const connectionFields = (hosts: Host[]) => hosts.map(({ id, name, platform, endpoints, token }) => [id, name, platform, endpoints, token]);
+	return JSON.stringify(connectionFields(left)) === JSON.stringify(connectionFields(right));
+}
+
 const HOSTS_KEY = "ao.hosts";
 const ACTIVE_HOST_KEY = "ao.activeHost";
 const tokenKey = (id: string) => `ao.hostToken.${id}`;
@@ -67,6 +73,15 @@ async function writeStored(hosts: StoredHost[]): Promise<void> {
 	await AsyncStorage.setItem(HOSTS_KEY, JSON.stringify(sortAndCap(hosts)));
 }
 
+// Several hosts can reconnect together. Serialize read-modify-write so one
+// host's endpoint refresh cannot overwrite another's update.
+let pendingWrite: Promise<void> = Promise.resolve();
+function mutateStored(change: (hosts: StoredHost[]) => StoredHost[]): Promise<void> {
+	const write = pendingWrite.then(async () => writeStored(change(await readStored())));
+	pendingWrite = write.catch(() => {});
+	return write;
+}
+
 /** Every paired machine, most recently connected first. */
 export async function loadHosts(): Promise<Host[]> {
 	const stored = sortAndCap(await readStored());
@@ -87,8 +102,7 @@ export async function findHost(id: string): Promise<Host | null> {
  * rather than adding a second entry for it. */
 export async function saveHost(host: Host): Promise<void> {
 	const { token, ...rest } = host;
-	const others = (await readStored()).filter((h) => h.id !== host.id);
-	await writeStored([rest, ...others]);
+	await mutateStored((stored) => [rest, ...stored.filter((h) => h.id !== host.id)]);
 	if (token) {
 		await SecureStore.setItemAsync(tokenKey(host.id), token);
 	} else {
@@ -104,15 +118,12 @@ export async function saveHost(host: Host): Promise<void> {
  * up without the user doing anything.
  */
 export async function updateHostEndpoints(id: string, endpoints: Endpoint[]): Promise<void> {
-	const stored = await readStored();
-	const next = stored.map((h) => (h.id === id ? { ...h, endpoints } : h));
-	await writeStored(next);
+	await mutateStored((stored) => stored.map((h) => (h.id === id ? { ...h, endpoints } : h)));
 }
 
 /** Records a successful connection, so the list orders by recency. */
 export async function touchHost(id: string, at: number = Date.now()): Promise<void> {
-	const stored = await readStored();
-	await writeStored(stored.map((h) => (h.id === id ? { ...h, lastConnected: at } : h)));
+	await mutateStored((stored) => stored.map((h) => (h.id === id ? { ...h, lastConnected: at } : h)));
 }
 
 /**
@@ -158,8 +169,7 @@ export async function clearActiveHost(): Promise<void> {
 }
 
 export async function removeHost(id: string): Promise<void> {
-	const stored = await readStored();
-	await writeStored(stored.filter((h) => h.id !== id));
+	await mutateStored((stored) => stored.filter((h) => h.id !== id));
 	await SecureStore.deleteItemAsync(tokenKey(id));
 	// A pointer at a machine that no longer exists would resolve to nothing;
 	// clearing it falls back to recency instead.
@@ -245,12 +255,13 @@ export async function migrateLegacyConfig(): Promise<void> {
 export async function adoptHostIdentity(oldId: string, hostId: string): Promise<void> {
 	if (oldId !== "" || hostId === "") return;
 
-	const stored = await readStored();
-	const target = stored.find((h) => h.id === "");
-	if (!target) return;
-
 	const token = (await SecureStore.getItemAsync(tokenKey(""))) ?? "";
-	await writeStored(stored.map((h) => (h.id === "" ? { ...h, id: hostId } : h)));
+	let adopted = false;
+	await mutateStored((stored) => {
+		adopted = stored.some((h) => h.id === "");
+		return stored.map((h) => (h.id === "" ? { ...h, id: hostId } : h));
+	});
+	if (!adopted) return;
 	if (token) {
 		await SecureStore.setItemAsync(tokenKey(hostId), token);
 		await SecureStore.deleteItemAsync(tokenKey(""));

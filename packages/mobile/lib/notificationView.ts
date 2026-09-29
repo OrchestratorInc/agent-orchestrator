@@ -63,13 +63,14 @@ export function notificationVisual(t: Theme, type: string): NotificationVisual {
  * opening it from the tray agree — the rule lives here rather than being written
  * twice.
  */
-export function notificationTarget(n: { type: string; sessionId?: string; hostId?: string }, activeHostId: string | undefined): string {
+export function notificationTarget(n: { type: string; sessionId?: string; hostId?: string }, knownHosts: string | ReadonlySet<string> | undefined): string {
 	// An older push has no machine identity. It cannot safely open (or mark read)
-	// a same-ID session on whichever machine is currently selected.
-	if (!n.hostId || n.hostId !== activeHostId) return "/";
+	// a same-ID session on whichever machine is currently selected. History passes
+	// its current host; push taps can name any paired host.
+	if (!n.hostId || !(typeof knownHosts === "string" ? n.hostId === knownHosts : knownHosts?.has(n.hostId))) return "/";
 	return n.type === "needs_input" && n.sessionId
 		? `/session/${encodeURIComponent(n.sessionId)}?hostId=${encodeURIComponent(n.hostId)}`
-		: "/prs";
+		: `/prs?hostId=${encodeURIComponent(n.hostId)}`;
 }
 
 /** Compact "3m" / "4h" / "2d" stamp. Returns "" for an unparseable timestamp. */

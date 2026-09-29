@@ -45,7 +45,11 @@ describe("sessionRouteView", () => {
 		expect(view({ listed, routeHostId: undefined })).toEqual({ kind: "wrongHost" });
 	});
 	it("waits for the saved config before judging anything", () => {
-		expect(view({ configured: null, listed: orchestrator(), lookup: failed(404) })).toEqual({ kind: "loading" });
+		expect(view({ configured: null, loading: true, listed: orchestrator(), lookup: failed(404) })).toEqual({ kind: "loading" });
+	});
+	it("shows an offline paired host instead of another-machine or a permanent loader", () => {
+		expect(view({ configured: null, connection: "closed" })).toEqual({ kind: "offline" });
+		expect(view({ configured: null, connection: "closed", currentHostId: "host-b" })).toEqual({ kind: "wrongHost" });
 	});
 
 	// The store keeps the last machine's lists after Settings → forget, so a

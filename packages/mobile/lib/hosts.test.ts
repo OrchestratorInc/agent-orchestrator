@@ -57,6 +57,33 @@ describe("host store", () => {
 		expect(got.map((h) => h.id)).toEqual(["h_new", "h_old"]);
 	});
 
+	it("does not restart another live connection for a recency-only write", async () => {
+		const { sameHostConnections } = await mod();
+		const original = { id: "b", name: "B", platform: "linux", endpoints: [lan("host-b")], token: "pw", lastConnected: 1 };
+		expect(sameHostConnections([original], [{ ...original, lastConnected: 2 }])).toBe(true);
+		expect(sameHostConnections([original], [{ ...original, endpoints: [lan("new-host-b")] }])).toBe(false);
+	});
+
+	it("keeps simultaneous endpoint updates from different machines", async () => {
+		const { saveHost, updateHostEndpoints, touchHost, loadHosts } = await mod();
+		await saveHost({ id: "a", name: "A", platform: "linux", endpoints: [lan("old-a")], token: "", lastConnected: 1 });
+		await saveHost({ id: "b", name: "B", platform: "linux", endpoints: [lan("old-b")], token: "", lastConnected: 1 });
+		const AsyncStorage = (await import("@react-native-async-storage/async-storage")).default;
+		const delayedRead = vi.spyOn(AsyncStorage, "getItem").mockImplementation(async (key: string) => {
+			const value = plain.get(key) ?? null;
+			await new Promise((resolve) => setTimeout(resolve, 1));
+			return value;
+		});
+		try {
+			await Promise.all([updateHostEndpoints("a", [lan("new-a")]), touchHost("b", 77)]);
+			const hosts = await loadHosts();
+			expect(hosts.find((host) => host.id === "a")?.endpoints).toEqual([lan("new-a")]);
+			expect(hosts.find((host) => host.id === "b")?.lastConnected).toBe(77);
+		} finally {
+			delayedRead.mockRestore();
+		}
+	});
+
 	it("replaces a host rather than duplicating it on re-pair", async () => {
 		const { saveHost, loadHosts } = await mod();
 		await saveHost({ id: "h_one", name: "before", platform: "darwin", endpoints: [], token: "", lastConnected: 1 });

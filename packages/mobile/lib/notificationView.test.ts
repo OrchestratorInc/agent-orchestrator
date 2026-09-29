@@ -45,31 +45,34 @@ describe("notificationTarget", () => {
 	it("opens the session for a needs_input notification", () => {
 		expect(notificationTarget({ type: "needs_input", sessionId: "abc", hostId: "host-a" }, "host-a"))
 			.toBe("/session/abc?hostId=host-a");
+		expect(notificationTarget({ type: "needs_input", sessionId: "abc", hostId: "host-a" }, new Set(["host-a", "host-b"])))
+			.toBe("/session/abc?hostId=host-a");
 	});
 
 	it("sends legacy and other-machine pushes to the board", () => {
 		expect(notificationTarget({ type: "needs_input", sessionId: "abc" }, "host-b")).toBe("/");
 		expect(notificationTarget({ type: "needs_input", sessionId: "abc", hostId: "host-a" }, "host-b")).toBe("/");
 		expect(notificationTarget({ type: "ready_to_merge", hostId: "host-a" }, "host-b")).toBe("/");
+		expect(notificationTarget({ type: "needs_input", sessionId: "abc", hostId: "forgotten" }, new Set(["host-a", "host-b"]))).toBe("/");
 	});
 
 	it("falls back to the PRs tab when there is no session to open", () => {
-		expect(notificationTarget({ type: "needs_input", sessionId: "", hostId: "host-a" }, "host-a")).toBe("/prs");
-		expect(notificationTarget({ type: "needs_input", hostId: "host-a" }, "host-a")).toBe("/prs");
+		expect(notificationTarget({ type: "needs_input", sessionId: "", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
+		expect(notificationTarget({ type: "needs_input", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
 	});
 
 	it("sends PR notifications to the PRs tab", () => {
-		expect(notificationTarget({ type: "ready_to_merge", sessionId: "abc", hostId: "host-a" }, "host-a")).toBe("/prs");
-		expect(notificationTarget({ type: "pr_merged", sessionId: "abc", hostId: "host-a" }, "host-a")).toBe("/prs");
+		expect(notificationTarget({ type: "ready_to_merge", sessionId: "abc", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
+		expect(notificationTarget({ type: "pr_merged", sessionId: "abc", hostId: "host-a" }, new Set(["host-a", "host-b"]))).toBe("/prs?hostId=host-a");
 	});
 
 	// A tray payload carries no guarantee of a type field, and PushManager passes
 	// "" when it is missing. An unknown or absent type must still land somewhere
 	// rather than routing to "/session/undefined".
 	it("sends an unknown or missing type to the PRs tab", () => {
-		expect(notificationTarget({ type: "", hostId: "host-a" }, "host-a")).toBe("/prs");
-		expect(notificationTarget({ type: "", sessionId: "abc", hostId: "host-a" }, "host-a")).toBe("/prs");
-		expect(notificationTarget({ type: "something_new", sessionId: "abc", hostId: "host-a" }, "host-a")).toBe("/prs");
+		expect(notificationTarget({ type: "", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
+		expect(notificationTarget({ type: "", sessionId: "abc", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
+		expect(notificationTarget({ type: "something_new", sessionId: "abc", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
 	});
 });
 

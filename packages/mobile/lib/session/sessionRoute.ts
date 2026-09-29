@@ -128,7 +128,7 @@ export function sessionRouteView(args: {
 }): SessionRouteView {
 	if (args.configured === null && args.loading) return { kind: "loading" };
 	if (!hostRouteMatches(args.routeHostId, args.currentHostId)) return { kind: "wrongHost" };
-	if (args.configured === null) return { kind: "loading" };
+	if (args.configured === null) return args.connection === "connecting" ? { kind: "loading" } : { kind: "offline" };
 	if (!args.configured) return { kind: "unpaired" };
 	if (args.listed) return { kind: "screen", session: args.listed };
 	const { lookup } = args;

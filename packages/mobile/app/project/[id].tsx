@@ -7,13 +7,14 @@ import { hostRouteMatches } from "../../lib/hostRoute";
 import { orchestratorProjectSections, projectDetailSessions, projectPageStats } from "../../lib/orchestratorView";
 import { ProjectPageHeader } from "../../lib/project-card";
 import { StaleBanner } from "../../lib/StaleBanner";
-import { useApp } from "../../lib/store";
+import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
 import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
 import { WorkerBoardList } from "../../lib/worker-board-list";
 import { backOr } from "../../lib/backNavigation";
+import { hostedRowKey } from "../../lib/hostedRows";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -23,13 +24,18 @@ export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundar
  * archive included — so nothing here has to be relearned.
  */
 export default function ProjectScreen() {
+	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
+	return hostId ? <HostScope key={hostId} hostId={hostId}><ProjectScreenContent /></HostScope> : <ProjectScreenContent />;
+}
+
+function ProjectScreenContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
 	const { id, hostId: routeHostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
-	const { config, loading, error, refresh, projects, sessions, orchestrators } = useApp();
-	const hostMatches = hostRouteMatches(routeHostId, config?.hostId);
+	const { config, currentHostId, connection, loading, error, refresh, projects, sessions, orchestrators } = useApp();
+	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
 	const [refreshing, setRefreshing] = useState(false);
 
@@ -95,6 +101,8 @@ export default function ProjectScreen() {
 					<View style={styles.center}>
 						<ActivityIndicator color={t.accent} />
 					</View>
+				) : connection !== "open" ? (
+					<EmptyState icon="wifi-off" title="Machine offline" message="This project loads once the app reconnects." />
 				) : (
 					<EmptyState icon="folder" title="Project not found" message="It may have been removed from AO." />
 				)
@@ -109,7 +117,7 @@ export default function ProjectScreen() {
 						<ProjectPageHeader
 							row={row}
 							stats={stats}
-							busy={busyProjects.has(row.project.id)}
+							busy={busyProjects.has(hostedRowKey(currentHostId ?? "", row.project.id))}
 							onPress={openOrchestrator}
 						/>
 					}
