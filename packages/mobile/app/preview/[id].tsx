@@ -11,7 +11,7 @@ import { BrowserToolbar } from "../../lib/browser/BrowserToolbar";
 import { browserSessionUrlKey, loadBrowserSessionUrl, saveBrowserSessionUrl } from "../../lib/browser/browserSessionStore";
 import { executeMobileBrowserAct } from "../../lib/browser/mobileBrowserAct";
 import { bridgeResult, browserCommandScript, MOBILE_BROWSER_APPEARANCE_SCRIPT, MOBILE_BROWSER_BOOTSTRAP, parseBrowserBridgeMessage, parseBrowserContentAppearance, type BrowserContentAppearance } from "../../lib/browser/mobileBrowserBridge";
-import { failPendingMobileBrowserNavigation, type PendingMobileBrowserNavigation } from "../../lib/browser/mobileBrowserNavigation";
+import { clearPendingMobileBrowserNavigationTimers, failPendingMobileBrowserNavigation, schedulePendingMobileBrowserNavigationSuccess, type PendingMobileBrowserNavigation } from "../../lib/browser/mobileBrowserNavigation";
 import { MobileBrowserRuntimeClient, type MobileBrowserCommand, type MobileBrowserCommandResult } from "../../lib/browser/mobileBrowserRuntime";
 import { inAppWebNavigation, isHttpUrl, normalizeBrowserInput, shouldAttachPreviewAuth } from "../../lib/browser/browserUrl";
 import { browserLoadEnd, browserLoadError, browserLoadStart, browserNavigationChanged, initialBrowserState, type MobileBrowserState } from "../../lib/browser/browserState";
@@ -147,11 +147,15 @@ export default function SessionPreviewScreen() {
 			return new Promise((resolve) => {
 				const previous = pendingNavigation.current;
 				if (previous) {
-					clearTimeout(previous.timer);
+					clearPendingMobileBrowserNavigationTimers(previous);
 					previous.resolve({ ok: false, error: { code: "BROWSER_COMMAND_CANCELLED", message: "Browser navigation was replaced." } });
 				}
 				const timer = setTimeout(() => {
-					if (pendingNavigation.current?.requestId === command.requestId) pendingNavigation.current = null;
+					const navigation = pendingNavigation.current;
+					if (navigation?.requestId === command.requestId) {
+						pendingNavigation.current = null;
+						clearPendingMobileBrowserNavigationTimers(navigation);
+					}
 					resolve({ ok: false, error: { code: "BROWSER_COMMAND_TIMEOUT", message: "The mobile browser did not finish navigating in time." } });
 				}, 55_000);
 				pendingNavigation.current = { requestId: command.requestId, started: false, resolve, timer };
@@ -165,7 +169,7 @@ export default function SessionPreviewScreen() {
 		const navigation = pendingNavigation.current;
 		if (navigation?.requestId === requestId) {
 			pendingNavigation.current = null;
-			clearTimeout(navigation.timer);
+			clearPendingMobileBrowserNavigationTimers(navigation);
 			navigation.resolve({ ok: false, error: { code: "BROWSER_COMMAND_CANCELLED", message: "Browser navigation was cancelled." } });
 			return;
 		}
@@ -206,7 +210,7 @@ export default function SessionPreviewScreen() {
 			const navigation = pendingNavigation.current;
 			pendingNavigation.current = null;
 			if (navigation) {
-				clearTimeout(navigation.timer);
+				clearPendingMobileBrowserNavigationTimers(navigation);
 				navigation.resolve({ ok: false, error: { code: "BROWSER_TARGET_UNAVAILABLE", message: "The mobile browser closed." } });
 			}
 		};
@@ -278,9 +282,15 @@ export default function SessionPreviewScreen() {
 						web.current?.injectJavaScript(`${MOBILE_BROWSER_BOOTSTRAP}\n${MOBILE_BROWSER_APPEARANCE_SCRIPT}`);
 						const navigation = pendingNavigation.current;
 						if (navigation?.started) {
-							pendingNavigation.current = null;
-							clearTimeout(navigation.timer);
-							navigation.resolve({ ok: true, result: { url: event.nativeEvent.url, title: event.nativeEvent.title } });
+							// Android WebView emits finish before its matching error event. Defer
+							// success one JS turn so onError can cancel it first.
+							const result = { ok: true, result: { url: event.nativeEvent.url, title: event.nativeEvent.title } } as const;
+							schedulePendingMobileBrowserNavigationSuccess(navigation, () => {
+								if (pendingNavigation.current !== navigation) return;
+								pendingNavigation.current = null;
+								clearPendingMobileBrowserNavigationTimers(navigation);
+								navigation.resolve(result);
+							}, Platform.OS === "android");
 						}
 					}}
 					onNavigationStateChange={(event: WebViewNavigation | null) => {
