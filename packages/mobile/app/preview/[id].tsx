@@ -1,13 +1,14 @@
 import { Feather } from "../../lib/icons";
 import { useLocalSearchParams, useNavigation } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, AppState, Linking, Pressable, Share, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, AppState, Linking, Platform, Pressable, Share, StyleSheet, Text, View } from "react-native";
 import { WebView, type WebViewMessageEvent, type WebViewNavigation } from "react-native-webview";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getPreview } from "../../lib/api";
 import { authHeaders } from "../../lib/config";
 import { BrowserErrorBanner } from "../../lib/browser/BrowserErrorBanner";
 import { BrowserToolbar } from "../../lib/browser/BrowserToolbar";
+import { browserSessionUrlKey, loadBrowserSessionUrl, saveBrowserSessionUrl } from "../../lib/browser/browserSessionStore";
 import { executeMobileBrowserAct } from "../../lib/browser/mobileBrowserAct";
 import { bridgeResult, browserCommandScript, MOBILE_BROWSER_APPEARANCE_SCRIPT, MOBILE_BROWSER_BOOTSTRAP, parseBrowserBridgeMessage, parseBrowserContentAppearance, type BrowserContentAppearance } from "../../lib/browser/mobileBrowserBridge";
 import { MobileBrowserRuntimeClient, type MobileBrowserCommand, type MobileBrowserCommandResult } from "../../lib/browser/mobileBrowserRuntime";
@@ -50,6 +51,8 @@ export default function SessionPreviewScreen() {
 		resolve: (result: MobileBrowserCommandResult) => void;
 		timer: ReturnType<typeof setTimeout>;
 	} | null>(null);
+	const browserDidNavigate = useRef(false);
+	const browserStorageKey = useMemo(() => config && id ? browserSessionUrlKey(config.host, config.httpPort, id) : "", [config, id]);
 
 	const showToast = useCallback((message: string) => {
 		setToast(message);
@@ -65,7 +68,18 @@ export default function SessionPreviewScreen() {
 		setContentAppearance(scheme);
 		setLoading(true);
 		setDiscoveryError(undefined);
+		browserDidNavigate.current = false;
 	}, [id, previewUrl, scheme]);
+	useEffect(() => {
+		if (!browserStorageKey) return;
+		let cancelled = false;
+		void loadBrowserSessionUrl(browserStorageKey).then((url) => {
+			if (cancelled || !url || browserDidNavigate.current) return;
+			setBrowserSource({ url, entry: new URL(url).hostname });
+			setBrowserState((current) => ({ ...current, url }));
+		});
+		return () => { cancelled = true; };
+	}, [browserStorageKey]);
 
 	const refresh = useCallback(async () => {
 		if (!config || !id) return;
@@ -110,9 +124,11 @@ export default function SessionPreviewScreen() {
 		}
 		haptics.tap();
 		const url = result.url.href;
+		browserDidNavigate.current = true;
+		if (browserStorageKey) void saveBrowserSessionUrl(browserStorageKey, url);
 		setBrowserSource({ url, entry: result.url.hostname });
 		setBrowserState((current) => browserLoadStart({ ...current, url }, url));
-	}, [config]);
+	}, [browserStorageKey, config]);
 
 	const executeWebCommand = useCallback((command: MobileBrowserCommand): Promise<MobileBrowserCommandResult> => {
 		if (!web.current) return Promise.resolve({ ok: false, error: { code: "BROWSER_TARGET_UNAVAILABLE", message: "The mobile browser page is not ready." } });
@@ -228,7 +244,7 @@ export default function SessionPreviewScreen() {
 	}, [currentUrl, showToast]);
 	const shareCurrentUrl = useCallback(() => {
 		if (!currentUrl) return;
-		void Share.share({ message: currentUrl, url: currentUrl }).catch(() => undefined);
+		void Share.share(Platform.OS === "ios" ? { url: currentUrl } : { message: currentUrl }).catch(() => undefined);
 	}, [currentUrl]);
 
 	return <View style={styles.screen}>
@@ -281,6 +297,10 @@ export default function SessionPreviewScreen() {
 							loading: event.loading,
 						};
 						setBrowserState((current) => browserNavigationChanged(current, update));
+						if (event.url && isHttpUrl(event.url) && browserStorageKey) {
+							browserDidNavigate.current = true;
+							void saveBrowserSessionUrl(browserStorageKey, event.url);
+						}
 					}}
 					onShouldStartLoadWithRequest={(request) => {
 						if (isHttpUrl(request.url)) return true;
