@@ -96,6 +96,22 @@ describe("CloudCredentialDialog browser login", () => {
 		expect(useCredentialDialogStore.getState().open).toBe(false);
 	});
 
+	it("saves a personal credential that also covers local sessions, like the harness login", async () => {
+		bridgeMocks.connectProviderAuth.mockResolvedValue(undefined);
+		const user = userEvent.setup();
+		renderDialog();
+		await startAnthropicLogin(user);
+
+		expect(bridgeMocks.connectProviderAuth).toHaveBeenCalledWith({
+			baseUrl: "https://cloud.example.test",
+			orgId: "org_1",
+			provider: "claude-code",
+			pushTarget: "me",
+			persistLocalClaudeToken: true,
+		});
+		expect(await screen.findByRole("status")).toBeInTheDocument();
+	});
+
 	it("still shows a real login failure", async () => {
 		bridgeMocks.connectProviderAuth.mockRejectedValue(new Error("Claude sign-in did not complete."));
 		const user = userEvent.setup();

@@ -7,7 +7,7 @@ import { Button } from "../ui/button";
 import { useCloudGate } from "../../hooks/useCloudGate";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import { useCloudOrg } from "../../hooks/useCloudOrg";
-import { hasValidAgentConnection, useProviderConnections } from "../../hooks/useProviderConnections";
+import { hasValidAgentConnection, useProviderConnections, userProviderConnectionsQueryKey } from "../../hooks/useProviderConnections";
 import { useCloudSession } from "../../lib/cloud-session";
 import { useCredentialDialogStore } from "../../stores/credential-dialog-store";
 import { SettingsRow } from "./SettingsRow";
@@ -43,7 +43,7 @@ function CloudCredentialsSectionInner({ titleHidden }: { titleHidden?: boolean }
 	const queryClient = useQueryClient();
 	const connections = useProviderConnections(org?.id);
 	const userConnections = useQuery({
-		queryKey: ["cloud-user-provider-connections"],
+		queryKey: userProviderConnectionsQueryKey,
 		enabled: status === "authenticated",
 		queryFn: async () => (await client.listUserProviderConnections()).providerConnections,
 	});
@@ -63,7 +63,9 @@ function CloudCredentialsSectionInner({ titleHidden }: { titleHidden?: boolean }
 		);
 	}
 
-	const rows = connections.data ?? [];
+	// Personal agent connections (what the one-login flows save) run cloud
+	// sessions too, so list them alongside the org's.
+	const rows = [...(connections.data ?? []), ...(userConnections.data ?? [])];
 	const githubPATConnected = (userConnections.data ?? []).some(
 		(connection) => connection.provider === "github" && connection.label === "default" && connection.validationState === "valid",
 	);
@@ -74,7 +76,7 @@ function CloudCredentialsSectionInner({ titleHidden }: { titleHidden?: boolean }
 		try {
 			await client.putGitHubPAT({ secret: githubPAT.trim() });
 			setGitHubPAT("");
-			await queryClient.invalidateQueries({ queryKey: ["cloud-user-provider-connections"] });
+			await queryClient.invalidateQueries({ queryKey: userProviderConnectionsQueryKey });
 		} catch (error) {
 			setGitHubPATError(error instanceof Error ? error.message : t("settings.cloudAgents.github.errorSave"));
 		} finally {
@@ -86,7 +88,7 @@ function CloudCredentialsSectionInner({ titleHidden }: { titleHidden?: boolean }
 		setGitHubPATError(null);
 		try {
 			await client.deleteGitHubPAT();
-			await queryClient.invalidateQueries({ queryKey: ["cloud-user-provider-connections"] });
+			await queryClient.invalidateQueries({ queryKey: userProviderConnectionsQueryKey });
 		} catch (error) {
 			setGitHubPATError(error instanceof Error ? error.message : t("settings.cloudAgents.github.errorRemove"));
 		} finally {
@@ -105,7 +107,7 @@ function CloudCredentialsSectionInner({ titleHidden }: { titleHidden?: boolean }
 						</span>
 					</SettingsRow>
 				))}
-				{connections.isSuccess && !hasValidAgentConnection(rows) ? (
+				{connections.isSuccess && userConnections.isSuccess && !hasValidAgentConnection(rows) ? (
 					<p className="px-3 text-xs leading-relaxed text-muted-foreground">{t("settings.cloudAgents.empty")}</p>
 				) : null}
 				<div className="flex items-center justify-between gap-4 px-3 pt-1">

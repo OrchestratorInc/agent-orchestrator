@@ -4,7 +4,12 @@ import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudSession } from "../lib/cloud-session";
 import { cloudOrgQueryKey, useCloudOrg } from "../hooks/useCloudOrg";
 import { cloudProjectsQueryKey, cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
-import { hasValidAgentConnection, useProviderConnections } from "../hooks/useProviderConnections";
+import {
+	hasValidAgentConnection,
+	useProviderConnections,
+	userProviderConnectionsQueryKey,
+	useUserProviderConnections,
+} from "../hooks/useProviderConnections";
 import { useCredentialDialogStore } from "../stores/credential-dialog-store";
 import { CloudCredentialDialog } from "./CloudCredentialDialog";
 import { CloudLocalSignInDialog } from "./CloudLocalSignInDialog";
@@ -19,6 +24,9 @@ export function CloudOnboardingGate() {
 	const { status } = useCloudSession();
 	const { org } = useCloudOrg();
 	const connections = useProviderConnections(org?.id);
+	// A personal connection (what "Log in with Anthropic/ChatGPT" saves) also
+	// runs cloud sessions, so it satisfies onboarding just like an org one.
+	const userConnections = useUserProviderConnections();
 	const openDialog = useCredentialDialogStore((s) => s.openDialog);
 	const queryClient = useQueryClient();
 	// Prompt at most once per signed-in session so a developer who dismisses
@@ -36,6 +44,7 @@ export function CloudOnboardingGate() {
 		queryClient.removeQueries({ queryKey: cloudSessionsQueryKey });
 		queryClient.removeQueries({ queryKey: cloudOrgQueryKey });
 		queryClient.removeQueries({ queryKey: ["cloud-provider-connections"] });
+		queryClient.removeQueries({ queryKey: userProviderConnectionsQueryKey });
 	}, [status, queryClient]);
 
 	useEffect(() => {
@@ -43,12 +52,12 @@ export function CloudOnboardingGate() {
 			autoPromptedRef.current = false;
 			return;
 		}
-		if (org === undefined || !connections.isSuccess || autoPromptedRef.current) return;
-		if (!hasValidAgentConnection(connections.data)) {
+		if (org === undefined || !connections.isSuccess || !userConnections.isSuccess || autoPromptedRef.current) return;
+		if (!hasValidAgentConnection([...connections.data, ...userConnections.data])) {
 			autoPromptedRef.current = true;
 			openDialog();
 		}
-	}, [signedIn, org, connections.isSuccess, connections.data, openDialog]);
+	}, [signedIn, org, connections.isSuccess, connections.data, userConnections.isSuccess, userConnections.data, openDialog]);
 
 	if (!cloudEnabled) return null;
 	return (

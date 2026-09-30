@@ -24,7 +24,7 @@ import {
 } from "../lib/onboarding-ui";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
-import { providerConnectionsQueryKey } from "../hooks/useProviderConnections";
+import { providerConnectionsQueryKey, userProviderConnectionsQueryKey } from "../hooks/useProviderConnections";
 import { useCredentialDialogStore } from "../stores/credential-dialog-store";
 import { cn } from "../lib/utils";
 import { aoBridge } from "../lib/bridge";
@@ -178,8 +178,20 @@ export function CloudCredentialDialog() {
 		setError(null);
 		loginCancelledRef.current = false;
 		try {
-			await aoBridge.cloud.connectProviderAuth({ baseUrl, orgId: org.id, provider: agent });
-			await queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey(org.id) });
+			// Same one-login semantics as the harness settings row: the credential
+			// becomes the caller's personal cloud connection and, for Claude Code,
+			// is also persisted locally so local sessions use the same login.
+			await aoBridge.cloud.connectProviderAuth({
+				baseUrl,
+				orgId: org.id,
+				provider: agent,
+				pushTarget: "me",
+				persistLocalClaudeToken: agent === "claude-code",
+			});
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey(org.id) }),
+				queryClient.invalidateQueries({ queryKey: userProviderConnectionsQueryKey }),
+			]);
 			setPhase("success");
 		} catch (err) {
 			setPhase("idle");
