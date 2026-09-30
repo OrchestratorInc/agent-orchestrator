@@ -166,6 +166,7 @@ export function HomePage() {
 	const workspaceQuery = useWorkspaceQuery();
 	const [sourceSignal, setSourceSignal] = useState<{ source: ProjectSource | "cloud"; nonce: number } | null>(null);
 	const projects = workspaceQuery.data ?? [];
+	const hasRegisteredProjects = projects.some((project) => project.id !== STANDALONE_WORKSPACE_ID);
 	const recentProjects = useMemo(() => sortProjectsByActivity(projects).slice(0, RECENT_PROJECT_LIMIT), [projects]);
 
 	const isDaemonReady = usesPreviewWorkspaceData || daemonStatus.state === "ready";
@@ -239,7 +240,7 @@ export function HomePage() {
 								label={t("home.newStandaloneAgent")}
 								onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
 							/>
-							{cloudEnabled && projects.length === 0 && (
+							{cloudEnabled && !hasRegisteredProjects && (
 								<div className="col-span-2">
 									<HomeActionCard
 										icon={<Cloud strokeWidth={1.8} />}

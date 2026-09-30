@@ -123,6 +123,21 @@ describe("shell index route", () => {
 		expect(routeMocks.createProjectFlowProps?.sourceSignal?.source).toBe("cloud");
 	});
 
+	it("shows cloud creation when standalone sessions exist without a registered project", () => {
+		routeMocks.cloudEnabled = true;
+		routeMocks.workspaces = [{
+			id: STANDALONE_WORKSPACE_ID,
+			name: "Scratchpad",
+			kind: STANDALONE_PROJECT_KIND,
+			path: "Not attached to a project",
+			sessions: [standaloneSession({})],
+		}];
+		render(<HomePage />);
+
+		fireEvent.click(screen.getByRole("button", { name: "New cloud project" }));
+		expect(routeMocks.createProjectFlowProps?.sourceSignal?.source).toBe("cloud");
+	});
+
 	it("renders the home page instead of redirecting to a scratch board when projects exist", async () => {
 		routeMocks.workspaces = [
 			{
