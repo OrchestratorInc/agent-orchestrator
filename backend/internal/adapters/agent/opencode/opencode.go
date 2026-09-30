@@ -654,6 +654,13 @@ func OpenCodeBinaryCandidates(ctx context.Context) ([]string, error) {
 			candidates = append(candidates, nodeManagerCandidates...)
 		}
 	}
+	if dir, ok := V2NPMBinDir(); ok {
+		if runtime.GOOS == "windows" {
+			candidates = append(candidates, filepath.Join(dir, "opencode.cmd"), filepath.Join(dir, "opencode.exe"))
+		} else {
+			candidates = append(candidates, filepath.Join(dir, "opencode"))
+		}
+	}
 	for _, candidate := range candidates {
 		if hookutil.IsExecutableFile(candidate) {
 			add(candidate)
