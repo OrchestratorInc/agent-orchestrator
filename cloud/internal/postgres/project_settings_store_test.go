@@ -55,6 +55,46 @@ func TestProjectSettingsStorePreservesOmissionsAndValidates(t *testing.T) {
 	}
 }
 
+func TestProjectSettingsStoreClearsRoleDefaults(t *testing.T) {
+	for _, role := range []string{"worker", "orchestrator"} {
+		t.Run(role, func(t *testing.T) {
+			store, admin, fixture := openNotificationTestStore(t)
+			ctx := context.Background()
+			principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+			if _, err := admin.Exec(ctx, `UPDATE ao_projects SET config = $2 WHERE id = $1`, fixture.projectID,
+				`{"workerAgent":"codex","orchestratorAgent":"claude-code","worker":{"agentConfig":{"model":"worker-model","effort":"max","permissions":"auto"}},"orchestrator":{"agentConfig":{"model":"orchestrator-model","effort":"high"}},"coder":{"templateId":"keep"}}`); err != nil {
+				t.Fatal(err)
+			}
+			patch, err := domain.ParseProjectSettingsPatch(json.RawMessage(`{"config":{"` + role + `":null}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.UpdateProjectSettings(ctx, principal, fixture.orgID, fixture.projectID, patch); err != nil {
+				t.Fatal(err)
+			}
+			project, err := store.GetProject(ctx, principal, fixture.orgID, fixture.projectID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(project.Config, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := fields[role]; exists || strings.Contains(string(project.Config), role+"Agent") || string(fields["coder"]) != `{"templateId":"keep"}` {
+				t.Fatalf("role reset not persisted or omitted config lost: %s", project.Config)
+			}
+			session, err := store.CreateSession(ctx, principal, fixture.orgID, uuid.NewString(), 10, domain.CreateSession{ProjectID: fixture.projectID, Kind: role, Harness: "opencode", DisplayName: role, Mode: "trusted"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			launch, err := store.WorkerLaunchSpec(ctx, fixture.orgID, session.ID)
+			if err != nil || launch.Harness != "opencode" || launch.Model != "" || !jsonEqual(launch.AgentConfig, json.RawMessage(`{}`)) {
+				t.Fatalf("cleared defaults reached new session: %+v, %v", launch, err)
+			}
+		})
+	}
+}
+
 func TestConcurrentPartialProjectSettingsDoNotLoseValues(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()

@@ -1452,8 +1452,10 @@ export interface components {
             [key: string]: unknown;
         };
         ProjectSettingsConfigPatch: {
-            worker?: components["schemas"]["ProjectRoleConfigPatch"];
-            orchestrator?: components["schemas"]["ProjectRoleConfigPatch"];
+            /** @description Null removes the worker override and uses the session agent selection. */
+            worker?: components["schemas"]["ProjectRoleConfigPatch"] | null;
+            /** @description Null removes the orchestrator override and uses the session agent selection. */
+            orchestrator?: components["schemas"]["ProjectRoleConfigPatch"] | null;
             reviewers?: components["schemas"]["ProjectReviewer"][];
             autoReview?: boolean;
         };

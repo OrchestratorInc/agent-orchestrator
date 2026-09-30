@@ -2400,9 +2400,15 @@ components:
       additionalProperties: false
       properties:
         worker:
-          $ref: "#/components/schemas/ProjectRoleConfigPatch"
+          description: Null removes the worker override and uses the session agent selection.
+          oneOf:
+            - $ref: "#/components/schemas/ProjectRoleConfigPatch"
+            - type: "null"
         orchestrator:
-          $ref: "#/components/schemas/ProjectRoleConfigPatch"
+          description: Null removes the orchestrator override and uses the session agent selection.
+          oneOf:
+            - $ref: "#/components/schemas/ProjectRoleConfigPatch"
+            - type: "null"
         reviewers:
           type: array
           maxItems: 1

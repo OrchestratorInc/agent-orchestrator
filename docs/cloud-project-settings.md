@@ -24,8 +24,10 @@ stays unset in project config, and Cloud applies the explicit effort at launch.
 Project reads and writes stay on the control plane.
 
 The settings endpoint accepts `displayName`, `defaultBranch`, and `config`.
-Repository identity is read-only. Unknown fields and explicit `null` values are
-rejected. Config uses the same role structure as local project settings:
+Repository identity is read-only. `config.worker: null` or
+`config.orchestrator: null` removes that role's defaults so new sessions use their
+own agent selection. Other explicit `null` values and unknown fields are rejected.
+Config uses the same role structure as local project settings:
 
 ```json
 {

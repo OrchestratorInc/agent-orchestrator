@@ -31,8 +31,8 @@ export function CloudProjectSettingsAdapter({ projectId, cloudOrgId, section = "
 	const loadError = !ready ? t("settings.cloudProject.signIn") : query.isError
 		? query.error instanceof Error ? query.error.message : t("settings.project.loadFailed") : undefined;
 	useEffect(() => {
-		if (loadError) onSaveState?.({ phase: "failed", error: loadError });
-	}, [loadError, onSaveState]);
+		if (loadError) onSaveState?.({ phase: "failed", error: loadError, retry: ready ? () => { void query.refetch({ cancelRefetch: false }); } : undefined });
+	}, [loadError, onSaveState, ready, query.refetch]);
 	if (loadError) return <p className="text-sm text-error" role="alert">{loadError}</p>;
 	if (!query.data) return <p className="text-sm text-settings-muted">{t("settings.project.loading")}</p>;
 	return <CloudSettingsAdapter key={`${cloudOrgId}/${projectId}`} project={query.data} section={section} onSaveState={onSaveState} />;
@@ -64,7 +64,7 @@ function CloudAgentPicker({ role, value, onChange }: ProjectAgentPickerProps) {
 	const { t } = useTranslation();
 	return <SettingsOptionMenu aria-label={`${t(`settings.models.${role}Role`)} ${t("settings.project.agent").toLocaleLowerCase()}`}
 		value={value} placeholder={t("settings.cloudProject.sessionSelection")}
-		options={[...(role === "reviewer" ? [{ value: "", label: t("settings.cloudProject.sessionAgent") }] : []), ...CLOUD_AGENT_PROVIDERS.map((agent) => ({ value: agent, label: agentLabel(agent), icon: <AgentAvatar provider={agent} className="size-icon-lg" decorative /> }))]}
+		options={[{ value: "", label: t(role === "reviewer" ? "settings.cloudProject.sessionAgent" : "settings.cloudProject.sessionSelection") }, ...CLOUD_AGENT_PROVIDERS.map((agent) => ({ value: agent, label: agentLabel(agent), icon: <AgentAvatar provider={agent} className="size-icon-lg" decorative /> }))]}
 		triggerClassName="w-full justify-between" menuClassName="settings-agent-menu-surface" menuItemClassName="settings-agent-menu-item"
 		renderMenuItem={(option, selected) => <AgentSelectMenuItem agentId={option.value || undefined} label={option.label} selected={selected} />}
 		onChange={onChange} />;
