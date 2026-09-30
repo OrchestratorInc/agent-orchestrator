@@ -125,7 +125,7 @@ function CloudSettingsBody({ project, section, onSaveState }: {
 						<ProjectSettingsInputRow id="project-default-branch" label={t("settings.project.defaultBranch")} editLabel={t("settings.field.edit", { label: t("settings.project.defaultBranch") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.defaultBranch} onChange={(defaultBranch) => setDraft((value) => ({ ...value, defaultBranch }))} />
 					</ProjectSettingsSection>
 					<ProjectSettingsSection title={t("settings.project.pullRequests")} grouped>
-						<ProjectAutoReviewToggle checked={draft.autoReview} onCheckedChange={(autoReview) => setDraft((value) => ({ ...value, autoReview }))} />
+						<ProjectAutoReviewToggle description={t("settings.cloudProject.autoReviewDescription")} checked={draft.autoReview} onCheckedChange={(autoReview) => setDraft((value) => ({ ...value, autoReview }))} />
 					</ProjectSettingsSection>
 				</> : <ProjectSettingsSection title={t("settings.project.agents")} titleHidden grouped>
 					<ProjectAgentRoleHeader />
@@ -134,6 +134,7 @@ function CloudSettingsBody({ project, section, onSaveState }: {
 						model={<AgentModelField role={role} agentId={draft[role].agent}
 							// Model discovery is agent-scoped; Cloud project IDs never go to local project APIs.
 							projectId={draft[role].agent === "opencode" && opencodeCredential ? credentialModelScope(opencodeCredential) : ""}
+							supportedEfforts={draft[role].agent === "codex" ? ["low", "medium", "high", "xhigh", "max"] : draft[role].agent === "claude-code" ? ["low", "medium", "high", "max"] : undefined}
 							model={draft[role].agentConfig.model} mode={draft[role].agentConfig.mode} effort={draft[role].agentConfig.effort} allowCustomFallback
 							onModelChange={(model) => updateRoleConfig(role, { model })}
 							onModeChange={(mode) => { if (mode === "" || mode === "plan" || mode === "ask") updateRoleConfig(role, { mode }); }}
