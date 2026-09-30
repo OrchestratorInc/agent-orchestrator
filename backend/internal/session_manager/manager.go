@@ -2291,7 +2291,12 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	// process, and closing it also settles any turn left in flight so a later
 	// read does not show work that is no longer running.
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
-		m.stopChatBestEffort(ctx, id)
+		if m.chat == nil {
+			return false, fmt.Errorf("kill %s: chat controller: %w", id, ErrIncompleteHandle)
+		}
+		if err := m.chat.StopChat(ctx, id); err != nil {
+			return false, fmt.Errorf("kill %s: chat controller: %w", id, err)
+		}
 	} else if handle.ID != "" {
 		// Any Destroy error stops the kill. Every runtime's Destroy already
 		// returns nil when it confirms the session is absent, so an error means
@@ -4633,25 +4638,32 @@ func (m *Manager) ForceTeardownProject(ctx context.Context, project domain.Proje
 // gate) do not pile up across the whole loop.
 func (m *Manager) forceTeardownProjectOne(ctx context.Context, rec domain.SessionRecord) error {
 	// Prove the process is gone before touching its working directory.
-	if !rec.IsTerminated {
-		if err := m.beginAgentOperation(ctx, rec.ID, agentOperationKill); err != nil {
-			if errors.Is(err, errAgentOperationInProgress) {
-				return fmt.Errorf("force cleanup %s: %w", rec.ID, ErrSwitchInProgress)
-			}
-			return fmt.Errorf("force cleanup %s: %w", rec.ID, err)
+	if err := m.beginAgentOperation(ctx, rec.ID, agentOperationKill); err != nil {
+		if errors.Is(err, errAgentOperationInProgress) {
+			return fmt.Errorf("force cleanup %s: %w", rec.ID, ErrSwitchInProgress)
 		}
-		defer m.endAgentOperation(rec.ID, agentOperationKill)
+		return fmt.Errorf("force cleanup %s: %w", rec.ID, err)
+	}
+	defer m.endAgentOperation(rec.ID, agentOperationKill)
 
+	if !rec.IsTerminated {
 		m.stopPreviewBestEffort(ctx, rec.ID)
 		m.destroyBrowserBestEffort(ctx, rec.ID)
-		handle := runtimeHandle(rec.Metadata)
-		if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
-			m.stopChatBestEffort(ctx, rec.ID)
-		} else if handle.ID != "" {
-			if err := m.runtime.Destroy(ctx, handle); err != nil {
-				return fmt.Errorf("force cleanup %s: runtime: %w", rec.ID, err)
-			}
+	}
+	handle := runtimeHandle(rec.Metadata)
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+		if m.chat == nil {
+			return fmt.Errorf("force cleanup %s: chat controller: %w", rec.ID, ErrIncompleteHandle)
 		}
+		if err := m.chat.StopChat(ctx, rec.ID); err != nil {
+			return fmt.Errorf("force cleanup %s: chat controller: %w", rec.ID, err)
+		}
+	} else if handle.ID != "" {
+		if err := m.runtime.Destroy(ctx, handle); err != nil {
+			return fmt.Errorf("force cleanup %s: runtime: %w", rec.ID, err)
+		}
+	}
+	if !rec.IsTerminated {
 		if err := m.terminateNativeSession(ctx, rec); err != nil {
 			return fmt.Errorf("force cleanup %s: native session: %w", rec.ID, err)
 		}
@@ -4721,12 +4733,13 @@ func (m *Manager) forceTeardownProjectOne(ctx context.Context, rec domain.Sessio
 // prune — log and continue so ForceTeardownProject can still unregister the
 // project (review issue: stale missing state must not block unregistering).
 func (m *Manager) forceStashAndDestroy(ctx context.Context, rec domain.SessionRecord, info ports.WorkspaceInfo) error {
-	staleWorkspace := false
 	if _, err := m.workspace.StashUncommitted(ctx, info); err != nil {
 		switch {
 		case errors.Is(err, ports.ErrWorkspaceStale):
-			staleWorkspace = true
-			m.logger.Warn("force cleanup: stale workspace; skipping preserve", "sessionID", rec.ID, "path", info.Path, "error", err)
+			// The path may have been replaced with unregistered user files.
+			// Leave it alone: without a valid worktree there is no safe stash.
+			m.logger.Warn("force cleanup: stale workspace; leaving path untouched", "sessionID", rec.ID, "path", info.Path, "error", err)
+			return nil
 		case errors.Is(err, ports.ErrWorkspaceRepoUnavailable):
 			m.logger.Warn("force cleanup: repository missing; skipping preserve", "sessionID", rec.ID, "path", info.Path, "error", err)
 		default:
@@ -4737,9 +4750,6 @@ func (m *Manager) forceStashAndDestroy(ctx context.Context, rec domain.SessionRe
 		if errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
 			m.logger.Warn("force cleanup: repository missing; skipping worktree removal", "sessionID", rec.ID, "path", info.Path, "error", err)
 			return nil
-		}
-		if staleWorkspace {
-			m.logger.Warn("force cleanup: stale workspace cleanup failed", "sessionID", rec.ID, "path", info.Path, "error", err)
 		}
 		return fmt.Errorf("force cleanup %s: force destroy: %w", rec.ID, err)
 	}
