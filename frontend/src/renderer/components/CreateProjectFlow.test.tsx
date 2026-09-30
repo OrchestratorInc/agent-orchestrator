@@ -1598,6 +1598,15 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(cloudMocks.signIn).toHaveBeenCalledOnce();
 	});
 
+	it("opens the Cloud sign-in flow directly from a home-page signal", async () => {
+		cloudMocks.cloudEnabled = true;
+		const view = render(<CreateProjectFlow mode="choose" sourceSignal={null} {...noop} />, { wrapper: CloudTestProviders });
+
+		view.rerender(<CreateProjectFlow mode="choose" sourceSignal={{ source: "cloud", nonce: 1 }} {...noop} />);
+
+		expect(await screen.findByText(/sign in to AO Cloud to create a cloud project/i)).toBeInTheDocument();
+	});
+
 	it("shows Cloud in a separate card above the local project sources", () => {
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.sessionStatus = "authenticated";

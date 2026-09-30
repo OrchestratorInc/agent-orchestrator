@@ -7,6 +7,9 @@
 // with a rotated password to "check you're on the same Wi-Fi" sends them to
 // debug the wrong thing.
 
+// Type-only, so erased at runtime: this module stays free of native imports.
+import type { FeatherIconName } from "./icons";
+
 export type ConnectionFailure =
 	| "not-ao-qr" // the scanned code wasn't an AO pairing payload
 	| "outdated-desktop" // a v1 code: AO on the computer is too old to pair with
@@ -116,6 +119,14 @@ export type ConnectionErrorCopy = {
 	// state); the inline error boxes on the pairing screens show `message` alone.
 	title: string;
 	message: string;
+	// The empty-state glyph for this cause. Distinct per cause so a rejected
+	// password no longer wears the same "no Wi-Fi" icon as a desktop that is
+	// simply out of range.
+	icon: FeatherIconName;
+	// One short line under the title on the board's empty state. Most causes
+	// leave it out and let the title and buttons speak; a disconnect keeps one
+	// because the fix is on the user's side and not obvious from the title.
+	hint?: string;
 	// When true the screen appends the Local Network hint and offers a button
 	// that opens the OS settings page for AO.
 	showLocalNetworkHint: boolean;
@@ -138,6 +149,7 @@ export function describeConnectionFailure(
 		case "tunnel-rotated":
 			return {
 				title: "Your desktop's address changed",
+				icon: "route-off",
 				message:
 					"AO restarted on your desktop, so it has a new address. Open AO \u2192 Settings \u2192 Connect Mobile there and scan the new code.",
 				showLocalNetworkHint: false,
@@ -145,6 +157,7 @@ export function describeConnectionFailure(
 		case "outdated-desktop":
 			return {
 				title: "Update AO on your desktop",
+				icon: "download-cloud",
 				message:
 					"That code came from an older version of AO. Update the desktop app, then generate a new code.",
 				showLocalNetworkHint: false,
@@ -152,6 +165,7 @@ export function describeConnectionFailure(
 		case "not-ao-qr":
 			return {
 				title: "Not an AO pairing code",
+				icon: "alert-circle",
 				message: "That QR code isn't an AO pairing code.",
 				showLocalNetworkHint: false,
 			};
@@ -161,6 +175,10 @@ export function describeConnectionFailure(
 			const messagePrefix = address ? `Reached nothing at ${address}. ` : "Couldn't reach your desktop. ";
 			return {
 				title: "Your desktop disconnected",
+				icon: "unplug",
+				hint: isTailscaleHost(target.host)
+					? "Check Tailscale is on for both devices."
+					: "Check you're on the same Wi-Fi.",
 				message: isTailscaleHost(target.host)
 					? messagePrefix +
 						"Make sure Tailscale is connected on this phone and your desktop, and that your desktop is awake."
@@ -174,6 +192,7 @@ export function describeConnectionFailure(
 			// and re-scanning is the actual fix, not retrying the same password.
 			return {
 				title: "Your desktop rejected the password",
+				icon: "monitor-off",
 				message: "That password was rotated. Re-scan the code on your desktop.",
 				showLocalNetworkHint: false,
 			};
@@ -183,6 +202,7 @@ export function describeConnectionFailure(
 			// things that were never the problem.
 			return {
 				title: "Too many attempts",
+				icon: "timer",
 				message:
 					"Your desktop locked this device out after too many failed attempts. " +
 					"It clears on its own in about a minute — check the password, then try again.",
@@ -191,6 +211,7 @@ export function describeConnectionFailure(
 		case "server-error":
 			return {
 				title: "Your desktop returned an error",
+				icon: "monitor-cog",
 				message: `${target.host}:${target.port} answered, but with an error. Check the AO logs on your desktop.`,
 				showLocalNetworkHint: false,
 			};

@@ -17,7 +17,7 @@ export function useBoardFailure(): ConnectionErrorCopy {
 			// which no amount of retrying fixes — rescanning does. Distinguished
 			// here rather than in the classifier because it depends on what the
 			// machine advertised, not on a status code.
-			classified === "unreachable" && tunnelMayHaveRotated(activeEndpoints, connection === "open")
+			classified === "unreachable" && tunnelMayHaveRotated(activeEndpoints, config?.endpointKind, connection === "open")
 				? "tunnel-rotated"
 				: classified,
 			{ host: config?.host ?? "", port: config?.httpPort ?? "", platform: Platform.OS },

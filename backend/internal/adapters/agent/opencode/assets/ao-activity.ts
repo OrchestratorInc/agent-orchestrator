@@ -1,155 +1,211 @@
 // agent-orchestrator: managed opencode activity plugin (do not edit)
 //
-// OpenCode v2 (@opencode/cli) rewrote the plugin system. This plugin is loaded
-// from the auto-scanned `.opencode/plugin/` directory (unchanged from v1) and is
-// a plain default-exported object `{ id, setup(ctx) }` — NO runtime import, so it
-// loads without @opencode/plugin being resolvable in the sandbox (a v2 `import
-// { define }` would fail with "Cannot find package '@opencode/plugin'"). Types
-// are intentionally omitted for the same reason.
+// It maps opencode's native lifecycle events onto AO's normalized
+// activity events:
+//   session.created                       -> `ao hooks opencode session-start`
+//   message.updated / message.part.updated -> `ao hooks opencode user-prompt-submit`
+//   tool.execute.before / tool.execute.after -> `ao hooks opencode active`
+//   session.status (status.type == idle)   -> `ao hooks opencode stop`
+//   permission.asked / question.asked      -> `ao hooks opencode permission-blocked`
+//   permission/question reply or rejection -> `ao hooks opencode active`
 //
-// It maps opencode v2's native lifecycle onto AO's normalized activity events
-// (verified live against opencode 2.0.19 + mimo-v2.6-flash-free):
-//   first event for a new session / session.created  -> `ao hooks opencode session-start`
-//   session.inbox.enqueued (item.type == "user")     -> `ao hooks opencode user-prompt-submit`
-//   session.execution.started / session.tool.called,
-//     tool execute.before/after, permission.replied  -> `ao hooks opencode active`
-//   session.execution.{succeeded,failed,interrupted} -> `ao hooks opencode stop`
-//   permission.asked                                 -> `ao hooks opencode permission-blocked`
+// The opencode-native session id (and prompt/model where known) is piped to the
+// hook command as JSON on stdin, run with cwd set to the worktree so AO can
+// correlate the opencode session to its AO session. Every invocation is
+// best-effort and must never crash the user's opencode session: a missing `ao`
+// binary is a guarded no-op (`Bun.which`), and spawn exceptions, non-zero
+// exit codes, and malformed event payloads are caught and surfaced through
+// opencode's structured logger (client.app.log) for diagnosis — never rethrown.
 //
-// v2 event payloads live under `event.data` (v1 used `event.properties`), with the
-// opencode session id at `event.data.sessionID`. Every invocation is best-effort
-// and must never crash opencode: a missing `ao` binary is a guarded no-op and all
-// spawn/stream failures are swallowed. The opencode session id (+ prompt/model
-// where known) is piped as JSON on stdin, cwd = the worktree, so AO can correlate
-// the opencode session to its AO session.
-export default {
-  id: "ao-activity",
-  setup: (ctx: any) => {
-    const directory: string = ctx?.location?.directory ?? process.cwd()
-    // AO fences each provider generation with AO_RUNTIME_LAUNCH_ID; carry it so
-    // hooks work even when child-process env inheritance is trimmed.
-    const launchID: string = (process.env.AO_RUNTIME_LAUNCH_ID ?? "").trim()
-    const HOOK_TIMEOUT_MS = 30_000
-    // Per-message dedup for the prompt report (see reportUserPrompt).
-    const promptReports = new Map<string, boolean>()
-    let currentSessionID: string | null = null
-    let currentModel: string | null = null
+// `import type` is erased at runtime by Bun's transpiler, so this loads even
+// before opencode has installed @opencode-ai/plugin into the config dir.
+import type { Plugin } from "@opencode-ai/plugin"
+
+export const aoActivity: Plugin = async ({ directory, client }) => {
+  // ao hooks must never be able to hang opencode: cap each invocation, matching
+  // the 30s timeout the claude-code and codex hook entries use.
+  const HOOK_TIMEOUT_MS = 30_000
+  // A user message is reported at most twice (see reportUserPrompt): an optional
+  // early empty report, then an upgrade carrying the prompt text. Maps a message
+  // id to whether the report we already sent included the prompt text.
+  const promptReports = new Map<string, boolean>()
+  // message.* events don't carry the session id, so track it from events that do.
+  let currentSessionID: string | null = null
+  // The model of the most recent assistant message, forwarded for context.
+  let currentModel: string | null = null
+  // AO fences each provider generation with AO_RUNTIME_LAUNCH_ID; carry it in
+  // the payload so hooks work even when child-process env inheritance is
+  // trimmed by the host runtime.
+  const launchID: string = (process.env.AO_RUNTIME_LAUNCH_ID ?? "").trim()
+  const messageStore = new Map<string, any>()
+
+  // Resolve AO through Bun so the same command works on Unix and Windows. A
+  // missing binary remains a silent no-op rather than a per-event error.
+  function hookCmd(hookName: string): string[] | null {
     const ao = Bun.which("ao")
+    return ao ? [ao, "hooks", "opencode", hookName] : null
+  }
 
-    // Synchronous dispatch preserves event ordering (opencode's loop blocks until
-    // the hook returns) and survives `opencode run` exiting on the stop event. A
-    // missing `ao` is a silent no-op; spawn failures are swallowed.
-    function callHookSync(hookName: string, payload: Record<string, unknown>) {
-      if (!ao) return
-      try {
-        Bun.spawnSync([ao, "hooks", "opencode", hookName], {
-          cwd: directory,
-          env: { ...process.env, AO_RUNTIME_LAUNCH_ID: launchID },
-          stdin: new TextEncoder().encode(JSON.stringify({ ...payload, launch_id: launchID }) + "\n"),
-          stdout: "ignore",
-          stderr: "ignore",
-          timeout: HOOK_TIMEOUT_MS,
-        })
-      } catch {
-        // never propagate into opencode
+  // Report a hook failure through opencode's structured logger. Best-effort: the
+  // log call must itself never throw or reject back into opencode, hence the
+  // optional chaining + swallowed rejection.
+  function logHookFailure(hookName: string, detail: string) {
+    try {
+      void client?.app
+        ?.log?.({ body: { service: "ao-activity", level: "error", message: `hook ${hookName} failed: ${detail}` } })
+        ?.catch?.(() => {})
+    } catch {
+      // The logger itself is unavailable — nothing more we can safely do.
+    }
+  }
+
+  // All hooks are dispatched synchronously (Bun.spawnSync), for two reasons:
+  //   1. Ordering. An async hook yields the event loop; if opencode does not
+  //      await the handler's promise, a later event (e.g. message.updated ->
+  //      user-prompt-submit) could complete before an in-flight async
+  //      session-start, so AO would see the prompt before the session is
+  //      registered. spawnSync blocks opencode's single-threaded loop until the
+  //      hook returns, so events are reported strictly in dispatch order.
+  //   2. `opencode run` exits on the idle event, so an async stop hook would be
+  //      killed before completing.
+  //
+  // A non-zero exit (the guard makes a missing `ao` exit 0, so this is a real
+  // `ao hooks` failure) or a spawn exception is logged with its stderr and never
+  // rethrown, so reporting failures are diagnosable without crashing opencode.
+  function callHookSync(hookName: string, payload: Record<string, unknown>) {
+    try {
+      const command = hookCmd(hookName)
+      if (!command) return
+      const result = Bun.spawnSync(command, {
+        cwd: directory,
+        env: { ...process.env, AO_RUNTIME_LAUNCH_ID: launchID },
+        stdin: new TextEncoder().encode(JSON.stringify({ ...payload, launch_id: launchID }) + "\n"),
+        stdout: "ignore",
+        stderr: "pipe",
+        timeout: HOOK_TIMEOUT_MS,
+      })
+      if (!result.success) {
+        const stderr = result.stderr ? new TextDecoder().decode(result.stderr).trim() : ""
+        logHookFailure(hookName, `exited ${result.exitCode}${stderr ? `: ${stderr}` : ""}`)
       }
+    } catch (err) {
+      // The spawn itself failed. Never propagate.
+      logHookFailure(hookName, err instanceof Error ? err.message : String(err))
     }
+  }
 
-    // Emit session-start the first time we see a session id. session.created can
-    // fire before the plugin's event subscription is active in `run` mode, so we
-    // never rely on it alone — the first event carrying a new sessionID starts
-    // the session and resets per-session state (mirrors v1's switchedSession).
-    function ensureSession(sessionID: string | undefined | null): boolean {
-      if (!sessionID || sessionID === currentSessionID) return false
-      currentSessionID = sessionID
-      promptReports.clear()
-      currentModel = null
-      callHookSync("session-start", { session_id: sessionID })
-      return true
-    }
+  function switchedSession(sessionID: string): boolean {
+    if (currentSessionID === sessionID) return false
+    promptReports.clear()
+    messageStore.clear()
+    currentModel = null
+    currentSessionID = sessionID
+    return true
+  }
 
-    function reportUserPrompt(sessionID: string, key: string, prompt: string) {
-      const hasText = prompt.length > 0
-      const reported = promptReports.get(key)
-      if (reported) return
-      if (reported === false && !hasText) return
-      promptReports.set(key, hasText)
-      callHookSync("user-prompt-submit", { session_id: sessionID, prompt, model: currentModel ?? "" })
-    }
+  // Report a user prompt, preferring the one that carries the prompt text.
+  // message.updated can arrive before message.part.updated with no text, so an
+  // early empty report must NOT dedup away the later text report — otherwise the
+  // prompt never reaches AO and title-from-prompt metadata breaks. Therefore: an
+  // empty report fires at most once (so run-mode flows that omit the text part
+  // still mark the session active), and a text report fires once and is terminal.
+  function reportUserPrompt(sessionID: string, messageID: string, prompt: string) {
+    const hasText = prompt.length > 0
+    const reportedWithText = promptReports.get(messageID)
+    if (reportedWithText) return // already reported with text — terminal
+    if (reportedWithText === false && !hasText) return // already reported empty; no new info
+    promptReports.set(messageID, hasText)
+    callHookSync("user-prompt-submit", { session_id: sessionID, prompt, model: currentModel ?? "" })
+  }
 
-    void (async () => {
+  return {
+    event: async ({ event }) => {
       try {
-        for await (const event of ctx.event.subscribe()) {
-          try {
-            const type: string = event?.type ?? ""
-            const d: any = event?.data ?? {}
-            const sessionID: string | undefined = d.sessionID
-            switch (type) {
-              case "session.created": {
-                if (d.model?.id) {
-                  currentModel = d.model.providerID ? `${d.model.providerID}/${d.model.id}` : d.model.id
-                }
-                ensureSession(sessionID)
-                break
-              }
-              case "session.model.selected": {
-                const m = d.model
-                if (m?.id) currentModel = m.providerID ? `${m.providerID}/${m.id}` : m.id
-                break
-              }
-              case "session.inbox.enqueued": {
-                if (!sessionID) break
-                ensureSession(sessionID)
-                if (d.item?.type === "user") {
-                  const text: string = d.item?.payload?.text ?? ""
-                  reportUserPrompt(sessionID, d.inboxID ?? sessionID, text)
-                }
-                break
-              }
-              case "session.execution.started":
-              case "session.tool.called": {
-                if (!sessionID) break
-                ensureSession(sessionID)
-                callHookSync("active", { session_id: sessionID, model: currentModel ?? "" })
-                break
-              }
-              case "session.execution.succeeded":
-              case "session.execution.failed":
-              case "session.execution.interrupted": {
-                if (!sessionID) break
-                ensureSession(sessionID)
-                callHookSync("stop", { session_id: sessionID, model: currentModel ?? "" })
-                break
-              }
-              case "permission.asked": {
-                if (!sessionID) break
-                ensureSession(sessionID)
-                callHookSync("permission-blocked", { session_id: sessionID, model: currentModel ?? "" })
-                break
-              }
-              case "permission.replied": {
-                if (!sessionID) break
-                callHookSync("active", { session_id: sessionID, model: currentModel ?? "" })
-                break
-              }
+        switch (event.type) {
+          case "session.created": {
+            const session = (event as any).properties?.info
+            if (!session?.id) break
+            if (switchedSession(session.id)) {
+              callHookSync("session-start", { session_id: session.id })
             }
-          } catch {
-            // a single malformed event must never break the stream
+            break
           }
+
+          case "message.updated": {
+            const msg = (event as any).properties?.info
+            if (!msg) break
+            if (msg.sessionID && switchedSession(msg.sessionID)) {
+              callHookSync("session-start", { session_id: msg.sessionID })
+            }
+            if (msg.role === "assistant" && msg.modelID) currentModel = msg.modelID
+            // Fallback: some `opencode run` flows never deliver message.part.updated
+            // for the prompt, so start the turn from the user message itself.
+            if (msg.role === "user") {
+              messageStore.set(msg.id, msg)
+              const sessionID = msg.sessionID ?? currentSessionID
+              if (sessionID) reportUserPrompt(sessionID, msg.id, "")
+            }
+            break
+          }
+
+          case "message.part.updated": {
+            const part = (event as any).properties?.part
+            if (!part?.messageID) break
+            const msg = messageStore.get(part.messageID)
+            if (msg?.role === "user" && part.type === "text") {
+              const sessionID = msg.sessionID ?? currentSessionID
+              const prompt = part.text ?? ""
+              if (sessionID) reportUserPrompt(sessionID, msg.id, prompt)
+              if (prompt.length > 0) messageStore.delete(part.messageID)
+            }
+            break
+          }
+
+          case "session.status": {
+            // session.status fires in both TUI and `opencode run`; session.idle
+            // is deprecated and not reliably emitted in run mode.
+            // AO's "stop" hook means "the current turn is idle/finished", not
+            // "the whole native session has terminated", so multi-turn TUI
+            // sessions intentionally emit one stop per idle transition.
+            const props = (event as any).properties
+            if (props?.status?.type !== "idle") break
+            const sessionID = props?.sessionID ?? currentSessionID
+            if (!sessionID) break
+            callHookSync("stop", { session_id: sessionID, model: currentModel ?? "" })
+            break
+          }
+
+          case "permission.asked":
+          case "question.asked": {
+            const sessionID = (event as any).properties?.sessionID ?? currentSessionID
+            if (!sessionID) break
+            callHookSync("permission-blocked", { session_id: sessionID, model: currentModel ?? "" })
+            break
+          }
+
+          case "permission.replied":
+          case "question.replied":
+          case "question.rejected": {
+            const sessionID = (event as any).properties?.sessionID ?? currentSessionID
+            if (!sessionID) break
+            callHookSync("active", { session_id: sessionID, model: currentModel ?? "" })
+            break
+          }
+
         }
-      } catch {
-        // stream closed / errored — nothing safe left to do
+      } catch (err) {
+        // A malformed/unexpected event payload must never crash opencode; log
+        // it (tagged with the event type) for diagnosis and move on.
+        logHookFailure(`event:${(event as any)?.type ?? "unknown"}`, err instanceof Error ? err.message : String(err))
       }
-    })()
-
-    // Tool execution is direct activity; the input carries sessionID at top level.
-    void ctx.tool.hook("execute.before", (input: any) => {
-      if (input?.sessionID) callHookSync("active", { session_id: input.sessionID, model: currentModel ?? "" })
-    })
-    void ctx.tool.hook("execute.after", (input: any) => {
-      if (input?.sessionID) callHookSync("active", { session_id: input.sessionID, model: currentModel ?? "" })
-    })
-
-    return () => {}
-  },
+    },
+    "tool.execute.before": async (input) => {
+      callHookSync("active", { session_id: input.sessionID, model: currentModel ?? "" })
+    },
+    "tool.execute.after": async (input) => {
+      // Tool completion is still activity; session.status(idle) owns the
+      // transition back to idle after the turn finishes.
+      callHookSync("active", { session_id: input.sessionID, model: currentModel ?? "" })
+    },
+  }
 }
