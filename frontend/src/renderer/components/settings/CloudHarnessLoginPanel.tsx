@@ -20,20 +20,43 @@ const SETUP_TOKEN_STEPS = [
 // default where the harness has one: the desktop app runs the agent CLI's own
 // login locally and securely sends the resulting credential to the control
 // plane, so no token is pasted or displayed. Pasting a Claude setup token or a
-// provider API key remains available as a fallback.
+// provider API key remains available as a fallback; each API key links to the
+// page where it is created. OpenCode is multi-provider, so its credential type
+// doubles as the provider the worker injects the key for. Product and provider
+// names are proper nouns and deliberately not translated.
 export type CloudHarness = (typeof CLOUD_AGENT_PROVIDERS)[number];
 
-const CLOUD_LOGIN_METHODS: Record<CloudHarness, ReadonlyArray<{ value: string; label: string }>> = {
+type LoginMethod = {
+	value: string;
+	label: string;
+	/** What the input asks for ("Paste your {{name}}"). */
+	name?: string;
+	/** Where to create an API key. */
+	help?: { site: string; url: string };
+};
+
+const ANTHROPIC_KEY_HELP = { site: "console.anthropic.com", url: "https://console.anthropic.com/settings/keys" };
+const OPENAI_KEY_HELP = { site: "platform.openai.com", url: "https://platform.openai.com/api-keys" };
+
+const CLOUD_LOGIN_METHODS: Record<CloudHarness, readonly LoginMethod[]> = {
 	"claude-code": [
 		{ value: BROWSER_LOGIN, label: "Log in with Anthropic" },
-		{ value: "oauth_token", label: "Setup token" },
-		{ value: "api_key", label: "API key" },
+		{ value: "oauth_token", label: "Setup token", name: "setup token" },
+		{ value: "api_key", label: "Anthropic API key", help: ANTHROPIC_KEY_HELP },
 	],
 	codex: [
 		{ value: BROWSER_LOGIN, label: "Log in with ChatGPT" },
-		{ value: "api_key", label: "API key" },
+		{ value: "api_key", label: "OpenAI API key", help: OPENAI_KEY_HELP },
 	],
-	cursor: [{ value: "api_key", label: "API key" }],
+	cursor: [
+		{ value: "api_key", label: "Cursor API key", help: { site: "cursor.com/dashboard", url: "https://cursor.com/dashboard?tab=integrations" } },
+	],
+	opencode: [
+		{ value: "opencode_api_key", label: "OpenCode API key", help: { site: "opencode.ai/auth", url: "https://opencode.ai/auth" } },
+		{ value: "anthropic_api_key", label: "Anthropic API key", help: ANTHROPIC_KEY_HELP },
+		{ value: "openai_api_key", label: "OpenAI API key", help: OPENAI_KEY_HELP },
+		{ value: "openrouter_api_key", label: "OpenRouter API key", help: { site: "openrouter.ai/keys", url: "https://openrouter.ai/keys" } },
+	],
 };
 
 // Logs one harness in for cloud sessions, expanded inline under its row on the
@@ -137,6 +160,24 @@ export function CloudHarnessLoginPanel({ agent, onClose }: { agent: CloudHarness
 		<div ref={panelRef} className="flex scroll-my-3 flex-col gap-2 pb-1" data-testid="cloud-harness-login">
 			{needsSecret ? (
 				<>
+					{selectedMethod.help ? (
+						<p className={hintClass}>
+							<Trans
+								i18nKey="cloudCredential.apiKeyHelp"
+								components={{
+									link: (
+										<button
+											type="button"
+											className="text-settings-label underline underline-offset-2"
+											onClick={() => void aoBridge.app.openExternal(selectedMethod.help!.url)}
+										>
+											{selectedMethod.help.site}
+										</button>
+									),
+								}}
+							/>
+						</p>
+					) : null}
 					{agent === "claude-code" && credentialType === "oauth_token" ? (
 						<ol className={cn(hintClass, "list-decimal pl-4")}>
 							{SETUP_TOKEN_STEPS.map((key) => (
@@ -158,7 +199,7 @@ export function CloudHarnessLoginPanel({ agent, onClose }: { agent: CloudHarness
 							spellCheck={false}
 							autoFocus
 							className="h-8 min-w-0 flex-1 text-[13px]"
-							placeholder={t("cloudCredential.tokenPlaceholder")}
+							placeholder={t("cloudCredential.pastePlaceholder", { name: selectedMethod.name ?? selectedMethod.label })}
 							disabled={busy}
 							value={secret}
 							onChange={(e) => setSecret(e.target.value)}

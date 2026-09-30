@@ -7,6 +7,7 @@ import { CloudHarnessLoginPanel, type CloudHarness } from "./CloudHarnessLoginPa
 const bridgeMocks = vi.hoisted(() => ({
 	connectProviderAuth: vi.fn(),
 	cancelProviderAuth: vi.fn(),
+	openExternal: vi.fn(),
 }));
 
 const cloudMocks = vi.hoisted(() => ({
@@ -15,6 +16,7 @@ const cloudMocks = vi.hoisted(() => ({
 
 vi.mock("../../lib/bridge", () => ({
 	aoBridge: {
+		app: { openExternal: bridgeMocks.openExternal },
 		cloud: {
 			connectProviderAuth: bridgeMocks.connectProviderAuth,
 			cancelProviderAuth: bridgeMocks.cancelProviderAuth,
@@ -60,13 +62,14 @@ describe("CloudHarnessLoginPanel", () => {
 		bridgeMocks.connectProviderAuth.mockReset();
 		bridgeMocks.cancelProviderAuth.mockReset();
 		cloudMocks.putUserAgentConnection.mockReset();
+		bridgeMocks.openExternal.mockReset();
 	});
 
 	it("defaults Claude Code to logging in with Anthropic and offers the fallbacks", () => {
 		renderPanel();
 		expect(screen.getByRole("button", { name: "Log in with Anthropic" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Setup token" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "API key" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Anthropic API key" })).toBeInTheDocument();
 		expect(screen.queryByRole("textbox")).toBeNull();
 	});
 
@@ -115,8 +118,31 @@ describe("CloudHarnessLoginPanel", () => {
 
 		expect(screen.getByText("claude setup-token")).toBeInTheDocument();
 		expect(screen.getByText("sk-ant-oat")).toBeInTheDocument();
-		expect(screen.getByLabelText("Setup token")).toBeInTheDocument();
+		expect(screen.getByLabelText("Setup token")).toHaveAttribute("placeholder", "Paste your setup token");
 		expect(screen.getByRole("button", { name: "Log in with Anthropic" })).toBeInTheDocument();
+	});
+
+	it("says which API key to paste and links to where it is created", async () => {
+		const user = userEvent.setup();
+		renderPanel("codex");
+		await user.click(screen.getByRole("button", { name: "OpenAI API key" }));
+
+		expect(screen.getByPlaceholderText("Paste your OpenAI API key")).toBeInTheDocument();
+		expect(screen.getByText(/then paste it here/)).toHaveTextContent("Create a key at platform.openai.com, then paste it here.");
+		await user.click(screen.getByRole("button", { name: "platform.openai.com" }));
+		expect(bridgeMocks.openExternal).toHaveBeenCalledWith("https://platform.openai.com/api-keys");
+	});
+
+	it("lets OpenCode connect a key for any of its providers", async () => {
+		cloudMocks.putUserAgentConnection.mockResolvedValue({ providerConnection: { validationState: "valid" } });
+		const user = userEvent.setup();
+		renderPanel("opencode");
+		expect(screen.getByPlaceholderText("Paste your OpenCode API key")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "OpenRouter API key" }));
+		await user.type(screen.getByPlaceholderText("Paste your OpenRouter API key"), "or-key");
+		await user.click(screen.getByRole("button", { name: "Connect" }));
+
+		expect(cloudMocks.putUserAgentConnection).toHaveBeenCalledWith("opencode", { credentialType: "openrouter_api_key", secret: "or-key" });
 	});
 
 	it("saves a pasted Cursor API key as the user's personal connection", async () => {
@@ -124,7 +150,7 @@ describe("CloudHarnessLoginPanel", () => {
 		const user = userEvent.setup();
 		const { onClose } = renderPanel("cursor");
 		expect(screen.queryByText("Or use")).toBeNull();
-		await user.type(screen.getByLabelText("API key"), " cursor-key ");
+		await user.type(screen.getByPlaceholderText("Paste your Cursor API key"), " cursor-key ");
 		await user.click(screen.getByRole("button", { name: "Connect" }));
 
 		expect(cloudMocks.putUserAgentConnection).toHaveBeenCalledWith("cursor", { credentialType: "api_key", secret: "cursor-key" });

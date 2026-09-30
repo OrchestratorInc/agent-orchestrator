@@ -1330,7 +1330,7 @@ function CloudAgentSetupStep({
 				<div className="flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-[var(--color-bg-import-card)] px-4 py-3">
 					<p className={onboardingFieldHintClass}>
 						{t("createProject.cloudHarnessLoginNeeded", {
-							defaultValue: "No harness is logged in for cloud yet. Log in to Claude Code, Codex, or Cursor to run this project's sessions.",
+							defaultValue: "No harness is logged in for cloud yet. Log in to Claude Code, Codex, Cursor, or OpenCode to run this project's sessions.",
 						})}
 					</p>
 					<Button

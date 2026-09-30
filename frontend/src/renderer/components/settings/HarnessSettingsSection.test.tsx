@@ -147,7 +147,7 @@ describe("HarnessSettingsSection", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("logs Claude Code, Codex, and Cursor in for cloud inline under their rows", async () => {
+	it("logs cloud harnesses in inline under their rows", async () => {
 		cloudMocks.org = { id: "org-1" };
 		cloudMocks.connections = [{ provider: "codex", validationState: "valid" }];
 		const user = userEvent.setup();
