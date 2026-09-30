@@ -137,3 +137,26 @@ func TestV1RejectsWrongMajorBeforeOverlay(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveBinaryForMajorPicksMatchingBinaryFromSeveralOnPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	first, second := t.TempDir(), t.TempDir()
+	for dir, version := range map[string]string{first: "2.0.20", second: "1.18.30"} {
+		script := "#!/bin/sh\nprintf '%s\n' '" + version + "'\n"
+		if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", first+string(os.PathListSeparator)+second)
+	for major, want := range map[int]string{2: filepath.Join(first, "opencode"), 1: filepath.Join(second, "opencode")} {
+		got, err := ResolveBinaryForMajor(context.Background(), major)
+		if err != nil || got != want {
+			t.Fatalf("major %d resolved (%q, %v), want %q", major, got, err, want)
+		}
+	}
+	if _, err := ResolveBinaryForMajor(context.Background(), 3); err == nil || !strings.Contains(err.Error(), "requires OpenCode 3") {
+		t.Fatalf("major 3 err = %v, want first-candidate mismatch", err)
+	}
+}
