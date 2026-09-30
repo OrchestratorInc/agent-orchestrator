@@ -280,6 +280,39 @@ func (s *Store) AppendInteractiveConversationFacts(ctx context.Context, orgID, s
 				return nil
 			}
 		}
+		// The initial prompt is already recorded as a chat.user_message at session
+		// create (createSessionTx), and the worker auto-runs it in the TUI, whose
+		// user-prompt-submit hook mirrors the identical text back here — producing a
+		// second, duplicate prompt bubble in ChatUI. Skip a user-prompt mirror that
+		// only repeats the latest recorded user message while it is still
+		// unanswered; a genuinely distinct TUI prompt (the reason this mirror
+		// exists) and a real re-submit of the same text after the agent has replied
+		// (an intervening chat.assistant_delta) both still record. Assistant deltas
+		// are never deduped.
+		if eventTypeOut == "chat.user_message" {
+			var lastText string
+			var answered bool
+			switch err := tx.QueryRow(ctx, `
+				WITH last_user AS (
+					SELECT sequence, payload->>'text' AS text
+					FROM ao_events
+					WHERE org_id = $1 AND session_id = $2 AND type = 'chat.user_message'
+					ORDER BY sequence DESC LIMIT 1
+				)
+				SELECT lu.text, EXISTS (
+					SELECT 1 FROM ao_events e
+					WHERE e.org_id = $1 AND e.session_id = $2
+					  AND e.type = 'chat.assistant_delta' AND e.sequence > lu.sequence
+				)
+				FROM last_user lu`, orgID, sessionID).Scan(&lastText, &answered); {
+			case errors.Is(err, pgx.ErrNoRows):
+				// No prior user message recorded — this is the first, record it.
+			case err != nil:
+				return err
+			case lastText == text && !answered:
+				return nil // duplicate of the still-unanswered latest prompt
+			}
+		}
 		var sequence int64
 		if err := tx.QueryRow(ctx, `UPDATE ao_sessions SET next_sequence = next_sequence + 1, updated_at = now()
 			WHERE org_id = $1 AND id = $2 AND is_terminated = false RETURNING next_sequence - 1`, orgID, sessionID).Scan(&sequence); errors.Is(err, pgx.ErrNoRows) {
