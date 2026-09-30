@@ -39,7 +39,8 @@ describe("chat composer pill", () => {
 		// while the keyboard is still moving. Filling reads nothing.
 		expect(composer).toContain("<ComposerGlass radius={COMPOSER_RADIUS} />");
 		expect(composer).not.toContain("<ComposerGlass height=");
-		expect(composer).not.toContain("onLayout");
+		// The PR card measures its own header for the drag-to-collapse animation;
+		// that measurement does not size the glass behind the composer row.
 		// The field grows from the native content size while glass fills the pill,
 		// avoiding a separately measured glass height that could lag behind it.
 		expect(composer).toContain("onContentSizeChange={(event) => {");
@@ -118,10 +119,12 @@ describe("composer meta row", () => {
 
 describe("PR review composer", () => {
 	it("groups the PR prompt, settings selector, and message input inside one review surface", () => {
-		expect(composer).toContain("reviewPR && onOpenReview && styles.reviewContainer");
-		expect(composer).toContain("<PRReviewPrompt pr={reviewPR}");
+		expect(composer).toContain("const reviewPromptAvailable = Boolean(reviewPR && onOpenReview)");
+		expect(composer).toContain("{showReviewPrompt ? <Animated.View style={[styles.reviewArea, styles.reviewAreaWithPrompt]}>");
+		expect(composer).toContain("<Animated.View style={[styles.reviewContainer, reviewCardDragStyle]}");
+		expect(composer).toContain("<PRReviewPrompt pr={activeReviewPR}");
 		expect(composer).toContain("<TextInput");
-		expect(composer).toContain("reviewPR ? null : <ComposerGlass");
+		expect(composer).toContain("{activeReviewPR ? <Animated.View pointerEvents=\"none\" style={[StyleSheet.absoluteFill, reviewComposerGlassStyle]}>");
 	});
 
 	it("uses supported PR and navigation symbols instead of a blank icon tile", () => {

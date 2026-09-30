@@ -306,7 +306,7 @@ function PolicyRow({ title, description, value, loading, disabled, onChange }: {
 	const styles = useThemedStyles(makeStyles);
 	return <View style={[styles.policyRow, disabled && styles.disabled]}>
 		<View style={styles.rowCopy}><Text style={styles.rowTitle}>{title}</Text><Text style={styles.rowSubtitle}>{description}</Text></View>
-		{loading ? <ActivityIndicator size="small" color={t.accent} /> : <Switch accessibilityLabel={title} disabled={disabled} value={value} onValueChange={onChange} trackColor={{ true: t.accent }} />}
+		{loading ? <ActivityIndicator size="small" color={t.accent} /> : <Switch accessibilityLabel={title} disabled={disabled} value={value} onValueChange={onChange} />}
 	</View>;
 }
 
