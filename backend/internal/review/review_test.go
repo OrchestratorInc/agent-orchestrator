@@ -3319,7 +3319,7 @@ func TestArchiveReviewerHidesSurfaceAndPreservesHistoryUntilNewReview(t *testing
 			}
 			launcher := &fakeLauncher{interfaceMode: mode, handle: "new-reviewer"}
 			engine := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha3"), fakeProjects{}, launcher)
-			if err := engine.ArchiveReviewer(ctx, worker.ID); err != nil {
+			if err := engine.ArchiveReviewer(ctx, worker.ID, ""); err != nil {
 				t.Fatal(err)
 			}
 			saved, _, err := store.GetReviewByID(ctx, review.ID)
@@ -3397,7 +3397,7 @@ func TestTriggerAlreadyReviewedHeadKeepsReviewerArchived(t *testing.T) {
 			}
 			launcher := &fakeLauncher{interfaceMode: mode, handle: "new-pane"}
 			engine := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
-			if err := engine.ArchiveReviewer(ctx, worker.ID); err != nil {
+			if err := engine.ArchiveReviewer(ctx, worker.ID, ""); err != nil {
 				t.Fatal(err)
 			}
 			result, err := trigger(ctx, engine, worker.ID, review.Harness, domain.AgentConfig{})

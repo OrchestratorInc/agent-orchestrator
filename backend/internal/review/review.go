@@ -1803,9 +1803,15 @@ func (e *Engine) TerminateReviewer(ctx stdctx.Context, workerID domain.SessionID
 	return e.terminateReviewer(ctx, workerID, body, false)
 }
 
-// ArchiveReviewer retires all reviewer surfaces but retains conversations and results.
-func (e *Engine) ArchiveReviewer(ctx stdctx.Context, workerID domain.SessionID) error {
-	_, err := e.terminateReviewer(ctx, workerID, "cancelled because reviewer was archived", true)
+// ArchiveReviewer retires all reviewer surfaces but retains conversations and
+// results. cancelBody is stamped onto the cancelled runs: the kill endpoint
+// passes domain.ReviewRunCancelledByKill so the auto-review coordinator
+// re-arms the same SHA (#3745); blank keeps the archive wording.
+func (e *Engine) ArchiveReviewer(ctx stdctx.Context, workerID domain.SessionID, cancelBody string) error {
+	if cancelBody == "" {
+		cancelBody = "cancelled because reviewer was archived"
+	}
+	_, err := e.terminateReviewer(ctx, workerID, cancelBody, true)
 	return err
 }
 
