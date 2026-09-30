@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -187,6 +188,12 @@ func registryEndpoint(registry, name string) (string, error) {
 		return "https://formulae.brew.sh/api/formula/" + escaped + ".json", nil
 	case "homebrew-cask":
 		return "https://formulae.brew.sh/api/cask/" + escaped + ".json", nil
+	case "github-release":
+		owner, repo, ok := strings.Cut(name, "/")
+		if !ok || owner == "" || repo == "" || strings.Contains(repo, "/") {
+			return "", fmt.Errorf("harnessupdate: github-release name %q is not owner/repo", name)
+		}
+		return "https://api.github.com/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/releases/latest", nil
 	default:
 		return "", fmt.Errorf("harnessupdate: unrecognized registry %q", registry)
 	}
@@ -232,6 +239,14 @@ func parseVersion(registry string, body []byte) (string, error) {
 			return "", err
 		}
 		return payload.Version, nil
+	case "github-release":
+		var payload struct {
+			TagName string `json:"tag_name"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return "", err
+		}
+		return strings.TrimPrefix(payload.TagName, "v"), nil
 	default:
 		return "", fmt.Errorf("harnessupdate: unrecognized registry %q", registry)
 	}

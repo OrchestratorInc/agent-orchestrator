@@ -184,6 +184,22 @@ func TestRegistryEndpointEscapesScopedPackageNames(t *testing.T) {
 	}
 }
 
+func TestRegistryEndpointGitHubRelease(t *testing.T) {
+	t.Parallel()
+	endpoint, err := registryEndpoint("github-release", "aaif-goose/goose")
+	if err != nil {
+		t.Fatalf("registryEndpoint: %v", err)
+	}
+	if want := "https://api.github.com/repos/aaif-goose/goose/releases/latest"; endpoint != want {
+		t.Fatalf("endpoint = %q, want %q", endpoint, want)
+	}
+	for _, bad := range []string{"goose", "/goose", "aaif-goose/", "a/b/c"} {
+		if _, err := registryEndpoint("github-release", bad); err == nil {
+			t.Fatalf("registryEndpoint(%q) succeeded, want error", bad)
+		}
+	}
+}
+
 func TestRegistryEndpointUnrecognized(t *testing.T) {
 	t.Parallel()
 	if _, err := registryEndpoint("carrier-pigeon", "pkg"); err == nil {
@@ -202,6 +218,7 @@ func TestParseVersionPerRegistry(t *testing.T) {
 		{registry: "pypi", body: `{"info":{"version":"2.0.0"}}`, want: "2.0.0"},
 		{registry: "homebrew-formula", body: `{"versions":{"stable":"3.0.0"}}`, want: "3.0.0"},
 		{registry: "homebrew-cask", body: `{"version":"4.0.0"}`, want: "4.0.0"},
+		{registry: "github-release", body: `{"tag_name":"v5.0.0"}`, want: "5.0.0"},
 	} {
 		t.Run(tt.registry, func(t *testing.T) {
 			t.Parallel()

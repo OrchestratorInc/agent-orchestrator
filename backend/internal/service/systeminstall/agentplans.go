@@ -77,7 +77,10 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 	case TargetCursor:
 		plans = []Plan{s.officialByOS(target, "https://cursor.com/install", "bash", "https://cursor.com/install?win32=true", agentDocumentationURLs[target])}
 	case TargetAider:
-		plans = []Plan{s.officialByOS(target, "https://aider.chat/install.sh", "sh", "https://aider.chat/install.ps1", agentDocumentationURLs[target])}
+		official := s.officialByOS(target, "https://aider.chat/install.sh", "sh", "https://aider.chat/install.ps1", agentDocumentationURLs[target])
+		// Aider's installer installs the aider-chat PyPI package, so PyPI knows its latest release.
+		official.PackageRegistry, official.PackageName = "pypi", "aider-chat"
+		plans = []Plan{official}
 	case TargetGrok:
 		plans = []Plan{s.officialByOS(target, "https://x.ai/cli/install.sh", "bash", "https://x.ai/cli/install.ps1", agentDocumentationURLs[target])}
 	case TargetKimi:
