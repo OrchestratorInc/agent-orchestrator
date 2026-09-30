@@ -304,6 +304,7 @@ func (b HarnessBuilder) Build(
 			return Command{}, configErr
 		}
 		command.Env["CLAUDE_CONFIG_DIR"] = configDir
+		setClaudeNonEssentialTrafficDisabled(&command)
 		if !b.claudeConversationAvailable(turn.AgentSessionID) {
 			turn.AgentSessionID = ""
 		}
@@ -351,12 +352,27 @@ func (b HarnessBuilder) binary(harness string) string {
 	return harness
 }
 
+// setClaudeNonEssentialTrafficDisabled stops Claude Code from making its
+// non-essential network calls (Statsig feature-flags, telemetry, error
+// reporting, auto-update check) on launch. On a locked-down coder/Azure VM those
+// hosts are blackholed, so each connect hangs ~30s before timing out — ~50s of
+// dead time before the first frame on a fresh VM (codex makes no such calls,
+// which is why only claude sessions felt slow). The essential model API
+// (api.anthropic.com) is a separate host and is unaffected.
+func setClaudeNonEssentialTrafficDisabled(command *Command) {
+	if command.Env == nil {
+		command.Env = map[string]string{}
+	}
+	command.Env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+}
+
 func (b HarnessBuilder) prepareClaudeCloudExperience(command *Command, workspace string) error {
 	configDir, err := b.claudeConfigDir()
 	if err != nil {
 		return err
 	}
 	command.Env["CLAUDE_CONFIG_DIR"] = configDir
+	setClaudeNonEssentialTrafficDisabled(command)
 	if err := updateJSONFile(filepath.Join(configDir, ".claude.json"), func(root map[string]any) {
 		root["hasCompletedOnboarding"] = true
 		root["theme"] = "dark"
