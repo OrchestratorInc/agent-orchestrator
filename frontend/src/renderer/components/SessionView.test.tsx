@@ -1157,7 +1157,7 @@ describe("SessionView", () => {
 		for (const [type, sequence, phrase, percent] of [
 			["sandbox.provisioning", 1, "Connecting to the worker", "33"],
 			["worker.connected", 2, "Preparing your repository and agent", "67"],
-			["agent.ready", 3, "Connecting your terminal", "100"],
+			["agent.ready", 3, "Connecting your terminal", "67"],
 		] as const) {
 			act(() => onEvent({ type, sequence, sessionId: "sess-2", createdAt: new Date().toISOString(), payload: {} }));
 			expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent(phrase);
@@ -1219,6 +1219,31 @@ describe("SessionView", () => {
 			type: "agent.ready", sessionId: "sess-2", sequence: 1, createdAt: new Date().toISOString(), payload: {},
 		}));
 		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting your terminal");
+		expect(screen.getByRole("progressbar", { name: "Session setup activity" })).toHaveAttribute("aria-valuenow", "67");
+	});
+
+	it("checks the final step when terminal content is ready, then reveals it", () => {
+		vi.useFakeTimers();
+		try {
+			autoAttachSessionTerminal.current = false;
+			const session = workerSession("sess-2");
+			session.mode = "tui";
+			session.runtimeConnected = true;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "running" };
+			const view = render(<SessionView sessionId="sess-2" />);
+			act(() => vi.advanceTimersByTime(200));
+			autoAttachSessionTerminal.current = true;
+			session.terminalGeneration = "ready";
+			view.rerender(<SessionView sessionId="sess-2" />);
+			expect(screen.getByRole("progressbar", { name: "Session setup activity" })).toHaveAttribute("aria-valuenow", "100");
+			expect(screen.getAllByTestId("multi-step-loader-check")).toHaveLength(4);
+			expect(screen.getByTestId("cloud-session-loader-screen")).toHaveClass("cloud-session-loader--complete");
+			act(() => vi.advanceTimersByTime(360));
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+			view.unmount();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("does not re-raise the full-screen loader when a connected cloud session's runtime relay drops mid-turn", () => {

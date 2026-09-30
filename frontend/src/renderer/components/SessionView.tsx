@@ -440,7 +440,7 @@ function cloudStartupStage(observedState: string | undefined, workerConnected: b
 		: 0;
 }
 
-function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly }: { sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean }) {
+function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly, completed = false }: { sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean; completed?: boolean }) {
 	const { t } = useTranslation();
 	const { baseUrl, client } = useCloudCp();
 	const factIndex = cloudStartupStage(observedState, workerConnected, terminalOnly);
@@ -549,12 +549,13 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			// New Task dialog, the project three-dots menu — leaving it invisible
 			// behind the loader while Radix still applied `body{pointer-events:none}`,
 			// which froze the whole UI (sidebar included). Keep this <= z-overlay.
-			className="absolute inset-0 z-chrome grid place-items-center bg-background"
+			className={cn("absolute inset-0 z-chrome grid place-items-center bg-background", completed && "cloud-session-loader--complete pointer-events-none")}
 			data-testid="cloud-session-loader-screen"
 		>
 			<MultiStepLoader
 				ariaLabel={t("terminal.sessionLoader.label")}
-				activeIndex={target.index}
+				activeIndex={completed ? 3 : target.index}
+				percent={completed ? 100 : target.index === 3 ? 67 : undefined}
 				steps={steps}
 			/>
 		</div>
@@ -868,6 +869,21 @@ export function SessionView({ sessionId }: SessionViewProps) {
 	const showLifecycleLoader = hasConnectedOnce
 		? (cloudReconnecting || workspaceRestarting)
 		: (cloudReconnecting || (cloudStage != null && cloudStage !== "paused_by_coder" && !sessionReady));
+	const loaderVisibleLongEnoughRef = useRef("");
+	const [completionDismissed, setCompletionDismissed] = useState(false);
+	useEffect(() => {
+		if (!showLifecycleLoader) return;
+		loaderVisibleLongEnoughRef.current = "";
+		setCompletionDismissed(false);
+		const timer = window.setTimeout(() => { loaderVisibleLongEnoughRef.current = sessionId; }, 200);
+		return () => window.clearTimeout(timer);
+	}, [sessionId, showLifecycleLoader]);
+	const showCompletedLoader = !showLifecycleLoader && sessionReady && loaderVisibleLongEnoughRef.current === sessionId && !completionDismissed;
+	useEffect(() => {
+		if (!showCompletedLoader) return;
+		const timer = window.setTimeout(() => setCompletionDismissed(true), 360);
+		return () => window.clearTimeout(timer);
+	}, [showCompletedLoader]);
 	const cloudResumeRef = useRef("");
 	const requestCloudResume = useCallback(async () => {
 		if (!session?.cloud) return;
@@ -2379,7 +2395,7 @@ export function SessionView({ sessionId }: SessionViewProps) {
 					<NotificationCenter style={noDragStyle} />
 				</div>
 			) : null}
-			{showLifecycleLoader
+			{showLifecycleLoader || showCompletedLoader
 				? <CloudSessionLifecycleLoader
 					key={`${sessionId}:${cloudReconnecting && !workspaceRestarting ? "terminal" : "startup"}`}
 					sessionId={sessionId}
@@ -2388,6 +2404,7 @@ export function SessionView({ sessionId }: SessionViewProps) {
 					observedState={session?.cloud?.observedState}
 					workerConnected={Boolean(session?.runtimeConnected)}
 					terminalOnly={cloudReconnecting && !workspaceRestarting}
+					completed={showCompletedLoader}
 				/>
 				: null}
 			<SessionInterfaceSwitchDialog
