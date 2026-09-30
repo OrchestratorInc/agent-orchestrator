@@ -40,6 +40,17 @@ describe("reviewer control integration", () => {
 		expect(picker).toContain("<AgentLogo harness={harness}");
 	});
 
+	it("expands reviewer and model choices inline on Android/web", () => {
+		expect(picker).toContain('accessibilityState={{ expanded: expanded === "reviewer", disabled: busy }}');
+		expect(picker).toContain('accessibilityState={{ expanded: expanded === "model", disabled: busy }}');
+		expect(picker).toContain('{expanded === "reviewer" ? <View style={styles.options}>');
+		expect(picker).toContain('{expanded === "model" ? <View style={styles.options}>');
+	});
+
+	it("keeps Android review actions scrolling inside the sheet", () => {
+		expect(actions).toMatch(/<ScrollView[^>]*nestedScrollEnabled/);
+	});
+
 	it("picks the reviewer and model from native iOS menus like the spawn sheet", () => {
 		expect(pickerIOS).toContain('import { Button, HStack, Image, Menu, Spacer, Text, VStack } from "@expo/ui/swift-ui"');
 		expect(pickerIOS).toContain('accessibilityIdentifier("review-reviewer")');

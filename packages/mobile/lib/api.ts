@@ -24,6 +24,7 @@ export type DashboardPR = {
 	ciStatus?: "pending" | "passing" | "failing" | "none";
 	reviewDecision?: "approved" | "changes_requested" | "pending" | "none";
 	mergeability?: {
+		state?: "unknown" | "mergeable" | "conflicting" | "blocked" | "unstable";
 		mergeable?: boolean;
 		ciPassing?: boolean;
 		approved?: boolean;
@@ -173,7 +174,7 @@ type WirePR = {
 	state?: string; // draft | open | merged | closed
 	ci?: string; // unknown | pending | passing | failing
 	review?: string; // none | approved | changes_requested | review_required
-	mergeability?: string; // unknown | mergeable | conflicting | blocked | unstable
+	mergeability?: "unknown" | "mergeable" | "conflicting" | "blocked" | "unstable";
 	reviewComments?: boolean;
 };
 
@@ -229,6 +230,7 @@ function mapProjectKind(kind?: string): ProjectInfo["kind"] {
 
 function mapPR(pr: WirePR): DashboardPR {
 	const ci = pr.ci === "passing" || pr.ci === "failing" || pr.ci === "pending" ? pr.ci : "none";
+	const mergeability = pr.mergeability ?? "unknown";
 	const review =
 		pr.review === "approved"
 			? "approved"
@@ -245,7 +247,7 @@ function mapPR(pr: WirePR): DashboardPR {
 		isDraft: pr.state === "draft",
 		ciStatus: ci,
 		reviewDecision: review,
-		mergeability: { mergeable: pr.mergeability === "mergeable" },
+		mergeability: { state: mergeability, mergeable: mergeability === "mergeable" },
 		unresolvedThreads: pr.reviewComments ? 1 : 0,
 	};
 }

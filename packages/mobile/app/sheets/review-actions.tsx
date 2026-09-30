@@ -230,7 +230,7 @@ export default function ReviewActionsSheet() {
 		}
 	}
 
-	return <ScrollView style={styles.screen} contentContainerStyle={SHEET_SCROLL_CONTENT}>
+	return <ScrollView style={styles.screen} contentContainerStyle={SHEET_SCROLL_CONTENT} nestedScrollEnabled keyboardShouldPersistTaps="handled">
 		<SheetHeader title="Review actions" subtitle={pr ? `PR #${pr.number} · ${pr.title}` : "Reviewer and GitHub feedback"} />
 		{error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
 		{prMissing ? <Text accessibilityRole="alert" style={styles.error}>Pull request not found. Its URL may have changed; reopen review details from the current pull request.</Text> : null}

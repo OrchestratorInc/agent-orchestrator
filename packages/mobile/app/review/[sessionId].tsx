@@ -69,7 +69,10 @@ export default function ReviewDetailScreen() {
 		const timer = setTimeout(() => setDismissedAutoFailureId(autoReviewFailureId), 10_000);
 		return () => clearTimeout(timer);
 	}, [autoReviewFailureId, dismissedAutoFailureId]);
-	useLayoutEffect(() => navigation.setOptions({ title: review?.title || "Review" }), [navigation, review?.title]);
+	useLayoutEffect(() => navigation.setOptions({
+		title: review?.title || "Review",
+		headerTitleStyle: { color: t.textPrimary, fontFamily: "Geist_600SemiBold", fontWeight: "600" },
+	}), [navigation, review?.title, t.textPrimary]);
 	useLayoutEffect(() => navigation.setOptions({
 		headerRight: review?.prUrl ? () => <View style={styles.headerActions}>
 			<Pressable accessibilityRole="link" accessibilityLabel={`Open pull request ${review.prNumber} in GitHub`} hitSlop={8} style={styles.headerAction} onPress={() => { haptics.tap(); void openGitHub(review.prUrl); }}><Feather name="external-link" size={19} color={t.textSecondary} /></Pressable>

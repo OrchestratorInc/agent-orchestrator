@@ -1,12 +1,21 @@
-import type { DashboardSession, PRReviewState, ReviewRun, SessionPRSummary, SessionReviews } from "./api";
+import type { DashboardPR, DashboardSession, PRReviewState, ReviewRun, SessionPRSummary, SessionReviews } from "./api";
 
 export function reviewRouteForSession(session: DashboardSession) {
 	const pr = session.prs?.[0] ?? session.pr;
-	if (!pr) return undefined;
+	return pr ? reviewRouteForPR(session.id, pr) : undefined;
+}
+
+export function reviewRouteForPR(sessionId: string, pr: Pick<DashboardPR, "number" | "url">) {
 	return {
 		pathname: "/review/[sessionId]" as const,
-		params: { sessionId: session.id, prNumber: String(pr.number), prUrl: pr.url },
+		params: { sessionId, prNumber: String(pr.number), prUrl: pr.url },
 	};
+}
+
+/** The chat shortcut is for PRs that can still be reviewed. */
+export function sessionPRReadyForReview(session: DashboardSession) {
+	const prs = session.prs?.length ? session.prs : session.pr ? [session.pr] : [];
+	return prs.find((pr) => pr.state !== "closed" && pr.state !== "merged");
 }
 
 export function reviewForPullRequest(

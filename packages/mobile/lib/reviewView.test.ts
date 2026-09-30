@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DashboardSession, PRReviewState, ReviewRun, SessionPRSummary, SessionReviews } from "./api";
-import { latestAutoReviewFailure, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryAction, reviewPrimaryActionLabel, reviewRouteForSession, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewStatusVisual, reviewVerdictLabel, shortCommit } from "./reviewView";
+import { latestAutoReviewFailure, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryAction, reviewPrimaryActionLabel, reviewRouteForSession, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewStatusVisual, reviewVerdictLabel, sessionPRReadyForReview, shortCommit } from "./reviewView";
 
 const run = (over: Partial<ReviewRun> = {}): ReviewRun => ({
 	id: "run-1", reviewId: "review-1", sessionId: "worker-1", batchId: "", harness: "codex",
@@ -15,6 +15,15 @@ const state = (over: Partial<PRReviewState> = {}): PRReviewState => ({
 });
 
 describe("mobile review presentation", () => {
+	it("offers the first open PR in a session and skips closed or merged PRs", () => {
+		const merged = { number: 10, url: "merged", state: "merged" };
+		const open = { number: 12, url: "open", state: "open" };
+		const session = { id: "worker-1", pr: merged, prs: [merged, open] } as DashboardSession;
+
+		expect(sessionPRReadyForReview(session)).toBe(open);
+		expect(sessionPRReadyForReview({ id: "worker-2", pr: merged } as DashboardSession)).toBeUndefined();
+	});
+
 	it("builds a review route from the session's current pull request", () => {
 		const session = { id: "worker-1", pr: { number: 12, url: "https://github.com/acme/repo/pull/12" } } as DashboardSession;
 		expect(reviewRouteForSession(session)).toEqual({
