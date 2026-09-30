@@ -306,7 +306,7 @@ function PolicyRow({ title, description, value, loading, disabled, onChange }: {
 	const styles = useThemedStyles(makeStyles);
 	return <View style={[styles.policyRow, disabled && styles.disabled]}>
 		<View style={styles.rowCopy}><Text style={styles.rowTitle}>{title}</Text><Text style={styles.rowSubtitle}>{description}</Text></View>
-		{loading ? <ActivityIndicator size="small" color={t.blue} /> : <Switch accessibilityLabel={title} disabled={disabled} value={value} onValueChange={onChange} trackColor={{ true: t.blue }} />}
+		{loading ? <ActivityIndicator size="small" color={t.accent} /> : <Switch accessibilityLabel={title} disabled={disabled} value={value} onValueChange={onChange} trackColor={{ true: t.accent }} />}
 	</View>;
 }
 
@@ -367,9 +367,9 @@ function ActionRow({ icon, harness, title, subtitle, selected, loading, disabled
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	return <Pressable accessibilityRole="button" accessibilityState={{ selected, disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.row, pressed && styles.pressed, disabled && styles.disabled]}>
-		{harness ? <AgentLogo harness={harness} size={22} /> : <Feather name={icon} size={17} color={selected ? t.blue : t.textTertiary} />}
-		<View style={styles.rowCopy}><Text style={[styles.rowTitle, selected && { color: t.blue }]}>{title}</Text>{subtitle ? <Text numberOfLines={2} style={styles.rowSubtitle}>{subtitle}</Text> : null}</View>
-		{loading ? <ActivityIndicator size="small" color={t.blue} /> : selected ? <Feather name="check" size={17} color={t.blue} /> : <Feather name="chevron-right" size={16} color={t.textFaint} />}
+		{harness ? <AgentLogo harness={harness} size={22} /> : <Feather name={icon} size={17} color={selected ? t.accent : t.textTertiary} />}
+		<View style={styles.rowCopy}><Text style={[styles.rowTitle, selected && { color: t.accent }]}>{title}</Text>{subtitle ? <Text numberOfLines={2} style={styles.rowSubtitle}>{subtitle}</Text> : null}</View>
+		{loading ? <ActivityIndicator size="small" color={t.accent} /> : selected ? <Feather name="check" size={17} color={t.accent} /> : <Feather name="chevron-right" size={16} color={t.textFaint} />}
 	</Pressable>;
 }
 

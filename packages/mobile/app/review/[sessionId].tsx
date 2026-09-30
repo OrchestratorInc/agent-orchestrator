@@ -100,7 +100,7 @@ export default function ReviewDetailScreen() {
 		setRefreshing(false);
 	};
 
-	if (!data && !error) return <View style={styles.center}><ActivityIndicator color={t.blue} /></View>;
+	if (!data && !error) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	if (!data || !review) return <EmptyState icon={error ? "alert-triangle" : "git-pull-request"} title={error ? "Could not load review" : "No review found"} message={error || "AO has no review state for this pull request yet."} action={<Button title="Try again" icon="refresh-cw" variant="ghost" onPress={() => void load()} />} />;
 	const primaryAction = reviewBatchAction(review, data.reviews);
 	const runs = reviewRunsForPullRequest([...(data.runs ?? []), ...(review.latestRun ? [review.latestRun] : []), ...(review.previousRun ? [review.previousRun] : [])], review.prUrl);
@@ -204,7 +204,7 @@ export default function ReviewDetailScreen() {
 		: primaryAction !== "none" && multiplePullRequests ? "Applies to every eligible pull request in this session." : undefined;
 
 	return (
-		<ScrollView style={styles.screen} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={t.blue} />}>
+		<ScrollView style={styles.screen} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={t.accent} />}>
 			{/* Flat rows under section labels, like the worker board and project pages. */}
 			<ListSectionHeader label="Pull request" />
 			<View style={styles.row}>
