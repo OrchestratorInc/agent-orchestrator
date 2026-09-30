@@ -5,6 +5,7 @@ import { apiClient, apiErrorMessage } from "../lib/api-client";
 export type AgentModelCatalog = components["schemas"]["AgentModelsResponse"];
 
 const MODEL_CATALOG_VALIDATION_INTERVAL_MS = 10 * 60 * 1_000;
+const MODEL_CATALOG_CACHE_LIFETIME_MS = 24 * 60 * 60 * 1_000;
 
 export const agentModelsQueryPrefix = (agentId: string) =>
 	["agent-models", agentId] as const;
@@ -39,6 +40,9 @@ export function agentModelsQueryOptions(agentId: string, projectId: string) {
 		queryFn: () => requestAgentModels(agentId, projectId, "cached"),
 		enabled: agentId !== "",
 		staleTime: MODEL_CATALOG_VALIDATION_INTERVAL_MS,
+		// Keep the last catalog in memory when its picker unmounts. A stale
+		// catalog stays visible while the daemon validates it in the background.
+		gcTime: MODEL_CATALOG_CACHE_LIFETIME_MS,
 	});
 }
 
