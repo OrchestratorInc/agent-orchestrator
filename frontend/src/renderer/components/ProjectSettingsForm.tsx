@@ -9,14 +9,12 @@ import {
 } from "@aoagents/product-ui";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Info, Pencil } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Pencil } from "lucide-react";
 import type { components } from "../../api/schema";
-import { agentModelsQueryKey, agentModelsQueryOptions, refreshAgentModels, revalidateAgentModels, type AgentModelCatalog } from "../hooks/useAgentModelsQuery";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
-import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
 import { WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
 import { OrchestratorSpawnError, spawnOrchestrator } from "../lib/spawn-orchestrator";
@@ -28,10 +26,8 @@ import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { buildIntake, deriveRepoPath, deriveRepoHost, IntakeFields, intakeNeedsRule, type IntakeForm } from "./IntakeFields";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { ReviewerSelect, reviewerTrustWarning } from "./ReviewerSelect";
-import { AgentModelCombobox } from "./settings/AgentModelCombobox";
+import { AgentModelField, ProjectAgentRoleHeader, ProjectAgentRoleRow, ProjectAutoReviewToggle } from "./settings/ProjectAgentRoleControls";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
-import { Switch } from "./ui/switch";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { CloudProjectSettingsForm } from "./CloudProjectSettingsForm";
 
 type Project = components["schemas"]["Project"];
@@ -546,33 +542,7 @@ function SettingsBody({
 								</ProjectSettingsSection>
 							)}
 							<ProjectSettingsSection title={t("settings.project.pullRequests")} grouped>
-								<div className="settings-row-bar">
-									<div className="flex shrink-0 items-center gap-1.5">
-										<span className="whitespace-nowrap text-sm leading-5 text-settings-label">{t("settings.project.autoReviewToggle")}</span>
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<button
-													type="button"
-													className="inline-flex size-5 items-center justify-center rounded-md text-settings-muted transition-colors hover:bg-settings-menu-selected hover:text-settings-label focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
-													aria-label={t("settings.project.autoReviewDescription")}
-												>
-													<Info className="size-icon-sm" aria-hidden="true" />
-												</button>
-											</TooltipTrigger>
-											<TooltipContent className="max-w-72 leading-normal" side="top">
-												{t("settings.project.autoReviewDescription")}
-											</TooltipContent>
-										</Tooltip>
-									</div>
-									<div className="flex min-w-0 flex-1 items-center justify-end">
-										<Switch
-											aria-label={t("settings.project.autoReviewToggle")}
-											checked={form.autoReview}
-											id="project-auto-review"
-											onCheckedChange={(checked) => setForm((f) => ({ ...f, autoReview: checked }))}
-										/>
-									</div>
-								</div>
+								<ProjectAutoReviewToggle checked={form.autoReview} onCheckedChange={(autoReview) => setForm((f) => ({ ...f, autoReview }))} />
 							</ProjectSettingsSection>
 						</>
 					)}
@@ -581,11 +551,7 @@ function SettingsBody({
 
 			{section === "agents" && (
 				<ProjectSettingsSection title={t("settings.project.agents")} titleHidden grouped>
-					<div className="grid grid-cols-[6rem_minmax(0,0.85fr)_minmax(0,1.25fr)] gap-3 py-2 text-xs font-medium text-settings-muted">
-						<span />
-						<span>{t("settings.project.agent")}</span>
-						<span>{t("settings.project.modelOverride")}</span>
-					</div>
+					<ProjectAgentRoleHeader />
 					<ProjectAgentRoleRow
 						label={t("settings.models.workerRole")}
 						agent={
@@ -748,154 +714,6 @@ function SettingsBody({
 				</ProjectSettingsSection>
 			)}
 		</ProjectSettingsFormView>
-	);
-}
-
-function AgentModelField({
-	role,
-	agentId,
-	projectId,
-	model,
-	mode,
-	effort,
-	onModelChange,
-	onModeChange,
-	onEffortChange,
-	onValidityChange,
-}: {
-	role: "worker" | "orchestrator" | "reviewer";
-	agentId: string;
-	projectId: string;
-	model: string;
-	mode: string;
-	effort: string;
-	onModelChange: (value: string) => void;
-	onModeChange: (value: string) => void;
-	onEffortChange: (value: string) => void;
-	onValidityChange: (valid: boolean) => void;
-}) {
-	const { t } = useTranslation();
-	const queryClient = useQueryClient();
-	const query = useQuery(agentModelsQueryOptions(agentId, projectId));
-	const catalog: AgentModelCatalog | undefined = query.data;
-	const revalidationQuery = useQuery({
-		queryKey: ["agent-model-revalidation", agentId, projectId, catalog?.validatedAt ?? ""],
-		queryFn: () => revalidateAgentModels(agentId, projectId),
-		enabled: agentId !== "" && catalog?.refreshRecommended === true,
-		staleTime: Number.POSITIVE_INFINITY,
-		retry: false,
-	});
-	useEffect(() => {
-		if (revalidationQuery.data) {
-			queryClient.setQueryData(agentModelsQueryKey(agentId, projectId), revalidationQuery.data);
-		}
-	}, [agentId, projectId, queryClient, revalidationQuery.data]);
-	const isMode = catalog?.selectionMode === "mode";
-	const label = t(`settings.models.${role}${isMode ? "Mode" : "Model"}`);
-	const warning =
-		(revalidationQuery.isError ? (revalidationQuery.error instanceof Error ? revalidationQuery.error.message : t("settings.models.validateFailed")) : undefined) ??
-		catalog?.warning ??
-		(query.isError ? (query.error instanceof Error ? query.error.message : t("settings.models.loadFailed")) : undefined);
-
-	if (agentId !== "" && query.isFetching && catalog === undefined) {
-		return (
-			<div className="min-w-0">
-				<span className="text-xs text-settings-muted" role="status" aria-label={t("settings.models.loading")}>
-					{t("settings.models.loading")}
-				</span>
-			</div>
-		);
-	}
-
-	if (isMode) {
-		const defaultMode = catalog.models?.find((item) => item.isDefault && isConcreteModelID(item.id))?.id;
-		const selectedMode = isConcreteModelID(mode) ? mode : "";
-		const options = (catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
-			value: item.id,
-			label: agentModelDisplayLabel(agentId, modelChoiceLabel(item)),
-		}));
-		return (
-			<>
-				<div className="min-w-0">
-					<div className="flex min-w-0 items-center gap-2">
-						<SettingsOptionMenu
-							aria-label={label}
-							value={selectedMode || defaultMode || ""}
-							options={options}
-							placeholder={t("settings.models.modeNotReported")}
-							action={selectedMode && !defaultMode ? { label: t("settings.models.useAgentMode"), onSelect: () => onModeChange("") } : undefined}
-							triggerClassName="w-full justify-between"
-							disabled={options.length === 0 && !(selectedMode && !defaultMode)}
-							onChange={(value) => {
-								onModeChange(value === defaultMode ? "" : value);
-								onModelChange("");
-							}}
-						/>
-					</div>
-				</div>
-				{warning && <p className="px-1 text-xs leading-row text-warning">{warning}</p>}
-			</>
-		);
-	}
-
-	const customModelEntry = catalog?.customModelEntry ?? (catalog?.allowCustom ? "direct" : "none");
-	const refreshCatalog = async () => {
-		const refreshed = await refreshAgentModels(agentId, projectId);
-		queryClient.setQueryData(agentModelsQueryKey(agentId, projectId), refreshed);
-	};
-	const selectCatalogModel = (value: string) => {
-		onModelChange(value);
-		onModeChange("");
-	};
-	const selectCustomModel = (value: string) => {
-		onModelChange(value);
-		onModeChange("");
-	};
-	const displayModels = (catalog?.models ?? []).map((item) => ({
-		...item,
-		label: agentModelDisplayLabel(agentId, item.label),
-	}));
-	return (
-		<>
-			<div className="min-w-0">
-				<div className="flex min-w-0 items-center gap-2">
-					<AgentModelCombobox
-						aria-label={label}
-						value={model}
-						models={displayModels}
-						allowCustom={catalog?.allowCustom}
-						customModelEntry={customModelEntry}
-						agentLabel={agentId}
-						onRefresh={refreshCatalog}
-						refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
-						refreshError={catalog?.refreshError}
-						retryAt={catalog?.retryAt}
-						disabled={(query.isFetching && !catalog) || agentId === ""}
-						onChange={selectCatalogModel}
-						onCustom={selectCustomModel}
-						triggerClassName="w-full justify-between"
-						compact={agentId === "codex"}
-						tuning={{
-							effort,
-							onEffortChange,
-							onValidityChange,
-							roleLabel: t(`settings.models.${role}Role`),
-						}}
-					/>
-				</div>
-			</div>
-			{warning && <p className="px-1 text-xs leading-row text-warning">{warning}</p>}
-		</>
-	);
-}
-
-function ProjectAgentRoleRow({ label, agent, model }: { label: string; agent: ReactNode; model: ReactNode }) {
-	return (
-		<div className="grid min-h-16 grid-cols-[6rem_minmax(0,0.85fr)_minmax(0,1.25fr)] items-center gap-3 py-2">
-			<span className="text-sm font-medium text-settings-label">{label}</span>
-			<div className="min-w-0">{agent}</div>
-			<div className="min-w-0">{model}</div>
-		</div>
 	);
 }
 

@@ -4,6 +4,13 @@ Cloud projects load from `GET /orgs/{orgId}/projects/{projectId}` and save throu
 `PATCH /orgs/{orgId}/projects/{projectId}/settings`. Local projects continue to use
 the local daemon. A Cloud lookup or save failure stays a Cloud error.
 
+Cloud and local settings import the same agent rows, model/effort picker, and
+Auto-review toggle. Both use inline identity edits and debounced autosave with
+errors and pending writes shown in the settings dialog. Model catalogs come
+from the existing agent discovery API, without a local project lookup or a
+Cloud project ID. OpenCode uses the connected Cloud credential type as its
+catalog scope. Project reads and writes stay on the control plane.
+
 The settings endpoint accepts `displayName`, `defaultBranch`, and `config`.
 Repository identity is read-only. Unknown fields and explicit `null` values are
 rejected. Config uses the same role structure as local project settings:
