@@ -77,6 +77,8 @@ type Session struct {
 	ActivityState      contract.ActivityState
 	IsTerminated       bool
 	RuntimeConnected   bool
+	WorkerLastSeenAt   *time.Time
+	StartupAttempts    int
 	SandboxProvider    string
 	DesiredState       string
 	ObservedState      string
@@ -97,12 +99,20 @@ type Session struct {
 
 // Status derives the session's display status from runtime and pull request facts.
 func (s Session) Status(now time.Time, prs []contract.PRFacts) contract.SessionStatus {
+	starting := s.DesiredState == "running" && !s.RuntimeConnected && s.WorkerLastSeenAt == nil && s.StartupAttempts == 0 && (s.ObservedState == "requested" || s.ObservedState == "provisioning" ||
+		s.ObservedState == "bootstrapping" || s.ObservedState == "restoring" ||
+		s.ObservedState == "ready" || s.ObservedState == "running")
+	lastSignalAt := s.UpdatedAt
+	if s.WorkerLastSeenAt != nil {
+		lastSignalAt = *s.WorkerLastSeenAt
+	}
 	return contract.DeriveStatus(contract.SessionFacts{
 		Activity:       s.ActivityState,
-		LastActivityAt: s.UpdatedAt,
+		LastActivityAt: lastSignalAt,
 		HasSignal:      s.RuntimeConnected,
-		SignalExpected: s.RuntimeState != "",
-		IsTerminated:   s.IsTerminated,
+		SignalExpected: s.DesiredState == "running" && !starting &&
+			(s.WorkerLastSeenAt != nil || s.StartupAttempts > 0 || s.ObservedState == "failed"),
+		IsTerminated: s.IsTerminated,
 	}, prs, now, 2*time.Minute)
 }
 

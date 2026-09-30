@@ -64,6 +64,21 @@ describe("Cloud control-plane interface transitions", () => {
 });
 
 describe("cloud control-plane session lifecycle", () => {
+	it("pages startup events through JSON without opening an SSE stream", async () => {
+		const page = { events: [{ sessionId: "session/1", sequence: 4, type: "worker.ready", payload: {}, createdAt: "2026-09-29T00:00:00Z" }], hasMore: false, nextAfter: 4 };
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify(page), {
+			status: 200,
+			headers: { "Content-Type": "application/json" },
+		}));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+		await expect(client.listChatEvents("org/1", "session/1", { after: 3, limit: 500 })).resolves.toEqual(page);
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/chat-events?after=3&limit=500",
+			expect.objectContaining({ method: "GET" }),
+		);
+		expect(new Headers((fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0]?.[1].headers).get("authorization")).toBe("Bearer token");
+	});
+
 	it("uses the organization GitHub App installation and repository routes", async () => {
 		const responses = [
 			{ installationUrl: "https://github.com/apps/ao/installations/new", expiresAt: "2026-09-22T12:00:00Z" },
