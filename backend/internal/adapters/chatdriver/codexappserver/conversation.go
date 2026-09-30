@@ -44,14 +44,16 @@ var approvalMethods = map[string]domain.ActivityKind{
 
 // conversation is one live Codex thread. It is the only writer to that thread.
 type conversation struct {
-	conn *conn
-	proc *process
-	log  *slog.Logger
+	// readOnly is the verified thread default. Explicit turn choices come from
+	// the service, which enforces the durable session permission restriction.
+	readOnly bool
+	conn     *conn
+	proc     *process
+	log      *slog.Logger
 
 	threadID        string
 	historyParentID string
 	providerScopeID string
-	readOnly        bool
 	events          chan ports.ChatEvent
 	// Effective defaults returned when Codex opened or resumed this thread.
 	threadModel, threadEffort string
@@ -293,6 +295,9 @@ func (c *conversation) emit(ev ports.ChatEvent) {
 
 // SendTurn delivers one message to the provider.
 func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
+	if c.readOnly && msg.Settings.Approval == "" {
+		msg.Settings.Approval = ports.PermissionModeReadOnly
+	}
 	if strings.TrimSpace(msg.Text) == "" {
 		// There is no keystroke concept here: an empty message is a caller bug,
 		// not a way to nudge the agent.

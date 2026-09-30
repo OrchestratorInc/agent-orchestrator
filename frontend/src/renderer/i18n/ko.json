@@ -1136,6 +1136,7 @@
 	"settings.project.permissionUseAgent": "에이전트 권한 설정 사용",
 	"settings.project.permissionNotReported": "에이전트 권한 정보가 제공되지 않음",
 	"settings.project.permissionMode": "권한 모드",
+	"settings.project.permissionReadOnly": "읽기 전용(채팅 전용)",
 	"settings.project.refresh": "새로고침",
 	"settings.project.repo": "repo",
 	"settings.project.replaceOrchestratorFailed": "오케스트레이터를 교체할 수 없습니다",

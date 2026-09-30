@@ -1267,6 +1267,29 @@ describe("Cursor's live Agent/Plan/Ask mode catalog", () => {
 	});
 });
 
+
+describe("preventive read-only permissions", () => {
+ it("offers read-only only when the provider declares support", async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn();
+  const { rerender } = render(<TurnSettingsBar models={[]} harness="codex" settings={{ approvalMode: "auto" }} onChange={onChange} />);
+  await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+  expect(screen.queryByRole("menuitemradio", { name: "Read-only" })).not.toBeInTheDocument();
+  await user.keyboard("{Escape}");
+  rerender(<TurnSettingsBar models={[]} harness="codex" settings={{ approvalMode: "auto" }} onChange={onChange} supportsReadOnly />);
+  await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+  await user.click(screen.getByRole("menuitemradio", { name: "Read-only" }));
+  expect(onChange).toHaveBeenCalledWith({ approvalMode: "read-only" });
+ });
+ it("keeps a read-only session restricted even while capabilities refresh", async () => {
+  const user = userEvent.setup();
+  render(<TurnSettingsBar models={[]} harness="codex" permissions="read-only" settings={{ approvalMode: "read-only" }} onChange={vi.fn()} />);
+  await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+  expect(screen.getAllByRole("menuitemradio")).toHaveLength(1);
+  expect(screen.getByRole("menuitemradio", { name: "Read-only" })).toBeChecked();
+ });
+});
+
 describe("OpenCode's live permission tiers", () => {
 	// What the daemon publishes for OpenCode: AO's tiers (relabelled from the
 	// injected agents) alongside OpenCode's own build and plan agents.

@@ -279,6 +279,18 @@ func (s *Service) settleOrphanedWork(ctx context.Context, session domain.Session
 // conversation: presenting unrelated history as continuous is worse than an error
 // the user can act on.
 func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, error) {
+	// Durable launch restrictions win over defaults supplied by any restore,
+	// switch, or recovery caller. Broader legacy sessions keep their existing choices.
+	if s.sessions != nil {
+		record, found, err := s.sessions.GetSession(ctx, cfg.SessionID)
+		if err != nil {
+			return nil, fmt.Errorf("read session permissions: %w", err)
+		}
+		if found && record.Metadata.Permissions == ports.PermissionModeReadOnly {
+			cfg.Permissions = ports.PermissionModeReadOnly
+		}
+	}
+	permissionFloor := cfg.Permissions
 	owner := conversationOwner(cfg)
 	if owner.Kind == domain.ConversationOwnerReview {
 		cfg.ReadOnly = true
@@ -370,6 +382,9 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	s.mu.RUnlock()
 	if existing != nil {
 		if existing.State() != ports.ChatControllerStopped {
+			if permissionFloor == ports.PermissionModeReadOnly && existing.permissionFloor != permissionFloor {
+				return nil, fmt.Errorf("%w: existing controller is not a read-only session", ports.ErrChatPermissionModeUnsupported)
+			}
 			return existing, nil
 		}
 		// A stopped event can reach the UI before the projector finishes its final
@@ -427,6 +442,9 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		replayCheckpoint = verified
 	}
 
+	if cfg.Permissions == ports.PermissionModeReadOnly && !driver.Capabilities().Has(ports.ChatCapabilityPreventiveReadOnly) {
+		return nil, fmt.Errorf("%w: %s cannot enforce read-only Chat", ports.ErrChatPermissionModeUnsupported, cfg.Harness)
+	}
 	var caps ports.ChatCapabilities
 	if cfg.ProviderConversationID == "" {
 		caps, err = s.driverCapabilities(ctx, cfg.Harness, driver)
@@ -579,8 +597,15 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	if cfg.ProviderConversationID != "" {
 		cfg.Effort = conversation.Settings.ReasoningEffort
 	}
-	if cfg.ProviderConversationID != "" && conversation.Settings.ApprovalMode != "" {
+	// A next-turn read-only choice on a mutable session has not necessarily
+	// reached the provider yet. Keep it for dispatch without requiring an idle
+	// or busy live host to have already adopted that future policy.
+	if cfg.ProviderConversationID != "" && conversation.Settings.ApprovalMode != "" &&
+		conversation.Settings.ApprovalMode != ports.PermissionModeReadOnly && permissionFloor != ports.PermissionModeReadOnly {
 		cfg.Permissions = conversation.Settings.ApprovalMode
+	}
+	if permissionFloor == ports.PermissionModeReadOnly {
+		conversation.Settings.ApprovalMode = permissionFloor
 	}
 	if cfg.ProviderConversationID == "" {
 		if err := capabilityAdmissionError(cfg.Harness, caps, cfg.Permissions); err != nil {
@@ -760,7 +785,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.
 	controller := newController(
-		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
+		cfg.SessionID, owner, conversation, generation, cfg.Harness, permissionFloor, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		providerTurnID := controller.restoreLiveTurnOwnership(liveRows.Turns)
@@ -912,7 +937,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		controller.conversation.ActiveBranchID = commit.Conversation.ActiveBranchID
 		controller.conversation.Settings = commit.Conversation.Settings
 		controller.conversation.UpdatedAt = commit.Conversation.UpdatedAt
-		controller.settings = commit.Conversation.Settings
+		controller.settings = controller.constrainSettings(commit.Conversation.Settings)
 	}
 	if commit.ControllerOwner != (domain.SessionControllerOwner{}) {
 		cfg.ExpectedControllerOwner = commit.ControllerOwner
@@ -1381,6 +1406,7 @@ type Snapshot struct {
 	NativeForkAvailableAfterSequence int64
 	SessionID                        domain.SessionID
 	Harness                          domain.AgentHarness
+	Permissions                      ports.PermissionMode
 	Mode                             domain.SessionMode
 	Controller                       ports.ChatControllerState
 	Turns                            []domain.ConversationTurn
@@ -1465,10 +1491,11 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 		// That is an empty conversation, not a failure — returning an error here
 		// would make a brand-new session look broken.
 		return Snapshot{
-			SessionID:  id,
-			Harness:    record.Harness,
-			Mode:       domain.NormalizeSessionMode(record.Mode),
-			Controller: idleControllerState(record),
+			SessionID:   id,
+			Harness:     record.Harness,
+			Permissions: record.Metadata.Permissions,
+			Mode:        domain.NormalizeSessionMode(record.Mode),
+			Controller:  idleControllerState(record),
 		}, nil
 	}
 	if err != nil {
@@ -1480,11 +1507,16 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 		return Snapshot{}, fmt.Errorf("load conversation %s: %w", conversation.ID, err)
 	}
 
+	permissions := record.Metadata.Permissions
 	state := idleControllerState(record)
 	var caps ports.ChatCapabilities
 	if controller, err := s.Controller(id); err == nil {
 		state = controller.State()
 		caps = controller.Capabilities()
+		permissions = controller.permissionFloor
+	}
+	if permissions == ports.PermissionModeReadOnly {
+		rows.Conversation.Settings.ApprovalMode = ports.PermissionModeReadOnly
 	}
 
 	return Snapshot{
@@ -1494,6 +1526,7 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 		NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence,
 		SessionID:                        id,
 		Harness:                          record.Harness,
+		Permissions:                      permissions,
 		Mode:                             domain.NormalizeSessionMode(record.Mode),
 		Controller:                       state,
 		Turns:                            rows.Turns,
@@ -1557,10 +1590,11 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 	conversation, err := s.store.ConversationForSession(ctx, id)
 	if errors.Is(err, domain.ErrNoConversation) {
 		return Snapshot{
-			SessionID:  id,
-			Harness:    record.Harness,
-			Mode:       domain.NormalizeSessionMode(record.Mode),
-			Controller: idleControllerState(record),
+			SessionID:   id,
+			Harness:     record.Harness,
+			Permissions: record.Metadata.Permissions,
+			Mode:        domain.NormalizeSessionMode(record.Mode),
+			Controller:  idleControllerState(record),
 		}, nil
 	}
 	if err != nil {
@@ -1575,11 +1609,16 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("load conversation page %s: %w", conversation.ID, err)
 	}
+	permissions := record.Metadata.Permissions
 	state := idleControllerState(record)
 	var caps ports.ChatCapabilities
 	if controller, err := s.Controller(id); err == nil {
 		state = controller.State()
 		caps = controller.Capabilities()
+		permissions = controller.permissionFloor
+	}
+	if permissions == ports.PermissionModeReadOnly {
+		rows.Conversation.Settings.ApprovalMode = ports.PermissionModeReadOnly
 	}
 	return Snapshot{
 		Conversation:                     rows.Conversation,
@@ -1588,6 +1627,7 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence,
 		SessionID:                        id,
 		Harness:                          record.Harness,
+		Permissions:                      permissions,
 		Mode:                             domain.NormalizeSessionMode(record.Mode),
 		Controller:                       state,
 		Turns:                            rows.Turns,
@@ -1673,6 +1713,11 @@ func (s *Service) SupportsChat(harness domain.AgentHarness) bool {
 	return s.drivers.SupportsChat(harness)
 }
 
+// SupportsReadOnlyChat exposes static preventive read-only support before spawn.
+func (s *Service) SupportsReadOnlyChat(harness domain.AgentHarness) bool {
+	return s.drivers.SupportsReadOnlyChat(harness)
+}
+
 // PreflightChat reports whether a harness can start in chat mode right now.
 //
 // Called before any durable state exists, so an unsupported request costs nothing
@@ -1686,6 +1731,9 @@ func (s *Service) PreflightChat(
 	driver, err := s.drivers.Driver(harness)
 	if err != nil {
 		return fmt.Errorf("%w: %s has no chat driver", ports.ErrChatUnsupported, harness)
+	}
+	if permissions == ports.PermissionModeReadOnly && !driver.Capabilities().Has(ports.ChatCapabilityPreventiveReadOnly) {
+		return fmt.Errorf("%w: %s cannot enforce read-only Chat", ports.ErrChatPermissionModeUnsupported, harness)
 	}
 	caps, err := s.driverCapabilities(ctx, harness, driver)
 	if err != nil {
@@ -1704,7 +1752,7 @@ func capabilityAdmissionError(
 		return nil
 	}
 	var allowed []ports.PermissionMode
-	if ports.NormalizePermissionMode(permissions) != ports.PermissionModeBypassPermissions &&
+	if permissions != ports.PermissionModeReadOnly && ports.NormalizePermissionMode(permissions) != ports.PermissionModeBypassPermissions &&
 		len(ports.MissingCapabilitiesForPermissions(caps, ports.PermissionModeBypassPermissions)) == 0 {
 		allowed = []ports.PermissionMode{ports.PermissionModeBypassPermissions}
 	}
@@ -1854,6 +1902,9 @@ func (s *Service) SetConfigOption(
 	}
 	controller.configMu.Lock()
 	defer controller.configMu.Unlock()
+	if controller.handoffActive() {
+		return nil, ErrControllerHandoff
+	}
 	previous := controller.Settings()
 	options, err := configurer.SetConfigOption(ctx, configID, value)
 	if err != nil {
@@ -1878,7 +1929,7 @@ func (s *Service) SetConfigOption(
 		}
 	}
 	if settings != previous {
-		if err := controller.SetSettings(ctx, settings); err != nil {
+		if err := controller.setSettingsLocked(ctx, settings); err != nil {
 			return nil, err
 		}
 		// The config-options route is how provider-owned pickers (e.g. Claude
@@ -2030,7 +2081,7 @@ func (s *Service) SetTurnSettings(
 	// The turn-settings endpoint does not own provider session mode choices.
 	previous := controller.Settings()
 	settings.OpenCodeMode = previous.OpenCodeMode
-	if err := controller.SetSettings(ctx, settings); err != nil {
+	if err := controller.setSettingsLocked(ctx, settings); err != nil {
 		return domain.ConversationSettings{}, err
 	}
 	s.persistPickedModel(id, previous, settings)

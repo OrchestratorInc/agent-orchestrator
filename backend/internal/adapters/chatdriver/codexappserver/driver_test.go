@@ -1083,11 +1083,18 @@ func TestApprovalSettingsMirrorTUIPosture(t *testing.T) {
 		{false, ports.PermissionModeAuto, "on-request", "workspace-write", "auto_review"},
 		{false, ports.PermissionMode("nonsense"), "never", "danger-full-access", "user"},
 		{true, ports.PermissionModeAuto, "never", "read-only", "user"},
+		{false, ports.PermissionModeReadOnly, "never", "read-only", "user"},
 	} {
 		policy, sandbox, reviewer := launchApprovalSettings(tc.mode, tc.readOnly)
 		if policy != tc.policy || sandbox != tc.sandbox || reviewer != tc.reviewer {
 			t.Errorf("approval settings(%q, readOnly=%t) = %q/%q/%q, want %q/%q/%q", tc.mode, tc.readOnly, policy, sandbox, reviewer, tc.policy, tc.sandbox, tc.reviewer)
 		}
+	}
+	// readOnlyRequested short-circuits the read-only mode, so the fall-through it
+	// skips must keep agreeing with it or the two paths drift apart unnoticed.
+	policy, sandbox := approvalSettings(ports.PermissionModeReadOnly)
+	if reviewer := approvalReviewer(ports.PermissionModeReadOnly); policy != "never" || sandbox != "read-only" || reviewer != "user" {
+		t.Errorf("fall-through for read-only = %q/%q/%q, want the short-circuit's never/read-only/user", policy, sandbox, reviewer)
 	}
 }
 

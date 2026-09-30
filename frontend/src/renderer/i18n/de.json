@@ -1136,6 +1136,7 @@
 	"settings.project.permissionUseAgent": "Agentenberechtigungen verwenden",
 	"settings.project.permissionNotReported": "Agentenberechtigungen nicht angegeben",
 	"settings.project.permissionMode": "Berechtigungsmodus",
+	"settings.project.permissionReadOnly": "Schreibgeschützt (nur Chat)",
 	"settings.project.refresh": "Aktualisieren",
 	"settings.project.repo": "Repo",
 	"settings.project.replaceOrchestratorFailed": "Orchestrator konnte nicht ersetzt werden",

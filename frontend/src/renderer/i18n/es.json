@@ -1156,6 +1156,7 @@
 	"settings.project.permissionUseAgent": "Usar permisos del agente",
 	"settings.project.permissionNotReported": "Permisos del agente no informados",
 	"settings.project.permissionMode": "Modo de permisos",
+	"settings.project.permissionReadOnly": "Solo lectura (solo Chat)",
 	"settings.project.refresh": "Actualizar",
 	"settings.project.repo": "repo",
 	"settings.project.replaceOrchestratorFailed": "No se pudo reemplazar el orquestador",

@@ -1266,6 +1266,7 @@
 	"settings.project.permissionUseAgent": "Use agent permissions",
 	"settings.project.permissionNotReported": "Agent permissions not reported",
 	"settings.project.permissionMode": "Permission mode",
+	"settings.project.permissionReadOnly": "Read-only (Chat only)",
 	"settings.project.refresh": "Refresh",
 	"settings.project.repo": "Repository",
 	"settings.project.replaceOrchestratorFailed": "Could not replace orchestrator",

@@ -22,6 +22,10 @@ func (r handoffDriverRegistry) SupportsChat(harness domain.AgentHarness) bool {
 	return harness == domain.HarnessCodex
 }
 
+func (r handoffDriverRegistry) SupportsReadOnlyChat(harness domain.AgentHarness) bool {
+	return harness == domain.HarnessCodex
+}
+
 func (r handoffDriverRegistry) Driver(domain.AgentHarness) (ports.ChatDriver, error) {
 	return r.driver, nil
 }

@@ -10443,6 +10443,7 @@ components:
           type: string
         permissionMode:
           enum:
+          - read-only
           - default
           - accept-edits
           - auto
@@ -10808,6 +10809,14 @@ components:
         oldestSequence:
           format: int64
           type: integer
+        permissions:
+          enum:
+          - read-only
+          - default
+          - accept-edits
+          - auto
+          - bypass-permissions
+          type: string
         rateLimits:
           $ref: '#/components/schemas/ConversationRateLimitsPayload'
         sessionId:
@@ -10919,6 +10928,7 @@ components:
       properties:
         approvalMode:
           enum:
+          - read-only
           - default
           - accept-edits
           - auto
@@ -11157,6 +11167,7 @@ components:
           type: string
         approvalMode:
           enum:
+          - read-only
           - default
           - accept-edits
           - auto
@@ -13728,6 +13739,7 @@ components:
       properties:
         permissions:
           enum:
+          - read-only
           - default
           - accept-edits
           - auto
@@ -13901,9 +13913,14 @@ components:
           type: string
         localEnabled:
           type: boolean
+        readOnlyChatHarnesses:
+          items:
+            type: string
+          type: array
       required:
       - defaultSessionMode
       - chatHarnesses
+      - readOnlyChatHarnesses
       - client
       - localEnabled
       - cloudOffering
@@ -13970,6 +13987,7 @@ components:
       properties:
         approvalMode:
           enum:
+          - read-only
           - default
           - accept-edits
           - auto

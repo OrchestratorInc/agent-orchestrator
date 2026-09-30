@@ -388,7 +388,8 @@ type SpawnSessionRequest struct {
 	// explicit request fails rather than quietly producing the other kind of session.
 	Mode domain.SessionMode `json:"mode,omitempty" enum:"chat,tui"`
 	// ApprovalMode overrides the project/default policy for this spawn.
-	ApprovalMode domain.PermissionMode `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
+	// Read-only requires a Chat driver that can enforce it.
+	ApprovalMode domain.PermissionMode `json:"approvalMode,omitempty" enum:"read-only,default,accept-edits,auto,bypass-permissions"`
 	Prompt       string                `json:"prompt,omitempty" maxLength:"16384"`
 	// Model is an optional agent model override scoped to this single spawn. Empty
 	// keeps the resolved project/role default. The daemon validates that the
@@ -984,7 +985,7 @@ type DelegateTaskRequest struct {
 	Effort *string `json:"effort,omitempty" maxLength:"64"`
 	// ApprovalMode is an optional per-session override. The UI uses the explicit
 	// bypass value only after the user accepts an approval-less Chat fallback.
-	ApprovalMode domain.PermissionMode `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
+	ApprovalMode domain.PermissionMode `json:"approvalMode,omitempty" enum:"read-only,default,accept-edits,auto,bypass-permissions"`
 	// Mode is omitted for the daemon-owned default. The UI sends tui only when
 	// the user explicitly accepts the fallback after Chat preflight fails.
 	Mode domain.SessionMode `json:"mode,omitempty" enum:"tui,chat"`
@@ -2349,7 +2350,7 @@ type ConversationConfigOptionResponse struct {
 
 // ConversationConfigChoiceResponse is one value in a provider select.
 type ConversationConfigChoiceResponse struct {
-	PermissionMode domain.PermissionMode `json:"permissionMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
+	PermissionMode domain.PermissionMode `json:"permissionMode,omitempty" enum:"read-only,default,accept-edits,auto,bypass-permissions"`
 	Value          string                `json:"value"`
 	Name           string                `json:"name"`
 	Description    string                `json:"description,omitempty"`
@@ -2409,7 +2410,7 @@ type ConversationSkillResponse struct {
 type ConversationTurnSettingsPayload struct {
 	Model           string `json:"model,omitempty"`
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
-	ApprovalMode    string `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
+	ApprovalMode    string `json:"approvalMode,omitempty" enum:"read-only,default,accept-edits,auto,bypass-permissions"`
 }
 
 // ResolveConversationApprovalRequest answers a pending approval. DecisionID must
@@ -2608,6 +2609,9 @@ type ConversationSnapshotResponse struct {
 	// native history or was rebuilt from AO's bounded text transcript. Omitted for
 	// conversations that have no durable branch metadata yet.
 	BranchMaterialization *ConversationBranchMaterializationResponse `json:"branchMaterialization,omitempty"`
+
+	Permissions domain.PermissionMode `json:"permissions,omitempty" enum:"read-only,default,accept-edits,auto,bypass-permissions"`
+
 	// Settings are the provider choices for the next turn. Carried on the snapshot
 	// the client already polls so the composer can label itself without a second
 	// request, and so a choice made on another client shows up here.
@@ -2821,6 +2825,9 @@ type SettingsResponse struct {
 	// ChatHarnesses are the agents that can run in chat mode today. Empty means
 	// chat cannot be used yet, which a client should say plainly.
 	ChatHarnesses []string `json:"chatHarnesses"`
+	// ReadOnlyChatHarnesses reports static preventive read-only support before a
+	// session is created; installation and authentication are checked at launch.
+	ReadOnlyChatHarnesses []string `json:"readOnlyChatHarnesses"`
 	// Client is the deployment's client identity (AO_CLIENT); empty when unset.
 	Client string `json:"client"`
 	// LocalEnabled reports whether the local offering is available.

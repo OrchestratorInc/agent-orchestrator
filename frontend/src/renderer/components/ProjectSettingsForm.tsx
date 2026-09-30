@@ -14,6 +14,7 @@ import { Info, Pencil } from "lucide-react";
 import type { components } from "../../api/schema";
 import { agentModelsQueryKey, agentModelsQueryOptions, refreshAgentModels, revalidateAgentModels, type AgentModelCatalog } from "../hooks/useAgentModelsQuery";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
+import { useSettings } from "../hooks/useSettings";
 import { useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
@@ -882,6 +883,7 @@ function ProjectAgentRoleRow({ label, agent, model }: { label: string; agent: Re
 
 function PermissionModeSelect({ ariaLabel, value, agentId, onChange }: { ariaLabel: string; value: string; agentId: string; onChange: (value: string) => void }) {
 	const { t } = useTranslation();
+	const { settings } = useSettings();
 	const options: { value: string; label: string }[] = PERMISSION_MODE_VALUES.map((permission) => ({
 		value: permission,
 		label: permission === "accept-edits" ? t("settings.project.permissionAcceptEdits") : permission === "auto" ? t("settings.project.permissionAuto") : t("settings.project.permissionBypass"),
@@ -891,6 +893,11 @@ function PermissionModeSelect({ ariaLabel, value, agentId, onChange }: { ariaLab
 			value: "default",
 			label: agentId === "claude-code" ? t("settings.project.permissionUseClaude") : t("settings.project.permissionUseAgent"),
 		});
+	}
+	// Read-only needs a Chat driver that can enforce it. An already-selected
+	// read-only stays listed so the current value is never silently dropped.
+	if (settings?.readOnlyChatHarnesses.includes(agentId) || value === "read-only") {
+		options.unshift({ value: "read-only", label: t("settings.project.permissionReadOnly") });
 	}
 	return (
 		<SettingsOptionMenu

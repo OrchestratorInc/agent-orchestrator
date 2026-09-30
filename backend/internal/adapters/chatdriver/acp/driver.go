@@ -183,6 +183,9 @@ func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string) (
 // Harness identifies the AO harness this ACP transport adapts.
 func (d *Driver) Harness() domain.AgentHarness { return d.cfg.Harness }
 
+// Capabilities declares the binding contract before installation/auth checks.
+func (d *Driver) Capabilities() ports.ChatCapabilities { return cloneCapabilities(d.cfg.Capabilities) }
+
 // Probe checks the provider binding without creating an ACP session or worktree.
 func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 	if d.cfg.Probe == nil || d.cfg.Launch == nil {
@@ -196,6 +199,9 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 
 // Start creates a new ACP session in the AO worktree.
 func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+	if cfg.Permissions == ports.PermissionModeReadOnly {
+		return nil, fmt.Errorf("%w: %s cannot enforce read-only", ports.ErrChatPermissionModeUnsupported, d.cfg.Harness)
+	}
 	totalStarted := time.Now()
 	if !filepath.IsAbs(cfg.WorkspacePath) {
 		return nil, fmt.Errorf("workspace path must be absolute, got %q", cfg.WorkspacePath)
@@ -308,6 +314,9 @@ func (d *Driver) logStartStage(sessionID domain.SessionID, stage string, started
 // transcript; resume-only agents recover context but explicitly report that no
 // typed history replay is available.
 func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	if cfg.Permissions == ports.PermissionModeReadOnly {
+		return nil, fmt.Errorf("%w: %s cannot enforce read-only", ports.ErrChatPermissionModeUnsupported, d.cfg.Harness)
+	}
 	if cfg.ProviderConversationID == "" {
 		return nil, fmt.Errorf("%w: no stored ACP session id", ports.ErrChatResumeFailed)
 	}

@@ -57,6 +57,11 @@ var _ ports.ChatDriver = (*Driver)(nil)
 // Harness returns the domain harness owned by this driver.
 func (*Driver) Harness() domain.AgentHarness { return domain.HarnessUnreal }
 
+// Capabilities declares the binding contract before installation/auth checks.
+// Preventive read-only is absent, so a read-only session is refused rather than
+// launched with broader access.
+func (*Driver) Capabilities() ports.ChatCapabilities { return capabilities() }
+
 func capabilities() ports.ChatCapabilities {
 	return ports.ChatCapabilities{
 		ports.ChatCapabilityStreaming: true,

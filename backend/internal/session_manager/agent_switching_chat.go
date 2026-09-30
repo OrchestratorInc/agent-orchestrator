@@ -160,10 +160,12 @@ func (m *Manager) executeChatAgentSwitch(
 	if m.chat == nil {
 		return result, fmt.Errorf("switch Chat agent %s: %w", id, ports.ErrChatUnsupported)
 	}
+	agentConfig := effectiveAgentConfig(cfg.TargetHarness, rec.Kind, project.Config)
+	agentConfig.Permissions = sessionPermissions(rec, project.Config)
 	if err := m.chat.PreflightChat(
 		ctx,
 		cfg.TargetHarness,
-		effectiveAgentConfig(cfg.TargetHarness, rec.Kind, project.Config).Permissions,
+		agentConfig.Permissions,
 	); err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: target preflight: %w", id, err)
 	}
@@ -626,6 +628,7 @@ func (m *Manager) rollbackStoppedChatAgentSwitchSource(
 		return err
 	}
 	agentConfig := effectiveAgentConfig(rec.Harness, rec.Kind, project.Config)
+	agentConfig.Permissions = sessionPermissions(rec, project.Config)
 	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
 	m.augmentAgentRuntimeEnv(sourceAgent, env)
 	if err := m.prepareWorkspace(

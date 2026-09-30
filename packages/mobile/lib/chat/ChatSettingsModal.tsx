@@ -9,6 +9,7 @@ import { can } from "./types";
 import { iconSize, microLabel, space, type } from "../tokens";
 
 const APPROVALS = [
+	{ id: "read-only", label: "Read-only", hint: "Read files without write access or permission escalation" },
 	{ id: "default", label: "Default", hint: "The worktree is the safety boundary" },
 	{ id: "accept-edits", label: "Ask outside worktree", hint: "Edits here are allowed; anything else asks" },
 	{ id: "auto", label: "Ask when unsure", hint: "The agent decides when to check with you" },
@@ -58,7 +59,7 @@ export function ChatSettingsSheet({
 						{efforts.map((effort) => <Choice key={effort} label={capitalize(effort)} selected={effort === (snapshot.settings.reasoningEffort ?? selected?.defaultEffort)} disabled={disabled} onPress={() => onSettings({ ...snapshot.settings, reasoningEffort: effort })} />)}
 					</SettingsSection> : null}
 					{(!usesProviderOptions || !hasProviderMode) ? <SettingsSection icon="circle-dashed-check" title="Approvals">
-						{APPROVALS.map((mode) => <Choice key={mode.id} label={mode.label} hint={mode.hint} selected={mode.id === (snapshot.settings.approvalMode ?? "default")} disabled={disabled} onPress={() => onSettings({ ...snapshot.settings, approvalMode: mode.id })} />)}
+						{APPROVALS.filter((mode) => snapshot.permissions === "read-only" ? mode.id === "read-only" : mode.id !== "read-only" || can(snapshot, "preventive_read_only")).map((mode) => <Choice key={mode.id} label={mode.label} hint={mode.hint} selected={mode.id === (snapshot.settings.approvalMode ?? "default")} disabled={disabled} onPress={() => onSettings({ ...snapshot.settings, approvalMode: mode.id })} />)}
 					</SettingsSection> : null}
 					{options.map((option) => <SettingsSection key={option.id} icon={configOptionIcon(option)} title={option.name} description={option.description}>
 						{option.type === "boolean" ? <View style={styles.switchRow}><Text style={styles.choiceLabel}>{option.currentBoolean ? "On" : "Off"}</Text><Switch disabled={disabled} value={Boolean(option.currentBoolean)} onValueChange={(enabled) => onOption(option.id, { enabled })} trackColor={{ true: t.green }} /></View> : <GroupedChoices option={option} disabled={disabled} onOption={onOption} />}

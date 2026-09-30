@@ -1136,6 +1136,7 @@
 	"settings.project.permissionUseAgent": "エージェントの権限設定を使用",
 	"settings.project.permissionNotReported": "エージェントの権限は報告されていません",
 	"settings.project.permissionMode": "権限モード",
+	"settings.project.permissionReadOnly": "読み取り専用（チャットのみ）",
 	"settings.project.refresh": "更新",
 	"settings.project.repo": "repo",
 	"settings.project.replaceOrchestratorFailed": "オーケストレーターを置き換えられませんでした",

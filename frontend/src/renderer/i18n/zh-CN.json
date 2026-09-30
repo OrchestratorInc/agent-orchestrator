@@ -1118,6 +1118,7 @@
 	"settings.project.permissionUseAgent": "使用智能体的权限设置",
 	"settings.project.permissionNotReported": "未报告代理权限",
 	"settings.project.permissionMode": "权限模式",
+	"settings.project.permissionReadOnly": "只读（仅聊天）",
 	"settings.project.refresh": "刷新",
 	"settings.project.repo": "仓库",
 	"settings.project.replaceOrchestratorFailed": "无法替换编排器",
