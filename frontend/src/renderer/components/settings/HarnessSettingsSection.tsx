@@ -17,7 +17,7 @@ import { agentLabel, AGENT_OPTIONS, type AgentId } from "../../lib/agent-options
 import { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
 import { useCloudOrg } from "../../hooks/useCloudOrg";
 import { useProviderConnections } from "../../hooks/useProviderConnections";
-import { useCredentialDialogStore } from "../../stores/credential-dialog-store";
+import { CloudHarnessLoginPanel, type CloudHarness } from "./CloudHarnessLoginPanel";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
@@ -132,7 +132,8 @@ export function HarnessSettingsSection({
 	// and opens the harness-scoped login dialog. Gated on being signed into a
 	// cloud org.
 	const { org: cloudOrg } = useCloudOrg();
-	const openCloudLogin = useCredentialDialogStore((state) => state.openDialog);
+	// The harness whose cloud login panel is expanded inline under its row.
+	const [cloudLoginAgent, setCloudLoginAgent] = useState<CloudHarness | null>(null);
 	const cloudConnections = useProviderConnections();
 	const cloudConnByProvider = useMemo(
 		() => new Map((cloudConnections.data ?? []).map((connection) => [connection.provider, connection])),
@@ -670,12 +671,13 @@ export function HarnessSettingsSection({
 			{isCloudCapable ? (
 								<div className="flex shrink-0 items-center gap-2">
 									{localControls}
-									{cloudConnected ? (
-										<Button type="button" size="sm" variant="ghost" className={MENU_TRIGGER_CHROME} onClick={() => openCloudLogin(agentId)}>
+									{/* The inline login under the row replaces this button while open. */}
+									{cloudLoginAgent === agentId ? null : cloudConnected ? (
+										<Button type="button" size="sm" variant="ghost" className={MENU_TRIGGER_CHROME} onClick={() => setCloudLoginAgent(agentId as CloudHarness)}>
 											{t("settings.harness.reconnect")}
 										</Button>
 									) : (
-										<Button data-harness-primary-action="" size="sm" onClick={() => openCloudLogin(agentId)}>
+										<Button data-harness-primary-action="" size="sm" onClick={() => setCloudLoginAgent(agentId as CloudHarness)}>
 											{t("settings.harness.cloudLogin")}
 										</Button>
 									)}
@@ -705,6 +707,11 @@ export function HarnessSettingsSection({
 						{expandedDiagnostics[agentId] ? t("settings.harness.hideDiagnostics") : t("settings.harness.showDiagnostics")}
 					</Button>
 					</div>
+										) : null}
+										{isCloudCapable && cloudLoginAgent === agentId ? (
+											<div className="basis-full pl-10">
+												<CloudHarnessLoginPanel agent={agentId as CloudHarness} onClose={() => setCloudLoginAgent(null)} />
+											</div>
 										) : null}
 										{rowAuthWorkflow ? (
 											<div className="basis-full pl-10">

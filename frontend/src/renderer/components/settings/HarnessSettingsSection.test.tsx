@@ -8,7 +8,6 @@ import { appI18n } from "../../i18n";
 import { agentReadinessQueryKey, useAgentReadinessQuery, type AgentReadiness } from "../../hooks/useAgentReadinessQuery";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { agentReadiness } from "../../test/agent-readiness-fixtures";
-import { useCredentialDialogStore } from "../../stores/credential-dialog-store";
 import { TooltipProvider } from "../ui/tooltip";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
 
@@ -126,7 +125,6 @@ describe("HarnessSettingsSection", () => {
 		terminalStateCallback.value = undefined;
 		cloudMocks.org = undefined;
 		cloudMocks.connections = [];
-		useCredentialDialogStore.setState({ open: false, targetAgent: null });
 		window.ao!.clipboard.writeText = vi.fn().mockResolvedValue(undefined);
 		vi.spyOn(apiClient, "GET").mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
@@ -149,7 +147,7 @@ describe("HarnessSettingsSection", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("logs Claude Code, Codex, and Cursor in for cloud through the harness login dialog", async () => {
+	it("logs Claude Code, Codex, and Cursor in for cloud inline under their rows", async () => {
 		cloudMocks.org = { id: "org-1" };
 		cloudMocks.connections = [{ provider: "codex", validationState: "valid" }];
 		const user = userEvent.setup();
@@ -159,7 +157,11 @@ describe("HarnessSettingsSection", () => {
 		expect(within(claudeRow).getByText(/^Local: /)).toBeInTheDocument();
 		expect(within(claudeRow).getByText("Cloud: Not connected")).toBeInTheDocument();
 		await user.click(within(claudeRow).getByRole("button", { name: "Log in to cloud" }));
-		expect(useCredentialDialogStore.getState()).toMatchObject({ open: true, targetAgent: "claude-code" });
+		expect(within(claudeRow).getByTestId("cloud-harness-login")).toBeInTheDocument();
+		expect(within(claudeRow).getByRole("button", { name: "Log in with Anthropic" })).toBeInTheDocument();
+		expect(within(claudeRow).queryByRole("button", { name: "Log in to cloud" })).toBeNull();
+		await user.click(within(claudeRow).getByRole("button", { name: "Cancel" }));
+		expect(within(claudeRow).queryByTestId("cloud-harness-login")).toBeNull();
 
 		const codexRow = screen.getByText("Codex").closest('[data-agent="codex"]') as HTMLElement;
 		expect(within(codexRow).getByText(/^Local: Not installed ·/)).toBeInTheDocument();
@@ -167,7 +169,7 @@ describe("HarnessSettingsSection", () => {
 		// A cloud row that is not installed locally still offers the local install.
 		expect(within(codexRow).getByRole("button", { name: "Install" })).toBeInTheDocument();
 		await user.click(within(codexRow).getByRole("button", { name: "Reconnect" }));
-		expect(useCredentialDialogStore.getState()).toMatchObject({ open: true, targetAgent: "codex" });
+		expect(within(codexRow).getByRole("button", { name: "Log in with ChatGPT" })).toBeInTheDocument();
 
 		const gooseRow = screen.getByText("Goose").closest('[data-agent="goose"]') as HTMLElement;
 		expect(within(gooseRow).queryByText(/^Cloud: /)).toBeNull();

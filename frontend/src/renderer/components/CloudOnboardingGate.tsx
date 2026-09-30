@@ -5,13 +5,11 @@ import { useCloudSession } from "../lib/cloud-session";
 import { cloudOrgQueryKey } from "../hooks/useCloudOrg";
 import { cloudProjectsQueryKey, cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
 import { providerConnectionsQueryKey } from "../hooks/useProviderConnections";
-import { CloudCredentialDialog } from "./CloudCredentialDialog";
 import { CloudLocalSignInDialog } from "./CloudLocalSignInDialog";
 
-// Mounted once at the app root. Renders the single cloud harness login dialog
-// (driven by harness rows on the Harnesses settings page through the shared
-// store) and clears cached cloud data on sign-out. Signing in never prompts for
-// a harness login: that lives only on the Harnesses settings page.
+// Mounted once at the app root. Clears cached cloud data on sign-out and renders
+// the local sign-in dialog. Signing in never prompts for a harness login: that
+// lives only on the Harness settings page.
 export function CloudOnboardingGate() {
 	const { cloudEnabled } = useCloudGate();
 	const { status } = useCloudSession();
@@ -31,7 +29,6 @@ export function CloudOnboardingGate() {
 	if (!cloudEnabled) return null;
 	return (
 		<>
-			<CloudCredentialDialog />
 			<CloudLocalSignInDialog />
 		</>
 	);
