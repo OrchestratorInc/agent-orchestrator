@@ -134,6 +134,7 @@ type reviewerRuntime interface {
 	SendInput(ctx context.Context, handle ports.RuntimeHandle, input string) error
 	IsChildAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error)
 	IsExactSupervisedProcessAlive(ctx context.Context, handle ports.RuntimeHandle, ref ports.SupervisedProcessRef) (bool, error)
+	HasSupervisedProcessRecord(ctx context.Context, handle ports.RuntimeHandle) (bool, error)
 	SendMessage(ctx context.Context, handle ports.RuntimeHandle, message string) error
 	GetOutput(ctx context.Context, handle ports.RuntimeHandle, lines int) (string, error)
 }
@@ -549,7 +550,11 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 			return LaunchResult{}, fmt.Errorf("resolve AO executable: %w", resolveErr)
 		}
 		env[sessionmanager.EnvSupervisedProcess] = "1"
-		argv = append([]string{executable, "agent-process", "supervise", "--session", handleID, "--launch", spec.LaunchID, "--"}, argv...)
+		activityFlag, activityID := "--session", handleID
+		if strings.TrimSpace(spec.ReviewSessionID) != "" {
+			activityFlag, activityID = "--review", strings.TrimSpace(spec.ReviewSessionID)
+		}
+		argv = append([]string{executable, "agent-process", "supervise", activityFlag, activityID, "--launch", spec.LaunchID, "--"}, argv...)
 	}
 	handle, err := l.runtime.Create(ctx, ports.RuntimeConfig{
 		SessionID:     domain.SessionID(handleID),
@@ -749,10 +754,19 @@ func (l *agentLauncher) Alive(ctx context.Context, handleID, launchID string) (b
 		return l.chat.ReviewChatAlive(reviewID), nil
 	}
 	if strings.TrimSpace(launchID) != "" {
-		return l.runtime.IsExactSupervisedProcessAlive(ctx, ports.RuntimeHandle{ID: handleID}, ports.SupervisedProcessRef{
+		handle := ports.RuntimeHandle{ID: handleID}
+		ref := ports.SupervisedProcessRef{
 			SessionID: domain.SessionID(handleID),
 			LaunchID:  launchID,
-		})
+		}
+		tracked, err := l.runtime.HasSupervisedProcessRecord(ctx, handle)
+		if err != nil {
+			return false, err
+		}
+		if !tracked {
+			return l.runtime.IsChildAlive(ctx, handle)
+		}
+		return l.runtime.IsExactSupervisedProcessAlive(ctx, handle, ref)
 	}
 	return l.runtime.IsChildAlive(ctx, ports.RuntimeHandle{ID: handleID})
 }

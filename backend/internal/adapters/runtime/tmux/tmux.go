@@ -710,11 +710,39 @@ func (r *Runtime) IsExactSupervisedProcessAlive(ctx context.Context, handle port
 	if ref.SessionID == "" || strings.TrimSpace(ref.LaunchID) == "" {
 		return false, errors.New("tmux runtime: exact supervisor session and launch are required")
 	}
+	// A reviewer pane may be closed outside AO. Confirm the handle first so a
+	// definitively missing tmux session is reported as not alive instead of the
+	// lower-level pane PID lookup surfacing it as an unexpected error.
+	alive, err := r.IsAlive(ctx, handle)
+	if err != nil || !alive {
+		return false, err
+	}
 	entries, panePID, err := r.supervisedProcessTree(ctx, handle)
 	if err != nil {
 		return false, err
 	}
 	return containsExactSupervisedWorkload(entries, panePID, string(ref.SessionID), ref.LaunchID), nil
+}
+
+// HasSupervisedProcessRecord reports whether an AO supervisor is present in
+// the pane's process tree. A live pane without one may be a reviewer launched
+// by an older AO version, which must retain the legacy child-liveness probe.
+func (r *Runtime) HasSupervisedProcessRecord(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
+	alive, err := r.IsAlive(ctx, handle)
+	if err != nil || !alive {
+		return false, err
+	}
+	entries, panePID, err := r.supervisedProcessTree(ctx, handle)
+	if err != nil {
+		return false, err
+	}
+	descendants := descendantPIDs(entries, panePID)
+	for _, entry := range entries {
+		if entry.pid != panePID && descendants[entry.pid] && isAnySupervisorCommand(entry.command) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (r *Runtime) supervisedProcessTree(ctx context.Context, handle ports.RuntimeHandle) ([]processEntry, int, error) {

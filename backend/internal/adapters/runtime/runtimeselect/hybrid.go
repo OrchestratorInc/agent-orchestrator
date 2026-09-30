@@ -24,6 +24,7 @@ type routedBackend interface {
 	ports.StyledTerminalOutputReader
 	ports.SupervisedProcessInspector
 	ports.ExactSupervisedProcessInspector
+	ports.SupervisedProcessRecordInspector
 }
 
 type hybridRuntime struct {
@@ -38,6 +39,7 @@ var _ ports.RuntimeRestarter = (*hybridRuntime)(nil)
 var _ ports.StyledTerminalOutputReader = (*hybridRuntime)(nil)
 var _ ports.SupervisedProcessInspector = (*hybridRuntime)(nil)
 var _ ports.ExactSupervisedProcessInspector = (*hybridRuntime)(nil)
+var _ ports.SupervisedProcessRecordInspector = (*hybridRuntime)(nil)
 
 func newHybridRuntime(legacy, direct routedBackend, log *slog.Logger, platform string) *hybridRuntime {
 	if log == nil {
@@ -131,6 +133,11 @@ func (r *hybridRuntime) IsSupervisedProcessAlive(ctx context.Context, handle por
 func (r *hybridRuntime) IsExactSupervisedProcessAlive(ctx context.Context, handle ports.RuntimeHandle, ref ports.SupervisedProcessRef) (bool, error) {
 	backend, raw := r.route(handle)
 	return backend.IsExactSupervisedProcessAlive(ctx, raw, ref)
+}
+
+func (r *hybridRuntime) HasSupervisedProcessRecord(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
+	backend, raw := r.route(handle)
+	return backend.HasSupervisedProcessRecord(ctx, raw)
 }
 
 // Restart preserves tmux's in-place restart behavior for every legacy handle.

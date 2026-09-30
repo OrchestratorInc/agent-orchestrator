@@ -17,8 +17,13 @@ describe("reviewer conversation parity", () => {
 	});
 
 	it("stages reviewer attachments against the worker session", () => {
-		expect(source).toContain("useMobileConversation(config, sessionId || reviewId");
-		expect(source).toContain("{ reviewId, eventSessionId: sessionId }");
+		expect(source).toContain("useMobileConversation(config, workerSessionId, { reviewId, eventSessionId: workerSessionId }");
+		expect(source).not.toContain("sessionId || reviewId");
+		expect(source).toContain("attachmentsEnabled={Boolean(workerSessionId)}");
+		expect(source).toContain("const workerSessionId = sessionId.trim()");
+		expect(source).toContain("eventSessionId: workerSessionId");
+		expect(readFileSync(new URL("./useConversation.ts", import.meta.url), "utf8")).toContain("if (!cfg || unavailable || !eventSessionId) return;");
+		expect(readFileSync(new URL("./useConversation.ts", import.meta.url), "utf8")).toContain("if (options?.reviewId && !sessionId.trim()) throw new Error(");
 	});
 
 	it("does not offer ordinary-session rollback for a reviewer id", () => {

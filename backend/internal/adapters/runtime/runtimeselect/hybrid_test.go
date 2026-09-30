@@ -116,6 +116,11 @@ func (f *fakeBackend) IsExactSupervisedProcessAlive(_ context.Context, handle po
 	return true, nil
 }
 
+func (f *fakeBackend) HasSupervisedProcessRecord(_ context.Context, handle ports.RuntimeHandle) (bool, error) {
+	f.record("supervised-record", handle)
+	return true, nil
+}
+
 type restartableFakeBackend struct{ fakeBackend }
 
 func (f *restartableFakeBackend) Restart(_ context.Context, handle ports.RuntimeHandle, _ ports.RuntimeConfig) (ports.RuntimeHandle, error) {
@@ -196,8 +201,9 @@ func TestHybridRuntimeRoutesPersistedLegacyHandlesToTmux(t *testing.T) {
 	_, _ = runtime.GetStyledOutput(ctx, handle, 10)
 	_, _ = runtime.IsSupervisedProcessAlive(ctx, handle, ref)
 	_, _ = runtime.IsExactSupervisedProcessAlive(ctx, handle, ref)
+	_, _ = runtime.HasSupervisedProcessRecord(ctx, handle)
 
-	wantCalls := []string{"destroy", "alive", "attach", "interrupt", "input", "message", "output", "styled", "supervised", "exact"}
+	wantCalls := []string{"destroy", "alive", "attach", "interrupt", "input", "message", "output", "styled", "supervised", "exact", "supervised-record"}
 	if !reflect.DeepEqual(legacy.calls, wantCalls) {
 		t.Fatalf("legacy calls = %v, want %v", legacy.calls, wantCalls)
 	}

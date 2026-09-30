@@ -229,8 +229,9 @@ export function useMobileConversation(
 	}, [cacheKey, cfg, hasConversation, sessionId, skills, unavailable]);
 
 	useEffect(() => {
-		if (!cfg || unavailable) return;
-		return subscribeConversationEvents(options?.eventSessionId ?? sessionId, (event) => {
+		const eventSessionId = options?.eventSessionId ?? sessionId;
+		if (!cfg || unavailable || !eventSessionId) return;
+		return subscribeConversationEvents(eventSessionId, (event) => {
 			if (event.payload?.conversationId) scheduleRefresh();
 		});
 	}, [cfg, options?.eventSessionId, sessionId, scheduleRefresh, unavailable]);
@@ -307,6 +308,7 @@ export function useMobileConversation(
 			let message = text;
 			let nativeAttachments = attachments;
 			if (attachments?.length) {
+				if (options?.reviewId && !sessionId.trim()) throw new Error("Attachments are unavailable until the worker session is linked.");
 				const paths = await requireConfig(cfg, (c) => stageConversationAttachments(c, sessionId, attachments));
 				message = withAttachmentReferences(message, paths);
 				if (!snapshot?.capabilities?.includes("images")) nativeAttachments = undefined;

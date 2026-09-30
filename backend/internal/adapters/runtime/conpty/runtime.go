@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -472,6 +473,17 @@ func (r *Runtime) IsExactSupervisedProcessAlive(ctx context.Context, handle port
 		return false, errors.New("conpty: exact supervisor session and launch are required")
 	}
 	return r.IsSupervisedProcessAlive(ctx, handle, ref)
+}
+
+// HasSupervisedProcessRecord reports whether this handle was created with an
+// AO-managed launch generation. An empty generation identifies pre-supervisor
+// sessions that still need the legacy child-liveness probe.
+func (r *Runtime) HasSupervisedProcessRecord(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
+	sess, err := r.resolveWithEvidence(ctx, handle.ID)
+	if err != nil {
+		return false, fmt.Errorf("conpty: resolve supervised runtime %q: %w", handle.ID, err)
+	}
+	return sess != nil && strings.TrimSpace(sess.launchID) != "", nil
 }
 
 // SendMessage chunks message and writes it to the pty-host followed by Enter.

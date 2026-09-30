@@ -20,9 +20,10 @@ const MAX_IMAGE_BYTES_TOTAL = 25 * 1024 * 1024;
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/bmp"]);
 
 /** Reviewer-only composer: send/attachments/interrupt, deliberately no session actions. */
-export function ReviewerComposer({ busy, stopped, onSend, onInterrupt }: {
+export function ReviewerComposer({ busy, stopped, attachmentsEnabled = true, onSend, onInterrupt }: {
 	busy: boolean;
 	stopped: boolean;
+	attachmentsEnabled?: boolean;
 	onSend(text: string, images?: ChatImage[], resources?: ChatResource[]): Promise<void>;
 	onInterrupt(): Promise<void>;
 }) {
@@ -91,7 +92,7 @@ export function ReviewerComposer({ busy, stopped, onSend, onInterrupt }: {
 		{attachments.length ? <ScrollView horizontal contentContainerStyle={styles.attachments}>{attachments.map((item) => <View key={item.id} style={styles.attachment}>{item.kind === "image" ? <Image source={{ uri: `data:${item.image.mimeType};base64,${item.image.data}` }} style={styles.image} /> : <Feather name="file-text" size={13} color={t.accent} />}<Text numberOfLines={1} style={styles.name}>{item.name}</Text><Pressable accessibilityLabel={`Remove ${item.name}`} onPress={() => setAttachments((current) => current.filter((candidate) => candidate.id !== item.id))}><Feather name="x" size={13} color={t.textTertiary} /></Pressable></View>)}</ScrollView> : null}
 		{error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
 		<View style={styles.row}>
-			<ChatAttachmentMenu disabled={stopped || submitting} canAttachFile onChoosePhoto={() => void addPhoto()} onChooseFile={() => void addFile()} />
+			<ChatAttachmentMenu disabled={stopped || submitting || !attachmentsEnabled} canAttachFile onChoosePhoto={() => void addPhoto()} onChooseFile={() => void addFile()} />
 			<TextInput accessibilityLabel="Reply to reviewer" value={text} onChangeText={setText} placeholder={stopped ? "Reviewer is stopped" : "Reply to reviewer…"} placeholderTextColor={t.textTertiary} multiline editable={!stopped && !submitting} style={styles.input} />
 			{busy ? <Pressable accessibilityRole="button" accessibilityLabel="Stop reviewer" onPress={() => void onInterrupt().catch((cause) => setError(cause instanceof Error ? cause.message : "Could not stop the reviewer."))} style={styles.stop}><Feather name="square" size={14} color={t.red} /></Pressable> : <Pressable accessibilityRole="button" accessibilityLabel="Send reply" disabled={stopped || submitting || (!text.trim() && !attachments.length)} onPress={() => void submit()} style={[styles.send, (stopped || submitting || (!text.trim() && !attachments.length)) && styles.disabled]}>{submitting ? <ActivityIndicator size="small" color="#fff" /> : <Feather name="arrow-up" size={18} color="#fff" />}</Pressable>}
 		</View>

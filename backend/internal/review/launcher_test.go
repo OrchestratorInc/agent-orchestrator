@@ -394,21 +394,22 @@ func (f fakeAgentAuthResolver) AuthStatus(context.Context, domain.ReviewerHarnes
 }
 
 type fakeRuntime struct {
-	createCfg     ports.RuntimeConfig
-	sentMsg       string
-	sentMsgs      []string
-	sentInput     string
-	sentInputs    []string
-	sentTo        string
-	alive         bool
-	interrupt     string
-	interrupts    int
-	destroyed     string
-	destroyBefore bool
-	created       bool
-	output        string
-	outputReads   int
-	exactRef      ports.SupervisedProcessRef
+	createCfg        ports.RuntimeConfig
+	sentMsg          string
+	sentMsgs         []string
+	sentInput        string
+	sentInputs       []string
+	sentTo           string
+	alive            bool
+	supervisedRecord bool
+	interrupt        string
+	interrupts       int
+	destroyed        string
+	destroyBefore    bool
+	created          bool
+	output           string
+	outputReads      int
+	exactRef         ports.SupervisedProcessRef
 }
 
 func (f *fakeRuntime) Create(_ context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
@@ -432,6 +433,9 @@ func (f *fakeRuntime) IsChildAlive(_ context.Context, _ ports.RuntimeHandle) (bo
 func (f *fakeRuntime) IsExactSupervisedProcessAlive(_ context.Context, _ ports.RuntimeHandle, ref ports.SupervisedProcessRef) (bool, error) {
 	f.exactRef = ref
 	return f.alive, nil
+}
+func (f *fakeRuntime) HasSupervisedProcessRecord(_ context.Context, _ ports.RuntimeHandle) (bool, error) {
+	return f.supervisedRecord, nil
 }
 func (f *fakeRuntime) GetOutput(_ context.Context, _ ports.RuntimeHandle, _ int) (string, error) {
 	f.outputReads++
@@ -840,7 +844,7 @@ func TestLauncherNotifyKeepsEarlierTaskReferenceImmutable(t *testing.T) {
 }
 
 func TestLauncherAlive(t *testing.T) {
-	rt := &fakeRuntime{alive: true}
+	rt := &fakeRuntime{alive: true, supervisedRecord: true}
 	l := NewLauncher(fakeReviewerResolver{ok: true}, rt, t.TempDir())
 	if ok, _ := l.Alive(context.Background(), "review-mer-1", ""); !ok {
 		t.Fatal("want alive true")
@@ -853,6 +857,17 @@ func TestLauncherAlive(t *testing.T) {
 	}
 	if ok, _ := l.Alive(context.Background(), "", ""); ok {
 		t.Fatal("empty handle should not be alive")
+	}
+}
+
+func TestLauncherAliveFallsBackForLegacyReviewerLaunch(t *testing.T) {
+	rt := &fakeRuntime{alive: true}
+	l := NewLauncher(fakeReviewerResolver{ok: true}, rt, t.TempDir())
+	if alive, err := l.Alive(context.Background(), "review-mer-1", "launch-1"); err != nil || !alive {
+		t.Fatalf("Alive() = (%v, %v), want legacy child alive", alive, err)
+	}
+	if rt.exactRef.LaunchID != "" {
+		t.Fatalf("exact supervised probe used for legacy launch: %+v", rt.exactRef)
 	}
 }
 
@@ -869,7 +884,7 @@ func TestLauncherSupervisesReviewerLaunch(t *testing.T) {
 	if _, err := l.Spawn(context.Background(), spec); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	want := "/usr/local/bin/ao agent-process supervise --session review-mer-1 --launch launch-1 -- greptile review"
+	want := "/usr/local/bin/ao agent-process supervise --review review-1 --launch launch-1 -- greptile review"
 	if got := strings.Join(rt.createCfg.Argv, " "); got != want {
 		t.Fatalf("runtime argv = %q, want %q", got, want)
 	}

@@ -13,13 +13,14 @@ export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundar
 
 export default function ReviewerConversationScreen() {
 	const { reviewId = "", sessionId = "", title } = useLocalSearchParams<{ reviewId: string; sessionId?: string; title?: string }>();
+	const workerSessionId = sessionId.trim();
 	const navigation = useNavigation();
 	const { config } = useApp();
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	// The review id owns the conversation routes; the worker id owns attachment
 	// staging and SSE refresh. Never stage reviewer attachments under a review id.
-	const conversation = useMobileConversation(config, sessionId || reviewId, { reviewId, eventSessionId: sessionId });
+	const conversation = useMobileConversation(config, workerSessionId, { reviewId, eventSessionId: workerSessionId });
 
 	useLayoutEffect(() => navigation.setOptions({ title: title ? `Review · ${title}` : "Reviewer chat" }), [navigation, title]);
 
@@ -29,7 +30,7 @@ export default function ReviewerConversationScreen() {
 	return <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={88}>
 		{conversation.unavailable?.message || conversation.error || conversation.actionError ? <Text accessibilityRole="alert" style={styles.error}>{conversation.unavailable?.message || conversation.error || conversation.actionError}</Text> : null}
 		<ChatTimeline snapshot={conversation.snapshot} loadingOlder={conversation.loadingOlder} onLoadOlder={() => void conversation.loadOlder()} approvalPending={conversation.pendingActions.includes("approval")} inputPending={conversation.pendingActions.includes("input")} onDecide={conversation.resolveApproval} onResolveInput={conversation.resolveInput} />
-		<ReviewerComposer busy={conversation.snapshot.controller.state === "busy"} stopped={conversation.snapshot.controller.state === "stopped" || Boolean(conversation.unavailable)} onSend={conversation.send} onInterrupt={conversation.interrupt} />
+		<ReviewerComposer attachmentsEnabled={Boolean(workerSessionId)} busy={conversation.snapshot.controller.state === "busy"} stopped={conversation.snapshot.controller.state === "stopped" || Boolean(conversation.unavailable)} onSend={conversation.send} onInterrupt={conversation.interrupt} />
 	</KeyboardAvoidingView>;
 }
 

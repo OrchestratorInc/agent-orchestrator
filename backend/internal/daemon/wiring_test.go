@@ -1065,6 +1065,10 @@ func (r *selectableRuntime) IsExactSupervisedProcessAlive(context.Context, ports
 	return true, nil
 }
 
+func (r *selectableRuntime) HasSupervisedProcessRecord(context.Context, ports.RuntimeHandle) (bool, error) {
+	return true, nil
+}
+
 func (r *selectableRuntime) ProbeFencedRuntime(context.Context, ports.FencedRuntimeRef) ports.FencedProbeResult {
 	return ports.FencedProbeResult{Liveness: ports.FencedUnknown, Reason: ports.FencedReasonProbeFailed}
 }
