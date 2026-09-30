@@ -6,7 +6,6 @@ import { cancelSessionReview, getSessionReviews, killSessionReviewer, restoreSes
 import { ChatMarkdown } from "../../lib/chat/ChatMarkdown";
 import { haptics } from "../../lib/haptics";
 import { openGitHub } from "../../lib/openGitHub";
-import { takeSheetLink } from "../../lib/sheetLink";
 import { formatReviewSummaryMessage, reviewRunsForPullRequest, reviewRunUrl } from "../../lib/reviewFeedback";
 import { latestAutoReviewFailure, reviewBatchAction, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewStatusVisual, reviewVerdictLabel, shortCommit } from "../../lib/reviewView";
 import { useApp } from "../../lib/store";
@@ -15,9 +14,6 @@ import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { Button, Card, EmptyState } from "../../lib/ui";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
-
-// Longer than the native formSheet dismissal animation.
-const SHEET_DISMISS_MS = 450;
 
 export default function ReviewDetailScreen() {
 	const t = useTheme();
@@ -50,15 +46,7 @@ export default function ReviewDetailScreen() {
 		}
 	}, [config, sessionId]);
 
-	useFocusEffect(useCallback(() => {
-		void load();
-		const link = takeSheetLink();
-		if (!link) return;
-		// Focus returns as soon as the sheet starts to close; presenting the
-		// in-app browser before its native dismissal finishes is refused by iOS.
-		const timer = setTimeout(() => void openGitHub(link), SHEET_DISMISS_MS);
-		return () => clearTimeout(timer);
-	}, [load]));
+	useFocusEffect(useCallback(() => { void load(); }, [load]));
 	const review = reviewForPullRequest(data?.reviews ?? [], prUrl, Number(prNumber) || undefined);
 	const autoReviewFailure = latestAutoReviewFailure(data?.reviews ?? [], autoReviewEnabled);
 	const autoReviewFailureId = autoReviewFailure?.id;
