@@ -170,6 +170,16 @@ func (c *readinessCoordinator) Snapshot() []domain.AgentReadinessSnapshot {
 	return out
 }
 
+func (c *readinessCoordinator) SnapshotAgent(agentID string) (domain.AgentReadinessSnapshot, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry := c.entries[agentID]
+	if entry == nil {
+		return domain.AgentReadinessSnapshot{}, false
+	}
+	return c.snapshotLocked(entry, domain.AgentReadinessPurposeDisplay), true
+}
+
 func (c *readinessCoordinator) Ensure(ctx context.Context, agentIDs []string, purpose domain.AgentReadinessPurpose) ([]domain.AgentReadinessSnapshot, error) {
 	return c.ensure(ctx, agentIDs, purpose, readinessInvalidateAll)
 }

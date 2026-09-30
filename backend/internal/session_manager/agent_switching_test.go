@@ -34,6 +34,11 @@ func (p *switchReadinessProvider) EnsureAgentReadiness(context.Context, string, 
 	p.calls++
 	return p.snapshot, p.err
 }
+
+func (p *switchReadinessProvider) CachedAgentReadiness(string) (domain.AgentReadinessSnapshot, bool) {
+	return p.snapshot, true
+}
+
 func (*switchReadinessProvider) InvalidateAgentInstallation(string)   {}
 func (*switchReadinessProvider) InvalidateAgentAuthentication(string) {}
 func (*switchReadinessProvider) RecheckAgent(string)                  {}

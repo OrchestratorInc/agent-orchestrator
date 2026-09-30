@@ -39,6 +39,11 @@ func (p *wiringReadinessProvider) EnsureAgentReadiness(_ context.Context, agentI
 	p.purpose = purpose
 	return p.snapshot, p.err
 }
+
+func (p *wiringReadinessProvider) CachedAgentReadiness(string) (domain.AgentReadinessSnapshot, bool) {
+	return p.snapshot, true
+}
+
 func (*wiringReadinessProvider) InvalidateAgentInstallation(string)   {}
 func (*wiringReadinessProvider) InvalidateAgentAuthentication(string) {}
 func (*wiringReadinessProvider) RecheckAgent(string)                  {}
