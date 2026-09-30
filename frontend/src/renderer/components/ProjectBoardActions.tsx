@@ -35,7 +35,7 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 						data-priority={header ? "secondary" : undefined}
 						disabled={busy}
 						onClick={() => openOrchestrator()}
-						variant={quiet || cloud ? "secondary" : "primary"}
+						variant={quiet ? "secondary" : "primary"}
 					>
 						<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
 						<span data-compact-label={header ? "" : undefined}>{busyLabel ?? t("shell.orchestrator")}</span>
