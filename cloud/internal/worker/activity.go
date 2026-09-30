@@ -37,6 +37,8 @@ func DeriveActivity(
 		return deriveCodexActivity(event)
 	case "cursor":
 		return deriveStandardActivity(event)
+	case "opencode":
+		return deriveOpenCodeActivity(event)
 	default:
 		return "", false
 	}
@@ -149,6 +151,19 @@ func ValidActivityEvent(event ActivityEvent) bool {
 		case "stop":
 			return event.State == contract.ActivityIdle
 		}
+	case "opencode":
+		switch event.Event {
+		case "session-start":
+			// session-start carries no state; it exists to land the plugin-reported
+			// native session id (used for --session restore).
+			return event.State == "" && event.AgentSessionID != ""
+		case "user-prompt-submit", "active":
+			return event.State == contract.ActivityActive
+		case "permission-blocked":
+			return event.State == contract.ActivityWaitingInput
+		case "stop":
+			return event.State == contract.ActivityIdle
+		}
 	}
 	return false
 }
@@ -203,6 +218,24 @@ func deriveCodexActivity(event string) (contract.ActivityState, bool) {
 	case "user-prompt-submit":
 		return contract.ActivityActive, true
 	case "permission-request":
+		return contract.ActivityWaitingInput, true
+	case "stop":
+		return contract.ActivityIdle, true
+	default:
+		return "", false
+	}
+}
+
+// deriveOpenCodeActivity maps the normalized events AO's opencode activity
+// plugin emits (session-start, user-prompt-submit, active, stop,
+// permission-blocked) onto AO's durable activity states. session-start returns
+// no activity: like claude/codex it flows purely to capture the native session
+// id (State stays empty, AgentSessionID lands the durable-restore identity).
+func deriveOpenCodeActivity(event string) (contract.ActivityState, bool) {
+	switch event {
+	case "user-prompt-submit", "active":
+		return contract.ActivityActive, true
+	case "permission-blocked":
 		return contract.ActivityWaitingInput, true
 	case "stop":
 		return contract.ActivityIdle, true
