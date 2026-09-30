@@ -212,11 +212,9 @@ func TestPrepareACPConfigContentPreservesUserConfigAndConstrainsTheBuiltInAgent(
 			if build.Mode != "primary" || build.System != "AO standing rules" || build.Description != "preserve me" {
 				t.Fatalf("build agent = %#v", build)
 			}
+			// AO injects no allow/ask rules: agent rules are evaluated after file-defined
+			// rules, so any would override a config-file denial such as read .env.
 			want := []permissionRule{
-				{Action: "*", Resource: "*", Effect: "ask"},
-				{Action: "read", Resource: "*", Effect: "allow"},
-				{Action: "glob", Resource: "*", Effect: "allow"},
-				{Action: "grep", Resource: "*", Effect: "allow"},
 				{Action: "shell", Resource: "git push *", Effect: "deny"},
 			}
 			if !reflect.DeepEqual(build.Permissions, want) {

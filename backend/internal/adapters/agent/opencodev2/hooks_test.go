@@ -188,7 +188,7 @@ process.stdin.on("end", () => {
 	}
 
 	calls := readV2HookCalls(t, capture)
-	wantEvents := []string{"session-start", "active", "permission-blocked", "permission-resolved", "stop"}
+	wantEvents := []string{"session-start", "active", "active", "permission-blocked", "permission-resolved", "stop", "active", "stop", "active", "stop", "stop"}
 	if len(calls) != len(wantEvents) {
 		t.Fatalf("calls = %#v, want %d", calls, len(wantEvents))
 	}
@@ -321,10 +321,20 @@ if (mode === "single") {
 } else {
   emit({ type: "session.created", data: { sessionID: "ses_native_v2" } });
   await flush();
+  emit({ type: "session.execution.started", data: { sessionID: "ses_native_v2" } });
+  await flush();
   await callbacks["tool:execute.before"]({ sessionID: "ses_native_v2", tool: "read" });
   emit({ type: "permission.asked", data: { sessionID: "ses_native_v2", id: "per_1" } });
   await flush();
   emit({ type: "permission.replied", data: { sessionID: "ses_native_v2", requestID: "per_1", reply: "once" } });
+  await flush();
+  emit({ type: "session.execution.succeeded", data: { sessionID: "ses_native_v2" } });
+  await flush();
+  emit({ type: "session.execution.started", data: { sessionID: "ses_native_v2" } });
+  emit({ type: "session.execution.failed", data: { sessionID: "ses_native_v2", error: { type: "unknown", message: "x" } } });
+  await flush();
+  emit({ type: "session.execution.started", data: { sessionID: "ses_native_v2" } });
+  emit({ type: "session.execution.interrupted", data: { sessionID: "ses_native_v2", reason: "user" } });
   await flush();
   emit({ type: "session.status", data: { sessionID: "ses_native_v2", status: { type: "idle" } } });
   await flush();

@@ -58,6 +58,12 @@ export default {
           ensureSession(sessionID)
           report("active", sessionID)
           break
+        case "session.execution.succeeded":
+        case "session.execution.failed":
+        case "session.execution.interrupted":
+          ensureSession(sessionID)
+          report("stop", sessionID)
+          break
         case "session.status":
           ensureSession(sessionID)
           if (data?.status?.type === "idle") report("stop", sessionID)

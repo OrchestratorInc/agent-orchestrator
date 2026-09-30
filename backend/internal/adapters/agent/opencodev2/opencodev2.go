@@ -220,15 +220,11 @@ func PrepareACPConfigContent(existing, systemPrompt string, _ ports.PermissionMo
 	if systemPrompt != "" {
 		agent["system"] = systemPrompt
 	}
-	// Agent rules are evaluated after top-level rules and the last match wins, so
-	// the user's own top-level and agent rules are re-appended after AO's
-	// defaults to keep their explicit denies effective.
-	permissions := []any{
-		permissionRule{Action: "*", Resource: "*", Effect: "ask"},
-		permissionRule{Action: "read", Resource: "*", Effect: "allow"},
-		permissionRule{Action: "glob", Resource: "*", Effect: "allow"},
-		permissionRule{Action: "grep", Resource: "*", Effect: "allow"},
-	}
+	// Agent rules are evaluated after every top-level and file-defined rule and the
+	// last match wins, so AO injects no allow or catch-all rules of its own: they
+	// would override denies from user/project opencode.json. Only the user's
+	// inline rules are carried through.
+	permissions := []any{}
 	for _, source := range []json.RawMessage{config["permissions"], userAgentPermissions} {
 		if len(source) == 0 {
 			continue
