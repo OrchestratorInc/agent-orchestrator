@@ -1,6 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
-import { baseUrlForHost, subscribeConnectedHosts } from "./host-clients";
+import { baseUrlForHost, isQuickTunnelHost, subscribeConnectedHosts } from "./host-clients";
 import { sessionUiKey } from "./hosts";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 
@@ -23,6 +23,7 @@ type WorkspaceStream = {
 	 */
 	retries: number;
 	source?: EventSource;
+	poll?: ReturnType<typeof setInterval>;
 	sourceBaseUrl?: string;
 	debounce?: ReturnType<typeof setTimeout>;
 	retry?: ReturnType<typeof setTimeout>;
@@ -111,6 +112,8 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 		stream.generation += 1;
 		if (stream.retry) clearTimeout(stream.retry);
 		stream.retry = undefined;
+		if (stream.poll !== undefined) clearInterval(stream.poll);
+		stream.poll = undefined;
 		stream.source?.close();
 		stream.source = undefined;
 		stream.sourceBaseUrl = undefined;
@@ -133,10 +136,6 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 	setWorkspaceFileConnectionState(key, "connecting");
 	stream.ensureConnected = () => {
 		if (stream.disposed) return;
-		if (typeof EventSource === "undefined") {
-			setWorkspaceFileConnectionState(key, "degraded");
-			return;
-		}
 		if (hostId && !baseUrlForHost(hostId)) {
 			resetConnection();
 			setWorkspaceFileConnectionState(key, "degraded");
@@ -148,11 +147,26 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 			return;
 		}
 		const baseUrl = hostId ? baseUrlForHost(hostId)! : getApiBaseUrl();
-		if (stream.sourceBaseUrl && stream.sourceBaseUrl !== baseUrl) {
+		const quickTunnel = Boolean(hostId && isQuickTunnelHost(hostId));
+		if (stream.sourceBaseUrl && (stream.sourceBaseUrl !== baseUrl || (stream.poll !== undefined) !== quickTunnel)) {
 			resetConnection();
 			stream.failures = 0;
 			stream.retries = 0;
 			setWorkspaceFileConnectionState(key, "connecting");
+		}
+		if (quickTunnel) {
+			if (stream.poll === undefined) {
+				stream.sourceBaseUrl = baseUrl;
+				stream.phase = "open";
+				setWorkspaceFileConnectionState(key, "connected");
+				invalidate();
+				stream.poll = setInterval(invalidate, 2_000);
+			}
+			return;
+		}
+		if (typeof EventSource === "undefined") {
+			setWorkspaceFileConnectionState(key, "degraded");
+			return;
 		}
 		if (stream.phase !== "idle") return;
 

@@ -12,6 +12,7 @@ const {
 	setTransportHealthyMock,
 	connectedHostsMock,
 	baseUrlForHostMock,
+	isQuickTunnelHostMock,
 	subscribeConnectedHostsMock,
 	unsubscribeConnectedHostsMock,
 	remoteGetMock,
@@ -25,6 +26,7 @@ const {
 	setTransportHealthyMock: vi.fn(),
 	connectedHostsMock: vi.fn(() => [] as string[]),
 	baseUrlForHostMock: vi.fn((_hostId: string): string | undefined => undefined),
+	isQuickTunnelHostMock: vi.fn((_hostId: string): boolean => false),
 	subscribeConnectedHostsMock: vi.fn(),
 	unsubscribeConnectedHostsMock: vi.fn(),
 	remoteGetMock: vi.fn(),
@@ -45,6 +47,7 @@ vi.mock("./agent-switch-visibility", () => ({ agentSwitchVisibility: { setTransp
 vi.mock("./host-clients", () => ({
 	connectedHosts: connectedHostsMock,
 	baseUrlForHost: baseUrlForHostMock,
+	isQuickTunnelHost: isQuickTunnelHostMock,
 	subscribeConnectedHosts: subscribeConnectedHostsMock,
 	clientForSessionHost: () => ({ GET: remoteGetMock }),
 }));
@@ -107,6 +110,7 @@ beforeEach(() => {
 	setTransportHealthyMock.mockReset();
 	connectedHostsMock.mockReset().mockReturnValue([]);
 	baseUrlForHostMock.mockReset().mockReturnValue(undefined);
+	isQuickTunnelHostMock.mockReset().mockReturnValue(false);
 	subscribeConnectedHostsMock.mockReset().mockReturnValue(unsubscribeConnectedHostsMock);
 	unsubscribeConnectedHostsMock.mockReset();
 	remoteGetMock.mockReset().mockResolvedValue({ data: {
@@ -122,6 +126,31 @@ afterEach(() => {
 });
 
 describe("createEventTransport", () => {
+	it("polls only quick-tunnel hosts and stops when a host disconnects", async () => {
+		vi.useFakeTimers();
+		try {
+			connectedHostsMock.mockReturnValue(["tunnel", "direct"]);
+			baseUrlForHostMock.mockImplementation((hostId) => `http://127.0.0.1:4000/${hostId}`);
+			isQuickTunnelHostMock.mockImplementation((hostId) => hostId === "tunnel");
+			const client = fakeQueryClient();
+			const disconnect = createEventTransport(client).connect();
+			expect(cdcSources().map((source) => source.url)).not.toContain("http://127.0.0.1:4000/tunnel/api/v1/events");
+			expect(cdcSources().map((source) => source.url)).toContain("http://127.0.0.1:4000/direct/api/v1/events");
+			vi.mocked(client.invalidateQueries).mockClear();
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "tunnel"] }, { cancelRefetch: false });
+			expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "tunnel"] }, { cancelRefetch: false });
+			expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-conversation", "tunnel"] }, { cancelRefetch: false });
+			expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "direct"] }, { cancelRefetch: false });
+			connectedHostsMock.mockReturnValue(["direct"]);
+			(subscribeConnectedHostsMock.mock.calls[0][0] as () => void)();
+			vi.mocked(client.invalidateQueries).mockClear();
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "tunnel"] }, { cancelRefetch: false });
+			disconnect();
+		} finally { vi.useRealTimers(); }
+	});
+
 	it("streams each connected remote host and refreshes only its live conversation page", async () => {
 		const client = fakeQueryClient();
 		connectedHostsMock.mockReturnValue(["box-a", "box-b"]);

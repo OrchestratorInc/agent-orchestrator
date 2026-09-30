@@ -9,8 +9,9 @@ const { getApiBaseUrlMock, hasTrustedApiBaseUrlMock, subscribeApiBaseUrlMock, un
 		unsubscribeBaseUrlMock: vi.fn(),
 	}),
 );
-const { baseUrlForHostMock, subscribeConnectedHostsMock } = vi.hoisted(() => ({
+const { baseUrlForHostMock, isQuickTunnelHostMock, subscribeConnectedHostsMock } = vi.hoisted(() => ({
 	baseUrlForHostMock: vi.fn((_hostId: string): string | undefined => undefined),
+	isQuickTunnelHostMock: vi.fn((_hostId: string): boolean => false),
 	subscribeConnectedHostsMock: vi.fn(),
 }));
 
@@ -21,6 +22,7 @@ vi.mock("./api-client", () => ({
 }));
 vi.mock("./host-clients", () => ({
 	baseUrlForHost: baseUrlForHostMock,
+	isQuickTunnelHost: isQuickTunnelHostMock,
 	subscribeConnectedHosts: subscribeConnectedHostsMock,
 }));
 
@@ -81,6 +83,7 @@ beforeEach(() => {
 	});
 	unsubscribeBaseUrlMock.mockReset();
 	baseUrlForHostMock.mockReset().mockReturnValue(undefined);
+	isQuickTunnelHostMock.mockReset().mockReturnValue(false);
 	subscribeConnectedHostsMock.mockReset().mockImplementation((listener: () => void) => {
 		hostListeners.push(listener);
 		return () => { hostListeners = hostListeners.filter((candidate) => candidate !== listener); };
@@ -95,6 +98,26 @@ afterEach(() => {
 });
 
 describe("subscribeWorkspaceFileChanges", () => {
+	it("polls workspace files over a quick tunnel, then returns to SSE on a direct path", () => {
+		vi.useFakeTimers();
+		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/host-a");
+		isQuickTunnelHostMock.mockReturnValue(true);
+		const queryClient = fakeQueryClient();
+		const stop = subscribeWorkspaceFileChanges("session-a", queryClient, "host-a");
+		expect(EventSourceStub.instances).toHaveLength(0);
+		expect(getWorkspaceFileConnectionState("session-a", "host-a")).toBe("connected");
+		vi.advanceTimersByTime(2_150);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "host-a", "session-a"] });
+		isQuickTunnelHostMock.mockReturnValue(false);
+		hostListeners[0]();
+		expect(EventSourceStub.instances).toHaveLength(1);
+		vi.mocked(queryClient.invalidateQueries).mockClear();
+		vi.advanceTimersByTime(2_150);
+		expect(queryClient.invalidateQueries).not.toHaveBeenCalled();
+		stop();
+		expect(EventSourceStub.instances[0].closed).toBe(true);
+	});
+
 	it("isolates equal session IDs on remote A and B and closes only the disconnected host", () => {
 		vi.useFakeTimers();
 		baseUrlForHostMock.mockImplementation((hostId: string) => `http://127.0.0.1:4000/${hostId}`);

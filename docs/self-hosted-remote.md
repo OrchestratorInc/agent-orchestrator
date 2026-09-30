@@ -9,11 +9,14 @@ or new global database. The existing AO Cloud path is separate.
 
 1. Run the AO daemon on the machine that will own the sessions (`ao daemon`).
    Use your OS service manager if it must survive logout/reboot.
-2. Run `ao remote-host enable` **on that machine**. It prints its stable Host ID,
-   reachable addresses, and connection password. `ao remote-host status` shows
-   the current details; `ao remote-host disable` closes the network listener.
-   This command does not start AO's managed public Cloudflare tunnel, even if
-   Connect Mobile previously started one.
+2. Run `ao remote-host enable` **on that machine** for private-network access.
+   For access from elsewhere, install `cloudflared` on the host and use
+   `ao remote-host enable --tunnel` to opt into the existing Connect Mobile
+   Cloudflare quick tunnel. It prints the stable
+   Host ID, connection password, and available addresses; the HTTPS tunnel
+   address may take a few seconds to appear in `ao remote-host status`. Paste
+   that address into the desktop's host settings. `ao remote-host disable`
+   closes the listener and tunnel.
 3. On each desktop client, enable **Settings → General → Remote hosts
    (experimental)**, then add the address/password in **Settings → Remote hosts**.
    Repeat for as many remote machines as needed. Projects on each host appear
@@ -35,6 +38,14 @@ credentialed request before the client detects it. Use only a trusted private
 network or encrypted tunnel; this is not protection against an active network
 attacker or a copied AO data directory. Desktop connection passwords live in
 `~/.ao/remotes.json` (or `AO_DATA_DIR/remotes.json`) with owner-only permissions.
+
+The optional Cloudflare quick tunnel encrypts traffic in transit, but Cloudflare
+terminates TLS and can see the connection password, conversations, and terminal
+traffic. It has no uptime guarantee and its HTTPS hostname changes on restart;
+update the saved address on each client if that happens. The host daemon still
+needs an OS service manager to survive logout or reboot. The desktop refreshes
+remote data while a quick tunnel is active because these tunnels buffer SSE
+events; terminals continue over WebSocket.
 
 The desktop reuses the normal project creation, settings, board, Chat,
 inspector, and file surfaces, with requests routed to the owning host. The

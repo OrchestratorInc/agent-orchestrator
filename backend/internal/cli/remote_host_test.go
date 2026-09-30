@@ -68,10 +68,96 @@ func TestRemoteHostCLIUsesLocalControlAPI(t *testing.T) {
 	}
 }
 
+func TestRemoteHostCLITunnelFromDisabledAndStatus(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var requests []string
+	enabled, ready, failed := false, false, false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") {
+			requests = append(requests, r.Method+" "+r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/mobile/enable-lan-only":
+			enabled = true
+			_, _ = io.WriteString(w, `{"enabled":true,"hostId":"host-a","password":"pairing-secret"}`)
+		case "/api/v1/mobile/remote-access":
+			_, _ = io.WriteString(w, `{"enabled":true,"hostId":"host-a","password":"pairing-secret","endpoints":[{"kind":"lan","host":"192.168.1.10","port":3011}],"tunnel":{"supported":true,"running":true,"ready":false}}`)
+		case "/api/v1/mobile/status":
+			if !enabled {
+				_, _ = io.WriteString(w, `{"enabled":false,"hostId":"host-a"}`)
+			} else if failed {
+				_, _ = io.WriteString(w, `{"enabled":true,"hostId":"host-a","password":"pairing-secret","endpoints":[{"kind":"lan","host":"192.168.1.10","port":3011}],"tunnel":{"supported":true,"running":false,"ready":false,"hostname":"stale.trycloudflare.com","lastError":"connector exited"}}`)
+			} else if ready {
+				_, _ = io.WriteString(w, `{"enabled":true,"hostId":"host-a","password":"pairing-secret","endpoints":[{"kind":"lan","host":"192.168.1.10","port":3011},{"kind":"tunnel","host":"live.trycloudflare.com","port":443,"secure":true}],"tunnel":{"supported":true,"running":true,"ready":true,"hostname":"live.trycloudflare.com"}}`)
+			} else {
+				_, _ = io.WriteString(w, `{"enabled":true,"hostId":"host-a","password":"pairing-secret","endpoints":[{"kind":"lan","host":"192.168.1.10","port":3011}],"tunnel":{"supported":true,"running":true,"ready":false,"hostname":"unsettled.trycloudflare.com"}}`)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "enable", "--tunnel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status,POST /api/v1/mobile/enable-lan-only,POST /api/v1/mobile/remote-access" {
+		t.Fatalf("requests = %s", got)
+	}
+	for _, want := range []string{"pairing-secret", "Tunnel: starting", "Cloudflare terminates TLS", "no uptime guarantee"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("enable output %q missing %q", out, want)
+		}
+	}
+	if strings.Contains(out, "unsettled.trycloudflare.com") {
+		t.Fatalf("enable output advertised unsettled tunnel: %q", out)
+	}
+
+	ready = true
+	out, _, err = executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "status")
+	if err != nil || !strings.Contains(out, "https://live.trycloudflare.com:443") {
+		t.Fatalf("ready tunnel status = %q, %v", out, err)
+	}
+	failed = true
+	out, _, err = executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "status")
+	if err != nil || !strings.Contains(out, "Tunnel unavailable: connector exited") || strings.Contains(out, "stale.trycloudflare.com") {
+		t.Fatalf("failed tunnel status = %q, %v", out, err)
+	}
+}
+
+func TestRemoteHostCLITunnelExistingListenerKeepsPassword(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var requests []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") {
+			requests = append(requests, r.Method+" "+r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"enabled":true,"hostId":"host-a","password":"existing-secret","tunnel":{"supported":false}}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "enable", "--tunnel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status,POST /api/v1/mobile/remote-access" {
+		t.Fatalf("requests = %s, want no listener restart", got)
+	}
+	if !strings.Contains(out, "existing-secret") || !strings.Contains(out, "Tunnel unavailable: install cloudflared") {
+		t.Fatalf("tunnel output = %q", out)
+	}
+}
+
 func TestRemoteHostCLIRejectsArgsAndPreservesDaemonError(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var requests []string
 	statusError := false
+	tunnelError := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") {
 			requests = append(requests, r.Method+" "+r.URL.Path)
@@ -80,11 +166,16 @@ func TestRemoteHostCLIRejectsArgsAndPreservesDaemonError(t *testing.T) {
 		case r.URL.Path == "/api/v1/mobile/status" && statusError:
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = io.WriteString(w, `{"message":"status failed","code":"MOBILE_STATUS","requestId":"req-456"}`)
+		case r.URL.Path == "/api/v1/mobile/status" && tunnelError:
+			_, _ = io.WriteString(w, `{"enabled":true,"hostId":"host-a"}`)
 		case r.URL.Path == "/api/v1/mobile/status":
 			_, _ = io.WriteString(w, `{"enabled":false,"hostId":"host-a"}`)
 		case r.URL.Path == "/api/v1/mobile/enable-lan-only":
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = io.WriteString(w, `{"message":"listener failed","code":"MOBILE_ENABLE","requestId":"req-123"}`)
+		case r.URL.Path == "/api/v1/mobile/remote-access":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"message":"tunnel failed","code":"MOBILE_REMOTE_ACCESS","requestId":"req-789"}`)
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -109,6 +200,16 @@ func TestRemoteHostCLIRejectsArgsAndPreservesDaemonError(t *testing.T) {
 	}
 	if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status" {
 		t.Fatalf("requests = %v, want status only", requests)
+	}
+	requests = nil
+	statusError = false
+	tunnelError = true
+	_, _, err = executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "enable", "--tunnel")
+	if err == nil || !strings.Contains(err.Error(), "tunnel failed (MOBILE_REMOTE_ACCESS) [request req-789]") {
+		t.Fatalf("tunnel error = %v, want request ID and code", err)
+	}
+	if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status,POST /api/v1/mobile/remote-access" {
+		t.Fatalf("requests = %v, want existing listener and tunnel start", requests)
 	}
 }
 

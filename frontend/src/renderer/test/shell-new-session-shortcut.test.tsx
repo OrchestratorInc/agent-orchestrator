@@ -149,6 +149,7 @@ vi.mock("../lib/bridge", () => ({
 			setAttentionState: () => undefined,
 			onOpenSession: () => () => undefined,
 		},
+		remotes: { list: async () => [] },
 	},
 }));
 
@@ -415,6 +416,7 @@ describe("shell workspace startup", () => {
 	});
 
 	it("leaves a remote session only when removing its project on the same host", async () => {
+		useUiStore.setState({ remoteHosts: true });
 		shellMocks.state.routeParams = { hostId: "box-a", sessionId: "same-session" };
 		shellMocks.state.remoteWorkspaces = [
 			{ hostId: "box-a", id: "project-a", sessions: [{ id: "same-session" }] },

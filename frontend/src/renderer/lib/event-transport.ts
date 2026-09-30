@@ -16,7 +16,7 @@ import { agentSwitchVisibility } from "./agent-switch-visibility";
 import { codexAccountsQueryKey, writeCodexAccounts } from "../hooks/codex-accounts-state";
 import type { components } from "../../api/schema";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
-import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
+import { baseUrlForHost, connectedHosts, isQuickTunnelHost, subscribeConnectedHosts } from "./host-clients";
 
 export type EventTransport = {
 	connect: () => () => void;
@@ -76,6 +76,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			const remoteSources = new Map<string, {
 				base: string;
 				source?: EventSource;
+				pollTimer?: ReturnType<typeof setInterval>;
 				retries: number;
 				retryTimer?: ReturnType<typeof setTimeout>;
 			}>();
@@ -116,16 +117,30 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				invalidate(["agent-models", hostId]);
 			};
 			const connectRemote = (hostId: string) => {
-				if (disposed || typeof EventSource === "undefined") return;
+				if (disposed) return;
 				const base = baseUrlForHost(hostId);
 				if (!base) return;
+				const quickTunnel = isQuickTunnelHost(hostId);
 				let connection = remoteSources.get(hostId);
-				if (connection?.base !== base) {
+				if (connection?.base !== base || (connection?.pollTimer !== undefined) !== quickTunnel) {
 					connection?.source?.close();
+					if (connection?.pollTimer !== undefined) clearInterval(connection.pollTimer);
 					if (connection?.retryTimer) clearTimeout(connection.retryTimer);
 					connection = { base, retries: 0 };
 					remoteSources.set(hostId, connection);
 				}
+				if (quickTunnel) {
+					if (connection.pollTimer === undefined) {
+						// Quick tunnels buffer SSE bodies; completed REST responses still arrive.
+						refreshRemote(hostId, true);
+						connection.pollTimer = setInterval(() => {
+							refreshRemote(hostId);
+							invalidate(["reviewer-conversation", hostId]);
+						}, 2_000);
+					}
+					return;
+				}
+				if (typeof EventSource === "undefined") return;
 				if (connection.source?.readyState !== EVENTSOURCE_CLOSED && connection.source) return;
 				connection.source?.close();
 				try {
@@ -169,8 +184,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			const syncRemoteSources = () => {
 				const active = new Set(connectedHosts());
 				for (const [hostId, connection] of remoteSources) {
-					if (active.has(hostId) && connection.base === baseUrlForHost(hostId)) continue;
+					if (active.has(hostId) && connection.base === baseUrlForHost(hostId) && (connection.pollTimer !== undefined) === isQuickTunnelHost(hostId)) continue;
 					connection.source?.close();
+					if (connection.pollTimer !== undefined) clearInterval(connection.pollTimer);
 					if (connection.retryTimer) clearTimeout(connection.retryTimer);
 					remoteSources.delete(hostId);
 				}
@@ -464,6 +480,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				accountSource?.close();
 				for (const connection of remoteSources.values()) {
 					connection.source?.close();
+					if (connection.pollTimer !== undefined) clearInterval(connection.pollTimer);
 					if (connection.retryTimer) clearTimeout(connection.retryTimer);
 				}
 				remoteSources.clear();

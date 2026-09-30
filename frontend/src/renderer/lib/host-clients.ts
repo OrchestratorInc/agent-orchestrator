@@ -28,6 +28,11 @@ export function baseUrlForHost(hostId: HostId): string | undefined {
 	return hosts.get(hostId)?.base;
 }
 
+export function isQuickTunnelHost(hostId: HostId): boolean {
+	const url = hosts.get(hostId)?.url;
+	return Boolean(url && new URL(url).hostname.endsWith(".trycloudflare.com"));
+}
+
 export function labelForHost(hostId: HostId): string | undefined {
 	return hosts.get(hostId)?.label;
 }
@@ -62,7 +67,7 @@ export async function connectHost(url: string): Promise<ConnectedHost> {
 	const previous = hosts.get(host.hostId);
 	if (previous?.base !== host.base) clients.delete(host.hostId);
 	hosts.set(host.hostId, host);
-	if (replaced || !previous || previous.base !== host.base || previous.label !== host.label) publish();
+	if (replaced || !previous || previous.base !== host.base || previous.label !== host.label || previous.url !== host.url) publish();
 	return host;
 }
 
