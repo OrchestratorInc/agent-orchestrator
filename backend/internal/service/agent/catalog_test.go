@@ -1391,7 +1391,7 @@ func TestModelsCachesDiscoveredCatalogGlobally(t *testing.T) {
 	}
 }
 
-func TestModelsReusesCacheWhileBinaryVersionMatches(t *testing.T) {
+func TestModelsReusesFreshCacheWithoutResolvingBinary(t *testing.T) {
 	cache := &fakeModelCache{}
 	agent := &blockingSubsequentResolverAgent{
 		started: make(chan struct{}),
@@ -1438,8 +1438,8 @@ func TestModelsReusesCacheWhileBinaryVersionMatches(t *testing.T) {
 	}
 	select {
 	case <-agent.started:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for background cache revalidation")
+		t.Fatal("fresh cached read unexpectedly resolved the agent binary")
+	case <-time.After(50 * time.Millisecond):
 	}
 	if discoverer.discoverCalls.Load() != 1 {
 		t.Fatalf("discovery calls=%d, want cached result", discoverer.discoverCalls.Load())
@@ -1449,7 +1449,7 @@ func TestModelsReusesCacheWhileBinaryVersionMatches(t *testing.T) {
 	}
 }
 
-func TestModelsRediscoversWhenBinaryVersionChanges(t *testing.T) {
+func TestModelsRediscoversAfterAgentInstallationInvalidation(t *testing.T) {
 	cache := &fakeModelCache{}
 	discoverer := &fakeModelDiscoverer{version: "v1", catalog: ports.AgentModelCatalog{
 		SelectionMode: ports.ModelSelectionCatalog,
@@ -1474,8 +1474,12 @@ func TestModelsRediscoversWhenBinaryVersionChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got.Models) != 1 || got.Models[0].ID != "model-one" {
-		t.Fatalf("cache-first catalog=%#v, want model-one while v2 validates", got)
+		t.Fatalf("cache-first catalog=%#v, want saved model-one", got)
 	}
+	if calls := discoverer.discoverCalls.Load(); calls != 1 {
+		t.Fatalf("discoveries after fresh cached read = %d, want 1", calls)
+	}
+	svc.InvalidateAgentInstallation("codex")
 	deadline := time.Now().Add(time.Second)
 	for {
 		record, ok, cacheErr := cache.GetAgentModelCatalog(context.Background(), "codex", "")
@@ -1486,7 +1490,7 @@ func TestModelsRediscoversWhenBinaryVersionChanges(t *testing.T) {
 			break
 		}
 		if !time.Now().Before(deadline) {
-			t.Fatal("timed out waiting for asynchronously refreshed v2 catalog")
+			t.Fatal("timed out waiting for v2 catalog after installation invalidation")
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -1495,7 +1499,7 @@ func TestModelsRediscoversWhenBinaryVersionChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.BinaryVersion != "v2" || len(got.Models) != 1 || got.Models[0].ID != "model-two" {
-		t.Fatalf("catalog=%#v, want asynchronously refreshed v2 catalog", got)
+		t.Fatalf("catalog=%#v, want refreshed v2 catalog", got)
 	}
 }
 
