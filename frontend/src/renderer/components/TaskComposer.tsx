@@ -532,15 +532,6 @@ export function TaskComposer({
 		setError(undefined);
 		setFallbackAction(undefined);
 		try {
-			if (!isCloudProject && selectedAgent) {
-				try {
-					const completed = await ensureAgentReadiness([selectedAgent], "launch");
-					cacheAgentReadiness(queryClient, completed);
-				} catch {
-					// This check lacks the selected project's cwd and environment, so it
-					// is advisory. The project-aware launch path remains authoritative.
-				}
-			}
 			const attachmentPayloads = await toSettledPayload();
 			const submittedPreparation = taskPreparationRef.current;
 			const sessionId = await createTask({
