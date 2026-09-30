@@ -49,8 +49,8 @@ export function cloudProjectSettingsPatch(before: CloudProjectSettingsDraft, aft
 	if (before.defaultBranch !== after.defaultBranch) patch.defaultBranch = after.defaultBranch.trim();
 	const config: NonNullable<CloudCpProjectSettingsRequest["config"]> = {};
 	for (const role of ["worker", "orchestrator"] as const) {
-		if (JSON.stringify(before[role]) !== JSON.stringify(after[role]) && after[role].agent !== "") {
-			config[role] = { agent: after[role].agent, agentConfig: after[role].agentConfig };
+		if (JSON.stringify(before[role]) !== JSON.stringify(after[role])) {
+			config[role] = after[role].agent === "" ? null : { agent: after[role].agent, agentConfig: after[role].agentConfig };
 		}
 	}
 	if (JSON.stringify(before.reviewer) !== JSON.stringify(after.reviewer)) {

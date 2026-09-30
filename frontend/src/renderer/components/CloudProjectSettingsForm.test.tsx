@@ -52,12 +52,14 @@ beforeEach(() => {
 		const mergeRole = (role: "worker" | "orchestrator") => {
 			const previous = project.config[role];
 			const update = patch.config?.[role];
-			if (!update) return previous;
+			if (update === undefined) return previous;
+			if (update === null) return undefined;
 			const agent = update.agent ?? previous?.agent;
 			if (!agent) throw new Error("Role agent is required");
 			return { agent, agentConfig: { ...previous?.agentConfig, ...update.agentConfig } };
 		};
 		project = { ...project, ...(patch.displayName ? { displayName: patch.displayName } : {}), ...(patch.defaultBranch ? { defaultBranch: patch.defaultBranch } : {}), config: { ...project.config, ...patch.config, worker: mergeRole("worker"), orchestrator: mergeRole("orchestrator") } };
+		for (const role of ["worker", "orchestrator"] as const) if (project.config[role] === undefined) delete project.config[role];
 		return { project };
 	});
 });
@@ -238,13 +240,46 @@ describe("Cloud project settings", () => {
 		mount();
 		await screen.findByRole("button", { name: "Worker agent" });
 		await userEvent.click(screen.getByRole("button", { name: "Worker agent" }));
-		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Claude Code", "Codex", "Cursor", "OpenCode"]);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Session selection", "Claude Code", "Codex", "Cursor", "OpenCode"]);
+	});
+
+	it.each([["worker", "Worker"], ["orchestrator", "Orchestrator"]] as const)("clears the %s defaults and reloads the session selection", async (role, label) => {
+		const before = structuredClone(project.config);
+		const view = mount();
+		await screen.findByRole("button", { name: `${label} agent` });
+		await choose(`${label} agent`, "Session selection");
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { [role]: null } }));
+		expect(project.config).toEqual(Object.fromEntries(Object.entries(before).filter(([key]) => key !== role)));
+		view.unmount();
+		mount();
+		expect(await screen.findByRole("button", { name: `${label} agent` })).toHaveTextContent("Session selection");
+		expect(screen.getByRole("button", { name: `${label} model` })).toHaveTextContent("Session model");
+		expect(screen.getByRole("button", { name: `${label} approval` })).toHaveTextContent("Session policy");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
 	it("shows Cloud lookup errors without looking up a local project", async () => {
 		mocks.get.mockRejectedValue(new Error("Cloud unavailable"));
 		mount();
 		expect(await screen.findByRole("alert")).toHaveTextContent("Cloud unavailable");
+		expect(mocks.localGet).not.toHaveBeenCalled();
+	});
+
+	it("retries a failed Cloud load from the dialog without submitting settings or using the daemon", async () => {
+		mocks.get.mockRejectedValueOnce(new Error("Cloud unavailable")).mockRejectedValueOnce(new Error("Still unavailable"));
+		useUiStore.getState().openProjectSettings("project", { cloudOrgId: "org" });
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={client}><TooltipProvider><SettingsDialog /></TooltipProvider></QueryClientProvider>);
+		await screen.findByRole("button", { name: "Retry" });
+		expect(screen.queryByRole("button", { name: "Edit Project name" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(screen.getAllByRole("alert")[0]).toHaveTextContent("Still unavailable"));
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(await screen.findByRole("button", { name: "Edit Project name" })).toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+		expect(mocks.get).toHaveBeenCalledTimes(3);
+		expect(mocks.patch).not.toHaveBeenCalled();
 		expect(mocks.localGet).not.toHaveBeenCalled();
 	});
 

@@ -41,6 +41,7 @@ export type ProjectSettingsSaveState = {
 	requestPending?: boolean;
 	error?: string;
 	replacementError?: string;
+	retry?: () => void;
 };
 
 type ProjectSettingsFormProps = {

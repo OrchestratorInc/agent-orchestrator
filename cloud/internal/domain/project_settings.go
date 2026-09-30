@@ -223,7 +223,13 @@ func validateSettingsPatchObject(raw json.RawMessage, kind string) error {
 		"agentConfig": {"model", "mode", "effort", "permissions"},
 	}
 	for key, value := range values {
-		if !slices.Contains(allowed[kind], key) || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		if !slices.Contains(allowed[kind], key) {
+			return fmt.Errorf("unsupported or null %s.%s", kind, key)
+		}
+		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			if kind == "config" && (key == "worker" || key == "orchestrator") {
+				continue // Remove the role override and use the session selection.
+			}
 			return fmt.Errorf("unsupported or null %s.%s", kind, key)
 		}
 		switch key {
@@ -285,7 +291,9 @@ func mergeSettingsObjects(existing, patch json.RawMessage) json.RawMessage {
 		result = make(map[string]json.RawMessage)
 	}
 	for key, value := range updates {
-		if bytes.HasPrefix(bytes.TrimSpace(value), []byte("{")) {
+		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			delete(result, key)
+		} else if bytes.HasPrefix(bytes.TrimSpace(value), []byte("{")) {
 			result[key] = mergeSettingsObjects(result[key], value)
 		} else {
 			result[key] = value

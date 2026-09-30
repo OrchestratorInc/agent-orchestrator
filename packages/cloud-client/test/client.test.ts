@@ -19,6 +19,8 @@ describe("CloudClient", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org%2F1/projects/project%2F1");
     expect(fetchMock.mock.calls[1]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org%2F1/projects/project%2F1/settings");
     expect(fetchMock.mock.calls[1]?.[1]?.body).toBe(JSON.stringify({ config: { reviewers: [{ harness: "claude-code", agentConfig: { model: "review-model", effort: "high", permissions: "auto" } }] } }));
+    await client.updateProjectSettings("org/1", "project/1", { config: { worker: null, orchestrator: null } });
+    expect(fetchMock.mock.calls[2]?.[1]?.body).toBe('{"config":{"worker":null,"orchestrator":null}}');
   });
   it("loads the authenticated account and organization memberships", async () => {
     const account = {

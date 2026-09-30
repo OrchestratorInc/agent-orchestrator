@@ -34,6 +34,8 @@ func TestProjectSettingsHandlerPartialPatchAndErrors(t *testing.T) {
 		status, calls int
 	}{
 		{"partial", `{"config":{"autoReview":false}}`, nil, http.StatusOK, 1},
+		{"clear worker", `{"config":{"worker":null}}`, nil, http.StatusOK, 1},
+		{"clear orchestrator", `{"config":{"orchestrator":null}}`, nil, http.StatusOK, 1},
 		{"unknown", `{"config":{"sessionPrefix":"unused"}}`, nil, http.StatusUnprocessableEntity, 0},
 		{"invalid", `{"displayName":null}`, nil, http.StatusUnprocessableEntity, 0},
 		{"store validation", `{}`, postgres.ErrInvalid, http.StatusUnprocessableEntity, 1},
@@ -53,6 +55,9 @@ func TestProjectSettingsHandlerPartialPatchAndErrors(t *testing.T) {
 			}
 			if test.name == "partial" && (store.patch.DisplayName != nil || store.patch.DefaultBranch != nil || string(store.patch.Config) != `{"autoReview":false}`) {
 				t.Fatalf("omitted fields were populated: %+v", store.patch)
+			}
+			if strings.HasPrefix(test.name, "clear ") && !strings.Contains(string(store.patch.Config), ":null") {
+				t.Fatalf("role reset was dropped: %+v", store.patch)
 			}
 		})
 	}
