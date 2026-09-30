@@ -85,11 +85,19 @@ function DockHeader({
 		<div className="flex min-h-8 items-center gap-2 px-3 py-2">
 			<div className="min-w-0 flex-1">
 				{label ? (
-					<p id={labelId} className="text-[11px] font-medium leading-relaxed text-muted-foreground">
+					<p
+						id={labelId}
+						title={label}
+						className="line-clamp-1 break-words text-[11px] font-medium leading-relaxed text-muted-foreground"
+					>
 						{label}
 					</p>
 				) : null}
-				<p id={id} className="text-xs font-medium leading-relaxed text-foreground">
+				<p
+					id={id}
+					title={title}
+					className="line-clamp-2 break-words text-xs font-medium leading-relaxed text-foreground"
+				>
 					{title}
 				</p>
 			</div>
@@ -216,7 +224,7 @@ function FormRequest({
 	const askedQuestion =
 		propertyDescription || (questionGroups?.length === 1 ? activity.detail?.message : undefined) || undefined;
 	const title = askedQuestion ?? propertyTitle ?? activity.detail?.message ?? schema?.title ?? activity.summary;
-	const label = askedQuestion ? propertyTitle : undefined;
+	const label = askedQuestion && askedQuestion !== propertyTitle ? propertyTitle : undefined;
 	const pager =
 		questionGroups && questionGroups.length > 1
 			? `${activeQuestion + 1} of ${questionGroups.length}`
