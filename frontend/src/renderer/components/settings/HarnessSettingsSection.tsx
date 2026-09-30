@@ -528,8 +528,9 @@ export function HarnessSettingsSection({
 							|| (!authPlans.isPending && (!authPlan || authPlan.action === "instructions"));
 						const isCloudCapable = Boolean(cloudOrg?.id) && (CLOUD_AGENT_PROVIDERS as readonly string[]).includes(agentId);
 						const cloudConnected = cloudConnByProvider.get(agentId)?.validationState === "valid";
-						// Claude Code's browser login also stores the token locally, so one
-						// login covers both; the others' cloud login is separate from local.
+						// Cloud logins are always separate from local ones. Claude Code's
+						// browser login is also stored locally, but only as a fallback the
+						// daemon uses when Claude Code has no native login on this machine.
 						const cloudAuthHint = agentId === "claude-code"
 							? t("settings.harness.cloudAuthHintShared")
 							: t("settings.harness.cloudAuthHintSeparate", { agent: agentLabel(agentId) });
@@ -593,8 +594,7 @@ export function HarnessSettingsSection({
 										{installationStatusLabel}
 									</Button>
 								) : null}
-								{/* Claude Code's cloud login also logs in locally. */}
-								{agentId === "claude-code" && isCloudCapable ? null : authControls}
+								{authControls}
 								</div>
 							) : failed ? (
 								<div className="flex items-center gap-1.5">

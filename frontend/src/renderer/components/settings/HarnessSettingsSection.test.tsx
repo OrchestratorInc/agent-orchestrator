@@ -182,8 +182,8 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 
 		const claudeRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
-		await user.hover(within(claudeRow).getByRole("button", { name: /One login for both local and cloud sessions/ }));
-		expect(await screen.findByRole("tooltip")).toHaveTextContent("also signs Claude Code in on this machine");
+		await user.hover(within(claudeRow).getByRole("button", { name: /Cloud sessions use their own Claude login/ }));
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("If Claude Code isn't signed in here");
 	});
 
 	it("offers native login when fx is installed but unauthorized", async () => {
