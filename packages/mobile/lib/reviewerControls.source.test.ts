@@ -77,6 +77,15 @@ describe("reviewer control integration", () => {
 		expect(detail).toContain("reviewRunSendable(run) ? <Pressable");
 	});
 
+	it("never opens a web page on top of the actions sheet", () => {
+		// The only direct open is the no-history case, where nothing is behind the sheet.
+		expect(actions.match(/openGitHub\(/g)).toHaveLength(1);
+		expect(actions).toContain("if (router.canGoBack()) { parkSheetLink(url); router.back(); }");
+		expect(actions).toContain("else void openGitHub(url);");
+		expect(detail).toContain("const link = takeSheetLink();");
+		expect(detail).toContain("setTimeout(() => void openGitHub(link), SHEET_DISMISS_MS)");
+	});
+
 	it("keys automatic-review dismissal to the stable run id", () => {
 		expect(detail).toContain("const autoReviewFailureId = autoReviewFailure?.id");
 		expect(detail).toContain("[autoReviewFailureId, dismissedAutoFailureId]");

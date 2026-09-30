@@ -1,5 +1,5 @@
 import { Feather } from "@expo/vector-icons";
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import {
@@ -26,6 +26,7 @@ import {
 import { AgentLogo } from "../../lib/AgentLogo";
 import { haptics } from "../../lib/haptics";
 import { openGitHub } from "../../lib/openGitHub";
+import { parkSheetLink } from "../../lib/sheetLink";
 import { formatExternalReviewMessage, formatInlineReviewCommentMessage } from "../../lib/reviewFeedback";
 import { ReviewerPicker } from "../../lib/reviewer-picker";
 import { defaultReviewerHarness, reviewerChoices, reviewerSelectionChanged, reviewerSwitchSelection, reviewerSwitchWarning } from "../../lib/reviewerControls";
@@ -60,6 +61,15 @@ export default function ReviewActionsSheet() {
 	const [policies, setPolicies] = useState<ReviewPolicies>();
 	const [busy, setBusy] = useState<BusyAction>();
 	const [error, setError] = useState("");
+	const router = useRouter();
+
+	// Close the sheet before a web page opens; the review screen opens the link
+	// once it is back in front (see lib/sheetLink.ts).
+	function openAfterClose(url: string) {
+		// Opened by a direct link there is no review screen behind to take it.
+		if (router.canGoBack()) { parkSheetLink(url); router.back(); }
+		else void openGitHub(url);
+	}
 
 	const load = useCallback(async () => {
 		if (!config || !sessionId) return;
@@ -273,13 +283,13 @@ export default function ReviewActionsSheet() {
 			{externalReviewers.map((item) => <ActionRow key={item.reviewerId} icon="refresh-cw" title={item.reviewerId} subtitle={`${item.count} ${item.count === 1 ? "comment" : "comments"}`} loading={busy?.kind === "rerequest" && busy.id === item.reviewerId} disabled={Boolean(busy)} onPress={() => void rerequest(item)} />)}
 		</Section> : null}
 		{externalReviews.length > 0 && pr ? <Section title="GITHUB REVIEWS" subtitle="Complete review summaries submitted on GitHub.">
-			{externalReviews.map((item) => <View key={item.reviewUrl || `${item.reviewerId}:${item.submittedAt}`} style={styles.feedbackCard}><View style={styles.feedbackHeading}><Text style={styles.feedbackAuthor}>{item.reviewerId}</Text><Text style={styles.feedbackVerdict}>{item.verdict.replaceAll("_", " ")}</Text></View>{item.autoInjectReview === false ? <Text style={styles.notInjected}>Not automatically sent to the worker</Text> : null}{item.body ? <Text style={styles.feedbackBody}>{item.body}</Text> : <Text style={styles.feedbackMuted}>No written summary.</Text>}<View style={styles.feedbackActions}>{item.reviewUrl ? <MiniAction icon="external-link" title="Open review" onPress={() => void openGitHub(item.reviewUrl!)} /> : null}<MiniAction icon="send" title="Send to worker" loading={busy?.kind === "send" && busy.id === (item.reviewUrl || item.reviewerId)} disabled={Boolean(busy)} onPress={() => void send(item.reviewUrl || item.reviewerId, formatExternalReviewMessage(item, pr.url))} /></View></View>)}
+			{externalReviews.map((item) => <View key={item.reviewUrl || `${item.reviewerId}:${item.submittedAt}`} style={styles.feedbackCard}><View style={styles.feedbackHeading}><Text style={styles.feedbackAuthor}>{item.reviewerId}</Text><Text style={styles.feedbackVerdict}>{item.verdict.replaceAll("_", " ")}</Text></View>{item.autoInjectReview === false ? <Text style={styles.notInjected}>Not automatically sent to the worker</Text> : null}{item.body ? <Text style={styles.feedbackBody}>{item.body}</Text> : <Text style={styles.feedbackMuted}>No written summary.</Text>}<View style={styles.feedbackActions}>{item.reviewUrl ? <MiniAction icon="external-link" title="Open review" onPress={() => openAfterClose(item.reviewUrl!)} /> : null}<MiniAction icon="send" title="Send to worker" loading={busy?.kind === "send" && busy.id === (item.reviewUrl || item.reviewerId)} disabled={Boolean(busy)} onPress={() => void send(item.reviewUrl || item.reviewerId, formatExternalReviewMessage(item, pr.url))} /></View></View>)}
 		</Section> : null}
 		{comments.length ? <Section title="UNRESOLVED COMMENTS" subtitle="Open the exact GitHub file and line, send feedback to the worker, or resolve it once addressed.">
-			{comments.map((item) => <FeedbackCard key={item.comment.url || `${item.reviewerId}:${item.comment.file}`} item={item} aoOwned={Boolean(item.comment.reviewId && aoReviewIds.has(item.comment.reviewId))} busy={busy} disabled={Boolean(busy)} onOpen={() => item.comment.url && void openGitHub(item.comment.url)} onSend={() => void send(item.comment.url || `${item.reviewerId}:${item.comment.file}`, formatInlineReviewCommentMessage(item.comment, item.reviewerId))} onResolve={() => confirmResolve(item.comment)} />)}
+			{comments.map((item) => <FeedbackCard key={item.comment.url || `${item.reviewerId}:${item.comment.file}`} item={item} aoOwned={Boolean(item.comment.reviewId && aoReviewIds.has(item.comment.reviewId))} busy={busy} disabled={Boolean(busy)} onOpen={() => item.comment.url && openAfterClose(item.comment.url)} onSend={() => void send(item.comment.url || `${item.reviewerId}:${item.comment.file}`, formatInlineReviewCommentMessage(item.comment, item.reviewerId))} onResolve={() => confirmResolve(item.comment)} />)}
 		</Section> : null}
 		{resolvedComments.length ? <Section title="RESOLVED COMMENTS" subtitle="Previously addressed AO and GitHub feedback.">
-			{resolvedComments.map((item) => <FeedbackCard key={item.comment.url || `${item.reviewerId}:${item.comment.file}`} item={item} resolved aoOwned={Boolean(item.comment.reviewId && aoReviewIds.has(item.comment.reviewId))} busy={busy} disabled={Boolean(busy)} onOpen={() => item.comment.url && void openGitHub(item.comment.url)} onSend={() => void send(item.comment.url || `${item.reviewerId}:${item.comment.file}`, formatInlineReviewCommentMessage(item.comment, item.reviewerId))} onResolve={() => undefined} />)}
+			{resolvedComments.map((item) => <FeedbackCard key={item.comment.url || `${item.reviewerId}:${item.comment.file}`} item={item} resolved aoOwned={Boolean(item.comment.reviewId && aoReviewIds.has(item.comment.reviewId))} busy={busy} disabled={Boolean(busy)} onOpen={() => item.comment.url && openAfterClose(item.comment.url)} onSend={() => void send(item.comment.url || `${item.reviewerId}:${item.comment.file}`, formatInlineReviewCommentMessage(item.comment, item.reviewerId))} onResolve={() => undefined} />)}
 		</Section> : null}
 		{!pr && !error && !prMissing ? <Text style={styles.empty}>No GitHub feedback is available for this pull request yet.</Text> : null}
 	</ScrollView>;
