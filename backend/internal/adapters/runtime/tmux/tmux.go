@@ -1213,10 +1213,22 @@ func isAnySupervisorCommand(command string) bool {
 
 func isSupervisorCommand(command, sessionID, launchID string) bool {
 	fields := strings.Fields(command)
-	for i := 0; i+6 < len(fields); i++ {
-		if fields[i] == "agent-process" && fields[i+1] == "supervise" &&
-			fields[i+2] == "--session" && fields[i+3] == sessionID &&
-			fields[i+4] == "--launch" && fields[i+5] == launchID && fields[i+6] == "--" {
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] != "agent-process" || fields[i+1] != "supervise" {
+			continue
+		}
+		gotSession, gotLaunch := "", ""
+		for j := i + 2; j+1 < len(fields) && fields[j] != "--"; j++ {
+			switch fields[j] {
+			case "--session":
+				gotSession = fields[j+1]
+				j++
+			case "--launch":
+				gotLaunch = fields[j+1]
+				j++
+			}
+		}
+		if gotSession == sessionID && gotLaunch == launchID {
 			return true
 		}
 	}

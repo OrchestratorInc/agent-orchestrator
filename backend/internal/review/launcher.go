@@ -550,11 +550,12 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 			return LaunchResult{}, fmt.Errorf("resolve AO executable: %w", resolveErr)
 		}
 		env[sessionmanager.EnvSupervisedProcess] = "1"
-		activityFlag, activityID := "--session", handleID
-		if strings.TrimSpace(spec.ReviewSessionID) != "" {
-			activityFlag, activityID = "--review", strings.TrimSpace(spec.ReviewSessionID)
+		supervisorArgv := []string{executable, "agent-process", "supervise", "--session", handleID}
+		if reviewID := strings.TrimSpace(spec.ReviewSessionID); reviewID != "" {
+			supervisorArgv = append(supervisorArgv, "--activity-review", reviewID)
 		}
-		argv = append([]string{executable, "agent-process", "supervise", activityFlag, activityID, "--launch", spec.LaunchID, "--"}, argv...)
+		supervisorArgv = append(supervisorArgv, "--launch", spec.LaunchID, "--")
+		argv = append(supervisorArgv, argv...)
 	}
 	handle, err := l.runtime.Create(ctx, ports.RuntimeConfig{
 		SessionID:     domain.SessionID(handleID),

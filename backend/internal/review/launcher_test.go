@@ -884,7 +884,7 @@ func TestLauncherSupervisesReviewerLaunch(t *testing.T) {
 	if _, err := l.Spawn(context.Background(), spec); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	want := "/usr/local/bin/ao agent-process supervise --review review-1 --launch launch-1 -- greptile review"
+	want := "/usr/local/bin/ao agent-process supervise --session review-mer-1 --activity-review review-1 --launch launch-1 -- greptile review"
 	if got := strings.Join(rt.createCfg.Argv, " "); got != want {
 		t.Fatalf("runtime argv = %q, want %q", got, want)
 	}

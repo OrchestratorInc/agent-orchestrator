@@ -28,9 +28,10 @@ func newAgentProcessCommand(ctx *commandContext) *cobra.Command {
 func newAgentProcessSuperviseCommand(ctx *commandContext) *cobra.Command {
 	var sessionID string
 	var reviewID string
+	var activityReviewID string
 	var launchID string
 	cmd := &cobra.Command{
-		Use:    "supervise (--session <id>|--review <id>) --launch <id> -- <command> [args...]",
+		Use:    "supervise (--session <id>|--review <id>) [--activity-review <id>] --launch <id> -- <command> [args...]",
 		Short:  "Supervise one managed agent process (internal)",
 		Hidden: true,
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -41,26 +42,38 @@ func newAgentProcessSuperviseCommand(ctx *commandContext) *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sessionID = strings.TrimSpace(sessionID)
+			reviewID = strings.TrimSpace(reviewID)
+			activityReviewID = strings.TrimSpace(activityReviewID)
 			launchID = strings.TrimSpace(launchID)
-			if (strings.TrimSpace(sessionID) == "") == (strings.TrimSpace(reviewID) == "") {
+			if (sessionID == "") == (reviewID == "") {
 				return usageError{fmt.Errorf("exactly one of --session or --review is required")}
 			}
-			activityID := strings.TrimSpace(sessionID)
+			if activityReviewID != "" && sessionID == "" {
+				return usageError{fmt.Errorf("--activity-review requires --session")}
+			}
+			activityID := sessionID
 			if activityID == "" {
-				activityID = strings.TrimSpace(reviewID)
+				activityID = reviewID
 			}
 			if !sessionIDPattern.MatchString(activityID) {
 				return usageError{fmt.Errorf("invalid activity id")}
 			}
+			if activityReviewID != "" && !sessionIDPattern.MatchString(activityReviewID) {
+				return usageError{fmt.Errorf("invalid review activity id")}
+			}
 			if !sessionIDPattern.MatchString(strings.TrimSpace(launchID)) {
 				return usageError{fmt.Errorf("invalid launch id")}
 			}
-			ctx.runSupervisedProcess(cmd.Context(), strings.TrimSpace(sessionID), strings.TrimSpace(reviewID), strings.TrimSpace(launchID), args)
+			if activityReviewID == "" {
+				activityReviewID = reviewID
+			}
+			ctx.runSupervisedProcess(cmd.Context(), sessionID, activityReviewID, launchID, args)
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&sessionID, "session", "", "AO session id")
 	cmd.Flags().StringVar(&reviewID, "review", "", "AO review id")
+	cmd.Flags().StringVar(&activityReviewID, "activity-review", "", "AO review id to receive process activity")
 	cmd.Flags().StringVar(&launchID, "launch", "", "AO process launch id")
 	return cmd
 }

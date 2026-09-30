@@ -1266,6 +1266,22 @@ func TestIsSupervisedProcessAliveRejectsStaleAndUnrelatedProcesses(t *testing.T)
 	}
 }
 
+func TestExactSupervisedWorkloadFindsReviewerSupervisorWithHandleIdentity(t *testing.T) {
+	entries, err := parseProcessTable("100 1 /bin/zsh -i\n101 100 /opt/ao agent-process supervise --session review-worker-7 --activity-review review-7 --launch launch-3 -- codex\n102 101 codex\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsExactSupervisedWorkload(entries, 100, "review-worker-7", "launch-3") {
+		t.Fatal("exact supervised reviewer descendant was not found")
+	}
+	if containsExactSupervisedWorkload(entries, 100, "review-worker-8", "launch-3") {
+		t.Fatal("reviewer supervisor with a different handle was accepted")
+	}
+	if containsExactSupervisedWorkload(entries, 100, "review-worker-7", "launch-old") {
+		t.Fatal("reviewer supervisor with a different launch was accepted")
+	}
+}
+
 func TestExactSupervisedWorkloadRejectsSupervisorReportingExitedChild(t *testing.T) {
 	entries, err := parseProcessTable("100 1 /bin/sh\n101 100 /opt/ao agent-process supervise --session sess-1 --launch launch-2 -- codex\n")
 	if err != nil {

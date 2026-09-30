@@ -64,3 +64,16 @@ func TestAgentProcessSuperviseReportsReviewExitToReviewActivity(t *testing.T) {
 		t.Fatalf("review exit report = %+v, want %+v", req, want)
 	}
 }
+
+func TestAgentProcessSuperviseReportsReviewExitWithSessionIdentity(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	_, errOut, err := executeCLI(t, Deps{In: strings.NewReader("")}, "agent-process", "supervise", "--session", "review-mer-1", "--activity-review", "review-7", "--launch", "launch-3", "--", "sh", "-c", "exit 0")
+	if err != nil {
+		t.Fatalf("supervise returned child exit as command failure: %v\nstderr=%s", err, errOut)
+	}
+	if capture.path != "/api/v1/reviews/review-7/activity" {
+		t.Fatalf("exit report path = %q, want review activity endpoint", capture.path)
+	}
+}
