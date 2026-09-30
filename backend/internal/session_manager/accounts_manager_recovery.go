@@ -51,7 +51,7 @@ func (m *Manager) recoverAccountSwitch(ctx context.Context, store ports.Accounts
 		return "SESSION_UNAVAILABLE"
 	}
 	if err := router.ValidateAgentAccountTarget(ctx, op.TargetMode, op.Provider, op.TargetAccountID, rec.Metadata.Model); err != nil {
-		return "TARGET_UNAVAILABLE"
+		return "TARGET_REVALIDATION_UNAVAILABLE"
 	}
 	if op.TargetRevision == 0 {
 		if op.Phase == domain.AccountsManagerSwitchRequested {

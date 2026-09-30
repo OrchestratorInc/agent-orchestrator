@@ -408,6 +408,10 @@ func (m *Manager) finishAccountSwitchRun(store ports.AccountsManagerSwitchStore,
 		phase := domain.AccountsManagerSwitchRecoveryRequired
 		if op.Phase == domain.AccountsManagerSwitchRequested || op.Phase == domain.AccountsManagerSwitchWaiting {
 			phase = domain.AccountsManagerSwitchFailed
+			if code == "TARGET_REVALIDATION_UNAVAILABLE" {
+				// A retry outage retains pre-stop proof and the user's recovery choices.
+				phase = domain.AccountsManagerSwitchWaiting
+			}
 		}
 		if op.Phase == domain.AccountsManagerSwitchWaiting && code == "SOURCE_OWNERSHIP_UNCONFIRMED" {
 			// Preserve both intake fences and the durable pre-stop cancellation proof.
