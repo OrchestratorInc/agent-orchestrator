@@ -1131,6 +1131,7 @@ func TestRefreshReportsAuthorizedInstalledAgents(t *testing.T) {
 
 func TestProbeReconcilesCodexCredentialsChangedByExternalLogin(t *testing.T) {
 	root := t.TempDir()
+	ensurePrivateTestDirectory(t, root)
 	globalHome := filepath.Join(root, "global-codex")
 	if err := ensurePrivateDirectory(globalHome); err != nil {
 		t.Fatal(err)
