@@ -84,16 +84,21 @@ func prepareSessionHome(dataDir string, id domain.SessionID, goos string) (sessi
 		spec.CacheHome = filepath.Join(root, ".cache")
 	}
 	spec.SkillDir = filepath.Join(root, ".agents", "skills", skillassets.SkillName)
-	for _, dir := range []string{root, spec.ConfigHome, spec.DataHome, spec.StateHome, spec.CacheHome, filepath.Dir(spec.SkillDir), spec.AppData, spec.LocalAppData} {
+	for _, dir := range []string{
+		root, spec.ConfigHome, spec.DataHome, spec.StateHome, spec.CacheHome,
+		filepath.Dir(spec.SkillDir), filepath.Join(root, ".codex"),
+		filepath.Join(root, ".claude"), filepath.Join(root, ".gemini"),
+		filepath.Join(root, ".qwen"), spec.AppData, spec.LocalAppData,
+	} {
 		if strings.TrimSpace(dir) == "" {
 			continue
 		}
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return sessionHomeSpec{}, fmt.Errorf("session home: create %s: %w", dir, err)
+			return spec, fmt.Errorf("session home: create %s: %w", dir, err)
 		}
 	}
 	if err := skillassets.Materialize(spec.SkillDir); err != nil {
-		return sessionHomeSpec{}, fmt.Errorf("session home: materialize using-ao skill: %w", err)
+		return spec, fmt.Errorf("session home: materialize using-ao skill: %w", err)
 	}
 	return spec, nil
 }
@@ -104,6 +109,17 @@ func applySessionHomeEnv(env map[string]string, spec sessionHomeSpec, goos strin
 	setProtectedEnv(env, "XDG_DATA_HOME", spec.DataHome, caseInsensitive)
 	setProtectedEnv(env, "XDG_STATE_HOME", spec.StateHome, caseInsensitive)
 	setProtectedEnv(env, "XDG_CACHE_HOME", spec.CacheHome, caseInsensitive)
+	// These harnesses consult their own home overrides before HOME. Keep those
+	// discovery roots inside the same session profile, even when the daemon or
+	// project environment points them at a user-global installation.
+	for key, dir := range map[string]string{
+		"CODEX_HOME":        filepath.Join(spec.Root, ".codex"),
+		"CLAUDE_CONFIG_DIR": filepath.Join(spec.Root, ".claude"),
+		"GEMINI_CLI_HOME":   filepath.Join(spec.Root, ".gemini"),
+		"QWEN_HOME":         filepath.Join(spec.Root, ".qwen"),
+	} {
+		setProtectedEnv(env, key, dir, caseInsensitive)
+	}
 	if goos == "windows" {
 		setProtectedEnv(env, "USERPROFILE", spec.Root, caseInsensitive)
 		setProtectedEnv(env, "APPDATA", spec.AppData, caseInsensitive)

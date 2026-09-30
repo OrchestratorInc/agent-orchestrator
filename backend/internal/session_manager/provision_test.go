@@ -486,8 +486,12 @@ func TestRuntimeEnvIsolatesSessionHomeAndMaterializesUsingAO(t *testing.T) {
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	env := manager.runtimeEnv("mer-1", "mer", "", map[string]string{
-		"HOME":            filepath.Join(t.TempDir(), "project-home"),
-		"XDG_CONFIG_HOME": filepath.Join(t.TempDir(), "project-config"),
+		"HOME":              filepath.Join(t.TempDir(), "project-home"),
+		"XDG_CONFIG_HOME":   filepath.Join(t.TempDir(), "project-config"),
+		"CODEX_HOME":        filepath.Join(realHome, ".codex"),
+		"CLAUDE_CONFIG_DIR": filepath.Join(realHome, ".claude"),
+		"GEMINI_CLI_HOME":   filepath.Join(realHome, ".gemini"),
+		"QWEN_HOME":         filepath.Join(realHome, ".qwen"),
 	})
 
 	wantRoot := filepath.Join(dataDir, "runtime", "session-home", "mer-1")
@@ -496,6 +500,16 @@ func TestRuntimeEnvIsolatesSessionHomeAndMaterializesUsingAO(t *testing.T) {
 	}
 	if got := env["XDG_CONFIG_HOME"]; got != filepath.Join(wantRoot, ".config") {
 		t.Fatalf("XDG_CONFIG_HOME = %q", got)
+	}
+	for key, dir := range map[string]string{
+		"CODEX_HOME":        filepath.Join(wantRoot, ".codex"),
+		"CLAUDE_CONFIG_DIR": filepath.Join(wantRoot, ".claude"),
+		"GEMINI_CLI_HOME":   filepath.Join(wantRoot, ".gemini"),
+		"QWEN_HOME":         filepath.Join(wantRoot, ".qwen"),
+	} {
+		if got := env[key]; got != dir {
+			t.Errorf("%s = %q, want %q", key, got, dir)
+		}
 	}
 	skillPath := filepath.Join(wantRoot, ".agents", "skills", "using-ao", "SKILL.md")
 	body, err := os.ReadFile(skillPath)
@@ -526,6 +540,27 @@ func TestRuntimeEnvCanInheritUserHomeWhenExplicitlyRequested(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(manager.dataDir, "runtime", "session-home", "mer-1")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("session home was provisioned despite inherit mode: %v", err)
+	}
+}
+
+func TestRuntimeEnvKeepsIsolatedProfileWhenSkillProvisioningFails(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv(EnvSessionHomeMode, sessionHomeModeIsolated)
+	root := filepath.Join(dataDir, "runtime", "session-home", "mer-1")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".agents"), []byte("blocked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{
+		dataDir:    dataDir,
+		executable: func() (string, error) { return filepath.Join("/opt", "aod", "ao"), nil },
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	env := manager.runtimeEnv("mer-1", "mer", "", nil)
+	if env["HOME"] != root {
+		t.Fatalf("failed provisioning exposed inherited HOME: %q", env["HOME"])
 	}
 }
 

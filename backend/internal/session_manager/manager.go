@@ -4465,10 +4465,9 @@ func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issu
 			if logger == nil {
 				logger = slog.Default()
 			}
-			logger.Warn("session HOME/profile isolation unavailable; falling back to inherited user profile", "session", id, "error", err)
-		} else {
-			applySessionHomeEnv(env, spec, runtime.GOOS, caseInsensitive)
+			logger.Warn("session home provisioning failed; keeping isolated profile", "session", id, "error", err)
 		}
+		applySessionHomeEnv(env, spec, runtime.GOOS, caseInsensitive)
 	}
 	// Project configuration must never redirect AO-owned hook callbacks to a
 	// different daemon. New receives the resolved absolute path in production;
