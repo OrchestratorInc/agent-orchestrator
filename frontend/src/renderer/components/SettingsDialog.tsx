@@ -57,6 +57,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 
 	const globalSections = visibleGlobalSettings({ cloudEnabled });
 
+	const isCloudProjectSettings = settingsModal.scope === "project" && settingsModal.cloudOrgId !== undefined;
 	const projectSections: Array<{
 		id: ProjectSettingsSection;
 		label: string;
@@ -64,7 +65,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 	}> = [
 		{ id: "general", label: t("settings.project.general"), icon: MonitorCog },
 		{ id: "agents", label: t("settings.project.agents"), icon: Bot },
-		{ id: "cues", label: t("cues.title"), icon: Disc3 },
+		...(!isCloudProjectSettings ? [{ id: "cues" as const, label: t("cues.title"), icon: Disc3 }] : []),
 	];
 
 	const isProjectSettings = displaySettings?.scope === "project";
@@ -137,7 +138,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled }).id);
 		}
 		if (settingsModal?.scope === "project") {
-			setActiveProjectSection(settingsModal.section ?? "general");
+			setActiveProjectSection(settingsModal.cloudOrgId !== undefined && settingsModal.section === "cues" ? "general" : settingsModal.section ?? "general");
 			setProjectSaveState(initialProjectSaveState());
 			setCueBusy(false);
 		}
@@ -269,10 +270,10 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 							</DialogHeader>
 							<div aria-busy={!isBodyReady} className={cn(settingsDialogBodyClass, "settings-dialog-body flex-1 px-(--size-modal-padding) pt-0")}>
 								{isBodyReady ? (
-									displaySettings?.scope === "project" && activeProjectSection === "cues" ? (
+									displaySettings?.scope === "project" && !isCloudProjectSettings && activeProjectSection === "cues" ? (
 										<CuesSettings projectId={displaySettings.projectId} onBusyChange={setCueBusy} />
 									) : displaySettings?.scope === "project" ? (
-										<ProjectSettingsForm projectId={displaySettings.projectId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />
+										<ProjectSettingsForm projectId={displaySettings.projectId} cloudOrgId={displaySettings.cloudOrgId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />
 									) : (
 										<GlobalSettingsForm cloudEnabled={cloudEnabled} focusAgentId={focusAgentId} section={activeSection} />
 									)
