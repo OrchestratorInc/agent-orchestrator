@@ -141,15 +141,7 @@ func (b HarnessBuilder) BuildInteractive(
 	)
 	var argv []string
 	identity := b.interactiveRestoreIdentity(launch)
-	if launch.Harness == "opencode" {
-		// opencode's launch logic lives in the cloud module (self-contained), so
-		// the worker builds its argv directly rather than through agentruntime.
-		if identity != "" {
-			argv = openCodeRestoreArgs(binary, launch.SessionID, launch.Model, providerArgs, permission, launch.Prompt, identity)
-		} else {
-			argv = openCodeLaunchArgs(binary, launch.SessionID, launch.Model, providerArgs, permission, launch.Prompt)
-		}
-	} else if identity != "" {
+	if identity != "" {
 		var ok bool
 		argv, ok, err = agentruntime.BuildRestoreCommand(agentruntime.RestoreConfig{
 			Harness:          harness,
@@ -212,9 +204,11 @@ func (b HarnessBuilder) BuildInteractive(
 		}
 	}
 	if launch.Harness == "opencode" {
-		// opencode has no system-prompt flag; the argv (built above) selects the AO
-		// agent name, and the matching OPENCODE_CONFIG document carries the prompt.
-		// Write it beside the prompt file and export the env var.
+		// opencode v2 has no CLI flag for a system prompt, model, or agent; the argv
+		// (built by agentruntime above) is just the approval flag plus the prompt.
+		// The standing instructions, model override, and approval overlay ride an
+		// AO-owned OPENCODE_CONFIG document that selects the AO agent via
+		// `default_agent`. Write it beside the prompt file and export the env var.
 		configPath, err := writeOpenCodeConfig(systemPromptFile, permission, launch.SessionID, launch.Model)
 		if err != nil {
 			if command.Cleanup != nil {
@@ -224,6 +218,16 @@ func (b HarnessBuilder) BuildInteractive(
 		}
 		if configPath != "" {
 			command.Env["OPENCODE_CONFIG"] = configPath
+		}
+		// opencode has no native command-hook config; its only lifecycle surface is
+		// a workspace plugin. Install AO's activity plugin so opencode reports
+		// session-start/prompt/active/stop/permission events through
+		// `ao hooks opencode <event>`, the same bridge the other harnesses use.
+		if err := installOpenCodeActivityPlugin(workspace); err != nil {
+			if command.Cleanup != nil {
+				command.Cleanup()
+			}
+			return Command{}, err
 		}
 		// Warm opencode's models.dev cache from the baked catalog so the TUI is not
 		// blocked on a ~5MB startup download on a fresh sandbox.
