@@ -1,5 +1,6 @@
 import { Feather } from "../lib/icons";
-import { useRouter } from "expo-router";
+import { useRouter, type Href } from "expo-router";
+import { useOpenPage } from "../lib/pageNavigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActivityIndicator,
@@ -48,6 +49,7 @@ export default function NotificationsScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
+	const openPage = useOpenPage();
 	const insets = useSafeAreaInsets();
 	const { config, connection, unreachable, errorStatus, sessions, loading: sessionsLoading, restore } = useApp();
 	const [restoringId, setRestoringId] = useState<string>();
@@ -141,7 +143,7 @@ export default function NotificationsScreen() {
 		// decides: a terminated agent waiting on input is restored, not opened.
 		const action = notificationAction(notification, sessionState(notification.sessionId));
 		if (action.kind === "open") router.navigate(`/session/${action.sessionId}`);
-		else if (action.kind === "review") router.navigate(notificationTarget(notification));
+		else if (action.kind === "review") openPage(notificationTarget(notification) as Href);
 		else if (action.kind === "prs") router.navigate("/prs");
 		else if (action.kind === "restore") {
 			haptics.warning();

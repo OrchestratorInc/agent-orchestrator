@@ -16,6 +16,7 @@ import { WorkerRowInteraction } from "./worker-row-interaction";
 import { WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
 import { Spinning } from "./ui";
 import { normalizeConversationTitle } from "./chat/conversationMenuModel";
+import { useOpenPage } from "./pageNavigation";
 import { iconSize, press, space, type } from "./tokens";
 import { userFacingError } from "./connectionError";
 import { reviewRouteForSession } from "./reviewView";
@@ -62,6 +63,7 @@ export const WorkerListRow = memo(
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
+	const openPage = useOpenPage();
 	const closeActionRailRef = useRef<() => void>(() => {});
 	const [renameTitle, setRenameTitle] = useState("");
 	const [renameSaving, setRenameSaving] = useState(false);
@@ -159,13 +161,13 @@ export const WorkerListRow = memo(
 			case "restore":
 				return onRestore();
 			case "openPr":
-				if (reviewRoute) router.push(reviewRoute);
+				if (reviewRoute) openPage(reviewRoute);
 				return;
 			default:
 				return onDelete();
 		}
 	// openSession closes over router and session, both stable enough for a row.
-	}, [onDelete, onRenameStart, onResume, onRestore, onSetPinned, reviewRoute, router, row.title]);
+	}, [onDelete, onRenameStart, onResume, onRestore, onSetPinned, openPage, reviewRoute, router, row.title]);
 
 	return (
 		<WorkerRowInteraction

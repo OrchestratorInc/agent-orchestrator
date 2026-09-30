@@ -8,6 +8,7 @@ import { haptics } from "../../lib/haptics";
 import { ItemActionsMenu } from "../../lib/item-actions-menu";
 import type { ItemAction } from "../../lib/item-actions-menu.types";
 import { openGitHub } from "../../lib/openGitHub";
+import { useOpenPage } from "../../lib/pageNavigation";
 import { mergeReadiness, type MergeTone } from "../../lib/prMerge";
 import { formatReviewSummaryMessage, reviewRunsForPullRequest, reviewRunUrl } from "../../lib/reviewFeedback";
 import { latestAutoReviewFailure, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewVerdictLabel, shortCommit } from "../../lib/reviewView";
@@ -26,6 +27,7 @@ export default function ReviewDetailScreen() {
 	const styles = useThemedStyles(makeStyles);
 	const navigation = useNavigation();
 	const router = useRouter();
+	const openPage = useOpenPage();
 	const { sessionId, prUrl, prNumber } = useLocalSearchParams<{ sessionId: string; prUrl?: string; prNumber?: string }>();
 	const { config, sessions } = useApp();
 	const autoReviewEnabled = sessions.find((session) => session.id === sessionId)?.autoReviewEnabled === true;
@@ -104,7 +106,7 @@ export default function ReviewDetailScreen() {
 		const destination = reviewerDestination(data, review, sessionId);
 		if (!destination) return;
 		haptics.tap();
-		router.push(destination);
+		openPage(destination);
 	};
 	const restoreReviewer = async () => {
 		if (!config || mutation) return;

@@ -4,7 +4,8 @@
 // (warm + cold start). See docs/adr/0001-mobile-push-notifications.md (D6, D7, D9).
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
-import { useRootNavigationState, useRouter } from "expo-router";
+import { useRootNavigationState, useRouter, type Href } from "expo-router";
+import { useOpenPage } from "./pageNavigation";
 import { useEffect, useRef } from "react";
 import { AppState, Platform } from "react-native";
 import { announceDevice, markNotificationRead } from "./api";
@@ -29,6 +30,7 @@ type PushData = {
 export function PushManager(): null {
 	const { config, configured, connection } = useApp();
 	const router = useRouter();
+	const openPage = useOpenPage();
 	const navState = useRootNavigationState();
 
 	const handledColdStart = useRef(false);
@@ -129,7 +131,9 @@ export function PushManager(): null {
 		if (config && data.notificationId) {
 			markNotificationRead(config, data.notificationId).catch(() => {});
 		}
-		router.navigate(destination);
+		// A review opens as a page even when a sheet is up when the tap arrives.
+		if (target === "review") openPage(destination as Href);
+		else router.navigate(destination);
 	}
 
 	return null;

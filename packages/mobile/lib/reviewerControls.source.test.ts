@@ -6,6 +6,7 @@ const detail = readFileSync(new URL("../app/review/[sessionId].tsx", import.meta
 const pickerIOS = readFileSync(new URL("./reviewer-picker.ios.tsx", import.meta.url), "utf8");
 const picker = readFileSync(new URL("./reviewer-picker.tsx", import.meta.url), "utf8");
 const terminal = readFileSync(new URL("./session/TerminalSessionScreen.tsx", import.meta.url), "utf8");
+const source = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 
 describe("reviewer control integration", () => {
 	it("keeps the project-default override separate from the effective reviewer", () => {
@@ -110,6 +111,20 @@ describe("reviewer control integration", () => {
 		const row = detail.slice(detail.indexOf("onPress={openReviewer} style="), detail.indexOf('<ListSectionHeader label="AO review" />'));
 		expect(row.indexOf("</Pressable>")).toBeLessThan(row.indexOf("<ItemActionsMenu"));
 		expect(detail).toContain('<View style={styles.overlaySlot} pointerEvents="box-none">');
+	});
+
+	// A page pushed while a sheet is presented opens inside that sheet, so every
+	// way into review detail and the reviewer goes through useOpenPage.
+	it("opens review detail and the reviewer as pages, never inside a sheet", () => {
+		expect(source("./PRCard.tsx")).toContain("openPage({\n\t\t\t\t\tpathname: \"/review/[sessionId]\"");
+		expect(source("./worker-list-row.tsx")).toContain("if (reviewRoute) openPage(reviewRoute);");
+		expect(source("./chat/ChatSessionScreen.tsx")).toContain("if (route) openPage(route);");
+		expect(source("../app/notifications.tsx")).toContain('action.kind === "review") openPage(');
+		expect(source("./PushManager.tsx")).toContain('if (target === "review") openPage(destination as Href);');
+		expect(detail).toContain("openPage(destination);");
+		for (const path of ["./PRCard.tsx", "./worker-list-row.tsx", "./chat/ChatSessionScreen.tsx", "../app/review/[sessionId].tsx"]) {
+			expect(source(path)).not.toMatch(/router\.(push|navigate)\((reviewRoute|route|destination)\)/);
+		}
 	});
 
 	it("lays the review screen out as flat board rows, not cards", () => {

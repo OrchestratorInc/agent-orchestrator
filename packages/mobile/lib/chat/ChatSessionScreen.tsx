@@ -44,6 +44,7 @@ import { conversationActionError, conversationActionUnsupported } from "./conver
 import { conversationMarkers } from "./timelineModel";
 import { brokenMcpServers, can } from "./types";
 import { useMobileConversation } from "./useConversation";
+import { useOpenPage } from "../pageNavigation";
 import { type, space } from "../tokens";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
@@ -74,6 +75,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	const styles = useThemedStyles(makeStyles);
 	const navigation = useNavigation();
 	const router = useRouter();
+	const openPage = useOpenPage();
 	const headerHeight = useHeaderHeight();
 	const insets = useSafeAreaInsets();
 	const [headerRightReady, setHeaderRightReady] = useState(false);
@@ -383,7 +385,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				const route = !("projectName" in session) && (session.prs?.length ?? (session.pr ? 1 : 0)) <= 1
 					? reviewRouteForSession(session)
 					: undefined;
-				if (route) router.push(route);
+				if (route) openPage(route);
 				else {
 					setActiveProject(session.projectId);
 					router.push("/(tabs)/prs");
@@ -419,7 +421,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		};
 		actionsEntryRef.current = entry;
 		void dismissKeyboardBeforeSheet(keyboardVisible).then(() => router.push(chatSheetRoute(actionsEntryRef.current ?? entry)));
-	}, [conversation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setActiveProject, setWorkerPinned, title]);
+	}, [conversation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openPage, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setActiveProject, setWorkerPinned, title]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. Nothing else
