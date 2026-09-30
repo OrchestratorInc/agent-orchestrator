@@ -17,6 +17,7 @@
 		"build:tmux": "node ./scripts/build-tmux.mjs",
 		"browser-runtime:prepare": "node ./scripts/prepare-agent-browser.mjs",
 		"build:daemon": "node ./scripts/build-daemon.mjs",
+		"build:host": "node ./scripts/build-host-bundle.mjs",
 		"predev": "npm run build:daemon -- --dev && node ./scripts/ensure-browser-runtime.mjs && npm run build:acp-runtime",
 		"dev": "electron-forge start",
 		"dev:web": "node ./scripts/dev-web.mjs",

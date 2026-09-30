@@ -5,28 +5,79 @@ client of that daemon; closing or switching clients does not move the session.
 Each client saves its own host connections. There is no shared host directory
 or new global database. The existing AO Cloud path is separate.
 
-## Connect a machine
+## Set up a host
 
-1. Run the AO daemon on the machine that will own the sessions (`ao daemon`).
-   Use your OS service manager if it must survive logout/reboot.
-2. Run `ao remote-host enable` **on that machine** for private-network access.
-   For access from elsewhere, install `cloudflared` on the host and use
-   `ao remote-host enable --tunnel` to opt into the existing Connect Mobile
-   Cloudflare quick tunnel. It prints the stable
-   Host ID, connection password, and available addresses; the HTTPS tunnel
-   address may take a few seconds to appear in `ao remote-host status`. Paste
-   that address into the desktop's host settings. `ao remote-host disable`
-   closes the listener and tunnel.
-3. On each desktop client, enable **Settings → General → Remote hosts
-   (experimental)**, then add the address/password in **Settings → Remote hosts**.
-   Repeat for as many remote machines as needed. Projects on each host appear
-   in the normal sidebar with a host badge. Use **Projects → +** or **Add project
-   on [machine]** to register code on a host, then use that project's **New
-   task** action to start a worker there.
-4. On mobile, pair each machine in **Settings → Machines**. Projects and workers
+On the machine that will run the agents, run this as your normal user (macOS
+arm64/x64 or Linux x64):
+
+```bash
+bash -c 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/setup-self-hosted.sh | bash'
+```
+
+The script downloads AO's latest desktop release, verifies its published
+SHA-256 digest, and installs **only the daemon, Claude Chat ACP runtime, and
+tmux** under `~/.ao/host`. It starts `ao daemon` as a systemd user service on
+Linux or LaunchAgent on macOS, then enables the authenticated LAN listener.
+It prints the host ID, LAN address, and pairing password. The host needs
+`curl`, `python3`, and `git`; Linux additionally needs a working systemd user session.
+No desktop window or Electron process runs on the host. Run the script again
+to install a later AO release. Project and conversation data remain under
+`~/.ao/data`; restarting the daemon may exit running terminals.
+
+For access outside your private network, install `cloudflared` on the host and
+pass `--tunnel`:
+
+```bash
+bash -c 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/setup-self-hosted.sh | bash -s -- --tunnel'
+```
+
+The HTTPS tunnel address may take a few seconds to appear. On the host, run
+`~/.ao/host/current/resources/daemon/ao remote-host status` to retrieve it and
+the password. This uses AO's existing Connect Mobile quick tunnel. The URL
+changes when the tunnel restarts; update it on each client. Linux hosts must
+enable systemd lingering to keep the user service alive after logout; the
+installer prints the required `sudo loginctl enable-linger <user>` command when
+needed. A macOS LaunchAgent runs while that user is logged in; logging the
+host user out stops it. The host itself must remain powered on.
+
+Before this PR is in a published AO release, or on Linux arm64, build a native
+host bundle from this checkout and supply it to the same script:
+
+```bash
+cd frontend
+npm ci
+npm run build:daemon && npm run build:tmux && npm run build:acp-runtime && npm run build:host
+../scripts/setup-self-hosted.sh --bundle dist-host/ao-host-$(node -p 'process.platform')-$(node -p 'process.arch').tar.gz
+```
+
+The bundle preserves the same runtime layout as the desktop release. Use
+`--install-only` when another service manager or container entrypoint will
+run the installed `resources/daemon/ao daemon` command. Neither path installs
+Claude Code itself or copies credentials from your laptop.
+
+## Connect a desktop or phone
+
+1. On your laptop, open **Settings → Remote hosts**, add a label, and paste
+   the address and password printed on the host. Add more hosts the same way.
+2. Projects on each host appear in the normal sidebar with a host badge. Use
+   **Projects → +** or **Add project on [machine]** to register code on that
+   machine, then use the project's **New task** action.
+3. On mobile, pair each machine in **Settings → Machines**. Projects and workers
    from connected hosts appear together; opening one targets its owning host
-   without switching machines. Pair the same machine on a second laptop to
-   continue the same host-owned session.
+   without switching machines. Pair the same host on a second laptop to
+   continue the same session.
+
+The laptop's **Settings → Harness** host picker installs Claude Code, OpenCode,
+or another supported harness on the selected host, not on the laptop. Its
+install progress and sign-in terminal also run on that host. Each host keeps
+its own harness binaries and credentials. Installing Claude Code does not
+install AO's Chat adapter: the host setup above already includes that adapter
+and its Node runtime. Browser-callback provider logins may still require a
+browser or forwarding on the host.
+
+To disconnect later, run `~/.ao/host/current/resources/daemon/ao remote-host
+disable` on the host. Removing a host in a client only removes that client's
+saved connection; it does not stop the host or its sessions.
 
 The daemon's normal unauthenticated listener remains on `127.0.0.1`. The
 opt-in remote listener is password-protected but plain HTTP, intended only for
@@ -50,10 +101,7 @@ events; terminals continue over WebSocket.
 The desktop reuses the normal project creation, settings, board, Chat,
 inspector, and file surfaces, with requests routed to the owning host. The
 host badge indicates where the daemon runs; it does not change the project or
-session workflow. Choose the host in desktop Harness settings to install and
-sign in to agents there. Device-code and terminal login flows can run on a
-headless host; provider logins that require a browser callback on the host
-still need a browser or forwarding there. The Browser tab can show host
+session workflow. The Browser tab can show host
 workspace files and managed app previews started with `ao preview start`.
 Manually registered host-local URLs are not proxied to the client. AO's Files
 editor works remotely; opening a host file in an editor installed on the

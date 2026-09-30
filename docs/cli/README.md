@@ -35,17 +35,17 @@ Every product command resolves to a daemon HTTP route. Run `ao <command>
 | `ao daemon`                   | Run the daemon in the foreground (normally supervised by the desktop app or an OS service manager).                               |
 | `ao remote-host status/enable/disable` | Inspect or toggle this machine's authenticated remote listener through the local daemon. |
 
-On a headless box, run `ao daemon` under the OS service manager, then run
-`ao remote-host enable` on that box for LAN access. With `cloudflared` installed,
-use `ao remote-host enable --tunnel` to opt into the existing Connect Mobile
-Cloudflare quick tunnel; check `ao remote-host status` when its HTTPS address
-is ready. The command prints the stable host ID, available
-addresses, and a pairing password. `status` shows the current password
-from the host's local shell, so another client can pair without rotating it.
-Running `enable` again prints the current details without rotating the password.
-The listener uses plain HTTP on the LAN. Do not publish its port directly to
-the internet. Cloudflare terminates tunnel TLS and can see its traffic; quick
-tunnel addresses change on restart.
+For a self-hosted machine, use the [host setup command](../self-hosted-remote.md)
+to install the daemon with its Claude Chat runtime and start the OS user
+service. It calls `ao remote-host enable` and prints the host ID, address, and
+pairing password for **Settings → Remote hosts** on another desktop. With
+`cloudflared` installed, `--tunnel` opts into the existing Connect Mobile
+quick tunnel; check `ao remote-host status` when its HTTPS address is ready.
+Running `enable` again prints the current details without rotating the
+password. `status` shows the password from the host's local shell. The LAN
+listener uses plain HTTP; do not publish its port directly to the internet.
+Cloudflare terminates tunnel TLS and can see its traffic; quick-tunnel
+addresses change on restart.
 
 ### Product commands
 
