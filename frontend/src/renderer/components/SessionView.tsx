@@ -68,6 +68,7 @@ import {
 import { useAgentSwitchRouteVisibility } from "../hooks/useAgentSwitchVisibility";
 import { useWorkspaceSession, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { cloudLifecycleStage } from "../lib/cloud-lifecycle";
+import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
@@ -433,20 +434,41 @@ function SessionInspectorRail({
 // automatically grows into a co-work canvas. Chat readability clamps either
 // profile before the conversation can become unusably narrow.
 function cloudStartupStage(observedState: string | undefined, workerConnected: boolean, terminalOnly = false): number {
-	return terminalOnly || (observedState === "running" && workerConnected) ? 3
-		: (observedState === "bootstrapping" && workerConnected) || observedState === "running" ? 2
+	return terminalOnly ? 3
+		: workerConnected && (observedState === "bootstrapping" || observedState === "running") ? 2
 		: observedState === "provisioning" || observedState === "bootstrapping" ? 1
 		: 0;
 }
 
 function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly }: { sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean }) {
 	const { t } = useTranslation();
-	const { client } = useCloudCp();
+	const { baseUrl, client } = useCloudCp();
 	const factIndex = cloudStartupStage(observedState, workerConnected, terminalOnly);
 	const [factProgress, setFactProgress] = useState({ index: factIndex, since: createdAt ?? new Date().toISOString() });
 	const [remoteProgress, setRemoteProgress] = useState({ index: factIndex, since: createdAt ?? new Date().toISOString() });
 	const [progress, setProgress] = useState({ index: terminalOnly ? 3 : 0, since: createdAt ?? new Date().toISOString() });
 	const replayCutoff = useRef(Date.now() - 60 * 60 * 1_000);
+	useEffect(() => {
+		if (!baseUrl || !orgId || terminalOnly) return;
+		const controller = new AbortController();
+		void subscribeSessionEventsBridged({
+			baseUrl,
+			orgId,
+			sessionId,
+			after: 0,
+			signal: controller.signal,
+			onEvent: (event) => {
+				const occurredAt = Date.parse(event.createdAt);
+				if (event.sessionId !== sessionId || !Number.isFinite(occurredAt) || occurredAt < replayCutoff.current) return;
+				const index = event.type === "sandbox.provisioning" ? 1
+					: event.type === "worker.connected" || event.type === "worker.ready" ? 2
+					: event.type === "agent.ready" ? 3
+					: undefined;
+				if (index !== undefined) setProgress((current) => index > current.index ? { index, since: event.createdAt } : current);
+			},
+		});
+		return () => controller.abort();
+	}, [baseUrl, orgId, sessionId, terminalOnly]);
 	useEffect(() => {
 		setFactProgress((current) => current.index === factIndex ? current : { index: factIndex, since: new Date().toISOString() });
 	}, [factIndex]);
@@ -497,7 +519,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 					after = page.nextAfter;
 					if (!page.hasMore) break;
 				}
-				if (latest) setProgress(latest);
+				if (latest) setProgress((current) => latest.index > current.index ? latest : current);
 			} catch {
 				// Keep the current stage and retry while the session is loading.
 			} finally {
@@ -518,23 +540,6 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 	], [t]);
 	const confirmedFacts = remoteProgress.index > factProgress.index ? remoteProgress : factProgress;
 	const target = confirmedFacts.index > progress.index ? confirmedFacts : progress;
-	const [display, setDisplay] = useState(target);
-	useEffect(() => {
-		if (display.index === target.index) {
-			if (display.since !== target.since) setDisplay(target);
-			return;
-		}
-		if (target.index < display.index || target.index === display.index + 1) {
-			setDisplay(target);
-			return;
-		}
-		// A replay page can contain several milestones. Let each real stage
-		// appear briefly instead of jumping straight to the final phrase.
-		const timer = window.setTimeout(() => {
-			setDisplay({ index: display.index + 1, since: new Date().toISOString() });
-		}, 650);
-		return () => window.clearTimeout(timer);
-	}, [display, target]);
 	return (
 		<div
 			// Sits at the session-pane chrome level: it must cover the loading
@@ -549,9 +554,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 		>
 			<MultiStepLoader
 				ariaLabel={t("terminal.sessionLoader.label")}
-				activeIndex={display.index}
-				activeSince={display.since}
-				className="-translate-x-8"
+				activeIndex={target.index}
 				steps={steps}
 			/>
 		</div>
@@ -1808,7 +1811,7 @@ export function SessionView({ sessionId }: SessionViewProps) {
 			showInterfaceSwitchAction,
 		],
 	);
-	const handoffMenuItem = useMemo(() => session ? (
+	const handoffMenuItem = useMemo(() => session && !session.cloud ? (
 		<TerminalSwitchAgentButton
 			key={session.id}
 			variant="menu-item"
@@ -1820,9 +1823,8 @@ export function SessionView({ sessionId }: SessionViewProps) {
 			switchError={handoffSwitchError}
 		/>
 	) : null, [handoffAgentSwitch, handoffControlPresentation, handoffDialogOpen, handoffSwitchError, handleHandoffDialogOpenChange, session]);
-	// The ⋮ only holds the Chat/Terminal switch and Switch agent, and agent
-	// switching is limited to Claude Code and Codex, which both have Chat. A
-	// harness without Chat therefore gets no ⋮ instead of an empty menu.
+	// Cloud sessions expose only the interface switch here; agent handoff is a
+	// local daemon feature. Harnesses without Chat get no empty menu.
 	const sessionTabActions = useMemo(() => interfaceSwitchUnsupported ? null : (
 		<SessionActionsMenu inlineStatus={interfaceSwitchInlineStatus}>
 			{interfaceSwitchMenuItem}
@@ -2118,7 +2120,7 @@ export function SessionView({ sessionId }: SessionViewProps) {
 						/>
 						<div className="relative min-h-0 flex-1" ref={bindHandoffDialogContainer}>
 							{cloudStage === "paused_by_coder" ? <CloudPausedStatus /> : null}
-							{session && handoffDialogContainer ? (
+							{session && !session.cloud && handoffDialogContainer ? (
 								<SwitchAgentDialog
 									agentSwitch={handoffAgentSwitch}
 									container={handoffDialogContainer}
@@ -2379,13 +2381,13 @@ export function SessionView({ sessionId }: SessionViewProps) {
 			) : null}
 			{showLifecycleLoader
 				? <CloudSessionLifecycleLoader
-					key={`${sessionId}:${(cloudReconnecting && !workspaceRestarting) || cloudStage === "connected" ? "terminal" : "startup"}`}
+					key={`${sessionId}:${cloudReconnecting && !workspaceRestarting ? "terminal" : "startup"}`}
 					sessionId={sessionId}
 					orgId={session?.cloud?.orgId ?? ""}
 					createdAt={session?.cloud?.observedState === "requested" ? session.createdAt : undefined}
 					observedState={session?.cloud?.observedState}
 					workerConnected={Boolean(session?.runtimeConnected)}
-					terminalOnly={(cloudReconnecting && !workspaceRestarting) || cloudStage === "connected"}
+					terminalOnly={cloudReconnecting && !workspaceRestarting}
 				/>
 				: null}
 			<SessionInterfaceSwitchDialog

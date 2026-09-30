@@ -221,7 +221,7 @@ vi.mock("../hooks/useSettings", () => ({
 }));
 vi.mock("./TerminalSwitchAgentButton", () => ({
 	TerminalSwitchAgentButton: ({ variant }: { variant?: "icon" | "menu-item" }) =>
-		variant === "menu-item" ? null : <button aria-label="Switch agent" type="button" />,
+		variant === "menu-item" ? <div role="menuitem">Switch agent</div> : <button aria-label="Switch agent" type="button" />,
 }));
 vi.mock("./chat/SessionChatSurface", async () => {
 	const { memo } = await vi.importActual<typeof import("react")>("react");
@@ -1001,16 +1001,18 @@ describe("SessionView", () => {
 		expect(loaderScreen.className).not.toMatch(/z-\[\d+\]/);
 		expect(loaderScreen.children).toHaveLength(1);
 		expect(loader).toHaveTextContent("Connecting to the worker");
-		expect(loader).not.toHaveTextContent("Building your session");
+		expect(loader).toHaveTextContent("Building your session");
+		expect(loader).toHaveTextContent("Preparing your repository and agent");
+		expect(loader).toHaveTextContent("Connecting your terminal");
 		expect(within(loader).getByTestId("multi-step-loader-step").querySelector(".multi-step-loader__step")).toBeInTheDocument();
-		expect(within(loader).getByTestId("multi-step-loader-timer")).toBeInTheDocument();
+		expect(within(loader).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "33");
+		expect(within(loader).getByTestId("multi-step-loader-percent")).toHaveTextContent("33%");
 		expect(loader).not.toHaveTextContent("Coder");
 		expect(loader).not.toHaveClass("right-4", "top-4");
-		expect(loader).toHaveClass("-translate-x-8");
 		expect(document.querySelector("[data-cloud-lifecycle-stage]")).not.toBeInTheDocument();
 	});
 
-	it("reads startup progress without opening another cloud stream", async () => {
+	it("replays confirmed startup progress and opens a live event stream", async () => {
 		const session = workerSession("sess-2");
 		session.runtimeConnected = false;
 		session.cloud = {
@@ -1032,8 +1034,8 @@ describe("SessionView", () => {
 		render(<SessionView sessionId="sess-2" />);
 		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent"));
 		expect(listSessionEventsMock).toHaveBeenCalledWith("cloud-org", "sess-2", { after: 0, limit: 500 }, expect.any(Object));
-		expect(subscribeSessionEventsMock).not.toHaveBeenCalled();
-		expect(screen.getByTestId("multi-step-loader-timer")).toHaveTextContent("0:05");
+		expect(subscribeSessionEventsMock).toHaveBeenCalledWith(expect.objectContaining({ orgId: "cloud-org", sessionId: "sess-2", after: 0 }));
+		expect(screen.getByRole("progressbar", { name: "Session setup activity" })).toHaveAttribute("aria-valuenow", "67");
 	});
 
 	it("advances the active phrase when a later startup event arrives", async () => {
@@ -1099,7 +1101,7 @@ describe("SessionView", () => {
 		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent"));
 	});
 
-	it("polls the session directly when the board has not refreshed its startup facts", async () => {
+	it("polls worker connection without treating sandbox running as agent readiness", async () => {
 		const session = workerSession("sess-2");
 		session.runtimeConnected = false;
 		session.cloud = {
@@ -1115,11 +1117,12 @@ describe("SessionView", () => {
 		render(<SessionView sessionId="sess-2" />);
 
 		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent"));
-		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting your terminal"), { timeout: 3_000 });
+		await waitFor(() => expect(getCloudSessionMock).toHaveBeenCalledTimes(2), { timeout: 3_000 });
+		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent");
 		expect(getCloudSessionMock).toHaveBeenCalledWith("cloud-org", "sess-2", expect.any(Object));
 	});
 
-	it("shows every startup phrase when replay returns several milestones together", async () => {
+	it("shows the latest confirmed startup phrase when replay returns several milestones together", async () => {
 		const session = workerSession("sess-2");
 		session.runtimeConnected = false;
 		session.cloud = {
@@ -1141,9 +1144,26 @@ describe("SessionView", () => {
 
 		render(<SessionView sessionId="sess-2" />);
 		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Building your session");
-		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting to the worker"));
-		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent"));
 		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting your terminal"));
+	});
+
+	it("advances on live startup events without waiting for another HTTP poll", async () => {
+		const session = workerSession("sess-2");
+		session.runtimeConnected = false;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "requested" };
+		render(<SessionView sessionId="sess-2" />);
+		await waitFor(() => expect(subscribeSessionEventsMock).toHaveBeenCalled());
+		const onEvent = subscribeSessionEventsMock.mock.calls[0][0].onEvent;
+		for (const [type, sequence, phrase, percent] of [
+			["sandbox.provisioning", 1, "Connecting to the worker", "33"],
+			["worker.connected", 2, "Preparing your repository and agent", "67"],
+			["agent.ready", 3, "Connecting your terminal", "100"],
+		] as const) {
+			act(() => onEvent({ type, sequence, sessionId: "sess-2", createdAt: new Date().toISOString(), payload: {} }));
+			expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent(phrase);
+			expect(screen.getByRole("progressbar", { name: "Session setup activity" })).toHaveAttribute("aria-valuenow", percent);
+		}
+		expect(listSessionEventsMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("removes the cloud lifecycle badge once the session is connected", () => {
@@ -1179,7 +1199,7 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting your terminal");
 	});
 
-	it("shows terminal attachment for an already connected cloud session", () => {
+	it("does not skip agent preparation just because the worker reports running", async () => {
 		autoAttachSessionTerminal.current = false;
 		const session = workerSession("sess-2");
 		session.mode = "tui";
@@ -1193,6 +1213,11 @@ describe("SessionView", () => {
 
 		render(<SessionView sessionId="sess-2" />);
 
+		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent");
+		await waitFor(() => expect(subscribeSessionEventsMock).toHaveBeenCalled());
+		act(() => subscribeSessionEventsMock.mock.calls[0][0].onEvent({
+			type: "agent.ready", sessionId: "sess-2", sequence: 1, createdAt: new Date().toISOString(), payload: {},
+		}));
 		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting your terminal");
 	});
 
@@ -2772,6 +2797,20 @@ describe("SessionView", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Session actions" }));
 		expect(screen.getByRole("menuitem", { name: "Switch to chat UI" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Switch agent" })).toBeInTheDocument();
+	});
+
+	it("hides unsupported agent switching from a cloud session menu", async () => {
+		interfaceTransitionState.status = { supported: true, targetMode: "chat" };
+		const session = workerSession("sess-2");
+		session.mode = "tui";
+		session.cloud = { orgId: "cloud-org", desiredState: "running", observedState: "running" };
+		session.runtimeConnected = true;
+		render(<SessionView sessionId="sess-2" />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Session actions" }));
+		expect(screen.getByRole("menuitem", { name: "Switch to chat UI" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Switch agent" })).not.toBeInTheDocument();
 	});
 
 	it("shows the switch button when the adapter only reports a generic unsupported reason", async () => {

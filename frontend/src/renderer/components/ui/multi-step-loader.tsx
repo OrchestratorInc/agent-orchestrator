@@ -1,59 +1,47 @@
-import { motion, useReducedMotion } from "motion/react";
-import { useEffect, useState, type CSSProperties } from "react";
+import type { CSSProperties } from "react";
 import { cn } from "../../lib/utils";
-
-function elapsedTime(since: string | undefined, now: number): string {
-	const started = since ? Date.parse(since) : now;
-	const seconds = Math.max(0, Math.floor((now - (Number.isFinite(started) ? started : now)) / 1_000));
-	return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-}
 
 export function MultiStepLoader({
 	ariaLabel,
 	className,
 	activeIndex,
-	activeSince,
 	duration = 380,
 	steps,
 }: {
 	ariaLabel: string;
 	className?: string;
 	activeIndex: number;
-	activeSince?: string;
 	duration?: number;
 	steps: readonly string[];
 }) {
-	const [now, setNow] = useState(() => Date.now());
-	const reduceMotion = useReducedMotion();
-	useEffect(() => {
-		setNow(Date.now());
-		const interval = window.setInterval(() => setNow(Date.now()), 1_000);
-		return () => window.clearInterval(interval);
-	}, [activeIndex, activeSince]);
 	if (steps.length === 0) return null;
+	const completed = steps.length === 1 ? 100 : Math.round(activeIndex / (steps.length - 1) * 100);
 
 	return (
-		<p aria-label={ariaLabel} className={cn("inline-flex min-h-7 items-center justify-center gap-3", className)} role="status">
-			<span
-				className="inline-flex items-center gap-3"
-				data-testid="multi-step-loader-step"
-			>
-				<span className="relative grid size-5 shrink-0 place-items-center" aria-hidden="true">
-					<span className="multi-step-loader__dot size-2 rounded-full bg-[#60a5fa]" />
-				</span>
-				<motion.span
-					animate={reduceMotion ? undefined : { backgroundPosition: ["180% center", "-80% center"] }}
-					className="multi-step-loader__step bg-[linear-gradient(100deg,var(--color-text-muted)_15%,#93c5fd_48%,var(--color-text-muted)_82%)] bg-[length:220%_100%] bg-clip-text text-sm font-medium leading-5 text-transparent"
-					key={activeIndex}
-					style={{ "--multi-step-loader-duration": `${duration}ms` } as CSSProperties}
-					transition={{ duration: 2.8, ease: "linear", repeat: Infinity }}
-				>
-					{steps[activeIndex]}
-				</motion.span>
-			</span>
-			<time aria-hidden="true" className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground/65" data-testid="multi-step-loader-timer">
-				{elapsedTime(activeSince, now)}
-			</time>
-		</p>
+		<div aria-label={ariaLabel} className={cn("flex w-80 max-w-[calc(100%-2rem)] flex-col gap-5", className)} role="status">
+			<ol className="flex flex-col gap-3">
+				{steps.map((step, index) => (
+					<li aria-current={index === activeIndex ? "step" : undefined} className="min-h-7 text-sm leading-5" key={step}>
+						{index === activeIndex ? (
+							<span data-testid="multi-step-loader-step">
+								<span
+									className="multi-step-loader__step multi-step-loader__shimmer font-medium"
+									key={activeIndex}
+									style={{ "--multi-step-loader-duration": `${duration}ms` } as CSSProperties}
+								>
+									{step}
+								</span>
+							</span>
+						) : <span className={index < activeIndex ? "text-foreground/80" : "text-muted-foreground/55"}>{step}</span>}
+					</li>
+				))}
+			</ol>
+			<div className="flex w-full items-center gap-3">
+				<div aria-label={ariaLabel} aria-valuemax={100} aria-valuemin={0} aria-valuenow={completed} className="relative h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-[#60a5fa]/10" role="progressbar">
+					<span className="absolute inset-y-0 left-0 rounded-full bg-[#60a5fa]/55 transition-[width] duration-500 ease-out" data-testid="multi-step-loader-completed" style={{ width: `${completed}%` }} />
+				</div>
+				<span aria-hidden="true" className="w-8 shrink-0 text-right font-mono text-xs tabular-nums text-muted-foreground/65" data-testid="multi-step-loader-percent">{Math.round(completed)}%</span>
+			</div>
+		</div>
 	);
 }

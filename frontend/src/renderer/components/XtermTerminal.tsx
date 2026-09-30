@@ -82,6 +82,8 @@ export type XtermTerminalProps = {
 	paneScrollsByKeyboard?: boolean;
 	/** Terminal construction failed; the owner decides how to surface it. */
 	onError?: (error: unknown) => void;
+	/** Called once the visible xterm viewport has painted nonblank content. */
+	onVisibleContent?: () => void;
 	/** Called after a terminal hyperlink is opened in the OS browser. */
 	onLinkOpen?: (uri: string) => void;
 	/** Publish the positive grid after a retained terminal becomes visible. */
@@ -698,6 +700,19 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		term.loadAddon(searchAddon);
 
 		term.open(host);
+		let visibleContentReported = false;
+		const reportVisibleContent = () => {
+			if (visibleContentReported || !callbacksRef.current.onVisibleContent) return;
+			const buffer = term.buffer.active;
+			for (let row = buffer.viewportY; row < buffer.viewportY + term.rows; row++) {
+				if (!buffer.getLine(row)?.translateToString(true).trim()) continue;
+				visibleContentReported = true;
+				callbacksRef.current.onVisibleContent();
+				break;
+			}
+		};
+		const visibleContentRender = term.onRender(reportVisibleContent);
+		reportVisibleContent();
 		// Browser integration tests need to wait on xterm's buffer state, not
 		// infer it from a hidden viewport element whose scrollTop can lag.
 		// Vite removes this development-only seam from packaged builds.
@@ -1523,6 +1538,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			shell.removeEventListener("dragover", dragOverInput);
 			shell.removeEventListener("drop", dropInput);
 			contextMenuActionsRef.current = null;
+			visibleContentRender.dispose();
 			cancelActivationPreparation?.();
 			clearSuppressNativePaste();
 			if (colorSchemeReporterRef.current === reportColorScheme) colorSchemeReporterRef.current = null;

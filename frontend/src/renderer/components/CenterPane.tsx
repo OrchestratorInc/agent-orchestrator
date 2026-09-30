@@ -766,7 +766,7 @@ export function CenterPane({
 							isFullscreen={isFullscreen}
 							inputDisabled={workerInputDisabled}
 							onChangeFontSize={updateFontSize}
-							onTerminalStateChange={target.kind === "worker" ? (state) => onSessionTerminalAttached?.(state === "attached") : undefined}
+							onTerminalContentReadyChange={target.kind === "worker" && session?.cloud ? onSessionTerminalAttached : undefined}
 							onToggleFullscreen={toggleFullscreen}
 							session={session}
 							terminalTarget={target}

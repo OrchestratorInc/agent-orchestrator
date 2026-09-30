@@ -60,6 +60,7 @@ const state = vi.hoisted(() => ({
 		focus: ReturnType<typeof vi.fn>;
 		selectAll: ReturnType<typeof vi.fn>;
 		dataListeners: Set<(data: string) => void>;
+		renderListeners: Set<() => void>;
 		csiHandlers: Array<{
 			callback: (params: (number | number[])[]) => boolean | Promise<boolean>;
 			id: { final: string; intermediates?: string; prefix?: string };
@@ -116,6 +117,7 @@ vi.mock("@xterm/xterm", () => ({
 		focus = vi.fn();
 		selectAll = vi.fn();
 		dataListeners = new Set<(data: string) => void>();
+		renderListeners = new Set<() => void>();
 		csiHandlers: Array<{
 			callback: (params: (number | number[])[]) => boolean | Promise<boolean>;
 			id: { final: string; intermediates?: string; prefix?: string };
@@ -183,8 +185,9 @@ vi.mock("@xterm/xterm", () => ({
 		onResize() {
 			return { dispose: () => undefined };
 		}
-		onRender() {
-			return { dispose: () => undefined };
+		onRender(listener: () => void) {
+			this.renderListeners.add(listener);
+			return { dispose: () => this.renderListeners.delete(listener) };
 		}
 		onScroll(listener: () => void) {
 			this.scrollListeners.add(listener);
@@ -218,6 +221,9 @@ vi.mock("@xterm/addon-fit", () => ({
 	FitAddon: class FakeFitAddon {
 		fit() {
 			state.fit();
+		}
+		proposeDimensions() {
+			return undefined;
 		}
 	},
 }));
@@ -275,6 +281,19 @@ function setNavigatorPlatform(platform: string) {
 }
 
 describe("XtermTerminal", () => {
+	it("reports visible text only after xterm renders nonblank cells", () => {
+		const onVisibleContent = vi.fn();
+		render(<XtermTerminal onVisibleContent={onVisibleContent} theme="dark" />);
+		const terminal = state.lastTerminal!;
+		terminal.bufferLines = [{ translateToString: () => "   ", isWrapped: false }];
+		act(() => terminal.renderListeners.forEach((listener) => listener()));
+		expect(onVisibleContent).not.toHaveBeenCalled();
+		terminal.bufferLines = [{ translateToString: () => "Codex", isWrapped: false }];
+		act(() => terminal.renderListeners.forEach((listener) => listener()));
+		expect(onVisibleContent).toHaveBeenCalledTimes(1);
+		act(() => terminal.renderListeners.forEach((listener) => listener()));
+		expect(onVisibleContent).toHaveBeenCalledTimes(1);
+	});
 	beforeEach(() => {
 		state.fit.mockReset();
 		state.lifecycle.length = 0;

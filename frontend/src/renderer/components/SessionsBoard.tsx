@@ -9,6 +9,7 @@ import {
 } from "@aoagents/product-ui";
 import { AlertTriangle, LayoutDashboard, RotateCw } from "lucide-react";
 import {
+	CLOUD_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
 	type WorkspaceSession,
 	newestActiveOrchestrator,
@@ -163,7 +164,7 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 
 	const actions = projectId ? (
 		<>
-			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} />
+			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />
 			{boardOwnsNotificationCenter ? (
 				<>
 					<NotificationCenter />

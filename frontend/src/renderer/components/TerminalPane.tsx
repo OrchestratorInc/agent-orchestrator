@@ -60,6 +60,8 @@ type TerminalPaneProps = {
 	focusRequested?: boolean;
 	/** Observe attachment state without taking ownership of the terminal lifecycle. */
 	onTerminalStateChange?: (state: TerminalSessionState) => void;
+	/** Cloud agent screen has painted nonblank terminal content. */
+	onTerminalContentReadyChange?: (ready: boolean) => void;
 	/** One-shot input initiated by an explicit UI action. */
 	inputRequest?: { id: number; data: string };
 	/** Reports whether the active attachment accepted a one-shot input request. */
@@ -128,6 +130,7 @@ function terminalPropsMatch(left: TerminalPaneProps, right: TerminalPaneProps): 
 		left.inputDisabled === right.inputDisabled &&
 		left.focusRequested === right.focusRequested &&
 		left.onTerminalStateChange === right.onTerminalStateChange &&
+		left.onTerminalContentReadyChange === right.onTerminalContentReadyChange &&
 		left.inputRequest === right.inputRequest &&
 		left.onInputRequestResult === right.onInputRequestResult &&
 		left.createMux === right.createMux &&
@@ -680,6 +683,7 @@ export function TerminalPane({
 	inputDisabled,
 	focusRequested,
 	onTerminalStateChange,
+	onTerminalContentReadyChange,
 	inputRequest,
 	onInputRequestResult,
 }: TerminalPaneProps) {
@@ -780,6 +784,7 @@ export function TerminalPane({
 		inputDisabled,
 		focusRequested,
 		onTerminalStateChange,
+		onTerminalContentReadyChange,
 		inputRequest,
 		onInputRequestResult,
 	};
@@ -801,6 +806,7 @@ export function TerminalPane({
 			onToggleFullscreen={onToggleFullscreen}
 			focusRequested={focusRequested}
 			onTerminalStateChange={onTerminalStateChange}
+			onTerminalContentReadyChange={onTerminalContentReadyChange}
 			inputRequest={inputRequest}
 			onInputRequestResult={onInputRequestResult}
 			terminalTarget={terminalTarget}
@@ -963,6 +969,7 @@ function AttachedTerminal({
 	inputDisabled,
 	focusRequested,
 	onTerminalStateChange,
+	onTerminalContentReadyChange,
 	inputRequest,
 	onInputRequestResult,
 	createMux,
@@ -985,6 +992,7 @@ function AttachedTerminal({
 	// cache retains this component across route switches; a replacement handle
 	// gets a new component rather than inheriting stale screen/input state.
 	const [terminal, setTerminal] = useState<AttachableTerminal | null>(null);
+	const [hasVisibleContent, setHasVisibleContent] = useState(false);
 	const lastInputRequestIdRef = useRef<number | null>(null);
 	const [initFailed, setInitFailed] = useState(false);
 	const [isRestoring, setIsRestoring] = useState(false);
@@ -1062,6 +1070,13 @@ function AttachedTerminal({
 			current = false;
 		};
 	}, [replayPaintPending, replaySettled, terminal]);
+	useEffect(() => {
+		if (!attachSession?.cloud) return;
+		onTerminalContentReadyChange?.(
+			(hasAttached && replaySettled && !replayPaintPending && hasVisibleContent)
+			|| state === "error" || state === "exited" || initFailed,
+		);
+	}, [attachSession?.cloud, hasAttached, hasVisibleContent, initFailed, onTerminalContentReadyChange, replayPaintPending, replaySettled, state]);
 	const handleId = shellTerminalHandleId ?? attachSession?.terminalHandleId;
 	const handleRetry = useCallback(() => {
 		// Re-attach from scratch: resets the connect-failure counter and starts a
@@ -1183,7 +1198,7 @@ function AttachedTerminal({
 	const isBoxComingUp = Boolean(session?.cloud) && isReconnecting;
 	// The single connecting state for a cloud terminal: ONE opaque centered
 	// "Connecting" cover from first connect (or a restore box coming up) until the
-	// pane has been fully revealed once (attached AND its replay painted). It is
+	// pane has been fully revealed once (attached, replay painted, content visible). It is
 	// LATCHED on that first reveal so a later transient reconnect (hasAttached
 	// briefly flips back to false) never flashes the cover back over an
 	// already-visible terminal. The latch resets when the terminal identity
@@ -1202,7 +1217,7 @@ function AttachedTerminal({
 		cloudRevealedIdentityRef.current = cloudTerminalIdentity;
 		cloudRevealedRef.current = false;
 	}
-	if (hasAttached && replaySettled && !replayPaintPending) cloudRevealedRef.current = true;
+	if (hasAttached && replaySettled && !replayPaintPending && hasVisibleContent) cloudRevealedRef.current = true;
 	// Also when the agent exited but its pane survived on a keep-alive: the mux
 	// never reports "exited" there, so without this the strip — and the resume
 	// action on it — stays hidden in exactly the state that needs it (#3875).
@@ -1250,7 +1265,8 @@ function AttachedTerminal({
 					onChangeFontSize={onChangeFontSize}
 					onError={handleInitError}
 					onLinkOpen={handleLinkOpen}
-					onReady={handleReady}
+						onReady={handleReady}
+						onVisibleContent={attachSession?.cloud ? () => setHasVisibleContent(true) : undefined}
 					onToggleFullscreen={onToggleFullscreen}
 					onVisibleSize={syncVisibleSize}
 					paneScrollsByKeyboard={providerScrollsByKeyboard(provider)}
