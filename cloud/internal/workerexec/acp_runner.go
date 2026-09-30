@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
@@ -153,6 +154,9 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 		}
 		s.activeMu.Unlock()
 	}()
+	// The LoadSession/NewSession handshake above is complete, so any replayed
+	// history has already been dropped; record from here on — this turn's output.
+	client.live.Store(true)
 	_, err = conn.Prompt(ctx, acp.PromptRequest{SessionId: sessionID, Prompt: []acp.ContentBlock{{Text: &acp.ContentBlockText{Type: "text", Text: turn.Prompt}}}})
 	if err != nil {
 		return fmt.Errorf("ACP prompt: %w: %s", err, boundedError(stderr.String()))
@@ -276,9 +280,19 @@ type cloudACPClient struct {
 	control approvalControl
 	turn    worker.Turn
 	publish func(Output) error
+	// live gates recording of session updates. LoadSession replays the entire
+	// prior conversation back through SessionUpdate before it returns; recording
+	// that replay would re-emit every earlier turn's assistant text at the head
+	// of the current turn. It stays false across the LoadSession/NewSession
+	// handshake and is flipped true just before Prompt, so only the live turn's
+	// output is published.
+	live atomic.Bool
 }
 
 func (c *cloudACPClient) SessionUpdate(_ context.Context, notification acp.SessionNotification) error {
+	if !c.live.Load() {
+		return nil
+	}
 	if chunk := notification.Update.AgentMessageChunk; chunk != nil && chunk.Content.Text != nil {
 		return c.publish(Output{Stream: "stdout", Text: chunk.Content.Text.Text})
 	}
