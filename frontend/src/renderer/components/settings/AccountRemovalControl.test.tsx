@@ -23,13 +23,10 @@ describe("coordinated account removal controls", () => {
     api.GET.mockImplementation(async path => success(path.endsWith("removal-impact") ? impact : operation));
   });
 
-  it("requires impact confirmation and sends exact revision zero without optimistic deletion", async () => {
+  it("submits one confirmation with the exact fresh impact revision", async () => {
     show();
-    expect(await screen.findByRole("region", { name: "Removal impact" })).toHaveTextContent("session-active");
-    expect(screen.getByRole("region", { name: "Removal impact" })).toHaveTextContent("session-dormant");
-    const submit = screen.getByRole("button", { name: "Request account removal" });
-    expect(submit).toBeDisabled();
-    fireEvent.click(screen.getByRole("checkbox", { name: /I confirm removal at revision 0/ }));
+    const submit = await screen.findByRole("button", { name: "Remove account" });
+    await waitFor(() => expect(submit).toBeEnabled());
     let resolve!: (value: unknown) => void;
     api.POST.mockImplementation(() => new Promise(done => { resolve = done; }));
     fireEvent.click(submit);
@@ -37,12 +34,10 @@ describe("coordinated account removal controls", () => {
     const body = api.POST.mock.calls[0][1].body;
     expect(api.POST.mock.calls[0][0]).toBe("/api/v1/accounts-manager/accounts/{accountId}/removals");
     expect(body).toEqual({ operationId: expect.any(String), expectedRevision: 0, confirmed: true });
-    expect(screen.queryByText("Removal complete")).not.toBeInTheDocument();
     const accepted = { ...operation, id: body.operationId };
     api.GET.mockImplementation(async path => success(path.endsWith("removal-impact") ? impact : accepted));
     resolve(success(accepted));
-    expect(await screen.findByRole("region", { name: "Removal operation" })).toHaveTextContent("Phase: requested");
-    expect(screen.queryByText("Removal complete")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove account" })).toBeDisabled();
     expect(api.DELETE).not.toHaveBeenCalled();
   });
 
@@ -51,7 +46,7 @@ describe("coordinated account removal controls", () => {
     show();
     expect(await screen.findByRole("alert")).toHaveTextContent("remove-unavailable");
     expect(screen.getByRole("alert")).not.toHaveTextContent("private-token");
-    expect(screen.queryByRole("button", { name: "Request account removal" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Remove account" })).toBeDisabled();
     expect(api.POST).not.toHaveBeenCalled();
     expect(api.DELETE).not.toHaveBeenCalled();
   });
@@ -59,52 +54,39 @@ describe("coordinated account removal controls", () => {
   it("rejects a stale impact revision and requires renewed confirmation", async () => {
     api.POST.mockResolvedValue({ error: { requestId: "removal-conflict" }, response: new Response(null, { status: 409 }) });
     show();
-    fireEvent.click(await screen.findByRole("checkbox", { name: /I confirm removal at revision 0/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Request account removal" }));
+    const submit = await screen.findByRole("button", { name: "Remove account" });
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
     expect(await screen.findByRole("alert")).toHaveTextContent("removal-conflict");
-    expect(screen.getByRole("checkbox", { name: /I confirm removal at revision 0/ })).not.toBeChecked();
-    expect(screen.getByRole("button", { name: "Request account removal" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove account" })).toBeDisabled();
     expect(screen.queryByText("Removal complete")).not.toBeInTheDocument();
   });
 
-  it("recovers the same unresolved removal after remount and does not convert missing status into success", async () => {
+  it("keeps an uncertain accepted request safe after remount without resubmitting", async () => {
     api.POST.mockRejectedValue(new Error("response lost"));
     const view = show();
-    fireEvent.click(await screen.findByRole("checkbox", { name: /I confirm removal at revision 0/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Request account removal" }));
+    const submit = await screen.findByRole("button", { name: "Remove account" });
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
     await waitFor(() => expect(api.POST).toHaveBeenCalledOnce());
     const id = api.POST.mock.calls[0][1].body.operationId;
     view.unmount();
     api.GET.mockResolvedValue({ error: { requestId: "unknown-removal" }, response: new Response(null, { status: 404 }) });
     show();
-    expect(await screen.findByText(`Unconfirmed removal ID: ${id}`)).toBeInTheDocument();
-    expect(screen.queryByText("Removal complete")).not.toBeInTheDocument();
-    expect(screen.queryByText("Phase: cancelled")).not.toBeInTheDocument();
+    expect(screen.queryByText(`Unconfirmed removal ID: ${id}`)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove account" })).toBeDisabled();
     expect(api.POST).toHaveBeenCalledOnce();
     expect(api.DELETE).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["requested", true, "cancel", "Cancel account removal", "cancelled"],
-    ["recovery_required", false, "retry", "Retry account removal", "complete"],
-  ] as const)("recovers %s with an owned %s operation", async (phase, canCancel, action, label, nextPhase) => {
+  it("polls an existing removal without exposing recovery controls", async () => {
     localStorage.setItem("ao:account-removals:v1", JSON.stringify([{ accountId: "account-a", operationId: "remove-a" }]));
-    let current = { ...operation, phase: phase as string, canCancel, recoveryRequired: phase === "recovery_required" };
+    const current = { ...operation, phase: "recovery_required", canCancel: false, recoveryRequired: true };
     api.GET.mockImplementation(async () => success(current));
-    let resolve!: (value: unknown) => void;
-    api.POST.mockImplementation(() => new Promise(done => { resolve = done; }));
     show();
-    const control = await screen.findByRole("button", { name: label });
-    await waitFor(() => expect(control).toBeEnabled());
-    if (!canCancel) expect(screen.queryByRole("button", { name: "Cancel account removal" })).not.toBeInTheDocument();
-    fireEvent.click(control);
-    await waitFor(() => expect(api.POST).toHaveBeenCalledOnce());
-    expect(api.POST.mock.calls[0]).toEqual([`/api/v1/accounts-manager/removals/{operationId}/${action}`, { params: { path: { operationId: "remove-a" } } }]);
-    expect(api.GET.mock.calls.filter(([path]) => path === "/api/v1/accounts-manager/removals/{operationId}").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByRole("region", { name: "Removal operation" })).toHaveTextContent(`Phase: ${phase}`);
-    current = { ...current, phase: nextPhase, canCancel: false, recoveryRequired: false };
-    resolve(success(current));
-    await waitFor(() => expect(screen.getByRole("region", { name: "Removal operation" })).toHaveTextContent(`Phase: ${nextPhase}`));
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove account" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Retry account removal" })).not.toBeInTheDocument();
     expect(api.DELETE).not.toHaveBeenCalled();
   });
 
@@ -114,6 +96,6 @@ describe("coordinated account removal controls", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Saved removal recovery is unavailable");
     expect(api.POST).not.toHaveBeenCalled();
     expect(api.DELETE).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "Request account removal" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove account" })).toBeDisabled();
   });
 });

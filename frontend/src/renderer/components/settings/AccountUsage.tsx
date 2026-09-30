@@ -1,4 +1,4 @@
-import { useQueries, type UseQueryResult } from "@tanstack/react-query";
+import { useQueries, type QueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { fetchAccountsManagerQuota, type AccountsManagerAccount } from "../../hooks/useAccountsManagerQuery";
@@ -13,14 +13,25 @@ function canReadUsage(account: AccountsManagerAccount): boolean {
 
 export function useAccountUsage(accounts: AccountsManagerAccount[]) {
   return useQueries({ queries: accounts.map(account => ({
+    ...accountUsageQueryOptions(account),
+    enabled: canReadUsage(account),
+  })) });
+}
+
+function accountUsageQueryOptions(account: AccountsManagerAccount) {
+  return {
     queryKey: ["accounts-manager", "quota", account.id, account.generation, account.kind, account.updatedAt, account.verifiedAt],
     queryFn: ({ signal }: { signal: AbortSignal }) => fetchAccountsManagerQuota(account.id, signal),
-    enabled: canReadUsage(account),
     retry: false,
     staleTime: 30_000,
     gcTime: 60_000,
     refetchOnWindowFocus: false,
-  })) });
+  };
+}
+
+export function prefetchAccountUsage(queryClient: QueryClient, account: AccountsManagerAccount) {
+  if (!canReadUsage(account)) return;
+  return queryClient.prefetchQuery(accountUsageQueryOptions(account));
 }
 
 function remaining(value: number, locale?: string) {
@@ -44,7 +55,7 @@ export function AccountUsage({ account }: { account: AccountsManagerAccount }) {
   const summary = accountUsageSummary(account, query, t, i18n.resolvedLanguage);
   const supported = canReadUsage(account);
   const stamp = (value: string) => Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString(i18n.resolvedLanguage) : t("accountsManager.status.unknown");
-  return <section aria-label={t("accountsManager.usage.title")} className="space-y-2 rounded-md border border-border p-3">
+  return <section aria-label={t("accountsManager.usage.title")} className="space-y-3">
     <div className="flex items-center justify-between gap-2">
       <h4 className="font-medium">{t("accountsManager.usage.title")}</h4>
       {supported ? <Button size="sm" variant="ghost" disabled={query.isFetching} onClick={() => void query.refetch()}>{t("accountsManager.usage.refresh")}</Button> : null}

@@ -1,22 +1,50 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AccountControlError, accountControlMessage, accountRemovalIsActive, changeAccountRemoval,
+  AccountControlError, accountControlMessage, accountRemovalIsActive,
   fetchAccountRemoval, fetchAccountRemovalImpact, readAccountRemovalReferences, saveAccountRemovalReference, startAccountRemoval,
   type AccountRemovalReference, type AccountRemovalRequest,
 } from "../../lib/accounts-manager-controls";
+import { accountsManagerQueryKey } from "../../hooks/useAccountsManagerQuery";
 import { Button } from "../ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  settingsDialogBodyClass,
+  settingsDialogContentClass,
+  settingsDialogHeaderClass,
+} from "../ui/dialog";
 import { Input } from "../ui/input";
 
 const referencesKey = ["accounts-manager", "removal-references"];
 
-export function AccountRemovalControl({ accountId }: { accountId: string }) {
-  return <RemovalPanel key={accountId} accountId={accountId} />;
+export function AccountRemovalControl({
+  accountId,
+  onOptimisticRemove,
+  onRemovalFailed,
+  onRemovalAccepted,
+  onCancel,
+}: {
+  accountId: string;
+  onOptimisticRemove?: () => void;
+  onRemovalFailed?: () => void;
+  onRemovalAccepted?: () => void;
+  onCancel?: () => void;
+}) {
+  return <RemovalPanel key={accountId} accountId={accountId} onOptimisticRemove={onOptimisticRemove} onRemovalFailed={onRemovalFailed} onRemovalAccepted={onRemovalAccepted} onCancel={onCancel} />;
 }
 
-function RemovalPanel({ accountId }: { accountId: string }) {
+function RemovalPanel({ accountId, onOptimisticRemove, onRemovalFailed, onRemovalAccepted, onCancel }: {
+  accountId: string;
+  onOptimisticRemove?: () => void;
+  onRemovalFailed?: () => void;
+  onRemovalAccepted?: () => void;
+  onCancel?: () => void;
+}) {
   const { t } = useTranslation();
   const client = useQueryClient();
   const [initial] = useState(() => {
@@ -25,7 +53,6 @@ function RemovalPanel({ accountId }: { accountId: string }) {
   });
   const [reference, setReference] = useState(initial.reference);
   const [localError, setLocalError] = useState(initial.unreadable ? t("accountsManager.controls.removalSavedError") : "");
-  const [confirmedRevision, setConfirmedRevision] = useState<number>();
   const inFlight = useRef(false);
   const persist = (next?: AccountRemovalReference) => {
     try {
@@ -37,16 +64,18 @@ function RemovalPanel({ accountId }: { accountId: string }) {
   const impactKey = ["accounts-manager", "removal-impact", accountId];
   const operationKey = (id?: string) => ["accounts-manager", "removal", accountId, id];
   const mutation = useMutation({
-    mutationFn: (request: AccountRemovalRequest | { operationId: string; action: "retry" | "cancel" }) => "action" in request
-      ? changeAccountRemoval(accountId, request.operationId, request.action)
-      : startAccountRemoval(accountId, request),
+    mutationFn: (request: AccountRemovalRequest) => startAccountRemoval(accountId, request),
     retry: false,
     onMutate: async request => { await client.cancelQueries({ queryKey: operationKey(request.operationId) }); },
-    onSuccess: result => client.setQueryData(operationKey(result.id), result),
-    onError: (error, request) => {
-      if (!("action" in request) && error instanceof AccountControlError && [400, 409].includes(error.status)) {
+    onSuccess: result => {
+      client.setQueryData(operationKey(result.id), result);
+      onRemovalAccepted?.();
+      onCancel?.();
+    },
+    onError: (error) => {
+      onRemovalFailed?.();
+      if (error instanceof AccountControlError && [400, 409].includes(error.status)) {
         persist(undefined);
-        setConfirmedRevision(undefined);
       }
     },
     onSettled: async () => {
@@ -69,71 +98,107 @@ function RemovalPanel({ accountId }: { accountId: string }) {
     retry: false,
   });
   const impact = operation?.impact ?? impactQuery.data;
-  const busy = mutation.isPending || operationQuery.isFetching || impactQuery.isFetching;
+  const busy = mutation.isPending || impactQuery.isFetching;
   useEffect(() => {
     if (operation?.phase === "complete") void client.invalidateQueries({ queryKey: ["accounts-manager", "accounts"] });
   }, [client, operation?.id, operation?.phase]);
   const request = (body: AccountRemovalRequest) => {
-    if (inFlight.current || busy || localError) return;
+    if (inFlight.current || busy || localError || !impact) return;
     if (!persist({ accountId, operationId: body.operationId, request: body })) return;
     inFlight.current = true;
+    onOptimisticRemove?.();
     mutation.mutate(body);
   };
-  const change = (action: "retry" | "cancel") => {
-    if (!operation || busy || operationQuery.isError || inFlight.current) return;
-    inFlight.current = true;
-    mutation.mutate({ operationId: operation.id, action });
+  const requestRemoval = () => {
+    const body = reference?.request ?? (impact ? { operationId: crypto.randomUUID(), expectedRevision: impact.revision, confirmed: true as const } : undefined);
+    if (body) request(body);
   };
-  return <div className="space-y-4 text-sm">
-    <p className="break-all">{t("accountsManager.controls.account", { id: accountId })}</p>
-    <p className="text-xs text-muted-foreground">{t("accountsManager.controls.removalDescription")}</p>
-    {localError ? <p role="alert" className="text-destructive">{localError}</p> : null}
-    {(reference ? operationQuery.error : impactQuery.error) ? <p role="alert" className="text-destructive">{accountControlMessage(reference ? operationQuery.error : impactQuery.error, t)}</p> : null}
-    {mutation.error ? <div role="alert" className="text-destructive"><p>{accountControlMessage(mutation.error, t)}</p><p>{t("accountsManager.controls.submitted", { id: mutation.variables?.operationId })}</p></div> : null}
-    {!reference && impactQuery.isPending && !localError ? <p role="status">{t("accountsManager.controls.checkingRemoval")}</p> : null}
-    {!reference && impactQuery.isError ? <Button size="sm" variant="outline" disabled={busy} onClick={() => void impactQuery.refetch()}>{t("accountsManager.controls.refreshRemovalCapability")}</Button> : null}
-    {impact ? <section aria-label={t("accountsManager.controls.impact")} className="rounded-md border border-border p-3 space-y-2">
-      <h4 className="font-medium">{t("accountsManager.controls.impact")}</h4><p>{t("accountsManager.controls.impactRevision", { revision: impact.revision })}</p>
-      {impact.sessions.length ? <ul className="space-y-2">{impact.sessions.map(session => <li key={`${session.sessionId}:${session.provider}`} className="break-all">
-        {t("accountsManager.controls.impactSession", { id: session.sessionId, provider: session.provider, revision: session.bindingRevision, status: session.stopped ? t("accountsManager.controls.stopAcknowledged") : t("accountsManager.controls.stopUnconfirmed") })}
-      </li>)}</ul> : <p>{t("accountsManager.controls.noBindings")}</p>}
-    </section> : null}
-    {reference && !operation ? <section aria-label={t("accountsManager.controls.unknownRemoval")} className="space-y-2">
-      <p className="break-all">{t("accountsManager.controls.unknownRemovalId", { id: reference.operationId })}</p>
-      <p>{t("accountsManager.controls.unknownRemovalResult")}</p>
-      <Button size="sm" disabled={busy} onClick={() => void operationQuery.refetch()}>{t("accountsManager.controls.checkRemoval")}</Button>
-      {reference.request && operationQuery.error instanceof AccountControlError && operationQuery.error.status === 404 ? <Button size="sm" variant="outline" disabled={busy || Boolean(localError)} onClick={() => request(reference.request!)}>{t("accountsManager.controls.resendRemoval")}</Button> : null}
-    </section> : null}
-    {operation ? <section aria-label={t("accountsManager.controls.removalOperation")} className="space-y-2" aria-live="polite">
-      <h4 className="font-medium">{operation.phase === "complete" ? t("accountsManager.controls.removalComplete") : t("accountsManager.controls.removalOperation")}</h4>
-      <p className="break-all">{t("accountsManager.controls.operationId", { id: operation.id })}</p><p>{t("accountsManager.controls.phase", { phase: operation.phase })}</p>
-      <p>{operation.canCancel ? t("accountsManager.controls.canCancel") : t("accountsManager.controls.cannotCancel")}</p>
-      {operation.recoveryRequired ? <p>{t("accountsManager.controls.removalRecoveryRequired")}</p> : null}
-      <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => void operationQuery.refetch()}>{t("accountsManager.controls.refreshRemoval")}</Button>
-        {operation.phase === "recovery_required" ? <Button size="sm" disabled={busy || operationQuery.isError} onClick={() => change("retry")}>{t("accountsManager.controls.retryRemoval")}</Button> : null}
-        {operation.canCancel && accountRemovalIsActive(operation) ? <Button size="sm" variant="outline" disabled={busy || operationQuery.isError} onClick={() => change("cancel")}>{t("accountsManager.controls.cancelRemoval")}</Button> : null}
-        {!accountRemovalIsActive(operation) ? <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setConfirmedRevision(undefined); persist(undefined); }}>{t("accountsManager.controls.dismissOperation")}</Button> : null}
-      </div>
-    </section> : null}
-    {!reference && impact && !impactQuery.isError ? <div className="space-y-3">
-      <label className="flex items-start gap-2"><input type="checkbox" disabled={busy || Boolean(localError)} checked={confirmedRevision === impact.revision} onChange={event => setConfirmedRevision(event.target.checked ? impact.revision : undefined)} />{t("accountsManager.controls.confirmRemoval", { revision: impact.revision })}</label>
-      <div className="flex flex-wrap gap-2">
-        <Button disabled={busy || Boolean(localError) || confirmedRevision !== impact.revision} onClick={() => request({ operationId: crypto.randomUUID(), expectedRevision: impact.revision, confirmed: true })}>{t("accountsManager.controls.requestRemoval")}</Button>
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => { setConfirmedRevision(undefined); void impactQuery.refetch(); }}>{t("accountsManager.controls.refreshImpact")}</Button>
-      </div>
-    </div> : null}
+  const error = localError || (reference ? operationQuery.error : impactQuery.error) || mutation.error;
+  return <div className="space-y-3 text-sm">
+    {error ? <p role="alert" className="text-sm text-destructive">{localError || accountControlMessage(error, t)}</p> : null}
+    <div className="flex justify-end gap-2">
+      <Button type="button" size="sm" variant="outline" disabled={mutation.isPending} onClick={onCancel}>{t("confirm.cancel")}</Button>
+      <Button type="button" size="sm" variant="primary" disabled={Boolean(reference) || busy || Boolean(error) || !impact} onClick={requestRemoval}>{t("accountsManager.controls.requestRemoval")}</Button>
+    </div>
   </div>;
 }
 
-export function AccountRemovalDialog({ accountId, open, onOpenChange }: { accountId: string; open: boolean; onOpenChange: (open: boolean) => void }) {
+export function AccountRemovalDialog({ accountId, open, onOpenChange, onOptimisticRemove, onRemovalFailed, onRemovalAccepted }: {
+  accountId: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onOptimisticRemove?: () => void;
+  onRemovalFailed?: () => void;
+  onRemovalAccepted?: () => void;
+}) {
   const { t } = useTranslation();
   return <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent className="max-h-[85vh] overflow-y-auto">
-      <DialogHeader><DialogTitle>{t("accountsManager.controls.removalTitle")}</DialogTitle><DialogDescription>{t("accountsManager.controls.removalDialogDescription")}</DialogDescription></DialogHeader>
-      {open ? <AccountRemovalControl accountId={accountId} /> : null}
+    <DialogContent className={`${settingsDialogContentClass} max-h-[85vh]`}>
+      <DialogHeader className={`${settingsDialogHeaderClass} !p-(--space-4) border-b-0`}><DialogTitle>{t("accountsManager.controls.removalTitle")}</DialogTitle><DialogDescription>{t("accountsManager.controls.removalDialogDescription")}</DialogDescription></DialogHeader>
+      {open ? <div className={`${settingsDialogBodyClass} !p-(--space-4) pt-0`}><AccountRemovalControl accountId={accountId} onOptimisticRemove={onOptimisticRemove} onRemovalFailed={onRemovalFailed} onRemovalAccepted={onRemovalAccepted} onCancel={() => onOpenChange(false)} /></div> : null}
     </DialogContent>
   </Dialog>;
+}
+
+export function AccountRemovalReconciler({
+  onPending,
+  onSettled,
+}: {
+  onPending: (accountId: string) => void;
+  onSettled: (accountId: string) => void;
+}) {
+  const client = useQueryClient();
+  const references = useQuery({ queryKey: referencesKey, queryFn: readAccountRemovalReferences, retry: false });
+  const saved = references.data ?? [];
+  const operations = useQueries({
+    queries: saved.map(reference => ({
+      queryKey: ["accounts-manager", "removal", reference.accountId, reference.operationId],
+      queryFn: ({ signal }: { signal: AbortSignal }) => fetchAccountRemoval(reference.accountId, reference.operationId, signal),
+      retry: false,
+      refetchInterval: (query: { state: { data?: Awaited<ReturnType<typeof fetchAccountRemoval>> } }) =>
+        query.state.data && !accountRemovalIsActive(query.state.data) ? false : 1500,
+    })),
+  });
+  const handled = useRef(new Set<string>());
+  const announced = useRef(new Set<string>());
+  useEffect(() => {
+    saved.forEach((reference, index) => {
+      const query = operations[index];
+      const key = `${reference.accountId}:${reference.operationId}`;
+      if (query?.data && accountRemovalIsActive(query.data)) {
+        if (query.data.phase === "recovery_required") {
+          const recoveryKey = `${key}:recovery`;
+          if (!handled.current.has(recoveryKey)) {
+            handled.current.add(recoveryKey);
+            void client.invalidateQueries({ queryKey: accountsManagerQueryKey }).finally(() => onSettled(reference.accountId));
+          }
+        } else {
+          if (!announced.current.has(key)) {
+            announced.current.add(key);
+            onPending(reference.accountId);
+          }
+        }
+        return;
+      }
+      const missing = query?.error instanceof AccountControlError && query.error.status === 404 && query.failureCount >= 3;
+      if (!missing && !(query?.data && !accountRemovalIsActive(query.data))) return;
+      if (handled.current.has(key)) return;
+      handled.current.add(key);
+      void (async () => {
+        if (query?.data) await client.invalidateQueries({ queryKey: accountsManagerQueryKey });
+        try {
+          const current = readAccountRemovalReferences();
+          if (current.some(value => value.accountId === reference.accountId && value.operationId === reference.operationId)) {
+            client.setQueryData(referencesKey, saveAccountRemovalReference(reference.accountId));
+          }
+        } catch {
+          /* Preserve an unreadable reference for a later recovery attempt. */
+        }
+        onSettled(reference.accountId);
+      })();
+    });
+  }, [client, onPending, onSettled, operations, saved]);
+  return null;
 }
 
 export function AccountRemovalRecovery() {

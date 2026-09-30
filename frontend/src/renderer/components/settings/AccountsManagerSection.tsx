@@ -1,22 +1,23 @@
 import {
   ChevronDown,
   ChevronRight,
+  MoreVertical,
   LoaderCircle,
+  Pencil,
   Plus,
   RefreshCw,
   Trash2,
 } from "lucide-react";
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type RefObject } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { MessageKey } from "../../i18n";
 import { aoBridge } from "../../lib/bridge";
-import { AccountControlError, accountControlMessage } from "../../lib/accounts-manager-controls";
+import { AccountControlError, accountControlMessage, readAccountRemovalReferences } from "../../lib/accounts-manager-controls";
 import {
   accountsManagerQueryKey,
   addAccountsManagerAPIKey,
   cancelAccountsManagerOAuth,
-  fetchAccountsManagerModels,
   importAccountsManagerCredential,
   refreshAccountsManagerAccount,
   renameAccountsManagerAccount,
@@ -30,12 +31,20 @@ import {
   type AccountsManagerSnapshot,
 } from "../../hooks/useAccountsManagerQuery";
 import { Button } from "../ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../ui/dropdown-menu";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { AgentProviderGroup } from "./AgentProviderGroup";
+import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsSection } from "./SettingsSection";
-import { AccountRemovalDialog, AccountRemovalRecovery } from "./AccountRemovalControl";
-import { AccountUsage } from "./AccountUsage";
+import { AccountRemovalDialog, AccountRemovalReconciler } from "./AccountRemovalControl";
+import { AccountUsage, prefetchAccountUsage } from "./AccountUsage";
 import { SignInBrowserRecovery, signInAuthorizationURL } from "./SignInBrowserRecovery";
 
 type Provider = "codex" | "claude";
@@ -51,9 +60,37 @@ export function AccountsManagerSection({
   titleHidden?: boolean;
 }) {
   const { t } = useTranslation();
+  const providerFilterOptions = [
+    { value: "all", label: t("accountsManager.filter.providers") },
+    { value: "codex", label: providerLabel("codex") },
+    { value: "claude", label: providerLabel("claude") },
+  ] satisfies SettingsOption<string>[];
+  const stateFilterOptions = [
+    { value: "all", label: t("accountsManager.filter.states") },
+    { value: "ready", label: t("accountsManager.filter.available") },
+    { value: "disabled", label: t("accountsManager.status.disabled") },
+    { value: "attention", label: t("accountsManager.status.error") },
+  ] satisfies SettingsOption<string>[];
   const query = useAccountsManagerQuery();
   useAccountsManagerEvents();
   const client = useQueryClient();
+  const [pendingRemovals, setPendingRemovals] = useState<Record<string, boolean>>(() => {
+    try {
+      return Object.fromEntries(readAccountRemovalReferences().map(reference => [reference.accountId, true]));
+    } catch {
+      return {};
+    }
+  });
+  const markRemovalPending = useCallback((accountId: string) => {
+    setPendingRemovals(current => ({ ...current, [accountId]: true }));
+  }, []);
+  const clearRemovalPending = useCallback((accountId: string) => {
+    setPendingRemovals(current => {
+      const next = { ...current };
+      delete next[accountId];
+      return next;
+    });
+  }, []);
   const [expanded, setExpanded] = useState<Record<Provider, boolean>>({
     codex: true,
     claude: true,
@@ -69,7 +106,11 @@ export function AccountsManagerSection({
   const [stateFilter, setStateFilter] = useState("all");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<MessageKey | null>(null);
-  const [cancellationReceipt, setCancellationReceipt] = useState("");
+  const [routingBusy, setRoutingBusy] = useState(false);
+  const [routingError, setRoutingError] = useState<{
+    provider: Provider;
+    requestId: string;
+  } | null>(null);
   const [requestId, setRequestId] = useState("");
   const showError = (message: MessageKey, cause: unknown) => {
     setError(cause instanceof AccountControlError && cause.code === "ACCOUNTS_MANAGER_CREDENTIAL_METHOD_UNSUPPORTED" ? "accountsManager.credentials.wrongMethod"
@@ -100,7 +141,6 @@ export function AccountsManagerSection({
       pending = cancelAccountsManagerOAuth(id)
         .then(() => {
           cancelledOAuth.current.add(id);
-          setCancellationReceipt(id);
         })
         .finally(() => cancellations.current.delete(id));
       cancellations.current.set(id, pending);
@@ -270,60 +310,57 @@ export function AccountsManagerSection({
     setError(null);
     clearSensitive();
   };
+  const saveRouting = async (
+    provider: Provider,
+    enabled: boolean,
+    accountIds: string[],
+  ) => {
+    setRoutingBusy(true);
+    setRoutingError(null);
+    try {
+      update(await updateAccountsManagerRouting(provider, enabled, accountIds));
+    } catch (cause) {
+      setRoutingError({
+        provider,
+        requestId: cause instanceof AccountControlError ? cause.requestId : "",
+      });
+    } finally {
+      setRoutingBusy(false);
+    }
+  };
 
   return (
+    <>
+    <AccountRemovalReconciler onPending={markRemovalPending} onSettled={clearRemovalPending} />
     <SettingsSection
       title={t("accountsManager.title")}
       titleHidden={titleHidden}
     >
-      <div className="space-y-4">
+      <div className="space-y-5">
         {query.error ? <p role="alert" className="text-sm text-destructive">{accountControlMessage(query.error, t)}</p> : null}
         {error && requestId ? <p role="alert" className="text-xs text-destructive">{t("accountsManager.controls.requestId", { id: requestId })}</p> : null}
-        <AccountRemovalRecovery />
-        {cancellationReceipt ? <section aria-label={t("accountsManager.controls.cancelAckTitle")} className="rounded-md border border-border p-3 text-xs space-y-1" aria-live="polite">
-          <p>{t("accountsManager.controls.cancelAck", { id: cancellationReceipt })}</p>
-          <p>{t("accountsManager.controls.cancelAckDescription")}</p>
-          <p>{data?.oauthSessions.some(session => session.id === cancellationReceipt)
-            ? t("accountsManager.controls.observedLogin", { state: data.oauthSessions.find(session => session.id === cancellationReceipt)!.status })
-            : t("accountsManager.controls.loginUnknown")}</p>
-          <Button size="sm" variant="ghost" onClick={() => setCancellationReceipt("")}>{t("accountsManager.controls.dismissAck")}</Button>
-        </section> : null}
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Input
-            className="min-w-40 flex-1"
+            className="min-w-0 flex-1"
             aria-label={t("accountsManager.search")}
             placeholder={t("accountsManager.search")}
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
-          <select
-            className="rounded-md border border-input bg-background px-2 text-sm"
+          <SettingsOptionMenu
             aria-label={t("accountsManager.filter.provider")}
             value={providerFilter}
-            onChange={(event) => setProviderFilter(event.target.value)}
-          >
-            <option value="all">{t("accountsManager.filter.providers")}</option>
-            {(["codex", "claude"] as const).map((provider) => (
-              <option key={provider} value={provider}>
-                {providerLabel(provider)}
-              </option>
-            ))}
-          </select>
-          <select
-            className="rounded-md border border-input bg-background px-2 text-sm"
+            options={providerFilterOptions}
+            onChange={setProviderFilter}
+            triggerClassName="w-fit"
+          />
+          <SettingsOptionMenu
             aria-label={t("accountsManager.filter.state")}
             value={stateFilter}
-            onChange={(event) => setStateFilter(event.target.value)}
-          >
-            <option value="all">{t("accountsManager.filter.states")}</option>
-            <option value="ready">{t("accountsManager.filter.available")}</option>
-            <option value="disabled">
-              {t("accountsManager.status.disabled")}
-            </option>
-            <option value="attention">
-              {t("accountsManager.status.error")}
-            </option>
-          </select>
+            options={stateFilterOptions}
+            onChange={setStateFilter}
+            triggerClassName="w-fit"
+          />
         </div>
         {data?.stale ? (
           <p className="text-xs text-muted-foreground">
@@ -342,7 +379,9 @@ export function AccountsManagerSection({
               data?.accounts.filter(
                 (account) => account.provider === provider,
               ) ?? [];
-            const visible = accounts.filter((account) => {
+            const displayAccounts = accounts.filter((account) => !pendingRemovals[account.id]);
+            const hasAccounts = displayAccounts.length > 0;
+            const visible = displayAccounts.filter((account) => {
               const matchesSearch =
                 `${account.label ?? ""} ${account.email ?? ""} ${account.id}`
                   .toLocaleLowerCase()
@@ -362,43 +401,77 @@ export function AccountsManagerSection({
             const routing = data?.routing?.find(
               (policy) => policy.provider === provider,
             ) ?? { provider, enabled: false, accountIds: [] };
+            const selectedRoutingId =
+              routing.accountIds.length === 1 ? routing.accountIds[0] : undefined;
+            const selectedRoutingAccount = accounts.find(
+              (account) => account.id === selectedRoutingId,
+            );
+            const selectedRoutingAccountEligible = Boolean(
+              selectedRoutingAccount &&
+                selectedRoutingAccount.verification === "verified" &&
+                !selectedRoutingAccount.disabled &&
+                !selectedRoutingAccount.unavailable &&
+                selectedRoutingAccount.status === "active",
+            );
             return (
               <AgentProviderGroup
                 key={provider}
                 provider={provider}
                 name={providerLabel(provider)}
-                summary={t("accountsManager.saved", { count: accounts.length })}
-                expanded={expanded[provider]}
+                summary={displayAccounts.length ? t("accountsManager.saved", { count: displayAccounts.length }) : undefined}
+                collapsible={hasAccounts}
+                expanded={hasAccounts ? expanded[provider] : adding === provider}
                 onExpandedChange={(value) =>
                   setExpanded((current) => ({ ...current, [provider]: value }))
                 }
                 action={
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    disabled={unavailable || busy || Boolean(waiting)}
-                    aria-label={t("accountsManager.addProvider", { provider })}
-                    onClick={() => {
-                      clearSensitive();
-                      setBaseURL("");
-                      addGeneration.current++;
-                      setAdding(provider);
-                      setReconnecting(null);
-                      setMethod(provider === "codex" ? "device" : "browser");
-                      setError(null);
-                    }}
-                  >
-                    <Plus className="size-4" />
-                  </Button>
+                  adding === provider ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={
+                        unavailable ||
+                        (busy && (method === "api-key" || method === "json")) ||
+                        Boolean(waiting && cancellations.current.has(waiting.id))
+                      }
+                      onClick={() => void closeAdd(provider)}
+                    >
+                      {t("confirm.cancel")}
+                    </Button>
+                  ) : (
+                    <Button
+                      size={hasAccounts ? "icon" : "sm"}
+                      variant={hasAccounts ? "ghost" : "outline"}
+                      disabled={unavailable || busy || Boolean(waiting)}
+                      aria-label={
+                        t("accountsManager.addProvider", { provider })
+                      }
+                      onClick={() => {
+                        clearSensitive();
+                        setBaseURL("");
+                        addGeneration.current++;
+                        setAdding(provider);
+                        setReconnecting(null);
+                        setMethod(provider === "codex" ? "device" : "browser");
+                        setError(null);
+                      }}
+                    >
+                      {hasAccounts ? <Plus className="size-4" /> : t("accountsManager.addFirst")}
+                    </Button>
+                  )
                 }
               >
-                <RoutingPanel
+                {hasAccounts ? <RoutingPanel
                   provider={provider}
-                  accounts={accounts}
                   policy={routing}
                   disabled={unavailable}
-                  update={update}
-                />
+                  selected={selectedRoutingAccount}
+                  canEnable={selectedRoutingAccountEligible}
+                  busy={busy || routingBusy}
+                  error={routingError?.provider === provider ? "accountsManager.errors.routing" : null}
+                  requestId={routingError?.provider === provider ? routingError.requestId : ""}
+                  save={(enabled, accountIds) => saveRouting(provider, enabled, accountIds)}
+                /> : null}
                 {adding === provider ? (
                   <AddAccountPanel
                     provider={provider}
@@ -424,7 +497,6 @@ export function AccountsManagerSection({
                     browserOpened={() => {
                       if (activeOAuthID.current === waiting?.id) setError(null);
                     }}
-                    close={() => void closeAdd(provider)}
                     startOAuth={(mode) => void startOAuth(provider, mode)}
                     submitKey={() => void submitKey(provider)}
                     fileRef={fileRef}
@@ -436,8 +508,16 @@ export function AccountsManagerSection({
                     <AccountRow
                       key={account.id}
                       account={account}
+                      removalPending={Boolean(pendingRemovals[account.id])}
+                      onRemovalStart={() => markRemovalPending(account.id)}
+                      onRemovalFailed={() => clearRemovalPending(account.id)}
                       disabled={unavailable}
                       signInDisabled={busy || Boolean(waiting)}
+                      isDefault={routing.accountIds.length === 1 && routing.accountIds[0] === account.id}
+                      routingEnabled={routing.enabled}
+                      routingBusy={routingBusy}
+                      canSetDefault={account.verification === "verified" && !account.disabled && !account.unavailable && account.status === "active"}
+                      setDefault={(accountId) => void saveRouting(provider, routing.enabled, accountId ? [accountId] : [])}
                       update={update}
                       reconnect={() => {
                         clearSensitive();
@@ -449,67 +529,53 @@ export function AccountsManagerSection({
                       }}
                     />
                   ))
-                ) : (
+                ) : displayAccounts.length ? (
                   <p className="px-4 py-5 text-sm text-muted-foreground">
-                    {unavailable && !accounts.length
-                      ? t("accountsManager.loading")
-                      : accounts.length
-                        ? t("accountsManager.noMatches")
-                        : t("accountsManager.emptyProvider", {
-                            provider: providerLabel(provider),
-                          })}
+                    {t("accountsManager.noMatches")}
                   </p>
-                )}
+                ) : unavailable ? (
+                  <p className="px-4 py-5 text-sm text-muted-foreground">
+                    {t("accountsManager.loading")}
+                  </p>
+                ) : null}
               </AgentProviderGroup>
             );
           })}
       </div>
     </SettingsSection>
+    </>
   );
 }
 
 function RoutingPanel({
   provider,
-  accounts,
   policy,
   disabled,
-  update,
+  selected,
+  canEnable,
+  busy,
+  error,
+  requestId,
+  save,
 }: {
   provider: Provider;
-  accounts: AccountsManagerAccount[];
   policy: { enabled: boolean; accountIds: string[] };
   disabled: boolean;
-  update: (next: AccountsManagerSnapshot) => void;
+  selected?: AccountsManagerAccount;
+  canEnable: boolean;
+  busy: boolean;
+  error: MessageKey | null;
+  requestId: string;
+  save: (enabled: boolean, accountIds: string[]) => void;
 }) {
   const { t } = useTranslation();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<MessageKey | null>(null);
-  const [requestId, setRequestId] = useState("");
-  const byID = new Map(accounts.map((account) => [account.id, account]));
-  const selectedID =
-    policy.accountIds.length === 1 ? policy.accountIds[0] : undefined;
-  const selected = selectedID ? byID.get(selectedID) : undefined;
-  const eligible = (account: AccountsManagerAccount) =>
-    account.verification === "verified" && !account.disabled && !account.unavailable && account.status === "active";
-  const save = async (enabled: boolean, accountIds: string[]) => {
-    setBusy(true);
-    setError(null);
-    try {
-      update(await updateAccountsManagerRouting(provider, enabled, accountIds));
-    } catch (cause) {
-      setError("accountsManager.errors.routing");
-      setRequestId(cause instanceof AccountControlError ? cause.requestId : "");
-    } finally {
-      setBusy(false);
-    }
-  };
   const toggle = (checked: boolean) => {
-    if (checked && (!selected || !eligible(selected))) return;
-    void save(checked, selected ? [selected.id] : []);
+    if (checked && (!selected || !canEnable)) return;
+    save(checked, selected ? [selected.id] : []);
   };
 
   return (
-    <div className="border-b border-border bg-muted/10 px-4 py-3">
+    <div className="border-b border-border px-4 py-3.5">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-sm font-medium">
@@ -530,64 +596,12 @@ function RoutingPanel({
           disabled={
             disabled ||
             busy ||
-            (!policy.enabled && (!selected || !eligible(selected)))
+            (!policy.enabled && (!selected || !canEnable))
           }
           onCheckedChange={toggle}
         />
       </div>
-      {accounts.length ? (
-        <div className="mt-3 space-y-1">
-          {accounts.map((account) => {
-            const included = selectedID === account.id;
-            const selectable = eligible(account);
-            const label =
-              account.label ||
-              account.email ||
-              t(
-                account.kind === "api_key"
-                  ? "accountsManager.keyAccount"
-                  : account.kind === "access_token" ? "accountsManager.tokenAccount"
-                  : "accountsManager.oauthAccount",
-                { provider: providerLabel(provider), id: account.id.slice(-6) },
-              );
-            return (
-              <div
-                key={account.id}
-                className="flex min-h-9 items-center gap-2 rounded-md px-2 text-sm"
-              >
-                <span className="min-w-0 flex-1 truncate">{label}</span>
-                {included ? (
-                  <span className="text-xs text-muted-foreground">
-                    {t("accountsManager.routing.preferred")}
-                  </span>
-                ) : null}
-                {included ? (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={disabled || busy || policy.enabled}
-                    onClick={() => void save(false, [])}
-                  >
-                    {t("shell.remove")}
-                  </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={disabled || busy || !selectable}
-                    onClick={() => void save(policy.enabled, [account.id])}
-                  >
-                    {t("accountsManager.routing.use")}
-                  </Button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
-      {error ? (
-        <p className="mt-2 text-xs text-destructive">{t(error)}</p>
-      ) : null}
+      {error ? <p className="mt-2 text-xs text-destructive">{t(error)}</p> : null}
       {error && requestId ? <p role="alert" className="text-xs text-destructive">{t("accountsManager.controls.requestId", { id: requestId })}</p> : null}
     </div>
   );
@@ -607,17 +621,56 @@ function AddAccountPanel(props: {
   error: MessageKey | null;
   dismissError: () => void;
   browserOpened: () => void;
-  close: () => void;
   startOAuth: (mode: "device" | "callback") => void;
   submitKey: () => void;
   fileRef: RefObject<HTMLInputElement | null>;
   submitFile: (file?: File) => void;
 }) {
   const { t } = useTranslation();
+  const [chosenMethod, setChosenMethod] = useState<AddMethod | null>(null);
+  const methods: Array<{ method: AddMethod; title: string; description: string }> = [
+    ...(props.provider === "codex"
+      ? [{
+          method: "device" as const,
+          title: t("accountsManager.method.device"),
+          description: t("accountsManager.method.device.description"),
+        }]
+      : []),
+    {
+      method: "browser",
+      title: t("accountsManager.method.browser"),
+      description: t("accountsManager.method.browser.description"),
+    },
+    ...(props.reconnecting
+      ? []
+      : [
+          {
+            method: "api-key" as const,
+            title: t("accountsManager.apiKey"),
+            description: t("accountsManager.method.apiKey.description"),
+          },
+          {
+            method: "json" as const,
+            title: t("accountsManager.method.json"),
+            description: t("accountsManager.method.json.description"),
+          },
+        ]),
+  ];
+  const selectMethod = (method: AddMethod) => {
+    setChosenMethod(method);
+    props.setMethod(method);
+    if (method === "device") props.startOAuth("device");
+    if (method === "browser") props.startOAuth("callback");
+    if (method === "json") {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => props.fileRef.current?.click());
+      });
+    }
+  };
   return (
-    <div className="border-b border-border bg-muted/20 p-4">
+    <div className="space-y-4 border-b border-border bg-muted/20 px-4 py-5">
       {props.reconnecting ? (
-        <p className="mb-3 text-sm" role="status">
+        <p className="text-sm" role="status">
           {t("accountsManager.reconnect.description", {
             account:
               props.reconnecting.label ||
@@ -626,111 +679,89 @@ function AddAccountPanel(props: {
           })}
         </p>
       ) : null}
-      <div className="mb-3 flex flex-wrap gap-2">
-        {(
-          [
-            ...(props.provider === "codex" ? (["device"] as const) : []),
-            "browser",
-            ...(props.reconnecting ? [] : (["api-key", "json"] as const)),
-          ] as const
-        ).map((method) => (
-          <Button
-            key={method}
-            size="sm"
-            variant={props.method === method ? "secondary" : "ghost"}
-            disabled={props.busy || Boolean(props.waiting)}
-            onClick={() => props.setMethod(method)}
-          >
-            {method === "device"
-              ? t("accountsManager.method.device")
-              : method === "browser"
-                ? t("accountsManager.method.browser")
-                : method === "api-key"
-                  ? t("accountsManager.apiKey")
-                  : t("accountsManager.method.json")}
-          </Button>
-        ))}
-      </div>
       {props.waiting ? (
         <DeviceOrBrowserWaiting key={props.waiting.id} session={props.waiting} browserOpened={props.browserOpened} />
-      ) : props.method === "device" ? (
-        <div className="space-y-2">
-          <p className="text-sm text-muted-foreground">
-            {t("accountsManager.device.description")}
-          </p>
-          <Button
-            disabled={props.busy}
-            onClick={() => props.startOAuth("device")}
-          >
-            {props.busy ? (
-              <LoaderCircle className="mr-2 size-4 animate-spin" />
-            ) : null}
-            {t("accountsManager.device.continue")}
-          </Button>
-        </div>
-      ) : props.method === "browser" ? (
-        <Button
-          disabled={props.busy}
-          onClick={() => props.startOAuth("callback")}
-        >
-          {props.busy ? (
-            <LoaderCircle className="mr-2 size-4 animate-spin" />
-          ) : null}
-          {t("accountsManager.browser.continue")}
-        </Button>
-      ) : props.method === "api-key" ? (
-        <div className="space-y-2">
-          <Input
-            aria-label={t("accountsManager.apiKey")}
-            autoComplete="off"
-            placeholder={t("accountsManager.apiKey")}
-            type="password"
-            value={props.secret}
-            onChange={(e) => props.setSecret(e.target.value)}
-          />
-          <Input
-            aria-label={t("accountsManager.baseURL")}
-            placeholder={t("accountsManager.baseURLPlaceholder")}
-            value={props.baseURL}
-            onChange={(e) => props.setBaseURL(e.target.value)}
-          />
-          <p className="text-xs text-muted-foreground">{t("accountsManager.credentials.keyFormHint")}</p>
-          <Button
-            disabled={props.busy || !props.secret.trim()}
-            onClick={props.submitKey}
-          >
-            {t("accountsManager.add")}
-          </Button>
-        </div>
       ) : (
-        <input
-          ref={props.fileRef}
-          type="file"
-          aria-label={t("accountsManager.method.json")}
-          accept="application/json,.json"
-          disabled={props.busy}
-          onChange={(e) => props.submitFile(e.currentTarget.files?.[0])}
-        />
+        <div className="space-y-3">
+          <p className="text-sm font-medium text-foreground">{t("accountsManager.addPrompt")}</p>
+          <div className="flex flex-col gap-2" role="group" aria-label={t("accountsManager.addPrompt")}>
+            {methods.map(({ method, title, description }) => {
+              const isActive =
+                chosenMethod === method ||
+                (method === "api-key" && props.method === "api-key");
+              const isStartingOAuth =
+                chosenMethod === method &&
+                props.busy &&
+                (method === "device" || method === "browser");
+              return (
+                <Button
+                  key={method}
+                  size="none"
+                  type="button"
+                  variant={isActive ? "secondary" : "outline"}
+                  className={`min-h-16 w-full justify-start whitespace-normal px-3 py-4 text-left transition-[background-color,border-color] active:scale-100 active:translate-y-0 active:bg-[var(--color-bg-settings-row-hover)] active:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${isActive ? "ring-1 ring-ring" : ""}`}
+                  disabled={props.busy}
+                  aria-pressed={method === "api-key" ? props.method === method : undefined}
+                  onClick={() => selectMethod(method)}
+                >
+                  <span className="flex min-w-0 flex-col items-start gap-1">
+                    <span className="flex items-center gap-2 font-medium">
+                      {isStartingOAuth ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin" /> : null}
+                      {title}
+                    </span>
+                    <span className="text-xs font-normal text-muted-foreground">{description}</span>
+                  </span>
+                </Button>
+              );
+            })}
+          </div>
+          <input
+            ref={props.fileRef}
+            className="sr-only"
+            type="file"
+            aria-label={t("accountsManager.method.json")}
+            aria-hidden="true"
+            accept="application/json,.json"
+            disabled={props.busy}
+            tabIndex={-1}
+            onChange={(event) => props.submitFile(event.currentTarget.files?.[0])}
+          />
+          {props.method === "api-key" ? (
+            <div className="space-y-3 rounded-md border border-border bg-background/50 p-3">
+              <Input
+                aria-label={t("accountsManager.apiKey")}
+                autoComplete="off"
+                placeholder={t("accountsManager.apiKey")}
+                type="password"
+                value={props.secret}
+                onChange={(event) => props.setSecret(event.target.value)}
+              />
+              <Input
+                aria-label={t("accountsManager.baseURL")}
+                placeholder={t("accountsManager.baseURLPlaceholder")}
+                value={props.baseURL}
+                onChange={(event) => props.setBaseURL(event.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">{t("accountsManager.credentials.keyFormHint")}</p>
+              {props.secret.trim() ? (
+                <div className="flex justify-end border-t border-border pt-3">
+                  <Button disabled={props.busy} onClick={props.submitKey}>
+                    {t("accountsManager.add")}
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       )}
       {props.error ? (
-        <div className="mt-3 flex items-center gap-2 text-sm text-destructive">
+        <div className="flex items-center gap-2 text-sm text-destructive">
           <span>{t(props.error)}</span>
           <Button size="sm" variant="ghost" onClick={props.dismissError}>
             {t("accountsManager.dismiss")}
           </Button>
         </div>
       ) : null}
-      <Button
-        className="mt-2"
-        size="sm"
-        variant="ghost"
-        onClick={props.close}
-        disabled={
-          props.busy && (props.method === "api-key" || props.method === "json")
-        }
-      >
-        {t("confirm.cancel")}
-      </Button>
     </div>
   );
 }
@@ -745,54 +776,80 @@ function DeviceOrBrowserWaiting({
   const { t } = useTranslation();
   const userCode = session?.userCode;
   return (
-    <div className="space-y-2">
-      {userCode ? <>
-      <p className="text-sm text-muted-foreground">
-        {t("accountsManager.device.enterCode")}
-      </p>
-      <div className="flex items-center gap-2">
-        <code className="rounded-md bg-background px-3 py-2 text-base font-semibold tracking-wider">
-          {userCode}
-        </code>
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={() =>
-            void navigator.clipboard.writeText(userCode).catch(() => undefined)
-          }
-        >
-          {t("diffSelection.copy")}
-        </Button>
+    <div className="space-y-4 rounded-lg border border-border bg-background/40 p-4">
+      {userCode ? (
+        <div className="space-y-2">
+          <p className="text-sm font-medium text-foreground">
+            {t("accountsManager.device.enterCode")}
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <code className="inline-flex h-control-form items-center rounded-md bg-background px-3 text-base font-semibold tracking-wider">
+              {userCode}
+            </code>
+            <Button
+              size="none"
+              variant="secondary"
+              className="h-control-form px-3"
+              onClick={() =>
+                void navigator.clipboard.writeText(userCode).catch(() => undefined)
+              }
+            >
+              {t("diffSelection.copy")}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      <div className={userCode ? "border-t border-border pt-4" : ""}>
+        <SignInBrowserRecovery authorizationUrl={session.authorizationUrl} expiresAt={session.expiresAt} onOpened={browserOpened} />
       </div>
-      </> : null}
-      <SignInBrowserRecovery authorizationUrl={session.authorizationUrl} expiresAt={session.expiresAt} onOpened={browserOpened} />
-      <p className="text-sm">{t("accountsManager.waiting")}</p>
+      <p role="status" className="flex items-center gap-2 border-t border-border pt-3 text-sm text-muted-foreground">
+        <LoaderCircle aria-hidden="true" className="size-4 shrink-0 animate-spin" />
+        {t("accountsManager.waiting")}
+      </p>
     </div>
   );
 }
 
 function AccountRow({
   account,
+  removalPending,
+  onRemovalStart,
+  onRemovalFailed,
   disabled,
   update,
   reconnect,
   signInDisabled,
+  isDefault,
+  routingEnabled,
+  routingBusy,
+  canSetDefault,
+  setDefault,
 }: {
   account: AccountsManagerAccount;
+  removalPending: boolean;
+  onRemovalStart: () => void;
+  onRemovalFailed: () => void;
   disabled: boolean;
   update: (next: AccountsManagerSnapshot) => void;
   reconnect: () => void;
   signInDisabled: boolean;
+  isDefault: boolean;
+  routingEnabled: boolean;
+  routingBusy: boolean;
+  canSetDefault: boolean;
+  setDefault: (accountId?: string) => void;
 }) {
   const { t, i18n } = useTranslation();
+  const queryClient = useQueryClient();
+  const detailsId = useId();
+  const [animationsReady, setAnimationsReady] = useState(false);
+  useEffect(() => setAnimationsReady(true), []);
   const [open, setOpen] = useState(false);
+  const [detailsMounted, setDetailsMounted] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<MessageKey | null>(null);
   const [requestId, setRequestId] = useState("");
-  const [details, setDetails] = useState<{
-    models?: string[];
-  } | null>(null);
   const [editing, setEditing] = useState(false);
   const [draftLabel, setDraftLabel] = useState(account.label ?? "");
   useEffect(() => {
@@ -842,26 +899,27 @@ function AccountRow({
       setBusy(false);
     }
   };
-  const expand = async () => {
+  const warmDetails = () => {
+    void prefetchAccountUsage(queryClient, account);
+  };
+  const expand = () => {
     const next = !open;
     setOpen(next);
-    if (next && !details) {
-      const [models] = await Promise.allSettled([
-        fetchAccountsManagerModels(account.id),
-      ]);
-      setDetails({
-        models:
-          models.status === "fulfilled"
-            ? models.value.models.map((model) => model.displayName || model.id)
-            : undefined,
-      });
+    if (next) {
+      setDetailsMounted(true);
+      warmDetails();
     }
   };
   return (
-    <div className="border-b border-border last:border-b-0">
-      <div className="flex min-h-16 items-center gap-3 px-4 py-3">
+    <div hidden={removalPending} className="border-b border-border last:border-b-0">
+      <div className="flex min-h-16 flex-wrap items-center gap-x-2 gap-y-1.5 px-4 py-3 lg:flex-nowrap lg:gap-3">
         <button
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          type="button"
+          aria-controls={detailsId}
+          aria-expanded={open}
+          className="flex min-w-0 flex-[1_1_14rem] items-center gap-2 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onPointerEnter={warmDetails}
+          onFocus={warmDetails}
           onClick={() => void expand()}
         >
           {open ? (
@@ -878,138 +936,187 @@ function AccountRow({
             {error && requestId ? <p role="alert" className="text-xs text-destructive">{t("accountsManager.controls.requestId", { id: requestId })}</p> : null}
           </div>
         </button>
-        <Button
-          size="icon"
-          variant="ghost"
-          disabled={disabled || busy}
-          aria-label={t(account.kind === "api_key" || account.kind === "access_token" || account.verification === "unverified" || account.verification === "invalid" ? "accountsManager.verification.verify" : "accountsManager.refresh")}
-          onClick={() =>
-            void action(() => refreshAccountsManagerAccount(account.id))
-          }
-        >
-          {busy ? (
-            <LoaderCircle className="size-4 animate-spin" />
-          ) : (
-            <RefreshCw className="size-4" />
-          )}
-        </Button>
-        {account.kind === "oauth" ? (
+        <div className="ml-6 flex w-full flex-wrap items-center justify-end gap-1 lg:ml-0 lg:w-auto lg:flex-nowrap">
+        {isDefault ? (
+          <span className="mr-auto rounded-full bg-muted px-2 py-1 text-micro font-medium text-foreground lg:mr-1">
+            {t("accountsManager.routing.preferred")}
+          </span>
+        ) : (
           <Button
             size="sm"
-            variant="ghost"
-            disabled={
-              disabled || busy || signInDisabled || !account.reconnectSupported
-            }
-            title={
-              account.reconnectSupported
-                ? undefined
-                : t("accountsManager.reconnect.unavailable")
-            }
-            onClick={reconnect}
+            variant="outline"
+            disabled={disabled || busy || routingBusy || !canSetDefault}
+            onClick={() => setDefault(account.id)}
           >
-            {t("accountsManager.reconnect")}
+            {t("accountsManager.routing.use")}
           </Button>
-        ) : null}
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={disabled || busy}
-          onClick={() =>
-            void action(() =>
-              setAccountsManagerDisabled(account.id, !account.disabled),
-            )
-          }
-        >
-          {account.disabled
-            ? t("accountsManager.enable")
-            : t("accountsManager.disable")}
-        </Button>
-        <Button
-            size="icon"
-            variant="ghost"
-            disabled={disabled || busy}
-            aria-label={t("accountsManager.remove")}
-            onClick={() => setConfirm(true)}
-          >
-            <Trash2 className="size-4" />
-          </Button>
-        <AccountRemovalDialog accountId={account.id} open={confirm} onOpenChange={setConfirm} />
-      </div>
-      {open ? (
-        <div className="space-y-2 border-t border-border px-10 py-3 text-xs text-muted-foreground">
-          {editing ? (
-            <form
-              className="flex items-center gap-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (!busy)
-                  void action(() =>
-                    renameAccountsManagerAccount(
-                      account.id,
-                      draftLabel,
-                      account.generation,
-                    ),
-                  ).then((saved) => {
-                    if (saved) setEditing(false);
-                  });
+        )}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              aria-label={t("accountsManager.moreActions")}
+              title={t("accountsManager.moreActions")}
+              disabled={disabled || busy}
+            >
+              <MoreVertical aria-hidden="true" className="size-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-48">
+            {isDefault ? (
+              <DropdownMenuItem
+                disabled={disabled || busy || routingBusy || routingEnabled}
+                onSelect={() => setDefault(undefined)}
+              >
+                {t("shell.remove")}
+              </DropdownMenuItem>
+            ) : null}
+            <DropdownMenuItem
+              disabled={disabled || busy}
+              onSelect={() => {
+                setEditing(true);
+                setDetailsMounted(true);
+                setOpen(true);
+                warmDetails();
               }}
             >
-              <Input
-                autoFocus
-                aria-label={t("accountsManager.label")}
-                maxLength={80}
-                value={draftLabel}
-                disabled={disabled || busy}
-                onChange={(event) => setDraftLabel(event.target.value)}
-              />
-              <Button type="submit" size="sm" disabled={disabled || busy}>
-                {t("accountsManager.saveLabel")}
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                disabled={busy}
-                onClick={() => setEditing(false)}
-              >
-                {t("confirm.cancel")}
-              </Button>
-            </form>
-          ) : (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={disabled || busy}
-              onClick={() => setEditing(true)}
-            >
+              <Pencil aria-hidden="true" />
               {t("accountsManager.rename")}
-            </Button>
-          )}
-          {account.kind === "oauth" && !account.reconnectSupported ? (
-            <p>{t("accountsManager.reconnect.unavailable")}</p>
-          ) : null}
-          {account.kind === "access_token" ? <p>{t("accountsManager.credentials.legacyToken")}</p> : null}
-          <p>
-            {details?.models === undefined && details
-              ? t("accountsManager.status.unknown")
-              : details
-                ? t("accountsManager.models", {
-                      count: details.models?.length ?? 0,
-                    })
-                : t("accountsManager.loadingDetails")}
-          </p>
-          {account.cooldowns?.[0]?.retryAt ? (
-            <p>
-              {t("accountsManager.cooldown", {
-                time: new Date(account.cooldowns[0].retryAt).toLocaleString(
-                  i18n.resolvedLanguage,
-                ),
-              })}
-            </p>
-          ) : null}
-          <AccountUsage key={`${account.id}:${account.generation}:${account.updatedAt}`} account={account} />
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={disabled || busy}
+              onSelect={() =>
+                void action(() => refreshAccountsManagerAccount(account.id))
+              }
+            >
+              {busy ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : <RefreshCw aria-hidden="true" />}
+              {t(account.kind === "api_key" || account.kind === "access_token" || account.verification === "unverified" || account.verification === "invalid" ? "accountsManager.verification.verify" : "accountsManager.refresh")}
+            </DropdownMenuItem>
+            {account.kind === "oauth" ? (
+              <DropdownMenuItem
+                disabled={disabled || busy || signInDisabled || !account.reconnectSupported}
+                title={account.reconnectSupported ? undefined : t("accountsManager.reconnect.unavailable")}
+                onSelect={reconnect}
+              >
+                {t("accountsManager.reconnect")}
+              </DropdownMenuItem>
+            ) : null}
+            <DropdownMenuItem
+              disabled={disabled || busy}
+              onSelect={() =>
+                void action(() =>
+                  setAccountsManagerDisabled(account.id, !account.disabled),
+                )
+              }
+            >
+              {account.disabled
+                ? t("accountsManager.enable")
+                : t("accountsManager.disable")}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              disabled={disabled || busy}
+              className="text-destructive focus:text-destructive data-[highlighted]:text-destructive"
+              onSelect={() => setConfirm(true)}
+            >
+              <Trash2 aria-hidden="true" className="!text-destructive" />
+              {t("accountsManager.remove")}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <AccountRemovalDialog
+          accountId={account.id}
+          open={confirm}
+          onOpenChange={setConfirm}
+          onOptimisticRemove={onRemovalStart}
+          onRemovalFailed={onRemovalFailed}
+          onRemovalAccepted={() => {
+            onRemovalStart();
+            setConfirm(false);
+          }}
+        />
         </div>
-      ) : null}
+      </div>
+      <div
+        id={detailsId}
+        aria-hidden={!open}
+        inert={!open}
+        className={`grid overflow-hidden ${animationsReady ? "transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none" : ""} ${open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}
+      >
+        <div className={`min-h-0 overflow-hidden ${open ? "border-t border-border" : ""}`}>
+          {detailsMounted ? (
+            <div className="space-y-4 bg-muted/10 px-4 py-4 text-xs text-muted-foreground sm:px-6">
+              {editing ? (
+                <form
+                  className="flex flex-wrap items-center gap-2"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    if (!busy)
+                      void action(() =>
+                        renameAccountsManagerAccount(
+                          account.id,
+                          draftLabel,
+                          account.generation,
+                        ),
+                      ).then((saved) => {
+                        if (saved) setEditing(false);
+                      });
+                  }}
+                >
+                  <Input
+                    autoFocus
+                    aria-label={t("accountsManager.label")}
+                    maxLength={80}
+                    value={draftLabel}
+                    disabled={disabled || busy}
+                    onChange={(event) => setDraftLabel(event.target.value)}
+                    className="min-w-0 flex-1"
+                  />
+                  <Button type="submit" size="sm" disabled={disabled || busy}>
+                    {t("accountsManager.saveLabel")}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => setEditing(false)}
+                  >
+                    {t("confirm.cancel")}
+                  </Button>
+                </form>
+              ) : null}
+              {account.kind === "oauth" && !account.reconnectSupported ? (
+                <p className="rounded-md border border-border bg-background/50 px-3 py-2">
+                  {t("accountsManager.reconnect.unavailable")}
+                </p>
+              ) : null}
+              {account.kind === "access_token" ? (
+                <p className="rounded-md border border-border bg-background/50 px-3 py-2">
+                  {t("accountsManager.credentials.legacyToken")}
+                </p>
+              ) : null}
+              {account.cooldowns?.[0]?.retryAt ? (
+                <p className="rounded-md border border-border bg-background/50 px-3 py-2">
+                  {t("accountsManager.cooldown", {
+                    time: new Date(account.cooldowns[0].retryAt).toLocaleString(
+                      i18n.resolvedLanguage,
+                    ),
+                  })}
+                </p>
+              ) : null}
+              <div>
+                <AccountUsage
+                  key={`${account.id}:${account.generation}:${account.updatedAt}`}
+                  account={account}
+                />
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }
