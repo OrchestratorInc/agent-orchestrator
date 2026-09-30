@@ -50,6 +50,7 @@ export type SettingsModal =
 			projectId: string;
 			/** Page to open on, so callers can deep-link a project setting. */
 			section?: ProjectSettingsSection;
+			cloudOrgId?: string;
 	};
 
 /** Worker detail view toggles — Changes (Git rail) is the default. */
@@ -157,7 +158,7 @@ export type UiState = {
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
 	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; harnessView?: "local" | "cloud"; preserveProject?: boolean }) => void;
-	openProjectSettings: (projectId: string, options?: { section?: ProjectSettingsSection }) => void;
+	openProjectSettings: (projectId: string, options?: { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
 	/** Refresh resolvedTheme from OS without writing light/dark to storage. */
 	syncSystemTheme: () => void;
@@ -331,6 +332,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			scope: "project",
 			projectId,
 			...(options?.section ? { section: options.section } : {}),
+			...(options?.cloudOrgId === undefined ? {} : { cloudOrgId: options.cloudOrgId }),
 		},
 	}),
 	closeSettings: () => set((state) => ({

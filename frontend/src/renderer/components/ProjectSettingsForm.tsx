@@ -32,6 +32,7 @@ import { AgentModelCombobox } from "./settings/AgentModelCombobox";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { Switch } from "./ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { CloudProjectSettingsForm } from "./CloudProjectSettingsForm";
 
 type Project = components["schemas"]["Project"];
 type ProjectConfig = components["schemas"]["ProjectConfig"];
@@ -59,15 +60,24 @@ export type ProjectSettingsSaveState = {
 	replacementError?: string;
 };
 
-export function ProjectSettingsForm({
+type ProjectSettingsFormProps = {
+	projectId: string;
+	cloudOrgId?: string;
+	section?: ProjectSettingsSection;
+	onSaveState?: (state: ProjectSettingsSaveState) => void;
+};
+
+export function ProjectSettingsForm(props: ProjectSettingsFormProps) {
+	return props.cloudOrgId !== undefined
+		? <CloudProjectSettingsForm {...props} cloudOrgId={props.cloudOrgId} />
+		: <LocalProjectSettingsForm {...props} />;
+}
+
+function LocalProjectSettingsForm({
 	projectId,
 	section = "general",
 	onSaveState,
-}: {
-	projectId: string;
-	section?: ProjectSettingsSection;
-	onSaveState?: (state: ProjectSettingsSaveState) => void;
-}) {
+}: ProjectSettingsFormProps) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 

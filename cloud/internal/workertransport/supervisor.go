@@ -72,6 +72,7 @@ type Supervisor struct {
 	// review launch. It lets the Cloud reviewer selector change independently
 	// from the session's already-running interactive harness.
 	ReviewCommandFactory func(context.Context, string) (workerexec.Command, error)
+	ProjectReviewCommand func(context.Context, worker.TerminalCommand) (workerexec.Command, error)
 	AgentTerminalID      string
 	Started              chan<- error
 	PollInterval         time.Duration
@@ -613,7 +614,7 @@ func (s *Supervisor) handle(
 
 func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalCommand) error {
 	if input.TerminalID == "" ||
-		(input.Kind != "workspace" && input.Kind != "agent") {
+		(input.Kind != "workspace" && input.Kind != "agent" && input.Kind != "reviewer") {
 		return errors.New("invalid terminal open request")
 	}
 	s.mu.Lock()
@@ -621,12 +622,19 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 		s.mu.Unlock()
 		return nil
 	}
+	s.mu.Unlock()
 	processCtx, cancel := context.WithCancel(ctx)
 	command, cleanup, err := s.terminalCommand(processCtx, input)
 	if err != nil {
 		cancel()
-		s.mu.Unlock()
 		return err
+	}
+	s.mu.Lock()
+	if _, exists := s.terminals[input.TerminalID]; exists {
+		s.mu.Unlock()
+		cancel()
+		cleanup()
+		return nil
 	}
 	columns, rows := input.Columns, input.Rows
 	if columns == 0 {
@@ -699,10 +707,19 @@ func (s *Supervisor) terminalCommand(
 	ctx context.Context,
 	input worker.TerminalCommand,
 ) (*exec.Cmd, func(), error) {
-	if input.Kind == "agent" {
+	if input.Kind == "agent" || input.Kind == "reviewer" {
 		// openTerminal holds s.mu while this command is created.
 		commandConfig := s.AgentCommand
-		if input.Review {
+		if input.Kind == "reviewer" {
+			if s.ProjectReviewCommand == nil || input.Reviewer == nil || input.ReviewRunID == "" {
+				return nil, func() {}, errors.New("reviewer command is unavailable")
+			}
+			var err error
+			commandConfig, err = s.ProjectReviewCommand(ctx, input)
+			if err != nil {
+				return nil, func() {}, err
+			}
+		} else if input.Review {
 			if s.ReviewCommandFactory != nil {
 				var err error
 				commandConfig, err = s.ReviewCommandFactory(ctx, input.Harness)
@@ -717,7 +734,7 @@ func (s *Supervisor) terminalCommand(
 			return nil, func() {}, errors.New("interactive agent command is unavailable")
 		}
 		args := append([]string(nil), commandConfig.Args...)
-		if input.Review && len(input.Data) > 0 {
+		if (input.Review || input.Kind == "reviewer") && len(input.Data) > 0 {
 			// Codex accepts an initial positional prompt. Supplying it at process
 			// startup avoids racing its interactive TUI initialization, which can
 			// drop a prompt typed immediately after the PTY opens.

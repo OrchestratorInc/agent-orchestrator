@@ -3,6 +3,8 @@ package worker
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
 
 // ReviewTerminalEnv marks a dedicated reviewer process. Reviewer harnesses
@@ -34,10 +36,11 @@ type LaunchContext struct {
 	Mode            string `json:"mode"`
 	// Model is the coding-agent model the worker launches the harness with;
 	// empty uses the harness default.
-	Model          string   `json:"model,omitempty"`
-	DeniedCommands []string `json:"deniedCommands"`
-	RepositoryURL  string   `json:"repositoryUrl"`
-	DefaultBranch  string   `json:"defaultBranch"`
+	Model          string                    `json:"model,omitempty"`
+	AgentConfig    domain.ProjectAgentConfig `json:"agentConfig,omitempty"`
+	DeniedCommands []string                  `json:"deniedCommands"`
+	RepositoryURL  string                    `json:"repositoryUrl"`
+	DefaultBranch  string                    `json:"defaultBranch"`
 	// ExtraRepos are additional repositories the worker clones alongside the
 	// primary repo (multi-repo dev kit). Empty for a single-repo session.
 	ExtraRepos []RepoRef `json:"extraRepos,omitempty"`
@@ -377,10 +380,12 @@ type TerminalCommand struct {
 	// Review starts an isolated coding-agent conversation for an automated PR
 	// review. It shares the session workspace, but never resumes the session's
 	// interactive agent thread.
-	Review  bool   `json:"review,omitempty"`
-	Data    []byte `json:"data,omitempty"`
-	Columns uint16 `json:"columns,omitempty"`
-	Rows    uint16 `json:"rows,omitempty"`
+	Review      bool                    `json:"review,omitempty"`
+	Data        []byte                  `json:"data,omitempty"`
+	Columns     uint16                  `json:"columns,omitempty"`
+	Rows        uint16                  `json:"rows,omitempty"`
+	ReviewRunID string                  `json:"reviewRunId,omitempty"`
+	Reviewer    *domain.ProjectReviewer `json:"reviewer,omitempty"`
 }
 
 // TerminalStreamFrame is one message on the persistent duplex terminal

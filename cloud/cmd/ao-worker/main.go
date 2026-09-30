@@ -240,6 +240,26 @@ func run(logger *slog.Logger) error {
 		InitialInterface:   committedInterface,
 		AgentSessionID:     bootstrap.Launch.AgentSessionID,
 	}
+	transportSupervisor.ProjectReviewCommand = func(ctx context.Context, input worker.TerminalCommand) (workerexec.Command, error) {
+		launch, err := reviewerLaunch(bootstrap.Launch, input)
+		if err != nil {
+			return workerexec.Command{}, err
+		}
+		credential, err := client.reviewCredential(ctx, input.ReviewRunID)
+		if err != nil {
+			return workerexec.Command{}, fmt.Errorf("load reviewer credential: %w", err)
+		}
+		command, err := (workerexec.HarnessBuilder{
+			DataDir: dataDir, ConfigRoot: filepath.Join(dataDir, "reviews", input.ReviewRunID),
+		}).BuildInteractive(launch, credential, workspace)
+		if err != nil {
+			return workerexec.Command{}, err
+		}
+		command.Env["AO_REVIEW_SOCKET"] = reviewSocketPath
+		command.Env["AO_REVIEW_HELP"] = reviewHelp()
+		command.Env["AO_SESSION_ID"] = bootstrap.SessionID
+		return command, nil
+	}
 	// Real-time terminal streaming (duplex predictive echo) rides the same
 	// worker transport; wire it before Run when the sandbox opts in. Preserved
 	// from the terminal-stream feature alongside #4960's workspace-ready gate.
@@ -754,16 +774,24 @@ func (c *client) EnsureAgentTerminal(ctx context.Context) (worker.AgentTerminalR
 }
 
 func (c *client) Credential(ctx context.Context) (worker.CredentialResponse, error) {
-	return c.CredentialForProvider(ctx, "")
+	return c.agentCredential(ctx, "")
 }
 
 func (c *client) CredentialForProvider(ctx context.Context, provider string) (worker.CredentialResponse, error) {
-	var response worker.CredentialResponse
-	path := "/worker/credential"
+	query := ""
 	if provider != "" {
-		path += "?provider=" + url.QueryEscape(provider)
+		query = "?provider=" + url.QueryEscape(provider)
 	}
-	err := c.doMethod(ctx, http.MethodGet, path, nil, &response)
+	return c.agentCredential(ctx, query)
+}
+
+func (c *client) reviewCredential(ctx context.Context, reviewRunID string) (worker.CredentialResponse, error) {
+	return c.agentCredential(ctx, "?reviewRunId="+url.QueryEscape(reviewRunID))
+}
+
+func (c *client) agentCredential(ctx context.Context, query string) (worker.CredentialResponse, error) {
+	var response worker.CredentialResponse
+	err := c.doMethod(ctx, http.MethodGet, "/worker/credential"+query, nil, &response)
 	if err != nil {
 		return worker.CredentialResponse{}, err
 	}

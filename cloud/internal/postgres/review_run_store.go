@@ -26,13 +26,43 @@ func (s *Store) CreateReviewRun(
 	orgID, pullRequestID, reviewSessionID, targetSHA, harness, triggerSource string,
 ) (run domain.ReviewRun, created bool, err error) {
 	err = s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var projectConfig, agentConfigJSON json.RawMessage
+		var sessionHarness, model, mode string
+		if err := tx.QueryRow(ctx,
+			`SELECT project.config, session.harness, session.model, session.mode, session.agent_config
+			FROM ao_sessions session JOIN ao_projects project ON project.id = session.project_id AND project.org_id = session.org_id
+			WHERE session.org_id = $1 AND session.id = $2 AND session.is_terminated = false AND project.archived_at IS NULL`,
+			orgID, reviewSessionID).Scan(&projectConfig, &sessionHarness, &model, &mode, &agentConfigJSON); err != nil {
+			return err
+		}
+		settings, err := domain.DecodeProjectSettings(projectConfig)
+		if err != nil {
+			return err
+		}
+		if triggerSource == "auto" && settings.AutoReview != nil && !*settings.AutoReview {
+			return nil
+		}
+		var agentConfig domain.ProjectAgentConfig
+		if err := json.Unmarshal(agentConfigJSON, &agentConfig); err != nil {
+			return err
+		}
+		reviewer := domain.EffectiveReviewer(settings, sessionHarness, model, mode, agentConfig)
+		if triggerSource == "manual" && harness != "" && harness != reviewer.Harness {
+			reviewer.Harness = harness
+			reviewer.AgentConfig.Model = ""
+			reviewer.AgentConfig.Effort = ""
+		}
+		reviewerConfig, err := json.Marshal(reviewer)
+		if err != nil {
+			return err
+		}
 		row := tx.QueryRow(
 			ctx,
-			`INSERT INTO ao_review_runs (org_id, pull_request_id, review_session_id, target_sha, harness, trigger_source)
-			VALUES ($1, $2, $3, $4, $5, $6)
+			`INSERT INTO ao_review_runs (org_id, pull_request_id, review_session_id, target_sha, harness, trigger_source, reviewer_config)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT DO NOTHING
 			RETURNING `+reviewRunColumns,
-			orgID, pullRequestID, reviewSessionID, targetSHA, harness, triggerSource,
+			orgID, pullRequestID, reviewSessionID, targetSHA, reviewer.Harness, triggerSource, reviewerConfig,
 		)
 		var scanErr error
 		run, scanErr = scanReviewRun(row)
@@ -55,7 +85,7 @@ func (s *Store) CreateReviewRun(
 			return scanErr
 		}
 		created = true
-		_, err := tx.Exec(
+		_, err = tx.Exec(
 			ctx,
 			`UPDATE ao_pull_requests
 			SET ao_review_state = 'running', updated_at = now()
@@ -84,6 +114,39 @@ func (s *Store) OpenReviewTerminal(
 ) (string, error) {
 	terminalID := uuid.NewString()
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var configJSON json.RawMessage
+		var triggerSource string
+		if err := tx.QueryRow(ctx,
+			`SELECT reviewer_config, trigger_source FROM ao_review_runs WHERE org_id = $1 AND id = $2 AND review_session_id = $3 AND status = 'running' FOR UPDATE`,
+			orgID, reviewRunID, sessionID).Scan(&configJSON, &triggerSource); err != nil {
+			return err
+		}
+		var reviewer domain.ProjectReviewer
+		if err := json.Unmarshal(configJSON, &reviewer); err != nil {
+			return err
+		}
+		// Runs predating reviewer snapshots keep their original session agent.
+		// Do not apply newly configured project reviewers to those runs.
+		if reviewer.Harness == "" {
+			var model, mode string
+			var agentConfigJSON json.RawMessage
+			if err := tx.QueryRow(ctx,
+				`SELECT harness, model, mode, agent_config FROM ao_sessions WHERE org_id = $1 AND id = $2`,
+				orgID, sessionID).Scan(&reviewer.Harness, &model, &mode, &agentConfigJSON); err != nil {
+				return err
+			}
+			if err := json.Unmarshal(agentConfigJSON, &reviewer.AgentConfig); err != nil {
+				return err
+			}
+			reviewer = domain.EffectiveReviewer(domain.ProjectSettingsConfig{}, reviewer.Harness, model, mode, reviewer.AgentConfig)
+			configJSON, err := json.Marshal(reviewer)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE ao_review_runs SET reviewer_config = $3 WHERE org_id = $1 AND id = $2`, orgID, reviewRunID, configJSON); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.Exec(
 			ctx,
 			`UPDATE ao_sandboxes
@@ -94,7 +157,14 @@ func (s *Store) OpenReviewTerminal(
 		); err != nil {
 			return err
 		}
-		openPayload, err := json.Marshal(reviewTerminalOpenCommand(terminalID, prompt, harness))
+		openCommand := reviewTerminalOpenCommand(terminalID, prompt, harness)
+		if triggerSource == "auto" {
+			openCommand = worker.TerminalCommand{
+				TerminalID: terminalID, Kind: "reviewer", ReviewRunID: reviewRunID,
+				Reviewer: &reviewer, Data: []byte(prompt),
+			}
+		}
+		openPayload, err := json.Marshal(openCommand)
 		if err != nil {
 			return err
 		}
@@ -354,32 +424,29 @@ func (s *Store) FailReviewRun(
 ) (domain.ReviewRun, error) {
 	var run domain.ReviewRun
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
-		row := tx.QueryRow(
-			ctx,
-			`UPDATE ao_review_runs
-			SET status = 'failed', last_error = $4, completed_at = now()
-			WHERE org_id = $1 AND id = $2 AND review_session_id = $3 AND status = 'running'
-			RETURNING `+reviewRunColumns,
-			orgID, reviewRunID, reviewSessionID, lastError,
-		)
 		var err error
-		run, err = scanReviewRun(row)
-		if err != nil {
-			return err
-		}
-		_, err = tx.Exec(
-			ctx,
-			`UPDATE ao_pull_requests
-			SET ao_review_state = 'needs_review', updated_at = now()
-			WHERE org_id = $1 AND id = $2 AND head_sha = $3`,
-			orgID, run.PullRequestID, run.TargetSHA,
-		)
+		run, err = failReviewRunTx(ctx, tx, orgID, reviewRunID, reviewSessionID, lastError)
 		return err
 	})
 	if err != nil {
 		return domain.ReviewRun{}, normalizeConstraintError(err)
 	}
 	return run, nil
+}
+
+func failReviewRunTx(ctx context.Context, tx pgx.Tx, orgID, reviewRunID, reviewSessionID, lastError string) (domain.ReviewRun, error) {
+	run, err := scanReviewRun(tx.QueryRow(ctx,
+		`UPDATE ao_review_runs SET status = 'failed', last_error = $4, completed_at = now()
+		WHERE org_id = $1 AND id = $2 AND review_session_id = $3 AND status = 'running'
+		RETURNING `+reviewRunColumns,
+		orgID, reviewRunID, reviewSessionID, lastError))
+	if err != nil {
+		return domain.ReviewRun{}, err
+	}
+	_, err = tx.Exec(ctx,
+		`UPDATE ao_pull_requests SET ao_review_state = 'needs_review', updated_at = now()
+		WHERE org_id = $1 AND id = $2 AND head_sha = $3`, orgID, run.PullRequestID, run.TargetSHA)
+	return run, err
 }
 
 // ReviewRunPullRequest returns a review run joined with its pull request.

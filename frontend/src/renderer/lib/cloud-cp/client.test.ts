@@ -148,6 +148,15 @@ describe("cloud control-plane session lifecycle", () => {
 		expect(new Headers((fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0]?.[1].headers).get("authorization")).toBe("Bearer token");
 	});
 
+	it("reads a Cloud project and patches only supplied settings", async () => {
+		const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ project: { id: "project" } }), { headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.test", getToken: async () => "token", fetchImpl: fetchMock });
+		await client.getProject("org/1", "project/1");
+		await client.updateProjectSettings("org/1", "project/1", { config: { autoReview: false } });
+		expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org%2F1/projects/project%2F1");
+		expect(fetchMock.mock.calls[1]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org%2F1/projects/project%2F1/settings");
+		expect(fetchMock.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ method: "PATCH", body: JSON.stringify({ config: { autoReview: false } }) }));
+	});
 	it("uses the organization GitHub App installation and repository routes", async () => {
 		const responses = [
 			{ installationUrl: "https://github.com/apps/ao/installations/new", expiresAt: "2026-09-22T12:00:00Z" },

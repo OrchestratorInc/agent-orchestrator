@@ -448,7 +448,7 @@ func (s *Store) WorkerAgentCredential(
 	orgID, sessionID, workerID string,
 	epoch int64,
 ) (domain.WorkerCredential, error) {
-	return s.workerAgentCredential(ctx, orgID, sessionID, workerID, epoch, "")
+	return s.workerAgentCredential(ctx, orgID, sessionID, workerID, epoch, "", "")
 }
 
 // WorkerAgentCredentialForProvider redeems another connected provider for a
@@ -460,14 +460,19 @@ func (s *Store) WorkerAgentCredentialForProvider(
 	epoch int64,
 	provider string,
 ) (domain.WorkerCredential, error) {
-	return s.workerAgentCredential(ctx, orgID, sessionID, workerID, epoch, provider)
+	return s.workerAgentCredential(ctx, orgID, sessionID, workerID, epoch, provider, "")
+}
+
+// WorkerReviewCredential can select only a running review owned by this session.
+func (s *Store) WorkerReviewCredential(ctx context.Context, orgID, sessionID, workerID string, epoch int64, reviewRunID string) (domain.WorkerCredential, error) {
+	return s.workerAgentCredential(ctx, orgID, sessionID, workerID, epoch, "", reviewRunID)
 }
 
 func (s *Store) workerAgentCredential(
 	ctx context.Context,
 	orgID, sessionID, workerID string,
 	epoch int64,
-	requestedProvider string,
+	requestedProvider, reviewRunID string,
 ) (domain.WorkerCredential, error) {
 	var credential domain.WorkerCredential
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
@@ -475,8 +480,11 @@ func (s *Store) workerAgentCredential(
 			return err
 		}
 		provider := requestedProvider
-		if provider == "" {
-			if err := tx.QueryRow(ctx, `SELECT harness FROM ao_sessions WHERE org_id = $1 AND id = $2 AND is_terminated = false`, orgID, sessionID).Scan(&provider); err != nil {
+		if reviewRunID != "" {
+			if err := tx.QueryRow(ctx,
+				`SELECT COALESCE(reviewer_config->>'harness', '') FROM ao_review_runs
+				WHERE org_id = $1 AND id = $2 AND review_session_id = $3 AND status = 'running'`,
+				orgID, reviewRunID, sessionID).Scan(&provider); err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return ErrNotFound
 				}
@@ -492,7 +500,7 @@ func (s *Store) workerAgentCredential(
 			FROM ao_sessions session
 			JOIN ao_provider_connections connection
 				ON connection.org_id = session.org_id
-				AND connection.provider = $4
+				AND connection.provider = COALESCE(NULLIF($4, ''), session.harness)
 				AND connection.label = $3
 				AND connection.validation_state = 'valid'
 			WHERE session.org_id = $1
@@ -523,11 +531,11 @@ func (s *Store) workerAgentCredential(
 		var createdByUserID *string
 		if err := tx.QueryRow(
 			ctx,
-			`SELECT created_by_user_id::text
+			`SELECT COALESCE(NULLIF($3, ''), harness), created_by_user_id::text
 			FROM ao_sessions
 			WHERE org_id = $1 AND id = $2 AND is_terminated = false`,
-			orgID, sessionID,
-		).Scan(&createdByUserID); err != nil {
+			orgID, sessionID, provider,
+		).Scan(&provider, &createdByUserID); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
