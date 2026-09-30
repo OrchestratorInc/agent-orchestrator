@@ -9,7 +9,12 @@ const picker = readFileSync(new URL("./reviewer-picker.tsx", import.meta.url), "
 describe("reviewer control integration", () => {
 	it("keeps the project-default override separate from the effective reviewer", () => {
 		expect(actions).toContain('const [reviewerOverride, setReviewerOverride] = useState("")');
-		expect(actions).toContain("setEffectiveReviewer(reviewState.reviewerHarness || reviewer)");
+		expect(actions).toContain("const effectiveReviewer = reviewerOverride || projectDefaultReviewer;");
+		expect(actions).toContain("defaultReviewerHarness(project?.config?.reviewers, session.harness ?? undefined)");
+		// The daemon's reviewerHarness names the last reviewer that ran, so it
+		// must never pick the model catalog after a switch.
+		expect(actions).not.toContain("result.reviewerHarness");
+		expect(actions).not.toContain("reviewState.reviewerHarness");
 		expect(actions).toContain("selectedReviewer={reviewerOverride}");
 		expect(actions).toContain("effectiveReviewer={effectiveReviewer}");
 	});

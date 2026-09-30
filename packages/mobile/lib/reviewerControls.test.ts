@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reviewerChoices, reviewerSelectionChanged, reviewerSwitchSelection, reviewerSwitchWarning } from "./reviewerControls";
+import { defaultReviewerHarness, reviewerChoices, reviewerSelectionChanged, reviewerSwitchSelection, reviewerSwitchWarning } from "./reviewerControls";
 
 describe("mobile reviewer controls", () => {
 	it("allows authorized and auth-unknown reviewers but disables unavailable agents", () => {
@@ -36,5 +36,12 @@ describe("mobile reviewer controls", () => {
 		expect(reviewerSwitchWarning(false)).toBeUndefined();
 		expect(reviewerSwitchWarning(true)).toContain("cancels its running review");
 		expect(reviewerSwitchWarning(true)).toContain("reviewer settings");
+	});
+	it("resolves the project default reviewer like desktop", () => {
+		expect(defaultReviewerHarness([{ harness: "codex" }, { harness: "claude-code" }], "claude-code")).toBe("codex");
+		expect(defaultReviewerHarness([], "opencode")).toBe("opencode");
+		expect(defaultReviewerHarness(undefined, "codex")).toBe("codex");
+		expect(defaultReviewerHarness(undefined, "aider")).toBe("claude-code");
+		expect(defaultReviewerHarness(undefined, undefined)).toBe("claude-code");
 	});
 });

@@ -5,6 +5,7 @@ import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Te
 import {
 	getAgents,
 	getAgentModels,
+	getProject,
 	getSession,
 	getSessionPR,
 	getSessionReviews,
@@ -27,7 +28,7 @@ import { haptics } from "../../lib/haptics";
 import { openGitHub } from "../../lib/openGitHub";
 import { formatExternalReviewMessage, formatInlineReviewCommentMessage } from "../../lib/reviewFeedback";
 import { ReviewerPicker } from "../../lib/reviewer-picker";
-import { reviewerChoices, reviewerSelectionChanged, reviewerSwitchSelection, reviewerSwitchWarning } from "../../lib/reviewerControls";
+import { defaultReviewerHarness, reviewerChoices, reviewerSelectionChanged, reviewerSwitchSelection, reviewerSwitchWarning } from "../../lib/reviewerControls";
 import { pullRequestSummaryForURL } from "../../lib/reviewView";
 import { useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
@@ -43,7 +44,7 @@ type BusyAction = { kind: "reviewer" | "rerequest" | "resolve" | "send"; id: str
 export default function ReviewActionsSheet() {
 	const styles = useThemedStyles(makeStyles);
 	const { config } = useApp();
-	const { sessionId = "", prUrl = "", reviewer = "" } = useLocalSearchParams<{ sessionId?: string; prUrl?: string; reviewer?: string }>();
+	const { sessionId = "", prUrl = "" } = useLocalSearchParams<{ sessionId?: string; prUrl?: string; reviewer?: string }>();
 	const [agents, setAgents] = useState<ReturnType<typeof reviewerChoices>>([]);
 	const [models, setModels] = useState<AgentModelCatalog>();
 	const [reviewerConfig, setReviewerConfig] = useState<ReviewerAgentConfig>({});
@@ -51,7 +52,10 @@ export default function ReviewActionsSheet() {
 	const [prMissing, setPRMissing] = useState(false);
 	const [reviews, setReviews] = useState<SessionReviews>();
 	const [reviewerOverride, setReviewerOverride] = useState("");
-	const [effectiveReviewer, setEffectiveReviewer] = useState(reviewer);
+	const [projectDefaultReviewer, setProjectDefaultReviewer] = useState("");
+	// The harness the next review runs under, resolved like desktop. The model
+	// catalog must follow this, not the daemon's last-run reviewerHarness.
+	const effectiveReviewer = reviewerOverride || projectDefaultReviewer;
 	const modelRequest = useRef(0);
 	const [policies, setPolicies] = useState<ReviewPolicies>();
 	const [busy, setBusy] = useState<BusyAction>();
@@ -63,8 +67,9 @@ export default function ReviewActionsSheet() {
 		try {
 			const [catalog, prs, session, reviewState] = await Promise.all([getAgents(config), getSessionPR(config, sessionId), getSession(config, sessionId), getSessionReviews(config, sessionId)]);
 			setAgents(reviewerChoices(catalog));
+			const project = session.projectId ? await getProject(config, session.projectId).catch(() => undefined) : undefined;
 			setReviewerOverride(session.reviewerHarness || "");
-			setEffectiveReviewer(reviewState.reviewerHarness || reviewer);
+			setProjectDefaultReviewer(defaultReviewerHarness(project?.config?.reviewers, session.harness ?? undefined));
 			setReviewerConfig(session.reviewerConfig ?? {});
 			const matchedPR = pullRequestSummaryForURL(prs, prUrl);
 			setPR(matchedPR);
@@ -107,9 +112,8 @@ export default function ReviewActionsSheet() {
 		setError("");
 		try {
 			const selection = reviewerSwitchSelection(id, agentConfig);
-			const result = await switchSessionReviewer(config, sessionId, selection.harness, selection.agentConfig);
+			await switchSessionReviewer(config, sessionId, selection.harness, selection.agentConfig);
 			setReviewerOverride(id);
-			setEffectiveReviewer(result.reviewerHarness || reviewer);
 			setReviewerConfig(selection.agentConfig ?? {});
 			haptics.success();
 		} catch (cause) {

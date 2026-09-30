@@ -10,6 +10,25 @@ export function reviewerChoices(catalog: AgentCatalog): RankedAgent[] {
 	return rankAgents(catalog);
 }
 
+// Mirrors desktop's WORKER_DEFAULT_REVIEWERS (frontend/src/renderer/lib/reviewer-harnesses.ts).
+const WORKER_DEFAULT_REVIEWERS: Readonly<Record<string, string>> = {
+	"claude-code": "claude-code",
+	codex: "codex",
+	opencode: "opencode",
+	muse: "muse",
+	kimchi: "kimchi",
+};
+
+/**
+ * The harness "Project default" resolves to, as desktop resolves it: the
+ * project's first configured reviewer, else the worker harness's default.
+ * Never the daemon's reported reviewerHarness, which names whichever reviewer
+ * last ran and lags a switch until the new reviewer has run once.
+ */
+export function defaultReviewerHarness(projectReviewers: readonly { harness?: string }[] | undefined, workerHarness: string | undefined): string {
+	return projectReviewers?.[0]?.harness || (workerHarness ? WORKER_DEFAULT_REVIEWERS[workerHarness] : undefined) || "claude-code";
+}
+
 export function reviewerSwitchSelection(
 	harness: string,
 	config: ReviewerAgentConfig,
