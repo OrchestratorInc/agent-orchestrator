@@ -151,6 +151,8 @@ func prepareConfigContent(existing, sessionID, prompt, model string, mode ports.
 			return "", fmt.Errorf("opencode-v2: OPENCODE_CONFIG_CONTENT agent %q must be an object", name)
 		}
 	}
+	// agents.build.permissions is left untouched: inline config replaces arrays on
+	// merge, so writing it would clear file-defined build-agent rules.
 	agent["mode"] = "primary"
 	if prompt != "" {
 		agent["system"] = prompt
@@ -212,32 +214,12 @@ func PrepareACPConfigContent(existing, systemPrompt string, _ ports.PermissionMo
 			return "", fmt.Errorf("opencode-v2: OPENCODE_CONFIG_CONTENT agent %q must be an object", name)
 		}
 	}
-	userAgentPermissions, _ := json.Marshal(agent["permissions"])
-	if agent["permissions"] == nil {
-		userAgentPermissions = nil
-	}
+	// agents.build.permissions is left untouched: inline config replaces arrays on
+	// merge, so writing it would clear file-defined build-agent rules.
 	agent["mode"] = "primary"
 	if systemPrompt != "" {
 		agent["system"] = systemPrompt
 	}
-	// Agent rules are evaluated after every top-level and file-defined rule and the
-	// last match wins, so AO injects no allow or catch-all rules of its own: they
-	// would override denies from user/project opencode.json. Only the user's
-	// inline rules are carried through.
-	permissions := []any{}
-	for _, source := range []json.RawMessage{config["permissions"], userAgentPermissions} {
-		if len(source) == 0 {
-			continue
-		}
-		var rules []json.RawMessage
-		if err := json.Unmarshal(source, &rules); err != nil {
-			return "", fmt.Errorf("opencode-v2: OPENCODE_CONFIG_CONTENT permissions must be an array")
-		}
-		for _, rule := range rules {
-			permissions = append(permissions, rule)
-		}
-	}
-	agent["permissions"] = permissions
 	raw, err := json.Marshal(agent)
 	if err != nil {
 		return "", err
