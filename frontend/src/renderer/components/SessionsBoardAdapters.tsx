@@ -65,6 +65,7 @@ export function toBoardSessionPresentation(
 		displayStatus: session.displayStatus,
 		provider: session.provider,
 		status: session.status,
+		statusReadiness: session.statusReadiness,
 		statusPresentation:
 			provisioningStatus ??
 			(t && switchPresentation && switchVisual

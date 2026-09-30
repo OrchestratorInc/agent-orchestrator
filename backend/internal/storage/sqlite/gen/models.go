@@ -661,8 +661,6 @@ type Session struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
-	PausedAt                         sql.NullTime
-	PauseReason                      string
 }
 
 type SessionCleanupFact struct {
