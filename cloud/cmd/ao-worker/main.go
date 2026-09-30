@@ -136,6 +136,9 @@ func run(logger *slog.Logger) error {
 		"harness", bootstrap.Launch.Harness,
 		"repository_url", bootstrap.Launch.RepositoryURL,
 	)
+	// startup-timing baseline: everything the user waits through after the loader
+	// (the "connected -> terminal usable" gap) is measured against this.
+	connectedAt := time.Now()
 
 	// The workspace shell is deliberately available before checkout starts. A
 	// developer can inspect the sandbox immediately while repository preparation
@@ -316,6 +319,9 @@ func run(logger *slog.Logger) error {
 		rehydrateSession(runCtx, logger, client, bootstrap, workspace, dataDir)
 		close(rehydrateDone)
 		close(chatWorkspaceReady)
+		// The agent's held input is released here, so this is when the terminal
+		// becomes usable. Total gap since "worker connected" = what the user times.
+		logger.Info("startup timing", "step", "workspace-ready-total", "ms", time.Since(connectedAt).Milliseconds())
 		transportSupervisor.MarkWorkspaceReady()
 		// Serve durable-restore checkpointing now that the checkout and the git
 		// credential helper are in place. The capture is triggered by the agent's
@@ -360,7 +366,14 @@ func prepareWorkspace(
 		}
 		logger.Info("initialized scratch workspace")
 	} else {
+		// startup-timing instrumentation: the coding agent's input is held until
+		// this workspace prep completes (MarkWorkspaceReady), so the "worker
+		// connected -> terminal usable" gap the user sees is dominated by these
+		// steps. One log line per step (grant / clone / git-creds / extra-repos /
+		// review-base) pinpoints where the seconds go on a cold spawn.
+		stepStart := time.Now()
 		checkoutGrant, err := client.checkoutGrant(ctx)
+		logger.Info("startup timing", "step", "checkout-grant", "ms", time.Since(stepStart).Milliseconds())
 		if err != nil {
 			if !anonymousCheckoutEnabled() {
 				if errors.Is(err, errCheckoutForbidden) {
@@ -375,15 +388,19 @@ func prepareWorkspace(
 			checkoutGrant = worker.CheckoutGrantResponse{CloneURL: bootstrap.Launch.RepositoryURL}
 			logger.Info("using anonymous public GitHub checkout")
 		}
+		stepStart = time.Now()
 		if err := worker.PrepareCheckout(ctx, worker.ExecGitRunner{}, workspace, checkoutGrant); err != nil {
 			return fmt.Errorf("prepare repository checkout: %w", err)
 		}
+		logger.Info("startup timing", "step", "clone", "ms", time.Since(stepStart).Milliseconds())
+		stepStart = time.Now()
 		if err := worker.ConfigureWorkerGit(
 			ctx, worker.ExecGitRunner{}, workspace, dataDir, publicURL,
 			bootstrap.SessionID, bootstrap.Launch.Branch,
 		); err != nil {
 			return fmt.Errorf("configure repository tooling: %w", err)
 		}
+		logger.Info("startup timing", "step", "git-creds", "ms", time.Since(stepStart).Milliseconds())
 		// Multi-repo dev kit: clone any additional repositories alongside the
 		// primary checkout. Non-fatal by design — an extra repo that cannot be
 		// cloned (e.g. it is outside the session credential's GitHub App
@@ -391,13 +408,17 @@ func prepareWorkspace(
 		// repo. Extra repos reuse the session's checkout-grant token, so they work
 		// for repositories the installation can access; arbitrary private
 		// third-party repos need per-repo grants (a follow-up).
+		stepStart = time.Now()
 		cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap.Launch.ExtraRepos, workspace, dataDir)
+		logger.Info("startup timing", "step", "extra-repos", "ms", time.Since(stepStart).Milliseconds())
 	}
+	reviewStart := time.Now()
 	if err := worker.EnsureWorkspaceReviewBase(
 		ctx, worker.ExecGitRunner{}, workspace, bootstrap.Launch.DefaultBranch,
 	); err != nil {
 		return fmt.Errorf("record workspace review base: %w", err)
 	}
+	logger.Info("startup timing", "step", "review-base", "ms", time.Since(reviewStart).Milliseconds())
 	return nil
 }
 
