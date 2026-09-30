@@ -101,6 +101,68 @@ func TestOpenCodeDiscoveryMarksUserConfiguredModelAsDefault(t *testing.T) {
 	}
 }
 
+// A session can be attached to an existing local branch or seeded from a
+// remote branch or tag, so config that exists only on such a ref, not in the
+// checkout or at HEAD, must still leave the default unresolved.
+func TestConfiguredDefaultUnresolvedWhenAnySeedRefHoldsConfig(t *testing.T) {
+	setup := func(t *testing.T) (gitRepo, string) {
+		t.Helper()
+		home := isolateHome(t)
+		writeConfig(t, filepath.Join(home, ".copilot", "settings.json"), `{"model": "user"}`)
+		repo := newGitRepo(t)
+		repo.git("branch", "-M", "main")
+		return repo, filepath.Join(repo.dir, ".github", "copilot", "settings.json")
+	}
+	// commitOnBranch commits the config on branch and returns to main, whose
+	// tree and working copy have none.
+	commitOnBranch := func(repo gitRepo, config, branch string) {
+		repo.git("checkout", "-q", "-b", branch)
+		writeConfig(repo.t, config, `{"model": "branch"}`)
+		repo.git("add", ".github/copilot/settings.json")
+		repo.commit("branch config")
+		repo.git("checkout", "-q", "main")
+		if _, err := os.Stat(config); !os.IsNotExist(err) {
+			repo.t.Fatalf("checkout should not hold the branch config: %v", err)
+		}
+	}
+
+	t.Run("local branch attached by git worktree add", func(t *testing.T) {
+		repo, config := setup(t)
+		if got := configuredDefaultModel("copilot", repo.dir, nil); got != "user" {
+			t.Fatalf("no config on any ref = %q, want user", got)
+		}
+		commitOnBranch(repo, config, "feature")
+		worktree := filepath.Join(t.TempDir(), "wt")
+		repo.git("worktree", "add", "-q", worktree, "feature")
+		if _, err := os.Stat(filepath.Join(worktree, ".github", "copilot", "settings.json")); err != nil {
+			t.Fatalf("session worktree should hold the branch config: %v", err)
+		}
+		if got := configuredDefaultModel("copilot", repo.dir, nil); got != "" {
+			t.Errorf("config only on a local branch = %q, want unresolved", got)
+		}
+	})
+
+	t.Run("remote-tracking branch", func(t *testing.T) {
+		repo, config := setup(t)
+		commitOnBranch(repo, config, "feature")
+		repo.git("update-ref", "refs/remotes/origin/feature", "feature")
+		repo.git("branch", "-q", "-D", "feature")
+		if got := configuredDefaultModel("copilot", repo.dir, nil); got != "" {
+			t.Errorf("config only on a remote branch = %q, want unresolved", got)
+		}
+	})
+
+	t.Run("tag", func(t *testing.T) {
+		repo, config := setup(t)
+		commitOnBranch(repo, config, "feature")
+		repo.git("tag", "v1", "feature")
+		repo.git("branch", "-q", "-D", "feature")
+		if got := configuredDefaultModel("copilot", repo.dir, nil); got != "" {
+			t.Errorf("config only on a tag = %q, want unresolved", got)
+		}
+	})
+}
+
 func TestApplyConfiguredDefault(t *testing.T) {
 	listed := func() []ports.AgentModelInfo {
 		return []ports.AgentModelInfo{{ID: "a/one", Label: "one"}, {ID: "b/two", Label: "two"}}

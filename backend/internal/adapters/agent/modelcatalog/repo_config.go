@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-// repoConfigRefs are the commits besides the working tree that a launch
-// worktree is commonly seeded from. A missing ref is skipped.
-var repoConfigRefs = []string{"HEAD", "refs/remotes/origin/HEAD"}
+// repoConfigRefPatterns are the refs a launch worktree can be seeded from or
+// attached to: any local branch, remote-tracking branch, or tag, plus HEAD.
+var repoConfigRefPatterns = []string{"refs/heads", "refs/remotes", "refs/tags"}
 
 // repoMayHoldConfig reports whether the repository containing workingDir may
 // hold any of the named config files (slash-separated, relative to a
@@ -24,9 +24,11 @@ var repoConfigRefs = []string{"HEAD", "refs/remotes/origin/HEAD"}
 // sees: it may be staged, uncommitted, untracked, or from another branch.
 // Repository config is therefore never read for the default; its possible
 // presence only makes the default unresolved. Every directory from the git
-// root down to workingDir is checked, both on disk and in repoConfigRefs, so a
-// file deleted locally but still committed also counts. Outside a git
-// repository only workingDir itself is checked on disk.
+// root down to workingDir is checked, on disk and at the tip of every ref a
+// session could be seeded from, so a file that exists only on another branch
+// or was deleted locally but is still committed also counts. If the refs
+// cannot be inspected, the repository is assumed to hold config. Outside a
+// git repository only workingDir itself is checked on disk.
 func repoMayHoldConfig(workingDir string, names ...string) bool {
 	if workingDir == "" || len(names) == 0 {
 		return false
@@ -44,12 +46,7 @@ func repoMayHoldConfig(workingDir string, names ...string) bool {
 			repoPaths = append(repoPaths, path.Join(dir, name))
 		}
 	}
-	for _, ref := range repoConfigRefs {
-		if gitRefHoldsAny(top, ref, repoPaths) {
-			return true
-		}
-	}
-	return false
+	return anyRefHoldsAny(top, repoPaths)
 }
 
 // repoDirsDownTo lists the repository-relative directories from the root ("")
@@ -92,21 +89,55 @@ func gitTopLevel(dir string) (top, prefix string, ok bool) {
 	return top, prefix, true
 }
 
-// gitRefHoldsAny reports whether ref's tree contains any of repoPaths. An
-// unknown ref (for example no origin/HEAD) holds nothing.
-func gitRefHoldsAny(top, ref string, repoPaths []string) bool {
-	if _, err := runGit(top, "rev-parse", "--verify", "--quiet", ref+"^{tree}"); err != nil {
-		return false
+// anyRefHoldsAny reports whether the tip of HEAD or any ref matching
+// repoConfigRefPatterns contains any of repoPaths. It answers every ref and
+// path with a single `git cat-file --batch-check`, and assumes true when git
+// cannot answer.
+func anyRefHoldsAny(top string, repoPaths []string) bool {
+	out, err := runGit(top, append([]string{"for-each-ref", "--format=%(objectname)"}, repoConfigRefPatterns...)...)
+	if err != nil {
+		return true
 	}
-	args := append([]string{"ls-tree", "-r", "--full-tree", "--name-only", ref, "--"}, repoPaths...)
-	out, err := runGit(top, args...)
-	return err == nil && strings.TrimSpace(string(out)) != ""
+	tips := []string{"HEAD"}
+	seen := map[string]bool{}
+	for _, tip := range strings.Fields(string(out)) {
+		if !seen[tip] {
+			seen[tip] = true
+			tips = append(tips, tip)
+		}
+	}
+	var query strings.Builder
+	for _, tip := range tips {
+		for _, repoPath := range repoPaths {
+			query.WriteString(tip + ":" + repoPath + "\n")
+		}
+	}
+	out, err = runGitInput(top, query.String(), "cat-file", "--batch-check")
+	if err != nil {
+		return true
+	}
+	// Found objects print "<oid> <type> <size>"; unmatched queries print the
+	// query followed by "missing" (or "ambiguous"), and the query itself may
+	// contain spaces, so match on the type field.
+	for _, line := range strings.Split(string(out), "\n") {
+		if fields := strings.Fields(line); len(fields) == 3 && (fields[1] == "blob" || fields[1] == "tree") {
+			return true
+		}
+	}
+	return false
 }
 
-var runGit = func(dir string, args ...string) ([]byte, error) {
+func runGit(dir string, args ...string) ([]byte, error) {
+	return runGitInput(dir, "", args...)
+}
+
+func runGitInput(dir, input string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	if input != "" {
+		cmd.Stdin = strings.NewReader(input)
+	}
 	return cmd.Output()
 }
