@@ -234,7 +234,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 									{projectSaveState.phase === "failed" ? (
 										<div className="space-y-2 text-error">
 											<p className="flex items-start gap-2" role="alert"><TriangleAlert className="size-4 shrink-0" aria-hidden="true" />{projectSaveState.error ?? t("settings.project.saveFailed")}</p>
-											<button className="text-settings-label underline underline-offset-2" onClick={() => (document.getElementById("project-settings-form") as HTMLFormElement | null)?.requestSubmit()} type="button">{t("settings.models.retry")}</button>
+											<button className="text-settings-label underline underline-offset-2" onClick={() => (document.getElementById("project-settings-form") as HTMLFormElement | null)?.requestSubmit()} type="button">{t("createProject.retry")}</button>
 										</div>
 									) : (
 										<p className="flex items-center gap-2 text-settings-muted">
