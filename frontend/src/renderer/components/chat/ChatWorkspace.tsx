@@ -63,7 +63,7 @@ import { purgeFileAttachments, purgeFileAttachmentsForSession } from "../../hook
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { sameContent, useStableList } from "../../lib/stable-list";
 import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
-import { apiErrorCode, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
+import { apiErrorCode, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import {
@@ -1236,6 +1236,12 @@ function ChatWorkspaceContent({
 	// seen is safe to act on then: pending ids are kept regardless, and
 	// resolved ids (seen, but not pending) are deleted, since those are known
 	// for certain. A fully loaded page can safely delete everything else too.
+	//
+	// Failed sends are kept here, keyed by request, not only in the dock: the
+	// dock is keyed by request too, so when a newer question replaces it while
+	// an older answer is still in flight, that dock is gone by the time the
+	// send rejects.
+	const [resolveErrors, setResolveErrors] = useState<Record<string, string>>({});
 	useEffect(() => {
 		pruneExpiredElicitationDraftsOnce();
 		reconcileElicitationDraftsForConversation(
@@ -1253,7 +1259,32 @@ function ChatWorkspaceContent({
 		for (const requestId of stableUserInputRequestIds.resolved) {
 			setChatDraftBoundary(snapshot.sessionId, elicitationBoundarySource(requestId), undefined);
 		}
+		// A failed send for a question that is no longer pending has nothing left to retry.
+		setResolveErrors((current) => {
+			const kept = Object.entries(current).filter(([requestId]) => stableUserInputRequestIds.pending.includes(requestId));
+			return kept.length === Object.keys(current).length ? current : Object.fromEntries(kept);
+		});
 	}, [snapshot.conversationId, snapshot.sessionId, snapshot.hasMoreBefore, stableUserInputRequestIds]);
+	const trackedResolveInput = useCallback(
+		async (requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>) => {
+			if (!onResolveInput) return;
+			try {
+				const result = await onResolveInput(requestId, action, content);
+				setResolveErrors((current) => {
+					if (!(requestId in current)) return current;
+					const { [requestId]: _cleared, ...rest } = current;
+					return rest;
+				});
+				return result;
+			} catch (reason) {
+				setResolveErrors((current) => ({ ...current, [requestId]: apiErrorMessage(reason, "The answer could not be sent.") }));
+				throw reason;
+			}
+		},
+		[onResolveInput],
+	);
+	const shownRequestId = stablePendingUserInput?.requestId;
+	const earlierAnswerFailed = Object.keys(resolveErrors).some((requestId) => requestId !== shownRequestId);
 	const composerElicitation = useMemo(
 		() =>
 			stablePendingUserInput ? (
@@ -1262,10 +1293,12 @@ function ChatWorkspaceContent({
 					activity={stablePendingUserInput}
 					sessionId={snapshot.sessionId}
 					conversationId={snapshot.conversationId}
-					onResolve={onResolveInput}
+					onResolve={onResolveInput ? trackedResolveInput : undefined}
+					initialError={shownRequestId ? resolveErrors[shownRequestId] : undefined}
+					earlierAnswerFailed={earlierAnswerFailed}
 				/>
 			) : undefined,
-		[onResolveInput, snapshot.conversationId, snapshot.sessionId, stablePendingUserInput],
+		[onResolveInput, trackedResolveInput, snapshot.conversationId, snapshot.sessionId, stablePendingUserInput, shownRequestId, resolveErrors, earlierAnswerFailed],
 	);
 	const canSteerQueuedMessage =
 		Boolean(onSteer) && can(snapshot, "steer") && turn?.state === "running";

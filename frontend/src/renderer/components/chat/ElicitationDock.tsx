@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ExternalLink, Loader2 } from "lucide-react";
+import { apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { getChatDraftSourceBoundaryKinds, setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
@@ -80,6 +81,8 @@ export function ElicitationDock({
 	sessionId,
 	conversationId,
 	onResolve,
+	initialError,
+	earlierAnswerFailed,
 }: {
 	activity: ConversationActivity;
 	/**
@@ -101,11 +104,15 @@ export function ElicitationDock({
 		action: InputAction,
 		content?: Record<string, unknown>,
 	) => Promise<unknown> | void;
+	/** A send for this question that failed while another question was shown. */
+	initialError?: string;
+	/** A send for a different, still-open question failed; it comes back after this one. */
+	earlierAnswerFailed?: boolean;
 }) {
 	const requestId = activity.requestId;
 	const unavailable = !requestId || !onResolve;
 	const [submitting, setSubmitting] = useState(false);
-	const [error, setError] = useState<string>();
+	const [error, setError] = useState<string | undefined>(initialError);
 
 	async function resolve(action: InputAction, content?: Record<string, unknown>) {
 		if (!requestId || !onResolve || submitting) return;
@@ -124,7 +131,7 @@ export function ElicitationDock({
 			// re-enabled form invites a stray edit that would recreate the draft
 			// just cleared above.
 		} catch (reason) {
-			setError(reason instanceof Error ? reason.message : "The answer could not be sent.");
+			setError(apiErrorMessage(reason, "The answer could not be sent."));
 			setSubmitting(false);
 		}
 	}
@@ -157,6 +164,11 @@ export function ElicitationDock({
 			{error ? (
 				<p role="alert" className="px-3 pb-2 text-[11px] leading-snug text-destructive">
 					{error}
+				</p>
+			) : null}
+			{earlierAnswerFailed ? (
+				<p role="alert" className="px-3 pb-2 text-[11px] leading-snug text-destructive">
+					Your answer to an earlier question couldn’t be sent. It will come back after this one.
 				</p>
 			) : null}
 		</div>

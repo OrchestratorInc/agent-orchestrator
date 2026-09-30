@@ -941,6 +941,63 @@ describe("ChatWorkspace timeline", () => {
 		}
 	});
 
+	it("keeps a failed send visible after a newer question replaced its dock mid-flight", async () => {
+		// The dock is keyed by request, so Q1's dock is gone by the time its
+		// send rejects. The failure has to survive somewhere: a note under Q2
+		// while Q2 is shown, then the error itself when Q1 comes back.
+		const user = userEvent.setup();
+		const withQ1 = withUserInput("pending");
+		const withQ1AndQ2 = structuredClone(withQ1);
+		withQ1AndQ2.items.push({
+			kind: "activity",
+			id: "input-2",
+			sequence: 101,
+			revision: 1,
+			turnId: "turn-1",
+			activityKind: "user_input",
+			status: "pending",
+			summary: "Choose a language",
+			requestId: "input-2",
+			detail: {
+				inputMode: "form",
+				message: "Choose a language",
+				schema: {
+					type: "object",
+					properties: {
+						question_0: { type: "string", title: "Which language?", oneOf: [{ const: "go", title: "Go" }] },
+					},
+				},
+			},
+			createdAt: "2026-08-24T00:01:00Z",
+		});
+		let rejectQ1!: (reason: unknown) => void;
+		const onResolveInput = vi.fn(
+			(requestId: string) =>
+				requestId === "input-1"
+					? new Promise<void>((_resolve, reject) => {
+							rejectQ1 = reject;
+						})
+					: Promise.resolve(),
+		);
+
+		const view = render(<ChatWorkspace snapshot={withQ1} onResolveInput={onResolveInput} />);
+		await user.click(screen.getByRole("radio", { name: "ACP" }));
+		await user.click(screen.getByRole("button", { name: "Continue" }));
+
+		view.rerender(<ChatWorkspace snapshot={withQ1AndQ2} onResolveInput={onResolveInput} />);
+		expect(screen.getByRole("radio", { name: "Go" })).toBeInTheDocument();
+
+		await act(async () => {
+			rejectQ1(new Error("daemon unreachable"));
+		});
+		expect(await screen.findByText(/earlier question couldn’t be sent/)).toBeInTheDocument();
+
+		view.rerender(<ChatWorkspace snapshot={withQ1} onResolveInput={onResolveInput} />);
+		expect(screen.getByRole("radio", { name: "ACP" })).toBeInTheDocument();
+		expect(screen.getByText("daemon unreachable")).toBeInTheDocument();
+		expect(screen.queryByText(/earlier question couldn’t be sent/)).not.toBeInTheDocument();
+	});
+
 	it("resets the dock instead of reusing one still disabled from a different question's in-flight resolve", async () => {
 		// Without a key on ElicitationDock, React would keep reusing the same
 		// component instance across a snapshot swap and carry its `submitting`/
