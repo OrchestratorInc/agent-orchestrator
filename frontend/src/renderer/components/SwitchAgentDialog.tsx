@@ -4,6 +4,7 @@ import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from "re
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { agentModelsQueryOptions } from "../hooks/useAgentModelsQuery";
+import { initialAccountProvider } from "../hooks/useInitialAccountChoice";
 import {
 	agentSwitchesQueryKey,
 	agentSwitchNeedsRecovery,
@@ -24,10 +25,11 @@ import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { isConcreteModelID } from "../lib/agent-model-choices";
 import { AGENT_LABELS, AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
-import type { AgentSwitchSummary, WorkspaceSession } from "../types/workspace";
+import { STANDALONE_WORKSPACE_ID, sessionIsActive, type AgentSwitchSummary, type WorkspaceSession } from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
 import { AgentModelPicker } from "./AgentModelPicker";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
+import { SessionAccountControl } from "./SessionAccountControl";
 import { Button } from "./ui/button";
 import {
 	Dialog,
@@ -55,6 +57,10 @@ export function canSwitchAgentHarness(
 		SWITCH_AGENT_OPTIONS.some((option) => option.value === value) &&
 		(mode !== "chat" || value !== "fx")
 	);
+}
+
+export function canControlSessionAccount(session: WorkspaceSession): boolean {
+	return !session.cloud && Boolean(initialAccountProvider(session.provider));
 }
 
 // SwitchAgentDialog is opened from a DropdownMenuItem ("Switch agent" in the
@@ -135,18 +141,21 @@ function SwitchTargetPicker({
 	disabled,
 	mode,
 	onChange,
+	onCurrentAccount,
 	value,
 }: {
 	currentHarness: string;
 	disabled: boolean;
 	mode?: WorkspaceSession["mode"];
 	onChange: (value: SwitchAgentHarness) => void;
+	onCurrentAccount?: () => void;
 	value: SwitchAgentHarness;
 }) {
 	const { t } = useTranslation();
+	const openingAccount = useRef(false);
 	const options = ALL_SWITCH_AGENT_OPTIONS.map((option) => ({
 		...option,
-		disabled: !canSwitchAgentHarness(option.value, mode) || option.value === currentHarness,
+		disabled: !canSwitchAgentHarness(option.value, mode) || (option.value === currentHarness && !onCurrentAccount),
 	}));
 	const selected = options.find((option) => option.value === value);
 	return (
@@ -157,7 +166,17 @@ function SwitchTargetPicker({
 			menuClassName="settings-agent-menu-surface"
 			menuItemClassName="settings-agent-menu-item"
 			onChange={(nextValue) => {
+				if (nextValue === currentHarness && onCurrentAccount) {
+					openingAccount.current = true;
+					onCurrentAccount();
+					return;
+				}
 				if (canSwitchAgentHarness(nextValue, mode) && nextValue !== currentHarness) onChange(nextValue);
+			}}
+			onCloseAutoFocus={(event) => {
+				if (!openingAccount.current) return;
+				openingAccount.current = false;
+				event.preventDefault();
 			}}
 			options={options}
 			renderMenuItem={(option) => {
@@ -175,7 +194,7 @@ function SwitchTargetPicker({
 						) : current ? (
 							<span className="shrink-0 text-micro text-settings-muted">
 								<span className="sr-only">, </span>
-								{t("switchAgent.current")}
+								{t(onCurrentAccount ? "switchAgent.accountAction" : "switchAgent.current")}
 							</span>
 						) : null}
 					</span>
@@ -197,34 +216,41 @@ function SwitchTargetPicker({
 
 type SwitchAgentDialogProps = {
 	agentSwitch?: AgentSwitchSummary;
+	includeAccountControls?: boolean;
 	container: HTMLElement;
 	open: boolean;
 	session: WorkspaceSession;
 	onOpenChange: (open: boolean) => void;
 };
 
-export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpenChange }: SwitchAgentDialogProps) {
+export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpenChange, includeAccountControls = false }: SwitchAgentDialogProps) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
+	const accountControlsAvailable = includeAccountControls && canControlSessionAccount(session);
+	const agentControlsAvailable = session.kind === "worker" && sessionIsActive(session) && canSwitchAgentHarness(session.provider, session.mode);
+	const [switchTab, setSwitchTab] = useState(accountControlsAvailable && !agentControlsAvailable ? "account" : "agent");
+	const [accountVisited, setAccountVisited] = useState(accountControlsAvailable && !agentControlsAvailable);
+	const [accountSwitchLocked, setAccountSwitchLocked] = useState(false);
 	const defaultTargetHarness: SwitchAgentHarness = session.provider === "claude-code" ? "codex" : "claude-code";
 	const [targetHarness, setTargetHarness] = useState<SwitchAgentHarness>(defaultTargetHarness);
 	const [model, setModel] = useState("");
 	const [mode, setMode] = useState("");
 	const [modelTouched, setModelTouched] = useState(false);
+	const projectId = session.workspaceId === STANDALONE_WORKSPACE_ID ? "" : session.workspaceId;
 	const projectQuery = useQuery({
-		queryKey: ["project", session.workspaceId],
-		enabled: open,
+		queryKey: ["project", projectId],
+		enabled: open && Boolean(projectId),
 		staleTime: 30_000,
 		queryFn: async () => {
 			const { data, error } = await apiClient.GET("/api/v1/projects/{id}", {
-				params: { path: { id: session.workspaceId } },
+				params: { path: { id: projectId } },
 			});
 			if (error) throw new Error(apiErrorMessage(error));
 			if (data?.status !== "ok" || !data.project) throw new Error(t("newTask.configUnavailable"));
 			return data.project as components["schemas"]["Project"];
 		},
 	});
-	const modelCatalog = useQuery(agentModelsQueryOptions(targetHarness, session.workspaceId)).data;
+	const modelCatalog = useQuery(agentModelsQueryOptions(targetHarness, projectId)).data;
 	const projectKnown = Boolean(projectQuery.data);
 	const role = session.kind === "orchestrator" ? projectQuery.data?.config?.orchestrator : projectQuery.data?.config?.worker;
 	const roleMatches = !role?.agent || role.agent === targetHarness;
@@ -247,6 +273,7 @@ export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpe
 	// cannot leave this dialog pinned to an older recovery-required snapshot.
 	const durableSwitch = agentSwitch ?? session.activeAgentSwitch;
 	const recoveryRequired = durableSwitch ? agentSwitchNeedsRecovery(durableSwitch) : false;
+	const activeTab = recoveryRequired ? "agent" : switchTab;
 	const sourceStopRecoveryRequired = durableSwitch ? agentSwitchNeedsSourceStopRecovery(durableSwitch) : false;
 	const sourceRestoreRequired = durableSwitch ? agentSwitchNeedsSourceRestore(durableSwitch) : false;
 	const sourceRecoveryRequired = durableSwitch ? agentSwitchNeedsSourceRecovery(durableSwitch) : false;
@@ -275,6 +302,11 @@ export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpe
 	);
 	const [refreshingRecovery, setRefreshingRecovery] = useState(false);
 	const operationPending = admissionPending || recoverAgentSwitch.isPending;
+	const openAccount = () => {
+		if (!accountControlsAvailable || operationPending || durableSwitching || recoveryRequired) return;
+		setAccountVisited(true);
+		setSwitchTab("account");
+	};
 	const suppressOpeningRace = useSuppressOpeningRace(open);
 	useEffect(() => {
 		setTargetHarness(session.provider === "claude-code" ? "codex" : "claude-code");
@@ -302,7 +334,7 @@ export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpe
 
 	const submit = (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
-		if (admissionPending || durableSwitching || recoveryRequired) return;
+		if (admissionPending || durableSwitching || recoveryRequired || accountSwitchLocked || (accountControlsAvailable && (switchTab !== "agent" || !agentControlsAvailable))) return;
 		switchAgent.mutate(
 			{
 				session,
@@ -326,6 +358,147 @@ export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpe
 			setRefreshingRecovery(false);
 		}
 	};
+
+	const agentPanel = (
+		<fieldset disabled={accountControlsAvailable && ((!agentControlsAvailable && !recoveryRequired) || accountSwitchLocked)}>
+			{recoveryRequired ? (
+				<div className="flex flex-col gap-4 px-4 pb-4 pt-4">
+					<div className="flex items-start gap-3 rounded-lg border border-warning/40 bg-warning/5 px-3 py-3">
+						<TriangleAlert aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-warning" />
+						<div className="min-w-0">
+							<p className="font-mono text-control font-medium text-foreground">
+								{t(recoveryTitleKey, { source: sourceLabel })}
+							</p>
+							<p className="mt-1 text-caption leading-4 text-muted-foreground">
+								{t(recoveryDescriptionKey, { source: sourceLabel })}
+							</p>
+							{sourceRecoveryRequired && recoverAgentSwitch.error instanceof Error ? (
+								<p className="mt-2 text-caption leading-4 text-error" role="alert">
+									{recoverAgentSwitch.error.message}
+								</p>
+							) : null}
+						</div>
+					</div>
+					{sourceRecoveryRequired && durableSwitch ? (
+						<Button
+							className="self-end"
+							disabled={recoverAgentSwitch.isPending}
+							onClick={() =>
+								recoverAgentSwitch.mutate({
+									sessionId: session.id,
+									switchId: durableSwitch.id,
+								})
+							}
+							type="button"
+							variant="outline"
+						>
+							{recoverAgentSwitch.isPending ? (
+								<LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />
+							) : null}
+							{t(sourceRecoveryActionKey, { source: sourceLabel })}
+						</Button>
+					) : (
+						<Button
+							className="self-end"
+							disabled={refreshingRecovery}
+							onClick={() => void refreshRecovery()}
+							type="button"
+							variant="outline"
+						>
+							{refreshingRecovery ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
+							{t("settings.project.refresh")}
+						</Button>
+					)}
+				</div>
+			) : (
+				<form className="flex flex-col gap-3 px-4 pb-4 pt-4" onSubmit={submit}>
+				{error || projectQuery.error || modelWarning ? (
+					<div>
+						{error ? (
+							<p className="text-caption leading-4 text-error" role="alert">
+								{error}
+							</p>
+						) : null}
+						{!error && projectQuery.error ? (
+							<p className="text-caption leading-4 text-error" role="alert">
+								{projectQuery.error instanceof Error ? projectQuery.error.message : t("newTask.configUnavailable")}
+							</p>
+						) : null}
+						{!error && !projectQuery.error && modelWarning ? (
+							<p className="text-caption text-warning">{modelWarning}</p>
+						) : null}
+					</div>
+				) : null}
+
+				<div className="composer-toolbar p-0!">
+					<div className="composer-run-controls" role="group" aria-label={t("newTask.runsWith")}>
+						<div className="composer-toolbar-slot">
+							<SwitchTargetPicker
+								currentHarness={session.provider}
+								disabled={admissionPending}
+								mode={session.mode}
+								onChange={changeTarget}
+								onCurrentAccount={accountControlsAvailable ? openAccount : undefined}
+								value={targetHarness}
+							/>
+						</div>
+						<div className="composer-toolbar-slot">
+							<AgentModelPicker
+								agentId={targetHarness}
+								agentLabel={agentLabel(targetHarness)}
+								disabled={admissionPending}
+								mode={modelCatalog?.selectionMode === "mode" ? visibleChoice : ""}
+								onModeChange={(value) => {
+									clearFailedAttempt();
+									setMode(value);
+									setModel("");
+									setModelTouched(true);
+								}}
+								onModelChange={(value) => {
+									clearFailedAttempt();
+									setModel(value);
+									setMode("");
+									setModelTouched(true);
+								}}
+								onWarningChange={setModelWarning}
+								projectId={projectId}
+								value={modelCatalog?.selectionMode === "mode" ? "" : visibleChoice}
+							/>
+						</div>
+					</div>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<span className="inline-flex">
+								<Button
+									aria-label={admissionPending ? t("newTask.starting") : t("switchAgent.confirm")}
+									className="size-(--size-settings-action-height)"
+									disabled={admissionPending}
+									size="none"
+									type="submit"
+									variant="primary"
+								>
+									{admissionPending ? (
+										<LoaderCircle className="size-icon-base animate-spin" aria-hidden="true" />
+									) : (
+										<Repeat2 className="size-4 stroke-[1.8]" aria-hidden="true" />
+									)}
+								</Button>
+							</span>
+						</TooltipTrigger>
+						<TooltipContent side="bottom">
+							{admissionPending ? t("newTask.starting") : t("switchAgent.confirm")}
+						</TooltipContent>
+					</Tooltip>
+				</div>
+				</form>
+			)}
+			{accountControlsAvailable && !recoveryRequired ? <div className="flex justify-end px-4 pb-3">
+				<Button variant="ghost" size="sm" type="button" disabled={operationPending || durableSwitching} onClick={openAccount}>
+					{t("switchAgent.accountAction")}
+				</Button>
+			</div> : null}
+		</fieldset>
+	);
 
 	return (
 		<Dialog
@@ -352,11 +525,11 @@ export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpe
 					if (suppressOpeningRace.current && isFromDismissedMenuTrigger(event.target)) event.preventDefault();
 				}}
 				showCloseButton={false}
-				className="absolute left-1/2 top-1/2 z-overlay w-[min(var(--size-dialog-md),calc(100%-var(--space-8)))] max-w-none -translate-x-1/2 -translate-y-1/2 gap-0 overflow-hidden rounded-xl border border-border-strong bg-surface/95 p-0 text-foreground shadow-xl shadow-black/20 data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none"
+				className="absolute left-1/2 top-1/2 z-overlay max-h-[calc(100%-var(--space-8))] w-[min(var(--size-dialog-md),calc(100%-var(--space-8)))] max-w-none -translate-x-1/2 -translate-y-1/2 gap-0 overflow-y-auto rounded-xl border border-border-strong bg-surface/95 p-0 text-foreground shadow-xl shadow-black/20 data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none"
 			>
 					<DialogClose asChild>
 						<button
-							aria-label={t("switchAgent.close")}
+							aria-label={t(accountControlsAvailable && activeTab === "account" ? "switchAgent.accountClose" : "switchAgent.close")}
 							className="settings-dialog-close-button settings-close-button"
 							disabled={operationPending}
 							type="button"
@@ -365,142 +538,19 @@ export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpe
 						</button>
 					</DialogClose>
 					<DialogTitle className="settings-dialog-title px-4 pr-12 pt-3">
-						{t("switchAgent.title")}
+						{t(accountControlsAvailable && activeTab === "account" ? "switchAgent.accountAction" : "switchAgent.title")}
 					</DialogTitle>
 					<DialogDescription className="px-4 pr-12 pt-0.5 text-caption leading-4 text-muted-foreground">
-						{t("switchAgent.description", { current: agentLabel(session.provider) })}
+						{t(accountControlsAvailable && activeTab === "account" ? "switchAgent.accountDescription" : "switchAgent.description", { current: agentLabel(session.provider) })}
 					</DialogDescription>
 
-					{recoveryRequired ? (
-						<div className="flex flex-col gap-4 px-4 pb-4 pt-4">
-							<div className="flex items-start gap-3 rounded-lg border border-warning/40 bg-warning/5 px-3 py-3">
-								<TriangleAlert aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-warning" />
-								<div className="min-w-0">
-									<p className="font-mono text-control font-medium text-foreground">
-										{t(recoveryTitleKey, { source: sourceLabel })}
-									</p>
-									<p className="mt-1 text-caption leading-4 text-muted-foreground">
-										{t(recoveryDescriptionKey, { source: sourceLabel })}
-									</p>
-									{sourceRecoveryRequired && recoverAgentSwitch.error instanceof Error ? (
-										<p className="mt-2 text-caption leading-4 text-error" role="alert">
-											{recoverAgentSwitch.error.message}
-										</p>
-									) : null}
-								</div>
-							</div>
-							{sourceRecoveryRequired && durableSwitch ? (
-								<Button
-									className="self-end"
-									disabled={recoverAgentSwitch.isPending}
-									onClick={() =>
-										recoverAgentSwitch.mutate({
-											sessionId: session.id,
-											switchId: durableSwitch.id,
-										})
-									}
-									type="button"
-									variant="outline"
-								>
-									{recoverAgentSwitch.isPending ? (
-										<LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />
-									) : null}
-									{t(sourceRecoveryActionKey, { source: sourceLabel })}
-								</Button>
-							) : (
-								<Button
-									className="self-end"
-									disabled={refreshingRecovery}
-									onClick={() => void refreshRecovery()}
-									type="button"
-									variant="outline"
-								>
-									{refreshingRecovery ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
-									{t("settings.project.refresh")}
-								</Button>
-							)}
-						</div>
-					) : (
-						<form className="flex flex-col gap-3 px-4 pb-4 pt-4" onSubmit={submit}>
-						{error || projectQuery.error || modelWarning ? (
-							<div>
-								{error ? (
-									<p className="text-caption leading-4 text-error" role="alert">
-										{error}
-									</p>
-								) : null}
-								{!error && projectQuery.error ? (
-									<p className="text-caption leading-4 text-error" role="alert">
-										{projectQuery.error instanceof Error ? projectQuery.error.message : t("newTask.configUnavailable")}
-									</p>
-								) : null}
-								{!error && !projectQuery.error && modelWarning ? (
-									<p className="text-caption text-warning">{modelWarning}</p>
-								) : null}
-							</div>
-						) : null}
-
-						<div className="composer-toolbar p-0!">
-							<div className="composer-run-controls" role="group" aria-label={t("newTask.runsWith")}>
-								<div className="composer-toolbar-slot">
-									<SwitchTargetPicker
-										currentHarness={session.provider}
-										disabled={admissionPending}
-										mode={session.mode}
-										onChange={changeTarget}
-										value={targetHarness}
-									/>
-								</div>
-								<div className="composer-toolbar-slot">
-									<AgentModelPicker
-										agentId={targetHarness}
-										agentLabel={agentLabel(targetHarness)}
-										disabled={admissionPending}
-										mode={modelCatalog?.selectionMode === "mode" ? visibleChoice : ""}
-										onModeChange={(value) => {
-											clearFailedAttempt();
-											setMode(value);
-											setModel("");
-											setModelTouched(true);
-										}}
-										onModelChange={(value) => {
-											clearFailedAttempt();
-											setModel(value);
-											setMode("");
-											setModelTouched(true);
-										}}
-										onWarningChange={setModelWarning}
-										projectId={session.workspaceId}
-										value={modelCatalog?.selectionMode === "mode" ? "" : visibleChoice}
-									/>
-								</div>
-							</div>
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<span className="inline-flex">
-										<Button
-											aria-label={admissionPending ? t("newTask.starting") : t("switchAgent.confirm")}
-											className="size-(--size-settings-action-height)"
-											disabled={admissionPending}
-											size="none"
-											type="submit"
-											variant="primary"
-										>
-											{admissionPending ? (
-												<LoaderCircle className="size-icon-base animate-spin" aria-hidden="true" />
-											) : (
-												<Repeat2 className="size-4 stroke-[1.8]" aria-hidden="true" />
-											)}
-										</Button>
-									</span>
-								</TooltipTrigger>
-								<TooltipContent side="bottom">
-									{admissionPending ? t("newTask.starting") : t("switchAgent.confirm")}
-								</TooltipContent>
-							</Tooltip>
-						</div>
-						</form>
-					)}
+					<div hidden={accountControlsAvailable && activeTab === "account"}>{agentPanel}</div>
+					{accountControlsAvailable && accountVisited ? <div hidden={activeTab !== "account"} className="px-4 pb-4 pt-3">
+						<SessionAccountControl compact key={session.provider} sessionId={session.id} onSwitchLockChange={setAccountSwitchLocked} />
+						{agentControlsAvailable ? <Button className="mt-3" variant="ghost" size="sm" type="button" disabled={accountSwitchLocked} onClick={() => setSwitchTab("agent")}>
+							{t("switchAgent.backToAgent")}
+						</Button> : null}
+					</div> : null}
 			</DialogContent>
 		</Dialog>
 	);

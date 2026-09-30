@@ -1,4 +1,9 @@
 {
+	"switchAgent.accountAction": "Switch account",
+	"switchAgent.backToAgent": "Back to agent",
+	"switchAgent.accountDetails": "More options",
+	"switchAgent.accountClose": "Close account switch dialog",
+	"switchAgent.accountDescription": "Use another account for {{current}}.",
 	"accountsManager.initial.shortChoose": "Account",
 	"accountsManager.browser.link": "Sign-in link",
 	"accountsManager.browser.open": "Open sign-in page",

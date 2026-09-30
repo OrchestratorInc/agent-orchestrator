@@ -108,7 +108,7 @@ Pass: distinct verified identities, no secret displayed, no false success from m
 1. Open **New task**. Keep the normal provider, model and effort controls. Find the separate account dropdown underneath them.
 2. Choose A explicitly. Confirm its email/label and quota summary if supported. Choose a model advertised for A and an offered effort level.
 3. Start a throwaway session with: `Reply only TEST_A_READY. Do not use tools or modify files.`
-4. Open the session account control. Record the committed account ID, mode and revision. A proposed or pending target is not the committed account.
+4. Open the session's three-dot menu, choose **Switch agent**, then **Switch account**. Choosing the current agent in the agent picker opens the same account popup. Expand **More options** to inspect the committed account ID, mode and revision. A proposed or pending target is not the committed account.
 5. Repeat with B in a second session, using `TEST_B_READY`. Changing the account must clear incompatible stale model/effort choices. Unavailable accounts remain visible but cannot be selected for a managed start.
 
 Pass: each session has the explicitly chosen binding and produces an actual response. No implicit native choice, silent account replacement or unsupported-model fallback. A native test requires explicitly choosing **Native credentials** and an existing native login. Do not assume every provider supports managed Chat: record an unsupported mode as blocked, not a managed success.
@@ -124,7 +124,7 @@ Pass: overlapping real responses with unchanged A/B bindings and an unaffected n
 
 ### S4. Switch one live session
 
-1. Give session A a harmless conversation marker, then request a switch to B through its session account control.
+1. Give session A a harmless conversation marker. Open its three-dot menu, choose **Switch agent**, then **Switch account** to request a switch to B. Choosing a different agent still uses the original agent/model row. Choosing the current agent opens account switching instead of a same-agent handoff.
 2. Choose timing explicitly: wait for the current turn, or stop now. Save the operation ID and source revision.
 3. Watch pending progress without treating acceptance as success. Wait for the daemon to report readiness and the committed binding to change.
 4. Confirm the conversation marker remains available when resuming history. Start a new conversation only if you explicitly choose that option.

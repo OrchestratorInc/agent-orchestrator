@@ -1,4 +1,9 @@
 {
+	"switchAgent.accountAction": "계정 전환",
+	"switchAgent.backToAgent": "에이전트로 돌아가기",
+	"switchAgent.accountDetails": "추가 옵션",
+	"switchAgent.accountClose": "계정 전환 대화상자 닫기",
+	"switchAgent.accountDescription": "{{current}}에 다른 계정을 사용합니다.",
 	"accountsManager.initial.shortChoose": "계정",
 	"accountsManager.browser.link": "로그인 링크",
 	"accountsManager.browser.open": "로그인 페이지 열기",

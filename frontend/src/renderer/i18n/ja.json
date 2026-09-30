@@ -1,4 +1,9 @@
 {
+	"switchAgent.accountAction": "アカウントを切り替え",
+	"switchAgent.backToAgent": "エージェントに戻る",
+	"switchAgent.accountDetails": "その他のオプション",
+	"switchAgent.accountClose": "アカウント切り替えを閉じる",
+	"switchAgent.accountDescription": "{{current}}で別のアカウントを使用します。",
 	"accountsManager.initial.shortChoose": "アカウント",
 	"accountsManager.browser.link": "サインインリンク",
 	"accountsManager.browser.open": "サインインページを開く",

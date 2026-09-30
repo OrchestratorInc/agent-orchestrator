@@ -35,7 +35,6 @@ import { CloudFileContentPane, CloudWorkspaceDiff } from "./CloudWorkspaceDiff";
 import { SessionFileTab } from "./SessionFileTabs";
 import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import { SessionActionsMenu } from "./SessionActionsMenu";
-import { SessionAccountButton } from "./SessionAccountControl";
 import { SessionInspector } from "./SessionInspector";
 import {
 	SessionInterfaceSwitchButton,
@@ -45,7 +44,7 @@ import {
 	interfaceTransitionOffersHistoryRecovery,
 } from "./SessionInterfaceSwitch";
 import { ShellTopbar } from "./ShellTopbar";
-import { SwitchAgentDialog } from "./SwitchAgentDialog";
+import { canControlSessionAccount, SwitchAgentDialog } from "./SwitchAgentDialog";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
 import { TerminalSwitchAgentButton } from "./TerminalSwitchAgentButton";
 import { TopbarButton } from "./TopbarButton";
@@ -1714,6 +1713,7 @@ export function SessionView({ sessionId }: SessionViewProps) {
 	const handoffMenuItem = useMemo(() => session ? (
 		<TerminalSwitchAgentButton
 			key={session.id}
+			includeAccountControls
 			variant="menu-item"
 			agentSwitch={handoffAgentSwitch}
 			onOpenChange={handleHandoffDialogOpenChange}
@@ -1723,22 +1723,16 @@ export function SessionView({ sessionId }: SessionViewProps) {
 			switchError={handoffSwitchError}
 		/>
 	) : null, [handoffAgentSwitch, handoffControlPresentation, handoffDialogOpen, handoffSwitchError, handleHandoffDialogOpenChange, session]);
-	// The ⋮ only holds the Chat/Terminal switch and Switch agent, and agent
-	// switching is limited to Claude Code and Codex, which both have Chat. A
-	// harness without Chat therefore gets no ⋮ instead of an empty menu.
-	const sessionTabActions = useMemo(() => interfaceSwitchUnsupported ? null : (
+	const accountControlsAvailable = Boolean(session && canControlSessionAccount(session));
+	const sessionTabActions = useMemo(() => interfaceSwitchUnsupported && !accountControlsAvailable ? null : (
 		<SessionActionsMenu inlineStatus={interfaceSwitchInlineStatus}>
 			{interfaceSwitchMenuItem}
 			{handoffMenuItem}
 		</SessionActionsMenu>
-	), [handoffMenuItem, interfaceSwitchInlineStatus, interfaceSwitchMenuItem, interfaceSwitchUnsupported]);
+	), [accountControlsAvailable, handoffMenuItem, interfaceSwitchInlineStatus, interfaceSwitchMenuItem, interfaceSwitchUnsupported]);
 	// Spinner replaces the ⋮ at the same size, so the tab title does not need a
 	// wider action slot while switching.
 	const sessionTabActionWide = false;
-	const accountHeaderActions = useMemo(() => <>
-		{session && !session.cloud ? <SessionAccountButton key={session.id} sessionId={session.id} /> : null}
-		{sessionHeaderActions}
-	</>, [session?.id, session?.cloud]);
 
 	useEffect(() => {
 		setHandoffDialogOpen(false);
@@ -2027,6 +2021,8 @@ export function SessionView({ sessionId }: SessionViewProps) {
 							{cloudStage === "paused_by_coder" ? <CloudPausedStatus /> : null}
 							{session && handoffDialogContainer ? (
 								<SwitchAgentDialog
+									key={session.id}
+									includeAccountControls
 									agentSwitch={handoffAgentSwitch}
 									container={handoffDialogContainer}
 									onOpenChange={handleHandoffDialogOpenChange}
@@ -2064,7 +2060,7 @@ export function SessionView({ sessionId }: SessionViewProps) {
 									onRenameShellTerminal={renameShellTerminalByHandle}
 									daemonReady={daemonStatus.state === "ready"}
 									theme={theme}
-									headerActions={accountHeaderActions}
+									headerActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
 									sessionTabActionWide={sessionTabActionWide}
 									tabStripAction={newShellTerminalAction}
@@ -2112,7 +2108,7 @@ export function SessionView({ sessionId }: SessionViewProps) {
 									shellTerminals={shellTerminals}
 									terminalTarget={routedTerminalTarget}
 									theme={theme}
-									topbarActions={accountHeaderActions}
+									topbarActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
 									sessionTabActionWide={sessionTabActionWide}
 									tabStripAction={newShellTerminalAction}

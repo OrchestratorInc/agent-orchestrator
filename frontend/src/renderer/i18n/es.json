@@ -1,4 +1,9 @@
 {
+	"switchAgent.accountAction": "Cambiar de cuenta",
+	"switchAgent.backToAgent": "Volver al agente",
+	"switchAgent.accountDetails": "Más opciones",
+	"switchAgent.accountClose": "Cerrar el diálogo de cambio de cuenta",
+	"switchAgent.accountDescription": "Usa otra cuenta para {{current}}.",
 	"accountsManager.initial.shortChoose": "Cuenta",
 	"accountsManager.browser.link": "Enlace de inicio de sesión",
 	"accountsManager.browser.open": "Abrir página de inicio de sesión",

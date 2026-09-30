@@ -205,10 +205,6 @@ vi.mock("../hooks/useSettings", () => ({
 		error: undefined,
 	}),
 }));
-vi.mock("./TerminalSwitchAgentButton", () => ({
-	TerminalSwitchAgentButton: ({ variant }: { variant?: "icon" | "menu-item" }) =>
-		variant === "menu-item" ? null : <button aria-label="Switch agent" type="button" />,
-}));
 vi.mock("./chat/SessionChatSurface", async () => {
 	const { memo } = await vi.importActual<typeof import("react")>("react");
 	return { SessionChatSurface: memo(({
@@ -803,19 +799,21 @@ describe("SessionView", () => {
 		});
 	});
 
-	it.each(["tui", "chat"] as const)("opens managed account controls explicitly from a local %s session", async mode => {
+	it.each(["tui", "chat"] as const)("opens managed account controls through Switch agent in a local %s session", async mode => {
 		workerSession("sess-1").mode = mode;
 		render(<SessionView sessionId="sess-1" />);
 		expect(reviewGetMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}/account")).toHaveLength(0);
 		reviewGetMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/account"
 			? { error: { requestId: "capability-79" }, response: new Response(null, { status: 501 }) }
 			: { data: { revision: 1, accounts: [], availability: "ready", stale: false }, response: new Response(null, { status: 200 }) });
-		fireEvent.click(screen.getByRole("button", { name: "Session account controls" }));
-		const dialog = await screen.findByRole("dialog", { name: "Session account controls" });
+		expect(screen.queryByRole("button", { name: "Session account controls" })).not.toBeInTheDocument();
+		await chooseSessionAction("Switch agent");
+		const dialog = await screen.findByRole("dialog", { name: "Switch agent" });
+		await userEvent.click(within(dialog).getByRole("button", { name: "Switch account" }));
 		expect(await within(dialog).findByRole("alert")).toHaveTextContent("capability-79");
 		expect(interfaceTransitionMock.start).not.toHaveBeenCalled();
-		fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
-		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Session account controls" })).not.toBeInTheDocument());
+		fireEvent.click(within(dialog).getByRole("button", { name: "Close account switch dialog" }));
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Switch account" })).not.toBeInTheDocument());
 	});
 
 	it("does not expose local account controls for a cloud session", () => {
@@ -2572,7 +2570,10 @@ describe("SessionView", () => {
 	it.each([
 		["worker", "sess-1"],
 		["orchestrator", "sess-orch"],
-	] as const)("removes the session actions menu for %s sessions when Chat UI is unsupported", (_label, sessionId) => {
+	] as const)("retains account access for local %s sessions when Chat UI is unsupported", async (_label, sessionId) => {
+		reviewGetMock.mockImplementation(async (path: string) => path === "/api/v1/accounts-manager/accounts"
+			? { data: { revision: 1, accounts: [], availability: "ready", stale: false }, response: new Response(null, { status: 200 }) }
+			: { error: { requestId: "unavailable-79" }, response: new Response(null, { status: 501 }) });
 		interfaceTransitionState.status = { supported: false, targetMode: "chat", reasonCode: "CHAT_UNSUPPORTED" };
 		const session = workerSession(sessionId);
 		session.mode = "tui";
@@ -2581,8 +2582,9 @@ describe("SessionView", () => {
 
 		render(<SessionView sessionId={sessionId} />);
 
-		// Nothing in the menu applies, so it must not render as an empty dropdown.
-		expect(screen.queryByRole("button", { name: "Session actions" })).not.toBeInTheDocument();
+		await chooseSessionAction("Switch agent");
+		if (_label === "worker") await userEvent.click(await screen.findByRole("button", { name: "Switch account" }));
+		expect(await screen.findByRole("dialog", { name: "Switch account" })).toBeInTheDocument();
 	});
 
 	it.each([

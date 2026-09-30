@@ -1,4 +1,9 @@
 {
+	"switchAgent.accountAction": "切换账户",
+	"switchAgent.backToAgent": "返回代理",
+	"switchAgent.accountDetails": "更多选项",
+	"switchAgent.accountClose": "关闭账户切换对话框",
+	"switchAgent.accountDescription": "为 {{current}} 使用另一个账户。",
 	"accountsManager.initial.shortChoose": "账户",
 	"accountsManager.browser.link": "登录链接",
 	"accountsManager.browser.open": "打开登录页面",

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { UsersRound } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAccountsManagerQuery } from "../hooks/useAccountsManagerQuery";
 import {
@@ -9,27 +8,15 @@ import {
   type AccountSwitch, type AccountSwitchRequest,
 } from "../lib/accounts-manager-controls";
 import { Button } from "./ui/button";
-import { TopbarButton } from "./TopbarButton";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "./ui/dialog";
 import { AccountUsage, accountUsageSummary, useAccountUsage } from "./settings/AccountUsage";
 
-export function SessionAccountButton({ sessionId }: { sessionId: string }) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  return <Dialog open={open} onOpenChange={setOpen}>
-    <DialogTrigger asChild><TopbarButton variant="icon" aria-label={t("accountsManager.controls.sessionTitle")} title={t("accountsManager.controls.sessionTitle")}><UsersRound className="size-4" aria-hidden="true" /></TopbarButton></DialogTrigger>
-    <DialogContent className="max-h-[85vh] overflow-y-auto">
-      <DialogHeader><DialogTitle>{t("accountsManager.controls.sessionTitle")}</DialogTitle><DialogDescription>{t("accountsManager.controls.sessionDescription")}</DialogDescription></DialogHeader>
-      {open ? <SessionAccountControl sessionId={sessionId} /> : null}
-    </DialogContent>
-  </Dialog>;
+type SessionAccountControlProps = { sessionId: string; compact?: boolean; onSwitchLockChange?: (locked: boolean) => void };
+
+export function SessionAccountControl(props: SessionAccountControlProps) {
+  return <SessionAccountPanel key={props.sessionId} {...props} />;
 }
 
-export function SessionAccountControl({ sessionId }: { sessionId: string }) {
-  return <SessionAccountPanel key={sessionId} sessionId={sessionId} />;
-}
-
-function SessionAccountPanel({ sessionId }: { sessionId: string }) {
+function SessionAccountPanel({ sessionId, compact = false, onSwitchLockChange }: SessionAccountControlProps) {
   const { t, i18n } = useTranslation();
   const client = useQueryClient();
   const key = ["accounts-manager", "session", sessionId];
@@ -88,6 +75,8 @@ function SessionAccountPanel({ sessionId }: { sessionId: string }) {
   const pendingCommit = operation?.phase === "ready" && (!binding || binding.revision < operation.targetRevision);
   const unavailable = current.isError || !binding;
   const busy = mutation.isPending || current.isFetching;
+  const switchLocked = mutation.isPending || active || serverActive || unconfirmed || pendingCommit || Boolean(localError) || Boolean(binding?.blocked);
+  useEffect(() => { onSwitchLockChange?.(switchLocked); }, [onSwitchLockChange, switchLocked]);
   useEffect(() => {
     const completed = observed.data;
     if (!submitted || !completed || accountSwitchIsActive(completed) || !binding?.switch) return;
@@ -99,6 +88,12 @@ function SessionAccountPanel({ sessionId }: { sessionId: string }) {
     catch { setLocalError(t("accountsManager.controls.switchSavedError")); }
   }, [submitted, observed.data, binding, sessionId]);
   const accounts = inventory.data?.accounts.filter(account => account.provider === binding?.provider) ?? [];
+  const identity = (id?: string) => {
+    const account = accounts.find(item => item.id === id);
+    if (account?.email) return account.label && account.label !== account.id && account.label !== account.email
+      ? `${account.label} (${account.email})` : account.email;
+    return account?.label || id;
+  };
   const usage = useAccountUsage(accounts);
   const inventoryReady = inventory.data?.availability === "ready" && !inventory.data.stale && !inventory.isError;
   const selected = target.startsWith("managed:") ? accounts.find(account => account.id === target.slice(8)) : undefined;
@@ -124,20 +119,22 @@ function SessionAccountPanel({ sessionId }: { sessionId: string }) {
   };
   return (
     <div className="space-y-4 text-sm">
-      <div className="flex items-center justify-between gap-3">
+      {!compact ? <div className="flex items-center justify-between gap-3">
         <h3 className="font-medium">{t("accountsManager.controls.session")}</h3>
         <Button size="sm" variant="outline" disabled={busy} onClick={() => { void current.refetch(); if (trackedId) void observed.refetch(); }}>{t("accountsManager.controls.refreshSession")}</Button>
-      </div>
-      <p className="text-xs text-muted-foreground">{t("accountsManager.controls.noFallback")}</p>
+      </div> : null}
+      {!compact ? <p className="text-xs text-muted-foreground">{t("accountsManager.controls.noFallback")}</p> : null}
       {current.isPending ? <p role="status">{t("accountsManager.controls.checkingSession")}</p> : null}
       {current.error ? <p role="alert" className="text-destructive">{accountControlMessage(current.error, t)}</p> : null}
       {localError ? <p role="alert" className="text-destructive">{localError}</p> : null}
       {binding ? (
-        <section aria-label={t("accountsManager.controls.committed")} className="rounded-md border border-border p-3 space-y-1">
-          <h4 className="font-medium">{t("accountsManager.controls.committed")}</h4>
-          <p>{binding.mode === "native" ? t("accountsManager.controls.native") : binding.accountId}</p>
-          <p className="text-xs text-muted-foreground">{t("accountsManager.controls.binding", { mode: binding.mode, revision: binding.revision, provider: binding.provider })}</p>
-          <p className="text-xs">{unavailable ? t("accountsManager.controls.stale") : t("accountsManager.controls.available")}</p>
+        <section aria-label={t("accountsManager.controls.committed")} className={compact ? "text-xs text-muted-foreground" : "rounded-md border border-border p-3 space-y-1"}>
+          {compact ? <p>{t("switchAgent.current")}: {binding.mode === "native" ? t("accountsManager.controls.native") : identity(binding.accountId)}</p> : <>
+            <h4 className="font-medium">{t("accountsManager.controls.committed")}</h4>
+            <p>{binding.mode === "native" ? t("accountsManager.controls.native") : binding.accountId}</p>
+            <p className="text-xs text-muted-foreground">{t("accountsManager.controls.binding", { mode: binding.mode, revision: binding.revision, provider: binding.provider })}</p>
+            <p className="text-xs">{unavailable ? t("accountsManager.controls.stale") : t("accountsManager.controls.available")}</p>
+          </>}
           {binding.blocked ? <p role="status">{t("accountsManager.controls.blocked")}</p> : null}
         </section>
       ) : null}
@@ -152,15 +149,17 @@ function SessionAccountPanel({ sessionId }: { sessionId: string }) {
         }}>{t("accountsManager.controls.resendSwitch")}</Button> : null}
       </section> : null}
       {observed.error ? <p role="alert" className="text-destructive">{accountControlMessage(observed.error, t)}</p> : null}
-      {operation ? (
+      {operation && (!compact || active || pendingCommit || submitted || mutation.variables || operation.recoveryRequired || operation.phase === "failed") ? (
         <section aria-label={t("accountsManager.controls.switchOperation")} className="rounded-md border border-border p-3 space-y-2" aria-live="polite">
-          <h4 className="font-medium">{active ? t("accountsManager.controls.pendingSwitch") : t("accountsManager.controls.lastSwitch")}</h4>
-          <p className="break-all">{t("accountsManager.controls.operationId", { id: operation.id })}</p>
-          <p>{t("accountsManager.controls.phase", { phase: operation.phase })}</p>
+          <h4 className="font-medium">{active || pendingCommit ? t("accountsManager.controls.pendingSwitch") : t("accountsManager.controls.lastSwitch")}</h4>
+          {!compact ? <p className="break-all">{t("accountsManager.controls.operationId", { id: operation.id })}</p> : null}
+          <p>{compact && pendingCommit ? t("accountsManager.controls.accepted") : t("accountsManager.controls.phase", { phase: operation.phase })}</p>
+          {!compact ? <>
           <p>{t("accountsManager.controls.target", { target: operation.targetMode === "native" ? t("accountsManager.controls.native") : operation.targetAccountId })}</p>
           <p>{t("accountsManager.controls.revisions", { policy: operation.policy, source: operation.sourceRevision, target: operation.targetRevision })}</p>
           <p>{operation.newConversation ? t("accountsManager.controls.newConversation") : t("accountsManager.controls.preserveConversation")}</p>
           <p className="text-xs text-muted-foreground">{t("accountsManager.controls.accepted")}</p>
+          </> : null}
           {operation.recoveryRequired ? <p role="status">{t("accountsManager.controls.switchRecovery")}</p> : null}
           <div className="flex gap-2">
             {canRetry ? <Button size="sm" disabled={busy || unavailable || observed.isFetching || observed.isError} onClick={() => change("retry")}>{t("accountsManager.controls.retrySwitch")}</Button> : null}
@@ -172,21 +171,30 @@ function SessionAccountPanel({ sessionId }: { sessionId: string }) {
       {!unavailable ? (
         <fieldset className="space-y-3" disabled={busy || active || serverActive || unconfirmed || pendingCommit || Boolean(localError) || binding.blocked}>
           <label className="block space-y-1">{t("accountsManager.controls.targetLabel")}
-            <select aria-label={t("accountsManager.controls.targetLabel")} className="block w-full rounded-md border border-input bg-background p-2" value={target} onChange={event => setTarget(event.target.value)}>
+            <select autoFocus={compact} aria-label={t("accountsManager.controls.targetLabel")} className="block w-full rounded-md border border-input bg-background p-2" value={target} onChange={event => setTarget(event.target.value)}>
               <option value="">{t("accountsManager.controls.choose")}</option>
               <option value="native">{t("accountsManager.controls.chooseNative")}</option>
-              {accounts.map((account,index) => <option key={account.id} value={`managed:${account.id}`} disabled={!inventoryReady || account.verification !== "verified" || account.disabled || account.unavailable || account.status !== "active"}>{account.label || account.id} ({account.id}) | {accountUsageSummary(account, usage[index], t, i18n.resolvedLanguage)}</option>)}
+              {accounts.map((account,index) => <option key={account.id} value={`managed:${account.id}`} disabled={!inventoryReady || account.verification !== "verified" || account.disabled || account.unavailable || account.status !== "active"}>{compact
+                ? `${identity(account.id)}${account.quotaSupported && usage[index] ? ` | ${accountUsageSummary(account, usage[index], t, i18n.resolvedLanguage)}` : ""}`
+                : `${account.label || account.id} (${account.id}) | ${accountUsageSummary(account, usage[index], t, i18n.resolvedLanguage)}`}</option>)}
             </select>
           </label>
           {!inventoryReady ? <p>{t("accountsManager.controls.inventoryUnavailable")}</p> : null}
-          {selected ? <AccountUsage key={`${selected.id}:${selected.generation}`} account={selected} /> : null}
+          {selected && !compact ? <AccountUsage key={`${selected.id}:${selected.generation}`} account={selected} /> : null}
           <label className="block space-y-1">{t("accountsManager.controls.timing")}
             <select aria-label={t("accountsManager.controls.timing")} className="block w-full rounded-md border border-input bg-background p-2" value={policy} onChange={event => setPolicy(event.target.value as typeof policy)}>
               <option value="">{t("accountsManager.controls.chooseTiming")}</option><option value="drain">{t("accountsManager.controls.drain")}</option><option value="interrupt">{t("accountsManager.controls.interrupt")}</option>
             </select>
           </label>
-          <label className="flex gap-2"><input type="checkbox" checked={newConversation} onChange={event => setNewConversation(event.target.checked)} />{t("accountsManager.controls.startNew")}</label>
-          <Button disabled={!selectedReady || !policy} onClick={request}>{t("accountsManager.controls.requestSwitch")}</Button>
+          {compact ? <details className="text-xs text-muted-foreground space-y-2">
+            <summary className="cursor-pointer">{t("switchAgent.accountDetails")}</summary>
+            <p className="break-all">{binding.accountId}</p>
+            <p>{t("accountsManager.controls.binding", { mode: binding.mode, revision: binding.revision, provider: binding.provider })}</p>
+            {operation ? <p className="break-all">{t("accountsManager.controls.operationId", { id: operation.id })}</p> : null}
+            <label className="flex gap-2"><input type="checkbox" checked={newConversation} onChange={event => setNewConversation(event.target.checked)} />{t("accountsManager.controls.startNew")}</label>
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => { void current.refetch(); if (trackedId) void observed.refetch(); }}>{t("accountsManager.controls.refreshSession")}</Button>
+          </details> : <label className="flex gap-2"><input type="checkbox" checked={newConversation} onChange={event => setNewConversation(event.target.checked)} />{t("accountsManager.controls.startNew")}</label>}
+          <Button disabled={!selectedReady || !policy} onClick={request}>{t(compact ? "switchAgent.accountAction" : "accountsManager.controls.requestSwitch")}</Button>
         </fieldset>
       ) : null}
     </div>
