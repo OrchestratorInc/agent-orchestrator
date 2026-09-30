@@ -582,11 +582,17 @@ export function HarnessSettingsSection({
 								) : null}
 							</>
 						) : null;
-						// Re-running a login for a harness that is already logged in lives in a
-						// small options menu so it doesn't compete with the row's main action.
+						// Re-running a login for a harness that is already logged in. When the
+						// row still has a main action (install, local or cloud login), these
+						// secondary actions sit behind a menu; when it has none, they are the
+						// row's only actions and are shown as buttons.
 						const canRefreshLocal = authPlan?.action === "login" && authStatus === "authorized";
 						const canRefreshCloud = isCloudCapable && cloudConnected && cloudLoginAgent !== agentId;
-						const optionsMenu = canRefreshLocal || canRefreshCloud ? (
+						const refreshLocalDisabled = !authPlan?.available || authState?.pending || Boolean(authWorkflow);
+						const hasPrimaryAction = !isInstalled
+							|| (Boolean(authPlan) && authPlan?.action !== "instructions" && authStatus !== "authorized" && !mimoConfigured)
+							|| (isCloudCapable && !cloudConnected);
+						const refreshActions = !canRefreshLocal && !canRefreshCloud ? null : hasPrimaryAction ? (
 							<DropdownMenu>
 								<DropdownMenuTrigger asChild>
 									<Button type="button" size="icon-sm" variant="ghost" aria-label={t("settings.harness.moreOptions", { agent: agentLabel(agentId) })}>
@@ -595,7 +601,7 @@ export function HarnessSettingsSection({
 								</DropdownMenuTrigger>
 								<DropdownMenuContent align="end">
 									{canRefreshLocal ? (
-										<DropdownMenuItem disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} onSelect={() => void startAuth(agentId)}>
+										<DropdownMenuItem disabled={refreshLocalDisabled} onSelect={() => void startAuth(agentId)}>
 											{t("settings.harness.refreshLocalLogin")}
 										</DropdownMenuItem>
 									) : null}
@@ -606,7 +612,20 @@ export function HarnessSettingsSection({
 									) : null}
 								</DropdownMenuContent>
 							</DropdownMenu>
-						) : null;
+						) : (
+							<>
+								{canRefreshLocal ? (
+									<Button type="button" size="sm" variant="outline" disabled={refreshLocalDisabled} onClick={() => void startAuth(agentId)}>
+										{t("settings.harness.refreshLocalLogin")}
+									</Button>
+								) : null}
+								{canRefreshCloud ? (
+									<Button type="button" size="sm" variant="outline" onClick={() => setCloudLoginAgent(agentId as CloudHarness)}>
+										{t("settings.harness.refreshCloudLogin")}
+									</Button>
+								) : null}
+							</>
+						);
 					const localControls = active ? (
 				<span className="inline-flex items-center gap-1.5 text-xs text-settings-muted" role="status"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{job?.status === "installing" ? t("settings.harness.installing") : t("settings.harness.verifying")}</span>
 							) : isInstalled ? (
@@ -625,7 +644,7 @@ export function HarnessSettingsSection({
 									</Button>
 								) : null}
 								{authControls}
-								{isCloudCapable ? null : optionsMenu}
+								{isCloudCapable ? null : refreshActions}
 								</div>
 							) : failed ? (
 								<div className="flex items-center gap-1.5">
@@ -689,7 +708,9 @@ export function HarnessSettingsSection({
 								<p className={cn("truncate text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? incompatibleVersionReason ?? authPlan?.reason ?? plan?.reason}>
 									{isCloudCapable ? (
 										<>
-											{isInstalled ? t("settings.harness.localStatus", { status: authSummary }) : t("settings.harness.localNotInstalled")}
+											<span className={cn(!rowHasError && authStatus === "authorized" && "text-[color:var(--color-success)]")}>
+												{isInstalled ? t("settings.harness.localStatus", { status: authSummary }) : t("settings.harness.localNotInstalled")}
+											</span>
 											{" · "}
 											<span className={cn(!rowHasError && cloudConnected && "text-[color:var(--color-success)]")}>
 												{cloudConnected ? t("settings.harness.cloudStatusConnected") : t("settings.harness.cloudStatusNotConnected")}
@@ -708,7 +729,7 @@ export function HarnessSettingsSection({
 											{t("settings.harness.cloudLogin")}
 										</Button>
 									)}
-									{optionsMenu}
+									{refreshActions}
 								</div>
 							) : localControls}
 

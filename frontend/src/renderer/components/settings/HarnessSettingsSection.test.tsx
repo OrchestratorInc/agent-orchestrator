@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../../lib/api-client";
@@ -171,11 +171,11 @@ describe("HarnessSettingsSection", () => {
 		expect(within(claudeRow).queryByTestId("cloud-harness-login")).toBeNull();
 
 		const codexRow = screen.getByText("Codex").closest('[data-agent="codex"]') as HTMLElement;
-		expect(within(codexRow).getByText(/^Local: Not installed ·/)).toBeInTheDocument();
+		expect(within(codexRow).getByText("Local: Not installed")).toBeInTheDocument();
 		expect(within(codexRow).getByText("Cloud: Connected")).toBeInTheDocument();
 		// A cloud row that is not installed locally still offers the local install.
 		expect(within(codexRow).getByRole("button", { name: "Install" })).toBeInTheDocument();
-		// A connected harness refreshes its cloud login from the options menu.
+		// Install is still the row's main action, so the cloud refresh sits in the menu.
 		expect(within(codexRow).queryByRole("button", { name: "Cloud login" })).toBeNull();
 		await user.click(within(codexRow).getByRole("button", { name: "Codex options" }));
 		await user.click(await screen.findByRole("menuitem", { name: "Refresh cloud login" }));
@@ -198,7 +198,7 @@ describe("HarnessSettingsSection", () => {
 		expect(within(claudeRow).queryByRole("button", { name: "Claude Code options" })).toBeNull();
 	});
 
-	it("refreshes an existing local login from the options menu", async () => {
+	it("shows refreshes as buttons when a logged-in row has no other action", async () => {
 		const authorized = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "authorized" })] };
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: authorized } as never;
@@ -213,9 +213,21 @@ describe("HarnessSettingsSection", () => {
 
 		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
 		expect(within(row).queryByRole("button", { name: "Local login" })).toBeNull();
-		await user.click(await within(row).findByRole("button", { name: "Claude Code options" }));
-		expect(await screen.findByRole("menuitem", { name: "Refresh local login" })).toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: "Refresh cloud login" })).toBeNull();
+		expect(await within(row).findByRole("button", { name: "Refresh local login" })).toBeEnabled();
+		expect(within(row).queryByRole("button", { name: "Refresh cloud login" })).toBeNull();
+		expect(within(row).queryByRole("button", { name: "Claude Code options" })).toBeNull();
+
+		// Logged in both locally and on cloud: both refreshes are shown, no menu.
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.org = { id: "org-1" };
+		cloudMocks.connections = [{ provider: "claude-code", validationState: "valid" }];
+		cleanup();
+		renderSection();
+		const cloudRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		expect(await within(cloudRow).findByRole("button", { name: "Refresh local login" })).toBeInTheDocument();
+		await user.click(within(cloudRow).getByRole("button", { name: "Refresh cloud login" }));
+		expect(within(cloudRow).getByTestId("cloud-harness-login")).toBeInTheDocument();
+		expect(within(cloudRow).queryByRole("button", { name: "Claude Code options" })).toBeNull();
 	});
 
 	it("explains the cloud login in a tooltip on the info icon", async () => {
