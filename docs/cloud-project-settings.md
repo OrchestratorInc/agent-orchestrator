@@ -4,9 +4,14 @@ Cloud projects load from `GET /orgs/{orgId}/projects/{projectId}` and save throu
 `PATCH /orgs/{orgId}/projects/{projectId}/settings`. Local projects continue to use
 the local daemon. A Cloud lookup or save failure stays a Cloud error.
 
-Cloud and local settings import the same agent rows, model/effort picker, and
-Auto-review toggle. Both use inline identity edits and debounced autosave with
-errors and pending writes shown in the settings dialog. Model catalogs come
+Cloud and local settings render one `ProjectSettingsEditor` for General and
+Agents. It owns the draft, inline fields, role rows, approval controls,
+validation, and debounced autosave. Separate adapters load and save through
+the control plane or daemon and provide each project's supported capabilities.
+Local readiness, scratch/workspace fields, orchestrator replacement, Issue
+Intake, session prefix, and Cues retain their existing local behavior. Pending
+writes disable the shared editor, and the dialog waits for completion before
+closing. Save errors retain the draft and allow retry. Model catalogs come
 from the existing agent discovery API, without a local project lookup or a
 Cloud project ID. OpenCode uses the connected Cloud credential type as its
 catalog scope. Custom Cloud model IDs remain editable when the local catalog
