@@ -340,13 +340,6 @@ func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh
 			return ports.AgentModelCatalog{}, err
 		}
 		if ok {
-			// Claude provider model IDs are credential-scoped. Check its local
-			// discovery inputs before serving a cache hit so switching provider or
-			// credentials cannot briefly expose IDs from the previous provider.
-			// The check is local; provider discovery remains cache-first.
-			if agentID == "claude-code" && s.modelCatalogInputsChanged(ctx, agentID, projectID, cached.BinaryVersion) {
-				return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadCached)
-			}
 			cached.Catalog = applyCustomModelEntryPolicy(cached.Catalog, s.discoverer.Manual(agentID))
 			due := catalogNeedsRevalidation(catalogLastSuccess(cached.Catalog), s.now())
 			needsRecovery := cached.RefreshState == "refreshing"
@@ -357,6 +350,8 @@ func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh
 			} else if retriesExhausted {
 				go s.revalidateChangedInputs(agentID, projectID, cached.BinaryVersion)
 			} else if !due {
+				// Input checks can run an agent CLI (Claude checks auth status).
+				// Keep cache reads fast and publish any changed catalog afterward.
 				time.AfterFunc(10*time.Millisecond, func() {
 					s.revalidateChangedInputs(agentID, projectID, cached.BinaryVersion)
 				})

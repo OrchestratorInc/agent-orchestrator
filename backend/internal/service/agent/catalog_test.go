@@ -151,6 +151,22 @@ type blockingSubsequentModelDiscoverer struct {
 	once    sync.Once
 }
 
+type blockingFingerprintModelDiscoverer struct {
+	*fakeModelDiscoverer
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (f *blockingFingerprintModelDiscoverer) CatalogFingerprint(ctx context.Context, request ports.AgentModelDiscoveryRequest) string {
+	f.once.Do(func() { close(f.started) })
+	select {
+	case <-f.release:
+	case <-ctx.Done():
+	}
+	return f.fakeModelDiscoverer.CatalogFingerprint(ctx, request)
+}
+
 func (f *fakeModelDiscoverer) Discover(ctx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
 	f.discoverCalls.Add(1)
 	active := f.active.Add(1)
@@ -1890,10 +1906,12 @@ func TestClaudeModelsRevalidationKeepsMatchingProviderCacheOnFailure(t *testing.
 	}
 }
 
-func TestClaudeModelsRejectProviderCacheWhenCredentialFingerprintChanges(t *testing.T) {
+func TestClaudeModelsServesCacheThenReplacesItWhenCredentialFingerprintChanges(t *testing.T) {
+	now := time.Now()
 	cached := ports.AgentModelCatalog{
 		AgentID: "claude-code", SelectionMode: ports.ModelSelectionCatalog,
 		Models: []ports.AgentModelInfo{{ID: "us.anthropic.claude-opus-v1"}}, Source: "provider",
+		ValidatedAt: now, LastSuccessAt: &now,
 	}
 	data, err := json.Marshal(cached)
 	if err != nil {
@@ -1902,6 +1920,7 @@ func TestClaudeModelsRejectProviderCacheWhenCredentialFingerprintChanges(t *test
 	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{
 		"claude-code\x00": {
 			AgentID: "claude-code", BinaryVersion: "credential-a", CatalogJSON: string(data),
+			LastSuccessAt: now,
 		},
 	}}
 	discoverer := &fakeModelDiscoverer{
@@ -1918,8 +1937,58 @@ func TestClaudeModelsRejectProviderCacheWhenCredentialFingerprintChanges(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Models) != 2 || got.Models[0].ID != "sonnet" || got.Models[1].ID != "opus" || got.Source != "catalog" || !got.Stale {
-		t.Fatalf("catalog = %#v, want current-credential fallback", got)
+	if len(got.Models) != 1 || got.Models[0].ID != "us.anthropic.claude-opus-v1" {
+		t.Fatalf("initial catalog = %#v, want the cached model before revalidation", got)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		record, ok, err := cache.GetAgentModelCatalog(context.Background(), "claude-code", "")
+		if err != nil || !ok {
+			t.Fatalf("updated catalog = found %v, error %v", ok, err)
+		}
+		var updated ports.AgentModelCatalog
+		if err := json.Unmarshal([]byte(record.CatalogJSON), &updated); err != nil {
+			t.Fatal(err)
+		}
+		if len(updated.Models) == 2 && updated.Models[0].ID == "sonnet" && updated.Models[1].ID == "opus" && updated.Source == "catalog" && updated.Stale {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("cached provider catalog was not replaced after credential change")
+}
+
+func TestClaudeCachedModelsDoNotWaitForFingerprintProbe(t *testing.T) {
+	now := time.Now()
+	record := cachedModelRecord(t, "claude-code", "", now, false)
+	record.LastSuccessAt = now
+	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{
+		"claude-code\x00": record,
+	}}
+	discoverer := &blockingFingerprintModelDiscoverer{
+		fakeModelDiscoverer: &fakeModelDiscoverer{version: "same-fingerprint"},
+		started:             make(chan struct{}), release: make(chan struct{}),
+	}
+	defer close(discoverer.release)
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, cache, nil, discoverer)
+
+	result := make(chan ports.AgentModelCatalog, 1)
+	go func() {
+		catalog, _ := svc.Models(context.Background(), "claude-code", "", false)
+		result <- catalog
+	}()
+	select {
+	case got := <-result:
+		if len(got.Models) != 1 || got.Models[0].ID != "cached-model" {
+			t.Fatalf("catalog = %#v, want cached models before the probe finishes", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cached read waited for the fingerprint probe")
+	}
+	select {
+	case <-discoverer.started:
+	case <-time.After(time.Second):
+		t.Fatal("background fingerprint probe did not start")
 	}
 }
 
