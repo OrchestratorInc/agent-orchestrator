@@ -2275,7 +2275,7 @@
 	"executionContext.title": "contexto de ejecución",
 	"executionContext.loading": "cargando el contexto del proyecto…",
 	"coder.template.default": "Espacio de trabajo de la organización",
-	"settings.models.modelNotReported": "Modelo no informado",
+	"settings.models.selectModel": "Seleccionar modelo",
 	"settings.models.useAgentModel": "Usar modelo del agente",
 	"settings.models.useAgentMode": "Usar modo del agente",
 	"settings.models.useAgentEffort": "Usar esfuerzo de razonamiento del agente",
