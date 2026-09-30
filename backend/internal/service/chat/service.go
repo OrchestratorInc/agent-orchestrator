@@ -121,10 +121,9 @@ type Options struct {
 	// StopProviderHost destroys current session ownership on explicit teardown,
 	// even if its daemon attachment already failed. Never used by StopAll.
 	StopProviderHost func(context.Context, domain.SessionID) error
-	// ProviderHostAlive reports whether the persistent host for a provider host
-	// id is still running. A controller stream that ends while its host is alive
-	// lost only its attachment, never the provider (issue #5790). Nil keeps every
-	// stream end authoritative.
+	// ProviderHostAlive reports whether a session's persistent provider host is
+	// still running. Startup recovery uses it to heal a falsely exited session
+	// without reviving a genuinely exited one. Nil disables that healing.
 	ProviderHostAlive func(context.Context, domain.SessionID) (bool, error)
 }
 
@@ -286,18 +285,6 @@ func (s *Service) settleOrphanedWork(ctx context.Context, session domain.Session
 // conversation: presenting unrelated history as continuous is worse than an error
 // the user can act on.
 func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, error) {
-	return s.start(ctx, cfg, startOptions{})
-}
-
-// startOptions are internal Start variants that are not part of the port.
-type startOptions struct {
-	// requireLiveReconnect admits only the same already-running provider. An
-	// automatic reattachment must never launch or resume a replacement.
-	requireLiveReconnect bool
-	reattachAttempts     int
-}
-
-func (s *Service) start(ctx context.Context, cfg StartConfig, opts startOptions) (*Controller, error) {
 	owner := conversationOwner(cfg)
 	if owner.Kind == domain.ConversationOwnerReview {
 		cfg.ReadOnly = true
@@ -678,9 +665,9 @@ func (s *Service) start(ctx context.Context, cfg StartConfig, opts startOptions)
 	if reconnected, ok := conv.(ports.ChatLiveReconnector); ok {
 		liveReconnect = reconnected.ReconnectedLive()
 	}
-	if (opts.requireLiveReconnect || cfg.RequireLiveReconnect) && !liveReconnect {
+	if cfg.RequireLiveReconnect && !liveReconnect {
 		// Nothing has been claimed yet. Destroy whatever the driver opened in
-		// place of the vanished provider rather than adopting it silently.
+		// place of the vanished provider rather than adopting it.
 		return nil, errors.Join(ports.ErrChatProviderNotLive, cleanupUnpublishedConversation(conv, true))
 	}
 	if (cfg.HistoryMode == ports.ChatHistoryRequired) && liveReconnect {
@@ -785,9 +772,6 @@ func (s *Service) start(ctx context.Context, cfg StartConfig, opts startOptions)
 	// replaced can be told apart from the current one's.
 	controller := newController(
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
-	controller.providerAlive = s.providerAliveFor(hostID)
-	controller.reattachAttempts = opts.reattachAttempts
-	controller.startedAt = s.now()
 	var commitProviderHistory func(context.Context) error
 	providerTurnID := ""
 	if liveReconnect {
@@ -976,40 +960,16 @@ func (s *Service) start(ctx context.Context, cfg StartConfig, opts startOptions)
 		controller.Wait()
 		controller.waitForBranchHandoff()
 		s.mu.Lock()
-		released := false
 		if current, ok := s.ownerControllers[owner]; ok && current == controller {
 			delete(s.ownerControllers, owner)
 			if owner.Kind == domain.ConversationOwnerSession {
 				delete(s.controllers, cfg.SessionID)
 			}
-			released = true
 		}
 		s.mu.Unlock()
-		if released && controller.detachedFromLiveProvider() {
-			s.reattachLiveProvider(owner, controller)
-		}
 	}()
 
 	return controller, nil
-}
-
-const (
-	// maxProviderReattach bounds consecutive automatic reattachments whose
-	// streams keep ending while the host lives, so a persistently failing
-	// attachment cannot spin.
-	maxProviderReattach = 3
-	// providerReattachReset restores the budget for a controller that ran
-	// long enough to be considered healthy.
-	providerReattachReset = time.Minute
-	providerReattachLimit = 30 * time.Second
-)
-
-// providerAliveFor binds host liveness to one provider host id.
-func (s *Service) providerAliveFor(hostID domain.SessionID) func(context.Context) (bool, error) {
-	if s.providerHostAlive == nil {
-		return nil
-	}
-	return func(ctx context.Context) (bool, error) { return s.providerHostAlive(ctx, hostID) }
 }
 
 // ProviderHostAlive reports whether a session's persistent provider host is
@@ -1020,65 +980,6 @@ func (s *Service) ProviderHostAlive(ctx context.Context, id domain.SessionID) (a
 	}
 	alive, err = s.providerHostAlive(ctx, id)
 	return alive, true, err
-}
-
-// reattachLiveProvider adopts the still-running provider of a controller whose
-// stream ended while its host survived. It goes through the ordinary start
-// gate, requires the same live provider, and claims a fresh generation that
-// fences anything the lost attachment might still report.
-func (s *Service) reattachLiveProvider(owner domain.ConversationOwner, previous *Controller) {
-	attempt := previous.reattachAttempts + 1
-	if s.now().Sub(previous.startedAt) >= providerReattachReset {
-		attempt = 1
-	}
-	log := s.log.With("session", previous.sessionID, "generation", previous.generation, "attempt", attempt)
-	if attempt > maxProviderReattach {
-		log.Error("chat provider host is alive but reattachment keeps failing; session left without a controller")
-		return
-	}
-	s.mu.RLock()
-	cfg, ok := s.startConfigs[owner]
-	s.mu.RUnlock()
-	if !ok {
-		return // explicitly stopped while the stream was ending
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), providerReattachLimit)
-	defer cancel()
-	cfg = cloneStartConfig(cfg)
-	cfg.ProviderConversationID = previous.ProviderConversationID()
-	cfg.ControllerGeneration = ""
-	// The original publication callback belongs to a finished request. A live
-	// reconnect has no lifecycle facts to publish beyond the generation claim.
-	cfg.ControllerReady = nil
-	// Check before connecting: a driver that finds no host launches a
-	// replacement provider, which a reattachment must never do.
-	if alive, probeErr := previous.providerAlive(ctx); probeErr == nil && !alive {
-		s.recordLostProvider(ctx, previous, log, ports.ErrChatProviderNotLive)
-		return
-	}
-	controller, err := s.start(ctx, cfg, startOptions{requireLiveReconnect: true, reattachAttempts: attempt})
-	switch {
-	case err == nil:
-		log.Info("reattached chat controller to live provider host", "newGeneration", controller.Generation())
-	case errors.Is(err, ports.ErrChatProviderNotLive):
-		s.recordLostProvider(ctx, previous, log, err)
-	default:
-		log.Error("chat controller reattachment failed; provider host preserved", "error", err)
-	}
-}
-
-// recordLostProvider publishes the exit of a provider that died after its
-// controller's stream ended. Nothing was claimed by the failed reattachment,
-// so the lost generation still owns the session and settles its own work.
-func (s *Service) recordLostProvider(ctx context.Context, previous *Controller, log *slog.Logger, cause error) {
-	log.Warn("chat provider host ended before reattachment; recording session exited", "error", cause)
-	now := s.now()
-	previous.reportActivity(ctx, domain.ActivityExited, "chat.controller.stopped", now)
-	if _, err := s.store.CleanupOwnedControllerWork(
-		ctx, previous.sessionID, previous.conversation.ID, previous.generation, now,
-	); err != nil {
-		log.Error("failed to clean up stopped controller work", "error", err)
-	}
 }
 
 // cleanupUnpublishedConversation rolls back a provider opened before its AO

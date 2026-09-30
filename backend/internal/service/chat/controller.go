@@ -243,20 +243,6 @@ type Controller struct {
 	// the closing controller from projecting a false provider exit or failing work
 	// that the detached host continues to run.
 	preserveProviderOnStop bool
-	// closeRequested records that AO itself closed or terminated this controller.
-	// Only an unrequested stream end can be a lost attachment to a live host.
-	closeRequested bool
-	// providerAlive probes the persistent host behind this controller. Nil when
-	// the service has no host liveness authority.
-	providerAlive func(context.Context) (bool, error)
-	// providerDetached marks a stream that ended while the persistent provider
-	// host survived (issue #5790). The attachment was released without an exit
-	// so the service can reattach to the same live provider.
-	providerDetached bool
-	// reattachAttempts counts consecutive automatic reattachments that produced
-	// this controller; startedAt lets a long-lived controller reset the budget.
-	reattachAttempts int
-	startedAt        time.Time
 
 	// account, threadState and mcpServers are merged here before being written,
 	// because the provider reports each of them in pieces: account/updated carries
@@ -2443,9 +2429,6 @@ func (c *Controller) Rollback(ctx context.Context, turnID string) (int, error) {
 // output and unresolved provider requests to the replacement controller.
 func (c *Controller) Close(ctx context.Context) error {
 	c.once.Do(func() {
-		c.mu.Lock()
-		c.closeRequested = true
-		c.mu.Unlock()
 		if preserver, ok := c.conv.(ports.ChatProviderPreserver); ok && preserver.PreservesProviderOnClose() {
 			c.mu.Lock()
 			c.preserveProviderOnStop = true
@@ -2469,9 +2452,6 @@ func (c *Controller) Close(ctx context.Context) error {
 // and controller replacement use Terminate.
 func (c *Controller) Terminate(ctx context.Context) error {
 	c.once.Do(func() {
-		c.mu.Lock()
-		c.closeRequested = true
-		c.mu.Unlock()
 		if terminator, ok := c.conv.(ports.ChatProviderTerminator); ok {
 			c.closeErr = terminator.Terminate()
 		} else {
@@ -2552,41 +2532,6 @@ func (c *Controller) recoverStaleExit(ctx context.Context, sessions SessionReade
 	}
 }
 
-// providerProbeLimit bounds the host liveness probe made when a stream ends.
-const providerProbeLimit = 5 * time.Second
-
-// hostBacked reports whether a stream end must be checked against a
-// persistent provider host before it is treated as provider death.
-func (c *Controller) hostBacked() bool {
-	if c.providerAlive == nil {
-		return false
-	}
-	preserver, ok := c.conv.(ports.ChatProviderPreserver)
-	return ok && preserver.PreservesProviderOnClose()
-}
-
-// providerSurvivedStream reports whether the persistent host outlived this
-// controller's stream. A failed probe is not proof that the provider died.
-func (c *Controller) providerSurvivedStream(ctx context.Context) bool {
-	probeCtx, cancel := context.WithTimeout(ctx, providerProbeLimit)
-	defer cancel()
-	alive, err := c.providerAlive(probeCtx)
-	if err != nil {
-		c.log.Warn("chat provider host probe inconclusive after stream end; preserving session",
-			"session", c.sessionID, "generation", c.generation, "error", err)
-		return true
-	}
-	return alive
-}
-
-// detachedFromLiveProvider reports whether the stream ended while the provider
-// host survived, leaving the provider without an AO controller.
-func (c *Controller) detachedFromLiveProvider() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.providerDetached
-}
-
 // project consumes the driver's normalized events and writes them down. It runs
 // until this controller's stream closes. That can mean provider termination or a
 // deliberate detach from a provider that remains alive in a persistent host.
@@ -2598,21 +2543,11 @@ func (c *Controller) project() {
 	ctx := context.WithoutCancel(context.Background())
 	acknowledger, persistent := c.conv.(ports.ChatProviderEventAcknowledger)
 
-	hostBacked := c.hostBacked()
-	var heldStop *ports.ChatEvent
 	for event := range c.conv.Events() {
 		c.mu.Lock()
 		preserveProvider := c.preserveProviderOnStop
 		c.mu.Unlock()
-		stop := event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped
-		if preserveProvider && stop {
-			continue
-		}
-		if hostBacked && stop {
-			// A persistent host's attachment can end while its provider lives on.
-			// Whether this stop is an exit is decided once the stream has ended.
-			held := event
-			heldStop = &held
+		if preserveProvider && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped {
 			continue
 		}
 		// A lifecycle event and a concurrent Send must agree on whether the root
@@ -2664,31 +2599,9 @@ func (c *Controller) project() {
 	c.state = ports.ChatControllerStopped
 	suppressStoppedActivity := c.suppressStoppedActivity
 	preserveProvider := c.preserveProviderOnStop
-	closeRequested := c.closeRequested
 	c.mu.Unlock()
 	if preserveProvider {
 		return
-	}
-	if hostBacked && !closeRequested && !suppressStoppedActivity && c.providerSurvivedStream(ctx) {
-		// The attachment ended, not the provider: its host is still running the
-		// agent and owns any in-flight work. Release the attachment so the host
-		// accepts a replacement, and leave lifecycle and work untouched.
-		c.mu.Lock()
-		c.preserveProviderOnStop = true
-		c.providerDetached = true
-		c.mu.Unlock()
-		c.once.Do(func() { c.closeErr = c.conv.Close() })
-		c.log.Warn("chat controller stream ended while its provider host is alive; detached without exit",
-			"session", c.sessionID, "generation", c.generation)
-		return
-	}
-	if heldStop != nil {
-		if projected, _, err := c.projectEvent(ctx, *heldStop); err != nil {
-			c.log.Error("failed to project chat event",
-				"session", c.sessionID, "kind", heldStop.Kind, "error", err)
-		} else if projected {
-			c.afterProject(ctx, *heldStop, false)
-		}
 	}
 
 	// The stream has ended, so nothing more can arrive for this controller. This
@@ -2707,8 +2620,8 @@ func (c *Controller) project() {
 	// does not remain durably active, idle, or blocked after its controller died.
 	// ControllerGeneration fences this write from a replacement controller.
 	if !suppressStoppedActivity {
-		c.log.Info("chat controller stopped; recording session exited",
-			"session", c.sessionID, "generation", c.generation, "requested", closeRequested)
+		c.log.Info("chat controller stream ended; recording session exited",
+			"session", c.sessionID, "generation", c.generation)
 		c.reportActivity(ctx, domain.ActivityExited, "chat.controller.stopped", now)
 	}
 	if _, err := c.store.CleanupOwnedControllerWork(
