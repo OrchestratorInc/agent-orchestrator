@@ -230,7 +230,7 @@ func loadIdempotentProject(
 		return err
 	}
 	if kind != expectedKind || status != "succeeded" ||
-		!jsonEqual(storedPayload, payload) || projectID == "" {
+		!projectCreatePayloadEqual(storedPayload, payload, "Config") || projectID == "" {
 		return ErrIdempotencyMismatch
 	}
 	return scanProject(tx.QueryRow(
@@ -440,7 +440,7 @@ func (s *Store) CreateGitHubScratchProject(
 				return err
 			}
 			if kind != "github.scratch.create" || status != "succeeded" ||
-				!jsonEqual(storedPayload, payload) ||
+				!projectCreatePayloadEqual(storedPayload, payload, "config") ||
 				projectID == "" || sessionID == "" {
 				return ErrIdempotencyMismatch
 			}
@@ -1167,6 +1167,33 @@ func scanSession(row scanner, session *domain.Session) error {
 	session.Interface = domain.SessionInterface(interfaceValue).Normalized()
 	session.ActivityState = contract.ActivityState(activity)
 	return err
+}
+
+// Creation commands written before nested settings retain their original
+// payload. Compare canonical configs without rewriting that durable history.
+func projectCreatePayloadEqual(left, right []byte, configKey string) bool {
+	normalize := func(payload []byte) ([]byte, error) {
+		var request map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &request); err != nil || request == nil {
+			return nil, ErrInvalid
+		}
+		config := request[configKey]
+		if bytes.Equal(bytes.TrimSpace(config), []byte("null")) {
+			config = nil
+		}
+		var err error
+		request[configKey], err = domain.NormalizeProjectConfig(config)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(request)
+	}
+	left, err := normalize(left)
+	if err != nil {
+		return false
+	}
+	right, err = normalize(right)
+	return err == nil && jsonEqual(left, right)
 }
 
 func jsonEqual(left, right []byte) bool {

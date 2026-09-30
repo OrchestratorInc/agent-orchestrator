@@ -29,6 +29,9 @@ Reviewer arrays replace the previous array. Legacy `workerAgent` and
 `orchestratorAgent` fields are normalized to nested roles on reads and project
 writes. An existing nested `agent` wins over its flat alias. Flat aliases are
 never emitted or stored by new project writes and are rejected by settings PATCH.
+Creation retries compare canonical configs against historical command payloads,
+so a legacy flat request or omitted config still returns the original project.
+The stored command payload stays unchanged, and different choices still conflict.
 
 Role defaults are stamped into newly created sessions. An explicit session
 harness wins; matching role config supplies its model, mode, effort, and
