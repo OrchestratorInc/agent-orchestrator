@@ -96,6 +96,17 @@ describe("CloudCredentialDialog browser login", () => {
 		expect(useCredentialDialogStore.getState().open).toBe(false);
 	});
 
+	it("explains how to get a setup token when pasting one", async () => {
+		const user = userEvent.setup();
+		renderDialog();
+		await user.click(screen.getByRole("button", { name: "Credential type" }));
+		await user.click(await screen.findByRole("menuitem", { name: /Setup token/ }));
+
+		expect(screen.getByText("claude setup-token")).toBeInTheDocument();
+		expect(screen.getByText("sk-ant-oat")).toBeInTheDocument();
+		expect(screen.getByRole("list")).toHaveTextContent("Sign in with your Claude account");
+	});
+
 	it("saves a personal credential that also covers local sessions, like the harness login", async () => {
 		bridgeMocks.connectProviderAuth.mockResolvedValue(undefined);
 		const user = userEvent.setup();

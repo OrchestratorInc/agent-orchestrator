@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { AgentAvatar } from "./AgentAvatar";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
@@ -30,6 +30,11 @@ import { cn } from "../lib/utils";
 import { aoBridge } from "../lib/bridge";
 
 const BROWSER_LOGIN = "browser_login";
+const SETUP_TOKEN_STEPS = [
+	"cloudCredential.setupTokenStep1",
+	"cloudCredential.setupTokenStep2",
+	"cloudCredential.setupTokenStep3",
+] as const;
 
 // The coding-agent providers the control plane accepts, with the credential
 // types each one validates (see cloud validAgentCredentialType). Codex's
@@ -282,6 +287,23 @@ export function CloudCredentialDialog() {
 								)}
 							/>
 						</div>
+
+						{agent === "claude-code" && credentialType === "oauth_token" ? (
+							<div className={onboardingFieldHintClass}>
+								<p>{t("cloudCredential.setupTokenIntro")}</p>
+								<ol className="mt-1 list-decimal space-y-0.5 pl-5">
+									{SETUP_TOKEN_STEPS.map((key) => (
+										<li key={key}>
+											<Trans
+												i18nKey={key}
+												values={{ command: "claude setup-token", prefix: "sk-ant-oat" }}
+												components={{ code: <code className="rounded bg-muted px-1 py-px font-mono text-[11px] text-foreground" /> }}
+											/>
+										</li>
+									))}
+								</ol>
+							</div>
+						) : null}
 
 						{needsSecret ? (
 							<div className="space-y-2">
