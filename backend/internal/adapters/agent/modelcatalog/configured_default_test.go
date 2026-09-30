@@ -26,9 +26,13 @@ func isolateHome(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	for _, key := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "OPENCODE_CONFIG", "COPILOT_HOME", "COPILOT_MODEL", "AIDER_MODEL"} {
+	for _, key := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT",
+		"COPILOT_HOME", "COPILOT_MODEL", "AIDER_MODEL"} {
 		t.Setenv(key, "")
 	}
+	managed := openCodeManagedConfigDirs
+	openCodeManagedConfigDirs = func() []string { return nil }
+	t.Cleanup(func() { openCodeManagedConfigDirs = managed })
 	return home
 }
 
@@ -38,6 +42,9 @@ func TestOpenCodeDiscoveryMarksLocallyConfiguredModelAsDefault(t *testing.T) {
 	}
 	home := isolateHome(t)
 	workDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workDir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	writeConfig(t, filepath.Join(home, ".config", "opencode", "opencode.json"), `{"model": "anthropic/claude-sonnet-4-6"}`)
 	// The project config wins over the global one, and may be JSONC.
 	writeConfig(t, filepath.Join(workDir, "opencode.jsonc"), `{

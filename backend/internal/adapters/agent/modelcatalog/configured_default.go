@@ -20,6 +20,10 @@ type configuredDefaultSource struct {
 	parse func(raw []byte) string
 	// envOverride names a variable that wins over every file when set.
 	envOverride string
+	// resolve replaces paths/parse for agents whose layering cannot be
+	// expressed as a flat file list. It returns "" when the effective model
+	// cannot be determined.
+	resolve func(home, workingDir string, env map[string]string) string
 }
 
 // configuredDefaultSources covers agents whose model-list command reports
@@ -27,8 +31,12 @@ type configuredDefaultSource struct {
 // has no default to show and the task form reads "Model not reported" even
 // though the user has already chosen a model in the agent's own settings.
 var configuredDefaultSources = map[string]configuredDefaultSource{
-	"opencode":    {paths: opencodeConfigPaths, parse: parseJSONCModelKey},
-	"opencode-v2": {paths: opencodeConfigPaths, parse: parseJSONCModelKey},
+	"opencode": {resolve: func(home, workingDir string, env map[string]string) string {
+		return resolveOpenCodeModel(1, home, workingDir, env)
+	}},
+	"opencode-v2": {resolve: func(home, workingDir string, env map[string]string) string {
+		return resolveOpenCodeModel(2, home, workingDir, env)
+	}},
 	"aider": {
 		paths: func(home, workingDir string, _ map[string]string) []string {
 			var paths []string
@@ -102,22 +110,6 @@ var configuredDefaultSources = map[string]configuredDefaultSource{
 	},
 }
 
-func opencodeConfigPaths(home, workingDir string, env map[string]string) []string {
-	var paths []string
-	if configHome := xdgDir(home, env, "XDG_CONFIG_HOME", ".config"); configHome != "" {
-		for _, name := range []string{"config.json", "opencode.json", "opencode.jsonc"} {
-			paths = append(paths, filepath.Join(configHome, "opencode", name))
-		}
-	}
-	if custom := envValue(env, "OPENCODE_CONFIG"); custom != "" {
-		paths = append(paths, custom)
-	}
-	if workingDir != "" {
-		paths = append(paths, filepath.Join(workingDir, "opencode.json"), filepath.Join(workingDir, "opencode.jsonc"))
-	}
-	return paths
-}
-
 // configuredDefaultModel returns the model the agent's local configuration
 // selects, or "" when the agent has no such source or nothing is configured.
 func configuredDefaultModel(agentID, workingDir string, env map[string]string) string {
@@ -131,6 +123,9 @@ func configuredDefaultModel(agentID, workingDir string, env map[string]string) s
 		}
 	}
 	home, _ := os.UserHomeDir()
+	if source.resolve != nil {
+		return strings.TrimSpace(source.resolve(home, workingDir, env))
+	}
 	configured := ""
 	for _, path := range source.paths(home, workingDir, env) {
 		raw, err := readModelConfig(path)
