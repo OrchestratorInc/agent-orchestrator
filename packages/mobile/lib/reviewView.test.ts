@@ -100,7 +100,7 @@ describe("mobile review presentation", () => {
 		const review = state();
 		const base = { reviewerHandleId: "fallback", reviews: [review], runs: [] };
 		expect(reviewerDestination({ ...base, reviewerSurface: { mode: "chat", reviewId: "review-1", harness: "codex" } }, review, "worker-1")).toMatchObject({ pathname: "/reviewer/[reviewId]", params: { reviewId: "review-1" } });
-		expect(reviewerDestination({ ...base, reviewerSurface: { mode: "tui", reviewId: "review-1", harness: "codex" } }, review, "worker-1")).toMatchObject({ pathname: "/shell/[handleId]", params: { handleId: "fallback" } });
+		expect(reviewerDestination({ ...base, reviewerSurface: { mode: "tui", reviewId: "review-1", harness: "codex" } }, review, "worker-1")).toMatchObject({ pathname: "/shell/[handleId]", params: { handleId: "fallback", kind: "reviewer" } });
 		expect(reviewerDestination(base, review, "worker-1")).toBeUndefined();
 	});
 	it("only offers finished reviews with findings to the worker", () => {

@@ -5,6 +5,7 @@ const actions = readFileSync(new URL("../app/sheets/review-actions.tsx", import.
 const detail = readFileSync(new URL("../app/review/[sessionId].tsx", import.meta.url), "utf8");
 const pickerIOS = readFileSync(new URL("./reviewer-picker.ios.tsx", import.meta.url), "utf8");
 const picker = readFileSync(new URL("./reviewer-picker.tsx", import.meta.url), "utf8");
+const terminal = readFileSync(new URL("./session/TerminalSessionScreen.tsx", import.meta.url), "utf8");
 
 describe("reviewer control integration", () => {
 	it("keeps the project-default override separate from the effective reviewer", () => {
@@ -58,7 +59,7 @@ describe("reviewer control integration", () => {
 
 	it("does not let auto review lose its persistent reviewer", () => {
 		expect(detail).toContain("!data.reviewerHandleId || autoReviewEnabled");
-		expect(detail).toContain("disabled={Boolean(mutation) || autoReviewEnabled}");
+		expect(detail).toContain("const stopActions: ItemAction[] = controls.stop && !autoReviewEnabled");
 	});
 
 	it("checks fresh review state before changing reviewer, model, or mode", () => {
@@ -91,8 +92,22 @@ describe("reviewer control integration", () => {
 
 	it("chooses Open, Restore, or Stop from what is actually available", () => {
 		expect(detail).toContain("const controls = reviewerControls(data, review, sessionId);");
-		expect(detail).toContain("{controls.stop ? <>");
+		expect(detail).toContain("{controls.open\n\t\t\t\t\t\t? <RowPill label=\"Open\"");
+		expect(detail).toContain(": controls.restore ? <RowPill label=\"Restore\"");
 		expect(detail).toContain("Push a new commit to run another review.");
+	});
+
+	// The reviewer pane is attached by handle, but it is not a daemon shell
+	// terminal: closing it as one answered 404 "No such shell terminal".
+	it("stops the reviewer, not a shell, when its terminal is closed", () => {
+		expect(terminal).toContain('const reviewerPane = params.kind === "reviewer" && Boolean(params.sessionId);');
+		expect(terminal).toContain("if (reviewerPane) await killSessionReviewer(config, String(params.sessionId));");
+	});
+
+	it("lays the review screen out as flat board rows, not cards", () => {
+		expect(detail).not.toContain("<Card");
+		expect(detail).toContain('<ListSectionHeader label="Pull request" />');
+		expect(detail).toContain("borderBottomWidth: rowDividerWidth");
 	});
 
 	it("merges like desktop: only when ready, fenced to the head commit, after confirmation", () => {

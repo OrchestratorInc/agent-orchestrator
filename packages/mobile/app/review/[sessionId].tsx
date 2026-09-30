@@ -10,11 +10,14 @@ import type { ItemAction } from "../../lib/item-actions-menu.types";
 import { openGitHub } from "../../lib/openGitHub";
 import { mergeReadiness, type MergeTone } from "../../lib/prMerge";
 import { formatReviewSummaryMessage, reviewRunsForPullRequest, reviewRunUrl } from "../../lib/reviewFeedback";
-import { latestAutoReviewFailure, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewStatusVisual, reviewVerdictLabel, shortCommit } from "../../lib/reviewView";
+import { latestAutoReviewFailure, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewVerdictLabel, shortCommit } from "../../lib/reviewView";
 import { useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
-import { Button, Card, EmptyState } from "../../lib/ui";
+import { AgentLogo } from "../../lib/AgentLogo";
+import { rowDividerWidth } from "../../lib/divider";
+import { space, type } from "../../lib/tokens";
+import { Button, Dot, EmptyState, ListSectionHeader } from "../../lib/ui";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -167,9 +170,6 @@ export default function ReviewDetailScreen() {
 	const pr = observedPR && awaitingMerge ? { ...observedPR, state: "merged" as const } : observedPR;
 	const merge = pr ? mergeReadiness(pr) : undefined;
 	const closedPR = pr?.state === "merged" || pr?.state === "closed";
-	const headline = closedPR && merge
-		? { icon: merge.icon, color: toneColor(t, merge.tone), tint: toneColor(t, merge.tone, true), label: merge.label }
-		: { icon: reviewStatusVisual(review.status).icon, color: statusColor(t, reviewStatusVisual(review.status).tone), tint: statusColor(t, reviewStatusVisual(review.status).tone, true), label: reviewStatusLabel(review.status) };
 	const confirmMerge = () => {
 		if (!config || !pr || !merge?.canMerge || mutation) return;
 		Alert.alert(`Merge PR #${pr.number}?`, `This will squash-merge PR #${pr.number} in the remote repository.`, [
@@ -183,77 +183,151 @@ export default function ReviewDetailScreen() {
 		]);
 	};
 
+	const reviewerHarness = data.reviewerSurface?.harness || data.reviewerHarness || "";
+	const activity = data.reviewerActivityState;
+	const activityColor = activity === "active" ? t.orange : activity === "exited" ? t.red : t.textTertiary;
+	const stopActions: ItemAction[] = controls.stop && !autoReviewEnabled
+		? [{ id: "stop", label: "Stop reviewer session", systemImage: "power", destructive: true, onPress: confirmKillReviewer }]
+		: [];
+	// The review row describes the AO review itself; merge state lives in the PR row.
+	const latestRun = review.latestRun ?? review.previousRun;
+	const reviewLabel = review.status === "running" ? reviewStatusLabel("running") : latestRun ? reviewVerdictLabel(latestRun) : reviewStatusLabel(review.status);
+	const reviewColor = review.status === "running" ? t.orange : latestRun?.verdict === "approved" ? t.green : latestRun?.verdict === "changes_requested" ? t.amber : latestRun?.status === "failed" ? t.red : t.textSecondary;
+	const reviewDetail = closedPR ? `No new reviews: this pull request is ${pr?.state}.` : reviewStatusLabel(review.status);
+	const reviewNote = primaryAction !== "cancel" && autoReviewEnabled
+		? "Automatic review is watching for new commits. Turn it off in Review actions to run reviews manually."
+		: primaryAction !== "none" && multiplePullRequests ? "Applies to every eligible pull request in this session." : undefined;
+
 	return (
 		<ScrollView style={styles.screen} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={t.blue} />}>
-			<View style={styles.heading}>
-				<View style={[styles.statusIcon, { backgroundColor: headline.tint }]}>
-					<Feather name={headline.icon} size={20} color={headline.color} />
+			{/* Flat rows under section labels, like the worker board and project pages. */}
+			<ListSectionHeader label="Pull request" />
+			<View style={styles.row}>
+				<View style={styles.main}>
+					<View style={styles.eyebrow}>
+						<Feather name="git-pull-request" size={13} color={t.textSecondary} />
+						<Text style={styles.eyebrowText} numberOfLines={1}>PR #{review.prNumber}{pr?.targetBranch ? ` into ${pr.targetBranch}` : ""}</Text>
+					</View>
+					<Text style={styles.title} numberOfLines={2}>{review.title}</Text>
+					{merge ? <View style={styles.statusLine}>
+						<Dot color={toneColor(t, merge.tone)} size={6} />
+						<Text style={[styles.statusStrong, { color: toneColor(t, merge.tone) }]}>{merge.label}</Text>
+					</View> : null}
+					{merge?.reason ? <Text style={styles.detail}>{merge.reason}</Text> : null}
 				</View>
-				<View style={styles.headingCopy}>
-					<Text style={styles.title}>{review.title}</Text>
-					<Text style={styles.subtitle}>PR #{review.prNumber} · {headline.label}</Text>
-				</View>
+				{merge?.canMerge ? <RowPill label={mutation === "merge" ? "Merging…" : "Merge"} icon="git-merge" tone="merge" busy={mutation === "merge"} disabled={Boolean(mutation)} onPress={confirmMerge} /> : null}
 			</View>
 
-			<Card style={styles.metaCard}>
-				<Meta label="Reviewer" value={data.reviewerHarness || data.reviewerSurface?.harness || "Not selected"} />
-				<Meta label="Commit" value={shortCommit(review.targetSha)} mono />
-				{data.reviewerActivityState ? <Meta label="Activity" value={data.reviewerActivityState.replaceAll("_", " ")} /> : null}
-			</Card>
-			{autoReviewFailure && autoReviewFailure.id !== dismissedAutoFailureId ? <View accessibilityRole="alert" style={styles.autoReviewFailure}>
-				<Feather name="alert-circle" size={16} color={t.red} />
-				<View style={styles.failureCopy}><Text style={styles.failureTitle}>Automatic review failed</Text><Text style={styles.failureBody}>{autoReviewFailure.body.trim()}</Text></View>
-				<Pressable accessibilityRole="button" accessibilityLabel="Dismiss automatic review failure" hitSlop={8} onPress={() => setDismissedAutoFailureId(autoReviewFailure.id)}><Feather name="x" size={17} color={t.red} /></Pressable>
-			</View> : null}
-			{reviewNotice ? <View style={styles.notice}><Feather name="check" size={15} color={t.green} /><Text style={styles.noticeText}>{reviewNotice}</Text></View> : null}
-			{merge && pr ? <Card style={styles.mergeCard}>
-				<View style={styles.mergeRow}>
-					<View style={[styles.mergeIcon, { backgroundColor: toneColor(t, merge.tone, true) }]}><Feather name={merge.icon} size={17} color={toneColor(t, merge.tone)} /></View>
-					<View style={styles.mergeCopy}>
-						<Text style={[styles.mergeLabel, { color: toneColor(t, merge.tone) }]}>{merge.label}</Text>
-						{merge.reason ? <Text style={styles.mergeReason}>{merge.reason}</Text> : null}
+			<ListSectionHeader label="Reviewer" />
+			<Pressable accessibilityRole={controls.open ? "button" : undefined} disabled={!controls.open || Boolean(mutation)} onPress={openReviewer} style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}>
+				<View style={styles.main}>
+					<View style={styles.eyebrow}>
+						{reviewerHarness ? <AgentLogo harness={reviewerHarness} size={14} /> : <Feather name="user" size={13} color={t.textSecondary} />}
+						<Text style={styles.eyebrowText} numberOfLines={1}>AO reviewer</Text>
 					</View>
-					{merge.canMerge ? <Button title={mutation === "merge" ? "Merging…" : "Merge"} icon="git-merge" variant="success" loading={mutation === "merge"} disabled={Boolean(mutation)} onPress={confirmMerge} /> : null}
+					<Text style={styles.title} numberOfLines={1}>{reviewerName(reviewerHarness)}</Text>
+					<View style={styles.statusLine}>
+						<Dot color={activityColor} size={6} breathing={activity === "active"} />
+						<Text style={[styles.statusStrong, { color: activityColor }]}>{activity ? capitalize(activity.replaceAll("_", " ")) : "Not started"}</Text>
+						<Text style={styles.statusDetail} numberOfLines={1}>{controls.open === "chat" ? " · chat" : controls.open === "terminal" ? " · terminal" : ""}</Text>
+					</View>
 				</View>
-			</Card> : null}
-			{controls.open
-				? <Button title={controls.open === "chat" ? "Open reviewer chat" : "Open reviewer terminal"} icon={controls.open === "chat" ? "message-circle" : "terminal"} variant="ghost" disabled={Boolean(mutation)} onPress={openReviewer} />
-				: controls.restore ? <Button title="Restore reviewer" icon="refresh-cw" variant="ghost" loading={mutation === "restore"} disabled={Boolean(mutation)} onPress={() => void restoreReviewer()} /> : null}
-			{controls.stop ? <><Button title="Stop reviewer session" icon="power" variant="ghost" loading={mutation === "kill"} disabled={Boolean(mutation) || autoReviewEnabled} onPress={confirmKillReviewer} />{autoReviewEnabled ? <Text style={styles.scopeNote}>Turn off automatic review before stopping its reviewer session.</Text> : null}</> : null}
-			{data.reviewerSurface?.controllerError ? <Text accessibilityRole="alert" style={styles.error}>{data.reviewerSurface.controllerError}</Text> : null}
-			{primaryAction !== "none" ? <Button title={reviewPrimaryActionLabel(primaryAction, multiplePullRequests)} icon={primaryAction === "cancel" ? "x" : "play"} variant={primaryAction === "cancel" ? "danger" : "primary"} loading={mutation === "review"} disabled={Boolean(mutation) || primaryAction !== "cancel" && autoReviewEnabled} onPress={() => void runPrimaryAction()} /> : null}
-			{primaryAction !== "cancel" && autoReviewEnabled ? <Text style={styles.scopeNote}>Automatic review is watching for new commits. Turn it off in Review actions to run reviews manually.</Text> : null}
-			{primaryAction !== "none" && multiplePullRequests ? <Text style={styles.scopeNote}>This action applies to every eligible pull request in this session.</Text> : null}
-			{error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
+				<View style={styles.trailing}>
+					{controls.open
+						? <RowPill label="Open" icon={controls.open === "chat" ? "message-circle" : "terminal"} tone="solid" disabled={Boolean(mutation)} onPress={openReviewer} />
+						: controls.restore ? <RowPill label="Restore" icon="refresh-cw" tone="outline" busy={mutation === "restore"} disabled={Boolean(mutation)} onPress={() => void restoreReviewer()} /> : null}
+					<ItemActionsMenu accessibilityLabel="Reviewer session actions" actions={stopActions} loading={mutation === "kill"} disabled={Boolean(mutation)} />
+				</View>
+			</Pressable>
+			{controls.stop && autoReviewEnabled ? <Text style={styles.note}>Turn off automatic review before stopping its reviewer session.</Text> : null}
+			{data.reviewerSurface?.controllerError ? <Text accessibilityRole="alert" style={[styles.note, styles.noteError]}>{data.reviewerSurface.controllerError}</Text> : null}
 
-			<Text style={styles.sectionLabel}>AO REVIEW HISTORY</Text>
-			{runs.length ? runs.map((run, index) => <RunCard key={run.id} run={run} previous={index > 0} sent={sentRuns.has(run.id)} sending={mutation === `send:${run.id}`} disabled={Boolean(mutation)} onSend={() => void sendRun(run)} />) : <Card><Text style={styles.emptyTitle}>No result for this pull request</Text><Text style={styles.body}>This pull request still needs a review.</Text></Card>}
+			<ListSectionHeader label="AO review" />
+			<View style={styles.row}>
+				<View style={styles.main}>
+					<View style={styles.eyebrow}>
+						<Feather name="git-commit" size={13} color={t.textSecondary} />
+						<Text style={[styles.eyebrowText, styles.mono]} numberOfLines={1}>{shortCommit(review.targetSha)}</Text>
+					</View>
+					<Text style={styles.title} numberOfLines={1}>{reviewLabel}</Text>
+					<View style={styles.statusLine}>
+						<Dot color={reviewColor} size={6} breathing={review.status === "running"} />
+						<Text style={styles.detail} numberOfLines={2}>{reviewDetail}</Text>
+					</View>
+					{reviewNote ? <Text style={styles.detail}>{reviewNote}</Text> : null}
+				</View>
+				{primaryAction !== "none" ? <RowPill label={reviewPrimaryActionLabel(primaryAction, multiplePullRequests)} icon={primaryAction === "cancel" ? "x" : "play"} tone={primaryAction === "cancel" ? "danger" : primaryAction === "start" ? "solid" : "outline"} busy={mutation === "review"} disabled={Boolean(mutation) || primaryAction !== "cancel" && autoReviewEnabled} onPress={() => void runPrimaryAction()} /> : null}
+			</View>
+			{reviewNotice ? <View style={styles.inlineNote}><Feather name="check" size={13} color={t.green} /><Text style={[styles.inlineNoteText, { color: t.green }]}>{reviewNotice}</Text></View> : null}
+			{autoReviewFailure && autoReviewFailure.id !== dismissedAutoFailureId ? <View accessibilityRole="alert" style={styles.inlineNote}>
+				<Feather name="alert-circle" size={13} color={t.red} />
+				<Text style={[styles.inlineNoteText, { color: t.red }]}><Text style={styles.inlineNoteStrong}>Automatic review failed. </Text>{autoReviewFailure.body.trim()}</Text>
+				<Pressable accessibilityRole="button" accessibilityLabel="Dismiss automatic review failure" hitSlop={10} onPress={() => setDismissedAutoFailureId(autoReviewFailure.id)}><Feather name="x" size={15} color={t.red} /></Pressable>
+			</View> : null}
+			{error ? <Text accessibilityRole="alert" style={[styles.note, styles.noteError]}>{error}</Text> : null}
+
+			<ListSectionHeader label="History" count={runs.length} />
+			{runs.length
+				? runs.map((run) => <RunRow key={run.id} run={run} sent={sentRuns.has(run.id)} sending={mutation === `send:${run.id}`} disabled={Boolean(mutation)} onSend={() => void sendRun(run)} />)
+				: <Text style={styles.note}>No AO review for this pull request yet.</Text>}
 		</ScrollView>
 	);
 }
 
-function Meta({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+type PillTone = "solid" | "outline" | "danger" | "merge";
+
+/** The board's row pill: solid for the live action, outlined for the rest. */
+function RowPill({ label, icon, tone, busy = false, disabled = false, onPress }: { label: string; icon: keyof typeof Feather.glyphMap; tone: PillTone; busy?: boolean; disabled?: boolean; onPress: () => void }) {
+	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	return <View style={styles.metaRow}><Text style={styles.metaLabel}>{label}</Text><Text style={[styles.metaValue, mono && styles.mono]}>{value}</Text></View>;
+	const filled = tone === "solid" || tone === "merge";
+	const ink = tone === "solid" ? t.bgBase : tone === "merge" ? t.bgBase : tone === "danger" ? t.red : t.textPrimary;
+	return <Pressable
+		accessibilityRole="button"
+		accessibilityLabel={label}
+		accessibilityState={{ busy, disabled: disabled || busy }}
+		disabled={disabled || busy}
+		hitSlop={8}
+		onPress={() => { haptics.tap(); onPress(); }}
+		style={({ pressed }) => [styles.pill, tone === "solid" && styles.pillSolid, tone === "merge" && styles.pillMerge, !filled && styles.pillOutline, tone === "danger" && styles.pillDanger, (disabled && !busy) && styles.pillDisabled, pressed && styles.pillPressed]}
+	>
+		{busy ? <ActivityIndicator size="small" color={ink} /> : <Feather name={icon} size={14} color={ink} />}
+		<Text style={[styles.pillLabel, { color: ink }]} numberOfLines={1}>{label}</Text>
+	</Pressable>;
 }
 
-function RunCard({ run, previous = false, sent, sending, disabled, onSend }: { run: ReviewRun; previous?: boolean; sent: boolean; sending: boolean; disabled: boolean; onSend: () => void }) {
+function RunRow({ run, sent, sending, disabled, onSend }: { run: ReviewRun; sent: boolean; sending: boolean; disabled: boolean; onSend: () => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const requested = run.verdict === "changes_requested";
+	const color = requested ? t.amber : run.verdict === "approved" ? t.green : run.status === "failed" ? t.red : t.textSecondary;
 	const url = reviewRunUrl(run);
 	// Desktop keeps these in a per-review "⋯" menu.
 	const actions: ItemAction[] = [
 		...(url ? [{ id: "open", label: "Open on GitHub", systemImage: "arrow.up.right.square", onPress: () => void openGitHub(url) }] : []),
 		...(reviewRunSendable(run) && !sent ? [{ id: "send", label: "Send to worker", systemImage: "paperplane", onPress: onSend }] : []),
 	];
-	return <Card style={previous ? styles.previousCard : undefined}>
-		<View style={styles.runHeader}><Feather name={requested ? "alert-circle" : run.verdict === "approved" ? "check-circle" : "clock"} size={17} color={requested ? t.amber : run.verdict === "approved" ? t.green : t.textSecondary} /><Text style={styles.runTitle}>{reviewVerdictLabel(run)}</Text><Text style={styles.sha}>{shortCommit(run.targetSha)}</Text><ItemActionsMenu accessibilityLabel={`Actions for the ${reviewVerdictLabel(run).toLowerCase()} review`} actions={actions} disabled={disabled} loading={sending} /></View>
-		<Text style={styles.runBy}>{reviewRunMeta(run)}</Text>
-		{run.autoInjectReview === false ? <View style={styles.notInjected}><Feather name="info" size={13} color={t.amber} /><Text style={styles.notInjectedText}>Not automatically sent to the worker</Text></View> : null}
-		{run.body ? <View style={styles.markdown}><ChatMarkdown text={run.body} /></View> : <Text style={styles.bodyMuted}>{run.status === "running" ? "Findings appear here when the review finishes." : "No written findings."}</Text>}
-		{sent ? <View style={styles.sentNote}><Feather name="check" size={13} color={t.green} /><Text style={styles.sentNoteText}>Sent to worker</Text></View> : null}
-	</Card>;
+	return <View style={styles.runRow}>
+		<View style={styles.runHead}>
+			<Dot color={color} size={6} breathing={run.status === "running"} />
+			<Text style={[styles.statusStrong, styles.runVerdict, { color }]} numberOfLines={1}>{reviewVerdictLabel(run)}</Text>
+			<Text style={[styles.detail, styles.mono]}>{shortCommit(run.targetSha)}</Text>
+			<ItemActionsMenu accessibilityLabel={`Actions for the ${reviewVerdictLabel(run).toLowerCase()} review`} actions={actions} disabled={disabled} loading={sending} />
+		</View>
+		<Text style={styles.detail}>{reviewRunMeta({ ...run, harness: reviewerName(run.harness) }).split(" · ").map(capitalize).join(" · ")}</Text>
+		{run.autoInjectReview === false ? <Text style={[styles.detail, { color: t.amber }]}>Not automatically sent to the worker</Text> : null}
+		{run.body ? <View style={styles.markdown}><ChatMarkdown text={run.body} /></View> : <Text style={styles.detail}>{run.status === "running" ? "Findings appear here when the review finishes." : "No written findings."}</Text>}
+		{sent ? <View style={styles.statusLine}><Feather name="check" size={13} color={t.green} /><Text style={[styles.statusStrong, { color: t.green }]}>Sent to worker</Text></View> : null}
+	</View>;
+}
+
+function reviewerName(harness: string): string {
+	if (!harness) return "Not selected";
+	return harness.split("-").map(capitalize).join(" ");
+}
+
+function capitalize(value: string): string {
+	return value ? value[0].toUpperCase() + value.slice(1) : value;
 }
 
 function toneColor(t: Theme, tone: MergeTone, tint = false): string {
@@ -266,55 +340,40 @@ function toneColor(t: Theme, tone: MergeTone, tint = false): string {
 	}
 }
 
-function statusColor(t: Theme, tone: ReturnType<typeof reviewStatusVisual>["tone"], tint = false): string {
-	if (tone === "amber") return tint ? t.tintAmber : t.amber;
-	if (tone === "green") return tint ? t.tintGreen : t.green;
-	if (tone === "blue") return tint ? t.tintBlue : t.blue;
-	return tint ? t.bgSubtle : t.textTertiary;
-}
-
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
-	content: { padding: 16, paddingBottom: 40, gap: 12 },
-	mergeCard: { paddingVertical: 12 },
-	mergeRow: { flexDirection: "row", alignItems: "center", gap: 12 },
-	mergeIcon: { width: 34, height: 34, borderRadius: 10, alignItems: "center", justifyContent: "center" },
-	mergeCopy: { flex: 1, gap: 3 },
-	mergeLabel: { fontSize: 15, fontWeight: "700" },
-	mergeReason: { color: t.textTertiary, fontSize: 12, lineHeight: 17 },
-	sentNote: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 8 },
-	sentNoteText: { color: t.green, fontSize: 12, fontWeight: "600" },
+	content: { paddingBottom: space.huge },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
-	heading: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 4 },
-	statusIcon: { width: 42, height: 42, borderRadius: 13, alignItems: "center", justifyContent: "center" },
-	headingCopy: { flex: 1, gap: 3 },
-	title: { color: t.textPrimary, fontSize: 20, lineHeight: 25, fontWeight: "700" },
-	subtitle: { color: t.textSecondary, fontSize: 13 },
-	metaCard: { gap: 10 },
-	notice: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: t.tintGreen, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10 },
-	noticeText: { color: t.green, flex: 1, fontSize: 13 },
-	autoReviewFailure: { flexDirection: "row", alignItems: "flex-start", gap: 9, borderWidth: StyleSheet.hairlineWidth, borderColor: t.red, backgroundColor: t.tintRed, borderRadius: 10, padding: 11 },
-	failureCopy: { flex: 1, gap: 3 },
-	failureTitle: { color: t.red, fontSize: 13, fontWeight: "700" },
-	failureBody: { color: t.red, fontSize: 13, lineHeight: 18 },
-	metaRow: { flexDirection: "row", alignItems: "center", gap: 12 },
-	metaLabel: { width: 72, color: t.textTertiary, fontSize: 12, textTransform: "uppercase", letterSpacing: 0.5 },
-	metaValue: { flex: 1, color: t.textPrimary, fontSize: 14, textTransform: "capitalize" },
-	mono: { fontFamily: t.fontMono, textTransform: "none" },
-	sectionLabel: { color: t.textTertiary, fontSize: 11, fontWeight: "700", letterSpacing: 0.8, marginTop: 8, marginLeft: 4 },
-	runHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
-	runTitle: { flex: 1, color: t.textPrimary, fontSize: 16, fontWeight: "700" },
-	sha: { color: t.textTertiary, fontSize: 11, fontFamily: t.fontMono },
-	runBy: { color: t.textTertiary, fontSize: 12, marginTop: 6, textTransform: "capitalize" },
-	body: { color: t.textSecondary, fontSize: 14, lineHeight: 21, marginTop: 12 },
-	markdown: { marginTop: 12 },
-	bodyMuted: { color: t.textTertiary, fontSize: 14, marginTop: 12, fontStyle: "italic" },
-	emptyTitle: { color: t.textPrimary, fontSize: 15, fontWeight: "700" },
-	error: { color: t.red, fontSize: 13, lineHeight: 18 },
-	scopeNote: { color: t.textTertiary, fontSize: 12, lineHeight: 17, textAlign: "center", paddingHorizontal: 12 },
-	previousCard: { opacity: 0.78 },
-	notInjected: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8 },
-	notInjectedText: { color: t.amber, fontSize: 12 },
+	// A worker row's metrics: eyebrow, title, status line, divider underneath.
+	row: { minHeight: 76, flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: space.lg, paddingVertical: space.sm, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle, backgroundColor: t.bgBase },
+	rowPressed: { backgroundColor: t.bgSubtle },
+	main: { flex: 1, minWidth: 0, gap: space.hair },
+	trailing: { flexDirection: "row", alignItems: "center", gap: space.xxs },
+	eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 17 },
+	eyebrowText: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500" },
+	title: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
+	statusLine: { flexDirection: "row", alignItems: "center", gap: space.xs, minWidth: 0 },
+	statusStrong: { fontFamily: "Geist_600SemiBold", fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "600" },
+	statusDetail: { fontFamily: "Geist_400Regular", flexShrink: 1, marginLeft: -space.xs, color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
+	detail: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
+	mono: { fontFamily: t.fontMono },
+	note: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, paddingHorizontal: space.lg, paddingVertical: space.sm },
+	noteError: { color: t.red },
+	inlineNote: { flexDirection: "row", alignItems: "flex-start", gap: space.xs, paddingHorizontal: space.lg, paddingVertical: space.sm, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle },
+	inlineNoteText: { flex: 1, fontFamily: "Geist_400Regular", fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
+	inlineNoteStrong: { fontFamily: "Geist_600SemiBold", fontWeight: "600" },
+	runRow: { paddingHorizontal: space.lg, paddingVertical: space.md, gap: space.xxs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle },
+	runHead: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 28 },
+	runVerdict: { flex: 1, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
+	markdown: { marginTop: space.xs },
+	pill: { flexDirection: "row", alignItems: "center", gap: space.xs, height: 28, paddingHorizontal: space.md, borderRadius: 12 },
+	pillSolid: { backgroundColor: t.textPrimary },
+	pillMerge: { backgroundColor: t.green },
+	pillOutline: { borderWidth: 1, borderColor: t.borderStrong },
+	pillDanger: { borderColor: t.red },
+	pillDisabled: { opacity: 0.45 },
+	pillPressed: { opacity: 0.8 },
+	pillLabel: { fontFamily: "Geist_600SemiBold", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 	headerActions: { flexDirection: "row", alignItems: "center", gap: 2 },
 	headerAction: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
 });

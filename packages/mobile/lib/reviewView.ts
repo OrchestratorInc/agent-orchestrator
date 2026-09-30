@@ -127,7 +127,7 @@ export function reviewerDestination(data: SessionReviews, review: PRReviewState,
 	}
 	const handleId = surface.handleId || data.reviewerHandleId;
 	if (!handleId) return undefined;
-	return { pathname: "/shell/[handleId]" as const, params: { handleId, sessionId, title: `Review · PR #${review.prNumber}` } };
+	return { pathname: "/shell/[handleId]" as const, params: { handleId, sessionId, title: `Review · PR #${review.prNumber}`, kind: "reviewer" } };
 }
 
 export type ReviewerControls = {
