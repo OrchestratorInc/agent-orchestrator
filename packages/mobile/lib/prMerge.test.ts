@@ -25,12 +25,18 @@ describe("merge readiness", () => {
 		expect(mergeReadiness({ ...ready(), ci: { state: "pending", failingChecks: [] } })).toMatchObject({ canMerge: false, label: "Checking" });
 	});
 
+	it("colors states by meaning, like the rest of the app", () => {
+		expect(mergeReadiness(ready()).tone).toBe("green");
+		expect(mergeReadiness({ ...ready(), mergeability: { state: "conflicting", reasons: [] } }).tone).toBe("red");
+		expect(mergeReadiness({ ...ready(), review: { ...ready().review, hasUnresolvedHumanComments: true } }).tone).toBe("amber");
+	});
+
 	it("never merges without the head commit the merge is fenced to", () => {
 		expect(mergeReadiness({ ...ready(), headSha: undefined }).canMerge).toBe(false);
 	});
 
 	it("reports merged and closed PRs without a merge action", () => {
-		expect(mergeReadiness({ ...ready(), state: "merged" })).toEqual({ canMerge: false, label: "Merged" });
-		expect(mergeReadiness({ ...ready(), state: "closed" })).toEqual({ canMerge: false, label: "Closed" });
+		expect(mergeReadiness({ ...ready(), state: "merged", targetBranch: "main" })).toEqual({ canMerge: false, tone: "purple", icon: "git-merge", label: "Merged", reason: "This pull request was merged into main." });
+		expect(mergeReadiness({ ...ready(), state: "closed" })).toMatchObject({ canMerge: false, tone: "muted", label: "Closed" });
 	});
 });

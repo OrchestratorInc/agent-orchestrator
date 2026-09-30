@@ -8,7 +8,7 @@ import { haptics } from "../../lib/haptics";
 import { ItemActionsMenu } from "../../lib/item-actions-menu";
 import type { ItemAction } from "../../lib/item-actions-menu.types";
 import { openGitHub } from "../../lib/openGitHub";
-import { mergeReadiness } from "../../lib/prMerge";
+import { mergeReadiness, type MergeTone } from "../../lib/prMerge";
 import { formatReviewSummaryMessage, reviewRunsForPullRequest, reviewRunUrl } from "../../lib/reviewFeedback";
 import { latestAutoReviewFailure, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewStatusVisual, reviewVerdictLabel, shortCommit } from "../../lib/reviewView";
 import { useApp } from "../../lib/store";
@@ -29,6 +29,9 @@ export default function ReviewDetailScreen() {
 	const [data, setData] = useState<SessionReviews>();
 	const [prs, setPRs] = useState<SessionPRSummary[]>([]);
 	const [sentRuns, setSentRuns] = useState<ReadonlySet<string>>(new Set());
+	// The daemon learns a merge from its next GitHub observation, seconds after
+	// the merge call returns. Show the merge at once and poll until it agrees.
+	const [mergedURL, setMergedURL] = useState<string>();
 	const [error, setError] = useState("");
 	const [reviewNotice, setReviewNotice] = useState("");
 	const [dismissedAutoFailureId, setDismissedAutoFailureId] = useState<string>();
@@ -68,6 +71,14 @@ export default function ReviewDetailScreen() {
 			<Pressable accessibilityRole="button" accessibilityLabel="More review actions" hitSlop={8} style={styles.headerAction} onPress={() => { haptics.tap(); router.push({ pathname: "/sheets/review-actions", params: { sessionId, prUrl: review.prUrl, reviewer: data?.reviewerHarness ?? "" } }); }}><Feather name="more-horizontal" size={21} color={t.textSecondary} /></Pressable>
 		</View> : undefined,
 	}), [data?.reviewerHarness, navigation, review?.prNumber, review?.prUrl, router, sessionId, styles.headerAction, styles.headerActions, t.textSecondary]);
+	const observedPR = review ? pullRequestSummaryForURL(prs, review.prUrl) : undefined;
+	const awaitingMerge = Boolean(mergedURL && observedPR && observedPR.url === mergedURL && observedPR.state !== "merged");
+	useEffect(() => {
+		if (!awaitingMerge) return;
+		const timer = setInterval(() => void load(true), 2_000);
+		const giveUp = setTimeout(() => setMergedURL(undefined), 60_000);
+		return () => { clearInterval(timer); clearTimeout(giveUp); };
+	}, [awaitingMerge, load]);
 	useEffect(() => {
 		if (review?.status !== "running" && !autoReviewEnabled) return;
 		const timer = setInterval(() => void load(true), 2_000);
@@ -153,15 +164,19 @@ export default function ReviewDetailScreen() {
 	};
 
 	const controls = reviewerControls(data, review, sessionId);
-	const pr = pullRequestSummaryForURL(prs, review.prUrl);
+	const pr = observedPR && awaitingMerge ? { ...observedPR, state: "merged" as const } : observedPR;
 	const merge = pr ? mergeReadiness(pr) : undefined;
+	const closedPR = pr?.state === "merged" || pr?.state === "closed";
+	const headline = closedPR && merge
+		? { icon: merge.icon, color: toneColor(t, merge.tone), tint: toneColor(t, merge.tone, true), label: merge.label }
+		: { icon: reviewStatusVisual(review.status).icon, color: statusColor(t, reviewStatusVisual(review.status).tone), tint: statusColor(t, reviewStatusVisual(review.status).tone, true), label: reviewStatusLabel(review.status) };
 	const confirmMerge = () => {
 		if (!config || !pr || !merge?.canMerge || mutation) return;
 		Alert.alert(`Merge PR #${pr.number}?`, `This will squash-merge PR #${pr.number} in the remote repository.`, [
 			{ text: "Cancel", style: "cancel" },
 			{ text: "Merge", onPress: () => void (async () => {
 				setMutation("merge"); setError("");
-				try { await mergeSessionPR(config, pr); haptics.success(); await load(); }
+				try { await mergeSessionPR(config, pr); setMergedURL(pr.url); haptics.success(); await load(true); }
 				catch (value) { setError(value instanceof Error ? value.message : `Could not merge PR #${pr.number}.`); }
 				finally { setMutation(undefined); }
 			})() },
@@ -171,12 +186,12 @@ export default function ReviewDetailScreen() {
 	return (
 		<ScrollView style={styles.screen} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={t.blue} />}>
 			<View style={styles.heading}>
-				<View style={[styles.statusIcon, { backgroundColor: statusColor(t, reviewStatusVisual(review.status).tone, true) }]}>
-					<Feather name={reviewStatusVisual(review.status).icon} size={20} color={statusColor(t, reviewStatusVisual(review.status).tone)} />
+				<View style={[styles.statusIcon, { backgroundColor: headline.tint }]}>
+					<Feather name={headline.icon} size={20} color={headline.color} />
 				</View>
 				<View style={styles.headingCopy}>
 					<Text style={styles.title}>{review.title}</Text>
-					<Text style={styles.subtitle}>PR #{review.prNumber} · {reviewStatusLabel(review.status)}</Text>
+					<Text style={styles.subtitle}>PR #{review.prNumber} · {headline.label}</Text>
 				</View>
 			</View>
 
@@ -193,8 +208,9 @@ export default function ReviewDetailScreen() {
 			{reviewNotice ? <View style={styles.notice}><Feather name="check" size={15} color={t.green} /><Text style={styles.noticeText}>{reviewNotice}</Text></View> : null}
 			{merge && pr ? <Card style={styles.mergeCard}>
 				<View style={styles.mergeRow}>
+					<View style={[styles.mergeIcon, { backgroundColor: toneColor(t, merge.tone, true) }]}><Feather name={merge.icon} size={17} color={toneColor(t, merge.tone)} /></View>
 					<View style={styles.mergeCopy}>
-						<Text style={[styles.mergeLabel, { color: merge.canMerge ? t.green : pr.state === "merged" ? t.accent : t.textSecondary }]}>{merge.label}</Text>
+						<Text style={[styles.mergeLabel, { color: toneColor(t, merge.tone) }]}>{merge.label}</Text>
 						{merge.reason ? <Text style={styles.mergeReason}>{merge.reason}</Text> : null}
 					</View>
 					{merge.canMerge ? <Button title={mutation === "merge" ? "Merging…" : "Merge"} icon="git-merge" variant="success" loading={mutation === "merge"} disabled={Boolean(mutation)} onPress={confirmMerge} /> : null}
@@ -240,6 +256,16 @@ function RunCard({ run, previous = false, sent, sending, disabled, onSend }: { r
 	</Card>;
 }
 
+function toneColor(t: Theme, tone: MergeTone, tint = false): string {
+	switch (tone) {
+		case "green": return tint ? t.tintGreen : t.green;
+		case "purple": return tint ? t.tintPurple : t.purple;
+		case "amber": return tint ? t.tintAmber : t.amber;
+		case "red": return tint ? t.tintRed : t.red;
+		default: return tint ? t.bgSubtle : t.textSecondary;
+	}
+}
+
 function statusColor(t: Theme, tone: ReturnType<typeof reviewStatusVisual>["tone"], tint = false): string {
 	if (tone === "amber") return tint ? t.tintAmber : t.amber;
 	if (tone === "green") return tint ? t.tintGreen : t.green;
@@ -252,6 +278,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	content: { padding: 16, paddingBottom: 40, gap: 12 },
 	mergeCard: { paddingVertical: 12 },
 	mergeRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+	mergeIcon: { width: 34, height: 34, borderRadius: 10, alignItems: "center", justifyContent: "center" },
 	mergeCopy: { flex: 1, gap: 3 },
 	mergeLabel: { fontSize: 15, fontWeight: "700" },
 	mergeReason: { color: t.textTertiary, fontSize: 12, lineHeight: 17 },
