@@ -337,7 +337,7 @@ export function TaskComposer({
 		queryKey: ["agent-readiness", hostId],
 		enabled: Boolean(hostId),
 		queryFn: async (): Promise<AgentReadiness> => {
-			const { data, error } = await clientForHost(hostId ?? "").POST("/api/v1/agents/readiness/ensure", { body: { purpose: "display" } });
+			const { data, error } = await clientForHost(hostId ?? "").POST("/api/v1/agents/readiness/ensure", { body: { purpose: "launch" } });
 			if (error) throw new Error(apiErrorMessage(error));
 			return data as AgentReadiness;
 		},

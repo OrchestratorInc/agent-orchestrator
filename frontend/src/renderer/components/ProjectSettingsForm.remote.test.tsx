@@ -96,6 +96,9 @@ it("keeps same-ID projects and their paths on separate hosts", async () => {
 	connect("box-a", "box-b");
 	const { queryClient, rerenderHost } = renderForm("box-a");
 	expect(await screen.findByText("Alpha")).toBeVisible();
+	await waitFor(() => expect(mocks.post).toHaveBeenCalledWith("box-a", "/api/v1/agents/readiness/ensure", {
+		body: { agentIds: [], purpose: "launch" },
+	}));
 	expect(screen.getByText("/srv/alpha").closest("a")).toBeNull();
 	expect(screen.getByText("/srv/alpha.git").closest("a")).toBeNull();
 	rerenderHost("box-b");

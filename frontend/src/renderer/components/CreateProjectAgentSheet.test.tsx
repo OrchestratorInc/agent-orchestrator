@@ -9,10 +9,16 @@ import { CreateProjectAgentSheet, RequiredAgentField } from "./CreateProjectAgen
 import { TooltipProvider } from "./ui/tooltip";
 import { useUiStore } from "../stores/ui-store";
 
+const remote = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
+vi.mock("../lib/host-clients", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/host-clients")>()),
+	clientForHost: () => ({ GET: remote.get, POST: remote.post }),
+}));
+
 function renderSheet(
 	onSubmit = vi.fn().mockResolvedValue(undefined),
 	queryClient?: QueryClient,
-	options: { shake?: boolean } = {},
+	options: { shake?: boolean; hostId?: string } = {},
 ) {
 	queryClient ??= new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	if (queryClient.getQueryData(agentReadinessQueryKey) === undefined) {
@@ -27,6 +33,7 @@ function renderSheet(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
 				<CreateProjectAgentSheet
+					hostId={options.hostId}
 					isCreating={false}
 					kind="single_repo"
 					onOpenChange={() => undefined}
@@ -52,6 +59,16 @@ function hoursAgo(hours: number): string {
 }
 
 describe("CreateProjectAgentSheet", () => {
+	it("ensures launch readiness when creating on a remote host", async () => {
+		remote.get.mockResolvedValue({ data: { agents: [agentReadiness("codex")] } });
+		remote.post.mockResolvedValue({ data: { agents: [agentReadiness("codex")] } });
+		renderSheet(undefined, undefined, { hostId: "box-a" });
+
+		await waitFor(() => expect(remote.post).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", {
+			body: { agentIds: [], purpose: "launch" },
+		}));
+	});
+
 	it("shakes the active sheet when creation fails", () => {
 		renderSheet(undefined, undefined, { shake: true });
 

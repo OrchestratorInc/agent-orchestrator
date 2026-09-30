@@ -185,7 +185,7 @@ function SettingsBody({
 	});
 	const missingRequiredAgent = form.workerAgent === "" || form.orchestratorAgent === "";
 	const agentsQuery = useAgentReadinessQuery(true, hostId);
-	useEnsureAgentReadiness({ hostId });
+	useEnsureAgentReadiness({ hostId, purpose: hostId ? "launch" : "display" });
 	useEnsureAgentReadiness({
 		agentIds: [form.workerAgent, form.orchestratorAgent, form.reviewerHarness],
 		enabled: form.workerAgent !== "" || form.orchestratorAgent !== "" || form.reviewerHarness !== "",

@@ -135,7 +135,7 @@ export function CreateProjectAgentSheet({
 		displayedOnBack.current = onBack;
 	}
 	const agentsQuery = useAgentReadinessQuery(contentOpen && connected, hostId);
-	useEnsureAgentReadiness({ enabled: contentOpen && connected, hostId });
+	useEnsureAgentReadiness({ enabled: contentOpen && connected, hostId, purpose: hostId ? "launch" : "display" });
 	const agents = agentsQuery.data;
 	const agentOptions = useMemo(() => agents?.agents ?? [], [agents]);
 	const selectableAgents = useMemo(() => hostId ? agentOptions.filter((agent) => agent.effectiveReadiness === "ready") : agentOptions, [agentOptions, hostId]);
