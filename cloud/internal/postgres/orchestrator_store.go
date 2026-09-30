@@ -175,12 +175,53 @@ func (s *Store) SendOrchestratorChildMessage(
 		if !allowed {
 			return ErrForbidden
 		}
+		// `ao spawn --prompt` already records the child's task as a chat.user_message
+		// and the worker auto-runs it from the launch spec, so an orchestrator
+		// `ao send` of the IDENTICAL task before the child has produced any turn just
+		// duplicates the prompt bubble (and re-injects the same work into the live
+		// agent terminal). Suppress only that pristine re-send — returning the
+		// existing record so the send still succeeds; once the child has run a turn
+		// every send is a genuine follow-up and passes through unchanged.
+		var initialPrompt string
+		var hasTurn bool
+		if err := tx.QueryRow(
+			ctx,
+			`SELECT s.prompt,
+				EXISTS (SELECT 1 FROM ao_turns t WHERE t.org_id = $1 AND t.session_id = $2)
+			FROM ao_sessions s
+			WHERE s.org_id = $1 AND s.id = $2`,
+			orgID, childSessionID,
+		).Scan(&initialPrompt, &hasTurn); err != nil {
+			return err
+		}
+		if !hasTurn && strings.TrimSpace(initialPrompt) != "" &&
+			strings.TrimSpace(text) == strings.TrimSpace(initialPrompt) {
+			event, err = loadInitialPromptEvent(ctx, tx, orgID, childSessionID)
+			return err
+		}
 		event, err = sendMessageTx(
 			ctx, tx, orgID, childSessionID, idempotencyKey, text, "", orchestratorSessionID,
 			"", nil, domain.ChatTurnSettings{},
 		)
 		return err
 	})
+	return event, err
+}
+
+// loadInitialPromptEvent returns the child's first chat.user_message — the one
+// createSessionTx recorded for the spawn `--prompt`. Used to make a redundant
+// orchestrator re-send of that same task a no-op that still returns a valid event.
+func loadInitialPromptEvent(ctx context.Context, tx pgx.Tx, orgID, sessionID string) (domain.ClientEvent, error) {
+	var event domain.ClientEvent
+	err := scanClientEvent(tx.QueryRow(
+		ctx,
+		`SELECT session_id, sequence, type, payload, created_at
+		FROM ao_events
+		WHERE org_id = $1 AND session_id = $2 AND type = 'chat.user_message'
+		ORDER BY sequence
+		LIMIT 1`,
+		orgID, sessionID,
+	), &event)
 	return event, err
 }
 
