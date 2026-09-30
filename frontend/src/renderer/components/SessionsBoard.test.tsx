@@ -58,6 +58,8 @@ vi.mock("../hooks/useSessionUsageSummaries", () => ({
 vi.mock("../lib/api-client", () => ({
 	apiClient: { POST: (...args: unknown[]) => postMock(...args) },
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => () => undefined,
 }));
 
 vi.mock("../lib/bridge", () => ({
