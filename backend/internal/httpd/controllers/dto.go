@@ -764,6 +764,12 @@ type BrowserCapabilityHeader struct {
 	Capability string `header:"X-AO-Browser-Capability" description:"Opaque browser capability injected into the owning AO worker."`
 }
 
+// PreviewCapabilityHeader lets a session-scoped user shell manage only its
+// own preview server, without granting browser automation access.
+type PreviewCapabilityHeader struct {
+	Capability string `header:"X-AO-Preview-Capability" description:"Opaque preview-only capability injected into a session-scoped user shell."`
+}
+
 // BrowserStatusResponse reports whether the desktop-owned browser transport is
 // ready. A connected runtime can create the session target while its panel is
 // hidden; panel visibility is intentionally not part of this state.

@@ -726,14 +726,15 @@ type SessionWorktree struct {
 }
 
 type ShellTerminal struct {
-	HandleID   string
-	ProjectID  *domain.ProjectID
-	WorkingDir string
-	Title      string
-	AppRunID   string
-	CreatedAt  time.Time
-	SessionID  sql.NullString
-	Transient  bool
+	HandleID                  string
+	ProjectID                 *domain.ProjectID
+	WorkingDir                string
+	Title                     string
+	AppRunID                  string
+	CreatedAt                 time.Time
+	SessionID                 sql.NullString
+	Transient                 bool
+	PreviewCapabilityVerifier string
 }
 
 type TelemetryEvent struct {

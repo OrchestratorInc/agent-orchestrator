@@ -897,11 +897,12 @@ func Run() error {
 				return sqlite.OpenReadOnly(ctx, dataDir)
 			},
 		}),
-		Browser:             browserService,
-		LinkPreview:         linkpreviewsvc.New(nil),
-		PreviewServer:       managedPreview,
-		SessionCapabilities: browserAuthority,
-		AgentSwitchPolicy:   policyCoordinator,
+		Browser:                  browserService,
+		LinkPreview:              linkpreviewsvc.New(nil),
+		PreviewServer:            managedPreview,
+		SessionCapabilities:      browserAuthority,
+		ShellPreviewCapabilities: shellTermSvc,
+		AgentSwitchPolicy:        policyCoordinator,
 	})
 	if err != nil {
 		stop()

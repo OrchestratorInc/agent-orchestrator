@@ -155,6 +155,20 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 			t.Fatalf("%s: got %d want 404 (Host-spoof + valid auth must not reach control routes)", path, resp.StatusCode)
 		}
 	}
+	for _, method := range []string{http.MethodPost, http.MethodDelete} {
+		req, _ := http.NewRequest(method, fmt.Sprintf("http://127.0.0.1:%d/api/v1/sessions/ao-1/preview/server", port), nil)
+		req.Host = "127.0.0.1"
+		req.Header.Set("Authorization", "Bearer secret12")
+		req.Header.Set("X-AO-Preview-Capability", "shell-preview-token")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("LAN %s preview/server = %d, want 404", method, resp.StatusCode)
+		}
+	}
 	{
 		req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/api/v1/mobile/enable-lan-only", port), nil)
 		req.Header.Set("Authorization", "Bearer secret12")

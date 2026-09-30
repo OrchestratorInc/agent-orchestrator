@@ -158,6 +158,12 @@ type SessionCapabilityValidator interface {
 	Valid(sessionID domain.SessionID, token, verifier string) bool
 }
 
+// ShellPreviewCapabilityValidator checks the separate, preview-only bearer
+// held by a live session-scoped user shell.
+type ShellPreviewCapabilityValidator interface {
+	ValidPreviewCapability(ctx context.Context, sessionID domain.SessionID, token string) (bool, error)
+}
+
 // UsageHookRecorder consumes transcript metadata from the same native hook
 // callback without changing activity-state semantics.
 type UsageHookRecorder interface {
@@ -167,12 +173,13 @@ type UsageHookRecorder interface {
 // SessionsController owns the session routes. Nil keeps routes registered but
 // returns OpenAPI-backed 501s.
 type SessionsController struct {
-	Svc           SessionService
-	Activity      ActivityRecorder
-	Usage         UsageHookRecorder
-	Attachments   *attachmentstore.Store
-	PreviewServer ManagedPreviewServer
-	Capabilities  SessionCapabilityValidator
+	Svc                      SessionService
+	Activity                 ActivityRecorder
+	Usage                    UsageHookRecorder
+	Attachments              *attachmentstore.Store
+	PreviewServer            ManagedPreviewServer
+	Capabilities             SessionCapabilityValidator
+	ShellPreviewCapabilities ShellPreviewCapabilityValidator
 }
 
 // Register mounts the session routes on the supplied router.
@@ -1190,23 +1197,35 @@ func (c *SessionsController) authorizePreviewServer(w http.ResponseWriter, r *ht
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "SESSION_TERMINATED", "Session is terminated", nil)
 		return false
 	}
-	if !c.Capabilities.Valid(
+	if c.Capabilities.Valid(
 		id,
 		strings.TrimSpace(r.Header.Get(browserCapabilityHeader)),
 		sess.Metadata.BrowserCapabilityVerifier,
 	) {
-		envelope.WriteAPIError(
-			w,
-			r,
-			http.StatusForbidden,
-			"forbidden",
-			"PREVIEW_CAPABILITY_INVALID",
-			"Preview capability is invalid",
-			nil,
-		)
-		return false
+		return true
 	}
-	return true
+	if c.ShellPreviewCapabilities != nil {
+		valid, err := c.ShellPreviewCapabilities.ValidPreviewCapability(
+			r.Context(), id, strings.TrimSpace(r.Header.Get("X-AO-Preview-Capability")),
+		)
+		if err != nil {
+			envelope.WriteError(w, r, err)
+			return false
+		}
+		if valid {
+			return true
+		}
+	}
+	envelope.WriteAPIError(
+		w,
+		r,
+		http.StatusForbidden,
+		"forbidden",
+		"PREVIEW_CAPABILITY_INVALID",
+		"Preview capability is invalid",
+		nil,
+	)
+	return false
 }
 
 func previewServerStatusResponse(status previewserver.Status) PreviewServerStatusResponse {

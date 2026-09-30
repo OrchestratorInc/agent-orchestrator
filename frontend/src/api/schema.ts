@@ -13970,6 +13970,8 @@ export interface operations {
             header?: {
                 /** @description Opaque browser capability injected into the owning AO worker. */
                 "X-AO-Browser-Capability"?: string;
+                /** @description Opaque preview-only capability injected into a session-scoped user shell. */
+                "X-AO-Preview-Capability"?: string;
             };
             path: {
                 /** @description Session identifier, e.g. project-1. */
@@ -14041,6 +14043,8 @@ export interface operations {
             header?: {
                 /** @description Opaque browser capability injected into the owning AO worker. */
                 "X-AO-Browser-Capability"?: string;
+                /** @description Opaque preview-only capability injected into a session-scoped user shell. */
+                "X-AO-Preview-Capability"?: string;
             };
             path: {
                 /** @description Session identifier, e.g. project-1. */
@@ -14152,6 +14156,8 @@ export interface operations {
             header?: {
                 /** @description Opaque browser capability injected into the owning AO worker. */
                 "X-AO-Browser-Capability"?: string;
+                /** @description Opaque preview-only capability injected into a session-scoped user shell. */
+                "X-AO-Preview-Capability"?: string;
             };
             path: {
                 /** @description Session identifier, e.g. project-1. */

@@ -2228,7 +2228,7 @@ func sessionOperations() []operation {
 		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/preview/server", id: "getSessionPreviewServer", tag: "sessions",
 			summary:    "Get the managed preview server status for a session",
-			pathParams: []any{controllers.SessionIDParam{}, controllers.BrowserCapabilityHeader{}},
+			pathParams: []any{controllers.SessionIDParam{}, controllers.BrowserCapabilityHeader{}, controllers.PreviewCapabilityHeader{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.PreviewServerStatusResponse{}},
 				{http.StatusForbidden, envelope.APIError{}},
@@ -2241,7 +2241,7 @@ func sessionOperations() []operation {
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/preview/server", id: "startSessionPreviewServer", tag: "sessions",
 			summary:    "Start a session-owned server from .ao/launch.json and open its application preview",
-			pathParams: []any{controllers.SessionIDParam{}, controllers.BrowserCapabilityHeader{}},
+			pathParams: []any{controllers.SessionIDParam{}, controllers.BrowserCapabilityHeader{}, controllers.PreviewCapabilityHeader{}},
 			reqBody:    controllers.StartPreviewServerRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.PreviewServerStatusResponse{}},
@@ -2259,7 +2259,7 @@ func sessionOperations() []operation {
 		{
 			method: http.MethodDelete, path: "/api/v1/sessions/{sessionId}/preview/server", id: "stopSessionPreviewServer", tag: "sessions",
 			summary:    "Stop the managed preview server for a session",
-			pathParams: []any{controllers.SessionIDParam{}, controllers.BrowserCapabilityHeader{}},
+			pathParams: []any{controllers.SessionIDParam{}, controllers.BrowserCapabilityHeader{}, controllers.PreviewCapabilityHeader{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.PreviewServerStatusResponse{}},
 				{http.StatusForbidden, envelope.APIError{}},

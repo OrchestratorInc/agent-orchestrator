@@ -6847,6 +6847,14 @@ paths:
         schema:
           description: Opaque browser capability injected into the owning AO worker.
           type: string
+      - description: Opaque preview-only capability injected into a session-scoped
+          user shell.
+        in: header
+        name: X-AO-Preview-Capability
+        schema:
+          description: Opaque preview-only capability injected into a session-scoped
+            user shell.
+          type: string
       responses:
         "200":
           content:
@@ -6903,6 +6911,14 @@ paths:
         schema:
           description: Opaque browser capability injected into the owning AO worker.
           type: string
+      - description: Opaque preview-only capability injected into a session-scoped
+          user shell.
+        in: header
+        name: X-AO-Preview-Capability
+        schema:
+          description: Opaque preview-only capability injected into a session-scoped
+            user shell.
+          type: string
       responses:
         "200":
           content:
@@ -6958,6 +6974,14 @@ paths:
         name: X-AO-Browser-Capability
         schema:
           description: Opaque browser capability injected into the owning AO worker.
+          type: string
+      - description: Opaque preview-only capability injected into a session-scoped
+          user shell.
+        in: header
+        name: X-AO-Preview-Capability
+        schema:
+          description: Opaque preview-only capability injected into a session-scoped
+            user shell.
           type: string
       requestBody:
         content:

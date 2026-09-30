@@ -32,6 +32,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
+	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 )
@@ -159,6 +160,15 @@ func (allowSessionCapability) Valid(domain.SessionID, string, string) bool { ret
 type denySessionCapability struct{}
 
 func (denySessionCapability) Valid(domain.SessionID, string, string) bool { return false }
+
+type fixedShellPreviewCapability struct {
+	token   string
+	revoked bool
+}
+
+func (f *fixedShellPreviewCapability) ValidPreviewCapability(_ context.Context, id domain.SessionID, token string) (bool, error) {
+	return !f.revoked && id == "ao-1" && token == f.token, nil
+}
 
 func (f *fakeManagedPreviewServer) Start(
 	_ context.Context,
@@ -2682,6 +2692,77 @@ func TestSessionsAPI_ManagedPreviewRequiresOwningCapability(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusForbidden, "PREVIEW_CAPABILITY_INVALID")
 	if managed.startName != "" {
 		t.Fatal("preview process started without a valid capability")
+	}
+}
+
+func TestSessionsAPI_ShellPreviewCapabilityCannotAutomateBrowser(t *testing.T) {
+	authority := browsersvc.NewAuthority()
+	workerToken, workerVerifier, err := authority.Issue("ao-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shellToken, _, err := authority.Issue("ao-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := newFakeSessionService()
+	session := svc.sessions["ao-1"]
+	session.Metadata.BrowserCapabilityVerifier = workerVerifier
+	svc.sessions["ao-1"] = session
+	shell := &fixedShellPreviewCapability{token: shellToken}
+	managed := &fakeManagedPreviewServer{}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
+		Sessions: svc, PreviewServer: managed, SessionCapabilities: authority,
+		ShellPreviewCapabilities: shell,
+		Browser:                  browsersvc.New(svc, nil, authority),
+	}, httpd.ControlDeps{}))
+	t.Cleanup(srv.Close)
+	request := func(method, path, body, header, token string) (int, string) {
+		t.Helper()
+		req, err := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set(header, token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		responseBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, string(responseBody)
+	}
+	previewPath := "/api/v1/sessions/ao-1/preview/server"
+	for _, tc := range []struct{ method, body string }{
+		{http.MethodGet, ""}, {http.MethodPost, `{}`}, {http.MethodDelete, ""},
+	} {
+		status, body := request(tc.method, previewPath, tc.body, "X-AO-Preview-Capability", shellToken)
+		if status != http.StatusOK {
+			t.Fatalf("shell %s preview = %d: %s", tc.method, status, body)
+		}
+	}
+	status, body := request(http.MethodGet, previewPath, "", "X-AO-Browser-Capability", workerToken)
+	if status != http.StatusOK {
+		t.Fatalf("worker preview = %d: %s", status, body)
+	}
+	for _, tc := range []struct{ method, path, body, header string }{
+		{http.MethodGet, "/api/v1/browser/status?sessionId=ao-1", "", "X-AO-Preview-Capability"},
+		{http.MethodGet, "/api/v1/browser/status?sessionId=ao-1", "", "X-AO-Browser-Capability"},
+		{http.MethodPost, "/api/v1/browser/commands", `{"sessionId":"ao-1","action":"snapshot"}`, "X-AO-Browser-Capability"},
+	} {
+		status, body := request(tc.method, tc.path, tc.body, tc.header, shellToken)
+		if status != http.StatusForbidden || !strings.Contains(body, "BROWSER_CAPABILITY_INVALID") {
+			t.Fatalf("shell token reached browser %s %s = %d: %s", tc.method, tc.path, status, body)
+		}
+	}
+	shell.revoked = true
+	status, body = request(http.MethodGet, previewPath, "", "X-AO-Preview-Capability", shellToken)
+	if status != http.StatusForbidden || !strings.Contains(body, "PREVIEW_CAPABILITY_INVALID") {
+		t.Fatalf("revoked shell preview = %d: %s", status, body)
 	}
 }
 
