@@ -785,6 +785,52 @@ func (s *Service) Recover(ctx context.Context) error {
 	return nil
 }
 
+// RecordInstalledVersions probes every harness already on disk and records its
+// version, so harnesses installed outside AO get the same update check as ones
+// AO installed. Harnesses that are missing, or mid install, are left alone.
+func (s *Service) RecordInstalledVersions() {
+	if s.verifier == nil || !s.beginWorker() {
+		return
+	}
+	defer s.workers.Done()
+	ctx := s.backgroundContext
+	for _, target := range agentTargets {
+		if ctx.Err() != nil {
+			return
+		}
+		s.mu.Lock()
+		current, hadJob := s.jobs[target]
+		busy := hadJob && activeStatus(current.Status)
+		s.mu.Unlock()
+		if busy {
+			continue
+		}
+		result, err := s.verifier.Verify(ctx, target)
+		if err != nil || result.Version == "" {
+			continue
+		}
+		now := time.Now().UTC()
+		s.mu.Lock()
+		current, hadJob = s.jobs[target]
+		if hadJob && (activeStatus(current.Status) || current.Version == result.Version) {
+			s.mu.Unlock()
+			continue
+		}
+		job := &Job{Target: target, Status: StatusSucceeded, StartedAt: &now, FinishedAt: &now}
+		if hadJob {
+			copied := *current
+			job = &copied
+		}
+		job.Version = result.Version
+		job.ExpectedDestination = result.ResolvedPath
+		job.UpdatedAt = &now
+		s.jobs[target] = job
+		snapshot := *job
+		s.mu.Unlock()
+		_ = s.persistJobBestEffort(snapshot)
+	}
+}
+
 // Verify starts adapter-backed verification without rerunning an installer.
 func (s *Service) Verify(ctx context.Context, target Target) (Job, error) {
 	if !IsAgentTarget(target) {

@@ -617,6 +617,7 @@ func Run() error {
 		agentSvc.InvalidateAgentInstallation(harness)
 		agentSvc.RecheckAgent(harness)
 	})
+	go systemInstall.RecordInstalledVersions()
 
 	// Connect Mobile: the bridge service needs the LAN listener, but the LAN
 	// listener needs the built router's handler, which only exists once srv is

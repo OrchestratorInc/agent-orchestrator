@@ -93,10 +93,16 @@ export function useHarnessUpdatesAvailable(): boolean {
 		const jobByTarget = new Map(jobs.data?.map((job) => [job.target, job]) ?? []);
 		return (installers.data ?? []).some((plan) => {
 			const job = jobByTarget.get(plan.agentId);
-			const installedMethod = plan.methods.find((method) => method.id === job?.method);
-			return Boolean(job?.version && installedMethod?.latestVersion && installedMethod.latestVersion !== job.version);
+			const latestVersion = latestVersionFor(plan.methods, job?.method);
+			return Boolean(job?.version && latestVersion && latestVersion !== job.version);
 		});
 	}, [installers.data, jobs.data]);
+}
+
+// A harness installed outside AO has no recorded method; every method of one
+// harness tracks the same upstream release, so any cached answer will do.
+function latestVersionFor(methods: AgentInstallPlan["methods"], methodId: string | undefined): string | undefined {
+	return methods.find((method) => method.id === methodId)?.latestVersion ?? methods.find((method) => method.latestVersion)?.latestVersion;
 }
 
 function upsertJob(current: InstallJob[] | undefined, next: InstallJob): InstallJob[] {
@@ -501,7 +507,7 @@ export function HarnessSettingsSection({
 					const selectedMethodId = selectedMethods[agentId] ?? (availableMethods.some((method) => method.id === job?.method) ? job?.method : recommendedMethod?.id) ?? "";
 					const selectedMethod = availableMethods.find((method) => method.id === selectedMethodId);
 					const installedMethod = plan?.methods.find((method) => method.id === job?.method);
-					const latestVersion = installedMethod?.latestVersion;
+					const latestVersion = plan ? latestVersionFor(plan.methods, job?.method) : undefined;
 					const updateAvailable = Boolean(isInstalled && job?.version && latestVersion && latestVersion !== job.version);
 					const pending = pendingAgentIds.has(agentId);
 					const actionError = actionErrors[agentId];
