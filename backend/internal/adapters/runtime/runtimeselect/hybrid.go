@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -137,12 +138,21 @@ func (r *hybridRuntime) GetStyledOutput(ctx context.Context, handle ports.Runtim
 
 func (r *hybridRuntime) IsSupervisedProcessAlive(ctx context.Context, handle ports.RuntimeHandle, ref ports.SupervisedProcessRef) (bool, error) {
 	backend, raw := r.route(handle)
+	ref = normalizeProcessRef(handle, raw, ref)
 	return backend.IsSupervisedProcessAlive(ctx, raw, ref)
 }
 
 func (r *hybridRuntime) IsExactSupervisedProcessAlive(ctx context.Context, handle ports.RuntimeHandle, ref ports.SupervisedProcessRef) (bool, error) {
 	backend, raw := r.route(handle)
+	ref = normalizeProcessRef(handle, raw, ref)
 	return backend.IsExactSupervisedProcessAlive(ctx, raw, ref)
+}
+
+func normalizeProcessRef(handle, raw ports.RuntimeHandle, ref ports.SupervisedProcessRef) ports.SupervisedProcessRef {
+	if string(ref.SessionID) == handle.ID && raw.ID != handle.ID {
+		ref.SessionID = domain.SessionID(raw.ID)
+	}
+	return ref
 }
 
 func (r *hybridRuntime) HasSupervisedProcessRecord(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
