@@ -681,6 +681,8 @@ type Session struct {
 	ClientRequestCommitted           bool
 	CodexActivityFacts               string
 	ClaudeActivityFacts              string
+	HibernatedAt                     sql.NullTime
+
 }
 
 type SessionCleanupFact struct {

@@ -188,6 +188,7 @@ type sessionLifecycle interface {
 	Reconcile(ctx context.Context) error
 	ReconcileStartupSafety(ctx context.Context) error
 	ReconcileBackground(ctx context.Context) error
+	HibernateIdleChats(ctx context.Context) error
 	RestoreAll(ctx context.Context) error
 	WaitBackgroundWorkers(ctx context.Context) error
 	WaitAgentSwitchWorkers(ctx context.Context) error
@@ -547,7 +548,26 @@ func (r projectRepoResolver) RepoPath(projectID domain.ProjectID) (string, error
 // The two packages define their own request/result types on purpose so neither
 // depends on the other's; this is the one place that knows both, which keeps the
 // translation in the wiring rather than in either domain.
-type chatLauncher struct{ svc *chatsvc.Service }
+type chatLauncher struct {
+	svc                         *chatsvc.Service
+	persistentHostReconcileDone <-chan struct{}
+}
+
+func (c chatLauncher) waitForPersistentHostReconcile(ctx context.Context) error {
+	if c.persistentHostReconcileDone == nil {
+		return nil
+	}
+	select {
+	case <-c.persistentHostReconcileDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+var _ interface {
+	HibernateChat(context.Context, domain.SessionID) (bool, error)
+} = chatLauncher{}
 
 var _ sessionmanager.ChatLauncher = chatLauncher{}
 var _ interface {
@@ -587,6 +607,9 @@ func (c chatLauncher) RestoreReviewChat(ctx context.Context, cfg reviewcore.Revi
 }
 
 func (c chatLauncher) startReviewChat(ctx context.Context, cfg reviewcore.ReviewerChatStart, sendPrompt bool) (string, error) {
+	if err := c.waitForPersistentHostReconcile(ctx); err != nil {
+		return "", err
+	}
 	owner := domain.ReviewConversationOwner(cfg.ReviewID)
 	started, err := c.svc.StartChat(ctx, chatsvc.StartConfig{Owner: owner, SessionID: cfg.WorkerID, ProjectID: cfg.ProjectID, Kind: domain.KindWorker, Harness: cfg.Harness, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Model: cfg.Model, Effort: cfg.Effort, Permissions: ports.PermissionModeAuto, SystemPrompt: cfg.SystemPrompt, ProviderConversationID: cfg.ProviderConversationID})
 	if err != nil {
@@ -624,6 +647,9 @@ func (c chatLauncher) StopReviewChat(ctx context.Context, reviewID string) error
 }
 
 func (c chatLauncher) StartChat(ctx context.Context, cfg sessionmanager.ChatStart) (sessionmanager.ChatStarted, error) {
+	if err := c.waitForPersistentHostReconcile(ctx); err != nil {
+		return sessionmanager.ChatStarted{}, err
+	}
 	return c.svc.StartChat(ctx, cfg)
 }
 
@@ -669,6 +695,10 @@ func (c chatLauncher) DrainChatQueue(ctx context.Context, id domain.SessionID) e
 
 func (c chatLauncher) HasLiveChatController(id domain.SessionID) bool {
 	return c.svc.HasLiveChatController(id)
+}
+
+func (c chatLauncher) HibernateChat(ctx context.Context, id domain.SessionID) (bool, error) {
+	return c.svc.HibernateChat(ctx, id)
 }
 
 // ArmChatHandoff closes Chat intake and dispatch synchronously at transition

@@ -10691,6 +10691,11 @@ components:
           type: string
         harness:
           type: string
+        hibernatedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         id:
           type: string
         isPinned:
@@ -11334,6 +11339,7 @@ components:
           - ready
           - busy
           - recovering
+          - hibernated
           - stopped
           type: string
         conversationId:
