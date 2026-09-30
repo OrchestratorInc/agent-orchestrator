@@ -177,7 +177,11 @@ func (s *Service) Start(ctx context.Context, agentID string) (StartResult, error
 		InitialInput:            plan.initialInput,
 		InitialInputReadyStates: plan.initialInputReadyStates,
 	}
-if plan.AgentID == "opencode-v2" {		if dataHome, ok := opencodev2.DataHome(); ok {			input.Env = map[string]string{"XDG_DATA_HOME": dataHome}		}	}
+	if plan.AgentID == "opencode-v2" {
+		if dataHome, ok := opencodev2.DataHome(); ok {
+			input.Env = map[string]string{"XDG_DATA_HOME": dataHome}
+		}
+	}
 	if plan.prepareWorkspace != nil {
 		workingDir, err := s.prepareAuthWorkspace(ctx, plan)
 		if err != nil {
