@@ -20,6 +20,7 @@ const routeMocks = vi.hoisted(() => ({
 	startGitHubAuth: vi.fn(),
 	markAutoLoginOffered: vi.fn(),
 	closeTerminal: vi.fn(),
+	cloudEnabled: false,
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
@@ -29,6 +30,10 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => ({ data: routeMocks.workspaces, isSuccess: true }),
+}));
+
+vi.mock("../hooks/useCloudGate", () => ({
+	useCloudGate: () => ({ cloudEnabled: routeMocks.cloudEnabled }),
 }));
 
 vi.mock("../hooks/useSystemRequirementsGate", () => ({
@@ -85,6 +90,7 @@ beforeEach(() => {
 	routeMocks.startGitHubAuth.mockReset();
 	routeMocks.markAutoLoginOffered.mockReset();
 	routeMocks.closeTerminal.mockReset();
+	routeMocks.cloudEnabled = false;
 });
 
 describe("shell index route", () => {
@@ -97,6 +103,7 @@ describe("shell index route", () => {
 		expect(screen.getByRole("button", { name: "Import an existing project" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Import a workspace folder" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "New standalone agent" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "New cloud project" })).not.toBeInTheDocument();
 		expect(screen.queryByText("Recent projects")).not.toBeInTheDocument();
 		expect(routeMocks.navigate).not.toHaveBeenCalled();
 	});
@@ -106,6 +113,14 @@ describe("shell index route", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: "Clone from Git" }));
 		expect(routeMocks.createProjectFlowProps?.sourceSignal?.source).toBe("clone");
+	});
+
+	it("opens cloud project creation from the empty home when Cloud is enabled", () => {
+		routeMocks.cloudEnabled = true;
+		render(<HomePage />);
+
+		fireEvent.click(screen.getByRole("button", { name: "New cloud project" }));
+		expect(routeMocks.createProjectFlowProps?.sourceSignal?.source).toBe("cloud");
 	});
 
 	it("renders the home page instead of redirecting to a scratch board when projects exist", async () => {
