@@ -1446,7 +1446,10 @@ const ProjectItem = memo(function ProjectItem({
 					transition={prefersReducedMotion ? { duration: 0 } : { type: "spring", stiffness: 520, damping: 42, mass: 0.55 }}
 				>
 					<div
-						className="relative"
+						className={cn(
+							"relative",
+							activeProjectMatches && "sticky top-0 z-20 bg-sidebar group-data-[collapsible=icon]:static",
+						)}
 						data-project-drag-row=""
 						data-project-id={workspace.id}
 						draggable

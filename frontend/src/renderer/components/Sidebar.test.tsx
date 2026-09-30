@@ -2186,6 +2186,21 @@ describe("Sidebar", () => {
 		expect(screen.getByRole("button", { name: "Show 4 more projects" })).toBeInTheDocument();
 	});
 
+	it("keeps the active project row at the top of the scroller", () => {
+		mockParams.projectId = "proj-1";
+		const other: WorkspaceSummary = {
+			...workspace,
+			id: "proj-2",
+			name: "Project Two",
+			path: "/repo/project-two",
+		};
+
+		renderSidebar({ workspaces: [workspace, other] });
+
+		const activeRow = document.querySelector('[data-project-drag-row][data-project-id="proj-1"]');
+		expect(activeRow).toHaveClass("sticky", "top-0", "z-20", "bg-sidebar");
+	});
+
 	it("caps each project's agent list at 6 until its Show more is clicked", async () => {
 		const user = userEvent.setup();
 		renderSidebar({
