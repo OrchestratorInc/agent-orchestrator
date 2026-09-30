@@ -19,8 +19,19 @@ import { useFileAttachments, type FileAttachment } from "../hooks/useFileAttachm
 const navigateMock = vi.hoisted(() => vi.fn());
 const openShellTerminalMock = vi.hoisted(() => vi.fn());
 const closeShellTerminalMock = vi.hoisted(() => vi.fn());
-const cloudResumeMock = vi.hoisted(() => vi.fn(async () => ({ session: {} })));
-const cloudGetSessionMock = vi.hoisted(() => vi.fn(async () => ({ session: { activityState: "idle", status: "idle" } })));
+const cloudCpClientMock = vi.hoisted(() => ({
+	resumeSession: vi.fn(async () => ({ session: {} })),
+	listChatEvents: vi.fn(),
+	getSession: vi.fn(),
+}));
+const cloudResumeMock = cloudCpClientMock.resumeSession;
+const cloudGetSessionMock = cloudCpClientMock.getSession;
+const getCloudSessionMock = cloudCpClientMock.getSession;
+const listSessionEventsMock = cloudCpClientMock.listChatEvents;
+const autoAttachSessionTerminal = vi.hoisted(() => ({ current: true }));
+const subscribeSessionEventsMock = vi.hoisted(() => vi.fn(async (_options: {
+	onEvent: (event: { type: string; createdAt: string; sessionId: string; sequence: number; payload: unknown }) => void;
+}) => undefined));
 const nativeFullScreenMock = vi.hoisted(() => vi.fn(() => false));
 const interfaceTransitionMock = vi.hoisted(() => ({
 	start: vi.fn(),
@@ -94,9 +105,12 @@ vi.mock("../hooks/useCloudGate", () => ({
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
 		baseUrl: "https://cloud.example.test",
-		client: { resumeSession: cloudResumeMock, getSession: cloudGetSessionMock },
+		client: cloudCpClientMock,
 		ready: true,
 	}),
+}));
+vi.mock("../lib/cloud-cp/stream-bridge", () => ({
+	subscribeSessionEventsBridged: subscribeSessionEventsMock,
 }));
 vi.mock("../hooks/useSessionInterfaceTransition", async (importOriginal) => ({
 	...await importOriginal<typeof import("../hooks/useSessionInterfaceTransition")>(),
@@ -220,7 +234,7 @@ vi.mock("../hooks/useSettings", () => ({
 }));
 vi.mock("./TerminalSwitchAgentButton", () => ({
 	TerminalSwitchAgentButton: ({ variant }: { variant?: "icon" | "menu-item" }) =>
-		variant === "menu-item" ? null : <button aria-label="Switch agent" type="button" />,
+		variant === "menu-item" ? <div role="menuitem">Switch agent</div> : <button aria-label="Switch agent" type="button" />,
 }));
 vi.mock("./chat/SessionChatSurface", async () => {
 	const { memo } = await vi.importActual<typeof import("react")>("react");
@@ -374,6 +388,7 @@ vi.mock("./CenterPane", () => ({
 		onCloseShellTerminal,
 		onSelectShellTerminal,
 		onSelectSessionTerminal,
+		onSessionTerminalAttached,
 		onSelectReviewerTerminal,
 		topbarActions,
 		sessionTabAction,
@@ -392,6 +407,7 @@ vi.mock("./CenterPane", () => ({
 		onCloseShellTerminal?: (handleId: string) => void;
 		onSelectShellTerminal?: (handleId: string) => void;
 		onSelectSessionTerminal?: () => void;
+		onSessionTerminalAttached?: (attached: boolean) => void;
 		onSelectReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
 		topbarActions?: ReactNode;
 		sessionTabAction?: ReactNode;
@@ -402,8 +418,15 @@ vi.mock("./CenterPane", () => ({
 		reviewerChatContent?: ReactNode;
 		terminalTarget?: { kind: string; handleId?: string };
 		auxiliaryTabOrder?: string[];
-	}) => (
+	}) => {
+		useEffect(() => {
+			if (autoAttachSessionTerminal.current && session?.cloud && session.runtimeConnected && (session.cloud.observedState === "running" || session.terminalGeneration)) {
+				onSessionTerminalAttached?.(true);
+			}
+		}, [onSessionTerminalAttached, session?.cloud, session?.runtimeConnected, session?.terminalGeneration]);
+		return (
 		<div data-testid="terminal-center" data-agent-input-disabled={agentInputDisabled ? "true" : "false"} data-terminal-generation={terminalGeneration ?? ""}>
+
 			terminal center
 			<div data-testid={`auxiliary-tab-order-tui-${session?.id ?? "none"}`}>
 				{auxiliaryTabOrder?.join("|") ?? ""}
@@ -441,7 +464,8 @@ vi.mock("./CenterPane", () => ({
 				select agent tab
 			</button>
 		</div>
-	),
+		);
+	},
 }));
 vi.mock("./BrowserPanel", () => ({
 	BrowserPanelView: ({
@@ -805,6 +829,11 @@ describe("SessionView", () => {
 		cloudResumeMock.mockReset();
 		cloudResumeMock.mockResolvedValue({ session: {} });
 		cloudGetSessionMock.mockReset();
+		subscribeSessionEventsMock.mockClear();
+		listSessionEventsMock.mockReset();
+		listSessionEventsMock.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		getCloudSessionMock.mockReset();
+		autoAttachSessionTerminal.current = true;
 		cloudGetSessionMock.mockResolvedValue({ session: { activityState: "idle", status: "idle" } });
 		interfaceTransitionMock.start.mockReset();
 		interfaceTransitionMock.refreshStatus.mockReset();
@@ -1024,12 +1053,170 @@ describe("SessionView", () => {
 		expect(loaderScreen).toHaveClass("z-chrome");
 		expect(loaderScreen.className).not.toMatch(/z-\[\d+\]/);
 		expect(loaderScreen.children).toHaveLength(1);
-		expect(loader).toHaveTextContent("Orchestrating your environment");
-		expect(loader).not.toHaveTextContent("Connecting");
+		expect(loader).toHaveTextContent("Connecting to the worker");
+		expect(loader).toHaveTextContent("Building your session");
+		expect(loader).toHaveTextContent("Preparing your repository and agent");
+		expect(loader).toHaveTextContent("Connecting your terminal");
+		expect(within(loader).getByTestId("multi-step-loader-step").querySelector(".multi-step-loader__step")).toBeInTheDocument();
+		expect(within(loader).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "33");
+		expect(within(loader).getByTestId("multi-step-loader-percent")).toHaveTextContent("33%");
 		expect(loader).not.toHaveTextContent("Coder");
 		expect(loader).not.toHaveClass("right-4", "top-4");
-		expect(loader).toHaveClass("-translate-x-8");
 		expect(document.querySelector("[data-cloud-lifecycle-stage]")).not.toBeInTheDocument();
+	});
+
+	it("replays confirmed startup progress and opens a live event stream", async () => {
+		const session = workerSession("sess-2");
+		session.runtimeConnected = false;
+		session.cloud = {
+			orgId: "cloud-org",
+			sandboxProvider: "coder",
+			desiredState: "running",
+			observedState: "provisioning",
+		};
+		const recent = new Date(Date.now() - 5_000).toISOString();
+		listSessionEventsMock.mockResolvedValueOnce({
+			events: [
+				{ type: "agent.ready", createdAt: new Date(Date.now() - 12 * 60 * 60 * 1_000).toISOString(), sequence: 1 },
+				{ type: "sandbox.provisioning", createdAt: recent, sequence: 2 },
+				{ type: "worker.ready", createdAt: recent, sequence: 3 },
+			],
+			hasMore: false,
+			nextAfter: 3,
+		});
+		render(<SessionView sessionId="sess-2" />);
+		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent"));
+		expect(listSessionEventsMock).toHaveBeenCalledWith("cloud-org", "sess-2", { after: 0, limit: 500 }, expect.any(Object));
+		expect(subscribeSessionEventsMock).toHaveBeenCalledWith(expect.objectContaining({ orgId: "cloud-org", sessionId: "sess-2", after: 0 }));
+		expect(screen.getByRole("progressbar", { name: "Session setup activity" })).toHaveAttribute("aria-valuenow", "67");
+	});
+
+	it("advances the active phrase when a later startup event arrives", async () => {
+		const session = workerSession("sess-2");
+		session.runtimeConnected = false;
+		session.cloud = {
+			orgId: "cloud-org",
+			sandboxProvider: "coder",
+			desiredState: "running",
+			observedState: "requested",
+		};
+		listSessionEventsMock
+			.mockResolvedValueOnce({ events: [], hasMore: false, nextAfter: 0 })
+			.mockResolvedValueOnce({
+				events: [{ type: "sandbox.provisioning", createdAt: new Date().toISOString(), sequence: 1 }],
+				hasMore: false,
+				nextAfter: 1,
+			});
+		render(<SessionView sessionId="sess-2" />);
+		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Building your session");
+		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting to the worker"), { timeout: 3_000 });
+		expect(listSessionEventsMock).toHaveBeenLastCalledWith("cloud-org", "sess-2", { after: 0, limit: 500 }, expect.any(Object));
+	});
+
+	it("moves past worker connection when the worker checks in before worker.ready", async () => {
+		const session = workerSession("sess-2");
+		session.runtimeConnected = false;
+		session.cloud = {
+			orgId: "cloud-org",
+			sandboxProvider: "coder",
+			desiredState: "running",
+			observedState: "bootstrapping",
+		};
+		listSessionEventsMock.mockResolvedValueOnce({
+			events: [
+				{ type: "sandbox.provisioning", createdAt: new Date().toISOString(), sequence: 1 },
+				{ type: "worker.connected", createdAt: new Date().toISOString(), sequence: 2 },
+			],
+			hasMore: false,
+			nextAfter: 2,
+		});
+
+		render(<SessionView sessionId="sess-2" />);
+
+		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent"));
+	});
+
+	it("advances from session facts when event replay has no startup events", async () => {
+		const session = workerSession("sess-2");
+		session.runtimeConnected = false;
+		session.cloud = {
+			orgId: "cloud-org",
+			sandboxProvider: "coder",
+			desiredState: "running",
+			observedState: "provisioning",
+		};
+		const view = render(<SessionView sessionId="sess-2" />);
+		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting to the worker"));
+
+		session.cloud.observedState = "bootstrapping";
+		session.runtimeConnected = true;
+		view.rerender(<SessionView sessionId="sess-2" />);
+		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent"));
+	});
+
+	it("polls worker connection without treating sandbox running as agent readiness", async () => {
+		const session = workerSession("sess-2");
+		session.runtimeConnected = false;
+		session.cloud = {
+			orgId: "cloud-org",
+			sandboxProvider: "coder",
+			desiredState: "running",
+			observedState: "provisioning",
+		};
+		getCloudSessionMock
+			.mockResolvedValueOnce({ session: { observedState: "bootstrapping", runtimeConnected: true } })
+			.mockResolvedValue({ session: { observedState: "running", runtimeConnected: true } });
+
+		render(<SessionView sessionId="sess-2" />);
+
+		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent"));
+		await waitFor(() => expect(getCloudSessionMock).toHaveBeenCalledTimes(2), { timeout: 3_000 });
+		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent");
+		expect(getCloudSessionMock).toHaveBeenCalledWith("cloud-org", "sess-2", expect.any(Object));
+	});
+
+	it("shows the latest confirmed startup phrase when replay returns several milestones together", async () => {
+		const session = workerSession("sess-2");
+		session.runtimeConnected = false;
+		session.cloud = {
+			orgId: "cloud-org",
+			sandboxProvider: "coder",
+			desiredState: "running",
+			observedState: "requested",
+		};
+		const now = new Date().toISOString();
+		listSessionEventsMock.mockResolvedValueOnce({
+			events: [
+				{ type: "sandbox.provisioning", createdAt: now, sequence: 1 },
+				{ type: "worker.connected", createdAt: now, sequence: 2 },
+				{ type: "agent.ready", createdAt: now, sequence: 3 },
+			],
+			hasMore: false,
+			nextAfter: 3,
+		});
+
+		render(<SessionView sessionId="sess-2" />);
+		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Building your session");
+		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting your terminal"));
+	});
+
+	it("advances on live startup events without waiting for another HTTP poll", async () => {
+		const session = workerSession("sess-2");
+		session.runtimeConnected = false;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "requested" };
+		render(<SessionView sessionId="sess-2" />);
+		await waitFor(() => expect(subscribeSessionEventsMock).toHaveBeenCalled());
+		const onEvent = subscribeSessionEventsMock.mock.calls[0][0].onEvent;
+		for (const [type, sequence, phrase, percent] of [
+			["sandbox.provisioning", 1, "Connecting to the worker", "33"],
+			["worker.connected", 2, "Preparing your repository and agent", "67"],
+			["agent.ready", 3, "Connecting your terminal", "67"],
+		] as const) {
+			act(() => onEvent({ type, sequence, sessionId: "sess-2", createdAt: new Date().toISOString(), payload: {} }));
+			expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent(phrase);
+			expect(screen.getByRole("progressbar", { name: "Session setup activity" })).toHaveAttribute("aria-valuenow", percent);
+		}
+		expect(listSessionEventsMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("removes the cloud lifecycle badge once the session is connected", () => {
@@ -1062,9 +1249,54 @@ describe("SessionView", () => {
 		render(<SessionView sessionId="sess-2" />);
 
 		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
-		expect(screen.getByRole("status", { name: "Session setup activity" })).toHaveTextContent(
-			"Orchestrating your environment",
-		);
+		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting your terminal");
+	});
+
+	it("does not skip agent preparation just because the worker reports running", async () => {
+		autoAttachSessionTerminal.current = false;
+		const session = workerSession("sess-2");
+		session.mode = "tui";
+		session.runtimeConnected = true;
+		session.cloud = {
+			orgId: "cloud-org",
+			sandboxProvider: "coder",
+			desiredState: "running",
+			observedState: "running",
+		};
+
+		render(<SessionView sessionId="sess-2" />);
+
+		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent");
+		await waitFor(() => expect(subscribeSessionEventsMock).toHaveBeenCalled());
+		act(() => subscribeSessionEventsMock.mock.calls[0][0].onEvent({
+			type: "agent.ready", sessionId: "sess-2", sequence: 1, createdAt: new Date().toISOString(), payload: {},
+		}));
+		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting your terminal");
+		expect(screen.getByRole("progressbar", { name: "Session setup activity" })).toHaveAttribute("aria-valuenow", "67");
+	});
+
+	it("checks the final step when terminal content is ready, then reveals it", () => {
+		vi.useFakeTimers();
+		try {
+			autoAttachSessionTerminal.current = false;
+			const session = workerSession("sess-2");
+			session.mode = "tui";
+			session.runtimeConnected = true;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "running" };
+			const view = render(<SessionView sessionId="sess-2" />);
+			act(() => vi.advanceTimersByTime(200));
+			autoAttachSessionTerminal.current = true;
+			session.terminalGeneration = "ready";
+			view.rerender(<SessionView sessionId="sess-2" />);
+			expect(screen.getByRole("progressbar", { name: "Session setup activity" })).toHaveAttribute("aria-valuenow", "100");
+			expect(screen.getAllByTestId("multi-step-loader-check")).toHaveLength(4);
+			expect(screen.getByTestId("cloud-session-loader-screen")).toHaveClass("cloud-session-loader--complete");
+			act(() => vi.advanceTimersByTime(360));
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+			view.unmount();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("does not re-raise the full-screen loader when a connected cloud session's runtime relay drops mid-turn", () => {
@@ -2944,6 +3176,20 @@ describe("SessionView", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Session actions" }));
 		expect(screen.getByRole("menuitem", { name: "Switch to chat UI" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Switch agent" })).toBeInTheDocument();
+	});
+
+	it("hides unsupported agent switching from a cloud session menu", async () => {
+		interfaceTransitionState.status = { supported: true, targetMode: "chat" };
+		const session = workerSession("sess-2");
+		session.mode = "tui";
+		session.cloud = { orgId: "cloud-org", desiredState: "running", observedState: "running" };
+		session.runtimeConnected = true;
+		render(<SessionView sessionId="sess-2" />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Session actions" }));
+		expect(screen.getByRole("menuitem", { name: "Switch to chat UI" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Switch agent" })).not.toBeInTheDocument();
 	});
 
 	it("shows the switch button when the adapter only reports a generic unsupported reason", async () => {

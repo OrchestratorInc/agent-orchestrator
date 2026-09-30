@@ -139,7 +139,7 @@ func ValidActivityEvent(event ActivityEvent) bool {
 			return event.State == contract.ActivityActive
 		case "permission-request":
 			return event.State == contract.ActivityWaitingInput
-		case "stop":
+		case "stop", "interrupt":
 			return event.State == contract.ActivityIdle
 		}
 	case "cursor":
@@ -219,7 +219,7 @@ func deriveCodexActivity(event string) (contract.ActivityState, bool) {
 		return contract.ActivityActive, true
 	case "permission-request":
 		return contract.ActivityWaitingInput, true
-	case "stop":
+	case "stop", "interrupt":
 		return contract.ActivityIdle, true
 	default:
 		return "", false

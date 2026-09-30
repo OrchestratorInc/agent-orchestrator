@@ -216,9 +216,9 @@ export function ShellTopbar({
 				data-compact-actions={compactActions ? "true" : "false"}
 				data-testid="workspace-topbar-actions"
 			>
-			{!boardActionsInPanel && isProjectBoardRoute ? (
+				{!boardActionsInPanel && isProjectBoardRoute ? (
 					<>
-						<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} style={noDragStyle} />
+						<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={project?.kind === CLOUD_PROJECT_KIND} style={noDragStyle} />
 						{supportsLocalCues ? <span className="inline-flex" style={noDragStyle}>
 							<CueRunMenu
 								projectId={projectId!}

@@ -695,7 +695,7 @@ func createSessionTx(
 		RETURNING id, org_id, project_id, kind, harness, display_name, branch,
 			mode, model, denied_commands, interface, activity_state, is_terminated,
 			auto_inject_ci, auto_inject_review, terminate_on_pr_merge,
-			false, '', '', '', '', '', 0, created_at, updated_at`,
+			false, NULL::timestamptz, 0, '', '', '', '', '', 0, created_at, updated_at`,
 		orgID,
 		input.ProjectID,
 		input.Kind,
@@ -1012,14 +1012,7 @@ const sessionSelect = `
 	SELECT session.id, session.org_id, session.project_id, session.kind,
 		session.harness, session.display_name, session.branch,
 		session.mode, session.model, session.denied_commands, session.interface,
-		CASE
-			WHEN EXISTS (
-				SELECT 1 FROM ao_turns turn
-				WHERE turn.org_id = session.org_id AND turn.session_id = session.id
-					AND turn.state IN ('queued', 'claimed', 'running')
-			) THEN 'active'
-			ELSE session.activity_state
-		END AS activity_state,
+		session.activity_state,
 		session.is_terminated,
 		session.auto_inject_ci,
 		session.auto_inject_review,
@@ -1028,6 +1021,8 @@ const sessionSelect = `
 			SELECT 1 FROM ao_worker_connections worker
 			WHERE worker.session_id = session.id AND worker.disconnected_at IS NULL
 		),
+		sandbox.worker_last_seen_at,
+		COALESCE(sandbox.startup_attempts, 0),
 		COALESCE(sandbox.provider, ''),
 		COALESCE(sandbox.desired_state, ''),
 		COALESCE(sandbox.observed_state, ''),
@@ -1104,6 +1099,8 @@ func scanSession(row scanner, session *domain.Session) error {
 		&session.AutoInjectReview,
 		&session.TerminateOnPRMerge,
 		&session.RuntimeConnected,
+		&session.WorkerLastSeenAt,
+		&session.StartupAttempts,
 		&session.SandboxProvider,
 		&session.DesiredState,
 		&session.ObservedState,

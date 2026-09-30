@@ -95,6 +95,8 @@ type CenterPaneProps = {
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	/** Stop forwarding the agent pane's keystrokes while its controller drains. */
 	agentInputDisabled?: boolean;
+	/** Reports attachment of the session's own agent terminal. */
+	onSessionTerminalAttached?: (attached: boolean) => void;
 };
 
 export type CenterPaneWorkspaceTab = {
@@ -180,6 +182,7 @@ export function CenterPane({
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	agentInputDisabled = false,
+	onSessionTerminalAttached,
 }: CenterPaneProps) {
 	const { t } = useTranslation();
 	const paneRef = useRef<HTMLDivElement | null>(null);
@@ -765,6 +768,7 @@ export function CenterPane({
 							isFullscreen={isFullscreen}
 							inputDisabled={workerInputDisabled}
 							onChangeFontSize={updateFontSize}
+							onTerminalContentReadyChange={target.kind === "worker" && session?.cloud ? onSessionTerminalAttached : undefined}
 							onToggleFullscreen={toggleFullscreen}
 							session={session}
 							terminalGeneration={terminalGeneration}
