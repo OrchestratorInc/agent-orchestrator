@@ -2246,6 +2246,7 @@
 	"executionContext.loading": "프로젝트 컨텍스트 로드 중…",
 	"coder.template.default": "조직 워크스페이스",
 	"settings.models.modelNotReported": "모델 정보가 제공되지 않음",
+	"settings.models.default": "기본값",
 	"settings.models.useAgentEffort": "에이전트 추론 수준 사용",
 	"settings.models.effortNotReported": "추론 수준 정보가 제공되지 않음",
 	"settings.models.modeNotReported": "모드 정보가 제공되지 않음",

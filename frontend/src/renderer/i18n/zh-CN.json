@@ -2228,6 +2228,7 @@
 	"executionContext.loading": "正在加载项目上下文…",
 	"coder.template.default": "组织工作区",
 	"settings.models.modelNotReported": "未报告模型",
+	"settings.models.default": "默认",
 	"settings.models.useAgentEffort": "使用智能体推理强度",
 	"settings.models.effortNotReported": "未报告推理强度",
 	"settings.models.modeNotReported": "未报告模式",

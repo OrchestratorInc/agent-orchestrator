@@ -2226,6 +2226,7 @@
 	"executionContext.loading": "loading project context…",
 	"coder.template.default": "Organization workspace",
 	"settings.models.modelNotReported": "Model not reported",
+	"settings.models.default": "Default",
 	"settings.models.useAgentEffort": "Use agent effort",
 	"settings.models.effortNotReported": "Effort not reported",
 	"settings.models.modeNotReported": "Mode not reported",

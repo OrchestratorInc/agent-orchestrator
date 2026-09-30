@@ -2276,6 +2276,7 @@
 	"executionContext.loading": "carregando o contexto do projeto…",
 	"coder.template.default": "Espaço de trabalho da organização",
 	"settings.models.modelNotReported": "Modelo não informado",
+	"settings.models.default": "Padrão",
 	"settings.models.useAgentEffort": "Usar esforço do agente",
 	"settings.models.effortNotReported": "Esforço não informado",
 	"settings.models.modeNotReported": "Modo não informado",

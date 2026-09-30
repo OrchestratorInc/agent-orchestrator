@@ -2246,6 +2246,7 @@
 	"executionContext.loading": "Projektkontext wird geladen…",
 	"coder.template.default": "Arbeitsumgebung der Organisation",
 	"settings.models.modelNotReported": "Modell nicht gemeldet",
+	"settings.models.default": "Standard",
 	"settings.models.useAgentEffort": "Denkaufwand des Agenten verwenden",
 	"settings.models.effortNotReported": "Aufwand nicht gemeldet",
 	"settings.models.modeNotReported": "Modus nicht gemeldet",
