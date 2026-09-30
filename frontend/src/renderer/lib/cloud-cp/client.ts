@@ -284,18 +284,12 @@ export interface CloudCpClient {
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpTerminalTicketResponse>;
 
-	listProviderConnections(
-		orgId: string,
-		options?: CloudCpRequestOptions,
-	): Promise<CloudCpProviderConnectionsResponse>;
 	listUserProviderConnections(options?: CloudCpRequestOptions): Promise<CloudCpProviderConnectionsResponse>;
-	putAgentConnection(
-		orgId: string,
+	putUserAgentConnection(
 		agent: CloudCpAgentProvider,
 		body: CloudCpPutAgentConnectionRequest,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpProviderConnectionResponse>;
-	deleteAgentConnection(orgId: string, agent: CloudCpAgentProvider, options?: CloudCpRequestOptions): Promise<void>;
 	putGitHubPAT(body: CloudCpPutGitHubPATRequest, options?: CloudCpRequestOptions): Promise<CloudCpProviderConnectionResponse>;
 	deleteGitHubPAT(options?: CloudCpRequestOptions): Promise<void>;
 	listGitHubRepos(options?: CloudCpRequestOptions): Promise<CloudCpGitHubReposResponse>;
@@ -683,18 +677,9 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 				signal: o?.signal,
 			}),
 
-		listProviderConnections: (orgId, o) =>
-			requestJson("GET", `/orgs/${seg(orgId)}/provider-connections`, { signal: o?.signal }),
 		listUserProviderConnections: (o) => requestJson("GET", "/me/providers", { signal: o?.signal }),
-		putAgentConnection: (orgId, agent, body, o) =>
-			requestJson("PUT", `/orgs/${seg(orgId)}/provider-connections/agents/${seg(agent)}`, {
-				body,
-				signal: o?.signal,
-			}),
-		deleteAgentConnection: (orgId, agent, o) =>
-			requestVoid("DELETE", `/orgs/${seg(orgId)}/provider-connections/agents/${seg(agent)}`, {
-				signal: o?.signal,
-			}),
+		putUserAgentConnection: (agent, body, o) =>
+			requestJson("PUT", `/me/providers/${seg(agent)}`, { body, signal: o?.signal }),
 		putGitHubPAT: (body, o) => requestJson("PUT", "/me/github-pat", { body, signal: o?.signal }),
 		deleteGitHubPAT: (o) => requestVoid("DELETE", "/me/github-pat", { signal: o?.signal }),
 		listGitHubRepos: (o) => requestJson("GET", "/me/github/repos", { signal: o?.signal }),

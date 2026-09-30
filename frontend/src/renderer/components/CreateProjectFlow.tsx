@@ -43,10 +43,10 @@ import { CloudCpError } from "../lib/cloud-cp";
 import type { CloudCpGitHubAppRepository } from "../lib/cloud-cp/types";
 import { getGitHubStatus, isGitHubAuthInvalidError, listGitHubRepos, saveGitHubPAT } from "../lib/github-daemon";
 import { useCloudSession } from "../lib/cloud-session";
-import { useCredentialDialogStore } from "../stores/credential-dialog-store";
 import { useUiStore } from "../stores/ui-store";
 import {
 	onboardingAlertErrorClass,
+	onboardingFieldHintClass,
 	onboardingFooterActionsClass,
 	onboardingFormLabelClass,
 	onboardingPanelBodyClass,
@@ -1257,7 +1257,6 @@ function isHttpsRepositoryUrl(raw: string): boolean {
  * instead of daemon agent readiness — same component, different source of
  * truth, per the onboarding design. */
 function CloudAgentSetupStep({
-	orgId,
 	repositoryUrl,
 	displayName,
 	defaultBranch,
@@ -1266,7 +1265,6 @@ function CloudAgentSetupStep({
 	isCreating,
 	createError,
 }: {
-	orgId: string;
 	repositoryUrl: string;
 	displayName: string;
 	defaultBranch: string;
@@ -1276,15 +1274,15 @@ function CloudAgentSetupStep({
 	createError: string | null;
 }) {
 	const { t } = useTranslation();
-	const connections = useProviderConnections(orgId);
-	const openCredentialDialog = useCredentialDialogStore((state) => state.openDialog);
+	const connections = useProviderConnections();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const cloudAgents = useMemo(() => cloudAgentInfos(connections.data), [connections.data]);
 	const readyAgentId = cloudAgents.find((agent) => agent.authentication.state === "authorized")?.id ?? "";
 	const [workerAgent, setWorkerAgent] = useState(readyAgentId);
 	const [orchestratorAgent, setOrchestratorAgent] = useState(readyAgentId);
 
-	// A key added from the "Add a credential" link below lands here once the
-	// connections list refetches — fill the still-empty selects with it
+	// A login made from Harness settings (opened by the nudge below) lands here
+	// once the connections list refetches — fill the still-empty selects with it
 	// rather than forcing the user to reopen this step.
 	useEffect(() => {
 		if (readyAgentId === "") return;
@@ -1326,15 +1324,25 @@ function CloudAgentSetupStep({
 				value={orchestratorAgent}
 				onChange={setOrchestratorAgent}
 			/>
-			{!anyAgentReady ? (
-				<button
-					type="button"
-					className="flex items-center gap-1.5 self-start text-[12px] font-medium text-[var(--color-accent-import,#4d8dff)] hover:underline"
-					onClick={() => openCredentialDialog()}
-				>
-					<KeyRound className="size-3.5" aria-hidden="true" />
-					{t("createProject.addAgentCredential", { defaultValue: "Add a coding agent credential →" })}
-				</button>
+			{/* Harness login lives only in Harness settings; project creation just
+			    points there when no cloud harness is logged in yet. */}
+			{connections.isSuccess && !anyAgentReady ? (
+				<div className="flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-[var(--color-bg-import-card)] px-4 py-3">
+					<p className={onboardingFieldHintClass}>
+						{t("createProject.cloudHarnessLoginNeeded", {
+							defaultValue: "No harness is logged in for cloud yet. Log in to Claude Code, Codex, or Cursor to run this project's sessions.",
+						})}
+					</p>
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						className="shrink-0"
+						onClick={() => openGlobalSettings("harness", { preserveProject: true })}
+					>
+						{t("createProject.openHarnessSettings", { defaultValue: "Go to Harness settings" })}
+					</Button>
+				</div>
 			) : null}
 			<div className={onboardingFooterActionsClass}>
 				<Button type="button" variant="outline" onClick={onBack} disabled={isCreating}>
@@ -2076,7 +2084,6 @@ function CloudProjectCard({
 				{/* Agents — inline */}
 				{((usingApp && selectedRepoId !== "") || useManualPat) && org !== undefined ? (
 					<CloudAgentSetupStep
-						orgId={org.id}
 						repositoryUrl={repositoryUrl.trim()}
 						displayName={projectName.trim()}
 						defaultBranch={defaultBranch.trim()}

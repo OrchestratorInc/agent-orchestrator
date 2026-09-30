@@ -638,9 +638,8 @@ export function installCloudIPC(
   });
   ipcMain.handle("cloud:connectProviderAuth", async (_event, input: unknown) => {
     if (typeof input !== "object" || input === null) throw new Error("Invalid Cloud provider login request.");
-    const { baseUrl, orgId, provider, pushTarget, persistLocalClaudeToken } = input as Record<string, unknown>;
-    if (typeof baseUrl !== "string" || typeof orgId !== "string" || typeof provider !== "string" || orgId.trim() === "") throw new Error("Invalid Cloud provider login request.");
-    if (pushTarget !== undefined && pushTarget !== "org" && pushTarget !== "me") throw new Error("Invalid Cloud provider login target.");
+    const { baseUrl, provider, persistLocalClaudeToken } = input as Record<string, unknown>;
+    if (typeof baseUrl !== "string" || typeof provider !== "string") throw new Error("Invalid Cloud provider login request.");
     let base: URL;
     try {
       base = new URL(baseUrl);
@@ -685,11 +684,9 @@ export function installCloudIPC(
     }
 
     const basePath = base.pathname.replace(/\/+$/, "");
-    // Personal (/me) push is the no-admin, per-developer path used by the unified
-    // one-login flow; the org path (default) remains for the shared-team dialog.
-    const endpointPath = pushTarget === "me"
-      ? `/api/cloud/v1/me/providers/${encodeURIComponent(credential.provider)}`
-      : `/api/cloud/v1/orgs/${encodeURIComponent(orgId)}/provider-connections/agents/${encodeURIComponent(credential.provider)}`;
+    // Cloud agent credentials are always personal: the caller's own connection,
+    // usable in every org they belong to.
+    const endpointPath = `/api/cloud/v1/me/providers/${encodeURIComponent(credential.provider)}`;
     const target = new URL(`${base.origin}${basePath}${endpointPath}`);
     const response = await fetch(target, {
       method: "PUT",

@@ -135,7 +135,6 @@ describe("native WorkOS authentication", () => {
     await expect(
       handler?.({}, {
         baseUrl: "https://cloud.example",
-        orgId: "org-123",
         provider: "codex",
       }),
     ).rejects.toThrow("Sign in to AO Cloud before connecting a provider.");

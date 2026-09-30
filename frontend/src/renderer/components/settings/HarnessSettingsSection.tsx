@@ -16,8 +16,7 @@ import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { agentLabel, AGENT_OPTIONS, type AgentId } from "../../lib/agent-options";
 import { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
 import { useCloudOrg } from "../../hooks/useCloudOrg";
-import { useCloudCp } from "../../hooks/useCloudCp";
-import { providerConnectionsQueryKey, useProviderConnections } from "../../hooks/useProviderConnections";
+import { useProviderConnections } from "../../hooks/useProviderConnections";
 import { useCredentialDialogStore } from "../../stores/credential-dialog-store";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
@@ -127,13 +126,13 @@ export function HarnessSettingsSection({
 	const jobs = useQuery({ queryKey: installJobsQueryKey, queryFn: fetchInstallJobs, retry: false });
 	const authPlans = useAgentAuthPlans();
 	const startAgentAuth = useStartAgentAuth();
-	// Cloud provider connections: surface each cloud-capable harness's cloud
-	// auth state right here so a developer authorizes once, in one place, for
-	// both local and cloud. Gated on being signed into a cloud org.
+	// Cloud logins: this page is the only place a harness is logged in for
+	// cloud sessions. Each cloud-capable row shows its personal cloud connection
+	// and opens the harness-scoped login dialog. Gated on being signed into a
+	// cloud org.
 	const { org: cloudOrg } = useCloudOrg();
-	const { baseUrl: cloudBaseUrl } = useCloudCp();
-	const openCloudCredentialDialog = useCredentialDialogStore((state) => state.setOpen);
-	const cloudConnections = useProviderConnections(cloudOrg?.id);
+	const openCloudLogin = useCredentialDialogStore((state) => state.openDialog);
+	const cloudConnections = useProviderConnections();
 	const cloudConnByProvider = useMemo(
 		() => new Map((cloudConnections.data ?? []).map((connection) => [connection.provider, connection])),
 		[cloudConnections.data],
@@ -382,44 +381,6 @@ export function HarnessSettingsSection({
 		}
 	};
 
-	// Unified login: one action authorizes the harness for BOTH local and cloud
-	// sessions. When signed into a cloud org, capture a portable credential once,
-	// persist it locally (claude setup-token) and push it to the caller's personal
-	// cloud connection (/me, no admin). Otherwise fall back to local-only login.
-	const startUnifiedAuth = async (agentId: AgentId) => {
-		const cloudCapable = Boolean(cloudOrg?.id) && (CLOUD_AGENT_PROVIDERS as readonly string[]).includes(agentId);
-		if (!cloudCapable) {
-			await startAuth(agentId);
-			return;
-		}
-		// cursor and opencode have no browser capture (cursor's session and
-		// opencode's sqlite login are not portable), so their cloud credential is a
-		// pasted provider API key -- handled by the cloud credential dialog.
-		if (agentId === "cursor" || agentId === "opencode") {
-			openCloudCredentialDialog(true, agentId);
-			return;
-		}
-		if (authStartPendingRef.current) return;
-		authStartPendingRef.current = true;
-		updateAuthState(agentId, { pending: true, error: null });
-		try {
-			await aoBridge.cloud.connectProviderAuth({
-				baseUrl: cloudBaseUrl,
-				orgId: cloudOrg!.id,
-				provider: agentId,
-				pushTarget: "me",
-				persistLocalClaudeToken: agentId === "claude-code",
-			});
-			await queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey(cloudOrg!.id) });
-			void checkAuth(agentId, { fresh: true });
-		} catch (error) {
-			updateAuthState(agentId, { error: error instanceof Error ? error.message : t("settings.harness.authFailed") });
-		} finally {
-			authStartPendingRef.current = false;
-			updateAuthState(agentId, { pending: false });
-		}
-	};
-
 	const checkAuth = useCallback(async (
 		agentId: AgentId,
 		{ fresh = false }: { fresh?: boolean } = {},
@@ -564,10 +525,7 @@ export function HarnessSettingsSection({
 							|| mimoConfigured
 							|| (!authPlans.isPending && (!authPlan || authPlan.action === "instructions"));
 						const isCloudCapable = Boolean(cloudOrg?.id) && (CLOUD_AGENT_PROVIDERS as readonly string[]).includes(agentId);
-						// One login covers BOTH local and cloud sessions: authorized when the
-						// local harness is authenticated OR the cloud connection is valid.
-						const unifiedAuthorized = authStatus === "authorized"
-							|| cloudConnByProvider.get(agentId)?.validationState === "valid";
+						const cloudConnected = cloudConnByProvider.get(agentId)?.validationState === "valid";
 						const rowHasError = failed || Boolean(authState?.error);
 						const rowAuthWorkflow = authWorkflow?.agentId === agentId ? authWorkflow : null;
 						const hasDiagnostics = Boolean(
@@ -646,21 +604,18 @@ export function HarnessSettingsSection({
 
 			{isCloudCapable ? (
 								<div className="flex shrink-0 items-center gap-2">
-									{unifiedAuthorized ? (
-										<Button
-											type="button"
-											size="none"
-											variant="ghost"
-											className={cn(MENU_TRIGGER_CHROME, "h-8! min-h-8! shrink-0 rounded-md! border-0! bg-[var(--color-bg-settings-trigger)] px-3! text-xs leading-4")}
-											aria-label={t("settings.harness.authorized")}
-											disabled
-										>
-											{t("settings.harness.authorized")}
-										</Button>
+									{cloudConnected ? (
+										<>
+											<span className="inline-flex h-8 shrink-0 items-center rounded-md border border-[color:var(--color-success)] bg-transparent px-3 text-xs font-medium leading-4 text-[color:var(--color-success)]">
+												{t("settings.harness.cloudConnected")}
+											</span>
+											<Button type="button" size="sm" variant="ghost" className={MENU_TRIGGER_CHROME} onClick={() => openCloudLogin(agentId)}>
+												{t("settings.harness.reconnect")}
+											</Button>
+										</>
 									) : (
-										<Button data-harness-primary-action="" size="sm" disabled={authState?.pending} onClick={() => void startUnifiedAuth(agentId)}>
-											{authState?.pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-											{authState?.pending ? t("settings.harness.loggingIn") : t("settings.harness.login")}
+										<Button data-harness-primary-action="" size="sm" onClick={() => openCloudLogin(agentId)}>
+											{t("settings.harness.login")}
 										</Button>
 									)}
 								</div>

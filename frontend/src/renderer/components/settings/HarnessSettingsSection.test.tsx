@@ -8,7 +8,23 @@ import { appI18n } from "../../i18n";
 import { agentReadinessQueryKey, useAgentReadinessQuery, type AgentReadiness } from "../../hooks/useAgentReadinessQuery";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { agentReadiness } from "../../test/agent-readiness-fixtures";
+import { useCredentialDialogStore } from "../../stores/credential-dialog-store";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
+
+// Cloud sign-in state for the cloud login rows. Signed out by default, which
+// leaves every row on its local-only controls.
+const cloudMocks = vi.hoisted(() => ({
+	org: undefined as { id: string } | undefined,
+	connections: [] as Array<{ provider: string; validationState: string }>,
+}));
+
+vi.mock("../../hooks/useCloudOrg", () => ({
+	useCloudOrg: () => ({ org: cloudMocks.org, isLoading: false, error: null, ready: cloudMocks.org !== undefined }),
+}));
+
+vi.mock("../../hooks/useProviderConnections", () => ({
+	useProviderConnections: () => ({ data: cloudMocks.connections, isSuccess: true }),
+}));
 
 const { terminalFocusRequested, terminalStateCallback } = vi.hoisted(() => ({
 	terminalFocusRequested: { value: false },
@@ -105,6 +121,9 @@ describe("HarnessSettingsSection", () => {
 		await appI18n.changeLanguage("en");
 		terminalFocusRequested.value = false;
 		terminalStateCallback.value = undefined;
+		cloudMocks.org = undefined;
+		cloudMocks.connections = [];
+		useCredentialDialogStore.setState({ open: false, targetAgent: null });
 		window.ao!.clipboard.writeText = vi.fn().mockResolvedValue(undefined);
 		vi.spyOn(apiClient, "GET").mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
@@ -125,6 +144,26 @@ describe("HarnessSettingsSection", () => {
 	afterEach(() => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
+	});
+
+	it("logs Claude Code, Codex, and Cursor in for cloud through the harness login dialog", async () => {
+		cloudMocks.org = { id: "org-1" };
+		cloudMocks.connections = [{ provider: "codex", validationState: "valid" }];
+		const user = userEvent.setup();
+		renderSection();
+
+		const claudeRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		await user.click(within(claudeRow).getByRole("button", { name: "Login" }));
+		expect(useCredentialDialogStore.getState()).toMatchObject({ open: true, targetAgent: "claude-code" });
+
+		const codexRow = screen.getByText("Codex").closest('[data-agent="codex"]') as HTMLElement;
+		expect(within(codexRow).getByText("Cloud connected")).toBeInTheDocument();
+		await user.click(within(codexRow).getByRole("button", { name: "Reconnect" }));
+		expect(useCredentialDialogStore.getState()).toMatchObject({ open: true, targetAgent: "codex" });
+
+		const gooseRow = screen.getByText("Goose").closest('[data-agent="goose"]') as HTMLElement;
+		expect(within(gooseRow).queryByText("Cloud connected")).toBeNull();
+		expect(within(gooseRow).queryByRole("button", { name: "Reconnect" })).toBeNull();
 	});
 
 	it("offers native login when fx is installed but unauthorized", async () => {

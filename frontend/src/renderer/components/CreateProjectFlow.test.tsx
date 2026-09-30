@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { useState, type ComponentProps, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { CreateProjectFlow, type CloneProjectInput, type CreateProjectInput } from "./CreateProjectFlow";
 import { CloudCpError } from "../lib/cloud-cp";
 import { useUiStore } from "../stores/ui-store";
@@ -77,7 +77,6 @@ const cloudMocks = vi.hoisted(() => ({
 	coderAvailable: false,
 	sessionStatus: "unauthenticated",
 	createProject: vi.fn(),
-	listProviderConnections: vi.fn(),
 	listUserProviderConnections: vi.fn(),
 	putGitHubPAT: vi.fn(),
 	validateSavedRepositoryAccess: vi.fn(),
@@ -116,7 +115,6 @@ vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
 		client: {
 			createProject: cloudMocks.createProject,
-			listProviderConnections: cloudMocks.listProviderConnections,
 			listUserProviderConnections: cloudMocks.listUserProviderConnections,
 			putGitHubPAT: cloudMocks.putGitHubPAT,
 			validateSavedRepositoryAccess: cloudMocks.validateSavedRepositoryAccess,
@@ -319,7 +317,9 @@ beforeEach(() => {
 	cloudMocks.coderAvailable = false;
 	cloudMocks.sessionStatus = "unauthenticated";
 	cloudMocks.createProject.mockReset();
-	cloudMocks.listProviderConnections.mockReset().mockResolvedValue({
+	// The user's personal connections: a logged-in Claude Code harness, and no
+	// GitHub credential (so the GitHub connect panel shows by default).
+	cloudMocks.listUserProviderConnections.mockReset().mockResolvedValue({
 		providerConnections: [
 			{
 				id: "conn-1",
@@ -336,7 +336,6 @@ beforeEach(() => {
 		providerConnection: { id: "gh-1", provider: "github", label: "default", config: {}, validationState: "valid", createdAt: "", updatedAt: "" },
 	});
 	cloudMocks.validateSavedRepositoryAccess.mockReset().mockResolvedValue({ writeAccess: true });
-	cloudMocks.listUserProviderConnections.mockReset().mockResolvedValue({ providerConnections: [] });
 	// Default: no GitHub App installation, so the connect button shows.
 	cloudMocks.startGitHubInstallation.mockReset().mockResolvedValue({ installationUrl: "https://github.com/apps/ao/installations/new", expiresAt: "" });
 	cloudMocks.getGitHubUser.mockReset().mockResolvedValue({ connected: false, installations: [] });
@@ -2060,6 +2059,30 @@ describe("CreateProjectFlow project import validation", () => {
 		);
 		expect(onCreateProject).not.toHaveBeenCalled();
 		expect(bridgeMocks.chooseDirectory).not.toHaveBeenCalled();
+	});
+
+	it("points to Harness settings when no cloud harness is logged in", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		cloudMocks.listUserProviderConnections.mockResolvedValue({ providerConnections: [] });
+		const originalOpenGlobalSettings = useUiStore.getState().openGlobalSettings;
+		const openGlobalSettings = vi.fn();
+		useUiStore.setState({ openGlobalSettings });
+		onTestFinished(() => useUiStore.setState({ openGlobalSettings: originalOpenGlobalSettings }));
+		const user = userEvent.setup();
+		render(<CreateProjectFlow embedded mode="choose" {...noop} />, { wrapper: CloudTestProviders });
+
+		await user.click(screen.getByRole("button", { name: "New cloud project" }));
+		await user.type(screen.getByLabelText("Project name"), "web-app");
+		await user.click(screen.getByRole("button", { name: "Manually setup" }));
+		await user.type(screen.getByLabelText("GitHub PAT"), "ghp_setup_token");
+		await user.click(screen.getByRole("button", { name: "Save & Continue" }));
+		await user.type(screen.getByPlaceholderText("https://github.com/owner/repo"), "https://github.com/acme/web-app");
+
+		expect(await screen.findByText(/No harness is logged in for cloud yet/)).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Create cloud project" })).toBeDisabled();
+		await user.click(screen.getByRole("button", { name: "Go to Harness settings" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("harness", { preserveProject: true });
 	});
 
 	it("blocks a non-https repository URL without advancing past the repository step", async () => {

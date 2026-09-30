@@ -10,6 +10,10 @@ const bridgeMocks = vi.hoisted(() => ({
 	cancelProviderAuth: vi.fn(),
 }));
 
+const cloudMocks = vi.hoisted(() => ({
+	putUserAgentConnection: vi.fn(),
+}));
+
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
 		cloud: {
@@ -20,11 +24,11 @@ vi.mock("../lib/bridge", () => ({
 }));
 
 vi.mock("../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ client: {}, ready: true, baseUrl: "https://cloud.example.test" }),
-}));
-
-vi.mock("../hooks/useCloudOrg", () => ({
-	useCloudOrg: () => ({ org: { id: "org_1" }, isLoading: false, error: null, ready: true }),
+	useCloudCp: () => ({
+		client: { putUserAgentConnection: cloudMocks.putUserAgentConnection },
+		ready: true,
+		baseUrl: "https://cloud.example.test",
+	}),
 }));
 
 // Mirror the main process: cancelling aborts the pending login, whose IPC call
@@ -42,8 +46,8 @@ function pendingLogin() {
 	});
 }
 
-function renderDialog() {
-	useCredentialDialogStore.getState().openDialog("claude-code");
+function renderDialog(agent = "claude-code") {
+	useCredentialDialogStore.getState().openDialog(agent);
 	return render(
 		<QueryClientProvider client={new QueryClient()}>
 			<CloudCredentialDialog />
@@ -57,15 +61,39 @@ async function startAnthropicLogin(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("CloudCredentialDialog browser login", () => {
+	it("is scoped to the harness it was opened for", () => {
+		renderDialog("codex");
+		expect(screen.getByRole("heading", { name: "Log in to Codex" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Sign-in method" })).toHaveTextContent("Log in with ChatGPT");
+	});
+
+	it("offers Cursor only an API key, without a method picker", () => {
+		renderDialog("cursor");
+		expect(screen.queryByRole("button", { name: "Sign-in method" })).toBeNull();
+		expect(screen.getByLabelText("API key")).toBeInTheDocument();
+	});
+
+	it("saves a pasted credential as the user's personal connection", async () => {
+		cloudMocks.putUserAgentConnection.mockResolvedValue({ providerConnection: { validationState: "valid" } });
+		const user = userEvent.setup();
+		renderDialog("cursor");
+		await user.type(screen.getByLabelText("API key"), " cursor-key ");
+		await user.click(screen.getByRole("button", { name: "Connect" }));
+
+		expect(cloudMocks.putUserAgentConnection).toHaveBeenCalledWith("cursor", { credentialType: "api_key", secret: "cursor-key" });
+		expect(await screen.findByRole("status")).toBeInTheDocument();
+	});
+
 	it("defaults Claude Code to logging in with Anthropic", () => {
 		renderDialog();
-		expect(screen.getByRole("button", { name: "Credential type" })).toHaveTextContent("Log in with Anthropic");
+		expect(screen.getByRole("button", { name: "Sign-in method" })).toHaveTextContent("Log in with Anthropic");
 		expect(screen.queryByLabelText(/token/i, { selector: "input" })).toBeNull();
 	});
 
 	beforeEach(() => {
 		bridgeMocks.connectProviderAuth.mockReset();
 		bridgeMocks.cancelProviderAuth.mockReset();
+		cloudMocks.putUserAgentConnection.mockReset();
 		useCredentialDialogStore.getState().closeDialog();
 	});
 
@@ -99,7 +127,7 @@ describe("CloudCredentialDialog browser login", () => {
 	it("explains how to get a setup token when pasting one", async () => {
 		const user = userEvent.setup();
 		renderDialog();
-		await user.click(screen.getByRole("button", { name: "Credential type" }));
+		await user.click(screen.getByRole("button", { name: "Sign-in method" }));
 		await user.click(await screen.findByRole("menuitem", { name: /Setup token/ }));
 
 		expect(screen.getByText("claude setup-token")).toBeInTheDocument();
@@ -115,9 +143,7 @@ describe("CloudCredentialDialog browser login", () => {
 
 		expect(bridgeMocks.connectProviderAuth).toHaveBeenCalledWith({
 			baseUrl: "https://cloud.example.test",
-			orgId: "org_1",
 			provider: "claude-code",
-			pushTarget: "me",
 			persistLocalClaudeToken: true,
 		});
 		expect(await screen.findByRole("status")).toBeInTheDocument();

@@ -23,8 +23,7 @@ import {
 	onboardingFormLabelClass,
 } from "../lib/onboarding-ui";
 import { useCloudCp } from "../hooks/useCloudCp";
-import { useCloudOrg } from "../hooks/useCloudOrg";
-import { providerConnectionsQueryKey, userProviderConnectionsQueryKey } from "../hooks/useProviderConnections";
+import { providerConnectionsQueryKey } from "../hooks/useProviderConnections";
 import { useCredentialDialogStore } from "../stores/credential-dialog-store";
 import { cn } from "../lib/utils";
 import { aoBridge } from "../lib/bridge";
@@ -36,11 +35,11 @@ const SETUP_TOKEN_STEPS = [
 	"cloudCredential.setupTokenStep3",
 ] as const;
 
-// The coding-agent providers the control plane accepts, with the credential
-// types each one validates (see cloud validAgentCredentialType). Codex's
-// ChatGPT-subscription path deliberately has no secret field: the desktop app
-// performs the browser login locally, then securely sends Codex's native auth
-// document to the control plane. A session token is never pasted or displayed.
+// The cloud harnesses and the ways each can log in. Browser login is the
+// default where the harness has one: the desktop app runs the agent CLI's own
+// login locally and securely sends the resulting credential to the control
+// plane, so no token is pasted or displayed. Pasting a Claude setup token or a
+// provider API key remains available as a fallback.
 const AGENTS = [
 	{
 		agent: "claude-code",
@@ -55,8 +54,8 @@ const AGENTS = [
 		agent: "codex",
 		label: "Codex",
 		creds: [
-			{ value: "api_key", label: "API key" },
 			{ value: BROWSER_LOGIN, label: "Log in with ChatGPT" },
+			{ value: "api_key", label: "API key" },
 		],
 	},
 	{
@@ -64,37 +63,26 @@ const AGENTS = [
 		label: "Cursor",
 		creds: [{ value: "api_key", label: "API key" }],
 	},
-	{
-		agent: "opencode",
-		label: "OpenCode",
-		// opencode is multi-provider; the credential type doubles as a provider
-		// selector so the worker injects the key as the matching env var.
-		creds: [
-			{ value: "opencode_api_key", label: "OpenCode API key" },
-			{ value: "anthropic_api_key", label: "Anthropic API key" },
-			{ value: "openai_api_key", label: "OpenAI API key" },
-			{ value: "openrouter_api_key", label: "OpenRouter API key" },
-		],
-	},
 ] as const;
 
 type Phase = "idle" | "submitting" | "success";
 
-// Connects a developer's local coding-agent credential (Claude Code setup
-// token, Codex/Cursor key) to their cloud org so the sandbox worker can run the
-// agent. Replaces the dev-only cloud/scripts/dev-connect-agent-credential.py:
-// same PUT /orgs/{org}/provider-connections/agents/{agent}, in the app.
+// Logs one harness in for cloud sessions. Opened from that harness's row on the
+// Harnesses settings page, the only place cloud agent logins are made. Every
+// credential is personal (PUT /me/providers/{agent}): it runs the caller's
+// cloud sessions in every org they belong to.
 export function CloudCredentialDialog() {
 	const { t } = useTranslation();
 	const { client, baseUrl } = useCloudCp();
-	const { org } = useCloudOrg();
 	const queryClient = useQueryClient();
 	const open = useCredentialDialogStore((s) => s.open);
-	const setOpen = useCredentialDialogStore((s) => s.setOpen);
+	const closeDialog = useCredentialDialogStore((s) => s.closeDialog);
 	const targetAgent = useCredentialDialogStore((s) => s.targetAgent);
 
-	const [agent, setAgent] = useState<CloudCpAgentProvider>(AGENTS[0].agent);
-	const [credentialType, setCredentialType] = useState<string>(AGENTS[0].creds[0].value);
+	const selectedAgent = AGENTS.find((entry) => entry.agent === targetAgent) ?? AGENTS[0];
+	const agent: CloudCpAgentProvider = selectedAgent.agent;
+	const creds = selectedAgent.creds;
+	const [credentialType, setCredentialType] = useState<string>(creds[0].value);
 	const [secret, setSecret] = useState("");
 	const [phase, setPhase] = useState<Phase>("idle");
 	const [error, setError] = useState<string | null>(null);
@@ -102,43 +90,24 @@ export function CloudCredentialDialog() {
 	// treated as a cancellation rather than shown as an error.
 	const loginCancelledRef = useRef(false);
 
-	const creds = useMemo(() => AGENTS.find((a) => a.agent === agent)?.creds ?? AGENTS[0].creds, [agent]);
-	const agentOptions = useMemo(() => AGENTS.map((entry) => ({ value: entry.agent, label: entry.label })), []);
 	const credentialOptions = useMemo(
 		() => creds.map((entry) => ({ value: entry.value, label: entry.label })),
 		[creds],
 	);
-	const selectedAgent = AGENTS.find((entry) => entry.agent === agent);
-	const selectedCredential = creds.find((entry) => entry.value === credentialType);
+	const selectedCredential = creds.find((entry) => entry.value === credentialType) ?? creds[0];
 	const needsSecret = credentialType !== BROWSER_LOGIN;
 
-	// When opened from a specific harness row (targetAgent) the agent is fixed to
-	// that harness -- the dialog is "for OpenCode", not a picker over all harnesses.
-	// The credential-type/provider dropdown remains the interactive choice.
-	const agentLocked = Boolean(targetAgent && AGENTS.some((a) => a.agent === targetAgent));
-
 	// Reset the whole form each time the dialog opens so a reopen never shows a
-	// stale secret or a previous error/success. Pre-select the harness the user
-	// opened it from, when scoped.
+	// stale secret or a previous error/success.
 	useEffect(() => {
 		if (!open) return;
-		const initial = AGENTS.find((a) => a.agent === targetAgent) ?? AGENTS[0];
-		setAgent(initial.agent);
-		setCredentialType(initial.creds[0].value);
+		setCredentialType(selectedAgent.creds[0].value);
 		setSecret("");
 		setPhase("idle");
 		setError(null);
-	}, [open, targetAgent]);
+	}, [open, selectedAgent]);
 
-	const onAgentChange = (next: string) => {
-		const agentValue = (AGENTS.find((a) => a.agent === next) ?? AGENTS[0]).agent;
-		setAgent(agentValue);
-		setCredentialType(AGENTS.find((a) => a.agent === agentValue)?.creds[0]?.value ?? "api_key");
-		setSecret("");
-		setError(null);
-	};
-
-	const canSubmit = phase !== "submitting" && needsSecret && secret.trim() !== "" && org !== undefined;
+	const canSubmit = phase !== "submitting" && needsSecret && secret.trim() !== "";
 	const busy = phase === "submitting";
 	const browserLoginPending = busy && !needsSecret;
 
@@ -150,16 +119,17 @@ export function CloudCredentialDialog() {
 	// Closing the dialog mid-login (X, Escape) abandons the login rather than
 	// leaving the agent CLI waiting in the background.
 	const onOpenChange = (next: boolean) => {
-		if (!next && browserLoginPending) cancelBrowserLogin();
-		setOpen(next);
+		if (next) return;
+		if (browserLoginPending) cancelBrowserLogin();
+		closeDialog();
 	};
 
 	const submit = async () => {
-		if (!canSubmit || org === undefined) return;
+		if (!canSubmit) return;
 		setPhase("submitting");
 		setError(null);
 		try {
-			const { providerConnection } = await client.putAgentConnection(org.id, agent, {
+			const { providerConnection } = await client.putUserAgentConnection(agent, {
 				credentialType,
 				secret: secret.trim(),
 			});
@@ -168,7 +138,7 @@ export function CloudCredentialDialog() {
 				setError(t("cloudCredential.invalid", { state: providerConnection.validationState }));
 				return;
 			}
-			await queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey(org.id) });
+			await queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey });
 			setPhase("success");
 			setSecret("");
 		} catch (err) {
@@ -178,25 +148,20 @@ export function CloudCredentialDialog() {
 	};
 
 	const loginWithBrowser = async () => {
-		if (org === undefined || phase === "submitting") return;
+		if (phase === "submitting") return;
 		setPhase("submitting");
 		setError(null);
 		loginCancelledRef.current = false;
 		try {
-			// Same one-login semantics as the harness settings row: the credential
-			// becomes the caller's personal cloud connection and, for Claude Code,
-			// is also persisted locally so local sessions use the same login.
+			// One login for local and cloud: the credential becomes the caller's
+			// personal cloud connection and, for Claude Code, is also persisted
+			// locally so local sessions use the same login.
 			await aoBridge.cloud.connectProviderAuth({
 				baseUrl,
-				orgId: org.id,
 				provider: agent,
-				pushTarget: "me",
 				persistLocalClaudeToken: agent === "claude-code",
 			});
-			await Promise.all([
-				queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey(org.id) }),
-				queryClient.invalidateQueries({ queryKey: userProviderConnectionsQueryKey }),
-			]);
+			await queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey });
 			setPhase("success");
 		} catch (err) {
 			setPhase("idle");
@@ -219,9 +184,14 @@ export function CloudCredentialDialog() {
 					</button>
 				</DialogClose>
 
-				<DialogTitle className="px-4 pr-12 pt-3 text-balance text-[18px] font-semibold text-[var(--color-text-import-title)]">{t("cloudCredential.title")}</DialogTitle>
+				<DialogTitle className="px-4 pr-12 pt-3 text-balance text-[18px] font-semibold text-[var(--color-text-import-title)]">
+					<span className="inline-flex items-center gap-2">
+						<AgentAvatar provider={agent} className="size-5" decorative />
+						{t("cloudCredential.title", { agent: selectedAgent.label })}
+					</span>
+				</DialogTitle>
 				<DialogDescription className="px-4 pr-12 pt-1 text-pretty text-[13px] leading-5 text-muted-foreground">
-					{t("cloudCredential.description")}
+					{t("cloudCredential.description", { agent: selectedAgent.label })}
 				</DialogDescription>
 
 				{phase === "success" ? (
@@ -232,38 +202,7 @@ export function CloudCredentialDialog() {
 					</div>
 				) : (
 					<div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-4 pb-1 pt-4">
-						<div className="space-y-2">
-							<Label htmlFor="cloud-cred-agent" className={onboardingFormLabelClass}>
-								{t("cloudCredential.agentLabel")}
-							</Label>
-							{agentLocked ? (
-								<div className="composer-chip composer-toolbar-option flex h-control-form w-full items-center gap-2 px-3">
-									<AgentAvatar provider={agent} className="size-icon-base" decorative />
-									<span className="min-w-0 truncate text-control text-foreground" title={selectedAgent?.label}>
-										{selectedAgent?.label}
-									</span>
-								</div>
-							) : (
-								<SettingsOptionMenu
-									aria-label={t("cloudCredential.agentLabel")}
-									value={agent}
-									options={agentOptions}
-									disabled={busy}
-									menuAlign="start"
-									onChange={onAgentChange}
-									triggerClassName="composer-chip composer-toolbar-option h-control-form w-full justify-between"
-									renderTrigger={() => (
-										<span className="flex min-w-0 items-center gap-2">
-											<AgentAvatar provider={agent} className="size-icon-base" decorative />
-											<span className="min-w-0 truncate text-control text-foreground" title={selectedAgent?.label}>
-												{selectedAgent?.label}
-											</span>
-										</span>
-									)}
-								/>
-							)}
-						</div>
-
+						{creds.length > 1 ? (
 						<div className="space-y-2">
 							<Label htmlFor="cloud-cred-type" className={onboardingFormLabelClass}>
 								{t("cloudCredential.typeLabel")}
@@ -272,7 +211,7 @@ export function CloudCredentialDialog() {
 								aria-label={t("cloudCredential.typeLabel")}
 								value={credentialType}
 								options={credentialOptions}
-								disabled={busy || creds.length === 1}
+								disabled={busy}
 								menuAlign="start"
 								onChange={(val) => {
 									setCredentialType(val);
@@ -281,12 +220,13 @@ export function CloudCredentialDialog() {
 								}}
 								triggerClassName="composer-chip composer-toolbar-option h-control-form w-full justify-between"
 								renderTrigger={() => (
-									<span className="min-w-0 truncate text-control text-foreground" title={selectedCredential?.label}>
-										{selectedCredential?.label}
+									<span className="min-w-0 truncate text-control text-foreground" title={selectedCredential.label}>
+										{selectedCredential.label}
 									</span>
 								)}
 							/>
 						</div>
+						) : null}
 
 						{agent === "claude-code" && credentialType === "oauth_token" ? (
 							<div className={onboardingFieldHintClass}>
@@ -308,7 +248,7 @@ export function CloudCredentialDialog() {
 						{needsSecret ? (
 							<div className="space-y-2">
 							<Label htmlFor="cloud-cred-secret" className={onboardingFormLabelClass}>
-								{selectedCredential?.label ?? t("cloudCredential.tokenLabel")}
+								{selectedCredential.label}
 							</Label>
 							<Input
 								id="cloud-cred-secret"
@@ -360,7 +300,7 @@ export function CloudCredentialDialog() {
 						</Button>
 					) : null}
 					{phase !== "success" && !needsSecret ? (
-						<Button type="button" variant="primary" disabled={org === undefined || phase === "submitting"} onClick={() => void loginWithBrowser()}>
+						<Button type="button" variant="primary" disabled={busy} onClick={() => void loginWithBrowser()}>
 							{phase === "submitting" ? t("cloudCredential.connecting") : (agent === "claude-code" ? t("cloudCredential.loginWithAnthropic") : t("cloudCredential.loginWithChatGPT"))}
 						</Button>
 					) : null}
