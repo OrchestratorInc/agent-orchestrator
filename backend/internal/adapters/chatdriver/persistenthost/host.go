@@ -41,6 +41,8 @@ type Protocol string
 const (
 	// ProtocolRaw preserves the original newline-delimited forwarding profile.
 	ProtocolRaw Protocol = ""
+	// ProtocolManagedRaw fences raw streams by the explicit managed launch identity.
+	ProtocolManagedRaw Protocol = "managed-raw"
 	// ProtocolACP enables the host-owned ACP correlation and replay profile.
 	ProtocolACP Protocol = "acp"
 	// ProtocolUnreal preserves Unreal Agent's AO-private JSONL stream while
@@ -274,9 +276,9 @@ func validateDescriptor(cfg Config, d Descriptor) error {
 	if d.Protocol != cfg.Protocol {
 		return fmt.Errorf("%w: host protocol=%q requested=%q", ErrIncompatible, d.Protocol, cfg.Protocol)
 	}
-	// Codex raw hosts predate this ACP compatibility contract and retain their
-	// existing version/protocol fencing.
-	if d.Protocol == ProtocolRaw {
+	// Legacy native raw hosts carry no fingerprint. Managed raw hosts must
+	// prove the same controller generation before an existing transport is used.
+	if d.Protocol == ProtocolRaw && cfg.OwnershipFingerprint == "" && d.OwnershipFingerprint == "" {
 		return nil
 	}
 	if cfg.OwnershipFingerprint == "" || d.OwnershipFingerprint != cfg.OwnershipFingerprint {

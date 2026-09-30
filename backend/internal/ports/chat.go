@@ -276,6 +276,8 @@ func MissingCapabilitiesForPermissions(caps ChatCapabilities, permissions Permis
 // ChatStartConfig is what a driver needs to open a new provider conversation.
 type ChatStartConfig struct {
 	SessionID domain.SessionID
+	// ControllerGeneration fences managed process adoption across account switches.
+	ControllerGeneration string
 	// DataDir is AO's state root. Provider bindings may write process-scoped
 	// configuration beneath it, but must never use the worktree or an OS-default
 	// application-data directory for AO-owned state.
@@ -329,6 +331,7 @@ type ChatResumeConfig struct {
 	// See ChatStartConfig.ProviderIDsScoped.
 	ProviderIDsScoped      bool
 	SessionID              domain.SessionID
+	ControllerGeneration   string
 	ProviderConversationID string
 	DataDir                string
 	WorkspacePath          string

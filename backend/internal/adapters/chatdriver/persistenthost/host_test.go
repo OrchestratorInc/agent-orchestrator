@@ -19,8 +19,8 @@ func TestMain(m *testing.M) {
 		protocol := ProtocolRaw
 		fingerprint := ""
 		separator := 5
-		if len(os.Args) > 5 && os.Args[5] == string(ProtocolACP) {
-			protocol = ProtocolACP
+		if len(os.Args) > 5 && (os.Args[5] == string(ProtocolACP) || os.Args[5] == string(ProtocolManagedRaw)) {
+			protocol = Protocol(os.Args[5])
 			if len(os.Args) > 6 {
 				fingerprint = os.Args[6]
 			}
