@@ -2104,32 +2104,6 @@ func expectedWorkspaceRefusal(err error) bool {
 		errors.Is(err, ports.ErrWorkspaceDeferred)
 }
 
-// runtimeConfirmedGone reports whether a failed Destroy left nothing behind to
-// release. Destroy already returns nil when the runtime confirms the session
-// or server is absent, so its errors never carry that evidence on their own —
-// a kill-session that failed may still have taken the session down with it.
-// Re-probing IsAlive is what settles it: a definitive "not alive", or a
-// conclusively absent server, means refusing the kill would strand the session
-// for a condition no retry can clear (#5463).
-//
-// ErrRuntimeProbeInconclusive is deliberately NOT treated as gone: its port
-// contract says the runtime may still be live and callers "must not recreate,
-// destroy, archive, or otherwise treat the session as dead". Marking the row
-// terminated is treating it as dead, and it would leave a possibly-live agent
-// running with no owner and no row pointing at it — worse than a visible stuck
-// session. Every other probe error, and a session still alive, stays
-// fail-closed for the same reason.
-func (m *Manager) runtimeConfirmedGone(ctx context.Context, handle ports.RuntimeHandle, destroyErr error) bool {
-	if errors.Is(destroyErr, ports.ErrRuntimeUnavailable) {
-		return true
-	}
-	alive, err := m.runtime.IsAlive(ctx, handle)
-	if err != nil {
-		return errors.Is(err, ports.ErrRuntimeUnavailable)
-	}
-	return !alive
-}
-
 // terminateWithPreservedWorkspace records terminal intent for a session whose
 // workspace could not be released. Nothing was force-removed, so the worktree
 // is still on disk for `ao session cleanup` to retry and report on; what must
@@ -2259,11 +2233,14 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
 		m.stopChatBestEffort(ctx, id)
 	} else if handle.ID != "" {
+		// Any Destroy error stops the kill. Every runtime's Destroy already
+		// returns nil when it confirms the session is absent, so an error means
+		// the runtime may still be live. Re-probing cannot settle it: conpty's
+		// IsAlive dials the host's listener, which Destroy's graceful shutdown
+		// closes before the PID exits, so a hung host reads as gone. Terminating
+		// then would leave a possibly-live agent with no row pointing at it.
 		if err := m.runtime.Destroy(ctx, handle); err != nil {
-			if !m.runtimeConfirmedGone(ctx, handle, err) {
-				return false, fmt.Errorf("kill %s: runtime: %w", id, err)
-			}
-			m.logger.Warn("kill: runtime already gone; continuing teardown", "sessionID", id, "handle", handle.ID, "error", err)
+			return false, fmt.Errorf("kill %s: runtime: %w", id, err)
 		}
 	}
 	if err := m.terminateReviewer(ctx, id, "cancelled by worker session termination"); err != nil {
