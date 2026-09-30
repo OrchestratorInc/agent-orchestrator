@@ -115,3 +115,19 @@ describe("composer meta row", () => {
 		expect(control).toContain('overflow: "hidden"');
 	});
 });
+
+describe("PR review composer", () => {
+	it("groups the PR prompt, settings selector, and message input inside one review surface", () => {
+		expect(composer).toContain("reviewPR && onOpenReview && styles.reviewContainer");
+		expect(composer).toContain("<PRReviewPrompt pr={reviewPR}");
+		expect(composer).toContain("<TextInput");
+		expect(composer).toContain("reviewPR ? null : <ComposerGlass");
+	});
+
+	it("uses supported PR and navigation symbols instead of a blank icon tile", () => {
+		const prompt = source("./PRReviewPrompt.tsx");
+		expect(prompt).toContain('name="git-pull-request"');
+		expect(prompt).toContain('name="chevron-right"');
+		expect(prompt).not.toContain('name="arrow-up-right"');
+	});
+});
