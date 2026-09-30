@@ -7,7 +7,7 @@ import type { Theme } from "../theme";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
 import { SheetHeader } from "../ui";
 import type { ChatConfigOption, ChatModel, ConversationSnapshot, TurnSettings } from "./types";
-import { approvalLabel, effortChoiceLabel, fastControlEnabled, fastControlValue, followsAgentLabel, NOT_REPORTED, orderedProviderControls, providerChoiceLabel, providerTurnControlKind } from "./turnSettingsModel";
+import { approvalLabel, effortChoiceLabel, effortSliderIndex, effortSliderWrite, fastControlEnabled, fastControlValue, followsAgentLabel, nativeModelLabel, NOT_REPORTED, orderedProviderControls, providerChoiceLabel, providerTurnControlKind } from "./turnSettingsModel";
 import { can } from "./types";
 import { type, space } from "../tokens";
 
@@ -52,7 +52,7 @@ export function ChatSettingsSheet({ snapshot, models, options, disabled, refresh
 	// Nothing reported means nothing selected: the first model or level is not
 	// a stand-in for the one the provider did not name (#5834).
 	const selectedModel = modelOption?.currentValue ?? selected?.id ?? "";
-	const modelValue = modelOption ? providerChoiceLabel(modelOption) : selected?.displayName ?? snapshot.settings.model ?? NOT_REPORTED;
+	const modelValue = modelOption ? providerChoiceLabel(modelOption) : nativeModelLabel(selected, snapshot.settings.model);
 	const effortChoices = (effortOption
 		? effortOption.choices.map((effort) => ({ value: effort.value, label: capitalize(effort.name) }))
 		: (selected?.efforts ?? []).map((effort) => ({ value: effort, label: effortChoiceLabel(effort) }))
@@ -158,17 +158,17 @@ function EffortSlider({ choices, selected, unplaced, disabled, onChange }: { cho
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { scheme } = useThemeState();
-	// -1 when the current effort is none of these levels: nothing was reported,
-	// or this model does not list it. The thumb still needs a place, but nothing
-	// is written until it moves. Clamping it to the first level used to save
-	// that level about 180 ms after the sheet opened, a change nobody made.
-	const selectedIndex = choices.findIndex((choice) => choice.value === selected);
+	// -1 while the current effort is none of these levels. The thumb still needs
+	// a place, but nothing is written until it moves. Clamping it to the first
+	// level used to save that level about 180 ms after the sheet opened, a
+	// change nobody made.
+	const selectedIndex = effortSliderIndex(choices, selected);
 	const [index, setIndex] = useState(selectedIndex);
 
 	useEffect(() => setIndex(selectedIndex), [selectedIndex]);
 	useEffect(() => {
-		const next = index < 0 ? undefined : choices[index]?.value;
-		if (!next || next === selected) return;
+		const next = effortSliderWrite(choices, selected, index);
+		if (!next) return;
 		const timer = setTimeout(() => { haptics.select(); onChange(next); }, 180);
 		return () => clearTimeout(timer);
 	}, [choices, index, onChange, selected]);

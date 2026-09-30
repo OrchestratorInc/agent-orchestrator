@@ -1,4 +1,4 @@
-import type { ApprovalMode, ChatConfigOption, ChatModel, ConversationSnapshot, TurnSettings } from "./types";
+import type { ApprovalMode, ChatConfigChoice, ChatConfigOption, ChatModel, ConversationSnapshot, TurnSettings } from "./types";
 import { can } from "./types";
 
 export type TurnSettingChoice = {
@@ -99,11 +99,14 @@ export function providerTurnControlKind(option: ChatConfigOption): ProviderTurnC
  * pick, when it reads "Use agent model (Opus 5.5)". Otherwise "Use agent
  * model" / "Use agent effort" rather than a level we would have to guess.
  *
- * Permission modes differ from desktop in one place: desktop drops a
- * placeholder the daemon has not mapped to a permission mode, and here it
- * stays, renamed, so every mode the agent offers can still be picked.
- * "Default approvals" is what daemons before #5849 call OpenCode's default
- * tier, and a phone can be paired with one.
+ * Permission modes: a placeholder the daemon maps to AO's default permission
+ * mode reads "Use agent permissions", as on desktop; one it maps to another
+ * mode keeps its name, since the label would describe the wrong behaviour. A
+ * placeholder the daemon does not map reads "Use agent permissions" too; desktop
+ * drops such a choice when its value is "default", but here it stays, so every
+ * mode the agent offers can still be picked. "Default approvals" is what
+ * daemons before #5849 call OpenCode's default tier, and a phone can be paired
+ * with one.
  */
 export function resolveDefaultChoices(options: ChatConfigOption[]): ChatConfigOption[] {
 	return options.map(resolveDefaultChoice);
@@ -115,11 +118,13 @@ function resolveDefaultChoice(option: ChatConfigOption): ChatConfigOption {
 	// Fast mode is a toggle, and fastControlValue reads a "default" choice as Off.
 	if (kind === "fast") return option;
 	if (kind === "permissions") {
-		const placeholder = (name: string) => isDefaultPlaceholderLabel(name) || /^default approvals$/i.test(name.trim());
-		if (!option.choices.some((choice) => placeholder(choice.name))) return option;
+		const followsAgent = (choice: ChatConfigChoice) =>
+			(choice.permissionMode === undefined || choice.permissionMode === "default")
+			&& (isDefaultPlaceholderLabel(choice.name) || /^default approvals$/i.test(choice.name.trim()));
+		if (!option.choices.some(followsAgent)) return option;
 		return {
 			...option,
-			choices: option.choices.map((choice) => placeholder(choice.name) ? { ...choice, name: USE_AGENT_PERMISSIONS } : choice),
+			choices: option.choices.map((choice) => followsAgent(choice) ? { ...choice, name: USE_AGENT_PERMISSIONS } : choice),
 		};
 	}
 	const implicit = option.choices.find((choice) => choice.value === "default");
@@ -163,7 +168,38 @@ export function providerChoiceLabel(option: ChatConfigOption): string {
 	if (option.type === "boolean") return option.currentBoolean ? "On" : "Off";
 	const selected = option.choices.find((choice) => choice.value === option.currentValue);
 	if (selected) return selected.name;
-	return option.currentValue && !isDefaultValue(option.currentValue) ? option.currentValue : NOT_REPORTED;
+	return sentValue(option.currentValue) ?? NOT_REPORTED;
+}
+
+/**
+ * The native model row's value: `model` by name (the catalog entry picked, else
+ * the one the catalog marks as the provider's default). Without one, the
+ * setting as sent, except "default", which reads "Not reported". Display only:
+ * the setting itself is sent unchanged.
+ */
+export function nativeModelLabel(model: ChatModel | undefined, setting: string | undefined): string {
+	return model?.displayName ?? sentValue(setting) ?? NOT_REPORTED;
+}
+
+/** A value as sent, or undefined when there is none or it is "default", which names nothing. */
+function sentValue(value: string | undefined): string | undefined {
+	return value && !isDefaultValue(value) ? value : undefined;
+}
+
+/**
+ * Where an effort slider sits for `selected`: the index of that level, or -1
+ * when the effort is none of the slider's levels (not reported, or a level this
+ * model does not list). -1 must not be clamped to the first level: the slider
+ * saves the level it sits on, so a clamp saved a level nobody picked.
+ */
+export function effortSliderIndex(levels: ReadonlyArray<{ value: string }>, selected: string): number {
+	return levels.findIndex((level) => level.value === selected);
+}
+
+/** The level a slider sitting at `index` should save: none while it is unplaced (-1) or on `selected` already. */
+export function effortSliderWrite(levels: ReadonlyArray<{ value: string }>, selected: string, index: number): string | undefined {
+	const next = index < 0 ? undefined : levels[index]?.value;
+	return next && next !== selected ? next : undefined;
 }
 
 /** Providers encode Fast mode as either a boolean or an On/Off select. */
@@ -227,7 +263,7 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 		rows.push({
 			id: "model",
 			label: "Model",
-			value: selectedModel?.displayName ?? snapshot.settings.model ?? NOT_REPORTED,
+			value: nativeModelLabel(selectedModel, snapshot.settings.model),
 			kind: "select",
 			// No "Provider default" hint: with nothing picked, the provider's model
 			// is the selected row already (#5834).

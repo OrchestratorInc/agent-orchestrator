@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatConfigOption, ChatModel, ConversationSnapshot } from "./types";
-import { fastControlEnabled, fastControlValue, NOT_REPORTED, orderedProviderControls, providerChoiceLabel, providerTurnControlKind, resolveDefaultChoices, turnSettingsModelLabel, turnSettingsRows, turnSettingsSummary } from "./turnSettingsModel";
+import { effortSliderIndex, effortSliderWrite, fastControlEnabled, fastControlValue, nativeModelLabel, NOT_REPORTED, orderedProviderControls, providerChoiceLabel, providerTurnControlKind, resolveDefaultChoices, turnSettingsModelLabel, turnSettingsRows, turnSettingsSummary } from "./turnSettingsModel";
 
 const snapshot = (over: Partial<ConversationSnapshot> = {}): ConversationSnapshot => ({
 	conversationId: "c",
@@ -242,7 +242,8 @@ describe("default labels", () => {
 			choices: [
 				{ value: "build", name: "build" },
 				// OpenCode's AO default tier as daemons before #5849 label it.
-				{ value: "ao-default", name: "Default approvals" },
+				{ value: "ao-default", name: "Default approvals", permissionMode: "default" },
+				// A mode the daemon does not map.
 				{ value: "default", name: "Default" },
 			],
 		}]);
@@ -250,6 +251,22 @@ describe("default labels", () => {
 			["build", "build"],
 			["ao-default", "Use agent permissions"],
 			["default", "Use agent permissions"],
+		]);
+	});
+
+	// Review on #6071: the rename read only the name. A placeholder the daemon
+	// maps to another permission mode would have claimed to follow the agent.
+	it("does not rename a placeholder the daemon maps to another permission mode", () => {
+		const [mode] = resolveDefaultChoices([{
+			id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "default",
+			choices: [
+				{ value: "default", name: "Default", permissionMode: "default" },
+				{ value: "yolo", name: "Default", permissionMode: "bypass-permissions" },
+			],
+		}]);
+		expect(mode.choices.map((choice) => [choice.value, choice.name])).toEqual([
+			["default", "Use agent permissions"],
+			["yolo", "Default"],
 		]);
 	});
 
@@ -315,6 +332,22 @@ describe("default labels", () => {
 		expect(turnSettingsSummary(picked, models, [])).toBe("Alpha · Full access");
 	});
 
+	// Review on #6071: a native setting of "default" that nothing in the catalog
+	// resolves was printed verbatim in the Model row.
+	it("does not print a native model setting of default that nothing resolves", () => {
+		const unmarked: ChatModel[] = [{ id: "a", displayName: "Alpha", default: false }];
+		const s = snapshot({ harness: "codex", capabilities: [], settings: { model: "default" } });
+		const row = turnSettingsRows(s, unmarked, []).find((r) => r.id === "model");
+		expect(row?.value).toBe(NOT_REPORTED);
+		expect(row?.choices.some((choice) => choice.selected)).toBe(false);
+		expect(turnSettingsSummary(s, unmarked, [])).toBe("Full access");
+		const marked: ChatModel[] = [...unmarked, { id: "b", displayName: "Beta", default: true }];
+		expect(turnSettingsRows(s, marked, []).find((r) => r.id === "model")?.value).toBe("Beta");
+		expect(nativeModelLabel(undefined, "default")).toBe(NOT_REPORTED);
+		expect(nativeModelLabel(undefined, "gpt-custom")).toBe("gpt-custom");
+		expect(nativeModelLabel(undefined, undefined)).toBe(NOT_REPORTED);
+	});
+
 	it("names a native default effort as following the agent", () => {
 		const models: ChatModel[] = [{ id: "a", displayName: "Alpha", default: true, efforts: ["default", "high"] }];
 		const effort = turnSettingsRows(snapshot({ capabilities: [], settings: { reasoningEffort: "default" } }), models, []).find((row) => row.id === "effort");
@@ -326,5 +359,25 @@ describe("default labels", () => {
 		expect(turnSettingsModelLabel(snapshot({ capabilities: [], settings: { model: "opus" } }), [], [])).toBe("opus");
 		expect(turnSettingsModelLabel(snapshot({ capabilities: [], settings: { model: "default" } }), [], [])).toBe("");
 		expect(turnSettingsModelLabel(snapshot({ capabilities: [], settings: {} }), [], [])).toBe("");
+	});
+});
+
+// Review on #6071: the fix for the Android slider's unasked save lived only in
+// the component. These are the two decisions it now delegates.
+describe("effort slider", () => {
+	const levels = [{ value: "low" }, { value: "medium" }, { value: "high" }];
+
+	it("saves nothing when the sheet opens on an effort that is none of its levels", () => {
+		for (const selected of ["default", "ultra", ""]) {
+			const index = effortSliderIndex(levels, selected);
+			expect(index).toBe(-1);
+			expect(effortSliderWrite(levels, selected, index)).toBeUndefined();
+		}
+	});
+
+	it("saves the level it is moved to, the first one included, and nothing once that level is current", () => {
+		expect(effortSliderWrite(levels, "default", 0)).toBe("low");
+		expect(effortSliderWrite(levels, "low", 2)).toBe("high");
+		expect(effortSliderWrite(levels, "high", effortSliderIndex(levels, "high"))).toBeUndefined();
 	});
 });
