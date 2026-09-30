@@ -37,9 +37,11 @@ Existing sessions retain their saved launch settings.
 
 Each review run stores its effective reviewer config before launch. It starts a
 fresh process and conversation with that harness's credentials and an isolated
-credential directory. Later settings changes do not alter that run. Older runs
-without a snapshot retain their session agent. Missing reviewer config uses the
-session agent, model, and permissions; missing `autoReview` enables reviews.
+credential directory. Claude reviewers load only their isolated user settings,
+leaving workspace hooks active for the worker alone. Later settings changes do
+not alter that run. Older runs without a snapshot retain their session agent.
+Missing reviewer config uses the session agent, model, and permissions; missing
+`autoReview` enables reviews.
 
 `autoReview` controls whether new AO review runs start. Session
 `autoInjectReview` controls delivery of review feedback to the worker; disabling
