@@ -166,6 +166,9 @@ func reviewerPermissions(taskPromptRoot string) []permissionRule {
 			Effect:   "allow",
 		})
 	}
+	// OpenCode 2's shell scanner checks each command node separately (a pipeline
+	// is split, and a redirected command's resource includes its redirect), so
+	// every rule below matches a single command, never a whole pipeline.
 	for _, resource := range []string{
 		"gh api repos/*",
 		"git diff *",
@@ -173,7 +176,6 @@ func reviewerPermissions(taskPromptRoot string) []permissionRule {
 		"git show *",
 		"git status *",
 		"ao review submit *",
-		"printf * | ao review submit *",
 	} {
 		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "allow"})
 	}
@@ -184,37 +186,26 @@ func reviewerPermissions(taskPromptRoot string) []permissionRule {
 		"gh api -*",
 		"gh api * -*",
 		"gh api *>*",
-		"gh api *<*",
-		"gh api *;*",
-		"gh api *&*",
-		"gh api *|*",
-		"gh api *`*",
-		"gh api *$(*",
-		"printf * | gh api *",
 		"git *>*",
-		"git *<*",
-		"git *|*",
-		"git *;*",
-		"git *&*",
-		"git *`*",
-		"git *$(*",
 		"ao review submit *>*",
+		"gh api *<*",
+		"git *<*",
 		"ao review submit *<*",
+		"gh api *|*",
+		"git *|*",
 		"ao review submit *|*",
+		"gh api *;*",
+		"git *;*",
 		"ao review submit *;*",
+		"gh api *&*",
+		"git *&*",
 		"ao review submit *&*",
+		"gh api *`*",
+		"git *`*",
 		"ao review submit *`*",
+		"gh api *$(*",
+		"git *$(*",
 		"ao review submit *$(*",
-		"printf * | ao review submit *>*",
-		"printf * | ao review submit *;*",
-		"printf * | ao review submit *&*",
-		"printf * | ao review submit *`*",
-		"printf * | ao review submit *$(*",
-		"printf * | gh api *>*",
-		"printf * | gh api *;*",
-		"printf * | gh api *&*",
-		"printf * | gh api *`*",
-		"printf * | gh api *$(*",
 		"git diff *--output*",
 		"git log *--output*",
 		"git show *--output*",
@@ -223,9 +214,19 @@ func reviewerPermissions(taskPromptRoot string) []permissionRule {
 	}
 	for _, resource := range []string{
 		"gh api --method POST repos/*/pulls/*/reviews --input -",
-		"printf * | gh api --method POST repos/*/pulls/*/reviews --input -",
+		"gh api --method POST repos/*/pulls/*/reviews --input - --jq '.id'",
+		"printf '%s' '*'",
 	} {
 		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "allow"})
+	}
+	for _, resource := range []string{
+		"printf '%s' '*' *>*",
+		"printf '%s' '*' *<*",
+		"printf '%s' '*' *|*",
+		"printf '%s' '*' *;*",
+		"printf '%s' '*' *&*",
+	} {
+		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "deny"})
 	}
 	return rules
 }
