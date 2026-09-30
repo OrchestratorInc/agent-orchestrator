@@ -26,7 +26,7 @@ func isolateHome(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	for _, key := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "OPENCODE_CONFIG", "COPILOT_HOME", "AIDER_MODEL"} {
+	for _, key := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "OPENCODE_CONFIG", "COPILOT_HOME", "COPILOT_MODEL", "AIDER_MODEL"} {
 		t.Setenv(key, "")
 	}
 	return home
@@ -124,9 +124,23 @@ func TestConfiguredDefaultModelSources(t *testing.T) {
 	}
 
 	copilotHome := t.TempDir()
-	writeConfig(t, filepath.Join(copilotHome, "config.json"), `{"model": "gpt-5.4"}`)
-	if got := configuredDefaultModel("copilot", workDir, map[string]string{"COPILOT_HOME": copilotHome}); got != "gpt-5.4" {
-		t.Errorf("copilot = %q", got)
+	copilotEnv := map[string]string{"COPILOT_HOME": copilotHome}
+	// Legacy config.json is managed state, not the user's model choice.
+	writeConfig(t, filepath.Join(copilotHome, "config.json"), `{"model": "stale-legacy-model"}`)
+	if got := configuredDefaultModel("copilot", workDir, copilotEnv); got != "" {
+		t.Errorf("copilot must ignore legacy config.json, got %q", got)
+	}
+	writeConfig(t, filepath.Join(copilotHome, "settings.json"), `{"model": "gpt-5.4"}`)
+	if got := configuredDefaultModel("copilot", workDir, copilotEnv); got != "gpt-5.4" {
+		t.Errorf("copilot user settings = %q, want gpt-5.4", got)
+	}
+	writeConfig(t, filepath.Join(workDir, ".github", "copilot", "settings.json"), `{"model": "claude-sonnet-4-6"}`)
+	if got := configuredDefaultModel("copilot", workDir, copilotEnv); got != "claude-sonnet-4-6" {
+		t.Errorf("copilot repository settings must override user settings, got %q", got)
+	}
+	copilotEnv["COPILOT_MODEL"] = "gpt-5.5"
+	if got := configuredDefaultModel("copilot", workDir, copilotEnv); got != "gpt-5.5" {
+		t.Errorf("COPILOT_MODEL must override settings files, got %q", got)
 	}
 
 	if got := configuredDefaultModel("cursor", workDir, nil); got != "" {

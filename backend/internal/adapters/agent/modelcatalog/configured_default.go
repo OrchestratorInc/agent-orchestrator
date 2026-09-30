@@ -51,18 +51,28 @@ var configuredDefaultSources = map[string]configuredDefaultSource{
 		},
 		parse: parseJSONCModelKey,
 	},
+	// Copilot CLI keeps user-editable settings, including the model /model
+	// selects, in settings.json; config.json is legacy managed state and is not
+	// read, so a stale value there can never be marked as the default. Model
+	// precedence: user settings < repository settings < COPILOT_MODEL.
+	// https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference
 	"copilot": {
-		paths: func(home, _ string, env map[string]string) []string {
+		paths: func(home, workingDir string, env map[string]string) []string {
+			var paths []string
 			root := envValue(env, "COPILOT_HOME")
-			if root == "" {
-				if home == "" {
-					return nil
-				}
+			if root == "" && home != "" {
 				root = filepath.Join(home, ".copilot")
 			}
-			return []string{filepath.Join(root, "config.json")}
+			if root != "" {
+				paths = append(paths, filepath.Join(root, "settings.json"))
+			}
+			if workingDir != "" {
+				paths = append(paths, filepath.Join(workingDir, ".github", "copilot", "settings.json"))
+			}
+			return paths
 		},
-		parse: parseJSONCModelKey,
+		parse:       parseJSONCModelKey,
+		envOverride: "COPILOT_MODEL",
 	},
 	"pi": {
 		paths: func(home, _ string, _ map[string]string) []string {
