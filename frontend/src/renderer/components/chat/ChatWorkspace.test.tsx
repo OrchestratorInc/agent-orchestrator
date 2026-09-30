@@ -1712,6 +1712,49 @@ describe("ChatWorkspace timeline", () => {
 		expect(openShell).toHaveBeenCalledOnce();
 	});
 
+	// A controller that died mid-turn must not keep the "Working for…" spinner
+	// alive over a dead agent, with no stop and no cancel anywhere (#6064):
+	// without a controller the turn cannot be running, so the pane settles on
+	// the stopped banner.
+	it("settles a running turn when the controller stops instead of spinning forever", () => {
+		const snapshot = {
+			...chatFixture,
+			controller: { state: "stopped" as const },
+		};
+		render(<ChatWorkspace snapshot={snapshot} onResumeAgent={vi.fn()} />);
+
+		expect(screen.getByRole("alert")).toHaveTextContent("The agent controller stopped");
+		expect(screen.queryByTestId("live-turn-status")).not.toBeInTheDocument();
+		expect(screen.queryByText(/^Working for /)).not.toBeInTheDocument();
+	});
+
+	// An asynchronous spawn puts the session on screen before its agent exists.
+	// That is not a controller that stopped, and the composer has to stay open:
+	// what the user types while it starts is queued, not lost.
+	it("explains a session that is still starting and keeps it typeable", () => {
+		const snapshot = {
+			...chatFixtureSettled,
+			controller: { state: "connecting" as const },
+			turns: [
+				...chatFixtureSettled.turns,
+				{ id: "queued-start", state: "queued" as const, requestedAt: "2026-08-15T00:00:00Z" },
+			],
+		};
+		render(
+			<ChatWorkspace
+				snapshot={snapshot}
+				session={{ ...chatSession, provisionState: "provisioning" }}
+				onResumeAgent={vi.fn()}
+			/>,
+		);
+
+		expect(screen.getByRole("status")).toHaveTextContent("Starting Codex…");
+		expect(screen.queryByText(/^Working for /)).not.toBeInTheDocument();
+		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+		expect(screen.getByTestId("chat-conversation-panel")).not.toHaveAttribute("inert");
+	});
+
 	it("keeps a sleeping conversation usable without exposing wake controls", async () => {
 		const user = userEvent.setup();
 		const resume = vi.fn();
