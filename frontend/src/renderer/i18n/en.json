@@ -858,6 +858,8 @@
 	"newTask.close": "Close new task dialog",
 	"newTask.configUnavailable": "Project config is unavailable.",
 	"newTask.createAsTui": "Create as Terminal UI",
+	"newTask.managedChatUnavailable": "Managed accounts are available in Terminal UI only.",
+	"newTask.chatCapabilityUnavailable": "This agent does not support the selected Chat options.",
 	"newTask.description": "Start a worker directly from this project.",
 	"newTask.image": "Image {{number}}",
 	"newTask.noSession": "Task creation returned no session",

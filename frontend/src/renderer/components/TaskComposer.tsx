@@ -90,6 +90,7 @@ class TaskCreateError extends Error {
 		message: string,
 		readonly code?: string,
 		readonly details?: components["schemas"]["APIError"]["details"],
+		readonly requestId?: string,
 	) {
 		super(message);
 		this.name = "TaskCreateError";
@@ -97,11 +98,10 @@ class TaskCreateError extends Error {
 }
 
 function taskCreateErrorMessage(error: unknown, account: InitialAccountChoice | undefined, status: number | undefined, t: TFunction): string {
-	if (!account) return apiErrorMessage(error, t("newTask.unableToStart"));
-	const safe = accountRequestError(error, status);
-	if (apiErrorCode(error) !== "SESSION_MODE_UNSUPPORTED") return accountControlMessage(safe, t);
-	return apiErrorMessage(error, t("newTask.unableToStart"))
-		+ (safe.requestId ? " " + t("accountsManager.controls.requestId", { id: safe.requestId }) : "");
+	if (apiErrorCode(error) === "SESSION_MODE_UNSUPPORTED") {
+		return t(account?.mode === "managed" ? "newTask.managedChatUnavailable" : "newTask.chatCapabilityUnavailable");
+	}
+	return account ? accountControlMessage(accountRequestError(error, status), t) : apiErrorMessage(error, t("newTask.unableToStart"));
 }
 
 type FallbackAction = "tui" | "bypass-permissions";
@@ -145,6 +145,7 @@ export function TaskComposer({
 	const [effortTouched, setEffortTouched] = useState(false);
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const [error, setError] = useState<string | undefined>();
+	const [notice, setNotice] = useState<{ message: string; detail?: string }>();
 	const [fallbackAction, setFallbackAction] = useState<FallbackAction>();
 	const taskPreparationRef = useRef("");
 	const {
@@ -231,6 +232,7 @@ export function TaskComposer({
 						taskCreateErrorMessage(error, input.account, response?.status, t),
 						apiErrorCode(error),
 						error.details,
+						accountRequestError(error, response?.status).requestId,
 					);
 				}
 				if (!data?.workerId) throw new Error(t("newTask.noSession"));
@@ -277,7 +279,7 @@ export function TaskComposer({
 				},
 			});
 			if (error) {
-				throw new TaskCreateError(taskCreateErrorMessage(error, input.account, response?.status, t), apiErrorCode(error), error.details);
+				throw new TaskCreateError(taskCreateErrorMessage(error, input.account, response?.status, t), apiErrorCode(error), error.details, accountRequestError(error, response?.status).requestId);
 			}
 			if (!data?.session.id) throw new Error(t("newTask.noSession"));
 			void captureRendererEvent("ao.renderer.task_create_succeeded", { scope: "standalone" });
@@ -567,6 +569,7 @@ export function TaskComposer({
 
 		setIsSubmitting(true);
 		setError(undefined);
+		setNotice(undefined);
 		setFallbackAction(undefined);
 		try {
 			const account = await initialAccount.confirm();
@@ -626,9 +629,13 @@ export function TaskComposer({
 						? "tui"
 						: undefined,
 			);
-			setError(err instanceof InitialAccountChoiceUnavailable ? t("accountsManager.initial.changed")
-				: err instanceof AccountControlError ? accountControlMessage(err, t)
-					: err instanceof Error ? err.message : t("newTask.unableToStart"));
+			if (err instanceof TaskCreateError && err.code === "SESSION_MODE_UNSUPPORTED") {
+				setNotice({ message: err.message, detail: err.requestId ? t("accountsManager.controls.requestId", { id: err.requestId }) : undefined });
+			} else {
+				setError(err instanceof InitialAccountChoiceUnavailable ? t("accountsManager.initial.changed")
+					: err instanceof AccountControlError ? accountControlMessage(err, t)
+						: err instanceof Error ? err.message : t("newTask.unableToStart"));
+			}
 		} finally {
 			setIsSubmitting(false);
 		}
@@ -731,6 +738,7 @@ export function TaskComposer({
 			submission={{
 				showFallbackAction: fallbackAction !== undefined,
 				error,
+				notice,
 				isSubmitting,
 				modelWarning,
 				onFallbackAction: (brief) =>

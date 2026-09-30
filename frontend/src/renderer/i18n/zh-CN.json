@@ -862,6 +862,8 @@
 	"newTask.close": "关闭新建任务对话框",
 	"newTask.configUnavailable": "项目配置不可用。",
 	"newTask.createAsTui": "以终端界面创建",
+	"newTask.managedChatUnavailable": "托管账户仅可在终端 UI 中使用。",
+	"newTask.chatCapabilityUnavailable": "此代理不支持所选的聊天选项。",
 	"newTask.description": "直接从此项目启动一个 worker。",
 	"newTask.standaloneDescription": "启动一个不关联项目或代码仓库的工作代理。",
 	"newTask.image": "图片 {{number}}",

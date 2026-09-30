@@ -868,6 +868,8 @@
 	"newTask.close": "Fermer la boîte de dialogue de nouvelle tâche",
 	"newTask.configUnavailable": "La configuration du projet n'est pas disponible.",
 	"newTask.createAsTui": "Créer en mode terminal",
+	"newTask.managedChatUnavailable": "Les comptes gérés sont disponibles uniquement dans l’interface de terminal.",
+	"newTask.chatCapabilityUnavailable": "Cet agent ne prend pas en charge les options de chat sélectionnées.",
 	"newTask.description": "Démarrez un worker directement depuis ce projet.",
 	"newTask.standaloneDescription": "Démarrez un worker sans le rattacher à un projet ou dépôt.",
 	"newTask.image": "Image {{number}}",

@@ -868,6 +868,8 @@
 	"newTask.close": "Fechar diálogo de nova tarefa",
 	"newTask.configUnavailable": "A configuração do projeto está indisponível.",
 	"newTask.createAsTui": "Criar como interface de terminal",
+	"newTask.managedChatUnavailable": "As contas gerenciadas estão disponíveis apenas na interface do terminal.",
+	"newTask.chatCapabilityUnavailable": "Este agente não oferece suporte às opções de chat selecionadas.",
 	"newTask.description": "Inicie um worker diretamente neste projeto.",
 	"newTask.standaloneDescription": "Inicie um worker sem vinculá-lo a um projeto ou repositório.",
 	"newTask.image": "Imagem {{number}}",

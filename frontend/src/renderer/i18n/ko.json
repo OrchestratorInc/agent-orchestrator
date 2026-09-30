@@ -862,6 +862,8 @@
 	"newTask.close": "새 작업 대화상자 닫기",
 	"newTask.configUnavailable": "프로젝트 구성을 사용할 수 없습니다.",
 	"newTask.createAsTui": "터미널 UI로 만들기",
+	"newTask.managedChatUnavailable": "관리형 계정은 터미널 UI에서만 사용할 수 있습니다.",
+	"newTask.chatCapabilityUnavailable": "이 에이전트는 선택한 채팅 옵션을 지원하지 않습니다.",
 	"newTask.description": "이 프로젝트에서 워커를 직접 시작합니다.",
 	"newTask.standaloneDescription": "프로젝트나 저장소에 연결하지 않고 워커를 시작합니다.",
 	"newTask.image": "이미지 {{number}}",

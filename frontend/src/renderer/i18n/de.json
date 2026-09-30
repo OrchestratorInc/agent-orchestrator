@@ -862,6 +862,8 @@
 	"newTask.close": "Dialog „Neue Aufgabe“ schließen",
 	"newTask.configUnavailable": "Projektkonfiguration ist nicht verfügbar.",
 	"newTask.createAsTui": "Als Terminal-UI erstellen",
+	"newTask.managedChatUnavailable": "Verwaltete Konten sind nur in der Terminal-UI verfügbar.",
+	"newTask.chatCapabilityUnavailable": "Dieser Agent unterstützt die ausgewählten Chat-Optionen nicht.",
 	"newTask.description": "Starten Sie einen Worker direkt aus diesem Projekt.",
 	"newTask.standaloneDescription": "Starten Sie einen Worker, ohne ihn einem Projekt oder Repository zuzuordnen.",
 	"newTask.image": "Bild {{number}}",

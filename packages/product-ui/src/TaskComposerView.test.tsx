@@ -361,6 +361,27 @@ describe("TaskComposerView", () => {
 		expect(lastAttachmentTransition.current).toEqual({ duration: 0 });
 	});
 
+	it("shows a neutral capability notice with secondary diagnostics and a prompt-preserving fallback", () => {
+		const onFallbackAction = vi.fn();
+		render(<TaskComposerView {...viewProps({
+			submission: {
+				showFallbackAction: true,
+				notice: { message: "Managed accounts are available in Terminal UI only.", detail: "Request ID: synthetic-request" },
+				isSubmitting: false,
+				modelWarning: "Hidden model warning",
+				onFallbackAction,
+				onSubmit: vi.fn(),
+			},
+		})} />);
+		expect(screen.getByRole("status")).toHaveClass("border-border", "bg-muted", "text-foreground");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.getByText("Request ID: synthetic-request")).toHaveClass("text-muted-foreground");
+		expect(screen.queryByText("Hidden model warning")).not.toBeInTheDocument();
+		fireEvent.change(screen.getByRole("textbox", { name: "Task" }), { target: { value: "Keep this task" } });
+		fireEvent.click(screen.getByRole("button", { name: "Create as Terminal UI" }));
+		expect(onFallbackAction).toHaveBeenCalledWith("Keep this task");
+	});
+
 	it("shows attachment and submission errors with a fallback action", () => {
 		const onFallbackAction = vi.fn();
 		render(

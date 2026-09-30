@@ -862,6 +862,8 @@
 	"newTask.close": "新規タスクのダイアログを閉じる",
 	"newTask.configUnavailable": "プロジェクト設定を利用できません。",
 	"newTask.createAsTui": "ターミナル UI として作成",
+	"newTask.managedChatUnavailable": "管理対象アカウントはターミナル UI でのみ利用できます。",
+	"newTask.chatCapabilityUnavailable": "このエージェントは選択されたチャットオプションに対応していません。",
 	"newTask.description": "このプロジェクトからワーカーを直接開始します。",
 	"newTask.standaloneDescription": "プロジェクトやリポジトリに関連付けずにワーカーを開始します。",
 	"newTask.image": "画像 {{number}}",
