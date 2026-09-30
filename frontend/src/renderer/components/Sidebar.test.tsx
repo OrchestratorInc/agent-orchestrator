@@ -164,10 +164,6 @@ vi.mock("../lib/bridge", async (importOriginal) => {
 	};
 });
 
-// This file's apiClient mock has no case for /api/v1/settings, so the real hook
-// would throw on the undefined result and then retry five times, and those extra
-// render cycles shift when the agent catalog resolves. The gate is on because
-// these tests predate it and assert intake-independent behavior.
 vi.mock("../hooks/useSettings", () => ({
 	useSettings: () => ({ settings: { trackerIntakeEnabled: true }, isLoading: false, error: undefined }),
 }));

@@ -127,9 +127,6 @@ function SettingsBody({
 	const config = project.config ?? {};
 	const isScratchProject = project.kind === "scratch";
 	const { settings } = useSettings();
-	// Hidden rather than disabled: a control the daemon will ignore is noise, not
-	// something to explain. Undefined settings means the query has not resolved,
-	// so stay hidden until we know rather than offer a control that may not work.
 	const intakeVisible = !isScratchProject && !!settings?.trackerIntakeEnabled;
 	const workspace = workspaceQuery.data?.find((item) => item.id === projectId);
 	const activeOrchestrator = newestActiveOrchestrator(workspace?.sessions ?? []);
@@ -193,8 +190,6 @@ function SettingsBody({
 			intakeAssignee: patch.assignee ?? f.intakeAssignee,
 		}));
 	const effectiveIntakeRepo = form.intakeRepo.trim() || deriveRepoPath(project.repo);
-	// Gated on visibility, not just project kind: a stored enabled-without-assignee
-	// config must not block saving through a control the user cannot see.
 	const intakeSetupIncomplete = intakeVisible && intakeNeedsRule(intakeForm);
 	const reviewerWarning = reviewerTrustWarning(form.reviewerHarness);
 	const defaultReviewerHarness = WORKER_DEFAULT_REVIEWERS[form.workerAgent] ?? "claude-code";

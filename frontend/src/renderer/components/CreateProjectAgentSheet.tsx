@@ -171,8 +171,6 @@ export function CreateProjectAgentSheet({
 	const isBusy = isCreating || isInitializing;
 	const [intake, setIntake] = useState<IntakeForm>(EMPTY_INTAKE);
 	const { settings } = useSettings();
-	// Hidden rather than disabled when the daemon's AO_TRACKER_INTAKE gate is off,
-	// so project creation never offers a control the daemon will ignore.
 	const intakeVisible = !!settings?.trackerIntakeEnabled;
 	const intakeIncomplete = intakeVisible && intakeNeedsRule(intake);
 	const canSubmit =

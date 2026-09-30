@@ -11,9 +11,6 @@ import { useUiStore } from "../stores/ui-store";
 
 const { trackerIntakeGate } = vi.hoisted(() => ({ trackerIntakeGate: { enabled: true } }));
 
-// The intake control is hidden unless the daemon's AO_TRACKER_INTAKE gate is on,
-// so the gate is mocked on by default and flipped off only by the test asserting
-// the control disappears.
 vi.mock("../hooks/useSettings", () => ({
 	useSettings: () => ({ settings: { trackerIntakeEnabled: trackerIntakeGate.enabled }, isLoading: false, error: undefined }),
 }));
@@ -339,8 +336,6 @@ describe("CreateProjectAgentSheet", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Create and start" }));
 		await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-		// Undefined rather than an empty object: creation must not persist intake
-		// config the user was never offered.
 		expect(onSubmit.mock.calls[0]?.[0]?.trackerIntake).toBeUndefined();
 	});
 

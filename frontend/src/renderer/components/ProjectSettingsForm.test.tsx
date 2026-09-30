@@ -49,9 +49,6 @@ vi.mock("../lib/orchestrator-replacement-telemetry", () => ({
 	captureOrchestratorReplacementFailure: captureOrchestratorReplacementFailureMock,
 }));
 
-// The intake control is hidden unless the daemon's AO_TRACKER_INTAKE gate is on,
-// so the gate is mocked on by default and flipped off only by the test that
-// asserts the control disappears.
 vi.mock("../hooks/useSettings", () => ({
 	useSettings: () => ({ settings: { trackerIntakeEnabled: trackerIntakeGate.enabled }, isLoading: false, error: undefined }),
 }));
@@ -1855,16 +1852,11 @@ describe("ProjectSettingsForm", () => {
 
 		renderSettings("proj-1", undefined, "general");
 
-		// Wait on a sibling section so absence is asserted against a rendered form
-		// rather than against a form that simply has not loaded yet.
 		expect(await screen.findByText("Pull requests")).toBeInTheDocument();
 		expect(screen.queryByText("Issues")).not.toBeInTheDocument();
 		expect(screen.queryByLabelText("Enable issue intake")).not.toBeInTheDocument();
 	});
 
-	// A project configured via the CLI can hold enabled-without-assignee. With the
-	// section hidden that cannot be corrected in the UI, so it must not block an
-	// unrelated save behind an error the user has no control to fix.
 	it("still saves other settings when the gate is off and stored intake lacks an assignee", async () => {
 		trackerIntakeGate.enabled = false;
 		getMock.mockResolvedValue({
@@ -1896,8 +1888,6 @@ describe("ProjectSettingsForm", () => {
 		submitSettings();
 
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
-		// The stored intake config survives a save made while it was hidden, so
-		// turning the gate back on restores what the user had configured.
 		expect(putMock.mock.calls[0]?.[1]?.body.config.trackerIntake).toEqual({ enabled: true });
 	});
 

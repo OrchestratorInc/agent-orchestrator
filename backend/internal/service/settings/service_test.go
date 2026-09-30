@@ -6,9 +6,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 )
 
-// The intake gate has to survive the trip from daemon config into the offering,
-// because the renderer hides its per-project intake control on this value. A
-// gate that silently read false would hide a control that actually works.
 func TestOfferingFromConfigCarriesTrackerIntake(t *testing.T) {
 	for _, on := range []bool{true, false} {
 		got := OfferingFromConfig(config.Config{TrackerIntake: on})
