@@ -16,7 +16,7 @@ import { agentModelsQueryKey, agentModelsQueryOptions, refreshAgentModels, reval
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
-import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
+import { DEFAULT_MODE_OPTION, isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
 import { WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
 import { OrchestratorSpawnError, spawnOrchestrator } from "../lib/spawn-orchestrator";
@@ -795,24 +795,27 @@ function AgentModelField({
 	if (isMode) {
 		const defaultMode = catalog.models?.find((item) => item.isDefault && isConcreteModelID(item.id))?.id;
 		const selectedMode = isConcreteModelID(mode) ? mode : "";
-		const options = (catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
-			value: item.id,
-			label: modelChoiceLabel(item),
-		}));
+		// With no reported default, "Default" lets the agent use its own configured mode.
+		const options = [
+			...(defaultMode ? [] : [{ value: DEFAULT_MODE_OPTION, label: t("settings.models.default") }]),
+			...(catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
+				value: item.id,
+				label: modelChoiceLabel(item),
+			})),
+		];
 		return (
 			<>
 				<div className="min-w-0">
 					<div className="flex min-w-0 items-center gap-2">
 						<SettingsOptionMenu
 							aria-label={label}
-							value={selectedMode || defaultMode || ""}
+							value={selectedMode || defaultMode || DEFAULT_MODE_OPTION}
 							options={options}
-							placeholder={t("settings.models.modeNotReported")}
-							action={selectedMode && !defaultMode ? { label: t("settings.models.useAgentMode"), onSelect: () => onModeChange("") } : undefined}
+							placeholder={selectedMode || t("settings.models.default")}
 							triggerClassName="w-full justify-between"
-							disabled={options.length === 0 && !(selectedMode && !defaultMode)}
+							disabled={options.length === 0}
 							onChange={(value) => {
-								onModeChange(value === defaultMode ? "" : value);
+								onModeChange(value === defaultMode || value === DEFAULT_MODE_OPTION ? "" : value);
 								onModelChange("");
 							}}
 						/>

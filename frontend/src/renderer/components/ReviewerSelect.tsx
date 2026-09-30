@@ -122,7 +122,7 @@ export function ReviewerSelect({
 			void queryClient.prefetchQuery(agentModelsQueryOptions(harness, menuProjectID));
 		}
 	}, [defaultHarness, menuOpen, menuProjectID, queryClient, selectableOptions]);
-	const selectedModelLabel = modelOrModeLabel(triggerCatalog.data, model, mode, t("settings.models.modelNotReported"));
+	const selectedModelLabel = modelOrModeLabel(triggerCatalog.data, model, mode, t("settings.models.default"));
 	const triggerLabel = [value ? agentLabel(value) : defaultHarnessLabel, harnessOnly ? null : selectedModelLabel]
 		.filter(Boolean)
 		.join(" · ");
@@ -274,9 +274,13 @@ function ReviewerHarnessOption({
 				{!catalogKnown ? (
 					<OptionMenuItem disabled>{t("common.loading", { defaultValue: "Loading…" })}</OptionMenuItem>
 				) : null}
-				{isCurrentHarness && !isCurrentDefaultSelection && !defaultModel && (
-					<OptionMenuItem onSelect={selectDefault}>
-						{t(catalog?.selectionMode === "mode" ? "settings.models.useAgentMode" : "settings.models.useAgentModel")}
+				{catalogKnown && !defaultModel && (
+					// No reported default: "Default" lets the agent run its own configured choice.
+					<OptionMenuItem onSelect={selectDefault} active={isCurrentDefaultSelection}>
+						<span className="flex min-w-0 items-center justify-between gap-3">
+							<span className="min-w-0 truncate">{t("settings.models.default")}</span>
+							{isCurrentDefaultSelection ? <Check aria-hidden="true" className="size-4" /> : null}
+						</span>
 					</OptionMenuItem>
 				)}
 				{options.map((option) => {
