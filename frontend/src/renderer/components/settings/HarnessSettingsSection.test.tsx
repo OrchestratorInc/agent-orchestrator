@@ -476,7 +476,7 @@ describe("HarnessSettingsSection", () => {
 
 	// The first check right after a login terminal exits can fail transiently;
 	// the panel must not report a completed login as signed out.
-	async function loginWithProbeResults(statuses: string[], readinessAfterProbes: number) {
+	async function loginWithProbeResults(statuses: string[], readinessAfterProbes: number, terminalInput?: string) {
 		const authorized = catalogWithInstalled("claude-code");
 		authorized.agents[0].authentication.state = "authorized";
 		let probeCalls = 0;
@@ -497,7 +497,7 @@ describe("HarnessSettingsSection", () => {
 			}
 			if (path === "/api/v1/agents/readiness/ensure") return { data: probeCalls >= readinessAfterProbes ? authorized : catalog } as never;
 			if (path === "/api/v1/agents/{agent}/auth") return { data: {
-				agentId: "claude-code", action: "login", guidance: "Complete login in the terminal.",
+				agentId: "claude-code", action: "login", guidance: "Complete login in the terminal.", terminalInput,
 				terminal: { handleId: "auth-terminal-1", title: "Claude Code login", workingDir: "/tmp", createdAt: "2026-09-15T00:00:00Z" },
 			} } as never;
 			return { data: undefined } as never;
@@ -508,12 +508,23 @@ describe("HarnessSettingsSection", () => {
 		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
 		await user.click(await within(row).findByRole("button", { name: "Local login" }));
 		await within(row).findByTestId("inline-terminal-body");
-		act(() => terminalStateCallback.value?.("exited"));
-		return { row, close, probeCalls: () => probeCalls };
+		return { row, close, probeCalls: () => probeCalls, exit: () => act(() => terminalStateCallback.value?.("exited")) };
 	}
 
+	it("shows login guidance only when it asks for an action outside the terminal", async () => {
+		const { row, exit } = await loginWithProbeResults(["authorized"], Number.POSITIVE_INFINITY);
+		expect(within(row).queryByText("Complete login in the terminal.")).toBeNull();
+		exit();
+		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
+		cleanup();
+
+		const withAction = await loginWithProbeResults(["authorized"], Number.POSITIVE_INFINITY, "/login\r");
+		expect(within(withAction.row).getByText("Complete login in the terminal.")).toBeInTheDocument();
+	});
+
 	it("re-checks a login whose first post-login check fails transiently", async () => {
-		const { row, close, probeCalls } = await loginWithProbeResults(["unauthorized", "authorized"], Number.POSITIVE_INFINITY);
+		const { row, close, probeCalls, exit } = await loginWithProbeResults(["unauthorized", "authorized"], Number.POSITIVE_INFINITY);
+		exit();
 
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument(), { timeout: 5_000 });
 		expect(probeCalls()).toBe(2);
@@ -523,7 +534,8 @@ describe("HarnessSettingsSection", () => {
 	it("closes a login panel it could not confirm once the harness reads as logged in", async () => {
 		// Every post-login probe misses, but the daemon's readiness later reports
 		// the harness logged in.
-		const { row, probeCalls } = await loginWithProbeResults(["unauthorized"], 4);
+		const { row, probeCalls, exit } = await loginWithProbeResults(["unauthorized"], 4);
+		exit();
 
 		await waitFor(() => expect(probeCalls()).toBe(4), { timeout: 8_000 });
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument(), { timeout: 5_000 });
