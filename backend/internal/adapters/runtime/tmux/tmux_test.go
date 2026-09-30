@@ -1282,6 +1282,54 @@ func TestExactSupervisedWorkloadFindsReviewerSupervisorWithHandleIdentity(t *tes
 	}
 }
 
+func TestContainsUnsupervisedReviewerWorkloadDistinguishesExitedProcesses(t *testing.T) {
+	tests := []struct {
+		name  string
+		table string
+		want  bool
+	}{
+		{
+			name:  "live legacy reviewer",
+			table: "100 1 /bin/zsh -c reviewer\n101 100 codex review --pr 7\n",
+			want:  true,
+		},
+		{
+			name:  "preserved interactive shell",
+			table: "100 1 /bin/zsh -i\n",
+			want:  false,
+		},
+		{
+			name:  "supervised exit sink",
+			table: "100 1 /bin/zsh -c launch\n101 100 cat\n",
+			want:  false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entries, err := parseProcessTable(tt.table)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := containsUnsupervisedReviewerWorkload(entries, 100); got != tt.want {
+				t.Fatalf("containsUnsupervisedReviewerWorkload = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsUnsupervisedReviewerAliveRejectsSupervisedExitSink(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	fr.outputs = [][]byte{
+		nil,
+		[]byte("100\n"),
+		[]byte("100 1 /bin/zsh -c launch\n101 100 cat\n"),
+	}
+	alive, err := r.IsUnsupervisedReviewerAlive(context.Background(), ports.RuntimeHandle{ID: "review-worker-7"})
+	if err != nil || alive {
+		t.Fatalf("IsUnsupervisedReviewerAlive = (%v, %v), want (false, nil)", alive, err)
+	}
+}
+
 func TestExactSupervisedWorkloadRejectsSupervisorReportingExitedChild(t *testing.T) {
 	entries, err := parseProcessTable("100 1 /bin/sh\n101 100 /opt/ao agent-process supervise --session sess-1 --launch launch-2 -- codex\n")
 	if err != nil {

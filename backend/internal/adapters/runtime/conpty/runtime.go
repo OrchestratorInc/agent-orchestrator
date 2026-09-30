@@ -398,6 +398,12 @@ func (r *Runtime) IsChildAlive(ctx context.Context, handle ports.RuntimeHandle) 
 	return status.Alive, nil
 }
 
+// IsUnsupervisedReviewerAlive uses the PTY host's child status for legacy
+// reviewers that predate the AO supervisor wrapper.
+func (r *Runtime) IsUnsupervisedReviewerAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
+	return r.IsChildAlive(ctx, handle)
+}
+
 // ProbeFencedRuntime returns liveness evidence for the exact fenced runtime identity.
 func (r *Runtime) ProbeFencedRuntime(ctx context.Context, ref ports.FencedRuntimeRef) ports.FencedProbeResult {
 	if ref.Handle.ID == "" || ref.SessionID == "" || ref.Generation == "" || ref.Handle.ID != string(ref.SessionID) {

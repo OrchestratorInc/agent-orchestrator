@@ -133,6 +133,7 @@ type reviewerRuntime interface {
 	Interrupt(ctx context.Context, handle ports.RuntimeHandle) error
 	SendInput(ctx context.Context, handle ports.RuntimeHandle, input string) error
 	IsChildAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error)
+	IsUnsupervisedReviewerAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error)
 	IsExactSupervisedProcessAlive(ctx context.Context, handle ports.RuntimeHandle, ref ports.SupervisedProcessRef) (bool, error)
 	HasSupervisedProcessRecord(ctx context.Context, handle ports.RuntimeHandle) (bool, error)
 	SendMessage(ctx context.Context, handle ports.RuntimeHandle, message string) error
@@ -765,7 +766,7 @@ func (l *agentLauncher) Alive(ctx context.Context, handleID, launchID string) (b
 			return false, err
 		}
 		if !tracked {
-			return l.runtime.IsChildAlive(ctx, handle)
+			return l.runtime.IsUnsupervisedReviewerAlive(ctx, handle)
 		}
 		return l.runtime.IsExactSupervisedProcessAlive(ctx, handle, ref)
 	}

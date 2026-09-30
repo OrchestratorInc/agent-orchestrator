@@ -89,6 +89,16 @@ func (r *hybridRuntime) IsChildAlive(ctx context.Context, handle ports.RuntimeHa
 	return backend.IsChildAlive(ctx, raw)
 }
 
+func (r *hybridRuntime) IsUnsupervisedReviewerAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
+	backend, raw := r.route(handle)
+	if inspector, ok := backend.(interface {
+		IsUnsupervisedReviewerAlive(context.Context, ports.RuntimeHandle) (bool, error)
+	}); ok {
+		return inspector.IsUnsupervisedReviewerAlive(ctx, raw)
+	}
+	return backend.IsChildAlive(ctx, raw)
+}
+
 func (r *hybridRuntime) ProbeFencedRuntime(ctx context.Context, ref ports.FencedRuntimeRef) ports.FencedProbeResult {
 	backend, raw := r.route(ref.Handle)
 	ref.Handle = raw

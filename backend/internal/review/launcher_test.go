@@ -394,22 +394,23 @@ func (f fakeAgentAuthResolver) AuthStatus(context.Context, domain.ReviewerHarnes
 }
 
 type fakeRuntime struct {
-	createCfg        ports.RuntimeConfig
-	sentMsg          string
-	sentMsgs         []string
-	sentInput        string
-	sentInputs       []string
-	sentTo           string
-	alive            bool
-	supervisedRecord bool
-	interrupt        string
-	interrupts       int
-	destroyed        string
-	destroyBefore    bool
-	created          bool
-	output           string
-	outputReads      int
-	exactRef         ports.SupervisedProcessRef
+	createCfg         ports.RuntimeConfig
+	sentMsg           string
+	sentMsgs          []string
+	sentInput         string
+	sentInputs        []string
+	sentTo            string
+	alive             bool
+	unsupervisedAlive bool
+	supervisedRecord  bool
+	interrupt         string
+	interrupts        int
+	destroyed         string
+	destroyBefore     bool
+	created           bool
+	output            string
+	outputReads       int
+	exactRef          ports.SupervisedProcessRef
 }
 
 func (f *fakeRuntime) Create(_ context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
@@ -429,6 +430,9 @@ func (f *fakeRuntime) IsAlive(_ context.Context, _ ports.RuntimeHandle) (bool, e
 }
 func (f *fakeRuntime) IsChildAlive(_ context.Context, _ ports.RuntimeHandle) (bool, error) {
 	return f.alive, nil
+}
+func (f *fakeRuntime) IsUnsupervisedReviewerAlive(_ context.Context, _ ports.RuntimeHandle) (bool, error) {
+	return f.unsupervisedAlive, nil
 }
 func (f *fakeRuntime) IsExactSupervisedProcessAlive(_ context.Context, _ ports.RuntimeHandle, ref ports.SupervisedProcessRef) (bool, error) {
 	f.exactRef = ref
@@ -861,13 +865,21 @@ func TestLauncherAlive(t *testing.T) {
 }
 
 func TestLauncherAliveFallsBackForLegacyReviewerLaunch(t *testing.T) {
-	rt := &fakeRuntime{alive: true}
+	rt := &fakeRuntime{alive: true, unsupervisedAlive: true}
 	l := NewLauncher(fakeReviewerResolver{ok: true}, rt, t.TempDir())
 	if alive, err := l.Alive(context.Background(), "review-mer-1", "launch-1"); err != nil || !alive {
 		t.Fatalf("Alive() = (%v, %v), want legacy child alive", alive, err)
 	}
 	if rt.exactRef.LaunchID != "" {
 		t.Fatalf("exact supervised probe used for legacy launch: %+v", rt.exactRef)
+	}
+}
+
+func TestLauncherAliveDoesNotTreatReviewerExitSinkAsAlive(t *testing.T) {
+	rt := &fakeRuntime{alive: true, supervisedRecord: false, unsupervisedAlive: false}
+	l := NewLauncher(fakeReviewerResolver{ok: true}, rt, t.TempDir())
+	if alive, err := l.Alive(context.Background(), "review-mer-1", "launch-1"); err != nil || alive {
+		t.Fatalf("Alive() = (%v, %v), want exited reviewer", alive, err)
 	}
 }
 

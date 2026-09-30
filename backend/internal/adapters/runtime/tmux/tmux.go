@@ -648,6 +648,21 @@ func (r *Runtime) IsChildAlive(ctx context.Context, handle ports.RuntimeHandle) 
 	return childAlive, nil
 }
 
+// IsUnsupervisedReviewerAlive detects a live pre-supervisor reviewer process
+// without mistaking the pane's preserved shell or the supervised exit sink for
+// reviewer work.
+func (r *Runtime) IsUnsupervisedReviewerAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
+	alive, err := r.IsAlive(ctx, handle)
+	if err != nil || !alive {
+		return false, err
+	}
+	entries, panePID, err := r.supervisedProcessTree(ctx, handle)
+	if err != nil {
+		return false, err
+	}
+	return containsUnsupervisedReviewerWorkload(entries, panePID), nil
+}
+
 // ProbeFencedRuntime returns liveness evidence for the exact fenced runtime identity.
 func (r *Runtime) ProbeFencedRuntime(ctx context.Context, ref ports.FencedRuntimeRef) ports.FencedProbeResult {
 	if ref.Handle.ID == "" || ref.SessionID == "" || strings.TrimSpace(ref.Generation) == "" || ref.Handle.ID != string(ref.SessionID) {
@@ -1178,6 +1193,34 @@ func containsManagedWorkload(entries []processEntry, rootPID int, sessionID, lau
 	// supervisor remains, the pane root is the preserved interactive shell and
 	// any child is a workload the operator launched from that shell.
 	return hasChild && !hasSupervisor
+}
+
+func containsUnsupervisedReviewerWorkload(entries []processEntry, rootPID int) bool {
+	descendants := descendantPIDs(entries, rootPID)
+	for _, entry := range entries {
+		if entry.pid == rootPID || !descendants[entry.pid] || isAnySupervisorCommand(entry.command) {
+			continue
+		}
+		if isPreservedPaneProcess(entry.command) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func isPreservedPaneProcess(command string) bool {
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return true
+	}
+	name := filepath.Base(fields[0])
+	switch name {
+	case "sh", "bash", "zsh", "fish", "ksh", "dash", "nu", "cat":
+		return true
+	default:
+		return false
+	}
 }
 
 func containsExactSupervisedWorkload(entries []processEntry, rootPID int, sessionID, launchID string) bool {
