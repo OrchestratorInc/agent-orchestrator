@@ -29,8 +29,8 @@ import { Badge } from "./ui/badge";
  * - One centered column (`max-w-[640px]`); no upward translate hack.
  * - "Star us" is a quiet text link with dashed underline on hover — NOT a
  *   TopbarButton / accent pill / bordered card.
- * - Local actions are a 2×2 grid; standalone agent lives IN the grid (not a
- *   full-width accent CTA above). Cloud is available on the empty home when enabled.
+ * - Primary actions are a 2×2 grid; Cloud replaces the standalone-agent action
+ *   in the fourth cell when Developer Mode and Cloud are enabled.
  *   Connect Mobile is settings-only — not here.
  * - Recent rows use shared {@link NavRowHighlight} (same as sidebar), not a
  *   flat `hover:bg-interactive-hover` wash.
@@ -159,6 +159,7 @@ export function HomePage() {
 	const navigate = useNavigate();
 	const { t } = useTranslation();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
+	const developerMode = useUiStore((state) => state.developerMode);
 	const { cloneProject, createProject, daemonStatus, initializeProjectRepository, workspaceStartupState } =
 		useShell();
 	const { blocked: requirementsBlocked } = useSystemRequirementsGate();
@@ -166,7 +167,6 @@ export function HomePage() {
 	const workspaceQuery = useWorkspaceQuery();
 	const [sourceSignal, setSourceSignal] = useState<{ source: ProjectSource | "cloud"; nonce: number } | null>(null);
 	const projects = workspaceQuery.data ?? [];
-	const hasRegisteredProjects = projects.some((project) => project.id !== STANDALONE_WORKSPACE_ID);
 	const recentProjects = useMemo(() => sortProjectsByActivity(projects).slice(0, RECENT_PROJECT_LIMIT), [projects]);
 
 	const isDaemonReady = usesPreviewWorkspaceData || daemonStatus.state === "ready";
@@ -218,7 +218,7 @@ export function HomePage() {
 							</button>
 						</div>
 
-						{/* Local actions stay in a 2×2 grid; Cloud spans the row when enabled. */}
+						{/* Cloud replaces the standalone action in the same grid cell when enabled. */}
 						<div className="grid grid-cols-2 gap-3">
 							<HomeActionCard
 								icon={<GitFork strokeWidth={1.8} />}
@@ -235,19 +235,18 @@ export function HomePage() {
 								label={t("createProject.addWorkspace")}
 								onClick={() => requestSource("workspace")}
 							/>
-							<HomeActionCard
-								icon={<Bot strokeWidth={1.8} />}
-								label={t("home.newStandaloneAgent")}
-								onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
-							/>
-							{cloudEnabled && !hasRegisteredProjects && (
-								<div className="col-span-2">
-									<HomeActionCard
-										icon={<Cloud strokeWidth={1.8} />}
-										label={t("createProject.cloudTitle")}
-										onClick={() => requestSource("cloud")}
-									/>
-								</div>
+							{developerMode && cloudEnabled ? (
+								<HomeActionCard
+									icon={<Cloud strokeWidth={1.8} />}
+									label={t("createProject.cloudTitle")}
+									onClick={() => requestSource("cloud")}
+								/>
+							) : (
+								<HomeActionCard
+									icon={<Bot strokeWidth={1.8} />}
+									label={t("home.newStandaloneAgent")}
+									onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
+								/>
 							)}
 						</div>
 					</section>

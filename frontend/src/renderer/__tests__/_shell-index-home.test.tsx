@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useUiStore } from "../stores/ui-store";
 import {
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
@@ -82,6 +83,7 @@ const standaloneSession = (overrides: Partial<WorkspaceSession>): WorkspaceSessi
 });
 
 beforeEach(() => {
+	useUiStore.setState({ developerMode: false, newTaskRequest: null });
 	routeMocks.navigate.mockReset();
 	routeMocks.workspaces = [];
 	routeMocks.createProjectFlowProps = null;
@@ -115,15 +117,31 @@ describe("shell index route", () => {
 		expect(routeMocks.createProjectFlowProps?.sourceSignal?.source).toBe("clone");
 	});
 
-	it("opens cloud project creation from the empty home when Cloud is enabled", () => {
+	it("opens cloud project creation when Developer Mode and Cloud are enabled", () => {
+		useUiStore.setState({ developerMode: true });
 		routeMocks.cloudEnabled = true;
 		render(<HomePage />);
 
 		fireEvent.click(screen.getByRole("button", { name: "New cloud project" }));
 		expect(routeMocks.createProjectFlowProps?.sourceSignal?.source).toBe("cloud");
+		expect(screen.queryByRole("button", { name: "New standalone agent" })).not.toBeInTheDocument();
+	});
+
+	it.each([
+		{ developerMode: false, cloudEnabled: true },
+		{ developerMode: true, cloudEnabled: false },
+	])("keeps standalone creation when either toggle is off: %j", ({ developerMode, cloudEnabled }) => {
+		useUiStore.setState({ developerMode });
+		routeMocks.cloudEnabled = cloudEnabled;
+		render(<HomePage />);
+
+		fireEvent.click(screen.getByRole("button", { name: "New standalone agent" }));
+		expect(useUiStore.getState().newTaskRequest?.projectId).toBe(STANDALONE_WORKSPACE_ID);
+		expect(screen.queryByRole("button", { name: "New cloud project" })).not.toBeInTheDocument();
 	});
 
 	it("shows cloud creation when standalone sessions exist without a registered project", () => {
+		useUiStore.setState({ developerMode: true });
 		routeMocks.cloudEnabled = true;
 		routeMocks.workspaces = [{
 			id: STANDALONE_WORKSPACE_ID,
@@ -139,6 +157,8 @@ describe("shell index route", () => {
 	});
 
 	it("renders the home page instead of redirecting to a scratch board when projects exist", async () => {
+		useUiStore.setState({ developerMode: true });
+		routeMocks.cloudEnabled = true;
 		routeMocks.workspaces = [
 			{
 				id: "scratch",
@@ -152,7 +172,8 @@ describe("shell index route", () => {
 		render(<HomePage />);
 
 		expect(screen.getByText("Jump back right in")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "New standalone agent" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "New cloud project" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "New standalone agent" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Connect mobile" })).not.toBeInTheDocument();
 		expect(routeMocks.navigate).not.toHaveBeenCalled();
 	});
