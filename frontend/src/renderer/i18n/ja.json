@@ -1,4 +1,5 @@
 {
+	"accountsManager.controls.failureCode": "エラーコード: {{code}}",
 	"switchAgent.accountAction": "アカウントを切り替え",
 	"switchAgent.backToAgent": "エージェントに戻る",
 	"switchAgent.accountDetails": "その他のオプション",

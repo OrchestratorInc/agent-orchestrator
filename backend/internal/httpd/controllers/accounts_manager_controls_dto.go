@@ -49,6 +49,7 @@ type AccountsManagerSwitchResponse struct {
 	Policy           string    `json:"policy"`
 	NewConversation  bool      `json:"newConversation"`
 	Phase            string    `json:"phase"`
+	ErrorCode        string    `json:"errorCode,omitempty" enum:"ADMISSION_CHANGED,SOURCE_CHANGED,NATIVE_HISTORY_UNAVAILABLE,SOURCE_INTAKE_UNAVAILABLE,SOURCE_OWNERSHIP_UNCONFIRMED,SOURCE_NOT_QUIESCENT,TARGET_UNAVAILABLE,TARGET_REVALIDATION_UNAVAILABLE,REVOCATION_UNCONFIRMED,SOURCE_STOP_UNCONFIRMED,STOP_RECORD_UNCONFIRMED,BINDING_COMMIT_UNCONFIRMED,BINDING_SYNC_UNCONFIRMED,START_RECORD_UNCONFIRMED,SESSION_UNAVAILABLE,PROJECT_UNAVAILABLE,TARGET_START_UNCONFIRMED,TARGET_NOT_READY,OUTCOME_UNCONFIRMED,DAEMON_RESTARTED,CONTROLLER_CHANGED,TARGET_STOP_UNCONFIRMED,RETRY_COMMIT_UNCONFIRMED,SESSION_INTAKE_UNAVAILABLE,STOP_ADMISSION_CHANGED,REVOCATION_RECORD_UNCONFIRMED,FINAL_ADMISSION_CHANGED,CREDENTIAL_REMOVAL_UNCONFIRMED" doc:"Safe durable diagnostic; absent on success, cancellation, unknown codes and older servers."`
 	RecoveryRequired bool      `json:"recoveryRequired"`
 	CanRetry         bool      `json:"canRetry"`
 	CreatedAt        time.Time `json:"createdAt"`
@@ -76,6 +77,7 @@ type AccountsManagerRemovalResponse struct {
 	AccountID        string                               `json:"accountId"`
 	Impact           AccountsManagerRemovalImpactResponse `json:"impact"`
 	Phase            string                               `json:"phase"`
+	ErrorCode        string                               `json:"errorCode,omitempty" enum:"ADMISSION_CHANGED,SOURCE_CHANGED,NATIVE_HISTORY_UNAVAILABLE,SOURCE_INTAKE_UNAVAILABLE,SOURCE_OWNERSHIP_UNCONFIRMED,SOURCE_NOT_QUIESCENT,TARGET_UNAVAILABLE,TARGET_REVALIDATION_UNAVAILABLE,REVOCATION_UNCONFIRMED,SOURCE_STOP_UNCONFIRMED,STOP_RECORD_UNCONFIRMED,BINDING_COMMIT_UNCONFIRMED,BINDING_SYNC_UNCONFIRMED,START_RECORD_UNCONFIRMED,SESSION_UNAVAILABLE,PROJECT_UNAVAILABLE,TARGET_START_UNCONFIRMED,TARGET_NOT_READY,OUTCOME_UNCONFIRMED,DAEMON_RESTARTED,CONTROLLER_CHANGED,TARGET_STOP_UNCONFIRMED,RETRY_COMMIT_UNCONFIRMED,SESSION_INTAKE_UNAVAILABLE,STOP_ADMISSION_CHANGED,REVOCATION_RECORD_UNCONFIRMED,FINAL_ADMISSION_CHANGED,CREDENTIAL_REMOVAL_UNCONFIRMED" doc:"Safe durable diagnostic; absent on success, cancellation, unknown codes and older servers."`
 	CanCancel        bool                                 `json:"canCancel"`
 	RecoveryRequired bool                                 `json:"recoveryRequired"`
 	CreatedAt        time.Time                            `json:"createdAt"`

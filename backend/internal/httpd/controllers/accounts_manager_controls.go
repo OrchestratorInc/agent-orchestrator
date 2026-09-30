@@ -349,7 +349,7 @@ func (c *AccountsManagerController) observedAccountSwitchResponse(op domain.Acco
 }
 
 func accountSwitchResponse(op domain.AccountsManagerSwitch) AccountsManagerSwitchResponse {
-	return AccountsManagerSwitchResponse{ID: op.ID, SessionID: string(op.SessionID), Provider: string(op.Provider), SourceMode: string(op.SourceMode), SourceAccountID: op.SourceAccountID, SourceRevision: op.SourceRevision, TargetMode: string(op.TargetMode), TargetAccountID: op.TargetAccountID, TargetRevision: op.TargetRevision, Policy: string(op.Policy), NewConversation: op.NewConversation, Phase: string(op.Phase), RecoveryRequired: op.Phase == domain.AccountsManagerSwitchRecoveryRequired, CreatedAt: op.CreatedAt, UpdatedAt: op.UpdatedAt}
+	return AccountsManagerSwitchResponse{ID: op.ID, SessionID: string(op.SessionID), Provider: string(op.Provider), SourceMode: string(op.SourceMode), SourceAccountID: op.SourceAccountID, SourceRevision: op.SourceRevision, TargetMode: string(op.TargetMode), TargetAccountID: op.TargetAccountID, TargetRevision: op.TargetRevision, Policy: string(op.Policy), NewConversation: op.NewConversation, Phase: string(op.Phase), ErrorCode: accountControlFailureCode(string(op.Phase), op.ErrorCode), RecoveryRequired: op.Phase == domain.AccountsManagerSwitchRecoveryRequired, CreatedAt: op.CreatedAt, UpdatedAt: op.UpdatedAt}
 }
 
 func accountRemovalImpactResponse(id string, impact domain.AccountsManagerRemovalImpact) AccountsManagerRemovalImpactResponse {
@@ -361,5 +361,5 @@ func accountRemovalImpactResponse(id string, impact domain.AccountsManagerRemova
 }
 
 func accountRemovalResponse(op domain.AccountsManagerRemoval) AccountsManagerRemovalResponse {
-	return AccountsManagerRemovalResponse{ID: op.ID, AccountID: op.AccountID, Impact: accountRemovalImpactResponse(op.AccountID, op.Impact), Phase: string(op.Phase), CanCancel: !op.StopStarted && !op.Phase.Terminal(), RecoveryRequired: op.Phase == domain.AccountsManagerRemovalRecovery, CreatedAt: op.CreatedAt, UpdatedAt: op.UpdatedAt}
+	return AccountsManagerRemovalResponse{ID: op.ID, AccountID: op.AccountID, Impact: accountRemovalImpactResponse(op.AccountID, op.Impact), Phase: string(op.Phase), ErrorCode: accountControlFailureCode(string(op.Phase), op.ErrorCode), CanCancel: !op.StopStarted && !op.Phase.Terminal(), RecoveryRequired: op.Phase == domain.AccountsManagerRemovalRecovery, CreatedAt: op.CreatedAt, UpdatedAt: op.UpdatedAt}
 }

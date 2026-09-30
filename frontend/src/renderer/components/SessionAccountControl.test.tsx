@@ -38,6 +38,21 @@ describe("SessionAccountControl", () => {
     mockState(binding);
   });
 
+  it("shows a durable failure after reload and clears it only on authoritative success", async () => {
+    const failed = { ...operation, phase: "waiting", errorCode: "TARGET_REVALIDATION_UNAVAILABLE", canRetry: false };
+    mockState({ ...binding, switch: failed });
+    show();
+    const region = await screen.findByRole("region", { name: "Switch operation" });
+    expect(region).toHaveTextContent("Error code: TARGET_REVALIDATION_UNAVAILABLE");
+    expect(screen.queryByRole("button", { name: "Retry account switch" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Committed account" })).toHaveTextContent("account-a");
+    mockState({ ...binding, accountId: "account-b", revision: 8, switch: { ...failed, phase: "ready", targetRevision: 8 } });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh account state" }));
+    await waitFor(() => expect(region).toHaveTextContent("Phase: ready"));
+    expect(region).not.toHaveTextContent("TARGET_REVALIDATION_UNAVAILABLE");
+    expect(api.POST).not.toHaveBeenCalled();
+  });
+
   it("requires explicit account and policy and keeps acknowledgement separate from committed state", async () => {
     show();
     expect(await screen.findByRole("region", { name: "Committed account" })).toHaveTextContent("account-a");

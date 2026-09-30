@@ -23,6 +23,22 @@ describe("coordinated account removal controls", () => {
     api.GET.mockImplementation(async path => success(path.endsWith("removal-impact") ? impact : operation));
   });
 
+  it("shows durable removal failure after reload without claiming credential removal", async () => {
+    localStorage.setItem("ao:account-removals:v1", JSON.stringify([{ accountId: "account-a", operationId: "remove-a" }]));
+    let current = { ...operation, phase: "recovery_required", recoveryRequired: true, canCancel: false, errorCode: "SOURCE_STOP_UNCONFIRMED" };
+    api.GET.mockImplementation(async path => success(path.endsWith("removal-impact") ? impact : current));
+    show();
+    const region = await screen.findByRole("region", { name: "Removal operation" });
+    expect(region).toHaveTextContent("Error code: SOURCE_STOP_UNCONFIRMED");
+    expect(screen.queryByText("Removal complete")).not.toBeInTheDocument();
+    current = { ...current, phase: "complete", recoveryRequired: false };
+    fireEvent.click(screen.getByRole("button", { name: "Refresh removal status" }));
+    await waitFor(() => expect(region).toHaveTextContent("Phase: complete"));
+    expect(region).not.toHaveTextContent("SOURCE_STOP_UNCONFIRMED");
+    expect(api.POST).not.toHaveBeenCalled();
+    expect(api.DELETE).not.toHaveBeenCalled();
+  });
+
   it("submits one confirmation with the exact fresh impact revision", async () => {
     show();
     const submit = await screen.findByRole("button", { name: "Remove account" });

@@ -1,4 +1,5 @@
 {
+	"accountsManager.controls.failureCode": "错误代码：{{code}}",
 	"switchAgent.accountAction": "切换账户",
 	"switchAgent.backToAgent": "返回代理",
 	"switchAgent.accountDetails": "更多选项",

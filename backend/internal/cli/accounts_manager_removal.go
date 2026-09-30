@@ -98,11 +98,17 @@ func (r managedRemovalDTO) matches(accountID, operationID string) bool {
 }
 
 func writeManagedRemoval(cmd *cobra.Command, response managedRemovalDTO, asJSON bool) error {
+	response.ErrorCode = accountControlFailureCode(response.Phase, response.ErrorCode)
 	if asJSON {
 		return writeJSON(cmd.OutOrStdout(), response)
 	}
 	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "operation: %s\nphase: %s\ncan cancel: %t\nrecovery required: %t\n", response.ID, response.Phase, response.CanCancel, response.RecoveryRequired); err != nil {
 		return err
+	}
+	if response.ErrorCode != "" {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "error code: %s\n", response.ErrorCode); err != nil {
+			return err
+		}
 	}
 	return writeManagedRemovalImpact(cmd, response.Impact)
 }

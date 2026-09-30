@@ -116,6 +116,14 @@ function RemovalPanel({ accountId, onOptimisticRemove, onRemovalFailed, onRemova
   const error = localError || (reference ? operationQuery.error : impactQuery.error) || mutation.error;
   return <div className="space-y-3 text-sm">
     {error ? <p role="alert" className="text-sm text-destructive">{localError || accountControlMessage(error, t)}</p> : null}
+    {operation ? <section aria-label={t("accountsManager.controls.removalOperation")} className="space-y-2" aria-live="polite">
+      <h4 className="font-medium">{operation.phase === "complete" ? t("accountsManager.controls.removalComplete") : t("accountsManager.controls.removalOperation")}</h4>
+      <p>{t("accountsManager.controls.phase", { phase: operation.phase })}</p>
+      <p>{operation.canCancel ? t("accountsManager.controls.canCancel") : t("accountsManager.controls.cannotCancel")}</p>
+      {operation.errorCode ? <p>{t("accountsManager.controls.failureCode", { code: operation.errorCode })}</p> : null}
+      {operation.recoveryRequired ? <p>{t("accountsManager.controls.removalRecoveryRequired")}</p> : null}
+      <Button type="button" size="sm" variant="outline" disabled={operationQuery.isFetching} onClick={() => void operationQuery.refetch()}>{t("accountsManager.controls.refreshRemoval")}</Button>
+    </section> : null}
     <div className="flex justify-end gap-2">
       <Button type="button" size="sm" variant="outline" disabled={mutation.isPending} onClick={onCancel}>{t("confirm.cancel")}</Button>
       <Button type="button" size="sm" variant="primary" disabled={Boolean(reference) || busy || Boolean(error) || !impact} onClick={requestRemoval}>{t("accountsManager.controls.requestRemoval")}</Button>

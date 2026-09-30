@@ -63,6 +63,7 @@ type managedRemovalDTO struct {
 	AccountID        string                  `json:"accountId"`
 	Impact           managedRemovalImpactDTO `json:"impact"`
 	Phase            string                  `json:"phase"`
+	ErrorCode        string                  `json:"errorCode,omitempty"`
 	CanCancel        bool                    `json:"canCancel"`
 	RecoveryRequired bool                    `json:"recoveryRequired"`
 	CreatedAt        time.Time               `json:"createdAt"`

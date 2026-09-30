@@ -154,6 +154,7 @@ function SessionAccountPanel({ sessionId, compact = false, onSwitchLockChange }:
           <h4 className="font-medium">{active || pendingCommit ? t("accountsManager.controls.pendingSwitch") : t("accountsManager.controls.lastSwitch")}</h4>
           {!compact ? <p className="break-all">{t("accountsManager.controls.operationId", { id: operation.id })}</p> : null}
           <p>{compact && pendingCommit ? t("accountsManager.controls.accepted") : t("accountsManager.controls.phase", { phase: operation.phase })}</p>
+          {operation.errorCode ? <p>{t("accountsManager.controls.failureCode", { code: operation.errorCode })}</p> : null}
           {!compact ? <>
           <p>{t("accountsManager.controls.target", { target: operation.targetMode === "native" ? t("accountsManager.controls.native") : operation.targetAccountId })}</p>
           <p>{t("accountsManager.controls.revisions", { policy: operation.policy, source: operation.sourceRevision, target: operation.targetRevision })}</p>

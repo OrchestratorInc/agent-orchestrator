@@ -1,4 +1,5 @@
 {
+	"accountsManager.controls.failureCode": "Fehlercode: {{code}}",
 	"switchAgent.accountAction": "Konto wechseln",
 	"switchAgent.backToAgent": "Zurück zum Agenten",
 	"switchAgent.accountDetails": "Weitere Optionen",

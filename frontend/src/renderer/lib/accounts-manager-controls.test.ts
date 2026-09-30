@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { accountControlMessage, accountRequestError, changeAccountRemoval, changeSessionAccountSwitch, fetchSessionAccountControl, fetchSessionAccountSwitch, readAccountRemovalReferences, saveAccountRemovalReference, startAccountRemoval, startSessionAccountSwitch } from "./accounts-manager-controls";
+import { accountControlMessage, accountRequestError, changeAccountRemoval, changeSessionAccountSwitch, fetchAccountRemoval, fetchSessionAccountControl, fetchSessionAccountSwitch, readAccountRemovalReferences, saveAccountRemovalReference, startAccountRemoval, startSessionAccountSwitch } from "./accounts-manager-controls";
+import type { AccountSwitch, AccountRemoval } from "./accounts-manager-controls";
 
 const api = vi.hoisted(() => ({ GET: vi.fn(), POST: vi.fn() }));
 vi.mock("./api-client", () => ({ apiClient: api }));
@@ -69,6 +70,54 @@ describe("account control HTTP boundary", () => {
   });
 
   const removal = { id: "remove-a", accountId: "account-a", impact: { accountId: "account-a", revision: 0, sessions: [] }, phase: "recovery_required", canCancel: true, recoveryRequired: true };
+  it("preserves durable failure codes through the typed client without inventing retry permission", async () => {
+    const switchCode: AccountSwitch["errorCode"] = "TARGET_REVALIDATION_UNAVAILABLE";
+    const removalCode: AccountRemoval["errorCode"] = "SOURCE_STOP_UNCONFIRMED";
+    api.GET.mockResolvedValue(success({ ...operation, errorCode: switchCode, canRetry: false }));
+    expect(await fetchSessionAccountSwitch("session-a", "switch-a")).toMatchObject({ errorCode: switchCode, canRetry: false });
+    api.GET.mockResolvedValue(success({ ...removal, errorCode: removalCode }));
+    expect(await fetchAccountRemoval("account-a", "remove-a")).toMatchObject({ errorCode: removalCode });
+  });
+
+  it("keeps accepted and retried failures separate from successful cancellation", async () => {
+    const failed = Object.freeze({ ...operation, errorCode: "TARGET_UNAVAILABLE", canRetry: false });
+    api.POST.mockResolvedValue(success(failed));
+    const body = { operationId: "switch-a", expectedRevision: 1, mode: "managed", accountId: "account-a", policy: "drain" } as const;
+    expect(await startSessionAccountSwitch("session-a", body)).toMatchObject({ errorCode: "TARGET_UNAVAILABLE", canRetry: false });
+    expect(await changeSessionAccountSwitch("session-a", "switch-a", "retry")).toMatchObject({ errorCode: "TARGET_UNAVAILABLE", canRetry: false });
+    api.POST.mockResolvedValue(success({ ...failed, phase: "cancelled" }));
+    expect(await changeSessionAccountSwitch("session-a", "switch-a", "cancel")).not.toHaveProperty("errorCode");
+    expect(failed.errorCode).toBe("TARGET_UNAVAILABLE");
+
+    const stopped = Object.freeze({ ...removal, errorCode: "SOURCE_STOP_UNCONFIRMED" });
+    api.GET.mockResolvedValue(success(stopped));
+    api.POST.mockResolvedValue(success(stopped));
+    expect(await startAccountRemoval("account-a", { operationId: "remove-a", expectedRevision: 0, confirmed: true })).toMatchObject({ errorCode: "SOURCE_STOP_UNCONFIRMED" });
+    expect(await changeAccountRemoval("account-a", "remove-a", "retry")).toMatchObject({ errorCode: "SOURCE_STOP_UNCONFIRMED" });
+    api.POST.mockResolvedValue(success({ ...stopped, phase: "cancelled" }));
+    expect(await changeAccountRemoval("account-a", "remove-a", "cancel")).not.toHaveProperty("errorCode");
+    expect(stopped.errorCode).toBe("SOURCE_STOP_UNCONFIRMED");
+  });
+
+  it.each([undefined, "private-token http://127.0.0.1:54321", "__proto__", "constructor", 7, null, { token: "secret" }])("omits unknown durable failure %j without discarding the operation", async errorCode => {
+    api.GET.mockResolvedValue(success({ ...operation, errorCode }));
+    expect((await fetchSessionAccountSwitch("session-a", "switch-a"))).not.toHaveProperty("errorCode");
+    api.GET.mockResolvedValue(success({ ...removal, errorCode }));
+    expect((await fetchAccountRemoval("account-a", "remove-a"))).not.toHaveProperty("errorCode");
+  });
+
+  it.each(["ready", "cancelled"])("suppresses stale switch diagnostics on %s including nested session state", async phase => {
+    const done = { ...operation, phase, errorCode: "TARGET_UNAVAILABLE" };
+    api.GET.mockResolvedValue(success(done));
+    expect(await fetchSessionAccountSwitch("session-a", "switch-a")).not.toHaveProperty("errorCode");
+    api.GET.mockResolvedValue(success({ sessionId: "session-a", provider: "codex", mode: "native", revision: 1, blocked: false, switch: done }));
+    expect((await fetchSessionAccountControl("session-a")).switch).not.toHaveProperty("errorCode");
+  });
+
+  it.each(["complete", "cancelled"])("suppresses stale removal diagnostics on %s", async phase => {
+    api.GET.mockResolvedValue(success({ ...removal, phase, errorCode: "REVOCATION_UNCONFIRMED" }));
+    expect(await fetchAccountRemoval("account-a", "remove-a")).not.toHaveProperty("errorCode");
+  });
   it.each(["retry", "cancel"] as const)("checks removal account ownership before and after %s", async action => {
     for (const foreign of ["accountId", "id"] as const) {
       api.GET.mockResolvedValue(success({ ...removal, [foreign]: "foreign" }));

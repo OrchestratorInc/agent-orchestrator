@@ -31,6 +31,7 @@ type sessionAccountSwitchDTO struct {
 	Policy           string    `json:"policy"`
 	NewConversation  bool      `json:"newConversation"`
 	Phase            string    `json:"phase"`
+	ErrorCode        string    `json:"errorCode,omitempty"`
 	RecoveryRequired bool      `json:"recoveryRequired"`
 	CanRetry         bool      `json:"canRetry"`
 	CreatedAt        time.Time `json:"createdAt"`
@@ -72,6 +73,9 @@ func newSessionAccountGetCommand(ctx *commandContext) *cobra.Command {
 				return errors.New("daemon returned account state for another session")
 			}
 			if asJSON {
+				if response.Switch != nil {
+					response.Switch.ErrorCode = accountControlFailureCode(response.Switch.Phase, response.Switch.ErrorCode)
+				}
 				return writeJSON(cmd.OutOrStdout(), response)
 			}
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "session: %s\nmode: %s\naccount: %s\nrevision: %d\nblocked: %t\n", response.SessionID, response.Mode, response.AccountID, response.Revision, response.Blocked); err != nil {
@@ -178,9 +182,16 @@ func validateSessionAccountID(id string) error {
 }
 
 func writeSessionAccountSwitch(cmd *cobra.Command, response sessionAccountSwitchDTO, asJSON bool) error {
+	response.ErrorCode = accountControlFailureCode(response.Phase, response.ErrorCode)
 	if asJSON {
 		return writeJSON(cmd.OutOrStdout(), response)
 	}
 	_, err := fmt.Fprintf(cmd.OutOrStdout(), "operation: %s\nsession: %s\nsource mode: %s\nsource account: %s\ntarget mode: %s\ntarget account: %s\npolicy: %s\nnew conversation: %t\nphase: %s\nrecovery required: %t\nretry available: %t\n", response.ID, response.SessionID, response.SourceMode, response.SourceAccountID, response.TargetMode, response.TargetAccountID, response.Policy, response.NewConversation, response.Phase, response.RecoveryRequired, response.CanRetry)
+	if err != nil {
+		return err
+	}
+	if response.ErrorCode != "" {
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "error code: %s\n", response.ErrorCode)
+	}
 	return err
 }

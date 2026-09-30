@@ -11,6 +11,46 @@ export type AccountRemovalImpact = components["schemas"]["AccountsManagerRemoval
 export type AccountRemovalRequest = components["schemas"]["AccountsManagerRemovalRequest"];
 export type AccountRemovalReference = { accountId: string; operationId: string; request?: AccountRemovalRequest };
 
+const operationErrorCodes = {
+  ADMISSION_CHANGED: true,
+  SOURCE_CHANGED: true,
+  NATIVE_HISTORY_UNAVAILABLE: true,
+  SOURCE_INTAKE_UNAVAILABLE: true,
+  SOURCE_OWNERSHIP_UNCONFIRMED: true,
+  SOURCE_NOT_QUIESCENT: true,
+  TARGET_UNAVAILABLE: true,
+  TARGET_REVALIDATION_UNAVAILABLE: true,
+  REVOCATION_UNCONFIRMED: true,
+  SOURCE_STOP_UNCONFIRMED: true,
+  STOP_RECORD_UNCONFIRMED: true,
+  BINDING_COMMIT_UNCONFIRMED: true,
+  BINDING_SYNC_UNCONFIRMED: true,
+  START_RECORD_UNCONFIRMED: true,
+  SESSION_UNAVAILABLE: true,
+  PROJECT_UNAVAILABLE: true,
+  TARGET_START_UNCONFIRMED: true,
+  TARGET_NOT_READY: true,
+  OUTCOME_UNCONFIRMED: true,
+  DAEMON_RESTARTED: true,
+  CONTROLLER_CHANGED: true,
+  TARGET_STOP_UNCONFIRMED: true,
+  RETRY_COMMIT_UNCONFIRMED: true,
+  SESSION_INTAKE_UNAVAILABLE: true,
+  STOP_ADMISSION_CHANGED: true,
+  REVOCATION_RECORD_UNCONFIRMED: true,
+  FINAL_ADMISSION_CHANGED: true,
+  CREDENTIAL_REMOVAL_UNCONFIRMED: true,
+} satisfies Record<NonNullable<AccountSwitch["errorCode"] | AccountRemoval["errorCode"]>, true>;
+
+function safeOperationFailure<T extends AccountSwitch | AccountRemoval>(operation: T): T {
+  const { errorCode, ...state } = operation;
+  if (!["ready", "complete", "cancelled"].includes(operation.phase) && typeof errorCode === "string" && Object.hasOwn(operationErrorCodes, errorCode)) {
+    return { ...state, errorCode } as T;
+  }
+  return state as T;
+}
+
+
 const usageErrorKeys: Record<string, MessageKey> = {
   ACCOUNTS_MANAGER_USAGE_AUTHENTICATION_REQUIRED: "accountsManager.usage.authenticationRequired",
   ACCOUNTS_MANAGER_USAGE_ACCESS_DENIED: "accountsManager.usage.accessDenied",
@@ -82,7 +122,7 @@ function ownSwitch(operation: AccountSwitch, sessionId: string, operationId?: st
     || (operation.canRetry !== undefined && typeof operation.canRetry !== "boolean")) {
     throw new AccountControlError(502);
   }
-  return operation;
+  return safeOperationFailure(operation);
 }
 
 export async function fetchSessionAccountControl(sessionId: string, signal?: AbortSignal): Promise<SessionAccountState> {
@@ -91,8 +131,7 @@ export async function fetchSessionAccountControl(sessionId: string, signal?: Abo
   if (data.sessionId !== sessionId || !validMode(data.mode, data.accountId) || !validRevision(data.revision) || !validID(data.provider) || typeof data.blocked !== "boolean") {
     throw new AccountControlError(502);
   }
-  if (data.switch) ownSwitch(data.switch, sessionId);
-  return data;
+  return data.switch ? { ...data, switch: ownSwitch(data.switch, sessionId) } : data;
 }
 
 export async function startSessionAccountSwitch(sessionId: string, body: AccountSwitchRequest): Promise<AccountSwitch> {
@@ -166,7 +205,7 @@ function ownRemoval(operation: AccountRemoval, accountId: string, operationId: s
     || !["requested", "stopping", "revoked", "complete", "recovery_required", "cancelled"].includes(operation.phase)
     || typeof operation.canCancel !== "boolean" || typeof operation.recoveryRequired !== "boolean") throw new AccountControlError(502);
   ownImpact(operation.impact, accountId);
-  return operation;
+  return safeOperationFailure(operation);
 }
 
 export async function fetchAccountRemovalImpact(accountId: string, signal?: AbortSignal): Promise<AccountRemovalImpact> {

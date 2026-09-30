@@ -9970,6 +9970,37 @@ components:
         createdAt:
           format: date-time
           type: string
+        errorCode:
+          enum:
+          - ADMISSION_CHANGED
+          - SOURCE_CHANGED
+          - NATIVE_HISTORY_UNAVAILABLE
+          - SOURCE_INTAKE_UNAVAILABLE
+          - SOURCE_OWNERSHIP_UNCONFIRMED
+          - SOURCE_NOT_QUIESCENT
+          - TARGET_UNAVAILABLE
+          - TARGET_REVALIDATION_UNAVAILABLE
+          - REVOCATION_UNCONFIRMED
+          - SOURCE_STOP_UNCONFIRMED
+          - STOP_RECORD_UNCONFIRMED
+          - BINDING_COMMIT_UNCONFIRMED
+          - BINDING_SYNC_UNCONFIRMED
+          - START_RECORD_UNCONFIRMED
+          - SESSION_UNAVAILABLE
+          - PROJECT_UNAVAILABLE
+          - TARGET_START_UNCONFIRMED
+          - TARGET_NOT_READY
+          - OUTCOME_UNCONFIRMED
+          - DAEMON_RESTARTED
+          - CONTROLLER_CHANGED
+          - TARGET_STOP_UNCONFIRMED
+          - RETRY_COMMIT_UNCONFIRMED
+          - SESSION_INTAKE_UNAVAILABLE
+          - STOP_ADMISSION_CHANGED
+          - REVOCATION_RECORD_UNCONFIRMED
+          - FINAL_ADMISSION_CHANGED
+          - CREDENTIAL_REMOVAL_UNCONFIRMED
+          type: string
         id:
           type: string
         impact:
@@ -10115,6 +10146,37 @@ components:
           type: boolean
         createdAt:
           format: date-time
+          type: string
+        errorCode:
+          enum:
+          - ADMISSION_CHANGED
+          - SOURCE_CHANGED
+          - NATIVE_HISTORY_UNAVAILABLE
+          - SOURCE_INTAKE_UNAVAILABLE
+          - SOURCE_OWNERSHIP_UNCONFIRMED
+          - SOURCE_NOT_QUIESCENT
+          - TARGET_UNAVAILABLE
+          - TARGET_REVALIDATION_UNAVAILABLE
+          - REVOCATION_UNCONFIRMED
+          - SOURCE_STOP_UNCONFIRMED
+          - STOP_RECORD_UNCONFIRMED
+          - BINDING_COMMIT_UNCONFIRMED
+          - BINDING_SYNC_UNCONFIRMED
+          - START_RECORD_UNCONFIRMED
+          - SESSION_UNAVAILABLE
+          - PROJECT_UNAVAILABLE
+          - TARGET_START_UNCONFIRMED
+          - TARGET_NOT_READY
+          - OUTCOME_UNCONFIRMED
+          - DAEMON_RESTARTED
+          - CONTROLLER_CHANGED
+          - TARGET_STOP_UNCONFIRMED
+          - RETRY_COMMIT_UNCONFIRMED
+          - SESSION_INTAKE_UNAVAILABLE
+          - STOP_ADMISSION_CHANGED
+          - REVOCATION_RECORD_UNCONFIRMED
+          - FINAL_ADMISSION_CHANGED
+          - CREDENTIAL_REMOVAL_UNCONFIRMED
           type: string
         id:
           type: string
