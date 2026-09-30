@@ -129,6 +129,23 @@ describe("Cloud project settings", () => {
 		}));
 	});
 
+	it("preserves custom Cloud models outside the local catalog and excludes unsupported efforts", async () => {
+		mocks.localGet.mockResolvedValue({ data: { agent: "codex", selectionMode: "catalog", allowCustom: true,
+			models: [{ id: "local-model", label: "Local model", efforts: ["high", "ultra"] }],
+		} });
+		mount();
+		const worker = await screen.findByRole("button", { name: "Worker model" });
+		expect(worker).toHaveTextContent("worker-model · Max");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		await userEvent.click(worker);
+		await userEvent.click(screen.getByRole("menuitem", { name: /Reasoning effort/ }));
+		expect(screen.queryByRole("menuitemradio", { name: "Ultra" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
+			config: { worker: { agent: "codex", agentConfig: { model: "worker-model", mode: "", effort: "high", permissions: "" } } },
+		}));
+	});
+
 	it("shows Cloud lookup errors without looking up a local project", async () => {
 		mocks.get.mockRejectedValue(new Error("Cloud unavailable"));
 		mount();

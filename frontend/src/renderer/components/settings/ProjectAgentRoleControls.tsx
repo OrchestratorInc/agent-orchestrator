@@ -21,6 +21,7 @@ export function AgentModelField({
 	onEffortChange,
 	onValidityChange,
 	allowCustomFallback = false,
+	supportedEfforts,
 }: {
 	role: "worker" | "orchestrator" | "reviewer";
 	agentId: string;
@@ -33,6 +34,8 @@ export function AgentModelField({
 	onEffortChange: (value: string) => void;
 	onValidityChange: (valid: boolean) => void;
 	allowCustomFallback?: boolean;
+	/** Cloud accepts custom model IDs and validates effort at the harness boundary. */
+	supportedEfforts?: readonly string[];
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -98,6 +101,15 @@ export function AgentModelField({
 		);
 	}
 
+	const models = supportedEfforts
+		? (catalog?.models ?? []).map((item) => ({
+			...item,
+			efforts: item.efforts ? item.efforts.filter((value) => supportedEfforts.includes(value)) : [...supportedEfforts],
+		}))
+		: catalog?.models ?? [];
+	if (supportedEfforts && isConcreteModelID(model) && !models.some((item) => item.id === model)) {
+		models.push({ id: model, label: model, efforts: [...supportedEfforts] });
+	}
 	const customModelEntry = catalog?.customModelEntry ?? (catalog?.allowCustom || allowCustomFallback ? "direct" : "none");
 	const refreshCatalog = async () => {
 		const refreshed = await refreshAgentModels(agentId, projectId);
@@ -114,11 +126,11 @@ export function AgentModelField({
 	return (
 		<>
 			<div className="min-w-0">
-				<div className="flex min-w-0 items-center gap-2">
+				<div className="min-w-0">
 					<AgentModelCombobox
 						aria-label={label}
 						value={model}
-						models={catalog?.models ?? []}
+						models={models}
 						allowCustom={catalog?.allowCustom}
 						customModelEntry={customModelEntry}
 						agentLabel={agentId}
@@ -166,7 +178,7 @@ export function ProjectAgentRoleHeader() {
 	);
 }
 
-export function ProjectAutoReviewToggle({ checked, onCheckedChange }: { checked: boolean; onCheckedChange: (checked: boolean) => void }) {
+export function ProjectAutoReviewToggle({ checked, onCheckedChange, description }: { checked: boolean; onCheckedChange: (checked: boolean) => void; description?: string }) {
 	const { t } = useTranslation();
 	return (
 		<div className="settings-row-bar">
@@ -177,13 +189,13 @@ export function ProjectAutoReviewToggle({ checked, onCheckedChange }: { checked:
 						<button
 							type="button"
 							className="inline-flex size-5 items-center justify-center rounded-md text-settings-muted transition-colors hover:bg-settings-menu-selected hover:text-settings-label focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
-							aria-label={t("settings.project.autoReviewDescription")}
+							aria-label={description ?? t("settings.project.autoReviewDescription")}
 						>
 							<Info className="size-icon-sm" aria-hidden="true" />
 						</button>
 					</TooltipTrigger>
 					<TooltipContent className="max-w-72 leading-normal" side="top">
-						{t("settings.project.autoReviewDescription")}
+						{description ?? t("settings.project.autoReviewDescription")}
 					</TooltipContent>
 				</Tooltip>
 			</div>
