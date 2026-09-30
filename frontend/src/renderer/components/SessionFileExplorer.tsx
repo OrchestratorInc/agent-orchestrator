@@ -187,6 +187,9 @@ export function SessionFileExplorer({
 	// the picker's only entry is the already-selected Workspace, so it is hidden
 	// until there is something to choose.
 	const showSourcePicker = sourceMenu !== null || source.kind !== "workspace" || sourceOptions.length > 1;
+	// Workspace is its own item (it is not a branch) and Branch › lists only PRs,
+	// so both appear only when there is a PR to switch to.
+	const showBranchMenu = sourceOptions.length > 1;
 	const currentSourceLabel = sourceOptions.find((option) => option.value === sourceValue)?.label;
 	const selectSource = (value: string) => {
 		setSourceNotice("");
@@ -259,7 +262,7 @@ export function SessionFileExplorer({
 								</span>
 							</DropdownMenuItem>
 						))}
-						{sourceMenu && sourceMenu.scopes.length > 0 ? <DropdownMenuSeparator /> : null}
+						{sourceMenu && sourceMenu.scopes.length > 0 && (sourceMenu.commits.length > 0 || showBranchMenu) ? <DropdownMenuSeparator /> : null}
 						{sourceMenu && sourceMenu.commits.length > 0 ? (
 							<DropdownMenuSub>
 								<DropdownMenuSubTrigger className={cn(sourceMenu.commits.some((commit) => commit.selected) && "text-foreground")}>
@@ -280,10 +283,18 @@ export function SessionFileExplorer({
 								</DropdownMenuSubContent>
 							</DropdownMenuSub>
 						) : null}
-						<DropdownMenuSub>
+						{showBranchMenu ? (
+							<DropdownMenuItem className="gap-1.5" onSelect={() => selectSource("workspace")}>
+								<span className="min-w-0 truncate">{t("files.explorer.workspaceSource")}</span>
+								<span className="ml-auto flex size-4 shrink-0 items-center justify-center">
+									{sourceValue === "workspace" ? <Check aria-hidden="true" className="text-logo-accent" /> : null}
+								</span>
+							</DropdownMenuItem>
+						) : null}
+						{showBranchMenu ? <DropdownMenuSub>
 							<DropdownMenuSubTrigger>{t("files.branch")}</DropdownMenuSubTrigger>
 							<DropdownMenuSubContent className="w-max max-w-[min(28rem,calc(100vw_-_2rem))]">
-								{sourceOptions.map((option) => (
+								{sourceOptions.filter((option) => option.value !== "workspace").map((option) => (
 									<DropdownMenuItem className="gap-2" key={option.value} onSelect={() => selectSource(option.value)}>
 										<span className="min-w-0 flex-1 truncate">{option.label}</span>
 										<span className="flex size-4 shrink-0 items-center justify-center">
@@ -292,7 +303,7 @@ export function SessionFileExplorer({
 									</DropdownMenuItem>
 								))}
 							</DropdownMenuSubContent>
-						</DropdownMenuSub>
+						</DropdownMenuSub> : null}
 					</DropdownMenuContent>
 				</DropdownMenu>
 				) : null}
