@@ -133,6 +133,12 @@ func (b HarnessBuilder) BuildInteractive(
 	}
 	var providerArgs []string
 	switch launch.Harness {
+	case "claude-code":
+		if launch.Kind == "reviewer" {
+			// The shared checkout contains the worker's AO hooks. A separate
+			// CLAUDE_CONFIG_DIR alone does not exclude project/local settings.
+			providerArgs = []string{"--setting-sources", "user"}
+		}
 	case "codex":
 		if launch.Kind != "reviewer" {
 			providerArgs = codexActivityHookArgs(hookHelperPath(b.DataDir))

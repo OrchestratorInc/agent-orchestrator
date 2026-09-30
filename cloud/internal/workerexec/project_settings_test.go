@@ -1,6 +1,7 @@
 package workerexec
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,6 +10,48 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
+
+func TestClaudeReviewerExcludesSharedWorkspaceHooks(t *testing.T) {
+	root, workspace, workerHome := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", workerHome)
+	credential := worker.CredentialResponse{Provider: "claude-code", CredentialType: "api_key", Secret: "test"}
+	workerCommand, err := (HarnessBuilder{DataDir: root}).BuildInteractive(worker.LaunchContext{
+		SessionID: "worker", Kind: "worker", Harness: "claude-code", Mode: "standard",
+	}, credential, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workerCommand.Cleanup != nil {
+		defer workerCommand.Cleanup()
+	}
+	settingsPath := filepath.Join(workspace, ".claude", "settings.local.json")
+	workerSettings, err := os.ReadFile(settingsPath)
+	if err != nil || !bytes.Contains(workerSettings, []byte(" hooks claude-code session-start")) {
+		t.Fatalf("worker hook not installed: %s, %v", workerSettings, err)
+	}
+	if slices.Contains(workerCommand.Args, "--setting-sources") {
+		t.Fatalf("worker no longer loads workspace hooks: %#v", workerCommand.Args)
+	}
+	reviewerCommand, err := (HarnessBuilder{DataDir: root, ConfigRoot: filepath.Join(root, "reviewer")}).BuildInteractive(worker.LaunchContext{
+		SessionID: "review-run", Kind: "reviewer", Harness: "claude-code", Mode: "standard",
+	}, credential, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reviewerCommand.Cleanup != nil {
+		defer reviewerCommand.Cleanup()
+	}
+	if !containsAdjacent(reviewerCommand.Args, "--setting-sources", "user") {
+		t.Fatalf("reviewer can load the worker's workspace hooks: %#v", reviewerCommand.Args)
+	}
+	if reviewerCommand.Env["CLAUDE_CONFIG_DIR"] == workerHome {
+		t.Fatal("reviewer uses the worker's user settings")
+	}
+	after, err := os.ReadFile(settingsPath)
+	if err != nil || !bytes.Equal(after, workerSettings) {
+		t.Fatalf("reviewer changed shared workspace hooks: %s, %v", after, err)
+	}
+}
 
 func TestInteractiveLaunchConsumesProjectAgentSettings(t *testing.T) {
 	for _, test := range []struct {
