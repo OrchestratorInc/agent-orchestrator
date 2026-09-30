@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
@@ -93,6 +93,9 @@ export function CloudCredentialDialog() {
 	const [secret, setSecret] = useState("");
 	const [phase, setPhase] = useState<Phase>("idle");
 	const [error, setError] = useState<string | null>(null);
+	// Set when the user cancels the browser login, so the resulting rejection is
+	// treated as a cancellation rather than shown as an error.
+	const loginCancelledRef = useRef(false);
 
 	const creds = useMemo(() => AGENTS.find((a) => a.agent === agent)?.creds ?? AGENTS[0].creds, [agent]);
 	const agentOptions = useMemo(() => AGENTS.map((entry) => ({ value: entry.agent, label: entry.label })), []);
@@ -132,6 +135,19 @@ export function CloudCredentialDialog() {
 
 	const canSubmit = phase !== "submitting" && needsSecret && secret.trim() !== "" && org !== undefined;
 	const busy = phase === "submitting";
+	const browserLoginPending = busy && !needsSecret;
+
+	const cancelBrowserLogin = () => {
+		loginCancelledRef.current = true;
+		void aoBridge.cloud.cancelProviderAuth();
+	};
+
+	// Closing the dialog mid-login (X, Escape) abandons the login rather than
+	// leaving the agent CLI waiting in the background.
+	const onOpenChange = (next: boolean) => {
+		if (!next && browserLoginPending) cancelBrowserLogin();
+		setOpen(next);
+	};
 
 	const submit = async () => {
 		if (!canSubmit || org === undefined) return;
@@ -160,25 +176,27 @@ export function CloudCredentialDialog() {
 		if (org === undefined || phase === "submitting") return;
 		setPhase("submitting");
 		setError(null);
+		loginCancelledRef.current = false;
 		try {
 			await aoBridge.cloud.connectProviderAuth({ baseUrl, orgId: org.id, provider: agent });
 			await queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey(org.id) });
 			setPhase("success");
 		} catch (err) {
 			setPhase("idle");
+			if (loginCancelledRef.current) return;
 			setError(err instanceof Error ? err.message : t("cloudCredential.failed"));
 		}
 	};
 
 	return (
-		<Dialog open={open} onOpenChange={setOpen}>
+		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className={centeredOnboardingDialogClass} showCloseButton={false}>
 				<DialogClose asChild>
 					<button
 						type="button"
 						className="settings-dialog-close-button settings-close-button"
 						aria-label={t("common.close")}
-						disabled={busy}
+						disabled={busy && !browserLoginPending}
 					>
 						<X className="size-icon-base" aria-hidden="true" />
 					</button>
@@ -291,8 +309,8 @@ export function CloudCredentialDialog() {
 				)}
 
 				<div className={cn(onboardingFooterActionsEndClass, "px-4 pb-4")}>
-					{phase === "submitting" && !needsSecret ? (
-						<Button type="button" variant="outline" onClick={() => void aoBridge.cloud.cancelProviderAuth()}>
+					{browserLoginPending ? (
+						<Button type="button" variant="outline" onClick={cancelBrowserLogin}>
 							{t("cloudCredential.cancel")}
 						</Button>
 					) : (
