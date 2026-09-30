@@ -174,6 +174,66 @@ describe("Cloud project settings", () => {
 		}));
 	});
 
+	it.each([
+		["worker", "Worker", "codex"], ["worker", "Worker", "claude-code"],
+		["orchestrator", "Orchestrator", "codex"], ["orchestrator", "Orchestrator", "claude-code"],
+		["reviewer", "Reviewer", "codex"], ["reviewer", "Reviewer", "claude-code"],
+	] as const)("roundtrips effort-only %s settings for %s with %s", async (role, label, agent) => {
+		const agentConfig = { effort: "high" as const, permissions: "auto" as const };
+		if (role === "reviewer") project.config.reviewers = [{ harness: agent, agentConfig }];
+		else project.config[role] = { agent, agentConfig };
+		mocks.localGet.mockResolvedValue({ data: { selectionMode: "catalog", allowCustom: true,
+			models: [{ id: "local-default", label: "Local default", isDefault: true, efforts: ["low", "high", "max"], defaultEffort: "low" }],
+		} });
+		const view = mount();
+		expect(await screen.findByRole("button", { name: `${label} model` })).toHaveTextContent("Agent default · High");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		const expectedPatch = (effort: "high" | "low") => {
+			const config = { model: "", mode: "", effort, permissions: "bypass-permissions" };
+			return { config: role === "reviewer" ? { reviewers: [{ harness: agent, agentConfig: config }] } : { [role]: { agent, agentConfig: config } } };
+		};
+		await choose(`${label} approval`, "Bypass permissions");
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", expectedPatch("high")));
+		await userEvent.click(screen.getByRole("button", { name: `${label} model` }));
+		await userEvent.click(screen.getByRole("menuitem", { name: /Reasoning effort/ }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", expectedPatch("low")));
+		view.unmount();
+		mount();
+		expect(await screen.findByRole("button", { name: `${label} model` })).toHaveTextContent("Agent default · Low");
+		expect(screen.getByRole("button", { name: `${label} approval` })).toHaveTextContent("Bypass permissions");
+	});
+
+	it("preserves supported effort when clearing an explicit Cloud model override", async () => {
+		project.config.worker = { agent: "codex", agentConfig: { model: "worker-model", effort: "high", permissions: "auto" } };
+		mount();
+		await screen.findByRole("button", { name: "Worker model" });
+		await choose("Worker model", "Use agent model");
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
+			config: { worker: { agent: "codex", agentConfig: { model: "", mode: "", effort: "high", permissions: "auto" } } },
+		}));
+		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent("Agent default · High");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("blocks unsupported effort without a model override until a supported effort is selected", async () => {
+		project.config.worker = { agent: "claude-code", agentConfig: { effort: "xhigh", permissions: "auto" } };
+		const onSaveState = vi.fn();
+		mount("agents", onSaveState);
+		expect(await screen.findByRole("alert")).toHaveTextContent("Worker model tuning is no longer supported");
+		await choose("Worker approval", "Bypass permissions");
+		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed" })));
+		expect(mocks.patch).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: /Reasoning effort/ }));
+		expect(screen.queryByRole("menuitemradio", { name: "Extra high" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
+			config: { worker: { agent: "claude-code", agentConfig: { model: "", mode: "", effort: "high", permissions: "bypass-permissions" } } },
+		}));
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
 	it("offers only the harnesses Cloud can launch", async () => {
 		mount();
 		await screen.findByRole("button", { name: "Worker agent" });
