@@ -487,6 +487,11 @@ type PullRequestResponse struct {
 	Base struct {
 		Ref string `json:"ref"`
 	} `json:"base"`
+	// Mergeable and MergeableState come from the REST pulls endpoint, which — unlike
+	// GraphQL — triggers GitHub's async mergeability computation. They resolve the
+	// GraphQL "UNKNOWN" that otherwise strands a PR at mergeability=unknown.
+	Mergeable      *bool  `json:"mergeable"`
+	MergeableState string `json:"mergeable_state"`
 }
 
 // GetPullRequestRecord fetches the full pull request fields required to
@@ -517,6 +522,17 @@ func (c *Client) GetPullRequestRecord(
 		return PullRequestResponse{}, errors.New("GitHub returned an incomplete pull request response")
 	}
 	return pullRequest, nil
+}
+
+// MergePullRequest asks GitHub to squash the exact head the user reviewed.
+// GitHub rejects a moved head or unmet branch protection atomically.
+func (c *Client) MergePullRequest(ctx context.Context, token, owner, repo string, number int, expectedHeadSHA string) error {
+	if owner == "" || repo == "" || number <= 0 || expectedHeadSHA == "" {
+		return errors.New("pull request identity and expected head are required")
+	}
+	return c.userJSON(ctx, token, http.MethodPut,
+		"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/pulls/"+strconv.Itoa(number)+"/merge",
+		map[string]string{"sha": expectedHeadSHA, "merge_method": "squash"}, nil)
 }
 
 // CreatePullRequestInput is the request to open a pull request.
@@ -913,6 +929,42 @@ func (c *Client) repositoryWriteToken(
 	return response, nil
 }
 
+// repositoryWriteTokenForRepos is repositoryWriteToken's multi-repository
+// counterpart: it mints one short-lived installation token scoped to a set of
+// repositories with write access to their contents and pull requests. It backs
+// a worker's push and gh-CLI pull-request creation across the project's primary
+// repository plus any declared extra repositories that resolve within the same
+// installation — the write-side mirror of repositoryReadTokenForRepos. The
+// scope is exactly the given IDs; nothing is granted installation-wide.
+func (c *Client) repositoryWriteTokenForRepos(
+	ctx context.Context,
+	installationID int64,
+	repositoryIDs []int64,
+) (installationAccessToken, error) {
+	if installationID <= 0 || len(repositoryIDs) == 0 {
+		return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
+	}
+	for _, id := range repositoryIDs {
+		if id <= 0 {
+			return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
+		}
+	}
+	response, err := c.createInstallationToken(ctx, installationID, map[string]any{
+		"repository_ids": repositoryIDs,
+		"permissions": map[string]string{
+			"contents":      "write",
+			"pull_requests": "write",
+		},
+	})
+	if err != nil {
+		return installationAccessToken{}, err
+	}
+	if response.ExpiresAt.IsZero() || !response.ExpiresAt.After(c.now()) {
+		return installationAccessToken{}, errors.New("GitHub returned an expired installation token")
+	}
+	return response, nil
+}
+
 // statusReadToken mints a short-lived installation token scoped to one
 // repository with read access to pull requests and checks — the permissions
 // GitHub's fine-grained token model requires to fetch PR/review/check-run
@@ -984,8 +1036,10 @@ func (c *Client) GetPullRequest(
 
 // CheckRun is one GitHub Checks API run against a commit.
 type CheckRun struct {
+	Name       string `json:"name"`
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
+	HTMLURL    string `json:"html_url"`
 }
 
 // ListCheckRuns returns every check run GitHub has recorded against ref
@@ -1111,6 +1165,11 @@ func (c *Client) appJSON(ctx context.Context, method, path string, body, destina
 
 func (c *Client) userJSON(ctx context.Context, token, method, path string, body, destination any) error {
 	return c.jsonRequest(ctx, method, c.apiBaseURL+path, "Bearer "+token, body, destination)
+}
+
+func (c *Client) graphQL(ctx context.Context, token, query string, variables map[string]any, destination any) error {
+	return c.jsonRequest(ctx, http.MethodPost, c.apiBaseURL+"/graphql", "Bearer "+token,
+		map[string]any{"query": query, "variables": variables}, destination)
 }
 
 func (c *Client) jsonRequest(

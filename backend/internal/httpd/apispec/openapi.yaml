@@ -6229,6 +6229,14 @@ paths:
         schema:
           description: Stable URL of the selected associated pull request.
           type: string
+      - description: Exact SHA of one of the pull request's commits; reads that commit's
+          change instead of the whole pull request.
+        in: query
+        name: commitSha
+        schema:
+          description: Exact SHA of one of the pull request's commits; reads that
+            commit's change instead of the whole pull request.
+          type: string
       responses:
         "200":
           content:
@@ -6297,6 +6305,14 @@ paths:
         name: sourceUrl
         schema:
           description: Stable URL of the selected associated pull request.
+          type: string
+      - description: Exact SHA of one of the pull request's commits; before is its
+          first parent, after is the commit.
+        in: query
+        name: commitSha
+        schema:
+          description: Exact SHA of one of the pull request's commits; before is its
+            first parent, after is the commit.
           type: string
       responses:
         "200":
@@ -8406,19 +8422,20 @@ paths:
       operationId: getSystemInstallStatus
       parameters:
       - description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-          copilot, or cloudflared.'
+          opencode-v2, copilot, or cloudflared.'
         in: path
         name: target
         required: true
         schema:
           description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-            copilot, or cloudflared.'
+            opencode-v2, copilot, or cloudflared.'
           enum:
           - tmux
           - gh
           - claude
           - codex
           - opencode
+          - opencode-v2
           - copilot
           - cloudflared
           type: string
@@ -8454,19 +8471,20 @@ paths:
       operationId: startSystemInstall
       parameters:
       - description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-          copilot, or cloudflared.'
+          opencode-v2, copilot, or cloudflared.'
         in: path
         name: target
         required: true
         schema:
           description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-            copilot, or cloudflared.'
+            opencode-v2, copilot, or cloudflared.'
           enum:
           - tmux
           - gh
           - claude
           - codex
           - opencode
+          - opencode-v2
           - copilot
           - cloudflared
           type: string
@@ -8819,6 +8837,8 @@ components:
           type: string
         label:
           type: string
+        notice:
+          type: string
         reason:
           type: string
         recommended:
@@ -8856,6 +8876,8 @@ components:
           items:
             $ref: '#/components/schemas/AgentInstallMethod'
           type: array
+        notice:
+          type: string
         reason:
           type: string
       required:
@@ -10195,6 +10217,7 @@ components:
           - cursor
           - kilocode
           - opencode
+          - opencode-v2
           - kiro
           - pi
           - agy
@@ -11101,6 +11124,7 @@ components:
           - codex
           - aider
           - opencode
+          - opencode-v2
           - grok
           - droid
           - amp
@@ -11108,6 +11132,7 @@ components:
           - crush
           - cursor
           - qwen
+          - gemini
           - copilot
           - goose
           - auggie
@@ -11122,9 +11147,12 @@ components:
           - pi
           - kimchi
           - omp
+          - fx
           - prime-agent
           - autohand
           - unreal-agent
+          - mimo-code
+          - deepseek-harness
           - fake
           type: string
         approvalMode:
@@ -11696,6 +11724,10 @@ components:
           description: Server-owned installation method selected for this harness
             job.
           type: string
+        notice:
+          description: Fixed user-visible consequence to acknowledge before running
+            this install.
+          type: string
         output:
           description: Combined stdout+stderr from the install command, tail-capped
             to the last ~4000 bytes.
@@ -11727,6 +11759,7 @@ components:
           - codex
           - cursor
           - opencode
+          - opencode-v2
           - aider
           - copilot
           - grok
@@ -11739,6 +11772,7 @@ components:
           - cline
           - goose
           - qwen
+          - gemini
           - continue
           - devin
           - kiro
@@ -11750,7 +11784,10 @@ components:
           - kimchi
           - prime-agent
           - omp
+          - fx
           - unreal-agent
+          - mimo-code
+          - deepseek-harness
           - cloudflared
           type: string
         updatedAt:
@@ -11966,6 +12003,10 @@ components:
       type: object
     ListPRFilesResponse:
       properties:
+        commits:
+          items:
+            $ref: '#/components/schemas/WorkspaceCommitSummary'
+          type: array
         files:
           items:
             $ref: '#/components/schemas/WorkspaceFileSummary'
@@ -11979,6 +12020,7 @@ components:
       required:
       - sessionId
       - files
+      - commits
       - truncated
       - summary
       type: object
@@ -13125,6 +13167,8 @@ components:
           maxLength: 4096
           minLength: 1
           type: string
+        userAuthored:
+          type: boolean
       required:
       - message
       type: object
@@ -13818,6 +13862,7 @@ components:
           - cursor
           - kilocode
           - opencode
+          - opencode-v2
           - kiro
           - pi
           - agy
@@ -13948,6 +13993,7 @@ components:
           - codex
           - aider
           - opencode
+          - opencode-v2
           - grok
           - droid
           - amp
@@ -13955,6 +14001,7 @@ components:
           - crush
           - cursor
           - qwen
+          - gemini
           - copilot
           - goose
           - auggie
@@ -13969,9 +14016,12 @@ components:
           - pi
           - kimchi
           - omp
+          - fx
           - prime-agent
           - autohand
           - unreal-agent
+          - mimo-code
+          - deepseek-harness
           type: string
         issueId:
           type: string
@@ -14241,6 +14291,7 @@ components:
           enum:
           - claude-code
           - codex
+          - fx
           type: string
       required:
       - targetHarness
@@ -14317,6 +14368,7 @@ components:
           - cursor
           - kilocode
           - opencode
+          - opencode-v2
           - kiro
           - pi
           - agy

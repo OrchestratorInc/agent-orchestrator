@@ -1,6 +1,6 @@
 import { Feather } from "../lib/icons";
 import { useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActivityIndicator,
 	Alert,
@@ -30,9 +30,11 @@ import { useApp } from "../lib/store";
 import { MINUTE_MS, useNow } from "../lib/useNow";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
-import { Dot, EmptyState, HeaderIconButton, ScreenHeader } from "../lib/ui";
+import { Button, Dot, EmptyState, HeaderIconButton, ScreenHeader } from "../lib/ui";
+import { UnpairedState } from "../lib/UnpairedState";
 import { press, space, type } from "../lib/tokens";
 import { backOr } from "../lib/backNavigation";
+import { shouldKeepPolling, userFacingError } from "../lib/connectionError";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
@@ -46,7 +48,7 @@ export default function NotificationsScreen() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { config, connection, sessions, loading: sessionsLoading, restore } = useApp();
+	const { config, connection, unreachable, errorStatus, sessions, loading: sessionsLoading, restore } = useApp();
 	const [restoringId, setRestoringId] = useState<string>();
 	// A brief line rather than an Alert: the row is still there to act on, and
 	// a modal would make a dead tap feel like an error.
@@ -88,7 +90,7 @@ export default function NotificationsScreen() {
 				setNextCursor(page.nextCursor);
 				setUnreadCount(page.unreadCount);
 			} catch (cause) {
-				setError(cause instanceof Error ? cause.message : "Couldn't load notifications.");
+				setError(userFacingError(cause, "Couldn't load notifications."));
 			} finally {
 				setLoading(false);
 				setRefreshing(false);
@@ -103,6 +105,25 @@ export default function NotificationsScreen() {
 		// Paging state changes must not refetch the first page.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [config]);
+
+	// A load that failed while the desktop was unreachable retries as soon as the
+	// board's poll reconnects, which is what the offline state promises. Keyed on
+	// the reconnect itself: `load` clears `error` as it starts, so keying on the
+	// error would loop against an endpoint that keeps failing while connected.
+	const previousConnection = useRef(connection);
+	useEffect(() => {
+		const reconnected = previousConnection.current !== "open" && connection === "open";
+		previousConnection.current = connection;
+		if (reconnected && error) void load("refresh");
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [connection]);
+	// The board's poll is the app's view of the link: when it is down, say so in
+	// the board's words rather than as a failed load.
+	const offline = Boolean(config) && unreachable && Boolean(error);
+	// A rejected password (or the lockout it leads to) stops the board's poll for
+	// good. Retrying would only spend another failed attempt toward the lockout,
+	// so offer the fix instead, as the board does.
+	const rejected = errorStatus !== null && !shouldKeepPolling(errorStatus);
 
 	function open(notification: NotificationRecord) {
 		haptics.tap();
@@ -147,7 +168,7 @@ export default function NotificationsScreen() {
 				haptics.success();
 				router.navigate(`/session/${sessionId}`);
 			})
-			.catch((cause) => Alert.alert("Couldn't restore the session", cause instanceof Error ? cause.message : String(cause)))
+			.catch((cause) => Alert.alert("Couldn't restore the session", userFacingError(cause)))
 			.finally(() => setRestoringId(undefined));
 	}
 
@@ -218,7 +239,7 @@ export default function NotificationsScreen() {
 						error && items.length > 0 ? (
 							<View style={styles.inlineError}>
 								<Feather name="alert-circle" size={15} color={t.red} />
-								<Text selectable style={styles.inlineErrorText}>{error}</Text>
+								<Text selectable style={styles.inlineErrorText}>{offline ? "Not connected to your desktop. Showing the last notifications loaded." : error}</Text>
 							</View>
 						) : null
 					}
@@ -245,16 +266,29 @@ export default function NotificationsScreen() {
 						) : null
 					}
 					ListEmptyComponent={
-						<EmptyState
-							icon={error ? "alert-circle" : config ? "check-circle" : "server"}
-							title={error ? "Couldn't load notifications" : config ? "All caught up" : "No desktop paired"}
-							message={
-								error ??
-								(config
-									? "Updates from workers and pull requests will appear here when they need you."
-									: "Pair this phone with AO to receive worker and pull request updates.")
-							}
-						/>
+						offline ? (
+							<EmptyState
+								icon="wifi-off"
+								title="Not connected to your desktop"
+								message="Notifications load once the app reconnects."
+								action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={() => void load("refresh")} />}
+							/>
+						) : !config && !error ? (
+							// Shared with the tabs: "Connecting…" while the launch race runs,
+							// the pairing prompt only once it has found no machine.
+							<UnpairedState />
+						) : (
+							<EmptyState
+								icon={error ? "alert-circle" : "check-circle"}
+								title={error ? "Couldn't load notifications" : "All caught up"}
+								message={error ?? "Updates from workers and pull requests will appear here when they need you."}
+								action={
+									!error ? undefined
+										: rejected ? <Button title="Scan pairing code" icon="maximize" onPress={() => router.push("/pair")} />
+										: <Button title="Retry" icon="refresh-cw" variant="ghost" onPress={() => void load("refresh")} />
+								}
+							/>
+						)
 					}
 				/>
 			)}

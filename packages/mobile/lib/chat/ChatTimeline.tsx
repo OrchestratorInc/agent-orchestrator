@@ -65,6 +65,7 @@ import {
 	type ConversationGroup,
 } from "./timelineModel";
 import { type, space } from "../tokens";
+import { userFacingError } from "../connectionError";
 
 type TimelineRow =
 	| { kind: "single"; key: string; items: [ConversationItem] }
@@ -677,7 +678,7 @@ function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?
 							setRollingBack(true);
 							setRollbackError(undefined);
 							void onRollback(turn.id).then(() => setConfirming(false)).catch((cause) => {
-								setRollbackError(cause instanceof Error ? cause.message : String(cause));
+								setRollbackError(userFacingError(cause));
 							}).finally(() => setRollingBack(false));
 						}} />
 					</View>
@@ -787,7 +788,7 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 			return <ElicitationAction key={decision.id} label={label} width={actionControlWidth(label, index === 0)} primary={index === 0} disabled={busy || Boolean(submitting) || !activity.requestId} onPress={() => {
 				setSubmitting(decision.id);
 				setSubmitError(undefined);
-				void onDecide(activity.requestId ?? "", decision.id).catch((cause) => setSubmitError(cause instanceof Error ? cause.message : String(cause))).finally(() => setSubmitting(undefined));
+				void onDecide(activity.requestId ?? "", decision.id).catch((cause) => setSubmitError(userFacingError(cause))).finally(() => setSubmitting(undefined));
 			}} />;
 		})}</View> : <Text style={[styles.partial, { color: t.amber }]}>The agent offered no decisions AO can present. Open diagnostics from the host.</Text>}
 		{submitError ? <Text accessibilityRole="alert" selectable style={styles.validation}>{submitError}</Text> : null}
@@ -818,7 +819,7 @@ function UserInputCard({ activity, busy, onResolve, handledBelow }: { activity: 
 		setSubmitting(true);
 		setSubmitError(undefined);
 		try { await onResolve(activity.requestId, action, content); }
-		catch (cause) { setSubmitError(cause instanceof Error ? cause.message : String(cause)); }
+		catch (cause) { setSubmitError(userFacingError(cause)); }
 		finally { setSubmitting(false); }
 	};
 	const submit = () => {

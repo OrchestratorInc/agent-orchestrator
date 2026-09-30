@@ -2941,6 +2941,7 @@ export interface components {
             expectedDestination?: string;
             id: string;
             label: string;
+            notice?: string;
             reason?: string;
             recommended: boolean;
             reinstallAvailable: boolean;
@@ -2956,6 +2957,7 @@ export interface components {
             expectedDestination?: string;
             method: string;
             methods: components["schemas"]["AgentInstallMethod"][];
+            notice?: string;
             reason?: string;
         };
         AgentInstallationObservation: {
@@ -3446,7 +3448,7 @@ export interface components {
             prs: components["schemas"]["SessionPRFacts"][];
             reviewerConfig?: components["schemas"]["AgentConfig"];
             /** @enum {string} */
-            reviewerHarness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
+            reviewerHarness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "opencode-v2" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
             /** @enum {string} */
             scmStatus?: "pr_open" | "draft" | "ci_failed" | "review_pending" | "changes_requested" | "approved" | "mergeable" | "merged";
             /** @enum {string} */
@@ -3775,7 +3777,7 @@ export interface components {
         };
         DelegateTaskRequest: {
             /** @enum {string} */
-            agent?: "claude-code" | "codex" | "aider" | "opencode" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "prime-agent" | "autohand" | "unreal-agent" | "fake";
+            agent?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "mimo-code" | "deepseek-harness" | "fake";
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             attachments?: components["schemas"]["AttachmentInput"][];
@@ -3996,6 +3998,8 @@ export interface components {
             finishedAt?: null | string;
             /** @description Server-owned installation method selected for this harness job. */
             method?: string;
+            /** @description Fixed user-visible consequence to acknowledge before running this install. */
+            notice?: string;
             /** @description Combined stdout+stderr from the install command, tail-capped to the last ~4000 bytes. */
             output?: string;
             /** Format: date-time */
@@ -4009,7 +4013,7 @@ export interface components {
              * @description Fixed install target this job ran (or is running) for.
              * @enum {string}
              */
-            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "unreal-agent" | "cloudflared";
+            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "opencode-v2" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "mimo-code" | "deepseek-harness" | "cloudflared";
             /** Format: date-time */
             updatedAt?: null | string;
         };
@@ -4094,6 +4098,7 @@ export interface components {
             unresolvedCount: number;
         };
         ListPRFilesResponse: {
+            commits: components["schemas"]["WorkspaceCommitSummary"][];
             files: components["schemas"]["WorkspaceFileSummary"][];
             sessionId: string;
             summary: components["schemas"]["WorkspaceSummary"];
@@ -4544,6 +4549,7 @@ export interface components {
         SendSessionMessageRequest: {
             attachment?: components["schemas"]["AttachmentInput"];
             message: string;
+            userAuthored?: boolean;
         };
         SendSessionMessageResponse: {
             message: string;
@@ -4821,7 +4827,7 @@ export interface components {
         SetSessionReviewerRequest: {
             agentConfig?: components["schemas"]["AgentConfig"];
             /** @enum {string} */
-            harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
+            harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "opencode-v2" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
         };
         SettingsResponse: {
             chatHarnesses: string[];
@@ -4864,7 +4870,7 @@ export interface components {
             displayName?: string;
             effort?: string;
             /** @enum {string} */
-            harness?: "claude-code" | "codex" | "aider" | "opencode" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "prime-agent" | "autohand" | "unreal-agent";
+            harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "mimo-code" | "deepseek-harness";
             issueId?: string;
             /** @enum {string} */
             kind?: "worker" | "orchestrator";
@@ -4985,7 +4991,7 @@ export interface components {
              * @description Agent harness to continue the logical AO session with.
              * @enum {string}
              */
-            targetHarness: "claude-code" | "codex";
+            targetHarness: "claude-code" | "codex" | "fx";
         };
         SystemRequirement: {
             /** @description Extra context: the resolved path when satisfied, or why it is not. */
@@ -5018,7 +5024,7 @@ export interface components {
         TriggerReviewRequest: {
             agentConfig?: components["schemas"]["AgentConfig"];
             /** @enum {string} */
-            harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
+            harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "opencode-v2" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
         };
         TriggerReviewResponse: {
             /** @description True when a new review pass was started; false when an existing run for the same commit was reused. */
@@ -13165,6 +13171,8 @@ export interface operations {
                 previousPath?: string;
                 /** @description Stable URL of the selected associated pull request. */
                 sourceUrl?: string;
+                /** @description Exact SHA of one of the pull request's commits; reads that commit's change instead of the whole pull request. */
+                commitSha?: string;
             };
             header?: never;
             path: {
@@ -13224,6 +13232,8 @@ export interface operations {
                 side?: "before" | "after";
                 /** @description Stable URL of the selected associated pull request. */
                 sourceUrl?: string;
+                /** @description Exact SHA of one of the pull request's commits; before is its first parent, after is the commit. */
+                commitSha?: string;
             };
             header?: never;
             path: {
@@ -15822,8 +15832,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description Install target identifier: tmux, gh, claude, codex, opencode, copilot, or cloudflared. */
-                target: "tmux" | "gh" | "claude" | "codex" | "opencode" | "copilot" | "cloudflared";
+                /** @description Install target identifier: tmux, gh, claude, codex, opencode, opencode-v2, copilot, or cloudflared. */
+                target: "tmux" | "gh" | "claude" | "codex" | "opencode" | "opencode-v2" | "copilot" | "cloudflared";
             };
             cookie?: never;
         };
@@ -15872,8 +15882,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description Install target identifier: tmux, gh, claude, codex, opencode, copilot, or cloudflared. */
-                target: "tmux" | "gh" | "claude" | "codex" | "opencode" | "copilot" | "cloudflared";
+                /** @description Install target identifier: tmux, gh, claude, codex, opencode, opencode-v2, copilot, or cloudflared. */
+                target: "tmux" | "gh" | "claude" | "codex" | "opencode" | "opencode-v2" | "copilot" | "cloudflared";
             };
             cookie?: never;
         };

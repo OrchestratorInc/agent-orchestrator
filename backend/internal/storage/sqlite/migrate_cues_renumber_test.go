@@ -98,7 +98,7 @@ func assertPreviewCueMigration(t *testing.T, db *sql.DB) {
 	if !strings.Contains(sessionsSQL, "'unreal-agent'") {
 		t.Fatal("upstream Unreal Agent migration was not applied")
 	}
-	for _, version := range []int{149, 155, 156, 157, 158, 159, 160, 161, 162, 163} {
+	for _, version := range []int{149, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168} {
 		var applied int
 		if err := db.QueryRow(`SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = ? ORDER BY id DESC LIMIT 1), 0)`, version).Scan(&applied); err != nil {
 			t.Fatal(err)

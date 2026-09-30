@@ -11,6 +11,7 @@ import { useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { iconSize, space, type } from "../../lib/tokens";
+import { userFacingError } from "../../lib/connectionError";
 
 /** Session-scoped counterpart of the desktop Browser inspector. */
 export default function SessionPreviewScreen() {
@@ -30,7 +31,7 @@ export default function SessionPreviewScreen() {
 		try {
 			setPreview(await getPreview(config, id, previewUrl));
 		}
-		catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+		catch (cause) { setError(userFacingError(cause)); }
 		finally { setLoading(false); }
 	}, [config, id, previewUrl]);
 
@@ -39,7 +40,7 @@ export default function SessionPreviewScreen() {
 
 	if (!config || loading) return <View style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.copy}>Looking for a session preview…</Text></View>;
 	if (!preview) return <View style={styles.center}><Feather name={error ? "alert-triangle" : "globe"} size={iconSize.xl} color={error ? t.red : t.textTertiary} /><Text style={styles.title}>{error ? "Couldn't load the preview" : "No preview yet"}</Text><Text style={styles.copy}>{error || "Waiting for the agent to generate a page or document. This screen will keep checking."}</Text><Pressable onPress={() => { haptics.tap(); void refresh(); }} style={styles.retry}><Text style={styles.retryText}>Check again</Text></Pressable></View>;
-	return <View style={styles.screen}><WebView ref={web} source={{ uri: preview.url, headers: preview.authenticated ? authHeaders(config) : undefined }} style={styles.web} startInLoadingState renderLoading={() => <View style={styles.webLoading}><ActivityIndicator color={t.accent} /></View>} onLoadStart={() => setError(undefined)} onHttpError={(event) => setError(`Preview returned HTTP ${event.nativeEvent.statusCode}.`)} onError={(event) => setError(event.nativeEvent.description || "Couldn't load this preview.")} />{error ? <View accessibilityRole="alert" style={styles.webError}><Feather name="alert-triangle" size={iconSize.sm} color={t.red} /><Text style={styles.webErrorText}>{error}</Text><Pressable onPress={() => { haptics.tap(); setError(undefined); web.current?.reload(); }}><Text style={styles.retryText}>Retry</Text></Pressable></View> : null}</View>;
+	return <View style={styles.screen}><WebView ref={web} source={{ uri: preview.url, headers: preview.authenticated ? authHeaders(config) : undefined }} style={styles.web} startInLoadingState renderLoading={() => <View style={styles.webLoading}><ActivityIndicator color={t.accent} /></View>} onLoadStart={() => setError(undefined)} onHttpError={(event) => setError(previewHttpErrorCopy(event.nativeEvent.statusCode))} onError={(event) => setError(event.nativeEvent.description || "Couldn't load this preview.")} />{error ? <View accessibilityRole="alert" style={styles.webError}><Feather name="alert-triangle" size={iconSize.sm} color={t.red} /><Text style={styles.webErrorText}>{error}</Text><Pressable onPress={() => { haptics.tap(); setError(undefined); web.current?.reload(); }}><Text style={styles.retryText}>Retry</Text></Pressable></View> : null}</View>;
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
@@ -56,3 +57,12 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 });
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
+
+// The preview is the agent's own page, so a failing status is about that page or
+// the server behind it, not about AO. Say which, without the status code.
+function previewHttpErrorCopy(status: number): string {
+	if (status === 404 || status === 410) return "This page wasn't found. The agent may have moved or removed it.";
+	if (status === 401 || status === 403) return "This page needs access this phone doesn't have.";
+	if (status >= 500) return "The page's server hit an error. Check that the agent's dev server is running, then retry.";
+	return "This page didn't load. Retry, or check it on your desktop.";
+}
