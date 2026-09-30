@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -57,6 +58,46 @@ func TestSessionTop_SortsByMemoryAndDashesUnsampled(t *testing.T) {
 	}
 	if !strings.HasPrefix(lines[4], "TOTAL") || !strings.Contains(lines[4], "2.7 GB") {
 		t.Fatalf("total row wrong:\n%s", out)
+	}
+}
+
+// TestSessionTop_JSONDoesNotFabricateZeroForUnmeasured guards the JSON
+// contract against synthesizing a measurement: demo-3 has no entry in the
+// memory response (unsampled), so its JSON fields must be null, exactly like
+// the text table shows "-" instead of "0 B". A bare zero there would be
+// indistinguishable from a genuinely-empty process tree to any automation
+// reading --json.
+func TestSessionTop_JSONDoesNotFabricateZeroForUnmeasured(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := sessionTopServer(t, http.StatusOK, topMemoryBody)
+	writeRunFileFor(t, cfg, srv)
+
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "top", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		Data []struct {
+			ID           string  `json:"id"`
+			RSSBytes     *uint64 `json:"rssBytes"`
+			ProcessCount *int    `json:"processCount"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("invalid json: %v\n%s", err, out)
+	}
+	var found bool
+	for _, e := range parsed.Data {
+		if e.ID != "demo-3" {
+			continue
+		}
+		found = true
+		if e.RSSBytes != nil || e.ProcessCount != nil {
+			t.Fatalf("unmeasured session must serialize as null, not a fabricated zero: rssBytes=%v processCount=%v", e.RSSBytes, e.ProcessCount)
+		}
+	}
+	if !found {
+		t.Fatal("demo-3 missing from json output")
 	}
 }
 

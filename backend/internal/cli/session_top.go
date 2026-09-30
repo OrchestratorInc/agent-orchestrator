@@ -31,8 +31,13 @@ type sessionMemoryListResponse struct {
 
 type sessionTopEntry struct {
 	sessionDTO
-	RSSBytes     uint64 `json:"rssBytes"`
-	ProcessCount int    `json:"processCount"`
+	// RSSBytes and ProcessCount are nil when the session's process tree could
+	// not be measured (the text table shows "-" for the same reason): a
+	// missing reading must never serialize as a genuine zero-byte, zero-process
+	// measurement, which automation consuming --json cannot tell apart from
+	// "we don't know".
+	RSSBytes     *uint64 `json:"rssBytes"`
+	ProcessCount *int    `json:"processCount"`
 }
 
 type sessionTopOutput struct {
@@ -85,20 +90,33 @@ func (c *commandContext) topSessions(ctx context.Context, cmd *cobra.Command, op
 	entries := make([]sessionTopEntry, 0, len(list.Sessions))
 	var total uint64
 	for _, sess := range filterAndSortSessions(list.Sessions, opts.all) {
-		reading := bySession[sess.ID]
-		entries = append(entries, sessionTopEntry{sessionDTO: sess, RSSBytes: reading.RSSBytes, ProcessCount: reading.ProcessCount})
-		total += reading.RSSBytes
+		entry := sessionTopEntry{sessionDTO: sess}
+		if reading, ok := bySession[sess.ID]; ok {
+			rss, procs := reading.RSSBytes, reading.ProcessCount
+			entry.RSSBytes, entry.ProcessCount = &rss, &procs
+			total += rss
+		}
+		entries = append(entries, entry)
 	}
-	sort.SliceStable(entries, func(i, j int) bool { return entries[i].RSSBytes > entries[j].RSSBytes })
+	sort.SliceStable(entries, func(i, j int) bool {
+		var a, b uint64
+		if entries[i].RSSBytes != nil {
+			a = *entries[i].RSSBytes
+		}
+		if entries[j].RSSBytes != nil {
+			b = *entries[j].RSSBytes
+		}
+		return a > b
+	})
 	if opts.json {
 		out := sessionTopOutput{Data: entries}
 		out.Meta.TotalRSSBytes = total
 		return writeJSON(cmd.OutOrStdout(), out)
 	}
-	return writeSessionTop(cmd, entries, total, bySession, c.deps.Now())
+	return writeSessionTop(cmd, entries, total, c.deps.Now())
 }
 
-func writeSessionTop(cmd *cobra.Command, entries []sessionTopEntry, total uint64, readings map[string]sessionMemoryDTO, now time.Time) error {
+func writeSessionTop(cmd *cobra.Command, entries []sessionTopEntry, total uint64, now time.Time) error {
 	out := cmd.OutOrStdout()
 	if len(entries) == 0 {
 		_, err := fmt.Fprintln(out, "(no active sessions)")
@@ -110,9 +128,9 @@ func writeSessionTop(cmd *cobra.Command, entries []sessionTopEntry, total uint64
 	}
 	for _, e := range entries {
 		rss, procs := "-", "-"
-		if _, ok := readings[e.ID]; ok {
-			rss = formatBytes(e.RSSBytes)
-			procs = fmt.Sprint(e.ProcessCount)
+		if e.RSSBytes != nil {
+			rss = formatBytes(*e.RSSBytes)
+			procs = fmt.Sprint(*e.ProcessCount)
 		}
 		idle := "-"
 		if e.Activity.State != "working" {
