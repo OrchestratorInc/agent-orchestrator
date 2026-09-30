@@ -77,6 +77,12 @@ describe("reviewer control integration", () => {
 		expect(detail).toContain("reviewRunSendable(run) ? <Pressable");
 	});
 
+	it("never presents the in-app browser on top of the actions sheet", () => {
+		const calls = actions.match(/openGitHub\([^)]*\)/g) ?? [];
+		expect(calls.length).toBeGreaterThan(0);
+		for (const call of calls) expect(call).toContain("{ fromSheet: true }");
+	});
+
 	it("keys automatic-review dismissal to the stable run id", () => {
 		expect(detail).toContain("const autoReviewFailureId = autoReviewFailure?.id");
 		expect(detail).toContain("[autoReviewFailureId, dismissedAutoFailureId]");
