@@ -474,6 +474,61 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
 
+	// The first check right after a login terminal exits can fail transiently;
+	// the panel must not report a completed login as signed out.
+	async function loginWithProbeResults(statuses: string[], readinessAfterProbes: number) {
+		const authorized = catalogWithInstalled("claude-code");
+		authorized.agents[0].authentication.state = "authorized";
+		let probeCalls = 0;
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [
+				{ agentId: "claude-code", action: "login", launchMode: "terminal", available: true },
+			] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/{agent}/probe") {
+				const authStatus = statuses[Math.min(probeCalls, statuses.length - 1)];
+				probeCalls += 1;
+				return { data: { agent: { id: "claude-code", label: "Claude Code", authStatus }, supported: true, installed: true } } as never;
+			}
+			if (path === "/api/v1/agents/readiness/ensure") return { data: probeCalls >= readinessAfterProbes ? authorized : catalog } as never;
+			if (path === "/api/v1/agents/{agent}/auth") return { data: {
+				agentId: "claude-code", action: "login", guidance: "Complete login in the terminal.",
+				terminal: { handleId: "auth-terminal-1", title: "Claude Code login", workingDir: "/tmp", createdAt: "2026-09-15T00:00:00Z" },
+			} } as never;
+			return { data: undefined } as never;
+		});
+		const close = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
+		const user = userEvent.setup();
+		renderSection();
+		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		await user.click(await within(row).findByRole("button", { name: "Local login" }));
+		await within(row).findByTestId("inline-terminal-body");
+		act(() => terminalStateCallback.value?.("exited"));
+		return { row, close, probeCalls: () => probeCalls };
+	}
+
+	it("re-checks a login whose first post-login check fails transiently", async () => {
+		const { row, close, probeCalls } = await loginWithProbeResults(["unauthorized", "authorized"], Number.POSITIVE_INFINITY);
+
+		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument(), { timeout: 5_000 });
+		expect(probeCalls()).toBe(2);
+		expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", { params: { path: { handleId: "auth-terminal-1" } } });
+	});
+
+	it("closes a login panel it could not confirm once the harness reads as logged in", async () => {
+		// Every post-login probe misses, but the daemon's readiness later reports
+		// the harness logged in.
+		const { row, probeCalls } = await loginWithProbeResults(["unauthorized"], 4);
+
+		await waitFor(() => expect(probeCalls()).toBe(4), { timeout: 8_000 });
+		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument(), { timeout: 5_000 });
+	}, 15_000);
+
 	it("completes MiMo Code login when the key is configured locally", async () => {
 		const initial = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "unknown" })] };
 		const configured = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "configured" })] };

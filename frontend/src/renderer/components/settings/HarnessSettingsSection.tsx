@@ -40,6 +40,11 @@ const installerQueryKey = ["agent-installers"] as const;
 const installJobsQueryKey = ["agent-install-jobs"] as const;
 const POLL_INTERVAL_MS = 1_000;
 const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
+// The first check right after a login terminal exits can fail transiently (the
+// daemon's own readiness retry succeeds seconds later), so a login is re-checked
+// a few times before the panel reports it did not take.
+const AUTH_VERIFY_ATTEMPTS = 4;
+const AUTH_VERIFY_RETRY_MS = 1_500;
 const FOCUS_HIGHLIGHT_MS = 2_000;
 
 type AgentAuthState = { pending: boolean; error: string | null };
@@ -414,10 +419,17 @@ export function HarnessSettingsSection({
 	const finishAuth = useCallback(async (workflow: AuthTerminalWorkflow) => {
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
 		setAuthWorkflow((current) => current?.terminal.handleId === workflow.terminal.handleId ? { ...current, phase: "verifying", reason: undefined } : current);
-		const result = await checkAuth(workflow.agentId, { fresh: true });
-		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
 		// MiMo can confirm a stored provider key locally without validating it upstream.
-		if (result?.agent.authStatus === "authorized" || (workflow.agentId === "mimo-code" && result?.agent.authStatus === "configured")) {
+		const loggedIn = (candidate: AgentAuthProbeResult | undefined) =>
+			candidate?.agent.authStatus === "authorized" || (workflow.agentId === "mimo-code" && candidate?.agent.authStatus === "configured");
+		let result = await checkAuth(workflow.agentId, { fresh: true });
+		for (let attempt = 1; attempt < AUTH_VERIFY_ATTEMPTS && !loggedIn(result); attempt++) {
+			await new Promise((resolve) => window.setTimeout(resolve, AUTH_VERIFY_RETRY_MS));
+			if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
+			result = await checkAuth(workflow.agentId, { fresh: true });
+		}
+		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
+		if (loggedIn(result)) {
 			try {
 				await closeAuthTerminal(workflow.terminal.handleId);
 			} catch (error) {
@@ -451,6 +463,14 @@ export function HarnessSettingsSection({
 			return false;
 		}
 	}, [checkAuth, queryClient, t]);
+
+	// A login the panel could not confirm may still have taken: the daemon keeps
+	// re-checking readiness. Once the harness reads as logged in, close the panel
+	// instead of leaving a stale "signed out" terminal on screen.
+	useEffect(() => {
+		if (!authWorkflow || (authWorkflow.phase !== "unauthorized" && authWorkflow.phase !== "unverified")) return;
+		if (readinessAgents.get(authWorkflow.agentId)?.authentication.state === "authorized") void closeAuth(authWorkflow);
+	}, [authWorkflow, readinessAgents, closeAuth]);
 
 	useEffect(() => {
 		if (!authWorkflow || authWorkflow.phase !== "running") return;
