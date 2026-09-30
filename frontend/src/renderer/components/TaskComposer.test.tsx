@@ -143,6 +143,78 @@ afterEach(() => {
 });
 
 describe("TaskComposer", () => {
+	describe.each([
+		{ scope: "project", projectId: "demo", endpoint: "/api/v1/orchestrators/delegate", success: { workerId: "synthetic-tui" } },
+		{ scope: "standalone", projectId: "__standalone__", endpoint: "/api/v1/sessions", success: { session: { id: "synthetic-tui" } } },
+	])("initial account Chat errors ($scope)", ({ projectId, endpoint, success }) => {
+		async function prepare(account: "managed" | "native" | "none" = "managed") {
+			h.initialAccountSelection = account !== "none";
+			const baseGet = h.get.getMockImplementation();
+			h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+			h.get.mockImplementation(async (path: string) => {
+				if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["codex"] } };
+				if (path === "/api/v1/sessions/account-selection") return { data: { initialSelection: true } };
+				if (path === "/api/v1/accounts-manager/accounts") return { data: initialAccounts() };
+				if (path === "/api/v1/projects/{id}") return { data: { status: "ok", project: { config: { worker: { agent: "codex" } } } } };
+				return baseGet?.(path);
+			});
+			const onCreated = vi.fn();
+			render(<Wrap><TaskComposer projectId={projectId} onCreated={onCreated} /></Wrap>);
+			if (account !== "none") {
+				const picker = await screen.findByLabelText("Initial account");
+				await screen.findByRole("option", { name: "Work (account-b)" });
+				fireEvent.change(picker, { target: { value: account === "managed" ? "managed:account-b" : "native" } });
+			}
+			if (account === "managed") await chooseManagedModel();
+			fireEvent.change(task(), { target: { value: "Keep this synthetic task" } });
+			await waitForTaskReady();
+			fireEvent.click(startTask());
+			return onCreated;
+		}
+
+		it.each(["managed", "native", "none"] as const)("preserves capability text and explicit Terminal UI fallback with %s account selection", async (account) => {
+			const message = "spawn: session mode unsupported: managed Chat is not supported";
+			h.post.mockResolvedValueOnce({ error: { code: "SESSION_MODE_UNSUPPORTED", message, requestId: "synthetic-chat-409" }, response: new Response(null, { status: 409 }) })
+				.mockResolvedValueOnce({ data: success });
+			const onCreated = await prepare(account);
+			const fallback = await screen.findByRole("button", { name: "Create as Terminal UI" });
+			expect(fallback).toBeEnabled();
+			expect(screen.getByRole("alert")).toHaveTextContent(message);
+			expect(screen.getByRole("alert")).not.toHaveTextContent("Account state changed");
+			if (account !== "none") expect(screen.getByRole("alert")).toHaveTextContent("Request ID: synthetic-chat-409");
+			expect(h.post).toHaveBeenCalledTimes(1);
+			expect(onCreated).not.toHaveBeenCalled();
+			const firstBody = h.post.mock.calls[0][1].body;
+			if (account === "none") expect(firstBody).not.toHaveProperty("account");
+			else expect(firstBody.account).toEqual(account === "managed" ? { mode: "managed", accountId: "account-b" } : { mode: "native" });
+			await waitForTaskReady();
+			fireEvent.click(fallback);
+			await waitFor(() => expect(onCreated).toHaveBeenCalledWith("synthetic-tui"));
+			expect(h.post).toHaveBeenCalledTimes(2);
+			expect(h.post).toHaveBeenLastCalledWith(endpoint, expect.objectContaining({ body: { ...firstBody, mode: "tui" } }));
+		});
+
+		it.each(["ACCOUNTS_MANAGER_CONTROL_CONFLICT", "UNKNOWN_CONFLICT"])("keeps safe account-state copy without Terminal UI fallback for %s", async (code) => {
+			h.post.mockResolvedValue({ error: { code, message: "private-synthetic-detail", requestId: "synthetic-stale-409" }, response: new Response(null, { status: 409 }) });
+			const onCreated = await prepare();
+			await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Account state changed. Refresh before trying again. Request ID: synthetic-stale-409"));
+			expect(screen.getByRole("alert")).not.toHaveTextContent("private-synthetic-detail");
+			expect(screen.queryByRole("button", { name: "Create as Terminal UI" })).not.toBeInTheDocument();
+			expect(screen.getByLabelText("Initial account")).toHaveValue("managed:account-b");
+			expect(h.post).toHaveBeenCalledTimes(1);
+			expect(onCreated).not.toHaveBeenCalled();
+		});
+
+		it("omits malformed request IDs from managed capability errors", async () => {
+			h.post.mockResolvedValue({ error: { code: "SESSION_MODE_UNSUPPORTED", message: "managed Chat is not supported", requestId: "private synthetic detail" }, response: new Response(null, { status: 409 }) });
+			await prepare();
+			await screen.findByRole("button", { name: "Create as Terminal UI" });
+			expect(screen.getByRole("alert")).toHaveTextContent("managed Chat is not supported");
+			expect(screen.getByRole("alert")).not.toHaveTextContent("private synthetic detail");
+			expect(screen.getByRole("alert")).not.toHaveTextContent("Request ID:");
+		});
+	});
+
 	it("requires an explicit initial account and forwards it through task delegation", async () => {
 		h.initialAccountSelection = true;
 		const baseGet = h.get.getMockImplementation();

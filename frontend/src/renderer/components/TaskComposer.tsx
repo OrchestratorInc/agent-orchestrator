@@ -8,6 +8,7 @@ import {
 } from "@aoagents/product-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { Loader2 } from "lucide-react";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { InitialAccountPicker, InitialAccountStatus } from "./InitialAccountPicker";
@@ -93,6 +94,14 @@ class TaskCreateError extends Error {
 		super(message);
 		this.name = "TaskCreateError";
 	}
+}
+
+function taskCreateErrorMessage(error: unknown, account: InitialAccountChoice | undefined, status: number | undefined, t: TFunction): string {
+	if (!account) return apiErrorMessage(error, t("newTask.unableToStart"));
+	const safe = accountRequestError(error, status);
+	if (apiErrorCode(error) !== "SESSION_MODE_UNSUPPORTED") return accountControlMessage(safe, t);
+	return apiErrorMessage(error, t("newTask.unableToStart"))
+		+ (safe.requestId ? " " + t("accountsManager.controls.requestId", { id: safe.requestId }) : "");
 }
 
 type FallbackAction = "tui" | "bypass-permissions";
@@ -219,7 +228,7 @@ export function TaskComposer({
 				});
 				if (error) {
 					throw new TaskCreateError(
-						input.account ? accountControlMessage(accountRequestError(error, response?.status), t) : apiErrorMessage(error, t("newTask.unableToStart")),
+						taskCreateErrorMessage(error, input.account, response?.status, t),
 						apiErrorCode(error),
 						error.details,
 					);
@@ -268,7 +277,7 @@ export function TaskComposer({
 				},
 			});
 			if (error) {
-				throw new TaskCreateError(input.account ? accountControlMessage(accountRequestError(error, response?.status), t) : apiErrorMessage(error, t("newTask.unableToStart")), apiErrorCode(error), error.details);
+				throw new TaskCreateError(taskCreateErrorMessage(error, input.account, response?.status, t), apiErrorCode(error), error.details);
 			}
 			if (!data?.session.id) throw new Error(t("newTask.noSession"));
 			void captureRendererEvent("ao.renderer.task_create_succeeded", { scope: "standalone" });
