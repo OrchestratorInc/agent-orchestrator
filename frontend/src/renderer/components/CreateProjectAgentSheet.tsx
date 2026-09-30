@@ -11,15 +11,18 @@ import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "reac
 import type { components } from "../../api/schema";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
-import { AGENT_OPTIONS } from "../lib/agent-options";
+import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
 import {
 	buildRankedAgentOptions,
+	isLaunchableAgent,
 	DEFAULT_AGENT_PRIORITY_RANK,
 	defaultAuthorizedAgentForRole,
 	type AgentInfo,
 	unknownAgentReadiness,
 } from "../lib/agent-select-options";
 import { cn } from "../lib/utils";
+import { useAgentManagementMenu } from "../hooks/useAgentManagementMenu";
+import { useSettings } from "../hooks/useSettings";
 import { AgentAvatar } from "./AgentAvatar";
 import { FieldDefaultHint } from "./FieldDefaultHint";
 import { buildIntake, type IntakeForm, IntakeFields, intakeNeedsRule } from "./IntakeFields";
@@ -41,6 +44,7 @@ export type CreateProjectAgentSelection = {
 };
 
 const EMPTY_INTAKE: IntakeForm = { enabled: false, repo: "", assignee: "" };
+const AGENT_MENU_WIDTH = "w-56! min-w-56! max-w-56!";
 type CreateProjectAgentSheetProps = {
 	error?: string | null;
 	action?: "create" | "clone";
@@ -131,10 +135,14 @@ export function CreateProjectAgentSheet({
 	useEnsureAgentReadiness({ enabled: contentOpen });
 	const agents = agentsQuery.data;
 	const agentOptions = useMemo(() => agents?.agents ?? [], [agents]);
+	// "configured" belongs here even though it is not a verified credential.
+	// This picks the default preselection, not a gate — every agent stays
+	// selectable — and excluding it would silently stop preselecting an agent
+	// whose credentials AO simply cannot validate, which is most of them.
 	const authorizedAgents = useMemo(
 		() =>
 			agentOptions.filter((agent) =>
-				["authorized", "not_applicable"].includes(agent.authentication.state),
+				["authorized", "not_applicable", "configured"].includes(agent.authentication.state),
 			),
 		[agentOptions],
 	);
@@ -162,12 +170,14 @@ export function CreateProjectAgentSheet({
 	});
 	const isBusy = isCreating || isInitializing;
 	const [intake, setIntake] = useState<IntakeForm>(EMPTY_INTAKE);
-	const intakeIncomplete = intakeNeedsRule(intake);
+	const { settings } = useSettings();
+	const intakeVisible = !!settings?.trackerIntakeEnabled;
+	const intakeIncomplete = intakeVisible && intakeNeedsRule(intake);
 	const canSubmit =
 		canSubmitProjectSetup({
 			workerAgent,
 			orchestratorAgent,
-			intakeEnabled: intake.enabled,
+			intakeEnabled: intakeVisible && intake.enabled,
 			intakeAssignee: intake.assignee,
 		}) &&
 		!intakeIncomplete &&
@@ -308,18 +318,20 @@ export function CreateProjectAgentSheet({
 						}
 						canSubmit={canSubmit}
 						intakeControl={
-							<IntakeFields
-								form={intake}
-								onChange={(patch) => setIntake((f) => ({ ...f, ...patch }))}
-								compact
-								controlClassName="agents-sheet-control"
-								labelClassName="agents-sheet-label"
-							/>
+							intakeVisible ? (
+								<IntakeFields
+									form={intake}
+									onChange={(patch) => setIntake((f) => ({ ...f, ...patch }))}
+									compact
+									controlClassName="agents-sheet-control"
+									labelClassName="agents-sheet-label"
+								/>
+							) : null
 						}
 						isBusy={isBusy}
 						onCancel={() => onOpenChange(false)}
 						onSubmit={() =>
-							void onSubmit({ workerAgent, orchestratorAgent, trackerIntake: buildIntake(intake) })
+							void onSubmit({ workerAgent, orchestratorAgent, trackerIntake: intakeVisible ? buildIntake(intake) : undefined })
 						}
 						setupNotice={
 							repositorySetupNeeded
@@ -383,6 +395,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	label,
 	onChange,
 	placeholder,
+	manageAgents = true,
 	triggerClassName,
 	labelClassName,
 	contentClassName,
@@ -399,43 +412,58 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	label: string;
 	onChange: (value: string) => void;
 	placeholder: string;
+	/** Cloud tasks use remote availability, not this computer's Harness settings. */
+	manageAgents?: boolean;
 	triggerClassName?: string;
 	labelClassName?: string;
 	contentClassName?: string;
 	value: string;
-	variant?: "stacked" | "settings-row" | "chip";
+	variant?: "stacked" | "settings-row" | "settings-control" | "chip";
 }) {
-	const fallbackAgents: AgentInfo[] = AGENT_OPTIONS.map((agent) => unknownAgentReadiness(agent, agent));
+	const { t } = useTranslation();
+	const fallbackAgents: AgentInfo[] = AGENT_OPTIONS.map((agent) => unknownAgentReadiness(agent, agentLabel(agent)));
 	const options = buildRankedAgentOptions({
 		agents,
 		priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
 		fallbackAgents,
 	});
 
-	if (variant === "settings-row") {
-		const menuOptions = options.map((agent) => ({
+	const selectedOption = options.find((agent) => agent.id === value) ?? (value ? unknownAgentReadiness(value, agentLabel(value)) : undefined);
+	const hasReadinessSnapshot = agents !== undefined;
+	const needsSetup = manageAgents && hasReadinessSnapshot && Boolean(selectedOption && !isLaunchableAgent(selectedOption));
+	const visibleOptions = manageAgents && hasReadinessSnapshot ? options.filter(isLaunchableAgent) : options;
+	const management = useAgentManagementMenu(needsSetup ? value : undefined);
+	const managementAction = manageAgents ? { label: t("agentSelector.manage"), onSelect: management.requestManagement } : undefined;
+	const setupHint = needsSetup ? <span className="text-xs text-muted-foreground">{t("agentSelector.needsSetup")}</span> : null;
+
+	if (variant === "settings-row" || variant === "settings-control") {
+		const menuOptions = visibleOptions.map((agent) => ({
 			value: agent.id,
 			label: agent.label,
 			disabled: agent.disabled,
 		}));
 
-		return (
-			<SettingsRow icon={icon} label={label}>
+		const control = (
 				<SettingsOptionMenu
 					aria-label={label}
 					value={value}
 					placeholder={placeholder}
 					options={menuOptions}
+					action={managementAction}
+					emptyLabel={manageAgents ? t("agentSelector.noneReady") : undefined}
+					triggerRef={management.triggerRef}
+					onCloseAutoFocus={management.onCloseAutoFocus}
 					disabled={disabled}
 					onChange={onChange}
-					triggerClassName={invalid ? "text-error" : undefined}
-					menuClassName="settings-agent-menu-surface"
+					triggerClassName={cn(variant === "settings-control" && "w-full justify-between", invalid && "text-error")}
+					menuClassName={cn("settings-agent-menu-surface", AGENT_MENU_WIDTH)}
 					menuItemClassName="settings-agent-menu-item"
-					renderTrigger={(selected, triggerPlaceholder) => (
-						<>
-							{selected ? <AgentAvatar provider={selected.value} className="size-icon-lg" /> : null}
-							<span className="min-w-0 truncate">{selected?.label ?? triggerPlaceholder}</span>
-						</>
+					renderTrigger={() => (
+						<span className="flex min-w-0 items-center gap-2">
+							{selectedOption ? <AgentAvatar provider={selectedOption.id} className="size-icon-lg" /> : null}
+							<span className="min-w-0 truncate">{selectedOption?.label ?? placeholder}</span>
+							{setupHint}
+						</span>
 					)}
 					renderMenuItem={(option, selected) => {
 						const agent = options.find((entry) => entry.id === option.value);
@@ -452,11 +480,9 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 						);
 					}}
 				/>
-			</SettingsRow>
 		);
+		return variant === "settings-row" ? <SettingsRow icon={icon} label={label}>{control}</SettingsRow> : control;
 	}
-
-	const selectedOption = options.find((agent) => agent.id === value);
 
 	// Chip: the value reads as part of a sentence ("Runs with Codex") rather than
 	// as a form field, so the label is carried by that sentence, not by a <Label>.
@@ -464,7 +490,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	// model chip beside it) so both halves of the pill share one dropdown
 	// component instead of a Select-based menu and a DropdownMenu-based one.
 	if (variant === "chip") {
-		const menuOptions = options.map((agent) => ({
+		const menuOptions = visibleOptions.map((agent) => ({
 			value: agent.id,
 			label: agent.label,
 			disabled: agent.disabled,
@@ -476,6 +502,10 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 				value={value}
 				placeholder={placeholder}
 				options={menuOptions}
+				action={managementAction}
+				emptyLabel={manageAgents ? t("agentSelector.noneReady") : undefined}
+				triggerRef={management.triggerRef}
+				onCloseAutoFocus={management.onCloseAutoFocus}
 				disabled={disabled}
 				onChange={onChange}
 				menuAlign="start"
@@ -484,7 +514,10 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 					invalid && "text-error",
 					triggerClassName,
 				)}
-				menuClassName={contentClassName}
+				menuClassName={cn(
+					AGENT_MENU_WIDTH,
+					contentClassName,
+				)}
 				renderTrigger={() => (
 					<span className="flex min-w-0 items-center gap-2">
 						{selectedOption ? (
@@ -493,6 +526,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 						<span className="min-w-0 truncate text-control text-foreground" title={selectedOption?.label ?? placeholder}>
 							{selectedOption?.label ?? placeholder}
 						</span>
+						{setupHint}
 					</span>
 				)}
 				renderMenuItem={(option, selected) => {
@@ -521,8 +555,12 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 				</Label>
 				{hint && <FieldDefaultHint text={hint} />}
 			</div>
-			<Select value={value} onValueChange={onChange} disabled={disabled}>
+			<Select value={value} onValueChange={(next) => {
+				if (manageAgents && next === "__manage_agents__") management.requestManagement();
+				else onChange(next);
+			}} disabled={disabled}>
 				<SelectTrigger
+					ref={management.triggerRef}
 					id={id}
 					size="sm"
 					className={cn("w-full text-control", triggerClassName)}
@@ -536,18 +574,20 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 							<span className="flex min-w-0 items-center gap-3">
 								<AgentAvatar provider={selectedOption.id} className="size-icon-lg" decorative />
 								<span className="min-w-0 truncate">{selectedOption.label}</span>
+								{setupHint}
 							</span>
 						) : null}
 					</SelectValue>
 				</SelectTrigger>
 				<SelectContent
+					onCloseAutoFocus={management.onCloseAutoFocus}
 					position="popper"
 					side="bottom"
 					align="start"
 					sideOffset={4}
 					className={cn("max-h-select-menu-max!", contentClassName)}
 				>
-					{options.map((agent) => (
+					{visibleOptions.map((agent) => (
 						<SelectItem
 							key={agent.id}
 							value={agent.id}
@@ -564,6 +604,8 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 							/>
 						</SelectItem>
 					))}
+					{manageAgents && visibleOptions.length === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">{t("agentSelector.noneReady")}</p>}
+					{manageAgents && <SelectItem value="__manage_agents__" className="mt-1 border-t border-border">{t("agentSelector.manage")}</SelectItem>}
 				</SelectContent>
 			</Select>
 		</div>

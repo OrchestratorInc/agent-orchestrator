@@ -17,12 +17,13 @@ Natural-language-to-command mappings for common AO tasks.
 | Open the user's real Chromium debugging surface | `ao browser devtools open` |
 | Close the shared DevTools window when explicitly requested | `ao browser devtools close` |
 | Capture the page | `ao browser screenshot [path]` |
-| Spawn a worker on issue N | `ao spawn --project <p> --issue N --name "<=20 chars>" --prompt "..."` |
+| Spawn a worker on issue N | `ao spawn --project <p> --issue N --name "<=100 chars>" --prompt "..."` |
 | Message a running agent | `ao send --session <id> --message "..."` |
 | Kill a session | `ao session kill <id>` |
 | List sessions | `ao session ls` |
 | Register a repo as a project | `ao project add --path <abs-path> --name <name>` |
 | List projects | `ao project ls` |
+| Save a repetitive agent task or exact command as a Cue | `ao cue list --json`, then `ao cue create --name "..." --prompt "..."` or `--command "..."` |
 | Rename a session | `ao session rename <id> "<name>"` |
 | Restore a killed session | `ao session restore <id>` |
 | Clean up terminated sessions | `ao session cleanup` |

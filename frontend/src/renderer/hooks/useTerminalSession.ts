@@ -17,7 +17,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { getApiBaseUrl } from "../lib/api-client";
 import { consumeFreshTerminalHandle } from "../lib/fresh-terminal-handles";
 import { captureRendererEvent } from "../lib/telemetry";
-import { LOCAL_ECHO_ENABLED, withPredictiveLocalEcho } from "../lib/terminal-local-echo";
+import { LOCAL_ECHO_ENABLED, withLineBufferedLocalInput } from "../lib/terminal-local-echo";
 import { createTerminalMux, muxUrlFromApiBase, type TerminalMux } from "../lib/terminal-mux";
 import { sessionIsActive, type WorkspaceSession } from "../types/workspace";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
@@ -50,12 +50,6 @@ export type AttachableTerminal = {
 	prepareForActivation: () => Promise<void>;
 	/** Tell Cursor Agent the live light/dark scheme (private 997 notification). */
 	notifyCursorColorScheme: () => void;
-	/**
-	 * Which xterm buffer is active. Predictive local echo (cloud panes only)
-	 * predicts on the normal buffer and self-disables on the alternate one;
-	 * fakes may omit it, which reads as "alternate" — never predict.
-	 */
-	bufferType?: () => "normal" | "alternate";
 	/** Send an explicit UI action through the same guarded path as user input. */
 	sendUserInput: (data: string, source?: TerminalUserInputSource) => boolean;
 	onUserInput: (listener: (data: string, source: TerminalUserInputSource) => boolean | void) => { dispose: () => void };
@@ -404,16 +398,23 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 
 		const baseMux = (optionsRef.current.createMux ?? defaultCreateMux)();
 		// Cloud panes ride a real network round trip per keystroke, so wrap their
-		// mux with predictive local echo (see lib/terminal-local-echo.ts): typed
-		// characters render immediately and reconcile against the server echo.
+		// mux with line-buffered local input (see lib/terminal-local-echo.ts): typed
+		// characters render in xterm immediately, then the complete line is sent
+		// once on Enter and reconciled against the server echo.
 		// Local panes are loopback PTYs with ~0 latency and stay byte-exact
 		// untouched. Shell panes carry no session, so they are never wrapped —
 		// today the renderer only dials cloud sockets for agent panes anyway.
+		// opencode's OpenTUI repaints the whole screen on every keystroke and polls
+		// the terminal color-scheme protocol (CSI ? 996/997 n) every frame, whose
+		// replies ride the same input path. That fights the line-buffered
+		// prediction/rollback (tuned for codex/claude), corrupting the input line
+		// (e.g. a typed prefix followed by a runaway character run). opencode draws
+		// its own input authoritatively, so skip local prediction for it — direct,
+		// server-authoritative input like a local pane (the pre-#4763 behavior).
+		const localEchoSafeHarness = sessionRef.current?.provider !== "opencode";
 		const mux =
-			LOCAL_ECHO_ENABLED && sessionRef.current?.cloud
-				? withPredictiveLocalEcho(baseMux, {
-						bufferType: () => terminal.bufferType?.() ?? "alternate",
-					})
+			LOCAL_ECHO_ENABLED && sessionRef.current?.cloud && localEchoSafeHarness
+				? withLineBufferedLocalInput(baseMux, {})
 				: baseMux;
 		r.mux = mux;
 

@@ -38,6 +38,38 @@ type HarnessBuilder struct {
 	CodexLogin func(binary, home, credentialType, secret string) error
 }
 
+// extraReposPromptNote describes the additional repositories the worker checked
+// out beside the primary workspace, so the agent knows they exist and where to
+// find them. Paths mirror worker.ExtraRepoPath (siblings of the primary
+// checkout), so what the agent is told matches what is on disk.
+func extraReposPromptNote(workspace string, repos []worker.RepoRef) string {
+	if len(repos) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Additional repositories\n\n")
+	b.WriteString("This session was set up with extra repositories checked out alongside your primary repository. Your working directory is the primary repository; the others are sibling directories you can read and edit directly:\n\n")
+	wrote := false
+	for _, repo := range repos {
+		if strings.TrimSpace(repo.URL) == "" {
+			continue
+		}
+		abs := worker.ExtraRepoPath(workspace, repo.URL)
+		name := filepath.Base(abs)
+		branch := ""
+		if strings.TrimSpace(repo.Branch) != "" {
+			branch = fmt.Sprintf(" (branch %s)", repo.Branch)
+		}
+		fmt.Fprintf(&b, "- %s%s: %s (relative to your working directory: ../%s)\n", name, branch, abs, name)
+		wrote = true
+	}
+	if !wrote {
+		return ""
+	}
+	b.WriteString("\nMake changes, commit, and open pull requests per repository as appropriate. If one is missing it could not be cloned (for example it is outside this session's GitHub access); continue with the primary repository.")
+	return b.String()
+}
+
 // BuildInteractive prepares the provider's native TUI command. Unlike Build,
 // it deliberately omits headless print/JSON flags so the browser terminal is
 // the conversation surface.
@@ -74,50 +106,78 @@ func (b HarnessBuilder) BuildInteractive(
 	if launch.Kind == "orchestrator" {
 		systemPrompt = orchestratorSystemPrompt(skillDir)
 	}
-	if launch.Harness == "cursor" {
-		// The cursor launch builder drops SystemPrompt entirely (see
-		// agentruntime.buildCursorLaunch); the installed skill on disk is the
-		// only guidance a cursor agent gets. Known limitation.
-		systemPrompt = ""
+	if projectPrompt := strings.TrimSpace(launch.SystemPrompt); projectPrompt != "" {
+		systemPrompt += "\n\n" + projectPrompt
+	}
+	// Multi-repo dev kit: tell a worker about the additional repositories checked
+	// out beside its primary repo, and where to find them, so it can edit them
+	// directly. This concrete sibling-path note is worker-only: an orchestrator
+	// codes nothing itself, so it gets multi-repo awareness from the shared
+	// project context (roleprompt) instead — enough to coordinate work across the
+	// repos without being pointed at sibling directories to edit.
+	if launch.Kind != "orchestrator" {
+		if note := extraReposPromptNote(workspace, launch.ExtraRepos); note != "" {
+			systemPrompt += "\n\n" + note
+		}
+	}
+	systemPromptFile, err := b.writeSystemPromptFile(launch.SessionID, systemPrompt)
+	if err != nil {
+		return Command{}, err
 	}
 	var providerArgs []string
 	switch launch.Harness {
 	case "codex":
 		providerArgs = codexActivityHookArgs(hookHelperPath(b.DataDir))
 	case "cursor":
-		providerArgs = []string{"--trust"}
+		pluginDir, err := b.writeCursorPromptPlugin(launch.SessionID, systemPrompt)
+		if err != nil {
+			return Command{}, err
+		}
+		providerArgs = []string{"--trust", "--plugin-dir", pluginDir}
 	}
 	harness := agentruntime.Harness(launch.Harness)
 	permission := agentruntime.PermissionPolicyForMode(
 		agentruntime.SessionMode(launch.Mode),
 	)
 	var argv []string
-	var err error
-	if identity := b.interactiveRestoreIdentity(launch); identity != "" {
+	identity := b.interactiveRestoreIdentity(launch)
+	if launch.Harness == "opencode" {
+		// opencode's launch logic lives in the cloud module (self-contained), so
+		// the worker builds its argv directly rather than through agentruntime.
+		if identity != "" {
+			argv = openCodeRestoreArgs(binary, launch.SessionID, launch.Model, providerArgs, permission, launch.Prompt, identity)
+		} else {
+			argv = openCodeLaunchArgs(binary, launch.SessionID, launch.Model, providerArgs, permission, launch.Prompt)
+		}
+	} else if identity != "" {
 		var ok bool
 		argv, ok, err = agentruntime.BuildRestoreCommand(agentruntime.RestoreConfig{
-			Harness:       harness,
-			Binary:        binary,
-			SessionID:     launch.SessionID,
-			Metadata:      map[string]string{agentruntime.MetadataKeyAgentSessionID: identity},
-			WorkspacePath: workspace,
-			SystemPrompt:  systemPrompt,
-			ProviderArgs:  providerArgs,
-			Permission:    permission,
+			Harness:          harness,
+			Binary:           binary,
+			SessionID:        launch.SessionID,
+			Model:            launch.Model,
+			Metadata:         map[string]string{agentruntime.MetadataKeyAgentSessionID: identity},
+			WorkspacePath:    workspace,
+			SystemPrompt:     systemPrompt,
+			SystemPromptFile: systemPromptFile,
+			ProviderArgs:     providerArgs,
+			Permission:       permission,
 		})
 		if err == nil && !ok {
 			err = errors.New("coding-agent conversation cannot be restored")
 		}
 	} else {
 		argv, err = agentruntime.BuildLaunchCommand(agentruntime.LaunchConfig{
-			Harness:       harness,
-			Binary:        binary,
-			SessionID:     launch.SessionID,
-			WorkspacePath: workspace,
-			Prompt:        launch.Prompt,
-			SystemPrompt:  systemPrompt,
-			ProviderArgs:  providerArgs,
-			Permission:    permission,
+			Harness:          harness,
+			Binary:           binary,
+			SessionID:        launch.SessionID,
+			Model:            launch.Model,
+			WorkspacePath:    workspace,
+			Prompt:           launch.Prompt,
+			SystemPrompt:     systemPrompt,
+			SystemPromptFile: systemPromptFile,
+			ProviderArgs:     providerArgs,
+			Permission:       permission,
 		})
 	}
 	if err != nil {
@@ -150,6 +210,24 @@ func (b HarnessBuilder) BuildInteractive(
 			}
 			return Command{}, err
 		}
+	}
+	if launch.Harness == "opencode" {
+		// opencode has no system-prompt flag; the argv (built above) selects the AO
+		// agent name, and the matching OPENCODE_CONFIG document carries the prompt.
+		// Write it beside the prompt file and export the env var.
+		configPath, err := writeOpenCodeConfig(systemPromptFile, permission, launch.SessionID, launch.Model)
+		if err != nil {
+			if command.Cleanup != nil {
+				command.Cleanup()
+			}
+			return Command{}, err
+		}
+		if configPath != "" {
+			command.Env["OPENCODE_CONFIG"] = configPath
+		}
+		// Warm opencode's models.dev cache from the baked catalog so the TUI is not
+		// blocked on a ~5MB startup download on a fresh sandbox.
+		seedOpenCodeModelsCache(command.Env)
 	}
 	return command, nil
 }
@@ -245,53 +323,28 @@ func (b HarnessBuilder) Build(
 	return command, nil
 }
 
+// configureCredential injects a resolved credential into the launch command by
+// dispatching to the harness's own business logic (see harness_credentials.go).
 func (b HarnessBuilder) configureCredential(
 	command *Command,
 	harness string,
 	credential worker.CredentialResponse,
 ) error {
-	switch harness {
-	case "claude-code":
-		switch credential.CredentialType {
-		case "api_key":
-			command.Env["ANTHROPIC_API_KEY"] = credential.Secret
-		case "oauth_token":
-			command.Env["CLAUDE_CODE_OAUTH_TOKEN"] = credential.Secret
-		default:
-			return errors.New("unsupported Claude Code credential type")
-		}
-	case "codex":
-		switch credential.CredentialType {
-		case "api_key", "access_token", "auth_json":
-			return b.configureCodexCredential(command, credential)
-		default:
-			return errors.New("unsupported Codex credential type")
-		}
-	case "cursor":
-		if credential.CredentialType != "api_key" {
-			return errors.New("unsupported Cursor credential type")
-		}
-		command.Env["CURSOR_API_KEY"] = credential.Secret
-	default:
+	h, ok := harnessCredentialFor(harness)
+	if !ok {
 		return fmt.Errorf("unsupported coding-agent harness %q", harness)
 	}
-	return nil
+	return h.configure(b, command, credential)
 }
 
 func (b HarnessBuilder) binary(harness string) string {
 	if binary := strings.TrimSpace(b.Binaries[harness]); binary != "" {
 		return binary
 	}
-	switch harness {
-	case "claude-code":
-		return "claude"
-	case "codex":
-		return "codex"
-	case "cursor":
-		return "cursor-agent"
-	default:
-		return harness
+	if h, ok := harnessCredentialFor(harness); ok {
+		return h.defaultBinary()
 	}
+	return harness
 }
 
 func (b HarnessBuilder) prepareClaudeCloudExperience(command *Command, workspace string) error {

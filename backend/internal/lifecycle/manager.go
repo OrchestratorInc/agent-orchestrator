@@ -621,6 +621,10 @@ retryProjection:
 		m.mu.Unlock()
 		return nil
 	}
+	if s.ExpectedHarness != "" && s.ExpectedHarness != rec.Harness {
+		m.mu.Unlock()
+		return nil
+	}
 	mode := domain.NormalizeSessionMode(rec.Mode)
 	// Rollback restores the TUI mode before its replacement runtime has a launch
 	// generation. While the durable transition remains active, an untagged hook
@@ -742,7 +746,7 @@ retryProjection:
 			checkpoint.ConversationCheckpointState = domain.ConversationCheckpointCoordination
 			checkpoint.ConversationCheckpointGeneration = ownerGeneration
 			checkpoint.ConversationCheckpointNativeID = checkpointNativeID
-			checkpoint.ConversationCheckpointTurnID = ""
+			checkpoint.ConversationCheckpointTurnID = s.CoordinationID
 		} else {
 			promptAt := timeOr(s.Timestamp, now)
 			sameCheckpointOwner := !resetConversationCheckpoint && ownerGeneration != "" &&
@@ -805,7 +809,9 @@ retryProjection:
 			checkpoint.ConversationCheckpointState = domain.ConversationCheckpointCoordination
 			checkpoint.ConversationCheckpointGeneration = ownerGeneration
 			checkpoint.ConversationCheckpointNativeID = checkpointNativeID
-			checkpoint.ConversationCheckpointTurnID = ""
+			if s.CoordinationID != "" {
+				checkpoint.ConversationCheckpointTurnID = s.CoordinationID
+			}
 		} else if checkpoint.ConversationCheckpointState == domain.ConversationCheckpointPrompt &&
 			!checkpoint.ConversationCheckpointUnsettled &&
 			(s.Timestamp.IsZero() || !s.Timestamp.Before(checkpoint.LatestUserPromptAt)) &&
@@ -845,7 +851,7 @@ retryProjection:
 	// preserved shell. Other same-generation callbacks may have been delayed
 	// behind the process-exit report and cannot resurrect an exited workload.
 	if rec.Activity.State == domain.ActivityExited && s.Valid && s.State != domain.ActivityExited &&
-		(s.State != domain.ActivityActive || s.Event != "user-prompt-submit") {
+		(s.State != domain.ActivityActive || s.Event != "user-prompt-submit") && !currentChatController {
 		m.mu.Unlock()
 		return nil
 	}
@@ -1024,6 +1030,9 @@ func (m *Manager) stagePendingAgentSwitchNativeMetadata(ctx context.Context, id 
 	if !found || sw.State != domain.AgentSwitchStartingTarget || string(sw.TargetGenerationID) != s.LaunchID || sw.TargetNativeSessionRef == nil {
 		return nil
 	}
+	if s.ExpectedHarness != "" && s.ExpectedHarness != sw.TargetHarness {
+		return nil
+	}
 	native, found, err := store.GetAgentNativeSession(ctx, *sw.TargetNativeSessionRef)
 	if err != nil {
 		return err
@@ -1196,12 +1205,12 @@ func cursorResolvedExecutionKey(s ports.ActivitySignal) (string, bool) {
 	}
 }
 
-// isTurnBoundaryEvent reports the events that reliably mean the pending
-// dialog is gone: a prompt cannot be submitted while a dialog holds the
-// composer, and a turn cannot end (or the session exit) with one on screen.
+// isTurnBoundaryEvent reports events that reliably mean the pending dialog is
+// gone: a definitive permission reply, a new prompt, or the end of the turn or
+// session. Generic active/tool events remain insufficient to clear blocked.
 func isTurnBoundaryEvent(event string) bool {
 	return event == "user-prompt-submit" || event == "stop" || event == "session-end" ||
-		event == "process-exited" || event == "chat.controller.stopped"
+		event == "process-exited" || event == "chat.controller.stopped" || event == "permission-resolved"
 }
 
 // applyToolPrecedenceLocked folds an event-tagged activity signal through the
@@ -1914,6 +1923,7 @@ func mergeMetadata(base, in domain.SessionMetadata) domain.SessionMetadata {
 	set(&base.LatestAssistantUpdate, in.LatestAssistantUpdate)
 	set(&base.NativeTranscriptPath, in.NativeTranscriptPath)
 	set(&base.Model, in.Model)
+	set(&base.Effort, in.Effort)
 	set(&base.BrowserCapabilityVerifier, in.BrowserCapabilityVerifier)
 	// The chat controller's resume handle. Without this a restart has no thread to
 	// resume and the conversation is stranded — the provider still holds it, but

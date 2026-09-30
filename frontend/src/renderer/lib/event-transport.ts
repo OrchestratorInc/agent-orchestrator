@@ -6,6 +6,10 @@ import { computeSseRetryDelayMs } from "./sse-backoff";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { conversationQueryKey, conversationQueryRoot } from "../hooks/useConversation";
+import {
+	reviewerConversationQueryKey,
+	reviewerConversationQueryRoot,
+} from "../hooks/useReviewerConversation";
 import { agentSwitchesQueryRoot } from "../hooks/useAgentSwitches";
 import { sessionUsageQueryRoot } from "../hooks/useSessionUsageSummaries";
 import { agentSwitchVisibility } from "./agent-switch-visibility";
@@ -55,8 +59,10 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			let healthAttempt = 0;
 			let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 			const pendingConversationSessions = new Set<string>();
+			const pendingReviewerConversations = new Set<string>();
 			const pendingInterfaceTransitionSessions = new Set<string>();
 			const pendingEditorHandoffSessions = new Set<string>();
+			const pendingModelCatalogScopes = new Map<string, { agentId: string; projectId: string }>();
 			let workspaceInvalidationPending = false;
 			let allConversationsInvalidationPending = false;
 			let allEditorHandoffsInvalidationPending = false;
@@ -80,6 +86,11 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				// A fetch from polling/mounting may already predate this event. Wait
 				// for it, then refresh once so joining its promise cannot lose the event.
 				const state = { dirty: queryClient.isFetching({ queryKey, type: "active" }) > 0 };
+				// An inactive Chat hover prefetch cannot refresh itself after this event.
+				// Cancel it without interrupting unrelated imperative queries.
+				if (queryKey[0] === conversationQueryRoot[0] && queryClient.isFetching({ queryKey, type: "inactive" }) > 0) {
+					void queryClient.cancelQueries({ queryKey, type: "inactive" });
+				}
 				refreshes.set(key, state);
 				const settled = () => {
 					refreshes.delete(key);
@@ -102,6 +113,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			const flushPending = () => {
 				if (allConversationsInvalidationPending) {
 					invalidate(conversationQueryRoot);
+					invalidate(reviewerConversationQueryRoot);
 					allConversationsInvalidationPending = false;
 				}
 				if (workspaceInvalidationPending) {
@@ -125,14 +137,23 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					invalidate(conversationQueryKey(sessionId));
 				}
 				pendingConversationSessions.clear();
+				for (const reviewId of pendingReviewerConversations) {
+					invalidate(reviewerConversationQueryKey(reviewId));
+				}
+				pendingReviewerConversations.clear();
 				for (const sessionId of pendingInterfaceTransitionSessions) {
 					invalidate(["session-interface-transition", sessionId]);
 				}
 				pendingInterfaceTransitionSessions.clear();
+				for (const scope of pendingModelCatalogScopes.values()) {
+					invalidate(["agent-models", scope.agentId, scope.projectId]);
+				}
+				pendingModelCatalogScopes.clear();
 			};
 			const refreshWorkspaces = (event?: Event) => {
 				if (disposed) return;
 				let conversationOnly = false;
+				let modelCatalogOnly = false;
 				if (event === undefined) {
 					// A lifecycle refresh -- reconnect, daemon status change, base-URL change --
 					// carries no event, so we cannot know which conversations moved. Normally the
@@ -159,10 +180,29 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							typeof decoded.payload === "object" && decoded.payload !== null
 								? (decoded.payload as {
 										conversationId?: unknown;
+										reviewId?: unknown;
 										interfaceTransitionId?: unknown;
+										kind?: unknown;
+										agentId?: unknown;
+										projectId?: unknown;
 								  })
 								: undefined;
+						if (payload?.kind === "model_catalog" && typeof payload.agentId === "string" && typeof payload.projectId === "string") {
+							pendingModelCatalogScopes.set(`${payload.agentId}\0${payload.projectId}`, {
+								agentId: payload.agentId,
+								projectId: payload.projectId,
+							});
+							modelCatalogOnly = true;
+						}
 						if (
+							typeof payload?.reviewId === "string" &&
+							payload.reviewId &&
+							typeof payload.conversationId === "string" &&
+							payload.conversationId
+						) {
+							pendingReviewerConversations.add(payload.reviewId);
+							conversationOnly = true;
+						} else if (
 							typeof decoded.sessionId === "string" &&
 							decoded.sessionId &&
 							typeof payload?.interfaceTransitionId === "string" &&
@@ -193,7 +233,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						// cannot target a conversation cache precisely.
 					}
 				}
-				if (!conversationOnly) workspaceInvalidationPending = true;
+				if (!conversationOnly && !modelCatalogOnly) workspaceInvalidationPending = true;
 				// A busy stream must not postpone visible updates until traffic
 				// stops, and the first event after a quiet period must not wait out
 				// a full window either. Flush on the leading edge when the last
@@ -334,6 +374,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				if (refreshTimer !== undefined) clearTimeout(refreshTimer);
 				pendingConversationSessions.clear();
 				pendingInterfaceTransitionSessions.clear();
+				pendingModelCatalogScopes.clear();
 				refreshes.clear();
 				if (retryTimer) clearTimeout(retryTimer);
 				removeDaemonListener();

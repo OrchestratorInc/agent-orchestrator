@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -32,15 +31,15 @@ const (
 	terminalRelayAuditBuffer = 256
 )
 
-// terminalStreams tracks, for this control-plane replica only, which
-// terminals have a live worker stream (input push targets) and which client
-// writers want output wakes. Cross-replica coordination rides Postgres
-// NOTIFY: rows are the source of truth, notifications are accelerants.
+// terminalStreams tracks which terminals have a live worker stream (input
+// push targets) and which client writers want output wakes. PostgreSQL rows
+// remain the durable source of truth; notifications accelerate recovery.
 type terminalStreams struct {
-	mu       sync.Mutex
-	workers  map[string]*workerTerminalStream
-	watchers map[string]map[chan struct{}]struct{}
-	clients  map[string]map[chan terminalRelayOutput]struct{}
+	mu                  sync.Mutex
+	workers             map[string]*workerTerminalStream
+	watchers            map[string]map[chan struct{}]struct{}
+	clients             map[string]map[chan terminalRelayOutput]struct{}
+	notificationClients map[string]map[chan terminalRelayNotification]struct{}
 }
 
 type workerTerminalStream struct {
@@ -56,23 +55,61 @@ type terminalRelayOutput struct {
 	data     []byte
 }
 
-// terminalRelayStats aggregates one worker stream's hot-path relay activity.
-// It is emitted once when the stream closes so saturation remains observable
-// without creating a CloudWatch record for every terminal frame.
-type terminalRelayStats struct {
-	forwardedFrames  atomic.Uint64
-	forwardedBytes   atomic.Uint64
-	mirroredFrames   atomic.Uint64
-	mirroredBytes    atomic.Uint64
-	saturatedClients atomic.Uint64
+// terminalRelayNotification is deliberately separate from terminal output:
+// unlike PTY bytes it has no durable terminal cursor and must never disturb
+// replay ordering. The notification inbox is its durable recovery path.
+type terminalRelayNotification struct {
+	eventID    string
+	typeName   string
+	occurredAt time.Time
+	payload    json.RawMessage
 }
 
 func newTerminalStreams() *terminalStreams {
 	return &terminalStreams{
-		workers:  make(map[string]*workerTerminalStream),
-		watchers: make(map[string]map[chan struct{}]struct{}),
-		clients:  make(map[string]map[chan terminalRelayOutput]struct{}),
+		workers:             make(map[string]*workerTerminalStream),
+		watchers:            make(map[string]map[chan struct{}]struct{}),
+		clients:             make(map[string]map[chan terminalRelayOutput]struct{}),
+		notificationClients: make(map[string]map[chan terminalRelayNotification]struct{}),
 	}
+}
+
+func (t *terminalStreams) subscribeRelayNotifications(terminalID string) (chan terminalRelayNotification, func()) {
+	notifications := make(chan terminalRelayNotification, terminalRelayOutputBuffer)
+	t.mu.Lock()
+	set := t.notificationClients[terminalID]
+	if set == nil {
+		set = make(map[chan terminalRelayNotification]struct{})
+		t.notificationClients[terminalID] = set
+	}
+	set[notifications] = struct{}{}
+	t.mu.Unlock()
+	return notifications, func() {
+		t.mu.Lock()
+		if set := t.notificationClients[terminalID]; set != nil {
+			delete(set, notifications)
+			if len(set) == 0 {
+				delete(t.notificationClients, terminalID)
+			}
+		}
+		t.mu.Unlock()
+	}
+}
+
+func (t *terminalStreams) relayNotification(terminalID string, notification terminalRelayNotification) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	dropped := 0
+	for client := range t.notificationClients[terminalID] {
+		frame := notification
+		frame.payload = append(json.RawMessage(nil), notification.payload...)
+		select {
+		case client <- frame:
+		default:
+			dropped++
+		}
+	}
+	return dropped
 }
 
 // subscribeRelayOutput attaches a browser to the in-process relay. Its
@@ -327,19 +364,6 @@ func (s *Server) workerTerminalStream(w http.ResponseWriter, r *http.Request) {
 	}
 	deregister := s.terminalStreams.registerWorker(terminalID, stream)
 	defer deregister()
-	relayStats := &terminalRelayStats{}
-	defer func() {
-		if s.terminalRelayEnabled && s.logger != nil {
-			s.logger.Debug("terminal relay stream summary",
-				"terminal_id", terminalID,
-				"forwarded_frames", relayStats.forwardedFrames.Load(),
-				"forwarded_bytes", relayStats.forwardedBytes.Load(),
-				"mirrored_frames", relayStats.mirroredFrames.Load(),
-				"mirrored_bytes", relayStats.mirroredBytes.Load(),
-				"saturated_clients", relayStats.saturatedClients.Load(),
-			)
-		}
-	}()
 
 	var writeMu sync.Mutex
 	writeFrame := func(frame worker.TerminalStreamFrame) error {
@@ -381,8 +405,6 @@ func (s *Server) workerTerminalStream(w http.ResponseWriter, r *http.Request) {
 					cancel()
 					return
 				}
-				relayStats.mirroredFrames.Add(1)
-				relayStats.mirroredBytes.Add(uint64(len(queued.frame.Data)))
 				if s.logger != nil {
 					s.logger.Debug("terminal relay output mirrored",
 						"terminal_id", terminalID, "sequence", sequence,
@@ -422,8 +444,29 @@ func (s *Server) workerTerminalStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var frame worker.TerminalStreamFrame
-		if json.Unmarshal(message, &frame) != nil || frame.Type != "output" ||
-			len(frame.Data) == 0 || len(frame.Data) > maxTerminalFrame {
+		if json.Unmarshal(message, &frame) != nil {
+			_ = connection.Close(websocket.StatusPolicyViolation, "invalid stream frame")
+			return
+		}
+		if frame.Type == "notification" {
+			accepted, err := s.acceptWorkerNotification(ctx, claims, worker.NotificationEventRequest{
+				EventID: frame.EventID, Type: frame.EventType, OccurredAt: frame.OccurredAt, Payload: frame.Payload,
+			})
+			if err != nil {
+				_ = writeFrame(worker.TerminalStreamFrame{Type: "error", Code: notificationStreamErrorCode(err)})
+				continue
+			}
+			if s.terminalStreams != nil {
+				s.terminalStreams.relayNotification(terminalID, terminalRelayNotification{
+					eventID: frame.EventID, typeName: frame.EventType, occurredAt: frame.OccurredAt, payload: frame.Payload,
+				})
+			}
+			if err := writeFrame(worker.TerminalStreamFrame{Type: "notification_ack", EventID: frame.EventID, Duplicate: accepted.Duplicate}); err != nil {
+				return
+			}
+			continue
+		}
+		if frame.Type != "output" || len(frame.Data) == 0 || len(frame.Data) > maxTerminalFrame {
 			_ = connection.Close(websocket.StatusPolicyViolation, "invalid stream frame")
 			return
 		}
@@ -431,9 +474,6 @@ func (s *Server) workerTerminalStream(w http.ResponseWriter, r *http.Request) {
 			dropped := s.terminalStreams.relayOutput(terminalID, terminalRelayOutput{
 				sequence: frame.ID, data: frame.Data,
 			})
-			relayStats.forwardedFrames.Add(1)
-			relayStats.forwardedBytes.Add(uint64(len(frame.Data)))
-			relayStats.saturatedClients.Add(uint64(dropped))
 			if s.logger != nil {
 				s.logger.Debug("terminal relay output forwarded",
 					"terminal_id", terminalID, "sequence", frame.ID,

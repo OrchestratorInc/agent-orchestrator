@@ -3,6 +3,7 @@ package session
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -41,6 +42,12 @@ const (
 	// maxWorkspaceImageBytes caps a single image revision streamed to the diff
 	// viewer. Anything larger is refused rather than buffered.
 	maxWorkspaceImageBytes = 16 * 1024 * 1024
+	// maxCommitLogCommits caps a Commits menu to its newest commits. GitHub's
+	// pull request commits API stops at the same 250.
+	maxCommitLogCommits = 250
+	// maxCommitLogBytes caps each of a Commits menu's two git log passes, so a
+	// huge commit cannot become an unbounded in-memory buffer.
+	maxCommitLogBytes = 2 * 1024 * 1024
 )
 
 // WorkspaceFileStatus describes a session-worktree file relative to its compare base.
@@ -83,9 +90,16 @@ type WorkspaceFiles struct {
 	Sections WorkspaceFileSections
 	// Commits are the commits between the compare base and HEAD, newest first.
 	Commits []CommitSummary
+	// CommitsTruncated means older commits were left out of Commits.
+	CommitsTruncated bool
 	// Summary aggregates Files (excluding unmodified entries) into totals for
 	// the panel header.
 	Summary WorkspaceSummary
+	// Degraded means the primary file list was returned but optional Git state
+	// enrichment could not be collected. Callers should keep the file list and
+	// offer a retry for sections/commit metadata.
+	Degraded     bool
+	DegradedCode string
 	// Ahead and Behind are commit counts against the branch's upstream (or
 	// origin/<branch> when no upstream is configured). Nil when neither can
 	// be resolved — that means "no push/pull data," not an error.
@@ -269,21 +283,46 @@ func (s *Service) ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	sections, commits, ahead, behind, err := workspaceGitState(ctx, rec.Metadata.WorkspacePath, compare.gitBase())
 	if err != nil {
-		return WorkspaceFiles{}, err
+		if errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+			return WorkspaceFiles{}, err
+		}
+		return finalizeWorkspaceFiles(WorkspaceFiles{
+			SessionID:      id,
+			CompareBaseSHA: compare.BaseSHA,
+			CompareBaseRef: compare.BaseRef,
+			CompareMode:    compare.Mode,
+			Files:          files,
+			Truncated:      truncated,
+			Summary:        workspaceSummaryFromFiles(files),
+			Degraded:       true,
+			DegradedCode:   workspaceDegradedCode(err),
+		}), nil
 	}
 	return finalizeWorkspaceFiles(WorkspaceFiles{
-		SessionID:      id,
-		CompareBaseSHA: compare.BaseSHA,
-		CompareBaseRef: compare.BaseRef,
-		CompareMode:    compare.Mode,
-		Files:          files,
-		Truncated:      truncated,
-		Sections:       sections,
-		Commits:        commits,
-		Summary:        workspaceSummaryFromFiles(files),
-		Ahead:          ahead,
-		Behind:         behind,
+		SessionID:        id,
+		CompareBaseSHA:   compare.BaseSHA,
+		CompareBaseRef:   compare.BaseRef,
+		CompareMode:      compare.Mode,
+		Files:            files,
+		Truncated:        truncated,
+		Sections:         sections,
+		Commits:          commits.list,
+		CommitsTruncated: commits.truncated,
+		Summary:          workspaceSummaryFromFiles(files),
+		Ahead:            ahead,
+		Behind:           behind,
 	}), nil
+}
+
+func workspaceDegradedCode(err error) string {
+	var apiErr *apierr.Error
+	if errors.As(err, &apiErr) && apiErr.Code != "" {
+		return apiErr.Code
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "WORKSPACE_GIT_TIMEOUT"
+	}
+	return "WORKSPACE_GIT_STATE_UNAVAILABLE"
 }
 
 // GetWorkspaceFile returns one session-worktree file's current text content and
@@ -1751,13 +1790,20 @@ func workspaceChangeMaps(ctx context.Context, root, base string) (workspaceChang
 	return workspaceChangeSet{statuses: statuses, counts: counts, previous: previous, untracked: untracked}, nil
 }
 
+// workspaceCommits is the commit list between base and HEAD, newest first,
+// and whether older commits were left out of it.
+type workspaceCommits struct {
+	list      []CommitSummary
+	truncated bool
+}
+
 // workspaceGitState computes the git-state sections, the commit list between
 // base and HEAD, and ahead/behind counts for one worktree root. The four
 // section diffs, the commit log, and the ahead/behind lookup are independent
 // git subprocesses and run concurrently.
-func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSections, []CommitSummary, *int, *int, error) {
+func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSections, workspaceCommits, *int, *int, error) {
 	var sections WorkspaceFileSections
-	var commits []CommitSummary
+	var commits workspaceCommits
 	var ahead, behind *int
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
@@ -1806,7 +1852,7 @@ func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSec
 			return nil
 		})
 		g.Go(func() (err error) {
-			commits, err = gitCommitLog(gctx, root, base)
+			commits.list, commits.truncated, err = gitCommitLog(gctx, root, base)
 			return err
 		})
 	}
@@ -1815,7 +1861,7 @@ func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSec
 		return nil
 	})
 	if err := g.Wait(); err != nil {
-		return WorkspaceFileSections{}, nil, nil, nil, err
+		return WorkspaceFileSections{}, workspaceCommits{}, nil, nil, err
 	}
 	return sections, commits, ahead, behind, nil
 }
@@ -1887,29 +1933,74 @@ func gitUntrackedFiles(ctx context.Context, root string) ([]string, error) {
 }
 
 // gitCommitLog lists the commits reachable from HEAD but not base, newest
-// first. Metadata/name-status and numstat are collected in two bounded Git
-// passes, rather than spawning Git once or twice for every commit.
-func gitCommitLog(ctx context.Context, root, base string) ([]CommitSummary, error) {
-	var statusOutput, numstatOutput string
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() (err error) {
-		statusOutput, err = gitWorkspaceOutput(gctx, root, "log", "--format=%x1e%H%x1f%s%x1f%an%x1f%aI", "--name-status", "--find-renames", "-z", base+"..HEAD")
-		return err
-	})
-	g.Go(func() (err error) {
-		numstatOutput, err = gitWorkspaceOutput(gctx, root, "log", "--format=%x1e%H", "--numstat", "--find-renames", "-z", base+"..HEAD")
-		return err
-	})
-	if err := g.Wait(); err != nil {
-		return nil, err
+// first, up to maxCommitLogCommits of them. truncated reports that older
+// commits were left out.
+func gitCommitLog(ctx context.Context, root, base string) ([]CommitSummary, bool, error) {
+	commits, changes, counts, truncated, err := gitCommitLogChanges(ctx, root, base+"..HEAD", maxCommitLogCommits, maxCommitLogBytes)
+	if err != nil {
+		return nil, false, err
 	}
-	commits, changes := parseCommitStatusLog(statusOutput)
-	counts := parseCommitNumstatLog(numstatOutput)
 	for i := range commits {
 		change := changes[commits[i].SHA]
 		commits[i].Files = buildSectionSummaries(root, change.statuses, counts[commits[i].SHA], change.previous)
 	}
-	return commits, nil
+	return commits, truncated, nil
+}
+
+// gitCommitLogChanges lists up to maxCommits commits in revRange, newest
+// first, with each commit's name-status changes and numstat counts. Both are
+// collected in two Git passes, rather than spawning Git once or twice for every
+// commit, and each pass keeps at most maxBytes of output. A commit either
+// fits whole in both passes or is left out, never listed with part of its
+// files. truncated reports that older commits were left out.
+func gitCommitLogChanges(ctx context.Context, root, revRange string, maxCommits, maxBytes int) ([]CommitSummary, map[string]commitChangeSet, map[string]map[string][2]int, bool, error) {
+	// Reading one commit past the cap tells a full list from a truncated one.
+	maxCount := "--max-count=" + strconv.Itoa(maxCommits+1)
+	var statusOutput, numstatOutput string
+	var statusCapped, numstatCapped bool
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) {
+		statusOutput, statusCapped, err = gitWorkspaceOutputCapped(gctx, root, maxBytes, "log", maxCount, "--format=%x1e%H%x1f%s%x1f%an%x1f%aI", "--name-status", "--find-renames", "-z", revRange)
+		return err
+	})
+	g.Go(func() (err error) {
+		numstatOutput, numstatCapped, err = gitWorkspaceOutputCapped(gctx, root, maxBytes, "log", maxCount, "--format=%x1e%H", "--numstat", "--find-renames", "-z", revRange)
+		return err
+	})
+	if err := g.Wait(); err != nil {
+		return nil, nil, nil, false, err
+	}
+	commits, changes := parseCommitStatusLog(wholeCommitChunks(statusOutput, statusCapped))
+	counts := parseCommitNumstatLog(wholeCommitChunks(numstatOutput, numstatCapped))
+	truncated := statusCapped || numstatCapped
+	if numstatCapped {
+		// Past the numstat pass's last whole commit, text files would read as
+		// binary for want of counts.
+		for i, commit := range commits {
+			if _, ok := counts[commit.SHA]; !ok {
+				commits = commits[:i]
+				break
+			}
+		}
+	}
+	if len(commits) > maxCommits {
+		commits = commits[:maxCommits]
+		truncated = true
+	}
+	return commits, changes, counts, truncated, nil
+}
+
+// wholeCommitChunks drops the commit a capped git log pass stopped partway
+// through. Every commit's chunk starts with \x1e, so all output before the
+// last one is whole.
+func wholeCommitChunks(out string, capped bool) string {
+	if !capped {
+		return out
+	}
+	if end := strings.LastIndexByte(out, '\x1e'); end >= 0 {
+		return out[:end]
+	}
+	return ""
 }
 
 type commitChangeSet struct {
@@ -2037,8 +2128,13 @@ func workspaceDiffStatuses(ctx context.Context, root, base string) (map[string]W
 // revision arguments (e.g. a single base for base..worktree, "--cached" for
 // index..HEAD, or two revisions for a committed range) and parses the result.
 func workspaceDiffNameStatus(ctx context.Context, root string, revArgs ...string) (map[string]WorkspaceFileStatus, map[string]string, error) {
+	return workspaceDiffNameStatusPaths(ctx, root, revArgs, nil)
+}
+
+func workspaceDiffNameStatusPaths(ctx context.Context, root string, revArgs, paths []string) (map[string]WorkspaceFileStatus, map[string]string, error) {
 	args := append([]string{"diff", "--name-status", "--find-renames", "-z"}, revArgs...)
 	args = append(args, "--")
+	args = append(args, paths...)
 	out, err := gitWorkspaceOutput(ctx, root, args...)
 	if err != nil {
 		return nil, nil, err
@@ -2120,8 +2216,13 @@ func workspaceNumstat(ctx context.Context, root, base string) (map[string][2]int
 // workspaceDiffNumstat runs `git diff --numstat` with the given revision
 // arguments; see workspaceDiffNameStatus for the argument forms.
 func workspaceDiffNumstat(ctx context.Context, root string, revArgs ...string) (map[string][2]int, error) {
+	return workspaceDiffNumstatPaths(ctx, root, revArgs, nil)
+}
+
+func workspaceDiffNumstatPaths(ctx context.Context, root string, revArgs, paths []string) (map[string][2]int, error) {
 	args := append([]string{"diff", "--numstat", "--find-renames", "-z"}, revArgs...)
 	args = append(args, "--")
+	args = append(args, paths...)
 	out, err := gitWorkspaceOutput(ctx, root, args...)
 	if err != nil {
 		return nil, err
@@ -2390,6 +2491,7 @@ func gitWorkspaceOutput(ctx context.Context, root string, args ...string) (strin
 	globalArgs := make([]string, 0, 10+len(args))
 	globalArgs = append(globalArgs, "--no-pager", "--no-optional-locks", "-c", "core.hooksPath="+os.DevNull, "-c", "diff.external=", "-c", "core.fsmonitor=false", "-C", root)
 	cmd := aoprocess.CommandContext(ctx, "git", append(globalArgs, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -2408,7 +2510,7 @@ func gitWorkspaceOutput(ctx context.Context, root string, args ...string) (strin
 		if workspaceRepoUnavailable(root) {
 			return "", fmt.Errorf("git -C %s %s: %w", root, strings.Join(args, " "), ports.ErrWorkspaceRepoUnavailable)
 		}
-		return "", fmt.Errorf("git -C %s %s: %w: %s", root, strings.Join(args, " "), err, detail)
+		return "", classifyWorkspaceGitError(ctx, err, detail)
 	}
 	return string(out), nil
 }
@@ -2440,6 +2542,7 @@ func gitWorkspaceOutputCapped(ctx context.Context, root string, limit int, args 
 	globalArgs := make([]string, 0, 10+len(args))
 	globalArgs = append(globalArgs, "--no-pager", "--no-optional-locks", "-c", "core.hooksPath="+os.DevNull, "-c", "diff.external=", "-c", "core.fsmonitor=false", "-C", root)
 	cmd := aoprocess.CommandContext(ctx, "git", append(globalArgs, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
 	stdout := &cappedWorkspaceOutput{limit: limit}
 	stderr := &cappedWorkspaceOutput{limit: 64 * 1024}
 	cmd.Stdout = stdout
@@ -2448,9 +2551,36 @@ func gitWorkspaceOutputCapped(ctx context.Context, root string, limit int, args 
 		if workspaceRepoUnavailable(root) {
 			return "", false, fmt.Errorf("workspace git command: %w", ports.ErrWorkspaceRepoUnavailable)
 		}
-		return "", false, fmt.Errorf("workspace git command failed: %w: %s", err, strings.TrimSpace(stderr.buffer.String()))
+		return "", false, classifyWorkspaceGitError(ctx, err, strings.TrimSpace(stderr.buffer.String()))
 	}
 	return stdout.buffer.String(), stdout.truncated, nil
+}
+
+// classifyWorkspaceGitError keeps repository-read failures actionable at the
+// HTTP boundary. The old code returned raw exec.ExitError values, which the
+// envelope rendered as an indistinguishable INTERNAL_ERROR. Context deadlines
+// remain discoverable by the envelope's transient mapper, while lock/contention
+// failures are explicitly retryable.
+func classifyWorkspaceGitError(ctx context.Context, err error, detail string) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	lower := strings.ToLower(detail)
+	for _, marker := range []string{
+		"index.lock",
+		"unable to create",
+		"could not lock",
+		"resource temporarily unavailable",
+		"another git process",
+	} {
+		if strings.Contains(lower, marker) {
+			return apierr.Unavailable("WORKSPACE_GIT_BUSY", "Workspace Git state is temporarily unavailable")
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	return apierr.Internal("WORKSPACE_GIT_READ_FAILED", "Unable to read workspace Git state")
 }
 
 // workspaceRepoUnavailable reports whether a worktree root can no longer reach
