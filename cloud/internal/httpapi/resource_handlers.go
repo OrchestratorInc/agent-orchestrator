@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -173,6 +175,35 @@ func toSessionChildResponse(
 	}
 }
 
+// writeProjectStoreError renders a project-creation store error, turning the
+// active-repository uniqueness conflict into a clear, specific message that
+// names the repository instead of the generic "resource conflicts" 409. Every
+// other error class is delegated to the shared store-error mapper unchanged.
+func (s *Server) writeProjectStoreError(w http.ResponseWriter, r *http.Request, err error) {
+	var repoConflict *postgres.ProjectRepositoryConflictError
+	if errors.As(err, &repoConflict) {
+		writeError(
+			w, r, http.StatusConflict, "project_repository_exists",
+			projectRepositoryConflictMessage(repoConflict.RepositoryURL),
+		)
+		return
+	}
+	s.writeStoreError(w, r, err)
+}
+
+// projectRepositoryConflictMessage explains that the workspace already has a
+// project for this repository, naming the repository (owner/name) when the URL
+// is known so the user can find and reuse or delete the existing project.
+func projectRepositoryConflictMessage(repositoryURL string) string {
+	if owner, repo, ok := parseGitHubRepo(repositoryURL); ok {
+		return fmt.Sprintf(
+			"You already have a project for %s/%s in this workspace. Open that project, or delete it before creating another for the same repository.",
+			owner, repo,
+		)
+	}
+	return "You already have a project for this repository in this workspace. Open that project, or delete it before creating another for the same repository."
+}
+
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 	if requireUUID(orgID, "orgId") != nil {
@@ -275,7 +306,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		},
 	)
 	if err != nil {
-		s.writeStoreError(w, r, err)
+		s.writeProjectStoreError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"project": toProjectResponse(project)})

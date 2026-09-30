@@ -499,7 +499,7 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 		},
 	)
 	if err != nil {
-		s.writeStoreError(w, r, err)
+		s.writeProjectStoreError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"project": toProjectResponse(project)})

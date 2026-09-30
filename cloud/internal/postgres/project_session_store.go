@@ -71,7 +71,7 @@ func (s *Store) CreateProject(
 			config,
 		), &project)
 		if err != nil {
-			return normalizeConstraintError(err)
+			return projectRepositoryConflict(err, input.RepositoryURL)
 		}
 		if _, err := tx.Exec(
 			ctx,

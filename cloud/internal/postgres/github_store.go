@@ -980,7 +980,11 @@ func (s *Store) CreateGitHubProject(
 			return ErrForbidden
 		}
 		if err != nil {
-			return normalizeConstraintError(err)
+			// The App path authorizes by repository id and derives the URL
+			// server-side, so it is not available here; the API renders a
+			// repository-agnostic message when the org already has a project for
+			// this repository.
+			return projectRepositoryConflict(err, "")
 		}
 		if _, err := tx.Exec(
 			ctx,
