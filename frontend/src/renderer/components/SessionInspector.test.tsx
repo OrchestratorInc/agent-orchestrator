@@ -14,6 +14,7 @@ import { SessionInspector } from "./SessionInspector";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
+import { settingsQueryKey } from "../hooks/useSettings";
 import { sessionWorkspaceFilesQueryKey } from "../hooks/useSessionWorkspaceFiles";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
@@ -397,6 +398,30 @@ describe("SessionInspector tabs", () => {
     );
   });
 
+  it("does not query the local workspace files endpoint for a cloud session", async () => {
+    renderWithQuery(
+      <SessionInspector
+        session={session([], {
+          id: "cloud-session-1",
+          cloud: {
+            orgId: "cloud-org-1",
+            sandboxProvider: "docker",
+            desiredState: "running",
+            observedState: "running",
+          },
+        })}
+      />,
+    );
+
+    await waitFor(() => expect(getMock.mock.calls.length).toBeGreaterThan(0));
+
+    expect(
+      getMock.mock.calls.some(
+        ([path]) => path === "/api/v1/sessions/{sessionId}/workspace/files",
+      ),
+    ).toBe(false);
+  });
+
   it("shows a live changed-file count on the Files tab once the shared cache is populated", () => {
     renderWithQuery(
       <SessionInspector session={session([])} />,
@@ -572,6 +597,40 @@ describe("SessionInspector PR section", () => {
       }),
     );
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("merges a ready cloud pull request through the control plane", async () => {
+    const requests: Array<{ path: string; method: string; body?: string }> = [];
+    const originalBridge = (window as unknown as { aoBridge?: unknown }).aoBridge;
+    (window as unknown as { aoBridge?: unknown }).aoBridge = {
+      cloudCp: { request: async (request: { path: string; method: string; body?: string }) => {
+        requests.push(request);
+        return { status: 202, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "merge_accepted" }) };
+      } },
+    };
+    try {
+      const readyPR = prSummary(7, "open", { headSha: "abc123" });
+      renderWithQuery(
+        <SessionInspector session={session([pr(7, "open")], { cloud: {
+          orgId: "cloud-org-1", sandboxProvider: "docker", desiredState: "running", observedState: "running",
+        } })} />,
+        undefined,
+        (client) => {
+          client.setQueryData(settingsQueryKey, {
+            defaultSessionMode: "tui", chatHarnesses: [], client: "", localEnabled: true,
+            cloudOffering: true, cloudEnabled: true, cloudControlPlaneUrl: "https://staging-api.aoagents.dev",
+          });
+          client.setQueryData(["cloud-session-scm-summary", "https://staging-api.aoagents.dev", "cloud-org-1", "sess-1"], [readyPR]);
+        },
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Merge PR #7" }));
+      await waitFor(() => expect(requests.some((request) => request.method === "POST" && request.path.endsWith("/pull-requests/7/merge"))).toBe(true));
+      const merge = requests.find((request) => request.method === "POST" && request.path.endsWith("/pull-requests/7/merge"));
+      expect(JSON.parse(merge?.body ?? "{}")) .toEqual({ prUrl: readyPR.url, expectedHeadSha: "abc123" });
+      expect(postCallsFor("/api/v1/prs/{id}/merge")).toHaveLength(0);
+    } finally {
+      (window as unknown as { aoBridge?: unknown }).aoBridge = originalBridge;
+    }
   });
 
   it("does not offer Merge when the pull request is not ready", () => {

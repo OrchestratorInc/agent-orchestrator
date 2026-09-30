@@ -44,6 +44,12 @@ export type PullRequestFacts = {
 	ci: string;
 	review: string;
 	mergeability: string;
+	failingChecks?: Array<{
+		name: string;
+		status: "failed" | "cancelled";
+		conclusion: string;
+		url?: string;
+	}>;
 	reviewComments: boolean;
 	updatedAt: string;
 };
@@ -323,6 +329,12 @@ export function sessionIsActive(session: WorkspaceSession): boolean {
  */
 export function sessionAgentExited(session: WorkspaceSession | undefined): boolean {
 	return Boolean(session && session.activity?.state === "exited" && sessionIsActive(session));
+}
+
+/** Whether a session can accept a Cue from its topbar. The daemon makes the
+ * final decision, including whether a command Cue's worktree still exists. */
+export function sessionCueTargetAvailable(session: WorkspaceSession | undefined): boolean {
+	return Boolean(session && sessionIsActive(session) && session.activity?.state !== "exited" && session.activity?.state !== "blocked");
 }
 
 export function sessionNeedsAttention(session: WorkspaceSession): boolean {

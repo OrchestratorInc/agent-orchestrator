@@ -53,17 +53,20 @@ test("settings: confirm opened from Settings stacks above it and enables Cloud",
 		const dialogs = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')];
 		const settings = dialogs.find((d) => d.textContent?.includes("Developer mode"));
 		const confirmDialog = dialogs.find((d) => d.textContent?.includes("Enable Cloud?"));
-		if (!settings || !confirmDialog) return null;
+		const settingsOverlay = document.querySelector<HTMLElement>('[data-testid="settings-dialog-overlay"]');
+		if (!settings || !confirmDialog || !settingsOverlay) return null;
 		const confirmAfter = Boolean(
 			settings.compareDocumentPosition(confirmDialog) & Node.DOCUMENT_POSITION_FOLLOWING,
 		);
 		return {
+			overlayZ: getComputedStyle(settingsOverlay).zIndex,
 			settingsZ: getComputedStyle(settings).zIndex,
 			confirmZ: getComputedStyle(confirmDialog).zIndex,
 			confirmAfter,
 		};
 	});
 	expect(stacking).not.toBeNull();
+	expect(Number(stacking!.overlayZ), JSON.stringify(stacking)).toBeLessThan(Number(stacking!.settingsZ));
 	const confirmPaintsAbove =
 		Number(stacking!.confirmZ) > Number(stacking!.settingsZ) ||
 		(stacking!.confirmZ === stacking!.settingsZ && stacking!.confirmAfter);

@@ -10,7 +10,7 @@ function render(ui: ReactElement) {
 	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
 }
 
-const { getMock, putMock, postMock, navigateMock, closeSettingsMock, openGlobalSettingsMock, setOrchestratorReplacementErrorMock, captureOrchestratorReplacementFailureMock, ensureAgentReadinessMock } = vi.hoisted(() => ({
+const { getMock, putMock, postMock, navigateMock, closeSettingsMock, openGlobalSettingsMock, setOrchestratorReplacementErrorMock, captureOrchestratorReplacementFailureMock, ensureAgentReadinessMock, trackerIntakeGate } = vi.hoisted(() => ({
 	getMock: vi.fn(),
 	putMock: vi.fn(),
 	postMock: vi.fn(),
@@ -20,6 +20,7 @@ const { getMock, putMock, postMock, navigateMock, closeSettingsMock, openGlobalS
 	setOrchestratorReplacementErrorMock: vi.fn(),
 	captureOrchestratorReplacementFailureMock: vi.fn(),
 	ensureAgentReadinessMock: vi.fn(),
+	trackerIntakeGate: { enabled: true },
 }));
 
 vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
@@ -46,6 +47,10 @@ vi.mock("../stores/ui-store", () => ({
 
 vi.mock("../lib/orchestrator-replacement-telemetry", () => ({
 	captureOrchestratorReplacementFailure: captureOrchestratorReplacementFailureMock,
+}));
+
+vi.mock("../hooks/useSettings", () => ({
+	useSettings: () => ({ settings: { trackerIntakeEnabled: trackerIntakeGate.enabled }, isLoading: false, error: undefined }),
 }));
 
 vi.mock("../lib/api-client", () => ({
@@ -198,6 +203,7 @@ beforeEach(() => {
 	setOrchestratorReplacementErrorMock.mockReset();
 	captureOrchestratorReplacementFailureMock.mockReset();
 	ensureAgentReadinessMock.mockReset();
+	trackerIntakeGate.enabled = true;
 	putMock.mockResolvedValue({ data: { project: {} }, error: undefined });
 	postMock.mockResolvedValue({
 		data: { orchestrator: { id: "proj-1-orch-2" } },
@@ -1824,6 +1830,65 @@ describe("ProjectSettingsForm", () => {
 			enabled: true,
 			assignee: "octocat",
 		});
+	});
+
+	it("hides the intake section entirely when the daemon gate is off", async () => {
+		trackerIntakeGate.enabled = false;
+		getMock.mockResolvedValue({
+			data: {
+				status: "ok",
+				project: {
+					id: "proj-1",
+					name: "Project One",
+					kind: "single_repo",
+					path: "/repo/project-one",
+					repo: "git@github.com:acme/project-one.git",
+					defaultBranch: "main",
+					config: { worker: { agent: "codex" }, orchestrator: { agent: "claude-code" } },
+				},
+			},
+			error: undefined,
+		});
+
+		renderSettings("proj-1", undefined, "general");
+
+		expect(await screen.findByText("Pull requests")).toBeInTheDocument();
+		expect(screen.queryByText("Issues")).not.toBeInTheDocument();
+		expect(screen.queryByLabelText("Enable issue intake")).not.toBeInTheDocument();
+	});
+
+	it("still saves other settings when the gate is off and stored intake lacks an assignee", async () => {
+		trackerIntakeGate.enabled = false;
+		getMock.mockResolvedValue({
+			data: {
+				status: "ok",
+				project: {
+					id: "proj-1",
+					name: "Project One",
+					kind: "single_repo",
+					path: "/repo/project-one",
+					repo: "git@github.com:acme/project-one.git",
+					defaultBranch: "main",
+					config: {
+						worker: { agent: "codex" },
+						orchestrator: { agent: "claude-code" },
+						trackerIntake: { enabled: true },
+					},
+				},
+			},
+			error: undefined,
+		});
+
+		renderSettings("proj-1", undefined, "general");
+		expect(await screen.findByText("Pull requests")).toBeInTheDocument();
+
+		const prefix = await beginEdit("Session prefix");
+		await userEvent.clear(prefix);
+		await userEvent.type(prefix, "gated");
+		submitSettings();
+
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0]?.[1]?.body.config.trackerIntake).toEqual({ enabled: true });
 	});
 
 	it("preserves explicit provider and unmodeled tracker intake fields on save", async () => {

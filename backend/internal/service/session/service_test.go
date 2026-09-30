@@ -204,6 +204,40 @@ func writeWorkspaceFile(t *testing.T, root, rel, content string) {
 	}
 }
 
+// fixtureCommit is one commit for importCommits: its message and the files it
+// writes.
+type fixtureCommit struct {
+	message string
+	files   map[string]string
+}
+
+// importCommits appends commits to branch on top of parent in one git
+// fast-import, far faster than a git commit per commit for the hundreds a
+// capped commit list needs, and returns their SHAs oldest first.
+func importCommits(t *testing.T, repo, branch, parent string, commits []fixtureCommit) []string {
+	t.Helper()
+	var stream strings.Builder
+	for i, commit := range commits {
+		fmt.Fprintf(&stream, "commit refs/heads/%s\ncommitter AO Tests <ao@example.com> %d +0000\ndata %d\n%s\n", branch, 1700000000+i, len(commit.message), commit.message)
+		if i == 0 {
+			fmt.Fprintf(&stream, "from %s\n", parent)
+		}
+		for path, content := range commit.files {
+			fmt.Fprintf(&stream, "M 100644 inline %s\ndata %d\n%s\n", path, len(content), content)
+		}
+	}
+	cmd := exec.Command("git", "-C", repo, "fast-import", "--quiet")
+	cmd.Stdin = strings.NewReader(stream.String())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git fast-import: %v\n%s", err, out)
+	}
+	shas := strings.Fields(runGit(t, repo, "rev-list", "--reverse", parent+".."+branch))
+	if len(shas) != len(commits) {
+		t.Fatalf("imported %d commits, want %d", len(shas), len(commits))
+	}
+	return shas
+}
+
 func linkWorkspaceDir(t *testing.T, target, link string) {
 	t.Helper()
 	if err := os.Symlink(target, link); err == nil {
