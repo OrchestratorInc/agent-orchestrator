@@ -43,7 +43,7 @@ func newAgentProcessSuperviseCommand(ctx *commandContext) *cobra.Command {
 			if !sessionIDPattern.MatchString(sessionID) {
 				return usageError{fmt.Errorf("invalid session id")}
 			}
-			if !sessionIDPattern.MatchString(launchID) {
+			if !launchIDPattern.MatchString(launchID) {
 				return usageError{fmt.Errorf("invalid launch id")}
 			}
 			ctx.runSupervisedProcess(cmd.Context(), sessionID, launchID, args)

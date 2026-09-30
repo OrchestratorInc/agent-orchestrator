@@ -28,7 +28,10 @@ import (
 // sessionIDPattern bounds the AO_SESSION_ID we will place in a request path to
 // the id alphabet the daemon issues. Validating the externally-set env value
 // before it reaches the loopback URL keeps it from steering the request.
-var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9._-]*$`)
+
+// Launch generations do not inherit the project's dotted identifier alphabet.
+var launchIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 const (
 	// hooksLogName is the file under AO_DATA_DIR where hook delivery failures
@@ -731,7 +734,7 @@ func hookReadsStdin(agent, event string) bool {
 
 func validLaunchID(value string) string {
 	value = strings.TrimSpace(value)
-	if !sessionIDPattern.MatchString(value) {
+	if !launchIDPattern.MatchString(value) {
 		return ""
 	}
 	return value
