@@ -3722,27 +3722,42 @@ func TestKill_UnnamedWorkspaceErrorPreservesAndTerminates(t *testing.T) {
 	}
 }
 
-// TestKill_ConclusivelyAbsentRuntimeStillTerminates is the #5463 regression on
-// the runtime half. tmux answering "no server running" is evidence the runtime
-// is already gone: there is nothing left to release, so failing the kill would
-// strand the session for a condition no retry can clear.
-func TestKill_ConclusivelyAbsentRuntimeStillTerminates(t *testing.T) {
-	m, st, rt, ws := newManager()
-	st.sessions["mer-1"] = mkLive("mer-1")
-	rt.destroyErr = fmt.Errorf("tmux runtime: no server running: %w", ports.ErrRuntimeUnavailable)
+// TestKill_RuntimeConfirmedGoneAfterDestroyErrorStillTerminates is the #5463
+// regression on the runtime half. Real runtimes return nil from Destroy when
+// they confirm the session is absent, so a Destroy error never proves absence
+// on its own — the re-probe does. When kill-session fails but IsAlive then
+// reports the session gone (definitively, or with its server conclusively
+// absent), there is nothing left to release, and failing the kill would strand
+// the session for a condition no retry can clear.
+func TestKill_RuntimeConfirmedGoneAfterDestroyErrorStillTerminates(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		aliveErr error
+	}{
+		{name: "session missing"},
+		{name: "server absent", aliveErr: fmt.Errorf("tmux runtime: probe session h1: %w: no server running", ports.ErrRuntimeUnavailable)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, rt, ws := newManager()
+			st.sessions["mer-1"] = mkLive("mer-1")
+			rt.destroyErr = errors.New("tmux runtime: destroy session h1: exit status 1")
+			rt.aliveByHandle = map[string]bool{"h1": false}
+			rt.aliveErr = tc.aliveErr
 
-	freed, err := m.Kill(ctx, "mer-1")
-	if err != nil {
-		t.Fatalf("Kill: %v", err)
-	}
-	if !freed {
-		t.Fatal("freed = false: workspace teardown must still run")
-	}
-	if ws.destroyed != 1 {
-		t.Fatalf("workspace destroys = %d, want 1", ws.destroyed)
-	}
-	if !st.sessions["mer-1"].IsTerminated {
-		t.Fatal("session must be marked terminated")
+			freed, err := m.Kill(ctx, "mer-1")
+			if err != nil {
+				t.Fatalf("Kill: %v", err)
+			}
+			if !freed {
+				t.Fatal("freed = false: workspace teardown must still run")
+			}
+			if ws.destroyed != 1 {
+				t.Fatalf("workspace destroys = %d, want 1", ws.destroyed)
+			}
+			if !st.sessions["mer-1"].IsTerminated {
+				t.Fatal("session must be marked terminated")
+			}
+		})
 	}
 }
 
@@ -3754,11 +3769,12 @@ func TestKill_ConclusivelyAbsentRuntimeStillTerminates(t *testing.T) {
 func TestKill_InconclusiveRuntimeProbeStaysFailClosed(t *testing.T) {
 	m, st, rt, ws := newManager()
 	st.sessions["mer-1"] = mkLive("mer-1")
-	rt.destroyErr = fmt.Errorf("conpty: pty registry scan incomplete: %w", ports.ErrRuntimeProbeInconclusive)
+	rt.destroyErr = errors.New("tmux runtime: destroy session h1: connection refused")
+	rt.aliveErr = fmt.Errorf("tmux runtime: probe session h1: %w: connection refused", ports.ErrRuntimeProbeInconclusive)
 
 	freed, err := m.Kill(ctx, "mer-1")
-	if err == nil || !errors.Is(err, ports.ErrRuntimeProbeInconclusive) {
-		t.Fatalf("freed=%v err=%v, want the inconclusive probe surfaced", freed, err)
+	if err == nil || !strings.Contains(err.Error(), "runtime") {
+		t.Fatalf("freed=%v err=%v, want the runtime error surfaced", freed, err)
 	}
 	if ws.destroyed != 0 {
 		t.Fatalf("workspace destroys = %d, want 0: teardown must stop at the runtime", ws.destroyed)
@@ -3924,6 +3940,8 @@ func TestKill_WorkspaceProjectDeferredRowDefersRemoval(t *testing.T) {
 func TestKill_RuntimeDestroyFailureLeavesSessionActive(t *testing.T) {
 	m, st, rt, ws := newManager()
 	rt.destroyErr = errors.New("tmux transient")
+	// The failed destroy left the session running, so the re-probe sees it.
+	rt.aliveByHandle = map[string]bool{"h1": true}
 	st.sessions["mer-1"] = mkLive("mer-1")
 
 	freed, err := m.Kill(ctx, "mer-1")

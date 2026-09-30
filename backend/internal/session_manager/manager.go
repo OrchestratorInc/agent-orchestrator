@@ -2104,19 +2104,30 @@ func expectedWorkspaceRefusal(err error) bool {
 		errors.Is(err, ports.ErrWorkspaceDeferred)
 }
 
-// runtimeConclusivelyAbsent reports a Destroy failure that is itself evidence
-// the runtime is already gone — tmux answering "no server running", and only
-// that class. There is nothing left to release, so refusing the kill would
-// strand the session for a condition no retry can clear (#5463).
+// runtimeConfirmedGone reports whether a failed Destroy left nothing behind to
+// release. Destroy already returns nil when the runtime confirms the session
+// or server is absent, so its errors never carry that evidence on their own —
+// a kill-session that failed may still have taken the session down with it.
+// Re-probing IsAlive is what settles it: a definitive "not alive", or a
+// conclusively absent server, means refusing the kill would strand the session
+// for a condition no retry can clear (#5463).
 //
-// ErrRuntimeProbeInconclusive is deliberately NOT included: its port contract
-// says the runtime may still be live and callers "must not recreate, destroy,
-// archive, or otherwise treat the session as dead". Marking the row terminated
-// is treating it as dead, and it would leave a possibly-live agent running with
-// no owner and no row pointing at it — worse than a visible stuck session.
-// Every other runtime error stays fail-closed for the same reason.
-func runtimeConclusivelyAbsent(err error) bool {
-	return errors.Is(err, ports.ErrRuntimeUnavailable)
+// ErrRuntimeProbeInconclusive is deliberately NOT treated as gone: its port
+// contract says the runtime may still be live and callers "must not recreate,
+// destroy, archive, or otherwise treat the session as dead". Marking the row
+// terminated is treating it as dead, and it would leave a possibly-live agent
+// running with no owner and no row pointing at it — worse than a visible stuck
+// session. Every other probe error, and a session still alive, stays
+// fail-closed for the same reason.
+func (m *Manager) runtimeConfirmedGone(ctx context.Context, handle ports.RuntimeHandle, destroyErr error) bool {
+	if errors.Is(destroyErr, ports.ErrRuntimeUnavailable) {
+		return true
+	}
+	alive, err := m.runtime.IsAlive(ctx, handle)
+	if err != nil {
+		return errors.Is(err, ports.ErrRuntimeUnavailable)
+	}
+	return !alive
 }
 
 // terminateWithPreservedWorkspace records terminal intent for a session whose
@@ -2249,7 +2260,7 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 		m.stopChatBestEffort(ctx, id)
 	} else if handle.ID != "" {
 		if err := m.runtime.Destroy(ctx, handle); err != nil {
-			if !runtimeConclusivelyAbsent(err) {
+			if !m.runtimeConfirmedGone(ctx, handle, err) {
 				return false, fmt.Errorf("kill %s: runtime: %w", id, err)
 			}
 			m.logger.Warn("kill: runtime already gone; continuing teardown", "sessionID", id, "handle", handle.ID, "error", err)
