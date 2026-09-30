@@ -1,10 +1,13 @@
 package modelcatalog
 
 import (
+	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -59,27 +62,8 @@ var configuredDefaultSources = map[string]configuredDefaultSource{
 		},
 		parse: parseJSONCModelKey,
 	},
-	// Copilot CLI keeps user-editable settings, including the model /model
-	// selects, in settings.json; config.json is legacy managed state and is not
-	// read, so a stale value there can never be marked as the default. Model
-	// precedence: user settings < repository settings < COPILOT_MODEL.
-	// https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference
 	"copilot": {
-		paths: func(home, workingDir string, env map[string]string) []string {
-			var paths []string
-			root := envValue(env, "COPILOT_HOME")
-			if root == "" && home != "" {
-				root = filepath.Join(home, ".copilot")
-			}
-			if root != "" {
-				paths = append(paths, filepath.Join(root, "settings.json"))
-			}
-			if workingDir != "" {
-				paths = append(paths, filepath.Join(workingDir, ".github", "copilot", "settings.json"))
-			}
-			return paths
-		},
-		parse:       parseJSONCModelKey,
+		resolve:     resolveCopilotModel,
 		envOverride: "COPILOT_MODEL",
 	},
 	"pi": {
@@ -110,6 +94,79 @@ var configuredDefaultSources = map[string]configuredDefaultSource{
 	},
 }
 
+// resolveCopilotModel returns the model Copilot CLI will run for a session
+// launched from an AO worktree of workingDir's repository. Copilot keeps
+// user-editable settings, including the model /model selects, in
+// settings.json; config.json is legacy managed state and is not read, so a
+// stale value there can never be marked as the default. Model precedence is
+// user settings < repository settings < repository local settings <
+// COPILOT_MODEL (checked by the caller).
+//
+// Discovery reads the project checkout, but sessions launch from worktrees
+// that contain only tracked files. settings.local.json is usually gitignored:
+// an untracked copy in the checkout is absent from the worktree and is skipped,
+// while a tracked one is present there and overrides the repository model.
+// When tracking cannot be determined, the default is left unresolved.
+// https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference
+func resolveCopilotModel(home, workingDir string, env map[string]string) string {
+	root := envValue(env, "COPILOT_HOME")
+	if root == "" && home != "" {
+		root = filepath.Join(home, ".copilot")
+	}
+	model := ""
+	if root != "" {
+		model = readConfiguredModel(filepath.Join(root, "settings.json"), parseJSONCModelKey, model)
+	}
+	if workingDir == "" {
+		return model
+	}
+	model = readConfiguredModel(filepath.Join(workingDir, ".github", "copilot", "settings.json"), parseJSONCModelKey, model)
+	localRel := filepath.Join(".github", "copilot", "settings.local.json")
+	raw, err := readModelConfig(filepath.Join(workingDir, localRel))
+	if err != nil {
+		return model
+	}
+	local := strings.TrimSpace(parseJSONCModelKey(raw))
+	if local == "" {
+		return model
+	}
+	tracked, ok := gitTracksFile(workingDir, localRel)
+	if !ok {
+		return ""
+	}
+	if tracked {
+		return local
+	}
+	return model
+}
+
+// gitTracksFile reports whether rel (relative to dir) is tracked by git. ok is
+// false when git cannot answer, for example outside a repository.
+var gitTracksFile = func(dir, rel string) (tracked, ok bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "ls-files", "--", filepath.ToSlash(rel))
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return false, false
+	}
+	return strings.TrimSpace(string(out)) != "", true
+}
+
+// readConfiguredModel returns the model set in path, or fallback when the file
+// is missing or sets none.
+func readConfiguredModel(path string, parse func([]byte) string, fallback string) string {
+	raw, err := readModelConfig(path)
+	if err != nil {
+		return fallback
+	}
+	if value := strings.TrimSpace(parse(raw)); value != "" {
+		return value
+	}
+	return fallback
+}
+
 // configuredDefaultModel returns the model the agent's local configuration
 // selects, or "" when the agent has no such source or nothing is configured.
 func configuredDefaultModel(agentID, workingDir string, env map[string]string) string {
@@ -128,13 +185,7 @@ func configuredDefaultModel(agentID, workingDir string, env map[string]string) s
 	}
 	configured := ""
 	for _, path := range source.paths(home, workingDir, env) {
-		raw, err := readModelConfig(path)
-		if err != nil {
-			continue
-		}
-		if value := strings.TrimSpace(source.parse(raw)); value != "" {
-			configured = value
-		}
+		configured = readConfiguredModel(path, source.parse, configured)
 	}
 	return configured
 }

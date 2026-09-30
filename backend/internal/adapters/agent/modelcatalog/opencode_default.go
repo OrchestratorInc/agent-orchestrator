@@ -10,10 +10,12 @@ import (
 // openCodeLayer is one OpenCode config source that may set the root model.
 // certain is false when AO cannot know whether the layer applies to the
 // session it will launch; if such a layer is the one that wins, the default is
-// left unresolved rather than guessed.
+// left unresolved rather than guessed. unknown marks a layer whose contents AO
+// cannot see at all: any model below it may be overridden at launch.
 type openCodeLayer struct {
 	model   string
 	certain bool
+	unknown bool
 }
 
 // openCodeManagedConfigDirs lists the system directories OpenCode reads
@@ -47,7 +49,10 @@ var openCodeManagedConfigDirs = func() []string {
 // worktrees elsewhere on disk, so only layers that are identical for both are
 // trusted:
 //   - in-repository files are the same in the checkout and every worktree;
-//   - v2 directories above the git root differ, so they are uncertain;
+//   - v2 also reads directories above the git root, and those are the
+//     ancestors of the launch worktree (for example <AO_DATA_DIR>/opencode.json),
+//     not of the checkout. AO cannot see them here, so they are an unknown
+//     layer: only a model from a layer that outranks them is trusted;
 //   - the user's OPENCODE_CONFIG is replaced by AO's own file at TUI launch but
 //     kept for ACP sessions, and OPENCODE_CONFIG_DIR's contents are not
 //     modeled, so both are uncertain.
@@ -68,9 +73,17 @@ func resolveOpenCodeModel(major int, home, workingDir string, env map[string]str
 
 	projectDirs := openCodeProjectDirs(major, workingDir)
 	for _, dir := range projectDirs {
+		if dir.unknown {
+			layers = append(layers, openCodeLayer{unknown: true})
+			continue
+		}
 		layers = append(layers, openCodeDirLayer(dir.path, dir.certain, "opencode.json", "opencode.jsonc"))
 	}
 	for _, dir := range projectDirs {
+		if dir.unknown {
+			layers = append(layers, openCodeLayer{unknown: true})
+			continue
+		}
 		layers = append(layers, openCodeDirLayer(filepath.Join(dir.path, ".opencode"), dir.certain, "opencode.json", "opencode.jsonc"))
 	}
 
@@ -85,6 +98,9 @@ func resolveOpenCodeModel(major int, home, workingDir string, env map[string]str
 	}
 
 	for i := len(layers) - 1; i >= 0; i-- {
+		if layers[i].unknown {
+			return ""
+		}
 		if layers[i].model == "" {
 			continue
 		}
@@ -99,13 +115,16 @@ func resolveOpenCodeModel(major int, home, workingDir string, env map[string]str
 type openCodeProjectDir struct {
 	path    string
 	certain bool
+	// unknown stands for the launch worktree's ancestors above its git root,
+	// which v2 reads but discovery cannot see.
+	unknown bool
 }
 
 // openCodeProjectDirs lists the directories OpenCode searches for project
 // config, outermost first. Directories inside the repository are certain.
-// Above the git root, v1 reads nothing and v2 reads directories that depend on
-// where the session is launched. Without a git root the search bound is not
-// known, so every directory is uncertain.
+// Above the git root, v1 reads nothing and v2 reads the launch worktree's
+// ancestors, which are represented by a single unknown entry. Without a git
+// root the search bound is not known, so every directory is uncertain.
 func openCodeProjectDirs(major int, workingDir string) []openCodeProjectDir {
 	if workingDir == "" {
 		return nil
@@ -131,9 +150,12 @@ func openCodeProjectDirs(major int, workingDir string) []openCodeProjectDir {
 		}
 	}
 	var dirs []openCodeProjectDir
+	if gitRoot >= 0 && major >= 2 {
+		dirs = append(dirs, openCodeProjectDir{unknown: true})
+	}
 	for i := len(chain) - 1; i >= 0; i-- {
 		inRepo := gitRoot >= 0 && i <= gitRoot
-		if !inRepo && major < 2 && gitRoot >= 0 {
+		if !inRepo && gitRoot >= 0 {
 			continue
 		}
 		dirs = append(dirs, openCodeProjectDir{path: chain[i], certain: inRepo})

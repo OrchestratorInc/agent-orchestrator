@@ -32,29 +32,41 @@ func newOpenCodeFixture(t *testing.T) openCodeFixture {
 func modelJSON(model string) string { return `{"model": "` + model + `"}` }
 
 func TestOpenCodeDefaultFollowsEachMajorsLayering(t *testing.T) {
-	for _, major := range []int{1, 2} {
-		agentID := map[int]string{1: "opencode", 2: "opencode-v2"}[major]
+	for _, tc := range []struct {
+		agentID string
+		// v2 also reads the launch worktree's ancestors above its git root,
+		// which discovery cannot see. Their direct and .opencode files outrank
+		// the global config and in-repository direct files, so those stay
+		// unresolved for v2.
+		global, repo, pkg string
+	}{
+		{agentID: "opencode", global: "global/a", repo: "repo/c", pkg: "pkg/d"},
+		{agentID: "opencode-v2"},
+	} {
+		agentID := tc.agentID
 		t.Run(agentID, func(t *testing.T) {
 			resolve := func(f openCodeFixture, env map[string]string) string {
 				return configuredDefaultModel(agentID, f.pkg, env)
 			}
 
 			f := newOpenCodeFixture(t)
-			if got := resolve(f, nil); got != "global/a" {
-				t.Errorf("global only = %q, want global/a", got)
+			if got := resolve(f, nil); got != tc.global {
+				t.Errorf("global only = %q, want %q", got, tc.global)
 			}
 
 			// Ancestor project config inside the repository applies, inner wins.
 			writeConfig(t, filepath.Join(f.repo, "opencode.json"), modelJSON("repo/c"))
-			if got := resolve(f, nil); got != "repo/c" {
-				t.Errorf("ancestor repo config = %q, want repo/c", got)
+			if got := resolve(f, nil); got != tc.repo {
+				t.Errorf("ancestor repo config = %q, want %q", got, tc.repo)
 			}
 			writeConfig(t, filepath.Join(f.pkg, "opencode.jsonc"), "// pkg\n"+modelJSON("pkg/d"))
-			if got := resolve(f, nil); got != "pkg/d" {
-				t.Errorf("inner project config = %q, want pkg/d", got)
+			if got := resolve(f, nil); got != tc.pkg {
+				t.Errorf("inner project config = %q, want %q", got, tc.pkg)
 			}
 
 			// Every .opencode file overrides every direct file, even an inner one.
+			// For v2 an in-repository .opencode file also outranks every
+			// ancestor .opencode file, so it is certain for both majors.
 			writeConfig(t, filepath.Join(f.repo, ".opencode", "opencode.json"), modelJSON("dotdir/b"))
 			if got := resolve(f, nil); got != "dotdir/b" {
 				t.Errorf(".opencode config = %q, want dotdir/b", got)
@@ -78,11 +90,13 @@ func TestOpenCodeDefaultAboveGitRootDependsOnMajor(t *testing.T) {
 	for _, tc := range []struct {
 		agentID string
 		want    string
+		repo    string
 	}{
 		// v1 stops at the git root, so the outer config is never read.
-		{agentID: "opencode", want: "global/a"},
-		// v2 reads it, but it differs between the checkout and AO's worktrees.
-		{agentID: "opencode-v2", want: ""},
+		{agentID: "opencode", want: "global/a", repo: "repo/c"},
+		// v2 reads the launch worktree's ancestors, not the checkout's, so
+		// neither the outer config nor an in-repository direct file is trusted.
+		{agentID: "opencode-v2", want: "", repo: ""},
 	} {
 		t.Run(tc.agentID, func(t *testing.T) {
 			f := newOpenCodeFixture(t)
@@ -90,12 +104,29 @@ func TestOpenCodeDefaultAboveGitRootDependsOnMajor(t *testing.T) {
 			if got := configuredDefaultModel(tc.agentID, f.pkg, nil); got != tc.want {
 				t.Errorf("config above git root = %q, want %q", got, tc.want)
 			}
-			// An in-repository model overrides the outer one, which is then moot.
 			writeConfig(t, filepath.Join(f.repo, "opencode.json"), modelJSON("repo/c"))
-			if got := configuredDefaultModel(tc.agentID, f.pkg, nil); got != "repo/c" {
-				t.Errorf("repo config over outer = %q, want repo/c", got)
+			if got := configuredDefaultModel(tc.agentID, f.pkg, nil); got != tc.repo {
+				t.Errorf("repo config over outer = %q, want %q", got, tc.repo)
 			}
 		})
+	}
+}
+
+// Sessions launch from <AO_DATA_DIR>/worktrees/..., whose ancestors (such as
+// <AO_DATA_DIR>/opencode.json) v2 reads but discovery on the checkout cannot
+// see. A model that such a file could override must not be marked default.
+func TestOpenCodeV2DefaultIgnoresUnseenLaunchWorktreeAncestors(t *testing.T) {
+	f := newOpenCodeFixture(t)
+	// The checkout's ancestors hold nothing, yet global/a is still unresolved:
+	// an <AO_DATA_DIR>/opencode.json selecting another model would win at launch.
+	if got := configuredDefaultModel("opencode-v2", f.pkg, nil); got != "" {
+		t.Errorf("v2 global model with unseen launch ancestors = %q, want unresolved", got)
+	}
+	// An in-repository .opencode model outranks any ancestor file, direct or
+	// .opencode, so it is what the launched session runs.
+	writeConfig(t, filepath.Join(f.repo, ".opencode", "opencode.jsonc"), modelJSON("dotdir/b"))
+	if got := configuredDefaultModel("opencode-v2", f.pkg, nil); got != "dotdir/b" {
+		t.Errorf("v2 in-repository .opencode model = %q, want dotdir/b", got)
 	}
 }
 

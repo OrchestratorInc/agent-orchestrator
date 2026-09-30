@@ -3,6 +3,7 @@ package modelcatalog
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -150,6 +151,14 @@ func TestConfiguredDefaultModelSources(t *testing.T) {
 		t.Errorf("COPILOT_MODEL must override settings files, got %q", got)
 	}
 
+	delete(copilotEnv, "COPILOT_MODEL")
+	// workDir is not a git repository, so whether settings.local.json reaches
+	// the launch worktree is unknown.
+	writeConfig(t, filepath.Join(workDir, ".github", "copilot", "settings.local.json"), `{"model": "local-model"}`)
+	if got := configuredDefaultModel("copilot", workDir, copilotEnv); got != "" {
+		t.Errorf("copilot local settings with unknown tracking = %q, want unresolved", got)
+	}
+
 	if got := configuredDefaultModel("cursor", workDir, nil); got != "" {
 		t.Errorf("agent without a config source = %q, want empty", got)
 	}
@@ -174,5 +183,44 @@ func TestConfiguredDefaultFingerprint(t *testing.T) {
 	writeConfig(t, filepath.Join(home, ".config", "opencode", "opencode.json"), `{"model": "openai/gpt-5.4"}`)
 	if got := discoveryConfigInputs(context.Background(), "opencode", workDir, nil); got != "default=openai/gpt-5.4" {
 		t.Fatalf("configured default must feed the fingerprint, got %q", got)
+	}
+}
+
+// Sessions launch from worktrees holding only tracked files, so Copilot's
+// .github/copilot/settings.local.json counts only when git tracks it.
+func TestCopilotLocalSettingsCountOnlyWhenTracked(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	isolateHome(t)
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	env := map[string]string{"COPILOT_HOME": t.TempDir()}
+	writeConfig(t, filepath.Join(repo, ".github", "copilot", "settings.json"), `{"model": "repo-model"}`)
+	writeConfig(t, filepath.Join(repo, ".github", "copilot", "settings.local.json"), `{"model": "local-model"}`)
+
+	// Untracked (typically gitignored): absent from the worktree, so skipped.
+	if got := configuredDefaultModel("copilot", repo, env); got != "repo-model" {
+		t.Errorf("untracked local settings = %q, want repo-model", got)
+	}
+
+	// Tracked: present in every worktree and overrides repository settings.
+	git("add", "-f", ".github/copilot/settings.local.json")
+	if got := configuredDefaultModel("copilot", repo, env); got != "local-model" {
+		t.Errorf("tracked local settings = %q, want local-model", got)
+	}
+
+	// COPILOT_MODEL still wins over every file.
+	env["COPILOT_MODEL"] = "env-model"
+	if got := configuredDefaultModel("copilot", repo, env); got != "env-model" {
+		t.Errorf("COPILOT_MODEL over tracked local settings = %q, want env-model", got)
 	}
 }
