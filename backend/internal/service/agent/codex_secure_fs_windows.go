@@ -384,6 +384,45 @@ func protectCodexPrivateDirectory(path string) error {
 	return setCodexWindowsPrivateDACL(handle, true)
 }
 
+func protectNewCodexPrivateDirectory(path string) error {
+	handle, _, ownerCurrent, ownerTrusted, aclSafe, err := openCodexWindowsPathWithAccess(
+		path,
+		true,
+		windows.WRITE_OWNER|windows.WRITE_DAC|windows.READ_CONTROL,
+		false,
+	)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(handle)
+	if !ownerTrusted || !aclSafe {
+		return errors.New("new codex private directory owner or ACL is unsafe")
+	}
+	if !ownerCurrent {
+		token, tokenErr := windows.OpenCurrentProcessToken()
+		if tokenErr != nil {
+			return tokenErr
+		}
+		defer token.Close()
+		user, userErr := token.GetTokenUser()
+		if userErr != nil {
+			return userErr
+		}
+		if ownerErr := windows.SetSecurityInfo(
+			handle,
+			windows.SE_FILE_OBJECT,
+			windows.OWNER_SECURITY_INFORMATION,
+			user.User.Sid,
+			nil,
+			nil,
+			nil,
+		); ownerErr != nil {
+			return ownerErr
+		}
+	}
+	return setCodexWindowsPrivateDACL(handle, true)
+}
+
 func protectCodexPrivateFile(path string, file *os.File) error {
 	if file == nil {
 		return errors.New("codex private file handle is unavailable")
