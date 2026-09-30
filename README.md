@@ -129,7 +129,7 @@ AO works with the coding agents and source-control workflow you already use. Age
 
 ## Supported agents
 
-**32 coding agents supported** through one supervised workflow.
+**31 coding agents supported** through one supervised workflow, plus experimental support for fx.
 
 <table>
   <tr valign="middle">
