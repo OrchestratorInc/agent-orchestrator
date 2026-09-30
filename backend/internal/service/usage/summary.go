@@ -90,7 +90,7 @@ func (r *SummaryReader) Get(ctx context.Context, sessionID domain.SessionID) (do
 	}
 	return domain.SessionUsageSummary{
 		SessionID: sessionID, Incomplete: incomplete, Totals: totals, Harnesses: harnesses,
-		Turns: window.EventCount, TokensPerSecond: usageTokensPerSecond(totals.OutputTokens, window),
+		Turns: window.EventCount, TokensPerSecond: usageTokensPerSecond(window),
 	}, nil
 }
 
@@ -101,41 +101,41 @@ func (r *SummaryReader) Get(ctx context.Context, sessionID domain.SessionID) (do
 // pause between turns — not generation.
 const activeTimeGapCutoff = 2 * time.Minute
 
-// usageTokensPerSecond divides OUTPUT tokens by active time: the sum of
-// inter-event timestamp deltas no longer than activeTimeGapCutoff. The raw
-// first-to-last span was rejected in review (#5775) because it also counts
-// think time, long tool runs, and idle gaps between turns, reporting a
-// materially misleading rate; capped per-gap deltas approximate the time the
-// model actually spent producing tokens. Output tokens are the numerator —
-// input and its cache reads ride along per turn and would inflate the rate
-// to physically impossible numbers. Any unknown input — uncounted output, a
-// missing timestamp, a single event with no elapsed time — leaves throughput
-// unavailable rather than reporting a silently wrong rate.
-func usageTokensPerSecond(output *int64, window domain.UsageEventWindow) *float64 {
-	if output == nil || window.KnownCreatedAtCount != window.EventCount {
+// usageTokensPerSecond divides measurable OUTPUT tokens by measurable time:
+// an event's output tokens count only when the gap to the previous event is
+// itself measurable — monotonic and no longer than activeTimeGapCutoff — and
+// that same gap is the only time summed into the divisor. Timestamps are
+// response completion times, so the first event of the window and events
+// after a long gap have no observable generation interval; their tokens stay
+// out of the numerator instead of inflating the rate. Output tokens are the
+// numerator — input and its cache reads ride along per turn and would
+// inflate the rate to physically impossible numbers. Any unknown input — a
+// missing timestamp, an event whose output tokens went unrecorded, or no
+// measurable gap at all — leaves throughput unavailable rather than
+// reporting a silently wrong rate.
+func usageTokensPerSecond(window domain.UsageEventWindow) *float64 {
+	if window.KnownCreatedAtCount != window.EventCount {
 		return nil
 	}
-	seconds := usageActiveSeconds(window.Timestamps)
+	for _, output := range window.OutputTokens {
+		if output == nil {
+			return nil
+		}
+	}
+	var tokens, seconds float64
+	for i := 1; i < len(window.Timestamps); i++ {
+		delta := window.Timestamps[i].Sub(window.Timestamps[i-1])
+		if delta <= 0 || delta > activeTimeGapCutoff {
+			continue
+		}
+		tokens += float64(*window.OutputTokens[i])
+		seconds += delta.Seconds()
+	}
 	if seconds <= 0 {
 		return nil
 	}
-	throughput := float64(*output) / seconds
+	throughput := tokens / seconds
 	return &throughput
-}
-
-// usageActiveSeconds sums the deltas between consecutive known timestamps,
-// skipping gaps past activeTimeGapCutoff and non-monotonic pairs. The first
-// event of each turn contributes its tokens but no time: its own generation
-// span is not observable, and skipping it biases the rate only slightly
-// upward.
-func usageActiveSeconds(timestamps []time.Time) float64 {
-	var total float64
-	for i := 1; i < len(timestamps); i++ {
-		if delta := timestamps[i].Sub(timestamps[i-1]); delta > 0 && delta <= activeTimeGapCutoff {
-			total += delta.Seconds()
-		}
-	}
-	return total
 }
 
 func usageTotals(models []domain.UsageModelAggregate) (domain.UsageMetricTotals, error) {

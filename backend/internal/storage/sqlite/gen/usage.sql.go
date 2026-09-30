@@ -1215,7 +1215,7 @@ func (q *Queries) ListUsageDiscoveryBindings(ctx context.Context, limit int64) (
 }
 
 const listUsageSessionEventTimestamps = `-- name: ListUsageSessionEventTimestamps :many
-SELECT mue.created_at AS created_at
+SELECT mue.created_at AS created_at, mue.output_tokens AS output_tokens
 FROM model_usage_events mue
 JOIN usage_bindings ub ON ub.id = mue.binding_id
 WHERE ub.session_id = ?
@@ -1223,24 +1223,32 @@ WHERE ub.session_id = ?
 ORDER BY mue.created_at
 `
 
+type ListUsageSessionEventTimestampsRow struct {
+	CreatedAt    sql.NullTime
+	OutputTokens sql.NullInt64
+}
+
 // Turns and the throughput divisor read the same visible-event scope the
 // token totals use: assistant messages only, AO's synthetic notices
-// excluded. Timestamps come back individually rather than as MIN/MAX so the
-// service can sum per-gap active time instead of one session-long span that
-// would also count think time and idle between turns.
-func (q *Queries) ListUsageSessionEventTimestamps(ctx context.Context, sessionID domain.SessionID) ([]sql.NullTime, error) {
+// excluded. Timestamps and per-event output tokens come back individually
+// rather than as MIN/MAX/SUM so the service can pair each event's tokens
+// with its own preceding gap: only measurable gaps (monotonic, no longer
+// than the active-time cutoff) contribute both time and tokens, instead of
+// one session-long span that would also count think time and idle between
+// turns.
+func (q *Queries) ListUsageSessionEventTimestamps(ctx context.Context, sessionID domain.SessionID) ([]ListUsageSessionEventTimestampsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listUsageSessionEventTimestamps, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []sql.NullTime{}
+	items := []ListUsageSessionEventTimestampsRow{}
 	for rows.Next() {
-		var created_at sql.NullTime
-		if err := rows.Scan(&created_at); err != nil {
+		var i ListUsageSessionEventTimestampsRow
+		if err := rows.Scan(&i.CreatedAt, &i.OutputTokens); err != nil {
 			return nil, err
 		}
-		items = append(items, created_at)
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

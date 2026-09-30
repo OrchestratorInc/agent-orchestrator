@@ -961,10 +961,11 @@ func usageEventReplayDisposition(existing gen.GetModelUsageEventByKeyRow, event 
 }
 
 // GetUsageSessionEventWindow returns the visible-event count with the parsed
-// transcript timestamps turns and throughput read from, ordered ascending.
-// created_at scans as sql.NullTime on plain column reads (only aggregates
-// lose the type), and SQL text ordering is not trusted for the timestamp
-// formats the driver round-trips, so the order is enforced here.
+// transcript timestamps and per-event output tokens turns and throughput
+// read from, ordered ascending. created_at scans as sql.NullTime and
+// output_tokens as sql.NullInt64 on plain column reads (only aggregates lose
+// the type), and SQL text ordering is not trusted for the timestamp formats
+// the driver round-trips, so the order is enforced here.
 func (s *Store) GetUsageSessionEventWindow(ctx context.Context, sessionID domain.SessionID) (domain.UsageEventWindow, error) {
 	rows, err := s.qr.ListUsageSessionEventTimestamps(ctx, sessionID)
 	if err != nil {
@@ -974,14 +975,37 @@ func (s *Store) GetUsageSessionEventWindow(ctx context.Context, sessionID domain
 		EventCount: int64(len(rows)),
 		Timestamps: make([]time.Time, 0, len(rows)),
 	}
-	for _, created := range rows {
-		if !created.Valid {
+	// Timestamps and OutputTokens travel as parallel slices: collect each
+	// known-timestamp event as a pair so the order sort below cannot break
+	// the pairing.
+	type eventObservation struct {
+		createdAt   time.Time
+		outputKnown bool
+		output      int64
+	}
+	observations := make([]eventObservation, 0, len(rows))
+	for _, row := range rows {
+		if !row.CreatedAt.Valid {
 			continue
 		}
 		window.KnownCreatedAtCount++
-		window.Timestamps = append(window.Timestamps, created.Time)
+		observations = append(observations, eventObservation{
+			createdAt:   row.CreatedAt.Time,
+			outputKnown: row.OutputTokens.Valid,
+			output:      row.OutputTokens.Int64,
+		})
 	}
-	sort.Slice(window.Timestamps, func(i, j int) bool { return window.Timestamps[i].Before(window.Timestamps[j]) })
+	sort.Slice(observations, func(i, j int) bool { return observations[i].createdAt.Before(observations[j].createdAt) })
+	window.OutputTokens = make([]*int64, 0, len(observations))
+	for _, observation := range observations {
+		window.Timestamps = append(window.Timestamps, observation.createdAt)
+		if observation.outputKnown {
+			output := observation.output
+			window.OutputTokens = append(window.OutputTokens, &output)
+		} else {
+			window.OutputTokens = append(window.OutputTokens, nil)
+		}
+	}
 	return window, nil
 }
 

@@ -276,6 +276,8 @@ func TestSummaryReaderGetDerivesTurnsAndTokensPerSecond(t *testing.T) {
 		base, base.Add(30 * time.Second), base.Add(40 * time.Second),
 		base.Add(640 * time.Second), base.Add(685 * time.Second),
 	}
+	// Per-event output tokens (10+20+30+40+20 = 120, matching the totals).
+	outputs := []int64{10, 20, 30, 40, 20}
 	store := &usageSummaryStoreStub{
 		found:   true,
 		session: domain.SessionRecord{ID: "reverb-13", Harness: domain.HarnessClaudeCode},
@@ -286,9 +288,7 @@ func TestSummaryReaderGetDerivesTurnsAndTokensPerSecond(t *testing.T) {
 				Cost:   completeCostAggregate(5, 0, 0, 0, 0),
 			},
 		},
-		window: domain.UsageEventWindow{
-			EventCount: 5, KnownCreatedAtCount: 5, Timestamps: timestamps,
-		},
+		window: usageWindow(timestamps, outputs),
 	}
 	got, err := NewSummaryReader(store).Get(context.Background(), "reverb-13")
 	mustNoError(t, err)
@@ -298,10 +298,12 @@ func TestSummaryReaderGetDerivesTurnsAndTokensPerSecond(t *testing.T) {
 	if got.Turns != 5 {
 		t.Fatalf("turns = %d, want 5", got.Turns)
 	}
-	// Output tokens over 85 s of active time: the 600 s between-turn idle
-	// gap must stay out of the divisor.
-	if got.TokensPerSecond == nil || math.Abs(*got.TokensPerSecond-120.0/85.0) > 1e-9 {
-		t.Fatalf("tokensPerSecond = %v, want %v", got.TokensPerSecond, 120.0/85.0)
+	// Only the tokens of events with a measurable preceding gap over 85 s of
+	// active time: the 600 s between-turn idle gap keeps both its time and
+	// the 40 tokens after it out of the rate, and the first event's 10 tokens
+	// have no observable interval at all.
+	if got.TokensPerSecond == nil || math.Abs(*got.TokensPerSecond-70.0/85.0) > 1e-9 {
+		t.Fatalf("tokensPerSecond = %v, want %v", got.TokensPerSecond, 70.0/85.0)
 	}
 
 	// One NULL timestamp widens the unknown instead of shortening the divisor.
@@ -315,19 +317,52 @@ func TestSummaryReaderGetDerivesTurnsAndTokensPerSecond(t *testing.T) {
 	}
 
 	// A single event has no inter-event gap to divide by.
-	store.window = domain.UsageEventWindow{
-		EventCount: 1, KnownCreatedAtCount: 1, Timestamps: timestamps[:1],
-	}
+	store.window = usageWindow(timestamps[:1], outputs[:1])
 	got, err = NewSummaryReader(store).Get(context.Background(), "reverb-13")
 	mustNoError(t, err)
 	if got.TokensPerSecond != nil {
 		t.Fatalf("tokensPerSecond = %v, want nil for a single-event window", *got.TokensPerSecond)
 	}
 
-	// Non-monotonic pairs (unreachable via the sorted store read) are skipped.
-	if skipped := usageActiveSeconds([]time.Time{timestamps[2], timestamps[0]}); skipped != 0 {
-		t.Fatalf("usageActiveSeconds = %v, want 0 for a non-monotonic pair", skipped)
+	// A long gap followed by a substantial response must not inflate the
+	// rate: that event's tokens have no measurable interval either.
+	longGap := []time.Time{base, base.Add(1 * time.Second), base.Add(10 * time.Minute)}
+	store.window = usageWindow(longGap, []int64{5, 60, 5000})
+	got, err = NewSummaryReader(store).Get(context.Background(), "reverb-13")
+	mustNoError(t, err)
+	if got.TokensPerSecond == nil || math.Abs(*got.TokensPerSecond-60.0) > 1e-9 {
+		t.Fatalf("tokensPerSecond = %v, want 60 for a long-gap window", got.TokensPerSecond)
 	}
+
+	// One event with unrecorded output tokens leaves the rate unknown.
+	unrecorded := usageWindow(timestamps, outputs)
+	unrecorded.OutputTokens[2] = nil
+	store.window = unrecorded
+	got, err = NewSummaryReader(store).Get(context.Background(), "reverb-13")
+	mustNoError(t, err)
+	if got.TokensPerSecond != nil {
+		t.Fatalf("tokensPerSecond = %v, want nil with an unrecorded output", *got.TokensPerSecond)
+	}
+
+	// Non-monotonic pairs (unreachable via the sorted store read) contribute
+	// neither time nor tokens.
+	reversed := []time.Time{timestamps[2], timestamps[1]}
+	if rate := usageTokensPerSecond(usageWindow(reversed, []int64{30, 20})); rate != nil {
+		t.Fatalf("tokensPerSecond = %v, want nil for a non-monotonic pair", *rate)
+	}
+}
+
+// usageWindow builds a fully-known event window from parallel timestamp and
+// output-token slices, mirroring the store read's pairing.
+func usageWindow(timestamps []time.Time, outputs []int64) domain.UsageEventWindow {
+	window := domain.UsageEventWindow{
+		EventCount: int64(len(timestamps)), KnownCreatedAtCount: int64(len(timestamps)),
+		Timestamps: timestamps,
+	}
+	for _, output := range outputs {
+		window.OutputTokens = append(window.OutputTokens, &output)
+	}
+	return window
 }
 
 func completeCostAggregate(events, total, input, cachedInput, output int64) domain.UsageCostAggregate {
