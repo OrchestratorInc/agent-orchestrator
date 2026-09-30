@@ -219,7 +219,11 @@ export default function ReviewDetailScreen() {
 			</View>
 
 			<ListSectionHeader label="Reviewer" />
-			<Pressable accessibilityRole={controls.open ? "button" : undefined} disabled={!controls.open || Boolean(mutation)} onPress={openReviewer} style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}>
+			{/* The row opens the reviewer; its pill and menu are laid over the row rather
+			    than inside its Pressable (as on the project page's orchestrator row), so
+			    a tap on "⋯" never also opens the reviewer. */}
+			<View>
+			<Pressable accessibilityRole={controls.open ? "button" : undefined} accessibilityLabel={controls.open ? `Open reviewer ${controls.open}` : undefined} disabled={!controls.open || Boolean(mutation)} onPress={openReviewer} style={({ pressed }) => [styles.row, styles.rowWithOverlay, pressed && styles.rowPressed]}>
 				<View style={styles.main}>
 					<View style={styles.eyebrow}>
 						{reviewerHarness ? <AgentLogo harness={reviewerHarness} size={14} /> : <Feather name="user" size={13} color={t.textSecondary} />}
@@ -232,13 +236,16 @@ export default function ReviewDetailScreen() {
 						<Text style={styles.statusDetail} numberOfLines={1}>{controls.open === "chat" ? " · chat" : controls.open === "terminal" ? " · terminal" : ""}</Text>
 					</View>
 				</View>
+			</Pressable>
+				<View style={styles.overlaySlot} pointerEvents="box-none">
 				<View style={styles.trailing}>
 					{controls.open
 						? <RowPill label="Open" icon={controls.open === "chat" ? "message-circle" : "terminal"} tone="solid" disabled={Boolean(mutation)} onPress={openReviewer} />
 						: controls.restore ? <RowPill label="Restore" icon="refresh-cw" tone="outline" busy={mutation === "restore"} disabled={Boolean(mutation)} onPress={() => void restoreReviewer()} /> : null}
 					<ItemActionsMenu accessibilityLabel="Reviewer session actions" actions={stopActions} loading={mutation === "kill"} disabled={Boolean(mutation)} />
 				</View>
-			</Pressable>
+				</View>
+			</View>
 			{controls.stop && autoReviewEnabled ? <Text style={styles.note}>Turn off automatic review before stopping its reviewer session.</Text> : null}
 			{data.reviewerSurface?.controllerError ? <Text accessibilityRole="alert" style={[styles.note, styles.noteError]}>{data.reviewerSurface.controllerError}</Text> : null}
 
@@ -347,6 +354,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// A worker row's metrics: eyebrow, title, status line, divider underneath.
 	row: { minHeight: 76, flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: space.lg, paddingVertical: space.sm, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle, backgroundColor: t.bgBase },
 	rowPressed: { backgroundColor: t.bgSubtle },
+	// Room for the pill and menu laid over the row's trailing edge.
+	rowWithOverlay: { paddingRight: 150 },
+	overlaySlot: { position: "absolute", right: space.lg - space.xxs, top: 0, bottom: 0, justifyContent: "center" },
 	main: { flex: 1, minWidth: 0, gap: space.hair },
 	trailing: { flexDirection: "row", alignItems: "center", gap: space.xxs },
 	eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 17 },

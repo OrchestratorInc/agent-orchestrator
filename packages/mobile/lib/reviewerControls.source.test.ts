@@ -104,6 +104,14 @@ describe("reviewer control integration", () => {
 		expect(terminal).toContain("if (reviewerPane) await killSessionReviewer(config, String(params.sessionId));");
 	});
 
+	// A native menu nested in the row's Pressable lost its tap to the row, which
+	// opened the reviewer instead of the menu.
+	it("lays the reviewer's pill and menu over its row instead of nesting them", () => {
+		const row = detail.slice(detail.indexOf("onPress={openReviewer} style="), detail.indexOf('<ListSectionHeader label="AO review" />'));
+		expect(row.indexOf("</Pressable>")).toBeLessThan(row.indexOf("<ItemActionsMenu"));
+		expect(detail).toContain('<View style={styles.overlaySlot} pointerEvents="box-none">');
+	});
+
 	it("lays the review screen out as flat board rows, not cards", () => {
 		expect(detail).not.toContain("<Card");
 		expect(detail).toContain('<ListSectionHeader label="Pull request" />');
