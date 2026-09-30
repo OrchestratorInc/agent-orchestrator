@@ -1,13 +1,10 @@
 package modelcatalog
 
 import (
-	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -15,16 +12,22 @@ import (
 )
 
 // configuredDefaultSource describes where an agent CLI keeps the model it runs
-// when no --model flag is passed. Paths are listed lowest precedence first: a
-// later file that sets a model overrides an earlier one, matching how these
-// CLIs layer global and project configuration.
+// when no --model flag is passed. Only user-level sources are read: sessions
+// launch from AO worktrees whose repository content is chosen per session, so
+// repository config is never trusted (see repoMayHoldConfig).
 type configuredDefaultSource struct {
-	paths func(home, workingDir string, env map[string]string) []string
+	// paths lists user-level config files, lowest precedence first: a later
+	// file that sets a model overrides an earlier one.
+	paths func(home string, env map[string]string) []string
 	parse func(raw []byte) string
+	// repoFiles names repository config files (relative to a directory, slash
+	// separated) that outrank every user-level path. If the repository may
+	// hold any of them, the default is left unresolved.
+	repoFiles []string
 	// envOverride names a variable that wins over every file when set.
 	envOverride string
-	// resolve replaces paths/parse for agents whose layering cannot be
-	// expressed as a flat file list. It returns "" when the effective model
+	// resolve replaces paths/parse/repoFiles for agents whose layering cannot
+	// be expressed as a flat file list. It returns "" when the effective model
 	// cannot be determined.
 	resolve func(home, workingDir string, env map[string]string) string
 }
@@ -41,20 +44,18 @@ var configuredDefaultSources = map[string]configuredDefaultSource{
 		return resolveOpenCodeModel(2, home, workingDir, env)
 	}},
 	"aider": {
-		paths: func(home, workingDir string, _ map[string]string) []string {
-			var paths []string
-			for _, dir := range []string{home, workingDir} {
-				if dir != "" {
-					paths = append(paths, filepath.Join(dir, ".aider.conf.yml"), filepath.Join(dir, ".aider.conf.yaml"))
-				}
+		paths: func(home string, _ map[string]string) []string {
+			if home == "" {
+				return nil
 			}
-			return paths
+			return []string{filepath.Join(home, ".aider.conf.yml"), filepath.Join(home, ".aider.conf.yaml")}
 		},
 		parse:       parseYAMLModelKey,
+		repoFiles:   []string{".aider.conf.yml", ".aider.conf.yaml"},
 		envOverride: "AIDER_MODEL",
 	},
 	"droid": {
-		paths: func(home, _ string, _ map[string]string) []string {
+		paths: func(home string, _ map[string]string) []string {
 			if home == "" {
 				return nil
 			}
@@ -62,12 +63,29 @@ var configuredDefaultSources = map[string]configuredDefaultSource{
 		},
 		parse: parseJSONCModelKey,
 	},
+	// Copilot CLI keeps user-editable settings, including the model /model
+	// selects, in settings.json; config.json is legacy managed state and is not
+	// read, so a stale value there can never be marked as the default. Model
+	// precedence: user settings < repository settings < repository local
+	// settings < COPILOT_MODEL.
+	// https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference
 	"copilot": {
-		resolve:     resolveCopilotModel,
+		paths: func(home string, env map[string]string) []string {
+			root := envValue(env, "COPILOT_HOME")
+			if root == "" && home != "" {
+				root = filepath.Join(home, ".copilot")
+			}
+			if root == "" {
+				return nil
+			}
+			return []string{filepath.Join(root, "settings.json")}
+		},
+		parse:       parseJSONCModelKey,
+		repoFiles:   []string{".github/copilot/settings.json", ".github/copilot/settings.local.json"},
 		envOverride: "COPILOT_MODEL",
 	},
 	"pi": {
-		paths: func(home, _ string, _ map[string]string) []string {
+		paths: func(home string, _ map[string]string) []string {
 			if home == "" {
 				return nil
 			}
@@ -76,7 +94,7 @@ var configuredDefaultSources = map[string]configuredDefaultSource{
 		parse: parsePiDefaultModel,
 	},
 	"crush": {
-		paths: func(home, workingDir string, env map[string]string) []string {
+		paths: func(home string, env map[string]string) []string {
 			var paths []string
 			if configHome := xdgDir(home, env, "XDG_CONFIG_HOME", ".config"); configHome != "" {
 				paths = append(paths, filepath.Join(configHome, "crush", "crush.json"))
@@ -85,73 +103,11 @@ var configuredDefaultSources = map[string]configuredDefaultSource{
 			if dataHome := xdgDir(home, env, "XDG_DATA_HOME", filepath.Join(".local", "share")); dataHome != "" {
 				paths = append(paths, filepath.Join(dataHome, "crush", "crush.json"))
 			}
-			if workingDir != "" {
-				paths = append(paths, filepath.Join(workingDir, "crush.json"), filepath.Join(workingDir, ".crush.json"))
-			}
 			return paths
 		},
-		parse: parseCrushDefaultModel,
+		parse:     parseCrushDefaultModel,
+		repoFiles: []string{"crush.json", ".crush.json"},
 	},
-}
-
-// resolveCopilotModel returns the model Copilot CLI will run for a session
-// launched from an AO worktree of workingDir's repository. Copilot keeps
-// user-editable settings, including the model /model selects, in
-// settings.json; config.json is legacy managed state and is not read, so a
-// stale value there can never be marked as the default. Model precedence is
-// user settings < repository settings < repository local settings <
-// COPILOT_MODEL (checked by the caller).
-//
-// Discovery reads the project checkout, but sessions launch from worktrees
-// that contain only tracked files. settings.local.json is usually gitignored:
-// an untracked copy in the checkout is absent from the worktree and is skipped,
-// while a tracked one is present there and overrides the repository model.
-// When tracking cannot be determined, the default is left unresolved.
-// https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference
-func resolveCopilotModel(home, workingDir string, env map[string]string) string {
-	root := envValue(env, "COPILOT_HOME")
-	if root == "" && home != "" {
-		root = filepath.Join(home, ".copilot")
-	}
-	model := ""
-	if root != "" {
-		model = readConfiguredModel(filepath.Join(root, "settings.json"), parseJSONCModelKey, model)
-	}
-	if workingDir == "" {
-		return model
-	}
-	model = readConfiguredModel(filepath.Join(workingDir, ".github", "copilot", "settings.json"), parseJSONCModelKey, model)
-	localRel := filepath.Join(".github", "copilot", "settings.local.json")
-	raw, err := readModelConfig(filepath.Join(workingDir, localRel))
-	if err != nil {
-		return model
-	}
-	local := strings.TrimSpace(parseJSONCModelKey(raw))
-	if local == "" {
-		return model
-	}
-	tracked, ok := gitTracksFile(workingDir, localRel)
-	if !ok {
-		return ""
-	}
-	if tracked {
-		return local
-	}
-	return model
-}
-
-// gitTracksFile reports whether rel (relative to dir) is tracked by git. ok is
-// false when git cannot answer, for example outside a repository.
-var gitTracksFile = func(dir, rel string) (tracked, ok bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "ls-files", "--", filepath.ToSlash(rel))
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		return false, false
-	}
-	return strings.TrimSpace(string(out)) != "", true
 }
 
 // readConfiguredModel returns the model set in path, or fallback when the file
@@ -183,8 +139,11 @@ func configuredDefaultModel(agentID, workingDir string, env map[string]string) s
 	if source.resolve != nil {
 		return strings.TrimSpace(source.resolve(home, workingDir, env))
 	}
+	if repoMayHoldConfig(workingDir, source.repoFiles...) {
+		return ""
+	}
 	configured := ""
-	for _, path := range source.paths(home, workingDir, env) {
+	for _, path := range source.paths(home, env) {
 		configured = readConfiguredModel(path, source.parse, configured)
 	}
 	return configured
