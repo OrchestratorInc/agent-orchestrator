@@ -1935,7 +1935,6 @@
 	"settings.harness.installFailed": "Installation failed.",
 	"settings.harness.installed": "Installed",
 	"settings.harness.installationUnknown": "インストール状態は不明です",
-	"settings.harness.authorized": "Authorized",
 	"settings.harness.installedVia": "Installed via {{method}}",
 	"settings.harness.installing": "Installing…",
 	"settings.harness.instructions": "Instructions",

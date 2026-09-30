@@ -268,7 +268,8 @@ describe("HarnessSettingsSection", () => {
 		});
 		renderSection();
 		const row = (await screen.findByText("MiMo Code")).closest('[data-agent="mimo-code"]') as HTMLElement;
-		expect(await within(row).findByRole("button", { name: "Configured" })).toBeDisabled();
+		expect(await within(row).findByText("Configured")).toBeInTheDocument();
+		expect(within(row).queryByRole("button", { name: "Configured" })).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Local login" })).not.toBeInTheDocument();
 	});
 
@@ -572,7 +573,8 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: "auth-mimo" } },
 		}));
-		expect(await within(row).findByRole("button", { name: "Configured" })).toBeDisabled();
+		expect(await within(row).findByText("Configured")).toBeInTheDocument();
+		expect(within(row).queryByRole("button", { name: "Configured" })).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Local login" })).not.toBeInTheDocument();
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
@@ -621,7 +623,8 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/probe", {
 			params: { path: { agent: "claude-code" } },
 		}));
-		await within(row).findByRole("button", { name: "Authorized" });
+		await within(row).findByText("Connected");
+		expect(within(row).queryByRole("button", { name: "Authorized" })).toBeNull();
 	});
 
 	it("uses Configured for a completed setup action", async () => {
@@ -986,7 +989,7 @@ describe("HarnessSettingsSection", () => {
 		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
 		await userEvent.click(await within(row).findByRole("button", { name: "Install" }));
 
-		await waitFor(() => expect(row).toHaveTextContent(authentication === "authorized" ? "Authorized" : "Installed"));
+		await waitFor(() => expect(row).toHaveTextContent(authentication === "authorized" ? "Connected" : "Installed"));
 		await waitFor(() => expect(selector).toHaveTextContent(authentication === "authorized" ? /^ready$/ : /^not_ready$/));
 		expect(client.getQueryData<AgentReadiness>(agentReadinessQueryKey)?.agents).toEqual([initial.agents[0], updated]);
 		expect(screen.getByTestId("originating-selector")).toBe(selector);

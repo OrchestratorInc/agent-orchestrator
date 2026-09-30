@@ -541,10 +541,7 @@ export function HarnessSettingsSection({
 						const authState = authStates[agentId];
 						const authStatus = readinessAgent?.authentication.state;
 						const mimoConfigured = agentId === "mimo-code" && authStatus === "configured";
-						const installationStatusLabel = authStatus === "authorized"
-							? t("settings.harness.authorized")
-							: mimoConfigured ? t("settings.harness.configured")
-							: t("settings.harness.installed");
+						const installationStatusLabel = t("settings.harness.installed");
 						const showInstallationStatus = authStatus === "authorized"
 							|| authStatus === "not_applicable"
 							|| mimoConfigured
@@ -650,8 +647,10 @@ export function HarnessSettingsSection({
 				<span className="inline-flex items-center gap-1.5 text-xs text-settings-muted" role="status"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{job?.status === "installing" ? t("settings.harness.installing") : t("settings.harness.verifying")}</span>
 							) : isInstalled ? (
 								<div className="flex shrink-0 items-center gap-2">
-								{/* Cloud rows state local status in their subtitle instead. */}
-								{showInstallationStatus && !isCloudCapable ? (
+								{/* The subtitle already states a login ("Connected", "Configured"), and
+								    cloud rows state local status there too; the chip is only for
+								    installed harnesses whose subtitle doesn't say so. */}
+								{showInstallationStatus && !isCloudCapable && authStatus !== "authorized" && !mimoConfigured ? (
 									<Button
 										type="button"
 										size="none"
@@ -728,11 +727,11 @@ export function HarnessSettingsSection({
 								<p className={cn("truncate text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? incompatibleVersionReason ?? authPlan?.reason ?? plan?.reason}>
 									{isCloudCapable ? (
 										<>
-											<span className={cn(!rowHasError && authStatus === "authorized" && "text-[color:var(--color-success)]")}>
+											<span>
 												{isInstalled ? t("settings.harness.localStatus", { status: authSummary }) : t("settings.harness.localNotInstalled")}
 											</span>
 											{" · "}
-											<span className={cn(!rowHasError && cloudConnected && "text-[color:var(--color-success)]")}>
+											<span>
 												{cloudConnected ? t("settings.harness.cloudStatusConnected") : t("settings.harness.cloudStatusNotConnected")}
 											</span>
 										</>
