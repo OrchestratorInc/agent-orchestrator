@@ -84,6 +84,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 import { TaskComposer } from "./TaskComposer";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
+import { sessionUsable, startTaskCreate, taskCreateFailed } from "../lib/journey-timing";
 
 function Wrap({ children, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }) }: {
 	children: ReactNode;
@@ -128,6 +129,8 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 	h.agentValues.length = 0;
 	window.localStorage.removeItem("ao.taskComposer.preferences.v1");
+	window.localStorage.removeItem("ao.telemetry.journeyTimingBudget");
+	vi.restoreAllMocks();
 });
 
 describe("TaskComposer", () => {
@@ -1125,6 +1128,49 @@ describe("TaskComposer", () => {
 		);
 	});
 
+	it("measures Chat rejection and TUI fallback as one task creation journey", async () => {
+		// Other composer tests can leave a returned session pending without mounting
+		// its route; start and finish a throwaway attempt to isolate this journey.
+		taskCreateFailed(startTaskCreate("local"));
+		h.capture.mockClear();
+		window.localStorage.removeItem("ao.telemetry.journeyTimingBudget");
+		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+		vi.spyOn(Math, "random").mockReturnValue(0);
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") {
+				return { data: { defaultSessionMode: "chat", chatHarnesses: ["codex"] } };
+			}
+			if (path.includes("/models")) {
+				return { data: { agent: "codex", selectionMode: "text", models: [], allowCustom: true } };
+			}
+			return { data: { status: "ok", project: { agent: "codex", config: {} } } };
+		});
+		h.post
+			.mockResolvedValueOnce({ error: { code: "CHAT_DRIVER_UNAVAILABLE" } })
+			.mockResolvedValueOnce({ data: { workerId: "sess-tui" } });
+		const onCreated = vi.fn();
+		const { unmount } = render(<Wrap><TaskComposer projectId="proj-1" onCreated={onCreated} /></Wrap>);
+		fireEvent.change(task(), { target: { value: "Do the thing" } });
+		await waitForTaskReady();
+		fireEvent.click(startTask());
+
+		const fallback = await screen.findByRole("button", { name: "Create as Terminal UI" });
+		const timings = () => h.capture.mock.calls.filter(([name]) => name === "ao.renderer.task_create_timing");
+		expect(timings()).toHaveLength(0);
+		now.mockReturnValue(1_400);
+		fireEvent.click(fallback);
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("sess-tui"));
+		unmount(); // The dialog closes before the new session paints.
+		now.mockReturnValue(1_800);
+		sessionUsable("sess-tui", "tui");
+		expect(timings()).toEqual([["ao.renderer.task_create_timing", {
+			duration_ms: 800,
+			outcome: "ready",
+			surface: "tui",
+			scope: "local",
+		}]]);
+	});
+
 	it("offers an explicit approval-less retry from structured capability details", async () => {
 		h.get.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) {
@@ -1165,6 +1211,30 @@ describe("TaskComposer", () => {
 			}),
 		);
 		expect(h.post.mock.calls[1][1].body).not.toHaveProperty("mode");
+	});
+
+	it("stops offering approval bypass after that fallback fails", async () => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) {
+				return { data: { agent: "cursor", selectionMode: "text", models: [], allowCustom: true } };
+			}
+			return { data: { status: "ok", project: { agent: "cursor", config: {} } } };
+		});
+		h.post.mockResolvedValue({ error: {
+			code: "SESSION_MODE_UNSUPPORTED",
+			message: "This provider cannot satisfy the selected approval policy",
+			details: {
+				missingCapabilities: ["approvals"],
+				allowedApprovalModes: ["bypass-permissions"],
+			},
+		} });
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "cursor"));
+		fireEvent.change(task(), { target: { value: "Use approval-less Chat" } });
+		fireEvent.click(startTask());
+		fireEvent.click(await screen.findByRole("button", { name: "Start without approvals" }));
+		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(2));
+		expect(screen.queryByRole("button", { name: "Start without approvals" })).not.toBeInTheDocument();
 	});
 
 	it("starts a standalone Unreal task in Chat after approval-less retry", async () => {
