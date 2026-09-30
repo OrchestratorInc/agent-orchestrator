@@ -10,16 +10,17 @@ import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
 import { useSettings } from "./useSettings";
 
 export type SessionPRSummary = components["schemas"]["SessionPRSummary"];
+export type SessionPRReference = components["schemas"]["SessionPRReference"];
 
 export const sessionScmSummaryQueryKey = (sessionId?: string, hostId?: string) =>
 	sessionId ? (["session-scm-summary", hostId ?? LOCAL_HOST, sessionId] as const) : (["session-scm-summary"] as const);
 
-export async function fetchSessionScmSummary(sessionId: string, hostId?: string): Promise<SessionPRSummary[]> {
+export async function fetchSessionScmSummary(sessionId: string, hostId?: string) {
 	const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/sessions/{sessionId}/pr", {
 		params: { path: { sessionId } },
 	});
 	if (error) throw error;
-	return data?.prs ?? [];
+	return { prs: data?.prs ?? [], linkedPrs: data?.linkedPrs ?? [] };
 }
 
 export function cloudPRSummaryToSessionPRSummary(
@@ -93,7 +94,10 @@ export function useSessionScmSummary(
 		queryFn: async () => {
 			if (!cloudOrgId) return fetchSessionScmSummary(sessionId!, hostId);
 			const response = await cloudClient.listSessionPullRequests(cloudOrgId, sessionId!);
-			return response.pullRequests.map((pr) => cloudPRSummaryToSessionPRSummary(pr, cloudAutoInjectCI));
+			return {
+				prs: response.pullRequests.map((pr) => cloudPRSummaryToSessionPRSummary(pr, cloudAutoInjectCI)),
+				linkedPrs: [],
+			};
 		},
 		retry: 1,
 		...(hostId ? { refetchInterval: 15_000 } : {}),

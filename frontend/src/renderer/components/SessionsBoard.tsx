@@ -10,6 +10,7 @@ import {
 import { AlertTriangle, LayoutDashboard, RotateCw } from "lucide-react";
 import {
 	STANDALONE_WORKSPACE_ID,
+	toProjectKind,
 	type WorkspaceSession,
 	newestActiveOrchestrator,
 	orchestratorHealth,
@@ -51,6 +52,7 @@ import {
 	BoardSessionCardAdapter,
 	sessionsBoardLabels,
 } from "./SessionsBoardAdapters";
+import { CueRunMenu } from "./chat/CueRunMenu";
 
 type SessionsBoardProps = {
 	/** When set, the board shows only this project's sessions. */
@@ -136,7 +138,6 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
 	const health = workspace ? orchestratorHealth(workspace, isProjectRestarting) : { state: "ok" as const };
-
 	const archived = sessions
 		.filter(isArchivedSession)
 		.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
@@ -187,6 +188,12 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const actions = projectId && (!hostId || connected) ? (
 		<>
 			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} />
+			{workspace && toProjectKind(workspace.kind) ? <span className="inline-flex">
+				<CueRunMenu
+					projectId={projectId}
+					disabled={isProjectRestarting || isProvisioning}
+				/>
+			</span> : null}
 			{boardOwnsNotificationCenter ? (
 				<>
 					<NotificationCenter />

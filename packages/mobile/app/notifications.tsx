@@ -1,5 +1,6 @@
 import { Feather } from "../lib/icons";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter, type Href } from "expo-router";
+import { useOpenPage } from "../lib/pageNavigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActivityIndicator,
@@ -25,6 +26,7 @@ import {
 	notificationSections,
 	notificationRowsForHost,
 	notificationAction,
+	notificationTarget,
 	notificationVisual,
 	relativeTime,
 } from "../lib/notificationView";
@@ -82,6 +84,7 @@ function NotificationsContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
+	const openPage = useOpenPage();
 	const insets = useSafeAreaInsets();
 	const { config, connection, unreachable, errorStatus, sessions, loading: sessionsLoading, restore } = useApp();
 	const [restoringId, setRestoringId] = useState<string>();
@@ -195,6 +198,7 @@ function NotificationsContent() {
 		// decides: a terminated agent waiting on input is restored, not opened.
 		const action = notificationAction(notification, sessionState(notification.sessionId));
 		if (action.kind === "open") router.navigate({ pathname: "/session/[id]", params: { id: action.sessionId, hostId: config.hostId } });
+		else if (action.kind === "review") openPage(notificationTarget({ ...notification, hostId: config.hostId }, config.hostId) as Href);
 		else if (action.kind === "prs") router.navigate({ pathname: "/prs", params: { hostId: config.hostId } });
 		else if (action.kind === "restore") {
 			haptics.warning();
@@ -375,7 +379,7 @@ function NotificationSectionHeader({ title, count }: { title: string; count: num
 function NotificationRow({ item, now, action, restoring, onPress, onRestore }: {
 	item: NotificationRecord;
 	now: number;
-	action: "open" | "restore" | "prs" | "none";
+	action: "open" | "review" | "restore" | "prs" | "none";
 	restoring: boolean;
 	onPress: () => void;
 	onRestore: () => void;

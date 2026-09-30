@@ -12,6 +12,7 @@
 import {
 	type InfiniteData,
 	type QueryClient,
+	infiniteQueryOptions,
 	useInfiniteQuery,
 	useMutation,
 	useQuery,
@@ -332,21 +333,12 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 	});
 }
 
-export function useConversation(sessionId: string | undefined, hostId?: string): ConversationQueryResult {
-	const queryClient = useQueryClient();
-	const refreshError = useQuery({
-		queryKey: remoteConversationRefreshErrorKey(sessionId ?? "", hostId ?? ""),
-		queryFn: async () => false,
-		initialData: false,
-		enabled: false,
-	}).data;
-	const query = useInfiniteQuery({
-		queryKey: conversationQueryKey(sessionId ?? "", hostId),
-		enabled: Boolean(sessionId),
+export function conversationQueryOptions(sessionId: string, hostId?: string) {
+	return infiniteQueryOptions({
+		queryKey: conversationQueryKey(sessionId, hostId),
 		initialPageParam: undefined as number | undefined,
-		queryFn: ({ pageParam }) => fetchConversationPage(sessionId as string, hostId, pageParam),
+		queryFn: ({ pageParam }) => fetchConversationPage(sessionId, hostId, pageParam),
 		getNextPageParam: (page) => (page.hasMoreBefore ? page.oldestSequence : undefined),
-		select: (data) => mergeConversationPages(data.pages),
 		// A mode mismatch is authoritative for this committed controller epoch, so
 		// retrying the same request cannot help and would leave the surface loading
 		// instead of explaining why there is no conversation. Only genuinely
@@ -356,6 +348,21 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 			if (code && PERMANENT_CODES.has(code)) return false;
 			return attempt < 2;
 		},
+	});
+}
+
+export function useConversation(sessionId: string | undefined, hostId?: string): ConversationQueryResult {
+	const queryClient = useQueryClient();
+	const refreshError = useQuery({
+		queryKey: remoteConversationRefreshErrorKey(sessionId ?? "", hostId ?? ""),
+		queryFn: async () => false,
+		initialData: false,
+		enabled: false,
+	}).data;
+	const query = useInfiniteQuery({
+		...conversationQueryOptions(sessionId ?? "", hostId),
+		enabled: Boolean(sessionId),
+		select: (data) => mergeConversationPages(data.pages),
 	});
 	useEffect(() => {
 		if (!hostId || !sessionId) return;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { allowsUnderscoreEmphasis } from "./inlineEmphasis";
+import { readFileSync } from "node:fs";
 import { parseBlocks } from "./markdownBlocks";
 
 describe("mobile Chat markdown blocks", () => {
@@ -25,4 +26,12 @@ it("keeps identifier underscores while allowing standalone emphasis", () => {
 	expect(allowsUnderscoreEmphasis(identifier, 3, 9)).toBe(false);
 	expect(allowsUnderscoreEmphasis("_emphasis_", 0, 10)).toBe(true);
 	expect(allowsUnderscoreEmphasis("before _emphasis_ after", 7, 17)).toBe(true);
+});
+
+describe("mobile Chat markdown layout", () => {
+	it("allows list prose to shrink and wrap within the available width", () => {
+		const source = readFileSync(new URL("./ChatMarkdown.tsx", import.meta.url), "utf8");
+		expect(source).toContain("styles.listBody");
+		expect(source).toContain("listBody: { flex: 1, minWidth: 0 }");
+	});
 });

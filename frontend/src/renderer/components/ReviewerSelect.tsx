@@ -28,7 +28,7 @@ import {
 	OptionMenuTrigger,
 } from "./ui/option-menu";
 
-const REVIEWER_AGENT_PRIORITY = ["claude-code", "codex", "cursor", "opencode", "muse", "aider"] as const;
+const REVIEWER_AGENT_PRIORITY = ["claude-code", "codex", "cursor", "opencode", "opencode-v2", "muse", "aider"] as const;
 const REVIEWER_AGENT_PRIORITY_RANK = new Map<string, number>(
 	REVIEWER_AGENT_PRIORITY.map((agent, index) => [agent, index]),
 );

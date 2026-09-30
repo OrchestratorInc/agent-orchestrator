@@ -77,7 +77,7 @@ import { agentLabel } from "../../lib/agent-options";
 import type { ApprovalMode } from "../../types/conversation";
 import type { ConversationLocalEcho } from "../../hooks/useConversation";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
-import { sidebarOccupiesLayout, useUiStore } from "../../stores/ui-store";
+import { inspectorIsOpen, sidebarOccupiesLayout, useUiStore } from "../../stores/ui-store";
 import type { TerminalTarget } from "../../types/terminal";
 import {
 	isOrchestratorSession,
@@ -2163,7 +2163,7 @@ function Timeline({
 	// DOM nodes, and inspector toggles are otherwise a broad synchronous commit.
 	// Keep that small accessibility/interaction boundary imperative instead.
 	const inspectorOpenRef = useRef(
-		useUiStore.getState().inspectorSessions[uiSessionId]?.isOpen ?? true,
+		inspectorIsOpen(useUiStore.getState().inspectorSessions, uiSessionId),
 	);
 	const turn = activeTurn(snapshot);
 	const [scrollbar, setScrollbar] = useState({
@@ -2293,10 +2293,10 @@ function Timeline({
 				if (hoveredMarkerRef.current !== null) setHoveredMarker(null);
 			}
 		};
-		setInspectorOpen(useUiStore.getState().inspectorSessions[uiSessionId]?.isOpen ?? true);
+		setInspectorOpen(inspectorIsOpen(useUiStore.getState().inspectorSessions, uiSessionId));
 		return useUiStore.subscribe((state, previous) => {
-			const currentOpen = state.inspectorSessions[uiSessionId]?.isOpen ?? true;
-			const previousOpen = previous.inspectorSessions[uiSessionId]?.isOpen ?? true;
+			const currentOpen = inspectorIsOpen(state.inspectorSessions, uiSessionId);
+			const previousOpen = inspectorIsOpen(previous.inspectorSessions, uiSessionId);
 			if (currentOpen !== previousOpen) setInspectorOpen(currentOpen);
 		});
 	}, [minimapEnabled, uiSessionId]);

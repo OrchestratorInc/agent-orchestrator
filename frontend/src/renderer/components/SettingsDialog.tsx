@@ -1,4 +1,4 @@
-import { Bot, Loader2, MonitorCog, TriangleAlert, X, type LucideIcon } from "lucide-react";
+import { Bot, Disc3, Loader2, MonitorCog, TriangleAlert, X, type LucideIcon } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useRef, useState } from "react";
@@ -7,9 +7,10 @@ import { useCloudGate } from "../hooks/useCloudGate";
 import { ensureCodexAccounts } from "../hooks/useCodexAccountsQuery";
 import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
-import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection } from "./ProjectSettingsForm";
+import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
+import { CuesSettings } from "./CuesDialog";
 import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, settingsDialogSurfaceClass } from "./ui/dialog";
-import { type GlobalSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
+import { type GlobalSettingsSection, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
 import { labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
@@ -57,6 +58,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 	const isBodyReady = bodySettings === displaySettings;
 
 	const globalSections = visibleGlobalSettings({ cloudEnabled });
+	const remoteHostId = displaySettings?.scope === "project" ? displaySettings.hostId : undefined;
 
 	const projectSections: Array<{
 		id: ProjectSettingsSection;
@@ -66,13 +68,14 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 		{ id: "general", label: t("settings.project.general"), icon: MonitorCog },
 		{ id: "agents", label: t("settings.project.agents"), icon: Bot },
 	];
+	if (!remoteHostId) projectSections.push({ id: "cues", label: t("cues.title"), icon: Disc3 });
 
 	const isProjectSettings = displaySettings?.scope === "project";
-	const remoteHostId = displaySettings?.scope === "project" ? displaySettings.hostId : undefined;
 	const [activeSection, setActiveSection] = useState<GlobalSettingsSection>("general");
 	const [focusAgentId, setFocusAgentId] = useState<string>();
 	const [activeProjectSection, setActiveProjectSection] = useState<ProjectSettingsSection>("general");
 	const [projectSaveState, setProjectSaveState] = useState<ProjectSettingsSaveState>(initialProjectSaveState);
+	const [cueBusy, setCueBusy] = useState(false);
 	const closeWhenSavedRef = useRef(false);
 	const globalSettingsWasOpen = useRef(false);
 
@@ -81,6 +84,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 		: globalSettingsItem(activeSection, { cloudEnabled }).label(t);
 
 	const closeSettingsDialog = () => {
+		if (cueBusy) return;
 		if (isProjectSettings) {
 			if (closeWhenSavedRef.current) return;
 			if (projectSaveState.requestPending) {
@@ -136,8 +140,9 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled }).id);
 		}
 		if (settingsModal?.scope === "project") {
-			setActiveProjectSection("general");
+			setActiveProjectSection(settingsModal.section ?? "general");
 			setProjectSaveState(initialProjectSaveState());
+			setCueBusy(false);
 		}
 	}, [cloudEnabled, settingsModal]);
 
@@ -208,7 +213,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 							<nav aria-label={t("settings.navSectionsAria")} className="flex flex-col gap-0.5 p-2 pt-0">
 								{isProjectSettings
 									? projectSections.map(({ id, label, icon }) => (
-											<SettingsNavItem active={activeProjectSection === id} icon={icon} key={id} label={label} onClick={() => setActiveProjectSection(id)} />
+											<SettingsNavItem active={activeProjectSection === id} disabled={cueBusy} icon={icon} key={id} label={label} onClick={() => setActiveProjectSection(id)} />
 										))
 									: globalSections.map(({ id, label, icon }) => (
 											<SettingsNavItem
@@ -223,7 +228,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 											/>
 										))}
 							</nav>
-							{isProjectSettings &&
+							{isProjectSettings && activeProjectSection !== "cues" &&
 								(projectSaveState.phase === "failed" ||
 									projectSaveState.phase === "pending" ||
 									projectSaveState.phase === "saving" ||
@@ -258,6 +263,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 								<button
 									aria-label={t("settings.close")}
 									className="settings-close-button"
+									disabled={cueBusy}
 									onClick={closeSettingsDialog}
 									ref={closeButtonRef}
 									type="button"
@@ -267,8 +273,10 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 							</DialogHeader>
 							<div aria-busy={!isBodyReady} className={cn(settingsDialogBodyClass, "settings-dialog-body flex-1 px-(--size-modal-padding) pt-0")}>
 								{isBodyReady ? (
-									displaySettings?.scope === "project" ? (
-										<ProjectSettingsForm projectId={displaySettings.projectId} hostId={displaySettings.hostId} section={activeProjectSection} onSaveState={setProjectSaveState} />
+									displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "cues" ? (
+										<CuesSettings projectId={displaySettings.projectId} onBusyChange={setCueBusy} />
+									) : displaySettings?.scope === "project" ? (
+										<ProjectSettingsForm projectId={displaySettings.projectId} hostId={remoteHostId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />
 									) : (
 										<GlobalSettingsForm cloudEnabled={cloudEnabled} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} section={activeSection} />
 									)

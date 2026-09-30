@@ -45,7 +45,7 @@ function isLegacyDirectoryTitle(title: string, workingDir: string): boolean {
 	return parts.at(-1) === title;
 }
 
-function toShellTerminal(t: components["schemas"]["ShellTerminalResponse"], hostId?: HostId): ShellTerminal {
+export function toShellTerminal(t: components["schemas"]["ShellTerminalResponse"], hostId?: HostId): ShellTerminal {
 	const title = isLegacyDirectoryTitle(t.title, t.workingDir) ? "Terminal" : t.title;
 	return {
 		handleId: t.handleId,

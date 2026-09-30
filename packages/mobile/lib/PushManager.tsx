@@ -4,7 +4,8 @@
 // (warm + cold start). See docs/adr/0001-mobile-push-notifications.md (D6, D7, D9).
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
-import { useRootNavigationState, useRouter } from "expo-router";
+import { useRootNavigationState, useRouter, type Href } from "expo-router";
+import { useOpenPage } from "./pageNavigation";
 import { useEffect, useRef } from "react";
 import { AppState, Platform } from "react-native";
 import { announceDevice, markNotificationRead } from "./api";
@@ -32,6 +33,7 @@ type PushData = {
 export function PushManager(): null {
 	const { hostStates } = useApp();
 	const router = useRouter();
+	const openPage = useOpenPage();
 	const navState = useRootNavigationState();
 
 	const handledColdStart = useRef(false);
@@ -101,20 +103,24 @@ export function PushManager(): null {
 		// saved pairing is the authority for whether this host may be opened.
 		const paired = data.hostId ? await findHost(data.hostId).catch(() => null) : null;
 		const hosts = hostsRef.current;
-		const destination = notificationTarget({ type: data.type ?? "", sessionId: data.sessionId, hostId: data.hostId }, paired?.id);
+		const destination = notificationTarget({ type: data.type ?? "", sessionId: data.sessionId, prUrl: data.prUrl, hostId: data.hostId }, paired?.id);
 		if (destination === "/") {
 			// Legacy or forgotten-machine push has no safe destination here.
 			router.navigate("/");
 			return;
 		}
 		const source = hosts.find(({ hostId }) => hostId === data.hostId);
-		const target = destination.startsWith("/session") ? "session" : "prs";
+		const target = destination.startsWith("/review")
+			? "review"
+			: destination.startsWith("/session") ? "session" : "prs";
 		mobileTelemetry()?.capture(MOBILE_EVENTS.notificationOpened, { target, cold_start: coldStart });
 		// Best-effort mark-read so unread counts stay consistent with the dashboard.
 		if (source?.config && source.connection === "open" && data.notificationId) {
 			markNotificationRead(source.config, data.notificationId).catch(() => {});
 		}
-		router.navigate(destination);
+		// A review opens as a page even when a sheet is up when the tap arrives.
+		if (target === "review") openPage(destination as Href);
+		else router.navigate(destination);
 	}
 
 	return null;
