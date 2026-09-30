@@ -744,7 +744,14 @@ describe("SessionView", () => {
 		workspaceQueryState.isLoading = false;
 		useUiStore.setState({
 			activeShellTerminalHandleId: null,
-			inspectorSessions: {},
+			// Opening a session leaves the inspector closed (covered by the
+			// "keeps the inspector closed" test); most tests here exercise the
+			// open rail, so start the workers the way a user left them: open.
+			inspectorSessions: {
+				"sess-1": { isOpen: true, view: "summary" },
+				"sess-2": { isOpen: true, view: "summary" },
+				"sess-cross-project": { isOpen: true, view: "summary" },
+			},
 			isSidebarOpen: true,
 			visibleTerminalKindBySession: {},
 		});
@@ -2865,13 +2872,20 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("inspector-resize-handle")).toBeInTheDocument();
 	});
 
-	it("opens the Summary inspector alongside the terminal by default", () => {
+	it("keeps the inspector closed when a session opens, then opens it on Summary", () => {
+		useUiStore.setState({ inspectorSessions: {} });
 		render(<SessionView sessionId="sess-1" />);
 
 		expect(screen.getByText("terminal center")).toBeInTheDocument();
+		expect(inspectorOpen("sess-1")).toBe(false);
+		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "collapsed");
+		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("inert");
+		expect(screen.getByTestId("inspector-collapsed-rail")).toBeInTheDocument();
+
+		fireEvent.keyDown(window, { key: "B", ctrlKey: true, shiftKey: true });
+
+		expect(inspectorOpen("sess-1")).toBe(true);
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "expanded");
-		expect(screen.getByTestId("inspector-resize-handle")).not.toHaveClass("hidden");
-		expect(screen.getByTestId("panel-inspector")).not.toHaveAttribute("inert");
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
 	});
 
@@ -2885,7 +2899,7 @@ describe("SessionView", () => {
 		expect(browserViewOptions.current).toMatchObject({ sessionId: "sess-1", terminated: true });
 	});
 
-	it("mounts the inspector open by default", () => {
+	it("mounts the inspector open when the store says open", () => {
 		render(<SessionView sessionId="sess-1" />);
 
 		const pane = screen.getByTestId("panel-inspector");
