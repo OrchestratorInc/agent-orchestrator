@@ -154,7 +154,7 @@ describe("HarnessSettingsSection", () => {
 		});
 		renderSection();
 		const row = (await screen.findByText("MiMo Code")).closest('[data-agent="mimo-code"]') as HTMLElement;
-		expect(await within(row).findByRole("button", { name: "Set up" })).toBeDisabled();
+		expect(await within(row).findByRole("button", { name: "Configured" })).toBeDisabled();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
 	});
 
@@ -391,7 +391,7 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: "auth-mimo" } },
 		}));
-		expect(await within(row).findByRole("button", { name: "Set up" })).toBeDisabled();
+		expect(await within(row).findByRole("button", { name: "Configured" })).toBeDisabled();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
@@ -443,7 +443,7 @@ describe("HarnessSettingsSection", () => {
 		await within(row).findByRole("button", { name: "Authorized" });
 	});
 
-	it("uses Set up for a completed setup action", async () => {
+	it("uses Configured for a completed setup action", async () => {
 		const authorized = catalogWithInstalled("codex");
 		authorized.agents[1].authentication.state = "authorized";
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
@@ -464,7 +464,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
 
-		await within(row).findByText("Set up");
+		await within(row).findByText("Configured");
 	});
 
 	it("does not expose manual readiness controls", async () => {
@@ -631,6 +631,50 @@ describe("HarnessSettingsSection", () => {
 
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
 			params: { path: { agent: "codex" } },
+			body: { method: "npm", operation: "install" },
+		}));
+	});
+
+	it("shows an incompatible OpenCode version reason and keeps installation available", async () => {
+		const reason = 'OpenCode 2 requires OpenCode 2, but "/usr/local/bin/opencode" reports OpenCode 1 (1.18.33); select the matching harness or put OpenCode 2 on PATH';
+		const mismatch = agentReadiness("opencode-v2", "OpenCode 2", {
+			installation: "not_installed",
+			authentication: "unknown",
+		});
+		mismatch.installation.reasonCode = "install_incompatible_version";
+		mismatch.installation.reason = reason;
+		const readiness = { agents: [mismatch] };
+		const installerPlans = { agents: [{
+			agentId: "opencode-v2",
+			available: true,
+			automatic: true,
+			method: "npm",
+			command: "npm install -g opencode-ai@latest",
+			methods: [{ id: "npm", label: "npm", available: true, recommended: true, command: "npm install -g opencode-ai@latest", reinstallAvailable: true }],
+		}] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
+			if (path === "/api/v1/agents/installers") return { data: installerPlans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/{agent}/install") {
+				return { data: { target: "opencode-v2", status: "installing", method: "npm" } } as never;
+			}
+			return { data: readiness } as never;
+		});
+
+		renderSection();
+		const row = (await screen.findByText("OpenCode 2")).closest('[data-agent="opencode-v2"]') as HTMLElement;
+		expect(await within(row).findByText(reason)).toBeInTheDocument();
+		expect(row).not.toHaveTextContent("Installation status unknown");
+		const install = within(row).getByRole("button", { name: "Install" });
+		expect(install).toBeEnabled();
+
+		await userEvent.click(install);
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
+			params: { path: { agent: "opencode-v2" } },
 			body: { method: "npm", operation: "install" },
 		}));
 	});

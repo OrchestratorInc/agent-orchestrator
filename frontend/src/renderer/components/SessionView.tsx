@@ -1215,21 +1215,11 @@ export function SessionView({ sessionId }: SessionViewProps) {
 		if (!activeShellTerminalHandleId) return;
 		const shell = shellTerminals.find((s) => s.handleId === activeShellTerminalHandleId);
 		if (!shell) return;
-		setTerminalTarget((current) =>
-			current.kind === "shell" &&
-			current.handleId === shell.handleId &&
-			current.generation === shell.createdAt &&
-			current.title === shell.title
-				? current
-				: {
-						generation: shell.createdAt,
-						kind: "shell",
-						handleId: shell.handleId,
-						sessionId,
-						title: shell.title,
-					},
-		);
-	}, [activeShellTerminalHandleId, sessionId, shellTerminals]);
+		if (terminalTarget.kind === "shell" && terminalTarget.handleId === shell.handleId &&
+			terminalTarget.generation === shell.createdAt && terminalTarget.title === shell.title &&
+			!fileTabs.activePath && !reviewerChatId) return;
+		selectShellTerminal(shell.handleId);
+	}, [activeShellTerminalHandleId, fileTabs.activePath, reviewerChatId, selectShellTerminal, shellTerminals, terminalTarget]);
 
 	// If the pane is pointed at a shell that is not in THIS session's strip — e.g.
 	// after navigating to a different session whose globally-active shell belongs

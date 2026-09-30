@@ -13,8 +13,10 @@ import {
 	isOrchestratorSession,
 	resolveNextNavigationAfterSessionKill,
 	sessionIsActive,
+	sessionCueTargetAvailable,
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
+	toProjectKind,
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
@@ -42,6 +44,7 @@ import {
 	deriveSessionAgentSwitchPresentation,
 } from "../lib/agent-switch-presentation";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { CueRunMenu } from "./chat/CueRunMenu";
 
 const isMac = isMacPlatform();
 const dragStyle = isMac ? ({ WebkitAppRegion: "drag" } as React.CSSProperties) : undefined;
@@ -129,6 +132,7 @@ export function ShellTopbar({
 	const isProjectBoardRoute = !isSessionRoute && Boolean(projectId);
 	const isRootBoardRoute = !isSessionRoute && !isProjectBoardRoute && !isAutomationsRoute && !isStandaloneBoardRoute;
 	const project = workspaceScope?.project;
+	const supportsLocalCues = Boolean(project && toProjectKind(project.kind));
 	const projectLabel = project?.name ?? session?.workspaceName ?? (projectId ? "" : t("shell.board"));
 	const orchestrator = workspaceScope?.orchestrator;
 	const supportsProjectActions = project?.kind !== STANDALONE_PROJECT_KIND && projectId !== STANDALONE_WORKSPACE_ID;
@@ -212,8 +216,16 @@ export function ShellTopbar({
 				data-compact-actions={compactActions ? "true" : "false"}
 				data-testid="workspace-topbar-actions"
 			>
-				{!boardActionsInPanel && isProjectBoardRoute ? (
-					<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} style={noDragStyle} />
+			{!boardActionsInPanel && isProjectBoardRoute ? (
+					<>
+						<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} style={noDragStyle} />
+						{supportsLocalCues ? <span className="inline-flex" style={noDragStyle}>
+							<CueRunMenu
+								projectId={projectId!}
+								disabled={isProjectRestarting || isProvisioning}
+							/>
+						</span> : null}
+					</>
 				) : null}
 				{isSessionRoute ? (
 					<>
@@ -281,6 +293,18 @@ export function ShellTopbar({
 								sessionTerminated={session.isTerminated}
 								style={noDragStyle}
 							/>
+						) : null}
+						{/* Cues run from the topbar, not the composer: with a session in
+						    scope they dispatch into it, where the board's project-level
+						    runner (above) spawns a worker instead. */}
+						{session && supportsLocalCues ? (
+							<span className="inline-flex" style={noDragStyle}>
+								<CueRunMenu
+									projectId={session.workspaceId}
+									sessionId={session.id}
+									disabled={!sessionCueTargetAvailable(session)}
+								/>
+							</span>
 						) : null}
 						{/* Local worker actions share one tight control group. Navigation
 						    remains a separate visual target in the outer top-bar row. */}

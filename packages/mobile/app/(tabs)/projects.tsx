@@ -109,9 +109,9 @@ export default function ProjectsScreen() {
 					ListEmptyComponent={
 						error ? (
 							<EmptyState
-								icon="wifi-off"
+								icon={failure.icon}
 								title={failure.title}
-								message={failure.message}
+								message={failure.hint}
 								action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />}
 							/>
 						) : (

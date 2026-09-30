@@ -23,7 +23,7 @@ describe("describeDesktopStatus", () => {
 	// The reported bug: a desktop that stopped answering still read "Paired".
 	it("never calls an unreachable desktop paired", () => {
 		expect(describeDesktopStatus({ configured: true, connection: "closed", failure: "unreachable" })).toEqual({
-			label: "Offline",
+			label: "Unreachable",
 			tone: "error",
 		});
 	});

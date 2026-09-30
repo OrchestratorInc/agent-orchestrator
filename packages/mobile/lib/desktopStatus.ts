@@ -35,6 +35,6 @@ export function describeDesktopStatus(input: {
 		default:
 			// Still paired, just not answering. Kept apart from "Set up" so an
 			// offline desktop never reads as an unpaired phone.
-			return { label: "Offline", tone: "error" };
+			return { label: "Unreachable", tone: "error" };
 	}
 }

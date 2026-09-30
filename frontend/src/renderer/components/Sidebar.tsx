@@ -73,9 +73,11 @@ import {
 import { getSessionStatusDotView } from "../lib/session-presentation";
 import { deriveSessionAgentSwitchPresentation } from "../lib/agent-switch-presentation";
 import { aoBridge } from "../lib/bridge";
+import { hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useCanResumeAgent } from "../hooks/useCanResumeAgent";
 import { cloudSessionsQueryKey, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { conversationQueryKey, conversationQueryOptions } from "../hooks/useConversation";
 import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import { resumeOrchestrator, spawnOrchestrator } from "../lib/spawn-orchestrator";
@@ -2129,6 +2131,13 @@ function SessionRow({
 	const rename = useSessionRename(session, refreshWorkspaces);
 	const lastTouchAtRef = useRef(0);
 	const suppressTouchOpenRef = useRef(false);
+	const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+	const canPrefetch = session.mode === "chat" && !session.cloud && !active && !listIsDragging && !reorder?.isDragging;
+	useEffect(() => () => clearTimeout(hoverTimerRef.current), [canPrefetch]);
+	const prefetchConversation = () => {
+		if (!canPrefetch || !hasTrustedApiBaseUrl() || queryClient.getQueryData(conversationQueryKey(session.id))) return;
+		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(session.id));
+	};
 	const beginRename = useCallback(() => {
 		rename.begin();
 	}, [rename.begin]);
@@ -2216,6 +2225,11 @@ function SessionRow({
 								reorder?.isDragging && "!cursor-grabbing",
 							)}
 							{...(reorder?.listeners ?? {})}
+							onMouseEnter={() => {
+								if (canPrefetch) hoverTimerRef.current = setTimeout(prefetchConversation, 100);
+							}}
+							onMouseLeave={() => clearTimeout(hoverTimerRef.current)}
+							onFocus={prefetchConversation}
 							onClick={(event) => {
 								if (event.detail > 1) return;
 								if (suppressTouchOpenRef.current) {
