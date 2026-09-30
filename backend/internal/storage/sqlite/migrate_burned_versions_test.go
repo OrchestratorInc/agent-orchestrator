@@ -172,7 +172,7 @@ var shippedMigrations = map[int64]string{
 	166: "0166_allow_deepseek_harness.sql",
 	167: "0167_allow_opencode_v2_harness.sql",
 	168: "0168_cues.sql",
-	169: "0169_tmux_server_clients.sql",
+	169: "0169_reported_pr_cdc.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
