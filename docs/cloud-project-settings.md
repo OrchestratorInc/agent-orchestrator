@@ -14,6 +14,8 @@ does not list them, and effort choices are limited to the Cloud API values.
 Cloud saves explicit model and effort selections even when the local catalog
 marks them as defaults, since Cloud runtime defaults may differ. Cursor model
 and mode selections are independent; changing either preserves the other.
+Codex and Claude effort can be selected without a model override. The model
+stays unset in project config, and Cloud applies the explicit effort at launch.
 Project reads and writes stay on the control plane.
 
 The settings endpoint accepts `displayName`, `defaultBranch`, and `config`.

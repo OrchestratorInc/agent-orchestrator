@@ -155,6 +155,7 @@ export function AgentModelField({
 						compact={agentId === "codex"}
 						tuning={{
 							effort,
+							effortsWithoutModel: supportedEfforts,
 							onEffortChange,
 							onValidityChange,
 							roleLabel: t(`settings.models.${role}Role`),
