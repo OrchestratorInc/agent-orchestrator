@@ -187,6 +187,7 @@ func (tc *testClient) close() { _ = tc.conn.Close() }
 // ---------------------------------------------------------------------------
 
 type serveFixture struct {
+	host   *host
 	pty    *fakePTY
 	ring   *Ring
 	ln     net.Listener
@@ -205,15 +206,15 @@ func startServe(t *testing.T, pid int) *serveFixture {
 	ring := NewRing()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() {
-		done <- Serve(ctx, ServeConfig{
-			SessionID: fmt.Sprintf("test-%d", pid),
-			Listener:  ln,
-			PTY:       pty,
-			Ring:      ring,
-		})
-	}()
+	h := newHost(ServeConfig{
+		SessionID: fmt.Sprintf("test-%d", pid),
+		Listener:  ln,
+		PTY:       pty,
+		Ring:      ring,
+	})
+	go func() { done <- h.run(ctx) }()
 	return &serveFixture{
+		host:   h,
 		pty:    pty,
 		ring:   ring,
 		ln:     ln,
@@ -335,12 +336,12 @@ collect:
 
 	// Parse the received bytes back into the ordered list of line indices.
 	// Each line is "[NNNN]\n". The client may legitimately start late (the
-	// snapshot only captures lines written before the connect), and a line may
-	// appear twice at the snapshot/live seam (a chunk landing in the ring just
-	// before this client registers can be both snapshotted and broadcast). The
-	// DROP bug instead produced a MISSING index in the middle. So the invariant
-	// is: the indices, in order, are non-decreasing, advance by 0 or 1 each
-	// step (no jump that skips an index), and reach the final index nChunks-1.
+	// snapshot only captures lines written before the connect). The DROP bug
+	// produced a MISSING index in the middle. A line may not appear twice
+	// either: record appends a chunk to the ring and queues it in one h.mu
+	// hold, so a chunk is in the snapshot or broadcast after it, never both.
+	// So the invariant is: the indices, in order, advance by exactly 1 each
+	// step and reach the final index nChunks-1.
 	lines := strings.Split(string(got), "\n")
 	// Trailing "" after the final \n.
 	if lines[len(lines)-1] == "" {
@@ -356,7 +357,10 @@ collect:
 			prev = idx
 			continue
 		}
-		if idx != prev && idx != prev+1 {
+		if idx == prev {
+			t.Fatalf("line %d delivered twice at the snapshot/live seam", idx)
+		}
+		if idx != prev+1 {
 			t.Fatalf("non-contiguous line indices (dropped chunk): %d followed by %d", prev, idx)
 		}
 		prev = idx
@@ -883,5 +887,152 @@ func TestEarlyAttachGetsTheBareReplay(t *testing.T) {
 	}
 	if !bytes.Equal(payload, f.ring.Replay()) {
 		t.Fatalf("payload = %q, want the bare ring replay %q", payload, f.ring.Replay())
+	}
+}
+
+// waitRecorded returns once the ring ends with out, checked under h.mu. record
+// holds h.mu from the ring append until the chunk is queued, so by then the
+// mode tracker has seen out too, and the pump takes h.mu again only for new
+// output.
+func waitRecorded(t *testing.T, f *serveFixture, out []byte) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		f.host.mu.Lock()
+		done := bytes.HasSuffix(f.ring.Replay(), out)
+		f.host.mu.Unlock()
+		if done {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("host did not record %q", out)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// TestOutputWaitsForAnAttachInProgress replays the interleaving from the #5445
+// review: an attach takes its ring snapshot, the program then switches to the
+// alternate screen, and only after that does the attach restore modes. The
+// output has to wait until the attach lets go of h.mu. Recorded straight away,
+// the switch reaches the mode tracker but not the snapshot, so Restore prefixes
+// ?1049h and the shell lines in the snapshot are painted into the alternate
+// buffer.
+//
+// The test holds h.mu itself, standing in for handleConn between its snapshot
+// and its Restore, so the pump's write lands inside that window on every run.
+// A real attach parked there (on the tracker's lock) would make an unlocked
+// pump wait on that same lock, leaving the order to the scheduler.
+// TestOutputDuringAttachIsDeliveredOnce drives a real attach.
+func TestOutputWaitsForAnAttachInProgress(t *testing.T) {
+	f := startServe(t, 303)
+	defer f.cancel()
+
+	shell := []byte("$ ls\nnotes.txt\n$ qwen\n")
+	if _, err := f.pty.WriteOutput(shell); err != nil {
+		t.Fatalf("write shell output: %v", err)
+	}
+	waitRecorded(t, f, shell)
+
+	tui := []byte("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[H\x1b[2J> ")
+	read := make(chan struct{})
+	f.host.mu.Lock()
+	snap := f.ring.Replay()
+	go func() {
+		_, _ = f.pty.WriteOutput(tui) // returns once the pump has read the chunk
+		close(read)
+	}()
+	pumpRead := false
+	select {
+	case <-read:
+		pumpRead = true
+		// Long enough for a pump that records without h.mu to get the chunk
+		// into the ring and the tracker. A pump that waits for h.mu cannot,
+		// however long this is, so the wait cannot make the test flaky.
+		time.Sleep(100 * time.Millisecond)
+	case <-time.After(2 * time.Second):
+	}
+	prefix := f.host.modes.Restore(snap)
+	ringMoved := !bytes.Equal(f.ring.Replay(), snap)
+	f.host.mu.Unlock()
+
+	if !pumpRead {
+		t.Fatal("pump did not read the program's output")
+	}
+	if len(prefix) > 0 {
+		t.Fatalf("Restore prefixed %q onto a snapshot taken before the program started", prefix)
+	}
+	if ringMoved {
+		t.Fatal("the ring took PTY output while an attach held h.mu")
+	}
+
+	// Once the attach lets go, the chunk is recorded, and its modes with it.
+	waitRecorded(t, f, tui)
+	if got, want := f.host.modes.Restore(shell), "\x1b[?1049h\x1b[?1003h\x1b[?1006h"; string(got) != want {
+		t.Fatalf("modes after the chunk = %q, want %q", got, want)
+	}
+}
+
+// TestOutputDuringAttachIsDeliveredOnce: a real attach and PTY output both wait
+// for h.mu (held here, as a status probe or another attach would), the attach
+// first. Whichever gets the lock first, the new client must receive every
+// byte exactly once: in its snapshot or live after it. Appended to the ring
+// before the snapshot but queued after registration, the output would arrive
+// twice.
+func TestOutputDuringAttachIsDeliveredOnce(t *testing.T) {
+	f := startServe(t, 304)
+	defer f.cancel()
+
+	shell := []byte("$ ls\nnotes.txt\n")
+	if _, err := f.pty.WriteOutput(shell); err != nil {
+		t.Fatalf("write shell output: %v", err)
+	}
+	waitRecorded(t, f, shell)
+
+	f.host.mu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			f.host.mu.Unlock()
+		}
+	}()
+	c := newTestClient(t, f.addr)
+	defer c.close()
+	time.Sleep(50 * time.Millisecond) // let the attach queue on h.mu first
+
+	more := []byte("$ make\nok\n")
+	read := make(chan struct{})
+	go func() {
+		_, _ = f.pty.WriteOutput(more) // returns once the pump has read the chunk
+		close(read)
+	}()
+	select {
+	case <-read:
+	case <-time.After(2 * time.Second):
+		t.Fatal("pump did not read the output")
+	}
+	time.Sleep(50 * time.Millisecond) // time for a pump that appends without h.mu
+	f.host.mu.Unlock()
+	locked = false
+
+	want := append(append([]byte{}, shell...), more...)
+	var got []byte
+	for len(got) < len(want) {
+		typ, payload := c.readFrame(t)
+		if typ != MsgTerminalData {
+			t.Fatalf("got type 0x%02x, want MsgTerminalData", typ)
+		}
+		got = append(got, payload...)
+	}
+	// A duplicate would follow straight after; give it the chance to show.
+	select {
+	case fr, ok := <-c.frameC:
+		if ok {
+			got = append(got, fr.payload...)
+		}
+	case <-time.After(200 * time.Millisecond):
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("client received %q, want %q exactly once", got, want)
 	}
 }
