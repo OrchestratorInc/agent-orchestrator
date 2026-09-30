@@ -1,24 +1,29 @@
 # Accounts Manager upstream engine
 
-The source under `engine/` is a pinned snapshot of CLIProxyAPI with the local
-changes listed below.
+The runner compiles CLIProxyAPI from a publicly fetchable, pinned Go dependency.
+No source download occurs when the packaged application starts.
 
 - Upstream: https://github.com/router-for-me/CLIProxyAPI
 - Tag: `v7.3.8`
 - Commit: `c93978c4ea2e908255a2a06c37599fda3651554a`
-- Imported: 2026-09-19
-- License: MIT; see `engine/LICENSE`
+- Fork: https://github.com/Ayash-Bera/CLIProxyAPI
+- Fork commit: `f8e08347b8f7667bfaf26de2e59081dc346fc644`
+- Go replacement: `github.com/Ayash-Bera/CLIProxyAPI/v7 v7.0.0-20260929230337-f8e08347b8f7`
+- License: MIT; copied from the verified module as `CLIProxyAPI-LICENSE`
 
-AO-specific lifecycle, API, storage, and product integration should live outside
-`engine/`. Keeping the snapshot isolated makes upstream updates reviewable and
-prevents AO-specific behavior from being mixed into the provider engine.
+`runner/go.mod` selects the dependency. `dependency.json` records the full source
+identity, checksums and license hash; packaging fails if these disagree. Builds
+disable Go workspace overrides, verify cached modules, inspect the binary's
+replacement module and bundle both notices and the dependency record.
+
+Account lifecycle, storage, routing policy and product integration stay in this
+repository. The fork retains the patches below and its own test workflow.
 
 This is an embedded-library distribution. The standalone server, terminal UI,
 alternate credential stores, examples and upstream release tooling are omitted.
 AO builds `runner/cmd/ao-accounts-manager`; it does not run the upstream server.
 
-When updating the snapshot, copy a clean upstream checkout without `.git` or
-the following paths, then update the tag and commit above in the same change:
+The pinned fork omits these upstream standalone-only paths:
 
 ```text
 .github/
@@ -36,17 +41,33 @@ docker-compose.cluster.yml
 docker-compose.yml
 ```
 
+It adds its own `.github/workflows/embedded-verification.yml` for dependency
+builds, tests and cross-compilation instead of the upstream release workflows.
+
 These private packages are used only by the omitted standalone entry points.
 Keep `internal/homeplugins`, all public SDK packages, embedded catalogs,
 `config.example.yaml`, test fixtures, the license and local patches below.
 The example configuration is read by an executor regression. Original upstream
 reference documentation may describe commands omitted from this distribution.
 
-After updating, run `go mod tidy` in the engine and runner modules. Review the
-module diff without upgrading versions. Compare the runner's production/test
-dependency closure on Linux amd64/arm64, Windows amd64 and Mac amd64/arm64,
-then build and test both modules and verify desktop runner/license packaging.
-An exclusion must be revisited if a new upstream version imports that path.
+## Updates and rollback
+
+The Accounts Manager maintainers own review of fork patches and security updates.
+Publish a reviewed immutable fork commit before changing the consumer pin. Resolve
+its canonical version with Go, update `runner/go.mod`, run `go mod tidy` and update
+`dependency.json` and this record together. Do not select a branch or mutable tag.
+
+Run the dependency tests in an exact checkout, the full runner suites, packaging
+boundary tests and all five cross-builds. Compare production/test source and asset
+closures before accepting a new revision. Native platform acceptance is separate.
+No unrelated module upgrade belongs in a pin change. Revisit an exclusion if a new
+upstream version imports that path.
+
+Rollback restores the preceding pin, checksums and provenance record as one
+reviewed change. Existing credentials and session bindings need no migration for
+this packaging change. Preserve these local patches until upstream supplies their
+tested equivalents. A failing dependency verification must stop packaging rather
+than select another source.
 
 ## Local callback extension
 

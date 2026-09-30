@@ -219,7 +219,7 @@ const config: ForgeConfig = {
 				if (!existsSync(accountsManagerBinary)) {
 					throw new Error(`packaged Accounts Manager missing from ${accountsManagerBinary}`);
 				}
-				for (const notice of ["CLIProxyAPI-LICENSE", "UPSTREAM.md"]) {
+				for (const notice of ["CLIProxyAPI-LICENSE", "UPSTREAM.md", "dependency.json"]) {
 					const noticePath = path.join(resourcesPath, "accounts-manager", notice);
 					if (!existsSync(noticePath)) throw new Error(`packaged Accounts Manager notice missing from ${noticePath}`);
 				}

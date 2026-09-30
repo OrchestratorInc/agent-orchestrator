@@ -1,5 +1,7 @@
 cloud.google.com/go/compute/metadata v0.3.0 h1:Tz+eQXMEqDIKRsmY3cHTL6FVaynIjX2QxYC4trgAKZc=
 cloud.google.com/go/compute/metadata v0.3.0/go.mod h1:zFmK7XCadkQkj6TtorcaGlCW1hT1fIilQDwofLpJ20k=
+github.com/Ayash-Bera/CLIProxyAPI/v7 v7.0.0-20260929230337-f8e08347b8f7 h1:G7ZYyiD+M01q0Tx+No6i2AcnffHmlpPCPiubxM9pM6M=
+github.com/Ayash-Bera/CLIProxyAPI/v7 v7.0.0-20260929230337-f8e08347b8f7/go.mod h1:Cb5PmcsKfYlHhedA8SAHiwczmXtw0aYgvOkZJFMgwZM=
 github.com/andybalholm/brotli v1.0.6 h1:Yf9fFpf49Zrxb9NlQaluyE92/+X7UVHlhMNJN2sxfOI=
 github.com/andybalholm/brotli v1.0.6/go.mod h1:fO7iG3H7G2nSZ7m0zPUDn85XEX2GTukHGRSepvi9Eig=
 github.com/bsm/ginkgo/v2 v2.12.0 h1:Ny8MWAHyOepLGlLKYmXG4IEkioBysk6GpaRTLC8zwWs=

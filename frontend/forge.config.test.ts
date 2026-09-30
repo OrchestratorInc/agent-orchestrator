@@ -108,10 +108,26 @@ describe("native runtime resources", () => {
 		chmodSync(binary, 0o755);
 		writeFileSync(join(managerDir, "CLIProxyAPI-LICENSE"), "MIT\n");
 		writeFileSync(join(managerDir, "UPSTREAM.md"), "upstream\n");
+		writeFileSync(join(managerDir, "dependency.json"), "{}\n");
 		const hook = config.hooks?.postPackage;
 		expect(hook).toBeTypeOf("function");
 		if (typeof hook !== "function") return;
 		await expect(hook(config, { platform: "win32", arch: "x64", outputPaths: [fixtureDir] })).resolves.toBeUndefined();
+	});
+
+	it.each(["CLIProxyAPI-LICENSE", "UPSTREAM.md", "dependency.json"])("fails packaging without the %s notice", async (missing) => {
+		const managerDir = join(fixtureDir, "resources", "accounts-manager");
+		mkdirSync(managerDir, { recursive: true });
+		writeFileSync(join(managerDir, "ao-accounts-manager.exe"), "");
+		for (const notice of ["CLIProxyAPI-LICENSE", "UPSTREAM.md", "dependency.json"]) {
+			if (notice !== missing) writeFileSync(join(managerDir, notice), "fixture\n");
+		}
+		const hook = config.hooks?.postPackage;
+		expect(hook).toBeTypeOf("function");
+		if (typeof hook !== "function") return;
+		await expect(hook(config, { platform: "win32", arch: "x64", outputPaths: [fixtureDir] })).rejects.toThrow(
+			`packaged Accounts Manager notice missing from ${join(managerDir, missing)}`,
+		);
 	});
 
 	it("fails packaging when the macOS helper was not copied into Resources", async () => {

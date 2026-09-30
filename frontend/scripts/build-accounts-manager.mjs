@@ -11,6 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { meetsMinimumVersion, parseGoVersion, parseMinimumGoVersion } from "./go-version.mjs";
+import { resolveAccountsManagerDependency, verifyAccountsManagerBinary } from "./accounts-manager-dependency.mjs";
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const frontendRoot = resolve(scriptsDir, "..");
@@ -39,6 +40,8 @@ if (versionResult.error || versionResult.status !== 0 || !actualGoVersion || !me
 	process.exit(1);
 }
 
+const dependency = resolveAccountsManagerDependency(repoRoot);
+
 if (isWindowsDev) {
 	mkdirSync(windowsDevOutDir, { recursive: true });
 } else if (process.platform === "win32") {
@@ -54,7 +57,7 @@ if (isWindowsDev) {
 const versionSymbol = "github.com/aoagents/agent-orchestrator/accounts-manager/runner/internal/runner.Version";
 const result = spawnSync(
 	"go",
-	["build", "-ldflags", `-X ${versionSymbol}=${packageVersion}`, "-o", buildOutPath, "./cmd/ao-accounts-manager"],
+	["build", "-mod=readonly", "-ldflags", `-X ${versionSymbol}=${packageVersion}`, "-o", buildOutPath, "./cmd/ao-accounts-manager"],
 	{ cwd: runnerRoot, stdio: "inherit", windowsHide: true, env: { ...process.env, GOWORK: "off" } },
 );
 if (result.error) {
@@ -63,14 +66,17 @@ if (result.error) {
 }
 if (result.status !== 0) process.exit(result.status ?? 1);
 
-copyFileSync(join(repoRoot, "accounts-manager", "engine", "LICENSE"), join(outDir, "CLIProxyAPI-LICENSE"));
-copyFileSync(join(repoRoot, "accounts-manager", "UPSTREAM.md"), join(outDir, "UPSTREAM.md"));
+verifyAccountsManagerBinary(buildOutPath, repoRoot, dependency.pin);
 
 const verify = spawnSync(buildOutPath, ["version"], { encoding: "utf8", windowsHide: true });
 if (verify.status !== 0 || !verify.stdout.includes("ao-accounts-manager") || !verify.stdout.includes("CLIProxyAPI v7.3.8")) {
 	console.error(`Accounts Manager version verification failed: ${verify.stderr || verify.stdout}`);
 	process.exit(1);
 }
+
+copyFileSync(dependency.licensePath, join(outDir, "CLIProxyAPI-LICENSE"));
+copyFileSync(join(repoRoot, "accounts-manager", "UPSTREAM.md"), join(outDir, "UPSTREAM.md"));
+copyFileSync(dependency.recordPath, join(outDir, "dependency.json"));
 
 if (isWindowsDev) {
 	writeFileSync(windowsDevManifestPath, `${JSON.stringify({ path: buildOutPath }, null, 2)}\n`);

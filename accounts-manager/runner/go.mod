@@ -78,4 +78,4 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 )
 
-replace github.com/router-for-me/CLIProxyAPI/v7 => ../engine
+replace github.com/router-for-me/CLIProxyAPI/v7 => github.com/Ayash-Bera/CLIProxyAPI/v7 v7.0.0-20260929230337-f8e08347b8f7

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "module": "github.com/router-for-me/CLIProxyAPI/v7",
+  "version": "v7.3.8",
+  "replacement": {
+    "module": "github.com/Ayash-Bera/CLIProxyAPI/v7",
+    "version": "v7.0.0-20260929230337-f8e08347b8f7",
+    "commit": "f8e08347b8f7667bfaf26de2e59081dc346fc644",
+    "sum": "h1:G7ZYyiD+M01q0Tx+No6i2AcnffHmlpPCPiubxM9pM6M=",
+    "goModSum": "h1:Cb5PmcsKfYlHhedA8SAHiwczmXtw0aYgvOkZJFMgwZM="
+  },
+  "upstreamCommit": "c93978c4ea2e908255a2a06c37599fda3651554a",
+  "licenseSHA256": "879792e89cf1bdd6a8d446033ec87e30496f97dcafc4656dc53f641509b346a6"
+}
