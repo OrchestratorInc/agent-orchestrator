@@ -48,7 +48,7 @@ export function OnboardingCloudDialog({ onClose, onCreated }: { onClose: () => v
 					</div>
 
 					{signedIn ? (
-						<CloudProjectCard bare onCreated={onCreated} />
+						<CloudProjectCard onAuthRequired={() => signIn()} onBack={onClose} onCreated={onCreated} />
 					) : (
 						<>
 							<div className="min-h-0 overflow-y-auto">

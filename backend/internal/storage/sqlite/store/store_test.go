@@ -68,6 +68,44 @@ func TestSessionCreateAllowsPrimeAgentHarness(t *testing.T) {
 	}
 }
 
+func TestSessionCreateAndReadFXHarness(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "fx-project")
+	rec := sampleRecord("fx-project")
+	rec.Harness = domain.HarnessFX
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatalf("create fx session: %v", err)
+	}
+	got, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok || got.Harness != domain.HarnessFX {
+		t.Fatalf("read fx session = %+v, %v, %v", got, ok, err)
+	}
+}
+
+func TestSessionRoundTripsOpenCodeHarnessVersions(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "opencode-project")
+
+	for index, harness := range []domain.AgentHarness{"opencode", "opencode-v2"} {
+		rec := sampleRecord("opencode-project")
+		rec.Harness = harness
+		created, err := s.CreateSession(ctx, rec)
+		if err != nil {
+			t.Fatalf("create %q session: %v", harness, err)
+		}
+		got, ok, err := s.GetSession(ctx, created.ID)
+		if err != nil || !ok {
+			t.Fatalf("read %q session: exists=%v err=%v", harness, ok, err)
+		}
+		if got.Harness != harness {
+			t.Fatalf("session %d harness = %q, want %q", index, got.Harness, harness)
+		}
+	}
+}
+
 func TestTaskPreparationPromotionPreservesWorkspace(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

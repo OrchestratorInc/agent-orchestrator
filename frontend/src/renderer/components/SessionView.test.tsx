@@ -1092,6 +1092,31 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("sh-after-file");
 	});
 
+	it("reveals a command cue terminal over an open file", async () => {
+		shellTerminalsState.data = [{ handleId: "cue-shell", projectId: "proj-1", sessionId: "sess-1", title: "Terminal 4", workingDir: "/p", createdAt: "2026-09-26T00:00:00Z" }];
+		render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "view review file" }));
+		expect(await screen.findByTestId("session-file-workspace")).toBeInTheDocument();
+		act(() => useUiStore.getState().setActiveShellTerminal("cue-shell"));
+		await waitFor(() => expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument());
+		expect(screen.getByTestId("terminal-target")).toHaveTextContent("cue-shell");
+	});
+
+	it("reveals a command cue terminal over reviewer chat", async () => {
+		shellTerminalsState.data = [{ handleId: "cue-shell", projectId: "proj-1", sessionId: "sess-1", title: "Terminal 4", workingDir: "/p", createdAt: "2026-09-26T00:00:00Z" }];
+		const view = render(<SessionView sessionId="sess-1" />);
+		act(() => view.client.setQueryData(["session-reviews", "sess-1"], {
+			reviewerHandleId: "review-chat:review-1",
+			reviewerSurface: { mode: "chat", reviewId: "review-1", harness: "codex" },
+			reviews: [], runs: [],
+		}));
+		fireEvent.click(screen.getByRole("button", { name: "open reviewer chat" }));
+		expect(screen.getByTestId("reviewer-chat-surface")).toBeInTheDocument();
+		act(() => useUiStore.getState().setActiveShellTerminal("cue-shell"));
+		await waitFor(() => expect(screen.queryByTestId("reviewer-chat-surface")).not.toBeInTheDocument());
+		expect(screen.getByTestId("terminal-target")).toHaveTextContent("cue-shell");
+	});
+
 	it("does not offer a new terminal for orchestrator sessions", () => {
 		render(<SessionView sessionId="sess-orch" />);
 

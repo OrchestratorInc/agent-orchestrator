@@ -63,6 +63,10 @@ vi.mock("./GlobalSettingsForm", () => ({
 	),
 }));
 
+vi.mock("./CuesDialog", () => ({
+	CuesSettings: ({ projectId }: { projectId: string }) => <div data-testid="project-cues-settings">{projectId}</div>,
+}));
+
 // The dialog reads the cloud gate to decide whether the Cloud nav page exists;
 // mocked so these tests need no QueryClientProvider (same pattern as Sidebar).
 vi.mock("../hooks/useCloudGate", () => ({
@@ -105,6 +109,27 @@ describe("SettingsDialog", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent("Display name must be 100 characters or fewer");
 	});
 
+	it("keeps cue management in project settings without the project save action", async () => {
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderSettingsDialog();
+
+		const cuesSection = await screen.findByRole("button", { name: "Cues" });
+		expect(cuesSection.querySelector(".lucide-disc-3")).not.toBeNull();
+		await userEvent.click(cuesSection);
+
+		expect(screen.getByTestId("project-cues-settings")).toHaveTextContent("proj-1");
+		expect(cuesSection).toHaveAttribute("aria-current", "page");
+		expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
+	});
+
+	it("opens project settings on the cues page when the caller asks for it", async () => {
+		useUiStore.getState().openProjectSettings("proj-1", { section: "cues" });
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("project-cues-settings")).toHaveTextContent("proj-1");
+		expect(screen.getByRole("button", { name: "Cues" })).toHaveAttribute("aria-current", "page");
+	});
+
 	it("opens the requested global settings page", async () => {
 		useUiStore.getState().openGlobalSettings("mobile");
 		renderSettingsDialog();
@@ -124,16 +149,21 @@ describe("SettingsDialog", () => {
 		const overlay = screen.getByTestId("settings-dialog-overlay");
 		const dialog = await screen.findByRole("dialog");
 		expect(overlay).toHaveClass("dialog-overlay");
-		expect(dialog).toHaveClass("z-[calc(var(--z-overlay)+1)]");
-		expect(dialog).not.toHaveClass("z-overlay");
+		// Keep the scrim below Settings so Chromium never composites its backdrop
+		// blur over the dialog at fractional display scaling. Settings itself stays
+		// on z-overlay: later-portaled confirms and menus can still paint above it.
+		expect(overlay).toHaveClass("z-[calc(var(--z-overlay)-1)]");
+		expect(dialog).toHaveClass("z-overlay");
+		expect(dialog).not.toHaveClass("z-[calc(var(--z-overlay)+1)]");
 	});
 
-	it("does not apply a backdrop filter behind settings content", async () => {
+	it("keeps the backdrop blur on the layer below settings", async () => {
 		useUiStore.getState().openGlobalSettings("mobile");
 		renderSettingsDialog();
 
 		const overlay = screen.getByTestId("settings-dialog-overlay");
-		expect(overlay.style.backdropFilter).toBe("none");
+		expect(overlay).toHaveClass("dialog-overlay");
+		expect(overlay.style.backdropFilter).toBe("");
 	});
 
 	it("opens Harness and forwards its agent focus target without redirecting to Codex Accounts", async () => {

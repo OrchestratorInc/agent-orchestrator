@@ -66,6 +66,7 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 export type CreateProjectInput = {
 	path: string;
@@ -1443,7 +1444,7 @@ function CloudAgentSetupStep({
 				<button
 					type="button"
 					className="flex items-center gap-1.5 self-start text-[12px] font-medium text-[var(--color-accent-import,#4d8dff)] hover:underline"
-					onClick={openCredentialDialog}
+					onClick={() => openCredentialDialog()}
 				>
 					<KeyRound className="size-3.5" aria-hidden="true" />
 					{t("createProject.addAgentCredential", { defaultValue: "Add a coding agent credential →" })}
