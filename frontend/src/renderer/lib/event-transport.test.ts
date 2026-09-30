@@ -195,6 +195,26 @@ describe("createEventTransport", () => {
 		expect(unsubscribeConnectedHostsMock).toHaveBeenCalledOnce();
 	});
 
+	it("refetches only the affected host when its live stream drops", async () => {
+		connectedHostsMock.mockReturnValue(["box-a", "box-b"]);
+		baseUrlForHostMock.mockImplementation((hostId) => `http://127.0.0.1:4000/${hostId}`);
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		const remoteA = EventSourceStub.instances.find((source) => source.url.includes("/box-a/"))!;
+		remoteA.onopen?.();
+		await Promise.resolve();
+		vi.mocked(client.invalidateQueries).mockClear();
+
+		remoteA.onerror?.();
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "box-a"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "box-b"] }, { cancelRefetch: false });
+		await Promise.resolve();
+		vi.mocked(client.invalidateQueries).mockClear();
+		remoteA.onerror?.();
+		expect(client.invalidateQueries).not.toHaveBeenCalled();
+		disconnect();
+	});
+
 	it("rebinds a host stream when its reachable address changes", () => {
 		connectedHostsMock.mockReturnValue(["box-a"]);
 		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/old");

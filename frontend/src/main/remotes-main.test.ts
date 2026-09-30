@@ -102,6 +102,37 @@ describe("registerRemotesIpc", () => {
 		}
 	});
 
+	it("keeps the real host connected when another saved host points at its URL", async () => {
+		const file = await tempFile();
+		const url = "http://127.0.0.1:9123";
+		await writeFile(file, JSON.stringify({ remotes: [
+			{ hostId: "h_a", label: "A", url, password: "a" },
+			{ hostId: "h_b", label: "B", url, password: "b" },
+		] }));
+		const closed = vi.fn().mockResolvedValue(undefined);
+		const registry = new RemoteRegistry(async () => ({ base: "http://127.0.0.1:5000/token", previewUrl: (_sessionId, sourceUrl) => sourceUrl, close: closed }));
+		await registry.connect({ hostId: "h_b", label: "B", url, password: "b" });
+		const ipc = fakeIpc();
+		registerRemotesIpc(ipc.ipcMain, { file, registry, identity: async () => "h_b", probe: async () => "online" });
+
+		await expect(ipc.invoke("remotes:connect", url, "h_a")).rejects.toThrow(/identity changed/);
+		await expect(ipc.invoke("remotes:connect", url, "h_b")).resolves.toMatchObject({ hostId: "h_b" });
+		expect(closed).not.toHaveBeenCalled();
+	});
+
+	it("reports an unreachable new address as offline without changing the saved host", async () => {
+		const file = await tempFile();
+		const ipc = fakeIpc();
+		registerRemotesIpc(ipc.ipcMain, {
+			file,
+			registry: new RemoteRegistry(async () => { throw new Error("proxy must not start"); }),
+			identity: async () => { throw new TypeError("fetch failed"); },
+		});
+
+		await expect(ipc.invoke("remotes:update", "http://192.0.2.1:1", { url: "https://new.trycloudflare.com" })).resolves.toBe("offline");
+		expect((JSON.parse(await readFile(file, "utf8")).remotes as Array<{ url: string }>)[0].url).toBe("http://192.0.2.1:1");
+	});
+
 	it("registers the saved-host surface", async () => {
 		const ipc = fakeIpc();
 		registerRemotesIpc(ipc.ipcMain, { file: await tempFile(), registry: new RemoteRegistry(async () => { throw new Error("unused"); }) });

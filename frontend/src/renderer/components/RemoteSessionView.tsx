@@ -3,7 +3,7 @@ import { useBlocker } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { PanelRight, Plus } from "lucide-react";
-import { apiErrorMessage } from "../lib/api-client";
+import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { baseUrlForHost, clientForHost, labelForHost, subscribeConnectedHosts } from "../lib/host-clients";
 import { refKey, sessionUiKey } from "../lib/hosts";
 import { sessionReviewsQueryKey, type ReviewsResponse } from "../lib/session-reviews";
@@ -36,6 +36,7 @@ import { SessionInspector } from "./SessionInspector";
 import { useBrowserAnnotationQueue } from "./BrowserPanel";
 import { ShellTerminalTab } from "./ShellTerminalTab";
 import { SessionActionsMenu } from "./SessionActionsMenu";
+import { NotificationCenter } from "./NotificationCenter";
 import { SwitchAgentDialog, canSwitchAgentHarness } from "./SwitchAgentDialog";
 import { TerminalSwitchAgentButton } from "./TerminalSwitchAgentButton";
 
@@ -108,6 +109,9 @@ export function RemoteSessionView({ hostId, sessionId }: { hostId: string; sessi
 	}, [handoffSwitchError, hostId, queryClient, sessionId]);
 	useEffect(() => setHandoffDialogOpen(false), [sessionRefKey]);
 	const [inspectorView, setInspectorView] = useState<InspectorView>("summary");
+	useEffect(() => {
+		if (proxyBase && inspectorOpen && inspectorView === "browser") void session.refetch();
+	}, [proxyBase, inspectorOpen, inspectorView, session.refetch]);
 	const browserView = useBrowserView({
 		sessionId: sessionUiKey(sessionId, hostId),
 		origin: { hostId, sessionId, proxyBase: proxyBase ?? "" },
@@ -221,13 +225,16 @@ export function RemoteSessionView({ hostId, sessionId }: { hostId: string; sessi
 			onClick={() => setInspectorOpen((open) => !open)}
 			variant="icon"
 		><PanelRight aria-hidden="true" className="size-icon-md" /></TopbarButton>
+		<NotificationCenter />
 	</div>;
+	const hostUnavailable = !proxyBase || (session.isError && (
+		apiErrorCode(session.error) === "UPSTREAM_UNAVAILABLE" || apiErrorMessage(session.error) === "remote daemon unreachable"
+	));
 
 	return <div className="relative flex h-full min-h-0 bg-background text-foreground" data-testid="remote-session-view" data-host-id={hostId}>
 		<div className="flex min-w-0 flex-1 flex-col">
 		{proxyBase && !session.isError && interfaceUi.renderedMode === "chat" && <SessionTopbarHost className="relative z-chrome flex h-inspector-tabs w-full shrink-0 overflow-hidden" data-testid="session-topbar-host" />}
-		{session.isError && <p role="alert" className="px-4 py-2 text-sm text-destructive">{t("remote.loadSessionFailed")}</p>}
-		{!proxyBase && <p role="alert" className="px-4 py-2 text-sm text-destructive">{t("remote.loadSessionFailed")}</p>}
+		{(session.isError || !proxyBase) && <p role="alert" className="px-4 py-2 text-sm text-destructive">{t(hostUnavailable ? "remote.hostOffline" : "remote.loadSessionFailed")}</p>}
 		<div className="relative min-h-0 flex-1" ref={setHandoffDialogContainer}>
 			{session.data && handoffDialogContainer ? <SwitchAgentDialog agentSwitch={handoffAgentSwitch} container={handoffDialogContainer} onOpenChange={handleHandoffDialogOpenChange} open={handoffDialogOpen} session={session.data} /> : null}
 			{proxyBase && !session.isError && session.data && interfaceUi.renderedMode === "chat" ? <>

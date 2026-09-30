@@ -29,6 +29,8 @@ type State struct {
 	Enabled  bool   `json:"enabled"`
 	Password string `json:"password"`
 	LastPort int    `json:"lastPort"`
+	// The last rotated credential stays recognizable as stale after restart.
+	RetiredPasswordHash string `json:"retiredPasswordHash,omitempty"`
 	// NoPublicTunnel keeps the self-hosted remote listener off the managed
 	// Cloudflare tunnel, including after daemon restart. Old Connect Mobile
 	// configs default to false and keep their existing behavior.

@@ -59,7 +59,7 @@ it("keeps offline hosts visible and opens a same-ID session on the selected host
 	expect(retry).toHaveBeenCalledOnce();
 	expect(screen.queryByRole("button", { name: "Start on Box B" })).not.toBeInTheDocument();
 	const add = screen.getByRole("button", { name: "Add project on Box B" });
-	expect(add).toHaveTextContent("1");
+	expect(add).toHaveTextContent("1 project");
 	fireEvent.click(add);
 	expect(addProject).toHaveBeenCalledWith("box-b");
 	expect(screen.queryByRole("button", { name: "Add project on Box A" })).not.toBeInTheDocument();
@@ -246,7 +246,7 @@ it("shows a retry action when a connected host cannot load its sessions", () => 
 		onRemoveProject={vi.fn()}
 		onRetry={retry}
 	/></SidebarMenu></SidebarProvider></TooltipProvider>);
-	expect(screen.getByRole("button", { name: "Add project on Box A" })).toHaveTextContent("0");
+	expect(screen.getByRole("button", { name: "Add project on Box A" })).toHaveTextContent("0 projects");
 	fireEvent.click(screen.getByRole("button", { name: "Could not load sessions. Retry" }));
 	expect(retry).toHaveBeenCalledOnce();
 });
@@ -266,6 +266,23 @@ it("does not show a false zero before project loading succeeds", () => {
 		onRetry={vi.fn()}
 	/></SidebarMenu></SidebarProvider></TooltipProvider>);
 	expect(screen.getByRole("button", { name: "Add project on Box A" })).not.toHaveTextContent("0");
+});
+
+it("shows a password hint when a saved host rejects its credential", () => {
+	render(<TooltipProvider><SidebarProvider><SidebarMenu><RemoteHostsSection
+		hosts={[{ hostId: "box-a", label: "Box A", url: "http://box-a:3001", status: "offline", failureReason: "unauthorized" }]}
+		workspaces={[]}
+		onOpenSession={vi.fn()}
+		onOpenProject={vi.fn()}
+		onOpenHome={vi.fn()}
+		onNewTask={vi.fn()}
+		onOrchestrator={vi.fn()}
+		onConfigure={vi.fn()}
+		onAddProject={vi.fn()}
+		onRemoveProject={vi.fn()}
+		onRetry={vi.fn()}
+	/></SidebarMenu></SidebarProvider></TooltipProvider>);
+	expect(screen.getByRole("button", { name: "Retry Box A" })).toHaveTextContent("Password rejected");
 });
 
 it("confirms removal on the selected host and disables its action while pending", async () => {

@@ -257,9 +257,16 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 		return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SHELL",
 			"Could not determine a shell to launch. Set SHELL (macOS/Linux) or ComSpec (Windows).")
 	}
+	env := s.pinnedEnv()
+	if in.SessionID != "" {
+		if env == nil {
+			env = make(map[string]string, 1)
+		}
+		env["AO_SESSION_ID"] = string(in.SessionID)
+	}
 	return s.openTerminal(ctx, openTerminalConfig{
 		argv:       argv,
-		env:        s.pinnedEnv(),
+		env:        env,
 		projectID:  projectID,
 		sessionID:  in.SessionID,
 		workingDir: workingDir,

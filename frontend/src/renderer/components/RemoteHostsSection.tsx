@@ -289,7 +289,7 @@ export function RemoteHostsSection({ hosts, workspaces, failedHostIds = [], load
 				>
 					{host.status === "offline" ? <AlertTriangle aria-hidden="true" /> : <Folder aria-hidden="true" />}
 					<span className="truncate">{host.label}</span>
-					<span className="ml-auto text-xs">{host.status === "connecting" ? t("terminal.connecting") : t("remote.retryHost", { label: host.label })}</span>
+					<span className="ml-auto text-xs">{host.status === "connecting" ? t("terminal.connecting") : host.failureReason === "unauthorized" ? t("remote.passwordRejected") : t("remote.retryHost", { label: host.label })}</span>
 				</SidebarMenuButton>
 			</SidebarMenuItem>;
 			const projects = workspaces.filter((workspace) => workspace.hostId === host.hostId);
@@ -317,7 +317,7 @@ export function RemoteHostsSection({ hosts, workspaces, failedHostIds = [], load
 					>
 						<FolderPlus aria-hidden="true" />
 						<span className="truncate">{t("remote.addProjectOnHost", { label: host.label, defaultValue: "Add project on {{label}}" })}</span>
-						{loadedProjectHostIds.includes(host.hostId) && <span className="ml-auto text-xs tabular-nums" title={t("remote.projectCount", { count: projectCount, defaultValue: projectCount === 1 ? "{{count}} project" : "{{count}} projects" })}>{projectCount}</span>}
+						{loadedProjectHostIds.includes(host.hostId) && <span className="ml-auto text-xs tabular-nums">{t("remote.projectCount", { count: projectCount, defaultValue: projectCount === 1 ? "{{count}} project" : "{{count}} projects" })}</span>}
 					</SidebarMenuButton>
 				</SidebarMenuItem>
 				{failedHostIds.includes(host.hostId) && <SidebarMenuItem>

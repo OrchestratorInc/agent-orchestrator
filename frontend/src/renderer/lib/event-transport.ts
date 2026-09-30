@@ -145,9 +145,11 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				connection.source?.close();
 				try {
 					const source = new EventSource(`${base.replace(/\/+$/, "")}/api/v1/events`);
+					let opened = false;
 					connection.source = source;
 					source.onopen = () => {
 						if (disposed || remoteSources.get(hostId)?.source !== source) return;
+						opened = true;
 						connection.retries = 0;
 						refreshRemote(hostId, true);
 					};
@@ -170,7 +172,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					source.onmessage = onEvent;
 					for (const type of CDC_EVENT_TYPES) source.addEventListener(type, onEvent);
 					source.onerror = () => {
-						if (disposed || remoteSources.get(hostId)?.source !== source || source.readyState !== EVENTSOURCE_CLOSED || connection.retryTimer) return;
+						if (disposed || remoteSources.get(hostId)?.source !== source) return;
+						if (opened) {
+							opened = false;
+							refreshRemote(hostId);
+						}
+						if (source.readyState !== EVENTSOURCE_CLOSED || connection.retryTimer) return;
 						connection.retries += 1;
 						connection.retryTimer = setTimeout(() => {
 							connection.retryTimer = undefined;

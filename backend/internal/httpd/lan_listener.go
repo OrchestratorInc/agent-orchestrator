@@ -24,6 +24,7 @@ type LANManager struct {
 	defaultPort int
 	log         *slog.Logger
 	state       *authState // shared with authMiddleware; SetPasswordHash writes through here
+	lock        *lockout
 
 	transitionMu sync.Mutex // serializes Start and Stop without blocking status reads
 	mu           sync.Mutex
@@ -43,6 +44,7 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 		defaultPort: defaultPort,
 		log:         loggerOrDefault(log),
 		state:       state,
+		lock:        lock,
 	}
 }
 
@@ -126,11 +128,25 @@ func NewMobileLAN(handler http.Handler, defaultPort int, log *slog.Logger, sink 
 	return NewLANManager(handler, &authState{}, defaultPort, log, sink)
 }
 
-// SetPasswordHash stores the current connection password hash on the shared
-// authState so the auth middleware (already wrapping handler) validates
-// against it. Satisfies controllers.LANController.
+// SetPasswordHash rotates the connection password, clears lockouts inherited
+// from the old credential, and closes existing LAN connections (including
+// upgraded WebSockets). Satisfies controllers.LANController.
 func (m *LANManager) SetPasswordHash(hash string) {
+	m.transitionMu.Lock()
+	defer m.transitionMu.Unlock()
+	if m.state.currentHash() == hash {
+		return
+	}
 	m.state.setHash(hash)
+	m.lock.resetAll()
+	m.mu.Lock()
+	ln := m.ln
+	m.mu.Unlock()
+	if ln != nil {
+		if err := ln.closeConnections(); err != nil {
+			m.log.Warn("close LAN connections after password rotation", "err", err)
+		}
+	}
 }
 
 // PasswordHash returns the current connection password hash. Used to snapshot the

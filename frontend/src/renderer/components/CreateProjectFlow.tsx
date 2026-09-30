@@ -2252,7 +2252,7 @@ function ImportSourcePicker({
 			source: "local",
 			icon: <FolderClosed className="size-5" aria-hidden="true" strokeWidth={1.8} />,
 			label: t("createProject.openLocal"),
-			description: t("createProject.openLocalDesc"),
+			description: hostLabel ? t("remote.openExistingProjectDesc", { label: hostLabel }) : t("createProject.openLocalDesc"),
 		},
 		{
 			source: "workspace",

@@ -11,7 +11,7 @@ const remotes = vi.hoisted(() => ({
 
 vi.mock("../lib/bridge", () => ({ aoBridge: { remotes } }));
 
-import { connectedHosts } from "../lib/host-clients";
+import { baseUrlForHost, connectedHosts } from "../lib/host-clients";
 import { useRemoteHosts } from "./useRemoteHosts";
 
 beforeEach(() => {
@@ -29,7 +29,10 @@ beforeEach(() => {
 	useUiStore.setState({ remoteHosts: false });
 });
 
-afterEach(() => useUiStore.setState({ remoteHosts: false }));
+afterEach(() => {
+	vi.useRealTimers();
+	useUiStore.setState({ remoteHosts: false });
+});
 
 it("does not connect to saved boxes until Remote hosts is enabled", async () => {
 	const { result } = renderHook(() => useRemoteHosts());
@@ -59,6 +62,25 @@ it("disconnects the prior proxy when a connected host becomes unreachable", asyn
 	expect(connectedHosts()).not.toContain("box-a");
 });
 
+it("keeps B connected when A's corrupted saved address points at B", async () => {
+	const sharedUrl = "http://box-b:3001";
+	remotes.list.mockResolvedValue([
+		{ hostId: "box-a", label: "Box A", url: sharedUrl },
+		{ hostId: "box-b", label: "Box B", url: sharedUrl },
+	]);
+	remotes.connect.mockImplementation(async (url: string, hostId?: string) => {
+		if (hostId === "box-a") throw new Error("remote host identity changed");
+		return { hostId: "box-b", label: "Box B", url, base: "http://127.0.0.1:4000" };
+	});
+	useUiStore.setState({ remoteHosts: true });
+	const { result } = renderHook(() => useRemoteHosts());
+	await waitFor(() => expect(result.current.hosts.map((host) => [host.hostId, host.status])).toEqual([
+		["box-a", "offline"], ["box-b", "connected"],
+	]));
+	expect(connectedHosts()).toContain("box-b");
+	expect(remotes.disconnect).not.toHaveBeenCalledWith(sharedUrl);
+});
+
 it("does not disconnect a newer successful connection after an older refresh fails", async () => {
 	remotes.list.mockResolvedValue([{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }]);
 	useUiStore.setState({ remoteHosts: true });
@@ -75,6 +97,28 @@ it("does not disconnect a newer successful connection after an older refresh fai
 	expect(remotes.disconnect).not.toHaveBeenCalledWith("http://box-a:3001");
 });
 
+it("does not replace a newer proxy when an older refresh succeeds late", async () => {
+	const oldUrl = "http://box-a:3001";
+	const newUrl = "http://box-a-new:3001";
+	remotes.list.mockReset().mockResolvedValueOnce([{ hostId: "box-a", label: "Box A", url: oldUrl }])
+		.mockResolvedValueOnce([{ hostId: "box-a", label: "Box A", url: oldUrl }])
+		.mockResolvedValue([{ hostId: "box-a", label: "Box A", url: newUrl }]);
+	useUiStore.setState({ remoteHosts: true });
+	const { result } = renderHook(() => useRemoteHosts());
+	await waitFor(() => expect(result.current.hosts[0]?.status).toBe("connected"));
+	let finishOld!: (host: { hostId: string; label: string; url: string; base: string }) => void;
+	remotes.connect.mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+		.mockResolvedValueOnce({ hostId: "box-a", label: "Box A", url: newUrl, base: "http://127.0.0.1:4001" });
+	let oldRefresh!: Promise<void>;
+	await act(async () => { oldRefresh = result.current.refresh(); await Promise.resolve(); });
+	await waitFor(() => expect(remotes.connect).toHaveBeenCalledTimes(2));
+	await act(async () => { await result.current.refresh(); });
+	expect(baseUrlForHost("box-a")).toBe("http://127.0.0.1:4001");
+	await act(async () => { finishOld({ hostId: "box-a", label: "Box A", url: oldUrl, base: "http://127.0.0.1:4000" }); await oldRefresh; });
+	expect(baseUrlForHost("box-a")).toBe("http://127.0.0.1:4001");
+	expect(remotes.disconnect).not.toHaveBeenCalledWith(newUrl);
+});
+
 it("closes a connection that finishes after the feature is disabled", async () => {
 	let finishConnect!: (value: { hostId: string; label: string; url: string; base: string }) => void;
 	remotes.list.mockResolvedValue([{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }]);
@@ -86,4 +130,59 @@ it("closes a connection that finishes after the feature is disabled", async () =
 	await act(async () => finishConnect({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" }));
 	await waitFor(() => expect(remotes.disconnect).toHaveBeenCalledWith("http://box-a:3001"));
 	expect(result.current.hosts).toEqual([]);
+});
+
+it("reconnects a saved host that was offline at startup without retrying healthy hosts", async () => {
+	vi.useFakeTimers();
+	let boxAOnline = false;
+	const connect = remotes.connect.getMockImplementation()!;
+	remotes.connect.mockImplementation((url: string, hostId: string) =>
+		url.includes("box-a") && !boxAOnline
+			? Promise.reject(new Error(`host ${url} is offline`))
+			: connect(url, hostId),
+	);
+	useUiStore.setState({ remoteHosts: true });
+	const { result } = renderHook(() => useRemoteHosts());
+	await act(async () => { await Promise.resolve(); });
+	expect(result.current.hosts.map(({ status }) => status)).toEqual(["offline", "connected"]);
+	boxAOnline = true;
+	await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+	expect(result.current.hosts.map(({ status }) => status)).toEqual(["connected", "connected"]);
+	expect(remotes.connect.mock.calls.filter(([url]) => url.includes("box-b"))).toHaveLength(1);
+});
+
+it("does not automatically retry a saved host with an invalid password", async () => {
+	vi.useFakeTimers();
+	remotes.list.mockResolvedValue([{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }]);
+	remotes.connect.mockRejectedValue(new Error("host http://box-a:3001 is unauthorized"));
+	useUiStore.setState({ remoteHosts: true });
+	const { result } = renderHook(() => useRemoteHosts());
+	await act(async () => { await Promise.resolve(); });
+	expect(result.current.hosts[0]?.status).toBe("offline");
+	expect(result.current.hosts[0]?.failureReason).toBe("unauthorized");
+	await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+	expect(remotes.connect).toHaveBeenCalledTimes(1);
+});
+
+it("does not replace a newer proxy when an old offline retry finishes late", async () => {
+	vi.useFakeTimers();
+	const oldUrl = "http://box-a:3001";
+	const newUrl = "http://box-a-new:3001";
+	remotes.list.mockResolvedValueOnce([{ hostId: "box-a", label: "Box A", url: oldUrl }]);
+	let finishRetry!: (host: { hostId: string; label: string; url: string; base: string }) => void;
+	remotes.connect.mockRejectedValueOnce(new Error(`host ${oldUrl} is offline`))
+		.mockImplementationOnce(() => new Promise((resolve) => { finishRetry = resolve; }))
+		.mockResolvedValueOnce({ hostId: "box-a", label: "Box A", url: newUrl, base: "http://127.0.0.1:4001" });
+	useUiStore.setState({ remoteHosts: true });
+	const { result } = renderHook(() => useRemoteHosts());
+	await act(async () => { await Promise.resolve(); });
+	expect(result.current.hosts[0]?.status).toBe("offline");
+	await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+	remotes.list.mockResolvedValue([{ hostId: "box-a", label: "Box A", url: newUrl }]);
+	await act(async () => { await result.current.refresh(); });
+	expect(baseUrlForHost("box-a")).toBe("http://127.0.0.1:4001");
+	await act(async () => finishRetry({ hostId: "box-a", label: "Box A", url: oldUrl, base: "http://127.0.0.1:4000" }));
+	expect(baseUrlForHost("box-a")).toBe("http://127.0.0.1:4001");
+	expect(remotes.disconnect).toHaveBeenCalledWith(oldUrl);
+	expect(remotes.disconnect).not.toHaveBeenCalledWith(newUrl);
 });

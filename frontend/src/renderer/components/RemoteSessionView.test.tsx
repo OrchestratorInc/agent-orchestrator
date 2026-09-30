@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { typeInLexicalEditor } from "../test/lexical";
 import { setChatDraftBoundary } from "../lib/chat-draft-boundary";
 import { sessionUiKey } from "../lib/hosts";
+import { aoBridge } from "../lib/bridge";
 
 const { localGet, localPost, remoteConnect } = vi.hoisted(() => ({ localGet: vi.fn(), localPost: vi.fn(), remoteConnect: vi.fn() }));
 vi.mock("../lib/api-client", async (importOriginal) => ({
@@ -23,6 +24,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 }));
 vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ ready: false, baseUrl: "", client: {} }) }));
 vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: undefined, ready: false }) }));
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button aria-label="Notifications" type="button" /> }));
 vi.mock("./RemoteTerminalView", () => ({ RemoteTerminalView: ({ hostId, proxyBase, terminalHandleId, inputDisabled }: { hostId: string; proxyBase: string; terminalHandleId?: string; inputDisabled?: boolean }) => <div data-testid="remote-terminal-base" data-host-id={hostId} data-terminal-handle={terminalHandleId ?? ""} data-input-disabled={inputDisabled ? "true" : "false"}>{proxyBase}</div> }));
 
 import { connectHost, disconnectHost } from "../lib/host-clients";
@@ -115,7 +117,7 @@ it("removes remote chat actions when its host disconnects, without falling back 
 	await act(async () => { await disconnectHost("box-a"); });
 	expect(queryClient.getQueryData(conversationQueryKey("session-1", "box-a"))).toBeDefined();
 	expect(screen.queryByRole("combobox", { name: "Message the agent" })).not.toBeInTheDocument();
-	expect(screen.getByRole("alert")).toHaveTextContent("Could not load this remote session");
+	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 });
@@ -131,7 +133,7 @@ it("hides stale chat controls when the upstream daemon fails but its proxy remai
 		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
 		if (path.endsWith("/sessions")) {
 			return upstreamFailed
-				? Response.json({ code: "UPSTREAM_UNAVAILABLE", message: "Remote daemon is down" }, { status: 503 })
+				? Response.json({ error: "remote daemon unreachable" }, { status: 502 })
 				: Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode: "chat", prs: [] }] });
 		}
 		if (path.endsWith("/conversation")) return Response.json(conversationBody());
@@ -145,7 +147,7 @@ it("hides stale chat controls when the upstream daemon fails but its proxy remai
 	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
 	expect(queryClient.getQueryData(remoteWorkspaceQueryKey("box-a"))).toBeDefined();
 	expect(screen.getByTestId("remote-session-view")).toBeInTheDocument();
-	expect(screen.getByRole("alert")).toHaveTextContent("Could not load this remote session");
+	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
 	expect(screen.queryByRole("combobox", { name: "Message the agent" })).not.toBeInTheDocument();
 	expect(screen.queryByRole("complementary", { name: "Session inspector" })).not.toBeInTheDocument();
 	expect(localGet).not.toHaveBeenCalled();
@@ -240,6 +242,54 @@ it("shows a normal inspector and reads its changed files from the remote host on
 	expect(screen.queryByRole("complementary", { name: "Session inspector" })).not.toBeInTheDocument();
 	await userEvent.click(screen.getByRole("button", { name: "Open inspector panel" }));
 	expect(screen.getByRole("complementary", { name: "Session inspector" })).toBeInTheDocument();
+});
+
+it("discovers a preview started on the host before the Browser tab opens", async () => {
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	let previewStarted = false;
+	let sessionReads = 0;
+	const resolvePreview = vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue("http://ao-preview.localhost/");
+	const navigate = vi.spyOn(window.ao!.browser, "navigate").mockImplementation(async ({ viewId, url }) => ({
+		viewId, url, title: "AO preview", canGoBack: false, canGoForward: false, isLoading: false,
+	}));
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (path.endsWith("/sessions")) {
+			sessionReads++;
+			return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode: "chat", previewUrl: previewStarted ? "http://127.0.0.1:4600/" : "", previewRevision: previewStarted ? 1 : 0, prs: [] }] });
+		}
+		if (path.endsWith("/conversation")) return Response.json(conversationBody());
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+	await screen.findByRole("combobox", { name: "Message the agent" });
+	expect(sessionReads).toBe(1);
+	previewStarted = true;
+	await userEvent.click(screen.getByRole("tab", { name: "Browser" }));
+	await waitFor(() => expect(resolvePreview).toHaveBeenCalledWith("box-a", "session-1", "http://127.0.0.1:4600/"));
+	await waitFor(() => expect(screen.getByRole("textbox", { name: "Browser URL" })).toHaveValue("ao-preview.localhost"));
+	expect(navigate).toHaveBeenCalledWith({ viewId: "test:remote:box-a:session-1", url: "http://ao-preview.localhost/" });
+	expect(sessionReads).toBe(2);
+	navigate.mockRestore();
+	resolvePreview.mockRestore();
+});
+
+it.each(["chat", "tui"] as const)("shows the combined notification bell in a remote %s session header", async (mode) => {
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (path.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode, terminalHandleId: "terminal-1", prs: [] }] });
+		if (path.endsWith("/conversation")) return Response.json(conversationBody());
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+	if (mode === "chat") await screen.findByRole("combobox", { name: "Message the agent" });
+	else await screen.findByTestId("remote-terminal-base");
+	expect(screen.getByRole("button", { name: "Notifications" })).toBeInTheDocument();
 });
 
 it("opens a TUI host file in a shared center tab and renames on that host", async () => {

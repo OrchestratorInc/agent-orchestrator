@@ -8,6 +8,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +18,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
@@ -235,6 +239,155 @@ func TestLANManagerStopClosesHijackedWebSocket(t *testing.T) {
 	}
 	if _, _, err := conn.Read(ctx); err == nil {
 		t.Fatal("WebSocket remained readable after Stop")
+	}
+}
+
+func TestLANManagerPasswordRotationClosesHijackedWebSocket(t *testing.T) {
+	m, base := startShutdownTestLAN(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		for {
+			kind, data, err := conn.Read(context.Background())
+			if err != nil {
+				return
+			}
+			if err := conn.Write(context.Background(), kind, data); err != nil {
+				return
+			}
+		}
+	}))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	old, _, err := websocket.Dial(ctx, base+"/mux", &websocket.DialOptions{
+		HTTPHeader: http.Header{"Authorization": {"Bearer secret12"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.CloseNow()
+	if err := old.Write(ctx, websocket.MessageText, []byte("before")); err != nil {
+		t.Fatal(err)
+	}
+	if _, data, err := old.Read(ctx); err != nil || string(data) != "before" {
+		t.Fatalf("echo before rotation: data=%q err=%v", data, err)
+	}
+	m.SetPasswordHash(mobilebridge.HashPassword("newpass1"))
+	if _, _, err := old.Read(ctx); err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("old WebSocket remained usable after password rotation: %v", err)
+	}
+	if stale, response, err := websocket.Dial(ctx, base+"/mux", &websocket.DialOptions{
+		HTTPHeader: http.Header{"Authorization": {"Bearer secret12"}},
+	}); err == nil {
+		stale.CloseNow()
+		t.Fatal("old password opened a new WebSocket")
+	} else if response == nil || response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("old password status = %v, want 401", response)
+	}
+	fresh, _, err := websocket.Dial(ctx, base+"/mux", &websocket.DialOptions{
+		HTTPHeader: http.Header{"Authorization": {"Bearer newpass1"}},
+	})
+	if err != nil {
+		t.Fatalf("new password could not open WebSocket: %v", err)
+	}
+	fresh.CloseNow()
+}
+
+func TestFailedPasswordRotationPreservesExistingWebSocket(t *testing.T) {
+	m, base := startShutdownTestLAN(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		for {
+			kind, data, err := conn.Read(context.Background())
+			if err != nil {
+				return
+			}
+			if err := conn.Write(context.Background(), kind, data); err != nil {
+				return
+			}
+		}
+	}))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	old, _, err := websocket.Dial(ctx, base+"/mux", &websocket.DialOptions{
+		HTTPHeader: http.Header{"Authorization": {"Bearer secret12"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.CloseNow()
+
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bridge := &controllers.BridgeService{LAN: m, ConfigPath: filepath.Join(blocker, "config.json")}
+	if _, err := bridge.Enable(); err == nil {
+		t.Fatal("expected password rotation to fail during persistence")
+	}
+	if got, want := m.PasswordHash(), mobilebridge.HashPassword("secret12"); got != want {
+		t.Fatal("failed rotation did not restore the old password")
+	}
+	if err := old.Write(ctx, websocket.MessageText, []byte("still-connected")); err != nil {
+		t.Fatalf("old WebSocket disconnected after failed rotation: %v", err)
+	}
+	if _, data, err := old.Read(ctx); err != nil || string(data) != "still-connected" {
+		t.Fatalf("old WebSocket after failed rotation: data=%q err=%v", data, err)
+	}
+}
+
+func TestRotatedPasswordStaysOutOfLockoutAfterDaemonRestart(t *testing.T) {
+	first, _ := startShutdownTestLAN(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	configPath := filepath.Join(t.TempDir(), "mobile.json")
+	if err := mobilebridge.Save(configPath, mobilebridge.State{Enabled: true, Password: "secret12", LastPort: first.BoundPort()}); err != nil {
+		t.Fatal(err)
+	}
+	bridge := &controllers.BridgeService{LAN: first, ConfigPath: configPath, DefaultPort: first.BoundPort()}
+	if _, err := bridge.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	state, err := mobilebridge.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.RetiredPasswordHash != mobilebridge.HashPassword("secret12") {
+		t.Fatal("the rotated credential was not persisted as a retired hash")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := first.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	second := NewMobileLAN(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), 0, nil, nil)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = second.Stop(ctx)
+	})
+	if err := (&controllers.BridgeService{LAN: second, DefaultPort: 0}).RestoreOnBoot(state); err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		w := httptest.NewRecorder()
+		second.handler.ServeHTTP(w, req("Bearer secret12"))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("retired credential after restart: got %d want 401", w.Code)
+		}
+	}
+	w := httptest.NewRecorder()
+	second.handler.ServeHTTP(w, req("Bearer "+state.Password))
+	if w.Code != http.StatusOK {
+		t.Fatalf("new credential after stale retries: got %d want 200", w.Code)
 	}
 }
 

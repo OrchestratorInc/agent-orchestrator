@@ -19,8 +19,8 @@ export function toHostViews(entries: RemoteEntry[]): RemoteHostView[] {
 	return entries.map(({ hostId, label, url }) => ({ hostId: hostId ?? "", label, url }));
 }
 
-export async function findRemote(path: string, url: string): Promise<RemoteEntry> {
-	const entry = (await readRemotes(path)).find((candidate) => candidate.url === url);
+export async function findRemote(path: string, url: string, hostId?: string): Promise<RemoteEntry> {
+	const entry = (await readRemotes(path)).find((candidate) => candidate.url === url && (!hostId || candidate.hostId === hostId));
 	if (!entry) throw new Error(`no saved host for ${url}`);
 	return entry;
 }

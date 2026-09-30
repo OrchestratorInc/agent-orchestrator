@@ -36,13 +36,15 @@ export function registerRemotesIpc(
 	{ file, registry, probe = probeRemote, identity = readRemoteIdentity }: RemotesIpcDeps,
 ): void {
 	const disconnect = (url: string) => registry.disconnect(url);
-	const verify = async (entry: RemoteEntry): Promise<void> => {
-		if (!entry.hostId) throw new Error("remote host must be paired again to record its identity");
-		const actual = await identity(entry);
-		if (actual !== entry.hostId) throw new Error(`remote host identity changed for ${entry.url}; connection refused`);
-	};
 	const checkedProbe = async (entry: RemoteEntry): Promise<RemoteHealth> => {
-		await verify(entry);
+		if (!entry.hostId) throw new Error("remote host must be paired again to record its identity");
+		let actual: string;
+		try {
+			actual = await identity(entry);
+		} catch {
+			return "offline";
+		}
+		if (actual !== entry.hostId) throw new Error(`remote host identity changed for ${entry.url}; connection refused`);
 		return probe(entry);
 	};
 	// Keep edits and connects ordered so an update cannot leave a stale proxy.
@@ -80,8 +82,8 @@ export function registerRemotesIpc(
 	ipcMain.handle("remotes:remove", async (_event, url: string) => ordered(() =>
 		removeSavedRemote(file, url, disconnect),
 	));
-	ipcMain.handle("remotes:connect", async (_event, url: string) => ordered(async () => {
-		const entry = await findRemote(file, url);
+	ipcMain.handle("remotes:connect", async (_event, url: string, hostId?: string) => ordered(async () => {
+		const entry = await findRemote(file, url, hostId);
 		const health = await checkedProbe(entry);
 		if (health !== "online") throw new Error(`host ${url} is ${health}`);
 		return registry.connect(entry);

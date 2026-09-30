@@ -103,6 +103,83 @@ func TestAuthLockoutAfterFive(t *testing.T) {
 	}
 }
 
+func TestRotatedPasswordCanRecoverFromStaleClientLockout(t *testing.T) {
+	state := &authState{}
+	state.setHash(mobilebridge.HashPassword("oldpass1"))
+	lock := newLockout(5, time.Minute, time.Now)
+	h := authMiddleware(state, lock, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	state.setHash(mobilebridge.HashPassword("newpass1"))
+	for range 5 {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req("Bearer oldpass1"))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("stale client: got %d want 401", w.Code)
+		}
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req("Bearer newpass1"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("rotated password from same source: got %d want 200", w.Code)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req("Bearer oldpass1"))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("old password after recovery: got %d want 401", w.Code)
+	}
+}
+
+func TestRetiredPasswordDoesNotResetLockout(t *testing.T) {
+	state := &authState{}
+	state.setHash(mobilebridge.HashPassword("oldpass1"))
+	state.setHash(mobilebridge.HashPassword("newpass1"))
+	lock := newLockout(5, time.Minute, time.Now)
+	h := authMiddleware(state, lock, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	for range 5 {
+		for _, password := range []string{"oldpass1", "wrong"} {
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req("Bearer "+password))
+			if w.Code != http.StatusUnauthorized {
+				t.Fatalf("%s attempt: got %d want 401", password, w.Code)
+			}
+		}
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req("Bearer newpass1"))
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("new password after five genuinely wrong guesses: got %d want 429", w.Code)
+	}
+}
+
+func TestLANManagerPasswordRotationClearsPriorLockout(t *testing.T) {
+	m := NewMobileLAN(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), 0, nil, nil)
+	m.SetPasswordHash(mobilebridge.HashPassword("oldpass1"))
+	for range 5 {
+		w := httptest.NewRecorder()
+		m.handler.ServeHTTP(w, req("Bearer wrong"))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("failed attempt: got %d want 401", w.Code)
+		}
+	}
+	w := httptest.NewRecorder()
+	m.handler.ServeHTTP(w, req("Bearer oldpass1"))
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("before rotation: got %d want 429", w.Code)
+	}
+	m.SetPasswordHash(mobilebridge.HashPassword("newpass1"))
+	w = httptest.NewRecorder()
+	m.handler.ServeHTTP(w, req("Bearer newpass1"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("new password after rotation: got %d want 200", w.Code)
+	}
+}
+
 // reqPathCookie builds a request to an arbitrary path, optionally carrying the
 // Bearer header and/or the preview auth cookie, for the preview-cookie tests.
 func reqPathCookie(method, path, auth, cookie string) *http.Request {

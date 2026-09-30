@@ -54,8 +54,9 @@ export function clientForSessionHost(hostId?: HostId) {
 	return hostId && hostId !== LOCAL_HOST ? clientForHost(hostId) : apiClient;
 }
 
-export async function connectHost(url: string): Promise<ConnectedHost> {
-	const host = await aoBridge.remotes.connect(url);
+export async function connectHost(url: string, hostId?: HostId, shouldAdopt: () => boolean = () => true): Promise<ConnectedHost> {
+	const host = await aoBridge.remotes.connect(url, hostId);
+	if (!shouldAdopt()) return host;
 	let replaced = false;
 	for (const [oldId, oldHost] of hosts) {
 		if (oldId !== host.hostId && oldHost.url === host.url) {

@@ -795,6 +795,9 @@ func TestOpenShellTerminalScopesToSession(t *testing.T) {
 	if len(st.records) != 1 || st.records[0].SessionID != "portfolio-3" {
 		t.Fatalf("session id not persisted on the record: %+v", st.records)
 	}
+	if got := rt.created[0].Env["AO_SESSION_ID"]; got != "portfolio-3" {
+		t.Errorf("shell AO_SESSION_ID = %q, want portfolio-3", got)
+	}
 }
 
 // This is the regression the bug covered: opening a shell from a session view

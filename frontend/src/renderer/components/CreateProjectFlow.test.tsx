@@ -401,6 +401,7 @@ describe("CreateProjectFlow remote host", () => {
 			mode="choose" initialOpen hostId="host-b" hostLabel="Host B" connected
 			onCreateProject={onCreateProject} onInitializeProject={noop.onInitializeProject}
 		/></QueryClientProvider>);
+		expect(screen.getByText("Use a project already on Host B")).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Clone from Git" }));
 		await user.click(await screen.findByRole("button", { name: "Continue clone" }));
 		expect(await screen.findByTestId("agent-sheet")).toHaveAttribute("data-path", "/repo/empty-repository");

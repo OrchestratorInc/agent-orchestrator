@@ -652,7 +652,7 @@ const api = {
 		update: (url: string, changes: { label?: string; url?: string; password?: string }) =>
 			ipcRenderer.invoke("remotes:update", url, changes) as Promise<RemoteHealth>,
 		remove: (url: string) => ipcRenderer.invoke("remotes:remove", url) as Promise<void>,
-		connect: (url: string) => ipcRenderer.invoke("remotes:connect", url) as Promise<ConnectedHostView>,
+		connect: (url: string, hostId?: string) => ipcRenderer.invoke("remotes:connect", url, hostId) as Promise<ConnectedHostView>,
 		disconnect: (url: string) => ipcRenderer.invoke("remotes:disconnect", url) as Promise<void>,
 		previewUrl: (hostId: string, sessionId: string, sourceUrl: string) =>
 			ipcRenderer.invoke("remotes:previewUrl", hostId, sessionId, sourceUrl) as Promise<string>,

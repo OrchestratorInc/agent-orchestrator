@@ -12,16 +12,48 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
-// authState holds the current password hash for the LAN listener. Swapped
-// atomically on regenerate so an in-flight request never sees a torn value.
-type authState struct{ hash atomic.Pointer[string] }
+// authState keeps previously valid hashes so a client retrying an old password
+// after rotation cannot lock out a newly paired client behind the same address.
+type authState struct{ hashes atomic.Pointer[authHashes] }
+type authHashes struct {
+	current string
+	retired []string
+}
 
-func (a *authState) setHash(h string) { a.hash.Store(&h) }
+func (a *authState) setHash(h string) {
+	for {
+		previous := a.hashes.Load()
+		if previous != nil && previous.current == h {
+			return
+		}
+		next := &authHashes{current: h}
+		if previous != nil {
+			next.retired = append(next.retired, previous.retired...)
+			if previous.current != "" {
+				next.retired = append(next.retired, previous.current)
+			}
+		}
+		if a.hashes.CompareAndSwap(previous, next) {
+			return
+		}
+	}
+}
 func (a *authState) currentHash() string {
-	if p := a.hash.Load(); p != nil {
-		return *p
+	if hashes := a.hashes.Load(); hashes != nil {
+		return hashes.current
 	}
 	return ""
+}
+
+func (a *authState) retiredPasswordMatches(token string) bool {
+	if hashes := a.hashes.Load(); hashes != nil {
+		for _, hash := range hashes.retired {
+			if mobilebridge.PasswordMatches(hash, token) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // lockout throttles password guessing per source address.
@@ -72,6 +104,13 @@ func (l *lockout) reset(src string) {
 	defer l.mu.Unlock()
 	delete(l.fails, src)
 	delete(l.until, src)
+}
+
+func (l *lockout) resetAll() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.fails = map[string]int{}
+	l.until = map[string]time.Time{}
 }
 
 func sourceKey(r *http.Request) string {
@@ -197,14 +236,17 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 					"too many failed attempts; try again shortly", nil)
 				return
 			}
-			if tok := connectionToken(r); mobilebridge.PasswordMatches(state.currentHash(), tok) {
+			tok := connectionToken(r)
+			if mobilebridge.PasswordMatches(state.currentHash(), tok) {
 				lock.reset(src)
 				connected.report(src)
 				maybeSetPreviewAuthCookie(w, r, tok)
 				next.ServeHTTP(w, r)
 				return
 			}
-			lock.fail(src)
+			if !state.retiredPasswordMatches(tok) {
+				lock.fail(src)
+			}
 			envelope.WriteAPIError(w, r, http.StatusUnauthorized, "unauthorized", "BAD_PASSWORD",
 				"missing or invalid connection password", nil)
 		})

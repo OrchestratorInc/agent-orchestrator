@@ -496,28 +496,42 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel bool)
 	wasRunning := b.LAN.Running()
 	prevSt, _ := mobilebridge.Load(b.ConfigPath)
 
-	// The persisted password is plaintext; the auth hash is derived in memory.
-	b.LAN.SetPasswordHash(mobilebridge.HashPassword(pw))
+	// A fresh listener must be armed before binding. For an already-running
+	// listener, wait until persistence succeeds before rotating the hash: a
+	// failed save must not disconnect currently authenticated clients.
+	nextHash := mobilebridge.HashPassword(pw)
+	if !wasRunning {
+		b.LAN.SetPasswordHash(nextHash)
+	}
 	port, err := b.LAN.Start(b.DefaultPort)
 	if err != nil {
-		b.LAN.SetPasswordHash(prevHash) // Start failed: undo the hash swap.
+		if !wasRunning {
+			b.LAN.SetPasswordHash(prevHash) // Start failed: undo the hash swap.
+		}
 		return MobileStatusResponse{}, err
 	}
 	// Preserve the persisted SecurePairing and KeepAwake flags while selecting
 	// whether this enable is allowed to start a managed public tunnel.
-	nextSt := mobilebridge.State{Enabled: true, Password: pw, LastPort: port, SecurePairing: prevSt.SecurePairing, KeepAwake: prevSt.KeepAwake, NoPublicTunnel: noPublicTunnel}
+	retired := prevSt.RetiredPasswordHash
+	if prevSt.Password != "" && prevSt.Password != pw {
+		// ponytail: retain only one revoked password across daemon restarts;
+		// keep more history only if multi-rotation stale clients are observed.
+		retired = mobilebridge.HashPassword(prevSt.Password)
+	}
+	nextSt := mobilebridge.State{Enabled: true, Password: pw, LastPort: port, RetiredPasswordHash: retired, SecurePairing: prevSt.SecurePairing, KeepAwake: prevSt.KeepAwake, NoPublicTunnel: noPublicTunnel}
 	if err := mobilebridge.Save(b.ConfigPath, nextSt); err != nil {
-		// Persist failed after the listener came up. Roll back so reality matches
-		// the unchanged persisted state (and the UI's "enable failed"). A rotate on
-		// an already-running listener (wasRunning) keeps serving on the prior hash;
-		// a fresh enable tears the listener back down.
+		// Persist failed after the listener came up. A running listener still
+		// serves the old hash; a fresh enable must tear the listener back down.
 		if !wasRunning {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			_ = b.LAN.Stop(ctx)
+			b.LAN.SetPasswordHash(prevHash)
 		}
-		b.LAN.SetPasswordHash(prevHash)
 		return MobileStatusResponse{}, err
+	}
+	if wasRunning {
+		b.LAN.SetPasswordHash(nextHash)
 	}
 	// Re-point the proxy at the port Start actually bound. This runs on every
 	// listener start driven through this method — enable and password rotation
@@ -569,6 +583,9 @@ func (b *BridgeService) RestoreOnBoot(state mobilebridge.State) error {
 	defer b.transitionMu.Unlock()
 
 	prevHash := b.LAN.PasswordHash()
+	if state.RetiredPasswordHash != "" {
+		b.LAN.SetPasswordHash(state.RetiredPasswordHash)
+	}
 	b.LAN.SetPasswordHash(mobilebridge.HashPassword(state.Password))
 	port, err := b.LAN.Start(state.LastPort)
 	if err != nil {
@@ -579,8 +596,8 @@ func (b *BridgeService) RestoreOnBoot(state mobilebridge.State) error {
 	return nil
 }
 
-// Enable generates a fresh password, arms the auth hash, and starts the LAN
-// listener, persisting the enabled state.
+// Enable generates a fresh password and starts the LAN listener. If it is
+// already running, the password changes only after the new state is saved.
 func (b *BridgeService) Enable() (MobileStatusResponse, error) {
 	b.transitionMu.Lock()
 	defer b.transitionMu.Unlock()
