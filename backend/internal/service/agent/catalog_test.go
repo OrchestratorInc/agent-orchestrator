@@ -151,22 +151,6 @@ type blockingSubsequentModelDiscoverer struct {
 	once    sync.Once
 }
 
-type blockingFingerprintModelDiscoverer struct {
-	*fakeModelDiscoverer
-	started chan struct{}
-	release chan struct{}
-	once    sync.Once
-}
-
-func (f *blockingFingerprintModelDiscoverer) CatalogFingerprint(ctx context.Context, request ports.AgentModelDiscoveryRequest) string {
-	f.once.Do(func() { close(f.started) })
-	select {
-	case <-f.release:
-	case <-ctx.Done():
-	}
-	return f.fakeModelDiscoverer.CatalogFingerprint(ctx, request)
-}
-
 func (f *fakeModelDiscoverer) Discover(ctx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
 	f.discoverCalls.Add(1)
 	active := f.active.Add(1)
@@ -512,12 +496,8 @@ func TestModelDiscoveryRetryBackoffStopsAfterBound(t *testing.T) {
 	if cached.RefreshRecommended {
 		t.Fatal("cached read recommended another refresh after retries were exhausted")
 	}
-	deadline := time.Now().Add(100 * time.Millisecond)
-	for discoverer.fingerprintRequests.Load() == fingerprintRequests && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if discoverer.fingerprintRequests.Load() == fingerprintRequests {
-		t.Fatal("cached read did not check whether exhausted discovery inputs changed")
+	if got := discoverer.fingerprintRequests.Load(); got != fingerprintRequests {
+		t.Fatalf("fingerprint probes = %d after exhausted cached read, want %d", got, fingerprintRequests)
 	}
 	if calls := discoverer.discoverCalls.Load(); calls != exhaustedCalls {
 		t.Fatalf("discoveries = %d after exhausted cached read, want %d", calls, exhaustedCalls)
@@ -1906,7 +1886,7 @@ func TestClaudeModelsRevalidationKeepsMatchingProviderCacheOnFailure(t *testing.
 	}
 }
 
-func TestClaudeModelsServesCacheThenReplacesItWhenCredentialFingerprintChanges(t *testing.T) {
+func TestClaudeModelsServesCacheThenReplacesItWhenAuthenticationInvalidated(t *testing.T) {
 	now := time.Now()
 	cached := ports.AgentModelCatalog{
 		AgentID: "claude-code", SelectionMode: ports.ModelSelectionCatalog,
@@ -1940,6 +1920,7 @@ func TestClaudeModelsServesCacheThenReplacesItWhenCredentialFingerprintChanges(t
 	if len(got.Models) != 1 || got.Models[0].ID != "us.anthropic.claude-opus-v1" {
 		t.Fatalf("initial catalog = %#v, want the cached model before revalidation", got)
 	}
+	svc.InvalidateAgentAuthentication("claude-code")
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		record, ok, err := cache.GetAgentModelCatalog(context.Background(), "claude-code", "")
@@ -1958,37 +1939,24 @@ func TestClaudeModelsServesCacheThenReplacesItWhenCredentialFingerprintChanges(t
 	t.Fatal("cached provider catalog was not replaced after credential change")
 }
 
-func TestClaudeCachedModelsDoNotWaitForFingerprintProbe(t *testing.T) {
+func TestClaudeCachedModelsDoNotProbeOnFreshRead(t *testing.T) {
 	now := time.Now()
 	record := cachedModelRecord(t, "claude-code", "", now, false)
 	record.LastSuccessAt = now
 	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{
 		"claude-code\x00": record,
 	}}
-	discoverer := &blockingFingerprintModelDiscoverer{
-		fakeModelDiscoverer: &fakeModelDiscoverer{version: "same-fingerprint"},
-		started:             make(chan struct{}), release: make(chan struct{}),
-	}
-	defer close(discoverer.release)
+	discoverer := &fakeModelDiscoverer{version: "same-fingerprint"}
 	svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, cache, nil, discoverer)
-
-	result := make(chan ports.AgentModelCatalog, 1)
-	go func() {
-		catalog, _ := svc.Models(context.Background(), "claude-code", "", false)
-		result <- catalog
-	}()
-	select {
-	case got := <-result:
-		if len(got.Models) != 1 || got.Models[0].ID != "cached-model" {
-			t.Fatalf("catalog = %#v, want cached models before the probe finishes", got)
+	for range 2 {
+		got, err := svc.Models(context.Background(), "claude-code", "", false)
+		if err != nil || len(got.Models) != 1 || got.Models[0].ID != "cached-model" {
+			t.Fatalf("cached catalog = %#v, error %v", got, err)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("cached read waited for the fingerprint probe")
 	}
-	select {
-	case <-discoverer.started:
-	case <-time.After(time.Second):
-		t.Fatal("background fingerprint probe did not start")
+	time.Sleep(50 * time.Millisecond)
+	if got := discoverer.fingerprintRequests.Load(); got != 0 {
+		t.Fatalf("fingerprint probes after fresh cached reads = %d, want none", got)
 	}
 }
 
