@@ -561,7 +561,7 @@ func Run() error {
 	}
 	sessionSvc.SetChatProviderPreserver(chatSvc.PreservesProviderOnRestart)
 	memoryReader := usagesvc.NewMemoryReader(usagesvc.MemoryReaderDeps{
-		Store: store, Runtime: runtimeAdapter, CacheTTL: 2 * time.Second,
+		Store: store, Runtime: runtimeAdapter, Reviewers: store, CacheTTL: 2 * time.Second,
 		ChatHostPID: func(id domain.SessionID) (int, bool) {
 			return persistenthost.HostPID(cfg.DataDir, string(id))
 		},

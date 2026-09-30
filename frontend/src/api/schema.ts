@@ -3072,6 +3072,7 @@ export interface components {
             cpuPercent: number;
             own?: components["schemas"]["SessionMemoryResponse"];
             processCount: number;
+            reviewers?: components["schemas"]["ControllersReviewerMemoryResponse"][];
             rssBytes: number;
         };
         AttachmentInput: {
@@ -3425,6 +3426,13 @@ export interface components {
         };
         ControllersResolveReviewCommentResponse: {
             ok: boolean;
+        };
+        ControllersReviewerMemoryResponse: {
+            harness: string;
+            memory: components["schemas"]["SessionMemoryResponse"];
+            reviewId: string;
+            /** @description The worker session this reviewer reviews, not the reviewer's own identity. */
+            sessionId: string;
         };
         ControllersSecurePairingStatus: {
             active: boolean;

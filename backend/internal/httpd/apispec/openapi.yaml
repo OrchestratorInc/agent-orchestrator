@@ -9198,6 +9198,10 @@ components:
         processCount:
           minimum: 0
           type: integer
+        reviewers:
+          items:
+            $ref: '#/components/schemas/ControllersReviewerMemoryResponse'
+          type: array
         rssBytes:
           minimum: 0
           type: integer
@@ -10133,6 +10137,24 @@ components:
           type: boolean
       required:
       - ok
+      type: object
+    ControllersReviewerMemoryResponse:
+      properties:
+        harness:
+          type: string
+        memory:
+          $ref: '#/components/schemas/SessionMemoryResponse'
+        reviewId:
+          type: string
+        sessionId:
+          description: The worker session this reviewer reviews, not the reviewer's
+            own identity.
+          type: string
+      required:
+      - reviewId
+      - sessionId
+      - harness
+      - memory
       type: object
     ControllersSecurePairingStatus:
       properties:

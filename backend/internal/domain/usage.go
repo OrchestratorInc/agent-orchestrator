@@ -460,6 +460,21 @@ type AppMemory struct {
 	ProcessCount int
 	CPUPercent   float64
 	Own          SessionMemory
+	// Reviewers is memory held by live reviewer panes that outlive (or never
+	// had) a session row of their own — ownership lives on the review record
+	// instead. Kept separate from Own and from ListMemory's per-session rows
+	// so a "why is AO using memory" report can name a reviewer specifically,
+	// even one whose worker has already terminated.
+	Reviewers []ReviewerMemory
+}
+
+// ReviewerMemory is one live reviewer pane's process-tree reading, attributed
+// back to the review that owns it.
+type ReviewerMemory struct {
+	ReviewID  string
+	SessionID SessionID
+	Harness   ReviewerHarness
+	Memory    SessionMemory
 }
 
 // SessionStep is one tool call the agent made, as reported by its hooks: which

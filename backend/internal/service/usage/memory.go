@@ -17,11 +17,22 @@ type memorySessionStore interface {
 	ListAllSessions(context.Context) ([]domain.SessionRecord, error)
 }
 
+// memoryReviewerStore names live reviewer panes independent of session rows:
+// a reviewer's identity is the review record, not a session, and it can
+// outlive the worker session that spawned it.
+type memoryReviewerStore interface {
+	ListLiveReviewerHandles(context.Context) ([]domain.ReviewerHandle, error)
+}
+
 // MemoryReaderDeps wires the memory reader. Snapshot defaults to a real `ps`
 // run; tests inject a parsed table.
 type MemoryReaderDeps struct {
 	Store   memorySessionStore
 	Runtime ports.RuntimeProcessRootInspector
+	// Reviewers is optional: without it AppMemory cannot see reviewer-owned
+	// process trees at all (they silently fold into nothing, not into Own —
+	// the whole point is they are not a daemon descendant either).
+	Reviewers memoryReviewerStore
 	// ChatHostPID names the provider host of a runtime-less Chat session.
 	// Nil means Chat sessions are not measured.
 	ChatHostPID func(sessionID domain.SessionID) (int, bool)
@@ -194,15 +205,46 @@ func (r *MemoryReader) AppMemory(ctx context.Context) (domain.AppMemory, error) 
 			inSession[p.PID] = true
 		}
 	}
+	var reviewers []domain.ReviewerMemory
+	inReviewer := map[int]bool{}
+	if r.deps.Reviewers != nil {
+		handles, err := r.deps.Reviewers.ListLiveReviewerHandles(ctx)
+		if err != nil {
+			return domain.AppMemory{}, err
+		}
+		for _, h := range handles {
+			reviewerRoots, err := r.deps.Runtime.ProcessRootPIDs(ctx, ports.RuntimeHandle{ID: h.HandleID})
+			if err != nil || len(reviewerRoots) == 0 {
+				// A stale handle whose process is already gone is not a leak
+				// to report: omit it, same as an unmeasured session.
+				continue
+			}
+			reviewerTree := table.Tree(reviewerRoots...)
+			if len(reviewerTree.Processes) == 0 {
+				continue
+			}
+			roots = append(roots, reviewerRoots...)
+			for _, p := range reviewerTree.Processes {
+				inReviewer[p.PID] = true
+			}
+			reading := treeReading(reviewerTree, prev, elapsed)
+			reading.SampledAt = r.deps.Now()
+			reviewers = append(reviewers, domain.ReviewerMemory{
+				ReviewID: h.ReviewID, SessionID: h.SessionID, Harness: h.Harness, Memory: reading,
+			})
+		}
+	}
 	tree := table.Tree(roots...)
-	// The daemon starts tmux, so every session is a descendant of the daemon
-	// and a plain walk from its pid would count them as AO's own. Own is the
-	// daemon tree with the session trees cut out, so the rows stay disjoint
-	// and add up to the total.
+	// The daemon starts tmux, so every session (and every reviewer pane still
+	// under it) is a descendant of the daemon and a plain walk from its pid
+	// would count them as AO's own. Own is the daemon tree with the session
+	// and reviewer trees cut out, so the rows stay disjoint and add up to the
+	// total. A detached reviewer (its worker already gone) was never in this
+	// tree to begin with — it reaches the total only through roots above.
 	ownTree := table.Tree(own...)
 	ownOnly := procmem.Tree{}
 	for _, p := range ownTree.Processes {
-		if inSession[p.PID] {
+		if inSession[p.PID] || inReviewer[p.PID] {
 			continue
 		}
 		ownOnly.RSSBytes += p.RSSBytes
@@ -213,7 +255,7 @@ func (r *MemoryReader) AppMemory(ctx context.Context) (domain.AppMemory, error) 
 	ownReading.SampledAt = r.deps.Now()
 	return domain.AppMemory{
 		RSSBytes: tree.RSSBytes, ProcessCount: len(tree.Processes),
-		CPUPercent: procmem.CPUPercent(tree.Processes, prev, elapsed), Own: ownReading,
+		CPUPercent: procmem.CPUPercent(tree.Processes, prev, elapsed), Own: ownReading, Reviewers: reviewers,
 	}, nil
 }
 

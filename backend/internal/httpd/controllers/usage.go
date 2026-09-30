@@ -116,6 +116,12 @@ func (c *UsageController) listMemory(w http.ResponseWriter, r *http.Request) {
 			own := sessionMemoryResponse(a.Own)
 			app.Own = &own
 		}
+		for _, rv := range a.Reviewers {
+			app.Reviewers = append(app.Reviewers, ReviewerMemoryResponse{
+				ReviewID: rv.ReviewID, SessionID: rv.SessionID, Harness: string(rv.Harness),
+				Memory: sessionMemoryResponse(rv.Memory),
+			})
+		}
 	}
 	envelope.WriteJSON(w, http.StatusOK, ListSessionMemoryResponse{Sessions: out, System: system, App: app})
 }

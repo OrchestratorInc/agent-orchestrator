@@ -1669,6 +1669,19 @@ type AppMemoryResponse struct {
 	CPUPercent   float64 `json:"cpuPercent" minimum:"0"`
 	// Own is the daemon and desktop shell alone, without any session.
 	Own *SessionMemoryResponse `json:"own,omitempty"`
+	// Reviewers is memory held by live reviewer panes, named separately from
+	// Own because a reviewer has no session row: its identity is the review
+	// it belongs to, and it can outlive the worker that spawned it.
+	Reviewers []ReviewerMemoryResponse `json:"reviewers,omitempty"`
+}
+
+// ReviewerMemoryResponse is one live reviewer pane's process-tree reading,
+// attributed back to the review record that owns it (never a session).
+type ReviewerMemoryResponse struct {
+	ReviewID  string                `json:"reviewId"`
+	SessionID domain.SessionID      `json:"sessionId" description:"The worker session this reviewer reviews, not the reviewer's own identity."`
+	Harness   string                `json:"harness"`
+	Memory    SessionMemoryResponse `json:"memory"`
 }
 
 // SystemMemoryResponse is the host's headroom at sample time. The pressure

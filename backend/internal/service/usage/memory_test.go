@@ -336,3 +336,71 @@ func TestAppMemoryOwnExcludesSessionsUnderTheDaemon(t *testing.T) {
 		t.Fatalf("total = %d, want %d", app.RSSBytes, want)
 	}
 }
+
+// reviewerHandleStore fakes the review store's live-handle listing.
+type reviewerHandleStore struct{ handles []domain.ReviewerHandle }
+
+func (s reviewerHandleStore) ListLiveReviewerHandles(context.Context) ([]domain.ReviewerHandle, error) {
+	return s.handles, nil
+}
+
+// TestAppMemoryIncludesDetachedReviewerRoot covers issue #5948: a reviewer
+// pane has no session row, is not necessarily a descendant of the daemon,
+// and can outlive the worker that spawned it. AppMemory must still find it
+// (through the review record, not the session-root walk) and report it
+// separately enough to name in a "why is AO using memory" breakdown.
+func TestAppMemoryIncludesDetachedReviewerRoot(t *testing.T) {
+	// 100 (tmux server) -> 200 (worker's shell) -> 300 (claude): the live
+	// worker's tree, same as the other fixtures. 500 -> 600 is the reviewer:
+	// PPID 1, reparented to init, no relation to 100 at all — exactly what a
+	// detached reviewer host looks like once nothing is tracking it anymore.
+	table := `
+  100     1   900 tmux: server
+  200   100  3000 bash
+  300   200 1600000 claude
+  500     1   700 reviewer-pty-host
+  600   500 50000 claude
+`
+	recs := []domain.SessionRecord{{ID: "s-a", Metadata: domain.SessionMetadata{RuntimeHandleID: "a"}}}
+	var snapshots int
+	reader := NewMemoryReader(MemoryReaderDeps{
+		Store: memStore{recs: recs},
+		Runtime: memRuntime{roots: map[string][]int{
+			"a": {200}, "reviewer-handle": {500},
+		}},
+		Reviewers: reviewerHandleStore{handles: []domain.ReviewerHandle{
+			{ReviewID: "rv-1", SessionID: "s-a", Harness: domain.ReviewerHarness("claude"), HandleID: "reviewer-handle"},
+		}},
+		Snapshot: func(context.Context) (*procmem.Table, error) {
+			snapshots++
+			return procmem.Parse(table)
+		},
+		Now:      func() time.Time { return time.Unix(1000, 0) },
+		CacheTTL: 2 * time.Second,
+	})
+	reader.deps.AppRootPIDs = func() []int { return []int{100} }
+
+	app, err := reader.AppMemory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ao := uint64(900) * 1024
+	worker := uint64(3000+1600000) * 1024
+	reviewer := uint64(700+50000) * 1024
+	if want := ao + worker + reviewer; app.RSSBytes != want {
+		t.Fatalf("AppMemory = %d, want AO own + worker tree + reviewer tree = %d", app.RSSBytes, want)
+	}
+	if app.ProcessCount != 5 {
+		t.Fatalf("ProcessCount = %d, want 5 (tmux, worker's shell + claude, reviewer's host + claude)", app.ProcessCount)
+	}
+	if len(app.Reviewers) != 1 {
+		t.Fatalf("Reviewers = %+v, want exactly one entry so it can be named separately", app.Reviewers)
+	}
+	rv := app.Reviewers[0]
+	if rv.ReviewID != "rv-1" || rv.SessionID != "s-a" || rv.Harness != domain.ReviewerHarness("claude") {
+		t.Fatalf("reviewer attribution = %+v, want rv-1/s-a/claude", rv)
+	}
+	if rv.Memory.RSSBytes != reviewer || rv.Memory.ProcessCount != 2 {
+		t.Fatalf("reviewer memory = %+v, want %d bytes across 2 processes", rv.Memory, reviewer)
+	}
+}
