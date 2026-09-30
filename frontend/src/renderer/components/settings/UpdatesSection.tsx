@@ -13,6 +13,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { DesktopReleaseNotes } from "../DesktopReleaseNotes";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
@@ -406,9 +407,10 @@ function UpdateActions({
 	// updater operations, so the manual check simply queues behind it.
 	const busy = manualCheckPending || downloading;
 	// The minimum-spinner window keeps "checking" on screen briefly after the
-	// updater has already answered, so the status line and the primary action
-	// read from the live state and only the button's own label follows `checking`.
+	// updater has already answered. The button is the single visible in-progress
+	// indicator; the status row resumes with the updater's terminal result.
 	const displayState: UpdateState = checking && !downloading && status.state !== "error" && status.state !== "downloaded" ? "checking" : status.state;
+	const showStatusState = displayState !== "checking";
 
 	const [now, setNow] = useState(Date.now());
 	useEffect(() => {
@@ -520,7 +522,7 @@ function UpdateActions({
 					<Button
 						type="button"
 						aria-label={checking ? t("settings.updates.checking") : t("settings.updates.check")}
-						aria-describedby="update-status-line"
+						aria-describedby={showStatusState ? "update-status-line" : undefined}
 						variant="outline"
 						size="sm"
 						onClick={() => void checkNow()}
@@ -546,12 +548,11 @@ function UpdateActions({
 				aria-live="polite"
 				aria-atomic="true"
 				aria-busy={checking}
-				className="flex min-w-0 flex-col gap-1"
+				// Keep the status slot's height while the button owns the checking
+				// feedback, so notices and last-checked metadata below do not jump up.
+				className="flex min-h-5 min-w-0 flex-col gap-1"
 			>
-				<UpdateStatusLine
-					state={displayState}
-					status={status}
-				/>
+				{showStatusState && <UpdateStatusLine state={displayState} status={status} />}
 				{status.state === "downloading" && status.percent !== undefined && <progress aria-label={t("settings.updates.progress")} max={100} value={status.percent} className="h-1 w-full" />}
 				{status.transferred !== undefined && status.total !== undefined && <p className="text-xs tabular-nums text-settings-muted">{t("settings.updates.bytes", { downloaded: (status.transferred / 1_000_000).toFixed(1), total: (status.total / 1_000_000).toFixed(1) })}</p>}
 				{channelSwitchMessage && <p className="text-xs leading-4 text-settings-muted">{channelSwitchMessage}</p>}
@@ -567,17 +568,17 @@ function UpdateActions({
 
 			{/* Release notes used to live only in the restart confirmation, so
 			    skipping that dialog when nothing is at risk would have hidden them
-			    entirely. The panel has room the dialog never did. Plain text on
-			    purpose: these are the remote release body, sanitized in the main
-			    process, and nothing here injects markup. */}
+			    entirely. The panel has room the dialog never did. The shared renderer
+			    keeps contributor handles out while preserving linked PR numbers. */}
 			{(status.state === "downloaded" || status.staged) && status.releaseNotes ? (
 				<div className="mt-3" data-testid="update-release-notes">
 					<p className="text-caption font-medium uppercase tracking-wide text-settings-muted">
 						{t("update.restart.whatsNew")}
 					</p>
-					<p className="mt-1.5 max-h-40 overflow-y-auto whitespace-pre-line text-pretty text-sm leading-5 text-settings-label">
-						{status.releaseNotes}
-					</p>
+					<DesktopReleaseNotes
+						notes={status.releaseNotes}
+						textClassName="mt-1.5 max-h-40 overflow-y-auto text-pretty text-sm leading-5 text-settings-label"
+					/>
 				</div>
 			) : null}
 

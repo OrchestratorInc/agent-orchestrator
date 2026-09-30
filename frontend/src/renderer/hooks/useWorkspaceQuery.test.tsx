@@ -2,6 +2,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
+import { appI18n } from "../i18n";
 import type { WorkspaceSummary } from "../types/workspace";
 
 const { captureRendererEventMock, cloudState, getMock, hasTrustedApiBaseUrlMock, listProjectsMock, listSessionsMock, setQueryHealthyMock } = vi.hoisted(
@@ -334,7 +335,7 @@ describe("useWorkspaceQuery", () => {
 		});
 	});
 
-	it("groups projectless sessions as ad hoc agents after projects", async () => {
+	it("groups projectless sessions in Scratchpad after projects", async () => {
 		respondWith({
 			projects: { data: { projects: [{ id: "proj-1", name: "my-app", path: "/p" }] }, error: undefined },
 			sessions: {
@@ -360,16 +361,46 @@ describe("useWorkspaceQuery", () => {
 		expect(result.current.data?.map((workspace) => workspace.id)).toEqual(["proj-1", "__standalone__"]);
 		expect(result.current.data?.[1]).toMatchObject({
 			id: "__standalone__",
-			name: "Ad hoc agents",
+			name: "Scratchpad",
 			kind: "standalone",
 		});
 		expect(result.current.data?.[1].sessions[0]).toMatchObject({
 			id: "standalone-1",
 			workspaceId: "__standalone__",
-			workspaceName: "Ad hoc agents",
+			workspaceName: "Scratchpad",
 			title: "Research",
 			branch: undefined,
 		});
+	});
+
+	it("localizes the standalone workspace name", async () => {
+		await appI18n.changeLanguage("zh-CN");
+		respondWith({
+			sessions: {
+				data: {
+					sessions: [
+						{
+							id: "standalone-1",
+							harness: "codex",
+							status: "working",
+							isTerminated: false,
+							updatedAt: "2026-06-10T16:15:04Z",
+						},
+					],
+				},
+				error: undefined,
+			},
+		});
+
+		try {
+			const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
+			await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+			expect(result.current.data?.[0]).toMatchObject({ name: "草稿区" });
+			expect(result.current.data?.[0].sessions[0]).toMatchObject({ workspaceName: "草稿区" });
+		} finally {
+			await appI18n.changeLanguage("en");
+		}
 	});
 
 	it("maps each session's prs straight from the session list", async () => {
@@ -554,8 +585,39 @@ describe("useWorkspaceQuery", () => {
 			path: "",
 			sessions: [],
 		});
-		expect(result.current.data?.[2]).toMatchObject({ id: "__standalone__", name: "Ad hoc agents" });
+		expect(result.current.data?.[2]).toMatchObject({ id: "__standalone__", name: "Scratchpad" });
 		expect(listProjectsMock).toHaveBeenCalledWith("org-1", { limit: 100 });
+	});
+
+	it("maps Cloud failing-check details into the shared PR facts", async () => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		listProjectsMock.mockResolvedValue({
+			items: [{ id: "cp-1", displayName: "cloud-app" }],
+			page: { hasMore: false },
+		});
+		listSessionsMock.mockResolvedValue({
+			items: [{
+				id: "cloud-session-1", projectId: "cp-1", displayName: "Fix CI",
+				harness: "codex", kind: "worker", status: "working", isTerminated: false,
+				createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-08-01T00:00:00Z",
+				prs: [{
+					url: "https://github.com/acme/cloud-app/pull/7", number: 7, state: "open",
+					ci: "failing", review: "none", mergeability: "blocked", reviewComments: false,
+					failingChecks: [{ name: "unit", status: "failed", conclusion: "failure", url: "https://ci/unit" }],
+					updatedAt: "2026-08-01T00:00:00Z",
+				}],
+			}],
+			page: { hasMore: false },
+		});
+		respondWith({ projects: { data: { projects: [] } }, sessions: { data: { sessions: [] } } });
+
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
+		await waitFor(() => expect(result.current.data?.[0]?.sessions).toHaveLength(1));
+
+		expect(result.current.data?.[0]?.sessions[0]?.prs[0]?.failingChecks).toEqual([
+			{ name: "unit", status: "failed", conclusion: "failure", url: "https://ci/unit" },
+		]);
 	});
 
 	it("keeps local projects when the cloud fetch fails", async () => {

@@ -48,8 +48,11 @@ type conversation struct {
 	proc *process
 	log  *slog.Logger
 
-	threadID string
-	events   chan ports.ChatEvent
+	threadID        string
+	historyParentID string
+	providerScopeID string
+	readOnly        bool
+	events          chan ports.ChatEvent
 	// Effective defaults returned when Codex opened or resumed this thread.
 	threadModel, threadEffort string
 
@@ -80,9 +83,11 @@ type conversation struct {
 	// once.
 	compactedTurn string
 
-	pumpDone  chan struct{}
-	closeOnce sync.Once
-	closeErr  error
+	pumpDone     chan struct{}
+	eventsMu     sync.RWMutex
+	eventsClosed bool
+	closeOnce    sync.Once
+	closeErr     error
 }
 
 var _ ports.ChatConversation = (*conversation)(nil)
@@ -105,13 +110,14 @@ var _ ports.ChatCompactor = (*conversation)(nil)
 // leaves a session with a dead tool server no way back.
 var _ ports.ChatMCPReloader = (*conversation)(nil)
 
-func newConversation(proc *process, log *slog.Logger) *conversation {
+func newConversation(proc *process, log *slog.Logger, providerScopeID string) *conversation {
 	c := &conversation{
-		proc:     proc,
-		log:      log,
-		events:   make(chan ports.ChatEvent, eventBuffer),
-		pending:  make(map[string]*parkedRequest),
-		pumpDone: make(chan struct{}),
+		proc:            proc,
+		log:             log,
+		events:          make(chan ports.ChatEvent, eventBuffer),
+		pending:         make(map[string]*parkedRequest),
+		pumpDone:        make(chan struct{}),
+		providerScopeID: providerScopeID,
 	}
 	c.conn = newConnAt(proc.stdin, proc.stdout, log, c.handleServerRequest, proc.nextRequestID)
 	return c
@@ -148,7 +154,12 @@ func (c *conversation) Events() <-chan ports.ChatEvent { return c.events }
 // connection ends, then reports why and closes the stream.
 func (c *conversation) pump() {
 	defer close(c.pumpDone)
-	defer close(c.events)
+	defer func() {
+		c.eventsMu.Lock()
+		defer c.eventsMu.Unlock()
+		c.eventsClosed = true
+		close(c.events)
+	}()
 	retries := make(map[string]ports.ChatEvent)
 
 	for n := range c.conn.notifs() {
@@ -247,6 +258,12 @@ func (c *conversation) pump() {
 // emit delivers an event, preferring to drop a delta over blocking the reader. A
 // lifecycle event is never dropped silently.
 func (c *conversation) emit(ev ports.ChatEvent) {
+	c.eventsMu.RLock()
+	defer c.eventsMu.RUnlock()
+	if c.eventsClosed {
+		return
+	}
+	ev = c.scopedEvent(ev)
 	select {
 	case c.events <- ev:
 		return
@@ -294,7 +311,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		// must not produce a second turn.
 		params["clientUserMessageId"] = msg.ClientMessageID
 	}
-	applyTurnSettings(params, msg.Settings)
+	applyTurnSettings(params, msg.Settings, c.readOnly)
 
 	var resp struct {
 		Turn struct {
@@ -309,7 +326,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	c.activeTurn = resp.Turn.ID
 	c.mu.Unlock()
 
-	return ports.ChatTurnRef{ProviderTurnID: resp.Turn.ID}, nil
+	return ports.ChatTurnRef{ProviderTurnID: c.scopedID(resp.Turn.ID)}, nil
 }
 
 // applyTurnSettings folds the caller's per-turn choices into a turn/start payload.
@@ -317,7 +334,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 // Only fields the caller actually chose are sent. An omitted field lets the
 // provider fall back to what the thread was started with, which is why a caller
 // that chooses nothing behaves exactly as it did before per-turn settings existed.
-func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings) {
+func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, readOnly bool) {
 	if settings.Model != "" {
 		params["model"] = settings.Model
 	}
@@ -335,6 +352,11 @@ func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings) {
 		params["approvalPolicy"] = policy
 		params["approvalsReviewer"] = approvalReviewer(settings.Approval)
 		params["sandboxPolicy"] = turnSandboxPolicy(sandbox)
+	}
+	if readOnly {
+		params["approvalPolicy"] = "never"
+		params["approvalsReviewer"] = "user"
+		params["sandboxPolicy"] = turnSandboxPolicy("read-only")
 	}
 }
 
@@ -567,6 +589,7 @@ func formatTokens(tokens int64) string {
 
 // Interrupt cancels a turn. An empty turn id targets the active one.
 func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) error {
+	providerTurnID = c.nativeID(providerTurnID)
 	if providerTurnID == "" {
 		c.mu.Lock()
 		providerTurnID = c.activeTurn
@@ -614,6 +637,7 @@ func isNoActiveTurn(err error) bool {
 // consuming the request on a bad one would leave the user's real answer with
 // nothing left to answer while the provider waits out its timeout.
 func (c *conversation) ResolveRequest(ctx context.Context, requestID string, decision ports.ChatDecision) error {
+	requestID = c.nativeID(requestID)
 	c.mu.Lock()
 	parked, ok := c.pending[requestID]
 	closed := c.closed
@@ -805,44 +829,66 @@ func (c *conversation) refuseDynamicToolCall(params json.RawMessage) error {
 // provider re-announces every server's startup state as notifications afterwards, so
 // the returned list is a convenience for the caller that asked, not the only path by
 // which AO learns the outcome.
-func (c *conversation) ReloadMCPServers(ctx context.Context) ([]ports.ChatMCPServer, error) {
+func (c *conversation) ReloadMCPServers(ctx context.Context) (ports.ChatMCPReloadResult, error) {
 	// config/mcpServer/reload takes no params, verified against a live app-server.
 	if err := c.conn.request(ctx, codexproto.MethodConfigMcpServerReload, map[string]any{}, nil); err != nil {
-		return nil, fmt.Errorf("%s: %w", codexproto.MethodConfigMcpServerReload, err)
+		return ports.ChatMCPReloadResult{}, fmt.Errorf("%s: %w", codexproto.MethodConfigMcpServerReload, err)
 	}
 
-	var resp struct {
-		Data []struct {
-			Name       string `json:"name"`
-			AuthStatus string `json:"authStatus"`
-		} `json:"data"`
-	}
-	if err := c.conn.request(ctx, codexproto.MethodMcpServerStatusList, map[string]any{
-		// The summary form: the full one returns every tool's JSON Schema, which for a
-		// handful of servers is hundreds of kilobytes AO would immediately discard.
-		"detail":   "summary",
-		"threadId": c.threadID,
-	}, &resp); err != nil {
-		// The reload itself succeeded, and that is the part the caller asked for. The
-		// pushed notifications will report the outcome regardless.
-		c.log.Debug("mcp server list after reload failed", "error", err)
-		return nil, nil
-	}
-
-	servers := make([]ports.ChatMCPServer, 0, len(resp.Data))
-	for _, entry := range resp.Data {
-		if entry.Name == "" {
-			continue
+	// toolsAndAuthOnly avoids the resource schemas from the full response while
+	// using the provider-declared enum value. "summary" was never part of the app
+	// server protocol and made an otherwise successful reload look unenumerated.
+	detail := codexproto.McpServerStatusDetailToolsAndAuthOnly
+	threadID := c.threadID
+	var cursor *string
+	servers := make([]ports.ChatMCPServer, 0)
+	seen := make(map[string]struct{})
+	seenCursors := make(map[string]struct{})
+	for {
+		var resp codexproto.ListMcpServerStatusResponse
+		params := codexproto.ListMcpServerStatusParams{
+			Cursor:   cursor,
+			Detail:   &detail,
+			ThreadID: &threadID,
 		}
-		// A server that answers the inventory call is running. Its startup state is
-		// reported separately by mcpServer/startupStatus/updated, which is the
-		// authoritative source; this list only says who came back.
-		servers = append(servers, ports.ChatMCPServer{
-			Name:   entry.Name,
-			Status: string(codexproto.McpServerStartupStateReady),
-		})
+		if err := c.conn.request(ctx, codexproto.MethodMcpServerStatusList, params, &resp); err != nil {
+			// The reload itself succeeded. Mark the inventory unavailable so the
+			// controller retains known state rather than mistaking failure for an
+			// authoritative empty configuration.
+			c.log.Debug("mcp server list after reload failed", "error", err)
+			return ports.ChatMCPReloadResult{}, nil
+		}
+		for _, entry := range resp.Data {
+			// serverInfo is supplied by the MCP initialize handshake. A configured
+			// server whose startup failed can still have a status-list row, but it
+			// must remain failed via its startup notification rather than being
+			// promoted to ready merely because configuration knows its name.
+			if entry.Name == "" || entry.ServerInfo == nil {
+				continue
+			}
+			if _, duplicate := seen[entry.Name]; duplicate {
+				continue
+			}
+			seen[entry.Name] = struct{}{}
+			// A server that answers the inventory call is running. Failed enabled
+			// servers arrive through startup-status notifications and are reconciled
+			// by the controller with this complete ready-server inventory.
+			servers = append(servers, ports.ChatMCPServer{
+				Name:   entry.Name,
+				Status: string(codexproto.McpServerStartupStateReady),
+			})
+		}
+		if resp.NextCursor == nil || *resp.NextCursor == "" {
+			break
+		}
+		if _, repeated := seenCursors[*resp.NextCursor]; repeated {
+			c.log.Debug("mcp server list after reload repeated its cursor", "cursor", *resp.NextCursor)
+			return ports.ChatMCPReloadResult{}, nil
+		}
+		seenCursors[*resp.NextCursor] = struct{}{}
+		cursor = resp.NextCursor
 	}
-	return servers, nil
+	return ports.ChatMCPReloadResult{Servers: servers, Authoritative: true}, nil
 }
 
 func (c *conversation) discardPending(requestID string) {

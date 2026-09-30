@@ -15,6 +15,19 @@ import type { CloudAccount } from "../shared/cloud-account";
 // incorrectly and panic. Both modules only use each other's exports inside
 // functions, so the static ES cycle is safe at module-init time.
 import { revokeLocalSession } from "./cloud-auth-local";
+import { providerAuthFlow } from "./provider-auth-flow";
+
+// persistLocalClaudeOAuthToken writes a captured Claude setup-token under the AO
+// data dir so local claude sessions can authenticate with the SAME credential
+// pushed to the cloud (read back by the daemon's claudecode adapter). Scoped to
+// ~/.ao, never the user's ~/.claude; 0600 file in a 0700 dir.
+async function persistLocalClaudeOAuthToken(dataDir: string, token: string): Promise<void> {
+  const dir = path.join(dataDir, "harnesses", "claude-code");
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const file = path.join(dir, "oauth-token");
+  await writeFile(file, token, { mode: 0o600 });
+  await chmod(file, 0o600);
+}
 
 // The WorkOS AuthKit client id is public configuration (it appears in every
 // sign-in URL), so a baked default keeps sign-in working without build-time
@@ -42,6 +55,8 @@ const workos = CLIENT_ID ? createWorkOS({ clientId: CLIENT_ID }) : null;
 let notifyRenderersFn: ((session: CloudAccount | null) => void) | null = null;
 // At most one loopback callback server is armed at a time.
 let loopbackServer: Server | null = null;
+
+let activeProviderAuthAbort: AbortController | null = null;
 
 export interface StoredSession extends CloudAccount {
   accessToken: string;
@@ -614,5 +629,75 @@ export function installCloudIPC(
     }
     await signOutCloud(dataDir);
     notifyRenderers(null);
+  });
+  ipcMain.handle("cloud:cancelProviderAuth", async () => {
+    if (activeProviderAuthAbort) {
+      activeProviderAuthAbort.abort();
+      activeProviderAuthAbort = null;
+    }
+  });
+  ipcMain.handle("cloud:connectProviderAuth", async (_event, input: unknown) => {
+    if (typeof input !== "object" || input === null) throw new Error("Invalid Cloud provider login request.");
+    const { baseUrl, orgId, provider, pushTarget, persistLocalClaudeToken } = input as Record<string, unknown>;
+    if (typeof baseUrl !== "string" || typeof orgId !== "string" || typeof provider !== "string" || orgId.trim() === "") throw new Error("Invalid Cloud provider login request.");
+    if (pushTarget !== undefined && pushTarget !== "org" && pushTarget !== "me") throw new Error("Invalid Cloud provider login target.");
+    let base: URL;
+    try {
+      base = new URL(baseUrl);
+    } catch {
+      throw new Error("Cloud control plane URL is invalid.");
+    }
+    if (base.protocol !== "https:" && !(base.protocol === "http:" && (base.hostname === "localhost" || base.hostname === "127.0.0.1"))) throw new Error("Cloud control plane must use HTTPS.");
+    if (base.username !== "" || base.password !== "" || base.search !== "" || base.hash !== "") throw new Error("Cloud control plane URL must not include credentials, a query string, or a fragment.");
+    const dataDir = getDataDir();
+    const token = await getCloudAccessToken(dataDir);
+    if (!token) throw new Error("Sign in to AO Cloud before connecting a provider.");
+    
+    if (activeProviderAuthAbort) activeProviderAuthAbort.abort();
+    activeProviderAuthAbort = new AbortController();
+    let credential;
+    try {
+      credential = await providerAuthFlow(provider).authenticate(dataDir, activeProviderAuthAbort.signal);
+    } finally {
+      activeProviderAuthAbort = null;
+    }
+
+    if (credential.provider !== provider) throw new Error("Cloud provider login returned an unexpected provider.");
+
+    // Unified "one login for local + cloud": persist the captured Claude
+    // setup-token locally so local sessions authenticate with the SAME credential
+    // the cloud copy uses. The daemon's claudecode adapter injects it only when no
+    // native login is present, so this never shadows an existing local login.
+    if (persistLocalClaudeToken === true && credential.provider === "claude-code" && credential.credentialType === "oauth_token") {
+      await persistLocalClaudeOAuthToken(dataDir, credential.secret);
+    }
+
+    if (provider === "github") {
+      // Returned to the renderer, which saves it via the daemon's
+      // PUT /api/v1/github/pat endpoint. Include the OAuth refresh material so
+      // the daemon can renew an expiring GitHub App token without a reconnect.
+      return {
+        secret: credential.secret,
+        refreshToken: credential.refreshToken,
+        expiresIn: credential.expiresIn,
+        refreshTokenExpiresIn: credential.refreshTokenExpiresIn,
+      };
+    }
+
+    const basePath = base.pathname.replace(/\/+$/, "");
+    // Personal (/me) push is the no-admin, per-developer path used by the unified
+    // one-login flow; the org path (default) remains for the shared-team dialog.
+    const endpointPath = pushTarget === "me"
+      ? `/api/cloud/v1/me/providers/${encodeURIComponent(credential.provider)}`
+      : `/api/cloud/v1/orgs/${encodeURIComponent(orgId)}/provider-connections/agents/${encodeURIComponent(credential.provider)}`;
+    const target = new URL(`${base.origin}${basePath}${endpointPath}`);
+    const response = await fetch(target, {
+      method: "PUT",
+      redirect: "error",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ credentialType: credential.credentialType, secret: credential.secret }),
+    });
+    if (!response.ok) throw new Error("AO Cloud could not save the provider credential.");
+    return undefined;
   });
 }

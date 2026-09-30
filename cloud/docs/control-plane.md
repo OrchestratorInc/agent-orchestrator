@@ -98,8 +98,8 @@ to a session epoch. Minting or reconnecting with a ticket is not lifecycle
 activity. Actual terminal input renews the short interaction lease; merely
 retaining a hidden WebSocket does not. The WebSocket itself is normally a
 stateless bridge: input becomes a durable worker request and output is replayed
-from PostgreSQL by sequence. Local relay experiments
-(`AO_CLOUD_TERMINAL_RELAY=1`, with terminal streaming also enabled) retain the
+from PostgreSQL by sequence. The terminal relay
+(`AO_CLOUD_TERMINAL_RELAY=1`, with terminal streaming also enabled) retains the
 same ticket and sequence contract but forward a worker frame to an attached
 browser first, then mirror that exact frame to PostgreSQL in order. Durable
 storage remains the reconnect/replay source and the original queue path is the
@@ -148,8 +148,30 @@ Separate staging/production ECS services, ALB target groups, Secrets Manager
 paths, RDS databases, image promotion, canary percentages, and rollback rules
 belong to deployment infrastructure rather than application branching.
 
-## Deliberate exclusions
+## GitHub webhook automation
 
-GitHub issue and pull-request synchronization remains outside this slice.
-Native agent-TUI attachment and terminal WebSocket proxying through the
-Next.js gateway are also deliberate exclusions described above.
+When the GitHub App is configured, its webhook URL is:
+
+```text
+https://<cloud-public-host>/api/cloud/v1/github/webhooks
+```
+
+Use the same secret as `AO_CLOUD_GITHUB_WEBHOOK_SECRET` and subscribe to
+`Pull requests`, `Check suites`, `Check runs`, and `Pull request reviews`.
+GitHub deliveries are signature-verified, deduplicated, persisted, and then
+processed in installation order. They update durable pull-request facts and
+Cloud notifications. Failing CI is sent to the session worker only when that
+session has automatic CI feedback enabled.
+
+For local testing, expose the control plane through a temporary public HTTPS
+tunnel and use the tunnel URL above. The tunnel is test-only; production uses
+`AO_CLOUD_PUBLIC_URL`. GitHub App configuration is accepted only when the
+control plane runs with `AO_CLOUD_ENVIRONMENT=production`, including a local
+end-to-end webhook test.
+
+`AO_CLOUD_PR_STATUS_POLL_INTERVAL` controls only how often the control plane
+looks in PostgreSQL for targeted recovery work. Each tick leases at most one PR
+whose received webhook failed or whose authoritative observation is older than
+`AO_CLOUD_PR_WEBHOOK_SILENCE_GRACE` (two minutes by default). Healthy PRs
+updated by webhooks make no GitHub polling request; the scanner never lists and
+refreshes every open PR.

@@ -1,5 +1,8 @@
 import { create } from "zustand";
+import { aoBridge } from "../lib/bridge";
+import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
+import type { FilesSource } from "../hooks/useSessionWorkspaceFiles";
 import {
 	applyDocumentTheme,
 	applyDocumentThemeStyle,
@@ -29,11 +32,22 @@ export type GlobalSettingsSection =
 	| "updates"
 	| "help";
 
+/** Project settings pages: the project form sections plus the cues manager. */
+export type ProjectSettingsSection = ProjectFormSection | "cues";
+
 export type SettingsModal =
-	| { scope: "global"; section?: GlobalSettingsSection }
+	| {
+			scope: "global";
+			section?: GlobalSettingsSection;
+			focusAgentId?: string;
+			/** Preserve the project form while global recovery settings is above it. */
+			returnTo?: Extract<SettingsModal, { scope: "project" }>;
+	}
 	| {
 			scope: "project";
 			projectId: string;
+			/** Page to open on, so callers can deep-link a project setting. */
+			section?: ProjectSettingsSection;
 	};
 
 /** Worker detail view toggles — Changes (Git rail) is the default. */
@@ -49,6 +63,8 @@ export type InspectorSessionState = {
 	browserUnseen?: boolean;
 	/** Files tab: review changed files directly. Defaults to true; false shows the full tree. */
 	filesChangedOnly?: boolean;
+	/** Files tab: source shared by the docked and maximized explorers. */
+	filesSource?: FilesSource;
 	/** The session-entry defaulting (Summary tab, baseline browser reveal) has already run once for this session's lifetime. */
 	initialized?: boolean;
 };
@@ -79,6 +95,10 @@ export type UiState = {
 	themeStyle: ThemeStyle;
 	/** When true, developer-only release controls are available. Default off. */
 	developerMode: boolean;
+	/** Experimental: connect to AO daemons on other machines. Default off. */
+	remoteHosts: boolean;
+	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
+	terminalCopyOnSelect: boolean;
 	restartingProjectIds: ReadonlySet<string>;
 	// Projects whose initial orchestrator spawn (after import/clone) is still
 	// running in the background. The board renders a progress banner and gates
@@ -123,12 +143,14 @@ export type UiState = {
 	setThemePreference: (theme: ThemePreference) => void;
 	setThemeStyle: (style: ThemeStyle) => void;
 	setDeveloperMode: (enabled: boolean) => void;
+	setRemoteHosts: (enabled: boolean) => void;
+	setTerminalCopyOnSelect: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection) => void;
-	openProjectSettings: (projectId: string) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; preserveProject?: boolean }) => void;
+	openProjectSettings: (projectId: string, options?: { section?: ProjectSettingsSection }) => void;
 	closeSettings: () => void;
 	/** Refresh resolvedTheme from OS without writing light/dark to storage. */
 	syncSystemTheme: () => void;
@@ -147,6 +169,7 @@ export type UiState = {
 	setBrowserContentRevealed: (sessionId: string, revealed: boolean) => void;
 	setBrowserUnseen: (sessionId: string, unseen: boolean) => void;
 	setFilesChangedOnly: (sessionId: string, changedOnly: boolean) => void;
+	setFilesSource: (sessionId: string, source: FilesSource) => void;
 	setCommandPaletteOpen: (open: boolean) => void;
 	setProjectRestarting: (projectId: string, restarting: boolean) => void;
 	setProjectProvisioning: (projectId: string, provisioning: boolean) => void;
@@ -168,10 +191,13 @@ export type OrchestratorReplacementFailure = {
 	message: string;
 	code?: string;
 	requestId?: string;
+	details?: Record<string, unknown>;
 };
 
 const sidebarStorageKey = "ao.sidebar.open";
 const developerModeStorageKey = "ao.developerMode";
+const remoteHostsStorageKey = "ao.remoteHosts";
+const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
 	return window.localStorage;
@@ -185,8 +211,27 @@ function initialDeveloperMode() {
 	return getLocalStorage()?.getItem(developerModeStorageKey) === "true";
 }
 
+function initialRemoteHosts() {
+	return getLocalStorage()?.getItem(remoteHostsStorageKey) === "true";
+}
+
+function initialTerminalCopyOnSelect() {
+	return getLocalStorage()?.getItem(terminalCopyOnSelectStorageKey) !== "false";
+}
+
+function syncDeveloperModeToUpdater(enabled: boolean): void {
+	const request = aoBridge.updateSettings?.setMacDifferentialUpdates?.(enabled);
+	void request?.catch(() => undefined);
+}
+
 function inspectorState(sessions: Record<string, InspectorSessionState>, sessionId: string): InspectorSessionState {
-	return sessions[sessionId] ?? { isOpen: true, view: "summary" };
+	return sessions[sessionId] ?? { isOpen: false, view: "summary" };
+}
+
+/** Opening a session keeps the inspector closed until the user (or a browser
+ *  reveal) opens it; read every open check through here so that default can't drift. */
+export function inspectorIsOpen(sessions: Record<string, InspectorSessionState>, sessionId: string): boolean {
+	return sessions[sessionId]?.isOpen ?? false;
 }
 
 export function sidebarIsVisible(state: Pick<UiState, "isSidebarOpen">): boolean {
@@ -200,6 +245,7 @@ export function sidebarOccupiesLayout(state: Pick<UiState, "isSidebarOpen">): bo
 
 const initialThemePreference = readStoredThemePreference();
 const initialThemeStyle = readStoredThemeStyle();
+const initialDeveloperModeValue = initialDeveloperMode();
 
 export const useUiStore = create<UiState>((set, get) => ({
 	workbenchTab: "changes",
@@ -210,7 +256,9 @@ export const useUiStore = create<UiState>((set, get) => ({
 	themePreference: initialThemePreference,
 	resolvedTheme: resolveTheme(initialThemePreference),
 	themeStyle: initialThemeStyle,
-	developerMode: initialDeveloperMode(),
+	developerMode: initialDeveloperModeValue,
+	remoteHosts: initialRemoteHosts(),
+	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
 	orchestratorReplacementErrors: {},
@@ -245,13 +293,41 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setDeveloperMode: (developerMode) => {
 		getLocalStorage()?.setItem(developerModeStorageKey, String(developerMode));
 		set({ developerMode });
+		syncDeveloperModeToUpdater(developerMode);
+	},
+	setRemoteHosts: (remoteHosts) => {
+		getLocalStorage()?.setItem(remoteHostsStorageKey, String(remoteHosts));
+		set({ remoteHosts });
+	},
+	setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
+		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));
+		set({ terminalCopyOnSelect });
 	},
 	updateInstallPromptOpen: false,
 	openUpdateInstallPrompt: () => set({ updateInstallPromptOpen: true }),
 	closeUpdateInstallPrompt: () => set({ updateInstallPromptOpen: false }),
-	openGlobalSettings: (section) => set({ settingsModal: { scope: "global", section } }),
-	openProjectSettings: (projectId) => set({ settingsModal: { scope: "project", projectId } }),
-	closeSettings: () => set({ settingsModal: null }),
+	openGlobalSettings: (section, options) => set((state) => ({
+		settingsModal: {
+			scope: "global",
+			section,
+			...(options?.focusAgentId ? { focusAgentId: options.focusAgentId } : {}),
+			...(options?.preserveProject && state.settingsModal?.scope === "project"
+				? { returnTo: state.settingsModal }
+				: options?.preserveProject && state.settingsModal?.scope === "global" && state.settingsModal.returnTo
+					? { returnTo: state.settingsModal.returnTo }
+					: {}),
+		},
+	})),
+	openProjectSettings: (projectId, options) => set({
+		settingsModal: {
+			scope: "project",
+			projectId,
+			...(options?.section ? { section: options.section } : {}),
+		},
+	}),
+	closeSettings: () => set((state) => ({
+		settingsModal: state.settingsModal?.scope === "global" ? state.settingsModal.returnTo ?? null : null,
+	})),
 	syncSystemTheme: () => {
 		const { themePreference, resolvedTheme } = get();
 		if (themePreference !== "system") return;
@@ -356,6 +432,16 @@ export const useUiStore = create<UiState>((set, get) => ({
 				},
 			};
 		}),
+	setFilesSource: (sessionId, filesSource) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, filesSource },
+				},
+			};
+		}),
 	setCommandPaletteOpen: (isCommandPaletteOpen) => set({ isCommandPaletteOpen }),
 	setProjectRestarting: (projectId, restarting) =>
 		set((state) => {
@@ -444,6 +530,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 			return { visibleTerminalKindBySession };
 		}),
 }));
+
+// Hydration synchronizes legacy renderer-only Developer Mode state into the
+// main-process updater mirror. Until this completes, the updater is fail-closed.
+syncDeveloperModeToUpdater(initialDeveloperModeValue);
 
 export function useResolvedTheme(): Theme {
 	return useUiStore((state) => state.resolvedTheme);

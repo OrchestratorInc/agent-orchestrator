@@ -28,23 +28,28 @@ func testLogger() *slog.Logger {
 // fakeShellRuntime records every runtime call so tests can assert on what was
 // spawned and what was torn down.
 type fakeShellRuntime struct {
-	created   []ports.RuntimeConfig
-	destroyed []string
-	sentCh    chan sentInput
+	created     []ports.RuntimeConfig
+	destroyed   []string
+	interrupted []string
+	sentCh      chan sentInput
 
-	createErr   error
-	destroyErr  error
-	sendErr     error
-	output      string
-	outputMu    sync.RWMutex
-	outputErr   error
-	outputReady <-chan struct{}
+	createErr    error
+	createCtxErr bool
+	destroyErr   error
+	sendErr      error
+	output       string
+	outputMu     sync.RWMutex
+	outputErr    error
+	outputReady  <-chan struct{}
 	// aliveByHandle answers IsAlive; a handle absent from the map is dead.
 	aliveByHandle map[string]bool
 	aliveErr      error
 	handlePrefix  string
 	childExited   bool
 	childProbeErr error
+	childProbeCh  chan struct{}
+	cueReady      bool
+	cueReadyGate  <-chan struct{}
 }
 
 type sentInput struct {
@@ -56,11 +61,23 @@ func newFakeShellRuntime() *fakeShellRuntime {
 	return &fakeShellRuntime{aliveByHandle: map[string]bool{}, sentCh: make(chan sentInput, 1)}
 }
 
-func (f *fakeShellRuntime) Create(_ context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
+func (f *fakeShellRuntime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
+	if f.createCtxErr && ctx.Err() != nil {
+		return ports.RuntimeHandle{}, ctx.Err()
+	}
 	if f.createErr != nil {
 		return ports.RuntimeHandle{}, f.createErr
 	}
 	f.created = append(f.created, cfg)
+	if f.cueReady && cfg.Env["AO_CUE_READY_FILE"] != "" {
+		_ = os.WriteFile(cfg.Env["AO_CUE_READY_FILE"], []byte("ready"), 0o600)
+	}
+	if f.cueReadyGate != nil && cfg.Env["AO_CUE_READY_FILE"] != "" {
+		go func() {
+			<-f.cueReadyGate
+			_ = os.WriteFile(cfg.Env["AO_CUE_READY_FILE"], []byte("ready"), 0o600)
+		}()
+	}
 	handleID := f.handlePrefix + string(cfg.SessionID)
 	f.aliveByHandle[handleID] = true
 	return ports.RuntimeHandle{ID: handleID}, nil
@@ -76,6 +93,12 @@ func (f *fakeShellRuntime) Destroy(_ context.Context, handle ports.RuntimeHandle
 		delete(f.aliveByHandle, handle.ID)
 	}
 	return f.destroyErr
+}
+
+func (f *fakeShellRuntime) Interrupt(_ context.Context, handle ports.RuntimeHandle) error {
+	f.interrupted = append(f.interrupted, handle.ID)
+	f.childExited = true
+	return nil
 }
 
 func (f *fakeShellRuntime) SendInput(_ context.Context, handle ports.RuntimeHandle, input string) error {
@@ -115,6 +138,12 @@ func (f *fakeShellRuntime) IsAlive(_ context.Context, handle ports.RuntimeHandle
 }
 
 func (f *fakeShellRuntime) IsChildAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
+	if f.childProbeCh != nil {
+		select {
+		case f.childProbeCh <- struct{}{}:
+		default:
+		}
+	}
 	if f.childProbeErr != nil {
 		return false, f.childProbeErr
 	}
@@ -233,6 +262,8 @@ func (f *fakeProjectRootLocator) ProjectRoot(_ context.Context, id domain.Projec
 type fakeSessionWorkspace struct {
 	workspacePath string
 	projectID     domain.ProjectID
+	activity      domain.ActivityState
+	terminated    bool
 }
 
 type fakeSessionWorkspaceLocator struct {
@@ -249,6 +280,17 @@ func (f *fakeSessionWorkspaceLocator) SessionWorkspace(_ context.Context, id dom
 		return "", "", apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
 	return ws.workspacePath, ws.projectID, nil
+}
+
+func (f *fakeSessionWorkspaceLocator) CueCommandSessionTarget(_ context.Context, id domain.SessionID) (CueCommandSessionTarget, error) {
+	if f.err != nil {
+		return CueCommandSessionTarget{}, f.err
+	}
+	ws, ok := f.sessions[id]
+	if !ok {
+		return CueCommandSessionTarget{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	return CueCommandSessionTarget{ProjectID: ws.projectID, WorkspacePath: ws.workspacePath, Activity: ws.activity, IsTerminated: ws.terminated}, nil
 }
 
 // newTestService wires a service with deterministic ids so assertions can name
@@ -818,6 +860,35 @@ func TestOpenShellTerminalStartsInSessionWorkspaceOverProjectRoot(t *testing.T) 
 	}
 	if rt.created[0].WorkspacePath != "/worktrees/portfolio-3" {
 		t.Errorf("runtime workspace = %q, want the session's worktree", rt.created[0].WorkspacePath)
+	}
+}
+
+// A standalone session has no project row. Its session identity must clear any
+// UI-only project sentinel supplied by a caller; otherwise the shell row's
+// project foreign key rejects the insert after the PTY has briefly opened.
+func TestOpenShellTerminalStandaloneSessionClearsRequestedProject(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	sessions := &fakeSessionWorkspaceLocator{sessions: map[domain.SessionID]fakeSessionWorkspace{
+		"standalone-1": {workspacePath: "/scratch/standalone-1"},
+	}}
+	svc := newTestServiceWithSessions(rt, st, &fakeProjectRootLocator{}, sessions)
+
+	term, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{
+		ProjectID: "__standalone__",
+		SessionID: "standalone-1",
+	})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if term.ProjectID != "" {
+		t.Fatalf("standalone terminal project = %q, want empty", term.ProjectID)
+	}
+	if len(st.records) != 1 || st.records[0].ProjectID != "" {
+		t.Fatalf("persisted standalone terminal = %+v, want no project", st.records)
+	}
+	if term.WorkingDir != "/scratch/standalone-1" {
+		t.Fatalf("working dir = %q, want standalone workspace", term.WorkingDir)
 	}
 }
 

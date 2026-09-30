@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState } from "react-native";
 import type { ServerConfig } from "../config";
 import {
+	cancelQueuedConversationTurn,
 	compactConversation,
 	getConversationConfigOptions,
 	getConversationModels,
@@ -19,6 +20,7 @@ import {
 	stageConversationAttachments,
 	steerConversation,
 	interruptConversation,
+	promoteQueuedConversationTurn,
 	type ConversationPage,
 } from "./api";
 import type { ChatConfigOption, ChatImage, ChatModel, ChatResource, ChatSkill, ConversationSnapshot, TurnSettings } from "./types";
@@ -30,6 +32,7 @@ import { createAsyncValueCache } from "./asyncValueCache";
 import { createRequestGate } from "./requestGate";
 import { withAttachmentReferences } from "./messageAttachments";
 import { loadTurnOptionCatalog } from "./turnOptionsCatalog";
+import { NOT_PAIRED_ACTION_COPY } from "../connectionError";
 
 const REFRESH_DEBOUNCE_MS = 120;
 const conversationPageCache = createMobileConversationPageCache();
@@ -47,6 +50,7 @@ export type PendingSend = {
 
 export type ConversationAction =
 	| "steer"
+	| "queue"
 	| "interrupt"
 	| "approval"
 	| "input"
@@ -80,6 +84,8 @@ export type MobileConversation = {
 	retrySend(id: string): Promise<void>;
 	discardSend(id: string): void;
 	steer(text: string): Promise<void>;
+	promoteQueuedTurn(turnId: string): Promise<void>;
+	cancelQueuedTurn(turnId: string): Promise<void>;
 	interrupt(): Promise<void>;
 	resolveApproval(requestId: string, decisionId: string): Promise<void>;
 	resolveInput(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>): Promise<void>;
@@ -264,7 +270,7 @@ export function useMobileConversation(
 
 	const deliver = useCallback(
 		async (pending: PendingSend) => {
-			if (!cfg) throw new Error("No AO server configured");
+			if (!cfg) throw new Error(NOT_PAIRED_ACTION_COPY);
 			setPendingSends((old) => upsertPending(old, { ...pending, state: "sending", error: undefined }));
 			try {
 				await sendConversationMessage(cfg, sessionId, {
@@ -312,6 +318,14 @@ export function useMobileConversation(
 	}, []);
 	const steer = useCallback(
 		(text: string) => runAction("steer", () => requireConfig(cfg, (c) => steerConversation(c, sessionId, text, clientMessageId()))),
+		[cfg, runAction, sessionId],
+	);
+	const cancelQueuedTurn = useCallback(
+		(turnId: string) => runAction("queue", () => requireConfig(cfg, (c) => cancelQueuedConversationTurn(c, sessionId, turnId))),
+		[cfg, runAction, sessionId],
+	);
+	const promoteQueuedTurn = useCallback(
+		(turnId: string) => runAction("queue", () => requireConfig(cfg, (c) => promoteQueuedConversationTurn(c, sessionId, turnId))),
 		[cfg, runAction, sessionId],
 	);
 	const interrupt = useCallback(
@@ -386,6 +400,8 @@ export function useMobileConversation(
 		retrySend,
 		discardSend,
 		steer,
+		promoteQueuedTurn,
+		cancelQueuedTurn,
 		interrupt,
 		resolveApproval: resolveApprovalAction,
 		resolveInput: resolveInputAction,
@@ -399,7 +415,7 @@ export function useMobileConversation(
 }
 
 async function requireConfig<T>(cfg: ServerConfig | null, action: (cfg: ServerConfig) => Promise<T>): Promise<T> {
-	if (!cfg) throw new Error("No AO server configured");
+	if (!cfg) throw new Error(NOT_PAIRED_ACTION_COPY);
 	return action(cfg);
 }
 

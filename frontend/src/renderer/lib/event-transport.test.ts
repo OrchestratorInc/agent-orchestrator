@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { QueryClient, QueryObserver } from "@tanstack/react-query";
+import { InfiniteQueryObserver, QueryClient, QueryObserver } from "@tanstack/react-query";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 
 const {
@@ -319,6 +319,26 @@ describe("createEventTransport", () => {
 		}
 	});
 
+	it("invalidates only the changed model-catalog scope for catalog CDC", () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			cdcSources()[0].emit("session_updated", JSON.stringify({
+				seq: 44,
+				projectId: "proj-1",
+				type: "session_updated",
+				payload: { kind: "model_catalog", agentId: "codex", projectId: "proj-1" },
+				createdAt: "2026-09-07T08:00:00Z",
+			}));
+			vi.advanceTimersByTime(200);
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["agent-models", "codex", "proj-1"] }, { cancelRefetch: false });
+			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("refetches cached unavailable state after the post-spawn session update", async () => {
 		vi.useFakeTimers();
 		let disconnect: (() => void) | undefined;
@@ -632,6 +652,53 @@ describe("bounded live refresh", () => {
 		disconnect(); finish(); await vi.advanceTimersByTimeAsync(0);
 		expect(client.invalidateQueries).toHaveBeenCalledTimes(1);
 	});
+});
+
+it("does not cancel an unrelated inactive workspace fetch on CDC", async () => {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const key = ["workspaces"];
+	let finish!: (value: number) => void;
+	const disconnect = createEventTransport(client).connect();
+	const pending = client.fetchQuery({
+		queryKey: key,
+		queryFn: () => new Promise<number>((resolve) => { finish = resolve; }),
+	});
+	const result = pending.then((value) => ({ value }), (error: unknown) => ({ error }));
+	try {
+		cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId: "another-session", payload: {} }));
+		finish(1);
+		expect(await result).toEqual({ value: 1 });
+	} finally { disconnect(); client.clear(); }
+});
+
+it("keeps a prefetched conversation stale when CDC arrives before its response", async () => {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 10_000 } } });
+	const key = ["conversation", "prefetched-chat"];
+	let finishFirst!: (value: number) => void;
+	let requests = 0;
+	const options = {
+		queryKey: key,
+		initialPageParam: undefined,
+		getNextPageParam: () => undefined,
+		queryFn: () => {
+			requests++;
+			return requests === 1 ? new Promise<number>((resolve) => { finishFirst = resolve; }) : Promise.resolve(2);
+		},
+	};
+	const disconnect = createEventTransport(client).connect();
+	const pending = client.prefetchInfiniteQuery(options);
+	try {
+		cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId: "prefetched-chat", payload: { conversationId: "conv-1" } }));
+		finishFirst(1);
+		await pending;
+		await vi.waitFor(() => expect(client.getQueryState(key)?.isInvalidated).toBe(true));
+		const observer = new InfiniteQueryObserver(client, options);
+		const unsubscribe = observer.subscribe(() => undefined);
+		try {
+			await vi.waitFor(() => expect(client.getQueryData<{ pages: number[] }>(key)?.pages).toEqual([2]));
+			expect(requests).toBe(2);
+		} finally { unsubscribe(); }
+	} finally { disconnect(); client.clear(); }
 });
 
 

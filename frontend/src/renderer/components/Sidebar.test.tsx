@@ -19,6 +19,7 @@ import {
 	Sidebar,
 	SIDEBAR_DEFAULT_WIDTH,
 	SIDEBAR_MIN_WIDTH,
+	resolveNextNavigationAfterSessionKill,
 } from "./Sidebar";
 import {
 	STANDALONE_PROJECT_KIND,
@@ -28,7 +29,9 @@ import {
 } from "../types/workspace";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
+import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
 import { useUiStore } from "../stores/ui-store";
+import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 
 type DragOverTestEvent = {
 	active: {
@@ -54,6 +57,7 @@ const {
 	postMock,
 	renameSessionMock,
 	spawnMock,
+	resumeOrchestratorMock,
 	updateStatusMock,
 	commandPaletteEnabled,
 } = vi.hoisted(
@@ -75,6 +79,7 @@ const {
 		mockParams: { projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
 		renameSessionMock: vi.fn().mockResolvedValue(undefined),
 		spawnMock: vi.fn(),
+		resumeOrchestratorMock: vi.fn(),
 		updateStatusMock: vi.fn(),
 		downloadUpdateMock: vi.fn(),
 		checkUpdateMock: vi.fn(),
@@ -103,7 +108,10 @@ vi.mock("@dnd-kit/core", async (importOriginal) => {
 });
 
 vi.mock("../lib/rename-session", () => ({ renameSession: renameSessionMock }));
-vi.mock("../lib/spawn-orchestrator", () => ({ spawnOrchestrator: spawnMock }));
+vi.mock("../lib/spawn-orchestrator", () => ({
+	spawnOrchestrator: spawnMock,
+	resumeOrchestrator: resumeOrchestratorMock,
+}));
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => cloudSessionState }));
 vi.mock("../hooks/useCloudGate", () => ({ useCloudGate: () => cloudGateState }));
 // Local (dev-only) cloud sign-in is off in these tests; mock it like its cloud
@@ -156,8 +164,13 @@ vi.mock("../lib/bridge", async (importOriginal) => {
 	};
 });
 
+vi.mock("../hooks/useSettings", () => ({
+	useSettings: () => ({ settings: { trackerIntakeEnabled: true }, isLoading: false, error: undefined }),
+}));
+
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
+	hasTrustedApiBaseUrl: () => false,
 	apiErrorMessage: (error: unknown) => {
 		if (error instanceof Error) return error.message;
 		if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") {
@@ -186,6 +199,22 @@ const session: WorkspaceSession = {
 	status: "working",
 	updatedAt: "2026-06-30T00:00:00Z",
 	prs: [],
+};
+
+// The row archive is confirmed, not instant: open the shared modal and accept.
+async function confirmArchiveFromRow(row: HTMLElement) {
+	fireEvent.click(within(row).getByLabelText("Archive session"));
+	const dialog = await screen.findByRole("dialog");
+	fireEvent.click(within(dialog).getByRole("button", { name: "Confirm, archive session" }));
+}
+
+const exitedOrchestrator: WorkspaceSession = {
+	...session,
+	id: "proj-1-orch",
+	kind: "orchestrator",
+	status: "exited",
+	activity: { state: "exited", lastActivityAt: "2026-06-30T00:00:00Z" },
+	isTerminated: false,
 };
 
 function activeAgentSwitch(
@@ -273,6 +302,7 @@ function renderSidebar({
 	initialOpen = true,
 	topbarOffset = "toolbar",
 	expandedProjectIds,
+	seed,
 }: {
 	onCloneProject?: CloneProjectHandler;
 	onCreateProject?: CreateProjectHandler;
@@ -283,6 +313,7 @@ function renderSidebar({
 	initialOpen?: boolean;
 	topbarOffset?: "toolbar" | "titlebar" | "trafficLights" | "session";
 	expandedProjectIds?: string[];
+	seed?: (client: QueryClient) => void;
 } = {}) {
 	// Most legacy sidebar tests exercise session rows and assume their fixture
 	// project was previously open. Tests for the empty-store behavior opt out.
@@ -298,6 +329,7 @@ function renderSidebar({
 			agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")],
 		});
 	}
+	seed?.(queryClient);
 	render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
@@ -443,6 +475,7 @@ beforeEach(() => {
 	navigateMock.mockReset();
 	renameSessionMock.mockReset().mockResolvedValue(undefined);
 	spawnMock.mockReset();
+	resumeOrchestratorMock.mockReset().mockResolvedValue(undefined);
 	updateStatusMock.mockReset().mockResolvedValue({ state: "idle" });
 	downloadUpdateMock.mockReset().mockResolvedValue(undefined);
 	checkUpdateMock.mockReset().mockResolvedValue(undefined);
@@ -484,6 +517,16 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		expect(screen.queryByLabelText("Signed in as user@example.com")).not.toBeInTheDocument();
+	});
+
+	it("navigates home from the brand row", async () => {
+		const user = userEvent.setup();
+		mockParams.projectId = "proj-1";
+		renderSidebar();
+
+		await user.click(screen.getByRole("button", { name: "Go to home" }));
+
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/" });
 	});
 
 	it("suppresses focus chrome without removing keyboard focusability", () => {
@@ -550,6 +593,76 @@ describe("Sidebar", () => {
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
 		expect(navigateMock).not.toHaveBeenCalled();
 		expect(spawnMock).not.toHaveBeenCalled();
+	});
+
+	// The sidebar owns its own openOrchestrator, separate from
+	// useProjectOrchestratorAction. Clicking Orchestrator on an orchestrator whose
+	// agent exited must resume it, not navigate to the dead terminal.
+	it("resumes an exited orchestrator instead of opening its dead terminal", async () => {
+		const user = userEvent.setup();
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [exitedOrchestrator] }] });
+
+		await user.click(screen.getByRole("button", { name: "Open Project One orchestrator" }));
+
+		await waitFor(() => expect(resumeOrchestratorMock).toHaveBeenCalledWith("proj-1-orch"));
+		expect(spawnMock).not.toHaveBeenCalled();
+	});
+
+	it("does not open an exited orchestrator when resume fails", async () => {
+		const user = userEvent.setup();
+		const error = new Error("resume request failed");
+		useUiStore.getState().clearGlobalToast();
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		resumeOrchestratorMock.mockRejectedValueOnce(error);
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [exitedOrchestrator] }] });
+
+		await user.click(screen.getByRole("button", { name: "Open Project One orchestrator" }));
+
+		await waitFor(() => expect(console.error).toHaveBeenCalledWith("Failed to resume orchestrator:", error));
+		expect(navigateMock).not.toHaveBeenCalled();
+		expect(useUiStore.getState().globalToast).toMatchObject({
+			title: "Resume agent",
+			body: "resume request failed",
+			tone: "error",
+		});
+	});
+
+	it("opens an exited orchestrator without resuming while its agent switch is active", async () => {
+		const user = userEvent.setup();
+		const switchingOrchestrator: WorkspaceSession = {
+			...exitedOrchestrator,
+			activeAgentSwitch: activeAgentSwitch(),
+		};
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [switchingOrchestrator] }] });
+
+		await user.click(screen.getByRole("button", { name: "Open Project One orchestrator" }));
+
+		expect(resumeOrchestratorMock).not.toHaveBeenCalled();
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "proj-1-orch" },
+		});
+	});
+
+	it("opens an exited orchestrator without resuming during an interface transition", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [{ ...workspace, sessions: [exitedOrchestrator] }],
+			seed: (client) => {
+				client.setQueryData(
+					sessionInterfaceTransitionQueryKey(exitedOrchestrator.id),
+					sessionInterfaceTransitionStatus(exitedOrchestrator.id),
+				);
+			},
+		});
+
+		await user.click(screen.getByRole("button", { name: "Open Project One orchestrator" }));
+
+		expect(resumeOrchestratorMock).not.toHaveBeenCalled();
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "proj-1-orch" },
+		});
 	});
 
 	it("does not spawn from the sidebar while the orchestrator is provisioning", async () => {
@@ -654,13 +767,43 @@ describe("Sidebar", () => {
 		expect(request?.nonce ?? 0).toBeGreaterThan(before);
 	});
 
+	it("opens the standalone board from the Scratchpad archived sessions action", () => {
+		renderSidebar({
+			workspaces: [
+				{
+					id: STANDALONE_WORKSPACE_ID,
+					name: "Scratchpad",
+					kind: STANDALONE_PROJECT_KIND,
+					path: "",
+					sessions: [
+						{
+							...session,
+							id: "adhoc-archived",
+							title: "archived",
+							workspaceId: STANDALONE_WORKSPACE_ID,
+							workspaceName: "Scratchpad",
+							isTerminated: true,
+							status: "terminated",
+						},
+					],
+				},
+			],
+		});
+
+		const archiveAction = screen.getByRole("button", { name: "Archived sessions" }).closest("[data-scratchpad-archive-action]");
+		expect(archiveAction).toHaveClass("opacity-0", "scale-[0.8]");
+		fireEvent.click(screen.getByRole("button", { name: "Archived sessions" }));
+
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/sessions" });
+	});
+
 	it("opens a new ad hoc agent directly from the ad hoc row action", async () => {
 		const user = userEvent.setup();
 		renderSidebar({
 			workspaces: [
 				{
 					id: STANDALONE_WORKSPACE_ID,
-					name: "Ad hoc agents",
+					name: "Scratchpad",
 					kind: STANDALONE_PROJECT_KIND,
 					path: "",
 					sessions: [],
@@ -669,12 +812,187 @@ describe("Sidebar", () => {
 		});
 		const before = useUiStore.getState().newTaskRequest?.nonce ?? 0;
 
-		expect(screen.queryByLabelText("Project actions for Ad hoc agents")).not.toBeInTheDocument();
+		expect(screen.queryByLabelText("Project actions for Scratchpad")).not.toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Open a new agent" }));
 
 		const request = useUiStore.getState().newTaskRequest;
 		expect(request?.projectId).toBe(STANDALONE_WORKSPACE_ID);
 		expect(request?.nonce ?? 0).toBeGreaterThan(before);
+	});
+
+	it("lists ad hoc agents in their own Scratchpad section, not under a project row", () => {
+		renderSidebar({
+			workspaces: [
+				workspace,
+				{
+					id: STANDALONE_WORKSPACE_ID,
+					name: "Scratchpad",
+					kind: STANDALONE_PROJECT_KIND,
+					path: "",
+					sessions: [
+						{ ...session, id: "adhoc-1", title: "baby", workspaceId: STANDALONE_WORKSPACE_ID, workspaceName: "Scratchpad" },
+					],
+				},
+			],
+		});
+
+		// Section header, not a project row.
+		expect(screen.getByRole("button", { name: "Scratchpad" })).toBeInTheDocument();
+		expect(document.querySelector(`li[data-project-id="${STANDALONE_WORKSPACE_ID}"]`)).toBeNull();
+		const section = document.querySelector("[data-scratchpad-section]")!;
+		expect(section).toContainElement(screen.getByText("baby"));
+		expect(section).toHaveClass("mb-2", "shrink-0");
+		expect(screen.queryByRole("button", { name: /show (more|fewer) agents/i })).not.toBeInTheDocument();
+		expect(screen.getByTestId("sidebar-projects-scroller")).not.toContainElement(screen.getByText("baby"));
+	});
+
+	it("optically centers the Project and Scratchpad header add icons", () => {
+		renderSidebar({
+			workspaces: [
+				workspace,
+				{
+					id: STANDALONE_WORKSPACE_ID,
+					name: "Scratchpad",
+					kind: STANDALONE_PROJECT_KIND,
+					path: "",
+					sessions: [],
+				},
+			],
+		});
+
+		for (const label of ["New project", "Open a new agent"]) {
+			expect(screen.getByRole("button", { name: label }).querySelector("svg")).toHaveClass("translate-y-px");
+		}
+	});
+
+	it("opens an ad hoc agent on its own session route", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{
+					id: STANDALONE_WORKSPACE_ID,
+					name: "Scratchpad",
+					kind: STANDALONE_PROJECT_KIND,
+					path: "",
+					sessions: [
+						{ ...session, id: "adhoc-1", title: "baby", workspaceId: STANDALONE_WORKSPACE_ID, workspaceName: "Scratchpad" },
+					],
+				},
+			],
+		});
+
+		await user.click(screen.getByText("baby"));
+
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "adhoc-1" } });
+	});
+
+	it("collapses the Scratchpad section from its header", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{
+					id: STANDALONE_WORKSPACE_ID,
+					name: "Scratchpad",
+					kind: STANDALONE_PROJECT_KIND,
+					path: "",
+					sessions: [
+						{ ...session, id: "adhoc-1", title: "baby", workspaceId: STANDALONE_WORKSPACE_ID, workspaceName: "Scratchpad" },
+					],
+				},
+			],
+		});
+
+		await user.click(screen.getByRole("button", { name: "Scratchpad" }));
+		expect(screen.queryByText("baby")).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Scratchpad" }));
+		expect(screen.getByText("baby")).toBeInTheDocument();
+	});
+
+	it("caps the ad hoc agent list at 10 and lets the section grow to half the available height", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{
+					id: STANDALONE_WORKSPACE_ID,
+					name: "Scratchpad",
+					kind: STANDALONE_PROJECT_KIND,
+					path: "",
+					sessions: Array.from({ length: 13 }, (_, index) => ({
+						...session,
+						id: `adhoc-${index + 1}`,
+						title: `Agent ${index + 1}`,
+						workspaceId: STANDALONE_WORKSPACE_ID,
+						workspaceName: "Scratchpad",
+						// Descending so sortedWorkerSessions keeps the fixture order.
+						updatedAt: `2026-06-${30 - index}T00:00:00Z`,
+					})),
+				},
+			],
+		});
+
+		expect(screen.getByText("Agent 10")).toBeInTheDocument();
+		expect(screen.queryByText("Agent 11")).not.toBeInTheDocument();
+
+		const scroller = screen.getByTestId("sidebar-scratchpad-scroller");
+		expect(scroller).toHaveClass("overflow-y-auto");
+		expect(scroller.style.height).toBe("");
+		expect(scroller.style.maxHeight).toBe("");
+		expect(document.querySelector("[data-scratchpad-section]")).toHaveStyle({ maxHeight: "calc(50cqh - var(--space-2))" });
+
+		await user.click(screen.getByRole("button", { name: "Show 3 more agents" }));
+
+		expect(screen.getByText("Agent 11")).toBeInTheDocument();
+		expect(screen.getByText("Agent 13")).toBeInTheDocument();
+		expect(scroller.style.maxHeight).toBe("");
+		expect(screen.getByRole("button", { name: "Show fewer agents" })).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Show fewer agents" }));
+
+		expect(screen.queryByText("Agent 11")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show 3 more agents" })).toBeInTheDocument();
+	});
+
+	it("shows scroll-edge fades on project and Scratchpad sections as they scroll", () => {
+		renderSidebar({
+			workspaces: [
+				...Array.from({ length: 2 }, (_, index) => ({
+					...workspace,
+					id: `proj-${index + 1}`,
+					name: `Project ${index + 1}`,
+				})),
+				{
+					id: STANDALONE_WORKSPACE_ID,
+					name: "Scratchpad",
+					kind: STANDALONE_PROJECT_KIND,
+					path: "",
+					sessions: [{ ...session, id: "adhoc-1", title: "baby", workspaceId: STANDALONE_WORKSPACE_ID, workspaceName: "Scratchpad" }],
+				},
+			],
+		});
+
+		for (const testId of ["sidebar-projects-scroller", "sidebar-scratchpad-scroller"]) {
+			const scroller = screen.getByTestId(testId);
+			Object.defineProperties(scroller, {
+				scrollHeight: { configurable: true, value: 200 },
+				clientHeight: { configurable: true, value: 100 },
+				scrollTop: { configurable: true, writable: true, value: 0 },
+			});
+
+			fireEvent.scroll(scroller);
+			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--bottom")).toBeInTheDocument();
+			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--top")).not.toBeInTheDocument();
+
+			scroller.scrollTop = 50;
+			fireEvent.scroll(scroller);
+			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--top")).toBeInTheDocument();
+			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--bottom")).toBeInTheDocument();
+
+			scroller.scrollTop = 100;
+			fireEvent.scroll(scroller);
+			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--top")).toBeInTheDocument();
+			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--bottom")).not.toBeInTheDocument();
+		}
 	});
 
 	it("offers ad hoc agent creation from the project add flow before the ad hoc row exists", async () => {
@@ -728,7 +1046,7 @@ describe("Sidebar", () => {
 		expect(screen.getByLabelText("Project actions for Project One")).toHaveProperty("tabIndex", 0);
 		expect(screen.getByLabelText("Pin session")).toHaveProperty("tabIndex", 0);
 		expect(screen.queryByRole("button", { name: "Rename fix login" })).not.toBeInTheDocument();
-		expect(screen.getByLabelText("Kill session")).toHaveProperty("tabIndex", 0);
+		expect(screen.getByLabelText("Archive session")).toHaveProperty("tabIndex", 0);
 	});
 
 	it("fades the message age out in favor of the overlaid hover actions", () => {
@@ -816,55 +1134,68 @@ describe("Sidebar", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("lists worker sessions by updated time, newest first", () => {
-		const oldest: WorkspaceSession = {
+	it("lists worker sessions by the user's last message, matching the row's message age", () => {
+		// Agent activity bumps updatedAt, but must not reorder rows past the shown age.
+		const busyAgent: WorkspaceSession = {
 			...session,
-			id: "proj-1-old",
-			title: "old task",
+			id: "proj-1-busy",
+			title: "busy agent",
 			createdAt: "2026-06-29T00:00:00Z",
-			updatedAt: "2026-07-02T00:00:00Z",
-			activity: { state: "idle", lastActivityAt: "2026-07-01T00:00:00Z" },
+			lastUserMessageAt: "2026-07-01T00:00:00Z",
+			updatedAt: "2026-07-05T00:00:00Z",
 		};
-		const newest: WorkspaceSession = {
+		const recentlyMessaged: WorkspaceSession = {
 			...session,
-			id: "proj-1-new",
-			title: "new task",
-			createdAt: "2026-07-01T00:00:00Z",
-			updatedAt: "2026-07-01T00:00:00Z",
-			activity: { state: "active", lastActivityAt: "2026-07-02T00:00:00Z" },
-		};
-		const noActivity: WorkspaceSession = {
-			...session,
-			id: "proj-1-no-activity",
-			title: "no activity",
+			id: "proj-1-messaged",
+			title: "recently messaged",
 			createdAt: "2026-06-29T00:00:00Z",
+			lastUserMessageAt: "2026-07-03T00:00:00Z",
 			updatedAt: "2026-07-03T00:00:00Z",
 		};
-		const invalidActivity: WorkspaceSession = {
+		const neverMessaged: WorkspaceSession = {
 			...session,
-			id: "proj-1-invalid-activity",
-			title: "invalid activity",
-			createdAt: "2026-06-29T00:00:00Z",
-			updatedAt: "2026-07-04T00:00:00Z",
-			activity: { state: "idle", lastActivityAt: "not-a-timestamp" },
+			id: "proj-1-never-messaged",
+			title: "never messaged",
+			createdAt: "2026-07-02T00:00:00Z",
+			updatedAt: "2026-07-06T00:00:00Z",
 		};
-		const createdFallback: WorkspaceSession = {
+		const invalidMessage: WorkspaceSession = {
 			...session,
-			id: "proj-1-created-fallback",
-			title: "created fallback",
-			createdAt: "2026-07-05T00:00:00Z",
-			updatedAt: "not-a-timestamp",
-			activity: { state: "idle", lastActivityAt: "also-not-a-timestamp" },
+			id: "proj-1-invalid-message",
+			title: "invalid message",
+			createdAt: "2026-06-28T00:00:00Z",
+			lastUserMessageAt: "not-a-timestamp",
+			updatedAt: "2026-07-07T00:00:00Z",
 		};
-		renderSidebar({ workspaces: [{ ...workspace, sessions: [oldest, newest, noActivity, invalidActivity, createdFallback] }] });
+		const tieOlderUpdate: WorkspaceSession = {
+			...session,
+			id: "proj-1-tie-older",
+			title: "tie older update",
+			createdAt: "2026-06-27T00:00:00Z",
+			updatedAt: "2026-06-27T00:00:00Z",
+		};
+		const tieNewerUpdate: WorkspaceSession = {
+			...session,
+			id: "proj-1-tie-newer",
+			title: "tie newer update",
+			createdAt: "2026-06-27T00:00:00Z",
+			updatedAt: "2026-06-28T00:00:00Z",
+		};
+		renderSidebar({
+			workspaces: [{
+				...workspace,
+				sessions: [busyAgent, tieOlderUpdate, recentlyMessaged, invalidMessage, neverMessaged, tieNewerUpdate],
+			}],
+		});
 
 		const sessionButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-session-row] button[aria-label^="Open "]'));
 		expect(sessionButtons.map((button) => button.getAttribute("aria-label"))).toEqual([
-			"Open invalid activity",
-			"Open no activity",
-			"Open old task",
-			"Open new task",
-			"Open created fallback",
+			"Open recently messaged",
+			"Open never messaged",
+			"Open busy agent",
+			"Open invalid message",
+			"Open tie newer update",
+			"Open tie older update",
 		]);
 	});
 
@@ -1109,6 +1440,7 @@ describe("Sidebar", () => {
 			"Aider",
 			"Devin",
 			"Goose",
+			"Manage agents…",
 		]);
 		await user.keyboard("{Escape}");
 
@@ -1530,7 +1862,7 @@ describe("Sidebar", () => {
 		expect(await screen.findByRole("menuitem", { name: /settings/i })).toBeInTheDocument();
 	});
 
-	it("shows needs-auth agents as unavailable while keeping authorized agents selectable", async () => {
+	it("hides unavailable agents while keeping ready agents selectable", async () => {
 		const user = userEvent.setup();
 		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
@@ -1554,11 +1886,9 @@ describe("Sidebar", () => {
 		const options = await screen.findAllByRole("option");
 		expect(options.map((option) => option.textContent)).toEqual([
 			"Claude Code",
-			"CursorNeeds auth",
-			"AiderNeeds install",
+			"Manage agents…",
 		]);
-		expect(options[1]).toHaveAttribute("aria-disabled", "true");
-		expect(options[2]).toHaveAttribute("aria-disabled", "true");
+		expect(options[1]).not.toHaveAttribute("aria-disabled", "true");
 		await user.keyboard("{Escape}");
 
 		await user.click(screen.getByRole("button", { name: "Create and start" }));
@@ -1738,13 +2068,13 @@ describe("Sidebar", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("caps the inline rename input at 20 characters", async () => {
+	it("caps the inline rename input at 100 characters", async () => {
 		const user = userEvent.setup();
 		const workspaceWithSession = { ...workspace, sessions: [session] };
 		renderSidebar({ workspaces: [workspaceWithSession] });
 
 		await user.dblClick(screen.getByText("fix login"));
-		expect(screen.getByLabelText("Rename fix login")).toHaveAttribute("maxlength", "20");
+		expect(screen.getByLabelText("Rename fix login")).toHaveAttribute("maxlength", "100");
 	});
 
 	it("renders rename as an unboxed inline label editor", async () => {
@@ -1834,7 +2164,7 @@ describe("Sidebar", () => {
 		expect(projectRow?.querySelector("[data-project-label]")).toHaveClass("translate-y-px");
 	});
 
-	it("caps the project list at 12 until Show more is clicked", async () => {
+	it("caps the project list at 10 until Show more is clicked", async () => {
 		const user = userEvent.setup();
 		const manyProjects = Array.from({ length: 14 }, (_, index) => ({
 			...workspace,
@@ -1844,15 +2174,129 @@ describe("Sidebar", () => {
 		}));
 		renderSidebar({ workspaces: manyProjects });
 
-		expect(screen.getByText("Project 12")).toBeInTheDocument();
-		expect(screen.queryByText("Project 13")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Show 2 more projects" })).toBeVisible();
+		expect(screen.getByText("Project 10")).toBeInTheDocument();
+		expect(screen.queryByText("Project 11")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show 4 more projects" })).toBeInTheDocument();
 
-		await user.click(screen.getByRole("button", { name: "Show 2 more projects" }));
+		await user.click(screen.getByRole("button", { name: "Show 4 more projects" }));
 
-		expect(screen.getByText("Project 13")).toBeInTheDocument();
+		expect(screen.getByText("Project 11")).toBeInTheDocument();
 		expect(screen.getByText("Project 14")).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /more projects/ })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show fewer projects" })).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Show fewer projects" }));
+
+		expect(screen.queryByText("Project 11")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show 4 more projects" })).toBeInTheDocument();
+	});
+
+	it("keeps the active project row at the top of the scroller", () => {
+		mockParams.projectId = "proj-1";
+		const other: WorkspaceSummary = {
+			...workspace,
+			id: "proj-2",
+			name: "Project Two",
+			path: "/repo/project-two",
+		};
+
+		renderSidebar({ workspaces: [workspace, other] });
+
+		const activeRow = document.querySelector('[data-project-drag-row][data-project-id="proj-1"]');
+		expect(activeRow).toHaveClass("sticky", "top-0", "z-20", "bg-sidebar");
+	});
+
+	it("caps each project's agent list at 6 until its Show more is clicked", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: Array.from({ length: 9 }, (_, index) => ({
+						...session,
+						id: `proj-1-${index + 1}`,
+						title: `Agent ${index + 1}`,
+						// Descending so sortedWorkerSessions keeps the fixture order.
+						updatedAt: `2026-06-${30 - index}T00:00:00Z`,
+					})),
+				},
+			],
+		});
+
+		const list = screen.getByTestId("session-list-proj-1");
+		expect(within(list).getByText("Agent 6")).toBeInTheDocument();
+		expect(screen.queryByText("Agent 7")).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Show 3 more agents" }));
+
+		expect(screen.getByText("Agent 7")).toBeInTheDocument();
+		expect(screen.getByText("Agent 9")).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Show fewer agents" }));
+
+		expect(screen.queryByText("Agent 7")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show 3 more agents" })).toBeInTheDocument();
+	});
+
+	it("lifts a project's agent cap when the open session sits past it", () => {
+		mockParams.projectId = "proj-1";
+		mockParams.sessionId = "proj-1-8";
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: Array.from({ length: 9 }, (_, index) => ({
+						...session,
+						id: `proj-1-${index + 1}`,
+						title: `Agent ${index + 1}`,
+						updatedAt: `2026-06-${30 - index}T00:00:00Z`,
+					})),
+				},
+			],
+		});
+
+		expect(screen.getByText("Agent 8")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show fewer agents" })).toBeInTheDocument();
+	});
+
+	it("fits the project list to content up to the full available height", async () => {
+		const user = userEvent.setup();
+		const manyProjects = Array.from({ length: 14 }, (_, index) => ({
+			...workspace,
+			id: `proj-${index + 1}`,
+			name: `Project ${index + 1}`,
+			path: `/repo/project-${index + 1}`,
+		}));
+		renderSidebar({ workspaces: manyProjects });
+
+		const scroller = screen.getByTestId("sidebar-projects-scroller");
+		expect(scroller).toHaveClass("overflow-y-auto");
+		expect(scroller).toContainElement(screen.getByText("Project 1"));
+		expect(scroller.style.height).toBe("");
+		expect(scroller.style.maxHeight).toContain("100cqh");
+		expect(scroller.style.maxHeight).toContain("--sidebar-scratchpad-reserved-height");
+
+		// Show more stays directly beneath the project list and reveals the remainder.
+		const showMore = screen.getByRole("button", { name: "Show 4 more projects" });
+		expect(showMore.parentElement).toBe(scroller.parentElement?.parentElement);
+		await user.click(showMore);
+		expect(scroller.style.maxHeight).toContain("100cqh");
+		expect(scroller).toHaveClass("overflow-y-auto");
+	});
+
+	it("collapses the project list from the Projects header", async () => {
+		const user = userEvent.setup();
+		renderSidebar();
+
+		await user.click(screen.getByRole("button", { name: "Projects" }));
+		expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByTestId("sidebar-projects-scroller")).not.toBeInTheDocument();
+		expect(screen.queryByText("Project One")).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Projects" }));
+		expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByText("Project One")).toBeInTheDocument();
+		expect(screen.getByTestId("sidebar-projects-scroller")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /Show (more|fewer) projects/ })).not.toBeInTheDocument();
 	});
 
 	it("shows the full project list in the collapsed icon rail without Show more", () => {
@@ -1864,7 +2308,7 @@ describe("Sidebar", () => {
 		}));
 		renderSidebar({ workspaces: manyProjects, initialOpen: false });
 
-		expect(screen.getByText("Project 13")).toBeInTheDocument();
+		expect(screen.getByText("Project 11")).toBeInTheDocument();
 		expect(screen.getByText("Project 14")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: /more projects/ })).not.toBeInTheDocument();
 	});
@@ -1891,34 +2335,21 @@ describe("Sidebar", () => {
 		).toBe(`${SIDEBAR_MIN_WIDTH}px`);
 	});
 
-	it("flushes any queued rAF frame on pointer-up and persists the clamped width", async () => {
-		let queuedFrame: FrameRequestCallback | undefined;
-		const requestAnimationFrameSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-			queuedFrame = callback;
-			return 1;
-		});
-		const cancelAnimationFrameSpy = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+	it("persists the clamped width on pointer-up (sync apply during drag)", async () => {
+		renderSidebar();
 
-		try {
-			renderSidebar();
+		const resizeHandle = screen.getByTestId("resize-handle");
 
-			const resizeHandle = screen.getByTestId("resize-handle");
+		fireEvent.pointerDown(resizeHandle, { clientX: SIDEBAR_DEFAULT_WIDTH });
+		fireEvent.pointerMove(window, { clientX: SIDEBAR_MIN_WIDTH + 5 });
+		expect(
+			document
+				.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')
+				?.style.getPropertyValue("--ao-sidebar-w"),
+		).toBe(`${SIDEBAR_MIN_WIDTH + 5}px`);
 
-			fireEvent.pointerDown(resizeHandle, { clientX: SIDEBAR_DEFAULT_WIDTH });
-			fireEvent.pointerMove(window, { clientX: SIDEBAR_MIN_WIDTH + 5 });
-			fireEvent.pointerUp(window);
-
-			// rAF was queued; pointerUp should flush it via cancelAnimationFrame.
-			expect(cancelAnimationFrameSpy).toHaveBeenCalledWith(1);
-			expect(window.localStorage.getItem("ao-sidebar-w")).toBe(String(SIDEBAR_MIN_WIDTH + 5));
-
-			// Firing the stale frame after cancellation should not overwrite width.
-			queuedFrame?.(performance.now());
-			expect(window.localStorage.getItem("ao-sidebar-w")).toBe(String(SIDEBAR_MIN_WIDTH + 5));
-		} finally {
-			requestAnimationFrameSpy.mockRestore();
-			cancelAnimationFrameSpy.mockRestore();
-		}
+		fireEvent.pointerUp(window);
+		expect(window.localStorage.getItem("ao-sidebar-w")).toBe(String(SIDEBAR_MIN_WIDTH + 5));
 	});
 
 	it("paints the dot from its board section while activity drives the pulse", () => {
@@ -2208,6 +2639,262 @@ describe("Sidebar", () => {
 		expect(screen.queryByLabelText("Open merged terminated task")).not.toBeInTheDocument();
 	});
 
+	it("confirms before archiving a session and names the action archive, not delete", async () => {
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		const row = screen.getByLabelText("Open fix login").closest<HTMLElement>("[data-session-row]")!;
+		const archiveButton = within(row).getByLabelText("Archive session");
+		expect(archiveButton.querySelector("svg")).toHaveClass("lucide-archive");
+
+		fireEvent.click(archiveButton);
+		expect(postMock).not.toHaveBeenCalled();
+
+		const dialog = await screen.findByRole("dialog", {
+			name: "Are you sure you want to archive fix login?",
+		});
+		expect(dialog).toHaveTextContent("You can always restore fix login from the Archive section later.");
+		fireEvent.click(within(dialog).getByRole("button", { name: "No" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		expect(postMock).not.toHaveBeenCalled();
+
+		await confirmArchiveFromRow(row);
+
+		await waitFor(() =>
+			expect(postMock).toHaveBeenCalledWith(
+				"/api/v1/sessions/{sessionId}/kill",
+				expect.objectContaining({ params: { path: { sessionId: "proj-1-1" } } }),
+			),
+		);
+	});
+
+	it("shifts to the adjacent session when deleting the active session", async () => {
+		mockParams.projectId = "proj-1";
+		mockParams.sessionId = "proj-1-2";
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{ ...session, id: "proj-1-1", title: "first task", updatedAt: "2026-06-30T00:00:00Z" },
+						{ ...session, id: "proj-1-2", title: "second task", updatedAt: "2026-06-30T01:00:00Z" },
+					],
+				},
+			],
+		});
+
+		const row = screen.getByLabelText("Open second task").closest<HTMLElement>("[data-session-row]")!;
+		await confirmArchiveFromRow(row);
+
+		await waitFor(() =>
+			expect(postMock).toHaveBeenCalledWith(
+				"/api/v1/sessions/{sessionId}/kill",
+				expect.objectContaining({ params: { path: { sessionId: "proj-1-2" } } }),
+			),
+		);
+		await waitFor(() =>
+			expect(navigateMock).toHaveBeenCalledWith({
+				to: "/projects/$projectId/sessions/$sessionId",
+				params: { projectId: "proj-1", sessionId: "proj-1-1" },
+			}),
+		);
+	});
+
+	it("shifts to the orchestrator when killing the only worker session in a project with an active orchestrator", async () => {
+		mockParams.projectId = "proj-1";
+		mockParams.sessionId = "proj-1-1";
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{ ...session, id: "proj-1-1", title: "sole worker" },
+						{
+							...session,
+							id: "orch-1",
+							title: "Orchestrator",
+							kind: "orchestrator",
+							isTerminated: false,
+						},
+					],
+				},
+			],
+		});
+
+		const row = screen.getByLabelText("Open sole worker").closest<HTMLElement>("[data-session-row]")!;
+		await confirmArchiveFromRow(row);
+
+		await waitFor(() =>
+			expect(postMock).toHaveBeenCalledWith(
+				"/api/v1/sessions/{sessionId}/kill",
+				expect.objectContaining({ params: { path: { sessionId: "proj-1-1" } } }),
+			),
+		);
+
+		await waitFor(() =>
+			expect(navigateMock).toHaveBeenCalledWith({
+				to: "/projects/$projectId/sessions/$sessionId",
+				params: { projectId: "proj-1", sessionId: "orch-1" },
+			}),
+		);
+	});
+
+	it("shifts to the project board when killing the only worker session in a project without an orchestrator", async () => {
+		mockParams.projectId = "proj-1";
+		mockParams.sessionId = "proj-1-1";
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [{ ...session, id: "proj-1-1", title: "sole worker" }],
+				},
+			],
+		});
+
+		const row = screen.getByLabelText("Open sole worker").closest<HTMLElement>("[data-session-row]")!;
+		await confirmArchiveFromRow(row);
+
+		await waitFor(() =>
+			expect(postMock).toHaveBeenCalledWith(
+				"/api/v1/sessions/{sessionId}/kill",
+				expect.objectContaining({ params: { path: { sessionId: "proj-1-1" } } }),
+			),
+		);
+
+		await waitFor(() =>
+			expect(navigateMock).toHaveBeenCalledWith({
+				to: "/projects/$projectId",
+				params: { projectId: "proj-1" },
+			}),
+		);
+	});
+
+	it("does not navigate away when killing an inactive session", async () => {
+		mockParams.projectId = "proj-1";
+		mockParams.sessionId = "proj-1-1";
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{ ...session, id: "proj-1-1", title: "active task", updatedAt: "2026-06-30T00:00:00Z" },
+						{ ...session, id: "proj-1-2", title: "inactive task", updatedAt: "2026-06-30T01:00:00Z" },
+					],
+				},
+			],
+		});
+
+		const row = screen.getByLabelText("Open inactive task").closest<HTMLElement>("[data-session-row]")!;
+		await confirmArchiveFromRow(row);
+
+		await waitFor(() =>
+			expect(postMock).toHaveBeenCalledWith(
+				"/api/v1/sessions/{sessionId}/kill",
+				expect.objectContaining({ params: { path: { sessionId: "proj-1-2" } } }),
+			),
+		);
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("shifts to the next session when killing an active pinned session", async () => {
+		mockParams.projectId = "proj-1";
+		mockParams.sessionId = "proj-1-2";
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{ ...session, id: "proj-1-1", title: "first task", isPinned: false, updatedAt: "2026-06-30T00:00:00Z" },
+						{ ...session, id: "proj-1-2", title: "pinned task", isPinned: true, pinnedAt: "2026-06-30T01:00:00Z", updatedAt: "2026-06-30T01:00:00Z" },
+					],
+				},
+			],
+		});
+
+		const pinnedList = screen.getByTestId("pinned-session-list");
+		const row = within(pinnedList).getByLabelText("Open pinned task").closest<HTMLElement>("[data-session-row]")!;
+		await confirmArchiveFromRow(row);
+
+		await waitFor(() =>
+			expect(postMock).toHaveBeenCalledWith(
+				"/api/v1/sessions/{sessionId}/kill",
+				expect.objectContaining({ params: { path: { sessionId: "proj-1-2" } } }),
+			),
+		);
+		await waitFor(() =>
+			expect(navigateMock).toHaveBeenCalledWith({
+				to: "/projects/$projectId/sessions/$sessionId",
+				params: { projectId: "proj-1", sessionId: "proj-1-1" },
+			}),
+		);
+	});
+
+	it("shifts to the adjacent session when killing an active pinned session with multiple remaining sessions", async () => {
+		mockParams.projectId = "proj-1";
+		mockParams.sessionId = "proj-1-1";
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{ ...session, id: "proj-1-3", title: "newest task", updatedAt: "2026-06-30T02:00:00Z" },
+						{ ...session, id: "proj-1-2", title: "middle task", updatedAt: "2026-06-30T01:00:00Z" },
+						{ ...session, id: "proj-1-1", title: "oldest pinned task", isPinned: true, pinnedAt: "2026-06-30T00:00:00Z", updatedAt: "2026-06-30T00:00:00Z" },
+					],
+				},
+			],
+		});
+
+		const pinnedList = screen.getByTestId("pinned-session-list");
+		const row = within(pinnedList).getByLabelText("Open oldest pinned task").closest<HTMLElement>("[data-session-row]")!;
+		await confirmArchiveFromRow(row);
+
+		await waitFor(() =>
+			expect(postMock).toHaveBeenCalledWith(
+				"/api/v1/sessions/{sessionId}/kill",
+				expect.objectContaining({ params: { path: { sessionId: "proj-1-1" } } }),
+			),
+		);
+		await waitFor(() =>
+			expect(navigateMock).toHaveBeenCalledWith({
+				to: "/projects/$projectId/sessions/$sessionId",
+				params: { projectId: "proj-1", sessionId: "proj-1-2" },
+			}),
+		);
+	});
+
+	it("navigates optimistically when killing the active session", async () => {
+		mockParams.projectId = "proj-1";
+		mockParams.sessionId = "proj-1-1";
+		let resolveKill: (() => void) | undefined;
+		postMock.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					resolveKill = () => resolve({ data: { ok: true }, error: undefined, response: new Response(null, { status: 200 }) });
+				}),
+		);
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{ ...session, id: "proj-1-1", title: "first task", updatedAt: "2026-06-30T00:00:00Z" },
+					],
+				},
+			],
+		});
+
+		const row = screen.getByLabelText("Open first task").closest<HTMLElement>("[data-session-row]")!;
+		await confirmArchiveFromRow(row);
+
+		// Navigation occurs optimistically on click rather than waiting for daemon round-trip.
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId",
+			params: { projectId: "proj-1" },
+		});
+
+		resolveKill?.();
+	});
+
 	it("downloads the update when the available row is clicked", async () => {
 		updateStatusMock.mockResolvedValue({ state: "available", version: "9.9.9" });
 		renderSidebar();
@@ -2411,14 +3098,14 @@ describe("Sidebar", () => {
 		expect(Array.from(document.querySelectorAll("[data-project-label]"), (node) => node.textContent)).toEqual(["Bravo", "Alpha"]);
 	});
 
-	it("keeps the ad hoc group out of project drag and drop ordering", () => {
+	it("keeps the ad hoc group out of the project list and its drag ordering", () => {
 		renderSidebar({
 			workspaces: [
 				{ ...workspace, id: "alpha", name: "Alpha" },
 				{ ...workspace, id: "bravo", name: "Bravo" },
 				{
 					id: STANDALONE_WORKSPACE_ID,
-					name: "Ad hoc agents",
+					name: "Scratchpad",
 					kind: STANDALONE_PROJECT_KIND,
 					path: "",
 					sessions: [],
@@ -2427,25 +3114,18 @@ describe("Sidebar", () => {
 		});
 		const labels = () => Array.from(document.querySelectorAll("[data-project-label]"), (node) => node.textContent);
 
-		const alphaRow = document.querySelector('[data-project-drag-row][data-project-id="alpha"]')!;
-		const standaloneTarget = document.querySelector(`li[data-project-id="${STANDALONE_WORKSPACE_ID}"]`)!;
-		fireDrag("dragStart", alphaRow, {});
-		fireDrag("dragOver", standaloneTarget, { clientY: 40 });
-		fireDrag("drop", standaloneTarget, {});
-		expect(labels()).toEqual(["Alpha", "Bravo", "Ad hoc agents"]);
-
-		const standaloneRow = document.querySelector(`[data-project-drag-row][data-project-id="${STANDALONE_WORKSPACE_ID}"]`)!;
-		const alphaTarget = document.querySelector('li[data-project-drop-target][data-project-id="alpha"]')!;
-		fireDrag("dragStart", standaloneRow, {});
-		fireDrag("dragOver", alphaTarget, { clientY: 0 });
-		fireDrag("drop", alphaTarget, {});
-		expect(labels()).toEqual(["Alpha", "Bravo", "Ad hoc agents"]);
+		// The ad hoc group is its own section, never a row in the project list.
+		expect(labels()).toEqual(["Alpha", "Bravo"]);
+		expect(document.querySelector(`li[data-project-id="${STANDALONE_WORKSPACE_ID}"]`)).toBeNull();
+		expect(screen.getByRole("button", { name: "Scratchpad" })).toBeInTheDocument();
 
 		const bravoRow = document.querySelector('[data-project-drag-row][data-project-id="bravo"]')!;
+		const alphaTarget = document.querySelector('li[data-project-drop-target][data-project-id="alpha"]')!;
 		fireDrag("dragStart", bravoRow, {});
+		// jsdom rows measure as zero-height, so clientY 0 lands in the top half — drop before Alpha.
 		fireDrag("dragOver", alphaTarget, { clientY: 0 });
 		fireDrag("drop", alphaTarget, {});
-		expect(labels()).toEqual(["Bravo", "Alpha", "Ad hoc agents"]);
+		expect(labels()).toEqual(["Bravo", "Alpha"]);
 	});
 
 	it("commits a session drop within its project", () => {
@@ -2489,5 +3169,72 @@ describe("Sidebar", () => {
 		} finally {
 			document.documentElement.classList.remove("dark");
 		}
+	});
+
+	it("marks the brand with a dev badge in dev builds so the unpackaged window is distinguishable", () => {
+		renderSidebar();
+
+		expect(screen.getByTestId("sidebar-dev-badge")).toHaveTextContent("dev");
+	});
+});
+
+describe("resolveNextNavigationAfterSessionKill", () => {
+	const ws: WorkspaceSummary = {
+		...workspace,
+		sessions: [
+			{ ...session, id: "s-1", title: "Task 1", updatedAt: "2026-06-30T00:00:00Z" },
+			{ ...session, id: "s-2", title: "Task 2", updatedAt: "2026-06-30T01:00:00Z" },
+			{ ...session, id: "s-3", title: "Task 3", updatedAt: "2026-06-30T02:00:00Z" },
+		],
+	};
+
+	it("selects previous session when killing middle session in default order", () => {
+		// sortedWorkerSessions orders newest first: [s-3, s-2, s-1]
+		const route = resolveNextNavigationAfterSessionKill(ws, "s-2");
+		expect(route).toEqual({ target: "session", sessionId: "s-3" });
+	});
+
+	it("selects first remaining session when killing the first session", () => {
+		const route = resolveNextNavigationAfterSessionKill(ws, "s-3");
+		expect(route).toEqual({ target: "session", sessionId: "s-2" });
+	});
+
+	it("respects custom display order when provided", () => {
+		const customOrder: WorkspaceSession[] = [
+			{ ...session, id: "s-1", title: "Task 1" },
+			{ ...session, id: "s-2", title: "Task 2" },
+			{ ...session, id: "s-3", title: "Task 3" },
+		];
+		const route = resolveNextNavigationAfterSessionKill(ws, "s-2", customOrder);
+		expect(route).toEqual({ target: "session", sessionId: "s-1" });
+	});
+
+	it("falls back to active orchestrator if no worker sessions remain", () => {
+		const wsWithOrch: WorkspaceSummary = {
+			...workspace,
+			sessions: [
+				{ ...session, id: "s-1", title: "Task 1" },
+				{ ...session, id: "orch-1", kind: "orchestrator", isTerminated: false },
+			],
+		};
+		const route = resolveNextNavigationAfterSessionKill(wsWithOrch, "s-1");
+		expect(route).toEqual({ target: "session", sessionId: "orch-1" });
+	});
+
+	it("falls back to project board if orchestrator is terminated", () => {
+		const wsWithDeadOrch: WorkspaceSummary = {
+			...workspace,
+			sessions: [
+				{ ...session, id: "s-1", title: "Task 1" },
+				{ ...session, id: "orch-1", kind: "orchestrator", isTerminated: true },
+			],
+		};
+		const route = resolveNextNavigationAfterSessionKill(wsWithDeadOrch, "s-1");
+		expect(route).toEqual({ target: "project" });
+	});
+
+	it("falls back to project board if workspace is undefined", () => {
+		const route = resolveNextNavigationAfterSessionKill(undefined, "s-1");
+		expect(route).toEqual({ target: "project" });
 	});
 });

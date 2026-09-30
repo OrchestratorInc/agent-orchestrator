@@ -209,6 +209,7 @@ type fakeCodexLoginTerminal struct {
 	closeErr        error
 	writeCredential bool
 	credential      []byte
+	childExited     bool
 }
 
 func (f *fakeCodexLoginTerminal) OpenCommandTerminal(_ context.Context, in shellterm.OpenCommandTerminalInput) (shellterm.ShellTerminal, error) {
@@ -235,6 +236,12 @@ func (f *fakeCodexLoginTerminal) CloseShellTerminal(_ context.Context, handle st
 	}
 	f.closed = append(f.closed, handle)
 	return nil
+}
+
+func (f *fakeCodexLoginTerminal) IsShellTerminalChildAlive(_ context.Context, _ string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return !f.childExited, nil
 }
 
 func supportedCodexAccountCapabilities() domain.CodexAccountCapabilities {
@@ -2150,23 +2157,31 @@ func TestAuthenticationRequestCancellationDoesNotCancelSharedRead(t *testing.T) 
 		done <- err
 	}()
 	<-started
+	manager.mu.Lock()
+	shared := manager.auth[record.Snapshot.ID].call
+	manager.mu.Unlock()
+	if shared == nil {
+		cancel()
+		close(release)
+		t.Fatal("shared authentication read was not in flight")
+		return
+	}
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("wait error = %v", err)
 	}
 	close(release)
-	deadline := time.After(time.Second)
-	for {
-		latest, _ := manager.catalog.record(record.Snapshot.ID)
-		if latest.Snapshot.Authentication.State == domain.AgentAuthenticationAuthorized {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("shared authentication read did not finish")
-		default:
-			time.Sleep(time.Millisecond)
-		}
+	// Wait on the shared call itself, not on the snapshot. The snapshot flips to
+	// authorized before the verified descriptor is persisted under the account
+	// home, so polling the snapshot lets TempDir cleanup race that write.
+	select {
+	case <-shared.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shared authentication read did not finish")
+	}
+	latest, _ := manager.catalog.record(record.Snapshot.ID)
+	if latest.Snapshot.Authentication.State != domain.AgentAuthenticationAuthorized {
+		t.Fatalf("shared authentication state = %v", latest.Snapshot.Authentication.State)
 	}
 }
 
