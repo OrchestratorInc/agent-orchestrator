@@ -765,10 +765,10 @@ func (l *agentLauncher) Alive(ctx context.Context, handleID, launchID string) (b
 			return false, err
 		}
 		if !tracked {
-			if runtime, ok := l.runtime.(interface {
+			if probe, ok := l.runtime.(interface {
 				IsUnsupervisedReviewerAlive(context.Context, ports.RuntimeHandle) (bool, error)
 			}); ok {
-				return runtime.IsUnsupervisedReviewerAlive(ctx, handle)
+				return probe.IsUnsupervisedReviewerAlive(ctx, handle)
 			}
 			return l.runtime.IsChildAlive(ctx, handle)
 		}
