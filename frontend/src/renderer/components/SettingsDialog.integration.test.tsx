@@ -142,7 +142,7 @@ describe("Settings recovery modal integration", () => {
 		});
 
 		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
-		const login = await within(row).findByRole("button", { name: "Login" });
+		const login = await within(row).findByRole("button", { name: "Local login" });
 		await waitFor(() => expect(document.activeElement).toBe(login));
 	});
 

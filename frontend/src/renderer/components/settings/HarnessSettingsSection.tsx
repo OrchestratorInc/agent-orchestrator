@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, Copy, Download, Info, LoaderCircle, LogIn, Search, TriangleAlert, X } from "lucide-react";
+import { BookOpen, Check, Copy, Download, Info, LoaderCircle, LogIn, MoreVertical, Search, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
@@ -27,6 +27,8 @@ import { AgentAvatar } from "../AgentAvatar";
 import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { useCloudGate } from "../../hooks/useCloudGate";
 import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
@@ -131,6 +133,7 @@ export function HarnessSettingsSection({
 	// cloud sessions. Each cloud-capable row shows its personal cloud connection
 	// and opens the harness-scoped login dialog. Gated on being signed into a
 	// cloud org.
+	const { cloudEnabled } = useCloudGate();
 	const { org: cloudOrg } = useCloudOrg();
 	// The harness whose cloud login panel is expanded inline under its row.
 	const [cloudLoginAgent, setCloudLoginAgent] = useState<CloudHarness | null>(null);
@@ -526,7 +529,9 @@ export function HarnessSettingsSection({
 							|| authStatus === "not_applicable"
 							|| mimoConfigured
 							|| (!authPlans.isPending && (!authPlan || authPlan.action === "instructions"));
-						const isCloudCapable = Boolean(cloudOrg?.id) && (CLOUD_AGENT_PROVIDERS as readonly string[]).includes(agentId);
+						// Cloud options only for cloud-supported harnesses, only while the
+						// cloud feature is on and the user is signed into a cloud org.
+						const isCloudCapable = cloudEnabled && Boolean(cloudOrg?.id) && (CLOUD_AGENT_PROVIDERS as readonly string[]).includes(agentId);
 						const cloudConnected = cloudConnByProvider.get(agentId)?.validationState === "valid";
 						// Cloud logins are always separate from local ones. Claude Code's
 						// browser login is also stored locally, but only as a fallback the
@@ -572,10 +577,35 @@ export function HarnessSettingsSection({
 								{authStatus !== "authorized" && !mimoConfigured ? (
 									<Button data-harness-primary-action="" data-terminal-focus-handoff="true" disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} size="sm" onClick={() => void startAuth(agentId)}>
 										{authState?.pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-										{authState?.pending ? t("settings.harness.loggingIn") : isSetupAction ? t("settings.harness.setup") : t("settings.harness.login")}
+										{authState?.pending ? t("settings.harness.loggingIn") : isSetupAction ? t("settings.harness.setup") : t("settings.harness.localLogin")}
 									</Button>
 								) : null}
 							</>
+						) : null;
+						// Re-running a login for a harness that is already logged in lives in a
+						// small options menu so it doesn't compete with the row's main action.
+						const canRefreshLocal = authPlan?.action === "login" && authStatus === "authorized";
+						const canRefreshCloud = isCloudCapable && cloudConnected && cloudLoginAgent !== agentId;
+						const optionsMenu = canRefreshLocal || canRefreshCloud ? (
+							<DropdownMenu>
+								<DropdownMenuTrigger asChild>
+									<Button type="button" size="icon-sm" variant="ghost" aria-label={t("settings.harness.moreOptions", { agent: agentLabel(agentId) })}>
+										<MoreVertical aria-hidden="true" />
+									</Button>
+								</DropdownMenuTrigger>
+								<DropdownMenuContent align="end">
+									{canRefreshLocal ? (
+										<DropdownMenuItem disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} onSelect={() => void startAuth(agentId)}>
+											{t("settings.harness.refreshLocalLogin")}
+										</DropdownMenuItem>
+									) : null}
+									{canRefreshCloud ? (
+										<DropdownMenuItem onSelect={() => setCloudLoginAgent(agentId as CloudHarness)}>
+											{t("settings.harness.refreshCloudLogin")}
+										</DropdownMenuItem>
+									) : null}
+								</DropdownMenuContent>
+							</DropdownMenu>
 						) : null;
 					const localControls = active ? (
 				<span className="inline-flex items-center gap-1.5 text-xs text-settings-muted" role="status"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{job?.status === "installing" ? t("settings.harness.installing") : t("settings.harness.verifying")}</span>
@@ -595,6 +625,7 @@ export function HarnessSettingsSection({
 									</Button>
 								) : null}
 								{authControls}
+								{isCloudCapable ? null : optionsMenu}
 								</div>
 							) : failed ? (
 								<div className="flex items-center gap-1.5">
@@ -672,15 +703,12 @@ export function HarnessSettingsSection({
 								<div className="flex shrink-0 items-center gap-2">
 									{localControls}
 									{/* The inline login under the row replaces this button while open. */}
-									{cloudLoginAgent === agentId ? null : cloudConnected ? (
-										<Button type="button" size="sm" variant="ghost" className={MENU_TRIGGER_CHROME} onClick={() => setCloudLoginAgent(agentId as CloudHarness)}>
-											{t("settings.harness.reconnect")}
-										</Button>
-									) : (
+									{cloudLoginAgent === agentId || cloudConnected ? null : (
 										<Button data-harness-primary-action="" size="sm" onClick={() => setCloudLoginAgent(agentId as CloudHarness)}>
 											{t("settings.harness.cloudLogin")}
 										</Button>
 									)}
+									{optionsMenu}
 								</div>
 							) : localControls}
 
