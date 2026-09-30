@@ -34,7 +34,7 @@ func (e *IncompatibleVersionError) Error() string {
 // cached across attempts. When none match, the first candidate's error is
 // returned so a mismatch still reports what was found.
 func ResolveBinaryForMajor(ctx context.Context, major int) (string, error) {
-	candidates, err := OpenCodeBinaryCandidates(ctx)
+	candidates, err := BinaryCandidates(ctx)
 	if err != nil {
 		return "", err
 	}

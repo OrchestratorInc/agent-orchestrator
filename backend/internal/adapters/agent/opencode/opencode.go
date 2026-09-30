@@ -567,7 +567,7 @@ func opencodeAOAgentName(sessionID string) string {
 // searching PATH then a handful of well-known install locations (the install
 // script's ~/.opencode/bin, Homebrew, npm global).
 func ResolveOpenCodeBinary(ctx context.Context) (string, error) {
-	candidates, err := OpenCodeBinaryCandidates(ctx)
+	candidates, err := BinaryCandidates(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -577,11 +577,11 @@ func ResolveOpenCodeBinary(ctx context.Context) (string, error) {
 	return candidates[0], nil
 }
 
-// OpenCodeBinaryCandidates returns every distinct opencode executable in
+// BinaryCandidates returns every distinct opencode executable in
 // resolution order: the LookPath winner, other PATH entries, then well-known
 // install locations. OpenCode 1 and 2 share an executable name, so a machine can
 // carry both and a harness must be able to pick the one matching its major.
-func OpenCodeBinaryCandidates(ctx context.Context) ([]string, error) {
+func BinaryCandidates(ctx context.Context) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
