@@ -2257,15 +2257,22 @@ describe("agent browser runtime", () => {
 		expect(result).toMatchObject({ text: "t1" });
 	});
 
-	it("denies browser-partition permissions by default", async () => {
+	it("allows browser clipboard writes while denying reads and other permissions", async () => {
 		const { host, setPermissionCheckHandler, setPermissionRequestHandler } = setupHost();
 		await host.execute("sess-1", "tabs");
 
 		expect(setPermissionCheckHandler).toHaveBeenCalledWith(expect.any(Function));
-		expect(setPermissionCheckHandler.mock.calls[0][0]()).toBe(false);
+		const checkPermission = setPermissionCheckHandler.mock.calls[0][0];
+		expect(checkPermission({}, "clipboard-sanitized-write")).toBe(true);
+		expect(checkPermission({}, "clipboard-read")).toBe(false);
+		expect(checkPermission({}, "camera")).toBe(false);
 		const callback = vi.fn();
+		setPermissionRequestHandler.mock.calls[0][0]({}, "clipboard-sanitized-write", callback);
+		expect(callback).toHaveBeenLastCalledWith(true);
+		setPermissionRequestHandler.mock.calls[0][0]({}, "clipboard-read", callback);
+		expect(callback).toHaveBeenLastCalledWith(false);
 		setPermissionRequestHandler.mock.calls[0][0]({}, "camera", callback);
-		expect(callback).toHaveBeenCalledWith(false);
+		expect(callback).toHaveBeenLastCalledWith(false);
 	});
 
 	it("rounds every native browser tab view to match the renderer shell", async () => {

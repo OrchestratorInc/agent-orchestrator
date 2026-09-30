@@ -685,8 +685,12 @@ export function createBrowserViewHost(options: BrowserViewHostOptions): BrowserV
 		applyBrowserViewBounds(view, OFFSCREEN_BOUNDS, false);
 		options.mainWindow.contentView.addChildView(view);
 		view.setBorderRadius?.(BROWSER_VIEW_BORDER_RADIUS);
-		view.webContents.session?.setPermissionCheckHandler?.(() => false);
-		view.webContents.session?.setPermissionRequestHandler?.((_contents, _permission, callback) => callback(false));
+		// Sites use this permission for actions such as "Copy link". Keep
+		// clipboard reads and every other browser permission denied.
+		view.webContents.session?.setPermissionCheckHandler?.((_contents, permission) => permission === "clipboard-sanitized-write");
+		view.webContents.session?.setPermissionRequestHandler?.((_contents, permission, callback) =>
+			callback(permission === "clipboard-sanitized-write"),
+		);
 		options.browserDownloadManager?.attach(view.webContents.session);
 		let scrollbarStyleKey: string | undefined;
 		let scrollbarStyleUpdate = Promise.resolve();
