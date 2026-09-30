@@ -187,9 +187,11 @@ export function SessionFileExplorer({
 	// the picker's only entry is the already-selected Workspace, so it is hidden
 	// until there is something to choose.
 	const showSourcePicker = sourceMenu !== null || source.kind !== "workspace" || sourceOptions.length > 1;
-	// Workspace is its own item (it is not a branch) and Branch › lists only PRs,
-	// so both appear only when there is a PR to switch to.
+	// Workspace is its own item (it is not a branch) and Branch › lists only PRs.
 	const showBranchMenu = sourceOptions.length > 1;
+	// Keep the escape back to Workspace available if an active PR outlives its
+	// SCM summary query (for example, while it is loading or after a failure).
+	const showWorkspaceSource = showBranchMenu || source.kind === "pull_request";
 	const currentSourceLabel = sourceOptions.find((option) => option.value === sourceValue)?.label;
 	const selectSource = (value: string) => {
 		setSourceNotice("");
@@ -283,7 +285,7 @@ export function SessionFileExplorer({
 								</DropdownMenuSubContent>
 							</DropdownMenuSub>
 						) : null}
-						{showBranchMenu ? (
+						{showWorkspaceSource ? (
 							<DropdownMenuItem className="gap-1.5" onSelect={() => selectSource("workspace")}>
 								<span className="min-w-0 truncate">{t("files.explorer.workspaceSource")}</span>
 								<span className="ml-auto flex size-4 shrink-0 items-center justify-center">

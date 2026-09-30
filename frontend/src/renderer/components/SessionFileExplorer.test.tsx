@@ -285,6 +285,22 @@ describe("SessionFileExplorer", () => {
 		);
 	});
 
+	it("lets the user return to Workspace while an active PR has no SCM summary yet", async () => {
+		const sessionId = "sess-pr-scm-loading";
+		const url = "https://example.test/pr/42";
+		useUiStore.getState().setFilesSource(sessionId, { kind: "pull_request", number: 42, url, label: "PR #42 · files" });
+		getMock.mockImplementation((path: string) => {
+			if (path === "/api/v1/sessions/{sessionId}/pr") return new Promise(() => {});
+			return Promise.resolve({ data: { sessionId, files: [], truncated: false } });
+		});
+		renderWithQuery(<SessionFileExplorer sessionId={sessionId} />);
+
+		await userEvent.click(await screen.findByRole("button", { name: "File source" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Workspace" }));
+
+		expect(useUiStore.getState().inspectorSessions[sessionId]?.filesSource).toEqual({ kind: "workspace" });
+	});
+
 	it("refreshes PR files when the observed head changes", async () => {
 		const sessionId = "sess-pr-refresh";
 		const url = "https://example.test/pr/42";
