@@ -15,10 +15,12 @@ const state = vi.hoisted(() => ({
 	isError: false,
 }));
 const client = vi.hoisted(() => ({
-	listUserProviderConnections: vi.fn(),
-	putGitHubPAT: vi.fn(),
-	deleteGitHubPAT: vi.fn(),
+	listGitHubInstallations: vi.fn(),
+	startGitHubInstallation: vi.fn(),
+	syncGitHubInstallation: vi.fn(),
 }));
+const bridge = vi.hoisted(() => ({ openExternal: vi.fn() }));
+vi.mock("../../lib/bridge", () => ({ aoBridge: { app: { openExternal: bridge.openExternal } } }));
 vi.mock("../../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: state.cloudEnabled }) }));
 vi.mock("../../lib/cloud-session", () => ({ useCloudSession: () => ({ status: state.status }) }));
 vi.mock("../../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: state.org, error: state.orgError }) }));
@@ -47,9 +49,10 @@ beforeEach(() => {
 	state.connections = [connection("codex", "auth_json"), connection("opencode", "openrouter_api_key", "invalid")];
 	state.isPending = false;
 	state.isError = false;
-	client.listUserProviderConnections.mockResolvedValue({ providerConnections: [] });
-	client.putGitHubPAT.mockResolvedValue({});
-	client.deleteGitHubPAT.mockResolvedValue({});
+	client.listGitHubInstallations.mockResolvedValue({ installations: [] });
+	client.startGitHubInstallation.mockResolvedValue({ installationUrl: "https://github.com/apps/ao/installations/new" });
+	client.syncGitHubInstallation.mockResolvedValue({});
+	bridge.openExternal.mockResolvedValue(undefined);
 	useCredentialDialogStore.getState().closeDialog();
 });
 
@@ -63,52 +66,46 @@ describe("Cloud settings connections", () => {
 		expect(useCredentialDialogStore.getState()).toMatchObject({ open: true, targetAgent: "opencode", targetCredentialType: "openrouter_api_key" });
 		fireEvent.click(screen.getByRole("button", { name: "Connect agent" }));
 		expect(useCredentialDialogStore.getState()).toMatchObject({ open: true, targetAgent: null, targetCredentialType: null });
-		await waitFor(() => expect(client.listUserProviderConnections).toHaveBeenCalled());
+		await waitFor(() => expect(client.listGitHubInstallations).toHaveBeenCalled());
 	});
 
-	it("keeps the manual token collapsed and preserves save and remove actions", async () => {
+	it("opens GitHub App installation without a personal token field", async () => {
 		renderSettings();
-		const advanced = screen.getByRole("button", { name: "Advanced repository access" });
-		expect(advanced).toHaveAttribute("aria-expanded", "false");
+		const connect = await screen.findByRole("button", { name: "Connect GitHub" });
 		expect(screen.queryByLabelText("GitHub personal access token")).not.toBeInTheDocument();
-		fireEvent.click(advanced);
-		await screen.findByText("No manual token saved");
-		expect(screen.queryByText("Not connected")).not.toBeInTheDocument();
-		fireEvent.change(screen.getByLabelText("GitHub personal access token"), { target: { value: " example-token " } });
-		client.listUserProviderConnections.mockResolvedValue({ providerConnections: [connection("github", "access_token")] });
-		fireEvent.click(screen.getByRole("button", { name: "Save token" }));
-		await waitFor(() => expect(client.putGitHubPAT).toHaveBeenCalledWith({ secret: "example-token" }));
-		await screen.findByText("Token saved");
-		expect(screen.getByLabelText("GitHub personal access token")).toHaveValue("");
-		fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-		await waitFor(() => expect(client.deleteGitHubPAT).toHaveBeenCalledOnce());
+		fireEvent.click(connect);
+		await waitFor(() => expect(client.startGitHubInstallation).toHaveBeenCalledWith("org-test"));
+		await waitFor(() => expect(bridge.openExternal).toHaveBeenCalledWith("https://github.com/apps/ao/installations/new"));
 	});
 
-	it("clears an unsaved manual token on collapse and sign-out", async () => {
-		const view = renderSettings();
-		const advanced = screen.getByRole("button", { name: "Advanced repository access" });
-		fireEvent.click(advanced);
-		fireEvent.change(screen.getByLabelText("GitHub personal access token"), { target: { value: "unsaved-token" } });
-		fireEvent.click(advanced);
-		fireEvent.click(advanced);
-		expect(screen.getByLabelText("GitHub personal access token")).toHaveValue("");
-		fireEvent.change(screen.getByLabelText("GitHub personal access token"), { target: { value: "another-unsaved-token" } });
-		state.status = "unauthenticated";
-		view.rerender(<CloudCredentialsSection />);
-		state.status = "authenticated";
-		view.rerender(<CloudCredentialsSection />);
-		fireEvent.click(screen.getByRole("button", { name: "Advanced repository access" }));
-		expect(screen.getByLabelText("GitHub personal access token")).toHaveValue("");
-		expect(client.putGitHubPAT).not.toHaveBeenCalled();
-		await act(async () => {});
-	});
-
-	it("does not present a failed token lookup as a missing connection", async () => {
-		client.listUserProviderConnections.mockRejectedValue(new Error("offline"));
+	it("shows Connected when the browser completes the installation", async () => {
+		const active = { id: "inst-1", status: "active", accountLogin: "acme", updatedAt: "now", syncStatus: "ready" };
+		client.listGitHubInstallations
+			.mockResolvedValueOnce({ installations: [] })
+			.mockResolvedValueOnce({ installations: [] })
+			.mockResolvedValue({ installations: [active] });
 		renderSettings();
-		fireEvent.click(screen.getByRole("button", { name: "Advanced repository access" }));
-		await screen.findByText("Could not load token status");
-		expect(screen.queryByText("No manual token saved")).not.toBeInTheDocument();
+		fireEvent.click(await screen.findByRole("button", { name: "Connect GitHub" }));
+		await waitFor(() => expect(bridge.openExternal).toHaveBeenCalled());
+		await waitFor(() => expect(screen.getByRole("button", { name: "Manage repositories" })).toBeInTheDocument(), { timeout: 6000 });
+		expect(screen.getAllByText("Connected")).toHaveLength(2);
+	}, 10_000);
+
+	it("shows connected GitHub account and repository management", async () => {
+		client.listGitHubInstallations.mockResolvedValue({ installations: [{ id: "inst-1", status: "active", accountLogin: "acme", updatedAt: "now", syncStatus: "ready" }] });
+		renderSettings();
+		await screen.findByText("acme");
+		fireEvent.click(screen.getByRole("button", { name: "Manage repositories" }));
+		await waitFor(() => expect(client.startGitHubInstallation).toHaveBeenCalledWith("org-test"));
+		await waitFor(() => expect(bridge.openExternal).toHaveBeenCalledWith("https://github.com/apps/ao/installations/new"));
+		expect(screen.queryByLabelText("GitHub personal access token")).not.toBeInTheDocument();
+	});
+
+	it("shows a failed GitHub lookup instead of a disconnected state", async () => {
+		client.listGitHubInstallations.mockRejectedValue(new Error("offline"));
+		renderSettings();
+		await screen.findByText("Could not load GitHub connection");
+		expect(screen.queryByText("Not connected")).not.toBeInTheDocument();
 	});
 
 	it("shows loading and failure states instead of an empty connection list", async () => {
@@ -134,6 +131,6 @@ describe("Cloud settings connections", () => {
 		state.status = "unauthenticated";
 		renderSettings();
 		expect(screen.getByText(/Sign in to AO Cloud/)).toBeInTheDocument();
-		expect(client.listUserProviderConnections).not.toHaveBeenCalled();
+		expect(client.listGitHubInstallations).not.toHaveBeenCalled();
 	});
 });
