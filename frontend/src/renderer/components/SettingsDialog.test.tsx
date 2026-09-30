@@ -124,16 +124,21 @@ describe("SettingsDialog", () => {
 		const overlay = screen.getByTestId("settings-dialog-overlay");
 		const dialog = await screen.findByRole("dialog");
 		expect(overlay).toHaveClass("dialog-overlay");
-		expect(dialog).toHaveClass("z-[calc(var(--z-overlay)+1)]");
-		expect(dialog).not.toHaveClass("z-overlay");
+		// Keep the scrim below Settings so Chromium never composites its backdrop
+		// blur over the dialog at fractional display scaling. Settings itself stays
+		// on z-overlay: later-portaled confirms and menus can still paint above it.
+		expect(overlay).toHaveClass("z-[calc(var(--z-overlay)-1)]");
+		expect(dialog).toHaveClass("z-overlay");
+		expect(dialog).not.toHaveClass("z-[calc(var(--z-overlay)+1)]");
 	});
 
-	it("does not apply a backdrop filter behind settings content", async () => {
+	it("keeps the backdrop blur on the layer below settings", async () => {
 		useUiStore.getState().openGlobalSettings("mobile");
 		renderSettingsDialog();
 
 		const overlay = screen.getByTestId("settings-dialog-overlay");
-		expect(overlay.style.backdropFilter).toBe("none");
+		expect(overlay).toHaveClass("dialog-overlay");
+		expect(overlay.style.backdropFilter).toBe("");
 	});
 
 	it("opens Harness and forwards its agent focus target without redirecting to Codex Accounts", async () => {
