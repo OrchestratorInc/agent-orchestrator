@@ -119,7 +119,7 @@ type Options struct {
 // Reconciler defaults, tuned for a decentralized provider whose provisioning
 // latency is variable by design.
 const (
-	DefaultInterval               = 2 * time.Second
+	DefaultInterval = 2 * time.Second
 	// Cold coder/Azure VMs routinely need >3 min to check in (VM boot + snap/lxd,
 	// a fresh durable-disk mkfs, and harness warming), which tripped the 180s
 	// window and triggered a needless worker reinstall mid-startup. 6 min covers

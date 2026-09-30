@@ -217,12 +217,12 @@ func Load() (Config, error) {
 			os.Getenv("AO_CLOUD_ENV_CONTROL_TOKEN"),
 		),
 
-		PublicURL:                strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_PUBLIC_URL")), "/"),
-		WorkerSigningKey:         strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_SIGNING_KEY")),
-		WorkerBinaryPath:         strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_BINARY_PATH")),
-		WorkerHelperBinaryPath:   strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_HELPER_BINARY_PATH")),
-		MaxSandboxesPerOrg:       intEnvOrDefault("AO_CLOUD_MAX_ACTIVE_SANDBOXES_PER_ORG", 1000),
-		ReconcileInterval:        durationEnv("AO_CLOUD_SANDBOX_RECONCILE_INTERVAL", 2*time.Second),
+		PublicURL:              strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_PUBLIC_URL")), "/"),
+		WorkerSigningKey:       strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_SIGNING_KEY")),
+		WorkerBinaryPath:       strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_BINARY_PATH")),
+		WorkerHelperBinaryPath: strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_HELPER_BINARY_PATH")),
+		MaxSandboxesPerOrg:     intEnvOrDefault("AO_CLOUD_MAX_ACTIVE_SANDBOXES_PER_ORG", 1000),
+		ReconcileInterval:      durationEnv("AO_CLOUD_SANDBOX_RECONCILE_INTERVAL", 2*time.Second),
 		// Cold coder/Azure VMs routinely need >3 min to first-heartbeat (VM boot +
 		// snap/lxd, a fresh durable-disk mkfs, harness warming), which tripped the
 		// old 3m budget and triggered a needless worker reinstall mid-startup. This
@@ -556,7 +556,6 @@ func Load() (Config, error) {
 		return Config{}, errors.New("AO_CLOUD_PUBLIC_URL is required when the GitHub App is configured")
 	}
 	githubAllowed := cfg.Environment == "production" ||
-		cfg.Environment == "staging" || // DEPLOY-ONLY staging relaxation — DO NOT COMMIT to main
 		(cfg.Environment == "development" && githubLocalTest)
 	if cfg.GitHub.Enabled() && !githubAllowed {
 		return Config{}, errors.New("GitHub App credentials may only be configured in production")
