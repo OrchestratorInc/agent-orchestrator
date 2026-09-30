@@ -17,7 +17,11 @@ const state = vi.hoisted(() => ({
 		provideLinks: (
 			line: number,
 			callback: (
-				links?: Array<{ text: string; activate: (event: MouseEvent) => void }>,
+				links?: Array<{
+					text: string;
+					range: { start: { x: number; y: number }; end: { x: number; y: number } };
+					activate: (event: MouseEvent) => void;
+				}>,
 			) => void,
 		) => void;
 	},
@@ -42,12 +46,20 @@ const state = vi.hoisted(() => ({
 				type: string;
 				viewportY: number;
 				length: number;
+				getNullCell: () => {
+					chars: string;
+					width: number;
+					getChars: () => string;
+					getWidth: () => number;
+				};
 				getLine: (
 					row: number,
 				) =>
 					| {
 							translateToString: (trimRight: boolean, startColumn?: number, endColumn?: number) => string;
 							isWrapped: boolean;
+							length?: number;
+							getCell?: (column: number, cell: { chars: string; width: number }) => unknown;
 					  }
 					| undefined;
 			};
@@ -111,6 +123,16 @@ vi.mock("@xterm/xterm", () => ({
 				type: "normal",
 				viewportY: 0,
 				length: 1,
+				getNullCell: () => ({
+					chars: "",
+					width: 1,
+					getChars() {
+						return this.chars;
+					},
+					getWidth() {
+						return this.width;
+					},
+				}),
 				getLine: (row: number) => this.bufferLines[row],
 			},
 		};
@@ -286,6 +308,34 @@ function setNavigatorPlatform(platform: string) {
 		configurable: true,
 		value: { platform },
 	});
+}
+
+type TestBufferCell = { chars: string; width: number };
+
+function asciiCells(text: string): TestBufferCell[] {
+	return [...text].map((chars) => ({ chars, width: 1 }));
+}
+
+function testBufferLine(cells: TestBufferCell[], isWrapped = false) {
+	return {
+		isWrapped,
+		length: cells.length,
+		getCell(column: number, target: { chars: string; width: number }) {
+			const cell = cells[column];
+			if (!cell) return undefined;
+			target.chars = cell.chars;
+			target.width = cell.width;
+			return target;
+		},
+		translateToString(trimRight: boolean, startColumn = 0, endColumn = cells.length) {
+			const text = cells
+				.slice(startColumn, endColumn)
+				.filter((cell) => cell.width > 0)
+				.map((cell) => cell.chars || " ")
+				.join("");
+			return trimRight ? text.trimEnd() : text;
+		},
+	};
 }
 
 describe("XtermTerminal", () => {
@@ -2372,10 +2422,8 @@ describe("XtermTerminal", () => {
 		if (kind === "OSC 8") {
 			osc.activate({} as MouseEvent, "ao://sessions/project/session");
 		} else {
-			state.lastTerminal!.buffer.active.getLine = () => ({
-				isWrapped: false,
-				translateToString: () => "ao://sessions/project/session",
-			});
+			state.lastTerminal!.buffer.active.getLine = () =>
+				testBufferLine(asciiCells("ao://sessions/project/session"));
 			state.sessionLinkProvider!.provideLinks(1, (links) =>
 				links![0]!.activate({} as MouseEvent),
 			);
@@ -2420,15 +2468,65 @@ describe("XtermTerminal", () => {
 		state.lastTerminal!.buffer.active.getLine = (line) =>
 			line >= rows.length
 				? undefined
-				: {
-						isWrapped: line === 1,
-						translateToString: () => rows[line]!,
-					};
+				: testBufferLine(asciiCells(rows[line]!), line === 1);
 		state.sessionLinkProvider!.provideLinks(2, (links) => {
 			expect(links?.[0]?.text).toBe("ao://sessions/project/session");
+			expect(links?.[0]?.range).toEqual({
+				start: { x: 1, y: 1 },
+				end: { x: 13, y: 2 },
+			});
 			links?.[0]?.activate({} as MouseEvent);
 		});
 		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
+	});
+
+	it.each([
+		{
+			name: "wide",
+			prefix: [{ chars: "中", width: 2 }, { chars: "", width: 0 }, { chars: " ", width: 1 }],
+			expected: { start: { x: 4, y: 1 }, end: { x: 20, y: 1 } },
+		},
+		{
+			name: "combining",
+			prefix: [{ chars: "e\u0301", width: 1 }, { chars: " ", width: 1 }],
+			expected: { start: { x: 3, y: 1 }, end: { x: 19, y: 1 } },
+		},
+	])("maps a session link after $name characters to terminal cells", ({ prefix, expected }) => {
+		render(<XtermTerminal onSessionLinkOpen={vi.fn()} theme="dark" />);
+		const line = testBufferLine([
+			...prefix,
+			...asciiCells("ao://sessions/p/s"),
+			{ chars: "", width: 1 },
+		]);
+		state.lastTerminal!.buffer.active.length = 1;
+		state.lastTerminal!.buffer.active.getLine = (row) => (row === 0 ? line : undefined);
+
+		state.sessionLinkProvider!.provideLinks(1, (links) => {
+			expect(links?.[0]?.range).toEqual(expected);
+		});
+	});
+
+	it("maps a wrapped session link with a wide character prefix to terminal cells", () => {
+		render(<XtermTerminal onSessionLinkOpen={vi.fn()} theme="dark" />);
+		state.lastTerminal!.cols = 10;
+		const rows = [
+			testBufferLine([
+				{ chars: "中", width: 2 },
+				{ chars: "", width: 0 },
+				{ chars: " ", width: 1 },
+				...asciiCells("ao://se"),
+			]),
+			testBufferLine(asciiCells("ssions/p/s"), true),
+		];
+		state.lastTerminal!.buffer.active.length = rows.length;
+		state.lastTerminal!.buffer.active.getLine = (row) => rows[row];
+
+		state.sessionLinkProvider!.provideLinks(2, (links) => {
+			expect(links?.[0]?.range).toEqual({
+				start: { x: 4, y: 1 },
+				end: { x: 10, y: 2 },
+			});
+		});
 	});
 
 	it.each([
