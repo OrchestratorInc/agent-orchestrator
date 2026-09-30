@@ -46,6 +46,7 @@ import { brokenMcpServers, can } from "./types";
 import { useMobileConversation } from "./useConversation";
 import { type, space } from "../tokens";
 import { backOr } from "../backNavigation";
+import { userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
 
@@ -82,8 +83,17 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		),
 		[navigation],
 	);
-	const { config, projects, refresh: refreshBoard, setActiveProject, setWorkerPinned, renameWorker, kill } = useApp();
+	const { config, connection, unreachable, projects, refresh: refreshBoard, setActiveProject, setWorkerPinned, renameWorker, kill } = useApp();
 	const conversation = useMobileConversation(config, session.id);
+	// A load that failed while the desktop was unreachable retries as soon as the
+	// board's poll reconnects, which is what the offline state promises.
+	// Keyed on a failed load, not a missing one, so the first mount doesn't send a
+	// second request alongside the hook's own initial load.
+	const loadFailed = !conversation.snapshot && Boolean(conversation.error);
+	const refreshConversation = conversation.refresh;
+	useEffect(() => {
+		if (connection === "open" && loadFailed) void refreshConversation();
+	}, [connection, loadFailed, refreshConversation]);
 	const actionsEntryRef = useRef<ConversationActionsEntry | undefined>(undefined);
 	const actionsListeners = useRef(new Set<(entry: ConversationActionsEntry) => void>());
 	const interfaceSwitch = useInterfaceTransition(config, session.id, refreshBoard);
@@ -277,7 +287,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			setMenuOpen(false);
 			router.push({ pathname: "/shell/[handleId]", params: { handleId: shell.handleId, projectId: session.projectId, sessionId: session.id, title: shell.title } });
 		} catch (cause) {
-			Alert.alert("Couldn't open shell", cause instanceof Error ? cause.message : String(cause));
+			Alert.alert("Couldn't open shell", userFacingError(cause));
 		} finally { setOpeningShell(false); }
 	}, [config, openingShell, router, session.id, session.projectId]);
 
@@ -294,13 +304,13 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		if (resuming) return;
 		setResuming(true);
 		try {
-			if (!config) throw new Error("No AO server configured");
+			if (!config) throw new Error(NOT_PAIRED_ACTION_COPY);
 			if (terminated) await restoreSession(config, session.id);
 			else await resumeSessionAgent(config, session.id);
 			await refreshBoard();
 			await conversation.refresh();
 		} catch (cause) {
-			Alert.alert("Couldn't resume the agent", cause instanceof Error ? cause.message : String(cause));
+			Alert.alert("Couldn't resume the agent", userFacingError(cause));
 		} finally { setResuming(false); }
 	}, [config, conversation.refresh, refreshBoard, resuming, session.id, terminated]);
 
@@ -310,7 +320,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			try {
 				await interfaceSwitch.start("tui", policy);
 			} catch (cause) {
-				Alert.alert("Couldn't switch interface", cause instanceof Error ? cause.message : String(cause));
+				Alert.alert("Couldn't switch interface", userFacingError(cause));
 			}
 		},
 		[interfaceSwitch],
@@ -438,7 +448,10 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	if (failedStart && !conversation.snapshot) return <Centered icon="alert-triangle" title="Session failed to start" message={failedStart} action={resuming ? "Retrying…" : "Retry"} onAction={() => void resume()} />;
 	if (conversation.loading && !conversation.snapshot) return <Centered icon="message-square" title="Loading conversation…" spinning />;
 	if (conversation.unavailable) return <Unavailable message={conversation.unavailable.message} onShell={() => void openShell()} openingShell={openingShell} />;
-	if (!conversation.snapshot) return <Centered icon="alert-triangle" title="Couldn't load the conversation" message={conversation.error || "The daemon did not return a conversation."} action="Retry" onAction={() => void conversation.refresh()} />;
+	// The board's poll is the app's view of the link: when it is down, say so in
+	// the board's words instead of echoing whatever this request failed with.
+	if (!conversation.snapshot && unreachable) return <Centered icon="wifi-off" title="Not connected to your desktop" message="This conversation loads once the app reconnects." action="Retry" onAction={() => void conversation.refresh()} />;
+	if (!conversation.snapshot) return <Centered icon="alert-triangle" title="Couldn't load the conversation" message={conversation.error || "Your desktop didn't return this conversation. Try again."} action="Retry" onAction={() => void conversation.refresh()} />;
 
 	const snapshot = conversation.snapshot;
 	const active = snapshot.turns.some((turn) => turn.state === "running" || turn.state === "queued");

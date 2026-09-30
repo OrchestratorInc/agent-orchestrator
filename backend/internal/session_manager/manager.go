@@ -437,6 +437,9 @@ type Manager struct {
 	backgroundWorkers sync.WaitGroup
 	asyncChatSpawnsMu sync.Mutex
 	asyncChatSpawns   map[domain.SessionID]*asyncChatSpawnRun
+	// killTeardown bounds Kill's detached teardown. Zero means
+	// killTeardownBudget; tests shrink it to prove what survives its expiry.
+	killTeardown time.Duration
 	// openTranscriptFile is os.Open in production. The narrow seam lets tests
 	// deterministically prove that a post-stop transcript read failure falls
 	// back without advertising the provider path.
@@ -2103,20 +2106,28 @@ func (m *Manager) RollbackSpawn(ctx context.Context, id domain.SessionID) (delet
 	return m.rollbackSpawn(ctx, id)
 }
 
-// workspacePreserved reports a teardown refusal that must not fail the kill.
-// These cases leave the directory on disk and none is the user's problem to
-// resolve before the session can go away: a project whose repository has been
-// deleted can never have its worktree reclaimed by git at all, and a directory
-// still pinned by a process handle (Windows sharing violation) is deferred for
-// a later cleanup pass rather than unlinked mid-kill. A dirty worktree is not
-// one of those cases on the single-worktree kill path: that path snapshots the
-// uncommitted work and then removes the folder. Erroring instead strands the
-// session in the sidebar forever, which is the one outcome a delete must not
-// produce.
-func workspacePreserved(err error) bool {
+// expectedWorkspaceRefusal reports a teardown refusal AO already has a name
+// for: uncommitted work that is deliberately never force-removed, a project
+// whose repository has been deleted, or a directory still pinned by a process
+// handle (Windows sharing violation). It only decides log volume — every
+// workspace teardown failure preserves the worktree, named or not.
+func expectedWorkspaceRefusal(err error) bool {
 	return errors.Is(err, ports.ErrWorkspaceDirty) ||
 		errors.Is(err, ports.ErrWorkspaceRepoUnavailable) ||
 		errors.Is(err, ports.ErrWorkspaceDeferred)
+}
+
+// terminateWithPreservedWorkspace records terminal intent for a session whose
+// workspace could not be released. Nothing was force-removed, so the worktree
+// is still on disk for `ao session cleanup` to retry and report on; what must
+// not survive is the session's claim on the sidebar. dropRestoreMarker is false
+// only for workspace projects, whose rows are left as non-restorable inventory
+// for the same retry.
+func (m *Manager) terminateWithPreservedWorkspace(ctx context.Context, id domain.SessionID, cause error, dropRestoreMarker bool) error {
+	if cause != nil && !expectedWorkspaceRefusal(cause) {
+		m.logger.Warn("kill: workspace teardown failed; worktree preserved", "sessionID", id, "error", cause)
+	}
+	return m.recordTermination(ctx, id, dropRestoreMarker)
 }
 
 // killTeardownBudget bounds the detached teardown Kill runs below. Sized just
@@ -2126,6 +2137,32 @@ func workspacePreserved(err error) bool {
 // hold this session's agent-operation lock (and the connection chi only
 // cancels, never aborts) for minutes on end.
 const killTeardownBudget = 90 * time.Second
+
+// terminalIntentBudget bounds the two writes that record a kill actually
+// happened. They run on their own context because by the time Kill reaches
+// them every destructive step is already done: refusing the write because the
+// teardown budget ran out mid-unlink leaves a session dead everywhere except
+// the row the UI reads, and `ao session cleanup` only walks terminated rows, so
+// nothing can reach it afterwards (#5463). Short, because these are two small
+// local writes, not the git and runtime calls the teardown budget exists for.
+const terminalIntentBudget = 15 * time.Second
+
+// recordTermination performs the writes that outlive teardown: the restore
+// marker must not survive a user kill (#2319) and the row must end up
+// terminated. Deliberately detached from the teardown budget — see
+// terminalIntentBudget.
+func (m *Manager) recordTermination(ctx context.Context, id domain.SessionID, dropRestoreMarker bool) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), terminalIntentBudget)
+	defer cancel()
+	if dropRestoreMarker {
+		m.dropShutdownRestoreMarkers(ctx, id)
+	}
+	if err := m.lcm.MarkTerminated(ctx, id); err != nil {
+		return fmt.Errorf("kill %s: %w", id, err)
+	}
+	m.cleanupSystemPromptDir(id)
+	return nil
+}
 
 // Kill tears down the runtime and workspace, then records terminal intent with
 // the LCM. A dirty worktree is snapshotted into a private local ref and then
@@ -2148,7 +2185,11 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	// tab used to produce. Values still flow through, so request-scoped logging
 	// keeps working; only the cancellation is dropped, under its own ceiling so
 	// a wedged git or runtime call cannot pin the goroutine forever.
-	ctx, cancelTeardown := context.WithTimeout(context.WithoutCancel(ctx), killTeardownBudget)
+	budget := m.killTeardown
+	if budget <= 0 {
+		budget = killTeardownBudget
+	}
+	ctx, cancelTeardown := context.WithTimeout(context.WithoutCancel(ctx), budget)
 	defer cancelTeardown()
 	if err := m.cancelAsyncChatSpawn(ctx, id); err != nil {
 		return false, fmt.Errorf("kill %s: cancel provisioning: %w", id, err)
@@ -2204,6 +2245,12 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
 		m.stopChatBestEffort(ctx, id)
 	} else if handle.ID != "" {
+		// Any Destroy error stops the kill. Every runtime's Destroy already
+		// returns nil when it confirms the session is absent, so an error means
+		// the runtime may still be live. Re-probing cannot settle it: conpty's
+		// IsAlive dials the host's listener, which Destroy's graceful shutdown
+		// closes before the PID exits, so a hung host reads as gone. Terminating
+		// then would leave a possibly-live agent with no row pointing at it.
 		if err := m.runtime.Destroy(ctx, handle); err != nil {
 			return false, fmt.Errorf("kill %s: runtime: %w", id, err)
 		}
@@ -2222,16 +2269,9 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 		release, err := m.beginShellTerminalTeardown(ctx, id)
 		if err != nil {
 			// Same shape as the dirty-workspace refusal below: the worktree is
-			// left alone, but a shutdown-restore marker still must not survive a
-			// user kill, or the next boot's RestoreAll could resurrect a session
-			// the user explicitly terminated (#2319). A saved snapshot stays.
+			// left alone and the session is still terminated. A saved snapshot stays.
 			m.noteArchive(id, archiveNotice{})
-			m.dropShutdownRestoreMarkers(ctx, id)
-			if err := m.lcm.MarkTerminated(ctx, id); err != nil {
-				return false, fmt.Errorf("kill %s: %w", id, err)
-			}
-			m.cleanupSystemPromptDir(id)
-			return false, nil
+			return false, m.terminateWithPreservedWorkspace(ctx, id, nil, true)
 		}
 		if release != nil {
 			defer release()
@@ -2243,7 +2283,8 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 		var err error
 		freed, notice, err = m.teardownWorkspaceProjectForKill(ctx, rec, workspaceProjectRows)
 		if err != nil {
-			return false, fmt.Errorf("kill %s: workspace: %w", id, err)
+			m.noteArchive(id, notice)
+			return false, m.terminateWithPreservedWorkspace(ctx, id, err, false)
 		}
 		if freed {
 			m.cleanupAgentWorkspace(ctx, rec, ws.Path)
@@ -2252,10 +2293,9 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 		if err := m.workspace.Destroy(ctx, ws); err != nil {
 			if errors.Is(err, ports.ErrWorkspaceDirty) {
 				freed, notice = m.removeDirtyWorkspaceAfterCapture(ctx, rec, ws)
-			} else if workspacePreserved(err) {
-				freed = false
 			} else {
-				return false, fmt.Errorf("kill %s: workspace: %w", id, err)
+				m.noteArchive(id, archiveNotice{})
+				return false, m.terminateWithPreservedWorkspace(ctx, id, err, true)
 			}
 		} else {
 			freed = true
@@ -2266,11 +2306,9 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	// resurrect a killed session (#2319). Snapshot rows stay, with state active,
 	// so reopening checks out the branch and does not apply the edits.
 	m.noteArchive(id, notice)
-	m.dropShutdownRestoreMarkers(ctx, id)
-	if err := m.lcm.MarkTerminated(ctx, id); err != nil {
-		return false, fmt.Errorf("kill %s: %w", id, err)
+	if err := m.recordTermination(ctx, id, true); err != nil {
+		return false, err
 	}
-	m.cleanupSystemPromptDir(id)
 	return freed, nil
 }
 
@@ -2359,7 +2397,7 @@ func (m *Manager) teardownWorkspaceProjectForKill(ctx context.Context, rec domai
 			continue
 		}
 		if !errors.Is(err, ports.ErrWorkspaceDirty) {
-			if workspacePreserved(err) {
+			if expectedWorkspaceRefusal(err) {
 				allGone = false
 				if stateErr := m.upsertWorkspaceProjectRowState(ctx, rows[i], "retry_remove"); stateErr != nil {
 					return false, notice, stateErr
@@ -5025,7 +5063,7 @@ func (m *Manager) cleanupOne(ctx context.Context, rec domain.SessionRecord, ws p
 	} else if ok {
 		reclaim, err := m.destroyWorkspaceProjectRows(ctx, rows)
 		if err != nil {
-			if !workspacePreserved(err) {
+			if !expectedWorkspaceRefusal(err) {
 				m.logger.Warn("cleanup: workspace teardown failed", "sessionID", rec.ID, "path", ws.Path, "error", err)
 			}
 			return ports.WorkspaceReclaimRemoved, cleanupSkipReason(err)
@@ -5048,7 +5086,7 @@ func (m *Manager) cleanupOne(ctx context.Context, rec domain.SessionRecord, ws p
 		return ports.WorkspaceReclaimRemoved, ""
 	}
 	if err != nil {
-		if !workspacePreserved(err) {
+		if !expectedWorkspaceRefusal(err) {
 			// The public reason stays a fixed string (the raw error carries
 			// internal filesystem paths); the full cause lands here.
 			m.logger.Warn("cleanup: workspace teardown failed", "sessionID", rec.ID, "path", ws.Path, "error", err)
@@ -5480,7 +5518,7 @@ func (m *Manager) prepareSystemPromptFile(id domain.SessionID, harness domain.Ag
 
 func systemPromptFileRequired(harness domain.AgentHarness) bool {
 	switch harness {
-	case domain.HarnessAider,
+	case domain.HarnessGemini, domain.HarnessAider,
 		domain.HarnessAgy,
 		domain.HarnessAuggie,
 		domain.HarnessKiro,

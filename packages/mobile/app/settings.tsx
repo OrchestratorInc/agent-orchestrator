@@ -11,8 +11,9 @@ import { ActivityIndicator, Alert, Linking, Platform, Pressable, ScrollView, Sty
 import { ApiError, pingServer } from "../lib/api";
 import { formatVersionLine, type BuildInfo } from "../lib/appInfo";
 import { bugReportClipboard, bugReportOpenUrl, bugReportUrl } from "../lib/bugReport";
-import { DEFAULT_CONFIG, isConfigured, loadConfig, type ServerConfig } from "../lib/config";
+import { isConfigured, type ServerConfig } from "../lib/config";
 import { classifyConnectionFailure, describeConnectionFailure } from "../lib/connectionError";
+import { describeDesktopStatus } from "../lib/desktopStatus";
 import { discordFeatureRequestURL } from "../lib/discord";
 import { forgetServer } from "../lib/disconnect";
 import { haptics } from "../lib/haptics";
@@ -21,6 +22,7 @@ import { checkStore, openOrStartUpdate } from "../lib/inAppUpdates";
 import { describePrompt } from "../lib/storeUpdate";
 import { NativeHeaderButton } from "../lib/native-header-button";
 import { openGitHub } from "../lib/openGitHub";
+import { tunnelMayHaveRotated } from "../lib/staleTunnel";
 import { getPushStatus, openNotificationSettings, registerForPush, unregisterFromPush } from "../lib/push";
 import { describePushToggle, describeRegisterFailure, type PushStatus } from "../lib/pushStatus";
 import { useApp } from "../lib/store";
@@ -56,21 +58,15 @@ export default function SettingsScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
-	const { reloadConfig } = useApp();
+	// The store's config, not a second copy read from storage: that copy went
+	// stale whenever the store moved on (a failed disconnect, a re-race), and
+	// it knew nothing about whether the desktop was actually answering.
+	const { config, configured: paired, reloadConfig } = useApp();
 	const scrollRef = useRef<ScrollView>(null);
-	const [cfg, setCfg] = useState<ServerConfig>(DEFAULT_CONFIG);
-	const [loaded, setLoaded] = useState(false);
 
-	useFocusEffect(useCallback(() => {
-		loadConfig().then((saved) => {
-			setCfg(saved);
-			setLoaded(true);
-		});
-	}, []));
-
-	if (!loaded) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
-
-	const paired = isConfigured(cfg);
+	// Null only until the store's first resolve. Waiting keeps the pairing-
+	// dependent rows (Disconnect above all) from popping in after first paint.
+	if (!config) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	return (
 		<View style={styles.screen} collapsable={false}>
 			<View style={styles.header}>
@@ -85,15 +81,10 @@ export default function SettingsScreen() {
 				contentContainerStyle={styles.content}
 				keyboardShouldPersistTaps="handled"
 			>
-				<SettingsSection title="Desktop" footer={paired ? `${cfg.host}:${cfg.httpPort}` : "Pair this phone with AO on your computer."}>
+				<SettingsSection title="Desktop" footer={paired ? `${config.host}:${config.httpPort}` : "Pair this phone with AO on your computer."}>
 					<SettingsCard>
-						<CardRow
-							icon="monitor"
-							label="Connected desktop"
-							value={paired ? "Paired" : "Set up"}
-							onPress={() => router.navigate("/pair")}
-						/>
-						<ConnectionTestRow cfg={cfg} paired={paired} />
+						<DesktopStatusRow />
+						<ConnectionTestRow />
 					</SettingsCard>
 				</SettingsSection>
 
@@ -123,13 +114,36 @@ export default function SettingsScreen() {
 					</SettingsCard>
 				</SettingsSection>
 
-				<DisconnectRow
-					onForget={async () => {
-						await forgetServer();
-						await reloadConfig();
-						router.replace("/onboarding");
-					}}
-				/>
+				{/* Keyed on the saved pairing, not the live connection: an offline
+				    desktop is exactly when people want to forget it. */}
+				{paired ? (
+					<DisconnectRow
+						onForget={async () => {
+							let failed = false;
+							try {
+								await forgetServer();
+							} catch {
+								failed = true;
+							}
+							// Always re-resolve, so the screen reflects whatever
+							// forgetServer managed to clear before it threw. Null when
+							// storage could not be read either.
+							let remaining: ServerConfig | null = null;
+							try {
+								remaining = await reloadConfig();
+							} catch {}
+							// Only a pairing that survived is worth retrying; if it is
+							// gone this row is too, and the leftovers are best-effort.
+							// Unknown counts as survived when the forget itself failed.
+							if (failed && (remaining === null || isConfigured(remaining))) {
+								haptics.error();
+								Alert.alert("Couldn't disconnect", "This desktop's saved connection couldn't be removed. Try again.");
+								return;
+							}
+							router.replace("/onboarding");
+						}}
+					/>
+				) : null}
 				<VersionFooter />
 			</ScrollView>
 		</View>
@@ -225,30 +239,74 @@ function CardRow({
 	return <Pressable disabled={disabled || loading} onPress={() => { haptics.tap(); onPress(); }} style={({ pressed }) => [styles.row, pressed && styles.rowPressed, disabled && styles.disabled]}>{content}</Pressable>;
 }
 
-function ConnectionTestRow({ cfg, paired }: { cfg: ServerConfig; paired: boolean }) {
+function DesktopStatusRow() {
 	const t = useTheme();
+	const router = useRouter();
+	const { config, configured, connection, error, errorStatus, activeEndpoints } = useApp();
+	// Only a poll that actually failed is a failure. Before the first tick lands
+	// errorStatus is null too, which on its own would read as unreachable. Same
+	// gate as the board, which only shows its failure copy behind `error`.
+	const classified = error ? classifyConnectionFailure(errorStatus ?? undefined) : null;
+	// Same rule as the board's failure copy: a dead tunnel with nothing else to
+	// reach the machine by is a rotated address, not an unreachable machine.
+	const failure =
+		classified === "unreachable" && tunnelMayHaveRotated(activeEndpoints, config?.endpointKind, connection === "open")
+			? "tunnel-rotated"
+			: classified;
+	const status = describeDesktopStatus({ configured, connection, failure });
+	const color = status.tone === "ok" ? t.green : status.tone === "error" ? t.red : undefined;
+	return (
+		<CardRow
+			icon="monitor"
+			label="Connected desktop"
+			value={status.label}
+			valueColor={color}
+			onPress={() => router.navigate("/pair")}
+		/>
+	);
+}
+
+function ConnectionTestRow() {
+	const t = useTheme();
+	const { config, configured: paired, reloadConfig, refresh } = useApp();
 	const [testing, setTesting] = useState(false);
 	const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
-	useEffect(() => setResult(null), [cfg.host, cfg.httpPort]);
+	useEffect(() => setResult(null), [config?.host, config?.httpPort]);
 
 	async function test() {
 		setTesting(true);
 		setResult(null);
+		// Race every known path first, like the app itself does, rather than
+		// pinging only the last address that happened to win. Without the
+		// endpoint refresh: it is authenticated, so with a stale password it and
+		// the ping would spend two failed attempts per tap towards the lockout.
+		let target = config;
+		let rejected = false;
 		try {
-			await pingServer(cfg);
+			target = await reloadConfig({ refreshEndpoints: false });
+			await pingServer(target);
 			haptics.success();
 			setResult({ ok: true, msg: "Connected" });
 		} catch (error) {
 			haptics.error();
 			const status = error instanceof ApiError ? error.status : undefined;
-			const { title } = describeConnectionFailure(classifyConnectionFailure(status), {
-				host: cfg.host,
-				port: cfg.httpPort,
+			const failure = classifyConnectionFailure(status);
+			rejected = failure === "auth" || failure === "rate-limited";
+			const { title } = describeConnectionFailure(failure, {
+				host: target?.host ?? "",
+				port: target?.httpPort ?? "",
 				platform: Platform.OS,
 			});
 			setResult({ ok: false, msg: title });
 		} finally {
+			// Poll now so the status row above lands on the same answer instead
+			// of waiting out the poll interval — unless the desktop rejected the
+			// password: another request would spend a second failed attempt
+			// towards its lockout, and the poll already reports a rejection on its
+			// own. Not awaited: against a dead address it is another full request
+			// timeout.
+			if (!rejected) void refresh();
 			setTesting(false);
 		}
 	}
@@ -285,6 +343,7 @@ function LayoutGridRow() {
 
 function AppearanceRow() {
 	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
 	const { preference, scheme, setPreference } = useThemeState();
 	const [open, setOpen] = useState(false);
 	if (Platform.OS === "android") {
@@ -307,21 +366,23 @@ function AppearanceRow() {
 			icon="sun"
 			label="Appearance"
 			right={
-				<Host style={{ width: 96, height: 38 }} colorScheme={scheme} seedColor={t.accent}>
-					<Picker
-						selectedValue={preference}
-						onValueChange={(value) => {
-							haptics.select();
-							setPreference(String(value) as ThemePreference);
-						}}
-						appearance="menu"
-						testID="settings-appearance"
-					>
-						<Picker.Item label="System" value="system" />
-						<Picker.Item label="Light" value="light" />
-						<Picker.Item label="Dark" value="dark" />
-					</Picker>
-				</Host>
+				<View style={styles.appearancePicker}>
+					<Host matchContents={{ horizontal: true }} style={{ height: 38 }} colorScheme={scheme} seedColor={t.accent}>
+						<Picker
+							selectedValue={preference}
+							onValueChange={(value) => {
+								haptics.select();
+								setPreference(String(value) as ThemePreference);
+							}}
+							appearance="menu"
+							testID="settings-appearance"
+						>
+							<Picker.Item label="System" value="system" />
+							<Picker.Item label="Light" value="light" />
+							<Picker.Item label="Dark" value="dark" />
+						</Picker>
+					</Host>
+				</View>
 			}
 		/>
 	);
@@ -603,6 +664,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	rowIcon: { fontFamily: "Geist_400Regular", width: 26, textAlign: "center" },
 	rowLabel: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600", flex: 1 },
 	rowValue: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, maxWidth: "42%" },
+	appearancePicker: { width: 124, height: 38, alignItems: "flex-end", justifyContent: "center" },
 	disabled: { opacity: 0.45 },
 	disconnect: { minHeight: 52, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md, borderRadius: 16, borderCurve: "continuous" },
 	disconnectText: { fontFamily: "Geist_600SemiBold", color: t.red, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },

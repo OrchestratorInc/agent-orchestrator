@@ -1,9 +1,8 @@
 import { useMemo, useState } from "react";
-import { ActivityIndicator, Platform, RefreshControl, SectionList, StyleSheet, View } from "react-native";
+import { ActivityIndicator, RefreshControl, SectionList, StyleSheet, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Theme } from "../../lib/theme";
-import { classifyConnectionFailure, describeConnectionFailure } from "../../lib/connectionError";
 import { haptics } from "../../lib/haptics";
 import { PRCard } from "../../lib/PRCard";
 import { PRFilterDock } from "../../lib/pr-filter-dock";
@@ -13,6 +12,7 @@ import { StaleBanner } from "../../lib/StaleBanner";
 import { useApp, usePRs } from "../../lib/store";
 import { UnpairedState } from "../../lib/UnpairedState";
 import { usePRSummaries } from "../../lib/usePRSummaries";
+import { useBoardFailure } from "../../lib/useBoardFailure";
 import { useTabScrollToTop } from "../../lib/useTabScrollToTop";
 import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
@@ -36,7 +36,7 @@ export default function PRsScreen() {
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
 	const router = useRouter();
-	const { configured, loading, error, errorStatus, connection, config, refresh, notificationsUnread } = useApp();
+	const { configured, loading, error, refresh, notificationsUnread } = useApp();
 	const prs = usePRs();
 	const [filter, setFilter] = useState<Filter>("open");
 	const [refreshing, setRefreshing] = useState(false);
@@ -53,15 +53,7 @@ export default function PRsScreen() {
 	// only thing that re-fetches it.
 	const sessionIds = useMemo(() => [...new Set(filtered.map(({ session }) => session.id))], [filtered]);
 	const summaries = usePRSummaries(sessionIds);
-	const failure = useMemo(
-		() =>
-			describeConnectionFailure(classifyConnectionFailure(errorStatus ?? undefined), {
-				host: config?.host ?? "",
-				port: config?.httpPort ?? "",
-				platform: Platform.OS,
-			}),
-		[errorStatus, config?.host, config?.httpPort],
-	);
+	const failure = useBoardFailure();
 
 	const onRefresh = async () => {
 		haptics.tap();
@@ -127,9 +119,9 @@ export default function PRsScreen() {
 						filtered.length === 0 ? (
 							error ? (
 								<EmptyState
-									icon="wifi-off"
+									icon={failure.icon}
 									title={failure.title}
-									message={failure.message}
+									message={failure.hint}
 									action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />}
 								/>
 							) : (

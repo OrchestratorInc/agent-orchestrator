@@ -572,11 +572,11 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 									</button>
 									<Tooltip>
 										<TooltipTrigger asChild>
-											<span className="inline-flex">
+											<span className="ml-0.5 inline-flex align-middle">
 												<button
 													type="button"
 													aria-label={t("mobile.regenerate")}
-													className="ml-0.5 inline-flex size-5 items-center justify-center align-middle text-settings-muted transition-colors hover:text-settings-label disabled:opacity-50"
+													className="inline-flex size-5 items-center justify-center text-settings-muted transition-colors hover:text-settings-label disabled:opacity-50"
 													disabled={busy}
 													onClick={() => {
 														clearActionErrors();

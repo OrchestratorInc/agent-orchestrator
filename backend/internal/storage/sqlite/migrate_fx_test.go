@@ -28,9 +28,7 @@ func TestMigration0163AllowsFXAndReversesBothHistoricalSchemas(t *testing.T) {
 			if legacyQM {
 				mustExec(t, db, insert, "existing-qm", 2, "qm")
 			}
-			if err := migrate(db); err != nil {
-				t.Fatal(err)
-			}
+			upTo(t, db, 163)
 			if _, err := db.Exec(insert, "fx-session", 3, "fx"); err != nil {
 				t.Fatalf("insert fx session after migration: %v", err)
 			}

@@ -125,6 +125,13 @@ test("encodes the LAN address by default", async () => {
 	);
 });
 
+test("vertically aligns the regenerate control with the password row", async () => {
+	renderMobileSettings();
+
+	const regenerate = await screen.findByRole("button", { name: "Regenerate password" });
+	expect(regenerate.parentElement).toHaveClass("align-middle");
+});
+
 test("shows a quiet preparing state instead of a blurred QR while startup is incomplete", async () => {
 	mobileStatus.endpoints = [];
 	mobileStatus.tunnel = {
