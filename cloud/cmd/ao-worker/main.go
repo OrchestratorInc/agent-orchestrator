@@ -478,19 +478,10 @@ func startInteractiveAgent(
 	if transportSupervisor.AgentCommandFactory == nil {
 		return errors.New("coding-agent command factory is unavailable")
 	}
-	// startup-timing instrumentation for the harness launch. The steps below run
-	// AFTER checkout (rehydrateDone), so this is the "terminal attached -> first
-	// frame" window the user watches. agent-start-spawn only spawns the process;
-	// the harness's OWN cold start (auth/config/MCP/update-check for claude vs the
-	// near-instant codex) then shows up as the gap to the first "publish terminal
-	// output" line — that gap is the claude-specific delay we're hunting.
-	launchStart := time.Now()
 	agentCommand, err := transportSupervisor.AgentCommandFactory(ctx, bootstrap.Launch.AgentSessionID)
 	if err != nil {
 		return fmt.Errorf("build interactive coding-agent command: %w", err)
 	}
-	logger.Info("startup timing", "step", "agent-build-command", "ms", time.Since(launchStart).Milliseconds())
-	terminalStart := time.Now()
 	agentTerminal, err := client.ensureAgentTerminal(ctx)
 	if err != nil {
 		if agentCommand.Cleanup != nil {
@@ -498,13 +489,9 @@ func startInteractiveAgent(
 		}
 		return fmt.Errorf("initialize agent terminal: %w", err)
 	}
-	logger.Info("startup timing", "step", "agent-ensure-terminal", "ms", time.Since(terminalStart).Milliseconds())
-	spawnStart := time.Now()
 	if err := transportSupervisor.StartAgent(ctx, agentCommand, agentTerminal); err != nil {
 		return fmt.Errorf("start interactive coding-agent terminal: %w", err)
 	}
-	logger.Info("startup timing", "step", "agent-start-spawn", "ms", time.Since(spawnStart).Milliseconds(),
-		"harness", bootstrap.Launch.Harness, "note", "process spawned; harness cold-start (first frame) follows")
 	if err := client.publishEvent(ctx, "agent.ready", map[string]any{
 		"workerId":     bootstrap.WorkerID,
 		"epoch":        bootstrap.Epoch,
