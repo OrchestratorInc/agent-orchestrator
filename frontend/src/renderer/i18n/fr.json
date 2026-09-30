@@ -35,6 +35,7 @@
 	"settings.coder11x.removeCancel": "Cancel",
 	"settings.coder11x.removing": "Removing…",
 	"settings.coder11x.errorRemove": "Could not remove the Coder configuration.",
+	"settings.cloudProject.autoReviewDescription": "Lancer les revues automatiques de PR pour ce projet. La transmission des retours est contrôlée séparément dans chaque session.",
 	"settings.cloudProject.title": "Projet Cloud",
 	"settings.cloudProject.signIn": "Connectez-vous pour charger les paramètres du projet Cloud.",
 	"settings.cloudProject.agentDefault": "Valeur par défaut de l’agent",

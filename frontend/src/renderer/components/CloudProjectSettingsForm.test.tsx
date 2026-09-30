@@ -118,14 +118,27 @@ describe("Cloud project settings", () => {
 		expect(mocks.localGet.mock.calls.some(([path]) => path === "/api/v1/projects/{id}")).toBe(false);
 	});
 
-	it("persists Cursor mode without overwriting the selected mode through the shared picker", async () => {
-		project.config.reviewers = [{ harness: "cursor" }];
-		mocks.localGet.mockResolvedValue({ data: { agent: "cursor", selectionMode: "mode", models: [{ id: "agent", label: "Agent", isDefault: true }, { id: "plan", label: "Plan" }, { id: "ask", label: "Ask" }] } });
+	it("keeps Cursor model and mode independent with the real catalog selection mode", async () => {
+		project.config.reviewers = [{ harness: "cursor", agentConfig: { model: "cursor-cloud-model", mode: "ask" } }];
+		mocks.localGet.mockResolvedValue({ data: { agent: "cursor", selectionMode: "catalog", allowCustom: true,
+			models: [{ id: "cursor-cloud-model", label: "Cloud model", isDefault: true }, { id: "other-model", label: "Other model" }],
+		} });
 		mount();
-		await screen.findByRole("button", { name: "Reviewer mode" });
+		await screen.findByRole("button", { name: "Reviewer model" });
+		expect(screen.getByRole("button", { name: "Reviewer mode" })).toHaveTextContent("Ask");
+		await choose("Reviewer model", "Other model");
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
+			config: { reviewers: [{ harness: "cursor", agentConfig: { model: "other-model", mode: "ask", effort: "", permissions: "" } }] },
+		}));
 		await choose("Reviewer mode", "Plan");
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
-			config: { reviewers: [{ harness: "cursor", agentConfig: { model: "", mode: "plan", effort: "", permissions: "" } }] },
+			config: { reviewers: [{ harness: "cursor", agentConfig: { model: "other-model", mode: "plan", effort: "", permissions: "" } }] },
+		}));
+		await userEvent.click(screen.getByRole("button", { name: "Reviewer model" }));
+		await userEvent.type(screen.getByRole("searchbox", { name: "Search reviewer model" }), "private/cursor-model");
+		await userEvent.click(screen.getByRole("menuitem", { name: /as a custom model/ }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
+			config: { reviewers: [{ harness: "cursor", agentConfig: { model: "private/cursor-model", mode: "plan", effort: "", permissions: "" } }] },
 		}));
 	});
 
@@ -144,6 +157,28 @@ describe("Cloud project settings", () => {
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
 			config: { worker: { agent: "codex", agentConfig: { model: "worker-model", mode: "", effort: "high", permissions: "" } } },
 		}));
+	});
+
+	it("pins explicit Cloud model and effort choices even when the local catalog marks them as defaults", async () => {
+		project.config.worker = { agent: "codex" };
+		mocks.localGet.mockResolvedValue({ data: { agent: "codex", selectionMode: "catalog", allowCustom: true,
+			models: [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", isDefault: true, efforts: ["low", "high"], defaultEffort: "low" }],
+		} });
+		mount();
+		const worker = await screen.findByRole("button", { name: "Worker model" });
+		expect(worker).not.toHaveTextContent("GPT-6.1-Sol");
+		await choose("Worker model", "GPT-6.1-Sol");
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
+			config: { worker: { agent: "codex", agentConfig: { model: "gpt-6.1-sol", mode: "", effort: "low", permissions: "" } } },
+		}));
+	});
+
+	it("offers only the harnesses Cloud can launch", async () => {
+		mount();
+		await screen.findByRole("button", { name: "Worker agent" });
+		await userEvent.click(screen.getByRole("button", { name: "Worker agent" }));
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Claude Code", "Codex", "Cursor", "OpenCode"]);
 	});
 
 	it("shows Cloud lookup errors without looking up a local project", async () => {

@@ -35,6 +35,7 @@
 	"settings.coder11x.removeCancel": "Cancel",
 	"settings.coder11x.removing": "Removing…",
 	"settings.coder11x.errorRemove": "Could not remove the Coder configuration.",
+	"settings.cloudProject.autoReviewDescription": "为此项目启动自动 PR 审查。审查反馈的传递在每个会话中单独控制。",
 	"settings.cloudProject.title": "云项目",
 	"settings.cloudProject.signIn": "请登录以加载云项目设置。",
 	"settings.cloudProject.agentDefault": "代理默认值",

@@ -131,15 +131,20 @@ function CloudSettingsBody({ project, section, onSaveState }: {
 					<ProjectAgentRoleHeader />
 					{roles.map((role) => <ProjectAgentRoleRow key={role} label={t(`settings.models.${role}Role`)}
 						agent={<CloudRoleAgent role={role} value={draft[role]} onChange={(agent) => setDraft((current) => ({ ...current, [role]: { agent, agentConfig: emptyCloudAgentConfig() } }))} />}
-						model={<AgentModelField role={role} agentId={draft[role].agent}
+						model={<div className="space-y-1.5"><AgentModelField role={role} agentId={draft[role].agent}
 							// Model discovery is agent-scoped; Cloud project IDs never go to local project APIs.
 							projectId={draft[role].agent === "opencode" && opencodeCredential ? credentialModelScope(opencodeCredential) : ""}
 							supportedEfforts={draft[role].agent === "codex" ? ["low", "medium", "high", "xhigh", "max"] : draft[role].agent === "claude-code" ? ["low", "medium", "high", "max"] : undefined}
-							model={draft[role].agentConfig.model} mode={draft[role].agentConfig.mode} effort={draft[role].agentConfig.effort} allowCustomFallback
+							model={draft[role].agentConfig.model} mode={draft[role].agentConfig.mode} effort={draft[role].agentConfig.effort} allowCustomFallback followCatalogDefaults={false} emptyLabel={t(draft[role].agent === "" ? "settings.cloudProject.sessionModel" : "settings.cloudProject.agentDefault")}
+							independentMode={draft[role].agent === "cursor"}
 							onModelChange={(model) => updateRoleConfig(role, { model })}
 							onModeChange={(mode) => { if (mode === "" || mode === "plan" || mode === "ask") updateRoleConfig(role, { mode }); }}
 							onEffortChange={(effort) => { if (effort === "" || effort === "low" || effort === "medium" || effort === "high" || effort === "xhigh" || effort === "max") updateRoleConfig(role, { effort }); }}
-							onValidityChange={(valid) => setTuningValidity((current) => current[role] === valid ? current : { ...current, [role]: valid })} />}
+							onValidityChange={(valid) => setTuningValidity((current) => current[role] === valid ? current : { ...current, [role]: valid })} />
+							{draft[role].agent === "cursor" && <SettingsOptionMenu<"" | "plan" | "ask"> aria-label={t(`settings.models.${role}Mode`)} value={draft[role].agentConfig.mode} triggerClassName="w-full justify-between"
+								options={[{ value: "", label: t("settings.cloudProject.agentDefault") }, { value: "plan", label: t("settings.cloudProject.plan") }, { value: "ask", label: t("settings.cloudProject.ask") }]}
+								onChange={(mode) => updateRoleConfig(role, { mode })} />}
+						</div>}
 					/>)}
 					<div className="grid grid-cols-3 gap-3 border-t border-border/60 pt-4">
 						{roles.map((role) => <CloudRolePermissions key={role} role={role} value={draft[role]} onChange={(permissions) => updateRoleConfig(role, { permissions })} />)}

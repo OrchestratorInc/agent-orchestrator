@@ -11,6 +11,9 @@ from the existing agent discovery API, without a local project lookup or a
 Cloud project ID. OpenCode uses the connected Cloud credential type as its
 catalog scope. Custom Cloud model IDs remain editable when the local catalog
 does not list them, and effort choices are limited to the Cloud API values.
+Cloud saves explicit model and effort selections even when the local catalog
+marks them as defaults, since Cloud runtime defaults may differ. Cursor model
+and mode selections are independent; changing either preserves the other.
 Project reads and writes stay on the control plane.
 
 The settings endpoint accepts `displayName`, `defaultBranch`, and `config`.
