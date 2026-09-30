@@ -3755,6 +3755,7 @@ describe("SessionView", () => {
 		act(() => {
 			useUiStore.setState({
 				inspectorSessions: {
+					"sess-1": { isOpen: true, view: "summary" },
 					"sess-2": {
 						isOpen: true,
 						view: "summary",
