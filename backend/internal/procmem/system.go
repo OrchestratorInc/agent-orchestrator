@@ -112,6 +112,38 @@ func ParseCPUTicks(contents string) (busy, total uint64) {
 	return 0, 0
 }
 
+// ParseTopCPU reads the "CPU usage: N.NN% user, N.NN% sys, N.NN% idle" summary
+// line `top -l 1 -n 0` prints on macOS, where Mach's real per-processor ticks
+// are reachable only through cgo. busyPercent is user+sys, the same
+// everything-but-idle definition ParseCPUTicks uses on Linux.
+func ParseTopCPU(contents string) (busyPercent float64, ok bool) {
+	for _, line := range strings.Split(contents, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "CPU usage:") {
+			continue
+		}
+		var user, sys float64
+		var userFound, sysFound bool
+		for _, field := range strings.Split(strings.TrimPrefix(line, "CPU usage:"), ",") {
+			field = strings.TrimSpace(field)
+			switch {
+			case strings.HasSuffix(field, "% user"):
+				if v, err := strconv.ParseFloat(strings.TrimSuffix(field, "% user"), 64); err == nil {
+					user, userFound = v, true
+				}
+			case strings.HasSuffix(field, "% sys"):
+				if v, err := strconv.ParseFloat(strings.TrimSuffix(field, "% sys"), 64); err == nil {
+					sys, sysFound = v, true
+				}
+			}
+		}
+		if userFound && sysFound {
+			return user + sys, true
+		}
+	}
+	return 0, false
+}
+
 // VMStat is the slice of vm_stat's page counts the monitor needs.
 type VMStat struct {
 	PageSize uint64

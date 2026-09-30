@@ -158,9 +158,10 @@ func (r *MemoryReader) SystemMemory(ctx context.Context) (domain.SystemMemory, e
 	case !lastAt.IsZero() && sys.CPUTotalTicks > last.CPUTotalTicks && sys.CPUBusyTicks >= last.CPUBusyTicks:
 		out.CPUPercent = 100 * float64(sys.CPUBusyTicks-last.CPUBusyTicks) / float64(sys.CPUTotalTicks-last.CPUTotalTicks)
 	case sys.CPUTotalTicks == 0:
-		// No system-wide ticks on this platform (macOS today). The daemon
-		// already samples every process for the session rows, so the same
-		// table gives the machine's busy share: total CPU-seconds used by
+		// No system-wide reading at all: `top` failed on macOS, or a
+		// platform procmem genuinely can't read CPU on. The daemon already
+		// samples every process for the session rows, so the same table
+		// gives the machine's busy share: total CPU-seconds used by
 		// everything, divided by elapsed time and core count. This slightly
 		// undercounts processes that start and exit between two samples,
 		// which a whole-machine tick counter would not miss.
