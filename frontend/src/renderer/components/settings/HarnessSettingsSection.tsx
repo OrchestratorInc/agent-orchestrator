@@ -26,6 +26,7 @@ import { useResolvedTheme } from "../../stores/ui-store";
 import { AgentAvatar } from "../AgentAvatar";
 import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
@@ -526,6 +527,11 @@ export function HarnessSettingsSection({
 							|| (!authPlans.isPending && (!authPlan || authPlan.action === "instructions"));
 						const isCloudCapable = Boolean(cloudOrg?.id) && (CLOUD_AGENT_PROVIDERS as readonly string[]).includes(agentId);
 						const cloudConnected = cloudConnByProvider.get(agentId)?.validationState === "valid";
+						// Claude Code's browser login also stores the token locally, so one
+						// login covers both; the others' cloud login is separate from local.
+						const cloudAuthHint = agentId === "claude-code"
+							? t("settings.harness.cloudAuthHintShared")
+							: t("settings.harness.cloudAuthHintSeparate", { agent: agentLabel(agentId) });
 						const rowHasError = failed || Boolean(authState?.error);
 						const rowAuthWorkflow = authWorkflow?.agentId === agentId ? authWorkflow : null;
 						const hasDiagnostics = Boolean(
@@ -569,79 +575,25 @@ export function HarnessSettingsSection({
 								) : null}
 							</>
 						) : null;
-					return (
-						<div
-							aria-labelledby={`harness-agent-${agentId}`}
-							className={cn(
-								"settings-row-bar min-h-14 flex-wrap gap-3 transition-[background-color,box-shadow] duration-200",
-								highlightedAgentId === agentId && "bg-accent-weak ring-2 ring-inset ring-accent",
-							)}
-							data-agent={agentId}
-							data-focus-highlighted={highlightedAgentId === agentId ? "" : undefined}
-							key={agentId}
-							tabIndex={-1}
-						>
-							<AgentAvatar className="size-7 shrink-0" decorative provider={agentId} />
-							<div className="min-w-0 flex-1">
-								<div className="flex items-center gap-1.5">
-									<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
-									{isCloudCapable ? (
-										<span
-											className="inline-flex size-5 shrink-0 cursor-help items-center justify-center rounded-full text-settings-muted transition hover:bg-interactive-hover hover:text-settings-label"
-											role="img"
-											tabIndex={0}
-											aria-label={t("settings.harness.unifiedAuthHint", { defaultValue: "One login for both local and cloud sessions. Your credentials are used on this machine and securely copied to your cloud sandboxes." })}
-											title={t("settings.harness.unifiedAuthHint", { defaultValue: "One login for both local and cloud sessions. Your credentials are used on this machine and securely copied to your cloud sandboxes." })}
-										>
-											<Info className="size-3.5" aria-hidden="true" />
-										</span>
-									) : null}
-								</div>
-								<p className={cn("truncate text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? incompatibleVersionReason ?? authPlan?.reason ?? plan?.reason}>
-									{isInstalled ? authSummary : installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : incompatibleVersionReason ?? (plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired"))))}
-								</p>
-							</div>
-
-			{isCloudCapable ? (
-								<div className="flex shrink-0 items-center gap-2">
-									{cloudConnected ? (
-										<>
-											<span className="inline-flex h-8 shrink-0 items-center rounded-md border border-[color:var(--color-success)] bg-transparent px-3 text-xs font-medium leading-4 text-[color:var(--color-success)]">
-												{t("settings.harness.cloudConnected")}
-											</span>
-											<Button type="button" size="sm" variant="ghost" className={MENU_TRIGGER_CHROME} onClick={() => openCloudLogin(agentId)}>
-												{t("settings.harness.reconnect")}
-											</Button>
-										</>
-									) : (
-										<Button data-harness-primary-action="" size="sm" onClick={() => openCloudLogin(agentId)}>
-											{t("settings.harness.login")}
-										</Button>
-									)}
-								</div>
-							) : active ? (
+					const localControls = active ? (
 				<span className="inline-flex items-center gap-1.5 text-xs text-settings-muted" role="status"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{job?.status === "installing" ? t("settings.harness.installing") : t("settings.harness.verifying")}</span>
 							) : isInstalled ? (
 								<div className="flex shrink-0 items-center gap-2">
-								{showInstallationStatus ? (
-									isCloudCapable && authStatus === "authorized" ? (
-										<span className="inline-flex h-8 shrink-0 items-center rounded-md border border-[color:var(--color-success)] bg-transparent px-3 text-xs font-medium leading-4 text-[color:var(--color-success)]">
-											{`Local: ${installationStatusLabel}`}
-										</span>
-									) : (
-										<Button
-											type="button"
-											size="none"
-											variant="ghost"
-											className={cn(MENU_TRIGGER_CHROME, "h-8! min-h-8! shrink-0 rounded-md! border-0! bg-[var(--color-bg-settings-trigger)] px-3! text-xs leading-4")}
-											aria-label={installationStatusLabel}
-											disabled
-										>
-											{isCloudCapable ? `Local: ${installationStatusLabel}` : installationStatusLabel}
-										</Button>
-									)
+								{/* Cloud rows state local status in their subtitle instead. */}
+								{showInstallationStatus && !isCloudCapable ? (
+									<Button
+										type="button"
+										size="none"
+										variant="ghost"
+										className={cn(MENU_TRIGGER_CHROME, "h-8! min-h-8! shrink-0 rounded-md! border-0! bg-[var(--color-bg-settings-trigger)] px-3! text-xs leading-4")}
+										aria-label={installationStatusLabel}
+										disabled
+									>
+										{installationStatusLabel}
+									</Button>
 								) : null}
-								{authControls}
+								{/* Claude Code's cloud login also logs in locally. */}
+								{agentId === "claude-code" && isCloudCapable ? null : authControls}
 								</div>
 							) : failed ? (
 								<div className="flex items-center gap-1.5">
@@ -670,7 +622,65 @@ export function HarnessSettingsSection({
 								</div>
 							) : plan?.command ? (
 								<Button size="sm" variant="outline" onClick={() => void copyText(agentId, plan.command!)}>{copiedAgent === agentId ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{copiedAgent === agentId ? t("settings.harness.copied") : t("settings.harness.copyCommand")}</Button>
-							) : null}
+							) : null;
+					return (
+						<div
+							aria-labelledby={`harness-agent-${agentId}`}
+							className={cn(
+								"settings-row-bar min-h-14 flex-wrap gap-3 transition-[background-color,box-shadow] duration-200",
+								highlightedAgentId === agentId && "bg-accent-weak ring-2 ring-inset ring-accent",
+							)}
+							data-agent={agentId}
+							data-focus-highlighted={highlightedAgentId === agentId ? "" : undefined}
+							key={agentId}
+							tabIndex={-1}
+						>
+							<AgentAvatar className="size-7 shrink-0" decorative provider={agentId} />
+							<div className="min-w-0 flex-1">
+								<div className="flex items-center gap-1.5">
+									<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
+									{isCloudCapable ? (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<button
+													type="button"
+													className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-settings-muted transition hover:bg-interactive-hover hover:text-settings-label"
+													aria-label={cloudAuthHint}
+												>
+													<Info className="size-3.5" aria-hidden="true" />
+												</button>
+											</TooltipTrigger>
+											<TooltipContent className="max-w-72">{cloudAuthHint}</TooltipContent>
+										</Tooltip>
+									) : null}
+								</div>
+								<p className={cn("truncate text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? incompatibleVersionReason ?? authPlan?.reason ?? plan?.reason}>
+									{isCloudCapable ? (
+										<>
+											{isInstalled ? t("settings.harness.localStatus", { status: authSummary }) : t("settings.harness.localNotInstalled")}
+											{" · "}
+											<span className={cn(!rowHasError && cloudConnected && "text-[color:var(--color-success)]")}>
+												{cloudConnected ? t("settings.harness.cloudStatusConnected") : t("settings.harness.cloudStatusNotConnected")}
+											</span>
+										</>
+									) : isInstalled ? authSummary : installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : incompatibleVersionReason ?? (plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired"))))}
+								</p>
+							</div>
+
+			{isCloudCapable ? (
+								<div className="flex shrink-0 items-center gap-2">
+									{localControls}
+									{cloudConnected ? (
+										<Button type="button" size="sm" variant="ghost" className={MENU_TRIGGER_CHROME} onClick={() => openCloudLogin(agentId)}>
+											{t("settings.harness.reconnect")}
+										</Button>
+									) : (
+										<Button data-harness-primary-action="" size="sm" onClick={() => openCloudLogin(agentId)}>
+											{t("settings.harness.cloudLogin")}
+										</Button>
+									)}
+								</div>
+							) : localControls}
 
 				{authPlan?.action === "instructions" && authPlan.documentationUrl ? (
 					<Button size="icon-sm" variant="ghost" aria-label={t("settings.harness.instructions")} title={t("settings.harness.instructions")} onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}>

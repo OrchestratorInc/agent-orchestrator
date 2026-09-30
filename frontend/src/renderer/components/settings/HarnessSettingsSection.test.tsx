@@ -9,6 +9,7 @@ import { agentReadinessQueryKey, useAgentReadinessQuery, type AgentReadiness } f
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { agentReadiness } from "../../test/agent-readiness-fixtures";
 import { useCredentialDialogStore } from "../../stores/credential-dialog-store";
+import { TooltipProvider } from "../ui/tooltip";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
 
 // Cloud sign-in state for the cloud login rows. Signed out by default, which
@@ -109,8 +110,10 @@ function renderSection(focusAgentId?: string, selectorAgentId?: string) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const view = render(
 		<QueryClientProvider client={client}>
-			{selectorAgentId ? <ReadinessSelector agentId={selectorAgentId} /> : null}
-			<HarnessSettingsSection focusAgentId={focusAgentId} />
+			<TooltipProvider>
+				{selectorAgentId ? <ReadinessSelector agentId={selectorAgentId} /> : null}
+				<HarnessSettingsSection focusAgentId={focusAgentId} />
+			</TooltipProvider>
 		</QueryClientProvider>,
 	);
 	return { ...view, client };
@@ -153,17 +156,32 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 
 		const claudeRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
-		await user.click(within(claudeRow).getByRole("button", { name: "Login" }));
+		expect(within(claudeRow).getByText(/^Local: /)).toBeInTheDocument();
+		expect(within(claudeRow).getByText("Cloud: Not connected")).toBeInTheDocument();
+		await user.click(within(claudeRow).getByRole("button", { name: "Log in to cloud" }));
 		expect(useCredentialDialogStore.getState()).toMatchObject({ open: true, targetAgent: "claude-code" });
 
 		const codexRow = screen.getByText("Codex").closest('[data-agent="codex"]') as HTMLElement;
-		expect(within(codexRow).getByText("Cloud connected")).toBeInTheDocument();
+		expect(within(codexRow).getByText(/^Local: Not installed ·/)).toBeInTheDocument();
+		expect(within(codexRow).getByText("Cloud: Connected")).toBeInTheDocument();
+		// A cloud row that is not installed locally still offers the local install.
+		expect(within(codexRow).getByRole("button", { name: "Install" })).toBeInTheDocument();
 		await user.click(within(codexRow).getByRole("button", { name: "Reconnect" }));
 		expect(useCredentialDialogStore.getState()).toMatchObject({ open: true, targetAgent: "codex" });
 
 		const gooseRow = screen.getByText("Goose").closest('[data-agent="goose"]') as HTMLElement;
-		expect(within(gooseRow).queryByText("Cloud connected")).toBeNull();
+		expect(within(gooseRow).queryByText(/^Cloud: /)).toBeNull();
 		expect(within(gooseRow).queryByRole("button", { name: "Reconnect" })).toBeNull();
+	});
+
+	it("explains the cloud login in a tooltip on the info icon", async () => {
+		cloudMocks.org = { id: "org-1" };
+		const user = userEvent.setup();
+		renderSection();
+
+		const claudeRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		await user.hover(within(claudeRow).getByRole("button", { name: /One login for both local and cloud sessions/ }));
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("also signs Claude Code in on this machine");
 	});
 
 	it("offers native login when fx is installed but unauthorized", async () => {
