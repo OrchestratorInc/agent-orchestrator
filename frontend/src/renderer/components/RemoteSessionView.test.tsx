@@ -244,34 +244,53 @@ it("shows a normal inspector and reads its changed files from the remote host on
 	expect(screen.getByRole("complementary", { name: "Session inspector" })).toBeInTheDocument();
 });
 
-it("discovers a preview started on the host before the Browser tab opens", async () => {
+it("shows a preview tab after remote session data finishes loading", async () => {
+	HTMLElement.prototype.scrollTo = vi.fn();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
 	let previewStarted = false;
 	let sessionReads = 0;
+	let releaseInitialSessions!: () => void;
+	const initialSessions = new Promise<void>((resolve) => { releaseInitialSessions = resolve; });
+	let emitTabs: ((state: { viewId: string; activeTabId: string; tabs: { id: string; url: string; title: string; active: boolean }[] }) => void) | undefined;
 	const resolvePreview = vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue("http://ao-preview.localhost/");
-	const navigate = vi.spyOn(window.ao!.browser, "navigate").mockImplementation(async ({ viewId, url }) => ({
-		viewId, url, title: "AO preview", canGoBack: false, canGoForward: false, isLoading: false,
-	}));
+	const ensure = vi.spyOn(window.ao!.browser, "ensure");
+	const onTabsState = vi.spyOn(window.ao!.browser, "onTabsState").mockImplementation((listener) => {
+		emitTabs = listener;
+		return () => { emitTabs = undefined; };
+	});
+	const navigate = vi.spyOn(window.ao!.browser, "navigate").mockImplementation(async ({ viewId, url }) => {
+		emitTabs?.({ viewId, activeTabId: "t1", tabs: [{ id: "t1", url, title: "QA preview", active: true }] });
+		return { viewId, url, title: "AO preview", canGoBack: false, canGoForward: false, isLoading: false };
+	});
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
 		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
 		if (path.endsWith("/sessions")) {
 			sessionReads++;
+			if (sessionReads === 1) await initialSessions;
 			return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode: "chat", previewUrl: previewStarted ? "http://127.0.0.1:4600/" : "", previewRevision: previewStarted ? 1 : 0, prs: [] }] });
 		}
 		if (path.endsWith("/conversation")) return Response.json(conversationBody());
 		return Response.json({});
 	}));
 	await connectHost("http://box-a:3001");
-	renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	renderRemoteSession(queryClient);
+	await waitFor(() => expect(ensure).toHaveBeenCalledWith("remote:box-a:session-1"));
+	await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+	releaseInitialSessions();
 	await screen.findByRole("combobox", { name: "Message the agent" });
 	expect(sessionReads).toBe(1);
 	previewStarted = true;
+	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
+	await waitFor(() => expect(navigate).toHaveBeenCalledWith({ viewId: "test:remote:box-a:session-1", url: "http://ao-preview.localhost/" }));
 	await userEvent.click(screen.getByRole("tab", { name: "Browser" }));
 	await waitFor(() => expect(resolvePreview).toHaveBeenCalledWith("box-a", "session-1", "http://127.0.0.1:4600/"));
 	await waitFor(() => expect(screen.getByRole("textbox", { name: "Browser URL" })).toHaveValue("ao-preview.localhost"));
-	expect(navigate).toHaveBeenCalledWith({ viewId: "test:remote:box-a:session-1", url: "http://ao-preview.localhost/" });
-	expect(sessionReads).toBe(2);
+	await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Browser tabs" })).getByRole("tab", { name: "QA preview" })).toBeVisible());
+	expect(sessionReads).toBe(3);
+	onTabsState.mockRestore();
+	ensure.mockRestore();
 	navigate.mockRestore();
 	resolvePreview.mockRestore();
 });

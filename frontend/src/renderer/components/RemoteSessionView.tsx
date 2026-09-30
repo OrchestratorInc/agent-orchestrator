@@ -117,7 +117,7 @@ export function RemoteSessionView({ hostId, sessionId }: { hostId: string; sessi
 		origin: { hostId, sessionId, proxyBase: proxyBase ?? "" },
 		active: Boolean(proxyBase && inspectorOpen && inspectorView === "browser"),
 		poppedOut: false,
-		terminated: !session.data || !sessionIsActive(session.data),
+		terminated: Boolean(session.data && !sessionIsActive(session.data)),
 		previewUrl: session.data?.previewUrl,
 		previewRevision: session.data?.previewRevision,
 	});

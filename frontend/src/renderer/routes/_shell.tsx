@@ -186,6 +186,10 @@ function ShellLayout() {
 	const workspaces = workspaceQuery.data ?? [];
 	const { hosts: remoteHosts, refresh: refreshRemoteHosts } = useRemoteHosts();
 	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds, loadedProjectHostIds } = useRemoteWorkspaces();
+	const failedRemoteHostKey = remoteFailedHostIds.join("\0");
+	useEffect(() => {
+		if (failedRemoteHostKey) void refreshRemoteHosts();
+	}, [failedRemoteHostKey, refreshRemoteHosts]);
 	const [remoteAddProjectHostId, setRemoteAddProjectHostId] = useState<string | null>(null);
 	// Global shortcut listeners need the latest workspace list, but recreating
 	// those subscriptions for every streamed activity update is avoidable.

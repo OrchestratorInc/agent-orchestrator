@@ -317,7 +317,7 @@ export function RemoteHostsSection({ hosts, workspaces, failedHostIds = [], load
 					>
 						<FolderPlus aria-hidden="true" />
 						<span className="truncate">{t("remote.addProjectOnHost", { label: host.label, defaultValue: "Add project on {{label}}" })}</span>
-						{loadedProjectHostIds.includes(host.hostId) && <span className="ml-auto text-xs tabular-nums">{t("remote.projectCount", { count: projectCount, defaultValue: projectCount === 1 ? "{{count}} project" : "{{count}} projects" })}</span>}
+						{loadedProjectHostIds.includes(host.hostId) && <span className="ml-auto shrink-0 text-xs tabular-nums">{t("remote.projectCount", { count: projectCount, defaultValue: projectCount === 1 ? "{{count}} project" : "{{count}} projects" })}</span>}
 					</SidebarMenuButton>
 				</SidebarMenuItem>
 				{failedHostIds.includes(host.hostId) && <SidebarMenuItem>

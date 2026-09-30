@@ -29,7 +29,14 @@ host_root="${AO_HOST_INSTALL_DIR:-$HOME/.ao/host}"
 umask 077
 mkdir -p "$host_root/releases"
 stage="$(mktemp -d "$host_root/.setup.XXXXXX")"
-trap 'rm -rf "$stage"' EXIT
+lock_owned=false
+cleanup() {
+	if "$lock_owned"; then
+		rmdir "$lock_dir" 2>/dev/null || true
+	fi
+	rm -rf "$stage"
+}
+trap cleanup EXIT
 
 platform="$(uname -s)"
 arch="$(uname -m)"
@@ -106,8 +113,11 @@ tmux="$resources/tmux/bin/tmux"
 for required in "$ao" "$node" "$adapter"; do
 	[[ -f "$required" ]] || { printf 'Incomplete AO host package: %s\n' "$required" >&2; exit 1; }
 done
-[[ -x "$tmux" ]] || {
+[[ -f "$tmux" ]] || {
 	printf '%s\n' 'AO host package is missing its bundled tmux.' >&2; exit 1;
+}
+[[ -x "$tmux" ]] || {
+	printf '%s\n' 'AO host package bundled tmux is not executable.' >&2; exit 1;
 }
 "$ao" version >/dev/null
 "$ao" remote-host --help >/dev/null || {
@@ -115,6 +125,17 @@ done
 	exit 1
 }
 "$node" --version >/dev/null
+
+lock_dir="$host_root/.install.lock"
+if ! mkdir "$lock_dir" 2>/dev/null; then
+	if [[ -d "$lock_dir" ]]; then
+		printf 'Install lock exists at %s; another setup may be running. If stale, remove it after confirming no setup is running.\n' "$lock_dir" >&2
+	else
+		printf 'Cannot create install lock at %s.\n' "$lock_dir" >&2
+	fi
+	exit 1
+fi
+lock_owned=true
 
 # Do not attach a second service to a daemon owned by another AO installation.
 status="$("$ao" status --json)"
@@ -130,17 +151,46 @@ elif [[ "$state" != stopped && "$state" != stale ]]; then
 	exit 1
 fi
 
-release="$host_root/releases/$(date +%Y%m%d%H%M%S)-$$"
-mkdir -p "$release/resources"
-cp -R "$resources/daemon" "$resources/acp-runtime" "$resources/tmux" "$release/resources/"
+if [[ "$platform" == Linux ]] && ! "$install_only"; then
+	command -v systemctl >/dev/null || { printf '%s\n' 'systemd user services are required; use --install-only for another service manager.' >&2; exit 1; }
+	systemctl --user show-environment >/dev/null 2>&1 || { printf '%s\n' 'systemd user services are unavailable; use --install-only for another service manager.' >&2; exit 1; }
+fi
 if [[ -e "$host_root/current" && ! -L "$host_root/current" ]]; then
 	printf 'Refusing to replace non-symlink: %s/current\n' "$host_root" >&2
 	exit 1
 fi
+previous_release="$(readlink "$host_root/current" 2>/dev/null || true)"
+prune_allowed=true
+if [[ "$previous_release" == releases/* && "${previous_release#releases/}" =~ ^[0-9]{14}-[0-9]+$ ]]; then
+	previous_release="$host_root/$previous_release"
+elif [[ -n "$previous_release" ]]; then
+	previous_name="${previous_release#"$host_root"/releases/}"
+	[[ "$previous_name" != "$previous_release" && "$previous_name" =~ ^[0-9]{14}-[0-9]+$ ]] || prune_allowed=false
+fi
+running_release=""
+if [[ "$state" == ready ]]; then
+	case "$current_exe" in
+		"$host_root"/releases/*/resources/daemon/ao) running_release="${current_exe%/resources/daemon/ao}" ;;
+		"$host_root"/current/resources/daemon/ao) running_release="$previous_release" ;;
+	esac
+fi
+
+release="$host_root/releases/$(date +%Y%m%d%H%M%S)-$$"
+mkdir -p "$release/resources"
+cp -R "$resources/daemon" "$resources/acp-runtime" "$resources/tmux" "$release/resources/"
 ln -sfn "$release" "$host_root/current"
+prune_old_releases() {
+	[[ "$prune_allowed" == true ]] || return 0
+	for old in "$host_root"/releases/*; do
+		[[ -d "$old" && ! -L "$old" && "${old##*/}" =~ ^[0-9]{14}-[0-9]+$ ]] || continue
+		[[ "$old" == "$release" || "$old" == "$previous_release" || "$old" == "$running_release" ]] && continue
+		rm -rf -- "$old"
+	done
+}
 printf 'Installed AO host at %s\n' "$release"
 
 if "$install_only"; then
+	prune_old_releases
 	printf 'Start with: %s/resources/daemon/ao daemon\n' "$host_root/current"
 	exit 0
 fi
@@ -158,7 +208,6 @@ printf 'exec %q daemon\n' "$host_root/current/resources/daemon/ao" >> "$runner"
 chmod 700 "$runner"
 
 if [[ "$platform" == Linux ]]; then
-	command -v systemctl >/dev/null || { printf '%s\n' 'systemd user services are required; use --install-only for another service manager.' >&2; exit 1; }
 	unit_dir="$HOME/.config/systemd/user"
 	mkdir -p "$unit_dir"
 	escaped_runner="${runner//%/%%}"
@@ -206,4 +255,5 @@ done
 args=(remote-host enable)
 "$tunnel" && args+=(--tunnel)
 "$host_root/current/resources/daemon/ao" "${args[@]}"
+prune_old_releases
 printf '\nOn your laptop: Settings → Remote hosts → Add host. Enter the address and password above.\n'

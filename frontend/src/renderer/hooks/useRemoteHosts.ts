@@ -40,7 +40,10 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<
 		const saved = await aoBridge.remotes.list();
 		if (!current()) return;
 		savedHostUrls.current = new Map(saved.map((host) => [host.hostId, host.url]));
-		setHosts(saved.map((host) => ({ ...host, status: "connecting" })));
+		setHosts((previous) => saved.map((host) => ({
+			...host,
+			status: previous.some((entry) => entry.hostId === host.hostId && entry.url === host.url && entry.status === "connected") ? "connected" : "connecting",
+		})));
 		await Promise.all(saved.map(async (savedHost) => {
 			let status: RemoteHost["status"] = "connected";
 			let failureReason: RemoteHost["failureReason"];

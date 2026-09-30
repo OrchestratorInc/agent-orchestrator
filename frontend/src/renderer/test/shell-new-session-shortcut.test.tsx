@@ -21,6 +21,7 @@ const shellMocks = vi.hoisted(() => {
 		matchRouteTarget: null as string | null,
 		workspaces: [] as WorkspaceSummary[],
 		remoteWorkspaces: [] as WorkspaceSummary[],
+		remoteFailedHostIds: [] as string[],
 		removeRemoteProject: undefined as ((hostId: string, projectId: string) => Promise<void>) | undefined,
 		configureRemoteProject: undefined as ((hostId: string, projectId: string) => void) | undefined,
 		workspaceQuery: {
@@ -104,6 +105,7 @@ const shellMocks = vi.hoisted(() => {
 			setQueryData: vi.fn(),
 		},
 		remoteDelete: vi.fn(),
+		listRemoteHosts: vi.fn(async () => []),
 		state,
 	};
 });
@@ -149,13 +151,13 @@ vi.mock("../lib/bridge", () => ({
 			setAttentionState: () => undefined,
 			onOpenSession: () => () => undefined,
 		},
-		remotes: { list: async () => [] },
+		remotes: { list: shellMocks.listRemoteHosts },
 	},
 }));
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => shellMocks.state.workspaceQuery,
-	useRemoteWorkspaces: () => ({ data: shellMocks.state.remoteWorkspaces, loadedProjectHostIds: [] }),
+	useRemoteWorkspaces: () => ({ data: shellMocks.state.remoteWorkspaces, failedHostIds: shellMocks.state.remoteFailedHostIds, loadedProjectHostIds: [] }),
 	useWorkspaceTraySessions: () => ({ data: [] }),
 	workspaceQueryKey: ["workspaces"],
 	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
@@ -376,6 +378,8 @@ beforeEach(() => {
 	shellMocks.state.matchRouteTarget = null;
 	shellMocks.state.workspaces = workspaces;
 	shellMocks.state.remoteWorkspaces = [];
+	shellMocks.state.remoteFailedHostIds = [];
+	shellMocks.listRemoteHosts.mockClear();
 	shellMocks.state.removeRemoteProject = undefined;
 	shellMocks.state.configureRemoteProject = undefined;
 	shellMocks.remoteDelete.mockReset().mockResolvedValue({});
@@ -404,6 +408,19 @@ beforeEach(() => {
 });
 
 describe("shell workspace startup", () => {
+	it("rechecks a connected host when its session queries fail", async () => {
+		useUiStore.setState({ remoteHosts: true });
+		const view = await renderShell();
+		await waitFor(() => expect(shellMocks.listRemoteHosts).toHaveBeenCalledTimes(1));
+
+		shellMocks.state.remoteFailedHostIds = ["box-a"];
+		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+		await waitFor(() => expect(shellMocks.listRemoteHosts).toHaveBeenCalledTimes(2));
+
+		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+		expect(shellMocks.listRemoteHosts).toHaveBeenCalledTimes(2);
+	});
+
 	it("opens the shared Project settings dialog for the selected remote host", async () => {
 		shellMocks.state.remoteWorkspaces = [
 			{ hostId: "box-a", id: "shared", name: "Shared", path: "/a", sessions: [] },

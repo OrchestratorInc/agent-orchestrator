@@ -62,6 +62,36 @@ it("disconnects the prior proxy when a connected host becomes unreachable", asyn
 	expect(connectedHosts()).not.toContain("box-a");
 });
 
+it("shows password rejected when a connected host rejects its saved credential", async () => {
+	remotes.list.mockResolvedValue([{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }]);
+	useUiStore.setState({ remoteHosts: true });
+	const { result } = renderHook(() => useRemoteHosts());
+	await waitFor(() => expect(result.current.hosts[0]?.status).toBe("connected"));
+	remotes.connect.mockRejectedValueOnce(new Error("host http://box-a:3001 is unauthorized"));
+	await act(async () => result.current.refresh());
+	expect(result.current.hosts[0]).toMatchObject({ status: "offline", failureReason: "unauthorized" });
+	expect(connectedHosts()).not.toContain("box-a");
+});
+
+it("keeps healthy hosts visible while rechecking a failed one", async () => {
+	useUiStore.setState({ remoteHosts: true });
+	const { result } = renderHook(() => useRemoteHosts());
+	await waitFor(() => expect(result.current.hosts.every((host) => host.status === "connected")).toBe(true));
+	let failA!: (reason: Error) => void;
+	let finishB!: (host: { hostId: string; label: string; url: string; base: string }) => void;
+	remotes.connect.mockImplementationOnce(() => new Promise((_, reject) => { failA = reject; }));
+	remotes.connect.mockImplementationOnce(() => new Promise((resolve) => { finishB = resolve; }));
+	let refresh!: Promise<void>;
+	await act(async () => { refresh = result.current.refresh(); await Promise.resolve(); });
+	expect(result.current.hosts.find((host) => host.hostId === "box-b")?.status).toBe("connected");
+	await act(async () => {
+		finishB({ hostId: "box-b", label: "Box B", url: "http://box-b:3001", base: "http://127.0.0.1:4000" });
+		failA(new Error("host http://box-a:3001 is offline"));
+		await refresh;
+	});
+	expect(result.current.hosts.map((host) => [host.hostId, host.status])).toEqual([["box-a", "offline"], ["box-b", "connected"]]);
+});
+
 it("keeps B connected when A's corrupted saved address points at B", async () => {
 	const sharedUrl = "http://box-b:3001";
 	remotes.list.mockResolvedValue([
