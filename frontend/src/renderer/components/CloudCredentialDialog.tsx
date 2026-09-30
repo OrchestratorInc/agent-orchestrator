@@ -41,9 +41,9 @@ const AGENTS = [
 		agent: "claude-code",
 		label: "Claude Code",
 		creds: [
+			{ value: BROWSER_LOGIN, label: "Log in with Anthropic" },
 			{ value: "oauth_token", label: "Setup token" },
 			{ value: "api_key", label: "API key" },
-			{ value: BROWSER_LOGIN, label: "Log in with Anthropic" },
 		],
 	},
 	{

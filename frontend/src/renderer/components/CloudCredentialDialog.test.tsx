@@ -52,13 +52,17 @@ function renderDialog() {
 }
 
 async function startAnthropicLogin(user: ReturnType<typeof userEvent.setup>) {
-	await user.click(screen.getByRole("button", { name: "Credential type" }));
-	await user.click(await screen.findByRole("menuitem", { name: /Log in with Anthropic/ }));
-	await user.click(screen.getByRole("button", { name: /Log in with Anthropic/ }));
+	await user.click(screen.getByRole("button", { name: /^Log in with Anthropic$/ }));
 	await waitFor(() => expect(bridgeMocks.connectProviderAuth).toHaveBeenCalled());
 }
 
 describe("CloudCredentialDialog browser login", () => {
+	it("defaults Claude Code to logging in with Anthropic", () => {
+		renderDialog();
+		expect(screen.getByRole("button", { name: "Credential type" })).toHaveTextContent("Log in with Anthropic");
+		expect(screen.queryByLabelText(/token/i, { selector: "input" })).toBeNull();
+	});
+
 	beforeEach(() => {
 		bridgeMocks.connectProviderAuth.mockReset();
 		bridgeMocks.cancelProviderAuth.mockReset();
