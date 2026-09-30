@@ -1327,7 +1327,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	if (activeConfig && !isConfigured(activeConfig)) {
 		return (
 			<View style={styles.center}>
-				<Text style={styles.bannerText}>No desktop paired.</Text>
+				<Text style={styles.bannerText}>No machine paired.</Text>
 			</View>
 		);
 	}

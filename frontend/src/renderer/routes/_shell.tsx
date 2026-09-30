@@ -242,6 +242,10 @@ function ShellLayout() {
 	const [isKeyboardShortcutsOpen, setIsKeyboardShortcutsOpen] = useState(false);
 	const [isKeyboardShortcutsSettingsOpen, setIsKeyboardShortcutsSettingsOpen] = useState(false);
 	const routeParams = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
+	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
+	useEffect(() => {
+		if (!remoteHostsEnabled && routeParams.hostId) void navigate({ to: "/", replace: true });
+	}, [navigate, remoteHostsEnabled, routeParams.hostId]);
 	const linkSession = routeParams.hostId ? undefined : workspaces.flatMap((workspace) => workspace.sessions).find((session) => session.id === routeParams.sessionId);
 	const openBrowserLink = useSessionBrowserLink(linkSession);
 	const canOpenBrowserLink = linkSession?.kind === "worker" && sessionIsActive(linkSession);

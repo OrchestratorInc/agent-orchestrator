@@ -84,7 +84,7 @@ export default function SettingsScreen() {
 			await switchHost(id);
 			setSelectedHostId(id);
 		} catch {
-			Alert.alert("Could not switch machines", "Try again from Settings.");
+			Alert.alert("Could not change default machine", "Try again from Settings.");
 		} finally {
 			setSwitchingHostId(null);
 		}
@@ -109,7 +109,7 @@ export default function SettingsScreen() {
 				contentContainerStyle={styles.content}
 				keyboardShouldPersistTaps="handled"
 			>
-				<SettingsSection title="Machines" footer={selectedHost?.name ?? selectedHostName ?? (paired && config ? `${config.host}:${config.httpPort}` : "Pair this phone with AO on your computer.")}>
+				<SettingsSection title="Machines" footer={selectedHost?.name ?? selectedHostName ?? (paired && config ? `${config.host}:${config.httpPort}` : "Pair this phone with an AO machine.")}>
 					<SettingsCard>
 						<DesktopStatusRow />
 						<ConnectionTestRow paired={paired} selectedHostId={selectedHostId} />
@@ -119,7 +119,7 @@ export default function SettingsScreen() {
 								key={host.id}
 								icon="server"
 								label={host.name}
-								value={host.id === selectedHostId ? "Selected" : "Switch"}
+								value={host.id === selectedHostId ? "Default" : "Make default"}
 								loading={switchingHostId === host.id}
 								onPress={host.id === selectedHostId ? undefined : () => { void selectHost(host.id); }}
 							/>
@@ -302,7 +302,7 @@ function DesktopStatusRow() {
 	return (
 		<CardRow
 			icon="monitor"
-			label="Connected desktop"
+			label="Selected machine"
 			value={status.label}
 			valueColor={color}
 			onPress={() => router.navigate("/pair")}
@@ -657,7 +657,7 @@ function DisconnectRow({ machineName, onForget }: { machineName?: string; onForg
 	const styles = useThemedStyles(makeStyles);
 	const [forgetting, setForgetting] = useState(false);
 	function confirmForget() {
-		Alert.alert(machineName ? `Forget ${machineName}?` : "Disconnect from desktop?", "This phone will stop receiving notifications from this machine and remove its saved connection.", [
+		Alert.alert(machineName ? `Forget ${machineName}?` : "Disconnect from machine?", "This phone will stop receiving notifications from this machine and remove its saved connection.", [
 			{ text: "Cancel", style: "cancel" },
 			{
 				text: machineName ? "Forget" : "Disconnect",
@@ -676,7 +676,7 @@ function DisconnectRow({ machineName, onForget }: { machineName?: string; onForg
 			style={({ pressed }) => [styles.disconnect, pressed && styles.rowPressed]}
 		>
 			{forgetting ? <ActivityIndicator color={t.red} /> : <Feather name="log-out" size={17} color={t.red} />}
-			<Text style={styles.disconnectText}>{forgetting ? "Disconnecting…" : machineName ? `Forget ${machineName}` : "Disconnect from desktop"}</Text>
+			<Text style={styles.disconnectText}>{forgetting ? "Disconnecting…" : machineName ? `Forget ${machineName}` : "Disconnect from machine"}</Text>
 		</Pressable>
 	);
 }

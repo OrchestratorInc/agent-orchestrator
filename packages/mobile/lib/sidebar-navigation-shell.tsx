@@ -94,7 +94,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 		const name = projectNames.get(hostedProjectKey({ id: session.projectId, hostId })) ?? session.projectId;
 		const hostName = "hostName" in session && typeof session.hostName === "string" ? session.hostName : undefined;
 		const offline = hostStates.find((host) => host.hostId === hostId)?.connection === "closed";
-		return hostStates.length > 1 && hostName ? `${name} · ${hostName}${offline ? " (offline)" : ""}` : name;
+		return hostStates.length > 1 && hostName ? `${name ? `${name} · ` : ""}${hostName}${offline ? " (offline)" : ""}` : name;
 	};
 
 	const animateSidebar = useCallback((nextOpen: boolean) => {

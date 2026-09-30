@@ -342,7 +342,7 @@ export async function streamGlobalConversationEvents(
 		signal,
 	});
 	if (!res.ok) throw await streamError(res);
-	if (!res.body) throw new Error("Couldn't open live updates from your desktop.");
+	if (!res.body) throw new Error("Couldn't open live updates from your machine.");
 	const advertisedAfterHeader = res.headers.get("X-AO-Event-After");
 	const advertisedAfter = advertisedAfterHeader === null ? Number.NaN : Number(advertisedAfterHeader);
 	const effectiveAfter = Number.isSafeInteger(advertisedAfter) && advertisedAfter >= 0

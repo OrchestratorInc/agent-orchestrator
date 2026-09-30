@@ -295,7 +295,7 @@ function NotificationsContent() {
 						error && visibleItems.length > 0 ? (
 							<View style={styles.inlineError}>
 								<Feather name="alert-circle" size={15} color={t.red} />
-								<Text selectable style={styles.inlineErrorText}>{offline ? "Not connected to your desktop. Showing the last notifications loaded." : error}</Text>
+								<Text selectable style={styles.inlineErrorText}>{offline ? "This machine is offline. Showing the last notifications loaded." : error}</Text>
 							</View>
 						) : null
 					}
@@ -325,7 +325,7 @@ function NotificationsContent() {
 						offline ? (
 							<EmptyState
 								icon="wifi-off"
-								title="Not connected to your desktop"
+								title="This machine is offline"
 								message="Notifications load once the app reconnects."
 								action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={() => void load("refresh")} />}
 							/>

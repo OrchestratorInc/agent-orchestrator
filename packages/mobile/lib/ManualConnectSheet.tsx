@@ -176,7 +176,7 @@ export function ManualConnectSheet({ onConnected }: { onConnected: () => void })
 			>
 				<SheetHeader
 					title="Connect manually"
-					subtitle="Enter your computer's address from AO → Settings → Connect Mobile."
+					subtitle="Enter the address and password from Connect Mobile or ao remote-host enable."
 				/>
 				{form}
 			</ScrollView>
@@ -185,7 +185,7 @@ export function ManualConnectSheet({ onConnected }: { onConnected: () => void })
 
 	// iOS lifts a presented form sheet over the keyboard by itself.
 	return (
-		<SheetScreen title="Connect manually" subtitle="Enter your computer's address from AO → Settings → Connect Mobile.">
+		<SheetScreen title="Connect manually" subtitle="Enter the address and password from Connect Mobile or ao remote-host enable.">
 			{form}
 		</SheetScreen>
 	);

@@ -451,8 +451,8 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	if (conversation.unavailable) return <Unavailable message={conversation.unavailable.message} onShell={() => void openShell()} openingShell={openingShell} />;
 	// The board's poll is the app's view of the link: when it is down, say so in
 	// the board's words instead of echoing whatever this request failed with.
-	if (!conversation.snapshot && unreachable) return <Centered icon="wifi-off" title="Not connected to your desktop" message="This conversation loads once the app reconnects." action="Retry" onAction={() => void conversation.refresh()} />;
-	if (!conversation.snapshot) return <Centered icon="alert-triangle" title="Couldn't load the conversation" message={conversation.error || "Your desktop didn't return this conversation. Try again."} action="Retry" onAction={() => void conversation.refresh()} />;
+	if (!conversation.snapshot && unreachable) return <Centered icon="wifi-off" title="This machine is offline" message="This conversation loads once the app reconnects." action="Retry" onAction={() => void conversation.refresh()} />;
+	if (!conversation.snapshot) return <Centered icon="alert-triangle" title="Couldn't load the conversation" message={conversation.error || "The machine didn't return this conversation. Try again."} action="Retry" onAction={() => void conversation.refresh()} />;
 
 	const snapshot = conversation.snapshot;
 	const active = snapshot.turns.some((turn) => turn.state === "running" || turn.state === "queued");

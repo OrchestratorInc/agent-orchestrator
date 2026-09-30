@@ -29,7 +29,7 @@ export function describeDesktopStatus(input: {
 		case "rate-limited":
 			return { label: "Locked out", tone: "error" };
 		case "server-error":
-			return { label: "Desktop error", tone: "error" };
+			return { label: "Machine error", tone: "error" };
 		case "tunnel-rotated":
 			return { label: "Address changed", tone: "error" };
 		default:

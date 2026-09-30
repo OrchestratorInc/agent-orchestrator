@@ -131,7 +131,7 @@ describe("describeConnectionFailure", () => {
 		expect(titles.every((t) => t.length > 0)).toBe(true);
 		expect(new Set(titles).size).toBe(titles.length);
 		expect(describeConnectionFailure("auth", target()).title).not.toContain("disconnected");
-		expect(describeConnectionFailure("unreachable", target()).title).toContain("disconnected");
+		expect(describeConnectionFailure("unreachable", target()).title).toContain("offline");
 	});
 
 	it("explains the lockout on a 429, and that it clears itself", () => {
@@ -140,7 +140,7 @@ describe("describeConnectionFailure", () => {
 		expect(d.message).toContain("about a minute");
 	});
 
-	it("points at the desktop logs on a server error", () => {
+	it("points at the machine logs on a server error", () => {
 		const d = describeConnectionFailure("server-error", target());
 		expect(d.message).toContain("AO logs");
 	});
@@ -232,8 +232,8 @@ describe("userFacingError", () => {
 
 	it("falls back to status-specific copy when the daemon said nothing", () => {
 		const bare = (status: number) => Object.assign(new Error(`${status} `), { status });
-		expect(userFacingError(bare(404))).toBe("That's no longer on your desktop. Refresh and try again.");
-		expect(userFacingError(bare(409))).toMatch(/changed on your desktop/);
+		expect(userFacingError(bare(404))).toBe("That's no longer on your machine. Refresh and try again.");
+		expect(userFacingError(bare(409))).toMatch(/changed on your machine/);
 		expect(userFacingError(bare(422))).toMatch(/couldn't complete that/);
 	});
 

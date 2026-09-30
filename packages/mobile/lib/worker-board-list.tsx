@@ -124,7 +124,7 @@ export function WorkerBoardList({
 		const name = projectNames.get(hostId ? hostedRowKey(hostId, session.projectId) : session.projectId) ?? session.projectId;
 		const hostName = "hostName" in session && typeof session.hostName === "string" ? session.hostName : undefined;
 		const offline = hostStates.find((host) => host.hostId === hostId)?.connection === "closed";
-		return multipleHosts && hostName ? `${name} · ${hostName}${offline ? " (offline)" : ""}` : name;
+		return multipleHosts && hostName ? `${name ? `${name} · ` : ""}${hostName}${offline ? " (offline)" : ""}` : name;
 	}, [hostStates, multipleHosts, projectNames]);
 	const filteredSessions = useMemo(
 		() =>

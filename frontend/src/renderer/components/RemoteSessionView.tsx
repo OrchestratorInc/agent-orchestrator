@@ -20,6 +20,7 @@ import { activateSessionFile, closeSessionFile, EMPTY_SESSION_FILE_TABS, openSes
 import { cn } from "../lib/utils";
 import { isOrchestratorSession, sessionIsActive } from "../types/workspace";
 import type { InspectorView } from "../stores/ui-store";
+import { useUiStore } from "../stores/ui-store";
 import { SessionChatSurface } from "./chat/SessionChatSurface";
 import { ReviewerChatSurface } from "./chat/ReviewerChatSurface";
 import { AgentAvatar } from "./AgentAvatar";
@@ -41,10 +42,16 @@ import { TerminalSwitchAgentButton } from "./TerminalSwitchAgentButton";
 export function RemoteSessionRoute({ hostId, sessionId }: { hostId: string; sessionId: string }) {
 	const uiSessionId = sessionUiKey(sessionId, hostId);
 	const draftBoundaries = useSyncExternalStore(subscribeChatDraftBoundaries, () => getChatDraftBoundaries(uiSessionId));
+	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
+	const setRemoteHosts = useUiStore((state) => state.setRemoteHosts);
 	useBlocker({
 		disabled: draftBoundaries.length === 0,
 		enableBeforeUnload: draftBoundaries.length > 0,
-		shouldBlockFn: () => !confirmDiscardChatDrafts(getChatDraftBoundaries(uiSessionId), (message) => window.confirm(message)),
+		shouldBlockFn: () => {
+			const blocked = !confirmDiscardChatDrafts(getChatDraftBoundaries(uiSessionId), (message) => window.confirm(message));
+			if (blocked && !remoteHostsEnabled) setRemoteHosts(true);
+			return blocked;
+		},
 	});
 	useEffect(() => {
 		aoBridge.app.setChatDraftRisk?.(draftBoundaries, chatDraftDialogCopy(draftBoundaries));

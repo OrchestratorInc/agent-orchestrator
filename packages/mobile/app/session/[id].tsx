@@ -147,7 +147,7 @@ function SessionRouteContent() {
 				<View style={styles.center}>
 					<EmptyState
 						icon="monitor-smartphone"
-						title="No desktop paired"
+						title="No machine paired"
 						action={<Button title="Scan pairing code" icon="maximize" onPress={() => router.push("/pair")} />}
 					/>
 				</View>
@@ -157,7 +157,7 @@ function SessionRouteContent() {
 				<View style={styles.center}>
 					<EmptyState
 						icon="unplug"
-						title="Not connected to your desktop"
+						title="This machine is offline"
 						action={<Button title="Open board" icon="activity" variant="ghost" onPress={() => router.navigate("/")} />}
 					/>
 				</View>
@@ -178,7 +178,7 @@ function SessionRouteContent() {
 					<EmptyState
 						icon="search"
 						title="Session not found"
-						message="It may have been deleted on your desktop."
+						message="It may have been deleted on that machine."
 						action={<Button title="Open board" icon="activity" variant="ghost" onPress={() => router.navigate("/")} />}
 					/>
 				</View>

@@ -93,5 +93,5 @@ function previewHttpErrorCopy(status: number): string {
 	if (status === 404 || status === 410) return "This page wasn't found. The agent may have moved or removed it.";
 	if (status === 401 || status === 403) return "This page needs access this phone doesn't have.";
 	if (status >= 500) return "The page's server hit an error. Check that the agent's dev server is running, then retry.";
-	return "This page didn't load. Retry, or check it on your desktop.";
+	return "This page didn't load. Retry, or check it on that machine.";
 }

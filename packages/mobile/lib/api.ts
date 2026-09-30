@@ -831,7 +831,7 @@ export async function delegateTask(
 		}),
 	}, opts.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
 	const data = await res.json();
-	if (!data?.workerId) throw new Error("Your desktop didn't return the new worker. Refresh the board to check whether it started.");
+	if (!data?.workerId) throw new Error("Your machine didn't return the new worker. Refresh the board to check whether it started.");
 	return getSession(cfg, data.workerId);
 }
 

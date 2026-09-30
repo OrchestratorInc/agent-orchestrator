@@ -42,14 +42,14 @@ export function UnpairedState() {
 			<EmptyState
 				icon="monitor-smartphone"
 				pulse
-				title="Connecting to your desktop…"
+				title="Connecting to your machine…"
 			/>
 		);
 	}
 	return (
 		<EmptyState
 			icon="monitor-smartphone"
-			title="No desktop paired"
+			title="No machine paired"
 			action={<Button title="Scan pairing code" icon="maximize" onPress={() => router.push("/pair")} />}
 		/>
 	);
