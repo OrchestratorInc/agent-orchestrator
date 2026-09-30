@@ -817,6 +817,51 @@ func TestRestoreReviewerPreservesHookOwnedActivityStateAfterRestore(t *testing.T
 	}
 }
 
+func TestRestoreReviewerClearsExitedActivityForRelaunchedReviewer(t *testing.T) {
+	store := &fakeStore{
+		review: &domain.Review{
+			ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode,
+			AgentSessionID: "native-1", ReviewerActivityState: domain.ActivityExited,
+		},
+		runs: []domain.ReviewRun{{
+			ID: "run-1", ReviewID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode,
+			PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved,
+		}},
+	}
+	launcher := &fakeLauncher{alive: false, handle: "review-mer-1"}
+	worker := liveWorker()
+	worker.ReviewerHarness = domain.ReviewerClaudeCode
+	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+
+	if _, err := eng.RestoreReviewer(context.Background(), "mer-1"); err != nil {
+		t.Fatalf("RestoreReviewer: %v", err)
+	}
+	if store.review.ReviewerHandleID != "review-mer-1" || store.review.ReviewerActivityState != domain.ActivityIdle {
+		t.Fatalf("review = handle %q activity %q, want relaunched reviewer idle", store.review.ReviewerHandleID, store.review.ReviewerActivityState)
+	}
+}
+
+func TestRestoreReviewerKeepsExitedActivityWhenRelaunchFails(t *testing.T) {
+	store := &fakeStore{
+		review: &domain.Review{
+			ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode,
+			AgentSessionID: "native-1", ReviewerActivityState: domain.ActivityExited,
+		},
+		runs: []domain.ReviewRun{{ID: "run-1", ReviewID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, Status: domain.ReviewRunComplete}},
+	}
+	launcher := &fakeLauncher{alive: false, spawnErr: errors.New("resume failed")}
+	worker := liveWorker()
+	worker.ReviewerHarness = domain.ReviewerClaudeCode
+	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+
+	if _, err := eng.RestoreReviewer(context.Background(), "mer-1"); err == nil {
+		t.Fatal("RestoreReviewer succeeded, want relaunch failure")
+	}
+	if store.review.ReviewerActivityState != domain.ActivityExited {
+		t.Fatalf("activity = %q, want exited after a failed relaunch", store.review.ReviewerActivityState)
+	}
+}
+
 func TestRestoreReviewerFailsRunningRunWhenTerminalRestoreErrors(t *testing.T) {
 	store := &fakeStore{
 		review: &domain.Review{

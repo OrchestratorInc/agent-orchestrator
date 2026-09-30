@@ -74,13 +74,31 @@ describe("reviewer control integration", () => {
 	});
 
 	it("only offers finished review findings to the worker", () => {
-		expect(detail).toContain("reviewRunSendable(run) ? <Pressable");
+		expect(detail).toContain("...(reviewRunSendable(run) && !sent ? [{ id: \"send\", label: \"Send to worker\"");
 	});
 
 	it("never presents the in-app browser on top of the actions sheet", () => {
 		const calls = actions.match(/openGitHub\([^)]*\)/g) ?? [];
 		expect(calls.length).toBeGreaterThan(0);
 		for (const call of calls) expect(call).toContain("{ fromSheet: true }");
+	});
+
+	it("keeps per-item actions in a desktop-style menu", () => {
+		expect(actions).toContain("<ItemActionsMenu accessibilityLabel={`Actions for ${reviewerId}'s comment`}");
+		expect(actions).toContain('{ id: "resolve", label: "Resolve"');
+		expect(detail).toContain("<ItemActionsMenu accessibilityLabel={`Actions for the ${reviewVerdictLabel(run).toLowerCase()} review`}");
+	});
+
+	it("chooses Open, Restore, or Stop from what is actually available", () => {
+		expect(detail).toContain("const controls = reviewerControls(data, review, sessionId);");
+		expect(detail).toContain("{controls.stop ? <>");
+		expect(detail).toContain("Push a new commit to run another review.");
+	});
+
+	it("merges like desktop: only when ready, fenced to the head commit, after confirmation", () => {
+		expect(detail).toContain("const merge = pr ? mergeReadiness(pr) : undefined;");
+		expect(detail).toContain("await mergeSessionPR(config, pr)");
+		expect(detail).toContain("This will squash-merge PR #${pr.number} in the remote repository.");
 	});
 
 	it("keys automatic-review dismissal to the stable run id", () => {

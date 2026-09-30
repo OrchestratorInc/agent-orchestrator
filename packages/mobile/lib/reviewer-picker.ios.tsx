@@ -1,6 +1,6 @@
 import { Host } from "@expo/ui";
 import { Button, HStack, Image, Menu, Spacer, Text, VStack } from "@expo/ui/swift-ui";
-import { accessibilityIdentifier, buttonStyle, font, foregroundStyle, frame, lineLimit, opacity, padding, tint, truncationMode } from "@expo/ui/swift-ui/modifiers";
+import { accessibilityIdentifier, buttonStyle, contentShape, font, foregroundStyle, frame, lineLimit, opacity, padding, shapes, tint, truncationMode } from "@expo/ui/swift-ui/modifiers";
 import { StyleSheet } from "react-native";
 import { haptics } from "./haptics";
 import { reviewerLabel, type ReviewerPickerProps } from "./reviewer-picker.types";
@@ -28,7 +28,7 @@ export function ReviewerPicker({ reviewers, selectedReviewer, effectiveReviewer,
 					<Spacer />
 					<Menu
 						label={
-							<HStack spacing={6}>
+							<HStack spacing={6} modifiers={[frame({ height: rowHeight }), contentShape(shapes.rectangle())]}>
 								<HarnessImage uri={logoUris[shownReviewer]} harness={shownReviewer} />
 								<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>{reviewerText}</Text>
 								<Image systemName="chevron.up.chevron.down" size={iconSize.xs} />
@@ -59,7 +59,7 @@ export function ReviewerPicker({ reviewers, selectedReviewer, effectiveReviewer,
 						<Spacer />
 						<Menu
 							label={
-								<HStack spacing={5}>
+								<HStack spacing={5} modifiers={[frame({ height: rowHeight }), contentShape(shapes.rectangle())]}>
 									<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>{modelText}</Text>
 									<Image systemName="chevron.up.chevron.down" size={iconSize.xs} />
 								</HStack>

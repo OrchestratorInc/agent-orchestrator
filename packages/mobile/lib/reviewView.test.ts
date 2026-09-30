@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { DashboardSession, PRReviewState, ReviewRun, SessionPRSummary } from "./api";
-import { latestAutoReviewFailure, pullRequestSummaryForURL, reviewBatchAction, reviewerDestination, reviewForPullRequest, reviewPrimaryAction, reviewPrimaryActionLabel, reviewRouteForSession, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewStatusVisual, reviewVerdictLabel, shortCommit } from "./reviewView";
+import type { DashboardSession, PRReviewState, ReviewRun, SessionPRSummary, SessionReviews } from "./api";
+import { latestAutoReviewFailure, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryAction, reviewPrimaryActionLabel, reviewRouteForSession, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewStatusVisual, reviewVerdictLabel, shortCommit } from "./reviewView";
 
 const run = (over: Partial<ReviewRun> = {}): ReviewRun => ({
 	id: "run-1", reviewId: "review-1", sessionId: "worker-1", batchId: "", harness: "codex",
@@ -117,5 +117,19 @@ describe("mobile review presentation", () => {
 		expect(reviewRunMeta(run({ status: "delivered", deliveredAt: "2026-09-30T00:00:00Z" }))).toBe("codex · manual · delivered");
 		expect(reviewRunMeta(run({ status: "complete", deliveredAt: "2026-09-30T00:00:00Z" }))).toBe("codex · manual · complete · delivered");
 		expect(reviewRunMeta(run({ status: "running" }))).toBe("codex · manual · running");
+	});
+	it("only offers Open when there is a reviewer surface to open", () => {
+		const base = { reviewerHandleId: "", reviews: [state()], runs: [run()] } as SessionReviews;
+		const tui = { mode: "tui", reviewId: "review-1", harness: "claude-code" } as SessionReviews["reviewerSurface"];
+		// Stopped terminal reviewer: surface kept, handle gone -> Restore, not a dead Open.
+		expect(reviewerControls({ ...base, reviewerSurface: tui, reviewerActivityState: "active" } as SessionReviews, state(), "worker-1")).toEqual({ restore: true, stop: false });
+		// Live terminal reviewer.
+		expect(reviewerControls({ ...base, reviewerHandleId: "review-worker-1", reviewerSurface: { ...tui!, handleId: "review-worker-1" }, reviewerActivityState: "idle" } as SessionReviews, state(), "worker-1")).toEqual({ open: "terminal", restore: false, stop: true });
+		// Exited reviewer with a stale handle: Restore only, never Restore and Stop together.
+		expect(reviewerControls({ ...base, reviewerHandleId: "review-worker-1", reviewerSurface: { ...tui!, handleId: "review-worker-1" }, reviewerActivityState: "exited" } as SessionReviews, state(), "worker-1")).toEqual({ restore: true, stop: false });
+		// Chat reviewer opens by review id.
+		expect(reviewerControls({ ...base, reviewerSurface: { mode: "chat", reviewId: "review-1", harness: "codex" }, reviewerActivityState: "active" } as SessionReviews, state(), "worker-1")).toEqual({ open: "chat", restore: false, stop: false });
+		// No reviewer and no history: nothing to show.
+		expect(reviewerControls({ reviewerHandleId: "", reviews: [state()], runs: [] } as SessionReviews, state(), "worker-1")).toEqual({ restore: false, stop: false });
 	});
 });

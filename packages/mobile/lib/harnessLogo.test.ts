@@ -73,7 +73,6 @@ describe("backdropFor", () => {
 	// The symmetric case, which is the one that is easy to miss: goose and
 	// kilocode are pure black and vanish on the dark card.
 	it("puts a light chip behind marks that vanish on a dark card", () => {
-<<<<<<< HEAD
 		for (const h of ["kilocode", "goose", "devin", "droid", "pi", "kimi", "fx", "prime-agent"]) {
 			expect(backdropFor(h), h).toBe("needs-light");
 		}

@@ -4,7 +4,7 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem
 vi.mock("expo-secure-store", () => ({ getItemAsync: vi.fn(), setItemAsync: vi.fn(), deleteItemAsync: vi.fn() }));
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 
-import { ApiError, getSessionPR, killSessionReviewer, requestSessionRereview, resolveSessionReviewComment, switchSessionReviewer, triggerSessionReview } from "./api";
+import { ApiError, getSessionPR, killSessionReviewer, mergeSessionPR, requestSessionRereview, resolveSessionReviewComment, switchSessionReviewer, triggerSessionReview } from "./api";
 import type { ServerConfig } from "./config";
 
 const cfg: ServerConfig = { host: "ao.test", httpPort: "3011", muxPort: "3011", secure: false, password: "secret12" };
@@ -29,6 +29,24 @@ describe("mobile review action API", () => {
 			"POST",
 			JSON.stringify({ harness: "codex", agentConfig: { model: "gpt-5", effort: "high" } }),
 		]]);
+	});
+
+	it("merges a PR fenced to the head commit on screen, like desktop", async () => {
+		vi.mocked(fetch).mockResolvedValue(response({ merged: true }));
+		const sha = "a".repeat(40);
+
+		await mergeSessionPR(cfg, { number: 12, url: "https://github.com/acme/repo/pull/12", headSha: sha });
+
+		expect(requests()).toEqual([[
+			"http://ao.test:3011/api/v1/prs/12/merge",
+			"POST",
+			JSON.stringify({ prUrl: "https://github.com/acme/repo/pull/12", expectedHeadSha: sha }),
+		]]);
+	});
+
+	it("refuses to merge without a head commit to fence to", async () => {
+		await expect(mergeSessionPR(cfg, { number: 12, url: "https://github.com/acme/repo/pull/12" })).rejects.toThrow("no head commit");
+		expect(fetch).not.toHaveBeenCalled();
 	});
 
 	it("can clear the reviewer override without sending an empty harness", async () => {

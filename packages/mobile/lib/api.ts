@@ -763,6 +763,8 @@ export type SessionPRSummary = {
 	state: "draft" | "open" | "merged" | "closed";
 	repo: string;
 	author: string;
+	/** The head commit the merge is fenced to, so a newer push is never merged unseen. */
+	headSha?: string;
 	sourceBranch: string;
 	targetBranch: string;
 	additions: number;
@@ -784,6 +786,15 @@ export type SessionPRSummary = {
 	};
 	updatedAt?: string;
 };
+
+/** Squash-merges a session PR the way desktop does, fenced to the head commit on screen. */
+export async function mergeSessionPR(cfg: ServerConfig, pr: Pick<SessionPRSummary, "number" | "url" | "headSha">): Promise<void> {
+	if (!pr.headSha) throw new Error(`PR #${pr.number} has no head commit yet; refresh and try again.`);
+	await req(cfg, `${API}/prs/${encodeURIComponent(String(pr.number))}/merge`, {
+		method: "POST",
+		body: JSON.stringify({ prUrl: pr.url, expectedHeadSha: pr.headSha }),
+	});
+}
 
 export async function getSessionPR(cfg: ServerConfig, sessionId: string): Promise<SessionPRSummary[]> {
 	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/pr`);

@@ -130,6 +130,31 @@ export function reviewerDestination(data: SessionReviews, review: PRReviewState,
 	return { pathname: "/shell/[handleId]" as const, params: { handleId, sessionId, title: `Review · PR #${review.prNumber}` } };
 }
 
+export type ReviewerControls = {
+	/** Open the live reviewer; set only when there is a surface to open. */
+	open?: "chat" | "terminal";
+	/** Relaunch a reviewer that exited or has nothing to open. */
+	restore: boolean;
+	/** Stop the live reviewer; never offered next to Restore. */
+	stop: boolean;
+};
+
+/**
+ * Which reviewer controls to show. "Open" needs a surface it can actually
+ * navigate to: a stopped terminal reviewer keeps its surface but loses its
+ * handle, and an Open button then did nothing. Anything else with review
+ * history gets Restore instead, and Stop only applies to a live reviewer.
+ */
+export function reviewerControls(data: SessionReviews, review: PRReviewState, sessionId: string): ReviewerControls {
+	const exited = data.reviewerActivityState === "exited" || Boolean(data.reviewerSurface?.controllerError);
+	const destination = exited ? undefined : reviewerDestination(data, review, sessionId);
+	if (destination) {
+		return { open: data.reviewerSurface?.mode === "chat" ? "chat" : "terminal", restore: false, stop: Boolean(data.reviewerHandleId) };
+	}
+	const hasReviewer = Boolean(data.reviewerSurface || data.reviewerHandleId || data.runs?.length);
+	return { restore: hasReviewer, stop: false };
+}
+
 export function reviewPrimaryActionLabel(action: ReviewPrimaryAction, multiple = false): string {
 	switch (action) {
 		case "start": return multiple ? "Start all reviews" : "Start review";

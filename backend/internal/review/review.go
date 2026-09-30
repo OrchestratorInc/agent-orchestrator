@@ -769,7 +769,16 @@ func (e *Engine) restoreReviewerLocked(
 		}
 	}
 	launchID := e.newID()
-	reviewRow, err = e.upsertReview(ctx, worker, harness, reviewRow.ReviewerHandleID, agentSessionID, launchID, "", e.clock())
+	// A reviewer being relaunched is no longer "exited". Clear that before the
+	// launch so clients stop offering Restore for a reviewer that is back, while
+	// state the new process reports through its hooks during launch still wins
+	// (the finalizing upsert below preserves it).
+	restoredActivity := domain.ActivityState("")
+	wasExited := reviewRow.ReviewerActivityState == domain.ActivityExited
+	if wasExited {
+		restoredActivity = domain.ActivityIdle
+	}
+	reviewRow, err = e.upsertReview(ctx, worker, harness, reviewRow.ReviewerHandleID, agentSessionID, launchID, restoredActivity, e.clock())
 	if err != nil {
 		return RestoreReviewerResult{}, err
 	}
@@ -790,6 +799,12 @@ func (e *Engine) restoreReviewerLocked(
 	})
 	if err != nil {
 		restoreErr := fmt.Errorf("restore reviewer: %w", err)
+		if wasExited {
+			// The relaunch failed, so the reviewer is still gone.
+			if _, markErr := e.upsertReview(ctx, worker, harness, reviewRow.ReviewerHandleID, agentSessionID, launchID, domain.ActivityExited, e.clock()); markErr != nil {
+				restoreErr = errors.Join(restoreErr, markErr)
+			}
+		}
 		if failErr := e.failRunningRestoredRuns(ctx, previousRuns, restoreErr.Error()); failErr != nil {
 			return RestoreReviewerResult{}, errors.Join(restoreErr, failErr)
 		}
