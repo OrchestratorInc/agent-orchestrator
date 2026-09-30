@@ -695,6 +695,7 @@
 	"notify.emptyUnread": "未読はありません。",
 	"notify.filters": "通知フィルター",
 	"notify.loadFailed": "通知を読み込めませんでした。",
+	"notify.loadEarlierFromHost": "{{host}} の過去の通知を読み込む",
 	"notify.loading": "通知を読み込み中…",
 	"notify.loadingUnread": "未読通知を読み込み中…",
 	"notify.loadingEarlier": "以前の通知を読み込み中…",

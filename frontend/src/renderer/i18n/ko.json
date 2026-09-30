@@ -695,6 +695,7 @@
 	"notify.emptyUnread": "모든 알림을 확인했습니다.",
 	"notify.filters": "알림 필터",
 	"notify.loadFailed": "알림을 불러올 수 없습니다.",
+	"notify.loadEarlierFromHost": "{{host}}의 이전 알림 불러오기",
 	"notify.loading": "알림 불러오는 중…",
 	"notify.loadingUnread": "읽지 않은 알림 불러오는 중…",
 	"notify.loadingEarlier": "이전 알림 불러오는 중…",

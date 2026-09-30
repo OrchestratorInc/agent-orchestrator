@@ -476,7 +476,9 @@ export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions = {}) 
 			? toRemoteWorkspaces(hostId, projects[index].data, sessions[index]?.data ?? [])
 			: []),
 		loadedProjectHostIds: connected.filter((_, index) => projects[index]?.data !== undefined),
+		loadedSessionHostIds: connected.filter((_, index) => sessions[index]?.data !== undefined),
 		failedHostIds: connected.filter((_, index) => projects[index]?.isError || sessions[index]?.isError),
+		refetch: () => Promise.all([...projects, ...sessions].map((query) => query.refetch())),
 	};
 }
 

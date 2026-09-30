@@ -691,6 +691,7 @@
 	"notify.earlierLoadFailed": "无法加载更早的通知。",
 	"notify.emptyAll": "暂无通知。",
 	"notify.loadFailed": "无法加载通知。",
+	"notify.loadEarlierFromHost": "加载来自 {{host}} 的更早通知",
 	"notify.loading": "正在加载通知…",
 	"notify.loadingEarlier": "正在加载更早的通知…",
 	"notify.markCloudRead": "将云端通知标记为已读",

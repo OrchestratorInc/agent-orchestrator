@@ -698,6 +698,7 @@
 	"notify.emptyUnread": "Você está em dia.",
 	"notify.filters": "Filtros de notificação",
 	"notify.loadFailed": "Não foi possível carregar as notificações.",
+	"notify.loadEarlierFromHost": "Carregar notificações anteriores de {{host}}",
 	"notify.loading": "Carregando notificações…",
 	"notify.loadingUnread": "Carregando notificações não lidas…",
 	"notify.loadingEarlier": "Carregando notificações anteriores…",

@@ -695,6 +695,7 @@
 	"notify.emptyUnread": "Sie sind auf dem neuesten Stand.",
 	"notify.filters": "Benachrichtigungsfilter",
 	"notify.loadFailed": "Benachrichtigungen konnten nicht geladen werden.",
+	"notify.loadEarlierFromHost": "Ältere Benachrichtigungen von {{host}} laden",
 	"notify.loading": "Benachrichtigungen werden geladen…",
 	"notify.loadingUnread": "Ungelesene Benachrichtigungen werden geladen…",
 	"notify.loadingEarlier": "Frühere Benachrichtigungen werden geladen…",

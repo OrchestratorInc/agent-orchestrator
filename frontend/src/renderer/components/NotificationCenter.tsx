@@ -25,10 +25,13 @@ import {
 	useNotificationsQuery,
 } from "../hooks/useNotificationsQuery";
 import { useRestoreSession } from "../hooks/useRestoreSession";
-import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
+import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import type { WorkspaceSummary } from "../types/workspace";
 import { aoBridge } from "../lib/bridge";
+import { apiErrorMessage } from "../lib/api-client";
 import { formatTimeCompact } from "../lib/format-time";
+import { clientForHost } from "../lib/host-clients";
+import { LOCAL_HOST, parseRefKey, refKey, sessionUiKey, type HostId } from "../lib/hosts";
 import {
 	createNotificationsTransport,
 	getCachedNotifications,
@@ -37,6 +40,7 @@ import {
 	keepLatestNotificationsPage,
 	type NotificationDTO,
 	type NotificationsCache,
+	type NotificationsPage,
 	recentNotificationsQueryKey,
 	unreadNotificationsQueryKey,
 } from "../lib/notifications";
@@ -49,31 +53,35 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { CloudNotificationList } from "./CloudNotificationList";
 import { useCloudNotifications } from "../hooks/useCloudNotifications";
+import { fetchRemoteNotificationsPage, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
 
 type NotificationCenterProps = {
 	style?: React.CSSProperties;
 };
 
+const REMOTE_NOTIFICATION_PREFIX = "remote-notification:";
+const notificationKey = (hostId: HostId, id: string) => refKey({ host: hostId, id });
+
 function useNotificationTargetNavigation() {
 	const navigateToSession = useNavigateToSession();
 	const openSession = useCallback(
-		(notification: NotificationDTO) => {
+		(notification: NotificationDTO, hostId: HostId = LOCAL_HOST) => {
 			const sessionId = notification.target.sessionId || notification.sessionId;
 			if (!sessionId) return;
 			void captureRendererEvent("ao.renderer.notification_opened", { target: "session" });
-			navigateToSession(notification.projectId, sessionId);
+			navigateToSession(notification.projectId, sessionId, hostId);
 		},
 		[navigateToSession],
 	);
 
 	const openPrimary = useCallback(
-		(notification: NotificationDTO) => {
+		(notification: NotificationDTO, hostId: HostId = LOCAL_HOST) => {
 			if (notification.target.kind === "pr" && notification.target.prUrl) {
 				void captureRendererEvent("ao.renderer.notification_opened", { target: "pr" });
 				window.open(notification.target.prUrl, "_blank", "noopener,noreferrer");
 				return;
 			}
-			openSession(notification);
+			openSession(notification, hostId);
 		},
 		[openSession],
 	);
@@ -97,7 +105,7 @@ function useSessionTerminationLookup(
 		for (const workspace of workspaces ?? []) {
 			for (const session of workspace.sessions) {
 				if (session.isTerminated === true || session.status === "terminated") {
-					ids.add(session.id);
+					ids.add(sessionUiKey(session.id, workspace.hostId));
 				}
 			}
 		}
@@ -123,6 +131,7 @@ function NotificationWorkspaceState({
 }: {
 	children: (state: {
 		retryWorkspace: () => void;
+		loadedRemoteSessionIds: Set<string>;
 		sessionMeta: Map<string, { projectName: string; sessionName: string }>;
 		sessionsReady: boolean;
 		terminatedIds: Set<string>;
@@ -130,11 +139,13 @@ function NotificationWorkspaceState({
 	}) => ReactNode;
 }) {
 	const workspaceQuery = useWorkspaceQuery();
+	const remoteWorkspaces = useRemoteWorkspaces();
 	const retryWorkspace = useCallback(() => {
 		void workspaceQuery.refetch();
-	}, [workspaceQuery.refetch]);
+		void remoteWorkspaces.refetch();
+	}, [remoteWorkspaces.refetch, workspaceQuery.refetch]);
 	const { sessionsReady, terminatedIds, workspaceError } = useSessionTerminationLookup(
-		workspaceQuery.data,
+		[...(workspaceQuery.data ?? []), ...remoteWorkspaces.data],
 		workspaceQuery.isError,
 		workspaceQuery.isSuccess,
 		retryWorkspace,
@@ -143,22 +154,40 @@ function NotificationWorkspaceState({
 		const map = new Map<string, { projectName: string; sessionName: string }>();
 		for (const workspace of workspaceQuery.data ?? []) {
 			for (const session of workspace.sessions) {
-				map.set(session.id, { projectName: workspace.name, sessionName: session.title });
+				map.set(sessionUiKey(session.id, workspace.hostId), { projectName: workspace.name, sessionName: session.title });
+			}
+		}
+		for (const workspace of remoteWorkspaces.data) {
+			for (const session of workspace.sessions) {
+				map.set(sessionUiKey(session.id, workspace.hostId), { projectName: workspace.name, sessionName: session.title });
 			}
 		}
 		return map;
-	}, [workspaceQuery.data]);
-	return <>{children({ retryWorkspace, sessionMeta, sessionsReady, terminatedIds, workspaceError })}</>;
+	}, [remoteWorkspaces.data, workspaceQuery.data]);
+	const loadedRemoteSessionIds = useMemo(() => {
+		const ids = new Set<string>();
+		for (const workspace of remoteWorkspaces.data) {
+			if (!workspace.hostId || !remoteWorkspaces.loadedSessionHostIds.includes(workspace.hostId) || remoteWorkspaces.failedHostIds.includes(workspace.hostId)) continue;
+			for (const session of workspace.sessions) {
+				ids.add(sessionUiKey(session.id, workspace.hostId));
+			}
+		}
+		return ids;
+	}, [remoteWorkspaces.data, remoteWorkspaces.failedHostIds, remoteWorkspaces.loadedSessionHostIds]);
+	return <>{children({ retryWorkspace, loadedRemoteSessionIds, sessionMeta, sessionsReady, terminatedIds, workspaceError: workspaceError || remoteWorkspaces.failedHostIds.length > 0 })}</>;
 }
 
 export function NotificationRuntime() {
 	const queryClient = useQueryClient();
 	const { openPrimary } = useNotificationTargetNavigation();
 	const unreadQuery = useNotificationsQuery("unread");
-	const unreadCount = getCachedUnreadCount(unreadQuery.data);
-	const params = useParams({ strict: false }) as { sessionId?: string };
-	const routeSessionIdRef = useRef(params.sessionId);
-	routeSessionIdRef.current = params.sessionId;
+	const remoteUnread = useRemoteNotificationHosts("unread");
+	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount;
+	const params = useParams({ strict: false }) as { hostId?: string; sessionId?: string };
+	const routeRef = useRef(params);
+	routeRef.current = params;
+	const seenRemoteIds = useRef(new Map<HostId, Set<string>>());
+	const shownRemoteNotifications = useRef(new Map<string, NotificationDTO>());
 
 	// Being on the session route is not the same as watching the agent: its pane
 	// renders one terminal at a time, so a shell or reviewer tab hides the agent
@@ -166,8 +195,8 @@ export function NotificationRuntime() {
 	// is the one on screen. Read the store imperatively — this feeds a getter for
 	// the long-lived SSE connection, which needs the current value, not a render.
 	const getVisibleAgentSessionId = useCallback(() => {
-		const sessionId = routeSessionIdRef.current;
-		if (!sessionId) return undefined;
+		const { hostId, sessionId } = routeRef.current;
+		if (!sessionId || hostId) return undefined;
 		return useUiStore.getState().visibleTerminalKindBySession[sessionId] === "worker" ? sessionId : undefined;
 	}, []);
 
@@ -184,7 +213,46 @@ export function NotificationRuntime() {
 	}, [unreadCount]);
 
 	useEffect(() => {
+		for (const host of remoteUnread.hosts) {
+			if (!host.data) continue;
+			const currentIds = new Set(host.data.notifications.map((item) => item.id));
+			const previousIds = seenRemoteIds.current.get(host.hostId);
+			seenRemoteIds.current.set(host.hostId, currentIds);
+			if (!previousIds) continue; // Reconnecting to a host must not replay its existing inbox.
+			for (const notification of host.data.notifications) {
+				if (previousIds.has(notification.id)) continue;
+				const id = `${REMOTE_NOTIFICATION_PREFIX}${notificationKey(host.hostId, notification.id)}`;
+				shownRemoteNotifications.current.set(id, notification);
+				if (shownRemoteNotifications.current.size > 256) {
+					shownRemoteNotifications.current.delete(shownRemoteNotifications.current.keys().next().value!);
+				}
+				const { hostId, sessionId } = routeRef.current;
+				const watched = notification.type === "needs_input" && hostId === host.hostId &&
+					sessionId === notification.sessionId && document.visibilityState === "visible" && document.hasFocus() &&
+					useUiStore.getState().visibleTerminalKindBySession[sessionUiKey(sessionId, hostId)] === "worker";
+				void aoBridge.notifications.show({
+					id,
+					title: `${host.label}: ${notification.title}`,
+					body: notification.body || undefined,
+					type: notification.type,
+					watched,
+				});
+			}
+		}
+	}, [remoteUnread.hosts]);
+
+	useEffect(() => {
 		return aoBridge.notifications.onClick((id) => {
+			if (id.startsWith(REMOTE_NOTIFICATION_PREFIX)) {
+				try {
+					const { host, id: notificationId } = parseRefKey(id.slice(REMOTE_NOTIFICATION_PREFIX.length));
+					const unread = queryClient.getQueryData<NotificationsPage>(remoteNotificationsQueryKey(host, "unread"));
+					const all = queryClient.getQueryData<NotificationsPage>(remoteNotificationsQueryKey(host, "all"));
+					const notification = shownRemoteNotifications.current.get(id) ?? [...(unread?.notifications ?? []), ...(all?.notifications ?? [])].find((item) => item.id === notificationId);
+					if (notification) openPrimary(notification, host);
+				} catch { /* Ignore malformed or obsolete OS notification IDs. */ }
+				return;
+			}
 			const unread = queryClient.getQueryData<NotificationsCache>(unreadNotificationsQueryKey);
 			const recent = queryClient.getQueryData<NotificationsCache>(recentNotificationsQueryKey);
 			const notification = [...getCachedNotifications(unread), ...getCachedNotifications(recent)].find(
@@ -211,15 +279,55 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	const [highlightedIds, setHighlightedIds] = useState<Set<string>>(() => new Set());
 	const [clearingNotificationIds, setClearingNotificationIds] = useState<Set<string>>(() => new Set());
 	const [restoringSessionId, setRestoringSessionId] = useState<string | undefined>();
+	const [clearingAll, setClearingAll] = useState(false);
+	const [remoteOlderPages, setRemoteOlderPages] = useState<Record<string, NotificationsPage[]>>({});
+	const [remoteLoadingEarlierHost, setRemoteLoadingEarlierHost] = useState<string | null>(null);
+	const [remoteEarlierError, setRemoteEarlierError] = useState<string | null>(null);
+	const remoteHistoryGeneration = useRef(0);
+	const remoteFirstPageKeys = useRef(new Map<string, string>());
 	const unreadQuery = useNotificationsQuery("unread");
 	const allQuery = useNotificationsQuery("all", open);
+	const remoteUnread = useRemoteNotificationHosts("unread");
+	const remoteAll = useRemoteNotificationHosts("all", open);
 	const cloudUnreadQuery = useCloudNotifications("unread");
 	const markAllRead = useMarkAllNotificationsReadMutation();
 	const clearAll = useClearAllNotificationsMutation();
 	const clearOne = useClearNotificationMutation();
 	const restoreSession = useRestoreSession();
 	const notifications = useMemo(() => getCachedNotifications(allQuery.data), [allQuery.data]);
-	const unreadCount = getCachedUnreadCount(unreadQuery.data) + (cloudUnreadQuery.data?.unreadCount ?? 0);
+	const remoteItems = useMemo(() => remoteAll.hosts.map((host) => {
+		const seen = new Set<string>();
+		const unread = remoteUnread.hosts.find((item) => item.hostId === host.hostId)?.data;
+		const items = [unread, host.data, ...(remoteOlderPages[host.hostId] ?? [])].filter((page): page is NotificationsPage => Boolean(page)).flatMap((page) =>
+			page.notifications.filter((notification) => {
+				if (seen.has(notification.id)) return false;
+				seen.add(notification.id);
+				return true;
+			}),
+		);
+		return { ...host, notifications: items };
+	}), [remoteAll.hosts, remoteOlderPages, remoteUnread.hosts]);
+	useEffect(() => {
+		for (const host of remoteAll.hosts) {
+			if (!host.data) continue;
+			const key = JSON.stringify([host.data.notifications.map((item) => item.id), host.data.nextCursor]);
+			const previous = remoteFirstPageKeys.current.get(host.hostId);
+			remoteFirstPageKeys.current.set(host.hostId, key);
+			if (previous === undefined || previous === key) continue;
+			if (!(remoteOlderPages[host.hostId]?.length) && remoteLoadingEarlierHost !== host.hostId) continue;
+			// Cursor pagination shifts when the first page changes; reload older pages from its new boundary.
+			remoteHistoryGeneration.current += 1;
+			setRemoteOlderPages((current) => ({ ...current, [host.hostId]: [] }));
+			setRemoteLoadingEarlierHost(null);
+		}
+	}, [remoteAll.hosts, remoteLoadingEarlierHost, remoteOlderPages]);
+	const entries = useMemo(() => [
+		...notifications.map((notification) => ({ hostId: LOCAL_HOST, label: "", notification })),
+		...remoteItems.flatMap((host) => host.notifications.map((notification) => ({
+			hostId: host.hostId, label: host.label, notification,
+		}))),
+	].sort((a, b) => b.notification.createdAt.localeCompare(a.notification.createdAt)), [notifications, remoteItems]);
+	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount + (cloudUnreadQuery.data?.unreadCount ?? 0);
 	const confirmedClearSnapshot = isNotificationsCacheFromClear(queryClient);
 	const { openSession } = useNotificationTargetNavigation();
 	const markAllMutate = markAllRead.mutateAsync;
@@ -227,6 +335,13 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	// Concrete ids only — never `[]` — so unread pages past the first stay
 	// reachable and arrive as unread (still highlighted) when the all-list loads them.
 	const acknowledgedIdsRef = useRef<Set<string>>(new Set());
+	const acknowledgedRemoteIdsRef = useRef<Set<string>>(new Set());
+	const remoteHostsRef = useRef(remoteItems);
+	remoteHostsRef.current = remoteItems;
+	const visibleRemoteUnreadKey = remoteItems.flatMap((host) =>
+		host.notifications.filter((item) => item.status === "unread")
+			.map((item) => notificationKey(host.hostId, item.id)),
+	).join("|");
 	const visibleUnreadIds = useMemo(() => {
 		const ids = new Set<string>();
 		for (const item of getCachedNotifications(unreadQuery.data)) {
@@ -259,8 +374,9 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			const next = new Set(current);
 			let changed = false;
 			for (const id of newly) {
-				if (next.has(id)) continue;
-				next.add(id);
+				const key = notificationKey(LOCAL_HOST, id);
+				if (next.has(key)) continue;
+				next.add(key);
 				changed = true;
 			}
 			return changed ? next : current;
@@ -277,9 +393,46 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			});
 	}, [ackRetryNonce, markAllMutate, open, t, unreadQuery.isLoading, visibleUnreadKey]);
 
+	useEffect(() => {
+		if (!open) {
+			acknowledgedRemoteIdsRef.current.clear();
+			return;
+		}
+		for (const host of remoteHostsRef.current) {
+			if (host.notifications.length === 0) continue;
+			const unreadIds = host.notifications
+				.filter((item) => item.status === "unread")
+				.map((item) => item.id)
+				.filter((id) => !acknowledgedRemoteIdsRef.current.has(notificationKey(host.hostId, id)));
+			if (unreadIds.length === 0) continue;
+			for (const id of unreadIds) acknowledgedRemoteIdsRef.current.add(notificationKey(host.hostId, id));
+			setHighlightedIds((current) => {
+				const next = new Set(current);
+				for (const id of unreadIds) next.add(notificationKey(host.hostId, id));
+				return next;
+			});
+			void (async () => {
+				try {
+					const { error } = await clientForHost(host.hostId).POST("/api/v1/notifications/read-all", { body: { ids: unreadIds } });
+					if (error) throw new Error(apiErrorMessage(error, "Could not mark notifications read"));
+					await queryClient.invalidateQueries({ queryKey: remoteNotificationsQueryKey(host.hostId, "unread") });
+					await queryClient.invalidateQueries({ queryKey: remoteNotificationsQueryKey(host.hostId, "all") });
+				} catch (error) {
+					for (const id of unreadIds) acknowledgedRemoteIdsRef.current.delete(notificationKey(host.hostId, id));
+					setMarkReadError(`${host.label}: ${error instanceof Error ? error.message : t("notify.couldNotMarkAllRead")}`);
+				}
+			})();
+		}
+	}, [ackRetryNonce, open, queryClient, t, visibleRemoteUnreadKey]);
+
 	const setPanelOpen = useCallback((nextOpen: boolean) => {
 		setOpen(nextOpen);
 		if (!nextOpen) {
+			remoteHistoryGeneration.current += 1;
+			remoteFirstPageKeys.current.clear();
+			setRemoteOlderPages({});
+			setRemoteLoadingEarlierHost(null);
+			setRemoteEarlierError(null);
 			keepLatestNotificationsPage(queryClient, unreadNotificationsQueryKey);
 			keepLatestNotificationsPage(queryClient, recentNotificationsQueryKey);
 		}
@@ -290,20 +443,22 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		setAckRetryNonce((nonce) => nonce + 1);
 	};
 
-	const openSessionAndDismiss = useCallback((notification: NotificationDTO) => {
-		openSession(notification);
+	const openSessionAndDismiss = useCallback((notification: NotificationDTO, hostId: HostId) => {
+		openSession(notification, hostId);
 		setPanelOpen(false);
 	}, [openSession, setPanelOpen]);
 
-	const restoreAndOpen = useCallback(async (notification: NotificationDTO) => {
+	const restoreAndOpen = useCallback(async (notification: NotificationDTO, hostId: HostId) => {
 		const sessionId = notification.target.sessionId || notification.sessionId;
 		if (!sessionId || restoringSessionId) return;
-		setRestoringSessionId(sessionId);
+		setRestoringSessionId(sessionUiKey(sessionId, hostId));
 		setActionError(null);
 		try {
-			const result = await restoreSession(sessionId);
+			const result = hostId === LOCAL_HOST
+				? await restoreSession(sessionId)
+				: await restoreSession(sessionId, hostId);
 			if (result.status === "success") {
-				openSession(notification);
+				openSession(notification, hostId);
 				setPanelOpen(false);
 				return;
 			}
@@ -314,28 +469,57 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	}, [openSession, restoreSession, restoringSessionId, setPanelOpen, t]);
 
 	const handleClearAll = useCallback(() => {
+		if (clearingAll) return;
 		setActionError(null);
-		void clearAll.mutateAsync().catch((error: unknown) => {
-			setActionError(error instanceof Error ? error.message : t("notify.couldNotClearAll"));
-		});
-	}, [clearAll, t]);
+		setClearingAll(true);
+		remoteHistoryGeneration.current += 1;
+		setRemoteOlderPages({});
+		setRemoteLoadingEarlierHost(null);
+		setRemoteEarlierError(null);
+		void Promise.allSettled([
+			clearAll.mutateAsync(),
+			...remoteAll.hosts.map(async (host) => {
+				const { error } = await clientForHost(host.hostId).DELETE("/api/v1/notifications");
+				if (error) throw new Error(`${host.label}: ${apiErrorMessage(error, t("notify.couldNotClearAll"))}`);
+				setRemoteOlderPages((current) => ({ ...current, [host.hostId]: [] }));
+				await queryClient.invalidateQueries({ queryKey: ["remote-notifications", host.hostId] });
+			}),
+		]).then((results) => {
+			const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+			if (failure) setActionError(failure.reason instanceof Error ? failure.reason.message : t("notify.couldNotClearAll"));
+		}).finally(() => setClearingAll(false));
+	}, [clearAll, clearingAll, queryClient, remoteAll.hosts, t]);
 
-	const handleClear = useCallback((notification: NotificationDTO) => {
+	const handleClear = useCallback((notification: NotificationDTO, hostId: HostId) => {
 		setActionError(null);
-		setClearingNotificationIds((current) => new Set(current).add(notification.id));
-		void clearOne
-			.mutateAsync(notification)
+		const key = notificationKey(hostId, notification.id);
+		setClearingNotificationIds((current) => new Set(current).add(key));
+		void (hostId === LOCAL_HOST ? clearOne.mutateAsync(notification) : (async () => {
+			const { error, response } = await clientForHost(hostId).DELETE("/api/v1/notifications/{id}", {
+				params: { path: { id: notification.id } },
+			});
+			if (error && response.status !== 404) throw new Error(apiErrorMessage(error, t("notify.couldNotClearOne")));
+			remoteHistoryGeneration.current += 1;
+			setRemoteLoadingEarlierHost(null);
+			setRemoteOlderPages((current) => ({
+				...current,
+				[hostId]: (current[hostId] ?? []).map((page) => ({
+					...page, notifications: page.notifications.filter((item) => item.id !== notification.id),
+				})),
+			}));
+			await queryClient.invalidateQueries({ queryKey: ["remote-notifications", hostId] });
+		})())
 			.catch((error: unknown) => {
 				setActionError(error instanceof Error ? error.message : t("notify.couldNotClearOne"));
 			})
 			.finally(() => {
 				setClearingNotificationIds((current) => {
 					const next = new Set(current);
-					next.delete(notification.id);
+					next.delete(key);
 					return next;
 				});
 			});
-	}, [clearOne, t]);
+	}, [clearOne, queryClient, t]);
 
 	const loadEarlierOnScroll = (event: React.UIEvent<HTMLDivElement>) => {
 		const list = event.currentTarget;
@@ -343,8 +527,26 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		if (remaining > 80 || !allQuery.hasNextPage || allQuery.isFetchingNextPage) return;
 		void allQuery.fetchNextPage();
 	};
+	const loadRemoteEarlier = async (hostId: string, cursor: string) => {
+		if (remoteLoadingEarlierHost) return;
+		const generation = remoteHistoryGeneration.current;
+		setRemoteLoadingEarlierHost(hostId);
+		setRemoteEarlierError(null);
+		try {
+			const page = await fetchRemoteNotificationsPage(hostId, "all", cursor);
+			if (generation === remoteHistoryGeneration.current) {
+				setRemoteOlderPages((current) => ({ ...current, [hostId]: [...(current[hostId] ?? []), page] }));
+			}
+		} catch (error) {
+			if (generation === remoteHistoryGeneration.current) {
+				setRemoteEarlierError(error instanceof Error ? error.message : t("notify.earlierLoadFailed"));
+			}
+		} finally {
+			if (generation === remoteHistoryGeneration.current) setRemoteLoadingEarlierHost(null);
+		}
+	};
 
-	const isEmpty = notifications.length === 0;
+	const isEmpty = entries.length === 0;
 
 	return (
 		<Popover onOpenChange={setPanelOpen} open={open}>
@@ -377,7 +579,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 					<p className="text-subtitle font-semibold tracking-tight text-foreground">{t("notify.title")}</p>
 					<button
 						className="shrink-0 text-caption font-medium text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-						disabled={isEmpty || clearAll.isPending}
+						disabled={isEmpty || clearingAll}
 						onClick={handleClearAll}
 						type="button"
 					>
@@ -385,7 +587,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 					</button>
 				</div>
 				<NotificationWorkspaceState>
-					{({ retryWorkspace, sessionMeta, sessionsReady, terminatedIds, workspaceError }) => (
+					{({ retryWorkspace, loadedRemoteSessionIds, sessionMeta, sessionsReady, terminatedIds, workspaceError }) => (
 						<>
 							{markReadError ? (
 					<div
@@ -420,45 +622,49 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						</button>
 					</div>
 				) : null}
-				{allQuery.isError && isEmpty && !confirmedClearSnapshot ? (
-					<NotificationEmpty icon={CircleAlert} message={t("notify.loadFailed")} />
-				) : allQuery.isLoading && isEmpty ? (
+						{(allQuery.isError || remoteAll.hosts.some((host) => host.isError)) && isEmpty && !confirmedClearSnapshot ? (
+							<NotificationEmpty icon={CircleAlert} message={t("notify.loadFailed")} />
+						) : (allQuery.isLoading || remoteAll.hosts.some((host) => host.isLoading)) && isEmpty ? (
 					<NotificationEmpty icon={Inbox} message={t("notify.loading")} />
 				) : isEmpty ? (
 					<NotificationEmpty icon={CheckCheck} message={t("notify.emptyAll")} />
 					) : (
 						<>
 						<div
-						aria-busy={allQuery.isFetchingNextPage}
+						aria-busy={allQuery.isFetchingNextPage || remoteLoadingEarlierHost !== null}
 						className="board-scrollbar max-h-notification-max-height overflow-y-auto overscroll-contain py-1.5"
 						onScroll={loadEarlierOnScroll}
 						role="list"
 					>
-						{notifications.map((notification) => {
+						{entries.map(({ hostId, label, notification }) => {
 							const sessionId = notification.target.sessionId || notification.sessionId;
-							const meta = sessionId ? sessionMeta.get(sessionId) : undefined;
-							const terminated = Boolean(sessionId) && terminatedIds.has(sessionId);
+							const sessionKey = sessionId ? sessionUiKey(sessionId, hostId) : undefined;
+							const sessionReady = hostId === LOCAL_HOST ? sessionsReady : Boolean(sessionKey && loadedRemoteSessionIds.has(sessionKey));
+							const meta = sessionKey ? sessionMeta.get(sessionKey) : undefined;
+							const terminated = Boolean(sessionKey) && terminatedIds.has(sessionKey ?? "");
+							const key = notificationKey(hostId, notification.id);
 							// Restoring only makes sense when an agent is actually paused waiting
 							// on input. PR outcomes (ready_to_merge, pr_merged, pr_closed_unmerged)
 							// describe work that already finished — there is nothing to resume, so
 							// a terminated session behind one of these should stay viewable, not
 							// gated behind a restore action.
-							const offerRestore = terminated && notification.type === "needs_input";
+							const offerRestore = sessionReady && terminated && notification.type === "needs_input";
 							return (
 								<NotificationItem
-									highlighted={highlightedIds.has(notification.id) || notification.status === "unread"}
-									key={notification.id}
+									highlighted={highlightedIds.has(key) || notification.status === "unread"}
+									key={key}
 									notification={notification}
-									onOpenSession={openSessionAndDismiss}
-									onRestore={restoreAndOpen}
-									onClear={handleClear}
-									clearing={clearingNotificationIds.has(notification.id)}
-									clearDisabled={clearingNotificationIds.has(notification.id) || clearAll.isPending}
-									restoring={restoringSessionId === sessionId}
+									onOpenSession={() => openSessionAndDismiss(notification, hostId)}
+									onRestore={() => restoreAndOpen(notification, hostId)}
+									onClear={() => handleClear(notification, hostId)}
+									clearing={clearingNotificationIds.has(key)}
+									clearDisabled={clearingNotificationIds.has(key) || clearingAll}
+									restoring={restoringSessionId === sessionKey}
 									restoreDisabled={restoringSessionId !== undefined}
+									hostLabel={label}
 									projectName={meta?.projectName}
 									sessionName={meta?.sessionName}
-									sessionsReady={sessionsReady}
+									sessionsReady={sessionReady}
 									terminated={terminated}
 									offerRestore={offerRestore}
 								/>
@@ -487,6 +693,23 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 								{t("notify.loadingEarlier")}
 							</div>
 						) : null}
+						{remoteAll.hosts.map((host) => {
+							const older = remoteOlderPages[host.hostId] ?? [];
+							const cursor = older.length > 0 ? older[older.length - 1].nextCursor : host.data?.nextCursor;
+							if (!cursor || !host.data) return null;
+							return (
+								<button
+									className="block w-full px-4 py-2 text-center text-caption font-medium text-muted-foreground hover:text-foreground disabled:opacity-50"
+									disabled={remoteLoadingEarlierHost !== null}
+									key={host.hostId}
+									onClick={() => void loadRemoteEarlier(host.hostId, cursor)}
+									type="button"
+								>
+									{remoteLoadingEarlierHost === host.hostId ? t("notify.loadingEarlier") : t("notify.loadEarlierFromHost", { host: host.label })}
+								</button>
+							);
+						})}
+						{remoteEarlierError ? <div aria-live="polite" className="px-4 py-2 text-caption text-error">{remoteEarlierError}</div> : null}
 					</div>
 						</>
 				)}
@@ -525,6 +748,7 @@ const NotificationItem = memo(function NotificationItem({
 	onOpenSession,
 	onRestore,
 	onClear,
+	hostLabel,
 	projectName,
 	clearing,
 	clearDisabled,
@@ -540,6 +764,7 @@ const NotificationItem = memo(function NotificationItem({
 	onOpenSession: (notification: NotificationDTO) => void;
 	onRestore: (notification: NotificationDTO) => void;
 	onClear: (notification: NotificationDTO) => void;
+	hostLabel?: string;
 	projectName?: string;
 	clearing: boolean;
 	clearDisabled: boolean;
@@ -628,8 +853,10 @@ const NotificationItem = memo(function NotificationItem({
 							{copy.body}
 						</p>
 					) : null}
-					{projectName || showSessionMeta ? (
+					{hostLabel || projectName || showSessionMeta ? (
 						<p className="mt-1 flex min-w-0 items-center gap-1.5 text-caption leading-none text-passive">
+							{hostLabel ? <span className="shrink-0 font-medium text-muted-foreground">{hostLabel}</span> : null}
+							{hostLabel && (projectName || showSessionMeta) ? <span aria-hidden="true">·</span> : null}
 							{projectName ? (
 								<span className="truncate font-medium text-muted-foreground">{projectName}</span>
 							) : null}
@@ -667,7 +894,7 @@ const NotificationItem = memo(function NotificationItem({
 					<Tooltip delayDuration={0}>
 						<TooltipTrigger asChild>
 							<button
-								aria-label={t("notify.clearOne", { title: copy.title })}
+								aria-label={t("notify.clearOne", { title: hostLabel ? `${hostLabel}: ${copy.title}` : copy.title })}
 								className="grid size-notification-icon place-items-center rounded-md text-passive transition-colors hover:bg-interactive-active hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
 								disabled={clearDisabled}
 								onClick={(event) => {

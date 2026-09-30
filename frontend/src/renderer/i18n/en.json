@@ -674,6 +674,7 @@
 	"notify.earlierLoadFailed": "Couldn’t load earlier notifications.",
 	"notify.emptyAll": "No notifications yet.",
 	"notify.loadFailed": "Could not load notifications.",
+	"notify.loadEarlierFromHost": "Load earlier from {{host}}",
 	"notify.loading": "Loading notifications…",
 	"notify.loadingEarlier": "Loading earlier notifications…",
 	"notify.markCloudRead": "Mark cloud read",
