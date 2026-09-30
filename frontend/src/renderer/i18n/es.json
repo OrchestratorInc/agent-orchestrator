@@ -1,4 +1,5 @@
 {
+	"settings.cloudProject.autoReviewDescription": "Iniciar revisiones automáticas de PR para este proyecto. La entrega de comentarios se controla por separado en cada sesión.",
 	"settings.cloudProject.title": "Proyecto Cloud",
 	"settings.cloudProject.signIn": "Inicia sesión para cargar la configuración del proyecto Cloud.",
 	"settings.cloudProject.agentDefault": "Predeterminado del agente",

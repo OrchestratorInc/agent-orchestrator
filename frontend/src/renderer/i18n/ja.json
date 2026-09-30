@@ -1,4 +1,5 @@
 {
+	"settings.cloudProject.autoReviewDescription": "このプロジェクトの PR 自動レビューを開始します。レビュー結果の送信は各セッションで個別に設定します。",
 	"settings.cloudProject.title": "クラウドプロジェクト",
 	"settings.cloudProject.signIn": "クラウドプロジェクト設定を読み込むにはサインインしてください。",
 	"settings.cloudProject.agentDefault": "エージェントの既定値",

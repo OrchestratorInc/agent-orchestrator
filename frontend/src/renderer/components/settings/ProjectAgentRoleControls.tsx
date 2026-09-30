@@ -22,6 +22,9 @@ export function AgentModelField({
 	onValidityChange,
 	allowCustomFallback = false,
 	supportedEfforts,
+	followCatalogDefaults = true,
+	emptyLabel,
+	independentMode = false,
 }: {
 	role: "worker" | "orchestrator" | "reviewer";
 	agentId: string;
@@ -36,6 +39,11 @@ export function AgentModelField({
 	allowCustomFallback?: boolean;
 	/** Cloud accepts custom model IDs and validates effort at the harness boundary. */
 	supportedEfforts?: readonly string[];
+	/** Local catalog defaults may differ from the Cloud worker runtime. */
+	followCatalogDefaults?: boolean;
+	emptyLabel?: string;
+	/** Cloud Cursor can select both a model and a launch mode. */
+	independentMode?: boolean;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -53,7 +61,7 @@ export function AgentModelField({
 			queryClient.setQueryData(agentModelsQueryKey(agentId, projectId), revalidationQuery.data);
 		}
 	}, [agentId, projectId, queryClient, revalidationQuery.data]);
-	const isMode = catalog?.selectionMode === "mode";
+	const isMode = !independentMode && catalog?.selectionMode === "mode";
 	const label = t(`settings.models.${role}${isMode ? "Mode" : "Model"}`);
 	const warning =
 		(revalidationQuery.isError ? (revalidationQuery.error instanceof Error ? revalidationQuery.error.message : t("settings.models.validateFailed")) : undefined) ??
@@ -71,7 +79,7 @@ export function AgentModelField({
 	}
 
 	if (isMode) {
-		const defaultMode = catalog.models?.find((item) => item.isDefault && isConcreteModelID(item.id))?.id;
+		const defaultMode = followCatalogDefaults ? catalog.models?.find((item) => item.isDefault && isConcreteModelID(item.id))?.id : "agent";
 		const selectedMode = isConcreteModelID(mode) ? mode : "";
 		const options = (catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
 			value: item.id,
@@ -101,10 +109,11 @@ export function AgentModelField({
 		);
 	}
 
-	const models = supportedEfforts
+	const models = supportedEfforts || !followCatalogDefaults
 		? (catalog?.models ?? []).map((item) => ({
 			...item,
-			efforts: item.efforts ? item.efforts.filter((value) => supportedEfforts.includes(value)) : [...supportedEfforts],
+			...(supportedEfforts ? { efforts: item.efforts ? item.efforts.filter((value) => supportedEfforts.includes(value)) : [...supportedEfforts] } : {}),
+			...(!followCatalogDefaults ? { isDefault: false, defaultEffort: undefined } : {}),
 		}))
 		: catalog?.models ?? [];
 	if (supportedEfforts && isConcreteModelID(model) && !models.some((item) => item.id === model)) {
@@ -117,11 +126,11 @@ export function AgentModelField({
 	};
 	const selectCatalogModel = (value: string) => {
 		onModelChange(value);
-		onModeChange("");
+		if (!independentMode) onModeChange("");
 	};
 	const selectCustomModel = (value: string) => {
 		onModelChange(value);
-		onModeChange("");
+		if (!independentMode) onModeChange("");
 	};
 	return (
 		<>
@@ -131,6 +140,7 @@ export function AgentModelField({
 						aria-label={label}
 						value={model}
 						models={models}
+						emptyLabel={emptyLabel}
 						allowCustom={catalog?.allowCustom}
 						customModelEntry={customModelEntry}
 						agentLabel={agentId}

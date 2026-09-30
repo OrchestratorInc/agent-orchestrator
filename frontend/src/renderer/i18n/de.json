@@ -1,4 +1,5 @@
 {
+	"settings.cloudProject.autoReviewDescription": "Automatische PR-Reviews für dieses Projekt starten. Die Übermittlung der Review-Rückmeldungen wird für jede Sitzung separat gesteuert.",
 	"settings.cloudProject.title": "Cloud-Projekt",
 	"settings.cloudProject.signIn": "Melde dich an, um die Cloud-Projekteinstellungen zu laden.",
 	"settings.cloudProject.agentDefault": "Agent-Standard",

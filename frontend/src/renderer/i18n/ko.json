@@ -1,4 +1,5 @@
 {
+	"settings.cloudProject.autoReviewDescription": "이 프로젝트의 PR 자동 리뷰를 시작합니다. 리뷰 피드백 전달은 각 세션에서 별도로 설정합니다.",
 	"settings.cloudProject.title": "클라우드 프로젝트",
 	"settings.cloudProject.signIn": "클라우드 프로젝트 설정을 불러오려면 로그인하세요.",
 	"settings.cloudProject.agentDefault": "에이전트 기본값",

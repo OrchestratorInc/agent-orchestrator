@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +15,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/workerexec"
 	"github.com/google/uuid"
 )
 
@@ -227,4 +232,97 @@ func TestLegacyReviewSnapshotAndFailedReviewerLaunch(t *testing.T) {
 	if status != "failed" || lastError != "Reviewer credential unavailable" || reviewState != "needs_review" {
 		t.Fatalf("review failure not surfaced: %s, %s, %s", status, lastError, reviewState)
 	}
+}
+
+// Exercise the settings write, durable launch and provider process boundaries
+// together. The executable records argv so this never invokes a paid model.
+func TestSavedProjectSettingsReachWorkerOrchestratorAndReviewerProcesses(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	patch, err := domain.ParseProjectSettingsPatch(json.RawMessage(`{"config":{"worker":{"agent":"codex","agentConfig":{"model":"gpt-6-luna","effort":"medium","permissions":"auto"}},"orchestrator":{"agent":"codex","agentConfig":{"model":"gpt-6.1-sol","effort":"low","permissions":"auto"}},"reviewers":[{"harness":"claude-code","agentConfig":{"model":"sonnet","effort":"high","permissions":"auto"}}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateProjectSettings(ctx, principal, fixture.orgID, fixture.projectID, patch); err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	recorder := filepath.Join(t.TempDir(), "record-agent-args")
+	if err := os.WriteFile(recorder, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	checkLaunch := func(kind, harness, model, effort string, launch worker.LaunchContext) {
+		t.Helper()
+		if launch.Harness != harness || launch.Model != model || launch.AgentConfig.Effort != effort {
+			t.Fatalf("%s launch differs from saved settings: %+v", kind, launch)
+		}
+		credential := worker.CredentialResponse{Provider: harness, CredentialType: "auth_json", Secret: `{"tokens":{"access_token":"fixture"}}`}
+		if harness == "claude-code" {
+			credential.CredentialType, credential.Secret = "api_key", "fixture"
+		}
+		command, err := (workerexec.HarnessBuilder{DataDir: t.TempDir(), ConfigRoot: t.TempDir(), Binaries: map[string]string{harness: recorder}}).BuildInteractive(launch, credential, workspace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if command.Cleanup != nil {
+			defer command.Cleanup()
+		}
+		process := exec.CommandContext(ctx, command.Path, command.Args...)
+		process.Dir = command.Dir
+		output, err := process.Output()
+		if err != nil {
+			t.Fatalf("%s process: %v", kind, err)
+		}
+		args := strings.Split(strings.TrimSpace(string(output)), "\n")
+		modelIndex := slices.Index(args, "--model")
+		if modelIndex < 0 || modelIndex+1 >= len(args) || args[modelIndex+1] != model {
+			t.Fatalf("%s launched wrong model: %q", kind, args)
+		}
+		effortFlag := `model_reasoning_effort="` + effort + `"`
+		if harness == "claude-code" {
+			effortIndex := slices.Index(args, "--effort")
+			if effortIndex < 0 || effortIndex+1 >= len(args) || args[effortIndex+1] != effort {
+				t.Fatalf("%s launched wrong effort: %q", kind, args)
+			}
+		} else if !slices.Contains(args, effortFlag) {
+			t.Fatalf("%s launched wrong effort: %q", kind, args)
+		}
+		t.Logf("%s process received harness=%s model=%s effort=%s", kind, harness, model, effort)
+	}
+	for _, role := range []struct{ kind, model, effort string }{{"worker", "gpt-6-luna", "medium"}, {"orchestrator", "gpt-6.1-sol", "low"}} {
+		session, err := store.CreateSession(ctx, principal, fixture.orgID, uuid.NewString(), 10, domain.CreateSession{ProjectID: fixture.projectID, Kind: role.kind, DisplayName: role.kind, Mode: "standard"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		spec, err := store.WorkerLaunchSpec(ctx, fixture.orgID, session.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var config domain.ProjectAgentConfig
+		if err := json.Unmarshal(spec.AgentConfig, &config); err != nil {
+			t.Fatal(err)
+		}
+		checkLaunch(role.kind, "codex", role.model, role.effort, worker.LaunchContext{SessionID: session.ID, Kind: role.kind, Harness: spec.Harness, Mode: spec.Mode, Model: spec.Model, AgentConfig: config})
+	}
+	pr, err := store.CreatePullRequestRecord(ctx, fixture.orgID, fixture.sessionID, "github", "owner/repo", "author", 1, "https://github.test/owner/repo/pull/1", "feature", "main", "settings-sha", "Settings launch", 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, created, err := store.CreateReviewRun(ctx, fixture.orgID, pr.ID, fixture.sessionID, "settings-sha")
+	if err != nil || !created {
+		t.Fatalf("review creation: created=%v err=%v", created, err)
+	}
+	if err := store.OpenReviewTerminal(ctx, fixture.orgID, fixture.sessionID, run.ID, "Review"); err != nil {
+		t.Fatal(err)
+	}
+	var payload json.RawMessage
+	if err := admin.QueryRow(ctx, `SELECT payload FROM ao_worker_requests WHERE session_id = $1 AND kind = 'terminal.open'`, fixture.sessionID).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	var terminal worker.TerminalCommand
+	if err := json.Unmarshal(payload, &terminal); err != nil || terminal.Reviewer == nil {
+		t.Fatalf("review transport: %s, %v", payload, err)
+	}
+	checkLaunch("reviewer", "claude-code", "sonnet", "high", worker.LaunchContext{SessionID: run.ID, Kind: "reviewer", Harness: terminal.Reviewer.Harness, Mode: "standard", Model: terminal.Reviewer.AgentConfig.Model, AgentConfig: terminal.Reviewer.AgentConfig})
 }
