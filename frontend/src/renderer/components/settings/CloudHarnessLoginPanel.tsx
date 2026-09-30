@@ -22,40 +22,36 @@ const SETUP_TOKEN_STEPS = [
 // plane, so no token is pasted or displayed. Pasting a Claude setup token or a
 // provider API key remains available as a fallback; each API key links to the
 // page where it is created. OpenCode is multi-provider, so its credential type
-// doubles as the provider the worker injects the key for. Product and provider
-// names are proper nouns and deliberately not translated.
+// doubles as the provider the worker injects the key for. Method names and
+// placeholders are translated whole; only the provider brand is inserted.
 export type CloudHarness = (typeof CLOUD_AGENT_PROVIDERS)[number];
 
-type LoginMethod = {
-	value: string;
-	label: string;
-	/** What the input asks for ("Paste your {{name}}"). */
-	name?: string;
-	/** Where to create an API key. */
-	help?: { site: string; url: string };
-};
+type LoginMethod =
+	| { value: string; kind: "browser"; provider: "Anthropic" | "ChatGPT" }
+	| { value: string; kind: "setupToken" }
+	| { value: string; kind: "apiKey"; provider: string; help: { site: string; url: string } };
 
 const ANTHROPIC_KEY_HELP = { site: "console.anthropic.com", url: "https://console.anthropic.com/settings/keys" };
 const OPENAI_KEY_HELP = { site: "platform.openai.com", url: "https://platform.openai.com/api-keys" };
 
 const CLOUD_LOGIN_METHODS: Record<CloudHarness, readonly LoginMethod[]> = {
 	"claude-code": [
-		{ value: BROWSER_LOGIN, label: "Log in with Anthropic" },
-		{ value: "oauth_token", label: "Setup token", name: "setup token" },
-		{ value: "api_key", label: "Anthropic API key", help: ANTHROPIC_KEY_HELP },
+		{ value: BROWSER_LOGIN, kind: "browser", provider: "Anthropic" },
+		{ value: "oauth_token", kind: "setupToken" },
+		{ value: "api_key", kind: "apiKey", provider: "Anthropic", help: ANTHROPIC_KEY_HELP },
 	],
 	codex: [
-		{ value: BROWSER_LOGIN, label: "Log in with ChatGPT" },
-		{ value: "api_key", label: "OpenAI API key", help: OPENAI_KEY_HELP },
+		{ value: BROWSER_LOGIN, kind: "browser", provider: "ChatGPT" },
+		{ value: "api_key", kind: "apiKey", provider: "OpenAI", help: OPENAI_KEY_HELP },
 	],
 	cursor: [
-		{ value: "api_key", label: "Cursor API key", help: { site: "cursor.com/dashboard", url: "https://cursor.com/dashboard?tab=integrations" } },
+		{ value: "api_key", kind: "apiKey", provider: "Cursor", help: { site: "cursor.com/dashboard", url: "https://cursor.com/dashboard?tab=integrations" } },
 	],
 	opencode: [
-		{ value: "opencode_api_key", label: "OpenCode API key", help: { site: "opencode.ai/auth", url: "https://opencode.ai/auth" } },
-		{ value: "anthropic_api_key", label: "Anthropic API key", help: ANTHROPIC_KEY_HELP },
-		{ value: "openai_api_key", label: "OpenAI API key", help: OPENAI_KEY_HELP },
-		{ value: "openrouter_api_key", label: "OpenRouter API key", help: { site: "openrouter.ai/keys", url: "https://openrouter.ai/keys" } },
+		{ value: "opencode_api_key", kind: "apiKey", provider: "OpenCode", help: { site: "opencode.ai/auth", url: "https://opencode.ai/auth" } },
+		{ value: "anthropic_api_key", kind: "apiKey", provider: "Anthropic", help: ANTHROPIC_KEY_HELP },
+		{ value: "openai_api_key", kind: "apiKey", provider: "OpenAI", help: OPENAI_KEY_HELP },
+		{ value: "openrouter_api_key", kind: "apiKey", provider: "OpenRouter", help: { site: "openrouter.ai/keys", url: "https://openrouter.ai/keys" } },
 	],
 };
 
@@ -78,6 +74,13 @@ export function CloudHarnessLoginPanel({ agent, onClose }: { agent: CloudHarness
 	const loginCancelledRef = useRef(false);
 
 	const selectedMethod = methods.find((entry) => entry.value === credentialType) ?? methods[0];
+	const methodLabel = (method: LoginMethod) =>
+		method.kind === "browser"
+			? method.provider === "Anthropic" ? t("cloudCredential.loginWithAnthropic") : t("cloudCredential.loginWithChatGPT")
+			: method.kind === "setupToken" ? t("cloudCredential.method.setupToken") : t("cloudCredential.method.apiKey", { provider: method.provider });
+	const placeholder = selectedMethod.kind === "apiKey"
+		? t("cloudCredential.pasteApiKey", { provider: selectedMethod.provider })
+		: t("cloudCredential.pasteSetupToken");
 	const needsSecret = credentialType !== BROWSER_LOGIN;
 	const browserLoginPending = busy && !needsSecret;
 	const canSubmit = !busy && needsSecret && secret.trim() !== "";
@@ -160,7 +163,7 @@ export function CloudHarnessLoginPanel({ agent, onClose }: { agent: CloudHarness
 		<div ref={panelRef} className="flex scroll-my-3 flex-col gap-2 pb-1" data-testid="cloud-harness-login">
 			{needsSecret ? (
 				<>
-					{selectedMethod.help ? (
+					{selectedMethod.kind === "apiKey" ? (
 						<p className={hintClass}>
 							<Trans
 								i18nKey="cloudCredential.apiKeyHelp"
@@ -169,7 +172,7 @@ export function CloudHarnessLoginPanel({ agent, onClose }: { agent: CloudHarness
 										<button
 											type="button"
 											className="text-settings-label underline underline-offset-2"
-											onClick={() => void aoBridge.app.openExternal(selectedMethod.help!.url)}
+											onClick={() => void aoBridge.app.openExternal(selectedMethod.help.url)}
 										>
 											{selectedMethod.help.site}
 										</button>
@@ -193,13 +196,13 @@ export function CloudHarnessLoginPanel({ agent, onClose }: { agent: CloudHarness
 					) : null}
 					<div className="flex items-center gap-2">
 						<Input
-							aria-label={selectedMethod.label}
+							aria-label={methodLabel(selectedMethod)}
 							type="password"
 							autoComplete="off"
 							spellCheck={false}
 							autoFocus
 							className="h-8 min-w-0 flex-1 text-[13px]"
-							placeholder={t("cloudCredential.pastePlaceholder", { name: selectedMethod.name ?? selectedMethod.label })}
+							placeholder={placeholder}
 							disabled={busy}
 							value={secret}
 							onChange={(e) => setSecret(e.target.value)}
@@ -255,7 +258,7 @@ export function CloudHarnessLoginPanel({ agent, onClose }: { agent: CloudHarness
 									setError(null);
 								}}
 							>
-								{entry.label}
+								{methodLabel(entry)}
 							</button>
 						</span>
 					))}

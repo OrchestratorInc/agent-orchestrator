@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { appI18n } from "../../i18n";
 import { CloudHarnessLoginPanel, type CloudHarness } from "./CloudHarnessLoginPanel";
 
 const bridgeMocks = vi.hoisted(() => ({
@@ -58,7 +59,8 @@ function renderPanel(agent: CloudHarness = "claude-code") {
 }
 
 describe("CloudHarnessLoginPanel", () => {
-	beforeEach(() => {
+	beforeEach(async () => {
+		await appI18n.changeLanguage("en");
 		bridgeMocks.connectProviderAuth.mockReset();
 		bridgeMocks.cancelProviderAuth.mockReset();
 		cloudMocks.putUserAgentConnection.mockReset();
@@ -143,6 +145,16 @@ describe("CloudHarnessLoginPanel", () => {
 		await user.click(screen.getByRole("button", { name: "Connect" }));
 
 		expect(cloudMocks.putUserAgentConnection).toHaveBeenCalledWith("opencode", { credentialType: "openrouter_api_key", secret: "or-key" });
+	});
+
+	it("translates method names and placeholders whole, inserting only the provider brand", async () => {
+		await appI18n.changeLanguage("de");
+		const user = userEvent.setup();
+		renderPanel();
+		await user.click(screen.getByRole("button", { name: "Setup-Token" }));
+		expect(screen.getByPlaceholderText("Füge dein Setup-Token ein")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Anthropic-API-Schlüssel" }));
+		expect(screen.getByPlaceholderText("Füge deinen Anthropic-API-Schlüssel ein")).toBeInTheDocument();
 	});
 
 	it("saves a pasted Cursor API key as the user's personal connection", async () => {
