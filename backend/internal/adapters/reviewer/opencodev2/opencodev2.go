@@ -183,6 +183,8 @@ func reviewerPermissions(taskPromptRoot string) []permissionRule {
 	for _, resource := range []string{
 		"gh api -*",
 		"gh api * -*",
+		"gh api *>*",
+		"gh api *<*",
 		"gh api *;*",
 		"gh api *&*",
 		"gh api *|*",
