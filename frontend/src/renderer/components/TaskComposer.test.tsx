@@ -1414,7 +1414,7 @@ describe("TaskComposer", () => {
 		);
 
 		const picker = await screen.findByRole("button", { name: "Model" });
-		expect(picker).toHaveTextContent("Default");
+		expect(picker).toHaveTextContent("Model not reported");
 
 		await userEvent.click(picker);
 		expect(await screen.findByRole("menuitem", { name: "GPT-5" })).toBeInTheDocument();
@@ -1558,8 +1558,7 @@ describe("TaskComposer", () => {
 
 		const model = await screen.findByRole("button", { name: "Model" });
 		await userEvent.click(model);
-		// Clearing here would fall back to the project model, not the agent's own default.
-		expect(screen.queryByRole("menuitem", { name: "Default" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Use agent model" })).not.toBeInTheDocument();
 		await userEvent.type(screen.getByRole("searchbox", { name: "Search model" }), "gpt-5.1");
 		await userEvent.click(screen.getByRole("menuitem", { name: "Use “gpt-5.1” as a custom model" }));
 		fireEvent.change(task(), { target: { value: "Use the selected model" } });
@@ -1746,8 +1745,8 @@ describe("TaskComposer", () => {
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Fast" }));
 		expect(picker).toHaveTextContent("Fast");
 		await userEvent.click(picker);
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Default" }));
-		expect(picker).toHaveTextContent("Default");
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Use agent mode" }));
+		expect(picker).toHaveTextContent("Mode not reported");
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
 		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");

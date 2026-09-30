@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { DEFAULT_MODE_OPTION, isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
+import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
 import {
 	agentModelsQueryKey,
 	agentModelsQueryOptions,
@@ -86,24 +86,21 @@ export function AgentModelPicker({
 	}
 
 	if (catalog?.selectionMode === "mode") {
+		const options = (catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
+			value: item.id,
+			label: modelChoiceLabel(item),
+		}));
 		const explicitMode = isConcreteModelID(mode) ? mode : "";
 		const defaultMode = catalog.models?.find((item) => item.isDefault && isConcreteModelID(item.id))?.id || "";
-		// With no reported default, "Default" lets the agent use its own configured mode.
-		const options = [
-			...(defaultMode ? [] : [{ value: DEFAULT_MODE_OPTION, label: t("settings.models.default") }]),
-			...(catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
-				value: item.id,
-				label: modelChoiceLabel(item),
-			})),
-		];
-		const effectiveMode = explicitMode || defaultMode || DEFAULT_MODE_OPTION;
+		const effectiveMode = explicitMode || defaultMode;
 		const visibleModeLabel = options.find((option) => option.value === effectiveMode)?.label ?? (explicitMode || t("settings.models.modeNotReported"));
 		return (
 			<SettingsOptionMenu
 				aria-label={t("newTask.model")}
 				value={effectiveMode}
 				options={options}
-				disabled={disabled || agentId === "" || options.length === 0}
+				action={explicitMode && !defaultMode ? { label: t("settings.models.useAgentMode"), onSelect: () => onModeChange("") } : undefined}
+				disabled={disabled || agentId === "" || (options.length === 0 && !(explicitMode && !defaultMode))}
 				triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
 				menuAlign="start"
 				renderTrigger={() => (
@@ -111,7 +108,7 @@ export function AgentModelPicker({
 						{visibleModeLabel}
 					</span>
 				)}
-				onChange={(value) => onModeChange(value === defaultMode || value === DEFAULT_MODE_OPTION ? "" : value)}
+				onChange={(value) => onModeChange(value === defaultMode ? "" : value)}
 			/>
 		);
 	}

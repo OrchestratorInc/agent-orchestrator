@@ -93,7 +93,6 @@ export function AgentModelCombobox({
 	onCustom: (value: string) => void;
 	/** Shown when the agent does not report a concrete model. */
 	emptyLabel?: string;
-	/** Offers a "Default" choice that clears the override when the agent reports no default. */
 	showFollowAgentAction?: boolean;
 	triggerLabel?: string;
 	triggerClassName?: string;
@@ -183,13 +182,7 @@ export function AgentModelCombobox({
 	);
 	const customSearchValue = search.trim();
 	const showCustomSearchAction = allowDirectCustom && customSearchValue !== "" && rankedModels.length === 0;
-	// When the agent reports no concrete default, "Default" is a real choice:
-	// clearing the override lets the agent run the model its own config selects.
-	const showDefaultOption = showFollowAgentAction && !defaultModel;
-	const currentLabel =
-		(triggerLabel ?? selected?.label ?? explicitModel) ||
-		emptyLabel ||
-		t(showDefaultOption ? "settings.models.default" : "settings.models.modelNotReported");
+	const currentLabel = (triggerLabel ?? selected?.label ?? explicitModel) || emptyLabel || t("settings.models.modelNotReported");
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const effortTriggerRef = useRef<HTMLDivElement>(null);
 	const [canScrollDown, setCanScrollDown] = useState(false);
@@ -346,17 +339,9 @@ export function AgentModelCombobox({
 						className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
 						onScroll={updateScrollCue}
 					>
-						{normalizedSearch === "" && showDefaultOption && (
-							<DropdownMenuItem
-								onSelect={() => {
-									onChange("");
-									setMenuOpen(false);
-								}}
-								className={modelItemClass(!explicitModel)}
-								aria-current={tuning && !explicitModel ? true : undefined}
-							>
-								<span className="truncate text-settings-label">{t("settings.models.default")}</span>
-								{tuning && !explicitModel && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
+						{normalizedSearch === "" && showFollowAgentAction && explicitModel && !defaultModel && (
+							<DropdownMenuItem onSelect={() => onChange("")} className={modelItemClass(false)}>
+								{t("settings.models.useAgentModel")}
 							</DropdownMenuItem>
 						)}
 						{groups.map((group, groupIndex) => (

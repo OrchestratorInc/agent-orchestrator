@@ -1055,7 +1055,7 @@ describe("ProjectSettingsForm", () => {
 		renderSettings("proj-1", undefined, "agents");
 
 		expect(await screen.findAllByText("model refresh unavailable")).toHaveLength(3);
-		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent("Default");
+		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent("Model not reported");
 	});
 
 	it("shows cached models immediately and deduplicates background revalidation", async () => {
@@ -1099,7 +1099,7 @@ describe("ProjectSettingsForm", () => {
 
 		renderSettings("proj-1", undefined, "agents");
 
-		expect(await screen.findByRole("button", { name: "Worker model" })).toHaveTextContent("Default");
+		expect(await screen.findByRole("button", { name: "Worker model" })).toHaveTextContent("Model not reported");
 		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
 		expect(postMock).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", {
 			params: {

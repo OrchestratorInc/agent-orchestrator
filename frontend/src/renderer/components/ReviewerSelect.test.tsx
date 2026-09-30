@@ -95,7 +95,7 @@ describe("ReviewerSelect", () => {
 		/></QueryClientProvider>);
 		await userEvent.click(screen.getByRole("button", { name: "Reviewer" }));
 		await userEvent.click(screen.getByRole("menuitem", { name: /Codex/ }));
-		await userEvent.click(screen.getByRole("menuitem", { name: "Default" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use agent model" }));
 		expect(onConfigChange).toHaveBeenCalledWith("codex", {});
 	});
 
@@ -110,7 +110,7 @@ describe("ReviewerSelect", () => {
 		/></QueryClientProvider>);
 
 		const trigger = screen.getByRole("button", { name: "Reviewer" });
-		expect(trigger).toHaveTextContent("Default");
+		expect(trigger).toHaveTextContent("Model not reported");
 		await userEvent.click(trigger);
 		await userEvent.click(screen.getByRole("menuitem", { name: /Codex/ }));
 		expect(screen.queryByRole("menuitem", { name: "Agent choice" })).not.toBeInTheDocument();

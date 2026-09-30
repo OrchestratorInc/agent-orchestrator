@@ -137,7 +137,7 @@ describe("AgentModelCombobox", () => {
 			{ id: "sonnet", label: "Sonnet" },
 		], { value: "sonnet" });
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-		await userEvent.click(screen.getByRole("menuitem", { name: "Default" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use agent model" }));
 		expect(onChange).toHaveBeenCalledWith("");
 	});
 
@@ -159,12 +159,10 @@ describe("AgentModelCombobox", () => {
 			{ id: "sonnet", label: "Sonnet" },
 		]);
 		const picker = screen.getByRole("button", { name: "Worker model" });
-		expect(picker).toHaveTextContent("Default");
+		expect(picker).toHaveTextContent("Model not reported");
 		expect(onChange).not.toHaveBeenCalled();
 		await userEvent.click(picker);
-		// The opaque "Default (recommended)" row is replaced by AO's own Default choice.
-		expect(screen.queryByRole("menuitem", { name: /recommended/ })).not.toBeInTheDocument();
-		expect(screen.getByRole("menuitem", { name: "Default" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /Default/ })).not.toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "Sonnet" })).toBeInTheDocument();
 	});
 

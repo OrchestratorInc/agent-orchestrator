@@ -24,7 +24,7 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
-import { DEFAULT_MODE_OPTION, isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
+import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
 import {
 	buildRankedAgentOptions,
 	DEFAULT_AGENT_PRIORITY_RANK,
@@ -793,26 +793,23 @@ function TaskModelPicker({
 	}
 
 	if (catalog?.selectionMode === "mode") {
+		const options = (catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
+			value: item.id,
+			label: modelChoiceLabel(item),
+		}));
 		const explicitMode = isConcreteModelID(mode) ? mode : "";
 		const defaultMode = catalog.models?.find((item) => item.isDefault && isConcreteModelID(item.id))?.id || "";
-		// With no reported default, "Default" lets the agent use its own configured mode.
-		const showDefaultOption = showFollowAgentAction && !defaultMode;
-		const options = [
-			...(showDefaultOption ? [{ value: DEFAULT_MODE_OPTION, label: t("settings.models.default") }] : []),
-			...(catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
-				value: item.id,
-				label: modelChoiceLabel(item),
-			})),
-		];
-		const effectiveMode = explicitMode || defaultMode || (showDefaultOption ? DEFAULT_MODE_OPTION : "");
-		const visibleModeLabel =
-			options.find((option) => option.value === effectiveMode)?.label ?? (explicitMode || t("settings.models.modeNotReported"));
+		const effectiveMode = explicitMode || defaultMode;
+		const visibleModeLabel = options.find((option) => option.value === effectiveMode)?.label ?? t("settings.models.modeNotReported");
 		return (
 			<SettingsOptionMenu
 				aria-label={t("newTask.model")}
 				disabled={disabled || options.length === 0}
 				value={effectiveMode}
 				options={options}
+				action={explicitMode && !defaultMode && showFollowAgentAction
+					? { label: t("settings.models.useAgentMode"), onSelect: () => onModeChange("") }
+					: undefined}
 				triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
 				menuAlign="start"
 				renderTrigger={() => (
@@ -820,7 +817,7 @@ function TaskModelPicker({
 						{visibleModeLabel}
 					</span>
 				)}
-				onChange={(value) => onModeChange(value === defaultMode || value === DEFAULT_MODE_OPTION ? "" : value)}
+				onChange={(value) => onModeChange(value === defaultMode ? "" : value)}
 			/>
 		);
 	}
