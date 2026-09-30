@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DashboardSession, PRReviewState, ReviewRun, SessionPRSummary } from "./api";
-import { latestAutoReviewFailure, pullRequestSummaryForURL, reviewBatchAction, reviewerDestination, reviewForPullRequest, reviewPrimaryAction, reviewPrimaryActionLabel, reviewRouteForSession, reviewStatusLabel, reviewStatusVisual, reviewVerdictLabel, shortCommit } from "./reviewView";
+import { latestAutoReviewFailure, pullRequestSummaryForURL, reviewBatchAction, reviewerDestination, reviewForPullRequest, reviewPrimaryAction, reviewPrimaryActionLabel, reviewRouteForSession, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewStatusVisual, reviewVerdictLabel, shortCommit } from "./reviewView";
 
 const run = (over: Partial<ReviewRun> = {}): ReviewRun => ({
 	id: "run-1", reviewId: "review-1", sessionId: "worker-1", batchId: "", harness: "codex",
@@ -102,5 +102,20 @@ describe("mobile review presentation", () => {
 		expect(reviewerDestination({ ...base, reviewerSurface: { mode: "chat", reviewId: "review-1", harness: "codex" } }, review, "worker-1")).toMatchObject({ pathname: "/reviewer/[reviewId]", params: { reviewId: "review-1" } });
 		expect(reviewerDestination({ ...base, reviewerSurface: { mode: "tui", reviewId: "review-1", harness: "codex" } }, review, "worker-1")).toMatchObject({ pathname: "/shell/[handleId]", params: { handleId: "fallback" } });
 		expect(reviewerDestination(base, review, "worker-1")).toBeUndefined();
+	});
+	it("only offers finished reviews with findings to the worker", () => {
+		expect(reviewRunSendable(run())).toBe(true);
+		expect(reviewRunSendable(run({ status: "delivered" }))).toBe(true);
+		expect(reviewRunSendable(run({ status: "running", body: "" }))).toBe(false);
+		expect(reviewRunSendable(run({ status: "running", body: "partial" }))).toBe(false);
+		expect(reviewRunSendable(run({ status: "failed", verdict: "", body: "reviewer process exited before submitting a result" }))).toBe(false);
+		expect(reviewRunSendable(run({ status: "cancelled", verdict: "" }))).toBe(false);
+		expect(reviewRunSendable(run({ body: "  " }))).toBe(false);
+	});
+
+	it("says delivered once", () => {
+		expect(reviewRunMeta(run({ status: "delivered", deliveredAt: "2026-09-30T00:00:00Z" }))).toBe("codex · manual · delivered");
+		expect(reviewRunMeta(run({ status: "complete", deliveredAt: "2026-09-30T00:00:00Z" }))).toBe("codex · manual · complete · delivered");
+		expect(reviewRunMeta(run({ status: "running" }))).toBe("codex · manual · running");
 	});
 });

@@ -7,7 +7,7 @@ import { ChatMarkdown } from "../../lib/chat/ChatMarkdown";
 import { haptics } from "../../lib/haptics";
 import { openGitHub } from "../../lib/openGitHub";
 import { formatReviewSummaryMessage, reviewRunsForPullRequest, reviewRunUrl } from "../../lib/reviewFeedback";
-import { latestAutoReviewFailure, reviewBatchAction, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewStatusLabel, reviewStatusVisual, reviewVerdictLabel, shortCommit } from "../../lib/reviewView";
+import { latestAutoReviewFailure, reviewBatchAction, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewStatusVisual, reviewVerdictLabel, shortCommit } from "../../lib/reviewView";
 import { useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
@@ -196,10 +196,11 @@ function RunCard({ run, previous = false, sending, disabled, onSend }: { run: Re
 	const url = reviewRunUrl(run);
 	return <Card style={previous ? styles.previousCard : undefined}>
 		<View style={styles.runHeader}><Feather name={requested ? "alert-circle" : run.verdict === "approved" ? "check-circle" : "clock"} size={17} color={requested ? t.amber : run.verdict === "approved" ? t.green : t.textSecondary} /><Text style={styles.runTitle}>{reviewVerdictLabel(run)}</Text><Text style={styles.sha}>{shortCommit(run.targetSha)}</Text></View>
-		<Text style={styles.runBy}>{run.harness} · {run.triggerSource} · {run.status}{run.deliveredAt ? " · delivered" : ""}</Text>
+		<Text style={styles.runBy}>{reviewRunMeta(run)}</Text>
 		{run.autoInjectReview === false ? <View style={styles.notInjected}><Feather name="info" size={13} color={t.amber} /><Text style={styles.notInjectedText}>Not automatically sent to the worker</Text></View> : null}
 		{run.body ? <View style={styles.markdown}><ChatMarkdown text={run.body} /></View> : <Text style={styles.bodyMuted}>No written findings.</Text>}
-		<View style={styles.runActions}>{url ? <Pressable accessibilityRole="link" onPress={() => void openGitHub(url)} style={styles.smallAction}><Feather name="external-link" size={14} color={t.blue} /><Text style={styles.smallActionText}>Open on GitHub</Text></Pressable> : null}<Pressable accessibilityRole="button" disabled={disabled} onPress={onSend} style={[styles.smallAction, disabled && styles.actionDisabled]}>{sending ? <ActivityIndicator size="small" color={t.blue} /> : <Feather name="send" size={14} color={t.blue} />}<Text style={styles.smallActionText}>Send to worker</Text></Pressable></View>
+		{run.body ? <View style={styles.markdown}><ChatMarkdown text={run.body} /></View> : <Text style={styles.bodyMuted}>{run.status === "running" ? "Findings appear here when the review finishes." : "No written findings."}</Text>}
+		{url || reviewRunSendable(run) ? <View style={styles.runActions}>{url ? <Pressable accessibilityRole="link" onPress={() => void openGitHub(url)} style={styles.smallAction}><Feather name="external-link" size={14} color={t.blue} /><Text style={styles.smallActionText}>Open on GitHub</Text></Pressable> : null}{reviewRunSendable(run) ? <Pressable accessibilityRole="button" disabled={disabled} onPress={onSend} style={[styles.smallAction, disabled && styles.actionDisabled]}>{sending ? <ActivityIndicator size="small" color={t.blue} /> : <Feather name="send" size={14} color={t.blue} />}<Text style={styles.smallActionText}>Send to worker</Text></Pressable> : null}</View> : null}
 	</Card>;
 }
 

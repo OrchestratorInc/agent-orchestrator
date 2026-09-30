@@ -3,12 +3,15 @@ import { describe, expect, it } from "vitest";
 
 const actions = readFileSync(new URL("../app/sheets/review-actions.tsx", import.meta.url), "utf8");
 const detail = readFileSync(new URL("../app/review/[sessionId].tsx", import.meta.url), "utf8");
+const pickerIOS = readFileSync(new URL("./reviewer-picker.ios.tsx", import.meta.url), "utf8");
+const picker = readFileSync(new URL("./reviewer-picker.tsx", import.meta.url), "utf8");
 
 describe("reviewer control integration", () => {
 	it("keeps the project-default override separate from the effective reviewer", () => {
 		expect(actions).toContain('const [reviewerOverride, setReviewerOverride] = useState("")');
 		expect(actions).toContain("setEffectiveReviewer(reviewState.reviewerHarness || reviewer)");
-		expect(actions).toContain("selected={!reviewerOverride}");
+		expect(actions).toContain("selectedReviewer={reviewerOverride}");
+		expect(actions).toContain("effectiveReviewer={effectiveReviewer}");
 	});
 
 	it("ignores stale model catalogs after the effective reviewer changes", () => {
@@ -25,9 +28,27 @@ describe("reviewer control integration", () => {
 	});
 
 	it("renders every reviewer through the shared harness logo registry", () => {
-		expect(actions).toContain('import { AgentLogo } from "../../lib/AgentLogo"');
-		expect(actions).toContain("harness={agent.id}");
-		expect(actions).toContain("<AgentLogo harness={harness}");
+		expect(pickerIOS).toContain('import { HarnessImage, useHarnessLogoUris } from "./spawn-composer-controls.ios"');
+		expect(pickerIOS).toContain("<HarnessImage uri={logoUris[agent.id]} harness={agent.id} />");
+		expect(picker).toContain("<AgentLogo harness={harness}");
+	});
+
+	it("picks the reviewer and model from native iOS menus like the spawn sheet", () => {
+		expect(pickerIOS).toContain('import { Button, HStack, Image, Menu, Spacer, Text, VStack } from "@expo/ui/swift-ui"');
+		expect(pickerIOS).toContain('accessibilityIdentifier("review-reviewer")');
+		expect(pickerIOS).toContain('accessibilityIdentifier("review-model")');
+	});
+
+	it("only offers reviewers that can run, like the spawn sheet", () => {
+		expect(actions).toContain(".filter((agent) => agent.selectable || agent.id === reviewerOverride)");
+		expect(actions).toContain("reviewers={availableReviewers}");
+	});
+
+	it("uses the desktop inspector's automation wording and the system switch colors", () => {
+		expect(actions).toContain('title="Auto review"');
+		expect(actions).toContain('title="Automatically fix review comments"');
+		expect(actions).toContain('title="Automatically fix CI failures"');
+		expect(actions).not.toContain("trackColor");
 	});
 
 	it("does not let auto review lose its persistent reviewer", () => {
@@ -45,6 +66,10 @@ describe("reviewer control integration", () => {
 	it("does not fall back to a different pull request", () => {
 		expect(actions).toContain("setPR(matchedPR)");
 		expect(actions).not.toContain("?? prs[0]");
+	});
+
+	it("only offers finished review findings to the worker", () => {
+		expect(detail).toContain("reviewRunSendable(run) ? <Pressable");
 	});
 
 	it("keys automatic-review dismissal to the stable run id", () => {

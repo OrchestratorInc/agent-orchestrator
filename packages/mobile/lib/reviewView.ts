@@ -80,6 +80,18 @@ export function reviewVerdictLabel(run: ReviewRun): string {
 	return "No verdict";
 }
 
+/** Only a finished run with findings is worth giving to the worker. */
+export function reviewRunSendable(run: ReviewRun): boolean {
+	return (run.status === "complete" || run.status === "delivered") && Boolean(run.body?.trim());
+}
+
+/** "harness · trigger · status", adding "delivered" only when the status does not already say so. */
+export function reviewRunMeta(run: ReviewRun): string {
+	const parts = [run.harness, run.triggerSource, run.status];
+	if (run.deliveredAt && run.status !== "delivered") parts.push("delivered");
+	return parts.filter(Boolean).join(" · ");
+}
+
 export function shortCommit(sha: string): string {
 	return sha.slice(0, 8);
 }

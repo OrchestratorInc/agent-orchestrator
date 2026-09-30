@@ -26,6 +26,7 @@ import { AgentLogo } from "../../lib/AgentLogo";
 import { haptics } from "../../lib/haptics";
 import { openGitHub } from "../../lib/openGitHub";
 import { formatExternalReviewMessage, formatInlineReviewCommentMessage } from "../../lib/reviewFeedback";
+import { ReviewerPicker } from "../../lib/reviewer-picker";
 import { reviewerChoices, reviewerSelectionChanged, reviewerSwitchSelection, reviewerSwitchWarning } from "../../lib/reviewerControls";
 import { pullRequestSummaryForURL } from "../../lib/reviewView";
 import { useApp } from "../../lib/store";
@@ -90,6 +91,11 @@ export default function ReviewActionsSheet() {
 	}, [config, effectiveReviewer]);
 	const aoReviewIds = useMemo(() => new Set((reviews?.runs ?? []).filter((run) => run.prUrl === pr?.url).map((run) => run.githubReviewId).filter(Boolean)), [pr?.url, reviews?.runs]);
 	const externalReviewers = useMemo(() => uniqueReviewers(pr, aoReviewIds), [aoReviewIds, pr]);
+	// Like the spawn sheet, only offer reviewers that can run now. A saved
+	// override that has since become unavailable stays listed so it can be read.
+	const availableReviewers = useMemo(() => agents
+		.filter((agent) => agent.selectable || agent.id === reviewerOverride)
+		.map((agent) => ({ id: agent.id, label: agent.label || agent.id })), [agents, reviewerOverride]);
 	const comments = useMemo(() => reviewComments(pr, false), [pr]);
 	const resolvedComments = useMemo(() => reviewComments(pr, true), [pr]);
 	const externalReviews = useMemo(() => (pr?.review.reviews ?? []).filter((item) => item.reviewerId !== pr?.author && ![...aoReviewIds].some((id) => item.reviewUrl?.includes(`pullrequestreview-${id}`))), [aoReviewIds, pr]);
@@ -220,41 +226,45 @@ export default function ReviewActionsSheet() {
 		<SheetHeader title="Review actions" subtitle={pr ? `PR #${pr.number} · ${pr.title}` : "Reviewer and GitHub feedback"} />
 		{error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
 		{prMissing ? <Text accessibilityRole="alert" style={styles.error}>Pull request not found. Its URL may have changed; reopen review details from the current pull request.</Text> : null}
-		<Section title="AUTOMATION" subtitle="Keep review and delivery behavior in sync with the desktop app.">
+		<Section title="AUTOMATION" subtitle="The same settings as this session's inspector on desktop.">
 			<PolicyRow
-				title="Automatically review new commits"
-				description="Run the reviewer whenever this pull request gets a new commit."
+				title="Auto review"
+				description="When enabled, PRs will get auto-reviewed. When disabled, you can manually trigger the reviews."
 				value={policies?.autoReviewEnabled ?? false}
 				loading={!policies || busy?.kind === "policy" && busy.id === "autoReviewEnabled"}
 				disabled={!policies || Boolean(busy)}
 				onChange={(value) => void updatePolicy("autoReviewEnabled", value)}
 			/>
 			<PolicyRow
-				title="Send review feedback to worker"
-				description="Automatically give completed AO and GitHub review feedback to the worker."
+				title="Automatically fix review comments"
+				description="Sends review comments to the worker."
 				value={policies?.autoInjectReview ?? true}
 				loading={!policies || busy?.kind === "policy" && busy.id === "autoInjectReview"}
 				disabled={!policies || Boolean(busy)}
 				onChange={(value) => void updatePolicy("autoInjectReview", value)}
 			/>
 			<PolicyRow
-				title="Send CI failures to worker"
-				description="Automatically give failing checks to the worker so it can fix them."
+				title="Automatically fix CI failures"
+				description="Sends CI failures to the worker for this session's PRs."
 				value={policies?.autoInjectCI ?? true}
 				loading={!policies || busy?.kind === "policy" && busy.id === "autoInjectCI"}
 				disabled={!policies || Boolean(busy)}
 				onChange={(value) => void updatePolicy("autoInjectCI", value)}
 			/>
 		</Section>
-		<Section title="AO REVIEWER" subtitle="Choose who runs the next AO review.">
-			<ActionRow icon="users" title="Project default" selected={!reviewerOverride} loading={busy?.kind === "reviewer" && !busy.id} disabled={Boolean(busy)} onPress={() => chooseReviewer("")} />
-			{agents.map((agent) => <ActionRow key={agent.id} icon="user" harness={agent.id} title={agent.label || agent.id} subtitle={[agent.id, agent.status].filter(Boolean).join(" · ")} selected={reviewerOverride === agent.id} loading={busy?.kind === "reviewer" && busy.id === agent.id} disabled={Boolean(busy) || !agent.selectable} onPress={() => chooseReviewer(agent.id)} />)}
-			{!agents.length ? <Text style={styles.empty}>No reviewer agents were found.</Text> : null}
+		<Section title="AO REVIEWER" subtitle="Choose who runs the next AO review and which model it uses.">
+			{availableReviewers.length || reviewerOverride ? <ReviewerPicker
+				reviewers={availableReviewers}
+				selectedReviewer={reviewerOverride}
+				effectiveReviewer={effectiveReviewer}
+				onSelectReviewer={chooseReviewer}
+				models={effectiveReviewer ? (models?.models ?? []).map((model) => ({ id: model.id, label: model.label || model.id })) : []}
+				modelTitle={models?.selectionMode === "mode" ? "Mode" : "Model"}
+				selectedModel={(models?.selectionMode === "mode" ? reviewerConfig.mode : reviewerConfig.model) ?? ""}
+				onSelectModel={chooseModel}
+				busy={Boolean(busy)}
+			/> : <Text style={styles.empty}>No reviewer agents are available. Install or sign in to an agent on desktop.</Text>}
 		</Section>
-		{models?.models.length && effectiveReviewer ? <Section title={models.selectionMode === "mode" ? "REVIEWER MODE" : "REVIEWER MODEL"} subtitle="Applied to this worker's future review runs.">
-			<ActionRow icon="sliders" title="Provider default" selected={!(models.selectionMode === "mode" ? reviewerConfig.mode : reviewerConfig.model)} loading={busy?.kind === "reviewer"} disabled={Boolean(busy)} onPress={() => chooseModel("")} />
-			{models.models.map((model) => <ActionRow key={model.id} icon="cpu" title={model.label || model.id} subtitle={model.isDefault ? "Provider default" : undefined} selected={(models.selectionMode === "mode" ? reviewerConfig.mode : reviewerConfig.model) === model.id} loading={busy?.kind === "reviewer" && busy.id === reviewerOverride} disabled={Boolean(busy)} onPress={() => chooseModel(model.id)} />)}
-		</Section> : null}
 		{externalReviewers.length ? <Section title="EXTERNAL REVIEWERS" subtitle="Ask a GitHub reviewer to look at the latest changes again.">
 			{externalReviewers.map((item) => <ActionRow key={item.reviewerId} icon="refresh-cw" title={item.reviewerId} subtitle={`${item.count} ${item.count === 1 ? "comment" : "comments"}`} loading={busy?.kind === "rerequest" && busy.id === item.reviewerId} disabled={Boolean(busy)} onPress={() => void rerequest(item)} />)}
 		</Section> : null}
