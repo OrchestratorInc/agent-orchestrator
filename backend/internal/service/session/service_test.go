@@ -2987,7 +2987,7 @@ func TestSpawnStandaloneRejectsProjectFeatures(t *testing.T) {
 	}
 }
 
-func TestSpawnBlocksDefinitelyMissingHarnessBeforeManager(t *testing.T) {
+func TestSpawnUsesManagerWithoutPreflightReadiness(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
 	fc := &fakeCommander{}
@@ -2997,16 +2997,14 @@ func TestSpawnBlocksDefinitelyMissingHarnessBeforeManager(t *testing.T) {
 	}}
 	svc := NewWithDeps(Deps{Manager: fc, Store: st, AgentReadiness: readiness})
 
-	_, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: "codex"})
-	var apiError *apierr.Error
-	if !errors.As(err, &apiError) || apiError.Code != "AGENT_BINARY_NOT_FOUND" {
-		t.Fatalf("Spawn error = %v, want AGENT_BINARY_NOT_FOUND", err)
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: "codex"}); err != nil {
+		t.Fatalf("Spawn: %v", err)
 	}
-	if fc.spawnCalls != 0 {
-		t.Fatal("manager.Spawn ran before a definitely-missing harness was blocked")
+	if fc.spawnCalls != 1 {
+		t.Fatalf("manager.Spawn calls = %d, want 1", fc.spawnCalls)
 	}
-	if readiness.calls != 1 || readiness.purpose != domain.AgentReadinessPurposeLaunch {
-		t.Fatalf("readiness call = count %d purpose %q", readiness.calls, readiness.purpose)
+	if readiness.calls != 0 {
+		t.Fatalf("preflight readiness calls = %d, want 0", readiness.calls)
 	}
 }
 
@@ -3034,9 +3032,12 @@ func TestSpawnProjectClaudeGatewayTreatsGlobalUnauthorizedAsAdvisory(t *testing.
 	if fc.spawnCalls != 1 {
 		t.Fatalf("manager.Spawn calls = %d, want project-aware launch to remain authoritative", fc.spawnCalls)
 	}
+	if readiness.calls != 0 {
+		t.Fatalf("preflight readiness calls = %d, want 0", readiness.calls)
+	}
 }
 
-func TestSpawnStillRejectsFreshUnauthorizedCodexAccount(t *testing.T) {
+func TestSpawnDoesNotRecheckCodexAccountBeforeManager(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
 	fc := &fakeCommander{}
@@ -3048,13 +3049,14 @@ func TestSpawnStillRejectsFreshUnauthorizedCodexAccount(t *testing.T) {
 	}}
 	svc := NewWithDeps(Deps{Manager: fc, Store: st, AgentReadiness: readiness})
 
-	_, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex})
-	var apiError *apierr.Error
-	if !errors.As(err, &apiError) || apiError.Code != "CODEX_ACCOUNT_AUTH_UNVERIFIED" {
-		t.Fatalf("Spawn error = %v, want CODEX_ACCOUNT_AUTH_UNVERIFIED", err)
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
+		t.Fatalf("Spawn: %v", err)
 	}
-	if fc.spawnCalls != 0 {
-		t.Fatalf("manager.Spawn calls = %d, want fresh unauthorized Codex account blocked", fc.spawnCalls)
+	if fc.spawnCalls != 1 {
+		t.Fatalf("manager.Spawn calls = %d, want 1", fc.spawnCalls)
+	}
+	if readiness.calls != 0 {
+		t.Fatalf("preflight readiness calls = %d, want 0", readiness.calls)
 	}
 }
 
@@ -3080,6 +3082,9 @@ func TestSpawnInvalidatesReadinessAfterTypedLaunchFailure(t *testing.T) {
 			svc := NewWithDeps(Deps{Manager: fc, Store: st, AgentReadiness: readiness})
 
 			_, _, _, _ = svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: "codex"})
+			if readiness.calls != 0 {
+				t.Fatalf("preflight readiness calls = %d, want 0", readiness.calls)
+			}
 			if got := len(readiness.installationInvalidated) == 1; got != tt.wantInstallation {
 				t.Fatalf("installation invalidated = %v, want %v", got, tt.wantInstallation)
 			}

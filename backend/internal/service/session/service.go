@@ -317,20 +317,6 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return domain.Session{}, 0, 0, apierr.Invalid("HARNESS_REQUIRED", "harness is required for a standalone session", nil)
 		}
 	}
-	if s.agentReadiness != nil && cfg.Harness != "" {
-		readiness, err := s.agentReadiness.EnsureAgentReadiness(ctx, string(cfg.Harness), domain.AgentReadinessPurposeLaunch)
-		if err != nil {
-			return domain.Session{}, 0, 0, err
-		}
-		if readiness.Installation.State == domain.AgentInstallationNotInstalled {
-			return domain.Session{}, 0, 0, apierr.Invalid("AGENT_BINARY_NOT_FOUND", "The selected agent harness is not installed", map[string]any{"agentId": cfg.Harness})
-		}
-		if cfg.Harness == domain.HarnessCodex &&
-			readiness.Authentication.State == domain.AgentAuthenticationUnauthorized &&
-			readiness.Authentication.Freshness == domain.AgentReadinessFresh {
-			return domain.Session{}, 0, 0, apierr.Conflict("CODEX_ACCOUNT_AUTH_UNVERIFIED", "Add or sign in to a Codex account in Settings before starting a Codex session", nil)
-		}
-	}
 	start := s.now()
 	firstSession, err := s.isFirstSession(ctx)
 	if err != nil {
