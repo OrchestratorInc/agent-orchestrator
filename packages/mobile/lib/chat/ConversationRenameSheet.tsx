@@ -7,6 +7,7 @@ import { SheetHeader } from "../ui";
 import { ElicitationAction, ElicitationTextField } from "./elicitation-native-controls";
 import { normalizeConversationTitle } from "./conversationMenuModel";
 import { space, type } from "../tokens";
+import { userFacingError } from "../connectionError";
 
 export function ConversationRenameSheet({
 	initialTitle,
@@ -33,7 +34,7 @@ export function ConversationRenameSheet({
 			onClose();
 		} catch (cause) {
 			haptics.error();
-			setError(cause instanceof Error ? cause.message : "Couldn't rename this conversation.");
+			setError(userFacingError(cause, "Couldn't rename this conversation."));
 			setSaving(false);
 		}
 	};

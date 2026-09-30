@@ -109,6 +109,7 @@ var commandSpecs = map[string]commandSpec{
 	// (and still honors the provider-presence env used for cloud scoping) without
 	// betting on a flag that can be rejected.
 	"opencode":    {args: []string{"models"}, parser: parseIDLines},
+	"opencode-v2": {args: []string{"models"}, parser: parseIDLines},
 	"grok":        {args: []string{"models"}, parser: parseGrokModels},
 	"cursor":      {args: []string{"models"}, parser: parseCursorModels},
 	"agy":         {args: []string{"models"}, parser: parseAgyModels},
@@ -125,6 +126,7 @@ var commandSpecs = map[string]commandSpec{
 	"droid":       {args: []string{"exec", "--help"}, parser: parseDroidHelpModels},
 	"crush":       {args: []string{"models"}, parser: parseIDLines},
 	"fx":          {args: []string{"models", "--json"}, parser: parseFXModels},
+	"mimo-code":   {args: []string{"models"}, parser: parseIDLines},
 }
 
 // Base returns the picker behavior AO can provide without executing a CLI.
@@ -186,8 +188,8 @@ func Manual(agentID string) ports.AgentModelCatalog {
 // availability remain agent-owned and are never listed here.
 func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	switch agentID {
-	case "claude-code", "codex", "opencode", "grok", "cursor", "qwen", "gemini",
-		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent":
+	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
+		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "mimo-code", "deepseek-harness":
 		return ports.CustomModelEntryDirect
 	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured
@@ -199,7 +201,7 @@ func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 // Discoverer implements the model-discovery port for production daemon wiring.
 type Discoverer struct {
 	CodexModels       CodexModelListFunc
-	ClineOptions      ClineConfigOptionListFunc
+	ACPOptions        map[string]ACPOptionListFunc
 	ClaudeModels      ClaudeModelListFunc
 	ClaudeFingerprint ClaudeFingerprintFunc
 }
@@ -208,9 +210,11 @@ type Discoverer struct {
 // opening a provider thread.
 type CodexModelListFunc func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatModel, error)
 
-// ClineConfigOptionListFunc obtains Cline's provider-owned model choices from
-// the ACP configuration catalog advertised by session/new.
-type ClineConfigOptionListFunc func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error)
+// ACPOptionListFunc obtains a harness's provider-owned model choices from the
+// ACP configuration catalog advertised by session/new. It is keyed by harness
+// id because each agent reaches that catalog through its own command line, and
+// the value a session accepts is exactly the value the catalog advertised.
+type ACPOptionListFunc func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error)
 
 // ClaudeModelListFunc obtains the Claude model IDs the configured provider
 // actually serves, in that provider's own ID format. It returns an error
@@ -233,12 +237,25 @@ func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscov
 	if request.AgentID == "codex" {
 		return discoverCodexCatalog(ctx, request, d.CodexModels)
 	}
-	if request.AgentID == "cline" && d.ClineOptions != nil {
-		if catalog, err := discoverClineCatalog(ctx, request, d.ClineOptions); err == nil {
+	if list := d.ACPOptions[request.AgentID]; list != nil {
+		catalog, err := discoverACPOptionCatalog(ctx, request, list)
+		if err == nil {
 			return catalog, nil
 		}
-		// Older Cline releases may not expose ACP config options. Fall back to
-		// the configured provider selections already stored by Cline.
+		// A harness that also keeps configured provider selections (Cline) may be
+		// an older release with no ACP config options. Fall back to those rather
+		// than emptying the picker.
+		//
+		// A harness whose only source is ACP (DeepSeek Harness) has nothing to
+		// fall back to: the generic path below has no command and no config
+		// parser for it, so it would answer with an empty catalog and no error.
+		// The caller records that as a successful discovery, which parks the
+		// catalog until the next calendar day and never runs the retry ladder —
+		// so an ACP session that merely needed a workspace looks like a harness
+		// with no models. Report the failure instead.
+		if !hasConfigDiscoverySource(request.AgentID) {
+			return catalog, err
+		}
 	}
 	if request.AgentID == "opencode" && request.CredentialType != "" {
 		return Discover(ctx, request.AgentID, request.Binary, request.WorkingDir,
@@ -606,15 +623,15 @@ func compareVersions(a, b []int) int {
 	return 0
 }
 
-func discoverClineCatalog(
+func discoverACPOptionCatalog(
 	ctx context.Context,
 	request ports.AgentModelDiscoveryRequest,
-	list ClineConfigOptionListFunc,
+	list ACPOptionListFunc,
 ) (ports.AgentModelCatalog, error) {
 	base := Base(request.AgentID)
 	options, err := list(ctx, request)
 	if err != nil {
-		return base, fmt.Errorf("cline ACP model discovery: %w", err)
+		return base, fmt.Errorf("%s ACP model discovery: %w", request.AgentID, err)
 	}
 	var models []ports.AgentModelInfo
 	for _, option := range options {
@@ -645,7 +662,7 @@ func discoverClineCatalog(
 	}
 	models = normalize(models)
 	if len(models) == 0 {
-		return base, errors.New("cline ACP model discovery returned no models")
+		return base, fmt.Errorf("%s ACP model discovery returned no models", request.AgentID)
 	}
 	base.Models = models
 	base.Source = "acp"
@@ -655,7 +672,10 @@ func discoverClineCatalog(
 
 func hasDiscoverySource(agentID string) bool {
 	switch agentID {
-	case "claude-code", "codex":
+	// Harnesses whose catalog comes from a daemon-injected surface rather than a
+	// command spec: Codex's app-server, Claude's provider probe, and the ACP
+	// configuration catalog for Cline and DeepSeek Harness.
+	case "claude-code", "codex", "deepseek-harness":
 		return true
 	}
 	if hasConfigDiscoverySource(agentID) {
@@ -788,6 +808,12 @@ func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env 
 	}
 	if agentID == "claude-code" {
 		return "config=" + claudeCodeDiscoveryFingerprint(ctx, workingDir, env)
+	}
+	if agentID == "deepseek-harness" {
+		// Not routed through configDiscoveryFingerprint: the profile is what the
+		// ACP session reads, not a catalog AO parses itself, so the harness has
+		// no config discovery source to declare.
+		return "config=" + fingerprintConfigPaths(modelConfigPaths(agentID, workingDir, env))
 	}
 	if config := configDiscoveryFingerprint(agentID, workingDir, env); config != "" {
 		return "config=" + config

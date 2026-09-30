@@ -181,8 +181,8 @@ export function CreateProjectFlow({
 	// "no project in scope" fallback). Lets the shortcut reuse the sidebar's own
 	// create-project flow instead of a separate delegating component.
 	openSignal?: number;
-	// Home-page action cards: each new nonce jumps straight to clone/local/workspace.
-	sourceSignal?: { source: ProjectSource; nonce: number } | null;
+	// Home-page action cards: each new nonce jumps straight to its source.
+	sourceSignal?: { source: ProjectSource | "cloud"; nonce: number } | null;
 }) {
 	const { t } = useTranslation();
 	const resolvedIdleLabel = idleLabel ?? t("createProject.newProject");
@@ -433,10 +433,9 @@ export function CreateProjectFlow({
 		}
 	};
 
-	const startFlow = (presetPath?: string) => {
+	const startFlow = (presetPath?: string, initialOffering: ProjectOffering = "local") => {
 		setPendingDropPath(presetPath ?? null);
-		// Each entry starts on the default Local choice, never a leftover Cloud one.
-		setOffering("local");
+		setOffering(initialOffering);
 		resetProjectImportState();
 		setCloneDetails(initialCloneDetails());
 		if (hasModePicker) {
@@ -478,6 +477,10 @@ export function CreateProjectFlow({
 		if (!sourceSignal || sourceSignal.nonce === lastSourceNonce.current) return;
 		lastSourceNonce.current = sourceSignal.nonce;
 		if (isBusy || modePickerOpen || cloneDialogOpen || folderPickerOpen || selectedPath !== null) return;
+		if (sourceSignal.source === "cloud") {
+			if (cloudEnabled) startFlow(undefined, "cloud");
+			return;
+		}
 		void selectSource(sourceSignal.source);
 	}, [sourceSignal]);
 

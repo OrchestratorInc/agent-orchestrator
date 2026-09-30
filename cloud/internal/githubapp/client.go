@@ -929,6 +929,42 @@ func (c *Client) repositoryWriteToken(
 	return response, nil
 }
 
+// repositoryWriteTokenForRepos is repositoryWriteToken's multi-repository
+// counterpart: it mints one short-lived installation token scoped to a set of
+// repositories with write access to their contents and pull requests. It backs
+// a worker's push and gh-CLI pull-request creation across the project's primary
+// repository plus any declared extra repositories that resolve within the same
+// installation — the write-side mirror of repositoryReadTokenForRepos. The
+// scope is exactly the given IDs; nothing is granted installation-wide.
+func (c *Client) repositoryWriteTokenForRepos(
+	ctx context.Context,
+	installationID int64,
+	repositoryIDs []int64,
+) (installationAccessToken, error) {
+	if installationID <= 0 || len(repositoryIDs) == 0 {
+		return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
+	}
+	for _, id := range repositoryIDs {
+		if id <= 0 {
+			return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
+		}
+	}
+	response, err := c.createInstallationToken(ctx, installationID, map[string]any{
+		"repository_ids": repositoryIDs,
+		"permissions": map[string]string{
+			"contents":      "write",
+			"pull_requests": "write",
+		},
+	})
+	if err != nil {
+		return installationAccessToken{}, err
+	}
+	if response.ExpiresAt.IsZero() || !response.ExpiresAt.After(c.now()) {
+		return installationAccessToken{}, errors.New("GitHub returned an expired installation token")
+	}
+	return response, nil
+}
+
 // statusReadToken mints a short-lived installation token scoped to one
 // repository with read access to pull requests and checks — the permissions
 // GitHub's fine-grained token model requires to fetch PR/review/check-run

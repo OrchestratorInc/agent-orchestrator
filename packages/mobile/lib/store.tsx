@@ -37,7 +37,7 @@ import { shouldReRace } from "./reRace";
 import { shouldRaceForUpgrade, UPGRADE_RACE_CHECK_MS } from "./upgradeRace";
 import { pollResultIsCurrent, sameServerConfig } from "./sameConfig";
 import { shouldShowLoading } from "./configLoading";
-import { shouldKeepPolling } from "./connectionError";
+import { isDesktopUnreachable, shouldKeepPolling, userFacingError } from "./connectionError";
 import { primeInstallId } from "./installId";
 import { collectPRs } from "./prView";
 import { ALL_PROJECTS, NO_PROJECTS_KNOWN, projectsForMachine, resolveActiveProject, retainProjects, type KnownProjects } from "./projectFilter";
@@ -67,6 +67,9 @@ export type SpawnOptions = {
 type AppState = {
 	config: ServerConfig | null;
 	configured: boolean;
+	/** Whether the first config resolution has finished. Until it has, an
+	 *  unconfigured store means "still finding the machine", not "unpaired". */
+	configResolved: boolean;
 	/** Every way the active machine says it can be reached, for telling a
 	 *  rotated tunnel hostname apart from being simply out of range. */
 	activeEndpoints: Endpoint[];
@@ -85,6 +88,11 @@ type AppState = {
 	error: string | null;
 	// HTTP status behind `error`, or null when the server was never reached.
 	errorStatus: number | null;
+	/**
+	 * The last poll failed because nothing answered, so a reconnect can clear it.
+	 * False for rejections (401/403/429), which stop the poll, and for 5xx.
+	 */
+	unreachable: boolean;
 	/**
 	 * When the last successful poll landed, in epoch milliseconds. 0 if none has.
 	 *
@@ -369,7 +377,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		} catch (e) {
 			if (!pollResultIsCurrent(c, cfgRef.current)) return false;
 			lastTickOkRef.current = false;
-			const msg = e instanceof Error ? e.message : "Failed to load";
+			const msg = userFacingError(e, "Failed to load");
 			setError(msg);
 			// Keep the HTTP status alongside the raw message so screens can render
 			// human copy via describeConnectionFailure instead of surfacing strings
@@ -584,6 +592,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		() => ({
 			config,
 			configured: !!config && isConfigured(config),
+			configResolved,
 			activeEndpoints,
 			projects,
 			projectsKnown,
@@ -597,6 +606,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			loading,
 			error,
 			errorStatus,
+			unreachable: isDesktopUnreachable({ connection, error, errorStatus }),
 			getLastSyncAt,
 			reloadConfig,
 			refresh,
@@ -613,6 +623,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		}),
 		[
 			config,
+			configResolved,
 			projects,
 			projectsKnown,
 			sessions,

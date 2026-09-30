@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { unpairFromDaemon } from "./api";
 import type { ServerConfig } from "./config";
+import { UnreachableError } from "./connectionError";
 
 vi.mock("@react-native-async-storage/async-storage", () => ({
 	default: { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() },
@@ -39,7 +40,9 @@ describe("disconnect request timeout", () => {
 
 		try {
 			await vi.advanceTimersByTimeAsync(2_000);
-			expect(failure).toEqual(expect.objectContaining({ message: "Request timed out. Is the desktop reachable?" }));
+			// Asserted by type, not wording: the copy is user-facing and changes.
+			expect(failure).toBeInstanceOf(UnreachableError);
+			expect(failure).toMatchObject({ reason: "timeout" });
 		} finally {
 			await vi.advanceTimersByTimeAsync(10_000);
 			await request;

@@ -143,6 +143,21 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
 	});
 
+	it("shows configured MiMo Code without asking for login again", async () => {
+		const configured = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "configured" })] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: configured } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "mimo-code", action: "login", launchMode: "terminal", available: true }] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		renderSection();
+		const row = (await screen.findByText("MiMo Code")).closest('[data-agent="mimo-code"]') as HTMLElement;
+		expect(await within(row).findByRole("button", { name: "Configured" })).toBeDisabled();
+		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
+	});
+
 	it("offers fx installation while readiness refreshes automatically", async () => {
 		const fxCatalog = { agents: [{ ...catalogWithInstalled().agents[0], id: "fx", label: "fx" }] };
 		const fxPlan = { agentId: "fx", available: true, automatic: true, method: "official-installer", command: "bash <downloaded from https://fx.sh/setup.sh>", documentationUrl: "https://fx.sh/docs", expectedDestination: "~/.local/bin/fx", methods: [{ id: "official-installer", label: "Official installer", available: true, recommended: true, command: "bash <downloaded from https://fx.sh/setup.sh>", reinstallAvailable: false }] };
@@ -345,6 +360,42 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
 
+	it("completes MiMo Code login when the key is configured locally", async () => {
+		const initial = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "unknown" })] };
+		const configured = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "configured" })] };
+		let probed = false;
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: initial } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "mimo-code", action: "login", launchMode: "terminal", available: true }] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/{agent}/auth") return { data: {
+				agentId: "mimo-code", action: "login", terminal: { handleId: "auth-mimo", projectId: null, sessionId: null, workingDir: "/tmp", title: "MiMo Code login", createdAt: "2026-09-29T00:00:00Z" },
+			} } as never;
+			if (path === "/api/v1/agents/{agent}/probe") {
+				probed = true;
+				return { data: { agent: { id: "mimo-code", authStatus: "configured" }, installed: true } } as never;
+			}
+			if (path === "/api/v1/agents/readiness/ensure") return { data: probed ? configured : initial } as never;
+			return { data: undefined } as never;
+		});
+		const close = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
+		renderSection();
+		const row = (await screen.findByText("MiMo Code")).closest('[data-agent="mimo-code"]') as HTMLElement;
+		await userEvent.click(await within(row).findByRole("button", { name: "Login" }));
+		await userEvent.click(await within(row).findByRole("button", { name: "Complete login terminal" }));
+
+		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
+			params: { path: { handleId: "auth-mimo" } },
+		}));
+		expect(await within(row).findByRole("button", { name: "Configured" })).toBeDisabled();
+		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
+		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
+	});
+
 	it("refreshes authentication when the user closes the login terminal", async () => {
 		const authorized = catalogWithInstalled("claude-code");
 		authorized.agents[0].authentication.state = "authorized";
@@ -392,7 +443,7 @@ describe("HarnessSettingsSection", () => {
 		await within(row).findByRole("button", { name: "Authorized" });
 	});
 
-	it("uses Set up for a completed setup action", async () => {
+	it("uses Configured for a completed setup action", async () => {
 		const authorized = catalogWithInstalled("codex");
 		authorized.agents[1].authentication.state = "authorized";
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
@@ -413,7 +464,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
 
-		await within(row).findByText("Set up");
+		await within(row).findByText("Configured");
 	});
 
 	it("does not expose manual readiness controls", async () => {
@@ -580,6 +631,50 @@ describe("HarnessSettingsSection", () => {
 
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
 			params: { path: { agent: "codex" } },
+			body: { method: "npm", operation: "install" },
+		}));
+	});
+
+	it("shows an incompatible OpenCode version reason and keeps installation available", async () => {
+		const reason = 'OpenCode 2 requires OpenCode 2, but "/usr/local/bin/opencode" reports OpenCode 1 (1.18.33); select the matching harness or put OpenCode 2 on PATH';
+		const mismatch = agentReadiness("opencode-v2", "OpenCode 2", {
+			installation: "not_installed",
+			authentication: "unknown",
+		});
+		mismatch.installation.reasonCode = "install_incompatible_version";
+		mismatch.installation.reason = reason;
+		const readiness = { agents: [mismatch] };
+		const installerPlans = { agents: [{
+			agentId: "opencode-v2",
+			available: true,
+			automatic: true,
+			method: "npm",
+			command: "npm install -g opencode-ai@latest",
+			methods: [{ id: "npm", label: "npm", available: true, recommended: true, command: "npm install -g opencode-ai@latest", reinstallAvailable: true }],
+		}] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
+			if (path === "/api/v1/agents/installers") return { data: installerPlans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/{agent}/install") {
+				return { data: { target: "opencode-v2", status: "installing", method: "npm" } } as never;
+			}
+			return { data: readiness } as never;
+		});
+
+		renderSection();
+		const row = (await screen.findByText("OpenCode 2")).closest('[data-agent="opencode-v2"]') as HTMLElement;
+		expect(await within(row).findByText(reason)).toBeInTheDocument();
+		expect(row).not.toHaveTextContent("Installation status unknown");
+		const install = within(row).getByRole("button", { name: "Install" });
+		expect(install).toBeEnabled();
+
+		await userEvent.click(install);
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
+			params: { path: { agent: "opencode-v2" } },
 			body: { method: "npm", operation: "install" },
 		}));
 	});

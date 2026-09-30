@@ -137,6 +137,7 @@ type WorkerTokens interface {
 type CheckoutBroker interface {
 	IssueCheckoutGrant(context.Context, string, string) (githubapp.CheckoutGrant, error)
 	IssuePushGrant(context.Context, string, string) (githubapp.CheckoutGrant, error)
+	IssuePushGrantForRepo(context.Context, string, string, string) (githubapp.CheckoutGrant, error)
 	RaisePullRequest(context.Context, string, string, domain.RaisePullRequest) (domain.PullRequest, error)
 	ClaimPullRequest(context.Context, string, string, string) (domain.PullRequest, error)
 	SubmitReview(context.Context, string, string, string, domain.SubmitReviewResult) (domain.ReviewRun, error)

@@ -1,8 +1,7 @@
 import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
-import { ActivityIndicator, Platform, RefreshControl, SectionList, StyleSheet, View } from "react-native";
+import { ActivityIndicator, RefreshControl, SectionList, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { classifyConnectionFailure, describeConnectionFailure } from "../../lib/connectionError";
 import { haptics } from "../../lib/haptics";
 import { orchestratorProjectSections, type OrchestratorProjectRow } from "../../lib/orchestratorView";
 import { ProjectCard } from "../../lib/project-card";
@@ -12,6 +11,7 @@ import { UnpairedState } from "../../lib/UnpairedState";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
+import { useBoardFailure } from "../../lib/useBoardFailure";
 import { useTabScrollToTop } from "../../lib/useTabScrollToTop";
 import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
 
@@ -26,8 +26,6 @@ export default function ProjectsScreen() {
 		configured,
 		loading,
 		error,
-		errorStatus,
-		config,
 		projects,
 		sessions,
 		orchestrators,
@@ -41,15 +39,7 @@ export default function ProjectsScreen() {
 		() => orchestratorProjectSections(projects, sessions, orchestrators),
 		[projects, sessions, orchestrators],
 	);
-	const failure = useMemo(
-		() =>
-			describeConnectionFailure(classifyConnectionFailure(errorStatus ?? undefined), {
-				host: config?.host ?? "",
-				port: config?.httpPort ?? "",
-				platform: Platform.OS,
-			}),
-		[errorStatus, config?.host, config?.httpPort],
-	);
+	const failure = useBoardFailure();
 
 	const onRefresh = async () => {
 		haptics.tap();
@@ -119,9 +109,9 @@ export default function ProjectsScreen() {
 					ListEmptyComponent={
 						error ? (
 							<EmptyState
-								icon="wifi-off"
+								icon={failure.icon}
 								title={failure.title}
-								message={failure.message}
+								message={failure.hint}
 								action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />}
 							/>
 						) : (
