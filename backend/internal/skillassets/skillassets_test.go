@@ -98,6 +98,17 @@ func TestEmbeddedBrowserGuidanceKeepsNetworkCaptureOptional(t *testing.T) {
 	}
 }
 
+func TestEmbeddedSpawnGuidanceListsOpenCodeV2(t *testing.T) {
+	body, err := files.ReadFile("using-ao/commands/spawn.md")
+	if err != nil {
+		t.Fatalf("read embedded spawn guidance: %v", err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "`opencode`, `opencode-v2`") {
+		t.Fatalf("spawn guidance does not distinguish OpenCode 1 and 2:\n%s", text)
+	}
+}
+
 // TestInstall_WritesSkillAndIsIdempotent: Install must lay down the embedded
 // skill (SKILL.md plus a commands file) under <dataDir>/skills/using-ao, and a
 // second run must clobber cleanly, leaving no stale files. This is the whole
@@ -117,6 +128,9 @@ func TestInstall_WritesSkillAndIsIdempotent(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(Dir(dataDir), "commands", "spawn.md")); err != nil {
 		t.Fatalf("commands/spawn.md missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(Dir(dataDir), "commands", "cue.md")); err != nil {
+		t.Fatalf("commands/cue.md missing: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(Dir(dataDir), "commands", "browser.md")); err != nil {
 		t.Fatalf("commands/browser.md missing: %v", err)

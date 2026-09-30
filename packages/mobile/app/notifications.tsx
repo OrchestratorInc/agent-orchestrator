@@ -31,6 +31,7 @@ import { MINUTE_MS, useNow } from "../lib/useNow";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
 import { Button, Dot, EmptyState, HeaderIconButton, ScreenHeader } from "../lib/ui";
+import { UnpairedState } from "../lib/UnpairedState";
 import { press, space, type } from "../lib/tokens";
 import { backOr } from "../lib/backNavigation";
 import { shouldKeepPolling, userFacingError } from "../lib/connectionError";
@@ -272,16 +273,15 @@ export default function NotificationsScreen() {
 								message="Notifications load once the app reconnects."
 								action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={() => void load("refresh")} />}
 							/>
+						) : !config && !error ? (
+							// Shared with the tabs: "Connecting…" while the launch race runs,
+							// the pairing prompt only once it has found no machine.
+							<UnpairedState />
 						) : (
 							<EmptyState
-								icon={error ? "alert-circle" : config ? "check-circle" : "server"}
-								title={error ? "Couldn't load notifications" : config ? "All caught up" : "No desktop paired"}
-								message={
-									error ??
-									(config
-										? "Updates from workers and pull requests will appear here when they need you."
-										: "Pair this phone with AO to receive worker and pull request updates.")
-								}
+								icon={error ? "alert-circle" : "check-circle"}
+								title={error ? "Couldn't load notifications" : "All caught up"}
+								message={error ?? "Updates from workers and pull requests will appear here when they need you."}
 								action={
 									!error ? undefined
 										: rejected ? <Button title="Scan pairing code" icon="maximize" onPress={() => router.push("/pair")} />

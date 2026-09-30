@@ -9,7 +9,7 @@ import { useFilesTopbarHost } from "./files-topbar-host";
 import { SessionTopbarProvider } from "./SessionTopbarPortal";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
-import { useUiStore, type InspectorView } from "../stores/ui-store";
+import { inspectorIsOpen, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { setChatDraftBoundary } from "../lib/chat-draft-boundary";
@@ -666,7 +666,7 @@ function testInterfaceTransition(
 }
 
 function inspectorOpen(sessionId: string): boolean {
-	return useUiStore.getState().inspectorSessions[sessionId]?.isOpen ?? true;
+	return inspectorIsOpen(useUiStore.getState().inspectorSessions, sessionId);
 }
 
 function browserUnseen(sessionId: string): boolean {
@@ -744,7 +744,14 @@ describe("SessionView", () => {
 		workspaceQueryState.isLoading = false;
 		useUiStore.setState({
 			activeShellTerminalHandleId: null,
-			inspectorSessions: {},
+			// Opening a session leaves the inspector closed (covered by the
+			// "keeps the inspector closed" test); most tests here exercise the
+			// open rail, so start the workers the way a user left them: open.
+			inspectorSessions: {
+				"sess-1": { isOpen: true, view: "summary" },
+				"sess-2": { isOpen: true, view: "summary" },
+				"sess-cross-project": { isOpen: true, view: "summary" },
+			},
 			isSidebarOpen: true,
 			visibleTerminalKindBySession: {},
 		});
@@ -1090,6 +1097,31 @@ describe("SessionView", () => {
 		fireEvent.click(screen.getByRole("button", { name: "New terminal" }));
 		expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("sh-after-file");
+	});
+
+	it("reveals a command cue terminal over an open file", async () => {
+		shellTerminalsState.data = [{ handleId: "cue-shell", projectId: "proj-1", sessionId: "sess-1", title: "Terminal 4", workingDir: "/p", createdAt: "2026-09-26T00:00:00Z" }];
+		render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "view review file" }));
+		expect(await screen.findByTestId("session-file-workspace")).toBeInTheDocument();
+		act(() => useUiStore.getState().setActiveShellTerminal("cue-shell"));
+		await waitFor(() => expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument());
+		expect(screen.getByTestId("terminal-target")).toHaveTextContent("cue-shell");
+	});
+
+	it("reveals a command cue terminal over reviewer chat", async () => {
+		shellTerminalsState.data = [{ handleId: "cue-shell", projectId: "proj-1", sessionId: "sess-1", title: "Terminal 4", workingDir: "/p", createdAt: "2026-09-26T00:00:00Z" }];
+		const view = render(<SessionView sessionId="sess-1" />);
+		act(() => view.client.setQueryData(["session-reviews", "sess-1"], {
+			reviewerHandleId: "review-chat:review-1",
+			reviewerSurface: { mode: "chat", reviewId: "review-1", harness: "codex" },
+			reviews: [], runs: [],
+		}));
+		fireEvent.click(screen.getByRole("button", { name: "open reviewer chat" }));
+		expect(screen.getByTestId("reviewer-chat-surface")).toBeInTheDocument();
+		act(() => useUiStore.getState().setActiveShellTerminal("cue-shell"));
+		await waitFor(() => expect(screen.queryByTestId("reviewer-chat-surface")).not.toBeInTheDocument());
+		expect(screen.getByTestId("terminal-target")).toHaveTextContent("cue-shell");
 	});
 
 	it("does not offer a new terminal for orchestrator sessions", () => {
@@ -2865,13 +2897,20 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("inspector-resize-handle")).toBeInTheDocument();
 	});
 
-	it("opens the Summary inspector alongside the terminal by default", () => {
+	it("keeps the inspector closed when a session opens, then opens it on Summary", () => {
+		useUiStore.setState({ inspectorSessions: {} });
 		render(<SessionView sessionId="sess-1" />);
 
 		expect(screen.getByText("terminal center")).toBeInTheDocument();
+		expect(inspectorOpen("sess-1")).toBe(false);
+		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "collapsed");
+		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("inert");
+		expect(screen.getByTestId("inspector-collapsed-rail")).toBeInTheDocument();
+
+		fireEvent.keyDown(window, { key: "B", ctrlKey: true, shiftKey: true });
+
+		expect(inspectorOpen("sess-1")).toBe(true);
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "expanded");
-		expect(screen.getByTestId("inspector-resize-handle")).not.toHaveClass("hidden");
-		expect(screen.getByTestId("panel-inspector")).not.toHaveAttribute("inert");
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
 	});
 
@@ -2885,7 +2924,7 @@ describe("SessionView", () => {
 		expect(browserViewOptions.current).toMatchObject({ sessionId: "sess-1", terminated: true });
 	});
 
-	it("mounts the inspector open by default", () => {
+	it("mounts the inspector open when the store says open", () => {
 		render(<SessionView sessionId="sess-1" />);
 
 		const pane = screen.getByTestId("panel-inspector");
@@ -3741,6 +3780,7 @@ describe("SessionView", () => {
 		act(() => {
 			useUiStore.setState({
 				inspectorSessions: {
+					"sess-1": { isOpen: true, view: "summary" },
 					"sess-2": {
 						isOpen: true,
 						view: "summary",

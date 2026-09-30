@@ -1057,6 +1057,7 @@ describe("providerScrollsByKeyboard", () => {
 	// PageUp/PageDown wheel routing (see XtermTerminal's paneScrollsByKeyboard).
 	it("is true for keyboard-scroll TUIs", () => {
 		expect(providerScrollsByKeyboard("opencode")).toBe(true);
+		expect(providerScrollsByKeyboard("opencode-v2")).toBe(true);
 		expect(providerScrollsByKeyboard("kilocode")).toBe(true);
 		expect(providerScrollsByKeyboard("grok")).toBe(true);
 		expect(providerScrollsByKeyboard("mimo-code")).toBe(true);

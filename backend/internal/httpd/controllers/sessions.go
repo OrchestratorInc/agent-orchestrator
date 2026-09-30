@@ -2236,6 +2236,7 @@ func workspaceFilesResponse(files sessionsvc.WorkspaceFiles) ListWorkspaceFilesR
 		Truncated:        files.Truncated,
 		Sections:         workspaceFileSectionsResponse(files.Sections),
 		Commits:          workspaceCommitsResponse(files.Commits),
+		CommitsTruncated: files.CommitsTruncated,
 		Summary:          WorkspaceSummary(files.Summary),
 		Degraded:         files.Degraded,
 		DegradedCode:     files.DegradedCode,
@@ -2246,11 +2247,12 @@ func workspaceFilesResponse(files sessionsvc.WorkspaceFiles) ListWorkspaceFilesR
 
 func prFilesResponse(files sessionsvc.PRFiles) ListPRFilesResponse {
 	return ListPRFilesResponse{
-		SessionID: files.SessionID,
-		Files:     workspaceFileSummariesResponse(files.Files),
-		Commits:   workspaceCommitsResponse(files.Commits),
-		Truncated: files.Truncated,
-		Summary:   WorkspaceSummary(files.Summary),
+		SessionID:        files.SessionID,
+		Files:            workspaceFileSummariesResponse(files.Files),
+		Commits:          workspaceCommitsResponse(files.Commits),
+		CommitsTruncated: files.CommitsTruncated,
+		Truncated:        files.Truncated,
+		Summary:          WorkspaceSummary(files.Summary),
 	}
 }
 

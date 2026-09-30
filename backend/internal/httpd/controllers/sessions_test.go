@@ -1554,6 +1554,42 @@ func TestSessionsAPI_SpawnsOMPChat(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_SpawnsOpenCodeV2(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions",
+		`{"projectId":"ao","harness":"opencode-v2","mode":"tui","prompt":"fix"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("spawn OpenCode 2 = %d, want 201; body=%s", status, body)
+	}
+	if svc.lastSpawn.Harness != domain.HarnessOpenCodeV2 || svc.lastSpawn.RequestedMode != domain.SessionModeTUI {
+		t.Fatalf("spawn config = %#v, want OpenCode 2 TUI", svc.lastSpawn)
+	}
+}
+
+func TestSessionsAPI_SpawnPreservesUnknownHarnessErrorEnvelope(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.spawnErr = apierr.Invalid("UNKNOWN_HARNESS", "Unknown agent harness", nil)
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions",
+		`{"projectId":"ao","harness":"not-a-harness","mode":"tui","prompt":"fix"}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("invalid harness status = %d, want 400; body=%s", status, body)
+	}
+	var got struct {
+		Error     string `json:"error"`
+		Code      string `json:"code"`
+		Message   string `json:"message"`
+		RequestID string `json:"requestId"`
+	}
+	mustJSON(t, body, &got)
+	if got.Error != "bad_request" || got.Code != "UNKNOWN_HARNESS" || got.Message != "Unknown agent harness" || got.RequestID == "" {
+		t.Fatalf("invalid harness envelope = %#v", got)
+	}
+}
+
 func TestSessionsAPI_SpawnsStandaloneWorkerWithoutProjectID(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
@@ -2614,6 +2650,7 @@ func TestSessionsAPI_ListWorkspaceFiles(t *testing.T) {
 			{Path: "README.md", Status: sessionsvc.WorkspaceFileModified, Additions: 2, Deletions: 1, Size: 48, Editable: true},
 			{Path: "notes.txt", PreviousPath: "old-notes.txt", Status: sessionsvc.WorkspaceFileRenamed, Additions: 1, Size: 11},
 		},
+		CommitsTruncated: true,
 	}
 	srv := newSessionTestServer(t, svc)
 
@@ -2636,9 +2673,10 @@ func TestSessionsAPI_ListWorkspaceFiles(t *testing.T) {
 			Size         int64  `json:"size"`
 			Editable     bool   `json:"editable"`
 		} `json:"files"`
+		CommitsTruncated bool `json:"commitsTruncated"`
 	}
 	mustJSON(t, body, &got)
-	if got.SessionID != "ao-1" || len(got.Files) != 2 {
+	if got.SessionID != "ao-1" || len(got.Files) != 2 || !got.CommitsTruncated {
 		t.Fatalf("response = %#v", got)
 	}
 	if got.CompareMode != "base" || got.CompareBaseSHA != "base-sha" || got.CompareBaseRef != "main" {
@@ -2666,6 +2704,7 @@ func TestSessionsAPI_ListPRFiles(t *testing.T) {
 			Author:  "Ada",
 			Files:   []sessionsvc.WorkspaceFileSummary{{Path: "README.md", Status: sessionsvc.WorkspaceFileModified, Additions: 1}},
 		}},
+		CommitsTruncated: true,
 	}
 	srv := newSessionTestServer(t, svc)
 	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/pr/42/files", "")
@@ -2681,6 +2720,9 @@ func TestSessionsAPI_ListPRFiles(t *testing.T) {
 	}
 	if len(got.Commits) != 1 || got.Commits[0].SHA != "abc123" || len(got.Commits[0].Files) != 1 || got.Commits[0].Files[0].Path != "README.md" {
 		t.Fatalf("commits = %+v, want abc123 changing README.md", got.Commits)
+	}
+	if !got.CommitsTruncated {
+		t.Fatal("commitsTruncated = false, want the service's truncated commit list flagged")
 	}
 }
 

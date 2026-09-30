@@ -21,6 +21,7 @@ func TestParseChangeRequestURL(t *testing.T) {
 	}
 	invalid := []string{
 		"https://github.com/o/r/pull/0", "https://github.com/o/r/issues/1",
+		"https://api.github.com/o/r/pull/1", "https://gist.github.com/o/r/pull/1",
 		"https://github.com/o/r/pull/1?x=1", "https://github.com/o/r/pull/1#x",
 		"https://user:pass@github.com/o/r/pull/1", "https://github.com:123/o/r/pull/1",
 		"https://gitlab.com/group/repo/-/merge_requests/nope", "https://gitlab.com/a/-/merge_requests/1",

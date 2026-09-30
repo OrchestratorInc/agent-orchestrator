@@ -156,6 +156,9 @@ type Config struct {
 	// GitLab carries the self-managed GitLab host allowlist and per-host
 	// token overrides, loaded once at boot from environment variables.
 	GitLab GitLabConfig
+	// TrackerIntake gates the issue-intake observer daemon-wide
+	// (AO_TRACKER_INTAKE).
+	TrackerIntake bool
 	// Client identifies which client this deployment serves (AO_CLIENT). Empty
 	// means no client identity, which keeps client-gated offerings off.
 	Client string
@@ -338,6 +341,14 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 		cfg.GitLab.HostTokens = tokens
+	}
+
+	if raw, ok := os.LookupEnv("AO_TRACKER_INTAKE"); ok && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_TRACKER_INTAKE", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.TrackerIntake = v
 	}
 
 	if raw := os.Getenv("AO_CLIENT"); raw != "" {
