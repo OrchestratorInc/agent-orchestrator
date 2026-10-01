@@ -80,4 +80,11 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain('!cloudPaused && !startFailure && (snapshot.controller.state === "recovering"');
 		expect(screenSource).toContain('conversation.error && cloudStage !== "paused_by_coder"');
 	});
+
+	it("offers a live PR review shortcut while leaving the chat composer in place", () => {
+		expect(screenSource).toContain("sessionPRReadyForReview(session)");
+		expect(screenSource).toContain("reviewPR={reviewPromptPR}");
+		expect(screenSource).toContain("reviewRouteForPR(session.id, reviewPromptPR)");
+		expect(screenSource).toContain("<ChatComposer");
+	});
 });

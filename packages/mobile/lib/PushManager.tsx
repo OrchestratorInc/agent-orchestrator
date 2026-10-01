@@ -4,7 +4,8 @@
 // (warm + cold start). See docs/adr/0001-mobile-push-notifications.md (D6, D7, D9).
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
-import { useRootNavigationState, useRouter } from "expo-router";
+import { useRootNavigationState, useRouter, type Href } from "expo-router";
+import { useOpenPage } from "./pageNavigation";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { AppState, Platform } from "react-native";
 import { announceDevice, markNotificationRead } from "./api";
@@ -29,6 +30,7 @@ type PushData = {
 export function PushManager(): null {
 	const { config, localConfigured, connection } = useApp();
 	const router = useRouter();
+	const openPage = useOpenPage();
 	const navState = useRootNavigationState();
 
 	const handledColdStart = useRef(false);
@@ -123,16 +125,18 @@ export function PushManager(): null {
 	function route(data: PushData, coldStart = false) {
 		const current = routingContext.current;
 		// Legacy Local pushes lack host identity, so needs_input opens Workers;
-		// PR notifications still open the Local-only PR tab.
-		const destination = pushNotificationTarget(current.localConfigured, { type: data.type ?? "", sessionId: data.sessionId });
+		// review notifications can deep-link to their Local-only review page.
+		const destination = pushNotificationTarget(current.localConfigured, { type: data.type ?? "", sessionId: data.sessionId, prUrl: data.prUrl });
 		if (!destination) return;
-		const target = destination === "/" ? "workers" : "prs";
+		const target = destination.startsWith("/review") ? "review" : destination === "/" ? "workers" : "prs";
 		mobileTelemetry()?.capture(MOBILE_EVENTS.notificationOpened, { target, cold_start: coldStart });
 		// Best-effort mark-read so unread counts stay consistent with the dashboard.
 		if (current.config && data.notificationId) {
 			markNotificationRead(current.config, data.notificationId).catch(() => {});
 		}
-		router.navigate(destination);
+		// A review opens as a page even when a sheet is up when the tap arrives.
+		if (target === "review") openPage(destination as Href);
+		else router.navigate(destination);
 	}
 
 	return null;

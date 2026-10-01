@@ -67,7 +67,7 @@ describe("CloudProviderSection", () => {
 		preference.error = "Could not save provider";
 		render(<CloudProviderSection />);
 		expect(screen.getByRole("alert")).toHaveTextContent("Could not save provider");
-		expect(screen.getByText("NodeOps (default)")).toBeInTheDocument();
+		expect(screen.getByText("NodeOps")).toBeInTheDocument();
 	});
 
 	it("disables the selector while saving", () => {

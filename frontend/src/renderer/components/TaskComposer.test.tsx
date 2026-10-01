@@ -14,8 +14,8 @@ const h = vi.hoisted(() => ({
 	agentValues: [] as string[],
 	agentCatalog: undefined as { agents: ReturnType<typeof import("../test/agent-readiness-fixtures").agentReadiness>[] } | undefined,
 	cloudProject: false,
-	cloudCreateSession: vi.fn(),
 	cloudProjects: [] as Array<{ id: string; displayName: string; repositoryUrl: string; defaultBranch: string; config: Record<string, unknown> }>,
+	cloudCreateSession: vi.fn(),
 }));
 
 vi.mock("../hooks/useCloudCp", () => ({
@@ -929,6 +929,21 @@ describe("TaskComposer", () => {
 		expect(h.post).not.toHaveBeenCalled();
 	});
 
+	it("uses the control plane default when a saved sandbox provider is unavailable", async () => {
+		h.cloudProject = true;
+		window.localStorage.setItem("ao.cloud.sandboxProvider", "coder");
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="cloud-project" onCreated={onCreated} /></Wrap>);
+
+		fireEvent.change(task(), { target: { value: "Fix the bug" } });
+		await waitForTaskReady();
+		fireEvent.click(startTask());
+
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("session-1"));
+		expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.not.objectContaining({ provider: "coder" }));
+	});
+
 	it("waits for a selected file read before submitting", async () => {
 		h.post.mockResolvedValueOnce({ data: { workerId: "sess-1" } });
 		let finishRead!: () => void;
@@ -1429,7 +1444,7 @@ describe("TaskComposer", () => {
 		);
 
 		const picker = await screen.findByRole("button", { name: "Model" });
-		expect(picker).toHaveTextContent("Model not reported");
+		expect(picker).toHaveTextContent("Select model");
 
 		await userEvent.click(picker);
 		expect(await screen.findByRole("menuitem", { name: "GPT-5" })).toBeInTheDocument();

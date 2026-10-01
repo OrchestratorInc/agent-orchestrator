@@ -10,7 +10,7 @@ const project: Project = {
 
 const session: Session = {
 	id: "s1", orgId: "o1", projectId: "p1", kind: "worker", harness: "claude-code",
-	displayName: "fix the build", branch: "ao/fix-build", mode: "trusted",
+	displayName: "fix the build", branch: "ao/fix-build", mode: "trusted", interfaceMode: "chat",
 	deniedCommands: [], activityState: "active", status: "working",
 	runtimeConnected: true, isTerminated: false,
 	createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-02T00:00:00Z",
@@ -36,11 +36,11 @@ describe("toDashboardSession", () => {
 		expect(mapped.lastActivityAt).toBe("2026-09-02T00:00:00Z");
 	});
 
-	// Mobile's mode vocabulary is the controller (chat/tui), not cloud's trust
-	// level (read-only/standard/trusted). Cloud sessions are always Chat.
-	it("reports Chat regardless of the cloud trust mode", () => {
+	// Mobile's mode vocabulary is the controller (chat/tui), not cloud's trust level.
+	it("uses the cloud interface mode regardless of trust mode", () => {
 		expect(toDashboardSession(session).mode).toBe("chat");
 		expect(toDashboardSession({ ...session, mode: "read-only" }).mode).toBe("chat");
+		expect(toDashboardSession({ ...session, interfaceMode: "tui" }).mode).toBe("tui");
 	});
 
 	// Cloud has no terminal mux handle; leaving it set would offer a terminal

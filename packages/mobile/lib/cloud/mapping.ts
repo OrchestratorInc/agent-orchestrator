@@ -57,9 +57,8 @@ export function toDashboardSession(session: Session): DashboardSession {
 		attentionLevel: null,
 		activity: session.activityState,
 		harness: session.harness,
-		// Cloud's `mode` is a trust level (read-only/standard/trusted), not
-		// mobile's controller (chat/tui). Cloud sessions are always Chat.
-		mode: "chat",
+		// Cloud's `mode` is a trust level; `interfaceMode` is the controller.
+		mode: session.interfaceMode,
 		branch: session.branch || null,
 		issueId: null,
 		issueTitle: null,

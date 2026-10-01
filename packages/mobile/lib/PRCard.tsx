@@ -1,5 +1,6 @@
 import { Feather } from "./icons";
 import { useRouter } from "expo-router";
+import { useOpenPage } from "./pageNavigation";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { sessionTitle, shortLabel, type DashboardPR, type DashboardSession, type SessionPRSummary } from "./api";
 import { haptics } from "./haptics";
@@ -34,6 +35,7 @@ export function PRCard({
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
+	const openPage = useOpenPage();
 	const state = summary ? stateVisualOf(t, summary.state as PRLifecycle) : prStateVisual(t, pr);
 	const title = summary?.title?.trim() || prTitle(pr, sessionTitle(session));
 	const project = shortLabel(summary?.repo || session.projectId || "Standalone");
@@ -55,10 +57,17 @@ export function PRCard({
 			onPress={() => {
 				if (!source) return;
 				haptics.tap();
-				router.push({
-					pathname: "/session/[id]",
-					params: { id: session.id, projectId: session.projectId, source: source.kind, sourceId: source.id },
-				});
+				if (source.kind === "local") {
+					openPage({
+						pathname: "/review/[sessionId]",
+						params: { sessionId: session.id, prNumber: String(pr.number), prUrl: pr.url },
+					});
+				} else {
+					router.push({
+						pathname: "/session/[id]",
+						params: { id: session.id, projectId: session.projectId, source: source.kind, sourceId: source.id },
+					});
+				}
 			}}
 			style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
 		>
