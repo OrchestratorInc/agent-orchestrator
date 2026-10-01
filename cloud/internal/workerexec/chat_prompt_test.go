@@ -26,9 +26,35 @@ func TestCloudPromptProviderHelper(t *testing.T) {
 	}
 	defer capture.Close()
 	record := json.NewEncoder(capture)
-	if err := record.Encode(map[string]any{"args": os.Args, "env": map[string]string{"AO_PULL_REQUEST_SOCKET": os.Getenv("AO_PULL_REQUEST_SOCKET"), "AO_REVIEW_SOCKET": os.Getenv("AO_REVIEW_SOCKET")}}); err != nil {
+	var cursorRules []string
+	if os.Getenv("AO_PROMPT_TEST_HARNESS") == "cursor" {
+		root, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for {
+			paths, err := filepath.Glob(filepath.Join(root, ".cursor", "rules", "*.mdc"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range paths {
+				contents, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cursorRules = append(cursorRules, string(contents))
+			}
+			parent := filepath.Dir(root)
+			if parent == root {
+				break
+			}
+			root = parent
+		}
+	}
+	if err := record.Encode(map[string]any{"args": os.Args, "cursorRules": cursorRules, "env": map[string]string{"AO_PULL_REQUEST_SOCKET": os.Getenv("AO_PULL_REQUEST_SOCKET"), "AO_REVIEW_SOCKET": os.Getenv("AO_REVIEW_SOCKET")}}); err != nil {
 		t.Fatal(err)
 	}
+
 	input := json.NewDecoder(os.Stdin)
 	output := json.NewEncoder(os.Stdout)
 	for {
@@ -154,6 +180,7 @@ func TestCloudChatDeliversTerminalRolePromptOnStartAndResume(t *testing.T) {
 					}
 					capture := filepath.Join(t.TempDir(), "requests.jsonl")
 					builder.Env["AO_PROMPT_TEST"], builder.Env["AO_PROMPT_CAPTURE"] = "1", capture
+					builder.Env["AO_PROMPT_TEST_HARNESS"] = harness
 					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 					defer cancel()
 					control := &promptControl{controlStub: controlStub{credential: credential}}
@@ -168,6 +195,15 @@ func TestCloudChatDeliversTerminalRolePromptOnStartAndResume(t *testing.T) {
 						t.Fatalf("Chat execution failed: %q, completed=%v, cancelled=%v", control.failed, control.completed, control.cancelled)
 					}
 					assertPromptRequests(t, capture, command, turn, resumed)
+					if harness == "cursor" {
+						path, err := cursorACPStandingRulePath(workspace, launch.SessionID)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if _, err := os.Stat(path); !os.IsNotExist(err) {
+							t.Fatalf("Cursor standing rule survived turn cleanup: %v", err)
+						}
+					}
 				})
 			}
 		}
@@ -191,10 +227,11 @@ func assertPromptRequests(t *testing.T, path string, command Command, turn worke
 	foundSession, foundTask := false, false
 	for scanner.Scan() {
 		var frame struct {
-			Args   []string          `json:"args"`
-			Env    map[string]string `json:"env"`
-			Method string            `json:"method"`
-			Params map[string]any    `json:"params"`
+			CursorRules []string          `json:"cursorRules"`
+			Args        []string          `json:"args"`
+			Env         map[string]string `json:"env"`
+			Method      string            `json:"method"`
+			Params      map[string]any    `json:"params"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &frame); err != nil {
 			t.Fatal(err)
@@ -207,8 +244,20 @@ func assertPromptRequests(t *testing.T, path string, command Command, turn worke
 			}
 		}
 		if turn.Harness == "cursor" && len(frame.Args) > 0 {
-			assertArgPair(t, frame.Args, "--plugin-dir", command.CursorPluginDir)
-			assertFileContains(t, filepath.Join(command.CursorPluginDir, "rules", "ao-standing.mdc"), command.SystemPrompt)
+			for _, arg := range frame.Args {
+				if arg == "--plugin-dir" {
+					t.Fatal("Cursor ACP received its unsupported plugin flag")
+				}
+			}
+			foundRule := false
+			for _, rule := range frame.CursorRules {
+				if rule == cursorACPRuleMarker+strings.TrimRight(command.SystemPrompt, "\n")+"\n" {
+					foundRule = true
+				}
+			}
+			if !foundRule {
+				t.Fatal("Cursor ACP did not load standing instructions from the workspace ancestors")
+			}
 		}
 		method := "session/new"
 		if resumed {

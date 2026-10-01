@@ -181,9 +181,6 @@ func acpLaunch(turn worker.Turn, command Command) (string, []string, map[string]
 		return "claude-agent-acp", nil, env, nil
 	case "cursor":
 		args := []string{"--trust"}
-		if command.CursorPluginDir != "" {
-			args = append(args, "--plugin-dir", command.CursorPluginDir)
-		}
 		switch turn.ApprovalMode {
 		case "auto":
 			args = append(args, "--auto-review")
