@@ -272,6 +272,31 @@ done
 
 args=(remote-host enable)
 "$tunnel" && args+=(--tunnel-only)
-"$host_root/current/resources/daemon/ao" "${args[@]}"
+enable_output="$("$host_root/current/resources/daemon/ao" "${args[@]}")"
+printf '%s\n' "$enable_output"
 prune_old_releases
+if "$tunnel" && [[ "$enable_output" != *"Address: https://"* ]]; then
+	address=""
+	for attempt in {1..60}; do
+		[[ "$enable_output" == *"Tunnel unavailable:"* ]] && break
+		if status_output="$("$host_root/current/resources/daemon/ao" remote-host status 2>/dev/null)"; then
+			while IFS= read -r line; do
+				if [[ "$line" == "Address: https://"* ]]; then
+					address="$line"
+					break
+				fi
+			done <<< "$status_output"
+			[[ "$status_output" == *"Tunnel unavailable:"* ]] && break
+		fi
+		[[ -n "$address" ]] && break
+		sleep 1
+	done
+	if [[ -n "$address" ]]; then
+		printf '%s\n' "$address"
+	else
+		printf '\nTunnel address is not ready. On this host, run: %s remote-host status\n' "$host_root/current/resources/daemon/ao"
+		printf '%s\n' 'Add the host on your laptop once status shows its HTTPS address.'
+		exit 1
+	fi
+fi
 printf '\nOn your laptop: Settings → Remote hosts → Add host. Enter the address and password above.\n'

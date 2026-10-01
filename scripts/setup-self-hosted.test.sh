@@ -9,7 +9,7 @@ mkdir -p "$tmp/bin" "$tmp/pkg/resources/daemon" "$tmp/pkg/resources/acp-runtime/
 	"$tmp/pkg/resources/tmux/bin"
 
 # Keep systemctl absent even when the test runner has it installed.
-for tool in chmod cp date git gzip ln mkdir mktemp python3 readlink rm rmdir tar; do
+for tool in chmod cp date git gzip ln mkdir mktemp python3 readlink rm rmdir sleep tar; do
 	ln -s "$(command -v "$tool")" "$tmp/bin/$tool"
 done
 printf '%s\n' '#!/bin/sh' 'case "$1" in' \
@@ -22,8 +22,22 @@ printf '%s\n' '#!/bin/sh' 'case "$1" in' \
 	'      : > "${TEST_AO_BLOCK_FILE}.ready"' \
 	'      while [ ! -e "${TEST_AO_BLOCK_FILE}.go" ]; do /bin/sleep 0.02; done' \
 	'    fi' \
+	'    if [ "${TEST_AO_READY_AFTER_INSTALL:-}" = 1 ] && [ -L "$TEST_AO_HOST_ROOT/current" ]; then' \
+	'      TEST_AO_STATE=ready TEST_AO_EXE="$TEST_AO_HOST_ROOT/current/resources/daemon/ao"' \
+	'    fi' \
 	'    printf '\''{"state":"%s","executablePath":"%s"}\n'\'' "${TEST_AO_STATE:-stopped}" "${TEST_AO_EXE:-}" ;;' \
-	'  version|remote-host) exit 0 ;;' 'esac' > "$tmp/pkg/resources/daemon/ao"
+	'  remote-host)' \
+	'    if [ -n "${TEST_AO_TUNNEL_PAIRING:-}" ]; then' \
+	'      case "$2" in' \
+	'        enable) if [ "$TEST_AO_TUNNEL_PAIRING" = unavailable ]; then' \
+	'                  printf "Remote host enabled\nHost ID: h_test\nTunnel unavailable: cloudflared missing\nPassword: test-secret\n"' \
+	'                else' \
+	'                  printf "Remote host enabled\nHost ID: h_test\nTunnel: starting; run status for the HTTPS address\nPassword: test-secret\n"' \
+	'                fi ;;' \
+	'        status) printf "Remote host enabled\nHost ID: h_test\nAddress: https://example.trycloudflare.com:443\nPassword: test-secret\n" ;;' \
+	'      esac' \
+	'    fi ;;' \
+	'  version) exit 0 ;;' 'esac' > "$tmp/pkg/resources/daemon/ao"
 printf '%s\n' '#!/bin/sh' 'echo v22.0.0' > "$tmp/pkg/resources/acp-runtime/node/bin/node"
 printf '%s\n' '#!/bin/sh' 'echo tmux' > "$tmp/pkg/resources/tmux/bin/tmux"
 : > "$tmp/pkg/resources/acp-runtime/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
@@ -185,6 +199,26 @@ case "${1:-}" in
 			/bin/bash -s -- --bundle "$bundle" --install-only > "$tmp/out" 2>&1
 		[[ -d "$(readlink "$tmp/host/current")" ]]
 		;;
-	*) printf 'Usage: %s {bad-tmux|no-systemd|inactive-systemd|prune|failed-restarts|relative-current|concurrent|interrupted|piped}\n' "$0" >&2; exit 2 ;;
+	tunnel-pairing|tunnel-unavailable)
+		printf '%s\n' '#!/bin/sh' 'exit 0' > "$tmp/bin/systemctl"
+		chmod +x "$tmp/bin/systemctl"
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		mode=1
+		[[ "$1" == tunnel-unavailable ]] && mode=unavailable
+		result=0
+		env HOME="$tmp/home" PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" \
+			TEST_AO_HOST_ROOT="$tmp/host" TEST_AO_READY_AFTER_INSTALL=1 TEST_AO_TUNNEL_PAIRING="$mode" \
+			/bin/bash "$script" --bundle "$bundle" --tunnel > "$tmp/out" 2>&1 || result=$?
+		if [[ "$1" == tunnel-pairing ]]; then
+			[[ "$result" == 0 ]] || { cat "$tmp/out" >&2; exit 1; }
+			grep -q '^Address: https://example.trycloudflare.com:443$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			grep -q 'Enter the address and password above' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+		else
+			[[ "$result" != 0 ]] || { cat "$tmp/out" >&2; exit 1; }
+			grep -q 'Tunnel address is not ready' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			! grep -q 'Enter the address and password above' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+		fi
+		;;
+	*) printf 'Usage: %s {bad-tmux|no-systemd|inactive-systemd|prune|failed-restarts|relative-current|concurrent|interrupted|piped|tunnel-pairing|tunnel-unavailable}\n' "$0" >&2; exit 2 ;;
 esac
 printf 'PASS %s\n' "$1"
