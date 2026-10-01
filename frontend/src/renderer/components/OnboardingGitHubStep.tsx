@@ -28,7 +28,7 @@ export function OnboardingGitHubStep({ setup }: { setup: ReturnType<typeof useGi
 
 	if (setup.authSatisfied) {
 		return (
-			<SetupList className="max-w-[420px]">
+			<SetupList className="max-w-[420px] overflow-hidden rounded-xl">
 				<SetupRow
 					icon={<GitHubMarkIcon aria-hidden="true" />}
 					label={t("startup.githubConnected")}
