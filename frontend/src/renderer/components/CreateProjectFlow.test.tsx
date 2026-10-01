@@ -1996,6 +1996,46 @@ describe("CreateProjectFlow project import validation", () => {
 		await waitFor(() => expect(bridgeMocks.openExternal).toHaveBeenCalledWith("https://github.com/apps/ao/installations/new"));
 	});
 
+	it("shows a newly connected repository right after Connect more repositories", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		const installation = (updatedAt: string) => ({
+			id: "inst-1", githubInstallationId: "100", accountLogin: "acme", accountType: "Organization",
+			status: "active", repositorySelection: "selected", syncStatus: "ready", createdAt: "", updatedAt,
+		});
+		const repository = (name: string) => ({
+			githubRepositoryId: name, name, fullName: `acme/${name}`, htmlUrl: `https://github.com/acme/${name}`,
+			defaultBranch: "main", visibility: "private", isPrivate: true, isArchived: false, access: "write", grantedAt: "",
+		});
+		// GitHub returns from the browser: the installation record changes but is
+		// still "ready", and the new grant is only listed once synced.
+		let returnedFromGitHub = false;
+		let synced = false;
+		cloudMocks.listGitHubInstallations.mockImplementation(async () => ({ installations: [installation(returnedFromGitHub ? "after" : "before")] }));
+		cloudMocks.startGitHubInstallation.mockImplementation(async () => {
+			returnedFromGitHub = true;
+			return { installationUrl: "https://github.com/apps/ao/installations/new", expiresAt: "" };
+		});
+		cloudMocks.syncGitHubInstallation.mockImplementation(async () => {
+			synced = true;
+			return { installation: installation("after") };
+		});
+		cloudMocks.listGitHubRepositories.mockImplementation(async () => ({
+			items: synced ? [repository("app"), repository("new-repo")] : [repository("app")],
+			page: { hasMore: false },
+		}));
+		const user = userEvent.setup();
+		render(<CreateProjectFlow embedded mode="choose" {...noop} />, { wrapper: CloudTestProviders });
+
+		await user.click(screen.getByRole("button", { name: "New cloud project" }));
+		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
+		await user.click(screen.getByRole("button", { name: "Connect more repositories" }));
+
+		await waitFor(() => expect(cloudMocks.syncGitHubInstallation).toHaveBeenCalledWith("org-1", "inst-1", expect.anything()), { timeout: 5_000 });
+		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
+		expect(await screen.findByRole("option", { name: "acme/new-repo" }, { timeout: 3_000 })).toBeInTheDocument();
+	}, 15_000);
+
 	it("offers Connect repository when GitHub is connected but shares no repositories", async () => {
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.sessionStatus = "authenticated";

@@ -1496,12 +1496,13 @@ function CloudProjectCard({
 					return;
 				}
 			}
-			// OAuth completion queues a durable sync, but the active installation is
-			// visible before the worker necessarily finishes. Use the authenticated sync
-			// endpoint when needed so the repository query cannot observe empty grants.
-			if (connectedInstallation.syncStatus !== "ready") {
-				await client.syncGitHubInstallation(org.id, connectedInstallation.id, { signal: abort.signal });
-			}
+			// Always sync before reading repositories. A new installation's grants
+			// may still be syncing, and an existing installation that just gained
+			// repositories ("Connect more repositories") is already marked ready
+			// while GitHub's webhook for the new grant can land seconds later. The
+			// sync endpoint enumerates the grants from GitHub before it returns, so
+			// the repository query below sees exactly what was just granted.
+			await client.syncGitHubInstallation(org.id, connectedInstallation.id, { signal: abort.signal });
 		} catch (err) {
 			if (abort.signal.aborted) return;
 			// If the AO Cloud session lapsed mid-connect, the control plane returns
