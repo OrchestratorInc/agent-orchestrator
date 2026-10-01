@@ -725,7 +725,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	// Shell terminals opened inside a session live beside its pane as extra tabs,
 	// scoped to the session on screen so each session has its own shell set.
-	const allShellTerminals = useShellTerminals(hostId).data ?? [];
+	const shellTerminalsQuery = useShellTerminals(hostId);
+	const allShellTerminals = shellTerminalsQuery.data ?? [];
 	const shellTerminals = useMemo(
 		() => allShellTerminals.filter((shell) => shell.sessionId === sessionId),
 		[allShellTerminals, sessionId],
@@ -1256,6 +1257,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		!session.cloud &&
 		daemonStatus.state === "ready" &&
 		routedTerminalTarget.kind === "worker" &&
+		(!activeShellTerminalHandleId ||
+			(shellTerminalsQuery.data !== undefined &&
+				!shellTerminals.some((shell) => shell.handleId === activeShellTerminalHandleId))) &&
 		!reviewerChatId &&
 		!fileTabs.activePath;
 	useEffect(() => {
