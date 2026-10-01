@@ -7513,8 +7513,8 @@ export interface operations {
     streamEvents: {
         parameters: {
             query?: {
-                /** @description Replay events with seq greater than this cursor. When omitted, clients may send Last-Event-ID instead. */
-                after?: null | number;
+                /** @description Replay events after a non-negative sequence, or use latest to start at the current head. Last-Event-ID overrides latest on reconnect. */
+                after?: null | string;
             };
             header?: never;
             path?: never;

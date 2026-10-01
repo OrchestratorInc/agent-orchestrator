@@ -1689,17 +1689,16 @@ paths:
     get:
       operationId: streamEvents
       parameters:
-      - description: Replay events with seq greater than this cursor. When omitted,
-          clients may send Last-Event-ID instead.
+      - description: Replay events after a non-negative sequence, or use latest to
+          start at the current head. Last-Event-ID overrides latest on reconnect.
         in: query
         name: after
         schema:
-          description: Replay events with seq greater than this cursor. When omitted,
-            clients may send Last-Event-ID instead.
-          minimum: 0
+          description: Replay events after a non-negative sequence, or use latest
+            to start at the current head. Last-Event-ID overrides latest on reconnect.
           type:
           - "null"
-          - integer
+          - string
       responses:
         "200":
           content:

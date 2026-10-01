@@ -80,6 +80,22 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				retries: number;
 				retryTimer?: ReturnType<typeof setTimeout>;
 			}>();
+			const remoteConversationRefreshes = new Map<string, { dirty: boolean }>();
+			const refreshRemoteConversationOnce = (hostId: string, sessionId: string) => {
+				const key = `${hostId}\0${sessionId}`;
+				const running = remoteConversationRefreshes.get(key);
+				if (running) { running.dirty = true; return; }
+				const state = { dirty: false };
+				remoteConversationRefreshes.set(key, state);
+				void (async () => {
+					do {
+						state.dirty = false;
+						try { await refreshRemoteConversation(queryClient, sessionId, hostId); }
+						catch { /* A later event or the polling fallback can retry. */ }
+					} while (state.dirty && !disposed && baseUrlForHost(hostId));
+					remoteConversationRefreshes.delete(key);
+				})();
+			};
 			// Do not repeatedly cancel a slow fetch under continuous CDC traffic. A
 			// key receives at most one in-flight refresh and one queued catch-up.
 			const refreshes = new Map<string, { dirty: boolean }>();
@@ -149,7 +165,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				if (connection.source?.readyState !== EVENTSOURCE_CLOSED && connection.source) return;
 				connection.source?.close();
 				try {
-					const source = new EventSource(`${base.replace(/\/+$/, "")}/api/v1/events`);
+					const source = new EventSource(`${base.replace(/\/+$/, "")}/api/v1/events?after=latest`);
 					let opened = false;
 					connection.source = source;
 					source.onopen = () => {
@@ -165,7 +181,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						try {
 							const decoded = JSON.parse(String((event as MessageEvent).data)) as { sessionId?: unknown; payload?: { conversationId?: unknown; reviewId?: unknown } };
 							if (typeof decoded.sessionId === "string" && typeof decoded.payload?.conversationId === "string" && typeof decoded.payload.reviewId !== "string") {
-								void refreshRemoteConversation(queryClient, decoded.sessionId, hostId).catch(() => undefined);
+								refreshRemoteConversationOnce(hostId, decoded.sessionId);
 							}
 							if (typeof decoded.payload?.reviewId === "string") {
 							invalidate(["reviewer-conversation", hostId, decoded.payload.reviewId]);

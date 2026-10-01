@@ -135,7 +135,7 @@ describe("createEventTransport", () => {
 			const client = fakeQueryClient();
 			const disconnect = createEventTransport(client).connect();
 			expect(cdcSources().map((source) => source.url)).not.toContain("http://127.0.0.1:4000/tunnel/api/v1/events");
-			expect(cdcSources().map((source) => source.url)).toContain("http://127.0.0.1:4000/direct/api/v1/events");
+			expect(EventSourceStub.instances.map((source) => source.url)).toContain("http://127.0.0.1:4000/direct/api/v1/events?after=latest");
 			vi.mocked(client.invalidateQueries).mockClear();
 			await vi.advanceTimersByTimeAsync(2_000);
 			expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "tunnel"] }, { cancelRefetch: false });
@@ -158,8 +158,8 @@ describe("createEventTransport", () => {
 		const disconnect = createEventTransport(client).connect();
 		const remoteA = EventSourceStub.instances.find((source) => source.url.includes("/box-a/"))!;
 		const remoteB = EventSourceStub.instances.find((source) => source.url.includes("/box-b/"))!;
-		expect(remoteA.url).toBe("http://127.0.0.1:4000/box-a/api/v1/events");
-		expect(remoteB.url).toBe("http://127.0.0.1:4000/box-b/api/v1/events");
+		expect(remoteA.url).toBe("http://127.0.0.1:4000/box-a/api/v1/events?after=latest");
+		expect(remoteB.url).toBe("http://127.0.0.1:4000/box-b/api/v1/events?after=latest");
 
 		remoteA.emit("session_updated", JSON.stringify({ sessionId: "same", payload: { conversationId: "remote-conversation" } }));
 		remoteA.emit("review_run_updated", JSON.stringify({ sessionId: "same", payload: { reviewId: "review-1", conversationId: "review-conversation" } }));
@@ -195,6 +195,23 @@ describe("createEventTransport", () => {
 		expect(unsubscribeConnectedHostsMock).toHaveBeenCalledOnce();
 	});
 
+	it("coalesces a burst of remote conversation events into one catch-up fetch", async () => {
+		connectedHostsMock.mockReturnValue(["box-a"]);
+		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/box-a");
+		const replies: Array<(value: unknown) => void> = [];
+		remoteGetMock.mockImplementation(() => new Promise((resolve) => replies.push(resolve)));
+		const disconnect = createEventTransport(fakeQueryClient()).connect();
+		const remote = EventSourceStub.instances.find((source) => source.url.includes("/box-a/"))!;
+		const event = JSON.stringify({ sessionId: "same", payload: { conversationId: "remote-conversation" } });
+		for (let i = 0; i < 10; i += 1) remote.emit("session_updated", event);
+		expect(remoteGetMock).toHaveBeenCalledOnce();
+		replies[0]({ data: { conversationId: "remote-conversation", sessionId: "same", mode: "chat", controller: "idle", latestSequence: 0, messages: [], activities: [] } });
+		await vi.waitFor(() => expect(remoteGetMock).toHaveBeenCalledTimes(2));
+		replies[1]({ data: { conversationId: "remote-conversation", sessionId: "same", mode: "chat", controller: "idle", latestSequence: 0, messages: [], activities: [] } });
+		await vi.waitFor(() => expect(remoteGetMock).toHaveBeenCalledTimes(2));
+		disconnect();
+	});
+
 	it("refetches only the affected host when its live stream drops", async () => {
 		connectedHostsMock.mockReturnValue(["box-a", "box-b"]);
 		baseUrlForHostMock.mockImplementation((hostId) => `http://127.0.0.1:4000/${hostId}`);
@@ -227,7 +244,7 @@ describe("createEventTransport", () => {
 		hostsChanged();
 		const newSource = EventSourceStub.instances.find((source) => source.url.includes("/new/"))!;
 		expect(oldSource.closed).toBe(true);
-		expect(newSource.url).toBe("http://127.0.0.1:5000/new/api/v1/events");
+		expect(newSource.url).toBe("http://127.0.0.1:5000/new/api/v1/events?after=latest");
 
 		oldSource.emit("session_updated", "{}");
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "box-a"] }, { cancelRefetch: false });
