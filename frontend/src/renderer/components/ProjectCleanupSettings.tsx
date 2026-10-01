@@ -78,8 +78,8 @@ function CleanupEditor({ project, onSaveState, onSaved }: { project: Project; on
 		</div>
 		<div className="rounded-md border border-border p-3 text-xs text-settings-muted">
 			<p className="font-medium text-settings-label">{t("settings.project.cleanupPaths")}</p>
-			<p><code>AO_SOURCE_TREE_PATH</code> — {t("settings.project.cleanupSourcePath")}</p>
-			<p><code>AO_WORKTREE_PATH</code> — {t("settings.project.cleanupWorktreePath")}</p>
+			<p><code>{"AO_SOURCE_TREE_PATH"}</code> — {t("settings.project.cleanupSourcePath")}</p>
+			<p><code>{"AO_WORKTREE_PATH"}</code> — {t("settings.project.cleanupWorktreePath")}</p>
 		</div>
 		<div className="space-y-4">
 			{steps.map((step, index) => <div key={index}>
