@@ -29,7 +29,7 @@ import {
 } from "./api";
 import type { ChatConfigOption, ChatImage, ChatModel, ChatResource, ChatSkill, ConversationSnapshot, TurnSettings } from "./types";
 import { cachedConversationState, createMobileConversationPageCache, discardHistoricalPages } from "./snapshot";
-import { conversationActionError, conversationErrorCode, conversationErrorIsPermanent } from "./conversationErrors";
+import { conversationActionError, conversationErrorCode, conversationErrorIsPermanent, ignoreStaleApproval } from "./conversationErrors";
 import { subscribeConversationEvents } from "./conversationEvents";
 import { conversationPollIntervalFor } from "./conversationPoll";
 import { createAsyncValueCache } from "./asyncValueCache";
@@ -341,9 +341,9 @@ export function useMobileConversation(
 	);
 	const resolveApprovalAction = useCallback(
 		(requestId: string, decisionId: string) =>
-			runAction("approval", () => requireConfig(cfg, (c) => options?.reviewId
+			runAction("approval", () => ignoreStaleApproval(() => requireConfig(cfg, (c) => options?.reviewId
 				? resolveReviewerApproval(c, options.reviewId, requestId, decisionId)
-				: resolveApproval(c, sessionId, requestId, decisionId))),
+				: resolveApproval(c, sessionId, requestId, decisionId)))),
 		[cfg, options?.reviewId, runAction, sessionId],
 	);
 	const resolveInputAction = useCallback(
