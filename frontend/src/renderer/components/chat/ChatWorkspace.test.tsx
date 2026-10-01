@@ -1787,6 +1787,37 @@ describe("ChatWorkspace timeline", () => {
 });
 
 describe("automation reports", () => {
+	it("keeps queued browser feedback visible while the agent is busy", () => {
+		const snapshot: ConversationSnapshot = {
+			...chatFixture,
+			turns: [
+				...chatFixture.turns,
+				{ id: "queued-feedback", state: "queued", requestedAt: "2026-09-28T12:00:00Z" },
+			],
+			items: [
+				...chatFixture.items,
+				{
+					kind: "message",
+					id: "queued-feedback-message",
+					turnId: "queued-feedback",
+					sequence: 15,
+					revision: 0,
+					role: "user",
+					origin: "automation",
+					text: "<browser_annotations>\nBrowser feedback\nPage: Example\nURL: https://example.com/\nAnnotations: 1\n\nAnnotation 1 (comment):\nTarget: button\nComment: Make this clearer.\n\n</browser_annotations>",
+					streaming: false,
+					createdAt: "2026-09-28T12:00:00Z",
+				},
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		expect(screen.getByText("Browser feedback")).toBeInTheDocument();
+		expect(screen.getByText("1 annotation on Example")).toBeInTheDocument();
+		expect(screen.getByText("Make this clearer.")).toBeInTheDocument();
+	});
+
 	it("renders browser annotation transport as a compact feedback card", () => {
 		const source = chatFixture.items.find((item) => item.id === "m-4") as ConversationMessage;
 		const message: ConversationMessage = {
