@@ -31,6 +31,19 @@ func TestProjectEnvMergeAndRedaction(t *testing.T) {
 	}
 }
 
+func TestMergeEnvReservesAONamespace(t *testing.T) {
+	merged := MergeEnv(
+		map[string]string{"AO_SESSION_ID": "spoof", "ao_worktree_path": "spoof", "PROJECT_TOKEN": "safe"},
+		map[string]string{"AO_SESSION_ID": "session-1"},
+	)
+	if merged["AO_SESSION_ID"] != "session-1" || merged["ao_worktree_path"] != "" {
+		t.Fatalf("project AO markers survived merge: %#v", merged)
+	}
+	if merged["PROJECT_TOKEN"] != "safe" {
+		t.Fatalf("project variable = %q, want safe", merged["PROJECT_TOKEN"])
+	}
+}
+
 func TestSharedInstallKeepsAgentNodeAndCanonicalAO(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shebang selection; Windows has a separate command test")

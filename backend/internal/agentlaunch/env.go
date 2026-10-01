@@ -16,12 +16,16 @@ import (
 
 const aoBinaryName = "ao"
 
-// MergeEnv overlays child-specific values on project values. A new process
-// receives its own map so a launch cannot mutate the saved project config.
+// MergeEnv overlays child-specific values on project values. The AO_ namespace
+// belongs to AO, including when a child has no value for a particular key.
+// A new process receives its own map so a launch cannot mutate saved config.
 func MergeEnv(project, child map[string]string) map[string]string {
 	env := make(map[string]string, len(project)+len(child))
-	for _, source := range []map[string]string{project, child} {
+	for i, source := range []map[string]string{project, child} {
 		for key, value := range source {
+			if i == 0 && strings.HasPrefix(strings.ToUpper(key), "AO_") {
+				continue
+			}
 			if runtime.GOOS == "windows" {
 				for existing := range env {
 					if strings.EqualFold(existing, key) {

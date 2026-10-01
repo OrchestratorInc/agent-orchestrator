@@ -699,6 +699,25 @@ func TestOpenShellTerminalRedactsProjectEnvFromRuntimeError(t *testing.T) {
 	}
 }
 
+func TestOpenShellTerminalDoesNotTrustProjectAOMarkers(t *testing.T) {
+	rt := newFakeShellRuntime()
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}, envs: map[domain.ProjectID]map[string]string{
+		"portfolio": {"AO_SESSION_ID": "spoof", "AO_WORKTREE_PATH": "spoof", "PROJECT_TOKEN": "safe"},
+	}}
+	svc := newTestService(rt, &fakeShellTerminalStore{}, projects)
+
+	if _, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{ProjectID: "portfolio"}); err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	got := rt.created[0].Env
+	if got["AO_SESSION_ID"] == "spoof" || got["AO_WORKTREE_PATH"] == "spoof" {
+		t.Fatalf("shell received spoofed AO markers: %#v", got)
+	}
+	if got["PROJECT_TOKEN"] != "safe" {
+		t.Fatalf("project variable = %q, want safe", got["PROJECT_TOKEN"])
+	}
+}
+
 func TestOpenShellTerminalRejectsUnavailableWindowsShell(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows shell selection only applies on Windows")

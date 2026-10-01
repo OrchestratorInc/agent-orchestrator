@@ -28,7 +28,7 @@ type ProjectConfig struct {
 	SessionPrefix string `json:"sessionPrefix,omitempty"`
 
 	// Env are extra environment variables forwarded into worker session
-	// runtimes. AO-internal vars (AO_SESSION, AO_PROJECT_ID, …) always win.
+	// runtimes. The AO_ namespace is reserved for AO-owned variables.
 	Env map[string]string `json:"env,omitempty"`
 	// Symlinks are repo-relative paths symlinked into each session workspace.
 	Symlinks []string `json:"symlinks,omitempty"`
@@ -190,6 +190,9 @@ func (c ProjectConfig) Validate() error {
 			return fmt.Errorf("env %q: invalid variable name or value", key)
 		}
 		folded := strings.ToUpper(key)
+		if strings.HasPrefix(folded, "AO_") {
+			return fmt.Errorf("env %q: AO_ prefix is reserved", key)
+		}
 		if seenEnv[folded] {
 			return fmt.Errorf("env %q: duplicate variable name", key)
 		}

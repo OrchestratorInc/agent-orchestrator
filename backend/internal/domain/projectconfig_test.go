@@ -18,6 +18,8 @@ func TestProjectConfigValidate(t *testing.T) {
 		{"session prefix with backslash", ProjectConfig{SessionPrefix: `ao\project`}, true},
 		{"session prefix traversal component", ProjectConfig{SessionPrefix: ".."}, true},
 		{"valid env", ProjectConfig{Env: map[string]string{"API_KEY": "a=b\nsecond line"}}, false},
+		{"AO-owned env name", ProjectConfig{Env: map[string]string{"AO_SESSION_ID": "spoof"}}, true},
+		{"case-folded AO-owned env name", ProjectConfig{Env: map[string]string{"ao_worktree_path": "spoof"}}, true},
 		{"invalid env name", ProjectConfig{Env: map[string]string{"BAD KEY": "secret"}}, true},
 		{"invalid env value", ProjectConfig{Env: map[string]string{"KEY": "bad\x00value"}}, true},
 		{"case-folded duplicate env", ProjectConfig{Env: map[string]string{"KEY": "first", "key": "second"}}, true},
