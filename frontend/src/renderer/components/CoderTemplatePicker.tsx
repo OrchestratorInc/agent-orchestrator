@@ -174,13 +174,6 @@ export function AdditionalRepositoriesPicker({ repos = [] }: { repos?: { label: 
 												aria-label={t("coder.repos.url", { defaultValue: "Repository" })}
 											/>
 										)}
-										<Input
-											value={repo.branch ?? ""}
-											onChange={(e) => updateRepo(index, { branch: e.target.value })}
-											placeholder={t("coder.repos.branch", { defaultValue: "branch" })}
-											className="w-32 shrink-0"
-											aria-label={t("coder.repos.branch", { defaultValue: "branch" })}
-										/>
 										<Button
 											type="button"
 											variant="ghost"

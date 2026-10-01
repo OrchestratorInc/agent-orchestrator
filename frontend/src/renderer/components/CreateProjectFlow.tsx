@@ -1244,17 +1244,11 @@ function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
  * instead of daemon agent readiness — same component, different source of
  * truth, per the onboarding design. */
 function CloudAgentSetupStep({
-	repositoryUrl,
-	displayName,
-	defaultBranch,
 	onBack,
 	onCreate,
 	isCreating,
 	createError,
 }: {
-	repositoryUrl: string;
-	displayName: string;
-	defaultBranch: string;
 	onBack: () => void;
 	onCreate: (selection: { workerAgent: string; orchestratorAgent: string }) => void;
 	isCreating: boolean;
@@ -1282,12 +1276,6 @@ function CloudAgentSetupStep({
 
 	return (
 		<div className="flex flex-col gap-5">
-			<div className="flex flex-col gap-1 rounded-lg border border-border/50 bg-[var(--color-bg-import-card)] px-4 py-3">
-				<span className="truncate text-[13px] font-medium text-[var(--color-text-import-title)]">{displayName}</span>
-				<span className="truncate font-mono text-[11.5px] text-muted-foreground">
-					{repositoryUrl} · {defaultBranch}
-				</span>
-			</div>
 			{createError ? (
 				<div className={onboardingAlertErrorClass} role="alert">
 					{createError}
@@ -1748,9 +1736,6 @@ function CloudProjectCard({
 				{/* Agents, once a repository is chosen. */}
 				{selectedRepo !== undefined && org !== undefined ? (
 					<CloudAgentSetupStep
-						repositoryUrl={selectedRepo.htmlUrl}
-						displayName={selectedRepo.name}
-						defaultBranch={selectedRepo.defaultBranch !== "" ? selectedRepo.defaultBranch : "main"}
 						onBack={onBack}
 						onCreate={(selection) => void createProject(selection)}
 						isCreating={isCreating}
