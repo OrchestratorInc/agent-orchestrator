@@ -2230,7 +2230,7 @@
 	"executionContext.title": "执行上下文",
 	"executionContext.loading": "正在加载项目上下文…",
 	"coder.template.default": "组织工作区",
-	"settings.models.modelNotReported": "未报告模型",
+	"settings.models.selectModel": "选择模型",
 	"settings.models.useAgentModel": "使用智能体模型",
 	"settings.models.useAgentMode": "使用智能体模式",
 	"settings.models.useAgentEffort": "使用智能体推理强度",
