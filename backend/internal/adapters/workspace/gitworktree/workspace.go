@@ -1179,7 +1179,7 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 	if _, err := w.run(ctx, w.binary, createRefArgs(path, ref, commitSHA)...); err != nil {
 		exists, lookupErr := w.refExists(ctx, path, ref)
 		if lookupErr != nil {
-			return "", fmt.Errorf("gitworktree: create preserved ref %q: %w (verify existing ref: %v)", ref, err, lookupErr)
+			return "", fmt.Errorf("gitworktree: create preserved ref %q: %w (verify existing ref: %w)", ref, err, lookupErr)
 		}
 		if exists {
 			currentState, stateErr := w.preservedCommitState(ctx, path, commitSHA)
