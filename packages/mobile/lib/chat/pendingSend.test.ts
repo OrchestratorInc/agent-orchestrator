@@ -14,6 +14,26 @@ import { afterDraftWrites, clearPendingSend, needsAttachmentRecovery, pendingSen
 beforeEach(() => saved.clear());
 
 describe("pending Chat send", () => {
+	it("reuses a host-scoped steer ID after acceptance, response loss, and app relaunch", async () => {
+		const key = pendingSendKey("host-A", "session-1");
+		const accepted = new Set<string>();
+		const postSteer = async (candidateId: string) => {
+			const pending = await reservePendingSend(key, { id: candidateId, draftText: "Change course", text: "Change course", hasAttachments: false, kind: "steer" });
+			if (!accepted.has(pending.id)) {
+				accepted.add(pending.id);
+				throw new Error("Response lost after the provider accepted guidance");
+			}
+			return pending;
+		};
+		await expect(postSteer("first-id")).rejects.toThrow("Response lost");
+		const afterRelaunch = await postSteer("new-id");
+		expect(afterRelaunch.id).toBe("first-id");
+		expect(accepted.size).toBe(1);
+		expect(await readPendingSend(key)).toEqual(afterRelaunch);
+		expect(await readPendingSend(pendingSendKey("host-B", "session-1"))).toBeNull();
+		await expect(reservePendingSend(key, { id: "send-id", draftText: "Change course", text: "Change course", hasAttachments: false, kind: "send" })).rejects.toThrow("previous message");
+	});
+
 	it("reuses the accepted message ID after the response was lost and the screen remounted", async () => {
 		const key = "ao.chat.pending.host-A.session-1";
 		const accepted = new Set<string>();

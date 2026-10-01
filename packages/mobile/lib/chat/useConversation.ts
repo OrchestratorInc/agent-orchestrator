@@ -49,6 +49,7 @@ export type PendingSend = {
 	id: string;
 	draftText: string;
 	text: string;
+	kind?: "send" | "steer";
 	state: "sending" | "failed";
 	error?: string;
 	attachments?: ChatImage[];
@@ -94,7 +95,7 @@ export type MobileConversation = {
 	retrySend(id: string): Promise<void>;
 	discardSend(id: string): Promise<void>;
 	acknowledgeSend(id: string): Promise<void>;
-	steer(text: string): Promise<void>;
+	steer(text: string): Promise<string>;
 	promoteQueuedTurn(turnId: string): Promise<void>;
 	cancelQueuedTurn(turnId: string): Promise<void>;
 	interrupt(): Promise<void>;
@@ -311,6 +312,8 @@ export function useMobileConversation(
 						}
 						throw cause;
 					}
+				} else if (pending.kind === "steer") {
+					await steerConversation(cfg, sessionId, pending.text, pending.id);
 				} else {
 					const sendMessage = options?.reviewId ? sendReviewerConversationMessage : sendConversationMessage;
 					await sendMessage(cfg, options?.reviewId ?? sessionId, {
@@ -324,6 +327,7 @@ export function useMobileConversation(
 				await refresh();
 			} catch (cause) {
 				const message = conversationActionError(cause);
+				if (pending.kind === "steer") setActionCodes((old) => ({ ...old, steer: conversationErrorCode(cause) }));
 				setPendingSends((old) => upsertPending(old, { ...pending, state: "failed", error: message }));
 				throw new Error(message);
 			}
@@ -344,7 +348,7 @@ export function useMobileConversation(
 				if (!snapshot?.capabilities?.includes("images")) nativeAttachments = undefined;
 			}
 			const saved = await reservePendingSend(pendingKey, {
-				id, draftText: text, text: message, hasAttachments: Boolean(attachments?.length || resources?.length),
+				id, draftText: text, text: message, hasAttachments: Boolean(attachments?.length || resources?.length), kind: "send",
 			});
 			await deliver({
 				...saved, text: attachments?.length || resources?.length ? message : saved.text,
@@ -375,10 +379,14 @@ export function useMobileConversation(
 		if (pendingKey) await clearPendingSend(pendingKey, id);
 		setCompletedRetry((current) => current?.id === id ? undefined : current);
 	}, [pendingKey]);
-	const steer = useCallback(
-		(text: string) => runAction("steer", () => requireConfig(cfg, (c) => steerConversation(c, sessionId, text, clientMessageId()))),
-		[cfg, runAction, sessionId],
-	);
+	const steer = useCallback(async (text: string) => {
+		if (!pendingKey) throw new Error(NOT_PAIRED_ACTION_COPY);
+		const id = clientMessageId();
+		const saved = await reservePendingSend(pendingKey, { id, draftText: text, text, hasAttachments: false, kind: "steer" });
+		await deliver({ ...saved, state: "sending", restored: saved.id !== id });
+		setActionCodes((old) => ({ ...old, steer: undefined }));
+		return saved.id;
+	}, [pendingKey, deliver]);
 	const cancelQueuedTurn = useCallback(
 		(turnId: string) => runAction("queue", () => requireConfig(cfg, (c) => cancelQueuedConversationTurn(c, sessionId, turnId))),
 		[cfg, runAction, sessionId],

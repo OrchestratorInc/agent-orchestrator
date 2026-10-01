@@ -125,7 +125,7 @@ export function ChatComposer({
 	onSend(text: string, attachments?: ChatImage[], resources?: ChatResource[]): Promise<string>;
 	onAcknowledgeSend(id: string): Promise<void>;
 	completedRetry?: { id: string; draftText: string };
-	onSteer(text: string): Promise<void>;
+	onSteer(text: string): Promise<string>;
 	onPromoteQueuedTurn(turnId: string): Promise<void>;
 	onCancelQueuedTurn(turnId: string): Promise<void>;
 	onInterrupt(): void;
@@ -323,24 +323,19 @@ export function ChatComposer({
 			const images = attachments.filter((item): item is Extract<Attachment, { kind: "image" }> => item.kind === "image").map((item) => item.image);
 			const resources = attachments.filter((item): item is Extract<Attachment, { kind: "resource" }> => item.kind === "resource").map((item) => item.resource);
 			const route = composerDeliveryRoute(intent, steerEligible);
-			if (route === "steer") await onSteer(trimmed);
-			else {
-				const id = await onSend(trimmed, images.length ? images : undefined, resources.length ? resources : undefined);
-				if (draftKey) {
-					const current = latestText.current;
-					await afterDraftWrites(draftKey, () => current === text ? AsyncStorage.removeItem(draftKey) : AsyncStorage.setItem(draftKey, current));
-				}
-				await onAcknowledgeSend(id);
+			const id = route === "steer"
+				? await onSteer(trimmed)
+				: await onSend(trimmed, images.length ? images : undefined, resources.length ? resources : undefined);
+			if (draftKey) {
+				const current = latestText.current;
+				await afterDraftWrites(draftKey, () => current === text ? AsyncStorage.removeItem(draftKey) : AsyncStorage.setItem(draftKey, current));
 			}
+			await onAcknowledgeSend(id);
 			if (latestText.current === text) {
 				latestText.current = "";
 				setText("");
 				setFieldHeight(COMPOSER_FIELD_HEIGHT);
 				setAttachments([]);
-			}
-			if (route === "steer" && draftKey) {
-				const current = latestText.current;
-				await afterDraftWrites(draftKey, () => current ? AsyncStorage.setItem(draftKey, current) : AsyncStorage.removeItem(draftKey));
 			}
 			haptics.success();
 		} catch (cause) {

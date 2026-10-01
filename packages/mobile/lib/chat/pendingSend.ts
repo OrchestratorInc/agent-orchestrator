@@ -5,6 +5,8 @@ export type PendingSendRecord = {
 	draftText: string;
 	text: string;
 	hasAttachments: boolean;
+	/** Absent on records saved by older builds, where every delivery was a send. */
+	kind?: "send" | "steer";
 };
 
 export function pendingSendKey(host: string, conversation: string): string {
@@ -28,7 +30,8 @@ export async function readPendingSend(key: string): Promise<PendingSendRecord | 
 	const raw = await AsyncStorage.getItem(key);
 	if (!raw) return null;
 	const saved = JSON.parse(raw) as PendingSendRecord;
-	if (!saved.id || typeof saved.draftText !== "string" || typeof saved.text !== "string" || typeof saved.hasAttachments !== "boolean") {
+	if (!saved.id || typeof saved.draftText !== "string" || typeof saved.text !== "string" || typeof saved.hasAttachments !== "boolean" ||
+		(saved.kind !== undefined && saved.kind !== "send" && saved.kind !== "steer")) {
 		throw new Error("The previous message's retry record is damaged. Discard it before sending another message.");
 	}
 	return saved;
@@ -37,6 +40,9 @@ export async function readPendingSend(key: string): Promise<PendingSendRecord | 
 export async function reservePendingSend(key: string, candidate: PendingSendRecord): Promise<PendingSendRecord> {
 	const existing = await readPendingSend(key);
 	if (existing) {
+		if ((existing.kind ?? "send") !== (candidate.kind ?? "send")) {
+			throw new Error("Resolve the previous message before sending another one.");
+		}
 		if (existing.draftText !== candidate.draftText) {
 			throw new Error("Resolve the previous message before sending another one.");
 		}
