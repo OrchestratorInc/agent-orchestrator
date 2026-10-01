@@ -82,6 +82,7 @@ function reading(
 function host(availableGiB: number, pressureRaw = 0, cpuPercent = 0, load1 = 0.5) {
 	return {
 		cpuPercent,
+		cpuMeasured: true,
 		totalBytes: 32 * GIB,
 		availableBytes: availableGiB * GIB,
 		swapTotalBytes: 8 * GIB,
@@ -103,6 +104,7 @@ function appReading(availableGiB: number, pressureRaw = 0, aoGiB = 2, hostCPUPer
 				rssBytes: aoGiB * GIB,
 				processCount: 20,
 				cpuPercent: aoCPUPercent,
+				cpuMeasured: true,
 				own: reading("ao", 300 * 1024 ** 2, 3, [{ pid: 7, ppid: 1, rssBytes: 300 * 1024 ** 2, cpuPercent: 1, command: "ao daemon" }]),
 			},
 			system: host(availableGiB, pressureRaw, hostCPUPercent, load1),
