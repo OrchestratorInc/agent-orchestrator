@@ -105,7 +105,7 @@ type SessionService interface {
 	DelegateTask(ctx context.Context, in sessionsvc.DelegateTaskInput) (sessionsvc.DelegateTaskOutcome, error)
 	PrepareTask(ctx context.Context, projectID domain.ProjectID) (string, error)
 	CancelTaskPreparation(ctx context.Context, token string) error
-	ListPRSummaries(ctx context.Context, id domain.SessionID) ([]sessionsvc.PRSummary, error)
+	ListPRListing(ctx context.Context, id domain.SessionID) (sessionsvc.PRListing, error)
 	ClaimPR(ctx context.Context, id domain.SessionID, ref string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error)
 	StageAttachments(ctx context.Context, id domain.SessionID, attachments []ports.SpawnAttachment) ([]string, error)
 	WorkspaceWatchPaths(ctx context.Context, id domain.SessionID) ([]string, error)
@@ -127,6 +127,10 @@ type SessionService interface {
 	InvalidateWorkspaceCache(id domain.SessionID)
 	Pin(ctx context.Context, id domain.SessionID) (domain.Session, error)
 	Unpin(ctx context.Context, id domain.SessionID) (domain.Session, error)
+}
+
+type sessionMessageOptionsSender interface {
+	SendWithOptions(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error
 }
 
 // ActivityRecorder applies an agent activity-state signal to a session. It is
@@ -1173,12 +1177,16 @@ func (c *SessionsController) listPRs(w http.ResponseWriter, r *http.Request) {
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/pr")
 		return
 	}
-	prs, err := c.Svc.ListPRSummaries(r.Context(), sessionID(r))
+	listing, err := c.Svc.ListPRListing(r.Context(), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, ListSessionPRsResponse{SessionID: sessionID(r), PRs: sessionPRSummaries(prs)})
+	linked := make([]SessionPRReference, len(listing.Linked))
+	for i, ref := range listing.Linked {
+		linked[i] = SessionPRReference{URL: ref.URL, Provider: ref.Provider, Host: ref.Host, Repo: ref.Repository, Number: ref.Number}
+	}
+	envelope.WriteJSON(w, http.StatusOK, ListSessionPRsResponse{SessionID: sessionID(r), PRs: sessionPRSummaries(listing.Tracked), LinkedPRs: linked})
 }
 
 func (c *SessionsController) claimPR(w http.ResponseWriter, r *http.Request) {
@@ -1604,7 +1612,18 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 		attachment = &decoded
 	}
 	message := domain.SanitizeControlChars(in.Message)
-	if err := c.Svc.Send(r.Context(), sessionID(r), message, attachment); err != nil {
+	var err error
+	if in.UserAuthored {
+		sender, ok := c.Svc.(sessionMessageOptionsSender)
+		if !ok {
+			apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/send")
+			return
+		}
+		err = sender.SendWithOptions(r.Context(), sessionID(r), message, attachment, ports.MessageDeliveryOptions{AuthoredByUser: true})
+	} else {
+		err = c.Svc.Send(r.Context(), sessionID(r), message, attachment)
+	}
+	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
@@ -2217,6 +2236,7 @@ func workspaceFilesResponse(files sessionsvc.WorkspaceFiles) ListWorkspaceFilesR
 		Truncated:        files.Truncated,
 		Sections:         workspaceFileSectionsResponse(files.Sections),
 		Commits:          workspaceCommitsResponse(files.Commits),
+		CommitsTruncated: files.CommitsTruncated,
 		Summary:          WorkspaceSummary(files.Summary),
 		Degraded:         files.Degraded,
 		DegradedCode:     files.DegradedCode,
@@ -2227,11 +2247,12 @@ func workspaceFilesResponse(files sessionsvc.WorkspaceFiles) ListWorkspaceFilesR
 
 func prFilesResponse(files sessionsvc.PRFiles) ListPRFilesResponse {
 	return ListPRFilesResponse{
-		SessionID: files.SessionID,
-		Files:     workspaceFileSummariesResponse(files.Files),
-		Commits:   workspaceCommitsResponse(files.Commits),
-		Truncated: files.Truncated,
-		Summary:   WorkspaceSummary(files.Summary),
+		SessionID:        files.SessionID,
+		Files:            workspaceFileSummariesResponse(files.Files),
+		Commits:          workspaceCommitsResponse(files.Commits),
+		CommitsTruncated: files.CommitsTruncated,
+		Truncated:        files.Truncated,
+		Summary:          WorkspaceSummary(files.Summary),
 	}
 }
 

@@ -484,7 +484,14 @@ func (l *fakeLCM) ActivateChatAgentSwitchTarget(ctx context.Context, activation 
 	}
 	return store.ActivateChatAgentSwitchTarget(ctx, activation)
 }
-func (l *fakeLCM) MarkTerminated(_ context.Context, id domain.SessionID) error {
+
+// MarkTerminated mirrors the real lifecycle.Manager, which refuses to write on
+// a dead context. The fake used to ignore ctx entirely, which hid the fact that
+// Kill was recording terminal intent on its own expiring teardown budget.
+func (l *fakeLCM) MarkTerminated(ctx context.Context, id domain.SessionID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if l.terminated == nil {
 		l.terminated = map[domain.SessionID]int{}
 	}
@@ -852,6 +859,16 @@ func (a readinessAgent) PromptReadinessHints(context.Context, ports.LaunchConfig
 	return a.hints, nil
 }
 
+type composedAfterStartAgent struct {
+	afterStartAgent
+	buildCalls int
+}
+
+func (a *composedAfterStartAgent) BuildAfterStartPrompt(_ context.Context, cfg ports.LaunchConfig) (string, error) {
+	a.buildCalls++
+	return "STANDING:\n" + cfg.SystemPrompt + "\nTASK:\n" + cfg.Prompt, nil
+}
+
 type promptStrategyErrorAgent struct {
 	*recordingAgent
 	err error
@@ -1012,11 +1029,14 @@ type fakeWorkspace struct {
 	// destroyCtxErr records ctx.Err() as seen by Destroy, so a test can prove
 	// teardown does not inherit a caller's cancellation.
 	destroyCtxErr error
-	fetchErr      error
-	fetches       []fetchDefaultBranchCall
-	resolves      []resolveDefaultBranchCall
-	resolved      map[string]ports.WorkspaceDefaultBranch
-	fetchFunc     func(context.Context, string, ports.WorkspaceDefaultBranch) error
+	// destroyHook runs at the top of Destroy, so a test can make teardown burn
+	// real time against Kill's budget.
+	destroyHook func()
+	fetchErr    error
+	fetches     []fetchDefaultBranchCall
+	resolves    []resolveDefaultBranchCall
+	resolved    map[string]ports.WorkspaceDefaultBranch
+	fetchFunc   func(context.Context, string, ports.WorkspaceDefaultBranch) error
 	// createRepoPath, when set, is returned as the RepoPath of a single-repo
 	// Create so tests can assert it survives the spawn->teardown metadata round
 	// trip (production Create resolves this path; the zero default keeps every
@@ -1162,6 +1182,9 @@ func (w *fakeWorkspace) CreateWorkspaceProject(_ context.Context, cfg ports.Work
 }
 func (w *fakeWorkspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) error {
 	w.lastDestroyInfo = info
+	if w.destroyHook != nil {
+		w.destroyHook()
+	}
 	w.destroyCtxErr = ctx.Err()
 	if info.RepoPath != "" {
 		entry := "Destroy:" + fakeWorkspaceRepoName(info)
@@ -2520,6 +2543,38 @@ func TestSpawn_DeliversPromptAfterStartWhenAgentRequestsIt(t *testing.T) {
 	}
 }
 
+func TestSpawn_AfterStartPromptBuilderCombinesStandingInstructionsAndTaskOnce(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rt := &fakeRuntime{}
+	msg := &fakeMessenger{}
+	recording := &recordingAgent{}
+	agent := &composedAfterStartAgent{afterStartAgent: afterStartAgent{recordingAgent: recording}}
+	m := New(Deps{
+		Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: msg, Lifecycle: &fakeLCM{store: st},
+		LookPath: func(string) (string, error) { return "/bin/true", nil },
+	})
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "fix the button"}); err != nil {
+		t.Fatal(err)
+	}
+	if agent.buildCalls != 1 {
+		t.Fatalf("BuildAfterStartPrompt calls = %d, want 1", agent.buildCalls)
+	}
+	if len(msg.msgs) != 1 || !strings.HasPrefix(msg.msgs[0], "STANDING:\n") ||
+		!strings.Contains(msg.msgs[0], "## AO Worker Role") ||
+		!strings.HasSuffix(msg.msgs[0], "TASK:\nfix the button") {
+		t.Fatalf("delivered prompts = %#v, want one combined bootstrap turn", msg.msgs)
+	}
+	if recording.lastLaunch.Prompt != "" {
+		t.Fatalf("launch prompt = %q, want empty for after-start delivery", recording.lastLaunch.Prompt)
+	}
+	if got := st.sessions["mer-1"].Metadata.Prompt; got != "fix the button" {
+		t.Fatalf("stored prompt = %q, want original task", got)
+	}
+}
+
 func TestSpawn_AfterStartPromptWaitsForReadinessHint(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
@@ -3682,14 +3737,76 @@ func TestKill_DeletesStaleRestoreMarker(t *testing.T) {
 	}
 }
 
-// TestKill_OtherWorkspaceErrorStillFails: only the typed dirty refusal is a
-// success-with-preserved-workspace; any other teardown failure keeps erroring.
-func TestKill_OtherWorkspaceErrorStillFails(t *testing.T) {
+// TestKill_UnnamedWorkspaceErrorPreservesAndTerminates is the #5463 regression
+// on the workspace half. A teardown failure AO has no typed name for (a locked
+// worktree git will not prune, a path that no longer resolves to a live
+// worktree) used to fail the kill, which left `terminated` false — and
+// `ao session cleanup` only walks terminated sessions, so the row was reachable
+// by no path at all. Nothing is force-removed: the worktree stays on disk for
+// cleanup to retry and report on. Only the session's claim on the sidebar goes.
+func TestKill_UnnamedWorkspaceErrorPreservesAndTerminates(t *testing.T) {
 	m, st, _, ws := newManager()
 	st.sessions["mer-1"] = mkLive("mer-1")
-	ws.destroyErr = errors.New("disk on fire")
-	if _, err := m.Kill(ctx, "mer-1"); err == nil || !strings.Contains(err.Error(), "disk on fire") {
-		t.Fatalf("kill err = %v, want workspace error surfaced", err)
+	ws.destroyErr = errors.New("path is still registered after git worktree prune")
+
+	freed, err := m.Kill(ctx, "mer-1")
+	if err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if freed {
+		t.Fatal("freed = true, want false: the worktree was left on disk")
+	}
+	if !st.sessions["mer-1"].IsTerminated {
+		t.Fatal("session must be marked terminated so cleanup can reach it")
+	}
+	if calls := strings.Join(ws.calls, ","); strings.Contains(calls, "ForceDestroy") {
+		t.Fatalf("calls = %s, want no ForceDestroy: a refused teardown is never forced", calls)
+	}
+}
+
+// TestKill_RuntimeDestroyErrorFailsClosedEvenWhenProbeReadsGone pins the
+// runtime half of #5463 shut. Every runtime's Destroy returns nil when it
+// confirms the session is absent, so an error means it may still be live — and
+// a follow-up IsAlive cannot overrule that: conpty's probe dials a listener the
+// graceful shutdown already closed, so a hung pty-host reads as gone. Kill must
+// surface the error and leave the session and its workspace alone.
+func TestKill_RuntimeDestroyErrorFailsClosedEvenWhenProbeReadsGone(t *testing.T) {
+	m, st, rt, ws := newManager()
+	st.sessions["mer-1"] = mkLive("mer-1")
+	rt.destroyErr = errors.New("conpty: pty-host pid 42 is still alive after teardown")
+	rt.aliveByHandle = map[string]bool{"h1": false}
+
+	freed, err := m.Kill(ctx, "mer-1")
+	if err == nil || !strings.Contains(err.Error(), "still alive after teardown") {
+		t.Fatalf("freed=%v err=%v, want the runtime error surfaced", freed, err)
+	}
+	if ws.destroyed != 0 {
+		t.Fatalf("workspace destroys = %d, want 0: teardown must stop at the runtime", ws.destroyed)
+	}
+	if st.sessions["mer-1"].IsTerminated {
+		t.Fatal("session must stay active while the runtime may be live")
+	}
+}
+
+// TestKill_InconclusiveRuntimeProbeStaysFailClosed pins the other side.
+// ErrRuntimeProbeInconclusive means the runtime may still be live, and its port
+// contract forbids callers from treating the session as dead. Terminating here
+// would leave a possibly-live agent running with no row pointing at it, so the
+// kill must keep failing and the workspace must stay untouched.
+func TestKill_InconclusiveRuntimeProbeStaysFailClosed(t *testing.T) {
+	m, st, rt, ws := newManager()
+	st.sessions["mer-1"] = mkLive("mer-1")
+	rt.destroyErr = fmt.Errorf("conpty: pty registry scan incomplete: %w", ports.ErrRuntimeProbeInconclusive)
+
+	freed, err := m.Kill(ctx, "mer-1")
+	if err == nil || !strings.Contains(err.Error(), "runtime") {
+		t.Fatalf("freed=%v err=%v, want the runtime error surfaced", freed, err)
+	}
+	if ws.destroyed != 0 {
+		t.Fatalf("workspace destroys = %d, want 0: teardown must stop at the runtime", ws.destroyed)
+	}
+	if st.sessions["mer-1"].IsTerminated {
+		t.Fatal("session must stay active while the runtime may be live")
 	}
 }
 func TestKill_WorkspaceProjectDestroysChildrenBeforeRoot(t *testing.T) {
@@ -5670,10 +5787,11 @@ func TestRestore_FallbackLaunchDeliversPromptAfterStartWhenAgentRequestsIt(t *te
 	}
 	rt := &fakeRuntime{}
 	msg := &fakeMessenger{}
-	agent := &recordingAgent{}
+	recording := &recordingAgent{}
+	agent := &composedAfterStartAgent{afterStartAgent: afterStartAgent{recordingAgent: recording}}
 	m := New(Deps{
 		Runtime:   rt,
-		Agents:    singleAgent{agent: afterStartAgent{recordingAgent: agent}},
+		Agents:    singleAgent{agent: agent},
 		Workspace: &fakeWorkspace{},
 		Store:     st,
 		Messenger: msg,
@@ -5684,14 +5802,56 @@ func TestRestore_FallbackLaunchDeliversPromptAfterStartWhenAgentRequestsIt(t *te
 	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
 		t.Fatal(err)
 	}
-	if agent.lastLaunch.Prompt != "" {
-		t.Fatalf("fallback launch prompt = %q, want empty for after-start delivery", agent.lastLaunch.Prompt)
+	if agent.buildCalls != 1 {
+		t.Fatalf("BuildAfterStartPrompt calls = %d, want 1", agent.buildCalls)
 	}
-	if len(msg.msgs) != 1 || msg.msgs[0] != "continue the task" {
-		t.Fatalf("delivered prompts = %#v, want saved prompt", msg.msgs)
+	if recording.lastLaunch.Prompt != "" {
+		t.Fatalf("fallback launch prompt = %q, want empty for after-start delivery", recording.lastLaunch.Prompt)
+	}
+	if len(msg.msgs) != 1 || !strings.HasPrefix(msg.msgs[0], "STANDING:\n") ||
+		!strings.Contains(msg.msgs[0], "## AO Worker Role") ||
+		!strings.HasSuffix(msg.msgs[0], "TASK:\ncontinue the task") {
+		t.Fatalf("delivered prompts = %#v, want one combined fallback turn", msg.msgs)
 	}
 	if rt.created != 1 {
 		t.Fatalf("runtime.Create = %d, want 1", rt.created)
+	}
+}
+
+func TestRestore_NativeAfterStartAgentResumesPassively(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		Metadata: domain.SessionMetadata{
+			WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "native-1", Prompt: "continue the task",
+		},
+	}
+	rt := &fakeRuntime{}
+	msg := &fakeMessenger{}
+	recording := &recordingAgent{}
+	agent := &composedAfterStartAgent{afterStartAgent: afterStartAgent{recordingAgent: recording}}
+	m := New(Deps{
+		Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: msg, Lifecycle: &fakeLCM{store: st},
+		LookPath: func(string) (string, error) { return "/bin/true", nil },
+	})
+
+	res, err := m.RestoreWithMode(ctx, "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Mode != RestoreModeNative {
+		t.Fatalf("restore mode = %q, want %q", res.Mode, RestoreModeNative)
+	}
+	if recording.restoreCalls != 1 || recording.launchCalls != 0 {
+		t.Fatalf("adapter calls = restore %d launch %d, want restore 1 launch 0", recording.restoreCalls, recording.launchCalls)
+	}
+	if agent.buildCalls != 0 {
+		t.Fatalf("BuildAfterStartPrompt calls = %d, want 0 for passive native resume", agent.buildCalls)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("delivered prompts = %#v, want no new user turn for passive native resume", msg.msgs)
 	}
 }
 
@@ -6062,6 +6222,14 @@ func (lostConversationAgent) NativeConversationExists(
 	return false, nil
 }
 
+type lostComposedAfterStartAgent struct{ *composedAfterStartAgent }
+
+func (lostComposedAfterStartAgent) NativeConversationExists(
+	context.Context, ports.SessionRef, string, map[string]string,
+) (bool, error) {
+	return false, nil
+}
+
 type lostDerivedConversationAgent struct {
 	fakeAgent
 	probedID string
@@ -6114,6 +6282,46 @@ func TestRestore_LostNativeConversationRelaunchesFresh(t *testing.T) {
 	}
 	if rt.created != 1 {
 		t.Errorf("runtime.Create = %d, want 1: the workspace holds real work", rt.created)
+	}
+}
+
+func TestRestore_PromptlessLostNativeConversationDeliversStandingInstructions(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		Metadata: domain.SessionMetadata{
+			WorkspacePath: "/ws/mer-1", Branch: "ao/mer-1/root", AgentSessionID: "reserved-but-empty",
+		},
+		Activity: domain.Activity{State: domain.ActivityExited},
+	}
+	recording := &recordingAgent{}
+	composed := &composedAfterStartAgent{afterStartAgent: afterStartAgent{recordingAgent: recording}}
+	agent := lostComposedAfterStartAgent{composedAfterStartAgent: composed}
+	msg := &fakeMessenger{}
+	m := New(Deps{
+		Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: msg, Lifecycle: &fakeLCM{store: st},
+		LookPath: func(string) (string, error) { return "/bin/true", nil },
+	})
+
+	res, err := m.RestoreWithMode(ctx, "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Mode != RestoreModeFresh {
+		t.Fatalf("restore mode = %q, want %q", res.Mode, RestoreModeFresh)
+	}
+	if composed.buildCalls != 1 {
+		t.Fatalf("BuildAfterStartPrompt calls = %d, want 1", composed.buildCalls)
+	}
+	if recording.lastLaunch.Prompt != "" {
+		t.Fatalf("fresh launch prompt = %q, want empty for after-start delivery", recording.lastLaunch.Prompt)
+	}
+	if len(msg.msgs) != 1 || !strings.HasPrefix(msg.msgs[0], "STANDING:\n") ||
+		!strings.Contains(msg.msgs[0], "## AO Worker Role") ||
+		!strings.HasSuffix(msg.msgs[0], "TASK:\n") {
+		t.Fatalf("delivered prompts = %#v, want one instruction-only bootstrap turn", msg.msgs)
 	}
 }
 
@@ -10438,5 +10646,35 @@ func TestRestoreRetainsSpawnPermissionsAfterProjectChange(t *testing.T) {
 		if agent.lastRestore.Permissions != want || agent.lastRestore.Config.Permissions != want {
 			t.Fatalf("restore=%#v want %q", agent.lastRestore, want)
 		}
+	}
+}
+
+// TestKill_TerminatesEvenWhenTeardownBudgetExpires is the third #5463 path,
+// and the one that most likely produced the reported state: a slow teardown
+// (a large worktree on NTFS) runs past killTeardownBudget, so the context that
+// carried it is already dead by the time Kill records terminal intent. Every
+// destructive step has happened at that point — the agent is gone, the worktree
+// is gone — and refusing the one remaining write leaves a session that is dead
+// everywhere except the row the UI reads, reachable by no path afterwards.
+func TestKill_TerminatesEvenWhenTeardownBudgetExpires(t *testing.T) {
+	m, st, rt, ws := newManager()
+	st.sessions["mer-1"] = mkLive("mer-1")
+	// Smaller than the time the fake workspace burns below, so the budget is
+	// already expired when Kill reaches its terminal-intent write.
+	m.killTeardown = 20 * time.Millisecond
+	ws.destroyHook = func() { time.Sleep(60 * time.Millisecond) }
+
+	freed, err := m.Kill(ctx, "mer-1")
+	if err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if !freed {
+		t.Fatal("freed = false: the workspace was torn down")
+	}
+	if rt.destroyed != 1 || ws.destroyed != 1 {
+		t.Fatalf("teardown incomplete: runtime=%d workspace=%d", rt.destroyed, ws.destroyed)
+	}
+	if !st.sessions["mer-1"].IsTerminated {
+		t.Fatal("session must be marked terminated even though the teardown budget expired")
 	}
 }

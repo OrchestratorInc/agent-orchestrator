@@ -67,7 +67,7 @@ export default function PairScreen() {
 		if (Platform.OS !== "ios" || lens) return;
 		try {
 			const lenses = (await camera.current?.getAvailableLensesAsync()) ?? [];
-			if (__DEV__) console.log("[pair] available lenses", lenses);
+			if (typeof __DEV__ !== "undefined" && __DEV__) console.log("[pair] available lenses", lenses);
 			setLens(pickNormalLens(lenses));
 		} catch {
 			/* keep the native default */
@@ -85,7 +85,8 @@ export default function PairScreen() {
 		if (scanned.current || busy || !focused.current) return;
 		// Cheap reject first: the camera sees every barcode in frame, and only a
 		// code we can actually parse should stop the scanner.
-		if (!parsePairingCode(data)) {
+		const offer = parsePairingCode(data);
+		if (!offer) {
 			if (rejected.current !== data) {
 				rejected.current = data;
 				// A v1 code is a recognisable thing, not noise: say what to do
@@ -97,13 +98,13 @@ export default function PairScreen() {
 		}
 		rejected.current = null;
 		scanned.current = true;
-		await pair(data);
+		await pair(data, offer);
 	}
 
 	// Races the code's endpoints, verifies the winner, then stores the machine.
 	// The scanned code is kept so "Try again" can re-run the whole thing rather
 	// than making the user re-scan.
-	async function pair(code: string) {
+	async function pair(code: string, offer?: ReturnType<typeof parsePairingCode>) {
 		pendingCode.current = code;
 		setBusy(true);
 		setFailure(null);
@@ -117,10 +118,15 @@ export default function PairScreen() {
 
 		if (!result.ok) {
 			haptics.warning();
+			// Use the first endpoint from the offer for error reporting, if available
+			const firstEndpoint = offer?.endpoints[0];
+			const errorTarget = firstEndpoint
+				? { host: firstEndpoint.host, port: String(firstEndpoint.port), platform: Platform.OS }
+				: { host: "", port: "", platform: Platform.OS };
 			setFailure(
 				describeConnectionFailure(
 					result.reason === "not-ao-qr" ? "not-ao-qr" : classifyConnectionFailure(undefined),
-					{ host: "", port: "", platform: Platform.OS },
+					errorTarget,
 				),
 			);
 			setBusy(false);
@@ -140,7 +146,8 @@ export default function PairScreen() {
 		setFailure(null);
 		rejected.current = null;
 		if (pendingCode.current) {
-			void pair(pendingCode.current);
+			const offer = parsePairingCode(pendingCode.current);
+			void pair(pendingCode.current, offer);
 			return;
 		}
 		scanned.current = false;
