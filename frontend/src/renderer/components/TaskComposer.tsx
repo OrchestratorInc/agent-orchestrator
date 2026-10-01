@@ -826,9 +826,11 @@ function TaskModelPicker({
 	}
 
 	const customModelEntry = catalog?.customModelEntry ?? (catalog?.allowCustom ? "direct" : "none");
-	const displayModels = (catalog?.models ?? []).map((item) =>
-		item.id === "auto" ? { ...item, label: t("settings.models.autoRouteLabel") } : item,
-	);
+	const displayModels = (catalog?.models ?? []).map((item) => {
+		if (item.id === "auto") return { ...item, label: t("settings.models.autoRouteLabel") };
+		if (agentId === "claude-code") return { ...item, label: item.label.replace(/^Claude\s+/i, "") };
+		return item;
+	});
 	const selectCatalogModel = (nextModel: string) => {
 		onModelChange(nextModel);
 	};
