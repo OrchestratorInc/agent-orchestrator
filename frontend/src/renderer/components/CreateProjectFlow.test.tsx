@@ -74,6 +74,8 @@ vi.mock("../lib/github-daemon", () => ({
 const cloudMocks = vi.hoisted(() => ({
 	cloudEnabled: false,
 	coderAvailable: false,
+	// Whether the control plane's default sandbox provider is coder.
+	coderDefault: false,
 	sessionStatus: "unauthenticated",
 	createProject: vi.fn(),
 	listUserProviderConnections: vi.fn(),
@@ -89,7 +91,12 @@ const cloudMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../hooks/useCloudSandboxProviders", () => ({
-	useCloudSandboxProviders: () => ({ available: cloudMocks.coderAvailable ? ["coder"] : [], default: "", ready: true, isLoading: false }),
+	useCloudSandboxProviders: () => ({
+		available: cloudMocks.coderAvailable ? ["nodeops", "coder"] : ["nodeops"],
+		default: cloudMocks.coderDefault ? "coder" : "nodeops",
+		ready: true,
+		isLoading: false,
+	}),
 }));
 
 vi.mock("../hooks/useCoderTemplates", () => ({
@@ -314,6 +321,7 @@ beforeEach(() => {
 	apiMocks.apiErrorMessage.mockClear();
 	cloudMocks.cloudEnabled = false;
 	cloudMocks.coderAvailable = false;
+	cloudMocks.coderDefault = false;
 	cloudMocks.sessionStatus = "unauthenticated";
 	cloudMocks.createProject.mockReset();
 	// The user's personal connections: a logged-in Claude Code harness, and no
@@ -2054,10 +2062,45 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(screen.queryByRole("combobox", { name: "Select a repository" })).not.toBeInTheDocument();
 	});
 
+	it("offers coder templates only when new sessions will run on coder", async () => {
+		// The deployment offers coder, but its default (and the user's choice) is another provider.
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		cloudMocks.coderAvailable = true;
+		cloudMocks.coderDefault = false;
+		cloudMocks.listGitHubInstallations.mockResolvedValue({
+			installations: [{
+				id: "inst-1", githubInstallationId: "100", accountLogin: "acme", accountType: "Organization",
+				status: "active", repositorySelection: "all", syncStatus: "ready", createdAt: "", updatedAt: "",
+			}],
+		});
+		cloudMocks.listGitHubRepositories.mockResolvedValue({
+			items: [{
+				githubRepositoryId: "555", name: "app", fullName: "acme/app", htmlUrl: "https://github.com/acme/app",
+				defaultBranch: "main", visibility: "private", isPrivate: true, isArchived: false, access: "write", grantedAt: "",
+			}],
+			page: { hasMore: false },
+		});
+		cloudMocks.createGitHubProject.mockResolvedValue({ project: { id: "cp-1" } });
+		const user = userEvent.setup();
+		render(<CreateProjectFlow embedded mode="choose" {...noop} />, { wrapper: CloudTestProviders });
+
+		await user.click(screen.getByRole("button", { name: "New cloud project" }));
+		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
+		await user.click(await screen.findByRole("option", { name: /acme\/app/ }));
+
+		expect(await screen.findByLabelText("Worker agent")).toBeInTheDocument();
+		expect(screen.queryByRole("combobox", { name: "Template" })).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Create" }));
+		await waitFor(() => expect(cloudMocks.createGitHubProject).toHaveBeenCalled());
+		expect(cloudMocks.createGitHubProject.mock.calls[0][1].config).not.toHaveProperty("coder");
+	});
+
 	it("does not offer additional coder session repositories", async () => {
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.sessionStatus = "authenticated";
 		cloudMocks.coderAvailable = true;
+		cloudMocks.coderDefault = true;
 		const existing = {
 			id: "inst-existing", githubInstallationId: "100", accountLogin: "acme", accountType: "Organization",
 			status: "active", repositorySelection: "all", syncStatus: "ready", createdAt: "", updatedAt: "before",

@@ -41,6 +41,7 @@ import { CloudCpError } from "../lib/cloud-cp";
 import type { CloudCpGitHubAppRepository } from "../lib/cloud-cp/types";
 import { useCloudSession } from "../lib/cloud-session";
 import { useUiStore } from "../stores/ui-store";
+import { resolveSandboxProviderPreference, useSandboxProviderStore } from "../stores/sandbox-provider-store";
 import {
 	onboardingAlertErrorClass,
 	onboardingFieldHintClass,
@@ -1357,10 +1358,16 @@ function CloudProjectCard({
 	const { client, baseUrl } = useCloudCp();
 	const { org } = useCloudOrg();
 	const queryClient = useQueryClient();
-	// The coder dev-kit picker is offered only when the deployment/org runs coder;
-	// its choices are stored on the project and inherited by every session.
+	// The coder template picker is offered only when new sessions will run on
+	// coder; its choice is stored on the project and inherited by every session.
 	const sandboxProviders = useCloudSandboxProviders();
-	const coderAvailable = sandboxProviders.available.includes("coder");
+	// The provider new sessions will run on: the user's saved choice when this
+	// control plane offers it, otherwise its default (the same rule the session
+	// launchers apply). Coder options only mean something on Coder.
+	const selectedSandboxProvider = useSandboxProviderStore((state) => state.selectedProvider);
+	const sessionSandboxProvider =
+		resolveSandboxProviderPreference(selectedSandboxProvider, sandboxProviders.available) ?? sandboxProviders.default;
+	const usesCoder = sessionSandboxProvider === "coder";
 	const resetCoderOptions = useCoderSessionOptionsStore((s) => s.reset);
 	useEffect(() => {
 		resetCoderOptions();
@@ -1559,7 +1566,7 @@ function CloudProjectCard({
 		setSubmitError(null);
 		setIsCreating(true);
 		try {
-			const coder = buildCoderRequestOptions(useCoderSessionOptionsStore.getState());
+			const coder = usesCoder ? buildCoderRequestOptions(useCoderSessionOptionsStore.getState()) : undefined;
 			// The App path authorizes by repository id and derives the default
 			// branch server-side. Coder config nests under `config.coder`, which
 			// the control plane reads for the dev-kit template and extra repos.
@@ -1712,7 +1719,7 @@ function CloudProjectCard({
 				</div>
 
 				{/* Coder template and size are inherited by every session. */}
-				{coderAvailable && selectedRepo !== undefined ? (
+				{usesCoder && selectedRepo !== undefined ? (
 					<div className="space-y-2">
 						<CoderTemplatePicker orgId={org?.id} />
 					</div>
