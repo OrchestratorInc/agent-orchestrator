@@ -495,14 +495,18 @@ export function OnboardingPage() {
 				</div>
 
 				<footer className="flex items-center justify-between">
-					<button
-						type="button"
-						onClick={back}
-						disabled={stepIndex === 0}
-						className="h-10 px-1 text-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-0"
-					>
-						{t("onboarding.back")}
-					</button>
+					{step === "github" && githubSetup.workflow ? (
+						<span aria-hidden="true" />
+					) : (
+						<button
+							type="button"
+							onClick={back}
+							disabled={stepIndex === 0}
+							className="h-10 px-1 text-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-0"
+						>
+							{t("onboarding.back")}
+						</button>
+					)}
 					<button
 						type="button"
 						onClick={next}

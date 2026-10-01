@@ -7,6 +7,7 @@ type Catalog = { authorized: { id: string; label: string }[]; installed: { id: s
 const mocks = vi.hoisted(() => ({
 	navigate: vi.fn(),
 	requestFinish: vi.fn(),
+	githubWorkflowActive: false,
 	agents: {} as { data: Catalog | undefined; isFetching: boolean; isLoading: boolean },
 }));
 
@@ -18,6 +19,37 @@ vi.mock("../stores/ui-store", () => ({
 vi.mock("../hooks/useAgentsQuery", () => ({ refreshAgentsIfStale: vi.fn().mockResolvedValue(undefined), useAgentsQuery: () => mocks.agents }));
 vi.mock("../components/OnboardingProjectSetup", () => ({
 	OnboardingProjectSetup: ({ cloudAvailable, onPrepared }: { cloudAvailable?: boolean; onPrepared: (input: { path: string }) => void }) => <button type="button" data-cloud-available={String(cloudAvailable)} onClick={() => onPrepared({ path: "/tmp/acme/project" })}>Prepare project</button>,
+}));
+vi.mock("../components/AuthTerminalPanel", () => ({
+	AuthTerminalPanel: ({ testId }: { testId?: string }) => <div data-testid={testId ?? "auth-terminal"} />,
+}));
+vi.mock("../hooks/useGitHubSetup", () => ({
+	useGitHubSetup: () => ({
+		authChecking: mocks.githubWorkflowActive,
+		authSatisfied: !mocks.githubWorkflowActive,
+		cliMissing: false,
+		closeSignIn: vi.fn(),
+		gh: { id: "gh", satisfied: true },
+		handleTerminalState: vi.fn(),
+		install: vi.fn(),
+		installError: null,
+		installing: false,
+		job: undefined,
+		loginEnded: false,
+		loginRunning: mocks.githubWorkflowActive,
+		requirementsQuery: {},
+		signIn: vi.fn(),
+		signInError: null,
+		signInPending: false,
+		workflow: mocks.githubWorkflowActive ? {
+			agentId: "github",
+			action: "login",
+			terminal: { handleId: "github-login", title: "Connect GitHub", workingDir: "/tmp", createdAt: "2026-10-01T00:00:00Z" },
+			guidance: "",
+			phase: "running",
+			startedAt: Date.now(),
+		} : null,
+	}),
 }));
 vi.mock("../lib/api-client", async (original) => {
 	const actual = await original<typeof import("../lib/api-client")>();
@@ -50,10 +82,22 @@ async function choose(user: ReturnType<typeof userEvent.setup>, label: string, o
 beforeEach(() => {
 	mocks.navigate.mockReset();
 	mocks.requestFinish.mockReset();
+	mocks.githubWorkflowActive = false;
 	mocks.agents = { data: { authorized: [{ id: "claude-code", label: "Claude Code" }, { id: "codex", label: "Codex" }], installed: [{ id: "claude-code", label: "Claude Code" }, { id: "codex", label: "Codex" }], supported: [{ id: "claude-code", label: "Claude Code" }, { id: "codex", label: "Codex" }] }, isFetching: false, isLoading: false };
 });
 
 describe("onboarding route", () => {
+	it("hides Back and asks the user to wait while GitHub sign-in is active", async () => {
+		mocks.githubWorkflowActive = true;
+		const user = userEvent.setup();
+		await renderOnboarding();
+		await user.click(screen.getByRole("button", { name: "Continue" }));
+
+		expect(await screen.findByTestId("github-auth-terminal")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Back" })).not.toBeInTheDocument();
+		expect(screen.getByText(/keep this window open/i)).toBeInTheDocument();
+	});
+
 	it("applies one selected harness to both project roles", async () => {
 		const user = userEvent.setup();
 		await renderOnboarding();

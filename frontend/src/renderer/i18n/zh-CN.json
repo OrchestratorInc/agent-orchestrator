@@ -740,6 +740,7 @@
 	"onboarding.githubConnectedDetail": "继续选择你的第一个项目",
 	"onboarding.githubInstallDetail": "用于在 GitHub 上创建拉取请求和读取议题。",
 	"onboarding.githubSignInDetail": "登录一次即可创建拉取请求和读取议题。",
+	"onboarding.githubSignInWait": "在浏览器中完成登录后，请保持此窗口打开。GitHub 可能需要片刻才能确认连接。",
 	"onboarding.cloudOptionYesLabel": "添加云端会话",
 	"onboarding.cloudOptionYesDetail": "让你可以把项目放在远程沙箱中运行。",
 	"onboarding.cloudOptionNoLabel": "保持本地",

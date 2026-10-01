@@ -78,17 +78,22 @@ export function OnboardingGitHubStep({ setup }: { setup: ReturnType<typeof useGi
 				</p>
 			) : null}
 			{setup.workflow ? (
-				<AuthTerminalPanel
-					workflow={setup.workflow}
-					onClose={setup.closeSignIn}
-					onRetry={setup.signIn}
-					onTerminalState={setup.handleTerminalState}
-					closeLabel={t("common.close")}
-					showHeader={false}
-					terminalContextMenu="compact"
-					terminalHeightClass="h-[200px]"
-					testId="github-auth-terminal"
-				/>
+				<>
+					<AuthTerminalPanel
+						workflow={setup.workflow}
+						onClose={setup.closeSignIn}
+						onRetry={setup.signIn}
+						onTerminalState={setup.handleTerminalState}
+						closeLabel={t("common.close")}
+						showHeader={false}
+						terminalContextMenu="compact"
+						terminalHeightClass="h-[200px]"
+						testId="github-auth-terminal"
+					/>
+					<p className="mt-3 px-1 text-center text-caption leading-snug text-muted-foreground" role="status">
+						{t("onboarding.githubSignInWait")}
+					</p>
+				</>
 			) : null}
 		</div>
 	);

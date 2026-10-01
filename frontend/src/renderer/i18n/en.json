@@ -735,6 +735,7 @@
 	"onboarding.githubConnectedDetail": "Continue to choose your first project",
 	"onboarding.githubInstallDetail": "Required to open pull requests and read issues on GitHub.",
 	"onboarding.githubSignInDetail": "Sign in once for pull requests and issues.",
+	"onboarding.githubSignInWait": "After you finish in the browser, keep this window open. GitHub may take a few moments to confirm the connection.",
 	"onboarding.cloudOptionYesLabel": "Add cloud sessions",
 	"onboarding.cloudOptionYesDetail": "Lets you run a project in a remote sandbox.",
 	"onboarding.cloudOptionNoLabel": "Keep it local",

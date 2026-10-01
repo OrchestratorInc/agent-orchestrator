@@ -740,6 +740,7 @@
 	"onboarding.githubConnectedDetail": "続行して最初のプロジェクトを選択",
 	"onboarding.githubInstallDetail": "GitHub でプルリクエストを作成し、Issue を読み取るために必要です。",
 	"onboarding.githubSignInDetail": "一度サインインすればプルリクエストと Issue を使えます。",
+	"onboarding.githubSignInWait": "ブラウザでのサインイン後も、このウィンドウを開いたままにしてください。GitHub の接続確認には少し時間がかかる場合があります。",
 	"onboarding.cloudOptionYesLabel": "クラウドセッションを追加",
 	"onboarding.cloudOptionYesDetail": "プロジェクトをリモートサンドボックスで実行できるようにします。",
 	"onboarding.cloudOptionNoLabel": "ローカルのまま",

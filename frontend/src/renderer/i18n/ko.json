@@ -740,6 +740,7 @@
 	"onboarding.githubConnectedDetail": "계속해서 첫 프로젝트를 선택하세요",
 	"onboarding.githubInstallDetail": "GitHub에서 풀 리퀘스트를 만들고 이슈를 읽는 데 필요합니다.",
 	"onboarding.githubSignInDetail": "한 번 로그인하면 풀 리퀘스트와 이슈를 사용할 수 있습니다.",
+	"onboarding.githubSignInWait": "브라우저에서 로그인을 마친 뒤에도 이 창을 열어 두세요. GitHub 연결을 확인하는 데 잠시 걸릴 수 있습니다.",
 	"onboarding.cloudOptionYesLabel": "클라우드 세션 추가",
 	"onboarding.cloudOptionYesDetail": "프로젝트를 원격 샌드박스에서 실행할 수 있습니다.",
 	"onboarding.cloudOptionNoLabel": "로컬 유지",
