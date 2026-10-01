@@ -119,7 +119,7 @@ func TestSendRetryAfterBindENOSPCAndDaemonRestart(t *testing.T) {
 		terminatingConversation: &terminatingConversation{fakeConversation: newFakeConversation()},
 		ack:                     func(id string) error { acks <- id; return nil },
 	}}
-	second.fakeConversation.turnSeq = 1
+	second.turnSeq = 1
 	var ids atomic.Int64
 	svc := chatsvc.New(chatsvc.Options{
 		Store: h.st, Sessions: h.st, Reader: fullSnapshotReader(h.st),
@@ -138,7 +138,7 @@ func TestSendRetryAfterBindENOSPCAndDaemonRestart(t *testing.T) {
 	if _, err := svc.Send(ctx, testSession, msg); err != nil {
 		t.Fatalf("same-ID retry after restart: %v", err)
 	}
-	if second.fakeConversation.sendCallCount() != 0 {
+	if second.sendCallCount() != 0 {
 		t.Fatal("retry itself sent a second provider turn")
 	}
 	second.emit(
@@ -150,7 +150,7 @@ func TestSendRetryAfterBindENOSPCAndDaemonRestart(t *testing.T) {
 		select {
 		case id := <-acks:
 			if id == "barrier" {
-				if got := first.sendCallCount() + second.fakeConversation.sendCallCount(); got != 1 {
+				if got := first.sendCallCount() + second.sendCallCount(); got != 1 {
 					t.Fatalf("provider accepted %d turns for one client ID across restart, want 1", got)
 				}
 				return
