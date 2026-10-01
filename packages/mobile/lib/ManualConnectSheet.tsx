@@ -1,6 +1,6 @@
 import { Feather } from "./icons";
 import { useEffect, useState } from "react";
-import { Linking, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { Linking, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { ApiError, pingServer } from "./api";
 import { DEFAULT_CONFIG, loadConfig, saveConfig, type ServerConfig } from "./config";
 import { saveHost, setActiveHost } from "./hosts";
@@ -18,7 +18,7 @@ import { Button, SHEET_SCROLL_CONTENT, SheetHeader, SheetScreen } from "./ui";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { MOBILE_EVENTS } from "./telemetry/events";
 import { mobileTelemetry } from "./telemetry/runtime";
-import { iconSize, space, type } from "./tokens";
+import { iconSize, space, touchTarget, type } from "./tokens";
 
 // The typing fallback behind the QR scanner: Tailscale users and anyone whose
 // desktop isn't in front of them. Deliberately narrower than the Settings form —
@@ -32,6 +32,7 @@ export function ManualConnectSheet({ onConnected }: { onConnected: () => void })
 	const [cfg, setCfg] = useState<ServerConfig>(DEFAULT_CONFIG);
 	const [busy, setBusy] = useState(false);
 	const [failure, setFailure] = useState<ConnectionErrorCopy | null>(null);
+	const [showPassword, setShowPassword] = useState(false);
 
 	// Load whatever is already saved when the sheet opens, so a user who closes it
 	// to re-try the scanner doesn't lose what they typed. Mount is the open now
@@ -99,14 +100,33 @@ export function ManualConnectSheet({ onConnected }: { onConnected: () => void })
 				keyboardType="url"
 			/>
 			<Field label="API PORT" value={cfg.httpPort} onChangeText={set("httpPort")} keyboardType="number-pad" />
-			<Field
-				label="PASSWORD"
-				value={cfg.password}
-				onChangeText={set("password")}
-				placeholder="Connection password"
-				autoCapitalize="none"
-				secureTextEntry
-			/>
+			<View style={styles.field}>
+				<Text style={styles.fieldLabel}>PASSWORD</Text>
+				<View style={styles.passwordRow}>
+					<TextInput
+						value={cfg.password}
+						onChangeText={set("password")}
+						placeholder="Connection password"
+						placeholderTextColor={t.textFaint}
+						selectionColor={t.accent}
+						autoCapitalize="none"
+						autoCorrect={false}
+						secureTextEntry={!showPassword}
+						style={[styles.input, styles.passwordInput]}
+					/>
+					<Pressable
+						accessibilityRole="button"
+						accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+						onPress={() => {
+							haptics.tap();
+							setShowPassword((visible) => !visible);
+						}}
+						style={({ pressed }) => [styles.passwordToggle, pressed && styles.passwordTogglePressed]}
+					>
+						<Feather name={showPassword ? "eye-off" : "eye"} size={iconSize.lg} color={t.textSecondary} />
+					</Pressable>
+				</View>
+			</View>
 
 			<View style={styles.toggleRow}>
 				<Text style={styles.toggleLabel}>Use TLS (https / wss)</Text>
@@ -209,6 +229,22 @@ const makeStyles = (t: Theme) =>
 			color: t.textPrimary,
 			fontSize: type.subheadline.fontSize,
 		},
+		passwordRow: {
+			flexDirection: "row",
+			alignItems: "center",
+			backgroundColor: t.bgElevated,
+			borderWidth: 1,
+			borderColor: t.borderDefault,
+			borderRadius: 8, borderCurve: "continuous",
+		},
+		passwordInput: { flex: 1, backgroundColor: "transparent", borderWidth: 0, paddingRight: 0 },
+		passwordToggle: {
+			width: touchTarget,
+			minHeight: touchTarget,
+			alignItems: "center",
+			justifyContent: "center",
+		},
+		passwordTogglePressed: { opacity: 0.6 },
 		toggleRow: {
 			flexDirection: "row",
 			alignItems: "center",

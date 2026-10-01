@@ -122,7 +122,7 @@ func TestMigrateRepairsRenumberedAccountsManagerHistory(t *testing.T) {
 }
 
 func TestMigrateAccountsManagerFromMainHistory(t *testing.T) {
-	for _, version := range []int64{160, 161, 162, 163, 164, 172} {
+	for _, version := range []int64{160, 164, 170, 171, 174, 178} {
 		t.Run(fmt.Sprint(version), func(t *testing.T) {
 			db := openMigratedDatabaseCopy(t, version)
 			if err := migrate(db); err != nil {
@@ -206,7 +206,7 @@ func applyLegacyAccountsManagerMigrations(t *testing.T, db *sql.DB, count int) {
 	suffixes := []string{"routing", "bindings", "switches", "removals", "retry_owner", "history_decision", "queue_obligations", "deletion_coordination"}
 	legacyFS := fstest.MapFS{}
 	for i := 0; i < count; i++ {
-		path := fmt.Sprintf("migrations/%04d_accounts_manager_%s.sql", 165+i, suffixes[i])
+		path := fmt.Sprintf("migrations/%04d_accounts_manager_%s.sql", 171+i, suffixes[i])
 		contents, err := migrationsFS.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -227,7 +227,7 @@ func applyLegacyAccountsManagerMigrations(t *testing.T, db *sql.DB, count int) {
 
 func assertAccountsManagerUpgradeHistory(t *testing.T, db *sql.DB) {
 	t.Helper()
-	for version := 161; version <= 172; version++ {
+	for version := 161; version <= 178; version++ {
 		var applied int
 		if err := db.QueryRow(`SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id=? ORDER BY id DESC LIMIT 1),0)`, version).Scan(&applied); err != nil || applied != 1 {
 			t.Fatalf("migration %d: applied=%d err=%v", version, applied, err)

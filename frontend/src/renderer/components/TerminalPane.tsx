@@ -24,6 +24,7 @@ import {
 	type TerminalSessionState,
 } from "../hooks/useTerminalSession";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
+import { useSessionLinkNavigation } from "../lib/use-session-link-navigation";
 import { getApiBaseUrl } from "../lib/api-client";
 import {
 	createTerminalMux,
@@ -923,10 +924,10 @@ function reviewerPreviewLines(session: WorkspaceSession | undefined): string[] {
 // Agents whose full-screen TUI keeps its own transcript and scrolls it only by
 // keyboard, ignoring SGR wheel reports. The terminal routes the wheel to
 // PageUp/PageDown for these (see XtermTerminal's paneScrollsByKeyboard).
-// kilocode is a fork of opencode and shares its TUI surface; grok also uses a
-// full-screen keyboard-scroll TUI, so both scroll the same way. Muse Code uses
+// kilocode and MiMo Code share opencode's TUI lineage; grok also uses a
+// full-screen keyboard-scroll TUI, so all scroll the same way. Muse Code uses
 // the normal terminal buffer instead and must keep the SGR -> tmux scroll path.
-const KEYBOARD_SCROLL_PROVIDERS = new Set(["opencode", "kilocode", "grok"]);
+const KEYBOARD_SCROLL_PROVIDERS = new Set(["opencode", "opencode-v2", "kilocode", "grok", "mimo-code"]);
 
 // Whether the given provider's TUI is one of the keyboard-scroll agents above.
 export function providerScrollsByKeyboard(provider?: string): boolean {
@@ -1095,6 +1096,7 @@ function AttachedTerminal({
 		}
 	}, [initFailed, onFatal, onTerminalStateChange]);
 	const handleLinkOpen = useSessionBrowserLink(session);
+	const handleSessionLinkOpen = useSessionLinkNavigation();
 	const restoreSession = useCallback(async () => {
 		if (!session?.id || !canRestoreSession || isRestoring) return;
 		setIsRestoring(true);
@@ -1250,6 +1252,7 @@ function AttachedTerminal({
 					onChangeFontSize={onChangeFontSize}
 					onError={handleInitError}
 					onLinkOpen={handleLinkOpen}
+					onSessionLinkOpen={handleSessionLinkOpen}
 					onReady={handleReady}
 					onToggleFullscreen={onToggleFullscreen}
 					onVisibleSize={syncVisibleSize}

@@ -57,6 +57,18 @@ func TestInspectTerminalSurfaceSeparatesCodexWorkFromComposer(t *testing.T) {
 			wantEditor: ports.TerminalComposerEmpty,
 		},
 		{
+			name:       "current Codex placeholder without dim styling",
+			output:     "› Ask Codex to do anything\n\nGPT-6-Sol medium · ~/project\n? for shortcuts\n",
+			wantWork:   ports.TerminalSurfaceWorkIdle,
+			wantEditor: ports.TerminalComposerEmpty,
+		},
+		{
+			name:       "text appended to Codex placeholder remains a draft",
+			output:     "› Ask Codex to do anything else\n\nGPT-6-Sol medium · ~/project\n? for shortcuts\n",
+			wantWork:   ports.TerminalSurfaceWorkIdle,
+			wantEditor: ports.TerminalComposerDraft,
+		},
+		{
 			name:       "idle empty composer when constrained viewport hides footer",
 			output:     "\x1b[2m• \x1b[0mE2E_ROUNDTRIP_TWO\n\n\n\x1b[1m›\x1b[0m\n",
 			wantWork:   ports.TerminalSurfaceWorkIdle,

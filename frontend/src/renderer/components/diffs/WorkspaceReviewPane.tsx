@@ -223,12 +223,18 @@ export function WorkspaceReviewPane({
 	);
 	const { viewed, toggle: toggleViewed } = useViewedFiles(sessionId, reviewSelectionKey, allFiles);
 
+	// Reset the collapse / deferred / batch state only when the review target
+	// itself changes (workspace version, selected commit/scope, session) — computed
+	// from the unfiltered allFiles. Keying on the filtered `files` instead would
+	// reset all of this on every file-filter keystroke, discarding the user's manual
+	// expand/collapse, loaded deferred diffs, and progressive batch progress.
 	useEffect(() => {
 		const savedViewed = readViewedRecords(viewedStorageKey(sessionId, reviewSelectionKey));
-		setCollapsedPaths(new Set(files.filter((file) => isDeferredByDefault(file) || isViewedRecord(file, savedViewed)).map((file) => file.path)));
+		setCollapsedPaths(new Set(allFiles.filter((file) => isDeferredByDefault(file) || isViewedRecord(file, savedViewed)).map((file) => file.path)));
 		setLoadedDeferredPaths(new Set());
 		setActiveBatchCount(4);
-	}, [data.workspaceVersion, files, reviewSelectionKey, sessionId]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- reset on review-target identity, not on allFiles' reference (which changes on every poll) or the filtered files (which changes per keystroke).
+	}, [data.workspaceVersion, reviewSelectionKey, sessionId]);
 
 	const requestedFiles = useMemo(
 		() => files.filter((file) => !isDeferredByDefault(file) || loadedDeferredPaths.has(file.path)),

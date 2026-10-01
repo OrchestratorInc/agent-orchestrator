@@ -191,7 +191,7 @@ func newPublicControlFixture(t *testing.T) *publicControlFixture {
 	}}
 	accounts := accountsvc.New(catalog, store)
 	ctx, cancel := context.WithCancel(t.Context())
-	svc, _, owner, err := startSession(ctx, cfg, rt, store, lifecycle.New(store, nil), newSessionMessenger(store, rt, log), telemetryadapter.NoopSink{}, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, accounts, log)
+	svc, _, owner, err := startSession(ctx, cfg, rt, store, lifecycle.New(store, nil), newSessionMessenger(store, rt, log), telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, accounts, log)
 	if err != nil {
 		cancel()
 		t.Fatal(err)

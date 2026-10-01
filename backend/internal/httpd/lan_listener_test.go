@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -13,10 +14,24 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 )
+
+func TestLANControlBlockMarksRequestContext(t *testing.T) {
+	seenLAN := false
+	handler := lanControlBlock(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenLAN = requestscope.IsLAN(r.Context())
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/cues/cue-a/invoke", nil))
+	if recorder.Code != http.StatusNoContent || !seenLAN {
+		t.Fatalf("status=%d seenLAN=%v", recorder.Code, seenLAN)
+	}
+}
 
 func TestLANManagerAuthGatesSharedHandler(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +61,47 @@ func TestLANManagerAuthGatesSharedHandler(t *testing.T) {
 	resp2, _ := http.DefaultClient.Do(req)
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("auth: got %d want 200", resp2.StatusCode)
+	}
+}
+
+// TestLANManagerIdentityEndpoint verifies the unauthenticated identity probe
+// works as expected for mobile pairing (ADR 0003).
+func TestLANManagerIdentityEndpoint(t *testing.T) {
+	inner := chi.NewRouter()
+	inner.Get("/api/v1/identity", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"hostId":"test-host-id","apiVersion":1}`)
+	})
+	st := &authState{}
+	st.setHash(mobilebridge.HashPassword("secret12"))
+	m := NewLANManager(inner, st, 0, slog.Default(), nil)
+	port, err := m.Start(0)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer m.Stop(context.Background())
+
+	// Identity endpoint should be accessible without auth (ADR 0003)
+	base := fmt.Sprintf("http://127.0.0.1:%d/api/v1/identity", port)
+	resp, err := http.Get(base)
+	if err != nil {
+		t.Fatalf("identity probe failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("identity probe: got %d want 200", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != `{"hostId":"test-host-id","apiVersion":1}` {
+		t.Fatalf("identity probe response: got %s want hostId", string(body))
+	}
+
+	// Other endpoints should still require auth
+	authBase := fmt.Sprintf("http://127.0.0.1:%d/api/v1/anything", port)
+	resp2, _ := http.Get(authBase)
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("other endpoint without auth: got %d want 401", resp2.StatusCode)
 	}
 }
 

@@ -8,11 +8,11 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-func TestMigration0172RetainsDeletionProof(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 171)
+func TestMigration0178RetainsDeletionProof(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 177)
 	now := time.Now().UTC()
 	mustExec(t, db, `INSERT INTO accounts_manager_removals(id,account_id,impact,phase,error_code,created_at,updated_at) VALUES ('pending','account-a','{"Revision":1,"Sessions":[]}','stopping','',?,?)`, now, now)
-	upTo(t, db, 172)
+	upTo(t, db, 178)
 	var started, revoked int
 	var phase string
 	if err := db.QueryRow(`SELECT phase,stop_started,bindings_revoked FROM accounts_manager_removals WHERE id='pending'`).Scan(&phase, &started, &revoked); err != nil {

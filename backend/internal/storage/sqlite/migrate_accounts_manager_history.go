@@ -61,24 +61,24 @@ func repairRenumberedAccountsManagerHistory(db *sql.DB) error {
 	for i, proof := range proofs {
 		var count int
 		if err := tx.QueryRow(proof.query).Scan(&count); err != nil {
-			return fmt.Errorf("inspect account migration %d: %w", 165+i, err)
+			return fmt.Errorf("inspect account migration %d: %w", 171+i, err)
 		}
 		if count == 0 {
 			continue
 		}
 		if count != proof.count || completed != i {
-			return fmt.Errorf("incomplete account schema at migration %d", 165+i)
+			return fmt.Errorf("incomplete account schema at migration %d", 171+i)
 		}
 		legacy, err := applied(161 + i)
 		if err != nil {
 			return err
 		}
-		canonical, err := applied(165 + i)
+		canonical, err := applied(171 + i)
 		if err != nil {
 			return err
 		}
 		if !legacy && !canonical {
-			return fmt.Errorf("account migration %d has no applied history", 165+i)
+			return fmt.Errorf("account migration %d has no applied history", 171+i)
 		}
 		completed++
 	}
@@ -98,12 +98,12 @@ func repairRenumberedAccountsManagerHistory(db *sql.DB) error {
 		return fmt.Errorf("incomplete main schema at colliding account migrations")
 	}
 	for i := 0; i < completed; i++ {
-		present, err := applied(165 + i)
+		present, err := applied(171 + i)
 		if err != nil {
 			return err
 		}
 		if !present {
-			if _, err := tx.Exec(`INSERT INTO goose_db_version(version_id,is_applied) VALUES (?,1)`, 165+i); err != nil {
+			if _, err := tx.Exec(`INSERT INTO goose_db_version(version_id,is_applied) VALUES (?,1)`, 171+i); err != nil {
 				return err
 			}
 		}

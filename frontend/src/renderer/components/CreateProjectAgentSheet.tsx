@@ -22,6 +22,7 @@ import {
 } from "../lib/agent-select-options";
 import { cn } from "../lib/utils";
 import { useAgentManagementMenu } from "../hooks/useAgentManagementMenu";
+import { useSettings } from "../hooks/useSettings";
 import { AgentAvatar } from "./AgentAvatar";
 import { FieldDefaultHint } from "./FieldDefaultHint";
 import { buildIntake, type IntakeForm, IntakeFields, intakeNeedsRule } from "./IntakeFields";
@@ -169,12 +170,14 @@ export function CreateProjectAgentSheet({
 	});
 	const isBusy = isCreating || isInitializing;
 	const [intake, setIntake] = useState<IntakeForm>(EMPTY_INTAKE);
-	const intakeIncomplete = intakeNeedsRule(intake);
+	const { settings } = useSettings();
+	const intakeVisible = !!settings?.trackerIntakeEnabled;
+	const intakeIncomplete = intakeVisible && intakeNeedsRule(intake);
 	const canSubmit =
 		canSubmitProjectSetup({
 			workerAgent,
 			orchestratorAgent,
-			intakeEnabled: intake.enabled,
+			intakeEnabled: intakeVisible && intake.enabled,
 			intakeAssignee: intake.assignee,
 		}) &&
 		!intakeIncomplete &&
@@ -315,18 +318,20 @@ export function CreateProjectAgentSheet({
 						}
 						canSubmit={canSubmit}
 						intakeControl={
-							<IntakeFields
-								form={intake}
-								onChange={(patch) => setIntake((f) => ({ ...f, ...patch }))}
-								compact
-								controlClassName="agents-sheet-control"
-								labelClassName="agents-sheet-label"
-							/>
+							intakeVisible ? (
+								<IntakeFields
+									form={intake}
+									onChange={(patch) => setIntake((f) => ({ ...f, ...patch }))}
+									compact
+									controlClassName="agents-sheet-control"
+									labelClassName="agents-sheet-label"
+								/>
+							) : null
 						}
 						isBusy={isBusy}
 						onCancel={() => onOpenChange(false)}
 						onSubmit={() =>
-							void onSubmit({ workerAgent, orchestratorAgent, trackerIntake: buildIntake(intake) })
+							void onSubmit({ workerAgent, orchestratorAgent, trackerIntake: intakeVisible ? buildIntake(intake) : undefined })
 						}
 						setupNotice={
 							repositorySetupNeeded

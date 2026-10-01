@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -167,14 +168,20 @@ var shippedMigrations = map[int64]string{
 	162: "0162_drop_pr_discussion_columns.sql",
 	163: "0163_allow_fx_harness.sql",
 	164: "0164_allow_gemini_harness.sql",
-	165: "0165_accounts_manager_routing.sql",
-	166: "0166_accounts_manager_bindings.sql",
-	167: "0167_accounts_manager_switches.sql",
-	168: "0168_accounts_manager_removals.sql",
-	169: "0169_accounts_manager_retry_owner.sql",
-	170: "0170_accounts_manager_history_decision.sql",
-	171: "0171_accounts_manager_queue_obligations.sql",
-	172: "0172_accounts_manager_deletion_coordination.sql",
+	165: "0165_allow_mimo_code_harness.sql",
+	166: "0166_allow_deepseek_harness.sql",
+	167: "0167_allow_opencode_v2_harness.sql",
+	168: "0168_cues.sql",
+	169: "0169_reported_pr_cdc.sql",
+	170: "0170_review_result_notifications.sql",
+	171: "0171_accounts_manager_routing.sql",
+	172: "0172_accounts_manager_bindings.sql",
+	173: "0173_accounts_manager_switches.sql",
+	174: "0174_accounts_manager_removals.sql",
+	175: "0175_accounts_manager_retry_owner.sql",
+	176: "0176_accounts_manager_history_decision.sql",
+	177: "0177_accounts_manager_queue_obligations.sql",
+	178: "0178_accounts_manager_deletion_coordination.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -244,6 +251,32 @@ func TestMigrationVersionLedger(t *testing.T) {
 		if _, ok := present[version]; !ok {
 			t.Errorf("ledgered migration %q (version %d) was deleted: installs that have not applied it yet will silently miss its schema, and the number is burned for reuse", name, version)
 		}
+	}
+}
+
+func TestReconcileMiMoHarnessConstraintAfterBurnedVersion(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 164)
+	if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (165, 1)`); err != nil {
+		t.Fatalf("seed burned MiMo migration: %v", err)
+	}
+	var schema string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(schema, "'mimo-code'") {
+		t.Fatal("burned migration unexpectedly added MiMo Code")
+	}
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate burned MiMo profile: %v", err)
+	}
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(schema, "'fx'") || !strings.Contains(schema, "'gemini'") || !strings.Contains(schema, "'mimo-code'") {
+		t.Fatalf("repaired sessions constraint lost fx, Gemini, or MiMo Code: %s", schema)
+	}
+	if err := reconcileHarnessConstraint(db); err != nil {
+		t.Fatalf("repeat repair: %v", err)
 	}
 }
 

@@ -131,6 +131,7 @@
 	--color-sidebar-ring: var(--sidebar-ring);
 	--color-terminal: var(--color-bg-terminal);
 	--color-terminal-opaque: var(--color-bg-terminal-opaque);
+	--color-terminal-foreground: var(--color-text-terminal);
 	--color-terminal-dim: var(--color-text-terminal-dim);
 	--color-scrim: var(--bridge-scrim);
 
@@ -3093,6 +3094,22 @@ html.sidebar-reordering * {
 	transform: scale(0.96);
 }
 
+/* A control that anchors a popover must not transform while pressed. The menu is
+   positioned from the trigger's rect, so scaling the trigger drags the open menu
+   along with it. Press feedback moves to the glyph, which the menu does not
+   measure. */
+.workspace-topbar-actions .topbar-control--static-press:active:not(:disabled) {
+	transform: none;
+}
+
+.workspace-topbar-actions .topbar-control--static-press > svg {
+	transition: transform var(--duration-fast) ease-out;
+}
+
+.workspace-topbar-actions .topbar-control--static-press:active:not(:disabled) > svg {
+	transform: scale(0.96);
+}
+
 .workspace-topbar-actions .topbar-control--labeled,
 .workspace-topbar-actions .topbar-control--feature {
 	padding-inline: var(--space-2_5);
@@ -4723,6 +4740,23 @@ body:has(#root .platform-windows) > .files-popout-overlay {
 .files-popout-overlay--mac-windowed {
 	top: var(--size-traffic-light-clearance);
 	--browser-popout-top: var(--size-traffic-light-clearance);
+}
+
+/* The files popout has no titlebar row of its own. Its content starts below
+   the native traffic-light band, so without a mask the session topbar from
+   underneath the portal remains visible through that band (half of the row
+   is visible on macOS windowed maximization). Keep the reserved band opaque,
+   matching the browser popout's titlebar surface. */
+.files-popout-overlay--mac-windowed::before {
+	position: absolute;
+	top: calc(-1 * var(--size-traffic-light-clearance));
+	right: 0;
+	left: 0;
+	height: var(--size-traffic-light-clearance);
+	content: "";
+	background: var(--bg);
+	border-bottom: 1px solid var(--border);
+	pointer-events: none;
 }
 
 .browser-popout-overlay--mac-windowed {

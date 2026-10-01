@@ -8,6 +8,13 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// codexComposerChromeLabels names provider-owned text that Codex paints into
+// the current composer row. After a Chat to Terminal UI switch the placeholder
+// can arrive without dim styling, so its visible characters would otherwise
+// read as an unsent draft. It is not human input and must not fail an
+// interface switch.
+var codexComposerChromeLabels = []string{"Ask Codex to do anything"}
+
 // DetectTerminalActivity reports idle only when Codex's composer and footer are visible.
 func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
 	observation := p.InspectTerminalSurface(output)
@@ -31,8 +38,12 @@ func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObse
 			break
 		}
 	}
+	var chromeLabels []string
+	if marker == "›" {
+		chromeLabels = codexComposerChromeLabels
+	}
 	observation := ports.TerminalSurfaceObservation{
-		Composer: codexComposerState(terminalui.LastPromptComposerState(codexComposerFrame(output), marker)),
+		Composer: codexComposerState(terminalui.LastPromptComposerState(codexComposerFrame(output), marker, chromeLabels...)),
 	}
 	if len(lines) < 2 {
 		return observation

@@ -138,7 +138,7 @@ func newPublicExecutionFixtureWithRuntime(t *testing.T, wrap func(*publicExecuti
 	if wrap != nil {
 		selected = wrap(runtime)
 	}
-	svc, _, owner, err := startSession(ctx, cfg, selected, store, lifecycle.New(store, nil), newSessionMessenger(store, selected, log), telemetryadapter.NoopSink{}, publicExecutionAgents{agent}, nil, nil, nil, nil, nil, nil, nil, nil, nil, accounts, log)
+	svc, _, owner, err := startSession(ctx, cfg, selected, store, lifecycle.New(store, nil), newSessionMessenger(store, selected, log), telemetryadapter.NoopSink{}, nil, publicExecutionAgents{agent}, nil, nil, nil, nil, nil, nil, nil, nil, nil, accounts, log)
 	if err != nil {
 		cancel()
 		t.Fatal(err)
