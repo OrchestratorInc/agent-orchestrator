@@ -2096,6 +2096,7 @@ describe("SessionInspector summary reviews", () => {
         "/api/v1/sessions/{sessionId}/reviews/trigger",
         {
           params: { path: { sessionId: "sess-1" } },
+          body: { interfaceMode: "chat" },
         },
       ),
     );
@@ -2130,6 +2131,27 @@ describe("SessionInspector summary reviews", () => {
 
     await waitFor(() => expect(onOpenReviewerChat).toHaveBeenCalledWith("review-1"));
     expect(onOpenReviewerTerminal).not.toHaveBeenCalled();
+  });
+
+  it("restarts a running Codex reviewer in Terminal when selected", async () => {
+    mockCommonGets([], "", [{ ...reviewState(3, "running"), latestRun: { ...approvedReview, harness: "codex", status: "running", verdict: "", body: "" } }]);
+    postMock.mockResolvedValue({
+      response: { status: 201 },
+      data: {
+        reviewerHandleId: "reviewer-terminal",
+        reviewerSurface: { mode: "tui", reviewId: "review-1", harness: "codex", handleId: "reviewer-terminal" },
+        reviews: [{ ...reviewState(3, "running"), latestRun: { ...approvedReview, status: "running", verdict: "", body: "" } }],
+      },
+    });
+    const onOpenReviewerTerminal = vi.fn();
+    renderWithQuery(<SessionInspector onOpenReviewerTerminal={onOpenReviewerTerminal} session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+    await userEvent.click(screen.getByRole("button", { name: "Terminal" }));
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith(
+      "/api/v1/sessions/{sessionId}/reviews/trigger",
+      { params: { path: { sessionId: "sess-1" } }, body: { harness: "codex", interfaceMode: "tui" } },
+    ));
+    expect(onOpenReviewerTerminal).toHaveBeenCalledWith({ handleId: "reviewer-terminal", harness: "codex" });
   });
 
   it("shows the worker-compatible default reviewer before a run exists", async () => {
@@ -3262,7 +3284,7 @@ describe("SessionInspector summary reviews", () => {
       "/api/v1/sessions/{sessionId}/reviews/trigger",
       {
         params: { path: { sessionId: "sess-1" } },
-        body: { harness: "opencode" },
+        body: { harness: "opencode", interfaceMode: "tui" },
       },
     );
   });
