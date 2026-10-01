@@ -564,7 +564,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			<MultiStepLoader
 				ariaLabel={t("terminal.sessionLoader.label")}
 				activeIndex={completed ? 3 : target.index}
-				percent={completed ? 100 : target.index === 3 ? 67 : undefined}
+				complete={completed}
 				steps={steps}
 			/>
 		</div>

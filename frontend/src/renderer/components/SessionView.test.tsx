@@ -1059,8 +1059,7 @@ describe("SessionView", () => {
 		expect(loader).toHaveTextContent("Preparing your repository and agent");
 		expect(loader).toHaveTextContent("Connecting your terminal");
 		expect(within(loader).getByTestId("multi-step-loader-step").querySelector(".multi-step-loader__step")).toBeInTheDocument();
-		expect(within(loader).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "33");
-		expect(within(loader).getByTestId("multi-step-loader-percent")).toHaveTextContent("33%");
+		expect(within(loader).queryByRole("progressbar")).not.toBeInTheDocument();
 		expect(loader).not.toHaveTextContent("Coder");
 		expect(loader).not.toHaveClass("right-4", "top-4");
 		expect(document.querySelector("[data-cloud-lifecycle-stage]")).not.toBeInTheDocument();
@@ -1089,7 +1088,6 @@ describe("SessionView", () => {
 		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent"));
 		expect(listSessionEventsMock).toHaveBeenCalledWith("cloud-org", "sess-2", { after: 0, limit: 500 }, expect.any(Object));
 		expect(subscribeSessionEventsMock).toHaveBeenCalledWith(expect.objectContaining({ orgId: "cloud-org", sessionId: "sess-2", after: 0 }));
-		expect(screen.getByRole("progressbar", { name: "Session setup activity" })).toHaveAttribute("aria-valuenow", "67");
 	});
 
 	it("advances the active phrase when a later startup event arrives", async () => {
@@ -1213,15 +1211,14 @@ describe("SessionView", () => {
 		render(<SessionView sessionId="sess-2" />);
 		await waitFor(() => expect(subscribeSessionEventsMock).toHaveBeenCalled());
 		const onEvent = subscribeSessionEventsMock.mock.calls[0][0].onEvent;
-		for (const [type, sequence, phrase, percent] of [
+		for (const [type, sequence, phrase] of [
 			// The start of workspace creation does not complete the workspace step.
-			["sandbox.provisioning", 1, "Creating the workspace", "0"],
-			["worker.connected", 2, "Preparing your repository and agent", "67"],
-			["agent.ready", 3, "Connecting your terminal", "67"],
+			["sandbox.provisioning", 1, "Creating the workspace"],
+			["worker.connected", 2, "Preparing your repository and agent"],
+			["agent.ready", 3, "Connecting your terminal"],
 		] as const) {
 			act(() => onEvent({ type, sequence, sessionId: "sess-2", createdAt: new Date().toISOString(), payload: {} }));
 			expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent(phrase);
-			expect(screen.getByRole("progressbar", { name: "Session setup activity" })).toHaveAttribute("aria-valuenow", percent);
 		}
 		expect(listSessionEventsMock).toHaveBeenCalledTimes(1);
 	});
@@ -1279,7 +1276,6 @@ describe("SessionView", () => {
 			type: "agent.ready", sessionId: "sess-2", sequence: 1, createdAt: new Date().toISOString(), payload: {},
 		}));
 		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting your terminal");
-		expect(screen.getByRole("progressbar", { name: "Session setup activity" })).toHaveAttribute("aria-valuenow", "67");
 	});
 
 	it("checks the final step when terminal content is ready, then reveals it", () => {
@@ -1295,7 +1291,6 @@ describe("SessionView", () => {
 			autoAttachSessionTerminal.current = true;
 			session.terminalGeneration = "ready";
 			view.rerender(<SessionView sessionId="sess-2" />);
-			expect(screen.getByRole("progressbar", { name: "Session setup activity" })).toHaveAttribute("aria-valuenow", "100");
 			expect(screen.getAllByTestId("multi-step-loader-check")).toHaveLength(4);
 			expect(screen.getByTestId("cloud-session-loader-screen")).toHaveClass("cloud-session-loader--complete");
 			act(() => vi.advanceTimersByTime(360));
