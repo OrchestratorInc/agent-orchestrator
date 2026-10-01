@@ -160,7 +160,7 @@ describe("HarnessSettingsSection", () => {
 
 		const claudeRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
 		expect(screen.getByRole("tab", { name: "Local" })).toHaveAttribute("aria-selected", "true");
-		expect(within(claudeRow).queryByRole("button", { name: "Cloud login" })).toBeNull();
+		expect(within(claudeRow).queryByRole("button", { name: "Login" })).toBeNull();
 		expect(within(claudeRow).queryByText(/Cloud/)).toBeNull();
 		expect(screen.getByText("Goose")).toBeInTheDocument();
 	});
@@ -178,17 +178,18 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.queryByText("Goose")).toBeNull();
 		const claudeRow = screen.getByText("Claude Code").closest('[data-agent="claude-code"]') as HTMLElement;
 		expect(within(claudeRow).getByText("Not connected")).toBeInTheDocument();
-		expect(within(claudeRow).queryByRole("button", { name: "Local login" })).toBeNull();
-		await user.click(within(claudeRow).getByRole("button", { name: "Cloud login" }));
+		// One action: the cloud login, not a local one alongside it.
+		expect(within(claudeRow).getAllByRole("button")).toHaveLength(1);
+		await user.click(within(claudeRow).getByRole("button", { name: "Login" }));
 		expect(within(claudeRow).getByTestId("cloud-harness-login")).toBeInTheDocument();
-		expect(within(claudeRow).queryByRole("button", { name: "Cloud login" })).toBeNull();
+		expect(within(claudeRow).queryByRole("button", { name: "Login" })).toBeNull();
 		await user.click(within(claudeRow).getByRole("button", { name: "Cancel" }));
 		expect(within(claudeRow).queryByTestId("cloud-harness-login")).toBeNull();
 
 		const codexRow = screen.getByText("Codex").closest('[data-agent="codex"]') as HTMLElement;
 		expect(within(codexRow).getByText("Connected")).toBeInTheDocument();
 		expect(within(codexRow).queryByRole("button", { name: "Install" })).toBeNull();
-		await user.click(within(codexRow).getByRole("button", { name: "Refresh cloud login" }));
+		await user.click(within(codexRow).getByRole("button", { name: "Refresh login" }));
 		expect(within(codexRow).getByRole("button", { name: "Log in with ChatGPT" })).toBeInTheDocument();
 	});
 
@@ -198,7 +199,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection(undefined, undefined, "cloud");
 
 		expect(await screen.findByRole("tab", { name: "Cloud" })).toHaveAttribute("aria-selected", "true");
-		expect((await screen.findAllByRole("button", { name: "Cloud login" })).length).toBeGreaterThan(0);
+		expect((await screen.findAllByRole("button", { name: "Login" })).length).toBeGreaterThan(0);
 		expect(screen.queryByText("Goose")).toBeNull();
 	});
 
@@ -219,7 +220,7 @@ describe("HarnessSettingsSection", () => {
 
 		const claudeRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
 		expect(screen.queryByRole("tab", { name: "Cloud" })).toBeNull();
-		expect(within(claudeRow).queryByRole("button", { name: "Cloud login" })).toBeNull();
+		expect(within(claudeRow).queryByRole("button", { name: "Login" })).toBeNull();
 		expect(screen.getByText("Goose")).toBeInTheDocument();
 	});
 
@@ -236,20 +237,9 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 
 		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
-		expect(await within(row).findByRole("button", { name: "Refresh local login" })).toBeEnabled();
-		expect(within(row).queryByRole("button", { name: "Local login" })).toBeNull();
+		expect(await within(row).findByRole("button", { name: "Refresh login" })).toBeEnabled();
+		expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Authorized" })).toBeNull();
-	});
-
-	it("explains the cloud login in a tooltip on the info icon", async () => {
-		cloudMocks.cloudEnabled = true;
-		cloudMocks.org = { id: "org-1" };
-		const user = userEvent.setup();
-		renderSection(undefined, undefined, "cloud");
-
-		const claudeRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
-		await user.hover(within(claudeRow).getByRole("button", { name: /Cloud sessions use their own Claude login/ }));
-		expect(await screen.findByRole("tooltip")).toHaveTextContent("If Claude Code isn't signed in here");
 	});
 
 	it("offers native login when fx is installed but unauthorized", async () => {
@@ -264,7 +254,7 @@ describe("HarnessSettingsSection", () => {
 		vi.mocked(apiClient.POST).mockResolvedValue({ data: fxCatalog } as never);
 		renderSection();
 		const row = (await screen.findByText("fx")).closest("[data-agent]") as HTMLElement;
-		expect(await within(row).findByRole("button", { name: "Local login" })).toBeInTheDocument();
+		expect(await within(row).findByRole("button", { name: "Login" })).toBeInTheDocument();
 		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
 	});
 
@@ -281,7 +271,7 @@ describe("HarnessSettingsSection", () => {
 		const row = (await screen.findByText("MiMo Code")).closest('[data-agent="mimo-code"]') as HTMLElement;
 		expect(await within(row).findByText("Configured")).toBeInTheDocument();
 		expect(within(row).queryByRole("button", { name: "Configured" })).toBeNull();
-		expect(within(row).queryByRole("button", { name: "Local login" })).not.toBeInTheDocument();
+		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
 	});
 
 	it("offers fx installation while readiness refreshes automatically", async () => {
@@ -347,7 +337,7 @@ describe("HarnessSettingsSection", () => {
 		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
 		renderSection("claude-code");
 		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
-		const login = await within(row).findByRole("button", { name: "Local login" });
+		const login = await within(row).findByRole("button", { name: "Login" });
 
 		await waitFor(() => expect(document.activeElement).toBe(login));
 	});
@@ -393,7 +383,7 @@ describe("HarnessSettingsSection", () => {
 		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
 		renderSection();
 		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
-		const login = await within(row).findByRole("button", { name: "Local login" });
+		const login = await within(row).findByRole("button", { name: "Login" });
 		await userEvent.click(login);
 		expect(openExternal).toHaveBeenCalledWith("https://example.test/login");
 	});
@@ -468,7 +458,7 @@ describe("HarnessSettingsSection", () => {
 
 		renderSection();
 		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
-		const login = await within(row).findByRole("button", { name: "Local login" });
+		const login = await within(row).findByRole("button", { name: "Login" });
 		await user.click(login);
 		await within(row).findByTestId("inline-terminal-body");
 		expect(terminalStateCallback.value).toBeDefined();
@@ -518,7 +508,7 @@ describe("HarnessSettingsSection", () => {
 		const user = userEvent.setup();
 		renderSection();
 		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
-		await user.click(await within(row).findByRole("button", { name: "Local login" }));
+		await user.click(await within(row).findByRole("button", { name: "Login" }));
 		await within(row).findByTestId("inline-terminal-body");
 		return { row, close, probeCalls: () => probeCalls, exit: () => act(() => terminalStateCallback.value?.("exited")) };
 	}
@@ -578,7 +568,7 @@ describe("HarnessSettingsSection", () => {
 		const close = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
 		renderSection();
 		const row = (await screen.findByText("MiMo Code")).closest('[data-agent="mimo-code"]') as HTMLElement;
-		await userEvent.click(await within(row).findByRole("button", { name: "Local login" }));
+		await userEvent.click(await within(row).findByRole("button", { name: "Login" }));
 		await userEvent.click(await within(row).findByRole("button", { name: "Complete login terminal" }));
 
 		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
@@ -586,7 +576,7 @@ describe("HarnessSettingsSection", () => {
 		}));
 		expect(await within(row).findByText("Configured")).toBeInTheDocument();
 		expect(within(row).queryByRole("button", { name: "Configured" })).toBeNull();
-		expect(within(row).queryByRole("button", { name: "Local login" })).not.toBeInTheDocument();
+		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
 
@@ -625,7 +615,7 @@ describe("HarnessSettingsSection", () => {
 
 		renderSection();
 		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
-		await user.click(await within(row).findByRole("button", { name: "Local login" }));
+		await user.click(await within(row).findByRole("button", { name: "Login" }));
 		await user.click(await within(row).findByRole("button", { name: "Close settings" }));
 
 		await waitFor(() => expect(closeTerminal).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
@@ -674,7 +664,7 @@ describe("HarnessSettingsSection", () => {
 		});
 		renderSection();
 		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
-		expect(await within(row).findByRole("button", { name: "Local login" })).toBeInTheDocument();
+		expect(await within(row).findByRole("button", { name: "Login" })).toBeInTheDocument();
 		expect(within(row).queryByRole("button", { name: "Installed" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Refresh harness status" })).not.toBeInTheDocument();
 		expect(within(row).queryByRole("button", { name: "Check login" })).not.toBeInTheDocument();
@@ -1037,7 +1027,7 @@ describe("HarnessSettingsSection", () => {
 		const selector = screen.getByTestId("originating-selector");
 		await waitFor(() => expect(selector).toHaveTextContent("not_ready"));
 		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
-		await userEvent.click(await within(row).findByRole("button", { name: "Local login" }));
+		await userEvent.click(await within(row).findByRole("button", { name: "Login" }));
 		await userEvent.click(await screen.findByRole("button", { name: "Complete login terminal" }));
 
 		await waitFor(() => expect(selector).toHaveTextContent(/^ready$/));

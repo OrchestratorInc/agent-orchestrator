@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, Copy, Download, Info, LoaderCircle, LogIn, Search, TriangleAlert, X } from "lucide-react";
+import { BookOpen, Check, Copy, Download, LoaderCircle, LogIn, Search, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
@@ -26,7 +26,6 @@ import { useResolvedTheme } from "../../stores/ui-store";
 import { AgentAvatar } from "../AgentAvatar";
 import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { useCloudGate } from "../../hooks/useCloudGate";
 import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
@@ -569,12 +568,6 @@ export function HarnessSettingsSection({
 							|| mimoConfigured
 							|| (!authPlans.isPending && (!authPlan || authPlan.action === "instructions"));
 						const cloudConnected = cloudConnByProvider.get(agentId)?.validationState === "valid";
-						// Cloud logins are always separate from local ones. Claude Code's
-						// browser login is also stored locally, but only as a fallback the
-						// daemon uses when Claude Code has no native login on this machine.
-						const cloudAuthHint = agentId === "claude-code"
-							? t("settings.harness.cloudAuthHintShared")
-							: t("settings.harness.cloudAuthHintSeparate", { agent: agentLabel(agentId) });
 						if (cloudView) {
 							return (
 								<div
@@ -592,18 +585,6 @@ export function HarnessSettingsSection({
 									<div className="min-w-0 flex-1">
 										<div className="flex items-center gap-1.5">
 											<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
-											<Tooltip>
-												<TooltipTrigger asChild>
-													<button
-														type="button"
-														className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-settings-muted transition hover:bg-interactive-hover hover:text-settings-label"
-														aria-label={cloudAuthHint}
-													>
-														<Info className="size-3.5" aria-hidden="true" />
-													</button>
-												</TooltipTrigger>
-												<TooltipContent className="max-w-72">{cloudAuthHint}</TooltipContent>
-											</Tooltip>
 										</div>
 										<p className="truncate text-xs text-settings-muted">
 											{cloudConnected ? t("settings.harness.loggedIn") : t("settings.harness.cloudNotConnected")}
@@ -612,11 +593,11 @@ export function HarnessSettingsSection({
 									{/* The inline login under the row replaces this button while open. */}
 									{cloudLoginAgent === agentId ? null : cloudConnected ? (
 										<Button type="button" size="sm" variant="outline" onClick={() => setCloudLoginAgent(agentId as CloudHarness)}>
-											{t("settings.harness.refreshCloudLogin")}
+											{t("settings.harness.refreshLogin")}
 										</Button>
 									) : (
 										<Button data-harness-primary-action="" size="sm" onClick={() => setCloudLoginAgent(agentId as CloudHarness)}>
-											{t("settings.harness.cloudLogin")}
+											{t("settings.harness.login")}
 										</Button>
 									)}
 									{cloudLoginAgent === agentId ? (
@@ -665,7 +646,7 @@ export function HarnessSettingsSection({
 								{authStatus !== "authorized" && !mimoConfigured ? (
 									<Button data-harness-primary-action="" data-terminal-focus-handoff="true" disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} size="sm" onClick={() => void startAuth(agentId)}>
 										{authState?.pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-										{authState?.pending ? t("settings.harness.loggingIn") : isSetupAction ? t("settings.harness.setup") : t("settings.harness.localLogin")}
+										{authState?.pending ? t("settings.harness.loggingIn") : isSetupAction ? t("settings.harness.setup") : t("settings.harness.login")}
 									</Button>
 								) : null}
 							</>
@@ -673,7 +654,7 @@ export function HarnessSettingsSection({
 						// A logged-in harness's only action is to re-run its login.
 						const refreshLocal = authPlan?.action === "login" && authStatus === "authorized" ? (
 							<Button type="button" size="sm" variant="outline" disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} onClick={() => void startAuth(agentId)}>
-								{t("settings.harness.refreshLocalLogin")}
+								{t("settings.harness.refreshLogin")}
 							</Button>
 						) : null;
 					const localControls = active ? (
