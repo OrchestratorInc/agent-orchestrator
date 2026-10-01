@@ -125,6 +125,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
 	controllerResumeError,
+	automaticWakeError,
 	newWorkDisabled,
 	onConversationWorkChange,
 }: {
@@ -174,6 +175,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	/** The target controller is being installed by an interface handoff. */
 	controllerTransitioning?: boolean;
 	controllerResumeError?: string;
+	/** A failed automatic wake, reported by the Chat view lease request. */
+	automaticWakeError?: string;
 	/** An interface handoff fences new agent work while current-turn decisions remain available. */
 	newWorkDisabled?: boolean;
 	/** Reports accepted Chat work that must inform an interface-switch policy choice. */
@@ -532,6 +535,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				auxiliaryTabOrder={auxiliaryTabOrder}
 				onAuxiliaryTabOrderChange={onAuxiliaryTabOrderChange}
 				controllerTransitioning={controllerTransitioning}
+				automaticWakeError={automaticWakeError}
 				hasOlder={hasOlder}
 				loadingOlder={isLoadingOlder}
 				onLoadOlder={loadOlder}

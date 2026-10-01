@@ -275,6 +275,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		workspaceTabActions,
 		newWorkDisabled,
 		onConversationWorkChange,
+		automaticWakeError,
 		auxiliaryTabOrder,
 		onAuxiliaryTabOrderChange,
 	}: {
@@ -297,6 +298,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		workspaceTabActions?: ReactNode;
 		newWorkDisabled?: boolean;
 		onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void;
+		automaticWakeError?: string;
 		auxiliaryTabOrder?: string[];
 		onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	}) => {
@@ -309,6 +311,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 			data-new-work-disabled={newWorkDisabled ? "true" : "false"}
 		>
 			chat surface
+			<div data-testid="automatic-wake-error">{automaticWakeError}</div>
 			<div data-testid={`auxiliary-tab-order-${session.id}`}>
 				{auxiliaryTabOrder?.join("|") ?? ""}
 			</div>
@@ -710,6 +713,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 		return cloudSessionQueryState;
 	},
 	cloudSessionsQueryKey: ["cloud-sessions"],
+	workspaceQueryKey: ["workspaces"],
 	useWorkspaceQuery: () => ({
 		data: workspaceQueryState.data,
 		isLoading: workspaceQueryState.isLoading,
@@ -1197,6 +1201,22 @@ describe("SessionView", () => {
 		await waitFor(() => expect(chatViewPostMock.mock.calls.filter(([, input]) => input.body.active)).toHaveLength(2));
 		view.unmount();
 		await waitFor(() => expect(chatViewPostMock.mock.calls.filter(([, input]) => !input.body.active)).toHaveLength(2));
+	});
+
+	it("shows a failed automatic wake and retries only after reopening Chat", async () => {
+		workerSession("sess-1").mode = "chat";
+		chatViewPostMock.mockReset()
+			.mockResolvedValueOnce({ error: { code: "CHAT_RESUME_FAILED" } })
+			.mockResolvedValue({ error: undefined });
+		const view = render(<SessionView sessionId="sess-1" />);
+		await waitFor(() => expect(screen.getByTestId("automatic-wake-error")).toHaveTextContent("saved conversation"));
+		expect(chatViewPostMock.mock.calls.filter(([, input]) => input.body.active)).toHaveLength(1);
+
+		view.rerender(<SessionView sessionId="sess-2" />);
+		await waitFor(() => expect(chatViewPostMock.mock.calls.some(([, input]) => input.body.active === false)).toBe(true));
+		view.rerender(<SessionView sessionId="sess-1" />);
+		await waitFor(() => expect(chatViewPostMock.mock.calls.filter(([, input]) => input.body.active)).toHaveLength(2));
+		expect(screen.getByTestId("automatic-wake-error")).toBeEmptyDOMElement();
 	});
 
 	it("does not wake Chat while restoring its selected shell tab", async () => {
