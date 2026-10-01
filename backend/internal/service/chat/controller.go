@@ -71,6 +71,7 @@ type Store interface {
 	ConversationMessageByClientID(ctx context.Context, conversationID, clientMessageID string) (domain.ConversationMessage, bool, error)
 	AppendRetryUserMessage(ctx context.Context, conversationID string, session domain.SessionID, generation string, msg domain.ConversationMessage, turnID, retryOfTurnID string, now time.Time) (bool, error)
 	AppendReviewRetryUserMessage(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation string, msg domain.ConversationMessage, turnID, retryOfTurnID string, now time.Time) (bool, error)
+	MarkTurnDispatching(ctx context.Context, turnID string) error
 	BindTurnToProvider(ctx context.Context, turnID, providerTurnID string, now time.Time) error
 	SettleTurn(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, now time.Time) error
 	SettleTurnByID(ctx context.Context, turnID string, state domain.TurnState, errMessage string, now time.Time) error
@@ -1681,6 +1682,16 @@ func (c *Controller) dispatch(
 	// setting that only applied when the user pressed send would silently stop
 	// applying exactly when they were not watching.
 	msg.Settings = c.turnSettings()
+	deferred, hasDeferredStart := c.conv.(ports.ChatDeferredTurnStarter)
+	// A provider can accept this turn and then lose its SQLite binding to ENOSPC.
+	// Move it out of the durable queue before crossing that boundary, or a live
+	// reconnect can drain the same prompt after the provider completes it. ACP's
+	// deferred start crosses the provider boundary only after binding succeeds.
+	if !hasDeferredStart {
+		if err := c.store.MarkTurnDispatching(ctx, turnID); err != nil {
+			return domain.ConversationTurn{}, fmt.Errorf("mark turn dispatching: %w", err)
+		}
+	}
 
 	c.mu.Lock()
 	c.dispatchingTurnID = turnID
@@ -1719,7 +1730,7 @@ func (c *Controller) dispatch(
 			c.dispatchingTurnID = ""
 		}
 		c.mu.Unlock()
-		if deferred, ok := c.conv.(ports.ChatDeferredTurnStarter); ok {
+		if hasDeferredStart {
 			deferred.DiscardDeferredTurn(ref.ProviderTurnID)
 		}
 		return domain.ConversationTurn{}, fmt.Errorf("bind turn: %w", err)
@@ -1739,7 +1750,7 @@ func (c *Controller) dispatch(
 	// driver prepares the request in SendTurn and starts it here. The durable
 	// provider-id binding above must exist before the first streamed update can be
 	// projected. Eager drivers do not implement this optional interface.
-	if deferred, ok := c.conv.(ports.ChatDeferredTurnStarter); ok {
+	if hasDeferredStart {
 		if err := deferred.StartDeferredTurn(ref.ProviderTurnID); err != nil {
 			c.mu.Lock()
 			c.pendingTurnID = ""

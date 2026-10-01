@@ -1166,6 +1166,20 @@ func (s *Store) AppendImportedUserMessage(
 	return nil
 }
 
+// MarkTurnDispatching removes a turn from automatic queue replay before any
+// provider call. If the later provider-ID binding fails, delivery is uncertain
+// but the prompt cannot be sent a second time by a reconnected controller.
+func (s *Store) MarkTurnDispatching(ctx context.Context, turnID string) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	if err := q.MarkConversationTurnStarted(ctx, gen.MarkConversationTurnStartedParams{
+		ID: turnID,
+	}); err != nil {
+		return fmt.Errorf("mark turn %s dispatching: %w", turnID, err)
+	}
+	return nil
+}
+
 // BindTurnToProvider records the provider's turn id once a send is accepted and
 // marks the turn running.
 func (s *Store) BindTurnToProvider(ctx context.Context, turnID, providerTurnID string, now time.Time) error {
