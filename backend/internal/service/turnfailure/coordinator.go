@@ -28,7 +28,7 @@ type Delivery interface {
 	SendSemantic(context.Context, domain.SessionID, string, string) error
 }
 
-// Coordinator retries failed worker turns until an orchestrator accepts them.
+// Coordinator retries failed worker turns against their durably pinned orchestrator.
 type Coordinator struct {
 	store    Store
 	delivery Delivery
