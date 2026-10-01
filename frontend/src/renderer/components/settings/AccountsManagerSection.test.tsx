@@ -150,10 +150,10 @@ describe("AccountsManagerSection", () => {
 		mocks.snapshot.accounts = [{id:"saved-a",provider:"codex",kind:"api_key",label:"Work",status:"active",generation:4,verification:"unverified",quotaSupported:false,cooldowns:[]}];
 		renderSection();
 		expect(screen.getByText("Not verified")).toBeInTheDocument();
+		expect(screen.getByRole("button", {name:"Use as default"})).toBeDisabled();
 		const user = userEvent.setup();
 		await user.click(screen.getByRole("button", { name: "More account actions" }));
 		expect(await screen.findByRole("menuitem",{name:"Verify credential"})).toBeInTheDocument();
-		expect(screen.getByRole("button",{name:"Use as default"})).toBeDisabled();
 	});
 
   it("shows a refresh failure request ID without raw diagnostics or changed account state", async () => {
@@ -199,7 +199,7 @@ describe("AccountsManagerSection", () => {
     expect(within(codexGroup as HTMLElement).queryByRole("button", { name: /Work/ })).not.toBeInTheDocument();
   });
 
-  it.each(["pending", "pruned"])("separates cancellation acknowledgement from %s sign-in status and keeps saved accounts", async state => {
+  it.each(["pending", "pruned"])("closes the cancelled %s sign-in flow and keeps saved accounts", async state => {
     mocks.snapshot.accounts = [{ id: "saved-a", provider: "codex", kind: "api_key", label: "Work", status: "active", verification: "verified", generation: 4, cooldowns: [] }];
     mocks.snapshot.oauthSessions = state === "pending" ? [{ id: "login-a", provider: "codex", status: "pending" }] : [];
     mocks.startOAuth.mockResolvedValue({ id: "login-a", authorizationUrl: "https://provider.example/login", provider: "codex", mode: "device", status: "pending", userCode: "ABCD-EFGH", expiresAt: new Date(Date.now() + 600_000).toISOString() });
@@ -211,9 +211,9 @@ describe("AccountsManagerSection", () => {
       await waitFor(() => expect(mocks.openExternal).toHaveBeenCalledOnce());
     }
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByText(/Cancellation request acknowledged/)).not.toBeInTheDocument();
-    expect(screen.getByText(state === "pending" ? "Observed sign-in state: pending" : "Observed sign-in state is unavailable.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument());
     expect(screen.queryByText("Sign-in cancelled")).not.toBeInTheDocument();
+    expect(screen.getByText("Work")).toBeInTheDocument();
     expect(mocks.snapshot.accounts).toHaveLength(1);
     expect(mocks.DELETE).not.toHaveBeenCalled();
   });
@@ -298,6 +298,9 @@ describe("AccountsManagerSection", () => {
     mocks.startOAuth.mockResolvedValue({
       id: "reconnect-a",
       authorizationUrl: "https://provider.example/login",
+      provider: "codex",
+      mode: "device",
+      status: "pending",
     });
     mocks.openExternal.mockResolvedValue(undefined);
     renderSection();

@@ -28,11 +28,18 @@ func TestAccountDurableFailureOutput(t *testing.T) {
 				{"ready", "ready", "REVOCATION_UNCONFIRMED", ""},
 				{"complete", "complete", "REVOCATION_UNCONFIRMED", ""},
 			} {
-				if (kind == "removal" && tc.phase == "ready") || (kind != "removal" && tc.phase == "complete") {
-					continue
-				}
-				if kind == "removal" && tc.phase == "waiting" {
-					tc.phase = "recovery_required"
+				switch kind {
+				case "removal":
+					if tc.phase == "ready" {
+						continue
+					}
+					if tc.phase == "waiting" {
+						tc.phase = "recovery_required"
+					}
+				default:
+					if tc.phase == "complete" {
+						continue
+					}
 				}
 				t.Run(kind+"/"+tc.name+map[bool]string{true: "/json", false: "/human"}[asJSON], func(t *testing.T) {
 					cfg := setConfigEnv(t)
@@ -42,10 +49,11 @@ func TestAccountDurableFailureOutput(t *testing.T) {
 					}
 					var response any = op
 					args := []string{"session", "account", "status", "session-a", "op-a"}
-					if kind == "session" {
+					switch kind {
+					case "session":
 						args = []string{"session", "account", "get", "session-a"}
 						response = map[string]any{"sessionId": "session-a", "mode": "managed", "accountId": "amc_a", "revision": 7, "switch": op}
-					} else if kind == "removal" {
+					case "removal":
 						args = []string{"accounts", "removal-status", "amc_a", "op-a"}
 					}
 					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
