@@ -312,7 +312,8 @@ func (e *Engine) TriggerWithSourceAndMode(ctx stdctx.Context, workerID domain.Se
 	if selectedMode == domain.ReviewerInterfaceChat && e.launcher.InterfaceMode(harness) != domain.ReviewerInterfaceChat {
 		return TriggerResult{}, fmt.Errorf("%w: reviewer %q does not support Chat", ErrInvalid, harness)
 	}
-	if hasReview && mode != "" && reviewRow.InterfaceMode != mode {
+	modeChanging := hasReview && mode != "" && reviewRow.InterfaceMode != mode
+	if modeChanging {
 		hasConfigOverride = true
 	}
 	if stale, err := e.cancelStaleRunningRuns(ctx, workerID, reviewRow, hasReview, runs); err != nil {
@@ -451,6 +452,18 @@ func (e *Engine) TriggerWithSourceAndMode(ctx stdctx.Context, workerID domain.Se
 		// handle when there is no resumable live agent session to notify.
 		if err := e.launcher.Preflight(ctx, harness, worker.Metadata.WorkspacePath, selectedMode); err != nil {
 			return TriggerResult{}, failRuns(0, fmt.Errorf("reviewer preflight: %w", err))
+		}
+		// A surface change restarts the same review run. Stop its old process
+		// before starting the replacement so both cannot submit the verdict.
+		if modeChanging && previousHandleID != "" {
+			if err := e.launcher.Destroy(ctx, previousHandleID); err != nil {
+				return TriggerResult{}, failRuns(0, fmt.Errorf("stop previous reviewer: %w", err))
+			}
+			if err := e.store.ClearReviewerHandleByHarness(ctx, workerID, harness); err != nil {
+				return TriggerResult{}, failRuns(0, err)
+			}
+			previousHandleID = ""
+			reviewRow.ReviewerHandleID = ""
 		}
 		launchID := e.newID()
 		reviewRow, err = e.upsertReview(ctx, worker, harness, reviewRow.ReviewerHandleID, launchAgentSessionID, launchID, "", now)
