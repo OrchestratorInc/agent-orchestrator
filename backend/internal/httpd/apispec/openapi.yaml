@@ -2225,6 +2225,31 @@ paths:
       summary: Enable the authenticated LAN bridge without a managed public tunnel
       tags:
       - mobile
+  /api/v1/mobile/enable-tunnel-only:
+    post:
+      operationId: enableMobileTunnelOnly
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobileStatusResponse'
+          description: OK
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+      summary: Enable the authenticated listener on loopback for a managed tunnel
+      tags:
+      - mobile
   /api/v1/mobile/keep-awake:
     post:
       operationId: setMobileKeepAwake
@@ -12552,6 +12577,8 @@ components:
           type: string
         keepAwake:
           $ref: '#/components/schemas/ControllersKeepAwakeStatus'
+        loopbackOnly:
+          type: boolean
         password:
           type: string
         port:
@@ -12566,6 +12593,7 @@ components:
           type: string
       required:
       - enabled
+      - loopbackOnly
       - endpoints
       - hostId
       - tunnel

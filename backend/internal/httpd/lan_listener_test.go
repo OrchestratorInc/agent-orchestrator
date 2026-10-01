@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -96,6 +97,21 @@ func TestLANManagerAuthGatesSharedHandler(t *testing.T) {
 	resp2, _ := http.DefaultClient.Do(req)
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("auth: got %d want 200", resp2.StatusCode)
+	}
+}
+
+func TestLANManagerTunnelOnlyBindsLoopback(t *testing.T) {
+	m := NewMobileLAN(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), "h_test", 0, nil, nil)
+	m.SetPasswordHash(mobilebridge.HashPassword("secret12"))
+	if _, err := m.StartLoopback(0); err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop(context.Background())
+	if addr := m.ln.Addr().(*net.TCPAddr); !addr.IP.IsLoopback() {
+		t.Fatalf("tunnel-only listener bound %s, want loopback", addr)
+	}
+	if _, err := m.Start(0); err == nil {
+		t.Fatal("LAN start silently reused a loopback-only listener")
 	}
 }
 

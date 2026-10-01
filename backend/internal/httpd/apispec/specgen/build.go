@@ -1596,6 +1596,15 @@ func mobileOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodPost, path: "/api/v1/mobile/enable-tunnel-only", id: "enableMobileTunnelOnly", tag: "mobile",
+			summary: "Enable the authenticated listener on loopback for a managed tunnel",
+			resps: []respUnit{
+				{http.StatusOK, controllers.MobileStatusResponse{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/mobile/disable", id: "disableMobile", tag: "mobile",
 			summary: "Disable the Connect Mobile LAN bridge",
 			resps: []respUnit{

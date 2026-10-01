@@ -12,10 +12,11 @@ import (
 // remoteHostStatus mirrors the small part of the loopback mobile status API
 // needed to pair another client with a headless daemon.
 type remoteHostStatus struct {
-	Enabled  bool   `json:"enabled"`
-	HostID   string `json:"hostId"`
-	Password string `json:"password"`
-	Tunnel   struct {
+	Enabled      bool   `json:"enabled"`
+	LoopbackOnly bool   `json:"loopbackOnly"`
+	HostID       string `json:"hostId"`
+	Password     string `json:"password"`
+	Tunnel       struct {
 		Supported bool   `json:"supported"`
 		Running   bool   `json:"running"`
 		LastError string `json:"lastError"`
@@ -30,7 +31,7 @@ type remoteHostStatus struct {
 
 func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 	root := &cobra.Command{Use: "remote-host", Short: "Manage this machine's remote listener"}
-	var tunnel bool
+	var tunnel, tunnelOnly bool
 	for _, action := range []struct {
 		name, method, path string
 	}{
@@ -44,9 +45,14 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 			RunE: func(cmd *cobra.Command, _ []string) error {
 				var status remoteHostStatus
 				method, path := action.method, action.path
-				if action.name == "enable" && tunnel {
+				if action.name == "enable" && tunnelOnly {
+					method, path = "POST", "mobile/enable-tunnel-only"
+				} else if action.name == "enable" && tunnel {
 					if err := ctx.doJSON(cmd.Context(), "GET", "mobile/status", nil, &status); err != nil {
 						return remoteHostDaemonError(err)
+					}
+					if status.Enabled && status.LoopbackOnly {
+						return errors.New("listener is loopback-only; run `ao remote-host disable` before enabling LAN and tunnel access")
 					}
 					if !status.Enabled {
 						if err := ctx.doJSON(cmd.Context(), "POST", "mobile/enable-lan-only", nil, &status); err != nil {
@@ -79,15 +85,19 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 						return err
 					}
 				}
-				if tunnel && action.name == "enable" {
+				if (tunnel || tunnelOnly) && action.name == "enable" {
 					if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Cloudflare terminates TLS and can see the connection password and traffic. Quick-tunnel URLs change on restart and have no uptime guarantee."); err != nil {
 						return err
 					}
 				}
-				if !publicAddress && (tunnel && action.name == "enable" || status.Tunnel.Running || status.Tunnel.LastError != "") {
+				if !publicAddress && ((tunnel || tunnelOnly) && action.name == "enable" || status.LoopbackOnly || status.Tunnel.Running || status.Tunnel.LastError != "") {
 					message := "Tunnel: starting; run `ao remote-host status` for the HTTPS address"
 					if !status.Tunnel.Supported {
-						message = "Tunnel unavailable: install cloudflared, then rerun `ao remote-host enable --tunnel`"
+						flag := "--tunnel"
+						if status.LoopbackOnly || tunnelOnly {
+							flag = "--tunnel-only"
+						}
+						message = "Tunnel unavailable: install cloudflared, then rerun `ao remote-host enable " + flag + "`"
 					} else if status.Tunnel.LastError != "" && !status.Tunnel.Running {
 						message = "Tunnel unavailable: " + status.Tunnel.LastError
 					}
@@ -104,6 +114,8 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 		}
 		if action.name == "enable" {
 			cmd.Flags().BoolVar(&tunnel, "tunnel", false, "Start AO's managed Cloudflare tunnel for access beyond the LAN")
+			cmd.Flags().BoolVar(&tunnelOnly, "tunnel-only", false, "Bind only to loopback and start AO's managed Cloudflare tunnel")
+			cmd.MarkFlagsMutuallyExclusive("tunnel", "tunnel-only")
 		}
 		root.AddCommand(cmd)
 	}

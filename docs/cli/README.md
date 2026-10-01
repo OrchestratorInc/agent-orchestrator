@@ -39,8 +39,11 @@ For a self-hosted machine, use the [host setup command](../self-hosted-remote.md
 to install the daemon with its Claude Chat runtime and start the OS user
 service. It calls `ao remote-host enable` and prints the host ID, address, and
 pairing password for **Settings → Remote hosts** on another desktop. With
-`cloudflared` installed, `--tunnel` opts into the existing Connect Mobile
-quick tunnel; check `ao remote-host status` when its HTTPS address is ready.
+`cloudflared` installed, setup `--tunnel` calls `ao remote-host enable
+--tunnel-only`: its authenticated listener binds only to loopback. Direct
+`ao remote-host enable --tunnel` keeps both LAN and Cloudflare access for users
+who deliberately want both. Check `ao remote-host status` when the HTTPS
+address is ready.
 Running `enable` again prints the current details without rotating the
 password. `status` shows the password from the host's local shell. The LAN
 listener uses plain HTTP; do not publish its port directly to the internet.

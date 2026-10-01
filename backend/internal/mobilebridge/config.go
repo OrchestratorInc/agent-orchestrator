@@ -35,12 +35,18 @@ type State struct {
 	// Cloudflare tunnel, including after daemon restart. Old Connect Mobile
 	// configs default to false and keep their existing behavior.
 	NoPublicTunnel bool `json:"noPublicTunnel"`
+	// LoopbackOnly keeps the authenticated listener reachable only by a local
+	// connector. Old Connect Mobile configs remain LAN-bound by default.
+	LoopbackOnly bool `json:"loopbackOnly,omitempty"`
 	// SecurePairing is the opt-in TLS-over-Tailscale mode. Persisted so a daemon
 	// restart (backend/internal/daemon/mobile_restore.go, via
 	// BridgeService.RestoreOnBoot) knows to re-apply the `tailscale serve` proxy
 	// — pointed at whatever port the restarted LAN listener actually bound, not
 	// this struct's LastPort, since Start can fall back to an ephemeral port.
 	SecurePairing bool `json:"securePairing"`
+	// ServeCleanupPending survives a failed Tailscale Serve teardown so a later
+	// tunnel-only setup cannot inherit an AO-owned tailnet route.
+	ServeCleanupPending bool `json:"serveCleanupPending,omitempty"`
 	// KeepAwake is the user's choice to keep this Mac from idle-sleeping while
 	// the bridge is on. Kept separate from Enabled so turning the bridge off and
 	// on again does not forget it.

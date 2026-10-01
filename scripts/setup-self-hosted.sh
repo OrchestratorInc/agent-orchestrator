@@ -271,7 +271,7 @@ done
 }
 
 args=(remote-host enable)
-"$tunnel" && args+=(--tunnel)
+"$tunnel" && args+=(--tunnel-only)
 "$host_root/current/resources/daemon/ao" "${args[@]}"
 prune_old_releases
 printf '\nOn your laptop: Settings → Remote hosts → Add host. Enter the address and password above.\n'

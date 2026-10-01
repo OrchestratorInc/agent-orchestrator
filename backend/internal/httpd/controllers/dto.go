@@ -2101,6 +2101,8 @@ type LinkPreviewResponse struct {
 // regenerate responses (empty otherwise) — it is never persisted in plaintext.
 type MobileStatusResponse struct {
 	Enabled bool `json:"enabled"`
+	// LoopbackOnly means direct LAN/Tailscale addresses are not listening.
+	LoopbackOnly bool `json:"loopbackOnly"`
 	// Endpoints is every way the phone can reach this daemon, in the client's
 	// preference order. The phone races them; Host/TailscaleHost below are the
 	// head of each kind, kept for the existing renderer.

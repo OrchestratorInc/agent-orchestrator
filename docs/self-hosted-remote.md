@@ -31,7 +31,9 @@ pass `--tunnel`:
 bash -c 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/setup-self-hosted.sh | bash -s -- --tunnel'
 ```
 
-The HTTPS tunnel address may take a few seconds to appear. On the host, run
+With `--tunnel`, the authenticated listener binds only to `127.0.0.1`; it
+does not expose a direct LAN or Tailscale address. The HTTPS tunnel address may
+take a few seconds to appear. On the host, run
 `~/.ao/host/current/resources/daemon/ao remote-host status` to retrieve it and
 the password. This uses AO's existing Connect Mobile quick tunnel. The URL
 changes when the tunnel restarts; update it on each client. Linux hosts must
@@ -39,6 +41,12 @@ enable systemd lingering to keep the user service alive after logout; the
 installer prints the required `sudo loginctl enable-linger <user>` command when
 needed. A macOS LaunchAgent runs while that user is logged in; logging the
 host user out stops it. The host itself must remain powered on.
+
+For direct access on a trusted LAN or private VPN, omit `--tunnel`. To use
+both direct LAN and the Cloudflare tunnel intentionally, run `ao remote-host
+enable --tunnel` on the host. If a LAN listener is already running,
+`--tunnel-only` refuses to claim it is private; run `ao remote-host disable`
+before switching modes.
 
 Before this PR is in a published AO release, or on Linux arm64, build a native
 host bundle from this checkout and supply it to the same script:
@@ -80,9 +88,10 @@ disable` on the host. Removing a host in a client only removes that client's
 saved connection; it does not stop the host or its sessions.
 
 The daemon's normal unauthenticated listener remains on `127.0.0.1`. The
-opt-in remote listener is password-protected but plain HTTP, intended only for
-a trusted private network or an encrypted tunnel. Do not expose it directly
-to the public internet. Clients remember a stable daemon-installation ID and
+opt-in remote listener is password-protected but plain HTTP. Direct mode is
+intended only for a trusted private network; tunnel-only mode binds it to
+loopback. Do not expose its direct port to the public internet. Clients remember
+a stable daemon-installation ID and
 reject an address that later answers as a different host when connecting.
 The desktop checks the host ID before each new HTTP or WebSocket connection;
 the host also rejects mismatched IDs before handling a request. Older clients

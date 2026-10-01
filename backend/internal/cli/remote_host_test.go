@@ -128,6 +128,51 @@ func TestRemoteHostCLITunnelFromDisabledAndStatus(t *testing.T) {
 	}
 }
 
+func TestRemoteHostCLITunnelOnlyUsesLoopbackRoute(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var requests []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") {
+			requests = append(requests, r.Method+" "+r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"enabled":true,"loopbackOnly":true,"hostId":"host-a","password":"pairing-secret","tunnel":{"supported":true,"running":true}}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "enable", "--tunnel-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(requests, ","); got != "POST /api/v1/mobile/enable-tunnel-only" {
+		t.Fatalf("tunnel-only requests = %s", got)
+	}
+	if !strings.Contains(out, "Tunnel: starting") || !strings.Contains(out, "pairing-secret") || strings.Contains(out, "http://") {
+		t.Fatalf("tunnel-only output = %q", out)
+	}
+}
+
+func TestRemoteHostCLITunnelRefusesLoopbackOnlyListener(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var requests []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") {
+			requests = append(requests, r.Method+" "+r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"enabled":true,"loopbackOnly":true,"hostId":"host-a"}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "enable", "--tunnel")
+	if err == nil || !strings.Contains(err.Error(), "disable") {
+		t.Fatalf("wrong-mode CLI error = %v, want disable-first guidance", err)
+	}
+	if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status" {
+		t.Fatalf("wrong-mode CLI requests = %s, want no mutation", got)
+	}
+}
+
 func TestRemoteHostCLITunnelExistingListenerKeepsPassword(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var requests []string
