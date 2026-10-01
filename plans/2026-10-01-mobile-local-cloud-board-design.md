@@ -45,6 +45,7 @@ The drawer loses its Environment picker and its recent-workers list uses the sam
 - A single-source error, stalled first load, or background/foreground transition must not blank the other source or falsely show “No workers.” Stale data is labeled where retained.
 - Source-specific routes that are no longer available offer Retry and the appropriate sign-in/pair action, rather than silently opening the other source.
 - A destination change during async catalog loading discards late results from the previous destination. A spawn response cannot navigate to the wrong source.
+- Existing Local push payloads do not identify the desktop that emitted them. A tap on such a legacy notification opens Workers instead of guessing that the current pairing owns its session ID; source-qualified links continue to open the intended session directly.
 
 ## Verification
 
