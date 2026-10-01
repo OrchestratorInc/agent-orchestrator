@@ -105,7 +105,7 @@ func (c *EventsController) stream(w http.ResponseWriter, r *http.Request) {
 	if startAtHead {
 		// Give EventSource a Last-Event-ID before the first live change so an
 		// immediate reconnect replays the gap instead of starting at head again.
-		if _, err := fmt.Fprintf(w, "id: %d\nevent: cursor\ndata: {}\n\n", after); err != nil {
+		if _, err := fmt.Fprintf(w, "id: %d\nevent: cursor\ndata: {}\n\n", after); err != nil { //nolint:gosec // G705: an int64 formatted with %d cannot inject SSE fields.
 			return
 		}
 	}
@@ -168,11 +168,9 @@ func (c *EventsController) replay(ctx context.Context, w http.ResponseWriter, fl
 
 func parseEventsAfter(r *http.Request) (int64, error) {
 	raw := r.URL.Query().Get("after")
-	if raw == "latest" {
+	if raw == "latest" || raw == "" {
 		// An EventSource reconnects to the same URL; its cursor must override
 		// this initial head sentinel or events during the gap would be lost.
-		raw = r.Header.Get("Last-Event-ID")
-	} else if raw == "" {
 		raw = r.Header.Get("Last-Event-ID")
 	}
 	if raw == "" {
