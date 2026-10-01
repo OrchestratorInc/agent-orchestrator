@@ -15,6 +15,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/roleprompt"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
@@ -274,6 +275,7 @@ func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error)
 		Branch:          launch.Branch,
 		Prompt:          launch.Prompt,
 		AgentSessionID:  launch.AgentSessionID,
+		Interface:       string(launch.Interface),
 		ParentSessionID: launch.ParentSessionID,
 		Mode:            launch.Mode,
 		Model:           launch.Model,
@@ -537,7 +539,23 @@ func (s *Server) workerGitHubToken(w http.ResponseWriter, r *http.Request) {
 	// projects the App cannot serve (no installation / not App-connected / a remote
 	// broker that cannot push).
 	if s.checkoutBroker != nil {
-		grant, err := s.checkoutBroker.IssuePushGrant(r.Context(), claims.OrgID, claims.SessionID)
+		// git invokes the credential helper with credential.useHttpPath=true, so
+		// it can name the exact repository it is fetching or pushing. When it does,
+		// mint an App token scoped to that repository (primary or a declared extra
+		// the App is installed on); an App-uninstalled extra returns ErrForbidden
+		// here and falls through to the PAT, giving the same App-first/PAT-fallback
+		// precedence per repository. Without a repository (older helpers, the gh
+		// CLI wrapper), fall back to the broad multi-repository push grant.
+		repo := workerRequestedRepository(r)
+		var (
+			grant githubapp.CheckoutGrant
+			err   error
+		)
+		if repo != "" {
+			grant, err = s.checkoutBroker.IssuePushGrantForRepo(r.Context(), claims.OrgID, claims.SessionID, repo)
+		} else {
+			grant, err = s.checkoutBroker.IssuePushGrant(r.Context(), claims.OrgID, claims.SessionID)
+		}
 		if err == nil && grant.Token != "" && grant.ExpiresAt.After(time.Now()) {
 			writeJSON(w, http.StatusOK, worker.GitHubTokenResponse{Token: grant.Token, ExpiresAt: grant.ExpiresAt})
 			return
@@ -565,6 +583,28 @@ func (s *Server) workerGitHubToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "GitHub credentials are not available.")
+}
+
+// workerRequestedRepository extracts the "owner/repo" the git credential helper
+// named via the ?repo= query parameter (git supplies host+path because the
+// helper runs with credential.useHttpPath=true). It returns "" for a missing or
+// malformed value, so the caller falls back to the broad multi-repository push
+// grant rather than failing — the repository hint only ever narrows the grant's
+// scope, it is never a hard requirement.
+func workerRequestedRepository(r *http.Request) string {
+	raw := strings.TrimSpace(r.URL.Query().Get("repo"))
+	if raw == "" {
+		return ""
+	}
+	raw = strings.TrimSuffix(strings.Trim(raw, "/"), ".git")
+	owner, repo, ok := strings.Cut(raw, "/")
+	if !ok ||
+		owner == "" || repo == "" ||
+		strings.ContainsAny(owner, "/ \t") ||
+		strings.ContainsAny(repo, "/ \t") {
+		return ""
+	}
+	return owner + "/" + repo
 }
 
 func (s *Server) workerRaisePullRequest(w http.ResponseWriter, r *http.Request) {
@@ -668,18 +708,25 @@ func (s *Server) workerClaimPullRequest(w http.ResponseWriter, r *http.Request) 
 		writeError(w, r, http.StatusBadRequest, "INVALID_PULL_REQUEST", "A pull request number or URL is required.")
 		return
 	}
-	// PAT-first, mirroring workerRaisePullRequest: a configured PAT can claim
-	// (fetch + record) a PR even where the checkout broker is read-only.
+	// Prefer the GitHub App (checkout broker) to claim, falling back to the user's
+	// PAT only when the broker cannot complete it — the same App-first/PAT-fallback
+	// precedence as workerRaisePullRequest / the credential-grant endpoints. A
+	// PAT-first order here let a cached-valid-but-rotted PAT (validation_state is a
+	// cached snapshot) shadow a healthy App installation and fail every claim with
+	// "The pull request could not be tracked" (GitHub 401) even though the App can
+	// track it — the same class of bug the raise/merge/token paths avoid by being
+	// App-first. The App token is minted fresh per request and never goes stale.
 	var (
 		pr  domain.PullRequest
 		err error
 	)
-	if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
-		pr, err = s.patWrites.ClaimPullRequest(
-			r.Context(), claims.OrgID, claims.SessionID, grant.CloneURL, grant.Token, input.Reference,
-		)
-	} else {
-		pr, err = s.checkoutBroker.ClaimPullRequest(r.Context(), claims.OrgID, claims.SessionID, input.Reference)
+	pr, err = s.checkoutBroker.ClaimPullRequest(r.Context(), claims.OrgID, claims.SessionID, input.Reference)
+	if err != nil {
+		if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
+			pr, err = s.patWrites.ClaimPullRequest(
+				r.Context(), claims.OrgID, claims.SessionID, grant.CloneURL, grant.Token, input.Reference,
+			)
+		}
 	}
 	if errors.Is(err, postgres.ErrForbidden) || errors.Is(err, postgres.ErrNotFound) {
 		writeError(w, r, http.StatusForbidden, "PULL_REQUEST_NOT_AUTHORIZED", "This session does not have an active repository grant.")
@@ -837,6 +884,11 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 			s.writeWorkerStoreError(w, r, err)
 			return
 		}
+		if err := s.store.AppendInteractiveConversationFacts(r.Context(), claims.OrgID, claims.SessionID,
+			activity.Event, activity.SourceInterface, activity.LatestUserPrompt, activity.LatestAssistantUpdate); err != nil {
+			s.writeWorkerStoreError(w, r, err)
+			return
+		}
 		s.appendSessionProjectionEvent(
 			r.Context(), claims.OrgID, claims.SessionID, input.Type, activity,
 		)
@@ -917,7 +969,10 @@ func (s *Server) workerClaimTurn(w http.ResponseWriter, r *http.Request) {
 		response.Turn = &worker.Turn{
 			ID:              turn.ID,
 			Prompt:          turn.Prompt,
+			Model:           turn.Model,
+			ReasoningEffort: turn.ReasoningEffort,
 			Mode:            turn.Mode,
+			ApprovalMode:    turn.ApprovalMode,
 			DeniedCommands:  turn.DeniedCommands,
 			Harness:         turn.Harness,
 			Attempt:         turn.Attempt,

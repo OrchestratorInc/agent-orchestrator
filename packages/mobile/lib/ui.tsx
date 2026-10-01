@@ -424,7 +424,8 @@ export function Button({
 }: {
 	title: string;
 	onPress: () => void;
-	variant?: "primary" | "ghost" | "danger";
+	/** `success` is desktop's green merge action. */
+	variant?: "primary" | "ghost" | "danger" | "success";
 	loading?: boolean;
 	disabled?: boolean;
 	icon?: keyof typeof Feather.glyphMap;
@@ -434,9 +435,10 @@ export function Button({
 	const s = useThemedStyles(makeStyles);
 	const isPrimary = variant === "primary";
 	const isDanger = variant === "danger";
+	const isSuccess = variant === "success";
 	// `onAccent`, not a literal: near-black reads best on the dark theme's light
 	// accent, but is invisible on light mode's darker one, which needs white.
-	const fg = isPrimary ? t.onAccent : isDanger ? t.red : t.accent;
+	const fg = isPrimary ? t.onAccent : isDanger ? t.red : isSuccess ? t.bgBase : t.accent;
 	const pressFx = usePressScale(disabled || loading);
 	return (
 		<Animated.View style={[style, pressFx.style]}>
@@ -461,6 +463,7 @@ export function Button({
 					isPrimary && s.btnPrimary,
 					!isPrimary && s.btnGhost,
 					isDanger && s.btnDanger,
+					isSuccess && s.btnSuccess,
 					(disabled || loading) && { opacity: 0.5 },
 					pressed && { opacity: press.opacity },
 				]}
@@ -806,21 +809,27 @@ export function EmptyState({
 	title,
 	message,
 	action,
+	pulse = false,
 }: {
 	icon?: keyof typeof Feather.glyphMap;
 	title: string;
 	message?: string;
 	action?: ReactNode;
+	/** Breathe the icon, for a state that is waiting on something. */
+	pulse?: boolean;
 }) {
 	const t = useTheme();
 	const s = useThemedStyles(makeStyles);
+	const breathing = useBreathing(pulse);
 	// An empty state appears once per screen and then sits still, so it can afford
 	// a quiet entrance. Lists and rows stay unstaggered.
 	const enter = useEnterTransition(space.xxs);
 	return (
 		<Animated.View style={[s.empty, enter]}>
 			<View style={s.emptyIcon}>
-				<Feather name={icon} size={24} color={t.textTertiary} />
+				<Animated.View style={breathing ? { opacity: breathing } : undefined}>
+					<Feather name={icon} size={24} color={t.textTertiary} />
+				</Animated.View>
 			</View>
 			<Text maxFontSizeMultiplier={fontScaleCap.body} style={s.emptyTitle}>
 				{title}
@@ -980,6 +989,7 @@ const makeStyles = (t: Theme) =>
 			backgroundColor: t.bgElevated,
 		},
 		btnDanger: { borderColor: t.tintRed, backgroundColor: t.tintRed },
+		btnSuccess: { borderColor: t.green, backgroundColor: t.green },
 		btnText: { fontFamily: "Geist_600SemiBold", fontSize: type.subheadline.fontSize, fontWeight: "600" },
 
 		step: {

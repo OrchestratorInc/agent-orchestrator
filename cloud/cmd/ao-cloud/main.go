@@ -18,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/httpapi"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/idlepause"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/interfacereconcile"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/notification"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/prstatus"
@@ -171,6 +172,7 @@ func newSandboxReconciler(
 		StartupTimeout:         cfg.SandboxStartupTimeout,
 		HeartbeatTimeout:       cfg.WorkerHeartbeatTimeout,
 		AllowAnonymousCheckout: cfg.AllowAnonymousCheckout,
+		KeepWarm:               cfg.IdlePauseDisabled(),
 		Logger:                 logger,
 	}), nil
 }
@@ -344,9 +346,11 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	// The scanner only has anything to do where sandboxes exist to pause.
+	// The scanner only has anything to do where sandboxes exist to pause, and
+	// only when idle-pause is enabled. With AO_CLOUD_IDLE_PAUSE_THRESHOLD=0
+	// (keep-warm) it never runs, so no session is ever paused for idleness.
 	var idlePauseScanner *idlepause.Scanner
-	if reconciler != nil {
+	if reconciler != nil && !cfg.IdlePauseDisabled() {
 		idlePauseScanner = idlepause.New(store, idlepause.Options{
 			Interval:      cfg.IdlePauseInterval,
 			IdleThreshold: cfg.IdlePauseThreshold,
@@ -495,6 +499,18 @@ func run(logger *slog.Logger) error {
 			}
 		}()
 	}
+
+	transitionDriver := interfacereconcile.NewTransportDriver(store, "interface-coordinator", 45*time.Second, logger)
+	transitionCoordinator := interfacereconcile.New(store, transitionDriver, interfacereconcile.Options{
+		Interval: cfg.InterfaceHandoffInterval,
+		Logger:   logger,
+	})
+	go func() {
+		logger.Info("interface-transition coordinator started", "interval", cfg.InterfaceHandoffInterval)
+		if err := transitionCoordinator.Run(ctx); err != nil {
+			logger.Error("interface-transition coordinator stopped", "error", err)
+		}
+	}()
 
 	if prStatusScanner != nil {
 		go func() {
