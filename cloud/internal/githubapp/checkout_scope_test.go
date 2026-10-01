@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 )
 
 func TestGitHubRepositoryFullName(t *testing.T) {
@@ -380,6 +381,134 @@ func TestIssueCheckoutGrantFallsBackToPrimaryOnExtrasError(t *testing.T) {
 	}
 	if backend.listCalls != 0 {
 		t.Fatalf("listed repositories %d times, want 0 (never reached on extras error)", backend.listCalls)
+	}
+}
+
+// IssuePushGrant is the write-side mirror of IssueCheckoutGrant: one broad token
+// scoped to the primary repository plus the declared extras the App can access,
+// so a worker's push to an extra dev-kit repository is correctly scoped. The
+// permissions must be write, not read.
+func TestIssuePushGrantBroadensToExtraRepos(t *testing.T) {
+	backend := &installationRepositoryServer{repos: []Repository{
+		{ID: 1, FullName: "octo/app"},
+		{ID: 2, FullName: "octo/lib"},
+	}}
+	server := httptest.NewServer(backend.handler(t))
+	defer server.Close()
+	client := newAppTestClient(t, server.URL, server.Client())
+	store := &checkoutStubStore{
+		primary: primaryContext(),
+		extras:  []domain.RepoRef{{URL: "https://github.com/octo/lib"}},
+	}
+	svc := newCheckoutTestService(t, store, client)
+
+	grant, err := svc.IssuePushGrant(context.Background(), "org-1", "sess-1")
+	if err != nil {
+		t.Fatalf("IssuePushGrant: %v", err)
+	}
+	if grant.Token == "" {
+		t.Fatal("expected a push token")
+	}
+	got := append([]int64(nil), backend.mintedRepoIDs...)
+	sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
+	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("minted repository_ids = %v, want [1 2] (primary + octo/lib)", backend.mintedRepoIDs)
+	}
+	if backend.mintedPermissions["contents"] != "write" || backend.mintedPermissions["pull_requests"] != "write" {
+		t.Fatalf("minted permissions = %v, want contents:write + pull_requests:write", backend.mintedPermissions)
+	}
+}
+
+// IssuePushGrantForRepo scopes the token to exactly one repository. An empty or
+// primary name resolves to the primary repository alone, with write permissions.
+func TestIssuePushGrantForRepoScopesToPrimary(t *testing.T) {
+	backend := &installationRepositoryServer{repos: []Repository{{ID: 1, FullName: "octo/app"}}}
+	server := httptest.NewServer(backend.handler(t))
+	defer server.Close()
+	client := newAppTestClient(t, server.URL, server.Client())
+	store := &checkoutStubStore{primary: primaryContext()}
+	svc := newCheckoutTestService(t, store, client)
+
+	if _, err := svc.IssuePushGrantForRepo(context.Background(), "org-1", "sess-1", ""); err != nil {
+		t.Fatalf("IssuePushGrantForRepo(primary): %v", err)
+	}
+	if len(backend.mintedRepoIDs) != 1 || backend.mintedRepoIDs[0] != 1 {
+		t.Fatalf("minted repository_ids = %v, want [1] (primary only)", backend.mintedRepoIDs)
+	}
+	if backend.mintedPermissions["contents"] != "write" {
+		t.Fatalf("minted permissions = %v, want contents:write", backend.mintedPermissions)
+	}
+	// A declared primary need not be listed as an extra to resolve.
+	if store.extrasSeen != 0 {
+		t.Fatalf("WorkerSessionExtraRepos called %d times for the primary, want 0", store.extrasSeen)
+	}
+}
+
+// A declared extra the App is installed on resolves to its own repository ID and
+// mints a token scoped only to it.
+func TestIssuePushGrantForRepoResolvesDeclaredExtra(t *testing.T) {
+	backend := &installationRepositoryServer{repos: []Repository{
+		{ID: 1, FullName: "octo/app"},
+		{ID: 2, FullName: "octo/lib"},
+	}}
+	server := httptest.NewServer(backend.handler(t))
+	defer server.Close()
+	client := newAppTestClient(t, server.URL, server.Client())
+	store := &checkoutStubStore{
+		primary: primaryContext(),
+		extras:  []domain.RepoRef{{URL: "https://github.com/octo/lib"}},
+	}
+	svc := newCheckoutTestService(t, store, client)
+
+	if _, err := svc.IssuePushGrantForRepo(context.Background(), "org-1", "sess-1", "octo/lib"); err != nil {
+		t.Fatalf("IssuePushGrantForRepo(extra): %v", err)
+	}
+	if len(backend.mintedRepoIDs) != 1 || backend.mintedRepoIDs[0] != 2 {
+		t.Fatalf("minted repository_ids = %v, want [2] (octo/lib only)", backend.mintedRepoIDs)
+	}
+}
+
+// A repository that is not the primary and not a declared extra is forbidden —
+// the App grant must not be issued, so the caller falls back to a PAT.
+func TestIssuePushGrantForRepoForbidsUndeclared(t *testing.T) {
+	backend := &installationRepositoryServer{repos: []Repository{
+		{ID: 1, FullName: "octo/app"},
+		{ID: 2, FullName: "octo/lib"},
+	}}
+	server := httptest.NewServer(backend.handler(t))
+	defer server.Close()
+	client := newAppTestClient(t, server.URL, server.Client())
+	store := &checkoutStubStore{
+		primary: primaryContext(),
+		extras:  []domain.RepoRef{{URL: "https://github.com/octo/lib"}},
+	}
+	svc := newCheckoutTestService(t, store, client)
+
+	_, err := svc.IssuePushGrantForRepo(context.Background(), "org-1", "sess-1", "octo/secret")
+	if !errors.Is(err, postgres.ErrForbidden) {
+		t.Fatalf("IssuePushGrantForRepo(undeclared) err = %v, want ErrForbidden", err)
+	}
+	if len(backend.mintedRepoIDs) != 0 {
+		t.Fatalf("minted a token for an undeclared repo: %v", backend.mintedRepoIDs)
+	}
+}
+
+// A declared extra the App is NOT installed on (404, unresolved) is forbidden so
+// the credential helper falls back to a PAT that may still cover it.
+func TestIssuePushGrantForRepoForbidsAppUninstalledExtra(t *testing.T) {
+	backend := &installationRepositoryServer{repos: []Repository{{ID: 1, FullName: "octo/app"}}}
+	server := httptest.NewServer(backend.handler(t))
+	defer server.Close()
+	client := newAppTestClient(t, server.URL, server.Client())
+	store := &checkoutStubStore{
+		primary: primaryContext(),
+		extras:  []domain.RepoRef{{URL: "https://github.com/octo/ghost"}},
+	}
+	svc := newCheckoutTestService(t, store, client)
+
+	_, err := svc.IssuePushGrantForRepo(context.Background(), "org-1", "sess-1", "octo/ghost")
+	if !errors.Is(err, postgres.ErrForbidden) {
+		t.Fatalf("IssuePushGrantForRepo(app-uninstalled extra) err = %v, want ErrForbidden", err)
 	}
 }
 
