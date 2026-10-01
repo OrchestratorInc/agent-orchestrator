@@ -470,7 +470,13 @@ it("reattaches a terminal when the same host gets a new proxy connection", async
 
 it("reuses a Chat delivery ID when a lost response is retried", async () => {
 	const deliveryIds: string[] = [];
-	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	const posts: string[] = [];
+	localGet.mockReset();
+	localPost.mockReset();
+	let boxAConnections = 0;
+	remoteConnect.mockImplementation(async (url: string) => url.includes("box-b")
+		? { hostId: "box-b", label: "Box B", url, base: "http://127.0.0.1:4001" }
+		: { hostId: "box-a", label: "Box A", url, base: boxAConnections++ === 0 ? "http://127.0.0.1:4000" : "http://127.0.0.1:4002" });
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const request = input instanceof Request ? input : new Request(input);
 		let body: unknown;
@@ -478,23 +484,36 @@ it("reuses a Chat delivery ID when a lost response is retried", async () => {
 		if (request.url.endsWith("/projects")) body = { projects: [{ id: "project-1", name: "Remote", path: "/remote" }] };
 		else if (request.url.endsWith("/sessions")) body = { sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode: "chat", prs: [] }] };
 		else if (new URL(request.url).pathname.endsWith("/conversation")) body = conversationBody();
-		else {
+		else if (new URL(request.url).pathname.endsWith("/conversation/messages")) {
+			posts.push(request.url);
 			deliveryIds.push((await request.json() as { clientMessageId: string }).clientMessageId);
-			status = deliveryIds.length === 1 ? 503 : 202;
-			body = status === 503 ? { error: "response lost" } : { state: "accepted", turnId: "turn-1" };
-		}
+			if (deliveryIds.length === 1) throw new TypeError("response lost after acceptance");
+			status = 202;
+			body = { state: "accepted", turnId: "turn-1" };
+		} else throw new Error(`Unexpected request ${request.url}`);
 		return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 	}));
 	await connectHost("http://box-a:3001");
+	await connectHost("http://box-b:3001");
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	renderRemoteSession(queryClient);
 	const message = await screen.findByRole("combobox", { name: "Message the agent" });
 	await typeInLexicalEditor(message, "Continue the task");
 	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
 	await screen.findByText(/delivery wasn’t confirmed/);
+	await act(async () => { await disconnectHost("box-a"); });
+	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
+	await act(async () => { await connectHost("http://box-a:3001"); });
+	await screen.findByRole("button", { name: "Retry message safely" });
 	await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
 	await waitFor(() => expect(deliveryIds).toHaveLength(2));
 	expect(deliveryIds[1]).toBe(deliveryIds[0]);
+	expect(posts).toEqual([
+		"http://127.0.0.1:4000/api/v1/sessions/session-1/conversation/messages",
+		"http://127.0.0.1:4002/api/v1/sessions/session-1/conversation/messages",
+	]);
+	expect(localGet).not.toHaveBeenCalled();
+	expect(localPost).not.toHaveBeenCalled();
 });
 
 it("refreshes a remote approval after an already-answered 409", async () => {
@@ -543,8 +562,9 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 	HTMLElement.prototype.scrollTo = vi.fn();
 	localGet.mockReset();
 	localPost.mockReset();
+	let boxBConnections = 0;
 	remoteConnect.mockImplementation(async (url: string) => url.includes("box-b")
-		? { hostId: "box-b", label: "Box B", url, base: "http://127.0.0.1:4001" }
+		? { hostId: "box-b", label: "Box B", url, base: boxBConnections++ === 0 ? "http://127.0.0.1:4001" : "http://127.0.0.1:4002" }
 		: { hostId: "box-a", label: "Box A", url, base: "http://127.0.0.1:4000" });
 	const posts: string[] = [];
 	const deliveryIds: string[] = [];
@@ -558,7 +578,7 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 		if (path.endsWith("/reviews/review-1/conversation/messages")) {
 			posts.push(request.url);
 			deliveryIds.push((await request.json() as { clientMessageId: string }).clientMessageId);
-			if (deliveryIds.length === 1) return Response.json({ error: "disk full" }, { status: 503 });
+			if (deliveryIds.length === 1) throw new TypeError("response lost after acceptance");
 			return Response.json({ state: "accepted", turnId: "review-turn" }, { status: 202 });
 		}
 		if (path.endsWith("/sessions/session-1/conversation")) return Response.json(conversationBody());
@@ -575,10 +595,17 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 	await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "Review this change");
 	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
 	await screen.findByText(/delivery wasn’t confirmed/);
+	await act(async () => { await disconnectHost("box-b"); });
+	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
+	await act(async () => { await connectHost("http://box-b:3001"); });
+	await screen.findByRole("button", { name: "Retry message safely" });
 	await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
 	await waitFor(() => expect(deliveryIds).toHaveLength(2));
 	expect(deliveryIds[1]).toBe(deliveryIds[0]);
-	await waitFor(() => expect(posts).toContain("http://127.0.0.1:4001/api/v1/reviews/review-1/conversation/messages"));
+	expect(posts).toEqual([
+		"http://127.0.0.1:4001/api/v1/reviews/review-1/conversation/messages",
+		"http://127.0.0.1:4002/api/v1/reviews/review-1/conversation/messages",
+	]);
 	expect(queryClient.getQueryData(reviewerConversationQueryKey("review-1"))).toBe("local-sentinel");
 	expect(queryClient.getQueryData(reviewerConversationQueryKey("review-1", "box-a"))).toBe("box-a-sentinel");
 	expect(queryClient.getQueryData(reviewerConversationQueryKey("review-1", "box-b"))).toBeDefined();
