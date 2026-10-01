@@ -870,9 +870,9 @@ describe("HarnessSettingsSection", () => {
 
 		renderSection();
 		const row = (await screen.findByText("OpenCode 2")).closest('[data-agent="opencode-v2"]') as HTMLElement;
+		const install = await within(row).findByRole("button", { name: "Install" });
 		expect(row).not.toHaveTextContent(reason);
 		expect(row).not.toHaveTextContent("Installation status unknown");
-		const install = within(row).getByRole("button", { name: "Install" });
 		expect(install).toBeEnabled();
 
 		await userEvent.click(install);
