@@ -433,7 +433,7 @@ func (e *Engine) TriggerWithSourceAndMode(ctx stdctx.Context, workerID domain.Se
 	previousHandleID := reviewRow.ReviewerHandleID
 	previousAgentSessionID := reviewRow.AgentSessionID
 	launchAgentSessionID := reviewRow.AgentSessionID
-	if hasConfigOverride {
+	if hasConfigOverride || selectedMode == domain.ReviewerInterfaceChat {
 		launchAgentSessionID = ""
 	}
 	persistedAgentSessionID := launchAgentSessionID
@@ -462,8 +462,12 @@ func (e *Engine) TriggerWithSourceAndMode(ctx stdctx.Context, workerID domain.Se
 			if err := e.store.ClearReviewerHandleByHarness(ctx, workerID, harness); err != nil {
 				return TriggerResult{}, failRuns(0, err)
 			}
+			if _, err := e.store.UpdateReviewAgentSessionID(ctx, reviewRow.ID, ""); err != nil {
+				return TriggerResult{}, failRuns(0, err)
+			}
 			previousHandleID = ""
 			reviewRow.ReviewerHandleID = ""
+			reviewRow.AgentSessionID = ""
 		}
 		launchID := e.newID()
 		reviewRow, err = e.upsertReview(ctx, worker, harness, reviewRow.ReviewerHandleID, launchAgentSessionID, launchID, "", now)
@@ -475,6 +479,9 @@ func (e *Engine) TriggerWithSourceAndMode(ctx stdctx.Context, workerID domain.Se
 		}
 		launchSpec := reviewLaunchSpec(worker, harness, config, launchRun, queue, 0, launchAgentSessionID, launchID)
 		launchSpec.InterfaceMode = selectedMode
+		if selectedMode == domain.ReviewerInterfaceChat {
+			launchSpec.ProviderConversationID = reviewRow.ProviderConversationID
+		}
 		launch, err := e.launcher.Spawn(ctx, launchSpec)
 		if err != nil {
 			return TriggerResult{}, failRuns(0, fmt.Errorf("launch reviewer: %w", err))

@@ -59,6 +59,7 @@ type Store interface {
 	ConversationEditAnchor(ctx context.Context, conversationID, replacedTurnID string) (domain.ConversationEditAnchor, error)
 	RepairIncompleteConversationEdit(ctx context.Context, sessionID domain.SessionID, conversationID string, now time.Time) (domain.ConversationBranch, bool, error)
 	CreateAndActivateConversationBranch(ctx context.Context, sessionID domain.SessionID, branch domain.ConversationBranch, generation string, now time.Time) error
+	CreateAndActivateReviewConversationBranch(ctx context.Context, reviewID string, branch domain.ConversationBranch, generation string, now time.Time) error
 	ActivateConversationBranch(ctx context.Context, sessionID domain.SessionID, conversationID, branchID, providerConversationID, generation string, now time.Time) error
 	UpdateConversationBranchReplacement(ctx context.Context, branchID, replacementTurnID string) error
 
@@ -78,6 +79,7 @@ type Store interface {
 	SettleOrphanedTurns(ctx context.Context, session domain.SessionID, now time.Time) error
 	SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error
 	CleanupOwnedControllerWork(ctx context.Context, session domain.SessionID, conversationID, generation string, now time.Time) (bool, error)
+	CleanupOwnedReviewControllerWork(ctx context.Context, reviewID, conversationID, generation string, now time.Time) (bool, error)
 	ListVisibleRunningTurnProviderIDs(ctx context.Context, conversationID string) ([]string, error)
 
 	SetConversationSettings(ctx context.Context, conversationID string, settings domain.ConversationSettings, now time.Time) error
@@ -2607,11 +2609,18 @@ func (c *Controller) project() {
 	if !suppressStoppedActivity {
 		c.reportActivity(ctx, domain.ActivityExited, "chat.controller.stopped", now)
 	}
-	if _, err := c.store.CleanupOwnedControllerWork(
-		ctx, c.sessionID, c.conversation.ID, c.generation, now,
-	); err != nil {
+	if err := c.cleanupOwnedControllerWork(ctx, now); err != nil {
 		c.log.Error("failed to clean up stopped controller work", "session", c.sessionID, "error", err)
 	}
+}
+
+func (c *Controller) cleanupOwnedControllerWork(ctx context.Context, now time.Time) error {
+	if c.reviewID != "" {
+		_, err := c.store.CleanupOwnedReviewControllerWork(ctx, c.reviewID, c.conversation.ID, c.generation, now)
+		return err
+	}
+	_, err := c.store.CleanupOwnedControllerWork(ctx, c.sessionID, c.conversation.ID, c.generation, now)
+	return err
 }
 
 // projectEvent archives one normalized provider event and applies its durable
@@ -3090,9 +3099,7 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 
 	case ports.ChatEventControllerState:
 		if event.ControllerState == ports.ChatControllerStopped {
-			_, err := c.store.CleanupOwnedControllerWork(
-				ctx, c.sessionID, c.conversation.ID, c.generation, now)
-			return err
+			return c.cleanupOwnedControllerWork(ctx, now)
 		}
 		return nil
 
