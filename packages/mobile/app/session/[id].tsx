@@ -149,7 +149,7 @@ export default function MobileSessionRoute() {
 		case "screen": {
 			const surface = sessionDisplaySurface({ environment: source?.kind ?? null, sessionMode: view.session.mode, requestedView });
 			if (surface === "cloud-terminal" && source) return <CloudTerminalSessionScreen session={view.session} source={source} />;
-			if (surface === "local-terminal") return <TerminalSessionScreen session={view.session} />;
+			if (surface === "local-terminal") return <TerminalSessionScreen session={view.session} source={source ?? undefined} />;
 			if (source) return <ChatSessionScreen session={view.session} source={source} />;
 			return null;
 		}

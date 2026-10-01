@@ -248,14 +248,14 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 				? glassHeaderControl("right", (
 					<View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
 						{cloudSession && !terminated ? (
-							<NativeHeaderButton icon="terminal" label="Open Terminal UI" onPress={() => router.replace({ pathname: "/session/[id]", params: { id: session.id, view: "terminal" } })} />
+							<NativeHeaderButton icon="terminal" label="Open Terminal UI" onPress={() => router.replace({ pathname: "/session/[id]", params: { id: session.id, view: "terminal", source: source.kind, sourceId: source.id } })} />
 						) : null}
 						<NativeHeaderButton icon="more" label="Conversation actions" onPress={() => { haptics.tap(); setMenuOpen(true); }} />
 					</View>
 				))
 				: glassHeaderControl("right"),
 		);
-	}, [cloudSession, headerRightReady, navigation, router, session.id, terminated]);
+	}, [cloudSession, headerRightReady, navigation, router, session.id, source.kind, source.id, terminated]);
 
 	const loadWorkspaceFiles = useCallback(async () => {
 		if (!config || !conversation.snapshot) return { paths: filePaths, truncated: filePathsTruncated };

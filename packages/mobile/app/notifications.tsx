@@ -48,7 +48,8 @@ export default function NotificationsScreen() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { config, configResolved, connection, unreachable, errorStatus, sessions, loading: sessionsLoading, restore } = useApp();
+	const { config, configResolved, connection, unreachable, errorStatus, localBoard, availableSources, restoreOn } = useApp();
+	const localSource = availableSources.find((source) => source.kind === "local");
 	const [restoringId, setRestoringId] = useState<string>();
 	// A brief line rather than an Alert: the row is still there to act on, and
 	// a modal would make a dead tap feel like an error.
@@ -139,7 +140,10 @@ export default function NotificationsScreen() {
 		// What a tap does depends on the session behind it, exactly as the renderer
 		// decides: a terminated agent waiting on input is restored, not opened.
 		const action = notificationAction(notification, sessionState(notification.sessionId));
-		if (action.kind === "open") router.navigate(`/session/${action.sessionId}`);
+		if (action.kind === "open") {
+			if (localSource) router.navigate({ pathname: "/session/[id]", params: { id: action.sessionId, source: localSource.kind, sourceId: localSource.id } });
+			else setNotice("Pair your desktop to open this session.");
+		}
 		else if (action.kind === "prs") router.navigate("/prs");
 		else if (action.kind === "restore") {
 			haptics.warning();
@@ -151,22 +155,22 @@ export default function NotificationsScreen() {
 	}
 
 	function sessionState(sessionId?: string) {
-		const session = sessionId ? sessions.find((item) => item.id === sessionId) : undefined;
+		const session = sessionId ? localBoard.sessions.find((item) => item.id === sessionId) : undefined;
 		return {
 			terminated: Boolean(session?.isTerminated || session?.status === "terminated"),
 			// Without the board we cannot tell a terminated session from a live one,
 			// and guessing lands on a screen that cannot resolve it.
-			sessionsReady: !sessionsLoading && sessions.length > 0,
+			sessionsReady: !localBoard.loading && localBoard.sessions.length > 0,
 		};
 	}
 
 	function restoreSession(sessionId: string) {
 		haptics.tap();
 		setRestoringId(sessionId);
-		void restore(sessionId)
+		void (localSource ? restoreOn(localSource, sessionId) : Promise.reject(new Error("Pair your desktop to restore this session.")))
 			.then(() => {
 				haptics.success();
-				router.navigate(`/session/${sessionId}`);
+				if (localSource) router.navigate({ pathname: "/session/[id]", params: { id: sessionId, source: localSource.kind, sourceId: localSource.id } });
 			})
 			.catch((cause) => Alert.alert("Couldn't restore the session", userFacingError(cause)))
 			.finally(() => setRestoringId(undefined));

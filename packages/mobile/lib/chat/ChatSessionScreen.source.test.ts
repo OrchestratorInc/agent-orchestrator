@@ -57,6 +57,7 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain("const sessionSource = sourceFor(source)");
 		expect(screenSource).toContain("source: source.kind, sourceId: source.id");
 		expect(screenSource).toContain("killOn(source, session.id)");
+		expect(screenSource).not.toContain('params: { id: session.id, view: "terminal" }');
 	});
 
 	it("shows a failed start's reason instead of only a stopped-agent banner", () => {
