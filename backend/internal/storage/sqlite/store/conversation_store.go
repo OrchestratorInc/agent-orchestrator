@@ -390,19 +390,8 @@ func (s *Store) CreateAndActivateConversationBranch(
 	defer s.writeMu.Unlock()
 
 	return s.inTx(ctx, "create and activate conversation branch", func(q *gen.Queries) error {
-		if err := insertConversationBranchTx(ctx, q, branch, now); err != nil {
+		if err := insertAndActivateConversationBranchTx(ctx, q, branch, now); err != nil {
 			return err
-		}
-		conversationRows, err := q.ActivateConversationBranch(ctx, gen.ActivateConversationBranchParams{
-			ActiveBranchID: branch.ID,
-			UpdatedAt:      now,
-			ID:             branch.ConversationID,
-		})
-		if err != nil {
-			return fmt.Errorf("move conversation head: %w", err)
-		}
-		if conversationRows != 1 {
-			return fmt.Errorf("move conversation head: conversation %s not found", branch.ConversationID)
 		}
 		sessionRows, err := q.ActivateConversationBranchSession(ctx, gen.ActivateConversationBranchSessionParams{
 			ProviderConversationID: branch.ProviderConversationID,
@@ -434,19 +423,8 @@ func (s *Store) CreateAndActivateReviewConversationBranch(
 	defer s.writeMu.Unlock()
 
 	return s.inTx(ctx, "create and activate reviewer conversation branch", func(q *gen.Queries) error {
-		if err := insertConversationBranchTx(ctx, q, branch, now); err != nil {
+		if err := insertAndActivateConversationBranchTx(ctx, q, branch, now); err != nil {
 			return err
-		}
-		conversationRows, err := q.ActivateConversationBranch(ctx, gen.ActivateConversationBranchParams{
-			ActiveBranchID: branch.ID,
-			UpdatedAt:      now,
-			ID:             branch.ConversationID,
-		})
-		if err != nil {
-			return fmt.Errorf("move conversation head: %w", err)
-		}
-		if conversationRows != 1 {
-			return fmt.Errorf("move conversation head: conversation %s not found", branch.ConversationID)
 		}
 		reviewRows, err := q.ClaimReviewChatController(ctx, gen.ClaimReviewChatControllerParams{
 			ProviderConversationID: branch.ProviderConversationID,
@@ -462,6 +440,24 @@ func (s *Store) CreateAndActivateReviewConversationBranch(
 		}
 		return nil
 	})
+}
+
+func insertAndActivateConversationBranchTx(ctx context.Context, q *gen.Queries, branch domain.ConversationBranch, now time.Time) error {
+	if err := insertConversationBranchTx(ctx, q, branch, now); err != nil {
+		return err
+	}
+	rows, err := q.ActivateConversationBranch(ctx, gen.ActivateConversationBranchParams{
+		ActiveBranchID: branch.ID,
+		UpdatedAt:      now,
+		ID:             branch.ConversationID,
+	})
+	if err != nil {
+		return fmt.Errorf("move conversation head: %w", err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("move conversation head: conversation %s not found", branch.ConversationID)
+	}
+	return nil
 }
 
 // CommitChatSpawn publishes a reserved fresh-provider boundary and the complete
@@ -2553,9 +2549,33 @@ func (s *Store) ProjectProviderEvent(
 	now time.Time,
 	project func(context.Context) error,
 ) (bool, error) {
+	return s.projectProviderEvent(ctx, conversationID, session, "", generation, providerEventID, method, payloadJSON, now, project)
+}
+
+// ProjectReviewProviderEvent uses the review's controller generation. Reviewer
+// Chat shares the worker session but never owns its Chat controller fence.
+func (s *Store) ProjectReviewProviderEvent(
+	ctx context.Context,
+	conversationID string,
+	session domain.SessionID,
+	reviewID, generation, providerEventID, method, payloadJSON string,
+	now time.Time,
+	project func(context.Context) error,
+) (bool, error) {
+	return s.projectProviderEvent(ctx, conversationID, session, reviewID, generation, providerEventID, method, payloadJSON, now, project)
+}
+
+func (s *Store) projectProviderEvent(
+	ctx context.Context,
+	conversationID string,
+	session domain.SessionID,
+	reviewID, generation, providerEventID, method, payloadJSON string,
+	now time.Time,
+	project func(context.Context) error,
+) (bool, error) {
 	if q, ok := ctx.Value(conversationProjectionTxKey{}).(*gen.Queries); ok && q != nil {
 		return projectProviderEventTx(
-			ctx, q, conversationID, session, generation,
+			ctx, q, conversationID, session, reviewID, generation,
 			providerEventID, method, payloadJSON, now, project,
 		)
 	}
@@ -2569,7 +2589,7 @@ func (s *Store) ProjectProviderEvent(
 	defer func() { _ = tx.Rollback() }()
 	q := s.qw.WithTx(tx)
 	projected, err := projectProviderEventTx(
-		ctx, q, conversationID, session, generation,
+		ctx, q, conversationID, session, reviewID, generation,
 		providerEventID, method, payloadJSON, now, project,
 	)
 	if err != nil {
@@ -2586,16 +2606,26 @@ func projectProviderEventTx(
 	q *gen.Queries,
 	conversationID string,
 	session domain.SessionID,
-	generation, providerEventID, method, payloadJSON string,
+	reviewID, generation, providerEventID, method, payloadJSON string,
 	now time.Time,
 	project func(context.Context) error,
 ) (bool, error) {
-	owner, err := q.GetSession(ctx, session)
-	if err != nil {
-		return false, fmt.Errorf("read controller generation for %s: %w", session, err)
-	}
-	if owner.ControllerGeneration != generation {
-		return false, nil
+	if reviewID != "" {
+		owner, err := q.GetReviewByID(ctx, reviewID)
+		if err != nil {
+			return false, fmt.Errorf("read reviewer controller generation for %s: %w", reviewID, err)
+		}
+		if owner.ControllerGeneration != generation || owner.InterfaceMode != "chat" || owner.SessionID != session {
+			return false, nil
+		}
+	} else {
+		owner, err := q.GetSession(ctx, session)
+		if err != nil {
+			return false, fmt.Errorf("read controller generation for %s: %w", session, err)
+		}
+		if owner.ControllerGeneration != generation {
+			return false, nil
+		}
 	}
 	inserted, err := q.InsertConversationProviderEvent(ctx, gen.InsertConversationProviderEventParams{
 		ConversationID:  conversationID,

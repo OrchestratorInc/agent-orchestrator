@@ -349,13 +349,19 @@ func (r singleReviewerResolver) Reviewer(domain.ReviewerHarness) (ports.Reviewer
 	return r.reviewer, true
 }
 
-type sqliteReviewChatController struct{ store *sqlite.Store }
+type sqliteReviewChatController struct {
+	store   *sqlite.Store
+	started *ReviewerChatStart
+}
 
 func (c sqliteReviewChatController) SupportsReviewChat(domain.AgentHarness) bool { return true }
 func (c sqliteReviewChatController) PreflightReviewChat(context.Context, domain.AgentHarness) error {
 	return nil
 }
 func (c sqliteReviewChatController) StartReviewChat(ctx context.Context, cfg ReviewerChatStart) (string, error) {
+	if c.started != nil {
+		*c.started = cfg
+	}
 	_, err := c.store.CreateReviewConversation(ctx, "review-conversation", cfg.ReviewID, cfg.ProjectID, cfg.WorkerID, time.Now().UTC())
 	return "provider-conversation", err
 }
@@ -587,12 +593,16 @@ func TestTriggerPersistsChatModeBeforeCreatingReviewerConversation(t *testing.T)
 	store := newSQLiteReviewStore(t)
 	worker := liveWorker()
 	seedReviewWorker(t, store, worker)
-	chat := sqliteReviewChatController{store: store}
+	var started ReviewerChatStart
+	chat := sqliteReviewChatController{store: store, started: &started}
 	launcher := NewLauncher(singleReviewerResolver{reviewer: chatReviewAdapter{}}, &fakeRuntime{}, t.TempDir(), WithReviewerChat(chat))
 	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
-	if _, err := eng.Trigger(ctx, worker.ID, domain.ReviewerCodex, domain.AgentConfig{}); err != nil {
+	if _, err := eng.Trigger(ctx, worker.ID, domain.ReviewerCodex, domain.AgentConfig{Model: "gpt-6-sol", Effort: "high"}); err != nil {
 		t.Fatalf("Trigger: %v", err)
+	}
+	if started.Model != "gpt-6-sol" || started.Effort != "high" {
+		t.Fatalf("reviewer Chat config: model=%q effort=%q", started.Model, started.Effort)
 	}
 	review, ok, err := store.GetReviewBySessionAndHarness(ctx, worker.ID, domain.ReviewerCodex)
 	if err != nil || !ok {
