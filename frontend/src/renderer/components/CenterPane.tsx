@@ -26,7 +26,7 @@ import {
 import { useObservedAgentSwitchLifecycle } from "../hooks/useObservedAgentSwitchLifecycle";
 import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } from "../hooks/useAgentSwitchVisibility";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
-import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { remoteWorkspaceQueryKey, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { MAX_SESSION_DISPLAY_NAME_LEN, useSessionRename } from "../hooks/useSessionRename";
 import { useSwitchAgentState } from "../hooks/useSwitchAgent";
 import { useTruncatedText } from "../hooks/useTruncatedText";
@@ -55,11 +55,16 @@ import { AgentSwitchProgressTrack } from "./AgentSwitchProgressTrack";
 import { ShellTerminalTab } from "./ShellTerminalTab";
 import { TerminalTabFrame } from "./TerminalTabFrame";
 import { TerminalPane } from "./TerminalPane";
+import { RemoteTerminalView } from "./RemoteTerminalView";
+import { baseUrlForHost, subscribeConnectedHosts } from "../lib/host-clients";
+import { sessionUiKey } from "../lib/hosts";
+import { useSyncExternalStore } from "react";
 import { SessionTopbarPortal } from "./SessionTopbarPortal";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "./ui/context-menu";
 
 type CenterPaneProps = {
 	session?: WorkspaceSession;
+	hostId?: string;
 	terminalGeneration?: string;
 	theme: Theme;
 	daemonReady: boolean;
@@ -142,6 +147,7 @@ function DraggableWorkspaceTab({ children, value }: { children: ReactNode; value
 
 export function CenterPane({
 	session,
+	hostId,
 	terminalGeneration,
 	theme,
 	daemonReady,
@@ -181,9 +187,10 @@ export function CenterPane({
 	const [tabOrderBySession, setTabOrderBySession] = useState<Record<string, string[]>>({});
 	const queryClient = useQueryClient();
 	const refreshWorkspaces = useCallback(
-		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
-		[queryClient],
+		() => queryClient.invalidateQueries({ queryKey: hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey }),
+		[hostId, queryClient],
 	);
+	const remoteBase = useSyncExternalStore(subscribeConnectedHosts, () => hostId ? baseUrlForHost(hostId) : undefined);
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const sessionId = session?.id;
 	const auxiliaryTabs = useMemo<AuxiliaryTab[]>(
@@ -225,9 +232,9 @@ export function CenterPane({
 		showRightFade,
 	} = useTabScrollEdges([tabOverflowWatch]);
 	const previousTabCountRef = useRef(availableAuxiliaryKeys.length);
-	const agentSwitchesQuery = useAgentSwitches(session?.id ?? "", !session?.cloud);
+	const agentSwitchesQuery = useAgentSwitches(session?.id ?? "", hostId ?? !session?.cloud);
 	const agentSwitches = agentSwitchesQuery.data ?? [];
-	const switchMutation = useSwitchAgentState(session?.id ?? "");
+	const switchMutation = useSwitchAgentState(session?.id ?? "", hostId);
 	const mountedSessionIdRef = useRef(session?.id);
 	const sourceFocusSwitchIdRef = useRef<string | undefined>(undefined);
 	const announcedAlertKeysRef = useRef(new Set<string>());
@@ -285,7 +292,7 @@ export function CenterPane({
 		admissionAgentSwitch ??
 		latestCompletedSwitch ??
 		observedTerminalSwitch;
-	useAgentSwitchRouteVisibility(`session/${session?.id ?? "unavailable"}`, agentSwitch && agentSwitch.state !== "completed" && agentSwitch.state !== "failed" ? "active" : "history", undefined, false);
+	useAgentSwitchRouteVisibility(`session/${sessionUiKey(session?.id ?? "unavailable", hostId)}`, agentSwitch && agentSwitch.state !== "completed" && agentSwitch.state !== "failed" ? "active" : "history", undefined, false);
 	const presentation =
 		agentSwitch && session
 			? deriveAgentSwitchPresentation({
@@ -329,7 +336,7 @@ export function CenterPane({
 	const shownAgentSwitch = agentSwitch ?? displayedSuccessNotice?.agentSwitch;
 	const visibilityPresentationKind = agentSwitchVisibilityPresentationKind(shownPresentation);
 	useAgentSwitchPresentationVisibility({
-		localRouteKey: `session/${session?.id ?? "unavailable"}`,
+		localRouteKey: `session/${sessionUiKey(session?.id ?? "unavailable", hostId)}`,
 		agentSwitch: shownAgentSwitch,
 		presentationKind: visibilityPresentationKind,
 		visible: Boolean(shownPresentation && shownAgentSwitch && !workspaceFileActive && !handoffDialogOpen),
@@ -742,7 +749,17 @@ export function CenterPane({
 						data-testid="terminal-interaction-surface"
 						inert={workerInputDisabled ? true : undefined}
 					>
-						<TerminalPane
+						{hostId ? remoteBase ? <RemoteTerminalView
+							hostId={hostId}
+							proxyBase={remoteBase}
+							terminalHandleId={target.kind === "shell" || target.kind === "reviewer" ? target.handleId : session?.terminalHandleId}
+							terminalGeneration={session?.terminalGeneration}
+							fontSize={fontSize}
+							onChangeFontSize={updateFontSize}
+							isFullscreen={isFullscreen}
+							onToggleFullscreen={toggleFullscreen}
+							inputDisabled={workerInputDisabled}
+						/> : null : <TerminalPane
 							daemonReady={daemonReady}
 							fontSize={fontSize}
 						// A terminal you can type into should already hold the caret when you
@@ -761,7 +778,7 @@ export function CenterPane({
 							terminalGeneration={terminalGeneration}
 							terminalTarget={target}
 							theme={theme}
-						/>
+						/>}
 					</div>
 				)}
 				{handoffDialogOpen ? null : shownPresentation && shownAgentSwitch && target.kind === "worker" ? (

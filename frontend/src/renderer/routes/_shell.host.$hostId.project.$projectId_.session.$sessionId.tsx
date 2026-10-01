@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { RemoteSessionRoute } from "../components/RemoteSessionView";
+import { SessionView } from "../components/SessionView";
 import { refKey } from "../lib/hosts";
 
 export const Route = createFileRoute("/_shell/host/$hostId/project/$projectId_/session/$sessionId")({
@@ -7,6 +7,6 @@ export const Route = createFileRoute("/_shell/host/$hostId/project/$projectId_/s
 });
 
 function HostProjectSessionRoute() {
-	const { hostId, sessionId } = Route.useParams();
-	return <RemoteSessionRoute key={refKey({ host: hostId, id: sessionId })} hostId={hostId} sessionId={sessionId} />;
+	const { hostId, projectId, sessionId } = Route.useParams();
+	return <SessionView key={refKey({ host: hostId, id: sessionId })} hostId={hostId} projectId={projectId} sessionId={sessionId} />;
 }

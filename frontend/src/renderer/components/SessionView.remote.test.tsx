@@ -22,9 +22,12 @@ vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	...await importOriginal<typeof import("@tanstack/react-router")>(),
 	useNavigate: () => vi.fn(),
+	useBlocker: () => undefined,
 }));
 vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ ready: false, baseUrl: "", client: {} }) }));
 vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: undefined, ready: false }) }));
+vi.mock("../lib/shell-context", () => ({ useShell: () => ({ daemonStatus: { state: "ready" } }) }));
+vi.mock("./ShellTopbar", () => ({ ShellTopbar: () => <div data-testid="shared-shell-topbar" /> }));
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button aria-label="Notifications" type="button" /> }));
 vi.mock("./RemoteTerminalView", () => ({ RemoteTerminalView: ({ hostId, proxyBase, terminalHandleId, inputDisabled }: { hostId: string; proxyBase: string; terminalHandleId?: string; inputDisabled?: boolean }) => <div data-testid="remote-terminal-base" data-host-id={hostId} data-terminal-handle={terminalHandleId ?? ""} data-input-disabled={inputDisabled ? "true" : "false"}>{proxyBase}</div> }));
 
@@ -34,13 +37,13 @@ import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { shellTerminalsQueryKey, shellTerminalsQueryKeyForHost } from "../hooks/useShellTerminals";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
-import { RemoteSessionView } from "./RemoteSessionView";
+import { SessionView } from "./SessionView";
 import { SessionTopbarProvider } from "./SessionTopbarPortal";
 import { TooltipProvider } from "./ui/tooltip";
 
 function renderRemoteSession(queryClient: QueryClient, hostId = "box-a") {
 	return render(<QueryClientProvider client={queryClient}>
-		<TooltipProvider><SessionTopbarProvider><RemoteSessionView hostId={hostId} sessionId="session-1" /></SessionTopbarProvider></TooltipProvider>
+		<TooltipProvider><SessionTopbarProvider><SessionView hostId={hostId} sessionId="session-1" /></SessionTopbarProvider></TooltipProvider>
 	</QueryClientProvider>);
 }
 
@@ -148,7 +151,7 @@ it("hides stale chat controls when the upstream daemon fails but its proxy remai
 	upstreamFailed = true;
 	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
 	expect(queryClient.getQueryData(remoteWorkspaceQueryKey("box-a"))).toBeDefined();
-	expect(screen.getByTestId("remote-session-view")).toBeInTheDocument();
+	expect(screen.queryByTestId("session-detail")).not.toBeInTheDocument();
 	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
 	expect(screen.queryByRole("combobox", { name: "Message the agent" })).not.toBeInTheDocument();
 	expect(screen.queryByRole("complementary", { name: "Session inspector" })).not.toBeInTheDocument();
@@ -718,10 +721,10 @@ it("opens a TUI reviewer terminal through Box B's mux handle", async () => {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	renderRemoteSession(queryClient, "box-b");
 	await userEvent.click(await screen.findByRole("tab", { name: "Reviewer" }));
-	expect(screen.getByTestId("remote-reviewer-panel")).toContainElement(screen.getAllByTestId("remote-terminal-base").find((node) => node.getAttribute("data-terminal-handle") === "reviewer-handle") ?? null);
-	expect(screen.getByTestId("remote-reviewer-panel")).toHaveTextContent("http://127.0.0.1:4001");
+	expect(screen.getByTestId("remote-terminal-base")).toHaveAttribute("data-terminal-handle", "reviewer-handle");
+	expect(screen.getByTestId("remote-terminal-base")).toHaveTextContent("http://127.0.0.1:4001");
 	await userEvent.click(screen.getByRole("tab", { name: /session-1/ }));
-	expect(screen.queryByTestId("remote-reviewer-panel")).not.toBeInTheDocument();
+	expect(screen.getByTestId("remote-terminal-base")).toHaveAttribute("data-terminal-handle", "worker-handle");
 });
 
 it("opens a shell tab on Box B without attaching a local or Box A terminal", async () => {

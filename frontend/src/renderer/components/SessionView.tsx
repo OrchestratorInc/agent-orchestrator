@@ -9,6 +9,7 @@ import {
 	useMemo,
 	useRef,
 	useState,
+	useSyncExternalStore,
 	type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
@@ -55,6 +56,7 @@ import {
 	useCloudSessionQuery,
 	useWorkspaceQuery,
 	useWorkspaceSession,
+	remoteWorkspaceQueryKey,
 	workspaceQueryKey,
 } from "../hooks/useWorkspaceQuery";
 import { cloudLifecycleStage } from "../lib/cloud-lifecycle";
@@ -63,7 +65,9 @@ import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
 import { clearSwitchAgentState } from "../hooks/useSwitchAgent";
-import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
+import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
+import { baseUrlForHost, clientForSessionHost, labelForHost, subscribeConnectedHosts } from "../lib/host-clients";
+import { sessionUiKey } from "../lib/hosts";
 import { sessionWorkspaceFilesQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { matchWorkspaceFilePath } from "../lib/workspace-file-path";
 import { aoBridge } from "../lib/bridge";
@@ -145,6 +149,7 @@ type SessionViewProps = {
 	sessionId: string;
 	cloudOrgId?: string;
 	projectId?: string;
+	hostId?: string;
 };
 
 // The session detail screen: terminal + git rail. On Win/Linux the shell owns
@@ -329,15 +334,19 @@ function CloudPausedStatus() {
 	);
 }
 
-export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewProps) {
+export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: SessionViewProps) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
+	const uiSessionId = sessionUiKey(sessionId, hostId);
+	const remoteBase = useSyncExternalStore(subscribeConnectedHosts, () => hostId ? baseUrlForHost(hostId) : undefined);
+	const hostLabel = useSyncExternalStore(subscribeConnectedHosts, () => hostId ? labelForHost(hostId) : undefined);
 	const refreshWorkspaces = useCallback(
-		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
-		[queryClient],
+		() => queryClient.invalidateQueries({ queryKey: hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey }),
+		[hostId, queryClient],
 	);
-	const workspaceQuery = useWorkspaceQuery();
-	const workspaces = workspaceQuery.data ?? [];
+	const workspaceQuery = useWorkspaceQuery({ enabled: !hostId });
+	const remoteSessionQuery = useWorkspaceSession(sessionId, hostId, false);
+	const workspaces = hostId ? [] : workspaceQuery.data ?? [];
 	const routedWorkspaces = projectId ? workspaces.filter((workspace) => workspace.id === projectId) : [];
 	const listedMatches = (projectId ? routedWorkspaces : workspaces.filter((workspace) => workspace.kind !== "cloud"))
 		.flatMap((workspace) => workspace.sessions.filter((candidate) => candidate.id === sessionId));
@@ -361,7 +370,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 		Boolean(routedWorkspace) || cloudRouteSession.isError ||
 		Boolean(projectId && cloudRouteSession.data && cloudRouteSession.data.projectId !== projectId)
 	);
-	const workspaceSessionQuery = useWorkspaceSession(sessionId, undefined, localLookupEnabled);
+	const workspaceSessionQuery = useWorkspaceSession(sessionId, undefined, !hostId && localLookupEnabled);
 	const directCloudWorkspace = cloudRouteSession.data
 		? workspaces.find((workspace) => workspace.kind === "cloud" && workspace.id === cloudRouteSession.data?.projectId)
 		: undefined;
@@ -377,17 +386,22 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 		? workspaceSessionQuery.data : undefined;
 	const scopedFallback = routedWorkspace && fallbackSession && Boolean(fallbackSession.cloud) !== isCloudRoute
 		? undefined : fallbackSession;
-	const session = ambiguousRoute
-		? undefined : listedSession ?? directCloudSession ?? scopedFallback;
-	const interfaceContext = session ? session.cloud ?? null : cloudOrgId && projectId ? { orgId: cloudOrgId } : null;
+	const session = hostId ? (remoteBase && !remoteSessionQuery.isError && remoteSessionQuery.data?.workspaceId === (projectId ?? remoteSessionQuery.data?.workspaceId) ? remoteSessionQuery.data : undefined)
+		: ambiguousRoute ? undefined : listedSession ?? directCloudSession ?? scopedFallback;
+	const interfaceContext = hostId ?? (session ? session.cloud ?? undefined : cloudOrgId && projectId ? { orgId: cloudOrgId } : undefined);
 	const interfaceUi = useSessionInterfaceSwitch(sessionId, session, interfaceContext);
 	const { draftBoundaries: chatDraftBoundaries, confirmUnsafeDraftLeave } = interfaceUi;
+	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
+	const setRemoteHosts = useUiStore((state) => state.setRemoteHosts);
 	useBlocker({
 		disabled: chatDraftBoundaries.length === 0,
 		enableBeforeUnload: chatDraftBoundaries.length > 0,
 		shouldBlockFn: async () => {
 			const decision = await confirmUnsafeDraftLeave();
-			if (decision.kind === "cancelled") return true;
+			if (decision.kind === "cancelled") {
+				if (hostId && !remoteHostsEnabled) setRemoteHosts(true);
+				return true;
+			}
 			if (decision.kind === "confirmed") {
 				// Route navigation is the boundary itself, so confirmed in-flight file
 				// work can be invalidated now. Interface switches defer this until the
@@ -407,9 +421,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	const { client: cloudCpClient } = useCloudCp();
 	const theme = useResolvedTheme();
 	const browserOnly = Boolean(session && isOrchestratorSession(session));
-	const isInspectorOpen = useUiStore((state) => inspectorIsOpen(state.inspectorSessions, sessionId));
-	const inspectorView = useUiStore((state) => browserOnly ? "browser" : state.inspectorSessions[sessionId]?.view ?? "summary");
-	const browserUnseen = useUiStore((state) => Boolean(state.inspectorSessions[sessionId]?.browserUnseen));
+	const isInspectorOpen = useUiStore((state) => inspectorIsOpen(state.inspectorSessions, uiSessionId));
+	const inspectorView = useUiStore((state) => browserOnly ? "browser" : state.inspectorSessions[uiSessionId]?.view ?? "summary");
+	const browserUnseen = useUiStore((state) => Boolean(state.inspectorSessions[uiSessionId]?.browserUnseen));
 	const setInspectorOpenForSession = useUiStore((state) => state.setInspectorOpen);
 	const toggleInspector = useUiStore((state) => state.toggleInspector);
 	const setInspectorViewForSession = useUiStore((state) => state.setInspectorView);
@@ -604,18 +618,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 		session.activeAgentSwitch.state !== "failed"
 			? "active"
 			: "history";
-	useAgentSwitchRouteVisibility(`session/${sessionId}`, routeVisibilityOperation);
+	useAgentSwitchRouteVisibility(`session/${uiSessionId}`, routeVisibilityOperation);
 	const reviewerQuery = useQuery({
-		queryKey: ["session-reviews", sessionId],
+		queryKey: hostId ? ["session-reviews", hostId, sessionId] : ["session-reviews", sessionId],
 		enabled: Boolean(
-			window.ao && session && !session.cloud && sessionIsActive(session) && !isOrchestratorSession(session) && session.prs.length > 0,
+			(hostId ? remoteBase : window.ao) && session && !session.cloud && sessionIsActive(session) && !isOrchestratorSession(session) && session.prs.length > 0,
 		),
 		refetchInterval: (query) => {
 			const data = query.state.data as ReviewsResponse | undefined;
 			return data?.reviews?.some((review) => review.status === "running") ? 2500 : false;
 		},
 		queryFn: async () => {
-			const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/reviews", {
+			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/reviews", {
 				params: { path: { sessionId } },
 			});
 			if (error) throw new Error(apiErrorMessage(error, "Unable to load reviews"));
@@ -635,7 +649,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 
 	// Shell terminals opened inside a session live beside its pane as extra tabs,
 	// scoped to the session on screen so each session has its own shell set.
-	const allShellTerminals = useShellTerminals().data ?? [];
+	const allShellTerminals = useShellTerminals(hostId).data ?? [];
 	const shellTerminals = useMemo(
 		() => allShellTerminals.filter((shell) => shell.sessionId === sessionId),
 		[allShellTerminals, sessionId],
@@ -666,9 +680,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 			return { ...current, [sessionId]: [...currentOrder, ...newKeys] };
 		});
 	}, [resolvedAuxiliaryTabOrder, sessionId]);
-	const openShellTerminal = useOpenShellTerminal();
-	const closeShellTerminal = useCloseShellTerminal();
-	const renameShellTerminal = useRenameShellTerminal();
+	const openShellTerminal = useOpenShellTerminal(hostId);
+	const closeShellTerminal = useCloseShellTerminal(hostId);
+	const renameShellTerminal = useRenameShellTerminal(hostId);
 	const activeShellTerminalHandleId = useUiStore((state) => state.activeShellTerminalHandleId);
 	const setActiveShellTerminal = useUiStore((state) => state.setActiveShellTerminal);
 	const setVisibleTerminalKind = useUiStore((state) => state.setVisibleTerminalKind);
@@ -1005,12 +1019,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 			}
 			const nextSizing = inspectorSizing(next);
 			if (!sizingGeometryEqual(sizing, nextSizing)) prepareWorkspaceProfile(nextSizing);
-			setInspectorViewForSession(sessionId, next);
+			setInspectorViewForSession(uiSessionId, next);
 		},
 		[
 			inspectorView,
 			prepareWorkspaceProfile,
-			sessionId,
+			uiSessionId,
 			setInspectorViewForSession,
 			sizing,
 		],
@@ -1042,7 +1056,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 		if (!orgId) throw new Error(t("files.feedbackError"));
 		await cloudCpClient.sendSessionMessage(orgId, sessionId, { text: message });
 	}, [cloudCpClient, session?.cloud?.orgId, sessionId, t]);
-	const fileAnnotation = useFileAnnotation(sessionId, { sendMessage: session?.cloud ? sendCloudFileAnnotation : undefined });
+	const fileAnnotation = useFileAnnotation(sessionId, { hostId, sendMessage: session?.cloud ? sendCloudFileAnnotation : undefined });
 	const centerFileTabs = useMemo(
 		() =>
 			fileTabs.openPaths.map((path) => ({
@@ -1069,9 +1083,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 			hasInspector &&
 			(browserPoppedOut || (inspectorPanelVisible && inspectorView === "browser")),
 	);
+	useEffect(() => {
+		if (hostId && remoteBase && browserSlotVisible) void remoteSessionQuery.refetch();
+	}, [hostId, remoteBase, browserSlotVisible, remoteSessionQuery.refetch]);
 	const terminated = session ? !sessionIsActive(session) : false;
 	const browserView = useBrowserView({
-		sessionId,
+		sessionId: uiSessionId,
+		origin: hostId ? { hostId, sessionId, proxyBase: remoteBase ?? "" } : undefined,
 		active: browserSlotVisible,
 		poppedOut: browserPoppedOut,
 		terminated,
@@ -1080,6 +1098,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	});
 	const browserAnnotationQueue = useBrowserAnnotationQueue({
 		sessionId: session?.id,
+		hostId,
+		sourcePreviewUrl: session?.previewUrl,
 		navUrl: browserView.navState.url,
 	});
 	const browserUrl = browserView.navState.url.trim();
@@ -1101,13 +1121,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	useLayoutEffect(() => {
 		if (!session) return;
 		if (browserOnly) {
-			const current = useUiStore.getState().inspectorSessions[sessionId];
-			if (!current) setInspectorOpenForSession(sessionId, false);
-			if (current?.view !== "browser") setInspectorViewForSession(sessionId, "browser");
+			const current = useUiStore.getState().inspectorSessions[uiSessionId];
+			if (!current) setInspectorOpenForSession(uiSessionId, false);
+			if (current?.view !== "browser") setInspectorViewForSession(uiSessionId, "browser");
 			return;
 		}
-		initializeInspectorSession(sessionId, hasBrowserContent, hasInspector);
-	}, [browserOnly, hasBrowserContent, hasInspector, session, sessionId, initializeInspectorSession, setInspectorOpenForSession, setInspectorViewForSession]);
+		initializeInspectorSession(uiSessionId, hasBrowserContent, hasInspector);
+	}, [browserOnly, hasBrowserContent, hasInspector, session, uiSessionId, initializeInspectorSession, setInspectorOpenForSession, setInspectorViewForSession]);
 
 	useLayoutEffect(() => {
 		setTerminalTarget({ kind: "worker" });
@@ -1140,10 +1160,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 		(nextOpen: boolean) => {
 			setHandoffDialogOpen(nextOpen);
 			if (!nextOpen && handoffSwitchError && session) {
-				clearSwitchAgentState(queryClient, session.id);
+				clearSwitchAgentState(queryClient, session.id, hostId);
 			}
 		},
-		[handoffSwitchError, queryClient, session],
+		[handoffSwitchError, hostId, queryClient, session],
 	);
 	useEffect(() => {
 		if (handoffSwitchError) setHandoffDialogOpen(true);
@@ -1172,6 +1192,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 			className="session-topbar-session-chrome flex shrink-0 items-center"
 			data-compact-session-chrome="false"
 		>
+			{hostId ? <span className="max-w-40 truncate px-3 text-xs text-muted-foreground" title={hostId}>{hostLabel ?? hostId}</span> : null}
 			<ShellTopbar embedded />
 		</div>
 	);
@@ -1188,24 +1209,24 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	// Publish which one is showing: the notification runtime lives outside this
 	// subtree and must not treat "on the session route" as "watching the agent".
 	useEffect(() => {
-		setVisibleTerminalKind(sessionId, reviewerChatId ? "reviewer" : routedTerminalTarget.kind);
-		return () => clearVisibleTerminalKind(sessionId);
-	}, [clearVisibleTerminalKind, reviewerChatId, routedTerminalTarget.kind, sessionId, setVisibleTerminalKind]);
+		setVisibleTerminalKind(uiSessionId, reviewerChatId ? "reviewer" : routedTerminalTarget.kind);
+		return () => clearVisibleTerminalKind(uiSessionId);
+	}, [clearVisibleTerminalKind, reviewerChatId, routedTerminalTarget.kind, uiSessionId, setVisibleTerminalKind]);
 
 	const prepareFilesInspector = useCallback(() => {
 		if (browserOnly) return;
 		setBrowserPopOutState({ sessionId, phase: "docked" });
 		setFilesPoppedOut(false);
-		setFilesChangedOnly(sessionId, true);
+		setFilesChangedOnly(uiSessionId, true);
 		transitionInspectorView("files");
-		setInspectorOpenForSession(sessionId, true);
-	}, [browserOnly, sessionId, setFilesChangedOnly, setInspectorOpenForSession, transitionInspectorView]);
+		setInspectorOpenForSession(uiSessionId, true);
+	}, [browserOnly, sessionId, uiSessionId, setFilesChangedOnly, setInspectorOpenForSession, transitionInspectorView]);
 
 	const fetchWorkspaceFiles = useCallback(async () => {
 		return queryClient.fetchQuery(
-			sessionWorkspaceFilesQueryOptions(sessionId, t("files.error.loadWorkspace")),
+			sessionWorkspaceFilesQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId),
 		);
-	}, [queryClient, sessionId, t]);
+	}, [hostId, queryClient, sessionId, t]);
 
 	const revealResolvedWorkspaceFile = useCallback(
 		async (rawPath: string) => {
@@ -1249,9 +1270,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 			if (next) setBrowserPopOutState({ sessionId, phase: "docked" });
 			setFilesPoppedOut(next);
 			transitionInspectorView("files");
-			setInspectorOpenForSession(sessionId, true);
+			setInspectorOpenForSession(uiSessionId, true);
 		},
-		[sessionId, setInspectorOpenForSession, transitionInspectorView],
+		[sessionId, uiSessionId, setInspectorOpenForSession, transitionInspectorView],
 	);
 
 	const handleToggleBrowserPopOut = useCallback(
@@ -1271,24 +1292,24 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 
 	useEffect(() => {
 		if (!hasInspector) return;
-		const current = useUiStore.getState().inspectorSessions[sessionId];
+		const current = useUiStore.getState().inspectorSessions[uiSessionId];
 		if (browserOnly) {
-			if (terminated && current?.browserUnseen) setBrowserUnseen(sessionId, false);
+			if (terminated && current?.browserUnseen) setBrowserUnseen(uiSessionId, false);
 			return;
 		}
 		if (!hasBrowserContent) {
-			if (current?.browserContentRevealed) setBrowserContentRevealed(sessionId, false);
-			else if (current?.browserUnseen) setBrowserUnseen(sessionId, false);
+			if (current?.browserContentRevealed) setBrowserContentRevealed(uiSessionId, false);
+			else if (current?.browserUnseen) setBrowserUnseen(uiSessionId, false);
 			return;
 		}
 		if (current?.browserContentRevealed) return;
-		setBrowserContentRevealed(sessionId, true);
+		setBrowserContentRevealed(uiSessionId, true);
 	}, [
 		hasBrowserContent,
 		browserOnly,
 		hasInspector,
 		previewRevision,
-		sessionId,
+		uiSessionId,
 		setBrowserContentRevealed,
 		setBrowserUnseen,
 		terminated,
@@ -1305,12 +1326,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 		if (baseline.key === previewKey) return;
 		previewBaselineRef.current = { sessionId, key: previewKey };
 		if (!previewKey) return;
-		if (browserOnly && !terminated && !useUiStore.getState().inspectorSessions[sessionId]?.browserContentRevealed) {
-			setInspectorOpenForSession(sessionId, true);
+		if (browserOnly && !terminated && !useUiStore.getState().inspectorSessions[uiSessionId]?.browserContentRevealed) {
+			setInspectorOpenForSession(uiSessionId, true);
 		}
-		setBrowserContentRevealed(sessionId, true);
-		if (browserIsVisible(sessionId, browserPoppedOut)) {
-			setBrowserUnseen(sessionId, false);
+		setBrowserContentRevealed(uiSessionId, true);
+		if (browserIsVisible(uiSessionId, browserPoppedOut)) {
+			setBrowserUnseen(uiSessionId, false);
 			return;
 		}
 		// Workers and already-revealed orchestrators badge new browser work.
@@ -1320,13 +1341,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 		// chat). Match the agent-activity effect below: badge it as unseen and
 		// let the user open Browser themselves when they're ready, instead of
 		// grabbing focus out from under them.
-		setBrowserUnseen(sessionId, true);
+		setBrowserUnseen(uiSessionId, true);
 	}, [
 		browserPoppedOut,
 		hasInspector,
 		previewRevision,
 		previewUrl,
 		sessionId,
+		uiSessionId,
 		setBrowserContentRevealed,
 		setBrowserUnseen,
 		browserOnly,
@@ -1341,19 +1363,19 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	// on hasBrowserContent/browserContentRevealed missed exactly that case.
 	useEffect(() => {
 		if (!hasInspector || terminated || !browserView.agentBrowserActive) return;
-		if (browserOnly && !useUiStore.getState().inspectorSessions[sessionId]?.browserContentRevealed) {
-			setBrowserContentRevealed(sessionId, true);
-			setInspectorOpenForSession(sessionId, true);
+		if (browserOnly && !useUiStore.getState().inspectorSessions[uiSessionId]?.browserContentRevealed) {
+			setBrowserContentRevealed(uiSessionId, true);
+			setInspectorOpenForSession(uiSessionId, true);
 			return;
 		}
-		if (!browserIsVisible(sessionId, browserPoppedOut)) setBrowserUnseen(sessionId, true);
+		if (!browserIsVisible(uiSessionId, browserPoppedOut)) setBrowserUnseen(uiSessionId, true);
 	}, [
 		browserPoppedOut,
 		browserView.agentBrowserActive,
 		hasInspector,
 		inspectorView,
 		isInspectorOpen,
-		sessionId,
+		uiSessionId,
 		setBrowserUnseen,
 		terminated,
 		browserOnly,
@@ -1364,15 +1386,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	// Opening Browser consumes the pending activity indicator, including the
 	// case where the inspector was collapsed while already parked on Browser.
 	useEffect(() => {
-		if (hasInspector && browserIsVisible(sessionId, browserPoppedOut)) {
-			setBrowserUnseen(sessionId, false);
+		if (hasInspector && browserIsVisible(uiSessionId, browserPoppedOut)) {
+			setBrowserUnseen(uiSessionId, false);
 		}
-	}, [browserPoppedOut, hasInspector, inspectorView, isInspectorOpen, sessionId, setBrowserUnseen]);
+	}, [browserPoppedOut, hasInspector, inspectorView, isInspectorOpen, uiSessionId, setBrowserUnseen]);
 
 	const handleToggleInspector = useCallback(() => {
-		if (browserOnly) setBrowserContentRevealed(sessionId, true);
-		toggleInspector(sessionId);
-	}, [browserOnly, sessionId, toggleInspector, setBrowserContentRevealed]);
+		if (browserOnly) setBrowserContentRevealed(uiSessionId, true);
+		toggleInspector(uiSessionId);
+	}, [browserOnly, uiSessionId, toggleInspector, setBrowserContentRevealed]);
 
 	useEffect(() => {
 		if (!hasInspector) return;
@@ -1430,10 +1452,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	// direct control-plane lookup is in flight; only show "not found" after
 	// both sources have settled.
 	const cloudSessionResolving = cloudLookupEnabled && cloudRouteSession.isLoading;
-	if (!session && !workspaceQuery.isLoading && !cloudSessionResolving) {
+	if (!session && (hostId ? !remoteSessionQuery.isLoading : !workspaceQuery.isLoading && !cloudSessionResolving)) {
+		const remoteCode = hostId && remoteSessionQuery.error ? apiErrorCode(remoteSessionQuery.error) : undefined;
+		const remoteMessage = hostId && remoteSessionQuery.error ? apiErrorMessage(remoteSessionQuery.error) : undefined;
+		const remoteError = hostId ? t(remoteCode === "BAD_PASSWORD" ? "remote.hostUnauthorized"
+			: remoteCode === "HOST_API_INCOMPATIBLE" ? "remote.hostIncompatible"
+			: !remoteBase || remoteCode === "UPSTREAM_UNAVAILABLE" || remoteMessage === "remote daemon unreachable" || remoteMessage === "remote host identity not verified"
+				? "remote.hostOffline" : remoteSessionQuery.isError ? "remote.loadSessionFailed" : "session.notFound") : undefined;
 		return (
-			<div className="grid h-full place-items-center p-6 text-center font-mono text-xs text-passive">
-				{t("session.notFound")}
+			<div className="grid h-full place-items-center p-6 text-center font-mono text-xs text-passive" role={remoteError ? "alert" : undefined}>
+				{remoteError ?? t("session.notFound")}
 			</div>
 		);
 	}
@@ -1496,7 +1524,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 							) : showChatSurface ? (
 								<>
 								<SessionChatSurface
-									key={session.id}
+									key={uiSessionId}
+									assetBaseUrl={remoteBase}
+									hostId={hostId}
 									session={session}
 									reviewerTerminal={reviewerTerminal}
 									reviewerChat={reviewerChat}
@@ -1515,7 +1545,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 									onSelectShellTerminal={selectShellTerminal}
 									onCloseShellTerminal={closeShellTerminalByHandle}
 									onRenameShellTerminal={renameShellTerminalByHandle}
-									daemonReady={daemonStatus.state === "ready"}
+									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
 									theme={theme}
 									headerActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
@@ -1541,14 +1571,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 								/>
 								{reviewerChatId ? (
 									<div className="absolute inset-0">
-										<ReviewerChatSurface hideHeader reviewId={reviewerChatId} />
+										<ReviewerChatSurface hideHeader hostId={hostId} reviewId={reviewerChatId} />
 									</div>
 								) : null}
 								</>
 							) : (
 								<CenterPane
+									hostId={hostId}
 									agentInputDisabled={interfaceUi.agentInputDisabled}
-									daemonReady={daemonStatus.state === "ready"}
+									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
 									onCloseShellTerminal={closeShellTerminalByHandle}
 									onRenameShellTerminal={renameShellTerminalByHandle}
 									onSelectSessionTerminal={selectSessionTerminal}
@@ -1559,7 +1590,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 									reviewerTerminal={reviewerTerminal}
 									reviewerChat={reviewerChat}
 									reviewerChatSelected={Boolean(reviewerChatId)}
-									reviewerChatContent={reviewerChatId ? <ReviewerChatSurface hideHeader reviewId={reviewerChatId} /> : undefined}
+									reviewerChatContent={reviewerChatId ? <ReviewerChatSurface hideHeader hostId={hostId} reviewId={reviewerChatId} /> : undefined}
 									session={session}
 									shellTerminals={shellTerminals}
 									terminalTarget={routedTerminalTarget}
@@ -1594,6 +1625,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 						/>
 									) : (
 										<SessionFileWorkspace
+											hostId={hostId}
 											annotation={fileAnnotation}
 											commitSha={activeCenterFileRequest?.commitSha}
 											initialEditing={activeCenterFileInitialEditing}
@@ -1618,7 +1650,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 						showCollapsedHandle={!browserOnly}
 						isOpen={isInspectorOpen}
 						onCloseAnimationComplete={handleInspectorCloseAnimationComplete}
-						onExpand={() => setInspectorOpenForSession(sessionId, true)}
+						onExpand={() => setInspectorOpenForSession(uiSessionId, true)}
 						restoreMinWidth={
 							sizing.mode === "browser" ? (browserEntryWidthFloorRef.current ?? undefined) : undefined
 						}
@@ -1627,6 +1659,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 						splitRef={sessionSplitRef}
 					>
 						<SessionInspector
+							hostId={hostId}
 							browserOnly={browserOnly}
 							browserAnnotationQueue={inspectorView === "browser" ? browserAnnotationQueue : undefined}
 							browserPoppedOut={browserPoppedOut}
@@ -1636,12 +1669,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 										<CloudWorkspaceDiff annotation={fileAnnotation} onOpenFile={openCenterFile} onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} session={session} split={filesSplit} />
 									) : (
 										<SessionFileExplorer
-										onOpenFile={openCenterFile}
-										onSplitChange={setFilesSplit}
-										onToggleMaximized={handleToggleFilesPopOut}
-										revealRequest={filePreviewRequestsBySession[sessionId] ?? null}
-										sessionId={session.id}
-										split={filesSplit}
+											hostId={hostId}
+											onOpenFile={openCenterFile}
+											onSplitChange={setFilesSplit}
+											onToggleMaximized={handleToggleFilesPopOut}
+											revealRequest={filePreviewRequestsBySession[sessionId] ?? null}
+											sessionId={session.id}
+											split={filesSplit}
 										/>
 									)
 								) : null
@@ -1655,7 +1689,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 							onToggleBrowserPopOut={handleToggleBrowserPopOut}
 							onViewChange={transitionInspectorView}
 							view={inspectorView}
-							browserView={inspectorView === "browser" ? browserView : undefined}
+							browserView={hostId || inspectorView === "browser" ? browserView : undefined}
 							session={session}
 						/>
 					</SessionInspectorRail>
@@ -1728,7 +1762,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 								{session.cloud ? (
 									<CloudWorkspaceDiff annotation={fileAnnotation} isMaximized onOpenFile={openCenterFile} onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} session={session} split={filesSplit} />
 								) : (
-									<SessionFileExplorer isMaximized onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} sessionId={session.id} split={filesSplit} />
+									<SessionFileExplorer hostId={hostId} isMaximized onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} sessionId={session.id} split={filesSplit} />
 								)}
 							</FilesTopbarHostContext.Provider>
 						}</SessionFilesPopOut>,

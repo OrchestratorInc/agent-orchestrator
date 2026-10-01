@@ -429,6 +429,7 @@ function toCloudWorkspace(
 
 type WorkspaceSubscriptionOptions = {
 	subscribed?: boolean;
+	enabled?: boolean;
 };
 
 export function useCloudProjectsQuery(options: WorkspaceSubscriptionOptions = {}) {
@@ -437,7 +438,7 @@ export function useCloudProjectsQuery(options: WorkspaceSubscriptionOptions = {}
 	const orgId = org?.id;
 	return useQuery({
 		queryKey: [...cloudProjectsQueryKey, baseUrl, orgId ?? ""],
-		enabled: ready && orgId !== undefined,
+		enabled: options.enabled !== false && ready && orgId !== undefined,
 		subscribed: options.subscribed,
 		retry: 1,
 		queryFn: async (): Promise<CloudCpProject[]> => {
@@ -456,7 +457,7 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 	const orgId = org?.id;
 	return useQuery({
 		queryKey: [...cloudSessionsQueryKey, baseUrl, orgId ?? ""],
-		enabled: ready && orgId !== undefined,
+		enabled: options.enabled !== false && ready && orgId !== undefined,
 		subscribed: options.subscribed,
 		retry: 1,
 		// A provisioning sandbox changes state without a client action, so poll to
@@ -536,7 +537,7 @@ export function useCloudSessionQuery(
 }
 
 export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
-	const local = useQuery({ ...workspaceQueryOptions, subscribed: options.subscribed });
+	const local = useQuery({ ...workspaceQueryOptions, subscribed: options.subscribed, enabled: options.enabled });
 	const cloud = useCloudProjectsQuery(options);
 	const cloudSessions = useCloudSessionsQuery(options);
 	const { org, ready } = useCloudOrg();
@@ -605,8 +606,8 @@ export function useWorkspaceSession(sessionId: string, hostId?: string, localLoo
 			return toWorkspaceSession(session, project);
 		},
 	});
-	const cloud = useCloudProjectsQuery();
-	const cloudSessions = useCloudSessionsQuery();
+	const cloud = useCloudProjectsQuery({ enabled: !hostId });
+	const cloudSessions = useCloudSessionsQuery({ enabled: !hostId });
 	const { org, ready } = useCloudOrg();
 	const resolvedDirectSession = useMemo(() => {
 		if (!direct.data) return undefined;
@@ -683,14 +684,15 @@ function selectWorkspaceScope(
  * Subscribe shell chrome to just the routed project and session. This avoids
  * redrawing the topbar for streamed activity from every other project.
  */
-export function useWorkspaceScope(projectId?: string, sessionId?: string) {
+export function useWorkspaceScope(projectId?: string, sessionId?: string, hostId?: string) {
 	const selectLocalScope = useMemo(
 		() => (workspaces: WorkspaceSummary[]) => selectWorkspaceScope(workspaces, projectId, sessionId),
 		[projectId, sessionId],
 	);
-	const local = useQuery({ ...workspaceQueryOptions, select: selectLocalScope });
-	const cloud = useCloudProjectsQuery();
-	const cloudSessions = useCloudSessionsQuery();
+	const local = useQuery({ ...workspaceQueryOptions, select: selectLocalScope, enabled: !hostId });
+	const remote = useQuery({ queryKey: remoteWorkspaceQueryKey(hostId ?? ""), queryFn: () => fetchRemoteWorkspaces(hostId ?? ""), select: selectLocalScope, enabled: Boolean(hostId) });
+	const cloud = useCloudProjectsQuery({ enabled: !hostId });
+	const cloudSessions = useCloudSessionsQuery({ enabled: !hostId });
 	const { org, ready } = useCloudOrg();
 	const cloudScope = useMemo(() => {
 		if (!ready || !org?.id || !cloud.data) return undefined;
@@ -702,7 +704,7 @@ export function useWorkspaceScope(projectId?: string, sessionId?: string) {
 	const data = local.data?.project || local.data?.session || !local.isSuccess
 		? local.data
 		: cloudScope ?? local.data;
-	return { ...local, data };
+	return hostId ? remote : { ...local, data };
 }
 
 function selectTraySessions(workspaces: WorkspaceSummary[]): TraySessionEntry[] {

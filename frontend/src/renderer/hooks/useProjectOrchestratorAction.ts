@@ -3,7 +3,7 @@ import { useMutation, useMutationState, useQueryClient } from "@tanstack/react-q
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, type WorkspaceSession } from "../types/workspace";
-import { cloudSessionsQueryKey, workspaceQueryKey, type WorkspaceScope } from "./useWorkspaceQuery";
+import { cloudSessionsQueryKey, remoteWorkspaceQueryKey, workspaceQueryKey, type WorkspaceScope } from "./useWorkspaceQuery";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import {
 	isChatPreflightError,
@@ -15,6 +15,7 @@ import { formatOrchestratorStartupError } from "../lib/orchestrator-startup-erro
 import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
 import { useUiStore } from "../stores/ui-store";
 import { useCanResumeAgent } from "./useCanResumeAgent";
+import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 
 export function useProjectOrchestratorAction({
 	projectId,
@@ -22,39 +23,41 @@ export function useProjectOrchestratorAction({
 	orchestrator,
 	source,
 	sessionId,
+	hostId,
 }: {
 	projectId?: string;
 	project?: WorkspaceScope["project"];
 	orchestrator?: WorkspaceSession;
 	source: OrchestratorSpawnSource;
 	sessionId?: string;
+	hostId?: string;
 }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
-	const mutationKey = ["project-orchestrator-open", projectId] as const;
-	const routeKey = `${projectId ?? ""}/${sessionId ?? ""}`;
+	const mutationKey = hostId ? ["project-orchestrator-open", hostId, projectId] : ["project-orchestrator-open", projectId];
+	const routeKey = `${hostId ?? "local"}/${projectId ?? ""}/${sessionId ?? ""}`;
 	const activeRoute = useRef<string | null>(routeKey);
 	activeRoute.current = routeKey;
 	useEffect(() => {
 		activeRoute.current = routeKey;
 		return () => { activeRoute.current = null; };
 	}, [routeKey]);
-	const isProjectRestarting = useUiStore((state) => projectId ? state.restartingProjectIds.has(projectId) : false);
-	const isProvisioning = useUiStore((state) => projectId ? state.provisioningProjectIds.has(projectId) : false);
-	const canResumeOrchestrator = useCanResumeAgent(orchestrator);
-	const startupError = useUiStore((state) => projectId ? state.orchestratorStartupErrors[projectId] : undefined);
+	const isProjectRestarting = useUiStore((state) => !hostId && projectId ? state.restartingProjectIds.has(projectId) : false);
+	const isProvisioning = useUiStore((state) => !hostId && projectId ? state.provisioningProjectIds.has(projectId) : false);
+	const canResumeOrchestrator = useCanResumeAgent(orchestrator, hostId);
+	const startupError = useUiStore((state) => !hostId && projectId ? state.orchestratorStartupErrors[projectId] : undefined);
 	const setStartupError = useUiStore((state) => state.setOrchestratorStartupError);
 	const previousProjectId = useRef(projectId);
 	useEffect(() => {
-		if (previousProjectId.current && previousProjectId.current !== projectId) {
+		if (!hostId && previousProjectId.current && previousProjectId.current !== projectId) {
 			setStartupError(previousProjectId.current, null);
 		}
 		previousProjectId.current = projectId;
-	}, [projectId, setStartupError]);
+	}, [hostId, projectId, setStartupError]);
 	useEffect(() => {
-		if (projectId && orchestrator && startupError) setStartupError(projectId, null);
-	}, [projectId, orchestrator, startupError, setStartupError]);
+		if (!hostId && projectId && orchestrator && startupError) setStartupError(projectId, null);
+	}, [hostId, projectId, orchestrator, startupError, setStartupError]);
 	const mutations = useMutationState({
 		filters: { mutationKey, exact: true },
 		select: (mutation) => ({ status: mutation.state.status, error: mutation.state.error }),
@@ -73,23 +76,23 @@ export function useProjectOrchestratorAction({
 		mutationKey,
 		mutationFn: async (mode?: "tui") => {
 			if (!projectId) return;
-			setStartupError(projectId, null);
-			const openedSessionId = resumableOrchestrator
+			if (!hostId) setStartupError(projectId, null);
+			const openedSessionId = hostId
+				? await openRemoteOrchestrator(hostId, projectId, orchestrator, mode)
+				: resumableOrchestrator
 				? (await resumeOrchestrator(resumableOrchestrator.id), resumableOrchestrator.id)
 				: project?.kind === CLOUD_PROJECT_KIND
 					? await spawnCloudOrchestrator(queryClient, projectId)
 					: await spawnOrchestrator(projectId, source, false, mode);
 			await queryClient.invalidateQueries({
-				queryKey: project?.kind === CLOUD_PROJECT_KIND ? cloudSessionsQueryKey : workspaceQueryKey,
+				queryKey: hostId ? remoteWorkspaceQueryKey(hostId) : project?.kind === CLOUD_PROJECT_KIND ? cloudSessionsQueryKey : workspaceQueryKey,
 			});
-			setStartupError(projectId, null);
+			if (!hostId) setStartupError(projectId, null);
 			// A completed request belongs to its original route, even if this
 			// component survived a project or session change while it was pending.
 			if (activeRoute.current === routeKey) {
-				void navigate({
-					to: "/projects/$projectId/sessions/$sessionId",
-					params: { projectId, sessionId: openedSessionId },
-				});
+				if (hostId) void navigate({ to: "/host/$hostId/project/$projectId/session/$sessionId", params: { hostId, projectId, sessionId: openedSessionId } });
+				else void navigate({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId, sessionId: openedSessionId } });
 			}
 		},
 		onError: (cause) => {
@@ -109,18 +112,21 @@ export function useProjectOrchestratorAction({
 			surface: sessionId ? "session_detail" : "project_board", project_id: projectId,
 		});
 		void captureRendererEvent("ao.renderer.orchestrator_open_requested", { project_id: projectId });
-		if (resumableOrchestrator) {
+		if (hostId && projectId && !orchestrator && project && !hasConfiguredOrchestratorAgent(project)) {
+			useUiStore.getState().openProjectSettings(projectId, hostId);
+		} else if (resumableOrchestrator) {
 			mutation.mutate(mode);
 		} else if (orchestrator) {
-			void navigate({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId, sessionId: orchestrator.id } });
+			if (hostId) void navigate({ to: "/host/$hostId/project/$projectId/session/$sessionId", params: { hostId, projectId, sessionId: orchestrator.id } });
+			else void navigate({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId, sessionId: orchestrator.id } });
 		} else if (project?.kind !== CLOUD_PROJECT_KIND && !hasConfiguredOrchestratorAgent(project)) {
-			if (project) useUiStore.getState().openProjectSettings(projectId);
+			if (project) useUiStore.getState().openProjectSettings(projectId, hostId);
 		} else {
 			mutation.mutate(mode);
 		}
 	};
 	const openNewTask = () => {
-		if (projectId && !isProjectRestarting && !isProvisioning) useUiStore.getState().requestNewTask(projectId);
+		if (projectId && !isProjectRestarting && !isProvisioning) useUiStore.getState().requestNewTask(projectId, hostId);
 	};
 	return { orchestrator, isSpawning, isProjectRestarting, isProvisioning, spawnError,
 		canCreateAsTui: isChatPreflightError(error), openOrchestrator, openNewTask };
