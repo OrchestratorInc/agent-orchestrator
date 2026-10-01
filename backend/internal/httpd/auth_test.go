@@ -13,7 +13,7 @@ func newAuthUnderTest(pw string, now func() time.Time) (http.Handler, *lockout) 
 	st := &authState{}
 	h := mobilebridge.HashPassword(pw)
 	st.setHash(h)
-	lock := newLockout(time.Minute, now)
+	lock := newLockout(now)
 	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	return authMiddleware(st, lock, nil)(ok), lock
 }
@@ -106,7 +106,7 @@ func TestAuthLockoutAfterFive(t *testing.T) {
 func TestRotatedPasswordCanRecoverFromStaleClientLockout(t *testing.T) {
 	state := &authState{}
 	state.setHash(mobilebridge.HashPassword("oldpass1"))
-	lock := newLockout(time.Minute, time.Now)
+	lock := newLockout(time.Now)
 	h := authMiddleware(state, lock, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -135,7 +135,7 @@ func TestRetiredPasswordDoesNotResetLockout(t *testing.T) {
 	state := &authState{}
 	state.setHash(mobilebridge.HashPassword("oldpass1"))
 	state.setHash(mobilebridge.HashPassword("newpass1"))
-	lock := newLockout(time.Minute, time.Now)
+	lock := newLockout(time.Now)
 	h := authMiddleware(state, lock, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))

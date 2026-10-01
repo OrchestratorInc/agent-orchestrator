@@ -58,15 +58,14 @@ func (a *authState) retiredPasswordMatches(token string) bool {
 
 // lockout throttles password guessing per source address.
 type lockout struct {
-	mu       sync.Mutex
-	cooldown time.Duration
-	now      func() time.Time
-	fails    map[string]int
-	until    map[string]time.Time
+	mu    sync.Mutex
+	now   func() time.Time
+	fails map[string]int
+	until map[string]time.Time
 }
 
-func newLockout(cooldown time.Duration, now func() time.Time) *lockout {
-	return &lockout{cooldown: cooldown, now: now, fails: map[string]int{}, until: map[string]time.Time{}}
+func newLockout(now func() time.Time) *lockout {
+	return &lockout{now: now, fails: map[string]int{}, until: map[string]time.Time{}}
 }
 
 func (l *lockout) blocked(src string) bool {
@@ -94,7 +93,7 @@ func (l *lockout) fail(src string) {
 	defer l.mu.Unlock()
 	l.fails[src]++
 	if l.fails[src] >= 5 {
-		l.until[src] = l.now().Add(l.cooldown)
+		l.until[src] = l.now().Add(time.Minute)
 	}
 }
 
