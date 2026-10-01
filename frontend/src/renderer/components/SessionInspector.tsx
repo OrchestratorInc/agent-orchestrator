@@ -2474,8 +2474,8 @@ function ReviewPanel({
 					</div>
 					{activeReviewerHarness === "codex" ? (
 						<div className="flex min-h-10 min-w-0 items-center justify-between gap-3 py-2">
-							<span className="text-xs font-medium text-foreground">Reviewer interface</span>
-							<div aria-label="Reviewer interface" className="flex rounded-md border border-border p-0.5" role="group">
+							<span className="text-xs font-medium text-foreground">{t("inspector.reviewerInterface")}</span>
+							<div aria-label={t("inspector.reviewerInterface")} className="flex rounded-md border border-border p-0.5" role="group">
 								{(["chat", "tui"] as const).map((mode) => (
 									<Button
 										key={mode}
@@ -2486,7 +2486,7 @@ function ReviewPanel({
 										type="button"
 										variant={reviewerInterfaceMode === mode ? "secondary" : "ghost"}
 									>
-										{mode === "chat" ? "Chat" : "Terminal"}
+										{t(mode === "chat" ? "inspector.reviewerChat" : "inspector.reviewerTerminal")}
 									</Button>
 								))}
 							</div>
