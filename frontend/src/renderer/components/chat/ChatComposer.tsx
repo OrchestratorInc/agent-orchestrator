@@ -157,6 +157,7 @@ export const ChatComposer = memo(function ChatComposer({
 	onStageAttachments,
 	nativeImages,
 	onSteer,
+	showSteerButton,
 	onInterrupt,
 	canSteer,
 	sendPending,
@@ -221,6 +222,8 @@ export const ChatComposer = memo(function ChatComposer({
 	 * cannot steer and the choice is never offered.
 	 */
 	onSteer?: (text: string, attachments?: FileAttachmentPayload[], clientMessageId?: string, recoverOnly?: boolean) => Promise<ChatSteerOutcome | void>;
+	/** Expose steering as a separate action while a Cloud turn is running. */
+	showSteerButton?: boolean;
 	/** Stop the turn already running when there is no draft to send. */
 	onInterrupt?: () => void;
 	/** A turn is actually running, so there is something to steer into. */
@@ -1433,9 +1436,10 @@ export const ChatComposer = memo(function ChatComposer({
 				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
 				onClick={(e) => {
 					if (controlsDisabled) return;
+					// The focusable context tooltip must keep its focus on click.
 					if (
 						e.target === e.currentTarget ||
-						!(e.target as HTMLElement).closest("button, a, [role='option'], ul")
+						!(e.target as HTMLElement).closest("button, a, [role='option'], [data-context-meter], ul")
 					) {
 						editor.current?.focus();
 					}
@@ -1608,6 +1612,11 @@ export const ChatComposer = memo(function ChatComposer({
 					</div>
 
 					<div role="group" aria-label="Send message controls" className="flex h-7 shrink-0 items-center">
+						{showSteerButton && canSteerDraft && (hasText || staged) ? (
+							<Button type="button" variant="ghost" size="sm" disabled={!sendActionEnabled} onClick={() => void submit(undefined, true)} aria-label="Steer into running turn" className="h-7 px-2 text-xs">
+								Steer
+							</Button>
+						) : null}
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<span className="inline-flex">

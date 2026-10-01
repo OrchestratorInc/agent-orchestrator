@@ -294,6 +294,17 @@ describe("HumanMessage attachments", () => {
 		expect(screen.queryByRole("img")).not.toBeInTheDocument();
 		expect(document.body.textContent).toContain(text);
 	});
+
+	it("linkifies session URLs without parsing the human message as Markdown", () => {
+		const text = "Notes:\n- fix *bug*\nao://sessions/proj/sess\n> write test";
+		const { container } = render(<HumanMessage message={humanMessage(text)} sessionId="ao-1" />);
+
+		const paragraph = container.querySelector(".cursor-chat-human-message > p");
+		expect(paragraph).toHaveClass("whitespace-pre-wrap");
+		expect(paragraph?.textContent).toBe(text);
+		expect(screen.getByRole("link", { name: "ao://sessions/proj/sess" })).toBeInTheDocument();
+		expect(container.querySelector("ul, blockquote, em")).toBeNull();
+	});
 });
 
 describe("Chat message timestamps", () => {
@@ -505,6 +516,30 @@ describe("ChatWorkspace timeline", () => {
 			/>,
 		);
 		expect(screen.getByRole("tab", { name: "Orchestrator · Codex · Working" })).toBeInTheDocument();
+	});
+
+	it("shows live provider context usage beside the composer settings", () => {
+		const reported = {
+			...idleSnapshot(chatFixture),
+			usage: {
+				contextUsed: 18_055,
+				contextWindow: 258_400,
+				inputTokens: 18_050,
+				outputTokens: 5,
+				cachedTokens: 0,
+				totalTokens: 18_055,
+			},
+		};
+		const view = render(<ChatWorkspace snapshot={reported} />);
+		const composer = screen.getByLabelText("Message the agent").closest("form") as HTMLElement;
+		const gauge = within(composer).getByRole("progressbar", { name: "Context window used" });
+		expect(gauge).toHaveAttribute("aria-valuetext", "18,055 / 258,400 tokens (7%)");
+		gauge.focus();
+		fireEvent.click(gauge.querySelector("svg") as SVGSVGElement);
+		expect(gauge).toHaveFocus();
+
+		view.rerender(<ChatWorkspace snapshot={{ ...reported, usage: { ...reported.usage, contextUsed: 129_200 } }} />);
+		expect(within(composer).getByRole("progressbar", { name: "Context window used" })).toHaveAttribute("aria-valuetext", "129,200 / 258,400 tokens (50%)");
 	});
 
 	it("refreshes the owning workspace after renaming the primary chat tab", async () => {
@@ -1139,6 +1174,22 @@ describe("ChatWorkspace timeline", () => {
 		expect(onLinkOpen).toHaveBeenCalledWith("http://localhost:5173");
 	});
 
+	it.each([
+		["human", "user"],
+		["automation", "user"],
+		["daemon", "user"],
+		["provider", "assistant"],
+	] as const)("activates session links from %s messages", async (origin, role) => {
+		const snapshot = structuredClone(chatFixtureSettled);
+		const template = snapshot.items.find((item): item is ConversationMessage => item.kind === "message");
+		if (!template) throw new Error("fixture has no message");
+		snapshot.items = [{ ...template, id: `link-${origin}`, origin, role, text: "ao://sessions/project/session", streaming: false }];
+		const onSessionLinkOpen = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} onSessionLinkOpen={onSessionLinkOpen} />);
+		await userEvent.setup().click(screen.getByRole("link"));
+		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
+	});
+
 	it("offers real recovery actions when the controller stops", async () => {
 		const user = userEvent.setup();
 		const resume = vi.fn();
@@ -1750,6 +1801,7 @@ Annotation 1 (adjustment):
 Target: div.badge
 Selector: body > div.badge
 Dimensions: 120×24
+Element text: "New"
 Requested visual changes:
 - Text color: "rgb(0, 0, 0)" → "#d7193f"
 - Background: "transparent" → "#32c873"
@@ -1767,6 +1819,7 @@ Task: Address the feedback below according to its wording. Visual adjustments ar
 		expect(screen.getByText("1 annotation on Google")).toBeInTheDocument();
 		expect(screen.getByText("2 visual changes")).toBeInTheDocument();
 		expect(screen.getByText("div.badge")).toBeInTheDocument();
+		expect(screen.getByText("New")).toBeInTheDocument();
 		expect(screen.getByText("1 reference screenshot")).toBeInTheDocument();
 		expect(screen.queryByText(/body > div\.badge/)).not.toBeInTheDocument();
 		expect(screen.queryByText(/Task: Address/)).not.toBeInTheDocument();
@@ -1801,6 +1854,18 @@ Task: Address the feedback below according to its wording. Visual adjustments ar
 		render(<OriginMessage message={message} />);
 		expect(screen.getByText(/Checks failed on the base branch/)).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Show full report" })).not.toBeInTheDocument();
+	});
+
+	it("linkifies session URLs without parsing an origin preview as Markdown", () => {
+		const source = chatFixture.items.find((item) => item.id === "m-4") as ConversationMessage;
+		const text = "Notes:\n- fix *bug*\nao://sessions/proj/sess\n> write test";
+		const { container } = render(<OriginMessage message={{ ...source, text }} />);
+
+		const paragraph = container.querySelector(".cursor-chat-origin-message > p");
+		expect(paragraph).toHaveClass("whitespace-pre-wrap");
+		expect(paragraph?.textContent).toBe(text);
+		expect(screen.getByRole("link", { name: "ao://sessions/proj/sess" })).toBeInTheDocument();
+		expect(container.querySelector("ul, blockquote, em")).toBeNull();
 	});
 });
 

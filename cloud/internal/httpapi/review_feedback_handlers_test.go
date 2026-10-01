@@ -31,6 +31,7 @@ func (s *reviewFeedbackStore) SendMessage(
 	_ domain.Principal,
 	_, _ string,
 	key, text string,
+	_ domain.ChatTurnSettings,
 ) (domain.ClientEvent, error) {
 	s.key = key
 	s.sent = text

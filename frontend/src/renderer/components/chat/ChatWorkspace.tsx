@@ -77,7 +77,7 @@ import { agentLabel } from "../../lib/agent-options";
 import type { ApprovalMode } from "../../types/conversation";
 import type { ConversationLocalEcho } from "../../hooks/useConversation";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
-import { sidebarOccupiesLayout, useUiStore } from "../../stores/ui-store";
+import { inspectorIsOpen, sidebarOccupiesLayout, useUiStore } from "../../stores/ui-store";
 import type { TerminalTarget } from "../../types/terminal";
 import {
 	isOrchestratorSession,
@@ -108,6 +108,7 @@ import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
 import { ChatComposer, type StoredComposerAttachment } from "./ChatComposer";
+import { ContextMeter } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
@@ -336,6 +337,7 @@ export interface ChatWorkspaceProps {
 	shellError?: string;
 	/** Open an HTTP(S) link in this session's AO Browser panel. */
 	onLinkOpen?: (url: string) => void;
+	onSessionLinkOpen?: (url: string) => void;
 	/** A send or decision is in flight. */
 	busy?: boolean;
 	/** The provider's model catalog. Empty hides the model control. */
@@ -361,6 +363,8 @@ export interface ChatWorkspaceProps {
 	theme?: "light" | "dark";
 	onChooseSettings?: (settings: TurnSettings) => void;
 	onRememberPermissions?: (mode: ApprovalMode) => Promise<unknown> | void;
+	showApprovalMode?: boolean;
+	approvalModes?: ApprovalMode[];
 	rememberPermissionsPending?: boolean;
 	rememberPermissionsError?: string;
 	rememberedPermissionMode?: ApprovalMode;
@@ -435,6 +439,7 @@ export interface ChatWorkspaceProps {
 		clientMessageId?: string,
 		recoverOnly?: boolean,
 	) => Promise<ChatSteerOutcome | void>;
+	showSteerButton?: boolean;
 	sendPending?: boolean;
 	steerPending?: boolean;
 	/** Why the last steer was refused, from the daemon's typed answer. */
@@ -579,10 +584,13 @@ function ChatWorkspaceContent({
 	openingShell,
 	shellError,
 	onLinkOpen,
+	onSessionLinkOpen,
 	busy,
 	models,
 	onChooseSettings,
 	onRememberPermissions,
+	showApprovalMode,
+	approvalModes,
 	rememberPermissionsPending,
 	rememberPermissionsError,
 	rememberedPermissionMode,
@@ -612,6 +620,7 @@ function ChatWorkspaceContent({
 	onStageAttachments,
 	nativeImages,
 	onSteer,
+	showSteerButton,
 	sendPending,
 	steerPending,
 	steerRefusal,
@@ -662,9 +671,10 @@ function ChatWorkspaceContent({
 		// A click fires after a drag selection ends. Focusing the composer here would
 		// collapse the range the user just selected in the transcript.
 		if (window.getSelection()?.isCollapsed === false) return;
+		// The focusable context tooltip must not redirect focus to the composer.
 		if (
 			target.closest(
-				"button, a, input, textarea, select, [contenteditable='true'], [role='button'], [role='option'], [role='menuitem'], [role='dialog'], [data-testid='session-terminal'], .xterm, .terminal-surface",
+				"button, a, input, textarea, select, [contenteditable='true'], [role='button'], [role='option'], [data-context-meter], [role='menuitem'], [role='dialog'], [data-testid='session-terminal'], .xterm, .terminal-surface",
 			)
 		)
 			return;
@@ -1149,6 +1159,8 @@ function ChatWorkspaceContent({
 					rememberPermissionsError={rememberPermissionsError}
 					rememberedPermissionMode={rememberedPermissionMode}
 					harness={snapshot.harness}
+					showApprovalMode={showApprovalMode ?? !session?.cloud}
+					approvalModes={approvalModes}
 					reroute={stableModelReroute}
 					onChange={newWorkDisabled ? undefined : onChooseSettings}
 					configOptions={configOptions ?? []}
@@ -1173,6 +1185,9 @@ function ChatWorkspaceContent({
 			rememberPermissionsPending,
 			rememberPermissionsError,
 			rememberedPermissionMode,
+			showApprovalMode,
+			approvalModes,
+			session?.cloud,
 			snapshot.controller.state,
 			stableModelReroute,
 			stableSettings,
@@ -1417,6 +1432,7 @@ function ChatWorkspaceContent({
 					/>
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
 					<McpServerBanner
+						sessionId={snapshot.sessionId}
 						servers={brokenServers}
 						onReload={newWorkDisabled ? undefined : onReloadMcpServers}
 						reloading={reloadingMcpServers}
@@ -1427,7 +1443,7 @@ function ChatWorkspaceContent({
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
 					>
-						<ChatLinkProvider onLinkOpen={onLinkOpen} onFileOpen={onOpenFile} workspacePaths={filePaths}>
+						<ChatLinkProvider onLinkOpen={onLinkOpen} onFileOpen={onOpenFile} onSessionLinkOpen={onSessionLinkOpen} workspacePaths={filePaths}>
 							<ChatImageSourceProvider sessionId={snapshot.sessionId}>
 								<Timeline
 									key={draftScopeKey}
@@ -1482,7 +1498,7 @@ function ChatWorkspaceContent({
 									onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
 									onInterrupt={turn && !newWorkDisabled ? stableInterrupt : undefined}
 									commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
-									settings={composerSettings}
+									settings={<><ContextMeter usage={snapshot.usage} />{composerSettings}</>}
 									busy={busy}
 									willQueue={Boolean(turn) || session?.provisionState === "provisioning"}
 									disabled={(snapshot.controller.state === "stopped" || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
@@ -1500,6 +1516,7 @@ function ChatWorkspaceContent({
 									// Steering is only meaningful into a turn that is running. A queued turn
 									// has not reached the provider, so there is nothing to steer.
 									onSteer={newWorkDisabled ? undefined : steer}
+									showSteerButton={showSteerButton}
 									canSteer={Boolean(onSteer) && turn?.state === "running"}
 									sendPending={sendPending}
 									steerPending={steerPending}
@@ -2147,7 +2164,7 @@ function Timeline({
 	// DOM nodes, and inspector toggles are otherwise a broad synchronous commit.
 	// Keep that small accessibility/interaction boundary imperative instead.
 	const inspectorOpenRef = useRef(
-		useUiStore.getState().inspectorSessions[snapshot.sessionId]?.isOpen ?? true,
+		inspectorIsOpen(useUiStore.getState().inspectorSessions, snapshot.sessionId),
 	);
 	const turn = activeTurn(snapshot);
 	const [scrollbar, setScrollbar] = useState({
@@ -2276,10 +2293,10 @@ function Timeline({
 				if (hoveredMarkerRef.current !== null) setHoveredMarker(null);
 			}
 		};
-		setInspectorOpen(useUiStore.getState().inspectorSessions[snapshot.sessionId]?.isOpen ?? true);
+		setInspectorOpen(inspectorIsOpen(useUiStore.getState().inspectorSessions, snapshot.sessionId));
 		return useUiStore.subscribe((state, previous) => {
-			const currentOpen = state.inspectorSessions[snapshot.sessionId]?.isOpen ?? true;
-			const previousOpen = previous.inspectorSessions[snapshot.sessionId]?.isOpen ?? true;
+			const currentOpen = inspectorIsOpen(state.inspectorSessions, snapshot.sessionId);
+			const previousOpen = inspectorIsOpen(previous.inspectorSessions, snapshot.sessionId);
 			if (currentOpen !== previousOpen) setInspectorOpen(currentOpen);
 		});
 	}, [minimapEnabled, snapshot.sessionId]);

@@ -15,6 +15,8 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import {
 	AlertTriangle,
+	Archive,
+	CalendarClock,
 	ChevronRight,
 	Download,
 	Folder,
@@ -71,9 +73,11 @@ import {
 import { getSessionStatusDotView } from "../lib/session-presentation";
 import { deriveSessionAgentSwitchPresentation } from "../lib/agent-switch-presentation";
 import { aoBridge } from "../lib/bridge";
+import { hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useCanResumeAgent } from "../hooks/useCanResumeAgent";
 import { cloudSessionsQueryKey, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { conversationQueryKey, conversationQueryOptions } from "../hooks/useConversation";
 import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import { resumeOrchestrator, spawnOrchestrator } from "../lib/spawn-orchestrator";
@@ -123,6 +127,7 @@ import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { SessionArchiveDialog } from "./SessionArchiveDialog";
 import { CreateProjectFlow, type CloneProjectInput, type CreateProjectInput } from "./CreateProjectFlow";
 import { ResizeHandle } from "./ResizeHandle";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
@@ -303,9 +308,41 @@ export const SIDEBAR_MAX_WIDTH = 420;
 /** Initial item count shown in expanded sections; Show more/less toggles the remainder.
  *  Collapsed icon rail always shows the full list so projects stay reachable. */
 const SIDEBAR_INITIAL_SECTION_LIMIT = 10;
+/** Initial agent count listed under each expanded project before its own Show more. */
+const SIDEBAR_PROJECT_SESSION_LIMIT = 6;
 /** Keep the complete Scratchpad section (including its footer gap) under half the available height. */
 const SECTION_SCROLLER_CLASS =
 	"scrollbar-none overflow-y-auto overflow-x-hidden overscroll-contain group-data-[collapsible=icon]:overflow-visible";
+
+/** Caps a sidebar list at `limit` behind Show more/less. The cap lifts on its
+ *  own when the active item sits past it, until the user collapses it again. */
+function useShowMoreCap<T extends { id: string }>(
+	items: T[],
+	limit: number,
+	activeId: string | undefined,
+	isCollapsed = false,
+) {
+	const [showAll, setShowAll] = useState(false);
+	const [showAllDismissed, setShowAllDismissed] = useState(false);
+	const activeBeyondLimit = useMemo(() => {
+		if (showAll || items.length <= limit || !activeId) return false;
+		return items.findIndex((item) => item.id === activeId) >= limit;
+	}, [activeId, items, limit, showAll]);
+	useEffect(() => setShowAllDismissed(false), [activeId]);
+	useEffect(() => {
+		if (activeBeyondLimit && !showAllDismissed) setShowAll(true);
+	}, [activeBeyondLimit, showAllDismissed]);
+	const listed = useMemo(
+		() => (isCollapsed || showAll || items.length <= limit ? items : items.slice(0, limit)),
+		[isCollapsed, items, limit, showAll],
+	);
+	const toggleShowAll = () => {
+		const next = !showAll;
+		setShowAll(next);
+		setShowAllDismissed(!next);
+	};
+	return { listed, hiddenCount: Math.max(0, items.length - limit), showAll, toggleShowAll };
+}
 
 /** Scratchpad's total section cap, or none in the collapsed icon rail. */
 function scratchpadSectionStyle(isCollapsed: boolean): CSSProperties | undefined {
@@ -450,6 +487,8 @@ function useSelection() {
 		select: (state) => state.location.pathname,
 	});
 	const goHome = useCallback(() => void navigate({ to: "/" }), [navigate]);
+	const goAutomations = useCallback(() => void navigate({ to: "/automations" }), [navigate]);
+	const goStandaloneBoard = useCallback(() => void navigate({ to: "/sessions" }), [navigate]);
 	const goGlobalSettings = useCallback(() => openGlobalSettings(), [openGlobalSettings]);
 	const goConnectMobile = useCallback(() => openGlobalSettings("mobile"), [openGlobalSettings]);
 	const goSettings = useCallback((projectId: string) => openProjectSettings(projectId), [openProjectSettings]);
@@ -472,9 +511,12 @@ function useSelection() {
 	);
 	return useMemo(() => ({
 		isHome: pathname === "/",
+		isAutomations: pathname === "/automations",
 		activeProjectId: params.projectId,
 		activeSessionId: params.sessionId,
 		goHome,
+		goAutomations,
+		goStandaloneBoard,
 		// Settings is a modal — open it in place so the current page (session
 		// terminal, board, etc.) stays underneath.
 		goGlobalSettings,
@@ -482,7 +524,7 @@ function useSelection() {
 		goSettings,
 		goProject,
 		goSession,
-	}), [goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, params.projectId, params.sessionId, pathname]);
+	}), [goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.projectId, params.sessionId, pathname]);
 }
 
 // Colour tracks the session's board section, preserving SCM state while the
@@ -669,27 +711,12 @@ export function Sidebar({
 		() => workspaces.find((workspace) => workspace.kind === STANDALONE_PROJECT_KIND),
 		[workspaces],
 	);
-	const [showAllProjects, setShowAllProjects] = useState(false);
-	const [showAllProjectsDismissed, setShowAllProjectsDismissed] = useState(false);
-	const activeProjectBeyondLimit = useMemo(() => {
-		if (showAllProjects || projectWorkspaces.length <= SIDEBAR_INITIAL_SECTION_LIMIT) return false;
-		const activeId = selection.activeProjectId;
-		if (!activeId) return false;
-		const index = projectWorkspaces.findIndex((workspace) => workspace.id === activeId);
-		return index >= SIDEBAR_INITIAL_SECTION_LIMIT;
-	}, [projectWorkspaces, selection.activeProjectId, showAllProjects]);
-	useEffect(() => setShowAllProjectsDismissed(false), [selection.activeProjectId]);
-	useEffect(() => {
-		if (activeProjectBeyondLimit && !showAllProjectsDismissed) setShowAllProjects(true);
-	}, [activeProjectBeyondLimit, showAllProjectsDismissed]);
-	const visibleWorkspaces = useMemo(
-		() =>
-			isCollapsed || showAllProjects || projectWorkspaces.length <= SIDEBAR_INITIAL_SECTION_LIMIT
-				? projectWorkspaces
-				: projectWorkspaces.slice(0, SIDEBAR_INITIAL_SECTION_LIMIT),
-		[isCollapsed, projectWorkspaces, showAllProjects],
-	);
-	const hiddenProjectCount = Math.max(0, projectWorkspaces.length - SIDEBAR_INITIAL_SECTION_LIMIT);
+	const {
+		listed: visibleWorkspaces,
+		hiddenCount: hiddenProjectCount,
+		showAll: showAllProjects,
+		toggleShowAll: toggleShowAllProjects,
+	} = useShowMoreCap(projectWorkspaces, SIDEBAR_INITIAL_SECTION_LIMIT, selection.activeProjectId, isCollapsed);
 	const projectContentOpen = workspaces.length > 0 && !workspaceError && (projectsOpen || isCollapsed);
 	const projectIds = useMemo(
 		() => projectWorkspaces.map((workspace) => workspace.id),
@@ -894,6 +921,20 @@ export function Sidebar({
 						</SidebarGroupContent>
 					</SidebarGroup>
 				) : null}
+				<SidebarMenu className="mb-3 gap-0.5 group-data-[collapsible=icon]:gap-1">
+					<SidebarMenuItem>
+						<SidebarMenuButton
+							aria-label={t("automations.title")}
+							className={NAV_ROW_CLASS}
+							isActive={selection.isAutomations}
+							onClick={selection.goAutomations}
+							tooltip={isCollapsed ? t("automations.title") : undefined}
+						>
+							<CalendarClock aria-hidden="true" />
+							<span className="sidebar-expanded-chrome group-data-[collapsible=icon]:hidden">{t("automations.title")}</span>
+						</SidebarMenuButton>
+					</SidebarMenuItem>
+				</SidebarMenu>
 
 				{/* Pinned — collapsible; hidden when empty. */}
 				{pinnedSessions.length > 0 && (
@@ -1005,11 +1046,7 @@ export function Sidebar({
 														? t("shell.showLessProjects")
 														: t("shell.showMoreProjects", { count: hiddenProjectCount })
 												}
-												onClick={() => {
-													const next = !showAllProjects;
-													setShowAllProjects(next);
-													setShowAllProjectsDismissed(!next);
-												}}
+												onClick={toggleShowAllProjects}
 											/>
 										) : null}
 									</AnimatedSectionBody>
@@ -1236,11 +1273,23 @@ const ProjectItem = memo(function ProjectItem({
 		() => applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start"),
 		[sessionOrder, visibleSessions],
 	);
-	const sessionIds = useMemo(() => sessions.map((session) => session.id), [sessions]);
-	const commitSessionOrder = useCallback((next: string[] | null) => {
-		if (!next) return;
-		setSessionOrder(next);
-	}, []);
+	const {
+		listed: listedSessions,
+		hiddenCount: hiddenSessionCount,
+		showAll: showAllSessions,
+		toggleShowAll: toggleShowAllSessions,
+	} = useShowMoreCap(sessions, SIDEBAR_PROJECT_SESSION_LIMIT, selection.activeSessionId);
+	const listedSessionIds = useMemo(() => listedSessions.map((session) => session.id), [listedSessions]);
+	const commitSessionOrder = useCallback(
+		(next: string[] | null) => {
+			if (!next) return;
+			// Only the listed slice is draggable, so keep the still-hidden tail
+			// behind it rather than letting applyOrder float it to the front.
+			const listed = new Set(next);
+			setSessionOrder([...next, ...sessions.filter((session) => !listed.has(session.id)).map((session) => session.id)]);
+		},
+		[sessions],
+	);
 	const openSession = useCallback((sessionId: string) => {
 		selection.goSession(workspace.id, sessionId);
 	}, [selection, workspace.id]);
@@ -1399,7 +1448,10 @@ const ProjectItem = memo(function ProjectItem({
 					transition={prefersReducedMotion ? { duration: 0 } : { type: "spring", stiffness: 520, damping: 42, mass: 0.55 }}
 				>
 					<div
-						className="relative"
+						className={cn(
+							"relative",
+							activeProjectMatches && "sticky top-0 z-20 bg-sidebar group-data-[collapsible=icon]:static",
+						)}
 						data-project-drag-row=""
 						data-project-id={workspace.id}
 						draggable
@@ -1612,9 +1664,12 @@ const ProjectItem = memo(function ProjectItem({
 											<SessionReorderList
 												dndId={sessionDndId(workspace.id)}
 												testId={`session-list-${workspace.id}`}
-												className="mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 py-1"
-												sessions={sessions}
-												sessionIds={sessionIds}
+												className={cn(
+													"mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 pt-1",
+													hiddenSessionCount > 0 ? "pb-px" : "pb-1",
+												)}
+												sessions={listedSessions}
+												sessionIds={listedSessionIds}
 												activeSessionId={selection.activeSessionId}
 												disableLayout={!layoutSettled}
 												plain={projectDragInProgress}
@@ -1622,6 +1677,21 @@ const ProjectItem = memo(function ProjectItem({
 												onKilled={handleSessionKilled}
 												onOpen={openSession}
 											/>
+											{hiddenSessionCount > 0 ? (
+												// Indented to the session list so its label starts on the status-dot column.
+												<div className="pl-4">
+													<ShowMoreRow
+														className="px-3"
+														expanded={showAllSessions}
+														label={
+															showAllSessions
+																? t("shell.showLessAgents")
+																: t("shell.showMoreAgents", { count: hiddenSessionCount })
+														}
+														onClick={toggleShowAllSessions}
+													/>
+												</div>
+											) : null}
 								</motion.div>
 							</div>
 							</motion.div>
@@ -1708,27 +1778,13 @@ function ScratchpadSection({
 		() => applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start"),
 		[sessionOrder, visibleSessions],
 	);
-	const [showAll, setShowAll] = useState(false);
-	const [showAllDismissed, setShowAllDismissed] = useState(false);
-	const activeSessionBeyondLimit = useMemo(() => {
-		if (showAll || sessions.length <= SIDEBAR_INITIAL_SECTION_LIMIT) return false;
-		const activeId = selection.activeSessionId;
-		if (!activeId) return false;
-		return sessions.findIndex((session) => session.id === activeId) >= SIDEBAR_INITIAL_SECTION_LIMIT;
-	}, [selection.activeSessionId, sessions, showAll]);
-	useEffect(() => setShowAllDismissed(false), [selection.activeSessionId]);
-	useEffect(() => {
-		if (activeSessionBeyondLimit && !showAllDismissed) setShowAll(true);
-	}, [activeSessionBeyondLimit, showAllDismissed]);
-	const listedSessions = useMemo(
-		() =>
-			isCollapsed || showAll || sessions.length <= SIDEBAR_INITIAL_SECTION_LIMIT
-				? sessions
-				: sessions.slice(0, SIDEBAR_INITIAL_SECTION_LIMIT),
-		[isCollapsed, sessions, showAll],
-	);
+	const {
+		listed: listedSessions,
+		hiddenCount: hiddenSessionCount,
+		showAll,
+		toggleShowAll,
+	} = useShowMoreCap(sessions, SIDEBAR_INITIAL_SECTION_LIMIT, selection.activeSessionId, isCollapsed);
 	const listedSessionIds = useMemo(() => listedSessions.map((session) => session.id), [listedSessions]);
-	const hiddenSessionCount = Math.max(0, sessions.length - SIDEBAR_INITIAL_SECTION_LIMIT);
 	useLayoutEffect(() => {
 		const section = sectionRef.current;
 		const container = sidebarSectionsRef.current;
@@ -1783,23 +1839,53 @@ function ScratchpadSection({
 				label={workspace.name}
 				open={open}
 				onToggle={onToggle}
-				className="mt-1"
+				className="group/scratchpad mt-1"
 				trailing={
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<span className="inline-flex">
-								<button
-									aria-label={t("shell.openNewAgent")}
-									className="sidebar-icon-action grid size-icon-xl shrink-0 place-items-center rounded-sm !bg-transparent text-passive hover:!bg-transparent focus:!bg-transparent focus-visible:!bg-transparent active:!bg-transparent hover:text-foreground"
-									onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
-									type="button"
-								>
+					<div className="relative inline-flex items-center">
+						<span
+							className={cn(
+								"pointer-events-none absolute right-full top-0 flex h-full origin-center scale-[0.8] items-center opacity-0",
+								"transition-[scale] duration-normal ease-[var(--ease-out)]",
+								"motion-reduce:transition-none",
+								"group-focus-within/scratchpad:pointer-events-auto group-focus-within/scratchpad:scale-100 group-focus-within/scratchpad:opacity-100",
+							)}
+							data-scratchpad-archive-action=""
+						>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span className="inline-flex">
+										<button
+											aria-label={t("shell.archivedSessions")}
+											className="sidebar-icon-action grid size-icon-xl shrink-0 place-items-center rounded-sm !bg-transparent text-passive hover:!bg-transparent focus:!bg-transparent focus-visible:!bg-transparent active:!bg-transparent hover:text-foreground"
+											onClick={(event) => {
+												event.stopPropagation();
+												selection.goStandaloneBoard();
+											}}
+											type="button"
+										>
+											<Archive className="size-icon-sm translate-y-px" aria-hidden="true" />
+										</button>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent>{t("shell.archivedSessions")}</TooltipContent>
+							</Tooltip>
+						</span>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<span className="inline-flex">
+									<button
+										aria-label={t("shell.openNewAgent")}
+										className="sidebar-icon-action grid size-icon-xl shrink-0 place-items-center rounded-sm !bg-transparent text-passive hover:!bg-transparent focus:!bg-transparent focus-visible:!bg-transparent active:!bg-transparent hover:text-foreground"
+										onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
+										type="button"
+									>
 										<Plus className="size-icon-sm translate-y-px" aria-hidden="true" />
-								</button>
-							</span>
-						</TooltipTrigger>
-						<TooltipContent>{t("shell.openNewAgent")}</TooltipContent>
-					</Tooltip>
+									</button>
+								</span>
+							</TooltipTrigger>
+							<TooltipContent>{t("shell.openNewAgent")}</TooltipContent>
+						</Tooltip>
+					</div>
 				}
 			/>
 			<AnimatedSectionBody open={open && listedSessions.length > 0} className="min-h-0 flex-1">
@@ -1826,11 +1912,7 @@ function ScratchpadSection({
 					<ShowMoreRow
 						expanded={showAll}
 						label={showAll ? t("shell.showLessAgents") : t("shell.showMoreAgents", { count: hiddenSessionCount })}
-						onClick={() => {
-							const next = !showAll;
-							setShowAll(next);
-							setShowAllDismissed(!next);
-						}}
+						onClick={toggleShowAll}
 					/>
 				) : null}
 			</AnimatedSectionBody>
@@ -2077,6 +2159,13 @@ function SessionRow({
 	const rename = useSessionRename(session, refreshWorkspaces);
 	const lastTouchAtRef = useRef(0);
 	const suppressTouchOpenRef = useRef(false);
+	const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+	const canPrefetch = session.mode === "chat" && !session.cloud && !active && !listIsDragging && !reorder?.isDragging;
+	useEffect(() => () => clearTimeout(hoverTimerRef.current), [canPrefetch]);
+	const prefetchConversation = () => {
+		if (!canPrefetch || !hasTrustedApiBaseUrl() || queryClient.getQueryData(conversationQueryKey(session.id))) return;
+		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(session.id));
+	};
 	const beginRename = useCallback(() => {
 		rename.begin();
 	}, [rename.begin]);
@@ -2164,6 +2253,11 @@ function SessionRow({
 								reorder?.isDragging && "!cursor-grabbing",
 							)}
 							{...(reorder?.listeners ?? {})}
+							onMouseEnter={() => {
+								if (canPrefetch) hoverTimerRef.current = setTimeout(prefetchConversation, 100);
+							}}
+							onMouseLeave={() => clearTimeout(hoverTimerRef.current)}
+							onFocus={prefetchConversation}
 							onClick={(event) => {
 								if (event.detail > 1) return;
 								if (suppressTouchOpenRef.current) {
@@ -2262,6 +2356,7 @@ const SessionActions = memo(function SessionActions({
 	const { t } = useTranslation();
 	const { mutate: pinSession } = usePinSession();
 	const { mutate: unpinSession } = useUnpinSession();
+	const [confirmOpen, setConfirmOpen] = useState(false);
 	// Optimistic: navigate + drop the row as soon as kill starts (onMutate),
 	// not after the daemon round-trip.
 	const onKilledRef = useRef(onKilled);
@@ -2272,8 +2367,15 @@ const SessionActions = memo(function SessionActions({
 		},
 	});
 
-	const handleKill = (event: React.MouseEvent) => {
+	// The row used to archive on the bare click while the session page asked
+	// first; both surfaces now open the same confirm before anything moves.
+	const handleArchive = (event: React.MouseEvent) => {
 		event.stopPropagation();
+		setConfirmOpen(true);
+	};
+
+	const confirmArchive = () => {
+		setConfirmOpen(false);
 		terminateSession(session);
 	};
 
@@ -2318,17 +2420,27 @@ const SessionActions = memo(function SessionActions({
 				</Tooltip>
 				<Tooltip>
 					<TooltipTrigger asChild>
-						<button
-							aria-label={t("shell.killSession")}
-							className={cn(SESSION_ACTION_CLASS, "hover:text-destructive focus-visible:text-destructive")}
-							disabled={isKilling}
-							onClick={handleKill}
-							type="button"
-						>
-							<Trash2 aria-hidden="true" />
-						</button>
+						<span className="inline-flex">
+							<SessionArchiveDialog
+								onConfirm={confirmArchive}
+								onOpenChange={setConfirmOpen}
+								open={confirmOpen}
+								session={session}
+								trigger={
+									<button
+										aria-label={t("shell.archiveSession")}
+										className={cn(SESSION_ACTION_CLASS, "focus-visible:text-foreground")}
+										disabled={isKilling}
+										onClick={handleArchive}
+										type="button"
+									>
+										<Archive aria-hidden="true" />
+									</button>
+								}
+							/>
+						</span>
 					</TooltipTrigger>
-					<TooltipContent side="top">{t("shell.killSession")}</TooltipContent>
+					<TooltipContent side="top">{t("shell.archiveSession")}</TooltipContent>
 				</Tooltip>
 			</div>
 			<SessionMessageAge session={session} />
@@ -2808,7 +2920,17 @@ function UpdateStatusRail({
 
 /** Releases a section's initial cap. Sits below its section's scroller so the
  *  cap can never hide the control that lifts it. */
-function ShowMoreRow({ label, expanded, onClick }: { label: string; expanded: boolean; onClick: () => void }) {
+function ShowMoreRow({
+	label,
+	expanded,
+	onClick,
+	className,
+}: {
+	label: string;
+	expanded: boolean;
+	onClick: () => void;
+	className?: string;
+}) {
 	const { t } = useTranslation();
 	const prefersReducedMotion = useReducedMotion();
 	return (
@@ -2820,6 +2942,7 @@ function ShowMoreRow({ label, expanded, onClick }: { label: string; expanded: bo
 					SECTION_ROW_CLASS,
 					NAV_ROW_HIGHLIGHT_HOST_CLASS,
 					"mb-1 shrink-0 rounded-lg text-left text-muted-foreground",
+					className,
 				)}
 				initial={{ opacity: 0, y: 4 }}
 				animate={{ opacity: 1, y: 0 }}

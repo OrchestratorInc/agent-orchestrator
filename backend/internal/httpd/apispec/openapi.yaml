@@ -960,6 +960,296 @@ paths:
       summary: Refresh the cached local agent adapter catalog
       tags:
       - agents
+  /api/v1/automations:
+    get:
+      operationId: listAutomations
+      parameters:
+      - in: query
+        name: projectId
+        schema:
+          type: string
+      - in: query
+        name: enabled
+        schema:
+          type:
+          - "null"
+          - boolean
+      - in: query
+        name: limit
+        schema:
+          maximum: 100
+          minimum: 1
+          type: integer
+      - in: query
+        name: cursor
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListAutomationsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List recurring automations
+      tags:
+      - automations
+    post:
+      operationId: createAutomation
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAutomationRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationEnvelope'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Create a recurring automation
+      tags:
+      - automations
+  /api/v1/automations/{automationId}:
+    delete:
+      operationId: deleteAutomation
+      parameters:
+      - description: Automation identifier.
+        in: path
+        name: automationId
+        required: true
+        schema:
+          description: Automation identifier.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Delete an automation and its run history
+      tags:
+      - automations
+    get:
+      operationId: getAutomation
+      parameters:
+      - description: Automation identifier.
+        in: path
+        name: automationId
+        required: true
+        schema:
+          description: Automation identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get one recurring automation
+      tags:
+      - automations
+    patch:
+      operationId: updateAutomation
+      parameters:
+      - description: Automation identifier.
+        in: path
+        name: automationId
+        required: true
+        schema:
+          description: Automation identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAutomationRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Update a recurring automation
+      tags:
+      - automations
+  /api/v1/automations/{automationId}/runs:
+    get:
+      operationId: listAutomationRuns
+      parameters:
+      - description: Automation identifier.
+        in: path
+        name: automationId
+        required: true
+        schema:
+          description: Automation identifier.
+          type: string
+      - in: query
+        name: limit
+        schema:
+          maximum: 100
+          minimum: 1
+          type: integer
+      - in: query
+        name: cursor
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListAutomationRunsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List durable automation run history
+      tags:
+      - automations
   /api/v1/browser/commands:
     post:
       operationId: executeBrowserCommand
@@ -1084,6 +1374,222 @@ paths:
       summary: Check whether the desktop browser runtime is connected for a session
       tags:
       - browser
+  /api/v1/cues/{cueId}:
+    delete:
+      operationId: deleteCue
+      parameters:
+      - description: Cue identifier.
+        in: path
+        name: cueId
+        required: true
+        schema:
+          description: Cue identifier.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Delete a cue
+      tags:
+      - cues
+    get:
+      operationId: getCue
+      parameters:
+      - description: Cue identifier.
+        in: path
+        name: cueId
+        required: true
+        schema:
+          description: Cue identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CueEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get a cue
+      tags:
+      - cues
+    patch:
+      operationId: updateCue
+      parameters:
+      - description: Cue identifier.
+        in: path
+        name: cueId
+        required: true
+        schema:
+          description: Cue identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CueDefinitionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CueEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Request Entity Too Large
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Replace a cue's definition
+      tags:
+      - cues
+  /api/v1/cues/{cueId}/invoke:
+    post:
+      operationId: invokeCue
+      parameters:
+      - description: Cue identifier.
+        in: path
+        name: cueId
+        required: true
+        schema:
+          description: Cue identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvokeCueRequest'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvokeCueResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Request Entity Too Large
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Dispatch an agent cue to a session or send a command cue to a scoped
+        shell terminal
+      tags:
+      - cues
   /api/v1/desktop/sessions/{sessionId}/workspace:
     get:
       operationId: getDesktopSessionWorkspace
@@ -1693,6 +2199,43 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
       summary: Enable the Connect Mobile LAN bridge and issue a fresh password
+      tags:
+      - mobile
+  /api/v1/mobile/keep-awake:
+    post:
+      operationId: setMobileKeepAwake
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersSetKeepAwakeRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobileStatusResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Keep this Mac from idle-sleeping while Connect Mobile is on
       tags:
       - mobile
   /api/v1/mobile/regenerate:
@@ -2497,6 +3040,107 @@ paths:
       summary: Speculatively create the next task's worktree
       tags:
       - projects
+  /api/v1/projects/{projectId}/cues:
+    get:
+      operationId: listProjectCues
+      parameters:
+      - description: Project whose cues are listed or extended.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose cues are listed or extended.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListCuesResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List a project's cues in name order
+      tags:
+      - cues
+    post:
+      operationId: createCue
+      parameters:
+      - description: Project whose cues are listed or extended.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose cues are listed or extended.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CueDefinitionRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CueEnvelope'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Request Entity Too Large
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Create a cue for a project
+      tags:
+      - cues
   /api/v1/projects/clone:
     post:
       operationId: cloneProject
@@ -5585,6 +6229,14 @@ paths:
         schema:
           description: Stable URL of the selected associated pull request.
           type: string
+      - description: Exact SHA of one of the pull request's commits; reads that commit's
+          change instead of the whole pull request.
+        in: query
+        name: commitSha
+        schema:
+          description: Exact SHA of one of the pull request's commits; reads that
+            commit's change instead of the whole pull request.
+          type: string
       responses:
         "200":
           content:
@@ -5653,6 +6305,14 @@ paths:
         name: sourceUrl
         schema:
           description: Stable URL of the selected associated pull request.
+          type: string
+      - description: Exact SHA of one of the pull request's commits; before is its
+          first parent, after is the commit.
+        in: query
+        name: commitSha
+        schema:
+          description: Exact SHA of one of the pull request's commits; before is its
+            first parent, after is the commit.
           type: string
       responses:
         "200":
@@ -7762,19 +8422,20 @@ paths:
       operationId: getSystemInstallStatus
       parameters:
       - description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-          copilot, or cloudflared.'
+          opencode-v2, copilot, or cloudflared.'
         in: path
         name: target
         required: true
         schema:
           description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-            copilot, or cloudflared.'
+            opencode-v2, copilot, or cloudflared.'
           enum:
           - tmux
           - gh
           - claude
           - codex
           - opencode
+          - opencode-v2
           - copilot
           - cloudflared
           type: string
@@ -7810,19 +8471,20 @@ paths:
       operationId: startSystemInstall
       parameters:
       - description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-          copilot, or cloudflared.'
+          opencode-v2, copilot, or cloudflared.'
         in: path
         name: target
         required: true
         schema:
           description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-            copilot, or cloudflared.'
+            opencode-v2, copilot, or cloudflared.'
           enum:
           - tmux
           - gh
           - claude
           - codex
           - opencode
+          - opencode-v2
           - copilot
           - cloudflared
           type: string
@@ -8175,6 +8837,8 @@ components:
           type: string
         label:
           type: string
+        notice:
+          type: string
         reason:
           type: string
         recommended:
@@ -8212,6 +8876,8 @@ components:
           items:
             $ref: '#/components/schemas/AgentInstallMethod'
           type: array
+        notice:
+          type: string
         reason:
           type: string
       required:
@@ -8497,6 +9163,158 @@ components:
           type: string
       required:
       - data
+      type: object
+    AutomationEnvelope:
+      properties:
+        automation:
+          $ref: '#/components/schemas/AutomationResponse'
+      required:
+      - automation
+      type: object
+    AutomationResponse:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        displayName:
+          type: string
+        enabled:
+          type: boolean
+        harness:
+          type: string
+        id:
+          type: string
+        kind:
+          enum:
+          - worker
+          - orchestrator
+          type: string
+        lastRunAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        latestRun:
+          $ref: '#/components/schemas/AutomationRunSummaryResponse'
+        nextRunAt:
+          format: date-time
+          type: string
+        projectId:
+          type: string
+        prompt:
+          type: string
+        rrule:
+          type: string
+        timezone:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - id
+      - projectId
+      - displayName
+      - prompt
+      - kind
+      - rrule
+      - timezone
+      - enabled
+      - nextRunAt
+      - createdAt
+      - updatedAt
+      type: object
+    AutomationRunResponse:
+      properties:
+        attemptCount:
+          format: int64
+          type: integer
+        automationId:
+          type: string
+        claimedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        createdAt:
+          format: date-time
+          type: string
+        errorMessage:
+          type: string
+        finishedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          type: string
+        leaseExpiresAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        scheduledFor:
+          format: date-time
+          type: string
+        sessionId:
+          type: string
+        startedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        status:
+          enum:
+          - pending
+          - spawning
+          - running
+          - completed
+          - failed
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - id
+      - automationId
+      - scheduledFor
+      - status
+      - attemptCount
+      - createdAt
+      - updatedAt
+      type: object
+    AutomationRunSummaryResponse:
+      properties:
+        errorMessage:
+          type: string
+        finishedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          type: string
+        scheduledFor:
+          format: date-time
+          type: string
+        sessionId:
+          type: string
+        startedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        status:
+          enum:
+          - pending
+          - spawning
+          - running
+          - completed
+          - failed
+          type: string
+      required:
+      - id
+      - status
+      - scheduledFor
       type: object
     BrowserCommandRequest:
       properties:
@@ -9211,6 +10029,22 @@ components:
         disabled:
           type: boolean
       type: object
+    ControllersKeepAwakeStatus:
+      properties:
+        active:
+          type: boolean
+        enabled:
+          type: boolean
+        hasBattery:
+          type: boolean
+        supported:
+          type: boolean
+      required:
+      - supported
+      - enabled
+      - active
+      - hasBattery
+      type: object
     ControllersRequestRereviewRequest:
       properties:
         pullRequestUrl:
@@ -9383,6 +10217,7 @@ components:
           - cursor
           - kilocode
           - opencode
+          - opencode-v2
           - kiro
           - pi
           - agy
@@ -9461,6 +10296,13 @@ components:
       - kanbanColumn
       - displayStatus
       - prs
+      type: object
+    ControllersSetKeepAwakeRequest:
+      properties:
+        enabled:
+          type: boolean
+      required:
+      - enabled
       type: object
     ControllersSetSecurePairingRequest:
       properties:
@@ -10121,6 +10963,38 @@ components:
       - cachedTokens
       - totalTokens
       type: object
+    CreateAutomationRequest:
+      properties:
+        cron:
+          type: string
+        displayName:
+          type: string
+        enabled:
+          type:
+          - "null"
+          - boolean
+        harness:
+          type: string
+        kind:
+          enum:
+          - worker
+          - orchestrator
+          type: string
+        projectId:
+          type: string
+        prompt:
+          type: string
+        rrule:
+          type: string
+        timezone:
+          type: string
+      required:
+      - projectId
+      - displayName
+      - prompt
+      - kind
+      - timezone
+      type: object
     CreateReportRequest:
       properties:
         message:
@@ -10151,6 +11025,73 @@ components:
           type: string
       required:
       - id
+      type: object
+    CueDefinitionRequest:
+      properties:
+        command:
+          description: Shell command for a command cue. At most 4096 bytes; cleared
+            when saving agent cues.
+          maxLength: 4096
+          type: string
+        description:
+          description: Optional human note about the cue, at most 240 bytes.
+          maxLength: 240
+          type: string
+        name:
+          description: Short cue name, unique within the project. Trimmed; must be
+            non-empty and at most 64 bytes.
+          maxLength: 64
+          type: string
+        prompt:
+          description: Agent instruction for an agent cue. At most 16384 bytes; cleared
+            when saving command cues.
+          maxLength: 16384
+          type: string
+        type:
+          description: 'Cue kind: command sends to a project- or session-scoped shell
+            terminal; agent sends an authored prompt. Definition body limit: 128 KiB.'
+          type: string
+      required:
+      - name
+      - type
+      type: object
+    CueEnvelope:
+      properties:
+        cue:
+          $ref: '#/components/schemas/CueResponse'
+      required:
+      - cue
+      type: object
+    CueResponse:
+      properties:
+        command:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        description:
+          type: string
+        id:
+          type: string
+        name:
+          type: string
+        projectId:
+          type: string
+        prompt:
+          type: string
+        type:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - id
+      - projectId
+      - name
+      - description
+      - type
+      - createdAt
+      - updatedAt
       type: object
     DegradedProject:
       properties:
@@ -10183,6 +11124,7 @@ components:
           - codex
           - aider
           - opencode
+          - opencode-v2
           - grok
           - droid
           - amp
@@ -10190,6 +11132,7 @@ components:
           - crush
           - cursor
           - qwen
+          - gemini
           - copilot
           - goose
           - auggie
@@ -10204,9 +11147,12 @@ components:
           - pi
           - kimchi
           - omp
+          - fx
           - prime-agent
           - autohand
           - unreal-agent
+          - mimo-code
+          - deepseek-harness
           - fake
           type: string
         approvalMode:
@@ -10778,6 +11724,10 @@ components:
           description: Server-owned installation method selected for this harness
             job.
           type: string
+        notice:
+          description: Fixed user-visible consequence to acknowledge before running
+            this install.
+          type: string
         output:
           description: Combined stdout+stderr from the install command, tail-capped
             to the last ~4000 bytes.
@@ -10809,6 +11759,7 @@ components:
           - codex
           - cursor
           - opencode
+          - opencode-v2
           - aider
           - copilot
           - grok
@@ -10821,6 +11772,7 @@ components:
           - cline
           - goose
           - qwen
+          - gemini
           - continue
           - devin
           - kiro
@@ -10832,7 +11784,10 @@ components:
           - kimchi
           - prime-agent
           - omp
+          - fx
           - unreal-agent
+          - mimo-code
+          - deepseek-harness
           - cloudflared
           type: string
         updatedAt:
@@ -10843,6 +11798,37 @@ components:
       required:
       - target
       - status
+      type: object
+    InvokeCueRequest:
+      properties:
+        sessionId:
+          description: 'Optional exact session target. Agent cues message it; command
+            cues use its worktree. Omit it to spawn an agent worker or run a command
+            in the project root. A supplied id must be non-blank and compatible, and
+            never falls back to a replacement worker. Invocation body limit: 4 KiB.'
+          type: string
+        shell:
+          description: Desktop shell selection used only for command cues.
+          type: string
+      type: object
+    InvokeCueResponse:
+      properties:
+        kind:
+          description: Invocation kind.
+          enum:
+          - agent
+          - command
+          type: string
+        sessionId:
+          description: For agent cues, the session that received the prompt or newly
+            spawned worker.
+          type: string
+        shellTerminal:
+          $ref: '#/components/schemas/ShellTerminalResponse'
+          description: For command cues, the normal shell terminal that received the
+            command.
+      required:
+      - kind
       type: object
     KillReviewResponse:
       properties:
@@ -10935,6 +11921,28 @@ components:
       - installed
       - authorized
       type: object
+    ListAutomationRunsResponse:
+      properties:
+        nextCursor:
+          type: string
+        runs:
+          items:
+            $ref: '#/components/schemas/AutomationRunResponse'
+          type: array
+      required:
+      - runs
+      type: object
+    ListAutomationsResponse:
+      properties:
+        automations:
+          items:
+            $ref: '#/components/schemas/AutomationResponse'
+          type: array
+        nextCursor:
+          type: string
+      required:
+      - automations
+      type: object
     ListCompactSessionUsageResponse:
       properties:
         sessions:
@@ -10943,6 +11951,15 @@ components:
           type: array
       required:
       - sessions
+      type: object
+    ListCuesResponse:
+      properties:
+        cues:
+          items:
+            $ref: '#/components/schemas/CueResponse'
+          type: array
+      required:
+      - cues
       type: object
     ListDirsResponse:
       properties:
@@ -10986,6 +12003,15 @@ components:
       type: object
     ListPRFilesResponse:
       properties:
+        commits:
+          items:
+            $ref: '#/components/schemas/WorkspaceCommitSummary'
+          type: array
+        commitsTruncated:
+          description: 'True when older commits were left out of commits: the list
+            keeps the newest 250, and stops at the last commit whose changes fit the
+            daemon''s size cap.'
+          type: boolean
         files:
           items:
             $ref: '#/components/schemas/WorkspaceFileSummary'
@@ -10999,6 +12025,7 @@ components:
       required:
       - sessionId
       - files
+      - commits
       - truncated
       - summary
       type: object
@@ -11051,6 +12078,10 @@ components:
       type: object
     ListSessionPRsResponse:
       properties:
+        linkedPrs:
+          items:
+            $ref: '#/components/schemas/SessionPRReference'
+          type: array
         prs:
           items:
             $ref: '#/components/schemas/SessionPRSummary'
@@ -11060,6 +12091,7 @@ components:
       required:
       - sessionId
       - prs
+      - linkedPrs
       type: object
     ListSessionsResponse:
       properties:
@@ -11093,6 +12125,11 @@ components:
           items:
             $ref: '#/components/schemas/WorkspaceCommitSummary'
           type: array
+        commitsTruncated:
+          description: 'True when older commits were left out of commits: the list
+            keeps the newest 250, and stops at the last commit whose changes fit the
+            daemon''s size cap.'
+          type: boolean
         compareBaseRef:
           type: string
         compareBaseSha:
@@ -11281,6 +12318,8 @@ components:
           type: string
         hostId:
           type: string
+        keepAwake:
+          $ref: '#/components/schemas/ControllersKeepAwakeStatus'
         password:
           type: string
         port:
@@ -11304,6 +12343,7 @@ components:
       - password
       - warning
       - securePairing
+      - keepAwake
       type: object
     MobileTunnelStatus:
       properties:
@@ -11379,6 +12419,8 @@ components:
           - ready_to_merge
           - pr_merged
           - pr_closed_unmerged
+          - review_completed
+          - review_changes_requested
           type: string
       required:
       - id
@@ -12142,6 +13184,8 @@ components:
           maxLength: 4096
           minLength: 1
           type: string
+        userAuthored:
+          type: boolean
       required:
       - message
       type: object
@@ -12369,6 +13413,28 @@ components:
       - state
       - reasons
       - prUrl
+      type: object
+    SessionPRReference:
+      properties:
+        host:
+          type: string
+        number:
+          type: integer
+        provider:
+          enum:
+          - github
+          - gitlab
+          type: string
+        repo:
+          type: string
+        url:
+          type: string
+      required:
+      - url
+      - provider
+      - host
+      - repo
+      - number
       type: object
     SessionPRReviewCommentLink:
       properties:
@@ -12835,6 +13901,7 @@ components:
           - cursor
           - kilocode
           - opencode
+          - opencode-v2
           - kiro
           - pi
           - agy
@@ -12873,6 +13940,8 @@ components:
           type: string
         localEnabled:
           type: boolean
+        trackerIntakeEnabled:
+          type: boolean
       required:
       - defaultSessionMode
       - chatHarnesses
@@ -12881,6 +13950,7 @@ components:
       - cloudOffering
       - cloudEnabled
       - cloudControlPlaneUrl
+      - trackerIntakeEnabled
       type: object
     ShellTerminalEnvelope:
       properties:
@@ -12965,6 +14035,7 @@ components:
           - codex
           - aider
           - opencode
+          - opencode-v2
           - grok
           - droid
           - amp
@@ -12972,6 +14043,7 @@ components:
           - crush
           - cursor
           - qwen
+          - gemini
           - copilot
           - goose
           - auggie
@@ -12986,9 +14058,12 @@ components:
           - pi
           - kimchi
           - omp
+          - fx
           - prime-agent
           - autohand
           - unreal-agent
+          - mimo-code
+          - deepseek-harness
           type: string
         issueId:
           type: string
@@ -13258,6 +14333,7 @@ components:
           enum:
           - claude-code
           - codex
+          - fx
           type: string
       required:
       - targetHarness
@@ -13334,6 +14410,7 @@ components:
           - cursor
           - kilocode
           - opencode
+          - opencode-v2
           - kiro
           - pi
           - agy
@@ -13384,6 +14461,44 @@ components:
       required:
       - token
       - deleted
+      type: object
+    UpdateAutomationRequest:
+      properties:
+        cron:
+          type:
+          - "null"
+          - string
+        displayName:
+          type:
+          - "null"
+          - string
+        enabled:
+          type:
+          - "null"
+          - boolean
+        harness:
+          type:
+          - "null"
+          - string
+        kind:
+          enum:
+          - worker
+          - orchestrator
+          type:
+          - "null"
+          - string
+        prompt:
+          type:
+          - "null"
+          - string
+        rrule:
+          type:
+          - "null"
+          - string
+        timezone:
+          type:
+          - "null"
+          - string
       type: object
     UpdateProjectSettingsInput:
       properties:
@@ -13937,6 +15052,8 @@ tags:
   name: projects
 - description: Agent session lifecycle and messaging
   name: sessions
+- description: Recurring daemon-owned session schedules and durable run history
+  name: automations
 - description: Pull-request actions (SCM lane)
   name: prs
 - description: Code-review runs and findings

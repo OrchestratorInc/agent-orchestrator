@@ -95,6 +95,51 @@ export interface CloudCpPageInfo {
 	nextCursor?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Cloud notifications (`notification_handlers.go`)
+// ---------------------------------------------------------------------------
+
+export interface CloudCpNotification {
+	id: string;
+	source: "cloud";
+	eventId?: string;
+	orgId: string;
+	projectId?: string;
+	sessionId?: string;
+	type: string;
+	title: string;
+	body: string;
+	status: "unread" | "read";
+	resolvedAt?: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface CloudCpNotificationEvent {
+	sequence: number;
+	orgId: string;
+	recipientUserId: string;
+	kind: "notification_created" | "notification_updated" | "notification_resolved";
+	notification: CloudCpNotification;
+	createdAt: string;
+}
+
+export interface CloudCpNotificationListQuery extends CloudCpListQuery {
+	status?: "unread" | "read" | "all";
+}
+
+export interface CloudCpNotificationListResponse {
+	items: CloudCpNotification[];
+	page: CloudCpPageInfo;
+	unreadCount: number;
+	latestSequence: number;
+}
+
+export interface CloudCpNotificationEventsResponse {
+	items: CloudCpNotificationEvent[];
+	hasMore: boolean;
+}
+
 export interface CloudCpListQuery {
 	/** Page size, 1-100 (control-plane default: 50). */
 	limit?: number;
@@ -176,6 +221,7 @@ export interface CloudCpProjectDeletedResponse {
 export type CloudCpSessionKind = "worker" | "orchestrator";
 
 export type CloudCpSessionMode = "read-only" | "standard" | "trusted";
+export type CloudCpInterfaceMode = "tui" | "chat";
 
 /** POST /orgs/{orgId}/sessions (requires an Idempotency-Key header). */
 export interface CloudCpCreateSessionRequest {
@@ -189,6 +235,11 @@ export interface CloudCpCreateSessionRequest {
 	prompt: string;
 	/** Defaults to "trusted" on the control plane when omitted. */
 	mode?: CloudCpSessionMode;
+	/**
+	 * Coding-agent model the session launches with (harness-native id). Optional:
+	 * omitted uses the harness default.
+	 */
+	model?: string;
 	deniedCommands?: string[];
 	sandboxProviderConnectionId?: string;
 	/**
@@ -229,12 +280,10 @@ export interface CloudCpSession {
 	harness: string;
 	reviewerHarness?: string;
 	autoReviewEnabled?: boolean;
-	autoInjectCI?: boolean;
-	autoInjectReview?: boolean;
-	terminateOnPrMerge?: boolean;
 	displayName: string;
 	branch: string;
 	mode: string;
+	interfaceMode: CloudCpInterfaceMode;
 	deniedCommands: string[];
 	activityState: string;
 	status: string;
@@ -245,6 +294,10 @@ export interface CloudCpSession {
 	runtimeState?: string;
 	runtimeError?: string;
 	isTerminated: boolean;
+	autoInjectCI?: boolean;
+	autoInjectReview?: boolean;
+	terminateOnPrMerge?: boolean;
+	prs: CloudCpSessionPullRequest[];
 	/**
 	 * Highest worker epoch the session has minted for its agent terminal. It
 	 * advances on every fresh worker connection (resume from idle-pause,
@@ -255,6 +308,61 @@ export interface CloudCpSession {
 	workerEpoch?: number;
 	createdAt: string;
 	updatedAt: string;
+}
+
+export interface CloudCpInterfaceTransition {
+	id: string;
+	/** Mirrors the durable Cloud coordinator state machine. */
+	phase:
+		| "requested"
+		| "preflighting"
+		| "draining"
+		| "source_stopping"
+		| "source_stopped"
+		| "target_starting"
+		| "activating"
+		| "completed"
+		| "failed"
+		| "cancelled"
+		| "recovery_required";
+	policy: "drain" | "interrupt";
+	sessionId: string;
+	sourceMode: CloudCpInterfaceMode;
+	targetMode: CloudCpInterfaceMode;
+	nativeConversationId?: string;
+	errorCode?: string;
+	errorDetail?: string;
+	noticeAcknowledgedAt?: string;
+	createdAt: string;
+	updatedAt: string;
+	completedAt?: string;
+}
+
+export interface CloudCpInterfaceTransitionStatusResponse {
+	supported: boolean;
+	targetMode: CloudCpInterfaceMode;
+	reasonCode?: string;
+	reason?: string;
+	transition?: CloudCpInterfaceTransition;
+}
+
+export interface CloudCpStartInterfaceTransitionRequest {
+	targetMode: CloudCpInterfaceMode;
+	policy: "drain" | "interrupt";
+}
+
+export interface CloudCpStartInterfaceTransitionResponse {
+	transition: CloudCpInterfaceTransition;
+}
+
+/** DELETE /orgs/{orgId}/sessions/{sessionId}/interface-transition */
+export interface CloudCpCancelInterfaceTransitionResponse {
+	ok: boolean;
+}
+
+/** PUT /orgs/{orgId}/sessions/{sessionId}/interface-transition/{transitionId}/notice-acknowledgement */
+export interface CloudCpAcknowledgeInterfaceTransitionNoticeResponse {
+	ok: boolean;
 }
 
 export interface CloudCpSessionResponse {
@@ -467,6 +575,12 @@ export interface CloudCpSessionPullRequest {
 	ci: string;
 	review: string;
 	mergeability: string;
+	failingChecks?: Array<{
+		name: string;
+		status: "failed" | "cancelled";
+		conclusion: string;
+		url?: string;
+	}>;
 	/** Always false today: the control plane does not track unresolved comments yet. */
 	reviewComments: boolean;
 	sourceBranch?: string;
@@ -497,13 +611,61 @@ export interface CloudCpPullRequestSummary {
 	provider: string;
 	repository: string;
 	author: string;
+	authorAvatarUrl?: string;
 	sourceBranch: string;
 	targetBranch: string;
 	headSha: string;
 	additions: number;
 	deletions: number;
 	changedFiles: number;
+	ci: {
+		state: "unknown" | "pending" | "passing" | "failing";
+		failingChecks: Array<{
+			name: string;
+			status: "failed" | "cancelled";
+			conclusion: string;
+			url?: string;
+		}>;
+	};
+	review: {
+		decision: "none" | "approved" | "changes_requested" | "review_required";
+		hasUnresolvedHumanComments: boolean;
+		unresolvedBy: Array<{
+			reviewerId: string;
+			count: number;
+			links: Array<{ url?: string; reviewId?: string; file?: string; line?: number; body?: string; autoInjectReview: boolean }>;
+			reviewUrl?: string;
+			isBot?: boolean;
+		}>;
+		resolvedBy: Array<{
+			reviewerId: string;
+			count: number;
+			links: Array<{ url?: string; reviewId?: string; file?: string; line?: number; body?: string; autoInjectReview: boolean }>;
+			reviewUrl?: string;
+			isBot?: boolean;
+		}>;
+		reviews: Array<{
+			reviewerId: string;
+			verdict: "none" | "approved" | "changes_requested" | "review_required";
+			body?: string;
+			reviewUrl?: string;
+			submittedAt: string;
+			isBot?: boolean;
+			autoInjectReview: boolean;
+		}>;
+	};
+	mergeability: {
+		state: "unknown" | "mergeable" | "conflicting" | "blocked" | "unstable";
+		reasons: string[];
+		pullRequestUrl: string;
+		conflictFiles: Array<{ path: string; url?: string }>;
+	};
+	stateChangedAt?: string;
+	createdAt?: string;
 	updatedAt: string;
+	observedAt: string;
+	ciObservedAt: string;
+	reviewObservedAt: string;
 }
 
 export interface CloudCpSessionPullRequestsResponse {
@@ -606,6 +768,22 @@ export interface CloudCpRestoreSessionResponse {
 export interface CloudCpSendMessageRequest {
 	/** 1-65536 bytes. */
 	text: string;
+	model?: string;
+	reasoningEffort?: string;
+	/** Per-turn permission mode, capped by the session and share grant. */
+	mode?: "read-only" | "standard" | "trusted";
+	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+}
+
+export interface CloudCpChatModelsResponse {
+	models: Array<{
+		id: string;
+		displayName: string;
+		description?: string;
+		default: boolean;
+		efforts?: string[];
+		defaultEffort?: string;
+	}>;
 }
 
 export interface CloudCpClientEvent {
@@ -624,6 +802,11 @@ export interface CloudCpSendMessageResponse {
 /** POST /orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/cancel responds 202. */
 export interface CloudCpCancelTurnResponse {
 	ok: boolean;
+}
+
+/** POST steering response; guidance for the active turn was accepted. */
+export interface CloudCpSteerTurnResponse {
+	event: CloudCpClientEvent;
 }
 
 export interface CloudCpChatEventsQuery {
@@ -666,13 +849,14 @@ export interface CloudCpTerminalTicketResponse {
 // ---------------------------------------------------------------------------
 
 /** Coding-agent providers the control plane accepts (`validAgentProvider`). */
-export type CloudCpAgentProvider = "claude-code" | "codex" | "cursor";
+export type CloudCpAgentProvider = "claude-code" | "codex" | "cursor" | "opencode";
 
 /**
  * Credential types by provider (`validAgentCredentialType`):
  * claude-code accepts "api_key" | "oauth_token"; codex accepts
  * "api_key" | "access_token" | "auth_json" (the opaque result of a
- * ChatGPT subscription login); cursor accepts "api_key".
+ * ChatGPT subscription login); cursor accepts "api_key"; opencode accepts
+ * "auth_json" (its multi-provider auth document; no single api-key env var).
  */
 export interface CloudCpPutAgentConnectionRequest {
 	credentialType: string;

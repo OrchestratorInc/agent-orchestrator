@@ -41,7 +41,7 @@ Project settings expose the fields that AO consumes at spawn time:
 | `agentRulesFile` | Repo-relative rules file appended to worker instructions |
 | `orchestratorRules` | Standing instructions for orchestrator sessions |
 | `reviewers` | Reviewer harnesses used for AO review runs |
-| `trackerIntake` | Opt-in, read-only issue intake that can spawn workers |
+| `trackerIntake` | Opt-in, read-only issue intake that can spawn workers; inert unless the daemon also has `AO_TRACKER_INTAKE=on` |
 | `containerReap` | Project-wide opt-out from AO's session-container cleanup |
 
 `symlinks` and `agentRulesFile` must remain inside the repository. AO rejects absolute paths and traversal. Scratch rejects Git-only fields such as `defaultBranch` and symlinks.

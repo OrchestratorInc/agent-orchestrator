@@ -33,6 +33,7 @@ const {
 	xtermMounts,
 	xtermUnmounts,
 	xtermFocusRequests,
+	visibleContentCallback,
 } = vi.hoisted(
 	() => ({
 		attachMock: vi.fn(() => vi.fn()),
@@ -59,6 +60,7 @@ const {
 		xtermMounts: { value: 0 },
 		xtermUnmounts: { value: 0 },
 		xtermFocusRequests: { value: 0 },
+		visibleContentCallback: { value: undefined as (() => void) | undefined },
 	}),
 );
 let terminalLinkHandler: ((uri: string) => void) | undefined;
@@ -94,10 +96,12 @@ vi.mock("./XtermTerminal", () => ({
 	XtermTerminal: (props: {
 		focusRequested?: boolean;
 		isVisible?: boolean;
+		onVisibleContent?: () => void;
 		onLinkOpen?: (uri: string) => void;
 		onReady?: (terminal: AttachableTerminal) => void;
 	}) => {
 		terminalLinkHandler = props.onLinkOpen;
+		visibleContentCallback.value = props.onVisibleContent;
 		const instance = useRef(0);
 		if (instance.current === 0) {
 			xtermMounts.value += 1;
@@ -184,6 +188,7 @@ beforeEach(() => {
 	xtermMounts.value = 0;
 	xtermUnmounts.value = 0;
 	xtermFocusRequests.value = 0;
+	visibleContentCallback.value = undefined;
 	useUiStore.setState({ inspectorSessions: {} });
 });
 
@@ -253,6 +258,7 @@ function renderPane(
 	inputRequest?: { id: number; data: string },
 	onInputRequestResult?: (id: number, accepted: boolean) => void,
 	terminalTarget?: TerminalTarget,
+	onTerminalContentReadyChange?: (ready: boolean) => void,
 ) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const previousAO = window.ao;
@@ -265,6 +271,7 @@ function renderPane(
 					fontSize={12}
 					inputRequest={inputRequest}
 					onInputRequestResult={onInputRequestResult}
+					onTerminalContentReadyChange={onTerminalContentReadyChange}
 					session={session}
 					terminalTarget={terminalTarget}
 					theme="dark"
@@ -599,6 +606,36 @@ describe("TerminalPane replay cover", () => {
 			// connecting cover (not the replay cover), with a bare "Connecting".
 			expect(screen.getByTestId("terminal-connecting-cover")).toHaveTextContent("Connecting");
 			expect(terminalSessionOptions.at(-1)?.waitForInitialOutput).toBe(true);
+		} finally {
+			view.restore();
+		}
+	});
+
+	it("reports the cloud agent ready only after its first replay is painted", async () => {
+		const onContentReady = vi.fn();
+		let finishPaint: (() => void) | undefined;
+		prepareForActivationMock.mockImplementation(() => new Promise<void>((resolve) => { finishPaint = resolve; }));
+		terminalState.value = "attached";
+		hasAttached.value = true;
+		replaySettled.value = false;
+		const session = { ...worker, terminalHandleId: "term-1", cloud: { orgId: "org-1" } };
+		const view = renderPane(session, undefined, undefined, undefined, onContentReady);
+		try {
+			expect(onContentReady).toHaveBeenLastCalledWith(false);
+			replaySettled.value = true;
+			view.rerender(
+				<QueryClientProvider client={view.queryClient}>
+					<TooltipProvider>
+						<TerminalPane daemonReady fontSize={12} onTerminalContentReadyChange={onContentReady} session={session} theme="dark" />
+					</TooltipProvider>
+				</QueryClientProvider>,
+			);
+			expect(onContentReady).toHaveBeenLastCalledWith(false);
+			await act(async () => finishPaint?.());
+			expect(onContentReady).toHaveBeenLastCalledWith(false);
+			expect(screen.getByTestId("terminal-connecting-cover")).toBeInTheDocument();
+			act(() => visibleContentCallback.value?.());
+			await waitFor(() => expect(onContentReady).toHaveBeenLastCalledWith(true));
 		} finally {
 			view.restore();
 		}
@@ -975,6 +1012,17 @@ describe("TerminalCacheProvider", () => {
 });
 
 describe("terminal restore", () => {
+	it("does not show the terminal-ended strip for a Cloud agent", () => {
+		terminalState.value = "exited";
+		const view = renderPane({ ...worker, cloud: { orgId: "org-1" }, terminalHandleId: "term-1" });
+		try {
+			expect(screen.queryByText("This terminal process ended, but the session is not marked terminated yet.")).not.toBeInTheDocument();
+			expect(screen.queryByText("TERMINAL ENDED")).not.toBeInTheDocument();
+		} finally {
+			view.restore();
+		}
+	});
+
 	it.each([
 		["exited", undefined],
 		["error", "terminal handle missing"],
@@ -1124,13 +1172,15 @@ describe("terminal restore", () => {
 });
 
 describe("providerScrollsByKeyboard", () => {
-	// opencode, its fork kilocode, and grok use TUIs that scroll their own transcripts
+	// opencode, its derivatives kilocode and MiMo Code, and grok use TUIs that scroll their own transcripts
 	// by keyboard and ignore SGR wheel reports, so they must opt into the
 	// PageUp/PageDown wheel routing (see XtermTerminal's paneScrollsByKeyboard).
 	it("is true for keyboard-scroll TUIs", () => {
 		expect(providerScrollsByKeyboard("opencode")).toBe(true);
+		expect(providerScrollsByKeyboard("opencode-v2")).toBe(true);
 		expect(providerScrollsByKeyboard("kilocode")).toBe(true);
 		expect(providerScrollsByKeyboard("grok")).toBe(true);
+		expect(providerScrollsByKeyboard("mimo-code")).toBe(true);
 	});
 
 	it("is false for mouse-report/native-scroll providers", () => {

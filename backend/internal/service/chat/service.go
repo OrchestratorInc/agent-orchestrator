@@ -47,9 +47,8 @@ type Service struct {
 	now                    Clock
 	onAccountChanged       func(domain.SessionID, string, domain.AgentHarness)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
-	// onModelChanged records a model the user picked in ChatUI onto the
-	// session's durable metadata before the next prompt routes, so a later TUI
-	// rebuild can resume with the same model.
+	// onModelChanged syncs ChatUI's model override (including clearing it) to
+	// session metadata before the next prompt routes or a later TUI rebuild.
 	onModelChanged   func(domain.SessionID, string)
 	stopProviderHost func(context.Context, domain.SessionID) error
 	reports          *reportsvc.Coordinator
@@ -115,10 +114,8 @@ type Options struct {
 	// globally active AO Codex account. The callback owns profile-independent
 	// account state; conversation rows are not the authority for Codex capacity.
 	OnCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
-	// OnModelChanged persists a model the user picked in ChatUI onto the
-	// session's durable metadata before the next prompt routes. Nil leaves the
-	// session model unchanged (production always wires it so the choice survives
-	// a later TUI rebuild).
+	// OnModelChanged syncs ChatUI's model override to session metadata before
+	// the next prompt routes. Nil leaves session metadata unchanged.
 	OnModelChanged func(domain.SessionID, string)
 	// StopProviderHost destroys current session ownership on explicit teardown,
 	// even if its daemon attachment already failed. Never used by StopAll.
@@ -689,7 +686,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			return nil, err
 		}
 	}
-	if !liveReconnect && cfg.Harness == domain.HarnessOpenCode && conversation.Settings.OpenCodeMode != "" {
+	if !liveReconnect && isOpenCodeHarness(cfg.Harness) && conversation.Settings.OpenCodeMode != "" {
 		if err := restoreOpenCodeMode(ctx, conv, conversation.Settings.OpenCodeMode); err != nil {
 			_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
 			return nil, err
@@ -1864,7 +1861,16 @@ func (s *Service) SetConfigOption(
 	}
 	options = permissionConfigOptions(record.Harness, options)
 	settings, _ := settingsFromConfigOptions(previous, options)
-	if record.Harness == domain.HarnessOpenCode && configID == "mode" {
+	if record.Harness == domain.HarnessClaudeCode {
+		// Provider-owned defaults stay implicit so future Claude defaults still apply.
+		if settings.Model == "default" {
+			settings.Model = ""
+		}
+		if settings.ReasoningEffort == "default" {
+			settings.ReasoningEffort = ""
+		}
+	}
+	if isOpenCodeHarness(record.Harness) && configID == "mode" {
 		for _, option := range options {
 			if option.ID == "mode" {
 				settings.OpenCodeMode = option.Current.Select
@@ -1881,6 +1887,10 @@ func (s *Service) SetConfigOption(
 		s.persistPickedModel(id, previous, settings)
 	}
 	return options, nil
+}
+
+func isOpenCodeHarness(harness domain.AgentHarness) bool {
+	return harness == domain.HarnessOpenCode || harness == domain.HarnessOpenCodeV2
 }
 
 // Restore the provider-owned choice before publishing a controller. A rejected
@@ -2027,16 +2037,11 @@ func (s *Service) SetTurnSettings(
 	return controller.Settings(), nil
 }
 
-// persistPickedModel records a model the user picked in ChatUI onto the
-// session's durable metadata BEFORE the next prompt routes. The conversation
-// row is the chat-side source of truth; the session metadata is what a later
-// TUI rebuild reads to keep the same model, so a model change must land there
-// too before the user can switch interfaces. Every route that can change the
-// model funnels through here: the turn-settings PATCH and the provider
-// config-options route (e.g. Claude Code's model picker).
+// persistPickedModel keeps session metadata in sync with the Chat model choice,
+// including clearing an override before a later TUI rebuild.
 func (s *Service) persistPickedModel(id domain.SessionID, previous, next domain.ConversationSettings) {
 	model := strings.TrimSpace(next.Model)
-	if model == "" || model == strings.TrimSpace(previous.Model) || s.onModelChanged == nil {
+	if model == strings.TrimSpace(previous.Model) || s.onModelChanged == nil {
 		return
 	}
 	s.onModelChanged(id, model)
@@ -2053,7 +2058,7 @@ func (s *Service) persistPickedModel(id domain.SessionID, previous, next domain.
 // Delivery follows the same rules as any other send: a message arriving mid-turn
 // queues instead of racing the running turn.
 func (s *Service) RelayChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error) {
-	return s.RelayChatTurnWithID(ctx, id, text, "")
+	return s.relayChatTurn(ctx, id, text, "", false)
 }
 
 // RelayChatTurnWithID is RelayChatTurn with a durable caller-supplied
@@ -2065,6 +2070,21 @@ func (s *Service) RelayChatTurnWithID(
 	id domain.SessionID,
 	text, clientMessageID string,
 ) (string, error) {
+	return s.relayChatTurn(ctx, id, text, clientMessageID, false)
+}
+
+// RelayUserAuthoredChatTurn delivers user-written content through AO's relay
+// path without changing its automation delivery attribution.
+func (s *Service) RelayUserAuthoredChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error) {
+	return s.relayChatTurn(ctx, id, text, "", true)
+}
+
+func (s *Service) relayChatTurn(
+	ctx context.Context,
+	id domain.SessionID,
+	text, clientMessageID string,
+	authoredByUser bool,
+) (string, error) {
 	controller, err := s.Controller(id)
 	if err != nil {
 		return "", err
@@ -2073,6 +2093,7 @@ func (s *Service) RelayChatTurnWithID(
 		Text:            text,
 		ClientMessageID: clientMessageID,
 		Origin:          domain.MessageOriginAutomation,
+		AuthoredByUser:  authoredByUser,
 	})
 	if err != nil {
 		return "", err
@@ -2109,7 +2130,7 @@ func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatCo
 				case "bypassPermissions":
 					choice.PermissionMode = domain.PermissionModeBypassPermissions
 				}
-			case domain.HarnessOpenCode:
+			case domain.HarnessOpenCode, domain.HarnessOpenCodeV2:
 				// AO's own permission tiers, injected as OpenCode agents. OpenCode
 				// reports an agent's key as its display name, so they are relabelled
 				// here into the vocabulary the rest of AO uses. Its native build and
@@ -2127,7 +2148,7 @@ func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatCo
 func openCodeApprovalTier(value string) (domain.PermissionMode, string, bool) {
 	switch value {
 	case "ao-default":
-		return domain.PermissionModeDefault, "Default approvals", true
+		return domain.PermissionModeDefault, "Use agent permissions", true
 	case "ao-accept-edits":
 		return domain.PermissionModeAcceptEdits, "Accept edits", true
 	case "ao-auto":

@@ -78,10 +78,14 @@ type Session struct {
 	DisplayName        string
 	Branch             string
 	Mode               string
+	Model              string
 	DeniedCommands     []string
+	Interface          SessionInterface
 	ActivityState      contract.ActivityState
 	IsTerminated       bool
 	RuntimeConnected   bool
+	WorkerLastSeenAt   *time.Time
+	StartupAttempts    int
 	SandboxProvider    string
 	DesiredState       string
 	ObservedState      string
@@ -99,12 +103,20 @@ type Session struct {
 
 // Status derives the session's display status from runtime and pull request facts.
 func (s Session) Status(now time.Time, prs []contract.PRFacts) contract.SessionStatus {
+	starting := s.DesiredState == "running" && !s.RuntimeConnected && s.WorkerLastSeenAt == nil && s.StartupAttempts == 0 && (s.ObservedState == "requested" || s.ObservedState == "provisioning" ||
+		s.ObservedState == "bootstrapping" || s.ObservedState == "restoring" ||
+		s.ObservedState == "ready" || s.ObservedState == "running")
+	lastSignalAt := s.UpdatedAt
+	if s.WorkerLastSeenAt != nil {
+		lastSignalAt = *s.WorkerLastSeenAt
+	}
 	return contract.DeriveStatus(contract.SessionFacts{
 		Activity:       s.ActivityState,
-		LastActivityAt: s.UpdatedAt,
+		LastActivityAt: lastSignalAt,
 		HasSignal:      s.RuntimeConnected,
-		SignalExpected: s.RuntimeState != "",
-		IsTerminated:   s.IsTerminated,
+		SignalExpected: s.DesiredState == "running" && !starting &&
+			(s.WorkerLastSeenAt != nil || s.StartupAttempts > 0 || s.ObservedState == "failed"),
+		IsTerminated: s.IsTerminated,
 	}, prs, now, 2*time.Minute)
 }
 
@@ -115,7 +127,9 @@ type CreateSession struct {
 	DisplayName    string
 	Prompt         string
 	Mode           string
+	Model          string
 	DeniedCommands []string
+	Interface      SessionInterface
 	Provider       string
 	// SandboxConnectionID names a bring-your-own provider credential. It is
 	// empty for sandboxes that run on the platform's own account.
@@ -201,7 +215,10 @@ type WorkerTurn struct {
 	ID                string
 	SessionID         string
 	Prompt            string
+	Model             string
+	ReasoningEffort   string
 	Mode              string
+	ApprovalMode      string
 	DeniedCommands    []string
 	Harness           string
 	Attempt           int
@@ -209,6 +226,13 @@ type WorkerTurn struct {
 	CancelRequested   bool
 	AgentSessionID    string
 	UserEventSequence int64
+}
+
+type ChatTurnSettings struct {
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	Mode            string `json:"mode,omitempty"`
+	ApprovalMode    string `json:"approvalMode,omitempty"`
 }
 
 // WorkerCredential is the encrypted coding-agent credential selected by the
@@ -240,15 +264,16 @@ type WorkerRequest struct {
 }
 
 type TerminalSession struct {
-	ID           string
-	OrgID        string
-	SessionID    string
-	WorkerEpoch  int64
-	Kind         string
-	State        string
-	Scopes       []string
-	ErrorMessage string
-	ExpiresAt    time.Time
+	ID                 string
+	OrgID              string
+	SessionID          string
+	WorkerEpoch        int64
+	NextOutputSequence int64
+	Kind               string
+	State              string
+	Scopes             []string
+	ErrorMessage       string
+	ExpiresAt          time.Time
 }
 
 type TerminalOutput struct {

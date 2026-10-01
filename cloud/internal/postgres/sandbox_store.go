@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -835,12 +836,13 @@ func (s *Store) WorkerLaunchSpec(
 ) (domain.WorkerLaunch, error) {
 	launch := domain.WorkerLaunch{OrgID: orgID}
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var interfaceValue string
 		err := tx.QueryRow(
 			ctx,
 			`SELECT session.id, session.project_id, project.display_name, project.config,
 				session.kind, session.harness,
 				session.display_name, session.branch, session.prompt,
-				session.agent_session_id, session.mode, session.denied_commands,
+				session.agent_session_id, session.mode, session.model, session.denied_commands, session.interface,
 				COALESCE(session.parent_session_id::text, ''),
 				project.repository_url, project.default_branch
 			FROM ao_sessions session
@@ -860,7 +862,9 @@ func (s *Store) WorkerLaunchSpec(
 			&launch.Prompt,
 			&launch.AgentSessionID,
 			&launch.Mode,
+			&launch.Model,
 			&launch.DeniedCommands,
+			&interfaceValue,
 			&launch.ParentSessionID,
 			&launch.RepositoryURL,
 			&launch.DefaultBranch,
@@ -871,6 +875,7 @@ func (s *Store) WorkerLaunchSpec(
 		if err != nil {
 			return fmt.Errorf("load worker launch spec: %w", err)
 		}
+		launch.Interface = domain.SessionInterface(interfaceValue).Normalized()
 		return nil
 	})
 	if err != nil {
@@ -1005,17 +1010,21 @@ func (s *Store) SetWorkerActivity(
 			return ErrStaleWorker
 		}
 		var currentState, blockedToolName, blockedToolUseID string
+		var sessionInterface domain.SessionInterface
 		if err := tx.QueryRow(ctx,
 			`SELECT activity_state, activity_blocked_tool_name,
-				activity_blocked_tool_use_id
+				activity_blocked_tool_use_id, interface
 			FROM ao_sessions
 			WHERE org_id = $1 AND id = $2 AND is_terminated = false
 			FOR UPDATE`,
 			orgID, sessionID,
-		).Scan(&currentState, &blockedToolName, &blockedToolUseID); errors.Is(err, pgx.ErrNoRows) {
+		).Scan(&currentState, &blockedToolName, &blockedToolUseID, &sessionInterface); errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		} else if err != nil {
 			return fmt.Errorf("load worker activity: %w", err)
+		}
+		if !shouldApplyWorkerActivity(sessionInterface, activity) {
+			return nil
 		}
 		if activity.State == "" {
 			tag, err := tx.Exec(ctx,
@@ -1070,6 +1079,19 @@ func (s *Store) SetWorkerActivity(
 		}
 		return nil
 	})
+}
+
+func shouldApplyWorkerActivity(sessionInterface domain.SessionInterface, activity worker.ActivityEvent) bool {
+	if sessionInterface.Normalized() == domain.SessionInterfaceTUI {
+		return true
+	}
+	if activity.State == "" && strings.TrimSpace(activity.AgentSessionID) != "" {
+		return true
+	}
+	// A terminal hook can arrive after Chat has taken ownership. Its stop
+	// acknowledgement may settle activity, but late active work belongs to
+	// the old controller and must not make Chat appear to be working.
+	return activity.SourceInterface == "tui" && activity.State == "idle"
 }
 
 func matchingBlockedTool(

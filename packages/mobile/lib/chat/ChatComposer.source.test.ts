@@ -39,11 +39,12 @@ describe("chat composer pill", () => {
 		// while the keyboard is still moving. Filling reads nothing.
 		expect(composer).toContain("<ComposerGlass radius={COMPOSER_RADIUS} />");
 		expect(composer).not.toContain("<ComposerGlass height=");
-		expect(composer).not.toContain("onLayout");
+		// The PR card measures its own header for the drag-to-collapse animation;
+		// that measurement does not size the glass behind the composer row.
 		// The field grows from the native content size while glass fills the pill,
 		// avoiding a separately measured glass height that could lag behind it.
 		expect(composer).toContain("onContentSizeChange={(event) => {");
-		expect(composer).toContain("style={[styles.input, { height: fieldHeight }]}");
+		expect(composer).toContain("style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}");
 		expect(styleRule("composer")).toContain("minHeight: COMPOSER_HEIGHT");
 		expect(styleRule("composer")).toContain("maxHeight: COMPOSER_MAX_HEIGHT");
 		expect(styleRule("composer")).toContain('alignItems: "flex-end"');
@@ -57,6 +58,20 @@ describe("chat composer pill", () => {
 		// content — typing would stop working.
 		expect(source("./composer-glass.ios.tsx")).toContain("glassPanel(radius, undefined, false)");
 		expect(source("./composer-glass.ios.tsx")).toContain("frame({ maxWidth: 2000, maxHeight: 2000 })");
+	});
+
+	it("returns an emptied multiline draft to the one-line height", () => {
+		// A controlled TextInput can retain its last native content size after its
+		// value is cleared; the empty placeholder must not inherit that height.
+		expect(composer).toContain('setText("");\n\t\t\tsetFieldHeight(COMPOSER_FIELD_HEIGHT);');
+		expect(composer).toContain('if (!latestText.current) {\n\t\t\t\t\t\t\tsetFieldHeight(COMPOSER_FIELD_HEIGHT);');
+		expect(composer).toContain("height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT");
+	});
+
+	it("uses the latest native text when a pasted draft grows before React renders", () => {
+		expect(composer).toContain("onChangeText={(value) => { latestText.current = value; setText(value); }}");
+		expect(composer).toContain("if (!latestText.current) {");
+		expect(composer).toContain('latestText.current = "";\n\t\t\tsetText("");');
 	});
 
 	// Two discs side by side have no hierarchy; the send button is the only shape
@@ -99,5 +114,23 @@ describe("composer meta row", () => {
 		expect(styleRule("deliveryNote")).toContain("flexShrink: 0");
 		expect(control).toContain('alignSelf: "stretch"');
 		expect(control).toContain('overflow: "hidden"');
+	});
+});
+
+describe("PR review composer", () => {
+	it("groups the PR prompt, settings selector, and message input inside one review surface", () => {
+		expect(composer).toContain("const reviewPromptAvailable = Boolean(reviewPR && onOpenReview)");
+		expect(composer).toContain("{showReviewPrompt ? <Animated.View style={[styles.reviewArea, styles.reviewAreaWithPrompt]}>");
+		expect(composer).toContain("<Animated.View style={[styles.reviewContainer, reviewCardDragStyle]}");
+		expect(composer).toContain("<PRReviewPrompt pr={activeReviewPR}");
+		expect(composer).toContain("<TextInput");
+		expect(composer).toContain("{activeReviewPR ? <Animated.View pointerEvents=\"none\" style={[StyleSheet.absoluteFill, reviewComposerGlassStyle]}>");
+	});
+
+	it("uses supported PR and navigation symbols instead of a blank icon tile", () => {
+		const prompt = source("./PRReviewPrompt.tsx");
+		expect(prompt).toContain('name="git-pull-request"');
+		expect(prompt).toContain('name="chevron-right"');
+		expect(prompt).not.toContain('name="arrow-up-right"');
 	});
 });
