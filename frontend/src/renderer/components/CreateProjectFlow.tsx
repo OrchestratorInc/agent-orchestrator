@@ -41,6 +41,7 @@ import { CloudCpError } from "../lib/cloud-cp";
 import type { CloudCpGitHubAppRepository } from "../lib/cloud-cp/types";
 import { useCloudSession } from "../lib/cloud-session";
 import { useUiStore } from "../stores/ui-store";
+import { useShellMaybe } from "../lib/shell-context";
 import { resolveSandboxProviderPreference, useSandboxProviderStore } from "../stores/sandbox-provider-store";
 import {
 	onboardingAlertErrorClass,
@@ -446,9 +447,12 @@ export function CreateProjectFlow({
 
 	// Cloud create finished: the list refetch is already invalidated by the
 	// form; just close the picker and fall back to the default Local choice.
-	const onCloudProjectCreated = () => {
+	// Like a local project, a new cloud project opens straight onto its board.
+	const shell = useShellMaybe();
+	const onCloudProjectCreated = (projectId: string) => {
 		setModePickerOpen(false);
 		setOffering("local");
+		shell?.openProject?.(projectId);
 	};
 
 	// Seed with the current value so we never open on mount; open when it changes.
@@ -1144,7 +1148,7 @@ function CreateProjectSourceDialog({
 	cloudEnabled: boolean;
 	disabled: boolean;
 	offering: ProjectOffering;
-	onCloudCreated: () => void;
+	onCloudCreated: (projectId: string) => void;
 	onSignIn: () => void;
 	onCloudSelect: () => void;
 	onCloudBack: () => void;
@@ -1352,7 +1356,7 @@ function CloudProjectCard({
 	onAuthRequired: () => void;
 	onBack: () => void;
 	onClose?: () => void;
-	onCreated: () => void;
+	onCreated: (projectId: string) => void;
 }) {
 	const { t } = useTranslation();
 	const { client, baseUrl } = useCloudCp();
@@ -1570,7 +1574,7 @@ function CloudProjectCard({
 			// The App path authorizes by repository id and derives the default
 			// branch server-side. Coder config nests under `config.coder`, which
 			// the control plane reads for the dev-kit template and extra repos.
-			await client.createGitHubProject(org.id, {
+			const { project } = await client.createGitHubProject(org.id, {
 				githubRepositoryId: selectedRepo.githubRepositoryId,
 				displayName: selectedRepo.name,
 				config: {
@@ -1580,7 +1584,7 @@ function CloudProjectCard({
 				},
 			});
 			await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
-			onCreated();
+			onCreated(project.id);
 		} catch (err) {
 			setSubmitError(err instanceof Error ? err.message : t("createProject.couldNotAdd"));
 			setIsCreating(false);

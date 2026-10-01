@@ -5,6 +5,7 @@ import { useState, type ComponentProps, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { CreateProjectFlow, type CloneProjectInput, type CreateProjectInput } from "./CreateProjectFlow";
 import { useUiStore } from "../stores/ui-store";
+import { ShellProvider, type ShellContextValue } from "../lib/shell-context";
 import { TooltipProvider } from "./ui/tooltip";
 
 const bridgeMocks = vi.hoisted(() => ({
@@ -1681,7 +1682,13 @@ describe("CreateProjectFlow project import validation", () => {
 		});
 		cloudMocks.createGitHubProject.mockResolvedValue({ project: { id: "cp-app-1" } });
 		const user = userEvent.setup();
-		render(<CreateProjectFlow embedded mode="choose" {...noop} />, { wrapper: CloudTestProviders });
+		const openProject = vi.fn();
+		render(
+			<ShellProvider value={{ openProject } as unknown as ShellContextValue}>
+				<CreateProjectFlow embedded mode="choose" {...noop} />
+			</ShellProvider>,
+			{ wrapper: CloudTestProviders },
+		);
 
 		await user.click(screen.getByRole("button", { name: "New cloud project" }));
 		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
@@ -1710,6 +1717,8 @@ describe("CreateProjectFlow project import validation", () => {
 			}),
 		);
 		expect(cloudMocks.validateSavedRepositoryAccess).not.toHaveBeenCalled();
+		// Like a local project, the new cloud project opens onto its board.
+		await waitFor(() => expect(openProject).toHaveBeenCalledWith("cp-app-1"));
 	});
 
 	it("shows repositories from every GitHub App page in the picker", async () => {
