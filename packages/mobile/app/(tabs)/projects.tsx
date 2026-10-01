@@ -1,14 +1,15 @@
 import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
-import { ActivityIndicator, Platform, RefreshControl, SectionList, StyleSheet, View } from "react-native";
+import { ActivityIndicator, RefreshControl, SectionList, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { boardFailure, boardPresentation, canUseOrchestratorAction } from "../../lib/board-presentation";
+import { useCloudAuth } from "../../lib/cloud/authStore";
+import { resourceKey, sourceSlice, type Scoped } from "../../lib/environment/scopedBoard";
 import { haptics } from "../../lib/haptics";
 import { orchestratorProjectSections, type OrchestratorProjectRow } from "../../lib/orchestratorView";
 import { ProjectCard } from "../../lib/project-card";
+import { projectRoute } from "../../lib/projects-view";
 import { StaleBanner } from "../../lib/StaleBanner";
 import { useApp } from "../../lib/store";
-import { CloudUnreadyState, UnpairedState } from "../../lib/UnpairedState";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
@@ -22,105 +23,63 @@ export default function ProjectsScreen() {
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
 	const router = useRouter();
-	const {
-		environment,
-		configured,
-		configResolved,
-		loading,
-		error,
-		errorStatus,
-		config,
-		projects,
-		sessions,
-		orchestrators,
-		notificationsUnread,
-		refresh,
-	} = useApp();
-	const presentation = boardPresentation(environment, configured);
+	const { scopedBoard, refreshAll, notificationsUnread } = useApp();
+	const { projects, sources } = scopedBoard;
+	const { signedIn } = useCloudAuth();
 	const [refreshing, setRefreshing] = useState(false);
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
-	const listRef = useTabScrollToTop<SectionList<OrchestratorProjectRow>>();
+	const listRef = useTabScrollToTop<SectionList<Scoped<OrchestratorProjectRow>>>();
 	const sections = useMemo(
-		() => orchestratorProjectSections(projects, sessions, orchestrators),
-		[projects, sessions, orchestrators],
-	);
-	const failure = useMemo(
-		() =>
-			boardFailure(environment, errorStatus ?? undefined, {
-				host: config?.host ?? "",
-				port: config?.httpPort ?? "",
-				platform: Platform.OS,
-			}),
-		[environment, errorStatus, config?.host, config?.httpPort],
+		() => {
+			const sourceEntries = new Map(projects.map((entry) => [JSON.stringify([entry.source.kind, entry.source.id]), entry.source]));
+			return [...sourceEntries.values()].flatMap((source) => {
+				const slice = sourceSlice(scopedBoard, source);
+				return orchestratorProjectSections(slice.projects, slice.sessions, slice.orchestrators).map((section) => ({
+					...section,
+					title: `${source.kind === "cloud" ? "Cloud" : "Local"} · ${section.title}`,
+					data: section.data.map((value) => ({ source, value })),
+				}));
+			});
+		},
+		[scopedBoard, projects],
 	);
 
 	const onRefresh = async () => {
 		haptics.tap();
 		setRefreshing(true);
 		try {
-			await refresh();
+			await refreshAll();
 		} finally {
 			setRefreshing(false);
 		}
 	};
 
-	const openProject = (row: OrchestratorProjectRow) => {
+	const openProject = (entry: Scoped<OrchestratorProjectRow>) => {
 		haptics.select();
-		router.push({ pathname: "/project/[id]", params: { id: row.project.id } });
+		router.push(projectRoute({ source: entry.source, value: entry.value.project }));
 	};
-
-	// See app/(tabs)/index.tsx's matching branch: the persisted environment
-	// choice hasn't loaded yet, so neither empty state below is safe to guess.
-	if (presentation.state === "loading") {
-		return (
-			<View style={styles.screen}>
-				<View style={{ height: insets.top }} />
-				<ScreenHeader title="Projects" />
-				<View style={styles.center}>
-					<ActivityIndicator color={t.accent} />
-				</View>
-			</View>
-		);
-	}
-
-	if (presentation.state === "cloud-unready") {
-		return (
-			<View style={styles.screen}>
-				<View style={{ height: insets.top }} />
-				<ScreenHeader title="Projects" />
-				<CloudUnreadyState />
-			</View>
-		);
-	}
-
-	if (presentation.state === "unpaired") {
-		return (
-			<View style={styles.screen}>
-				<View style={{ height: insets.top }} />
-				<ScreenHeader title="Projects" />
-				<UnpairedState resolving={!configResolved} />
-			</View>
-		);
-	}
+	const initialLoading = !sources.local.resolved || !sources.cloud.resolved || sources.local.loading || sources.cloud.loading;
+	const anyAvailable = sources.local.available || sources.cloud.available;
 
 	return (
 		<View style={styles.screen}>
 			<View style={{ height: insets.top }} />
 			<ScreenHeader
 				title="Projects"
-				right={environment === "cloud" ?
-					<HeaderIconButton icon="plus" label="Add Cloud project" onPress={() => router.push("/create-project")} /> : presentation.localControls &&
-					<HeaderIconButton
+				right={<View style={styles.headerActions}>
+					{sources.local.available && <HeaderIconButton
 						icon="bell"
 						label="Notifications"
 						badge={notificationsUnread}
 						onPress={() => router.navigate("/notifications")}
-					/>
-				}
+					/>}
+					{signedIn && <HeaderIconButton icon="plus" label="Add Cloud project" onPress={() => router.push("/create-project")} />}
+				</View>}
 			/>
-			<StaleBanner error={!!error} onRetry={onRefresh} />
+			<StaleBanner sourceLabel="Local" sourceStatus={sources.local} onRetry={onRefresh} />
+			<StaleBanner sourceLabel="Cloud" sourceStatus={sources.cloud} onRetry={onRefresh} />
 
-			{loading && projects.length === 0 ? (
+			{initialLoading && projects.length === 0 ? (
 				<View style={styles.center}>
 					<ActivityIndicator color={t.accent} />
 				</View>
@@ -128,7 +87,7 @@ export default function ProjectsScreen() {
 				<SectionList
 					ref={listRef}
 					sections={sections}
-					keyExtractor={(row) => row.project.id}
+					keyExtractor={(entry) => resourceKey(entry.source, entry.value.project.id)}
 					contentInsetAdjustmentBehavior="automatic"
 					contentContainerStyle={{ paddingBottom: insets.bottom + 92 }}
 					stickySectionHeadersEnabled={false}
@@ -138,26 +97,27 @@ export default function ProjectsScreen() {
 					)}
 					renderItem={({ item }) => (
 						<ProjectCard
-							row={item}
-							busy={busyProjects.has(item.project.id)}
-							onOpenProject={openProject}
-							onOrchestrator={canUseOrchestratorAction(environment, item.action) ? openOrchestrator : undefined}
+							row={item.value}
+							sourceLabel={item.source.kind === "cloud" ? "Cloud" : "Local"}
+							busy={busyProjects.has(resourceKey(item.source, item.value.project.id))}
+							onOpenProject={() => openProject(item)}
+							onOrchestrator={() => openOrchestrator(item)}
 						/>
 					)}
 					ListEmptyComponent={
-						error ? (
+						!anyAvailable ? (
 							<EmptyState
-								icon={failure.icon}
-								title={failure.title}
-								message={failure.hint}
-								action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />}
+								icon="folder"
+								title="Connect a workspace"
+								message="Pair a desktop or sign in to Cloud to see projects here."
+								action={<Button title="Sign in to Cloud" onPress={() => router.push("/sheets/cloud-signin")} />}
 							/>
 						) : (
 							<EmptyState
 								icon="folder"
 								title="No projects"
-								message={environment === "cloud" ? "Import a GitHub repository to get started." : "Add a project in AO to get started."}
-								action={environment === "cloud" ? <Button title="Add Cloud project" icon="plus" onPress={() => router.push("/create-project")} /> : undefined}
+								message="Add a project on desktop or import a GitHub repository to Cloud."
+								action={signedIn ? <Button title="Add Cloud project" icon="plus" onPress={() => router.push("/create-project")} /> : undefined}
 							/>
 						)
 					}
@@ -171,4 +131,5 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
+		headerActions: { flexDirection: "row", alignItems: "center", gap: 4 },
 	});

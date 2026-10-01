@@ -3,6 +3,7 @@ import { useRouter } from "expo-router";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { sessionTitle, shortLabel, type DashboardPR, type DashboardSession, type SessionPRSummary } from "./api";
 import { haptics } from "./haptics";
+import type { SourceRef } from "./environment/scopedBoard";
 import { openGitHub } from "./openGitHub";
 import type { Theme } from "./theme";
 import {
@@ -22,10 +23,12 @@ import { iconSize, space, type } from "./tokens";
 export function PRCard({
 	pr,
 	session,
+	source,
 	summary,
 }: {
 	pr: DashboardPR;
 	session: DashboardSession;
+	source: SourceRef | undefined;
 	summary?: SessionPRSummary;
 }) {
 	const t = useTheme();
@@ -50,10 +53,11 @@ export function PRCard({
 			accessibilityRole="button"
 			accessibilityLabel={`${title}. Pull request ${pr.number}. ${status.text}.`}
 			onPress={() => {
+				if (!source) return;
 				haptics.tap();
 				router.push({
 					pathname: "/session/[id]",
-					params: { id: session.id, projectId: session.projectId },
+					params: { id: session.id, projectId: session.projectId, source: source.kind, sourceId: source.id },
 				});
 			}}
 			style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ActivityIndicator, Platform, RefreshControl, SectionList, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Platform, RefreshControl, SectionList, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Theme } from "../../lib/theme";
@@ -7,11 +7,10 @@ import { boardFailure } from "../../lib/board-presentation";
 import { haptics } from "../../lib/haptics";
 import { PRCard } from "../../lib/PRCard";
 import { PRFilterDock } from "../../lib/pr-filter-dock";
-import { ProjectSwitcher } from "../../lib/ProjectSwitcher";
-import { prLifecycle, prListSections, type PRListFilter } from "../../lib/prView";
+import { localOnlyPRCopy, prLifecycle, prListSections, type PRListFilter } from "../../lib/prView";
 import { StaleBanner } from "../../lib/StaleBanner";
-import { useApp, usePRs } from "../../lib/store";
-import { CloudUnreadyState, UnpairedState } from "../../lib/UnpairedState";
+import { useApp } from "../../lib/store";
+import { UnpairedState } from "../../lib/UnpairedState";
 import { usePRSummaries } from "../../lib/usePRSummaries";
 import { useTabScrollToTop } from "../../lib/useTabScrollToTop";
 import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
@@ -36,8 +35,9 @@ export default function PRsScreen() {
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
 	const router = useRouter();
-	const { environment, configured, configResolved, loading, error, errorStatus, config, refresh, notificationsUnread } = useApp();
-	const prs = usePRs();
+	const { localConfigured, configResolved, localBoard, localPRs: prs, scopedBoard, config, refreshAll, notificationsUnread } = useApp();
+	const localSource = scopedBoard.sessions.find((entry) => entry.source.kind === "local")?.source;
+	const { loading, error } = localBoard;
 	const [filter, setFilter] = useState<Filter>("open");
 	const [refreshing, setRefreshing] = useState(false);
 
@@ -54,25 +54,23 @@ export default function PRsScreen() {
 	const sessionIds = useMemo(() => [...new Set(filtered.map(({ session }) => session.id))], [filtered]);
 	const summaries = usePRSummaries(sessionIds);
 	const failure = useMemo(
-		() => boardFailure(environment, errorStatus ?? undefined, {
+		() => boardFailure("local", undefined, {
 			host: config?.host ?? "",
 			port: config?.httpPort ?? "",
 			platform: Platform.OS,
 		}),
-		[environment, errorStatus, config?.host, config?.httpPort],
+		[config?.host, config?.httpPort],
 	);
 
 	const onRefresh = async () => {
 		haptics.tap();
 		setRefreshing(true);
 		summaries.reload();
-		await refresh();
+		await refreshAll();
 		setRefreshing(false);
 	};
 
-	// See app/(tabs)/index.tsx's matching branch: the persisted environment
-	// choice hasn't loaded yet, so neither empty state below is safe to guess.
-	if (environment === null) {
+	if (!configResolved) {
 		return (
 			<View style={styles.screen}>
 				<View style={{ height: insets.top }} />
@@ -84,17 +82,7 @@ export default function PRsScreen() {
 		);
 	}
 
-	if (environment === "cloud") {
-		return (
-			<View style={styles.screen}>
-				<View style={{ height: insets.top }} />
-				<ScreenHeader title="Pull Requests" />
-				<CloudUnreadyState />
-			</View>
-		);
-	}
-
-	if (!configured) {
+	if (!localConfigured) {
 		return (
 			<View style={styles.screen}>
 				<View style={{ height: insets.top }} />
@@ -102,6 +90,7 @@ export default function PRsScreen() {
 				    screen dropped it, so the tab lost its title and connection lamp exactly
 				    when a user most needs to know what they are looking at. */}
 				<ScreenHeader title="Pull Requests" />
+				<Text style={styles.sourceCopy}>{localOnlyPRCopy}</Text>
 				<UnpairedState resolving={!configResolved} />
 			</View>
 		);
@@ -127,7 +116,7 @@ export default function PRsScreen() {
 					/>
 				}
 			/>
-			<ProjectSwitcher />
+			<Text style={styles.sourceCopy}>{localOnlyPRCopy}</Text>
 			<StaleBanner error={!!error} onRetry={onRefresh} />
 
 			{loading && prs.length === 0 ? (
@@ -144,7 +133,7 @@ export default function PRsScreen() {
 					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.accent} />}
 					renderSectionHeader={({ section }) => <ListSectionHeader label={section.label} />}
 					renderItem={({ item: { pr, session } }) => (
-						<PRCard pr={pr} session={session} summary={summaries.summaryFor(session.id, pr.number)} />
+						<PRCard pr={pr} session={session} source={localSource} summary={summaries.summaryFor(session.id, pr.number)} />
 					)}
 					ListEmptyComponent={
 						filtered.length === 0 ? (
@@ -178,6 +167,7 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		center: { flex: 1, alignItems: "center", justifyContent: "center" },
+		sourceCopy: { color: t.textTertiary, paddingHorizontal: space.lg, paddingBottom: space.sm },
 		dock: {
 			position: "absolute",
 			left: 16,

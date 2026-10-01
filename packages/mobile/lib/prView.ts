@@ -285,3 +285,4 @@ export function comparePRs(a: DashboardPR, b: DashboardPR): number {
 	// Newest first within a bucket.
 	return b.number - a.number;
 }
+export const localOnlyPRCopy = "Pull requests from your paired desktop";

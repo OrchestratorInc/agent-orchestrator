@@ -3,12 +3,11 @@ import { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { haptics } from "../../lib/haptics";
-import { boardFailure, boardPresentation, canUseOrchestratorAction, projectDetailState } from "../../lib/board-presentation";
+import { boardFailure } from "../../lib/board-presentation";
 import { orchestratorProjectSections, projectDetailSessions, projectPageStats } from "../../lib/orchestratorView";
 import { ProjectPageHeader } from "../../lib/project-card";
 import { StaleBanner } from "../../lib/StaleBanner";
 import { useApp } from "../../lib/store";
-import { CloudUnreadyState } from "../../lib/UnpairedState";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
@@ -38,8 +37,6 @@ export default function ProjectScreen() {
 	const source = route.kind === "found" ? route.source : null;
 	const status = source ? scopedBoard.sources[source.kind] : undefined;
 	const configured = source ? !!sourceFor(source) : false;
-	const environment = source?.kind ?? null;
-	const presentation = boardPresentation(environment, configured);
 	const loading = !!status?.loading;
 	const error = status?.error ?? null;
 	const { projects, sessions, orchestrators } = source ? sourceSlice(scopedBoard, source) : { projects: [], sessions: [], orchestrators: [] };
@@ -56,7 +53,7 @@ export default function ProjectScreen() {
 	);
 	const projectSessions = useMemo(() => projectDetailSessions(id ?? "", sessions), [id, sessions]);
 	const stats = useMemo(() => projectPageStats(projectSessions, row?.link), [projectSessions, row?.link]);
-	const detailState = projectDetailState(presentation.state, !!row, loading, environment === "cloud" && !!error);
+	const detailState = row ? "project" : loading ? "loading" : source?.kind === "cloud" && error ? "cloud-error" : "not-found";
 
 	const onRefresh = useCallback(async () => {
 		haptics.tap();
@@ -89,18 +86,16 @@ export default function ProjectScreen() {
 				}
 				right={null}
 			/>
-			{presentation.state === "board" && <StaleBanner error={!!error} onRetry={onRefresh} />}
+			{source && status && <StaleBanner sourceLabel={source.kind === "cloud" ? "Cloud" : "Local"} sourceStatus={status} onRetry={onRefresh} />}
 
 			{route.kind === "ambiguous" || route.kind === "invalid" || route.kind === "missing" ? (
 				<EmptyState icon="folder" title="Choose a project from Projects" message="This link cannot safely identify its source."
 					action={<Button title="Open Projects" onPress={() => router.navigate("/projects")} />} />
-			) : source && !configured && status?.resolved ? (
+			) : source && !configured && status?.resolved && !row ? (
 				<EmptyState icon="wifi-off" title={source.kind === "cloud" ? "Cloud project unavailable" : "Desktop project unavailable"}
 					message="This project belongs to a source that is no longer connected."
 					action={<Button title={source.kind === "cloud" ? "Sign in to Cloud" : "Pair desktop"}
 						onPress={() => router.push(source.kind === "cloud" ? "/sheets/cloud-signin" : "/pair")} />} />
-			) : detailState === "cloud-unready" ? (
-				<CloudUnreadyState />
 			) : detailState !== "project" || !row ? (
 				detailState === "loading" ? (
 					<View style={styles.center}>
@@ -114,10 +109,9 @@ export default function ProjectScreen() {
 				)
 			) : (
 				<WorkerBoardList
-					interactionMode={presentation.interactionMode}
 					sessions={source ? projectSessions.map((value) => ({ source, value })) : []}
 					showProject={false}
-					contentBottomInset={presentation.spawnControls ? workerListBottomInset(insets.bottom + 12) : insets.bottom + 32}
+					contentBottomInset={configured ? workerListBottomInset(insets.bottom + 12) : insets.bottom + 32}
 					refreshing={refreshing}
 					onRefresh={onRefresh}
 					ListHeaderComponent={
@@ -125,7 +119,7 @@ export default function ProjectScreen() {
 								row={row}
 								stats={stats}
 								busy={source ? busyProjects.has(resourceKey(source, row.project.id)) : false}
-								onPress={source && canUseOrchestratorAction(environment, row.action) ? () => openOrchestrator({ source, value: row }) : undefined}
+								onPress={source && configured ? () => openOrchestrator({ source, value: row }) : undefined}
 						/>
 					}
 					ListEmptyComponent={
@@ -135,13 +129,13 @@ export default function ProjectScreen() {
 								icon="moon"
 								title="No workers yet"
 								message="Start a task to put this project to work."
-								action={presentation.spawnControls ? <Button title="Start task" icon="plus" onPress={startTask} /> : null}
+								action={configured ? <Button title="Start task" icon="plus" onPress={startTask} /> : null}
 							/>
 						</View>
 					}
 				/>
 			)}
-			{detailState === "project" && presentation.spawnControls ? (
+			{detailState === "project" && configured ? (
 				<View style={[styles.dock, { bottom: insets.bottom + 12 }]}>
 					<WorkerDock
 						controlsEnabled={false}

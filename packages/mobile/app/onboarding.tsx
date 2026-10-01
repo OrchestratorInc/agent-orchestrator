@@ -20,7 +20,7 @@ export default function OnboardingScreen() {
 	const router = useRouter();
 	const navigation = useNavigation();
 	const insets = useSafeAreaInsets();
-	const { reloadConfig, setEnvironment } = useApp();
+	const { reloadConfig } = useApp();
 	const cloudSignIn = useCloudSignInAction("/sheets/cloud-signin?from=onboarding");
 
 	useEffect(() => {
@@ -37,7 +37,6 @@ export default function OnboardingScreen() {
 	async function useCloud() {
 		haptics.tap();
 		if (!(await cloudSignIn.signIn())) return;
-		setEnvironment("cloud");
 		router.replace("/");
 	}
 

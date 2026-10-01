@@ -27,11 +27,13 @@ import { Dot } from "./ui";
  */
 export function ProjectCard({
 	row,
+	sourceLabel,
 	busy,
 	onOpenProject,
 	onOrchestrator,
 }: {
 	row: OrchestratorProjectRow;
+	sourceLabel?: "Local" | "Cloud";
 	busy: boolean;
 	onOpenProject: (row: OrchestratorProjectRow) => void;
 	onOrchestrator?: (row: OrchestratorProjectRow) => void;
@@ -46,7 +48,7 @@ export function ProjectCard({
 		<View style={styles.row}>
 			<Pressable
 				accessibilityRole="button"
-				accessibilityLabel={`${row.project.name}, ${onOrchestrator ? `${status.label}, ` : ""}${summary.workers}`}
+				accessibilityLabel={`${row.project.name}, ${sourceLabel ? `${sourceLabel}, ` : ""}${onOrchestrator ? `${status.label}, ` : ""}${summary.workers}`}
 				accessibilityHint="Opens the project"
 				onPress={() => onOpenProject(row)}
 				style={({ pressed }) => [styles.body, pressed && styles.pressed]}
@@ -55,6 +57,7 @@ export function ProjectCard({
 					<Text style={styles.project} numberOfLines={1}>
 						{row.project.name}
 					</Text>
+					{sourceLabel && <Text style={styles.sourceTag}>{sourceLabel}</Text>}
 					<Feather name="chevron-right" size={15} color={t.textFaint} />
 				</View>
 
@@ -230,6 +233,7 @@ const makeStyles = (t: Theme) =>
 
 		titleRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
 		project: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
+		sourceTag: { color: t.textTertiary, fontSize: type.caption2.fontSize, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, borderRadius: 5, paddingHorizontal: 5, overflow: "hidden" },
 		timestamp: { color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontVariant: ["tabular-nums"], fontFamily: t.fontMono },
 
 		summaryRow: { flexDirection: "row", alignItems: "center", minWidth: 0 },

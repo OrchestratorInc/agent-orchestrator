@@ -33,7 +33,7 @@ export default function CreateCloudProject() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { environment, refresh, setActiveProject } = useApp();
+	const { refreshSource } = useApp();
 	const { client, signedIn, orgId, orgLoading, orgError, retryOrgResolution } = useCloudAuth();
 	const [step, setStep] = useState<Step>("loading");
 	const [busy, setBusy] = useState(false);
@@ -129,11 +129,6 @@ export default function CreateCloudProject() {
 	}, [client, orgId]);
 
 	useEffect(() => {
-		if (environment !== "cloud") {
-			setError("Switch to Cloud before adding a project.");
-			setStep("unavailable");
-			return;
-		}
 		if (signedIn === null || orgLoading) {
 			setError(null);
 			setStep("loading");
@@ -188,7 +183,7 @@ export default function CreateCloudProject() {
 			setStep("github");
 		});
 		return () => { active = false; abort.abort(); };
-	}, [client, environment, signedIn, orgId, orgLoading, orgError, refreshGitHub]);
+	}, [client, signedIn, orgId, orgLoading, orgError, refreshGitHub]);
 
 	useEffect(() => {
 		if (!connecting || openingGitHub || !orgId || step !== "github") return;
@@ -324,9 +319,9 @@ export default function CreateCloudProject() {
 			const { project } = projectSource === "app" && selectedRepository
 				? await client.createProjectFromGitHub(orgId, { githubRepositoryId: selectedRepository.githubRepositoryId, displayName: displayName.trim(), config }, { idempotencyKey: creationKey.current })
 				: await client.createProject(orgId, cloudProjectInput({ displayName, repositoryUrl, defaultBranch, workerAgent, orchestratorAgent }), { idempotencyKey: creationKey.current });
-			setActiveProject(project.id);
-			await refresh().catch(() => {});
-			router.replace({ pathname: "/project/[id]", params: { id: project.id } });
+			const source = { kind: "cloud" as const, id: orgId };
+			await refreshSource(source).catch(() => {});
+			router.replace({ pathname: "/project/[id]", params: { id: project.id, source: source.kind, sourceId: source.id } });
 		} catch (cause) {
 			if (projectSource === "manual" && cause instanceof CloudApiError && (cause.code === "repository_unreachable" || cause.code === "read_only_token" || cause.code === "token_missing")) {
 				setStep(cause.code === "token_missing" ? "github-token" : "repository");

@@ -2,6 +2,8 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
+	replace: vi.fn(),
+	refreshSource: vi.fn(async () => {}),
 	environment: "cloud" as "cloud" | "local",
 	signedIn: null as boolean | null,
 	orgId: null as string | null,
@@ -31,7 +33,7 @@ vi.mock("react-native", () => ({
 	View: "View",
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));
-vi.mock("expo-router", () => ({ useRouter: () => ({ back: vi.fn(), replace: vi.fn() }) }));
+vi.mock("expo-router", () => ({ useRouter: () => ({ back: vi.fn(), replace: state.replace }) }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => "test-key" }));
 vi.mock("@expo/vector-icons", () => ({ Feather: "Feather" }));
 vi.mock("../ThemeProvider", () => {
@@ -39,7 +41,7 @@ vi.mock("../ThemeProvider", () => {
 	return { useTheme: () => theme, useThemedStyles: (makeStyles: (theme: unknown) => unknown) => makeStyles(theme) };
 });
 vi.mock("./authStore", () => ({ useCloudAuth: () => ({ ...state, client: state }) }));
-vi.mock("../store", () => ({ useApp: () => ({ environment: state.environment, refresh: vi.fn(), setActiveProject: vi.fn() }) }));
+vi.mock("../store", () => ({ useApp: () => ({ refreshSource: state.refreshSource }) }));
 vi.mock("../ui", () => ({ Button: "Button", HeaderIconButton: "HeaderIconButton" }));
 vi.mock("../haptics", () => ({ haptics: { tap: vi.fn(), select: vi.fn() } }));
 vi.mock("../openGitHub", () => ({ openGitHub: vi.fn() }));
@@ -135,6 +137,7 @@ describe("Add Cloud project sheet", () => {
 	});
 
 	it("searches granted repositories and creates an App-backed project", async () => {
+		state.environment = "local"; // The old global preference must not gate a signed-in Cloud import.
 		state.signedIn = true;
 		state.orgId = "org-1";
 		state.orgLoading = false;
@@ -155,6 +158,8 @@ describe("Add Cloud project sheet", () => {
 			displayName: "beta",
 			config: { worker: { agent: "claude-code" }, orchestrator: { agent: "claude-code" } },
 		}, { idempotencyKey: "test-key" });
+		expect(state.refreshSource).toHaveBeenCalledWith({ kind: "cloud", id: "org-1" });
+		expect(state.replace).toHaveBeenCalledWith({ pathname: "/project/[id]", params: { id: "project-1", source: "cloud", sourceId: "org-1" } });
 	});
 
 	it("asks Cloud to sync a newly connected installation before listing repositories", async () => {

@@ -32,7 +32,7 @@ export default function FleetScreen() {
 
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { scopedBoard, refreshAll, refreshSource, notificationsUnread } = useApp();
+	const { scopedBoard, refreshAll, notificationsUnread } = useApp();
 	const { sessions, projects, sources } = scopedBoard;
 	const [refreshing, setRefreshing] = useState(false);
 	const [query, setQuery] = useState("");
@@ -124,14 +124,8 @@ export default function FleetScreen() {
 			/>
 			{/* Above the list rather than inside ListEmptyComponent: the case this
 			    exists for is a populated board whose poll has died. */}
-			<StaleBanner sourceLabel="Local" sourceStatus={sources.local} onRetry={() => {
-				const source = sessions.find((entry) => entry.source.kind === "local")?.source ?? projects.find((entry) => entry.source.kind === "local")?.source;
-				if (source) void refreshSource(source);
-			}} />
-			<StaleBanner sourceLabel="Cloud" sourceStatus={sources.cloud} onRetry={() => {
-				const source = sessions.find((entry) => entry.source.kind === "cloud")?.source ?? projects.find((entry) => entry.source.kind === "cloud")?.source;
-				if (source) void refreshSource(source);
-			}} />
+			<StaleBanner sourceLabel="Local" sourceStatus={sources.local} onRetry={onRefresh} />
+			<StaleBanner sourceLabel="Cloud" sourceStatus={sources.cloud} onRetry={onRefresh} />
 
 			{initialLoading && sessions.length === 0 ? (
 				<View style={styles.center}>

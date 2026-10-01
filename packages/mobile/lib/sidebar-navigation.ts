@@ -3,19 +3,6 @@ import type { DashboardSession } from "./api";
 import type { EnvironmentKind } from "./environment/types";
 import type { Scoped } from "./environment/scopedBoard";
 
-export type SidebarEnvironmentOption = {
-	id: EnvironmentKind;
-	label: "Local" | "Cloud";
-	selected: boolean;
-};
-
-export function sidebarEnvironmentOptions(active: EnvironmentKind | null): SidebarEnvironmentOption[] {
-	return [
-		{ id: "local", label: "Local", selected: active === "local" },
-		{ id: "cloud", label: "Cloud", selected: active === "cloud" },
-	];
-}
-
 type SidebarSessionHealth = {
 	stale: boolean;
 	label: "DISCONNECTED" | "REFRESH FAILED" | null;

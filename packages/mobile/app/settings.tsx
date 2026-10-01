@@ -26,9 +26,7 @@ import { tunnelMayHaveRotated } from "../lib/staleTunnel";
 import { getPushStatus, openNotificationSettings, registerForPush, unregisterFromPush } from "../lib/push";
 import { describePushToggle, describeRegisterFailure, type PushStatus } from "../lib/pushStatus";
 import { useCloudAuth } from "../lib/cloud/authStore";
-import { useCloudSignInAction } from "../lib/cloud/useCloudSignInAction";
-import { environmentChoiceAction } from "../lib/environment/store";
-import { useApp, useEnvironment } from "../lib/store";
+import { useApp } from "../lib/store";
 import {
 	describeSoftwareUpdateRow,
 	describeStoreRow,
@@ -64,7 +62,6 @@ export default function SettingsScreen() {
 	// Keep the saved desktop pairing visible while Cloud is selected: `configured`
 	// describes the active board, while `localConfigured` describes this row.
 	const { config, localConfigured: paired, reloadConfig } = useApp();
-	const { environment } = useEnvironment();
 	const scrollRef = useRef<ScrollView>(null);
 
 	if (!config) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
@@ -82,21 +79,6 @@ export default function SettingsScreen() {
 				contentContainerStyle={styles.content}
 				keyboardShouldPersistTaps="handled"
 			>
-				<SettingsSection
-					title="Environment"
-					footer={
-						environment === null
-							? undefined
-							: environment === "local"
-								? "Drive the agents running on your paired computer."
-								: "Drive the agents running in your AO Cloud workspace."
-					}
-				>
-					<SettingsCard>
-						<EnvironmentRow />
-					</SettingsCard>
-				</SettingsSection>
-
 				<SettingsSection title="Cloud account" footer="Sign out to remove this device's AO Cloud credential.">
 					<SettingsCard>
 						<CloudAccountRow />
@@ -199,67 +181,6 @@ function SettingsCard({ children }: { children: ReactNode }) {
 }
 
 /**
- * Switches which environment's data the board, projects and PRs tabs show.
- *
- * Choosing Cloud while signed out sends the user to sign in first rather than
- * flipping the switch and leaving the tabs to render CloudUnreadyState's
- * sign-in prompt — the switch itself should never silently land on a
- * half-configured state the user then has to diagnose.
- */
-function EnvironmentRow() {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	const { environment, setEnvironment } = useEnvironment();
-	const cloudAuth = useCloudAuth();
-	const cloudSignIn = useCloudSignInAction();
-
-	function choose(next: "local" | "cloud") {
-		const action = environmentChoiceAction(environment, next, cloudAuth.signedIn === true);
-		if (action === "none") return;
-		haptics.select();
-		if (action === "sign-in") {
-			void cloudSignIn.signIn().then((authenticated) => {
-				if (authenticated) setEnvironment("cloud");
-			});
-			return;
-		}
-		setEnvironment(next);
-	}
-
-	return (
-		<View style={styles.inlineChoices}>
-			{(["local", "cloud"] as const).map((option) => {
-				const selected = environment === option;
-				return (
-					<Pressable
-						key={option}
-						accessibilityRole="button"
-						accessibilityState={{ selected }}
-						onPress={() => choose(option)}
-						disabled={cloudSignIn.busy && option === "cloud"}
-						style={({ pressed }) => [styles.inlineChoice, pressed && { opacity: 0.6 }]}
-					>
-						<Feather
-							name={option === "local" ? "monitor" : "cloud"}
-							size={16}
-							color={selected ? t.textPrimary : t.textTertiary}
-						/>
-						<Text style={[styles.inlineChoiceLabel, selected && { color: t.textPrimary, fontWeight: "700" }]}>
-							{option === "local" ? "Local" : "Cloud"}
-						</Text>
-						{cloudSignIn.busy && option === "cloud" ? (
-							<ActivityIndicator size="small" color={t.textSecondary} />
-						) : selected ? (
-							<Feather name="check" size={16} color={t.textPrimary} />
-						) : null}
-					</Pressable>
-				);
-			})}
-		</View>
-	);
-}
-
-/**
  * The signed-in AO Cloud account, with the only way this device's stored
  * bearer token gets removed: `authStore.signOut` has no other caller, so
  * without this row a cloud credential can be stored but never revoked or
@@ -271,6 +192,7 @@ function EnvironmentRow() {
  */
 function CloudAccountRow() {
 	const cloudAuth = useCloudAuth();
+	const router = useRouter();
 	const [email, setEmail] = useState<string | null>(null);
 	const [signingOut, setSigningOut] = useState(false);
 
@@ -311,9 +233,9 @@ function CloudAccountRow() {
 			icon="cloud"
 			label="AO Cloud account"
 			value={signedIn ? (signingOut ? "Signing out…" : (email ?? "Signed in")) : "Not signed in"}
-			disabled={!signedIn}
+			disabled={signingOut}
 			loading={signingOut}
-			onPress={signedIn ? () => { haptics.warning(); confirmSignOut(); } : undefined}
+			onPress={signedIn ? () => { haptics.warning(); confirmSignOut(); } : () => router.push("/sheets/cloud-signin")}
 		/>
 	);
 }

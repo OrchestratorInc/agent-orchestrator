@@ -1,18 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { sidebarEnvironmentOptions } from "./sidebar-navigation";
+import { readFileSync } from "node:fs";
 
-describe("sidebar environment picker", () => {
-	it("marks the active environment without hiding the other destination", () => {
-		expect(sidebarEnvironmentOptions("cloud")).toEqual([
-			{ id: "local", label: "Local", selected: false },
-			{ id: "cloud", label: "Cloud", selected: true },
-		]);
-	});
-
-	it("leaves both choices unselected while persisted state is loading", () => {
-		expect(sidebarEnvironmentOptions(null)).toEqual([
-			{ id: "local", label: "Local", selected: false },
-			{ id: "cloud", label: "Cloud", selected: false },
-		]);
+describe("combined sidebar", () => {
+	it("does not offer a global environment switch in either drawer", () => {
+		for (const file of ["sidebar-navigation-shell.tsx", "sidebar-navigation-shell.android.tsx"]) {
+			const source = readFileSync(new URL(`./${file}`, import.meta.url), "utf8");
+			expect(source).not.toContain("SidebarEnvironmentPicker");
+		}
 	});
 });

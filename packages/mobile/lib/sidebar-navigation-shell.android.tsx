@@ -50,7 +50,6 @@ import {
 	shouldCaptureSidebarGesture,
 } from "./sidebar-gesture";
 import { SidebarSettingsButton } from "./sidebar-settings-button";
-import { SidebarEnvironmentPicker } from "./sidebar-environment-picker";
 import { SidebarSpawnButton } from "./sidebar-spawn-button";
 import { useReducedMotion } from "./useReducedMotion";
 import { useApp } from "./store";
@@ -283,7 +282,6 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 					<View style={styles.brandMascotSlot}>
 						<MascotLamp status={lampStatus} size={55} />
 					</View>
-					<SidebarEnvironmentPicker />
 				</View>
 				<View style={styles.destinations}>
 					{sidebarDestinations.slice(0, -1).map((destination) => (
