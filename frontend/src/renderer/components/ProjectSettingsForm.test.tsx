@@ -213,42 +213,6 @@ beforeEach(() => {
 });
 
 describe("ProjectSettingsForm", () => {
-	it("keeps project env values masked and saves only after applying complete rows", async () => {
-		mockProject({
-			id: "proj-1",
-			name: "Project One",
-			kind: "single_repo",
-			path: "/repo/project-one",
-			repo: "",
-			config: {
-				env: { EXISTING_TOKEN: "existing-secret" },
-				worker: { agent: "codex" },
-				orchestrator: { agent: "claude-code" },
-			},
-		});
-
-		renderSettings();
-		const existingValue = await screen.findByLabelText("Value 1");
-		expect(existingValue).toHaveAttribute("type", "password");
-		expect(existingValue).toHaveValue("existing-secret");
-		expect(screen.queryByText("existing-secret")).not.toBeInTheDocument();
-
-		await userEvent.click(screen.getByRole("button", { name: "Add variable" }));
-		await userEvent.click(screen.getByRole("button", { name: "Apply variables" }));
-		expect(screen.getByRole("alert")).toHaveTextContent("Use unique variable names");
-		expect(putMock).not.toHaveBeenCalled();
-		await userEvent.type(screen.getByRole("textbox", { name: "Variable name 2" }), "NEW_TOKEN");
-		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-		await userEvent.type(screen.getByLabelText("Value 2"), "new-secret");
-		await new Promise((resolve) => setTimeout(resolve, 750));
-		expect(putMock).not.toHaveBeenCalled();
-
-		await userEvent.click(screen.getByRole("button", { name: "Apply variables" }));
-		await waitFor(() => expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", expect.objectContaining({
-			body: expect.objectContaining({ config: expect.objectContaining({ env: { EXISTING_TOKEN: "existing-secret", NEW_TOKEN: "new-secret" } }) }),
-		})));
-	});
-
 	it("saves a changed project setting without a submit action", async () => {
 		mockProject({
 			id: "proj-1",
@@ -705,7 +669,8 @@ describe("ProjectSettingsForm", () => {
 
 		submitSettings();
 
-		await waitFor(() => expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", {
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", {
 			params: { path: { id: "proj-1" } },
 			body: {
 				displayName: "Project One",
@@ -728,7 +693,7 @@ describe("ProjectSettingsForm", () => {
 					agentConfig: undefined,
 				}),
 			},
-		}));
+		});
 		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
 		expect(await screen.findByText("Saved")).toBeInTheDocument();
 	}, 20_000);

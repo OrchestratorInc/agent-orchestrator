@@ -367,14 +367,12 @@ func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (She
 		return ShellTerminal{}, err
 	}
 	defer readiness.cleanup()
-	env := s.pinnedEnv()
-	if env == nil {
-		env = map[string]string{}
+	projectEnv, err := s.projects.ProjectEnv(ctx, projectID)
+	if err != nil {
+		return ShellTerminal{}, fmt.Errorf("run cue command: resolve project environment: %w", err)
 	}
-	for key, value := range readiness.env {
-		env[key] = value
-	}
-	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: readiness.argv, env: env, projectID: projectID,
+	env := agentlaunch.MergeEnv(s.pinnedEnv(projectEnv), readiness.env)
+	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: readiness.argv, env: env, projectEnv: projectEnv, projectID: projectID,
 		sessionID: in.SessionID, workingDir: workingDir, title: nextShellTerminalTitle(records)})
 	if err != nil {
 		return ShellTerminal{}, err

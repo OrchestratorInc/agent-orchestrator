@@ -133,7 +133,6 @@ function SettingsBody({
 	const intake: TrackerIntakeConfig = config.trackerIntake ?? {};
 	const [form, setForm] = useState({
 		displayName: project.name,
-		env: config.env,
 		defaultBranch: config.defaultBranch ?? DEFAULT_BRANCH_AUTO,
 		sessionPrefix: config.sessionPrefix ?? "",
 		workerAgent: config.worker?.agent ?? "",
@@ -156,28 +155,6 @@ function SettingsBody({
 		intakeRepo: intake.repo ?? "",
 		intakeAssignee: intake.assignee ?? "",
 	});
-	const [envRows, setEnvRows] = useState(() => Object.entries(config.env ?? {}).map(([name, value]) => ({ name, value })));
-	const [envError, setEnvError] = useState<string | null>(null);
-	const editEnvRows = (update: (rows: typeof envRows) => typeof envRows) => {
-		setEnvError(null);
-		setEnvRows(update);
-	};
-	const envDraftDirty = JSON.stringify(envRows) !== JSON.stringify(Object.entries(form.env ?? {}).map(([name, value]) => ({ name, value })));
-	const applyEnvRows = () => {
-		const next: Record<string, string> = {};
-		for (const row of envRows) {
-			const name = row.name.trim();
-			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || Object.keys(next).some((key) => key.toUpperCase() === name.toUpperCase())) {
-				setEnvError(t("settings.project.envInvalid"));
-				return false;
-			}
-			next[name] = row.value;
-		}
-		setEnvRows(Object.entries(next).map(([name, value]) => ({ name, value })));
-		setEnvError(null);
-		setForm((current) => ({ ...current, env: Object.keys(next).length ? next : undefined }));
-		return true;
-	};
 	const lastSavedRef = useRef(JSON.stringify(form));
 	const failedKeyRef = useRef<string | null>(null);
 	const lastOrchestratorRef = useRef(config.orchestrator?.agent ?? "");
@@ -229,7 +206,6 @@ function SettingsBody({
 			const next: ProjectConfig = isScratchProject
 				? {
 						...scratchSupportedConfig(config),
-						...(values.env === undefined && config.env === undefined ? {} : { env: values.env }),
 						worker: {
 							...config.worker,
 							agent: values.workerAgent,
@@ -253,7 +229,6 @@ function SettingsBody({
 					}
 				: {
 						...config,
-						...(values.env === undefined && config.env === undefined ? {} : { env: values.env }),
 						defaultBranch: values.defaultBranch.trim() === DEFAULT_BRANCH_AUTO ? undefined : values.defaultBranch || undefined,
 						sessionPrefix: values.sessionPrefix || undefined,
 						worker: {
@@ -415,12 +390,12 @@ function SettingsBody({
 
 	useEffect(() => {
 		const mutationError = mutation.isError ? (mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")) : undefined;
-		const hasUnsavedChanges = envDraftDirty || JSON.stringify(form) !== lastSavedRef.current;
+		const hasUnsavedChanges = JSON.stringify(form) !== lastSavedRef.current;
 		onSaveState?.({
 			dirty: hasUnsavedChanges && !intakeSetupIncomplete,
 			requestPending: mutation.isPending,
 			phase:
-				envError || validationError || mutationError
+				validationError || mutationError
 					? "failed"
 					: mutation.isPending
 						? showSaving
@@ -431,13 +406,11 @@ function SettingsBody({
 							: savedAt !== null
 								? "saved"
 								: "idle",
-			error: envError ?? validationError ?? mutationError,
+			error: validationError ?? mutationError,
 			replacementError: !mutation.isPending && !mutation.isError ? (replacementError ?? undefined) : undefined,
 		});
 	}, [
 		form,
-		envDraftDirty,
-		envError,
 		intakeSetupIncomplete,
 		mutation.error,
 		mutation.isError,
@@ -461,10 +434,6 @@ function SettingsBody({
 			id="project-settings-form"
 			className="project-settings-form gap-5"
 			onSubmit={() => {
-				if (envDraftDirty) {
-					applyEnvRows();
-					return;
-				}
 				setSavedAt(null);
 				setReplacementError(null);
 				const validation = validateProjectSettings(form, {
@@ -597,40 +566,7 @@ function SettingsBody({
 							</ProjectSettingsSection>
 						</>
 					)}
-					<ProjectSettingsSection title={t("settings.project.environment")} grouped>
-						<div className="space-y-3 py-2">
-							<p className="text-xs text-settings-muted">{t("settings.project.environmentHint")}</p>
-							{envRows.map((row, index) => (
-								<div key={index} className="flex items-center gap-2">
-									<input
-										aria-label={`${t("settings.project.envName")} ${index + 1}`}
-										className="settings-field-control min-w-0 flex-1 py-1.5"
-										placeholder={t("settings.project.envName")}
-										value={row.name}
-										onChange={(event) => editEnvRows((rows) => rows.map((item, i) => i === index ? { ...item, name: event.target.value } : item))}
-									/>
-									<input
-										aria-label={`${t("settings.project.envValue")} ${index + 1}`}
-										autoComplete="off"
-										className="settings-field-control min-w-0 flex-1 py-1.5"
-										placeholder={t("settings.project.envValue")}
-										type="password"
-										value={row.value}
-										onChange={(event) => editEnvRows((rows) => rows.map((item, i) => i === index ? { ...item, value: event.target.value } : item))}
-									/>
-									<button type="button" className="text-xs text-settings-muted hover:text-settings-label" aria-label={t("settings.project.removeVariable", { name: row.name || index + 1 })} onClick={() => editEnvRows((rows) => rows.filter((_, i) => i !== index))}>
-										{t("settings.project.remove")}
-									</button>
-								</div>
-							))}
-							{envError && <p role="alert" className="text-xs text-error">{envError}</p>}
-							<div className="flex gap-3">
-								<button type="button" className="text-xs text-settings-label underline" onClick={() => editEnvRows((rows) => [...rows, { name: "", value: "" }])}>{t("settings.project.addVariable")}</button>
-								{envDraftDirty && <button type="button" className="text-xs text-settings-label underline" onClick={applyEnvRows}>{t("settings.project.applyVariables")}</button>}
-							</div>
-						</div>
-					</ProjectSettingsSection>
-			</>
+				</>
 			)}
 
 			{section === "agents" && (
