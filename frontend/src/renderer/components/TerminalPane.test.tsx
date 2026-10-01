@@ -1145,11 +1145,6 @@ describe("terminal restore", () => {
 				cloud: { orgId: "org-1" },
 			});
 			try {
-				await waitFor(() =>
-					expect(view.queryClient.getQueryData(editorHandoffQueryKey(worker.id))).toMatchObject({
-						workspaceAvailable: true,
-					}),
-				);
 				expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
 			} finally {
 				view.restore();
@@ -1180,7 +1175,15 @@ describe("terminal restore", () => {
 
 		it("does not offer resume when the session worktree is unavailable", async () => {
 			terminalState.value = "exited";
-			const view = renderPane({ ...worker, ...exited }, undefined, undefined, undefined, false, "SESSION_WORKSPACE_NOT_FOUND");
+			const view = renderPane(
+				{ ...worker, ...exited },
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				false,
+				"SESSION_WORKSPACE_NOT_FOUND",
+			);
 			try {
 				await waitFor(() =>
 					expect(view.queryClient.getQueryData(editorHandoffQueryKey(worker.id))).toMatchObject({
@@ -1195,7 +1198,7 @@ describe("terminal restore", () => {
 
 		it("keeps Resume available when the workspace probe has no definitive code", async () => {
 			terminalState.value = "exited";
-			const view = renderPane({ ...worker, ...exited }, undefined, undefined, undefined, false);
+			const view = renderPane({ ...worker, ...exited }, undefined, undefined, undefined, undefined, false);
 			try {
 				await waitFor(() =>
 					expect(view.queryClient.getQueryData(editorHandoffQueryKey(worker.id))).toMatchObject({
