@@ -66,6 +66,8 @@ type TerminalPaneProps = {
 	onInputRequestResult?: (id: number, accepted: boolean) => void;
 	/** Provider-owned shared transport lease factory. */
 	createMux?: () => TerminalMux;
+	/** Suppress the "Terminal ended" strip when the host renders its own exit state. */
+	hideEndedStrip?: boolean;
 };
 
 type TerminalCacheDescriptor = {
@@ -131,6 +133,7 @@ function terminalPropsMatch(left: TerminalPaneProps, right: TerminalPaneProps): 
 		left.inputRequest === right.inputRequest &&
 		left.onInputRequestResult === right.onInputRequestResult &&
 		left.createMux === right.createMux &&
+		left.hideEndedStrip === right.hideEndedStrip &&
 		terminalTargetMatches(left.terminalTarget, right.terminalTarget)
 	);
 }
@@ -682,6 +685,7 @@ export function TerminalPane({
 	onTerminalStateChange,
 	inputRequest,
 	onInputRequestResult,
+	hideEndedStrip,
 }: TerminalPaneProps) {
 	const { t } = useTranslation();
 	const terminalTarget =
@@ -782,6 +786,7 @@ export function TerminalPane({
 		onTerminalStateChange,
 		inputRequest,
 		onInputRequestResult,
+		hideEndedStrip,
 	};
 	const descriptor = cacheDescriptor(session, terminalTarget);
 	if (cache && descriptor) {
@@ -793,6 +798,7 @@ export function TerminalPane({
 			key={terminalKey}
 			session={session}
 			theme={theme}
+			hideEndedStrip={hideEndedStrip}
 			daemonReady={daemonReady}
 			fontSize={fontSize}
 			isFullscreen={isFullscreen}
@@ -966,6 +972,7 @@ function AttachedTerminal({
 	inputRequest,
 	onInputRequestResult,
 	createMux,
+	hideEndedStrip,
 	isVisible = true,
 	onFatal,
 	onTerminalReady,
@@ -1214,7 +1221,7 @@ function AttachedTerminal({
 		!showEmptyState &&
 		!showEndedStatePreview &&
 		!cloudRevealedRef.current;
-	const showEndedState = showEndedStatePreview && !isBoxComingUp;
+	const showEndedState = showEndedStatePreview && !isBoxComingUp && !hideEndedStrip;
 	const emptyStateTitle = session ? t("terminal.startingSession") : "Agent Orchestrator";
 	const emptyStateMessage = session
 		? session.kind === "orchestrator"

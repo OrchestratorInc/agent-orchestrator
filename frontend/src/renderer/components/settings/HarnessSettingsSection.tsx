@@ -742,7 +742,7 @@ export function HarnessSettingsSection({
 					</div>
 										) : null}
 										{rowAuthWorkflow ? (
-											<div className="basis-full pl-10">
+											<div className="basis-full pl-4">
 												<HarnessAuthTerminalPanel
 													workflow={rowAuthWorkflow}
 													onClose={() => void closeAuth(rowAuthWorkflow)}
@@ -787,11 +787,30 @@ function HarnessAuthTerminalPanel({ workflow, onClose, onRetry, onTerminalState 
 	useEffect(() => {
 		panelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 	}, [workflow.terminal.handleId]);
+	const terminalBoxRef = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		const box = terminalBoxRef.current;
+		if (!box) return;
+		// xterm scrolls itself through its own wheel handler, so the browser never
+		// needs to scroll anything under the terminal. Block native scrolling for
+		// any wheel over the terminal box (by position, since xterm's layers and
+		// cached portal can sit outside the event path) so the settings list
+		// behind it stays put.
+		const onWheel = (event: WheelEvent) => {
+			if (event.ctrlKey || event.metaKey) return;
+			const rect = box.getBoundingClientRect();
+			if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) return;
+			event.preventDefault();
+		};
+		window.addEventListener("wheel", onWheel, { capture: true, passive: false });
+		return () => window.removeEventListener("wheel", onWheel, { capture: true });
+	}, []);
 	const status = workflow.phase === "running"
 		? workflow.guidance || t("settings.harness.loggingIn")
 		: workflow.phase === "verifying" ? t("settings.harness.checkingLogin")
 			: workflow.phase === "closing" ? t("settings.harness.authClosing")
-				: workflow.reason ?? t("settings.harness.loginUnknown");
+				: workflow.phase === "unauthorized" || !workflow.reason ? t("settings.harness.loginEnded") : workflow.reason;
+	const busy = workflow.phase === "running" || workflow.phase === "verifying" || workflow.phase === "closing";
 	const retryable = workflow.phase === "unauthorized" || workflow.phase === "unverified" || workflow.phase === "timed_out" || workflow.phase === "cleanup_failed";
 	const openAuthAction = () => {
 		if (!workflow.terminalInput || terminalState !== "attached" || commandPending || commandSent) return;
@@ -809,15 +828,17 @@ function HarnessAuthTerminalPanel({ workflow, onClose, onRetry, onTerminalState 
 	}, []);
 	return (
 		<div ref={panelRef} className="mt-1 scroll-my-3 overflow-hidden rounded-md border border-(--color-border-settings-input) bg-terminal" data-testid="harness-auth-terminal">
-			<div className="flex min-h-10 items-center justify-between gap-3 border-b border-(--color-border-settings-input) bg-surface/90 px-3 py-2">
-				<div className="min-w-0"><p className="truncate text-xs font-medium text-settings-label">{workflow.terminal.title}</p><p className="truncate text-[11px] text-settings-muted" aria-live="polite" role="status">{status}</p></div>
-				<div className="flex shrink-0 items-center gap-2">
-					{workflow.terminalInput && workflow.phase === "running" ? <Button type="button" size="sm" variant="outline" disabled={terminalState !== "attached" || commandPending || commandSent} onClick={openAuthAction}>{commandSent ? <Check aria-hidden="true" /> : <LogIn aria-hidden="true" />}{workflow.action === "setup" ? commandSent ? t("settings.harness.setupOpened") : t("settings.harness.openSetup") : commandSent ? t("settings.harness.loginOpened") : t("settings.harness.openLogin")}</Button> : null}
-					<button type="button" aria-label={t("settings.close")} className="grid size-7 place-items-center rounded text-settings-muted hover:bg-interactive-hover" disabled={workflow.phase === "closing" || workflow.phase === "verifying"} onClick={onClose}><X className="size-4" aria-hidden="true" /></button>
-				</div>
+			<div className="flex min-h-10 items-center justify-between gap-3 border-b border-(--color-border-settings-input) bg-raised px-3 py-2">
+				<p className="min-w-0 truncate text-xs font-medium text-settings-label">{workflow.terminal.title}</p>
+				<button type="button" aria-label={t("settings.close")} className="grid size-7 shrink-0 place-items-center rounded-md text-settings-muted hover:bg-interactive-hover hover:text-settings-label disabled:opacity-50" disabled={workflow.phase === "closing" || workflow.phase === "verifying"} onClick={onClose}><X className="size-4" aria-hidden="true" /></button>
 			</div>
-			<div className="h-[300px] min-h-0"><TerminalPane daemonReady={shell ? shell.daemonStatus.state === "ready" : true} focusRequested={workflow.phase === "running" && terminalState === "attached"} fontSize={12} inputRequest={inputRequest} onInputRequestResult={handleInputRequestResult} onTerminalStateChange={handleTerminalState} terminalTarget={{ kind: "shell", handleId: workflow.terminal.handleId, generation: workflow.terminal.createdAt, title: workflow.terminal.title }} theme={theme} /></div>
-			{retryable ? <div className="flex items-center justify-end border-t border-(--color-border-settings-input) bg-surface/90 px-3 py-2"><Button type="button" size="sm" variant="outline" onClick={workflow.phase === "cleanup_failed" ? onClose : onRetry}>{workflow.phase === "cleanup_failed" ? t("settings.harness.retry") : workflow.action === "setup" ? t("settings.harness.setup") : t("settings.harness.login")}</Button></div> : null}
+			<div ref={terminalBoxRef} className="h-[300px] min-h-0 overscroll-contain"><TerminalPane daemonReady={shell ? shell.daemonStatus.state === "ready" : true} focusRequested={workflow.phase === "running" && terminalState === "attached"} fontSize={12} hideEndedStrip inputRequest={inputRequest} onInputRequestResult={handleInputRequestResult} onTerminalStateChange={handleTerminalState} terminalTarget={{ kind: "shell", handleId: workflow.terminal.handleId, generation: workflow.terminal.createdAt, title: workflow.terminal.title }} theme={theme} /></div>
+			<div className="flex min-h-10 items-center gap-2 border-t border-(--color-border-settings-input) bg-raised px-3 py-2">
+				{busy ? <LoaderCircle className="size-3.5 shrink-0 animate-spin text-settings-muted" aria-hidden="true" /> : null}
+				<p className="min-w-0 flex-1 truncate text-xs text-settings-muted" aria-live="polite" role="status">{status}</p>
+				{workflow.terminalInput && workflow.phase === "running" ? <Button type="button" size="sm" variant="outline" className="shrink-0" disabled={terminalState !== "attached" || commandPending || commandSent} onClick={openAuthAction}>{commandSent ? <Check aria-hidden="true" /> : <LogIn aria-hidden="true" />}{workflow.action === "setup" ? commandSent ? t("settings.harness.setupOpened") : t("settings.harness.openSetup") : commandSent ? t("settings.harness.loginOpened") : t("settings.harness.openLogin")}</Button> : null}
+				{retryable ? <Button type="button" size="sm" variant="outline" className="shrink-0" onClick={workflow.phase === "cleanup_failed" ? onClose : onRetry}>{workflow.phase === "cleanup_failed" ? t("settings.harness.retry") : workflow.action === "setup" ? t("settings.harness.setup") : t("settings.harness.login")}</Button> : null}
+			</div>
 		</div>
 	);
 }

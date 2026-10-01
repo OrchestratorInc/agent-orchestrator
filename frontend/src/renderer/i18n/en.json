@@ -1177,6 +1177,7 @@
 	"settings.harness.refresh": "Refresh harness status",
 	"settings.harness.reinstall": "Reinstall",
 	"settings.harness.retry": "Retry",
+	"settings.harness.loginEnded": "Sign-in didn't finish",
 	"settings.harness.search": "Search harnesses",
 	"settings.harness.searchPlaceholder": "Search harnesses…",
 	"settings.harness.showDiagnostics": "Show diagnostics",
