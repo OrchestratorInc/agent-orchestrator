@@ -4,9 +4,32 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+func TestManagedCodexDoesNotReplaceNativeDriver(t *testing.T) {
+	r := Build(nil, nil)
+	native, err := r.Driver(domain.HarnessCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := native.(*codexappserver.Driver); !ok {
+		t.Fatal("native driver changed")
+	}
+	managed, err := r.ManagedDriver(domain.HarnessCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := managed.(*codexappserver.ManagedDriver); !ok {
+		t.Fatal("managed driver missing")
+	}
+	if _, err := New(native).ManagedDriver(domain.HarnessCodex); !errors.Is(err, ports.ErrChatUnsupported) {
+		t.Fatal("missing managed registration fell back to native", err)
+	}
+}
 
 // What the daemon ships, stated once.
 //

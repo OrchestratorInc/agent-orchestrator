@@ -25,15 +25,16 @@ type providerProcessIdentity struct {
 }
 
 type providerOwner struct {
-	Version   int                       `json:"version"`
-	Session   string                    `json:"session"`
-	Identity  string                    `json:"identity"`
-	State     string                    `json:"state"`
-	Boot      string                    `json:"boot,omitempty"`
-	Group     int                       `json:"group,omitempty"`
-	SessionID int                       `json:"processSession,omitempty"`
-	Members   []providerProcessIdentity `json:"members,omitempty"`
-	Proof     string                    `json:"proof,omitempty"`
+	Version      int                       `json:"version"`
+	Session      string                    `json:"session"`
+	Identity     string                    `json:"identity"`
+	State        string                    `json:"state"`
+	Boot         string                    `json:"boot,omitempty"`
+	Group        int                       `json:"group,omitempty"`
+	SessionID    int                       `json:"processSession,omitempty"`
+	Members      []providerProcessIdentity `json:"members,omitempty"`
+	Proof        string                    `json:"proof,omitempty"`
+	HostProtocol Protocol                  `json:"hostProtocol,omitempty"`
 }
 
 func providerOwnerPath(dataDir, sessionID, identity string) (string, error) {
@@ -48,8 +49,11 @@ func providerOwnerPath(dataDir, sessionID, identity string) (string, error) {
 	return filepath.Join(dir, "provider-owners", identity+".json"), nil
 }
 
-func beginProviderOwner(dataDir, sessionID, identity string) (providerOwner, error) {
+func beginProviderOwner(dataDir, sessionID, identity string, protocol ...Protocol) (providerOwner, error) {
 	owner := providerOwner{Version: 1, Session: sessionID, Identity: identity, State: "starting"}
+	if len(protocol) != 0 && protocol[0] == ProtocolManagedRaw {
+		owner.HostProtocol = ProtocolManagedRaw
+	}
 	path, err := providerOwnerPath(dataDir, sessionID, identity)
 	if err != nil {
 		return owner, err
@@ -116,6 +120,9 @@ func readProviderOwner(dataDir, sessionID, identity string) (providerOwner, erro
 }
 
 func validProviderOwnerProof(owner providerOwner) bool {
+	if owner.HostProtocol != "" && owner.HostProtocol != ProtocolManagedRaw {
+		return false
+	}
 	if owner.State == "starting" {
 		return owner.Boot == "" && owner.Group == 0 && owner.SessionID == 0 && len(owner.Members) == 0 && owner.Proof == ""
 	}

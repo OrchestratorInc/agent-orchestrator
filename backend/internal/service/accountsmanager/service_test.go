@@ -187,6 +187,10 @@ func TestPrepareLaunchRoutePinsExplicitDefaultAndNeverRepins(t *testing.T) {
 	if route.AccountID != "safe-fallback" {
 		t.Fatalf("pinned route changed to %q", route.AccountID)
 	}
+	prepared, err := svc.PrepareAgentLaunchRoute(t.Context(), "session-1", domain.AccountsManagerProviderCodex, "gpt-5")
+	if err != nil || prepared == nil || prepared.BindingRevision <= 0 || prepared.BindingRevision != route.BindingRevision {
+		t.Fatal("private launch route lost its durable binding revision", err)
+	}
 }
 
 func TestPrepareLaunchRouteRequiresUnambiguousExplicitDefault(t *testing.T) {

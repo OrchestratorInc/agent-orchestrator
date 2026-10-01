@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
@@ -61,36 +60,12 @@ func TestManagedChatInstalledParallel(t *testing.T) {
 func installedManagedDriver(t *testing.T) *ManagedDriver {
 	t.Helper()
 	d := NewManaged(fixedCodexPlugin(os.Getenv("AO_MANAGED_CHAT_BINARY")), nil)
-	// This fixture proves the installed protocol and HTTP boundary, not host recovery.
 	d.open = func(ctx context.Context, cfg persistenthost.Config) (managedHost, error) {
-		command := exec.CommandContext(ctx, cfg.Argv[0], cfg.Argv[1:]...)
-		command.Env, command.Dir = cfg.Env, cfg.Workdir
-		command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		stdin, err := command.StdinPipe()
-		if err != nil {
-			return managedHost{}, err
+		host, err := openManagedHost(ctx, cfg)
+		if err == nil {
+			t.Cleanup(func() { _ = host.process.terminate() })
 		}
-		stdout, err := command.StdoutPipe()
-		if err != nil {
-			_ = stdin.Close()
-			return managedHost{}, err
-		}
-		if err := command.Start(); err != nil {
-			_ = stdin.Close()
-			_ = stdout.Close()
-			return managedHost{}, err
-		}
-		var once sync.Once
-		stop := func() error {
-			once.Do(func() {
-				_ = stdin.Close()
-				_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-				_ = command.Wait()
-			})
-			return nil
-		}
-		t.Cleanup(func() { _ = stop() })
-		return managedHost{process: &process{stdin: stdin, stdout: stdout, stop: stop, terminate: stop}, identity: cfg.OwnershipFingerprint}, nil
+		return host, err
 	}
 	return d
 }

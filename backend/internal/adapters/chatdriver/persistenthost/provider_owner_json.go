@@ -9,7 +9,7 @@ import (
 )
 
 func validateProviderOwnerJSON(raw []byte) error {
-	fields, err := uniqueProviderOwnerFields(raw, []string{"version", "session", "identity", "state", "boot", "group", "processSession", "members", "proof"})
+	fields, err := uniqueProviderOwnerFields(raw, []string{"version", "session", "identity", "state", "boot", "group", "processSession", "members", "proof", "hostProtocol"})
 	if err != nil {
 		return err
 	}

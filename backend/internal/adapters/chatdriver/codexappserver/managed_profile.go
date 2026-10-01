@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
@@ -63,7 +64,11 @@ func managedLaunchConfig(ctx context.Context, binary string, cfg ports.ChatStart
 	env = append(env, "NO_PROXY="+strings.Join(exclusions, ","), "no_proxy="+strings.Join(exclusions, ","),
 		"CODEX_HOME="+home, managedCodexTokenEnv+"="+cfg.Env[managedCodexTokenEnv])
 	sort.Strings(env)
-	owner, err := json.Marshal([]string{filepath.Clean(cfg.WorkspacePath), string(cfg.SessionID), cfg.ControllerGeneration, cfg.ProviderScopeID, home, cfg.Route.BaseURL, "managed-codex-v1"})
+	ownerGeneration := cfg.ControllerGeneration
+	if cfg.Route.BindingRevision > 0 {
+		ownerGeneration = "binding-" + strconv.FormatInt(cfg.Route.BindingRevision, 10)
+	}
+	owner, err := json.Marshal([]string{filepath.Clean(cfg.WorkspacePath), string(cfg.SessionID), ownerGeneration, cfg.ProviderScopeID, home, cfg.Route.BaseURL, "managed-codex-v1"})
 	if err != nil {
 		return launch, err
 	}

@@ -195,7 +195,7 @@ func openManagedHost(ctx context.Context, cfg persistenthost.Config) (managedHos
 	proc.terminate = func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		stopErr := persistenthost.ShutdownExact(ctx, cfg.DataDir, cfg.SessionID, identity)
+		stopErr := persistenthost.ShutdownHost(ctx, cfg.DataDir, cfg.SessionID, identity)
 		closeErr := transport.Stdin.Close()
 		if stopErr != nil {
 			return fmt.Errorf("%w: %w", ports.ErrChatRecoveryInconclusive, stopErr)

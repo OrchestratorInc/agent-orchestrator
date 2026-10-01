@@ -4,6 +4,7 @@ package persistenthost
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 )
 
@@ -11,6 +12,9 @@ type providerChild struct{ command *exec.Cmd }
 
 func startProviderChild(ctx context.Context, command *exec.Cmd, dataDir string, owner *providerOwner) (*providerChild, error) {
 	if err := command.Start(); err != nil {
+		if receiptErr := finishUnstartedProvider(dataDir, *owner); receiptErr != nil {
+			return nil, errors.Join(err, receiptErr)
+		}
 		return nil, err
 	}
 	child := &providerChild{command: command}
