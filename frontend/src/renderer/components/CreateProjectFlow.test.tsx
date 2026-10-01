@@ -2012,7 +2012,7 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(screen.queryByRole("combobox", { name: "Select a repository" })).not.toBeInTheDocument();
 	});
 
-	it("adds a coder session repository without starting another GitHub installation", async () => {
+	it("does not offer additional coder session repositories", async () => {
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.sessionStatus = "authenticated";
 		cloudMocks.coderAvailable = true;
@@ -2029,19 +2029,12 @@ describe("CreateProjectFlow project import validation", () => {
 		const user = userEvent.setup();
 		render(<CreateProjectFlow embedded mode="choose" {...noop} />, { wrapper: CloudTestProviders });
 		await user.click(screen.getByRole("button", { name: "New cloud project" }));
-		// Coder options belong to the chosen repository, so they wait for one.
-		expect(screen.queryByRole("button", { name: "Add another repository" })).not.toBeInTheDocument();
 		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
 		await user.click(await screen.findByRole("option", { name: /acme\/app/ }));
-		const addRepository = await screen.findByRole("button", { name: "Add another repository" });
-		await user.click(addRepository);
-		expect(screen.getByRole("combobox", { name: "Repository 1" })).toBeInTheDocument();
-		expect(screen.getByRole("combobox", { name: "Select a repository" }).compareDocumentPosition(screen.getByText("Additional repositories")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-		expect(screen.getByText("Additional repositories").compareDocumentPosition(screen.getByText("Template")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-		await user.click(addRepository);
-		expect(screen.getByText("2 / 2")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Previous repository" })).toBeEnabled();
-		expect(screen.getByRole("button", { name: "Next repository" })).toBeDisabled();
+		// The template still applies, but additional session repositories are hidden for now.
+		expect(await screen.findByRole("combobox", { name: "Template" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Add another repository" })).not.toBeInTheDocument();
+		expect(screen.queryByText("Additional repositories")).not.toBeInTheDocument();
 		expect(cloudMocks.startGitHubInstallation).not.toHaveBeenCalled();
 	});
 

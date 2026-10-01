@@ -26,7 +26,7 @@ import type { components } from "../../api/schema";
 import type { ImportFolderScan } from "../../preload";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudSandboxProviders } from "../hooks/useCloudSandboxProviders";
-import { AdditionalRepositoriesPicker, CoderTemplatePicker } from "./CoderTemplatePicker";
+import { CoderTemplatePicker } from "./CoderTemplatePicker";
 import { SearchablePicker } from "./SearchablePicker";
 import { buildCoderRequestOptions, useCoderSessionOptionsStore } from "../stores/coder-session-options-store";
 import { useCloudGate } from "../hooks/useCloudGate";
@@ -1358,8 +1358,6 @@ function CloudProjectCard({
 	const sandboxProviders = useCloudSandboxProviders();
 	const coderAvailable = sandboxProviders.available.includes("coder");
 	const resetCoderOptions = useCoderSessionOptionsStore((s) => s.reset);
-	const extraRepos = useCoderSessionOptionsStore((s) => s.extraRepos);
-	const setExtraRepos = useCoderSessionOptionsStore((s) => s.setExtraRepos);
 	useEffect(() => {
 		resetCoderOptions();
 		return () => resetCoderOptions();
@@ -1699,25 +1697,10 @@ function CloudProjectCard({
 									{t("createProject.retry")}
 								</button>
 							</div>
-						) : coderAvailable && selectedRepo !== undefined ? (
-							<button
-								type="button"
-								className="block text-[12px] font-medium text-muted-foreground underline decoration-dotted underline-offset-4 transition-colors hover:text-foreground disabled:opacity-60"
-								disabled={isCreating}
-								onClick={() => setExtraRepos([...extraRepos, { url: "", branch: "" }])}
-							>
-								{t("coder.repos.add", { defaultValue: "Add another repository" })}
-							</button>
 						) : null
 					) : null}
 					{githubOAuthError ? (
 						<p className="text-[12px] leading-5 text-destructive" role="alert">{githubOAuthError}</p>
-					) : null}
-					{/* Coder options apply to the chosen repository's sessions. */}
-					{coderAvailable && selectedRepo !== undefined ? (
-						<AdditionalRepositoriesPicker
-							repos={(githubAppRepos.data ?? []).map((repo) => ({ label: repo.fullName, url: repo.htmlUrl, private: repo.isPrivate }))}
-						/>
 					) : null}
 				</div>
 

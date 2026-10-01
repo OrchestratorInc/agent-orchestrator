@@ -119,6 +119,8 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 }
 
 // These cards are placed directly below the project's primary repository.
+// Not shown in the cloud project form for now; kept so it can
+// be re-enabled without rebuilding it.
 export function AdditionalRepositoriesPicker({ repos = [] }: { repos?: { label: string; url: string; private?: boolean }[] }) {
 	const { t } = useTranslation();
 	const extraRepos = useCoderSessionOptionsStore((s) => s.extraRepos);
