@@ -333,8 +333,6 @@ export interface ChatWorkspaceProps {
 	onResumeAgent?: () => void | Promise<unknown>;
 	resumingAgent?: boolean;
 	resumeError?: string;
-	/** Set only when opening this Chat view failed to wake its saved conversation. */
-	automaticWakeError?: string;
 	onOpenShell?: () => void;
 	openingShell?: boolean;
 	shellError?: string;
@@ -590,7 +588,6 @@ function ChatWorkspaceContent({
 	onResumeAgent,
 	resumingAgent,
 	resumeError,
-	automaticWakeError,
 	onOpenShell,
 	openingShell,
 	shellError,
@@ -1319,7 +1316,6 @@ function ChatWorkspaceContent({
 		};
 	}, [conversationEmpty, uiSessionId]);
 
-	const showWakeFailure = Boolean(automaticWakeError && snapshot.controller.state !== "ready" && snapshot.controller.state !== "busy");
 	const controllerBanner = (
 		<ControllerBanner
 			controller={snapshot.controller}
@@ -1331,7 +1327,6 @@ function ChatWorkspaceContent({
 			onResume={newWorkDisabled ? undefined : onResumeAgent}
 			resuming={resumingAgent}
 			resumeError={resumeError}
-			automaticWakeError={automaticWakeError}
 			onOpenShell={onOpenShell}
 			openingShell={openingShell}
 			shellError={shellError}
@@ -1445,7 +1440,7 @@ function ChatWorkspaceContent({
 					{snapshot.account ? (
 						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} reasonInTimeline={reauthErrorInChat} />
 					) : null}
-					{showWakeFailure ? null : controllerBanner}
+					{controllerBanner}
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
 					<McpServerBanner
 						sessionId={uiSessionId}
@@ -1496,7 +1491,6 @@ function ChatWorkspaceContent({
 								data-empty={conversationEmpty || undefined}
 								className="mx-auto flex w-full max-w-3xl flex-col gap-2 transition-[max-width] duration-500 ease-out data-[empty]:max-w-2xl"
 							>
-								{showWakeFailure ? controllerBanner : null}
 								{discarded > 0 ? <RolledBackNotice count={discarded} /> : null}
 								{conversationEmpty ? (
 									<h1 className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl">
@@ -1923,7 +1917,6 @@ function ControllerBanner({
 	onResume,
 	resuming,
 	resumeError,
-	automaticWakeError,
 	onOpenShell,
 	openingShell,
 	shellError,
@@ -1937,7 +1930,6 @@ function ControllerBanner({
 	onResume?: () => void | Promise<unknown>;
 	resuming?: boolean;
 	resumeError?: string;
-	automaticWakeError?: string;
 	onOpenShell?: () => void;
 	openingShell?: boolean;
 	shellError?: string;
@@ -1946,42 +1938,9 @@ function ControllerBanner({
 	const failed = provisionState === "failed";
 	const starting = provisioning || failed;
 	const waking = Boolean(resuming && controller.state === "stopped");
-	const wakeFailed = Boolean(automaticWakeError && controller.state !== "ready" && controller.state !== "busy");
 	const resumeClick = () => {
 		void Promise.resolve().then(() => onResume?.()).catch(() => {});
 	};
-
-	if (wakeFailed) return (
-		<div
-			role={resuming ? "status" : "alert"}
-			aria-atomic="true"
-			className={cn(
-				"flex flex-wrap items-center gap-3 rounded-lg border px-3 py-2.5",
-				resuming ? "border-border bg-surface" : "border-warning/30 bg-warning/5",
-			)}
-		>
-			<div className="flex min-w-0 flex-1 items-start gap-2.5">
-				<span aria-hidden="true" className={cn("mt-0.5 grid size-7 shrink-0 place-items-center rounded-md", resuming ? "bg-muted" : "bg-warning/10")}>
-					{resuming
-					? <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
-						: <TriangleAlert className="size-3.5 text-warning" />}
-				</span>
-				<div className="min-w-0">
-					<strong className="block text-sm font-medium leading-5 text-foreground">
-						{resuming ? "Reconnecting…" : resumeError ? "Still couldn’t reconnect" : "Couldn’t reconnect"}
-					</strong>
-					<p className="text-xs leading-4 text-muted-foreground">
-						{resuming ? "Restoring the conversation…" : automaticWakeError}
-					</p>
-				</div>
-			</div>
-			{onResume ? (
-				<Button type="button" size="sm" variant="secondary" onClick={resumeClick} disabled={resuming}>
-					{resuming ? "Connecting…" : "Reconnect"}
-				</Button>
-			) : null}
-		</div>
-	);
 
 	// The transition coordinator intentionally stops one controller before it
 	// starts the other. The top-bar handoff state already explains that interval;
