@@ -1,4 +1,21 @@
 import type { EnvironmentKind } from "./types";
+import { sourceKey, type SourceRef } from "./scopedBoard";
+
+export type SourceRequest = Readonly<{ source: SourceRef; generation: number }>;
+
+export function acceptSourceResult(input: { requested: SourceRequest; current: SourceRequest }): boolean {
+	return input.requested.generation === input.current.generation &&
+		sourceKey(input.requested.source) === sourceKey(input.current.source);
+}
+
+export function sourceMatchesCurrent(
+	ref: SourceRef,
+	current: { localId: string | null; cloudId: string | null },
+	requiredKind?: EnvironmentKind,
+): boolean {
+	if (requiredKind && ref.kind !== requiredKind) return false;
+	return ref.kind === "local" ? ref.id === current.localId : ref.id === current.cloudId;
+}
 
 export interface BoardState<Project, Session, Orchestrator = never> {
 	projects: Project[];

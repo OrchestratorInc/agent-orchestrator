@@ -152,19 +152,13 @@ describe("resolveSessionSource", () => {
 		const cfg: ServerConfig = { ...DEFAULT_CONFIG, host: "10.0.0.2", password: "pw" };
 		const localSource = resolveSessionSource({ environment: "local", cfg });
 		expect(cloudSource).not.toBe(localSource);
-		// The single memo slot is keyed on the *current* resolution, not a
-		// per-environment cache — switching away and back rebuilds rather than
-		// resurrecting the old instance. That is fine: it only costs one rebuild
-		// per environment toggle, not per render.
+		// Independent source caches keep Cloud stable while Local resolves.
 		const cloudAgain = resolveSessionSource({ environment: "cloud", cfg: null, cloud });
 		expect(cloudAgain?.kind).toBe("cloud");
-		expect(resolveSessionSource({ environment: "cloud", cfg: null, cloud })).toBe(cloudAgain);
+		expect(cloudAgain).toBe(cloudSource);
 	});
 
-	// The symmetric direction: 15b's switcher goes local -> cloud -> local, so
-	// this must rebuild (not resurrect a stale local instance) just like the
-	// cloud -> local -> cloud case above.
-	it("returns a new instance when switching from local to cloud and back to local", () => {
+	it("keeps Local source stable while Cloud resolves", () => {
 		const cfg: ServerConfig = { ...DEFAULT_CONFIG, host: "10.0.0.2", password: "pw" };
 		const cloud = { client: fakeClient, signedIn: true, orgId: "org1" };
 		const firstLocal = resolveSessionSource({ environment: "local", cfg });
@@ -173,7 +167,7 @@ describe("resolveSessionSource", () => {
 		expect(cloudSource?.kind).toBe("cloud");
 		const secondLocal = resolveSessionSource({ environment: "local", cfg });
 		expect(secondLocal?.kind).toBe("local");
-		expect(secondLocal).not.toBe(firstLocal);
+		expect(secondLocal).toBe(firstLocal);
 		// Stable from here on, same unchanged config.
 		expect(resolveSessionSource({ environment: "local", cfg })).toBe(secondLocal);
 	});

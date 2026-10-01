@@ -24,6 +24,14 @@ function harness(overrides: Partial<ConstructorParameters<typeof ConfigLoadContr
 }
 
 describe("config loading controller", () => {
+	it("continues resolving the paired desktop while Cloud is selected", async () => {
+		const h = harness();
+		h.controller.setLocalEnabled(true);
+		h.controller.setEnvironment("cloud");
+		await h.controller.reload();
+		expect(h.resolveActive).toHaveBeenCalledTimes(1);
+		expect(h.published).toEqual([{ config: resolved, endpoints, raced: true }]);
+	});
 	it("does no configuration work while the environment is unresolved", async () => {
 		const h = harness();
 		h.controller.setEnvironment(null);

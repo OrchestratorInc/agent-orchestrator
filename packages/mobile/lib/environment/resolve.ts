@@ -16,32 +16,53 @@ export type CloudResolveInput = {
 	sessionEpoch?: number;
 };
 
-// Memoised on environment identity. Cloud identity includes the client, org,
-// and account session epoch; retaining a source across any of those boundaries
-// could let an old account's request publish into the new board.
-let cachedEnvironment: EnvironmentKind | undefined;
-let cachedConfig: ServerConfig | undefined;
-let cachedOrgId: string | null | undefined;
+// Separate slots keep one source's resolution from evicting the other. The
+// authenticated Cloud slot is never reused across a session epoch.
+let cachedLocalConfig: ServerConfig | undefined;
+let cachedLocalSource: SessionSource | undefined;
+let cachedOrgId: string | undefined;
 let cachedCloudClient: CloudClient | undefined;
 let cachedCloudSessionEpoch: number | undefined;
-let cachedSource: SessionSource | undefined;
+let cachedCloudSource: SessionSource | undefined;
 
-function resetCache(): void {
-	cachedEnvironment = undefined;
-	cachedConfig = undefined;
-	cachedOrgId = undefined;
-	cachedCloudClient = undefined;
-	cachedCloudSessionEpoch = undefined;
-	cachedSource = undefined;
+export function resolveLocalSource(cfg: ServerConfig | null): SessionSource | undefined {
+	if (!cfg || !isConfigured(cfg)) {
+		cachedLocalConfig = undefined;
+		cachedLocalSource = undefined;
+		return undefined;
+	}
+	if (!cachedLocalSource || !sameServerConfig(cfg, cachedLocalConfig ?? null)) {
+		cachedLocalConfig = cfg;
+		cachedLocalSource = createLocalSessionSource(cfg);
+	}
+	return cachedLocalSource;
+}
+
+export function resolveCloudSource(cloud: CloudResolveInput | undefined): SessionSource | undefined {
+	if (!cloud || !cloud.signedIn || !cloud.orgId) {
+		cachedOrgId = undefined;
+		cachedCloudClient = undefined;
+		cachedCloudSessionEpoch = undefined;
+		cachedCloudSource = undefined;
+		return undefined;
+	}
+	if (!cachedCloudSource || cachedOrgId !== cloud.orgId || cachedCloudClient !== cloud.client ||
+		cachedCloudSessionEpoch !== (cloud.sessionEpoch ?? 0)) {
+		cachedOrgId = cloud.orgId;
+		cachedCloudClient = cloud.client;
+		cachedCloudSessionEpoch = cloud.sessionEpoch ?? 0;
+		cachedCloudSource = createCloudSessionSource({ client: cloud.client, orgId: cloud.orgId });
+	}
+	return cachedCloudSource;
 }
 
 /**
- * The source for the active environment, or undefined when it isn't ready
+ * Compatibility selector for the previously active environment, or undefined when it isn't ready
  * (no daemon paired for local; not signed in or no org resolved yet for
  * cloud).
  *
- * The store uses this source for the Cloud board while daemon mutations retain
- * their existing Local-only paths.
+ * Combined screens resolve Local and Cloud independently through the functions
+ * above; older screens still use this selected-source adapter during migration.
  */
 export function resolveSessionSource(input: {
 	// `null` means the persisted choice hasn't loaded yet — see
@@ -55,49 +76,7 @@ export function resolveSessionSource(input: {
 }): SessionSource | undefined {
 	const { environment, cfg, cloud } = input;
 
-	if (environment === null) {
-		resetCache();
-		return undefined;
-	}
-
-	if (environment === "local") {
-		if (!cfg || !isConfigured(cfg)) {
-			resetCache();
-			return undefined;
-		}
-		if (
-			cachedSource === undefined ||
-			cachedEnvironment !== "local" ||
-			!sameServerConfig(cfg, cachedConfig ?? null)
-		) {
-			cachedEnvironment = "local";
-			cachedConfig = cfg;
-			cachedOrgId = undefined;
-			cachedCloudClient = undefined;
-			cachedCloudSessionEpoch = undefined;
-			cachedSource = createLocalSessionSource(cfg);
-		}
-		return cachedSource;
-	}
-
-	// environment === "cloud"
-	if (!cloud || !cloud.signedIn || !cloud.orgId) {
-		resetCache();
-		return undefined;
-	}
-	if (
-		cachedSource === undefined ||
-		cachedEnvironment !== "cloud" ||
-		cachedOrgId !== cloud.orgId ||
-		cachedCloudClient !== cloud.client ||
-		cachedCloudSessionEpoch !== (cloud.sessionEpoch ?? 0)
-	) {
-		cachedEnvironment = "cloud";
-		cachedConfig = undefined;
-		cachedOrgId = cloud.orgId;
-		cachedCloudClient = cloud.client;
-		cachedCloudSessionEpoch = cloud.sessionEpoch ?? 0;
-		cachedSource = createCloudSessionSource({ client: cloud.client, orgId: cloud.orgId });
-	}
-	return cachedSource;
+	if (environment === "local") return resolveLocalSource(cfg);
+	if (environment === "cloud") return resolveCloudSource(cloud);
+	return undefined;
 }

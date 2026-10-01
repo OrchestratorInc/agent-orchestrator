@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldMaintainLocalConnection, shouldPollLocal } from "./shouldPoll";
+import { shouldMaintainLocalConnection, shouldPollLocal, shouldPollLocalSource, shouldPollCloudSource } from "./shouldPoll";
 
 describe("shouldPollLocal", () => {
 	it("polls for the local environment", () => {
@@ -18,4 +18,11 @@ describe("shouldPollLocal", () => {
 		expect(shouldMaintainLocalConnection("cloud")).toBe(false);
 		expect(shouldMaintainLocalConnection("local")).toBe(true);
 	});
+});
+
+it("keeps Local and Cloud polling concurrently when both are ready", () => {
+	expect(shouldPollLocalSource({ paired: true, appActive: true })).toBe(true);
+	expect(shouldPollCloudSource({ signedIn: true, orgId: "org-1", appActive: true })).toBe(true);
+	expect(shouldPollLocalSource({ paired: true, appActive: false })).toBe(false);
+	expect(shouldPollCloudSource({ signedIn: false, orgId: null, appActive: true })).toBe(false);
 });

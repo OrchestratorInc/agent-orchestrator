@@ -37,12 +37,14 @@ import {
 	dispatchCurrentCloudBoardRequest,
 	publishCloudBoardResult,
 	selectBoardState,
+	sourceMatchesCurrent,
 	type BoardState,
 	type CloudBoardRequest,
 } from "./environment/boardSelection";
-import { resolveSessionSource } from "./environment/resolve";
+import { resolveCloudSource, resolveLocalSource } from "./environment/resolve";
 import { ConfigLoadController } from "./environment/configLoadController";
-import { shouldMaintainLocalConnection, shouldPollLocal } from "./environment/shouldPoll";
+import { shouldPollCloudSource, shouldPollLocalSource } from "./environment/shouldPoll";
+import { composeBoards, type ScopedBoard, type SourceRef } from "./environment/scopedBoard";
 import type { EnvironmentKind, SessionSource } from "./environment/types";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
 import { cloudBoardPollInterval, pollIntervalFor } from "./pollInterval";
@@ -100,6 +102,21 @@ type AppState = {
 	setEnvironment: (kind: EnvironmentKind) => void;
 	/** The active environment's data source. Undefined until one is configured. */
 	sessionSource: SessionSource | undefined;
+	/** Independent source snapshots for the combined board. */
+	localBoard: BoardState<ProjectInfo, DashboardSession, OrchestratorLink>;
+	cloudBoard: BoardState<ProjectInfo, DashboardSession, OrchestratorLink>;
+	scopedBoard: ScopedBoard;
+	localPRs: ReturnType<typeof collectPRs>;
+	sourceFor: (source: SourceRef) => SessionSource | undefined;
+	refreshSource: (source: SourceRef) => Promise<void>;
+	refreshAll: () => Promise<void>;
+	spawnOn: (source: SourceRef, options: SpawnOptions) => Promise<{ id: string; projectId: string }>;
+	launchConductorOn: (source: SourceRef, projectId: string, clean?: boolean, mode?: SessionMode) => Promise<OrchestratorLink>;
+	killOn: (source: SourceRef, id: string) => Promise<void>;
+	renameWorkerOn: (source: SourceRef, id: string, displayName: string) => Promise<void>;
+	setWorkerPinnedOn: (source: SourceRef, id: string, pinned: boolean) => Promise<void>;
+	restoreOn: (source: SourceRef, id: string) => Promise<void>;
+	resumeAgentOn: (source: SourceRef, id: string) => Promise<void>;
 	/** Whether the first config resolution has finished. Until it has, an
 	 *  unconfigured store means "still finding the machine", not "unpaired". */
 	configResolved: boolean;
@@ -236,26 +253,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const [error, setError] = useState<string | null>(null);
 	const [errorStatus, setErrorStatus] = useState<number | null>(null);
 	const [cloudBoard, setCloudBoard] = useState<BoardState<ProjectInfo, DashboardSession, OrchestratorLink>>(EMPTY_BOARD);
+	const [cloudBoardOwner, setCloudBoardOwner] = useState<SessionSource | undefined>();
+	const [localSnapshotMachine, setLocalSnapshotMachine] = useState<string | null>(null);
 	const cloudRequestGenerationRef = useRef(0);
 	const activeEnvironmentRef = useRef<EnvironmentKind | null>(environment);
 	const cloudBoardRequestRef = useRef<CloudBoardRequest<SessionSource> | undefined>(undefined);
-	const sessionSource = useMemo(
-		() =>
-			resolveSessionSource({
-				environment,
-				cfg: config,
-				cloud: {
-					client: cloudAuth.client,
-					signedIn: cloudAuth.signedIn === true,
-					orgId: cloudAuth.orgId,
-					sessionEpoch: cloudAuth.sessionEpoch,
-				},
-			}),
-		[environment, config, cloudAuth.client, cloudAuth.signedIn, cloudAuth.orgId, cloudAuth.sessionEpoch],
-	);
+	const localSource = useMemo(() => resolveLocalSource(config), [config]);
+	const cloudSource = useMemo(() => resolveCloudSource({
+		client: cloudAuth.client,
+		signedIn: cloudAuth.signedIn === true,
+		orgId: cloudAuth.orgId,
+		sessionEpoch: cloudAuth.sessionEpoch,
+	}), [cloudAuth.client, cloudAuth.signedIn, cloudAuth.orgId, cloudAuth.sessionEpoch]);
+	const sessionSource = environment === "cloud" ? cloudSource : environment === "local" ? localSource : undefined;
+	const localMachineId = config && isConfigured(config) ? machineIdentity(config) : null;
+	const cloudOrgId = cloudSource ? cloudAuth.orgId : null;
+	const sourceIdentityRef = useRef({ localId: localMachineId, cloudId: cloudOrgId, localSource, cloudSource });
+	sourceIdentityRef.current = { localId: localMachineId, cloudId: cloudOrgId, localSource, cloudSource };
 	// Start authenticated streaming only after the REST probe succeeds. A stale
 	// password must cost one failed request, not a poll plus a parallel SSE attempt.
-	useConversationEventTransport(environment === "local" && connection === "open" ? config : null);
+	useConversationEventTransport(connection === "open" ? config : null);
 
 	const cfgRef = useRef<ServerConfig | null>(null);
 	// Gate for the connected event: emit only on the not-open -> open transition,
@@ -353,8 +370,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	}
 
 	useLayoutEffect(() => {
-		configLoadControllerRef.current?.setEnvironment(environment);
-	}, [environment]);
+		configLoadControllerRef.current?.setLocalEnabled(true);
+	}, []);
 
 	const reloadConfig = useCallback(async (options?: ConnectOptions): Promise<ServerConfig> => {
 		const loaded = await configLoadControllerRef.current?.reload(options);
@@ -363,14 +380,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
 	useEffect(() => {
 		void reloadConfig();
-	}, [environment, reloadConfig]);
+	}, [reloadConfig]);
 
 	// Nothing re-picks a path while the current one answers, so once the app
 	// fell to the tunnel it stayed there even after Wi-Fi came back — observed
 	// on device, holding a Cloudflare connection with a working LAN unused.
 	// This is the only thing that moves the app back up the preference order.
 	useEffect(() => {
-		if (!shouldMaintainLocalConnection(environment) || !config || !isConfigured(config) || !appActive) return;
+		if (!shouldPollLocalSource({ paired: !!localSource, appActive }) || !config || !isConfigured(config)) return;
 		let stopped = false;
 		const check = async () => {
 			if (stopped) return;
@@ -405,7 +422,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			stopped = true;
 			clearInterval(id);
 		};
-	}, [config, appActive, environment, reloadConfig]);
+	}, [config, appActive, localSource, reloadConfig]);
 
 	// A Cloud source is scoped to the signed-in account and organization. Every
 	// source change gets a new generation: any response already in flight can no
@@ -413,18 +430,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// visible before passive poll effects can start their next request.
 	useLayoutEffect(() => {
 		activeEnvironmentRef.current = environment;
+	}, [environment]);
+
+	useLayoutEffect(() => {
 		const generation = cloudRequestGenerationRef.current + 1;
 		cloudRequestGenerationRef.current = generation;
 		cloudBoardRequestRef.current =
-			environment === "cloud" && sessionSource?.kind === "cloud"
-				? { source: sessionSource, generation }
+			cloudSource
+				? { source: cloudSource, generation }
 				: undefined;
-		setCloudBoard(
-			environment === "cloud" && sessionSource?.kind === "cloud"
-				? { ...EMPTY_BOARD, loading: true }
-				: EMPTY_BOARD,
-		);
-	}, [environment, sessionSource]);
+		setCloudBoardOwner(undefined);
+		setCloudBoard(cloudSource ? { ...EMPTY_BOARD, loading: true } : EMPTY_BOARD);
+	}, [cloudSource]);
 
 	const fetchCloudBoard = useCallback((): Promise<void> =>
 		dispatchCurrentCloudBoardRequest(
@@ -433,6 +450,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				setCloudBoard((current) => ({ ...current, loading: true, error: null }));
 				try {
 					const board = await loadSessionSourceBoard(source);
+					if (cloudBoardRequestRef.current?.generation === generation &&
+						cloudBoardRequestRef.current?.sequence === sequence) setCloudBoardOwner(source);
 					setCloudBoard((current) =>
 						publishCloudBoardResult({
 							current,
@@ -465,11 +484,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	]);
 
 	useEffect(() => {
-		if (!cloudBoardRequestRef.current || !appActive) return;
+		if (!shouldPollCloudSource({ signedIn: cloudAuth.signedIn === true, orgId: cloudAuth.orgId, appActive })) return;
 		void fetchCloudBoard();
 		const poll = setInterval(() => void fetchCloudBoard(), cloudPollMs);
 		return () => clearInterval(poll);
-	}, [appActive, cloudPollMs, environment, fetchCloudBoard, sessionSource]);
+	}, [appActive, cloudPollMs, cloudAuth.signedIn, cloudAuth.orgId, cloudSource, fetchCloudBoard]);
 
 	// fetchAll returns false when it hit an auth failure (missing/wrong password
 	// or a 429 lockout). The poll loop uses that to STOP hammering: a phone that
@@ -498,6 +517,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				machineIdentity(c),
 			));
 			setSessions(sess.sessions);
+			setLocalSnapshotMachine(machineIdentity(c));
 			setOrchestrators(sess.orchestrators);
 			setOrchestratorId(sess.orchestratorId);
 			setStats(sess.stats);
@@ -559,13 +579,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		// A config change (unpair / re-pair / new host) restarts polling; reset the
 		// connected gate so the first open of the new session is a real transition.
 		openRef.current = false;
-		// Cloud has no daemon to poll, and nothing on that path consumes the
-		// result (see lib/cloud/source.ts) — without this a paired-but-asleep
-		// Mac would get hammered with failing requests forever while the user
-		// is on Cloud. `null` (environment not loaded yet) also does not poll;
-		// see shouldPollLocal's doc comment.
-		if (!shouldPollLocal(environment)) {
-			setConnection("closed");
+		// The paired desktop has its own poll gate. It remains live while Cloud
+		// refreshes independently, but stops heartbeating while backgrounded.
+		if (!shouldPollLocalSource({ paired: !!localSource, appActive })) {
+			if (!localSource) setConnection("closed");
 			return;
 		}
 		if (!config || !isConfigured(config)) {
@@ -625,7 +642,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// boundary instead of one whole request-timeout later.
 			stopped = true;
 		};
-	}, [config, fetchAll, appActive, reloadConfig, configResolved, environment]);
+	}, [config, fetchAll, appActive, reloadConfig, configResolved, localSource]);
 
 	const setActiveProject = useCallback((id: string) => {
 		setChosenProjectId(id);
@@ -638,10 +655,46 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		knownProjects,
 		config && isConfigured(config) ? machineIdentity(config) : "",
 	);
+	const localBoard: BoardState<ProjectInfo, DashboardSession, OrchestratorLink> = useMemo(() => ({
+		projects: localProjects,
+		sessions: localSnapshotMachine === localMachineId ? sessions : [],
+		orchestrators: localSnapshotMachine === localMachineId ? orchestrators : [],
+		loading,
+		error,
+	}), [localProjects, localSnapshotMachine, localMachineId, sessions, orchestrators, loading, error]);
+	const scopedBoard = useMemo(() => composeBoards({
+		local: {
+			status: {
+				resolved: configResolved,
+				available: !!localSource,
+				loading: !configResolved || (loading && localSnapshotMachine !== localMachineId),
+				stale: !!error && localSnapshotMachine === localMachineId,
+				error,
+			},
+			snapshot: localMachineId && localSnapshotMachine === localMachineId
+				? { source: { kind: "local", id: localMachineId }, board: localBoard }
+				: undefined,
+		},
+		cloud: {
+			status: {
+				resolved: cloudAuth.signedIn !== null && (cloudAuth.signedIn === false || !!cloudAuth.orgId || !cloudAuth.orgLoading),
+				available: !!cloudSource,
+				loading: cloudAuth.orgLoading || cloudBoard.loading,
+				stale: !!cloudBoard.error && cloudBoardOwner === cloudSource,
+				error: cloudAuth.orgError ?? cloudBoard.error,
+			},
+			snapshot: cloudOrgId && cloudBoardOwner === cloudSource
+				? { source: { kind: "cloud", id: cloudOrgId }, board: cloudBoard }
+				: undefined,
+		},
+	}), [configResolved, localSource, loading, localSnapshotMachine, localMachineId, error, localBoard,
+		cloudAuth.signedIn, cloudAuth.orgId, cloudAuth.orgLoading, cloudAuth.orgError,
+		cloudSource, cloudBoard, cloudBoardOwner, cloudOrgId]);
+	const localPRs = useMemo(() => collectPRs(localBoard.sessions), [localBoard.sessions]);
 	const boardSelection = selectBoardState({
 		environment,
 		sourceKind: sessionSource?.kind,
-		local: { projects: localProjects, sessions, orchestrators, loading, error },
+		local: localBoard,
 		cloud: cloudBoard,
 		empty: EMPTY_BOARD,
 	});
@@ -777,6 +830,65 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		}
 		await fetchAll();
 	}, [fetchAll, fetchCloudBoard]);
+	const sourceFor = useCallback((ref: SourceRef): SessionSource | undefined => {
+		const current = sourceIdentityRef.current;
+		if (!sourceMatchesCurrent(ref, current)) return undefined;
+		if (ref.kind === "local") {
+			const cfg = cfgRef.current;
+			if (!cfg || !isConfigured(cfg) || machineIdentity(cfg) !== ref.id) return undefined;
+			return current.localSource;
+		}
+		return current.cloudSource;
+	}, []);
+	const refreshSource = useCallback(async (ref: SourceRef): Promise<void> => {
+		if (!sourceFor(ref)) throw new Error("This destination is no longer available.");
+		if (ref.kind === "local") await fetchAll();
+		else await fetchCloudBoard();
+	}, [sourceFor, fetchAll, fetchCloudBoard]);
+	const refreshAll = useCallback(async (): Promise<void> => {
+		const current = sourceIdentityRef.current;
+		const pending: Promise<void>[] = [];
+		if (current.localId) pending.push(refreshSource({ kind: "local", id: current.localId }));
+		if (current.cloudId) pending.push(refreshSource({ kind: "cloud", id: current.cloudId }));
+		await Promise.allSettled(pending);
+	}, [refreshSource]);
+	const spawnOn = useCallback(async (ref: SourceRef, options: SpawnOptions) => {
+		const source = sourceFor(ref);
+		if (!source) throw new Error("This destination is no longer available.");
+		return spawnSessionThroughSource(source, options, () => refreshSource(ref));
+	}, [sourceFor, refreshSource]);
+	const assertLocalSource = useCallback((ref: SourceRef): ServerConfig => {
+		const c = cfgRef.current;
+		if (!c || !isConfigured(c) || !sourceMatchesCurrent(ref, {
+			localId: machineIdentity(c), cloudId: sourceIdentityRef.current.cloudId,
+		}, "local")) throw new Error("This paired desktop is no longer available.");
+		return c;
+	}, []);
+	const launchConductorOn = useCallback(async (ref: SourceRef, projectId: string, clean = false, mode: SessionMode = "chat") => {
+		const link = await apiLaunchOrchestrator(assertLocalSource(ref), projectId, clean, mode);
+		await refreshSource(ref);
+		return link;
+	}, [assertLocalSource, refreshSource]);
+	const killOn = useCallback(async (ref: SourceRef, id: string) => {
+		await killSession(assertLocalSource(ref), id);
+		await refreshSource(ref);
+	}, [assertLocalSource, refreshSource]);
+	const renameWorkerOn = useCallback(async (ref: SourceRef, id: string, displayName: string) => {
+		await apiRenameSession(assertLocalSource(ref), id, displayName);
+		await refreshSource(ref);
+	}, [assertLocalSource, refreshSource]);
+	const setWorkerPinnedOn = useCallback(async (ref: SourceRef, id: string, pinned: boolean) => {
+		await (pinned ? apiPinSession(assertLocalSource(ref), id) : apiUnpinSession(assertLocalSource(ref), id));
+		await refreshSource(ref);
+	}, [assertLocalSource, refreshSource]);
+	const restoreOn = useCallback(async (ref: SourceRef, id: string) => {
+		await restoreSession(assertLocalSource(ref), id);
+		await refreshSource(ref);
+	}, [assertLocalSource, refreshSource]);
+	const resumeAgentOn = useCallback(async (ref: SourceRef, id: string) => {
+		await resumeSessionAgent(assertLocalSource(ref), id);
+		await refreshSource(ref);
+	}, [assertLocalSource, refreshSource]);
 
 	// Memoized so the provider doesn't hand every useApp() consumer a brand-new
 	// object (causing re-renders) on each render. Re-renders now track real state changes.
@@ -792,6 +904,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			environment,
 			setEnvironment,
 			sessionSource,
+			localBoard,
+			cloudBoard,
+			scopedBoard,
+			localPRs,
+			sourceFor,
+			refreshSource,
+			refreshAll,
+			spawnOn,
+			launchConductorOn,
+			killOn,
+			renameWorkerOn,
+			setWorkerPinnedOn,
+			restoreOn,
+			resumeAgentOn,
 			activeEndpoints,
 			projects,
 			projectsKnown,
@@ -827,6 +953,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			environment,
 			setEnvironment,
 			sessionSource,
+			localBoard,
+			cloudBoard,
+			scopedBoard,
+			localPRs,
+			sourceFor,
+			refreshSource,
+			refreshAll,
+			spawnOn,
+			launchConductorOn,
+			killOn,
+			renameWorkerOn,
+			setWorkerPinnedOn,
+			restoreOn,
+			resumeAgentOn,
 			activeEndpoints,
 			projects,
 			projectsKnown,

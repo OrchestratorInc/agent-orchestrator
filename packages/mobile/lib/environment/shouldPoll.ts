@@ -28,3 +28,12 @@ export function shouldPollLocal(environment: EnvironmentKind | null): boolean {
 export function shouldMaintainLocalConnection(environment: EnvironmentKind | null): boolean {
 	return shouldPollLocal(environment);
 }
+
+/** Both sources can be live at once; their polling gates do not use the saved view. */
+export function shouldPollLocalSource(input: { paired: boolean; appActive: boolean }): boolean {
+	return input.paired && input.appActive;
+}
+
+export function shouldPollCloudSource(input: { signedIn: boolean; orgId: string | null; appActive: boolean }): boolean {
+	return input.signedIn && !!input.orgId && input.appActive;
+}

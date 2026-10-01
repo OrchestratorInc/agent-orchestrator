@@ -17,12 +17,13 @@ export type ConfigLoadControllerDeps = {
 };
 
 /**
- * Owns config-load dispatch and invalidation across environment changes. Cloud
- * only hydrates a saved Local pairing; the resolver and endpoint list are
- * Local-only and no stale result may publish after a switch.
+ * Owns config-load dispatch and invalidation. The legacy environment gate is
+ * retained for older callers; the combined board explicitly enables Local
+ * resolution regardless of the selected Cloud view.
  */
 export class ConfigLoadController {
 	private environment: EnvironmentKind | null = null;
+	private localEnabled: boolean | null = null;
 	private generation = 0;
 
 	constructor(
@@ -33,15 +34,22 @@ export class ConfigLoadController {
 	setEnvironment(environment: EnvironmentKind | null): void {
 		if (this.environment === environment) return;
 		this.environment = environment;
+		if (this.localEnabled === null) this.generation += 1;
+	}
+
+	/** New combined board: resolve the paired desktop independently of the saved view. */
+	setLocalEnabled(enabled: boolean): void {
+		if (this.localEnabled === enabled) return;
+		this.localEnabled = enabled;
 		this.generation += 1;
 	}
 
 	async reload(options?: ConnectOptions): Promise<ServerConfig | null> {
-		const environment = this.environment;
+		const environment = this.localEnabled === null ? this.environment : this.localEnabled ? "local" : "cloud";
 		const plan = configLoadPlan(environment);
 		if (plan === "wait" || environment === null) return null;
 		const generation = this.generation;
-		const current = () => this.environment === environment && this.generation === generation;
+		const current = () => this.generation === generation;
 
 		if (plan === "hydrate") {
 			const config = await this.deps.loadSaved();
