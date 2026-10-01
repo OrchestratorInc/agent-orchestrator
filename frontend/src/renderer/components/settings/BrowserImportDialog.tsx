@@ -563,7 +563,7 @@ function ResultStep({ includeCookies, result }: { includeCookies: boolean; resul
 	const { t } = useTranslation();
 	const empty = result.entries.every((entry) => entry.importedCookies + entry.importedHistoryEntries === 0);
 	const partial = result.entries.some((entry) =>
-		(includeCookies && entry.importedCookies === 0)
+		(includeCookies && entry.importedCookies === 0 && entry.skippedCookies > 0)
 		|| entry.warnings.some((warning) => !isExpectedSkip(warning))
 		|| entry.skippedCookies > entry.warnings.reduce((count, warning) => count + (isExpectedSkip(warning) ? warning.count ?? 0 : 0), 0),
 	);
