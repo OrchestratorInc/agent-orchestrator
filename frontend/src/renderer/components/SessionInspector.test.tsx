@@ -1559,6 +1559,25 @@ describe("SessionInspector Activity section", () => {
     expect(within(activityRow).queryByText("Changes Requested")).not.toBeInTheDocument();
   });
 
+  it("does not show Commented for a stale unresolved comment on a merged PR", () => {
+    renderWithQuery(
+      <SessionInspector
+        session={session(
+          [pr(5765, "merged", { review: "review_required", reviewComments: true })],
+          {
+            status: "idle",
+            activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
+          },
+        )}
+      />,
+    );
+
+    const activityRow = activitySection()
+      .getByText("Idle")
+      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
+    expect(within(activityRow).queryByText("Commented")).not.toBeInTheDocument();
+  });
+
   it("ignores stale failing CI from a merged PR when the open PR is passing", () => {
     renderWithQuery(
       <SessionInspector
