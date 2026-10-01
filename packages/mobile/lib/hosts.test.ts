@@ -138,19 +138,19 @@ describe("host store", () => {
 		expect(got[0].token).toBe("pw");
 	});
 
-	it("caps the list so it cannot grow without bound", async () => {
-		const { saveHost, loadHosts, MAX_HOSTS } = await mod();
-		for (let i = 0; i < MAX_HOSTS + 5; i++) {
+	it("keeps every paired host available for explicit removal", async () => {
+		const { saveHost, loadHosts } = await mod();
+		for (let i = 0; i < 15; i++) {
 			await saveHost({
 				id: `h_${i}`, name: `m${i}`, platform: "darwin",
-				endpoints: [], token: "", lastConnected: i,
+				endpoints: [], token: `pw-${i}`, lastConnected: i,
 			});
 		}
 
 		const got = await loadHosts();
-		expect(got).toHaveLength(MAX_HOSTS);
-		// The oldest fall off, not the newest.
-		expect(got[0].id).toBe(`h_${MAX_HOSTS + 4}`);
+		expect(got).toHaveLength(15);
+		expect(got[0].id).toBe("h_14");
+		expect(got[14]).toMatchObject({ id: "h_0", token: "pw-0" });
 	});
 
 	it("survives corrupted storage instead of crashing the app", async () => {

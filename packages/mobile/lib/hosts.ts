@@ -22,13 +22,7 @@ export type Host = {
 	lastConnected: number;
 };
 
-/**
- * Enough for a developer's machines without letting stale pairings pile up.
- *
- * activeHost() answers with an explicit selection where one exists and the
- * most recent machine otherwise. The Settings picker changes that selection.
- */
-export const MAX_HOSTS = 10;
+/** activeHost() uses explicit selection or the most recent machine. */
 
 /** Ignore recency-only writes so another host reconnecting does not restart live connections. */
 export function sameHostConnections(left: Host[], right: Host[]): boolean {
@@ -65,12 +59,12 @@ async function readStored(): Promise<StoredHost[]> {
 	}
 }
 
-function sortAndCap(hosts: StoredHost[]): StoredHost[] {
-	return [...hosts].sort((a, b) => b.lastConnected - a.lastConnected).slice(0, MAX_HOSTS);
+function sortHosts(hosts: StoredHost[]): StoredHost[] {
+	return [...hosts].sort((a, b) => b.lastConnected - a.lastConnected);
 }
 
 async function writeStored(hosts: StoredHost[]): Promise<void> {
-	await AsyncStorage.setItem(HOSTS_KEY, JSON.stringify(sortAndCap(hosts)));
+	await AsyncStorage.setItem(HOSTS_KEY, JSON.stringify(sortHosts(hosts)));
 }
 
 // Several hosts can reconnect together. Serialize read-modify-write so one
@@ -84,7 +78,7 @@ function mutateStored(change: (hosts: StoredHost[]) => StoredHost[]): Promise<vo
 
 /** Every paired machine, most recently connected first. */
 export async function loadHosts(): Promise<Host[]> {
-	const stored = sortAndCap(await readStored());
+	const stored = sortHosts(await readStored());
 	return Promise.all(
 		stored.map(async (h) => ({
 			...h,
@@ -153,7 +147,7 @@ export async function activeHost(): Promise<Host | null> {
 /** The selected machine without opening the token store. Cleanup uses this so
  * a keychain read failure cannot prevent the user from forgetting a server. */
 export async function activeHostMetadata(): Promise<HostMetadata | null> {
-	const hosts = sortAndCap(await readStored());
+	const hosts = sortHosts(await readStored());
 	if (hosts.length === 0) return null;
 	const selected = await AsyncStorage.getItem(ACTIVE_HOST_KEY);
 	return hosts.find((h) => h.id === selected) ?? hosts[0];

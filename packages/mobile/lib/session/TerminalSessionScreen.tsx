@@ -6,7 +6,8 @@ import { ActivityIndicator, Alert, BackHandler, Keyboard, LayoutAnimation, Platf
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import { ApiError, getPreview, isTerminalStatus, killSession, killSessionReviewer, sendMessage } from "../api";
-import { authHeaders, isConfigured } from "../config";
+import { authHeaders, isConfigured, type ServerConfig } from "../config";
+import { previewForConfig } from "../hostRoute";
 import { terminalTheme, type Theme } from "../theme";
 import { haptics } from "../haptics";
 import { resetHeaderRightForSwap } from "../headerRightSwap";
@@ -575,7 +576,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
-	const params = useLocalSearchParams<{ id?: string; handleId?: string; projectId?: string; sessionId?: string; title?: string; kind?: string }>();
+	const params = useLocalSearchParams<{ id?: string; handleId?: string; projectId?: string; sessionId?: string; title?: string; kind?: string; hostId?: string }>();
 	const shellOnly = Boolean(params.handleId);
 	// A reviewer pane is attached by handle like a shell, but the daemon does not
 	// own it as a shell terminal: closing it means stopping the worker's reviewer.
@@ -636,10 +637,11 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// green dot when the agent has produced something to view (any previewable file
 	// except the repo README); the user taps it to open.
 	const [browserOpen, setBrowserOpen] = useState(false);
-	const [preview, setPreview] = useState<{ entry: string; url: string } | null>(null);
+	const [loadedPreview, setLoadedPreview] = useState<{ config: ServerConfig; id: string; value: Awaited<ReturnType<typeof getPreview>> } | null>(null);
 	const previewWebRef = useRef<WebView>(null);
 
 	const { sessions, orchestrators, restore, refresh, config: activeConfig } = useApp();
+	const preview = loadedPreview?.id === id ? previewForConfig(loadedPreview, activeConfig, params.hostId) : null;
 	const known =
 		sessions.find((s) => s.id === sessionId) ??
 		orchestrators.find((o) => o.id === sessionId) ??
@@ -877,7 +879,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			try {
 				const p = await getPreview(activeConfig, id);
 				if (cancelled) return;
-				setPreview(p);
+				setLoadedPreview({ config: activeConfig, id, value: p });
 			} catch {
 				/* transient - keep polling */
 			}
@@ -1548,7 +1550,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 							// auth (Bearer). Without this header the WebView's request 401s and
 							// renders the JSON error body instead of the page. The active
 							// machine's credential is the only one this screen may send.
-							source={{ uri: preview.url, headers: activeConfig ? authHeaders(activeConfig) : undefined }}
+							source={{ uri: preview.url, headers: preview.authenticated && activeConfig ? authHeaders(activeConfig) : undefined }}
 							originWhitelist={["*"]}
 							style={styles.browserWeb}
 							onError={() => setBanner("Couldn't load the preview.")}

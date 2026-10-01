@@ -28,6 +28,13 @@ describe("retained-stack host routes", () => {
 		expect(preview).toContain("previewForConfig(");
 	});
 
+	it("never loads a terminal preview URL with another endpoint's credential", () => {
+		const terminal = source("./session/TerminalSessionScreen.tsx");
+		expect(terminal).toContain("previewForConfig(loadedPreview, activeConfig, params.hostId)");
+		expect(terminal).toContain("setLoadedPreview({ config: activeConfig, id, value: p })");
+		expect(terminal).toContain("headers: preview.authenticated && activeConfig ? authHeaders(activeConfig) : undefined");
+	});
+
 	it("requires the owning host for review detail, reviewer chat, and actions", () => {
 		for (const path of ["../app/review/[sessionId].tsx", "../app/reviewer/[reviewId].tsx", "../app/sheets/review-actions.tsx"]) {
 			const route = source(path);
