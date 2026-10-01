@@ -10,6 +10,7 @@ import { sessionReviewsQueryKey, type ReviewsResponse } from "../lib/session-rev
 import { aoBridge } from "../lib/bridge";
 import { chatDraftDialogCopy, confirmDiscardChatDrafts, getChatDraftBoundaries, subscribeChatDraftBoundaries } from "../lib/chat-draft-boundary";
 import { useWorkspaceSession, remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { sessionWorkspaceFilesQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { useBrowserView } from "../hooks/useBrowserView";
 import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
@@ -17,6 +18,7 @@ import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
 import { useCloseShellTerminal, useOpenShellTerminal, useRenameShellTerminal, useShellTerminals } from "../hooks/useShellTerminals";
 import { clearSwitchAgentState } from "../hooks/useSwitchAgent";
 import { activateSessionFile, closeSessionFile, EMPTY_SESSION_FILE_TABS, openSessionFile } from "../lib/session-file-tabs";
+import { matchWorkspaceFilePath } from "../lib/workspace-file-path";
 import { cn } from "../lib/utils";
 import { isOrchestratorSession, sessionIsActive } from "../types/workspace";
 import type { InspectorView } from "../stores/ui-store";
@@ -132,6 +134,10 @@ export function RemoteSessionView({ hostId, sessionId }: { hostId: string; sessi
 		setFileRequests((current) => ({ ...current, [path]: { ...options, key: (current[path]?.key ?? 0) + 1 } }));
 		setFileTabs((current) => openSessionFile(current, path));
 	}, []);
+	const openReferencedFile = useCallback((rawPath: string) => {
+		void queryClient.fetchQuery(sessionWorkspaceFilesQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId))
+			.then((data) => openCenterFile(matchWorkspaceFilePath(rawPath, data.files ?? [])));
+	}, [hostId, openCenterFile, queryClient, sessionId, t]);
 	const selectWorker = useCallback(() => {
 		setReviewerSelection(null);
 		setShellSelection(null);
@@ -255,7 +261,7 @@ export function RemoteSessionView({ hostId, sessionId }: { hostId: string; sessi
 				reviewerChatSelected={Boolean(selectedReviewer)}
 				onOpenReviewerTerminal={selectReviewerTerminal}
 				onOpenReviewerChat={(target) => selectReviewerChat(target.reviewId)}
-				onOpenFile={openCenterFile}
+				onOpenFile={openReferencedFile}
 				onOpenFiles={showFiles}
 				onOpenShell={addShell}
 				openingShell={openShellTerminal.isPending}
@@ -303,7 +309,7 @@ export function RemoteSessionView({ hostId, sessionId }: { hostId: string; sessi
 		</div>
 		{interfaceUi.dialogs}
 		{session.data && proxyBase && !session.isError && inspectorOpen ? <div className="w-[min(20rem,40%)] shrink-0 overflow-hidden border-l border-border-strong bg-background 2xl:w-[min(24rem,40%)]" data-testid="panel-inspector">
-			<SessionInspector key={sessionRefKey} browserAnnotationQueue={browserAnnotationQueue} browserView={browserView} hostId={hostId} session={session.data} filesView={<SessionFileExplorer hostId={hostId} onOpenFile={openCenterFile} sessionId={sessionId} />} onOpenReviewFile={({ path }) => openCenterFile(path)} onOpenReviewerTerminal={selectReviewerTerminal} onOpenReviewerChat={selectReviewerChat} onWorkerMessageSent={selectWorker} onViewChange={setInspectorView} view={inspectorView} />
+			<SessionInspector key={sessionRefKey} browserAnnotationQueue={browserAnnotationQueue} browserView={browserView} hostId={hostId} session={session.data} filesView={<SessionFileExplorer hostId={hostId} onOpenFile={openCenterFile} sessionId={sessionId} />} onOpenReviewFile={({ path }) => openReferencedFile(path)} onOpenReviewerTerminal={selectReviewerTerminal} onOpenReviewerChat={selectReviewerChat} onWorkerMessageSent={selectWorker} onViewChange={setInspectorView} view={inspectorView} />
 		</div> : null}
 	</div>;
 }

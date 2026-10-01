@@ -2629,7 +2629,7 @@ export function TurnChangedFiles({
 									<TooltipTrigger asChild>
 										<button
 											type="button"
-											onClick={() => onOpenFile(openPath)}
+											onClick={() => onOpenFile(tooltipPath)}
 											aria-label={`Open ${openPath} in Files`}
 											className={rowClass}
 										>

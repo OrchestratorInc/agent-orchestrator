@@ -261,6 +261,40 @@ it("shows a normal inspector and reads its changed files from the remote host on
 	expect(screen.getByRole("complementary", { name: "Session inspector" })).toBeInTheDocument();
 });
 
+it.each(["frontend", "backend"])("opens the %s file from an absolute remote turn diff without a cwd", async (directory) => {
+	HTMLElement.prototype.scrollTo = vi.fn();
+	localGet.mockReset();
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	const otherDirectory = directory === "frontend" ? "backend" : "frontend";
+	const expectedPath = `${directory}/src/index.ts`;
+	const files = [otherDirectory, directory].map((name) => ({ path: `${name}/src/index.ts`, status: "added", additions: 1, deletions: 0, size: 4, binary: false }));
+	const fileRequests: string[] = [];
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const url = new URL(request.url);
+		if (url.pathname.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (url.pathname.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", displayName: "Edit index", harness: "codex", status: "working", mode: "chat", prs: [] }] });
+		if (url.pathname.endsWith("/conversation")) return Response.json(conversationBody({
+			turns: [{ id: "turn-1", state: "completed", requestedAt: "2026-09-28T00:00:00Z", diff: { files: [{ path: `/home/ao/.ao/data/worktrees/demo/session-1/${expectedPath}`, status: "added", additions: 1, deletions: 0 }] } }],
+			messages: [{ id: "message-1", turnId: "turn-1", role: "assistant", origin: "provider", text: "Changed index.", sequence: 1, revision: 0, streaming: false, createdAt: "2026-09-28T00:00:01Z" }],
+		}));
+		if (url.pathname.endsWith("/workspace/files")) return Response.json({ sessionId: "session-1", workspaceVersion: "version-1", files, sections: { committed: [], staged: [], unstaged: [], untracked: files }, commits: [], summary: { additions: 2, deletions: 0, files: 2 }, truncated: false });
+		if (url.pathname.endsWith("/workspace/file")) {
+			fileRequests.push(url.searchParams.get("path") ?? "");
+			return url.searchParams.get("path") === expectedPath
+				? Response.json({ path: expectedPath, diff: "", content: "edit", binary: false, contentTruncated: false, diffTruncated: false })
+				: Response.json({ error: "Workspace file not found" }, { status: 404 });
+		}
+		throw new Error(`Unexpected request ${request.url}`);
+	}));
+	await connectHost("http://box-a:3001");
+	renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+	await userEvent.click(await screen.findByRole("button", { name: "Open src/index.ts in Files" }));
+	await waitFor(() => expect(fileRequests).toContain(expectedPath));
+	expect(fileRequests).toEqual([expectedPath]);
+	expect(localGet).not.toHaveBeenCalled();
+});
+
 it("shows a preview tab after remote session data finishes loading", async () => {
 	HTMLElement.prototype.scrollTo = vi.fn();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
