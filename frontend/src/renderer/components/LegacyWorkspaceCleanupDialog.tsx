@@ -87,8 +87,7 @@ export function LegacyWorkspaceCleanupDialog() {
 	useEffect(() => {
 		if (dismissed || !preview) return;
 		if (hasEnoughToPrompt) setOpen(true);
-		else if (!preview.incomplete) finishPrompt();
-	}, [dismissed, finishPrompt, hasEnoughToPrompt, preview]);
+	}, [dismissed, hasEnoughToPrompt, preview]);
 
 	if (!preview || !hasEnoughToPrompt || dismissed) return null;
 	const size = formatBytes(preview.totalBytes);

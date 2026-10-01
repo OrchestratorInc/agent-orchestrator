@@ -52,6 +52,7 @@ type fakeStore struct {
 	num              int
 	deleteErr        error
 	upsertWTErr      error
+	deleteWTErr      error
 	listAllErr       error
 	getProjectErr    error
 	getSessionErr    error
@@ -298,6 +299,20 @@ func (f *fakeStore) DeleteSessionWorktrees(_ context.Context, id domain.SessionI
 		*f.sharedLog = append(*f.sharedLog, "DeleteSessionWorktrees:"+string(id))
 	}
 	delete(f.worktrees, id)
+	return nil
+}
+
+func (f *fakeStore) DeleteSessionWorktree(_ context.Context, id domain.SessionID, repoName string) error {
+	if f.deleteWTErr != nil {
+		return f.deleteWTErr
+	}
+	rows := f.worktrees[id]
+	for i, row := range rows {
+		if row.RepoName == repoName {
+			f.worktrees[id] = append(rows[:i], rows[i+1:]...)
+			break
+		}
+	}
 	return nil
 }
 
@@ -1059,6 +1074,7 @@ type fakeWorkspace struct {
 	path            string
 	diskUsageByPath map[string]int64
 	diskUsageErr    error
+	diskUsageHook   func()
 	// stashRef is returned by StashUncommitted (empty means clean worktree).
 	stashRef        string
 	stashErr        error
@@ -1216,6 +1232,9 @@ func (w *fakeWorkspace) DestroyReclaim(ctx context.Context, info ports.Workspace
 	return reclaim, err
 }
 func (w *fakeWorkspace) DiskUsage(_ context.Context, info ports.WorkspaceInfo) (int64, error) {
+	if w.diskUsageHook != nil {
+		w.diskUsageHook()
+	}
 	if w.diskUsageErr != nil {
 		return 0, w.diskUsageErr
 	}
@@ -3728,6 +3747,66 @@ func TestLastArchiveNoticeConsumesNotice(t *testing.T) {
 	}
 }
 
+func TestKillClearsUnreadArchiveNoticeBeforeEarlyError(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.sessions["mer-1"] = mkLive("mer-1")
+	ws.destroyErr = ports.ErrWorkspaceDirty
+	ws.stashRef = "refs/ao/preserved/mer-1"
+	if _, err := m.Kill(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	// A direct manager caller can leave the notice unread. A subsequent
+	// service call must not report that earlier archive after an early error.
+	st.getSessionErr = errors.New("read failed")
+	if _, err := m.Kill(ctx, "mer-1"); err == nil {
+		t.Fatal("second kill should fail before archive")
+	}
+	if preserved, saveFailed := m.LastArchiveNotice("mer-1"); preserved || saveFailed {
+		t.Fatalf("stale archive notice preserved=%v saveFailed=%v", preserved, saveFailed)
+	}
+}
+
+func TestKillDirtyWorkspaceRetriesAfterRowWriteFailure(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.sessions["mer-1"] = mkLive("mer-1")
+	ws.destroyErr = ports.ErrWorkspaceDirty
+	ws.stashRef = "refs/ao/preserved/mer-1"
+	st.upsertWTErr = errors.New("database busy")
+	if freed, err := m.Kill(ctx, "mer-1"); err != nil || freed {
+		t.Fatalf("initial kill freed=%v err=%v", freed, err)
+	}
+	if len(st.worktrees["mer-1"]) != 0 {
+		t.Fatalf("unrecorded ref must not be represented as durable: %+v", st.worktrees["mer-1"])
+	}
+	st.upsertWTErr = nil
+	result, err := m.Cleanup(ctx, "mer")
+	if err != nil || len(result.Cleaned) != 1 {
+		t.Fatalf("retry cleanup result=%+v err=%v", result, err)
+	}
+	if rows := st.worktrees["mer-1"]; len(rows) != 1 || rows[0].PreservedRef != ws.stashRef {
+		t.Fatalf("retry did not record preserved ref: %+v", rows)
+	}
+}
+
+func TestKillDirtyWorkspaceRetriesAfterForceDestroyFailure(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.sessions["mer-1"] = mkLive("mer-1")
+	ws.destroyErr = ports.ErrWorkspaceDirty
+	ws.stashRef = "refs/ao/preserved/mer-1"
+	ws.forceDestroyErr = errors.New("directory busy")
+	if freed, err := m.Kill(ctx, "mer-1"); err != nil || freed {
+		t.Fatalf("initial kill freed=%v err=%v", freed, err)
+	}
+	ws.forceDestroyErr = nil
+	result, err := m.Cleanup(ctx, "mer")
+	if err != nil || len(result.Cleaned) != 1 {
+		t.Fatalf("retry cleanup result=%+v err=%v", result, err)
+	}
+	if rows := st.worktrees["mer-1"]; len(rows) != 1 || rows[0].PreservedRef != ws.stashRef {
+		t.Fatalf("retry lost preserved ref: %+v", rows)
+	}
+}
+
 // TestKill_DirtyWorkspaceStaysWhenSnapshotFails: a failed snapshot must not
 // remove the folder. The session still terminates.
 func TestKill_DirtyWorkspaceStaysWhenSnapshotFails(t *testing.T) {
@@ -3780,6 +3859,26 @@ func TestKill_DirtyWorkspaceKeepsPreviousSnapshotWhenSaveFails(t *testing.T) {
 	rows := st.worktrees["mer-1"]
 	if len(rows) != 1 || rows[0].PreservedRef != "refs/ao/preserved/previous" || rows[0].State != "active" {
 		t.Fatalf("snapshot = %+v, want the previous ref kept as an active row", rows)
+	}
+}
+
+func TestDropShutdownRestoreMarkersKeepsPreservedRowWhenUpdateFails(t *testing.T) {
+	m, st, _, _ := newManager()
+	st.worktrees["mer-1"] = []domain.SessionWorktreeRecord{
+		{SessionID: "mer-1", RepoName: domain.RootWorkspaceRepoName, PreservedRef: "refs/ao/preserved/root", State: "removed"},
+		{SessionID: "mer-1", RepoName: "api", State: "removed"},
+	}
+	st.upsertWTErr = errors.New("database busy")
+	m.dropShutdownRestoreMarkers(ctx, "mer-1")
+	rows := st.worktrees["mer-1"]
+	if len(rows) != 1 || rows[0].RepoName != domain.RootWorkspaceRepoName || rows[0].PreservedRef != "refs/ao/preserved/root" {
+		t.Fatalf("preserved row lost after failed update: %+v", rows)
+	}
+	st.upsertWTErr = nil
+	m.dropShutdownRestoreMarkers(ctx, "mer-1")
+	rows = st.worktrees["mer-1"]
+	if len(rows) != 1 || rows[0].State != "active" {
+		t.Fatalf("preserved row not activated on retry: %+v", rows)
 	}
 }
 
@@ -4086,6 +4185,39 @@ func TestKill_WorkspaceProjectDirtyRowSnapshotsThenRemoves(t *testing.T) {
 	}
 	if apiKey != "mer-1--api" {
 		t.Fatalf("api preserve key = %q, want mer-1--api", apiKey)
+	}
+}
+
+func TestWorkspaceProjectDirtyRepoCanRetryAfterPreserveOrRemovalFailure(t *testing.T) {
+	for _, failAt := range []string{"record", "remove"} {
+		t.Run(failAt, func(t *testing.T) {
+			m, st, _, ws := newManager()
+			ws.destroyErr = ports.ErrWorkspaceDirty
+			ws.stashRef = "refs/ao/preserved/mer-1"
+			rec := mkLive("mer-1")
+			row := ports.WorkspaceRepoInfo{
+				SessionID: rec.ID, ProjectID: rec.ProjectID, RepoName: "api",
+				RepoPath: "/repo/api", Path: "/ws/mer-1/api", Branch: "ao/mer-1",
+			}
+			if failAt == "record" {
+				st.upsertWTErr = errors.New("database busy")
+			} else {
+				ws.forceDestroyErr = errors.New("directory busy")
+			}
+			freed, _, err := m.teardownWorkspaceProjectForKill(ctx, rec, []ports.WorkspaceRepoInfo{row})
+			if err != nil || freed {
+				t.Fatalf("first teardown freed=%v err=%v", freed, err)
+			}
+			st.upsertWTErr = nil
+			ws.forceDestroyErr = nil
+			freed, _, err = m.teardownWorkspaceProjectForKill(ctx, rec, []ports.WorkspaceRepoInfo{row})
+			if err != nil || !freed {
+				t.Fatalf("retry teardown freed=%v err=%v", freed, err)
+			}
+			if rows := st.worktrees[rec.ID]; len(rows) != 1 || rows[0].PreservedRef != "refs/ao/preserved/mer-1/api" {
+				t.Fatalf("retry did not retain repo snapshot: %+v", rows)
+			}
+		})
 	}
 }
 
@@ -5024,6 +5156,43 @@ func TestPreviewCleanupCountsTerminatedWorktreesAndSkipsLiveOwnership(t *testing
 	}
 	if preview.Sessions[1].WorktreeBytes != 0 {
 		t.Fatalf("small worktree size = %d, want 0", preview.Sessions[1].WorktreeBytes)
+	}
+}
+
+func TestPreviewCleanupReleasesWorkspaceGateBeforeDiskUsage(t *testing.T) {
+	m, st, _, ws := newManager()
+	seedTerminal(st, "mer-old", domain.SessionMetadata{WorkspacePath: "/ws/old"})
+	started := make(chan struct{})
+	continueSizing := make(chan struct{})
+	ws.diskUsageHook = func() {
+		close(started)
+		<-continueSizing
+	}
+	previewDone := make(chan error, 1)
+	go func() {
+		_, err := m.PreviewCleanup(ctx, "mer")
+		previewDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("disk usage did not start")
+	}
+	gateAcquired := make(chan struct{})
+	go func() {
+		release := m.acquireWorkspaceGate("mer")
+		close(gateAcquired)
+		release()
+	}()
+	select {
+	case <-gateAcquired:
+	case <-time.After(time.Second):
+		close(continueSizing)
+		t.Fatal("disk usage kept project workspace gate locked")
+	}
+	close(continueSizing)
+	if err := <-previewDone; err != nil {
+		t.Fatal(err)
 	}
 }
 

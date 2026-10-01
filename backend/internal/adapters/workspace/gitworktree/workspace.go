@@ -1102,8 +1102,9 @@ func (w *Workspace) ForceDestroy(ctx context.Context, info ports.WorkspaceInfo) 
 //
 // Returns the full ref name (e.g. "refs/ao/preserved/sess-1"). Returns an
 // empty string (and no error) if the worktree is clean.
-// If that preserve ref already exists, it is left intact and the capture fails;
-// callers must keep the current worktree rather than replace saved edits.
+// If that preserve ref already exists for the same tree and HEAD, it is
+// returned unchanged. A different snapshot fails so callers keep the current
+// worktree rather than replace saved edits.
 func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceInfo) (string, error) {
 	if info.Path == "" {
 		return "", fmt.Errorf("%w: empty path", ErrUnsafePath)
@@ -1137,7 +1138,8 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 		return "", fmt.Errorf("gitworktree: worktree %q is not registered: %w", path, ports.ErrWorkspaceStale)
 	}
 
-	// Early exit for clean worktrees: nothing to preserve.
+	ref := "refs/ao/preserved/" + preserveKey
+	// Early exit for clean worktrees, unless a prior snapshot is still pending.
 	dirty, err := w.isDirty(ctx, path)
 	if err != nil {
 		if isNotGitRepositoryError(err) {
@@ -1146,6 +1148,13 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 		return "", fmt.Errorf("gitworktree: StashUncommitted dirty check: %w", err)
 	}
 	if !dirty {
+		exists, err := w.refExists(ctx, path, ref)
+		if err != nil {
+			return "", err
+		}
+		if exists {
+			return "", fmt.Errorf("gitworktree: preserved ref %q already exists for different worktree edits", ref)
+		}
 		return "", nil
 	}
 
@@ -1167,11 +1176,37 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 
 	// Create the preserve ref only if absent. The zero old-value makes this an
 	// atomic create, so a second archive cannot replace an earlier snapshot.
-	ref := "refs/ao/preserved/" + preserveKey
 	if _, err := w.run(ctx, w.binary, createRefArgs(path, ref, commitSHA)...); err != nil {
+		exists, lookupErr := w.refExists(ctx, path, ref)
+		if lookupErr != nil {
+			return "", fmt.Errorf("gitworktree: create preserved ref %q: %w (verify existing ref: %v)", ref, err, lookupErr)
+		}
+		if exists {
+			currentState, stateErr := w.preservedCommitState(ctx, path, commitSHA)
+			if stateErr != nil {
+				return "", stateErr
+			}
+			savedState, stateErr := w.preservedCommitState(ctx, path, ref)
+			if stateErr != nil {
+				return "", stateErr
+			}
+			if currentState == savedState {
+				return ref, nil
+			}
+		}
 		return "", fmt.Errorf("gitworktree: create preserved ref %q (an earlier snapshot may already exist): %w", ref, err)
 	}
 	return ref, nil
+}
+
+// preservedCommitState identifies the captured tree and its base commit.
+// Commit metadata can differ across retries even when the snapshot is the same.
+func (w *Workspace) preservedCommitState(ctx context.Context, path, rev string) (string, error) {
+	out, err := w.run(ctx, w.binary, "-C", path, "show", "-s", "--format=%T %P", rev)
+	if err != nil {
+		return "", fmt.Errorf("gitworktree: inspect preserved commit %q: %w", rev, err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // captureWorktreeCommit snapshots tracked and non-ignored untracked edits using
@@ -1275,6 +1310,17 @@ func (w *Workspace) ApplyPreserved(ctx context.Context, info ports.WorkspaceInfo
 		return fmt.Errorf("gitworktree: ApplyPreserved resolve ref %q: %w", ref, err)
 	}
 	commitSHA := strings.TrimSpace(string(resolveOut))
+	// The dirty-worktree fallback writes conflict markers into the index and
+	// worktree. Replaying that unresolved result would treat those markers as
+	// local edits and nest another set of markers inside them.
+	// Disable whitespace diagnostics here: only conflict markers gate replay.
+	diffCheck, checkErr := w.gitCombined(ctx, []string{"-C", info.Path, "-c", "core.whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab", "diff", "--check", "HEAD"})
+	if strings.Contains(diffCheck, "leftover conflict marker") {
+		return fmt.Errorf("%w: resolve existing conflict markers before reapplying preserved edits", ErrPreservedConflict)
+	}
+	if checkErr != nil {
+		return fmt.Errorf("gitworktree: check existing conflict markers: %w", checkErr)
+	}
 
 	// Apply the preserve commit via "git cherry-pick --no-commit <sha>".
 	// cherry-pick computes the diff between the preserve commit and its parent

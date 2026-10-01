@@ -55,17 +55,26 @@ describe("LegacyWorkspaceCleanupDialog", () => {
 		expect(showToastMock).toHaveBeenCalledWith("Cleanup finished: 2 cleaned, 0 skipped.");
 	});
 
-	it("does not interrupt users when the reclaimable footprint is below 1 GiB", async () => {
-		getMock.mockResolvedValue({
+	it("rechecks a small footprint on the next start and prompts if it grows", async () => {
+		getMock.mockResolvedValueOnce({
 			data: { sessions: [{ sessionId: "old-1" }], totalBytes: (1 << 30) - 1, incomplete: false },
 			error: undefined,
 		});
 
-		renderDialog();
+		const first = renderDialog();
 
-		await waitFor(() => expect(window.localStorage.getItem("ao.legacyWorkspaceCleanupPrompt.dismissed.v1")).toBe("true"));
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(1));
+		expect(window.localStorage.getItem("ao.legacyWorkspaceCleanupPrompt.dismissed.v1")).toBeNull();
 		expect(screen.queryByText(/Archived sessions are using/)).not.toBeInTheDocument();
 		expect(postMock).not.toHaveBeenCalled();
+		first.unmount();
+
+		getMock.mockResolvedValueOnce({
+			data: { sessions: [{ sessionId: "old-1" }], totalBytes: 2 * 1024 ** 3, incomplete: false },
+			error: undefined,
+		});
+		renderDialog();
+		expect(await screen.findByText("Archived sessions use about 2 GB")).toBeInTheDocument();
 	});
 
 	it("does not repeat the prompt after the user keeps worktrees for now", async () => {

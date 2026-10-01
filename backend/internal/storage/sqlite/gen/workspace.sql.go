@@ -12,6 +12,20 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+const deleteSessionWorktree = `-- name: DeleteSessionWorktree :exec
+DELETE FROM session_worktrees WHERE session_id = ? AND repo_name = ?
+`
+
+type DeleteSessionWorktreeParams struct {
+	SessionID domain.SessionID
+	RepoName  string
+}
+
+func (q *Queries) DeleteSessionWorktree(ctx context.Context, arg DeleteSessionWorktreeParams) error {
+	_, err := q.db.ExecContext(ctx, deleteSessionWorktree, arg.SessionID, arg.RepoName)
+	return err
+}
+
 const deleteSessionWorktrees = `-- name: DeleteSessionWorktrees :exec
 DELETE FROM session_worktrees WHERE session_id = ?
 `

@@ -119,6 +119,19 @@ func TestArchiveDropsIgnoredCheckout(t *testing.T) {
 	if _, err := ws.run(ctx, ws.binary, revParseVerifyArgs(repo, ref)...); err != nil {
 		t.Fatal("conflict apply deleted the snapshot")
 	}
+	if err := ws.ApplyPreserved(ctx, restored, ref); !errors.Is(err, ErrPreservedConflict) {
+		t.Fatalf("repeat apply = %v, want unresolved conflict", err)
+	}
+	repeated, err := os.ReadFile(filepath.Join(restored.Path, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(repeated) != text {
+		t.Fatalf("repeat apply changed conflict contents:\n%s", repeated)
+	}
+	if _, err := ws.run(ctx, ws.binary, revParseVerifyArgs(repo, ref)...); err != nil {
+		t.Fatal("repeat apply deleted the snapshot")
+	}
 }
 
 func TestDiskUsageMeasuresManagedWorktreeWithoutFollowingOutsidePaths(t *testing.T) {
@@ -199,6 +212,62 @@ func TestStashUncommittedDoesNotReplaceAnExistingSnapshot(t *testing.T) {
 	}
 }
 
+func TestStashUncommittedRetryReusesOnlyMatchingSnapshot(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, tmp)
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	info, err := ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess-stash-retry", Branch: "feature/stash-retry"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readmePath := filepath.Join(info.Path, "README.md")
+	if err := os.WriteFile(readmePath, []byte("saved edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := ws.StashUncommitted(ctx, info)
+	if err != nil || ref == "" {
+		t.Fatalf("initial capture ref=%q err=%v", ref, err)
+	}
+	initialSHA := gitOutput(t, git, repo, "rev-parse", ref)
+	if retried, err := ws.StashUncommitted(ctx, info); err != nil || retried != ref {
+		t.Fatalf("unchanged retry ref=%q err=%v, want %q", retried, err, ref)
+	}
+	if got := gitOutput(t, git, repo, "rev-parse", ref); got != initialSHA {
+		t.Fatalf("retry moved preserved ref from %s to %s", initialSHA, got)
+	}
+
+	if err := os.WriteFile(readmePath, []byte("newer edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ws.StashUncommitted(ctx, info); err == nil {
+		t.Fatal("retry accepted different worktree edits")
+	}
+	if got := gitOutput(t, git, repo, "rev-parse", ref); got != initialSHA {
+		t.Fatalf("different edits moved preserved ref from %s to %s", initialSHA, got)
+	}
+	if current, err := os.ReadFile(readmePath); err != nil || string(current) != "newer edit\n" {
+		t.Fatalf("newer edit changed after rejected retry: %q, %v", current, err)
+	}
+
+	// Matching file content on a different HEAD is still a different snapshot.
+	runGit(t, git, info.Path, "add", "README.md")
+	runGit(t, git, info.Path, "commit", "-m", "new base")
+	if err := os.WriteFile(readmePath, []byte("saved edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ws.StashUncommitted(ctx, info); err == nil {
+		t.Fatal("retry accepted matching tree with a different base commit")
+	}
+	if got := gitOutput(t, git, repo, "rev-parse", ref); got != initialSHA {
+		t.Fatalf("different base moved preserved ref from %s to %s", initialSHA, got)
+	}
+}
+
 func TestApplyPreservedRefDeleteFailureStaysVisibleAndCanBeRetried(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -214,7 +283,9 @@ func TestApplyPreservedRefDeleteFailureStaysVisibleAndCanBeRetried(t *testing.T)
 		t.Fatalf("create: %v", err)
 	}
 	readmePath := filepath.Join(info.Path, "README.md")
-	if err := os.WriteFile(readmePath, []byte("saved edit\n"), 0o644); err != nil {
+	// Trailing whitespace must not make the marker-only replay guard reject
+	// a retry after the ref deletion failure.
+	if err := os.WriteFile(readmePath, []byte("saved edit \n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	ref, err := ws.StashUncommitted(ctx, info)
@@ -249,7 +320,7 @@ func TestApplyPreservedRefDeleteFailureStaysVisibleAndCanBeRetried(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := string(readme); got != "saved edit\n" {
+	if got := string(readme); got != "saved edit \n" {
 		t.Fatalf("README after apply = %q, want saved edit", got)
 	}
 	if got := gitOutput(t, git, repo, "rev-parse", ref); got != firstSHA {

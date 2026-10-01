@@ -359,6 +359,9 @@ type Store interface {
 	// presence of any row is the marker; preserved_ref may be empty for clean
 	// worktrees.
 	ListSessionWorktrees(ctx context.Context, id domain.SessionID) ([]domain.SessionWorktreeRecord, error)
+	// DeleteSessionWorktree removes only one obsolete restore marker, leaving
+	// preserved refs in other repo rows intact if a write fails.
+	DeleteSessionWorktree(ctx context.Context, id domain.SessionID, repoName string) error
 	// DeleteSessionWorktrees consumes stale shutdown-restore markers. Explicit
 	// Kill and successful RestoreAll must remove these rows to prevent
 	// resurrecting sessions the user intentionally terminated.
@@ -2176,6 +2179,9 @@ func (m *Manager) recordTermination(ctx context.Context, id domain.SessionID, dr
 // available destroy steps are skipped so it can be cleaned up from the
 // dashboard.
 func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
+	// Kill callers outside Service may never consume the side-channel notice.
+	// Clear that outcome before any early return can expose it to a later call.
+	m.clearArchiveNotice(id)
 	// Teardown deliberately stops riding the caller's context. Kill runs a
 	// sequence (stop the agent, tear the controller down, drop the worktree,
 	// mark the row terminated) where being cancelled partway leaves a session
@@ -2337,6 +2343,12 @@ func (m *Manager) noteArchive(id domain.SessionID, notice archiveNotice) {
 	m.archiveNotices[id] = notice
 }
 
+func (m *Manager) clearArchiveNotice(id domain.SessionID) {
+	m.archiveNoticeMu.Lock()
+	defer m.archiveNoticeMu.Unlock()
+	delete(m.archiveNotices, id)
+}
+
 // removeDirtyWorkspaceAfterCapture stores the session's uncommitted work in
 // its private local snapshot, then removes the worktree. The row is written
 // only after StashUncommitted returns a ref, and it uses state active so a
@@ -2454,19 +2466,17 @@ func (m *Manager) dropShutdownRestoreMarkers(ctx context.Context, id domain.Sess
 		m.logger.Warn("kill: list worktrees failed", "sessionID", id, "error", err)
 		return
 	}
-	keep := make([]domain.SessionWorktreeRecord, 0, len(rows))
 	for _, row := range rows {
 		if kept, ok := keepWorktreeRowAfterUserKill(row); ok {
-			keep = append(keep, kept)
+			if kept.State != row.State {
+				if err := m.store.UpsertSessionWorktree(ctx, kept); err != nil {
+					m.logger.Warn("kill: keep preserved edits failed", "sessionID", id, "repo", row.RepoName, "error", err)
+				}
+			}
+			continue
 		}
-	}
-	if err := m.store.DeleteSessionWorktrees(ctx, id); err != nil {
-		m.logger.Warn("kill: delete restore marker failed", "sessionID", id, "error", err)
-		return
-	}
-	for _, row := range keep {
-		if err := m.store.UpsertSessionWorktree(ctx, row); err != nil {
-			m.logger.Warn("kill: keep preserved edits failed", "sessionID", id, "repo", row.RepoName, "error", err)
+		if err := m.store.DeleteSessionWorktree(ctx, id, row.RepoName); err != nil {
+			m.logger.Warn("kill: delete restore marker failed", "sessionID", id, "repo", row.RepoName, "error", err)
 		}
 	}
 }
@@ -4891,6 +4901,10 @@ func (m *Manager) PreviewCleanup(ctx context.Context, project domain.ProjectID) 
 				}
 			}
 		}
+		// DiskUsage may walk a large tree. The paths and ownership were
+		// inventoried under the gate; sizing is advisory and must not block
+		// mutations in this project.
+		release()
 		var sessionBytes int64
 		for _, info := range infos {
 			pathKey := normalizeWorkspacePath(info.Path)
@@ -4905,7 +4919,6 @@ func (m *Manager) PreviewCleanup(ctx context.Context, project domain.ProjectID) 
 			}
 			sessionBytes += bytes
 		}
-		release()
 		preview.Sessions = append(preview.Sessions, CleanupPreviewSession{
 			SessionID: rec.ID, ProjectID: rec.ProjectID, DisplayName: rec.DisplayName,
 			WorktreeBytes: sessionBytes,

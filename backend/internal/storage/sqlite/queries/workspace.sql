@@ -48,3 +48,6 @@ WHERE session_worktrees.preserved_ref != '';
 
 -- name: DeleteSessionWorktrees :exec
 DELETE FROM session_worktrees WHERE session_id = ?;
+
+-- name: DeleteSessionWorktree :exec
+DELETE FROM session_worktrees WHERE session_id = ? AND repo_name = ?;

@@ -87,6 +87,14 @@ func (s *Store) DeleteSessionWorktrees(ctx context.Context, sessionID domain.Ses
 	return s.qw.DeleteSessionWorktrees(ctx, sessionID)
 }
 
+// DeleteSessionWorktree removes one obsolete restore marker without touching
+// other repos' preserved edits.
+func (s *Store) DeleteSessionWorktree(ctx context.Context, sessionID domain.SessionID, repoName string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.qw.DeleteSessionWorktree(ctx, gen.DeleteSessionWorktreeParams{SessionID: sessionID, RepoName: repoName})
+}
+
 func sessionWorktreeFromGen(row gen.SessionWorktree) domain.SessionWorktreeRecord {
 	return domain.SessionWorktreeRecord{
 		SessionID:    row.SessionID,

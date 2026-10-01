@@ -2081,6 +2081,13 @@ func TestSessionWorktreesRoundTrip(t *testing.T) {
 	if err != nil || !ok || one.State != "active" || one.PreservedRef != "" {
 		t.Fatalf("updated api = %#v ok=%v err=%v", one, ok, err)
 	}
+	if err := s.DeleteSessionWorktree(ctx, rec.ID, domain.RootWorkspaceRepoName); err != nil {
+		t.Fatalf("delete root worktree: %v", err)
+	}
+	got, err = s.ListSessionWorktrees(ctx, rec.ID)
+	if err != nil || len(got) != 1 || got[0].RepoName != "api" {
+		t.Fatalf("after root-only delete = %#v err=%v", got, err)
+	}
 	if err := s.DeleteSessionWorktrees(ctx, rec.ID); err != nil {
 		t.Fatalf("delete worktrees: %v", err)
 	}
