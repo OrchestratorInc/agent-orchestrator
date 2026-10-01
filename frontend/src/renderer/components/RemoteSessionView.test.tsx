@@ -6,6 +6,7 @@ import { typeInLexicalEditor } from "../test/lexical";
 import { setChatDraftBoundary } from "../lib/chat-draft-boundary";
 import { sessionUiKey } from "../lib/hosts";
 import { aoBridge } from "../lib/bridge";
+import { useUiStore } from "../stores/ui-store";
 
 const { localGet, localPost, remoteConnect } = vi.hoisted(() => ({ localGet: vi.fn(), localPost: vi.fn(), remoteConnect: vi.fn() }));
 vi.mock("../lib/api-client", async (importOriginal) => ({
@@ -49,6 +50,7 @@ function conversationBody(body: Record<string, unknown> = {}) {
 
 afterEach(async () => {
 	setChatDraftBoundary(sessionUiKey("session-1", "box-a"), "queued-edit", undefined);
+	useUiStore.setState({ inspectorSessions: {} });
 	await disconnectHost("box-a");
 	await disconnectHost("box-b");
 	vi.unstubAllGlobals();
@@ -242,7 +244,15 @@ it("shows a normal inspector and reads its changed files from the remote host on
 	await connectHost("http://box-a:3001");
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	renderRemoteSession(queryClient);
+	await userEvent.click(await screen.findByRole("button", { name: "Open inspector panel" }));
 	expect(await screen.findByRole("complementary", { name: "Session inspector" })).toBeInTheDocument();
+	const resizeHandle = screen.getByTestId("inspector-resize-handle");
+	const inspector = screen.getByTestId("panel-inspector");
+	const initialWidth = Number.parseInt(inspector.style.getPropertyValue("--ao-inspector-w"), 10);
+	fireEvent.pointerDown(resizeHandle, { pointerId: 1, clientX: 1000 });
+	fireEvent.pointerMove(window, { pointerId: 1, clientX: 900 });
+	fireEvent.pointerUp(window, { pointerId: 1, clientX: 900 });
+	expect(inspector.style.getPropertyValue("--ao-inspector-w")).toBe(`${initialWidth + 100}px`);
 	await screen.findByRole("combobox", { name: "Message the agent" });
 	expect(screen.getByText("Box A")).toBeInTheDocument();
 	expect(screen.getByRole("link", { name: "Open PR #42" })).toHaveAttribute("href", "https://github.com/acme/app/pull/42");
@@ -251,12 +261,15 @@ it("shows a normal inspector and reads its changed files from the remote host on
 	await userEvent.click(await screen.findByRole("button", { name: "Open full file" }));
 	expect(screen.getByRole("tab", { name: "page.tsx" })).toBeInTheDocument();
 	expect(screen.getByTestId("session-file-workspace")).toBeInTheDocument();
+	await userEvent.click(screen.getByRole("button", { name: "Maximize files" }));
+	expect(screen.getByTestId("files-popout-topbar")).toBeInTheDocument();
+	await userEvent.click(screen.getByRole("button", { name: "Minimize files" }));
 	expect(requests).toContain("http://127.0.0.1:4000/api/v1/sessions/session-1/workspace/files");
 	expect(requests).toContain("http://127.0.0.1:4000/api/v1/sessions/session-1/workspace/diffs");
 	await waitFor(() => expect(requests.some((url) => url.startsWith("http://127.0.0.1:4000/api/v1/sessions/session-1/workspace/file?path="))).toBe(true));
 	expect(localGet).not.toHaveBeenCalled();
 	await userEvent.click(screen.getByRole("button", { name: "Close inspector panel" }));
-	expect(screen.queryByRole("complementary", { name: "Session inspector" })).not.toBeInTheDocument();
+	expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "collapsed");
 	await userEvent.click(screen.getByRole("button", { name: "Open inspector panel" }));
 	expect(screen.getByRole("complementary", { name: "Session inspector" })).toBeInTheDocument();
 });
@@ -335,10 +348,16 @@ it("shows a preview tab after remote session data finishes loading", async () =>
 	previewStarted = true;
 	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
 	await waitFor(() => expect(navigate).toHaveBeenCalledWith({ viewId: "test:remote:box-a:session-1", url: "http://ao-preview.localhost/" }));
+	await userEvent.click(screen.getByRole("button", { name: "Open inspector panel" }));
 	await userEvent.click(screen.getByRole("tab", { name: "Browser" }));
 	await waitFor(() => expect(resolvePreview).toHaveBeenCalledWith("box-a", "session-1", "http://127.0.0.1:4600/"));
 	await waitFor(() => expect(screen.getByRole("textbox", { name: "Browser URL" })).toHaveValue("ao-preview.localhost"));
 	await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Browser tabs" })).getByRole("tab", { name: "QA preview" })).toBeVisible());
+	await userEvent.click(screen.getByRole("button", { name: "Browser controls" }));
+	await userEvent.click(screen.getByRole("menuitem", { name: "Pop out" }));
+	expect(screen.getByTestId("browser-popout-topbar")).toBeInTheDocument();
+	await userEvent.click(within(document.querySelector(".browser-popout-overlay") as HTMLElement).getByRole("button", { name: "Return to panel" }));
+	expect(screen.queryByTestId("browser-popout-topbar")).not.toBeInTheDocument();
 	expect(sessionReads).toBe(3);
 	onTabsState.mockRestore();
 	ensure.mockRestore();
@@ -384,6 +403,7 @@ it("opens a TUI host file in a shared center tab and renames on that host", asyn
 	await connectHost("http://box-a:3001");
 	renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
 	expect(await screen.findByTestId("remote-terminal-base")).toHaveTextContent("http://127.0.0.1:4000");
+	await userEvent.click(screen.getByRole("button", { name: "Open inspector panel" }));
 	await userEvent.click(screen.getByRole("tab", { name: "Files" }));
 	await userEvent.click(await screen.findByRole("button", { name: "Open full file" }));
 	expect(screen.getByRole("tab", { name: "page.tsx" })).toHaveAttribute("aria-selected", "true");
@@ -676,6 +696,7 @@ it("opens the returned reviewer Chat when a remote review is triggered", async (
 	await connectHost("http://box-b:3001");
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	renderRemoteSession(queryClient, "box-b");
+	await userEvent.click(await screen.findByRole("button", { name: "Open inspector panel" }));
 	await userEvent.click(await screen.findByRole("tab", { name: "Reviews" }));
 	await userEvent.click(await screen.findByRole("button", { name: "Review latest commit" }));
 	expect(await screen.findByText("Reviewer is on Box B")).toBeInTheDocument();

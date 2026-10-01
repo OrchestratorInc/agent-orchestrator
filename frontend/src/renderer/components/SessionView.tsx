@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Globe2, Loader2, PanelRight, Plus } from "lucide-react";
 import { useBlocker } from "@tanstack/react-router";
-import { motion, useReducedMotion } from "motion/react";
+import { motion } from "motion/react";
 import {
 	useCallback,
 	useEffect,
@@ -10,8 +10,6 @@ import {
 	useRef,
 	useState,
 	type CSSProperties,
-	type ReactNode,
-	type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
@@ -24,12 +22,14 @@ import { SessionChatSurface } from "./chat/SessionChatSurface";
 import { CloudSessionChatSurface } from "./chat/CloudSessionChatSurface";
 import { ReviewerChatSurface } from "./chat/ReviewerChatSurface";
 import { NotificationCenter } from "./NotificationCenter";
-import { ResizeHandle } from "./ResizeHandle";
+import { SessionInspectorRail, initialInspectorSize, inspectorSizing, sizingGeometryEqual, INSPECTOR_SPRING_MS, INSPECTOR_SPRING_EASING, type InspectorSizing } from "./SessionInspectorRail";
 import { SessionFileExplorer } from "./SessionFileExplorer";
 import { FilesTopbarHostContext } from "./files-topbar-host";
 import { CloudFileContentPane, CloudWorkspaceDiff } from "./CloudWorkspaceDiff";
 import { SessionFileTab } from "./SessionFileTabs";
 import { SessionFileWorkspace } from "./SessionFileWorkspace";
+import { SessionFilesPopOut } from "./SessionFilesPopOut";
+import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
 import { SessionActionsMenu } from "./SessionActionsMenu";
 import { SessionInspector } from "./SessionInspector";
 import { ShellTopbar } from "./ShellTopbar";
@@ -41,7 +41,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { MultiStepLoader } from "./ui/multi-step-loader";
 import { useBrowserView } from "../hooks/useBrowserView";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
-import { useResizable } from "../hooks/useResizable";
 import {
 	useCloseShellTerminal,
 	useOpenShellTerminal,
@@ -64,7 +63,6 @@ import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
 import { clearSwitchAgentState } from "../hooks/useSwitchAgent";
-import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { sessionWorkspaceFilesQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { matchWorkspaceFilePath } from "../lib/workspace-file-path";
@@ -72,7 +70,6 @@ import { aoBridge } from "../lib/bridge";
 import {
 	chatDraftDialogCopy,
 } from "../lib/chat-draft-boundary";
-import { SHELL_PANEL_SPRING } from "../lib/motion-spring";
 import {
 	activateSessionFile,
 	closeSessionFile,
@@ -80,7 +77,7 @@ import {
 	openSessionFile,
 	type SessionFileTabState,
 } from "../lib/session-file-tabs";
-import { hidesShellTopbar, isMacPlatform } from "../lib/platform";
+import { isMacPlatform } from "../lib/platform";
 import { useShell } from "../lib/shell-context";
 import { cn } from "../lib/utils";
 import { isOrchestratorSession, sessionIsActive } from "../types/workspace";
@@ -90,26 +87,8 @@ import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } fro
 import {
 	INSPECTOR_SEPARATOR_RESERVE_PX,
 	inspectorMaxWidthCss,
-	inspectorMaxWidthPx,
 } from "../lib/inspector-width";
 
-const WORKSPACE_DEFAULT_PX = 500;
-const WORKSPACE_MIN_PX = 340;
-const WORKSPACE_MAX_PERCENT = 55;
-// Browser is the primary creation surface when selected. Its generous preferred
-// width is progressively capped by the live workspace, so laptop layouts land
-// at the chat safety floor while larger windows get a canvas-like split.
-const BROWSER_WORKSPACE_DEFAULT_PX = 900;
-const BROWSER_WORKSPACE_MIN_PX = 460;
-const BROWSER_WORKSPACE_MAX_PERCENT = 68;
-const CHAT_READABLE_MIN_PX = 560;
-// Browser mode deliberately turns chat into a compact companion column, like a
-// canvas workflow. This is still wide enough for the timeline and composer, and
-// is separate from the roomier utility-view floor above.
-const BROWSER_CHAT_MIN_PX = 440;
-// Files sizes like the other utility views (same default, cap and remembered
-// width); it only keeps a wider floor so its tree + preview stay usable.
-const FILES_WORKSPACE_MIN_PX = 460;
 type CenterFileOpenRequest = { commitSha?: string; editing: boolean; key: number; mode: FileViewMode; scope?: FileOpenOptions["scope"] };
 const EMPTY_AUXILIARY_TAB_ORDER: string[] = [];
 // The inspector tab labels respond to the tablist's remaining width. The
@@ -117,18 +96,6 @@ const EMPTY_AUXILIARY_TAB_ORDER: string[] = [];
 // inset gives a 325px inspector breakpoint for the animation lock.
 const INSPECTOR_COMPACT_MAX_PX = 325;
 const TOPBAR_SECONDARY_COMPACT_MAX_PX = 759;
-const inspectorWidthStorageKey = "ao.inspector.widthPx";
-// The canvas profile has different constraints from the earlier Browser rail;
-// use a new preference namespace so an old narrow width cannot silently pin it.
-const browserWorkspaceWidthStorageKey = "ao.workspace.browser.canvasWidthPx";
-const inspectorWidthVar = "--ao-inspector-w";
-// Closely matches SHELL_PANEL_SPRING's visual settle time. Keeping the CSS
-// width interpolation on the same clock prevents the sidebar from stopping
-// while the browser rail is still visibly drifting.
-const INSPECTOR_SPRING_MS = 300;
-const INSPECTOR_SPRING_EASING =
-	"linear(0, 0.333 12.5%, 0.642 25%, 0.813 37.5%, 0.902 50%, 0.949 62.5%, 0.974 75%, 0.986 87.5%, 1)";
-const shellTopbarHiddenByPlatform = hidesShellTopbar();
 const isMac = isMacPlatform();
 const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as CSSProperties) : undefined;
 const newTerminalShortcutLabel = shortcutBindingLabel(defaultShortcutBindings("new-shell-terminal", isMac)[0], isMac);
@@ -136,58 +103,6 @@ const newTerminalShortcutLabel = shortcutBindingLabel(defaultShortcutBindings("n
 type ReviewsResponse = components["schemas"]["ListReviewsResponse"];
 type ReviewerTerminalTarget = { handleId: string; harness: string };
 type ReviewerChatTarget = { reviewId: string; harness: string };
-
-type WorkspaceLayoutMode = "utility" | "browser" | "files";
-
-type InspectorSizing = {
-	chatMinWidth: number;
-	defaultWidth: number;
-	minWidth: number;
-	maxPercent: number;
-	mode: WorkspaceLayoutMode;
-	storageKey: string;
-};
-
-function inspectorSizing(view: InspectorView): InspectorSizing {
-	if (view === "browser") {
-		return {
-			chatMinWidth: BROWSER_CHAT_MIN_PX,
-			defaultWidth: BROWSER_WORKSPACE_DEFAULT_PX,
-			minWidth: BROWSER_WORKSPACE_MIN_PX,
-			maxPercent: BROWSER_WORKSPACE_MAX_PERCENT,
-			mode: "browser",
-			storageKey: browserWorkspaceWidthStorageKey,
-		};
-	}
-	return {
-		chatMinWidth: CHAT_READABLE_MIN_PX,
-		defaultWidth: WORKSPACE_DEFAULT_PX,
-		minWidth: view === "files" ? FILES_WORKSPACE_MIN_PX : WORKSPACE_MIN_PX,
-		maxPercent: WORKSPACE_MAX_PERCENT,
-		mode: view === "files" ? "files" : "utility",
-		storageKey: inspectorWidthStorageKey,
-	};
-}
-
-function initialInspectorSize(sizing: InspectorSizing, availableWidth?: number): string {
-	const raw = typeof window === "undefined" ? null : window.localStorage?.getItem(sizing.storageKey);
-	const parsed = raw === null ? Number.NaN : Number(raw);
-	const requestedWidth = Number.isFinite(parsed)
-		? Math.max(sizing.minWidth, Math.round(parsed))
-		: sizing.defaultWidth;
-	const maxWidth = inspectorMaxWidthPx(availableWidth, sizing.maxPercent, sizing.chatMinWidth);
-	return maxWidth === undefined ? `${requestedWidth}px` : `${Math.min(requestedWidth, maxWidth)}px`;
-}
-
-function sizingGeometryEqual(a: InspectorSizing, b: InspectorSizing): boolean {
-	return (
-		a.chatMinWidth === b.chatMinWidth &&
-		a.defaultWidth === b.defaultWidth &&
-		a.minWidth === b.minWidth &&
-		a.maxPercent === b.maxPercent &&
-		a.storageKey === b.storageKey
-	);
-}
 
 type BrowserPopOutPhase = "docked" | "mounting" | "open";
 type BrowserPopOutState = {
@@ -231,128 +146,6 @@ type SessionViewProps = {
 	cloudOrgId?: string;
 	projectId?: string;
 };
-
-// Mirrors the left sidebar: a Motion gap takes layout width while a sibling
-// panel slides on `x` with SHELL_PANEL_SPRING. Dragging uses useResizable
-// (clamped at min, never auto-collapse). Collapse is the explicit toggle only.
-function SessionInspectorRail({
-	showCollapsedHandle = true,
-	children,
-	isOpen,
-	onExpand,
-	onCloseAnimationComplete,
-	restoreMinWidth,
-	sizing,
-	settledClosed,
-	splitRef,
-}: {
-	showCollapsedHandle?: boolean;
-	children: ReactNode;
-	isOpen: boolean;
-	onExpand: () => void;
-	onCloseAnimationComplete?: () => void;
-	restoreMinWidth?: number;
-	sizing: InspectorSizing;
-	settledClosed: boolean;
-	splitRef: RefObject<HTMLDivElement | null>;
-}) {
-	const prefersReducedMotion = useReducedMotion();
-	const gapRef = useRef<HTMLDivElement>(null);
-	const panelRef = useRef<HTMLDivElement>(null);
-	// Live min/max from the split — never cache defaultWidth*2 as the drag ceiling
-	// (that was the inspector leftmost overshoot). useResizable is the sole clamp owner.
-	const minWidth = useCallback(() => {
-		const split = splitRef.current;
-		if (!split || split.clientWidth <= 0) return sizing.minWidth;
-		const available = Math.max(0, split.clientWidth - INSPECTOR_SEPARATOR_RESERVE_PX);
-		const max =
-			inspectorMaxWidthPx(available, sizing.maxPercent, sizing.chatMinWidth) ?? sizing.defaultWidth;
-		return Math.min(sizing.minWidth, max);
-	}, [sizing.chatMinWidth, sizing.defaultWidth, sizing.maxPercent, sizing.minWidth, splitRef]);
-	const maxWidth = useCallback(() => {
-		const split = splitRef.current;
-		// Unlaid-out split must not crush a restored width; CSS max-width still paints the cap.
-		if (!split || split.clientWidth <= 0) return Number.POSITIVE_INFINITY;
-		const available = Math.max(0, split.clientWidth - INSPECTOR_SEPARATOR_RESERVE_PX);
-		return (
-			inspectorMaxWidthPx(available, sizing.maxPercent, sizing.chatMinWidth) ?? sizing.defaultWidth
-		);
-	}, [sizing.chatMinWidth, sizing.defaultWidth, sizing.maxPercent, sizing.minWidth, splitRef]);
-	const getResizeTargets = useCallback(() => [gapRef.current, panelRef.current], []);
-	const getBorderElement = useCallback(() => panelRef.current, []);
-	const { onPointerDown, onCollapsedPointerDown, onDoubleClick } = useResizable({
-		cssVar: inspectorWidthVar,
-		getCssTargets: getResizeTargets,
-		storageKey: sizing.storageKey,
-		defaultWidth: sizing.defaultWidth,
-		min: minWidth,
-		max: maxWidth,
-		edge: "left",
-		onExpand,
-		restoreMin: restoreMinWidth,
-	});
-
-	const transition = prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING;
-	const hidden = !isOpen && settledClosed;
-
-	const handleAnimationComplete = useCallback(() => {
-		if (!isOpen) onCloseAnimationComplete?.();
-	}, [isOpen, onCloseAnimationComplete]);
-
-	return (
-		<>
-			<motion.div
-				aria-hidden="true"
-				className="relative max-w-(--session-inspector-max-width) shrink-0"
-				data-slot="inspector-gap"
-				initial={false}
-				ref={gapRef}
-				animate={{ width: isOpen ? `var(${inspectorWidthVar}, ${sizing.defaultWidth}px)` : 0 }}
-				transition={transition}
-			/>
-			<motion.div
-				aria-hidden={hidden}
-				className="absolute inset-y-0 right-0 z-chrome flex h-full max-w-(--session-inspector-max-width) flex-col overflow-hidden border-l border-border-strong bg-background"
-				data-panel=""
-				data-settled={settledClosed ? "true" : "false"}
-				data-slot="inspector-container"
-				data-state={isOpen ? "expanded" : "collapsed"}
-				data-workspace-mode={sizing.mode}
-				data-testid="panel-inspector"
-				hidden={hidden}
-				id="inspector"
-				inert={hidden}
-				initial={false}
-				animate={{ x: isOpen ? "0%" : "100%" }}
-				onAnimationComplete={handleAnimationComplete}
-				ref={panelRef}
-				style={{ width: `var(${inspectorWidthVar}, ${sizing.defaultWidth}px)` }}
-				transition={transition}
-			>
-				<ResizeHandle
-					className={!isOpen ? "hidden" : undefined}
-					data-testid="inspector-resize-handle"
-					getBorderElement={getBorderElement}
-					getObserveElements={getResizeTargets}
-					onDoubleClick={onDoubleClick}
-					onPointerDown={onPointerDown}
-					side="left"
-					style={noDragStyle}
-				/>
-				<div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">{children}</div>
-			</motion.div>
-			{isOpen || !showCollapsedHandle ? null : (
-				<div
-					className="absolute inset-y-0 right-0 z-chrome w-2 cursor-e-resize touch-none"
-					data-slot="inspector-collapsed-rail"
-					data-testid="inspector-collapsed-rail"
-					onPointerDown={onCollapsedPointerDown}
-					style={noDragStyle}
-				/>
-			)}
-		</>
-	);
-}
 
 // The session detail screen: terminal + git rail. On Win/Linux the shell owns
 // ShellTopbar above this view; when the platform hides the shell topbar
@@ -638,7 +431,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 		phase: "docked",
 	});
 	const [filesPoppedOut, setFilesPoppedOut] = useState(false);
-	const [filesPopoutTopbarHost, setFilesPopoutTopbarHost] = useState<HTMLDivElement | null>(null);
 	const [filesSplit, setFilesSplit] = useState(() => window.localStorage.getItem("ao.files.diffStyle") === "split");
 	const [filePreviewRequestsBySession, setFilePreviewRequestsBySession] = useState<
 		Record<string, { path: string; key: number }>
@@ -712,7 +504,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 		handoffDialogContainerRef.current = node;
 		setHandoffDialogContainer(node);
 	}, []);
-	const isNativeFullScreen = useWindowFullScreen();
 	const stopTerminalLiveResize = useCallback(() => {
 		if (terminalLiveResizeTimerRef.current !== null) {
 			window.clearTimeout(terminalLiveResizeTimerRef.current);
@@ -1932,39 +1723,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
           the band exists so the filter never renders inline first. */}
 			{filesPoppedOut && session
 				? createPortal(
-						<div
-							className={cn(
-								"files-popout-overlay",
-								shellTopbarHiddenByPlatform && !isNativeFullScreen && "files-popout-overlay--mac-windowed",
-							)}
-						>
-							<div aria-hidden="true" className="files-popout-backdrop" />
-							<div
-								className={cn(
-									"files-popout-titlebar",
-									shellTopbarHiddenByPlatform && !isNativeFullScreen && "files-popout-titlebar--mac-windowed",
+						<SessionFilesPopOut>{(topbarHost) =>
+							<FilesTopbarHostContext.Provider value={topbarHost}>
+								{session.cloud ? (
+									<CloudWorkspaceDiff annotation={fileAnnotation} isMaximized onOpenFile={openCenterFile} onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} session={session} split={filesSplit} />
+								) : (
+									<SessionFileExplorer isMaximized onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} sessionId={session.id} split={filesSplit} />
 								)}
-								data-testid="files-popout-topbar"
-								ref={setFilesPopoutTopbarHost}
-							/>
-							<div className="files-popout-frame">
-								{filesPopoutTopbarHost ? (
-									<FilesTopbarHostContext.Provider value={filesPopoutTopbarHost}>
-										{session.cloud ? (
-											<CloudWorkspaceDiff annotation={fileAnnotation} isMaximized onOpenFile={openCenterFile} onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} session={session} split={filesSplit} />
-										) : (
-											<SessionFileExplorer
-												isMaximized
-												onSplitChange={setFilesSplit}
-												onToggleMaximized={handleToggleFilesPopOut}
-												sessionId={session.id}
-												split={filesSplit}
-											/>
-										)}
-									</FilesTopbarHostContext.Provider>
-								) : null}
-							</div>
-						</div>,
+							</FilesTopbarHostContext.Provider>
+						}</SessionFilesPopOut>,
 						document.body,
 					)
 				: null}
@@ -1975,25 +1742,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
           and fills the window below any native titlebar overlay. */}
 			{browserPopOutMounted && session
 				? createPortal(
-						<div
-							className={cn(
-								"browser-popout-overlay",
-								shellTopbarHiddenByPlatform && !isNativeFullScreen && "browser-popout-overlay--mac-windowed",
-							)}
-							data-phase={browserPopOutPhase}
-						>
-							<div aria-hidden="true" className="browser-popout-backdrop" />
-							<div
-								className={cn(
-									"browser-popout-titlebar browser-panel__topbar-host",
-									shellTopbarHiddenByPlatform &&
-										!isNativeFullScreen &&
-										"browser-popout-titlebar--mac-windowed",
-								)}
-								data-testid="browser-popout-topbar"
-								ref={setBrowserPopoutTopbarHost}
-							/>
-							<div className="browser-popout-frame">
+						<SessionBrowserPopOut onTopbarHost={setBrowserPopoutTopbarHost} phase={browserPopOutPhase === "open" ? "open" : "mounting"}>
 								{browserPoppedOut && browserPopoutTopbarHost ? <BrowserPanelView
 									active
 									annotationQueue={browserAnnotationQueue}
@@ -2003,8 +1752,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 									session={session}
 									topbarHost={browserPopoutTopbarHost}
 								/> : null}
-							</div>
-						</div>,
+						</SessionBrowserPopOut>,
 						document.body,
 					)
 				: null}

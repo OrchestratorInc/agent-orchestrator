@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useBlocker } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
-import { PanelRight, Plus } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Globe2, PanelRight, Plus } from "lucide-react";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { baseUrlForHost, clientForHost, labelForHost, subscribeConnectedHosts } from "../lib/host-clients";
 import { refKey, sessionUiKey } from "../lib/hosts";
@@ -20,9 +21,10 @@ import { clearSwitchAgentState } from "../hooks/useSwitchAgent";
 import { activateSessionFile, closeSessionFile, EMPTY_SESSION_FILE_TABS, openSessionFile } from "../lib/session-file-tabs";
 import { matchWorkspaceFilePath } from "../lib/workspace-file-path";
 import { cn } from "../lib/utils";
+import { matchesRendererShortcut } from "../stores/keybindings-store";
 import { isOrchestratorSession, sessionIsActive } from "../types/workspace";
-import type { InspectorView } from "../stores/ui-store";
-import { useUiStore } from "../stores/ui-store";
+import { inspectorIsOpen, useUiStore } from "../stores/ui-store";
+import { inspectorMaxWidthCss } from "../lib/inspector-width";
 import { SessionChatSurface } from "./chat/SessionChatSurface";
 import { ReviewerChatSurface } from "./chat/ReviewerChatSurface";
 import { AgentAvatar } from "./AgentAvatar";
@@ -32,10 +34,14 @@ import { SessionTopbarHost } from "./SessionTopbarPortal";
 import { TopbarButton } from "./TopbarButton";
 import { RemoteTerminalView } from "./RemoteTerminalView";
 import { SessionFileExplorer } from "./SessionFileExplorer";
+import { FilesTopbarHostContext } from "./files-topbar-host";
+import { SessionFilesPopOut } from "./SessionFilesPopOut";
+import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
 import { SessionFileTab } from "./SessionFileTabs";
 import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import { SessionInspector } from "./SessionInspector";
-import { useBrowserAnnotationQueue } from "./BrowserPanel";
+import { SessionInspectorRail, inspectorSizing, INSPECTOR_SPRING_EASING, INSPECTOR_SPRING_MS } from "./SessionInspectorRail";
+import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { ShellTerminalTab } from "./ShellTerminalTab";
 import { SessionActionsMenu } from "./SessionActionsMenu";
 import { NotificationCenter } from "./NotificationCenter";
@@ -101,8 +107,41 @@ export function RemoteSessionView({ hostId, sessionId }: { hostId: string; sessi
 	const renameShellTerminal = useRenameShellTerminal(hostId);
 	const selectedShell = shellSelection?.owner === sessionRefKey ? shellTerminals.find((shell) => shell.handleId === shellSelection.handleId) : undefined;
 	const shellTarget = selectedShell && !selectedShell.optimistic ? { kind: "shell" as const, generation: selectedShell.createdAt, handleId: selectedShell.handleId, sessionId, title: selectedShell.title } : undefined;
-	const [inspectorOpen, setInspectorOpen] = useState(true);
+	const uiSessionId = sessionUiKey(sessionId, hostId);
+	const browserOnly = Boolean(session.data && isOrchestratorSession(session.data));
+	const inspectorOpen = useUiStore((state) => inspectorIsOpen(state.inspectorSessions, uiSessionId));
+	const inspectorView = useUiStore((state) => browserOnly ? "browser" : state.inspectorSessions[uiSessionId]?.view ?? "summary");
+	const setInspectorOpen = useUiStore((state) => state.setInspectorOpen);
+	const setInspectorView = useUiStore((state) => state.setInspectorView);
+	const initializeInspectorSession = useUiStore((state) => state.initializeInspectorSession);
+	const [inspectorSettledClosed, setInspectorSettledClosed] = useState(!inspectorOpen);
+	const sessionSplitRef = useRef<HTMLDivElement | null>(null);
+	const sizing = useMemo(() => inspectorSizing(inspectorView), [inspectorView]);
+	useEffect(() => {
+		if (!session.data) return;
+		initializeInspectorSession(uiSessionId, Boolean(session.data.previewUrl), true);
+		if (browserOnly) setInspectorView(uiSessionId, "browser");
+	}, [browserOnly, initializeInspectorSession, session.data, setInspectorView, uiSessionId]);
+	useEffect(() => {
+		if (inspectorOpen) setInspectorSettledClosed(false);
+	}, [inspectorOpen]);
+	useEffect(() => {
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (!session.data || !matchesRendererShortcut("toggle-inspector", event)) return;
+			event.preventDefault();
+			setInspectorOpen(uiSessionId, !inspectorIsOpen(useUiStore.getState().inspectorSessions, uiSessionId));
+		};
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, [session.data, setInspectorOpen, uiSessionId]);
 	const [handoffDialogOpen, setHandoffDialogOpen] = useState(false);
+	const [browserPopOut, setBrowserPopOut] = useState<{ owner: string; phase: "docked" | "mounting" | "open" }>({ owner: sessionRefKey, phase: "docked" });
+	const browserPopOutPhase = browserPopOut.owner === sessionRefKey ? browserPopOut.phase : "docked";
+	const browserPoppedOut = browserPopOutPhase === "open";
+	const [browserPopoutTopbarHost, setBrowserPopoutTopbarHost] = useState<HTMLDivElement | null>(null);
+	useLayoutEffect(() => {
+		if (browserPopOutPhase === "mounting" && browserPopoutTopbarHost) setBrowserPopOut({ owner: sessionRefKey, phase: "open" });
+	}, [browserPopOutPhase, browserPopoutTopbarHost, sessionRefKey]);
 	const [handoffDialogContainer, setHandoffDialogContainer] = useState<HTMLDivElement | null>(null);
 	const { agentSwitch: handoffAgentSwitch, switchControlPresentation: handoffPresentation, switchError: handoffSwitchError } = useSessionHandoffMenu(session.data);
 	const handleHandoffDialogOpenChange = useCallback((open: boolean) => {
@@ -110,15 +149,14 @@ export function RemoteSessionView({ hostId, sessionId }: { hostId: string; sessi
 		if (!open && handoffSwitchError) clearSwitchAgentState(queryClient, sessionId, hostId);
 	}, [handoffSwitchError, hostId, queryClient, sessionId]);
 	useEffect(() => setHandoffDialogOpen(false), [sessionRefKey]);
-	const [inspectorView, setInspectorView] = useState<InspectorView>("summary");
 	useEffect(() => {
 		if (proxyBase && inspectorOpen && inspectorView === "browser") void session.refetch();
 	}, [proxyBase, inspectorOpen, inspectorView, session.refetch]);
 	const browserView = useBrowserView({
-		sessionId: sessionUiKey(sessionId, hostId),
+		sessionId: uiSessionId,
 		origin: { hostId, sessionId, proxyBase: proxyBase ?? "" },
-		active: Boolean(proxyBase && inspectorOpen && inspectorView === "browser"),
-		poppedOut: false,
+		active: Boolean(proxyBase && (browserPoppedOut || (inspectorOpen && inspectorView === "browser"))),
+		poppedOut: browserPoppedOut,
 		terminated: Boolean(session.data && !sessionIsActive(session.data)),
 		previewUrl: session.data?.previewUrl,
 		previewRevision: session.data?.previewRevision,
@@ -127,6 +165,8 @@ export function RemoteSessionView({ hostId, sessionId }: { hostId: string; sessi
 	const [fileTabs, setFileTabs] = useState(EMPTY_SESSION_FILE_TABS);
 	const [fileRequests, setFileRequests] = useState<Record<string, FileOpenOptions & { key: number }>>({});
 	const [dirtyFiles, setDirtyFiles] = useState<Record<string, true>>({});
+	const [filesPoppedOut, setFilesPoppedOut] = useState(false);
+	const [filesSplit, setFilesSplit] = useState(() => window.localStorage.getItem("ao.files.diffStyle") === "split");
 	const consumedEditingRequests = useRef(new Set<string>());
 	const fileAnnotation = useFileAnnotation(sessionId, { hostId });
 	const openCenterFile = useCallback((path: string, options?: FileOpenOptions) => {
@@ -175,9 +215,22 @@ export function RemoteSessionView({ hostId, sessionId }: { hostId: string; sessi
 		return next;
 	}), []);
 	const showFiles = useCallback(() => {
-		setInspectorOpen(true);
-		setInspectorView("files");
-	}, []);
+		setFilesPoppedOut(false);
+		setInspectorOpen(uiSessionId, true);
+		setInspectorView(uiSessionId, "files");
+	}, [setInspectorOpen, setInspectorView, uiSessionId]);
+	const toggleFilesPopOut = useCallback((next: boolean) => {
+		if (next) setBrowserPopOut({ owner: sessionRefKey, phase: "docked" });
+		setFilesPoppedOut(next);
+		if (next) {
+			setInspectorView(uiSessionId, "files");
+			setInspectorOpen(uiSessionId, true);
+		}
+	}, [sessionRefKey, setInspectorOpen, setInspectorView, uiSessionId]);
+	const toggleBrowserPopOut = useCallback((next: boolean) => {
+		if (next) setFilesPoppedOut(false);
+		setBrowserPopOut({ owner: sessionRefKey, phase: next ? "mounting" : "docked" });
+	}, [sessionRefKey]);
 	const centerFileTabs = fileTabs.openPaths.map((path) => ({
 		key: `file:${path}`,
 		content: <SessionFileTab active={fileTabs.activePath === path} dirty={Boolean(dirtyFiles[path])} onActivate={() => setFileTabs((current) => activateSessionFile(current, path))} onClose={() => closeCenterFile(path)} path={path} />,
@@ -204,7 +257,7 @@ export function RemoteSessionView({ hostId, sessionId }: { hostId: string; sessi
 		path={activeFilePath}
 		scope={activeFileRequest?.scope}
 		sessionId={sessionId}
-		split={false}
+		split={filesSplit}
 	/></div> : null;
 	const title = session.data?.title ?? sessionId;
 	const handoffMenuItem = session.data?.kind === "worker" && canSwitchAgentHarness(session.data.provider) && (sessionIsActive(session.data) || handoffPresentation)
@@ -225,13 +278,7 @@ export function RemoteSessionView({ hostId, sessionId }: { hostId: string; sessi
 	const newShellAction = session.data && !isOrchestratorSession(session.data) ? <TopbarButton aria-label={t("shortcut.new-shell-terminal")} onClick={addShell} title={t("shortcut.new-shell-terminal")} type="button" variant="icon"><Plus aria-hidden="true" className="size-icon-md" /></TopbarButton> : null;
 	const hostActions = <div className="flex items-center gap-3">
 		<span className="max-w-40 truncate text-xs text-muted-foreground" title={hostId}>{hostLabel}</span>
-		<TopbarButton
-			aria-label={inspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
-			aria-pressed={inspectorOpen}
-			onClick={() => setInspectorOpen((open) => !open)}
-			variant="icon"
-		><PanelRight aria-hidden="true" className="size-icon-md" /></TopbarButton>
-		<NotificationCenter />
+		<div className="session-pinned-actions-reserve" data-state={inspectorOpen ? "collapsed" : "expanded"} data-testid="session-pinned-actions-reserve" aria-hidden="true" />
 	</div>;
 	const sessionErrorCode = apiErrorCode(session.error);
 	const sessionErrorMessage = apiErrorMessage(session.error);
@@ -240,8 +287,20 @@ export function RemoteSessionView({ hostId, sessionId }: { hostId: string; sessi
 		: !proxyBase || sessionErrorCode === "UPSTREAM_UNAVAILABLE" || sessionErrorMessage === "remote daemon unreachable" || sessionErrorMessage === "remote host identity not verified"
 			? "remote.hostOffline" : "remote.loadSessionFailed";
 
-	return <div className="relative flex h-full min-h-0 bg-background text-foreground" data-testid="remote-session-view" data-host-id={hostId}>
-		<div className="flex min-w-0 flex-1 flex-col">
+	return <div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="remote-session-view" data-host-id={hostId}>
+		<div
+			className="session-split relative flex min-h-0 flex-1 overflow-hidden"
+			data-testid="panel-group"
+			data-workspace-mode={sizing.mode}
+			id="session-workspace"
+			ref={sessionSplitRef}
+			style={{
+				"--session-inspector-max-width": inspectorMaxWidthCss(sizing.maxPercent, sizing.chatMinWidth),
+				"--session-inspector-motion-duration": `${INSPECTOR_SPRING_MS}ms`,
+				"--session-inspector-motion-easing": INSPECTOR_SPRING_EASING,
+			} as CSSProperties}
+		>
+		<div className="relative flex min-w-0 flex-1 flex-col overflow-hidden" data-panel="" id="terminal">
 		{proxyBase && !session.isError && interfaceUi.renderedMode === "chat" && <SessionTopbarHost className="relative z-chrome flex h-inspector-tabs w-full shrink-0 overflow-hidden" data-testid="session-topbar-host" />}
 		{(session.isError || !proxyBase) && <p role="alert" className="px-4 py-2 text-sm text-destructive">{t(loadErrorKey)}</p>}
 		<div className="relative min-h-0 flex-1" ref={setHandoffDialogContainer}>
@@ -307,9 +366,39 @@ export function RemoteSessionView({ hostId, sessionId }: { hostId: string; sessi
 			{interfaceUi.notice}
 		</div>
 		</div>
-		{interfaceUi.dialogs}
-		{session.data && proxyBase && !session.isError && inspectorOpen ? <div className="w-[min(20rem,40%)] shrink-0 overflow-hidden border-l border-border-strong bg-background 2xl:w-[min(24rem,40%)]" data-testid="panel-inspector">
-			<SessionInspector key={sessionRefKey} browserAnnotationQueue={browserAnnotationQueue} browserView={browserView} hostId={hostId} session={session.data} filesView={<SessionFileExplorer hostId={hostId} onOpenFile={openCenterFile} sessionId={sessionId} />} onOpenReviewFile={({ path }) => openReferencedFile(path)} onOpenReviewerTerminal={selectReviewerTerminal} onOpenReviewerChat={selectReviewerChat} onWorkerMessageSent={selectWorker} onViewChange={setInspectorView} view={inspectorView} />
+		{session.data && proxyBase && !session.isError ? <SessionInspectorRail
+			showCollapsedHandle={!browserOnly}
+			isOpen={inspectorOpen}
+			onExpand={() => setInspectorOpen(uiSessionId, true)}
+			onCloseAnimationComplete={() => setInspectorSettledClosed(true)}
+			sizing={sizing}
+			settledClosed={!inspectorOpen && inspectorSettledClosed}
+			splitRef={sessionSplitRef}
+		>
+			<SessionInspector key={sessionRefKey} browserOnly={browserOnly} browserPoppedOut={browserPoppedOut} browserAnnotationQueue={browserAnnotationQueue} browserView={browserView} hostId={hostId} isInspectorVisible={inspectorOpen || !inspectorSettledClosed} session={session.data} filesView={inspectorView === "files" ? <SessionFileExplorer hostId={hostId} onOpenFile={openCenterFile} onSplitChange={setFilesSplit} onToggleMaximized={toggleFilesPopOut} sessionId={sessionId} split={filesSplit} /> : null} onOpenReviewFile={({ path }) => openReferencedFile(path)} onOpenReviewerTerminal={selectReviewerTerminal} onOpenReviewerChat={selectReviewerChat} onWorkerMessageSent={selectWorker} onToggleBrowserPopOut={toggleBrowserPopOut} onViewChange={(view) => setInspectorView(uiSessionId, view)} view={inspectorView} />
+		</SessionInspectorRail> : null}
+		</div>
+		{session.data && proxyBase && !session.isError ? <div className="session-pinned-actions" data-testid="session-pinned-actions">
+			<TopbarButton
+				aria-label={inspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
+				aria-pressed={inspectorOpen}
+				onClick={() => setInspectorOpen(uiSessionId, !inspectorOpen)}
+				variant="icon"
+			>{browserOnly ? <Globe2 aria-hidden="true" className="size-icon-md" /> : <PanelRight aria-hidden="true" className="size-icon-md" />}</TopbarButton>
+			<NotificationCenter />
 		</div> : null}
+		{interfaceUi.dialogs}
+		{filesPoppedOut && session.data ? createPortal(
+			<SessionFilesPopOut>{(topbarHost) =>
+				<FilesTopbarHostContext.Provider value={topbarHost}>
+					<SessionFileExplorer hostId={hostId} isMaximized onSplitChange={setFilesSplit} onToggleMaximized={toggleFilesPopOut} sessionId={sessionId} split={filesSplit} />
+				</FilesTopbarHostContext.Provider>
+			}</SessionFilesPopOut>, document.body,
+		) : null}
+		{browserPopOutPhase !== "docked" && session.data ? createPortal(
+			<SessionBrowserPopOut onTopbarHost={setBrowserPopoutTopbarHost} phase={browserPopOutPhase}>
+				{browserPoppedOut && browserPopoutTopbarHost ? <BrowserPanelView active annotationQueue={browserAnnotationQueue} browserView={browserView} onTogglePopOut={toggleBrowserPopOut} poppedOut session={session.data} topbarHost={browserPopoutTopbarHost} /> : null}
+			</SessionBrowserPopOut>, document.body,
+		) : null}
 	</div>;
 }

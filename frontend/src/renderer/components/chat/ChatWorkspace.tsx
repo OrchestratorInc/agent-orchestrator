@@ -66,11 +66,7 @@ import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
 import { apiErrorCode, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
-import {
-	TERMINAL_FONT_SIZE_DEFAULT,
-	TERMINAL_FONT_SIZE_MAX,
-	TERMINAL_FONT_SIZE_MIN,
-} from "../../lib/design-tokens";
+import { clampTerminalFontSize, initialTerminalFontSize, terminalFontSizeStorageKey } from "../../lib/terminal-font-size";
 import { isLinuxPlatform, isMacPlatform } from "../../lib/platform";
 import { handleTerminalTabListKeyDown } from "../../lib/terminal-tabs";
 import { agentLabel } from "../../lib/agent-options";
@@ -173,9 +169,6 @@ function latestPendingInteraction(
 
 const CHAT_FONT_SIZE_DEFAULT = 14;
 
-// Reviewer panes share the terminal font-size preference with CenterPane, so a
-// reviewer opened inside the Chat surface matches a reviewer opened in TUI mode.
-const terminalFontSizeStorageKey = "ao.terminal.fontSize";
 const WHEEL_ZOOM_THRESHOLD = 80;
 const WHEEL_ZOOM_RESET_MS = 250;
 
@@ -184,18 +177,6 @@ export interface ChatRetryControl {
 	pending?: boolean;
 	error?: string;
 	turnId?: string;
-}
-
-function clampTerminalFontSize(size: number): number {
-	return Math.min(TERMINAL_FONT_SIZE_MAX, Math.max(TERMINAL_FONT_SIZE_MIN, size));
-}
-
-function initialTerminalFontSize(): number {
-	if (typeof window === "undefined") return TERMINAL_FONT_SIZE_DEFAULT;
-	const raw = window.localStorage?.getItem(terminalFontSizeStorageKey);
-	const parsed = raw === null ? Number.NaN : Number(raw);
-	if (!Number.isFinite(parsed)) return TERMINAL_FONT_SIZE_DEFAULT;
-	return clampTerminalFontSize(parsed);
 }
 
 type ReviewerTerminalTarget = Extract<TerminalTarget, { kind: "reviewer" }>;
@@ -1371,7 +1352,7 @@ function ChatWorkspaceContent({
 						role="tabpanel"
 					>
 						<div className="h-full min-h-0" data-testid="chat-reviewer-terminal">
-							{session.hostId && assetBaseUrl ? <RemoteTerminalView hostId={session.hostId} proxyBase={assetBaseUrl} terminalHandleId={reviewerTarget.handleId} /> : <TerminalPane
+							{session.hostId && assetBaseUrl ? <RemoteTerminalView fontSize={terminalFontSize} hostId={session.hostId} isFullscreen={isFullscreen} onChangeFontSize={updateTerminalFontSize} onToggleFullscreen={toggleFullscreen} proxyBase={assetBaseUrl} terminalHandleId={reviewerTarget.handleId} /> : <TerminalPane
 								daemonReady={Boolean(daemonReady)}
 								fontSize={terminalFontSize}
 								isFullscreen={isFullscreen}
@@ -1393,7 +1374,7 @@ function ChatWorkspaceContent({
 						role="tabpanel"
 					>
 						<div className="h-full min-h-0" data-testid="chat-shell-terminal">
-							{session.hostId && assetBaseUrl ? <RemoteTerminalView hostId={session.hostId} proxyBase={assetBaseUrl} terminalHandleId={shellTarget.handleId} /> : <TerminalPane
+							{session.hostId && assetBaseUrl ? <RemoteTerminalView fontSize={terminalFontSize} hostId={session.hostId} isFullscreen={isFullscreen} onChangeFontSize={updateTerminalFontSize} onToggleFullscreen={toggleFullscreen} proxyBase={assetBaseUrl} terminalHandleId={shellTarget.handleId} /> : <TerminalPane
 								daemonReady={Boolean(daemonReady)}
 								fontSize={terminalFontSize}
 								focusRequested

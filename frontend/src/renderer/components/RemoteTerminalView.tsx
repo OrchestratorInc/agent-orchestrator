@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useTerminalSession, type AttachableTerminal } from "../hooks/useTerminalSession";
-import { TERMINAL_FONT_SIZE_DEFAULT } from "../lib/design-tokens";
+import { clampTerminalFontSize, initialTerminalFontSize, terminalFontSizeStorageKey } from "../lib/terminal-font-size";
 import { createTerminalMux, muxUrlFromApiBase } from "../lib/terminal-mux";
 import { useSessionLinkNavigation } from "../lib/use-session-link-navigation";
 import { useResolvedTheme } from "../stores/ui-store";
@@ -13,17 +13,48 @@ type Props = {
 	terminalHandleId?: string;
 	terminalGeneration?: string;
 	inputDisabled?: boolean;
+	fontSize?: number;
+	onChangeFontSize?: (delta: number) => void;
+	isFullscreen?: boolean;
+	onToggleFullscreen?: () => void | Promise<void>;
 };
 
 /** Mount identity includes the host, so an equal handle on another box never inherits its socket or screen. */
-export function RemoteTerminalView({ hostId, proxyBase, terminalHandleId, terminalGeneration, inputDisabled }: Props) {
-	return <RemoteTerminalAttachment key={`${hostId}:${proxyBase}:${terminalHandleId ?? ""}:${terminalGeneration ?? ""}`} hostId={hostId} proxyBase={proxyBase} terminalHandleId={terminalHandleId} inputDisabled={inputDisabled} />;
+export function RemoteTerminalView({ hostId, proxyBase, terminalHandleId, terminalGeneration, ...presentation }: Props) {
+	return <RemoteTerminalAttachment key={`${hostId}:${proxyBase}:${terminalHandleId ?? ""}:${terminalGeneration ?? ""}`} hostId={hostId} proxyBase={proxyBase} terminalHandleId={terminalHandleId} {...presentation} />;
 }
 
-function RemoteTerminalAttachment({ hostId, proxyBase, terminalHandleId, inputDisabled }: Props) {
+function RemoteTerminalAttachment({ hostId, proxyBase, terminalHandleId, inputDisabled, fontSize, onChangeFontSize, isFullscreen, onToggleFullscreen }: Props) {
 	const { t } = useTranslation();
 	const theme = useResolvedTheme();
 	const openSessionLink = useSessionLinkNavigation(hostId);
+	const surfaceRef = useRef<HTMLDivElement>(null);
+	const [savedFontSize, setSavedFontSize] = useState(initialTerminalFontSize);
+	const [surfaceFullscreen, setSurfaceFullscreen] = useState(false);
+	useEffect(() => {
+		const onChange = () => setSurfaceFullscreen(document.fullscreenElement === surfaceRef.current);
+		document.addEventListener("fullscreenchange", onChange);
+		return () => document.removeEventListener("fullscreenchange", onChange);
+	}, []);
+	const changeFontSize = useCallback((delta: number) => {
+		if (onChangeFontSize) return onChangeFontSize(delta);
+		setSavedFontSize((current) => {
+			const next = clampTerminalFontSize(current + delta);
+			window.localStorage?.setItem(terminalFontSizeStorageKey, String(next));
+			return next;
+		});
+	}, [onChangeFontSize]);
+	const toggleFullscreen = useCallback(async () => {
+		if (onToggleFullscreen) return onToggleFullscreen();
+		const surface = surfaceRef.current;
+		if (!surface) return;
+		try {
+			if (document.fullscreenElement === surface) await document.exitFullscreen();
+			else await surface.requestFullscreen();
+		} catch (error) {
+			console.warn("Unable to toggle terminal fullscreen", error);
+		}
+	}, [onToggleFullscreen]);
 	const [terminal, setTerminal] = useState<AttachableTerminal | null>(null);
 	const [initError, setInitError] = useState(false);
 	const createMux = useCallback(() => createTerminalMux(muxUrlFromApiBase(proxyBase)), [proxyBase]);
@@ -45,13 +76,16 @@ function RemoteTerminalAttachment({ hostId, proxyBase, terminalHandleId, inputDi
 		return () => { current = false; detach?.(); };
 	}, [attach, terminal, terminalHandleId]);
 
-	return <div className="terminal-surface relative h-full min-h-0 pl-2" data-testid="remote-terminal-view">
+	return <div className="terminal-surface relative h-full min-h-0 pl-2" data-testid="remote-terminal-view" ref={surfaceRef}>
 		<XtermTerminal
 			ariaLabel={t("remote.terminalAria")}
-			fontSize={TERMINAL_FONT_SIZE_DEFAULT}
+			fontSize={fontSize ?? savedFontSize}
+			isFullscreen={isFullscreen ?? surfaceFullscreen}
+			onChangeFontSize={changeFontSize}
 			onError={() => setInitError(true)}
 			onSessionLinkOpen={openSessionLink}
 			onReady={setTerminal}
+			onToggleFullscreen={toggleFullscreen}
 			onVisibleSize={syncVisibleSize}
 			theme={theme}
 		/>

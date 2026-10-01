@@ -31,7 +31,7 @@ import { MAX_SESSION_DISPLAY_NAME_LEN, useSessionRename } from "../hooks/useSess
 import { useSwitchAgentState } from "../hooks/useSwitchAgent";
 import { useTruncatedText } from "../hooks/useTruncatedText";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
-import { TERMINAL_FONT_SIZE_DEFAULT, TERMINAL_FONT_SIZE_MAX, TERMINAL_FONT_SIZE_MIN } from "../lib/design-tokens";
+import { clampTerminalFontSize, initialTerminalFontSize, terminalFontSizeStorageKey } from "../lib/terminal-font-size";
 import { getAgentActivityView } from "../lib/session-presentation";
 import {
 	deriveAgentSwitchPresentation,
@@ -112,7 +112,6 @@ type AuxiliaryTab =
 	| { key: string; kind: "shell"; terminal: ShellTerminal }
 	| { key: string; kind: "workspace"; tab: CenterPaneWorkspaceTab };
 
-const terminalFontSizeStorageKey = "ao.terminal.fontSize";
 const WHEEL_ZOOM_THRESHOLD = 80;
 const WHEEL_ZOOM_RESET_MS = 250;
 const isMac = isMacPlatform();
@@ -139,18 +138,6 @@ function DraggableWorkspaceTab({ children, value }: { children: ReactNode; value
 			{children}
 		</Reorder.Item>
 	);
-}
-
-function clampTerminalFontSize(size: number): number {
-	return Math.min(TERMINAL_FONT_SIZE_MAX, Math.max(TERMINAL_FONT_SIZE_MIN, size));
-}
-
-function initialTerminalFontSize(): number {
-	if (typeof window === "undefined") return TERMINAL_FONT_SIZE_DEFAULT;
-	const raw = window.localStorage?.getItem(terminalFontSizeStorageKey);
-	const parsed = raw === null ? Number.NaN : Number(raw);
-	if (!Number.isFinite(parsed)) return TERMINAL_FONT_SIZE_DEFAULT;
-	return clampTerminalFontSize(parsed);
 }
 
 export function CenterPane({

@@ -12,7 +12,7 @@ vi.mock("../lib/use-session-link-navigation", () => ({
 	},
 }));
 vi.mock("./XtermTerminal", () => ({
-	XtermTerminal: ({ onReady, onSessionLinkOpen }: { onReady?: (terminal: AttachableTerminal) => void; onSessionLinkOpen?: (url: string) => void }) => {
+	XtermTerminal: ({ fontSize, onChangeFontSize, onReady, onSessionLinkOpen }: { fontSize?: number; onChangeFontSize?: (delta: number) => void; onReady?: (terminal: AttachableTerminal) => void; onSessionLinkOpen?: (url: string) => void }) => {
 		const [output, setOutput] = useState("");
 		useEffect(() => {
 			const inputListeners = new Set<Parameters<AttachableTerminal["onUserInput"]>[0]>();
@@ -29,7 +29,7 @@ vi.mock("./XtermTerminal", () => ({
 				onResize: () => ({ dispose: () => undefined }),
 			});
 		}, []);
-		return <div data-testid="remote-xterm">{output}<button type="button" onClick={() => onSessionLinkOpen?.("ao://sessions/project/session")}>Open remote session link</button></div>;
+		return <div data-testid="remote-xterm" data-font-size={fontSize}>{output}<button type="button" onClick={() => onSessionLinkOpen?.("ao://sessions/project/session")}>Open remote session link</button><button type="button" onClick={() => onChangeFontSize?.(1)}>Zoom terminal</button></div>;
 	},
 }));
 
@@ -66,6 +66,21 @@ it("passes remote terminal session links to navigation with the source host", ()
 	fireEvent.click(screen.getByRole("button", { name: "Open remote session link" }));
 	expect(sessionLinkMocks.host).toHaveBeenCalledWith("box-a");
 	expect(sessionLinkMocks.open).toHaveBeenCalledWith("ao://sessions/project/session");
+});
+
+it("uses the same saved terminal zoom preference as local sessions", () => {
+	const previous = window.localStorage.getItem("ao.terminal.fontSize");
+	window.localStorage.setItem("ao.terminal.fontSize", "15");
+	try {
+		render(<QueryClientProvider client={new QueryClient()}><RemoteTerminalView hostId="box-a" proxyBase="http://127.0.0.1:4500/token-a" /></QueryClientProvider>);
+		expect(screen.getByTestId("remote-xterm")).toHaveAttribute("data-font-size", "15");
+		fireEvent.click(screen.getByRole("button", { name: "Zoom terminal" }));
+		expect(screen.getByTestId("remote-xterm")).toHaveAttribute("data-font-size", "16");
+		expect(window.localStorage.getItem("ao.terminal.fontSize")).toBe("16");
+	} finally {
+		if (previous === null) window.localStorage.removeItem("ao.terminal.fontSize");
+		else window.localStorage.setItem("ao.terminal.fontSize", previous);
+	}
 });
 
 it("attaches to the selected remote host's terminal mux and shows its output", async () => {
