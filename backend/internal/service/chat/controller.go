@@ -152,6 +152,7 @@ type Store interface {
 	FailPendingInputs(ctx context.Context, conversationID string, now time.Time) error
 
 	ProjectProviderEvent(ctx context.Context, conversationID string, session domain.SessionID, generation, providerEventID, method, payloadJSON string, now time.Time, project func(context.Context) error) (bool, error)
+	ProjectReviewProviderEvent(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation, providerEventID, method, payloadJSON string, now time.Time, project func(context.Context) error) (bool, error)
 }
 
 // ActivityRecorder feeds derived session status.
@@ -2676,9 +2677,15 @@ func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (b
 	if err != nil {
 		return false, false, fmt.Errorf("encode provider event archive: %w", err)
 	}
-	projected, err := c.store.ProjectProviderEvent(ctx, c.conversation.ID, c.sessionID,
-		c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(),
-		func(txCtx context.Context) error { return c.apply(txCtx, event) })
+	project := func(txCtx context.Context) error { return c.apply(txCtx, event) }
+	var projected bool
+	if c.reviewID != "" {
+		projected, err = c.store.ProjectReviewProviderEvent(ctx, c.conversation.ID, c.sessionID,
+			c.reviewID, c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(), project)
+	} else {
+		projected, err = c.store.ProjectProviderEvent(ctx, c.conversation.ID, c.sessionID,
+			c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(), project)
+	}
 	if err != nil || !projected {
 		return projected, false, err
 	}

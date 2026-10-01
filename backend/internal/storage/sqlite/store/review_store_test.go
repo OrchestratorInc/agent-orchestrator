@@ -96,6 +96,45 @@ func TestCreateAndActivateReviewConversationBranchClaimsReview(t *testing.T) {
 	}
 }
 
+func TestReviewProviderEventsUseReviewControllerFence(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "review-events")
+	session, err := s.CreateSession(ctx, sampleRecord("review-events"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	review := domain.Review{ID: "review-events", SessionID: session.ID, ProjectID: session.ProjectID,
+		Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now}
+	if err := s.UpsertReview(ctx, review); err != nil {
+		t.Fatalf("upsert review: %v", err)
+	}
+	conversation, err := s.CreateReviewConversation(ctx, "review-events-conversation", review.ID, session.ProjectID, session.ID, now)
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	if claimed, err := s.ClaimReviewChatController(ctx, review.ID, "provider-1", "review-generation", now); err != nil || !claimed {
+		t.Fatalf("claim reviewer controller: claimed=%v err=%v", claimed, err)
+	}
+	projected := 0
+	project := func(context.Context) error { projected++; return nil }
+	applied, err := s.ProjectReviewProviderEvent(ctx, conversation.ID, session.ID, review.ID,
+		"review-generation", "event-1", "message.delta", `{}`, now, project)
+	if err != nil || !applied || projected != 1 {
+		t.Fatalf("review event: applied=%v projected=%d err=%v", applied, projected, err)
+	}
+	applied, err = s.ProjectReviewProviderEvent(ctx, conversation.ID, session.ID, review.ID,
+		"stale-generation", "event-2", "message.delta", `{}`, now, project)
+	if err != nil || applied || projected != 1 {
+		t.Fatalf("stale review event: applied=%v projected=%d err=%v", applied, projected, err)
+	}
+	events, err := s.ProviderEventsSince(ctx, conversation.ID, 0, 10)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("review event archive = %+v, err=%v", events, err)
+	}
+}
+
 func TestCleanupOwnedReviewControllerWorkSettlesItsTurn(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

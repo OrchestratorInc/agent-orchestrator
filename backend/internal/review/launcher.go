@@ -102,6 +102,8 @@ type ReviewerChatStart struct {
 	WorkerID               domain.SessionID
 	ProjectID              domain.ProjectID
 	Harness                domain.AgentHarness
+	Model                  string
+	Effort                 string
 	DataDir                string
 	WorkspacePath          string
 	Env                    map[string]string
@@ -483,7 +485,7 @@ func (l *agentLauncher) startReviewerChat(ctx context.Context, spec LaunchSpec, 
 	if providerID == "" {
 		providerID = strings.TrimSpace(spec.AgentSessionID)
 	}
-	start := ReviewerChatStart{ReviewID: spec.ReviewSessionID, WorkerID: spec.WorkerID, ProjectID: spec.ProjectID, Harness: profile.ReviewChatHarness(), DataDir: l.dataDir, WorkspacePath: spec.WorkspacePath, Env: l.runtimeEnv(ctx, spec, nil, nil), Prompt: inv.Prompt, SystemPrompt: string(systemPrompt), ProviderConversationID: providerID}
+	start := ReviewerChatStart{ReviewID: spec.ReviewSessionID, WorkerID: spec.WorkerID, ProjectID: spec.ProjectID, Harness: profile.ReviewChatHarness(), Model: spec.AgentConfig.Model, Effort: spec.AgentConfig.Effort, DataDir: l.dataDir, WorkspacePath: spec.WorkspacePath, Env: l.runtimeEnv(ctx, spec, nil, nil), Prompt: inv.Prompt, SystemPrompt: string(systemPrompt), ProviderConversationID: providerID}
 	if restore {
 		providerID, err = l.chat.RestoreReviewChat(ctx, start)
 	} else {
