@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,6 +25,7 @@ export function buildHostBundle({ source = frontendRoot, output = join(source, "
 		cpSync(daemon, join(resources, "daemon", "ao"));
 		cpSync(acpRuntime, join(resources, "acp-runtime"), { recursive: true, verbatimSymlinks: true });
 		cpSync(tmux, join(resources, "tmux"), { recursive: true });
+		for (const file of ["daemon/ao", "acp-runtime/node/bin/node", "tmux/bin/tmux"]) chmodSync(join(resources, file), 0o755);
 		const temporary = join(staging, "host.tar.gz");
 		execFileSync("tar", ["-czf", temporary, "-C", staging, "resources"], { stdio: "inherit", env: { ...process.env, COPYFILE_DISABLE: "1" } });
 		renameSync(temporary, archive);

@@ -17,7 +17,7 @@ test("headless archive contains the daemon, Claude ACP runtime, and tmux in the 
 			mkdirSync(dirname(file), { recursive: true });
 			writeFileSync(file, file);
 		}
-		for (const file of [daemon, node, tmux]) chmodSync(file, 0o755);
+		for (const file of [daemon, node, tmux]) chmodSync(file, 0o444);
 		const adapterLink = join(root, "resources", "acp-runtime", "node_modules", ".bin", "claude-agent-acp");
 		mkdirSync(dirname(adapterLink), { recursive: true });
 		symlinkSync("../@agentclientprotocol/claude-agent-acp/dist/index.js", adapterLink);
@@ -34,7 +34,11 @@ test("headless archive contains the daemon, Claude ACP runtime, and tmux in the 
 		]) {
 			assert.equal(readFileSync(join(extracted, bundled), "utf8"), original);
 		}
-		if (process.platform !== "win32") assert.ok(statSync(join(extracted, "resources", "daemon", "ao")).mode & 0o111);
+		if (process.platform !== "win32") {
+			for (const file of ["daemon/ao", "acp-runtime/node/bin/node", "tmux/bin/tmux"]) {
+				assert.equal(statSync(join(extracted, "resources", file)).mode & 0o777, 0o755);
+			}
+		}
 		assert.equal(readlinkSync(join(extracted, "resources", "acp-runtime", "node_modules", ".bin", "claude-agent-acp")), "../@agentclientprotocol/claude-agent-acp/dist/index.js");
 		rmSync(adapter);
 		assert.throws(() => buildHostBundle({ source: root, platform: "linux", arch: "x64" }), /Headless bundle requires/);
