@@ -2240,5 +2240,14 @@
 	"standalone.archive.heading_other": "{{count}} Archived Sessions",
 	"standalone.archive.newAgent": "New agent",
 	"standalone.archive.empty.title": "No archived standalone agents",
-	"standalone.archive.empty.body": "Standalone agents you archive from Scratchpad will appear here. Active standalone agents stay in the Scratchpad list."
+	"standalone.archive.empty.body": "Standalone agents you archive from Scratchpad will appear here. Active standalone agents stay in the Scratchpad list.",
+	"terminal.images.contextUnavailable": "Cloud session context is unavailable.",
+	"terminal.images.selectFirst": "Select a supported image first.",
+	"terminal.images.changed": "The terminal changed before image preparation finished. Retry to insert the current paths.",
+	"terminal.images.failed": "Image preparation failed. Retry.",
+	"terminal.images.attachAria": "Attach images to terminal",
+	"terminal.images.attach": "Attach image",
+	"terminal.images.preparing": "Preparing images in the sandbox...",
+	"terminal.images.hint": "Inserts a path. Press Enter yourself to submit.",
+	"terminal.images.clear": "Clear"
 }

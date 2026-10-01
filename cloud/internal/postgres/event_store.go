@@ -97,6 +97,16 @@ func sendMessageTx(
 	if err != nil {
 		return domain.ClientEvent{}, normalizeConstraintError(err)
 	}
+	if len(settings.AttachmentIDs) > 0 {
+		var project string
+		if err := tx.QueryRow(ctx, `SELECT project_id FROM ao_sessions WHERE org_id=$1 AND id=$2`, orgID, sessionID).Scan(&project); err != nil {
+			return domain.ClientEvent{}, err
+		}
+		settings.Attachments, err = attachmentMetadataTx(ctx, tx, orgID, sessionID, settings.AttachmentIDs, project, actorUserID, actorSessionID)
+		if err != nil {
+			return domain.ClientEvent{}, err
+		}
+	}
 	event, err := appendUserMessage(ctx, tx, orgID, sessionID, idempotencyKey, text, modeCap, deniedCommands, settings)
 	if err != nil {
 		return domain.ClientEvent{}, err
@@ -398,7 +408,7 @@ func appendUserMessage(
 		LIMIT 1`,
 		orgID, sessionID,
 	).Scan(&terminalID, &workerEpoch, &sessionMode, &sessionDeniedCommands)
-	if err == nil {
+	if err == nil && len(settings.AttachmentIDs) == 0 {
 		effective := effectiveMode(sessionMode, modeCap)
 		effectiveDenied := effectiveDeniedCommands(sessionDeniedCommands, deniedCommands)
 		if effective == "read-only" || len(effectiveDenied) != 0 {
@@ -438,7 +448,7 @@ func appendUserMessage(
 		}
 		return event, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return domain.ClientEvent{}, err
 	}
 	var turnID string
@@ -547,6 +557,9 @@ func appendUserMessageEvent(
 		payload,
 	), &event)
 	if err != nil {
+		return domain.ClientEvent{}, err
+	}
+	if err := linkAttachmentsTx(ctx, tx, orgID, sessionID, event.Sequence, settings.Attachments); err != nil {
 		return domain.ClientEvent{}, err
 	}
 	return event, nil

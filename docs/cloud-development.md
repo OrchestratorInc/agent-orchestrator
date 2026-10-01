@@ -155,3 +155,8 @@ environment-scoped broker grant before execution can be enabled.
 
 See [cloud-refactor.md](cloud-refactor.md) for package ownership, import rules,
 and the detailed public/private boundary.
+
+## Cloud images
+
+See [Cloud image attachments](cloud-image-attachments.md) for storage configuration,
+development verification and the AWS production release gate.

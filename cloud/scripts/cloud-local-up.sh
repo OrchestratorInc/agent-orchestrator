@@ -30,7 +30,7 @@ cloud_state_directory="$state_root/cloud"
 provider_key_file="$cloud_state_directory/provider-secret-key"
 worker_key_file="$cloud_state_directory/worker-signing-key"
 
-mkdir -p "$cloud_state_directory"
+mkdir -p "$cloud_state_directory" "${AO_CLOUD_LOCAL_ATTACHMENT_DATA_DIR:-$cloud_state_directory/attachments}"
 if [[ ! -s "$provider_key_file" ]]; then
 	(umask 077 && openssl rand -base64 32 >"$provider_key_file")
 fi

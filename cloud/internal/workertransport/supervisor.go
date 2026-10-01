@@ -7,10 +7,13 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/cloud/internal/attachments"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/workerexec"
 	"github.com/creack/pty"
@@ -369,7 +372,7 @@ func (s *Supervisor) forwardTurn(ctx context.Context) (bool, error) {
 	}
 	if err := s.writeTerminal(worker.TerminalCommand{
 		TerminalID: agentTerminalID,
-		Data:       []byte(turn.Prompt + "\r"),
+		Data:       []byte(worker.ImageToolPrompt(turn.Prompt, turn.ImagePaths) + "\r"),
 	}); err != nil {
 		if failErr := s.Control.FailTurn(
 			ctx, turn.ID, turn.Attempt, err.Error(),
@@ -499,10 +502,29 @@ func (s *Supervisor) handle(
 				response = worker.ChatModelsResponse{Models: models}
 			}
 		}
+	case "attachments.materialize":
+		var input struct {
+			Attachments []attachments.Metadata `json:"attachments"`
+		}
+		err = decodePayload(request.Payload, &input)
+		if err == nil {
+			materializer, ok := s.Control.(interface {
+				MaterializeAttachments(context.Context, string, []attachments.Metadata) ([]string, error)
+			})
+			if !ok {
+				err = errors.New("worker does not support image attachments")
+			} else {
+				var paths []string
+				paths, err = materializer.MaterializeAttachments(ctx, s.Workspace, input.Attachments)
+				epoch, _ := strconv.ParseInt(os.Getenv("AO_CLOUD_WORKER_EPOCH"), 10, 64)
+				response = map[string]any{"paths": paths, "workerId": os.Getenv("AO_CLOUD_WORKER_ID"), "epoch": epoch}
+			}
+		}
 	case "chat.steer":
 		var input struct {
-			TurnID string `json:"turnId"`
-			Text   string `json:"text"`
+			TurnID      string                 `json:"turnId"`
+			Text        string                 `json:"text"`
+			Attachments []attachments.Metadata `json:"attachments,omitempty"`
 		}
 		err = decodePayload(request.Payload, &input)
 		if err == nil {
@@ -513,7 +535,29 @@ func (s *Supervisor) handle(
 				err = errors.New("chat steering is unavailable")
 			} else {
 				steerCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-				err = steerer.Steer(steerCtx, input.TurnID, input.Text)
+				if len(input.Attachments) > 0 {
+					materializer, ok := s.Control.(interface {
+						MaterializeAttachments(context.Context, string, []attachments.Metadata) ([]string, error)
+					})
+					imageSteerer, supports := s.ChatRunner.(interface {
+						SteerImages(context.Context, string, string, []string, []attachments.Metadata) error
+					})
+					if !ok || !supports {
+						err = errors.New("worker cannot steer images")
+					} else {
+						paths, prepareErr := materializer.MaterializeAttachments(steerCtx, s.Workspace, input.Attachments)
+						if prepareErr != nil {
+							err = prepareErr
+						} else {
+							for i, path := range paths {
+								paths[i] = filepath.Join(s.Workspace, path)
+							}
+							err = imageSteerer.SteerImages(steerCtx, input.TurnID, input.Text, paths, input.Attachments)
+						}
+					}
+				} else {
+					err = steerer.Steer(steerCtx, input.TurnID, input.Text)
+				}
 				cancel()
 			}
 			response = map[string]bool{"injected": err == nil}

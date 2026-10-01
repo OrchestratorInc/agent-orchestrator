@@ -759,9 +759,13 @@ func createSessionTx(
 	); err != nil {
 		return domain.Session{}, normalizeConstraintError(err)
 	}
-	if input.Prompt != "" {
+	metadata, err := attachmentMetadataTx(ctx, tx, orgID, session.ID, input.AttachmentIDs, input.ProjectID, actorUserID, parentSessionID)
+	if err != nil {
+		return domain.Session{}, err
+	}
+	if input.Prompt != "" || len(metadata) > 0 {
 		if _, err := appendUserMessageEvent(
-			ctx, tx, orgID, session.ID, input.Prompt,
+			ctx, tx, orgID, session.ID, input.Prompt, domain.ChatTurnSettings{AttachmentIDs: input.AttachmentIDs, Attachments: metadata},
 		); err != nil {
 			return domain.Session{}, err
 		}

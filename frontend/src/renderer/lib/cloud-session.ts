@@ -1,3 +1,4 @@
+import { purgeCloudAttachmentCaches } from "../hooks/useFileAttachments";
 import { useEffect, useState } from "react";
 import { aoBridge } from "./bridge";
 import type { CloudAccount } from "../../shared/cloud-account";
@@ -53,10 +54,11 @@ export function useCloudSession(): UseCloudSessionResult {
       setStatus("unauthenticated");
     });
 
-    const unsub = cloud.onSessionChanged((s) => {
-      setSession(s);
-      setStatus(s ? "authenticated" : "unauthenticated");
-    });
+		const unsub = cloud.onSessionChanged((s) => {
+			if (!s) purgeCloudAttachmentCaches();
+			setSession(s);
+			setStatus(s ? "authenticated" : "unauthenticated");
+		});
 
     return () => {
       active = false;
@@ -69,11 +71,12 @@ export function useCloudSession(): UseCloudSessionResult {
     void aoBridge.cloud.signIn();
   };
 
-  const signOut = async () => {
-    await aoBridge.cloud.signOut();
-    setSession(null);
-    setStatus("unauthenticated");
-  };
+	const signOut = async () => {
+		await aoBridge.cloud.signOut();
+		purgeCloudAttachmentCaches();
+		setSession(null);
+		setStatus("unauthenticated");
+	};
 
   return { configured, session, status, signIn, signOut };
 }

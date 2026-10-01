@@ -148,9 +148,10 @@ func (s *Store) CreateOrchestratorChild(
 	return child, err
 }
 
-func (s *Store) SendOrchestratorChildMessage(
+func (s *Store) sendOrchestratorChildMessage(
 	ctx context.Context,
 	orgID, orchestratorSessionID, childSessionID, idempotencyKey, text string,
+	settings domain.ChatTurnSettings,
 ) (domain.ClientEvent, error) {
 	var event domain.ClientEvent
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
@@ -177,7 +178,7 @@ func (s *Store) SendOrchestratorChildMessage(
 		}
 		event, err = sendMessageTx(
 			ctx, tx, orgID, childSessionID, idempotencyKey, text, "", orchestratorSessionID,
-			"", nil, domain.ChatTurnSettings{},
+			"", nil, settings,
 		)
 		return err
 	})
@@ -188,9 +189,10 @@ func (s *Store) SendOrchestratorChildMessage(
 // of the orchestrator that spawned it. The child can reach exactly one
 // destination — its own parent — and only while that parent is a live
 // orchestrator; everything else is ErrForbidden.
-func (s *Store) ReportToOrchestrator(
+func (s *Store) reportToOrchestrator(
 	ctx context.Context,
 	orgID, childSessionID, idempotencyKey, text string,
+	settings domain.ChatTurnSettings,
 ) (domain.ClientEvent, error) {
 	var event domain.ClientEvent
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
@@ -220,7 +222,7 @@ func (s *Store) ReportToOrchestrator(
 		)
 		event, err = sendMessageTx(
 			ctx, tx, orgID, parentID, idempotencyKey, prefixed, "", childSessionID,
-			"", nil, domain.ChatTurnSettings{},
+			"", nil, settings,
 		)
 		return err
 	})
@@ -288,4 +290,17 @@ func requireActiveOrchestrator(
 		return "", ErrForbidden
 	}
 	return projectID, err
+}
+
+func (s *Store) SendOrchestratorChildMessage(ctx context.Context, org, parent, child, key, text string) (domain.ClientEvent, error) {
+	return s.sendOrchestratorChildMessage(ctx, org, parent, child, key, text, domain.ChatTurnSettings{})
+}
+func (s *Store) SendOrchestratorChildMessageWithAttachments(ctx context.Context, org, parent, child, key, text string, ids []string) (domain.ClientEvent, error) {
+	return s.sendOrchestratorChildMessage(ctx, org, parent, child, key, text, domain.ChatTurnSettings{AttachmentIDs: ids})
+}
+func (s *Store) ReportToOrchestrator(ctx context.Context, org, child, key, text string) (domain.ClientEvent, error) {
+	return s.reportToOrchestrator(ctx, org, child, key, text, domain.ChatTurnSettings{})
+}
+func (s *Store) ReportToOrchestratorWithAttachments(ctx context.Context, org, child, key, text string, ids []string) (domain.ClientEvent, error) {
+	return s.reportToOrchestrator(ctx, org, child, key, text, domain.ChatTurnSettings{AttachmentIDs: ids})
 }

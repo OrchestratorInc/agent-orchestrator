@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+export AO_CLOUD_LOCAL_UID="${AO_CLOUD_LOCAL_UID:-$(id -u)}"
+export AO_CLOUD_LOCAL_GID="${AO_CLOUD_LOCAL_GID:-$(id -g)}"
+
 ao_docker_available() {
 	command -v docker >/dev/null 2>&1 &&
 		docker compose version >/dev/null 2>&1 &&

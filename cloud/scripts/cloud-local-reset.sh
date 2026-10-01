@@ -21,3 +21,6 @@ ao_docker_remove_workers "$namespace"
 docker compose down --remove-orphans
 ao_docker_remove_workspaces "$namespace"
 rm -rf "$data_directory"
+
+attachment_directory="${AO_CLOUD_LOCAL_ATTACHMENT_DATA_DIR:-$state_root/cloud/attachments}"
+case "$attachment_directory" in "$state_root"/*) rm -rf "$attachment_directory" ;; *) echo "Refusing to remove attachment data outside $state_root" >&2; exit 1 ;; esac

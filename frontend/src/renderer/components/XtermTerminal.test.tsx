@@ -1188,6 +1188,28 @@ describe("XtermTerminal", () => {
 		expect(state.lastTerminal!.selectAll).toHaveBeenCalled();
 	});
 
+	it("prepares pasted images without sending terminal input and preserves text paste", () => {
+		const onInput = vi.fn();
+		const onPasteFiles = vi.fn();
+		const image = new File(["image"], "capture.png", { type: "image/png" });
+		const { container } = render(
+			<XtermTerminal
+				theme="dark"
+				onPasteFiles={onPasteFiles}
+				onReady={(terminal) => terminal.onUserInput(onInput)}
+			/>,
+		);
+		const imagePaste = new Event("paste", { bubbles: true, cancelable: true });
+		Object.defineProperty(imagePaste, "clipboardData", { value: { files: [image], getData: () => "ignored" } });
+		container.firstElementChild!.dispatchEvent(imagePaste);
+		expect(imagePaste.defaultPrevented).toBe(true);
+		expect(onPasteFiles).toHaveBeenCalledExactlyOnceWith([image]);
+		expect(onInput).not.toHaveBeenCalled();
+		const textPaste = new Event("paste", { bubbles: true, cancelable: true });
+		Object.defineProperty(textPaste, "clipboardData", { value: { files: [], getData: () => "ordinary text" } });
+		container.firstElementChild!.dispatchEvent(textPaste);
+		expect(onInput).toHaveBeenCalledExactlyOnceWith("ordinary text", "paste");
+	});
 	it("pastes from the context menu through the terminal paste path", async () => {
 		const onInput = vi.fn();
 		window.ao!.clipboard.readText = vi.fn().mockResolvedValue("menu\npaste");

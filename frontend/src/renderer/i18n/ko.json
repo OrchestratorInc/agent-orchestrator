@@ -2260,5 +2260,14 @@
 	"standalone.archive.heading_other": "보관된 세션 {{count}}개",
 	"standalone.archive.newAgent": "새 에이전트",
 	"standalone.archive.empty.title": "보관된 독립 실행형 에이전트가 없습니다",
-	"standalone.archive.empty.body": "스크래치패드에서 보관한 독립 실행형 에이전트가 여기에 표시됩니다. 활성 독립 실행형 에이전트는 스크래치패드 목록에 남아 있습니다."
+	"standalone.archive.empty.body": "스크래치패드에서 보관한 독립 실행형 에이전트가 여기에 표시됩니다. 활성 독립 실행형 에이전트는 스크래치패드 목록에 남아 있습니다.",
+	"terminal.images.contextUnavailable": "클라우드 세션 정보를 사용할 수 없습니다.",
+	"terminal.images.selectFirst": "먼저 지원되는 이미지를 선택하세요.",
+	"terminal.images.changed": "이미지 준비가 끝나기 전에 터미널이 변경되었습니다. 현재 경로를 삽입하려면 다시 시도하세요.",
+	"terminal.images.failed": "이미지 준비에 실패했습니다. 다시 시도하세요.",
+	"terminal.images.attachAria": "터미널에 이미지 첨부",
+	"terminal.images.attach": "이미지 첨부",
+	"terminal.images.preparing": "샌드박스에서 이미지 준비 중...",
+	"terminal.images.hint": "경로를 삽입합니다. 제출하려면 직접 Enter를 누르세요.",
+	"terminal.images.clear": "지우기"
 }

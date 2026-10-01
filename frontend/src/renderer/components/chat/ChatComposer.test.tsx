@@ -2181,3 +2181,15 @@ it("restores an image thumbnail from its durable path after the composer remount
 		.toHaveAttribute("src", attachmentURL(getApiBaseUrl(), sessionId, path));
 	expect(props.onStageAttachments).toHaveBeenCalledOnce();
 });
+
+it("restores Cloud IDs and previews without Local paths, then sends an image-only message",async()=>{
+ const sessionId="cloud:composer-images";const id="12345678-1234-1234-1234-123456789abc";
+ writeChatAttachments(sessionId,[{id:"selection",attachmentId:id,path:"",name:"image.png",mimeType:"image/png",bytes:4}]);
+ const send=vi.fn().mockResolvedValue({accepted:true});const upload=vi.fn();const resolve=vi.fn().mockResolvedValue("https://cloud.test/image");
+ render(<ChatComposer draftSessionId={sessionId} onSend={send} onUploadAttachments={upload} resolveAttachmentPreview={resolve}/>);
+ await waitFor(()=>expect(screen.getByRole("img",{name:"image.png"})).toBeInTheDocument());
+ fireEvent.click(screen.getByRole("button",{name:"Send message"}));
+ await waitFor(()=>expect(send).toHaveBeenCalledWith("",undefined,expect.any(String),undefined,[id]));
+ expect(upload).not.toHaveBeenCalled();
+ expect(readChatSessionDraft(sessionId).composer.attachments).toHaveLength(0);
+});

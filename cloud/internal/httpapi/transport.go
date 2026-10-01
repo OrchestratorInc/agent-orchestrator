@@ -60,6 +60,8 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, code, messag
 
 func (s *Server) writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, postgres.ErrImageWorkerUpgrade):
+		writeError(w, r, 409, "IMAGE_WORKER_UPGRADE_REQUIRED", "Upgrade or replace this worker before sending images.")
 	case errors.Is(err, postgres.ErrForbidden):
 		writeError(w, r, http.StatusForbidden, "forbidden", "You do not have access to this organization.")
 	case errors.Is(err, postgres.ErrNotFound):

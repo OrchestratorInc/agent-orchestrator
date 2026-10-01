@@ -251,13 +251,23 @@ func (s *Server) sendWorkerChildMessage(w http.ResponseWriter, r *http.Request) 
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body is invalid.")
 		return
 	}
-	if strings.TrimSpace(request.Text) == "" || len(request.Text) > 65536 {
+	if validateSendMessageRequest(request) != nil {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Message text must be between 1 and 65536 bytes.")
 		return
 	}
-	event, err := s.store.SendOrchestratorChildMessage(
-		r.Context(), claims.OrgID, claims.SessionID, childID, key, request.Text,
-	)
+	var event domain.ClientEvent
+	if len(request.AttachmentIDs) > 0 {
+		store, ok := s.store.(interface {
+			SendOrchestratorChildMessageWithAttachments(context.Context, string, string, string, string, string, []string) (domain.ClientEvent, error)
+		})
+		if !ok {
+			writeError(w, r, 503, "attachments_unavailable", "Image forwarding is not available.")
+			return
+		}
+		event, err = store.SendOrchestratorChildMessageWithAttachments(r.Context(), claims.OrgID, claims.SessionID, childID, key, request.Text, request.AttachmentIDs)
+	} else {
+		event, err = s.store.SendOrchestratorChildMessage(r.Context(), claims.OrgID, claims.SessionID, childID, key, request.Text)
+	}
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return
@@ -308,13 +318,23 @@ func (s *Server) reportToParent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body is invalid.")
 		return
 	}
-	if strings.TrimSpace(request.Text) == "" || len(request.Text) > 65536 {
+	if validateSendMessageRequest(request) != nil {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Message text must be between 1 and 65536 bytes.")
 		return
 	}
-	event, err := s.store.ReportToOrchestrator(
-		r.Context(), claims.OrgID, claims.SessionID, key, request.Text,
-	)
+	var event domain.ClientEvent
+	if len(request.AttachmentIDs) > 0 {
+		store, ok := s.store.(interface {
+			ReportToOrchestratorWithAttachments(context.Context, string, string, string, string, []string) (domain.ClientEvent, error)
+		})
+		if !ok {
+			writeError(w, r, 503, "attachments_unavailable", "Image forwarding is not available.")
+			return
+		}
+		event, err = store.ReportToOrchestratorWithAttachments(r.Context(), claims.OrgID, claims.SessionID, key, request.Text, request.AttachmentIDs)
+	} else {
+		event, err = s.store.ReportToOrchestrator(r.Context(), claims.OrgID, claims.SessionID, key, request.Text)
+	}
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return

@@ -1,3 +1,4 @@
+import { TypedAttachmentImage } from "./chat-image-source";
 import { AppLink } from "../AppLink";
 /**
  * Timeline entries for the Chat surface.
@@ -578,6 +579,19 @@ export function HumanMessage({
 						<p className="break-words whitespace-pre-wrap text-pretty">
 							<SessionLinkedText text={body} />
 						</p>
+					) : null}
+					{message.attachments?.length ? (
+						<ul aria-label="Attached images" className="flex flex-wrap gap-2">
+							{message.attachments.map((a) => (
+								<li key={a.id}>
+									<TypedAttachmentImage
+										id={a.id}
+										name={a.filename}
+										className="max-h-80 max-w-full rounded object-contain"
+									/>
+								</li>
+							))}
+						</ul>
 					) : null}
 					<StagedAttachmentItems
 						paths={attachments}

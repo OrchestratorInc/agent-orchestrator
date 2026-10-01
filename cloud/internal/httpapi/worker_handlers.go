@@ -172,6 +172,17 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 		s.logger.Warn("append worker.connected event", "error", err, "request_id", requestID(r))
 	}
 
+	if store, ok := s.store.(AttachmentStore); ok {
+		launchContext.Attachments, err = store.WorkerAttachments(r.Context(), ticket.OrgID, ticket.SessionID, workerID, ticket.WorkerEpoch)
+		if err != nil {
+			s.writeWorkerStoreError(w, r, err)
+			return
+		}
+		if len(launchContext.Attachments) > 0 && !slices.Contains(input.Capabilities, worker.AttachmentCapability) {
+			writeError(w, r, 409, "IMAGE_WORKER_UPGRADE_REQUIRED", "This session requires an image-capable worker.")
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, worker.BootstrapResponse{
 		WorkerToken: token,
 		WorkerID:    workerID,
@@ -223,6 +234,13 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 		s.logger.Error("build worker reconnect context", "error", err, "project_id", launch.ProjectID, "request_id", requestID(r))
 		writeError(w, r, http.StatusInternalServerError, "RECONNECT_FAILED", "The project's role instructions are invalid.")
 		return
+	}
+	if store, ok := s.store.(AttachmentStore); ok {
+		launchContext.Attachments, err = store.WorkerAttachments(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch)
+		if err != nil {
+			s.writeWorkerStoreError(w, r, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, worker.BootstrapResponse{
 		WorkerID:  claims.WorkerID,
@@ -968,6 +986,7 @@ func (s *Server) workerClaimTurn(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		response.Turn = &worker.Turn{
 			ID:              turn.ID,
+			Attachments:     turn.Attachments,
 			Prompt:          turn.Prompt,
 			Model:           turn.Model,
 			ReasoningEffort: turn.ReasoningEffort,

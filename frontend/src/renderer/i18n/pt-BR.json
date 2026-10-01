@@ -2291,5 +2291,14 @@
 	"standalone.archive.heading_other": "{{count}} sessões arquivadas",
 	"standalone.archive.newAgent": "Novo agente",
 	"standalone.archive.empty.title": "Nenhum agente independente arquivado",
-	"standalone.archive.empty.body": "Os agentes independentes que você arquivar no Bloco de notas aparecerão aqui. Agentes independentes ativos permanecem na lista do Bloco de notas."
+	"standalone.archive.empty.body": "Os agentes independentes que você arquivar no Bloco de notas aparecerão aqui. Agentes independentes ativos permanecem na lista do Bloco de notas.",
+	"terminal.images.contextUnavailable": "As informações da sessão Cloud não estão disponíveis.",
+	"terminal.images.selectFirst": "Primeiro selecione uma imagem compatível.",
+	"terminal.images.changed": "O terminal mudou antes de concluir a preparação. Tente novamente para inserir os caminhos atuais.",
+	"terminal.images.failed": "Falha ao preparar a imagem. Tente novamente.",
+	"terminal.images.attachAria": "Anexar imagens ao terminal",
+	"terminal.images.attach": "Anexar imagem",
+	"terminal.images.preparing": "Preparando imagens no sandbox...",
+	"terminal.images.hint": "Insere um caminho. Pressione Enter para enviar.",
+	"terminal.images.clear": "Limpar"
 }

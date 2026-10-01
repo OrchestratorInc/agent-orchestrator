@@ -65,6 +65,19 @@ const CLOUD_CP_WS_ORIGINS = (() => {
 	return origins;
 })();
 
+// S3 upload origins are deployment-specific. Do not widen connect-src to all
+// HTTPS hosts just to support direct image uploads.
+const CLOUD_IMAGE_UPLOAD_ORIGINS = (process.env.AO_CLOUD_IMAGE_UPLOAD_ORIGINS ?? "")
+	.split(",")
+	.flatMap((value) => {
+		try {
+			const url = new URL(value.trim());
+			return url.protocol === "https:" && !url.username && !url.password ? [url.origin] : [];
+		} catch {
+			return [];
+		}
+	});
+
 // CSP for the renderer. The daemon is loopback-only, so network access is
 // pinned to 127.0.0.1 (REST + SSE over http, terminal mux over ws), plus the
 // cloud control-plane websocket origins above. The policy is injected here
@@ -95,6 +108,8 @@ function contentSecurityPolicy(mode: "build" | "serve"): string {
 			mode === "serve" ? "ws://localhost:*" : "",
 			...POSTHOG_ORIGINS,
 			...CLOUD_CP_WS_ORIGINS,
+			...CLOUD_CP_WS_ORIGINS.map((origin) => origin.replace(/^ws/, "http")),
+			...CLOUD_IMAGE_UPLOAD_ORIGINS,
 		]
 			.filter(Boolean)
 			.join(" "),

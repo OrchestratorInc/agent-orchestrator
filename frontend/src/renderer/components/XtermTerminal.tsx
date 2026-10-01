@@ -65,6 +65,7 @@ import {
 } from "./ui/dropdown-menu";
 
 export type XtermTerminalProps = {
+	onPasteFiles?: (files: File[]) => void;
 	ariaLabel?: string;
 	className?: string;
 	fontSize?: number;
@@ -1016,6 +1017,26 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			suppressPasteTimer = window.setTimeout(clearSuppressNativePaste, SUPPRESS_NATIVE_PASTE_MS);
 		};
 		const pasteFromClipboard = () => {
+			if (callbacksRef.current.onPasteFiles && navigator.clipboard?.read) {
+				void navigator.clipboard
+					.read()
+					.then(async (items) => {
+						const files: File[] = [];
+						for (const item of items) {
+							const type = item.types.find((type) => type.startsWith("image/"));
+							if (type) files.push(new File([await item.getType(type)], "pasted-image", { type }));
+						}
+						if (files.length) {
+							callbacksRef.current.onPasteFiles?.(files);
+							return;
+						}
+						pasteText(await aoBridge.clipboard.readText());
+					})
+					.catch(() => {
+						void aoBridge.clipboard.readText().then(pasteText);
+					});
+				return;
+			}
 			void aoBridge.clipboard
 				.readText()
 				.then(pasteText)
@@ -1409,6 +1430,11 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			event.stopPropagation();
 			if (suppressNextNativePaste) {
 				clearSuppressNativePaste();
+				return;
+			}
+			const files = Array.from(event.clipboardData?.files ?? []);
+			if (files.length && callbacksRef.current.onPasteFiles) {
+				callbacksRef.current.onPasteFiles(files);
 				return;
 			}
 			const text = event.clipboardData?.getData("text/plain") ?? "";

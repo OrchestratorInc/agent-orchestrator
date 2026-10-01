@@ -15,8 +15,12 @@ const h = vi.hoisted(() => ({
 	agentCatalog: undefined as { agents: ReturnType<typeof import("../test/agent-readiness-fixtures").agentReadiness>[] } | undefined,
 	cloudProjects: [] as Array<{ id: string; displayName: string; repositoryUrl: string; defaultBranch: string; config: Record<string, unknown> }>,
 	cloudCreateSession: vi.fn(),
+ cloudUpload:vi.fn(),
+ cloudRead:vi.fn(),
 	cloudProviders: ["docker"] as string[],
 }));
+
+vi.mock("../lib/cloud-attachments", async importOriginal => ({...await importOriginal<typeof import("../lib/cloud-attachments")>(),uploadCloudAttachments:(...args:unknown[])=>h.cloudUpload(...args)}));
 
 vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../hooks/useAgentReadinessQuery")>();
@@ -82,7 +86,7 @@ vi.mock("../hooks/useCloudOrg", () => ({
 }));
 
 vi.mock("../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ client: { createSession: h.cloudCreateSession } }),
+	useCloudCp: () => ({ client: { createSession: h.cloudCreateSession,attachmentReadGrant:h.cloudRead },baseUrl:"https://cloud.test",userId:"user" }),
 }));
 
 vi.mock("../hooks/useCloudSandboxProviders", () => ({
@@ -922,22 +926,20 @@ describe("TaskComposer", () => {
 		expect(await screen.findByLabelText("Agent")).toHaveAttribute("data-manage-view", "local");
 	});
 
-	it("rejects cloud task attachments instead of silently dropping them", async () => {
-		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
-		const onCreated = vi.fn();
-		const { container } = render(<Wrap><TaskComposer projectId="cloud-1" onCreated={onCreated} /></Wrap>);
-		const input = container.querySelector('input[type="file"]') as HTMLInputElement;
-		fireEvent.change(input, { target: { files: [new File(["notes"], "notes.txt", { type: "text/plain" })] } });
-		expect(await screen.findByText("notes.txt")).toBeInTheDocument();
 
-		fireEvent.change(task(), { target: { value: "Read the notes" } });
-		await waitForTaskReady();
-		fireEvent.click(startTask());
-
-		expect(await screen.findByRole("alert")).toHaveTextContent("File attachments are not supported for cloud tasks yet.");
-		expect(onCreated).not.toHaveBeenCalled();
-		expect(h.post).not.toHaveBeenCalled();
-	});
+ it("creates an image-only Cloud task with attachment IDs and no JSON image bytes",async()=>{
+  h.cloudProjects.push({id:"cloud-1",displayName:"Cloud",repositoryUrl:"https://example.com/repo",defaultBranch:"main",config:{}});
+  h.cloudUpload.mockImplementation(async (_c,_url,_org,_project,_session,files)=>files.map((a:{id:string})=>({...a,file:undefined,attachmentId:"image-id"})));
+  h.cloudRead.mockResolvedValue({url:"https://cloud.test/image"});
+  h.cloudCreateSession.mockResolvedValue({session:{id:"session-image"}});
+  const onCreated=vi.fn();const {container}=render(<Wrap><TaskComposer projectId="cloud-1" onCreated={onCreated}/></Wrap>);
+  fireEvent.change(container.querySelector('input[type="file"]')!,{target:{files:[new File(["pixels"],"image.png",{type:"image/png"})]}});
+  await waitFor(()=>expect(screen.getByRole("img",{name:"image.png"})).toBeInTheDocument());
+  await waitForTaskReady();fireEvent.click(startTask());
+  await waitFor(()=>expect(onCreated).toHaveBeenCalledWith("session-image"));
+  expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1",expect.objectContaining({attachmentIds:["image-id"],prompt:""}),{idempotencyKey:expect.any(String)});
+  expect(h.cloudCreateSession.mock.lastCall?.[1]).not.toHaveProperty("attachments");
+ });
 
 	it("uses the control plane default when a saved sandbox provider is unavailable", async () => {
 		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });

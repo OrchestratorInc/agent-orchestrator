@@ -1,3 +1,4 @@
+import { readCloudImageDraft, writeCloudImageDraft, clearCloudImageDrafts } from "../lib/cloud-attachments";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { chatDraftScopeSessionId } from "../lib/chat-drafts";
 
@@ -14,6 +15,10 @@ const mb = (bytes: number) => Math.round(bytes / (1024 * 1024));
 /** A single file staged for a task/orchestrator brief. */
 export type FileAttachment = {
 	/** Stable id for list keys and removal. */
+	attachmentId?: string;
+	pendingUpload?: boolean;
+	file?: File;
+	uploadError?: string;
 	id: string;
 	/** Browser-reported MIME type (e.g. "image/png", "text/plain"). */
 	mimeType: string;
@@ -37,6 +42,9 @@ export type FileAttachmentPayload = {
 };
 
 export type FileAttachmentOptions = {
+	uploadFiles?: (attachments: FileAttachment[]) => Promise<FileAttachment[]>;
+	limits?: { count: number; fileBytes: number; totalBytes: number; imagesOnly?: boolean };
+
 	/** Previously staged descriptors restored for this owning surface. */
 	initialAttachments?: FileAttachment[];
 	/** Changes when the hook must replace its state with initialAttachments. */
@@ -80,12 +88,14 @@ export type PendingFileAttachmentCapture = {
 };
 
 function sharedAttachmentDescriptors(attachments: FileAttachment[]): FileAttachment[] {
-	return attachments.map(({ id, mimeType, bytes, name, stagedPath }) => ({
+	return attachments.map(({ id, mimeType, bytes, name, stagedPath, attachmentId, pendingUpload, file }) => ({
 		id,
 		mimeType,
 		bytes,
 		name,
 		...(stagedPath ? { stagedPath } : {}),
+		...(attachmentId ? { attachmentId } : {}),
+		...(pendingUpload ? { pendingUpload, file } : {}),
 	}));
 }
 
@@ -98,7 +108,12 @@ const sharedAttachmentEntries = new Map<string, SharedAttachmentEntry>();
 function sharedEntry(key: string): SharedAttachmentEntry {
 	let entry = sharedAttachmentEntries.get(key);
 	if (!entry) {
-		entry = { pending: new Set(), generation: 0, listeners: new Map() };
+		entry = {
+			pending: new Set(),
+			generation: 0,
+			listeners: new Map(),
+			...(key.startsWith("cloud:") ? { attachments: readCloudImageDraft(key) } : {}),
+		};
 		sharedAttachmentEntries.set(key, entry);
 	}
 	return entry;
@@ -112,6 +127,13 @@ function notifySharedAttachmentEntry(
 	const entry = sharedAttachmentEntries.get(key);
 	if (!entry) return;
 	if (update.attachments !== undefined) entry.attachments = update.attachments;
+	if (update.attachments !== undefined && key.startsWith("cloud:")) {
+		try {
+			writeCloudImageDraft(key, update.attachments);
+		} catch {
+			update.error = "The image draft could not be saved. Keep this window open and retry.";
+		}
+	}
 	if (update.error !== undefined) entry.error = update.error;
 	const notification = { pending: entry.pending.size, ...update };
 	for (const [token, listener] of entry.listeners) {
@@ -132,11 +154,7 @@ function endSharedAttachmentWork(key: string, token: symbol): void {
 	if (!entry) return;
 	entry.pending.delete(token);
 	notifySharedAttachmentEntry(key);
-	if (
-		entry.pending.size === 0 &&
-		entry.listeners.size === 0 &&
-		(entry.attachments?.length ?? 0) === 0
-	) {
+	if (entry.pending.size === 0 && entry.listeners.size === 0 && (entry.attachments?.length ?? 0) === 0) {
 		sharedAttachmentEntries.delete(key);
 	}
 }
@@ -155,11 +173,7 @@ function subscribeSharedAttachmentWork(
 	});
 	return () => {
 		entry.listeners.delete(token);
-		if (
-			entry.pending.size === 0 &&
-			entry.listeners.size === 0 &&
-			(entry.attachments?.length ?? 0) === 0
-		) {
+		if (entry.pending.size === 0 && entry.listeners.size === 0 && (entry.attachments?.length ?? 0) === 0) {
 			sharedAttachmentEntries.delete(key);
 		}
 	};
@@ -187,9 +201,7 @@ function attachmentKeyBelongsToSession(key: string, sessionId: string): boolean 
 }
 
 /** Capture only the work that is pending when the user confirms leaving Chat. */
-export function capturePendingFileAttachmentsForSession(
-	sessionId: string,
-): PendingFileAttachmentCapture {
+export function capturePendingFileAttachmentsForSession(sessionId: string): PendingFileAttachmentCapture {
 	const entries: CapturedPendingFileAttachmentEntry[] = [];
 	for (const [key, entry] of sharedAttachmentEntries) {
 		if (!attachmentKeyBelongsToSession(key, sessionId) || entry.pending.size === 0) continue;
@@ -202,9 +214,7 @@ export function capturePendingFileAttachmentsForSession(
  * Cancel exactly the pending work represented by a prior confirmation. Work
  * begun afterward remains current and can finish into the recoverable draft.
  */
-export function discardCapturedPendingFileAttachments(
-	capture: PendingFileAttachmentCapture,
-): void {
+export function discardCapturedPendingFileAttachments(capture: PendingFileAttachmentCapture): void {
 	for (const captured of capture[pendingFileAttachmentCaptureEntries]) {
 		const entry = sharedAttachmentEntries.get(captured.key);
 		if (!entry || entry.generation !== captured.generation) continue;
@@ -214,11 +224,7 @@ export function discardCapturedPendingFileAttachments(
 		}
 		if (!changed) continue;
 		notifySharedAttachmentEntry(captured.key);
-		if (
-			entry.pending.size === 0 &&
-			entry.listeners.size === 0 &&
-			(entry.attachments?.length ?? 0) === 0
-		) {
+		if (entry.pending.size === 0 && entry.listeners.size === 0 && (entry.attachments?.length ?? 0) === 0) {
 			sharedAttachmentEntries.delete(captured.key);
 		}
 	}
@@ -253,7 +259,14 @@ export function purgeFileAttachments(key: string): void {
 
 // Client-side mirror of the backend image-preview allowlist. Non-image files can
 // still be attached; they render with the generic file icon.
-const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/bmp"]);
+const SUPPORTED_IMAGE_TYPES = new Set([
+	"image/png",
+	"image/jpeg",
+	"image/jpg",
+	"image/gif",
+	"image/webp",
+	"image/bmp",
+]);
 
 export const isSupportedImageAttachment = (type: string) =>
 	SUPPORTED_IMAGE_TYPES.has(type.toLowerCase().trim());
@@ -288,11 +301,16 @@ const readFileAsBase64 = (file: File): Promise<{ dataUrl: string; data: string }
  */
 export function useFileAttachments(options: FileAttachmentOptions = {}) {
 	const {
+		uploadFiles,
+		limits,
 		initialAttachments = [],
 		initialKey,
 		prepareAttachments,
 		onAttachmentsChange,
 	} = options;
+	const maxCount = limits?.count ?? MAX_ATTACHMENTS;
+	const maxFileBytes = limits?.fileBytes ?? MAX_ATTACHMENT_BYTES;
+	const maxTotalBytes = limits?.totalBytes ?? MAX_ATTACHMENTS_BYTES;
 	const [attachments, setAttachments] = useState<FileAttachment[]>(() => initialAttachments);
 	const [error, setError] = useState<string | null>(null);
 	const [preparing, setPreparing] = useState(() => sharedAttachmentPending(initialKey));
@@ -327,190 +345,239 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		});
 	}, [initialKey, onAttachmentsChange]);
 
-	const processFiles = useCallback(async (files: File[], generation: number, sharedWork?: SharedAttachmentWork) => {
-		if (generationRef.current !== generation) return;
-		if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return;
-		// Filter out directories - they have type "" and size 0 in most browsers
-		const validFiles = files.filter((file) => {
-			// Exclude directories (they typically have no type and size 0)
-			// Also exclude items that might be folders based on common patterns
-			if (file.type === "" && file.name.endsWith("/")) return false;
-			// Some browsers report directories as size 0 with empty type
-			if (file.type === "" && file.size === 0) return false;
-			return true;
-		});
+	const processFiles = useCallback(
+		async (files: File[], generation: number, sharedWork?: SharedAttachmentWork) => {
+			if (generationRef.current !== generation) return;
+			if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return;
+			// Filter out directories - they have type "" and size 0 in most browsers
+			const validFiles = files.filter((file) => {
+				// Exclude directories (they typically have no type and size 0)
+				// Also exclude items that might be folders based on common patterns
+				if (file.type === "" && file.name.endsWith("/")) return false;
+				// Some browsers report directories as size 0 with empty type
+				if (file.type === "" && file.size === 0) return false;
+				return true;
+			});
 
-		if (validFiles.length === 0) return;
+			if (validFiles.length === 0) return;
 
-		const errors = new Set<string>();
-		// Block SVG files for security (active content)
-		const blockedFiles = validFiles.filter(
-			(file) => file.type.toLowerCase().trim() === "image/svg+xml",
-		);
-		if (blockedFiles.length > 0) {
-			errors.add("SVG files are not supported for security reasons.");
-		}
-		const valid = validFiles.filter(
-			(file) => file.type.toLowerCase().trim() !== "image/svg+xml",
-		);
-
-		// Check metadata before each read so rejected files never enter JS memory.
-		// Reserve budget only after a successful read: a later small file can still
-		// fit if an earlier read fails.
-		const pendingReads = (async () => {
-			const results: Array<{ file: File; result: { dataUrl: string; data: string } }> = [];
-			let freshBytes = 0;
-			for (const file of valid) {
-				if (generationRef.current !== generation ||
-					(initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork))) break;
-				if (file.size > MAX_ATTACHMENT_BYTES) {
-					errors.add(`Each file must be under ${mb(MAX_ATTACHMENT_BYTES)} MB.`);
-					continue;
+			const errors = new Set<string>();
+			// Block SVG files for security (active content)
+			const blockedFiles = validFiles.filter((file) => file.type.toLowerCase().trim() === "image/svg+xml");
+			if (blockedFiles.length > 0) {
+				errors.add("SVG files are not supported for security reasons.");
+			}
+			const valid = validFiles.filter((file) => {
+				if (limits?.imagesOnly && !isSupportedImageAttachment(file.type)) {
+					errors.add("Only PNG, JPEG, WebP, GIF and BMP images are supported.");
+					return false;
 				}
-				if (attachmentsRef.current.length + results.length >= MAX_ATTACHMENTS) {
-					errors.add(`You can attach up to ${MAX_ATTACHMENTS} files.`);
+				return file.type.toLowerCase().trim() !== "image/svg+xml";
+			});
+
+			// Check metadata before each read so rejected files never enter JS memory.
+			// Reserve budget only after a successful read: a later small file can still
+			// fit if an earlier read fails.
+			const pendingReads = (async () => {
+				const results: Array<{ file: File; result: { dataUrl: string; data: string } }> = [];
+				let freshBytes = 0;
+				for (const file of valid) {
+					if (
+						generationRef.current !== generation ||
+						(initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork))
+					)
+						break;
+					if (file.size > maxFileBytes) {
+						errors.add(`Each file must be under ${mb(maxFileBytes)} MB.`);
+						continue;
+					}
+					if (attachmentsRef.current.length + results.length >= maxCount) {
+						errors.add(`You can attach up to ${maxCount} files.`);
+						break;
+					}
+					const total = attachmentsRef.current.reduce(
+						(sum, attachment) => sum + attachment.bytes,
+						freshBytes,
+					);
+					if (total + file.size > maxTotalBytes) {
+						errors.add(`Attachments must total under ${mb(maxTotalBytes)} MB.`);
+						continue;
+					}
+					const result = uploadFiles
+						? { dataUrl: "", data: "" }
+						: await readFileAsBase64(file).catch(() => null);
+					if (!result) {
+						errors.add(`Some files couldn't be read and were skipped.`);
+						continue;
+					}
+					results.push({ file, result });
+					freshBytes += file.size;
+				}
+				return results;
+			})();
+			pendingReadsRef.current.add(pendingReads);
+			const results = await pendingReads;
+			pendingReadsRef.current.delete(pendingReads);
+			if (generationRef.current !== generation) return;
+			if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return;
+
+			const fresh: FileAttachment[] = [];
+			for (const { file, result } of results) {
+				const isImage = file.type.startsWith("image/") && isSupportedImageAttachment(file.type);
+				fresh.push({
+					id:
+						typeof crypto !== "undefined" && "randomUUID" in crypto
+							? crypto.randomUUID()
+							: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+					mimeType: file.type || "application/octet-stream",
+					bytes: file.size,
+					name: file.name,
+					dataUrl: isImage ? result.dataUrl : undefined,
+					data: uploadFiles ? undefined : result.data,
+					...(uploadFiles ? { file } : {}),
+				});
+			}
+
+			const accepted = [...attachmentsRef.current];
+			const acceptedFresh: FileAttachment[] = [];
+			let total = accepted.reduce((sum, a) => sum + a.bytes, 0);
+			for (const a of fresh) {
+				if (accepted.length >= maxCount) {
+					errors.add(`You can attach up to ${maxCount} files.`);
 					break;
 				}
-				const total = attachmentsRef.current.reduce((sum, attachment) => sum + attachment.bytes, freshBytes);
-				if (total + file.size > MAX_ATTACHMENTS_BYTES) {
-					errors.add(`Attachments must total under ${mb(MAX_ATTACHMENTS_BYTES)} MB.`);
+				if (total + a.bytes > maxTotalBytes) {
+					// Only this file is refused: the remaining budget cannot absorb it,
+					// but a later file in the same batch still can. Aborting here (break)
+					// would silently drop every smaller file staged after it.
+					errors.add(`Attachments must total under ${mb(maxTotalBytes)} MB.`);
 					continue;
 				}
-				const result = await readFileAsBase64(file).catch(() => null);
-				if (!result) {
-					errors.add(`Some files couldn't be read and were skipped.`);
-					continue;
-				}
-				results.push({ file, result });
-				freshBytes += file.size;
+				accepted.push(a);
+				acceptedFresh.push(a);
+				total += a.bytes;
 			}
-			return results;
-		})();
-		pendingReadsRef.current.add(pendingReads);
-		const results = await pendingReads;
-		pendingReadsRef.current.delete(pendingReads);
-		if (generationRef.current !== generation) return;
-		if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return;
-
-		const fresh: FileAttachment[] = [];
-		for (const { file, result } of results) {
-			const isImage = file.type.startsWith("image/") && isSupportedImageAttachment(file.type);
-			fresh.push({
-				id:
-					typeof crypto !== "undefined" && "randomUUID" in crypto
-						? crypto.randomUUID()
-						: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-				mimeType: file.type || "application/octet-stream",
-				bytes: file.size,
-				name: file.name,
-				dataUrl: isImage ? result.dataUrl : undefined,
-				data: result.data,
-			});
-		}
-
-		const accepted = [...attachmentsRef.current];
-		const acceptedFresh: FileAttachment[] = [];
-		let total = accepted.reduce((sum, a) => sum + a.bytes, 0);
-		for (const a of fresh) {
-			if (accepted.length >= MAX_ATTACHMENTS) {
-				errors.add(`You can attach up to ${MAX_ATTACHMENTS} files.`);
-				break;
-			}
-			if (total + a.bytes > MAX_ATTACHMENTS_BYTES) {
-				// Only this file is refused: the remaining budget cannot absorb it,
-				// but a later file in the same batch still can. Aborting here (break)
-				// would silently drop every smaller file staged after it.
-				errors.add(`Attachments must total under ${mb(MAX_ATTACHMENTS_BYTES)} MB.`);
-				continue;
-			}
-			accepted.push(a);
-			acceptedFresh.push(a);
-			total += a.bytes;
-		}
-		if (acceptedFresh.length > 0) {
-			let prepared = acceptedFresh;
-			if (prepareAttachments) {
-				try {
-					prepared = await prepareAttachments(acceptedFresh);
-					if (generationRef.current !== generation) return;
-					if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return;
-					if (prepared.length !== acceptedFresh.length) {
-						throw new Error("Attachment staging returned an incomplete result");
+			if (acceptedFresh.length > 0) {
+				let prepared = acceptedFresh;
+				if (prepareAttachments || uploadFiles) {
+					try {
+						prepared = uploadFiles
+							? await uploadFiles(acceptedFresh)
+							: await prepareAttachments!(acceptedFresh);
+						if (generationRef.current !== generation) return;
+						if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return;
+						if (prepared.length !== acceptedFresh.length) {
+							throw new Error("Attachment staging returned an incomplete result");
+						}
+					} catch (error) {
+						if (generationRef.current !== generation) return;
+						if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return;
+						if (uploadFiles) {
+							const message = error instanceof Error ? error.message : "Image upload failed. Retry sending.";
+							const next = [
+								...attachmentsRef.current,
+								...acceptedFresh.map((a) => ({ ...a, uploadError: message })),
+							];
+							attachmentsRef.current = next;
+							setAttachments(next);
+							setError(message);
+							onAttachmentsChange?.(next);
+							if (initialKey)
+								notifySharedAttachmentEntry(
+									initialKey,
+									{ attachments: sharedAttachmentDescriptors(next), error: message },
+									listenerTokenRef.current,
+								);
+							return;
+						}
+						errors.add("Files couldn’t be saved. Nothing was attached.");
+						const message = Array.from(errors).join(" ");
+						setError(message);
+						if (initialKey) notifySharedAttachmentEntry(initialKey, { error: message });
+						return;
 					}
-				} catch {
-					if (generationRef.current !== generation) return;
-					if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return;
-					errors.add("Files couldn’t be saved. Nothing was attached.");
-					const message = Array.from(errors).join(" ");
-					setError(message);
-					if (initialKey) notifySharedAttachmentEntry(initialKey, { error: message });
-					return;
+				}
+				// Read the live list after async preparation. A removal that happened while
+				// bytes were being staged must not resurrect an older attachment snapshot.
+				const next = [...attachmentsRef.current, ...prepared];
+				attachmentsRef.current = next;
+				setAttachments(next);
+				onAttachmentsChange?.(next);
+				if (initialKey) {
+					notifySharedAttachmentEntry(
+						initialKey,
+						{ attachments: sharedAttachmentDescriptors(next) },
+						listenerTokenRef.current,
+					);
 				}
 			}
-			// Read the live list after async preparation. A removal that happened while
-			// bytes were being staged must not resurrect an older attachment snapshot.
-			const next = [...attachmentsRef.current, ...prepared];
+			const nextError = errors.size > 0 ? Array.from(errors).join(" ") : null;
+			setError(nextError);
+			if (initialKey) notifySharedAttachmentEntry(initialKey, { error: nextError });
+		},
+		[
+			initialKey,
+			onAttachmentsChange,
+			prepareAttachments,
+			uploadFiles,
+			limits,
+			maxCount,
+			maxFileBytes,
+			maxTotalBytes,
+		],
+	);
+
+	const addFiles = useCallback(
+		(files: Iterable<File>): Promise<void> => {
+			// Serialize batches. Two paste/drop events can arrive before React publishes
+			// `preparing`; processing both against the same attachment snapshot could
+			// otherwise exceed count/byte caps or overwrite one batch with the other.
+			const batch = Array.from(files);
+			if (batch.length === 0) return Promise.resolve();
+			const sharedKey = initialKey;
+			const generation = generationRef.current;
+			const sharedWork = sharedKey ? beginSharedAttachmentWork(sharedKey) : undefined;
+			queuedAddsRef.current += 1;
+			setPreparing(true);
+			// Preserve the hook's existing contract: the first FileReader starts in the
+			// same turn as addFiles. Only a later overlapping batch needs to wait for the
+			// current queue, otherwise callers cannot observe the pending read immediately.
+			const run =
+				queuedAddsRef.current === 1
+					? processFiles(batch, generation, sharedWork)
+					: addQueueRef.current.then(() => processFiles(batch, generation, sharedWork));
+			const settled = run
+				.catch(() => {
+					setError("Some files couldn’t be prepared and were skipped.");
+				})
+				.finally(() => {
+					queuedAddsRef.current = Math.max(0, queuedAddsRef.current - 1);
+					if (sharedKey && sharedWork) endSharedAttachmentWork(sharedKey, sharedWork.token);
+					else if (queuedAddsRef.current === 0) setPreparing(false);
+				});
+			addQueueRef.current = settled;
+			return settled;
+		},
+		[initialKey, processFiles],
+	);
+
+	const remove = useCallback(
+		(id: string) => {
+			const next = attachmentsRef.current.filter((a) => a.id !== id);
 			attachmentsRef.current = next;
 			setAttachments(next);
 			onAttachmentsChange?.(next);
 			if (initialKey) {
 				notifySharedAttachmentEntry(
 					initialKey,
-					{ attachments: sharedAttachmentDescriptors(next) },
+					{ attachments: sharedAttachmentDescriptors(next), error: null },
 					listenerTokenRef.current,
 				);
 			}
-		}
-		const nextError = errors.size > 0 ? Array.from(errors).join(" ") : null;
-		setError(nextError);
-		if (initialKey) notifySharedAttachmentEntry(initialKey, { error: nextError });
-	}, [initialKey, onAttachmentsChange, prepareAttachments]);
-
-	const addFiles = useCallback((files: Iterable<File>): Promise<void> => {
-		// Serialize batches. Two paste/drop events can arrive before React publishes
-		// `preparing`; processing both against the same attachment snapshot could
-		// otherwise exceed count/byte caps or overwrite one batch with the other.
-		const batch = Array.from(files);
-		if (batch.length === 0) return Promise.resolve();
-		const sharedKey = initialKey;
-		const generation = generationRef.current;
-		const sharedWork = sharedKey ? beginSharedAttachmentWork(sharedKey) : undefined;
-		queuedAddsRef.current += 1;
-		setPreparing(true);
-		// Preserve the hook's existing contract: the first FileReader starts in the
-		// same turn as addFiles. Only a later overlapping batch needs to wait for the
-		// current queue, otherwise callers cannot observe the pending read immediately.
-		const run =
-			queuedAddsRef.current === 1
-				? processFiles(batch, generation, sharedWork)
-				: addQueueRef.current.then(() => processFiles(batch, generation, sharedWork));
-		const settled = run
-			.catch(() => {
-				setError("Some files couldn’t be prepared and were skipped.");
-			})
-			.finally(() => {
-				queuedAddsRef.current = Math.max(0, queuedAddsRef.current - 1);
-				if (sharedKey && sharedWork) endSharedAttachmentWork(sharedKey, sharedWork.token);
-				else if (queuedAddsRef.current === 0) setPreparing(false);
-			});
-		addQueueRef.current = settled;
-		return settled;
-	}, [initialKey, processFiles]);
-
-	const remove = useCallback((id: string) => {
-		const next = attachmentsRef.current.filter((a) => a.id !== id);
-		attachmentsRef.current = next;
-		setAttachments(next);
-		onAttachmentsChange?.(next);
-		if (initialKey) {
-			notifySharedAttachmentEntry(
-				initialKey,
-				{ attachments: sharedAttachmentDescriptors(next), error: null },
-				listenerTokenRef.current,
-			);
-		}
-		setError(null);
-	}, [initialKey, onAttachmentsChange]);
+			setError(null);
+		},
+		[initialKey, onAttachmentsChange],
+	);
 
 	const clear = useCallback(() => {
 		generationRef.current++;
@@ -519,34 +586,29 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		setAttachments([]);
 		onAttachmentsChange?.([]);
 		if (initialKey) {
-			notifySharedAttachmentEntry(
-				initialKey,
-				{ attachments: [], error: null },
-				listenerTokenRef.current,
-			);
+			notifySharedAttachmentEntry(initialKey, { attachments: [], error: null }, listenerTokenRef.current);
 		}
 		setError(null);
 	}, [initialKey, onAttachmentsChange]);
 
-	const reconcilePersistedAttachments = useCallback((persisted: FileAttachment[]) => {
-		// A hidden React Activity renders before its effects subscribe. By the time it
-		// reconnects, another same-scope surface may have accepted and cleared the
-		// durable draft. Prefer a live shared descriptor snapshot when one exists (it
-		// owns pending work and failed-persistence recovery); otherwise re-seed from
-		// storage at the commit boundary instead of reviving render-time descriptors.
-		const shared = initialKey
-			? sharedAttachmentEntries.get(initialKey)?.attachments
-			: undefined;
-		const next = shared ?? persisted;
-		attachmentsRef.current = next;
-		setAttachments(next);
-	}, [initialKey]);
+	const reconcilePersistedAttachments = useCallback(
+		(persisted: FileAttachment[]) => {
+			// A hidden React Activity renders before its effects subscribe. By the time it
+			// reconnects, another same-scope surface may have accepted and cleared the
+			// durable draft. Prefer a live shared descriptor snapshot when one exists (it
+			// owns pending work and failed-persistence recovery); otherwise re-seed from
+			// storage at the commit boundary instead of reviving render-time descriptors.
+			const shared = initialKey ? sharedAttachmentEntries.get(initialKey)?.attachments : undefined;
+			const next = shared ?? persisted;
+			attachmentsRef.current = next;
+			setAttachments(next);
+		},
+		[initialKey],
+	);
 
 	const toPayload = useCallback(
 		(): FileAttachmentPayload[] =>
-			attachments.flatMap(({ mimeType, data }) =>
-				data ? [{ mimeType, data }] : [],
-			),
+			attachments.flatMap(({ mimeType, data }) => (data ? [{ mimeType, data }] : [])),
 		[attachments],
 	);
 
@@ -559,10 +621,38 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		while (pendingReadsRef.current.size > 0) {
 			await Promise.allSettled(Array.from(pendingReadsRef.current));
 		}
-		return attachmentsRef.current.flatMap(({ mimeType, data }) =>
-			data ? [{ mimeType, data }] : [],
-		);
-	}, []);
+		if (uploadFiles && attachmentsRef.current.some((a) => a.pendingUpload || !a.attachmentId)) {
+			const pending = attachmentsRef.current.filter((a) => a.pendingUpload || !a.attachmentId);
+			let ready: FileAttachment[];
+			try {
+				ready = await uploadFiles(pending);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : "Image upload failed. Retry sending.";
+				setError(message);
+				onAttachmentsChange?.(attachmentsRef.current);
+				if (initialKey)
+					notifySharedAttachmentEntry(
+						initialKey,
+						{ attachments: sharedAttachmentDescriptors(attachmentsRef.current), error: message },
+						listenerTokenRef.current,
+					);
+				throw error;
+			}
+			const replacements = new Map(ready.map((a) => [a.id, a]));
+			const next = attachmentsRef.current.map((a) => replacements.get(a.id) ?? a);
+			attachmentsRef.current = next;
+			setAttachments(next);
+			onAttachmentsChange?.(next);
+			setError(null);
+			if (initialKey)
+				notifySharedAttachmentEntry(
+					initialKey,
+					{ attachments: sharedAttachmentDescriptors(next), error: null },
+					listenerTokenRef.current,
+				);
+		}
+		return attachmentsRef.current.flatMap(({ mimeType, data }) => (data ? [{ mimeType, data }] : []));
+	}, [uploadFiles, onAttachmentsChange, initialKey]);
 	// Read from the same ref as toSettledPayload so a submit resumed after FileReader
 	// completion can cache staged paths without waiting for another React render.
 	const attachmentSignature = useCallback(
@@ -588,4 +678,11 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		attachmentSignature,
 		hasPendingReads,
 	};
+}
+
+export function purgeCloudAttachmentCaches(): void {
+	clearCloudImageDrafts();
+	for (const key of [...sharedAttachmentEntries.keys()]) {
+		if (key.includes("cloud:")) purgeFileAttachments(key);
+	}
 }

@@ -470,3 +470,28 @@ describe("useFileAttachments", () => {
 		}
 	});
 });
+
+describe("Cloud attachment limits and retries", () => {
+ const limits = { count: 8, fileBytes: 10 * mb, totalBytes: 25 * mb, imagesOnly: true };
+ it("keeps Files out of base64 conversion and retries with the same selection", async () => {
+  const uploadFiles = vi.fn().mockRejectedValueOnce(new Error("interrupted"))
+   .mockImplementation(async (files: FileAttachment[]) => files.map(a => ({ ...a, file: undefined, attachmentId: "ready-id" })));
+  const changes = vi.fn();
+  const { result } = renderHook(() => useFileAttachments({ uploadFiles, limits, onAttachmentsChange: changes }));
+  await act(async () => { await result.current.addFiles([file("image.png", 8, "image/png")]); });
+  expect(result.current.attachments[0]?.file).toBeInstanceOf(File);
+  expect(result.current.attachments[0]?.data).toBeUndefined();expect(result.current.error).toContain("interrupted");
+  const id = result.current.attachments[0]?.id;
+  await act(async () => { await result.current.toSettledPayload(); });
+  expect(result.current.attachments[0]).toMatchObject({ id, attachmentId: "ready-id" });
+  expect(result.current.error).toBeNull();expect(changes).toHaveBeenCalledTimes(2);
+ });
+ it("rejects non-raster files and applies the smaller Cloud size budget", async () => {
+  const uploadFiles = vi.fn(async (files: FileAttachment[]) => files.map(a => ({ ...a, attachmentId: a.id, file: undefined })));
+  const { result } = renderHook(() => useFileAttachments({ uploadFiles, limits }));
+  await act(async () => { await result.current.addFiles([file("image.svg", 8, "image/svg+xml"), file("doc.pdf", 8, "application/pdf"), file("large.png", 11 * mb, "image/png")]); });
+  expect(uploadFiles).not.toHaveBeenCalled();expect(result.current.attachments).toHaveLength(0);
+  await act(async () => { await result.current.addFiles([file("one.png", 10 * mb, "image/png"), file("two.png", 10 * mb, "image/png"), file("three.png", 6 * mb, "image/png")]); });
+  expect(result.current.attachments).toHaveLength(2);expect(result.current.error).toContain("25 MB");
+ });
+});

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/attachments"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/auth"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
@@ -156,13 +157,14 @@ type CheckoutBroker interface {
 }
 
 type Server struct {
-	store            Store
-	transcripts      TranscriptStore
-	workos           auth.WorkOSVerifier
-	localAuthEnabled bool
-	localSessionTTL  time.Duration
-	localAuthLimiter *fixedWindowLimiter
-	sandboxProvider  string
+	attachmentStorage attachments.Storage
+	store             Store
+	transcripts       TranscriptStore
+	workos            auth.WorkOSVerifier
+	localAuthEnabled  bool
+	localSessionTTL   time.Duration
+	localAuthLimiter  *fixedWindowLimiter
+	sandboxProvider   string
 	// availableSandboxProviders is every provider a client may select for a
 	// session, always including sandboxProvider (the default). It gates the
 	// per-session provider override and is reported to clients via /me.
@@ -208,6 +210,7 @@ type Server struct {
 }
 
 type Options struct {
+	AttachmentStorage         attachments.Storage
 	Store                     Store
 	Transcripts               TranscriptStore
 	WorkOS                    auth.WorkOSVerifier
@@ -290,6 +293,7 @@ func New(options Options) *Server {
 		}
 	}
 	server := &Server{
+		attachmentStorage:         options.AttachmentStorage,
 		store:                     options.Store,
 		transcripts:               options.Transcripts,
 		workos:                    options.WorkOS,
@@ -397,6 +401,7 @@ func New(options Options) *Server {
 		router.Get("/worker/binary/{sha256}", server.serveWorkerBinary)
 		router.Group(func(router chi.Router) {
 			router.Use(server.workerAuth)
+			router.Get("/worker/attachments/{attachmentId}/read-grant", server.workerAttachmentRead)
 			router.Post("/worker/heartbeat", server.workerHeartbeat)
 			// A restarted worker re-presents its persisted token and asks for its
 			// durable launch context here, so it never redeems a fresh bootstrap
@@ -438,6 +443,9 @@ func New(options Options) *Server {
 			router.Post("/worker/terminals/{terminalId}/exit", server.workerTerminalExit)
 			router.Post("/worker/terminals/agent", server.workerEnsureAgentTerminal)
 		})
+		if fs, ok := options.AttachmentStorage.(*attachments.Filesystem); ok {
+			router.Handle("/attachment-storage/*", fs)
+		}
 		router.Get("/terminal", server.connectTerminal)
 		router.Route("/orgs/{orgId}", func(router chi.Router) {
 			router.Use(server.authenticate)
@@ -451,6 +459,10 @@ func New(options Options) *Server {
 				router.Post("/github/projects", server.createGitHubProject)
 				router.Post("/projects/scratch", server.createGitHubScratchProject)
 			}
+			router.Post("/attachments", server.prepareAttachment)
+			router.Post("/attachments/{attachmentId}/complete", server.completeAttachment)
+			router.Post("/attachments/{attachmentId}/read-grant", server.attachmentReadGrant)
+			router.Post("/sessions/{sessionId}/attachments/materialize", server.materializeAttachments)
 			router.Get("/projects", server.listProjects)
 			router.Get("/notifications", server.listNotifications)
 			router.Get("/notification-events", server.notificationEvents)

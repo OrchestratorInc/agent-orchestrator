@@ -162,6 +162,7 @@ export interface QueuedMessageEditOptions {
 }
 
 export interface ConversationMessage {
+	attachments?: { id: string; filename: string; mimeType: string; size: number; sha256: string }[];
 	kind: "message";
 	id: string;
 	turnId?: string;

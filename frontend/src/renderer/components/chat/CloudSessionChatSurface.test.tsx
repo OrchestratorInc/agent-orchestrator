@@ -39,6 +39,12 @@ const session = {
 	prs: [],
 } satisfies WorkspaceSession;
 
+it("renders typed image-only messages in the existing timeline",()=>{
+ const result=toSnapshot(session,[{sessionId:session.id,sequence:1,type:"chat.user_message",payload:{text:"",attachments:[{id:"image-id",filename:"image.png",mimeType:"image/png",size:99,sha256:"a".repeat(64),status:"ready"}]},createdAt:"2026-10-01T00:00:00Z"}]);
+ const message=result.items.find(item=>item.kind==="message");
+ expect(message?.kind==="message"?message.attachments:undefined).toEqual([expect.objectContaining({id:"image-id"})]);
+});
+
 describe("CloudSessionChatSurface", () => {
 	beforeEach(() => localStorage.clear());
 	it("wakes a paused worker before loading model choices", async () => {

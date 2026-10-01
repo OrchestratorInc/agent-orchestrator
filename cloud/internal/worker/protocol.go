@@ -2,6 +2,7 @@ package worker
 
 import (
 	"encoding/json"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/attachments"
 	"time"
 )
 
@@ -14,15 +15,16 @@ type BootstrapRequest struct {
 
 // LaunchContext is the durable session context handed to a bootstrapped worker.
 type LaunchContext struct {
-	SessionID      string `json:"sessionId"`
-	ProjectID      string `json:"projectId"`
-	Kind           string `json:"kind"`
-	Harness        string `json:"harness"`
-	DisplayName    string `json:"displayName"`
-	Branch         string `json:"branch"`
-	Prompt         string `json:"prompt,omitempty"`
-	AgentSessionID string `json:"agentSessionId,omitempty"`
-	Interface      string `json:"interface"`
+	Attachments    []attachments.Metadata `json:"attachments,omitempty"`
+	SessionID      string                 `json:"sessionId"`
+	ProjectID      string                 `json:"projectId"`
+	Kind           string                 `json:"kind"`
+	Harness        string                 `json:"harness"`
+	DisplayName    string                 `json:"displayName"`
+	Branch         string                 `json:"branch"`
+	Prompt         string                 `json:"prompt,omitempty"`
+	AgentSessionID string                 `json:"agentSessionId,omitempty"`
+	Interface      string                 `json:"interface"`
 	// ParentSessionID is the orchestrator that spawned this session; empty for
 	// top-level sessions.
 	ParentSessionID string `json:"parentSessionId,omitempty"`
@@ -157,17 +159,19 @@ type NotificationEventResponse struct {
 type ClaimTurnRequest struct{}
 
 type Turn struct {
-	ID              string   `json:"id"`
-	Prompt          string   `json:"prompt"`
-	Model           string   `json:"model,omitempty"`
-	ReasoningEffort string   `json:"reasoningEffort,omitempty"`
-	Mode            string   `json:"mode"`
-	ApprovalMode    string   `json:"approvalMode,omitempty"`
-	DeniedCommands  []string `json:"deniedCommands"`
-	Harness         string   `json:"harness"`
-	Attempt         int      `json:"attempt"`
-	CancelRequested bool     `json:"cancelRequested"`
-	AgentSessionID  string   `json:"agentSessionId,omitempty"`
+	Attachments     []attachments.Metadata `json:"attachments,omitempty"`
+	ImagePaths      []string               `json:"-"`
+	ID              string                 `json:"id"`
+	Prompt          string                 `json:"prompt"`
+	Model           string                 `json:"model,omitempty"`
+	ReasoningEffort string                 `json:"reasoningEffort,omitempty"`
+	Mode            string                 `json:"mode"`
+	ApprovalMode    string                 `json:"approvalMode,omitempty"`
+	DeniedCommands  []string               `json:"deniedCommands"`
+	Harness         string                 `json:"harness"`
+	Attempt         int                    `json:"attempt"`
+	CancelRequested bool                   `json:"cancelRequested"`
+	AgentSessionID  string                 `json:"agentSessionId,omitempty"`
 }
 
 type ChatModel struct {

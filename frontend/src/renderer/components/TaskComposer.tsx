@@ -1,3 +1,6 @@
+import { CLOUD_IMAGE_LIMITS, uploadCloudAttachments } from "../lib/cloud-attachments";
+import { AttachmentPreview } from "./chat/AttachmentPreview";
+import type { FileAttachment } from "../hooks/useFileAttachments";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	TaskComposerView,
@@ -20,6 +23,7 @@ import {
 } from "../hooks/useAgentReadinessQuery";
 import { type FileAttachmentPayload, useFileAttachments } from "../hooks/useFileAttachments";
 import { useSettings } from "../hooks/useSettings";
+import type { CloudCpCreateSessionRequest } from "../lib/cloud-cp";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useCloudSandboxProviders } from "../hooks/useCloudSandboxProviders";
@@ -60,6 +64,7 @@ type CreateTaskInput = {
 	effort?: string;
 	mode?: "chat" | "tui";
 	approvalMode?: "bypass-permissions";
+	attachmentIds?: string[];
 	attachments?: FileAttachmentPayload[];
 	taskPreparation?: string;
 };
@@ -133,18 +138,11 @@ export function TaskComposer({
 	const [error, setError] = useState<string | undefined>();
 	const [fallbackAction, setFallbackAction] = useState<FallbackAction>();
 	const taskPreparationRef = useRef("");
-	const {
-		attachments,
-		error: attachmentError,
-		addFiles,
-		remove: removeAttachment,
-		clear: clearAttachments,
-		toSettledPayload,
-	} = useFileAttachments();
+
 	// Cloud vs local is decided here and nowhere else: a cloud project routes task
 	// creation to the control plane (which provisions a sandbox), while a local
 	// project keeps the existing daemon flow untouched.
-	const { client: cloudClient } = useCloudCp();
+	const { client: cloudClient, baseUrl: cloudBaseUrl, userId: cloudUserId } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
 	// The user's client-side sandbox-provider preference (when the control plane
 	// offers more than one); omitted lets the control plane use its default.
@@ -154,6 +152,35 @@ export function TaskComposer({
 	const cloudProjects = useCloudProjectsQuery();
 	const cloudProject = (cloudProjects.data ?? []).find((project) => project.id === projectId);
 	const isCloudProject = Boolean(cloudProject);
+	const uploadAttachments = useCallback(
+		(files: FileAttachment[]) => {
+			if (!cloudOrg?.id || !projectId) throw new Error("Select a Cloud project before attaching an image.");
+			return uploadCloudAttachments(cloudClient, cloudBaseUrl, cloudOrg.id, projectId, undefined, files);
+		},
+		[cloudClient, cloudBaseUrl, cloudOrg?.id, projectId],
+	);
+	const resolveAttachmentPreview = useCallback(
+		async (id: string) => {
+			if (!cloudOrg?.id) throw new Error("Cloud account context is unavailable.");
+			return new URL((await cloudClient.attachmentReadGrant(cloudOrg.id, id)).url, cloudBaseUrl).toString();
+		},
+		[cloudClient, cloudBaseUrl, cloudOrg?.id],
+	);
+	const {
+		attachments,
+		error: attachmentError,
+		addFiles,
+		remove: removeAttachment,
+		clear: clearAttachments,
+		toSettledPayload,
+		getAttachments,
+	} = useFileAttachments({
+		initialKey: isCloudProject
+			? `cloud:${cloudBaseUrl}:${cloudUserId}:${cloudOrg?.id}:${projectId}`
+			: projectId,
+		uploadFiles: isCloudProject ? uploadAttachments : undefined,
+		limits: isCloudProject ? CLOUD_IMAGE_LIMITS : undefined,
+	});
 	const isStandalone = projectId === STANDALONE_WORKSPACE_ID;
 	const preferenceContext = projectId ?? "";
 	const persistedPreferences = useMemo(
@@ -163,21 +190,33 @@ export function TaskComposer({
 	const agentDrafts = useRef<Record<string, TaskComposerAgentPreference>>({
 		...persistedPreferences?.agents,
 	}).current;
+	const imageTaskAttempt = useRef<{ signature: string; key: string } | undefined>(undefined);
 	const createCloudTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
-			if (input.attachments?.length) throw new Error(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }));
 			void captureRendererEvent("ao.renderer.task_create_requested", { project_id: input.projectId });
 			if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
 			try {
-				const { session } = await cloudClient.createSession(cloudOrg.id, {
+				const body: CloudCpCreateSessionRequest = {
 					projectId: input.projectId,
 					kind: "worker",
 					harness: input.agent ?? "claude-code",
 					displayName: input.brief.trim().slice(0, 100) || (input.agent ?? "claude-code"),
 					prompt: input.brief,
+					attachmentIds: input.attachmentIds,
 					...(input.model ? { model: input.model } : {}),
 					...(provider ? { provider } : {}),
-				});
+				};
+				// Retrying a lost task response must not launch a second image task.
+				let options: { idempotencyKey: string } | undefined;
+				if (input.attachmentIds?.length) {
+					const signature = JSON.stringify([cloudBaseUrl, cloudUserId, cloudOrg.id, body]);
+					if (imageTaskAttempt.current?.signature !== signature)
+						imageTaskAttempt.current = { signature, key: crypto.randomUUID() };
+					options = { idempotencyKey: imageTaskAttempt.current.key };
+				}
+				const { session } = options
+					? await cloudClient.createSession(cloudOrg.id, body, options)
+					: await cloudClient.createSession(cloudOrg.id, body);
 				// The control plane provisions the sandbox asynchronously; surface the
 				// new session on the board immediately.
 				void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
@@ -188,7 +227,7 @@ export function TaskComposer({
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
-		[cloudClient, cloudOrg, provider, queryClient, t],
+		[cloudClient, cloudBaseUrl, cloudUserId, cloudOrg, provider, queryClient, t],
 	);
 
 	const createLocalTask = useCallback(
@@ -556,6 +595,9 @@ export function TaskComposer({
 				mode: interfaceMode,
 				approvalMode,
 				attachments: attachmentPayloads.length > 0 ? attachmentPayloads : undefined,
+				attachmentIds: isCloudProject
+					? getAttachments().flatMap((a) => (a.attachmentId ? [a.attachmentId] : []))
+					: undefined,
 				taskPreparation: submittedPreparation || undefined,
 			});
 			const preparationAfterSubmit = taskPreparationRef.current;
@@ -680,7 +722,19 @@ export function TaskComposer({
 				},
 			}}
 			attachments={{
-				items: attachments.map(({ id, name, dataUrl }) => ({ id, name, previewUrl: dataUrl })),
+				items: attachments.map(({ id, name, dataUrl, attachmentId }) => ({
+					id,
+					name,
+					previewUrl: dataUrl,
+					preview: attachmentId ? (
+						<AttachmentPreview
+							id={attachmentId}
+							resolve={resolveAttachmentPreview}
+							alt={name}
+							className="size-full object-cover"
+						/>
+					) : undefined,
+				})),
 				error: attachmentError,
 				onAddFiles: (files) => void addFiles(files),
 				onRemove: removeAttachment,

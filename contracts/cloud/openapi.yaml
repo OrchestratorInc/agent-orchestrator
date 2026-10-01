@@ -27,6 +27,97 @@ tags:
   - name: Worker Orchestration
   - name: Worker Transport
 paths:
+  /api/cloud/v1/orgs/{orgId}/attachments:
+    post:
+      operationId: prepareAttachment
+      tags: [Workspace]
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PrepareAttachmentInput"
+      responses:
+        "201":
+          description: Attachment operation succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrepareAttachmentResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/attachments/{attachmentId}/complete:
+    post:
+      operationId: completeAttachment
+      tags: [Workspace]
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/AttachmentId"
+      responses:
+        "200":
+          description: Attachment operation succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttachmentResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/attachments/{attachmentId}/read-grant:
+    post:
+      operationId: attachmentReadGrant
+      tags: [Workspace]
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/AttachmentId"
+      responses:
+        "200":
+          description: Attachment operation succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttachmentReadGrant"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/attachments/materialize:
+    post:
+      operationId: materializeAttachments
+      tags: [Workspace]
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MaterializeAttachmentsInput"
+      responses:
+        "200":
+          description: Attachment operation succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MaterializedAttachments"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/worker/attachments/{attachmentId}/read-grant:
+    get:
+      operationId: workerAttachmentReadGrant
+      tags: [Workspace]
+      parameters:
+        - $ref: "#/components/parameters/AttachmentId"
+      responses:
+        "200":
+          description: Attachment operation succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttachmentReadGrant"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/me:
     get:
       operationId: getCurrentAccount
@@ -1756,6 +1847,13 @@ components:
         `worker:transport` for workspace and terminal transport, and
         `worker:notification` for durable agent notification intake.
   parameters:
+    AttachmentId:
+      name: attachmentId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     OrgId:
       name: orgId
       in: path
@@ -2566,6 +2664,10 @@ components:
         - repositoryUrl
         - defaultBranch
       properties:
+        attachments:
+          type: array
+          items:
+            $ref: "#/components/schemas/ImageAttachment"
         sessionId:
           type: string
           format: uuid
@@ -2786,6 +2888,10 @@ components:
         - attempt
         - cancelRequested
       properties:
+        attachments:
+          type: array
+          items:
+            $ref: "#/components/schemas/ImageAttachment"
         id:
           type: string
           format: uuid
@@ -2890,9 +2996,10 @@ components:
       additionalProperties: false
       required: [text]
       properties:
+        attachmentIds:
+          $ref: "#/components/schemas/AttachmentIds"
         text:
           type: string
-          minLength: 1
           maxLength: 65536
         model:
           type: string
@@ -2947,9 +3054,10 @@ components:
       additionalProperties: false
       required: [text]
       properties:
+        attachmentIds:
+          $ref: "#/components/schemas/AttachmentIds"
         text:
           type: string
-          minLength: 1
           maxLength: 65536
     WorkerWorkspaceListPayload:
       type: object
@@ -3227,6 +3335,65 @@ components:
           const: terminal.close
         payload:
           $ref: "#/components/schemas/WorkerTerminalClosePayload"
+    WorkerImageMaterializeTransport:
+      type: object
+      additionalProperties: false
+      required: [id, kind, attempt, payload]
+      properties:
+        id:
+          type: string
+          format: uuid
+        attempt:
+          type: integer
+          minimum: 1
+        kind:
+          type: string
+          const: attachments.materialize
+        payload:
+          type: object
+          additionalProperties: false
+          required: [attachments]
+          properties:
+            attachments:
+              type: array
+              minItems: 1
+              maxItems: 8
+              items:
+                $ref: "#/components/schemas/ImageAttachment"
+    WorkerImageSteerTransport:
+      type: object
+      additionalProperties: false
+      required: [id, kind, attempt, payload]
+      properties:
+        id:
+          type: string
+          format: uuid
+        attempt:
+          type: integer
+          minimum: 1
+        kind:
+          type: string
+          const: chat.steer
+        payload:
+          type: object
+          additionalProperties: false
+          required: [turnId, text, clientMessageId, commandId, attachments]
+          properties:
+            turnId:
+              type: string
+              format: uuid
+            text:
+              type: string
+            clientMessageId:
+              type: string
+            commandId:
+              type: string
+              format: uuid
+            attachments:
+              type: array
+              maxItems: 8
+              items:
+                $ref: "#/components/schemas/ImageAttachment"
     WorkerTransportRequest:
       oneOf:
         - $ref: "#/components/schemas/WorkerWorkspaceListTransport"
@@ -3238,6 +3405,8 @@ components:
         - $ref: "#/components/schemas/WorkerTerminalInputTransport"
         - $ref: "#/components/schemas/WorkerTerminalResizeTransport"
         - $ref: "#/components/schemas/WorkerTerminalCloseTransport"
+        - $ref: "#/components/schemas/WorkerImageMaterializeTransport"
+        - $ref: "#/components/schemas/WorkerImageSteerTransport"
       discriminator:
         propertyName: kind
     WorkerClaimTransportResponse:
@@ -3484,6 +3653,8 @@ components:
       additionalProperties: false
       required: [projectId, kind, harness, displayName, prompt]
       properties:
+        attachmentIds:
+          $ref: "#/components/schemas/AttachmentIds"
         projectId:
           type: string
           format: uuid
@@ -3920,6 +4091,10 @@ components:
           additionalProperties: false
           required: [text]
           properties:
+            attachments:
+              type: array
+              items:
+                $ref: "#/components/schemas/ImageAttachment"
             text:
               type: string
             turnId:
@@ -4102,6 +4277,10 @@ components:
           additionalProperties: false
           required: [turnId, text, clientMessageId]
           properties:
+            attachments:
+              type: array
+              items:
+                $ref: "#/components/schemas/ImageAttachment"
             turnId:
               type: string
               format: uuid
@@ -4395,3 +4574,116 @@ components:
         updatedAt:
           type: string
           format: date-time
+
+    AttachmentIds:
+      type: array
+      maxItems: 8
+      uniqueItems: true
+      items:
+        type: string
+        format: uuid
+    ImageAttachment:
+      type: object
+      required: [id, filename, size, mimeType, sha256, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        filename:
+          type: string
+          maxLength: 255
+        size:
+          type: integer
+          minimum: 1
+          maximum: 10485760
+        mimeType:
+          type: string
+          enum: [image/png, image/jpeg, image/webp, image/gif, image/bmp]
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        status:
+          type: string
+          enum: [pending, ready, expired]
+    PrepareAttachmentInput:
+      type: object
+      additionalProperties: false
+      required: [projectId, filename, size, mimeType, sha256]
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        sessionId:
+          type: string
+          format: uuid
+        filename:
+          type: string
+          minLength: 1
+          maxLength: 255
+        size:
+          type: integer
+          minimum: 1
+          maximum: 10485760
+        mimeType:
+          type: string
+          enum: [image/png, image/jpeg, image/webp, image/gif, image/bmp]
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+    AttachmentUploadGrant:
+      type: object
+      required: [url, fields, expiresAt]
+      properties:
+        url:
+          type: string
+          description: Absolute storage URL, or development URL relative to the control-plane origin.
+        fields:
+          type: object
+          additionalProperties:
+            type: string
+        expiresAt:
+          type: string
+          format: date-time
+    AttachmentReadGrant:
+      type: object
+      required: [url, expiresAt]
+      properties:
+        url:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+    PrepareAttachmentResponse:
+      type: object
+      required: [attachment, upload]
+      properties:
+        attachment:
+          $ref: "#/components/schemas/ImageAttachment"
+        upload:
+          $ref: "#/components/schemas/AttachmentUploadGrant"
+    AttachmentResponse:
+      type: object
+      required: [attachment]
+      properties:
+        attachment:
+          $ref: "#/components/schemas/ImageAttachment"
+    MaterializeAttachmentsInput:
+      type: object
+      additionalProperties: false
+      required: [attachmentIds]
+      properties:
+        attachmentIds:
+          $ref: "#/components/schemas/AttachmentIds"
+    MaterializedAttachments:
+      type: object
+      required: [paths, workerId, epoch]
+      properties:
+        paths:
+          type: array
+          items:
+            type: string
+        workerId:
+          type: string
+        epoch:
+          type: integer
+          format: int64

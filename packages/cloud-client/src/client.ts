@@ -1,5 +1,10 @@
 import type {
   AgentProfile,
+  PrepareAttachmentInput,
+  PrepareAttachmentResponse,
+  AttachmentResponse,
+  AttachmentReadGrant,
+  MaterializedAttachments,
   ClientEvent,
   ClientEventPage,
   ChatMessageInput,
@@ -387,6 +392,58 @@ export class CloudClient {
     );
   }
 
+  prepareAttachment(
+    orgId: string,
+    input: PrepareAttachmentInput,
+    options: IdempotentRequestOptions,
+  ): Promise<PrepareAttachmentResponse> {
+    return this.request(this.orgPath(orgId, "/attachments"), {
+      method: "POST",
+      body: input,
+      idempotencyKey: options.idempotencyKey,
+      signal: options.signal,
+    });
+  }
+  completeAttachment(
+    orgId: string,
+    id: string,
+    options: RequestOptions = {},
+  ): Promise<AttachmentResponse> {
+    return this.request(
+      this.orgPath(orgId, `/attachments/${encodeURIComponent(id)}/complete`),
+      {
+        method: "POST",
+        signal: options.signal,
+      },
+    );
+  }
+  attachmentReadGrant(
+    orgId: string,
+    id: string,
+    options: RequestOptions = {},
+  ): Promise<AttachmentReadGrant> {
+    return this.request(
+      this.orgPath(orgId, `/attachments/${encodeURIComponent(id)}/read-grant`),
+      {
+        method: "POST",
+        signal: options.signal,
+      },
+    );
+  }
+  materializeAttachments(
+    orgId: string,
+    sessionId: string,
+    attachmentIds: string[],
+    options: RequestOptions = {},
+  ): Promise<MaterializedAttachments> {
+    return this.request(
+      this.orgPath(
+        orgId,
+        `/sessions/${encodeURIComponent(sessionId)}/attachments/materialize`,
+      ),
+      { method: "POST", body: { attachmentIds }, signal: options.signal },
+    );
+  }
   createSession(
     orgId: string,
     input: CreateSessionInput,
@@ -907,6 +964,16 @@ export class WorkerClient {
       cache: "no-store",
       signal: options.signal,
     });
+  }
+
+  attachmentReadGrant(
+    attachmentId: string,
+    options: RequestOptions = {},
+  ): Promise<AttachmentReadGrant> {
+    return this.request(
+      `/api/cloud/v1/worker/attachments/${encodeURIComponent(attachmentId)}/read-grant`,
+      { signal: options.signal, cache: "no-store" },
+    );
   }
 
   publishEvent(

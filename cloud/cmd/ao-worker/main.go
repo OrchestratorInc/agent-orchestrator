@@ -52,6 +52,7 @@ const (
 var checkoutRenewalInterval = 45 * time.Minute
 
 var workerCapabilities = []string{
+	worker.AttachmentCapability,
 	"worker.heartbeat",
 	"worker.events",
 	"agent.activity",
@@ -149,6 +150,7 @@ func run(logger *slog.Logger) error {
 		"AO_SESSION_BRANCH":     bootstrap.Launch.Branch,
 		"AO_DATA_DIR":           dataDir,
 		"AO_CLOUD_WORKER_EPOCH": strconv.FormatInt(bootstrap.Epoch, 10),
+		"AO_CLOUD_WORKER_ID":    bootstrap.WorkerID,
 	} {
 		if err := os.Setenv(key, value); err != nil {
 			return fmt.Errorf("set worker tooling environment %s: %w", key, err)
@@ -190,6 +192,11 @@ func run(logger *slog.Logger) error {
 			}
 			launch := bootstrap.Launch
 			launch.AgentSessionID = strings.TrimSpace(nativeConversationID)
+			paths, err := client.MaterializeAttachments(buildCtx, workspace, launch.Attachments)
+			if err != nil {
+				return workerexec.Command{}, err
+			}
+			launch.Prompt = worker.ImageToolPrompt(launch.Prompt, paths)
 			command, err := b.BuildInteractive(launch, credential, workspace)
 			credential.Secret = ""
 			if err != nil {
@@ -314,6 +321,11 @@ func run(logger *slog.Logger) error {
 		// Restore a previously deleted session's state before the agent launches.
 		// A fresh session finds nothing captured and this returns quickly.
 		rehydrateSession(runCtx, logger, client, bootstrap, workspace, dataDir)
+		if _, err := client.MaterializeAttachments(runCtx, workspace, bootstrap.Launch.Attachments); err != nil {
+			logger.Error("attachment restore failed; workspace remains unavailable")
+			close(rehydrateDone)
+			return
+		}
 		close(rehydrateDone)
 		close(chatWorkspaceReady)
 		transportSupervisor.MarkWorkspaceReady()
@@ -660,6 +672,19 @@ func (c *client) ClaimTurn(ctx context.Context) (*worker.Turn, error) {
 	var response worker.ClaimTurnResponse
 	if err := c.do(ctx, "/worker/turns/claim", worker.ClaimTurnRequest{}, &response); err != nil {
 		return nil, err
+	}
+	if response.Turn != nil && len(response.Turn.Attachments) > 0 {
+		var err error
+		response.Turn.ImagePaths, err = c.MaterializeAttachments(ctx, os.Getenv("AO_WORKSPACE_DIR"), response.Turn.Attachments)
+		if err != nil {
+			_ = c.FailTurn(ctx, response.Turn.ID, response.Turn.Attempt, "Image preparation failed. Retry the message.")
+			return nil, err
+		}
+	}
+	if response.Turn != nil {
+		for i, path := range response.Turn.ImagePaths {
+			response.Turn.ImagePaths[i] = filepath.Join(os.Getenv("AO_WORKSPACE_DIR"), path)
+		}
 	}
 	return response.Turn, nil
 }
