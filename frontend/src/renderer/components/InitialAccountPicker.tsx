@@ -1,8 +1,8 @@
-import { useId } from "react";
 import { useTranslation } from "react-i18next";
 import { initialAccountReady, type useInitialAccountChoice } from "../hooks/useInitialAccountChoice";
 import { accountControlMessage } from "../lib/accounts-manager-controls";
 import { accountUsageSummary, useAccountUsage } from "./settings/AccountUsage";
+import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 
 type Props = {
   state: ReturnType<typeof useInitialAccountChoice>;
@@ -13,25 +13,30 @@ type Props = {
 
 export function InitialAccountPicker({ state, value, disabled, onChange }: Props) {
   const { t, i18n } = useTranslation();
-  const id = useId();
   const usage = useAccountUsage(state.inventoryReady ? state.accounts : []);
   if (!state.enabled || state.capability.data === false) return null;
-  return <>
-    <label className="sr-only" htmlFor={id}>{t("accountsManager.initial.title")}</label>
-    <select id={id} className="composer-chip composer-toolbar-option w-full truncate" title={t("accountsManager.initial.description")} value={value}
-      disabled={disabled || state.capability.isPending || state.capability.isError || state.capability.data !== true} onChange={event => onChange(event.target.value)}>
-      <option value="" disabled>{t("accountsManager.initial.shortChoose")}</option>
-      <option value="native">{t("accountsManager.controls.native")}</option>
-      {value.startsWith("managed:") && !state.selected ? <option value={value} disabled>{t("accountsManager.initial.missing", { id: value.slice(8) })}</option> : null}
-      {state.accounts.map((account, index) => {
+  const locked = disabled || state.capability.isPending || state.capability.isError || state.capability.data !== true;
+  return <SettingsOptionMenu
+    aria-label={t("accountsManager.initial.title")}
+    value={value}
+    disabled={locked}
+    placeholder={state.capability.isPending ? t("accountsManager.initial.checking") : t("accountsManager.initial.shortChoose")}
+    triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
+    menuClassName="min-w-64 max-w-[calc(100vw-2rem)]"
+    menuAlign="start"
+    onChange={next => { if (!locked) onChange(next); }}
+    options={[
+      { value: "native", label: t("accountsManager.controls.native"), disabled: locked },
+      ...(value.startsWith("managed:") && !state.selected ? [{ value, label: t("accountsManager.initial.missing", { id: value.slice(8) }), disabled: true }] : []),
+      ...state.accounts.map((account, index) => {
         const identity = account.email
           ? account.label && account.label !== account.email ? `${account.label} (${account.email})` : account.email
           : account.label ? `${account.label} (${account.id})` : account.id;
         const quota = account.quotaSupported && usage[index] ? `: ${accountUsageSummary(account, usage[index], t, i18n.resolvedLanguage)}` : "";
-        return <option key={account.id} value={"managed:" + account.id} disabled={!state.inventoryReady || !initialAccountReady(account)}>{identity}{quota}</option>;
-      })}
-    </select>
-  </>;
+        return { value: "managed:" + account.id, label: identity + quota, disabled: locked || !state.inventoryReady || !initialAccountReady(account) };
+      }),
+    ]}
+  />;
 }
 
 export function InitialAccountStatus({ state, value, disabled }: Omit<Props, "onChange">) {

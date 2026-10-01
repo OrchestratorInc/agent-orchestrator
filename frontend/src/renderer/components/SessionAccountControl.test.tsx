@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionAccountControl } from "./SessionAccountControl";
+import userEvent from "@testing-library/user-event";
 
 const api = vi.hoisted(() => ({ GET: vi.fn(), POST: vi.fn() }));
 vi.mock("../lib/api-client", () => ({ apiClient: api }));
@@ -28,6 +29,11 @@ function mockState(state: typeof binding & { switch?: typeof operation }) {
 
 let queryClient: QueryClient;
 
+async function chooseMenu(label: string, name: string | RegExp) {
+  await userEvent.click(await screen.findByRole("button", { name: label }));
+  await userEvent.click(await screen.findByRole("menuitem", { name }));
+}
+
 function show() {
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(<QueryClientProvider client={queryClient}><SessionAccountControl sessionId="session-a" /></QueryClientProvider>);
@@ -38,6 +44,26 @@ describe("SessionAccountControl", () => {
     vi.resetAllMocks();
     localStorage.clear();
     mockState(binding);
+  });
+
+  it("uses keyboard menus for account and timing without submitting on selection", async () => {
+    const user = userEvent.setup();
+    show();
+    const target = await screen.findByRole("button", { name: "Target account" });
+    const timing = screen.getByRole("button", { name: "Switch timing" });
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    target.focus();
+    await user.keyboard("{Enter}{End}{Enter}");
+    await waitFor(() => expect(target).toHaveFocus());
+    expect(target).toHaveTextContent("Work");
+    expect(screen.getByRole("button", { name: "Request account switch" })).toBeDisabled();
+    timing.focus();
+    await user.keyboard("{Enter}{Escape}");
+    await waitFor(() => expect(timing).toHaveFocus());
+    await user.keyboard("{Enter}{Home}{Enter}");
+    await waitFor(() => expect(timing).toHaveFocus());
+    expect(screen.getByRole("button", { name: "Request account switch" })).toBeEnabled();
+    expect(api.POST).not.toHaveBeenCalled();
   });
 
   it("shows a durable failure after reload and clears it only on authoritative success", async () => {
@@ -60,9 +86,9 @@ describe("SessionAccountControl", () => {
     expect(await screen.findByRole("region", { name: "Committed account" })).toHaveTextContent("account-a");
     const submit = screen.getByRole("button", { name: "Request account switch" });
     expect(submit).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Target account"), { target: { value: "managed:account-b" } });
+    await chooseMenu("Target account", /^Work \(account-b\)/);
     expect(submit).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Switch timing"), { target: { value: "drain" } });
+    await chooseMenu("Switch timing", "Wait for the current turn");
     let resolve!: (value: unknown) => void;
     api.POST.mockImplementation((_path, input) => new Promise((done) => {
       resolve = done;
@@ -115,8 +141,8 @@ describe("SessionAccountControl", () => {
     api.POST.mockResolvedValue({ error: { code: "ACCOUNTS_MANAGER_CONTROL_CONFLICT", requestId: "stale-79", message: "private-token" }, response: new Response(null, { status: 409 }) });
     show();
     await screen.findByRole("region", { name: "Committed account" });
-    fireEvent.change(screen.getByLabelText("Target account"), { target: { value: "native" } });
-    fireEvent.change(screen.getByLabelText("Switch timing"), { target: { value: "interrupt" } });
+    await chooseMenu("Target account", "Use native credentials");
+    await chooseMenu("Switch timing", "Stop the current turn now");
     fireEvent.click(screen.getByRole("button", { name: "Request account switch" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("stale-79");
     expect(screen.getByRole("region", { name: "Committed account" })).toHaveTextContent("account-a");
@@ -131,8 +157,8 @@ describe("SessionAccountControl", () => {
     api.POST.mockImplementation(async (_path, input) => { accepted = { ...operation, id: input.body.operationId }; return success(accepted); });
     show();
     await screen.findByRole("region", { name: "Committed account" });
-    fireEvent.change(screen.getByLabelText("Target account"), { target: { value: "managed:account-b" } });
-    fireEvent.change(screen.getByLabelText("Switch timing"), { target: { value: "drain" } });
+    await chooseMenu("Target account", /^Work \(account-b\)/);
+    await chooseMenu("Switch timing", "Wait for the current turn");
     fireEvent.click(screen.getByRole("button", { name: "Request account switch" }));
     await waitFor(() => expect(api.POST).toHaveBeenCalledOnce());
     await waitFor(() => expect(screen.getByRole("region", { name: "Switch operation" })).toHaveTextContent(api.POST.mock.calls[0][1].body.operationId));
@@ -145,8 +171,8 @@ describe("SessionAccountControl", () => {
     api.POST.mockRejectedValue(new Error("private-token http://127.0.0.1:9999/internal"));
     const view = show();
     await screen.findByRole("region", { name: "Committed account" });
-    fireEvent.change(screen.getByLabelText("Target account"), { target: { value: "native" } });
-    fireEvent.change(screen.getByLabelText("Switch timing"), { target: { value: "interrupt" } });
+    await chooseMenu("Target account", "Use native credentials");
+    await chooseMenu("Switch timing", "Stop the current turn now");
     fireEvent.click(screen.getByRole("button", { name: "Request account switch" }));
     expect(await screen.findByRole("alert")).not.toHaveTextContent("private-token");
     expect(screen.getByRole("button", { name: "Request account switch" })).toBeDisabled();

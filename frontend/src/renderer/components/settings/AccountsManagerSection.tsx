@@ -39,7 +39,6 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { Input } from "../ui/input";
-import { Switch } from "../ui/switch";
 import { AgentProviderGroup } from "./AgentProviderGroup";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsSection } from "./SettingsSection";
@@ -401,18 +400,6 @@ export function AccountsManagerSection({
             const routing = data?.routing?.find(
               (policy) => policy.provider === provider,
             ) ?? { provider, enabled: false, accountIds: [] };
-            const selectedRoutingId =
-              routing.accountIds.length === 1 ? routing.accountIds[0] : undefined;
-            const selectedRoutingAccount = accounts.find(
-              (account) => account.id === selectedRoutingId,
-            );
-            const selectedRoutingAccountEligible = Boolean(
-              selectedRoutingAccount &&
-                selectedRoutingAccount.verification === "verified" &&
-                !selectedRoutingAccount.disabled &&
-                !selectedRoutingAccount.unavailable &&
-                selectedRoutingAccount.status === "active",
-            );
             return (
               <AgentProviderGroup
                 key={provider}
@@ -461,17 +448,10 @@ export function AccountsManagerSection({
                   )
                 }
               >
-                {hasAccounts ? <RoutingPanel
-                  provider={provider}
-                  policy={routing}
-                  disabled={unavailable}
-                  selected={selectedRoutingAccount}
-                  canEnable={selectedRoutingAccountEligible}
-                  busy={busy || routingBusy}
-                  error={routingError?.provider === provider ? "accountsManager.errors.routing" : null}
-                  requestId={routingError?.provider === provider ? routingError.requestId : ""}
-                  save={(enabled, accountIds) => saveRouting(provider, enabled, accountIds)}
-                /> : null}
+                {routingError?.provider === provider ? <div role="alert" className="border-b border-border px-4 py-3 text-xs text-destructive">
+                  <p>{t("accountsManager.errors.routing")}</p>
+                  {routingError.requestId ? <p>{t("accountsManager.controls.requestId", { id: routingError.requestId })}</p> : null}
+                </div> : null}
                 {adding === provider ? (
                   <AddAccountPanel
                     provider={provider}
@@ -513,11 +493,10 @@ export function AccountsManagerSection({
                       onRemovalFailed={() => clearRemovalPending(account.id)}
                       disabled={unavailable}
                       signInDisabled={busy || Boolean(waiting)}
-                      isDefault={routing.accountIds.length === 1 && routing.accountIds[0] === account.id}
-                      routingEnabled={routing.enabled}
+                      isDefault={routing.enabled && routing.accountIds.length === 1 && routing.accountIds[0] === account.id}
                       routingBusy={routingBusy}
                       canSetDefault={account.verification === "verified" && !account.disabled && !account.unavailable && account.status === "active"}
-                      setDefault={(accountId) => void saveRouting(provider, routing.enabled, accountId ? [accountId] : [])}
+                      setDefault={(accountId) => void saveRouting(provider, Boolean(accountId), accountId ? [accountId] : [])}
                       update={update}
                       reconnect={() => {
                         clearSensitive();
@@ -544,66 +523,6 @@ export function AccountsManagerSection({
       </div>
     </SettingsSection>
     </>
-  );
-}
-
-function RoutingPanel({
-  provider,
-  policy,
-  disabled,
-  selected,
-  canEnable,
-  busy,
-  error,
-  requestId,
-  save,
-}: {
-  provider: Provider;
-  policy: { enabled: boolean; accountIds: string[] };
-  disabled: boolean;
-  selected?: AccountsManagerAccount;
-  canEnable: boolean;
-  busy: boolean;
-  error: MessageKey | null;
-  requestId: string;
-  save: (enabled: boolean, accountIds: string[]) => void;
-}) {
-  const { t } = useTranslation();
-  const toggle = (checked: boolean) => {
-    if (checked && (!selected || !canEnable)) return;
-    save(checked, selected ? [selected.id] : []);
-  };
-
-  return (
-    <div className="border-b border-border px-4 py-3.5">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-medium">
-            {t("accountsManager.routing.title")}
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t("accountsManager.routing.description")}
-          </p>
-          {provider === "codex" ? (
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t("accountsManager.routing.nativeChat")}
-            </p>
-          ) : null}
-        </div>
-        <Switch
-          aria-label={t("accountsManager.routing.toggle", { provider })}
-          checked={policy.enabled}
-          disabled={
-            disabled ||
-            busy ||
-            (!policy.enabled && (!selected || !canEnable))
-          }
-          onCheckedChange={toggle}
-        />
-      </div>
-      {error ? <p className="mt-2 text-xs text-destructive">{t(error)}</p> : null}
-      {error && requestId ? <p role="alert" className="text-xs text-destructive">{t("accountsManager.controls.requestId", { id: requestId })}</p> : null}
-    </div>
   );
 }
 
@@ -820,7 +739,6 @@ function AccountRow({
   reconnect,
   signInDisabled,
   isDefault,
-  routingEnabled,
   routingBusy,
   canSetDefault,
   setDefault,
@@ -834,7 +752,6 @@ function AccountRow({
   reconnect: () => void;
   signInDisabled: boolean;
   isDefault: boolean;
-  routingEnabled: boolean;
   routingBusy: boolean;
   canSetDefault: boolean;
   setDefault: (accountId?: string) => void;
@@ -967,7 +884,7 @@ function AccountRow({
           <DropdownMenuContent align="end" className="min-w-48">
             {isDefault ? (
               <DropdownMenuItem
-                disabled={disabled || busy || routingBusy || routingEnabled}
+                disabled={disabled || busy || routingBusy}
                 onSelect={() => setDefault(undefined)}
               >
                 {t("shell.remove")}

@@ -9,6 +9,7 @@ import {
 } from "../lib/accounts-manager-controls";
 import { Button } from "./ui/button";
 import { AccountUsage, accountUsageSummary, useAccountUsage } from "./settings/AccountUsage";
+import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 
 type SessionAccountControlProps = { sessionId: string; compact?: boolean; onSwitchLockChange?: (locked: boolean) => void };
 
@@ -75,6 +76,9 @@ function SessionAccountPanel({ sessionId, compact = false, onSwitchLockChange }:
   const pendingCommit = operation?.phase === "ready" && (!binding || binding.revision < operation.targetRevision);
   const unavailable = current.isError || !binding;
   const busy = mutation.isPending || current.isPending;
+  const controlsDisabled = busy || active || serverActive || unconfirmed || pendingCommit || Boolean(localError) || Boolean(binding?.blocked);
+  const targetTrigger = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (compact && !unavailable) targetTrigger.current?.focus(); }, [compact, unavailable]);
   const switchLocked = mutation.isPending || active || serverActive || unconfirmed || pendingCommit || Boolean(localError) || Boolean(binding?.blocked);
   useEffect(() => { onSwitchLockChange?.(switchLocked); }, [onSwitchLockChange, switchLocked]);
   useEffect(() => {
@@ -170,23 +174,46 @@ function SessionAccountPanel({ sessionId, compact = false, onSwitchLockChange }:
       ) : null}
       {mutation.error ? <div role="alert" className="text-destructive space-y-1"><p>{accountControlMessage(mutation.error, t)}</p><p className="break-all">{t("accountsManager.controls.submitted", { id: mutation.variables?.operationId })}</p></div> : null}
       {!unavailable ? (
-        <fieldset className="space-y-3" disabled={busy || active || serverActive || unconfirmed || pendingCommit || Boolean(localError) || binding.blocked}>
-          <label className="block space-y-1">{t("accountsManager.controls.targetLabel")}
-            <select autoFocus={compact} aria-label={t("accountsManager.controls.targetLabel")} className="block w-full rounded-md border border-input bg-background p-2" value={target} onChange={event => setTarget(event.target.value)}>
-              <option value="">{t("accountsManager.controls.choose")}</option>
-              <option value="native">{t("accountsManager.controls.chooseNative")}</option>
-              {accounts.map((account,index) => <option key={account.id} value={`managed:${account.id}`} disabled={!inventoryReady || account.verification !== "verified" || account.disabled || account.unavailable || account.status !== "active"}>{compact
+        <fieldset className="space-y-3" disabled={controlsDisabled}>
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground">{t("accountsManager.controls.targetLabel")}</p>
+            <SettingsOptionMenu
+              aria-label={t("accountsManager.controls.targetLabel")}
+              triggerRef={targetTrigger}
+              triggerClassName="w-full justify-between"
+              menuClassName="min-w-64 max-w-[calc(100vw-2rem)]"
+              menuAlign="start"
+              value={target}
+              disabled={controlsDisabled}
+              placeholder={t("accountsManager.controls.choose")}
+              onChange={value => { if (!controlsDisabled) setTarget(value); }}
+              options={[
+                { value: "native", label: t("accountsManager.controls.chooseNative"), disabled: controlsDisabled },
+                ...accounts.map((account,index) => ({ value: `managed:${account.id}`, disabled: controlsDisabled || !inventoryReady || account.verification !== "verified" || account.disabled || account.unavailable || account.status !== "active", label: compact
                 ? `${identity(account.id)}${account.quotaSupported && usage[index] ? ` | ${accountUsageSummary(account, usage[index], t, i18n.resolvedLanguage)}` : ""}`
-                : `${account.label || account.id} (${account.id}) | ${accountUsageSummary(account, usage[index], t, i18n.resolvedLanguage)}`}</option>)}
-            </select>
-          </label>
+                : `${account.label || account.id} (${account.id}) | ${accountUsageSummary(account, usage[index], t, i18n.resolvedLanguage)}` })),
+              ]}
+            />
+          </div>
           {!inventoryReady ? <p>{t("accountsManager.controls.inventoryUnavailable")}</p> : null}
           {selected && !compact ? <AccountUsage key={`${selected.id}:${selected.generation}`} account={selected} /> : null}
-          <label className="block space-y-1">{t("accountsManager.controls.timing")}
-            <select aria-label={t("accountsManager.controls.timing")} className="block w-full rounded-md border border-input bg-background p-2" value={policy} onChange={event => setPolicy(event.target.value as typeof policy)}>
-              <option value="">{t("accountsManager.controls.chooseTiming")}</option><option value="drain">{t("accountsManager.controls.drain")}</option><option value="interrupt">{t("accountsManager.controls.interrupt")}</option>
-            </select>
-          </label>
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground">{t("accountsManager.controls.timing")}</p>
+            <SettingsOptionMenu<typeof policy>
+              aria-label={t("accountsManager.controls.timing")}
+              triggerClassName="w-full justify-between"
+              menuClassName="min-w-64 max-w-[calc(100vw-2rem)]"
+              menuAlign="start"
+              value={policy}
+              disabled={controlsDisabled}
+              placeholder={t("accountsManager.controls.chooseTiming")}
+              onChange={value => { if (!controlsDisabled) setPolicy(value); }}
+              options={[
+                { value: "drain", label: t("accountsManager.controls.drain"), disabled: controlsDisabled },
+                { value: "interrupt", label: t("accountsManager.controls.interrupt"), disabled: controlsDisabled },
+              ]}
+            />
+          </div>
           {compact ? <details className="text-xs text-muted-foreground space-y-2">
             <summary className="cursor-pointer">{t("switchAgent.accountDetails")}</summary>
             <p className="break-all">{binding.accountId}</p>

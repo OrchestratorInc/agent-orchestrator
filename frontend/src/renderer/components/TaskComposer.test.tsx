@@ -111,6 +111,11 @@ async function waitForTaskReady() {
 	await waitFor(() => expect(startTask()).toBeEnabled());
 }
 
+async function chooseInitialAccount(name: string) {
+	await userEvent.click(await screen.findByRole("button", { name: "Initial account" }));
+	await userEvent.click(await screen.findByRole("menuitem", { name }));
+}
+
 async function chooseManagedModel() {
 	const user = userEvent.setup();
 	await user.click(await screen.findByRole("button", { name: "Model" }));
@@ -175,9 +180,7 @@ describe("TaskComposer", () => {
 			const onCreated = vi.fn();
 			render(<Wrap><TaskComposer projectId={projectId} onCreated={onCreated} /></Wrap>);
 			if (account !== "none") {
-				const picker = await screen.findByLabelText("Initial account");
-				await screen.findByRole("option", { name: "Work (account-b)" });
-				fireEvent.change(picker, { target: { value: account === "managed" ? "managed:account-b" : "native" } });
+				await chooseInitialAccount(account === "managed" ? "Work (account-b)" : "Native credentials");
 			}
 			if (account === "managed") await chooseManagedModel();
 			fireEvent.change(task(), { target: { value: "Keep this synthetic task" } });
@@ -226,7 +229,7 @@ describe("TaskComposer", () => {
 			expect(screen.queryByText("Managed accounts are available in Terminal UI only.")).not.toBeInTheDocument();
 			expect(screen.getByRole("alert")).not.toHaveTextContent("private-synthetic-detail");
 			expect(screen.queryByRole("button", { name: "Create as Terminal UI" })).not.toBeInTheDocument();
-			expect(screen.getByLabelText("Initial account")).toHaveValue("managed:account-b");
+			expect(screen.getByLabelText("Initial account")).toHaveTextContent("Work (account-b)");
 			expect(h.post).toHaveBeenCalledTimes(1);
 			expect(onCreated).not.toHaveBeenCalled();
 		});
@@ -267,10 +270,9 @@ describe("TaskComposer", () => {
 		const onCreated = vi.fn();
 		render(<Wrap><TaskComposer projectId="demo" onCreated={onCreated} /></Wrap>);
 		const picker = await screen.findByLabelText("Initial account");
-		expect(picker).toHaveValue("");
+		expect(picker).toHaveTextContent("Account");
 		expect(startTask()).toBeDisabled();
-		await screen.findByRole("option", { name: "Work (account-b)" });
-		fireEvent.change(picker, { target: { value: "managed:account-b" } });
+		await chooseInitialAccount("Work (account-b)");
 		await chooseManagedModel();
 		await waitForTaskReady();
 		fireEvent.change(task(), { target: { value: "Keep my account choice" } });
@@ -305,8 +307,8 @@ describe("TaskComposer", () => {
 		void queryClient.invalidateQueries({ queryKey: ["initial-account-selection"] });
 		await waitFor(() => expect(capabilityReads).toBe(2));
 		expect(picker).toBeEnabled();
-		fireEvent.change(picker, { target: { value: "managed:account-b" } });
-		expect(picker).toHaveValue("managed:account-b");
+		await chooseInitialAccount("Work (account-b)");
+		expect(picker).toHaveTextContent("Work (account-b)");
 
 		resolveCapability({ data: { initialSelection: true } });
 	});
@@ -325,15 +327,14 @@ describe("TaskComposer", () => {
 		h.post.mockResolvedValue({ data: {} });
 		render(<Wrap><TaskComposer projectId="demo" onCreated={vi.fn()} /></Wrap>);
 		const picker = await screen.findByLabelText("Initial account");
-		await screen.findByRole("option", { name: "Work (account-b)" });
-		fireEvent.change(picker, { target: { value: "managed:account-b" } });
+		await chooseInitialAccount("Work (account-b)");
 		await chooseManagedModel();
 		await waitForTaskReady();
 		inventory = { ...inventory, revision: 2, accounts: [] };
 		fireEvent.click(startTask());
 		await screen.findAllByText("The selected account is no longer available. Choose an account explicitly.");
 		expect(h.post.mock.calls.some(([path]) => path === "/api/v1/orchestrators/delegate")).toBe(false);
-		expect(picker).toHaveValue("managed:account-b");
+		expect(picker).toHaveTextContent("Unavailable account (account-b)");
 	});
 
 	it("sends an explicit native choice for standalone creation", async () => {
@@ -347,7 +348,7 @@ describe("TaskComposer", () => {
 		});
 		h.post.mockResolvedValue({ data: { session: { id: "scratch-1" } } });
 		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
-		fireEvent.change(await screen.findByLabelText("Initial account"), { target: { value: "native" } });
+		await chooseInitialAccount("Native credentials");
 		await waitForTaskReady();
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/sessions", expect.objectContaining({ body: expect.objectContaining({ account: { mode: "native" } }) })));
@@ -366,15 +367,14 @@ describe("TaskComposer", () => {
 		const onCreated = vi.fn();
 		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={onCreated} /></Wrap>);
 		const picker = await screen.findByLabelText("Initial account");
-		await screen.findByRole("option", { name: "Work (account-b)" });
-		fireEvent.change(picker, { target: { value: "managed:account-b" } });
+		await chooseInitialAccount("Work (account-b)");
 		await chooseManagedModel();
 		await waitForTaskReady();
 		fireEvent.click(startTask());
 		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("initial-renderer-request"));
 		expect(screen.getByRole("alert")).not.toHaveTextContent("private-runtime-secret");
 		expect(screen.getByRole("alert")).not.toHaveTextContent("127.0.0.1");
-		expect(picker).toHaveValue("managed:account-b");
+		expect(picker).toHaveTextContent("Work (account-b)");
 		expect(onCreated).not.toHaveBeenCalled();
 	});
 
@@ -2027,7 +2027,7 @@ describe("TaskComposer", () => {
 });
 
 function initialAccounts() {
-	return { revision: 1, availability: "ready", stale: false, routing: [], oauthSessions: [], accounts: [
+	return { revision: 1, availability: "ready", stale: false, routing: [{ provider: "codex", enabled: false, accountIds: [] }], oauthSessions: [], accounts: [
 		{ id: "account-a", provider: "codex", label: "Personal", status: "active", verification: "verified", disabled: false, unavailable: false },
 		{ id: "account-b", provider: "codex", label: "Work", status: "active", verification: "verified", disabled: false, unavailable: false },
 	] };

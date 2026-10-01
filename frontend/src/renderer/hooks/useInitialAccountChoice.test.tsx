@@ -30,6 +30,18 @@ it("does not choose a default or require quota access for an explicitly verified
   await act(async () => expect(await result.current.confirm()).toEqual({ mode: "managed", accountId: "account-a" }));
 });
 
+it.each([false, true])("keeps explicit managed and native choices usable when legacy routing is %s", async enabled => {
+  const data = { ...inventory(), routing: [{ provider: "codex", enabled, accountIds: ["account-a"] }] };
+  api.GET.mockImplementation(async path => ok(path.endsWith("account-selection") ? { initialSelection: true } : data));
+  const { result, rerender } = renderHook(({ choice }) => useInitialAccountChoice("codex", true, choice), { initialProps: { choice: "" }, wrapper: wrapper() });
+  await waitFor(() => expect(result.current.accounts).toHaveLength(1));
+  expect(result.current.ready).toBe(false);
+  rerender({ choice: "managed:account-a" });
+  await act(async () => expect(await result.current.confirm()).toEqual({ mode: "managed", accountId: "account-a" }));
+  rerender({ choice: "native" });
+  await act(async () => expect(await result.current.confirm()).toEqual({ mode: "native" }));
+});
+
 it.each(["stale", "disabled", "unverified", "unavailable", "wrong provider"])("rejects %s inventory without a native fallback", async failure => {
   const data = inventory();
   switch (failure) {

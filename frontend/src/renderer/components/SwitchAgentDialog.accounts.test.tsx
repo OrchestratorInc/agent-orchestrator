@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceSession } from "../types/workspace";
@@ -35,6 +35,11 @@ const session: WorkspaceSession = {
 const binding = { sessionId: session.id, provider: "codex", mode: "managed", accountId: "account-a", revision: 7, blocked: false };
 const operation = { id: "operation-a", sessionId: session.id, provider: "codex", sourceMode: "managed", sourceAccountId: "account-a", sourceRevision: 7, targetMode: "managed", targetAccountId: "account-b", targetRevision: 0, policy: "drain", newConversation: false, phase: "waiting", canRetry: false, recoveryRequired: false, createdAt: "2026-09-30T00:00:00Z", updatedAt: "2026-09-30T00:00:00Z" };
 const ok = (data: unknown) => ({ data, response: new Response(null, { status: 200 }) });
+
+async function chooseMenu(label: string, name: string | RegExp) {
+  await userEvent.click(await screen.findByRole("button", { name: label }));
+  await userEvent.click(await screen.findByRole("menuitem", { name }));
+}
 
 function show(overrides: Partial<WorkspaceSession> = {}, includeAccountControls = true) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -94,7 +99,9 @@ describe("compact agent and account switching", () => {
   show();
   await userEvent.click(screen.getByRole("button", { name: "Switch account" }));
   await screen.findByLabelText("Target account");
-  expect(screen.getByRole("option", { name: /b@example.test/ })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Target account" }));
+  expect(screen.getByRole("menuitem", { name: /b@example.test/ })).toBeInTheDocument();
+  await userEvent.keyboard("{Escape}");
   expect(within(screen.getByRole("region", { name: "Committed account" })).getByText(/a@example.test/)).toBeVisible();
   expect(screen.getByText(/Revision: 7/)).not.toBeVisible();
   expect(screen.getByLabelText("Start a new conversation")).not.toBeVisible();
@@ -109,9 +116,9 @@ describe("compact agent and account switching", () => {
   await userEvent.click(screen.getByRole("button", { name: "Switch account" }));
   await screen.findByLabelText("Target account");
   const submit = screen.getByRole("button", { name: "Switch account" });
-  fireEvent.change(screen.getByLabelText("Target account"), { target: { value: "managed:account-b" } });
+  await chooseMenu("Target account", "b@example.test");
   expect(submit).toBeDisabled();
-  fireEvent.change(screen.getByLabelText("Switch timing"), { target: { value: policy } });
+  await chooseMenu("Switch timing", policy === "drain" ? "Wait for the current turn" : "Stop the current turn now");
   let resolve!: (value: unknown) => void;
   mocks.POST.mockImplementation(() => new Promise(done => { resolve = done; }));
   await userEvent.click(submit);
@@ -133,13 +140,13 @@ describe("compact agent and account switching", () => {
   show();
   await userEvent.click(screen.getByRole("button", { name: "Switch account" }));
   await screen.findByLabelText("Target account");
-  fireEvent.change(screen.getByLabelText("Target account"), { target: { value: "managed:account-b" } });
-  fireEvent.change(screen.getByLabelText("Switch timing"), { target: { value: "drain" } });
+  await chooseMenu("Target account", "b@example.test");
+  await chooseMenu("Switch timing", "Wait for the current turn");
   await userEvent.click(screen.getByRole("button", { name: "Back to agent" }));
   expect(screen.getByRole("button", { name: "Target agent" })).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Switch account" }));
-  expect(screen.getByLabelText("Target account")).toHaveValue("managed:account-b");
-  expect(screen.getByLabelText("Switch timing")).toHaveValue("drain");
+  expect(screen.getByLabelText("Target account")).toHaveTextContent("b@example.test");
+  expect(screen.getByLabelText("Switch timing")).toHaveTextContent("Wait for the current turn");
   expect(mocks.POST).not.toHaveBeenCalled();
  });
 
@@ -172,8 +179,8 @@ describe("compact agent and account switching", () => {
   const first = show();
   await userEvent.click(screen.getByRole("button", { name: "Switch account" }));
   await screen.findByLabelText("Target account");
-  fireEvent.change(screen.getByLabelText("Target account"), { target: { value: "managed:account-b" } });
-  fireEvent.change(screen.getByLabelText("Switch timing"), { target: { value: "drain" } });
+  await chooseMenu("Target account", "b@example.test");
+  await chooseMenu("Switch timing", "Wait for the current turn");
   await userEvent.click(screen.getByRole("button", { name: "Switch account" }));
   await waitFor(() => expect(mocks.POST).toHaveBeenCalledOnce());
   const id = mocks.POST.mock.calls[0][1].body.operationId;

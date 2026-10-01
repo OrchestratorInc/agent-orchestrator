@@ -589,34 +589,50 @@ describe("AccountsManagerSection", () => {
         {
           provider: "codex",
           enabled: true,
-          accountIds: ["account-a", "account-b"],
+          accountIds: ["account-b"],
         },
       ],
     });
     renderSection();
     expect(
-      screen.getByRole("switch", {
+      screen.queryByRole("switch", {
         name: "Route new codex sessions through Accounts Manager",
       }),
-    ).toBeDisabled();
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Route new sessions through Accounts Manager")).not.toBeInTheDocument();
     fireEvent.click(
       screen.getAllByRole("button", { name: "Use as default" })[1],
     );
     await waitFor(() =>
-      expect(mocks.updateRouting).toHaveBeenCalledWith("codex", false, [
+      expect(mocks.updateRouting).toHaveBeenCalledWith("codex", true, [
         "account-b",
       ]),
     );
-    expect(
-      screen.getAllByText(
-        "Changes apply to new sessions. Existing sessions keep their selected account.",
-      ),
-    ).toHaveLength(1);
-    expect(
-      screen.getByText(
-        "Codex Chat continues to use the native device account.",
-      ),
-    ).toBeInTheDocument();
+    expect(screen.queryByText("Changes apply to new sessions. Existing sessions keep their selected account.")).not.toBeInTheDocument();
+  });
+
+  it.each([false, true])("keeps default selection actionable when legacy routing is %s", async enabled => {
+    mocks.snapshot.accounts = [{ id: "account-a", provider: "codex", label: "Review Work", kind: "oauth", status: "active", verification: "verified", disabled: false, unavailable: false, quotaSupported: false, cooldowns: [] }];
+    mocks.snapshot.routing = [{ provider: "codex", enabled, accountIds: ["account-a"] }];
+    mocks.updateRouting.mockResolvedValue(mocks.snapshot);
+    renderSection();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    if (enabled) {
+      await clickAccountAction("Remove");
+      expect(mocks.updateRouting).toHaveBeenCalledWith("codex", false, []);
+    } else {
+      await userEvent.click(screen.getByRole("button", { name: "Use as default" }));
+      expect(mocks.updateRouting).toHaveBeenCalledWith("codex", true, ["account-a"]);
+    }
+  });
+
+  it("shows a safe default-save error after the routing row is removed", async () => {
+    mocks.snapshot.accounts = [{ id: "account-a", provider: "codex", label: "Review Work", kind: "oauth", status: "active", verification: "verified", disabled: false, unavailable: false, quotaSupported: false, cooldowns: [] }];
+    mocks.updateRouting.mockRejectedValueOnce(new AccountControlError(503, "default-request"));
+    renderSection();
+    await userEvent.click(screen.getByRole("button", { name: "Use as default" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("default-request");
+    expect(screen.getByRole("button", { name: "Use as default" })).toBeEnabled();
   });
 
   it("never replaces an unusable saved selection automatically", () => {
@@ -658,11 +674,10 @@ describe("AccountsManagerSection", () => {
     mocks.updateRouting.mockResolvedValue({ ...mocks.snapshot, revision: 6 });
 
     renderSection();
-    expect(
-      screen.getByRole("switch", {
-        name: "Route new claude sessions through Accounts Manager",
-      }),
-    ).toBeDisabled();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    const defaults = screen.getAllByRole("button", { name: "Use as default" });
+    expect(defaults[0]).toBeDisabled();
+    expect(defaults[1]).toBeEnabled();
     expect(mocks.updateRouting).not.toHaveBeenCalled();
   });
 
