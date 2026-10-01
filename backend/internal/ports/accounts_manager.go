@@ -10,8 +10,9 @@ import (
 // carried to the child process being launched and must never enter public
 // session DTOs, logs, or durable session metadata.
 type AccountsManagerLaunchRoute struct {
-	BaseURL string
-	Token   string
+	BaseURL         string
+	Token           string
+	BindingRevision int64
 }
 
 // AccountsManagerLaunchRouter supplies private child routes without exposing runner implementation details.

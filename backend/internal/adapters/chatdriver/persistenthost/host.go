@@ -277,7 +277,7 @@ func validateDescriptor(cfg Config, d Descriptor) error {
 		return fmt.Errorf("%w: host protocol=%q requested=%q", ErrIncompatible, d.Protocol, cfg.Protocol)
 	}
 	// Legacy native raw hosts carry no fingerprint. Managed raw hosts must
-	// prove the same controller generation before an existing transport is used.
+	// prove the same managed binding before an existing transport is used.
 	if d.Protocol == ProtocolRaw && cfg.OwnershipFingerprint == "" && d.OwnershipFingerprint == "" {
 		return nil
 	}
@@ -337,6 +337,11 @@ func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 	}
 	if !filepath.IsAbs(cfg.Workdir) {
 		return nil, errors.New("chat host start requires an absolute workdir")
+	}
+	if cfg.Protocol == ProtocolManagedRaw {
+		if err := confirmManagedHostStops(cfg.DataDir, cfg.SessionID); err != nil {
+			return nil, err
+		}
 	}
 	if cfg.Prepare != nil {
 		prepared, err := cfg.Prepare(ctx)
@@ -499,6 +504,35 @@ func Shutdown(ctx context.Context, dataDir, sessionID string) error {
 	if err != nil {
 		return err
 	}
+	return shutdownDescriptor(ctx, dataDir, sessionID, d)
+}
+
+// ShutdownHost stops one authenticated host and joins its provider process.
+// Account retirement must use ShutdownExact for descendant-death proof.
+func ShutdownHost(ctx context.Context, dataDir, sessionID, identity string) error {
+	if stopped, err := hostStopped(dataDir, sessionID, identity); err != nil || stopped {
+		return err
+	}
+	d, err := readDescriptor(dataDir, sessionID)
+	if err != nil {
+		return errors.Join(ErrOwnershipInconclusive, err)
+	}
+	if descriptorIdentity(d) != identity {
+		return ErrOwnershipInconclusive
+	}
+	if d.Protocol != ProtocolManagedRaw {
+		return ErrIncompatible
+	}
+	if err := shutdownDescriptor(ctx, dataDir, sessionID, d); err != nil {
+		return err
+	}
+	if stopped, err := hostStopped(dataDir, sessionID, identity); err != nil || !stopped {
+		return errors.Join(ErrOwnershipInconclusive, err)
+	}
+	return nil
+}
+
+func shutdownDescriptor(ctx context.Context, dataDir, sessionID string, d Descriptor) error {
 	if d.Version != ProtocolVersion {
 		return ErrIncompatible
 	}
@@ -563,6 +597,11 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer releaseLock()
+	if cfg.Protocol == ProtocolManagedRaw {
+		if err := confirmManagedHostStops(cfg.DataDir, cfg.SessionID); err != nil {
+			return err
+		}
+	}
 	token, err := randomToken()
 	if err != nil {
 		return err
@@ -572,11 +611,6 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer func() { _ = listener.Close() }()
-	owner, err := beginProviderOwner(cfg.DataDir, cfg.SessionID, descriptorIdentity(Descriptor{Token: token}))
-	if err != nil {
-		return err
-	}
-
 	child := exec.Command(cfg.Argv[0], cfg.Argv[1:]...) //nolint:gosec // provider argv is constructed by AO's driver.
 	child.Dir = cfg.Workdir
 	child.Env = cfg.Env
@@ -592,6 +626,10 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer func() { _ = stdout.Close() }()
 	child.Stderr = io.Discard
+	owner, err := beginProviderOwner(cfg.DataDir, cfg.SessionID, descriptorIdentity(Descriptor{Token: token}), cfg.Protocol)
+	if err != nil {
+		return err
+	}
 	ownedChild, err := startProviderChild(ctx, child, cfg.DataDir, &owner)
 	if err != nil {
 		return err
@@ -659,6 +697,10 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	_ = listener.Close()
 	_ = ownedChild.wait()
+	var hostStopErr error
+	if cfg.Protocol == ProtocolManagedRaw {
+		hostStopErr = recordHostStopped(cfg.DataDir, cfg.SessionID, owner.Identity)
+	}
 	proofCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	proofErr := finishProviderOwner(proofCtx, cfg.DataDir, owner)
@@ -667,7 +709,7 @@ func Run(ctx context.Context, cfg Config) error {
 		// Preserve the unresolved owner without changing native shutdown.
 		proofErr = nil
 	}
-	return errors.Join(runErr, proofErr)
+	return errors.Join(runErr, proofErr, hostStopErr)
 }
 
 type host struct {

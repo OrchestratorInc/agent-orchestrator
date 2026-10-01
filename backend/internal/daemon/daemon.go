@@ -425,6 +425,9 @@ func Run() error {
 		StopExactProviderHost: func(ctx context.Context, id domain.SessionID, identity string) error {
 			return persistenthost.ShutdownExact(ctx, cfg.DataDir, string(id), identity)
 		},
+		StopBoundProviderHost: func(ctx context.Context, id domain.SessionID, identity string) error {
+			return persistenthost.ShutdownHost(ctx, cfg.DataDir, string(id), identity)
+		},
 		// Adapts the store's own snapshot type, so the chat service never has to
 		// import the storage layer.
 		Reader: chatsvc.SnapshotReaderFunc(func(ctx context.Context, conversationID string) (chatsvc.ConversationRows, error) {

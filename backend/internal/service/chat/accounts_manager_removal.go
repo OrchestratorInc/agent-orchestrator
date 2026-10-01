@@ -8,7 +8,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func (s *Service) recordAccountsManagerChatHost(ctx context.Context, id domain.SessionID, generation string, conv ports.ChatConversation) error {
+func (s *Service) recordAccountsManagerChatHost(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, generation string, conv ports.ChatConversation) error {
 	if preserved, ok := conv.(ports.ChatProviderPreserver); !ok || !preserved.PreservesProviderOnClose() {
 		return nil
 	}
@@ -17,7 +17,11 @@ func (s *Service) recordAccountsManagerChatHost(ctx context.Context, id domain.S
 	if !ok || !durable || host.HostIdentity() == "" {
 		return ports.ErrChatRecoveryInconclusive
 	}
-	return store.RecordAccountsManagerChatHost(ctx, id, domain.AccountsManagerProviderClaude, generation, host.HostIdentity())
+	provider := domain.AccountsManagerProviderClaude
+	if harness == domain.HarnessCodex {
+		provider = domain.AccountsManagerProviderCodex
+	}
+	return store.RecordAccountsManagerChatHost(ctx, id, provider, generation, host.HostIdentity())
 }
 
 // ArmAccountsManagerRemoval fences the captured controller without discarding queued turns.

@@ -969,9 +969,6 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// if it is unavailable for this harness or installation, fall back to TUI.
 	modeExplicitlyRequested := cfg.RequestedMode.Valid()
 	mode := m.resolveSessionMode(ctx, cfg.RequestedMode)
-	if mode == domain.SessionModeChat && cfg.Account != nil && cfg.Account.Mode == domain.AccountsManagerManaged && cfg.Harness == domain.HarnessCodex {
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: managed Chat is not supported", ports.ErrChatUnsupported)
-	}
 	if mode == domain.SessionModeChat {
 		if m.chat == nil {
 			if modeExplicitlyRequested {
@@ -980,7 +977,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			m.logger.Warn("spawn: default Chat unavailable; falling back to TUI",
 				"harness", cfg.Harness, "error", ports.ErrChatUnsupported)
 			mode = domain.SessionModeTUI
-		} else if preflightErr := m.chat.PreflightChat(ctx, cfg.Harness, agentConfig.Permissions); preflightErr != nil {
+		} else if preflightErr := m.preflightSpawnChat(ctx, cfg, agentConfig.Permissions); preflightErr != nil {
 			// A routed Claude ACP process authenticates with its child-scoped
 			// gateway token, so native device auth is not a prerequisite.
 			routedClaude := errors.Is(preflightErr, ports.ErrChatAuthRequired) &&

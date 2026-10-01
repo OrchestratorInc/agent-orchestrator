@@ -27,6 +27,14 @@ var providerChildBirthForTest atomic.Pointer[func(int)]
 var providerChildPhaseForTest atomic.Pointer[func(string, int)]
 
 func startProviderChild(ctx context.Context, command *exec.Cmd, dataDir string, owner *providerOwner) (_ *providerChild, resultErr error) {
+	started := false
+	defer func() {
+		if resultErr != nil && !started {
+			if receiptErr := finishUnstartedProvider(dataDir, *owner); receiptErr != nil {
+				resultErr = errors.Join(resultErr, receiptErr)
+			}
+		}
+	}()
 	if stdin, ok := command.Stdin.(*os.File); ok {
 		defer func() { _ = stdin.Close() }()
 	}
@@ -67,6 +75,7 @@ func startProviderChild(ctx context.Context, command *exec.Cmd, dataDir string, 
 	if err != nil {
 		return nil, err
 	}
+	started = true
 	if barrier := providerChildBirthForTest.Load(); barrier != nil {
 		(*barrier)(pid)
 	}

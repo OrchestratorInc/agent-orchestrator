@@ -11,6 +11,38 @@ import (
 
 const accountsManagerCodexTokenEnv = "AO_ACCOUNTS_MANAGER_SESSION_TOKEN"
 
+type managedChatPreflighter interface {
+	PreflightManagedChat(context.Context, domain.AgentHarness, ports.PermissionMode) error
+}
+
+func (m *Manager) preflightManagedChat(ctx context.Context, harness domain.AgentHarness, permissions ports.PermissionMode) error {
+	chat, ok := m.chat.(managedChatPreflighter)
+	if !ok {
+		return fmt.Errorf("%w: Accounts Manager Chat driver unavailable", ports.ErrChatUnsupported)
+	}
+	return chat.PreflightManagedChat(ctx, harness, permissions)
+}
+
+func (m *Manager) preflightSpawnChat(ctx context.Context, cfg ports.SpawnConfig, permissions ports.PermissionMode) error {
+	if cfg.Harness == domain.HarnessCodex && cfg.Account != nil && cfg.Account.Mode == domain.AccountsManagerManaged {
+		return m.preflightManagedChat(ctx, cfg.Harness, permissions)
+	}
+	return m.chat.PreflightChat(ctx, cfg.Harness, permissions)
+}
+
+func (m *Manager) preflightBoundChat(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, permissions ports.PermissionMode) error {
+	if harness == domain.HarnessCodex && m.accountsManager != nil {
+		pinned, err := m.accountsManager.HasAgentSessionRoute(ctx, id, domain.AccountsManagerProviderCodex)
+		if err != nil {
+			return err
+		}
+		if pinned {
+			return m.preflightManagedChat(ctx, harness, permissions)
+		}
+	}
+	return m.chat.PreflightChat(ctx, harness, permissions)
+}
+
 func accountsManagerProvider(harness domain.AgentHarness) (domain.AccountsManagerProvider, bool) {
 	switch harness {
 	case domain.HarnessCodex:
@@ -90,7 +122,9 @@ func (m *Manager) checkAccountsManagerChatMode(ctx context.Context, id domain.Se
 		return fmt.Errorf("read Accounts Manager session binding: %w", err)
 	}
 	if pinned {
-		return fmt.Errorf("%w: this session is pinned to Accounts Manager; managed Chat is not supported", ports.ErrChatUnsupported)
+		if _, ok := m.chat.(managedChatPreflighter); !ok {
+			return fmt.Errorf("%w: Accounts Manager Chat driver unavailable", ports.ErrChatUnsupported)
+		}
 	}
 	return nil
 }

@@ -556,8 +556,9 @@ type LaunchConfig struct {
 
 // AgentProviderRoute names a child-only token variable; it never stores the token itself.
 type AgentProviderRoute struct {
-	BaseURL  string
-	TokenEnv string
+	BaseURL         string
+	TokenEnv        string
+	BindingRevision int64
 }
 
 // WorkspaceHookConfig carries inputs needed to install workspace-local agent hooks.

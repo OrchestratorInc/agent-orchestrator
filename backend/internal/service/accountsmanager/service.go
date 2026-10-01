@@ -113,10 +113,11 @@ type RoutingStore interface {
 
 // LaunchRoute is private child-process material and must not be persisted or exposed.
 type LaunchRoute struct {
-	Provider  core.Provider
-	AccountID string
-	BaseURL   string
-	Token     string
+	Provider        core.Provider
+	AccountID       string
+	BaseURL         string
+	Token           string
+	BindingRevision int64
 }
 
 // Service owns public projections and keeps private runner references out of them.
@@ -139,7 +140,7 @@ func (s *Service) PrepareAgentLaunchRoute(ctx context.Context, sessionID domain.
 	if err != nil || route == nil {
 		return nil, err
 	}
-	return &ports.AccountsManagerLaunchRoute{BaseURL: route.BaseURL, Token: route.Token}, nil
+	return &ports.AccountsManagerLaunchRoute{BaseURL: route.BaseURL, Token: route.Token, BindingRevision: route.BindingRevision}, nil
 }
 
 // HasAgentSessionRoute checks durable intent without minting a token or selecting an account.
@@ -363,7 +364,7 @@ func (s *Service) PrepareLaunchRoute(ctx context.Context, sessionID domain.Sessi
 	if err != nil {
 		return nil, err
 	}
-	return &LaunchRoute{Provider: provider, AccountID: accountID, BaseURL: capability.BaseURL, Token: capability.Token}, nil
+	return &LaunchRoute{Provider: provider, AccountID: accountID, BaseURL: capability.BaseURL, Token: capability.Token, BindingRevision: pinned.Revision}, nil
 }
 
 func (s *Service) preparePinnedRoute(ctx context.Context, client routingClient, pinned domain.AccountsManagerSessionRoute, provider core.Provider, model string) (*LaunchRoute, error) {
@@ -392,7 +393,7 @@ func (s *Service) preparePinnedRoute(ctx context.Context, client routingClient, 
 		}
 		return nil, err
 	}
-	return &LaunchRoute{Provider: provider, AccountID: pinned.AccountID, BaseURL: capability.BaseURL, Token: capability.Token}, nil
+	return &LaunchRoute{Provider: provider, AccountID: pinned.AccountID, BaseURL: capability.BaseURL, Token: capability.Token, BindingRevision: pinned.Revision}, nil
 }
 
 // Subscribe sends the current snapshot first and closes the subscription on cancellation.

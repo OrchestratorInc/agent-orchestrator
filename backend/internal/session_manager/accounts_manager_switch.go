@@ -97,7 +97,9 @@ func (m *Manager) StartAccountsManagerSwitch(ctx context.Context, id domain.Sess
 			return previous, ErrInterfaceHandoffUnsupported
 		}
 		if provider == domain.AccountsManagerProviderCodex && cfg.Mode == domain.AccountsManagerManaged {
-			return previous, ports.ErrChatUnsupported
+			if _, ok := m.chat.(managedChatPreflighter); !ok {
+				return previous, ports.ErrChatUnsupported
+			}
 		}
 	} else if rec.Metadata.RuntimeLaunchID == "" || rec.Metadata.RuntimeHandleID == "" {
 		return previous, ErrIncompleteHandle
