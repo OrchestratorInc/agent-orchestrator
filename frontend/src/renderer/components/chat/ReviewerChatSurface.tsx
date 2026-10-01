@@ -36,7 +36,7 @@ export function ReviewerChatSurface({ reviewId, hostId, hideHeader = false }: { 
 			hasOlder={hasOlder}
 			loadingOlder={isLoadingOlder}
 			onLoadOlder={loadOlder}
-			onSend={(text, attachments) => commands.send({ text, attachments })}
+			onSend={(text, attachments, clientMessageId) => commands.send({ text, attachments, clientMessageId })}
 			onDecide={commands.resolve}
 			onResolveInput={commands.resolveInput}
 			onInterrupt={commands.interrupt}

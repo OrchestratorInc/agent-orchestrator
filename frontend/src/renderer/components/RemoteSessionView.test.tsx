@@ -539,7 +539,7 @@ it("refreshes a remote approval after an already-answered 409", async () => {
 	expect(localGet).not.toHaveBeenCalled();
 });
 
-it("opens the shared reviewer Chat tab and sends only to Box B with equal review IDs", async () => {
+it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 	HTMLElement.prototype.scrollTo = vi.fn();
 	localGet.mockReset();
 	localPost.mockReset();
@@ -547,6 +547,7 @@ it("opens the shared reviewer Chat tab and sends only to Box B with equal review
 		? { hostId: "box-b", label: "Box B", url, base: "http://127.0.0.1:4001" }
 		: { hostId: "box-a", label: "Box A", url, base: "http://127.0.0.1:4000" });
 	const posts: string[] = [];
+	const deliveryIds: string[] = [];
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const request = input instanceof Request ? input : new Request(input);
 		const path = new URL(request.url).pathname;
@@ -556,6 +557,8 @@ it("opens the shared reviewer Chat tab and sends only to Box B with equal review
 		if (path.endsWith("/reviews/review-1/conversation")) return Response.json(conversationBody({ sessionId: "review-1", messages: [{ id: "msg-review", role: "assistant", text: `Review on port ${new URL(request.url).port}`, sequence: 1 }] }));
 		if (path.endsWith("/reviews/review-1/conversation/messages")) {
 			posts.push(request.url);
+			deliveryIds.push((await request.json() as { clientMessageId: string }).clientMessageId);
+			if (deliveryIds.length === 1) return Response.json({ error: "disk full" }, { status: 503 });
 			return Response.json({ state: "accepted", turnId: "review-turn" }, { status: 202 });
 		}
 		if (path.endsWith("/sessions/session-1/conversation")) return Response.json(conversationBody());
@@ -571,6 +574,10 @@ it("opens the shared reviewer Chat tab and sends only to Box B with equal review
 	expect(await screen.findByText("Review on port 4001")).toBeInTheDocument();
 	await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "Review this change");
 	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+	await screen.findByText(/delivery wasn’t confirmed/);
+	await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
+	await waitFor(() => expect(deliveryIds).toHaveLength(2));
+	expect(deliveryIds[1]).toBe(deliveryIds[0]);
 	await waitFor(() => expect(posts).toContain("http://127.0.0.1:4001/api/v1/reviews/review-1/conversation/messages"));
 	expect(queryClient.getQueryData(reviewerConversationQueryKey("review-1"))).toBe("local-sentinel");
 	expect(queryClient.getQueryData(reviewerConversationQueryKey("review-1", "box-a"))).toBe("box-a-sentinel");

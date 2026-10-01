@@ -54,7 +54,7 @@ export function useReviewerConversationCommands(reviewId: string | undefined, ho
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/reviews/{reviewId}/conversation/messages", {
 				params: { path: { reviewId: reviewId as string } },
 				headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
-				body: { ...input, clientMessageId: crypto.randomUUID() },
+				body: { ...input, clientMessageId: input.clientMessageId ?? crypto.randomUUID() },
 			});
 			if (error) throw error;
 			return data;
