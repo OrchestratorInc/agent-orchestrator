@@ -1375,6 +1375,13 @@ func (c *Controller) sendLocked(
 	msg ports.ChatUserMessage,
 	queueWhenBusy bool,
 ) (domain.ConversationTurn, error) {
+	if msg.ClientPayloadHash == "" {
+		var err error
+		msg.ClientPayloadHash, err = clientPayloadHash(msg)
+		if err != nil {
+			return domain.ConversationTurn{}, err
+		}
+	}
 	c.mu.Lock()
 	handoff := c.handoff != controllerHandoffNone
 	c.mu.Unlock()
@@ -1397,6 +1404,7 @@ func (c *Controller) sendLocked(
 		Text:                msg.Text,
 		Origin:              normalizeOrigin(msg.Origin),
 		ClientMessageID:     msg.ClientMessageID,
+		ClientPayloadHash:   msg.ClientPayloadHash,
 		DeliveryContentJSON: deliveryContent,
 		AuthoredByUser:      msg.AuthoredByUser,
 	}

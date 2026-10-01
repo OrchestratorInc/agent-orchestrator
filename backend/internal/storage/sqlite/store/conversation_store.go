@@ -971,7 +971,16 @@ func (s *Store) appendUserMessage(
 				ClientMessageID: msg.ClientMessageID,
 			})
 		if lookupErr == nil {
-			_ = existing
+			// Older rows have no intake fingerprint. Compare their current
+			// persisted payload exactly; never guess through AO-added context.
+			if existing.ClientPayloadHash.Valid {
+				if msg.ClientPayloadHash == "" || existing.ClientPayloadHash.String != msg.ClientPayloadHash {
+					return false, domain.ErrClientMessageConflict
+				}
+			} else if existing.Text != msg.Text || existing.Origin != msg.Origin ||
+				existing.DeliveryContentJson != msg.DeliveryContentJSON {
+				return false, domain.ErrClientMessageConflict
+			}
 			return false, nil
 		}
 		if !errors.Is(lookupErr, sql.ErrNoRows) {
@@ -1006,6 +1015,7 @@ func (s *Store) appendUserMessage(
 			Text:                msg.Text,
 			ProviderItemID:      "",
 			ClientMessageID:     msg.ClientMessageID,
+			ClientPayloadHash:   sql.NullString{String: msg.ClientPayloadHash, Valid: msg.ClientPayloadHash != ""},
 			DeliveryContentJson: msg.DeliveryContentJSON,
 			CreatedAt:           now,
 			UpdatedAt:           now,
@@ -3335,6 +3345,7 @@ func messageToDomain(row gen.ConversationMessage) domain.ConversationMessage {
 		Streaming:           row.Streaming != 0,
 		ProviderItemID:      row.ProviderItemID,
 		ClientMessageID:     row.ClientMessageID,
+		ClientPayloadHash:   row.ClientPayloadHash.String,
 		DeliveryContentJSON: row.DeliveryContentJson,
 		CreatedAt:           row.CreatedAt,
 		UpdatedAt:           row.UpdatedAt,

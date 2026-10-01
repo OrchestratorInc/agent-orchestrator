@@ -1051,6 +1051,10 @@ func (s *Service) Send(
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
+	msg.ClientPayloadHash, err = clientPayloadHash(msg)
+	if err != nil {
+		return domain.ConversationTurn{}, err
+	}
 	var reports reportsvc.PreparedBatch
 	if s.reports != nil && msg.Origin != domain.MessageOriginAutomation {
 		var err error
