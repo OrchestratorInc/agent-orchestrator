@@ -110,13 +110,13 @@ function ReadinessSelector({ agentId }: { agentId: string }) {
 	);
 }
 
-function renderSection(focusAgentId?: string, selectorAgentId?: string) {
+function renderSection(focusAgentId?: string, selectorAgentId?: string, initialView?: "local" | "cloud") {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const view = render(
 		<QueryClientProvider client={client}>
 			<TooltipProvider>
 				{selectorAgentId ? <ReadinessSelector agentId={selectorAgentId} /> : null}
-				<HarnessSettingsSection focusAgentId={focusAgentId} />
+				<HarnessSettingsSection focusAgentId={focusAgentId} initialView={initialView} />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -153,52 +153,77 @@ describe("HarnessSettingsSection", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("logs cloud harnesses in inline under their rows", async () => {
+	it("keeps the local view free of cloud logins", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.org = { id: "org-1" };
+		renderSection();
+
+		const claudeRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		expect(screen.getByRole("tab", { name: "Local" })).toHaveAttribute("aria-selected", "true");
+		expect(within(claudeRow).queryByRole("button", { name: "Cloud login" })).toBeNull();
+		expect(within(claudeRow).queryByText(/Cloud/)).toBeNull();
+		expect(screen.getByText("Goose")).toBeInTheDocument();
+	});
+
+	it("logs cloud harnesses in from the cloud view", async () => {
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.org = { id: "org-1" };
 		cloudMocks.connections = [{ provider: "codex", validationState: "valid" }];
 		const user = userEvent.setup();
 		renderSection();
+		await screen.findByText("Goose");
 
-		const claudeRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
-		expect(within(claudeRow).getByText(/^Local: /)).toBeInTheDocument();
-		expect(within(claudeRow).getByText("Cloud: Not connected")).toBeInTheDocument();
+		await user.click(screen.getByRole("tab", { name: "Cloud" }));
+		// Only cloud-supported harnesses, with no local install or login controls.
+		expect(screen.queryByText("Goose")).toBeNull();
+		const claudeRow = screen.getByText("Claude Code").closest('[data-agent="claude-code"]') as HTMLElement;
+		expect(within(claudeRow).getByText("Not connected")).toBeInTheDocument();
+		expect(within(claudeRow).queryByRole("button", { name: "Local login" })).toBeNull();
 		await user.click(within(claudeRow).getByRole("button", { name: "Cloud login" }));
 		expect(within(claudeRow).getByTestId("cloud-harness-login")).toBeInTheDocument();
-		expect(within(claudeRow).getByRole("button", { name: "Log in with Anthropic" })).toBeInTheDocument();
 		expect(within(claudeRow).queryByRole("button", { name: "Cloud login" })).toBeNull();
 		await user.click(within(claudeRow).getByRole("button", { name: "Cancel" }));
 		expect(within(claudeRow).queryByTestId("cloud-harness-login")).toBeNull();
 
 		const codexRow = screen.getByText("Codex").closest('[data-agent="codex"]') as HTMLElement;
-		expect(within(codexRow).getByText("Local: Not installed")).toBeInTheDocument();
-		expect(within(codexRow).getByText("Cloud: Connected")).toBeInTheDocument();
-		// A cloud row that is not installed locally still offers the local install.
-		expect(within(codexRow).getByRole("button", { name: "Install" })).toBeInTheDocument();
-		// Install is still the row's main action, so the cloud refresh sits in the menu.
-		expect(within(codexRow).queryByRole("button", { name: "Cloud login" })).toBeNull();
-		await user.click(within(codexRow).getByRole("button", { name: "Codex options" }));
-		await user.click(await screen.findByRole("menuitem", { name: "Refresh cloud login" }));
+		expect(within(codexRow).getByText("Connected")).toBeInTheDocument();
+		expect(within(codexRow).queryByRole("button", { name: "Install" })).toBeNull();
+		await user.click(within(codexRow).getByRole("button", { name: "Refresh cloud login" }));
 		expect(within(codexRow).getByRole("button", { name: "Log in with ChatGPT" })).toBeInTheDocument();
-
-		const gooseRow = screen.getByText("Goose").closest('[data-agent="goose"]') as HTMLElement;
-		expect(within(gooseRow).queryByText(/^Cloud: /)).toBeNull();
-		expect(within(gooseRow).queryByRole("button", { name: "Cloud login" })).toBeNull();
 	});
 
-	it("offers no cloud options while the cloud feature is off", async () => {
+	it("opens straight into the cloud view when asked", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.org = { id: "org-1" };
+		renderSection(undefined, undefined, "cloud");
+
+		expect(await screen.findByRole("tab", { name: "Cloud" })).toHaveAttribute("aria-selected", "true");
+		expect((await screen.findAllByRole("button", { name: "Cloud login" })).length).toBeGreaterThan(0);
+		expect(screen.queryByText("Goose")).toBeNull();
+	});
+
+	it("asks to sign in to AO Cloud in the cloud view when signed out", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.org = undefined;
+		renderSection(undefined, undefined, "cloud");
+
+		expect(await screen.findByText(/Sign in to AO Cloud/)).toBeInTheDocument();
+		expect(screen.queryByText("Claude Code")).toBeNull();
+	});
+
+	it("offers no cloud view while the cloud feature is off", async () => {
 		cloudMocks.cloudEnabled = false;
 		cloudMocks.org = { id: "org-1" };
 		cloudMocks.connections = [{ provider: "claude-code", validationState: "valid" }];
-		renderSection();
+		renderSection(undefined, undefined, "cloud");
 
 		const claudeRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
-		expect(within(claudeRow).queryByText(/Cloud: /)).toBeNull();
+		expect(screen.queryByRole("tab", { name: "Cloud" })).toBeNull();
 		expect(within(claudeRow).queryByRole("button", { name: "Cloud login" })).toBeNull();
-		expect(within(claudeRow).queryByRole("button", { name: "Claude Code options" })).toBeNull();
+		expect(screen.getByText("Goose")).toBeInTheDocument();
 	});
 
-	it("shows refreshes as buttons when a logged-in row has no other action", async () => {
+	it("offers to refresh an existing local login", async () => {
 		const authorized = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "authorized" })] };
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: authorized } as never;
@@ -208,33 +233,19 @@ describe("HarnessSettingsSection", () => {
 			return { data: undefined } as never;
 		});
 		vi.mocked(apiClient.POST).mockResolvedValue({ data: authorized } as never);
-		const user = userEvent.setup();
 		renderSection();
 
 		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
-		expect(within(row).queryByRole("button", { name: "Local login" })).toBeNull();
 		expect(await within(row).findByRole("button", { name: "Refresh local login" })).toBeEnabled();
-		expect(within(row).queryByRole("button", { name: "Refresh cloud login" })).toBeNull();
-		expect(within(row).queryByRole("button", { name: "Claude Code options" })).toBeNull();
-
-		// Logged in both locally and on cloud: both refreshes are shown, no menu.
-		cloudMocks.cloudEnabled = true;
-		cloudMocks.org = { id: "org-1" };
-		cloudMocks.connections = [{ provider: "claude-code", validationState: "valid" }];
-		cleanup();
-		renderSection();
-		const cloudRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
-		expect(await within(cloudRow).findByRole("button", { name: "Refresh local login" })).toBeInTheDocument();
-		await user.click(within(cloudRow).getByRole("button", { name: "Refresh cloud login" }));
-		expect(within(cloudRow).getByTestId("cloud-harness-login")).toBeInTheDocument();
-		expect(within(cloudRow).queryByRole("button", { name: "Claude Code options" })).toBeNull();
+		expect(within(row).queryByRole("button", { name: "Local login" })).toBeNull();
+		expect(within(row).queryByRole("button", { name: "Authorized" })).toBeNull();
 	});
 
 	it("explains the cloud login in a tooltip on the info icon", async () => {
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.org = { id: "org-1" };
 		const user = userEvent.setup();
-		renderSection();
+		renderSection(undefined, undefined, "cloud");
 
 		const claudeRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
 		await user.hover(within(claudeRow).getByRole("button", { name: /Cloud sessions use their own Claude login/ }));

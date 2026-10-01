@@ -81,7 +81,7 @@ function CloudCredentialsSectionInner({ titleHidden }: { titleHidden?: boolean }
 			<div className="flex w-full flex-col gap-1.5">
 				<div className="flex items-center justify-between gap-4 px-3 pt-1">
 					<p className="text-xs leading-relaxed text-muted-foreground">{t("settings.cloudAgents.description")}</p>
-					<Button type="button" variant="footer" onClick={() => openGlobalSettings("harness", { preserveProject: true })}>
+					<Button type="button" variant="footer" onClick={() => openGlobalSettings("harness", { harnessView: "cloud", preserveProject: true })}>
 						{t("settings.cloudAgents.connect")}
 					</Button>
 				</div>

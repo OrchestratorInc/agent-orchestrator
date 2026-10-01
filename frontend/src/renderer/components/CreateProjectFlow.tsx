@@ -1338,7 +1338,7 @@ function CloudAgentSetupStep({
 						variant="outline"
 						size="sm"
 						className="shrink-0"
-						onClick={() => openGlobalSettings("harness", { preserveProject: true })}
+						onClick={() => openGlobalSettings("harness", { harnessView: "cloud", preserveProject: true })}
 					>
 						{t("createProject.openHarnessSettings", { defaultValue: "Go to Harness settings" })}
 					</Button>

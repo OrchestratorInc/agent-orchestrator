@@ -2082,7 +2082,7 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(await screen.findByText(/No harness is logged in for cloud yet/)).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Create cloud project" })).toBeDisabled();
 		await user.click(screen.getByRole("button", { name: "Go to Harness settings" }));
-		expect(openGlobalSettings).toHaveBeenCalledWith("harness", { preserveProject: true });
+		expect(openGlobalSettings).toHaveBeenCalledWith("harness", { harnessView: "cloud", preserveProject: true });
 	});
 
 	it("blocks a non-https repository URL without advancing past the repository step", async () => {
