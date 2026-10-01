@@ -1763,6 +1763,10 @@ func spawnGitSingleLine(ctx context.Context, root string, args ...string) (strin
 }
 
 func (m *Manager) destroySpawnWorkspace(ctx context.Context, ws ports.WorkspaceInfo, workspaceProject *ports.WorkspaceProjectInfo) bool {
+	if err := m.runPreRemove(ctx, ws.ProjectID, ws.Path); err != nil {
+		m.logger.Warn("spawn rollback: workspace cleanup failed; preserving workspace", "sessionID", ws.SessionID, "error", err)
+		return false
+	}
 	var err error
 	if workspaceProject != nil {
 		if adapter, ok := m.workspace.(ports.WorkspaceProject); ok {
@@ -2271,6 +2275,11 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 		}
 	}
 	freed := false
+	if ws.Path != "" {
+		if err := m.runPreRemove(ctx, rec.ProjectID, ws.Path); err != nil {
+			return false, errors.Join(err, m.terminateWithPreservedWorkspace(ctx, id, err, !workspaceProject))
+		}
+	}
 	if workspaceProject {
 		reclaim, err := m.destroyWorkspaceProjectRows(ctx, workspaceProjectRows)
 		if err != nil {
@@ -2381,6 +2390,9 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 			return fmt.Errorf("retire replacement %s: runtime: %w", id, err)
 		}
 	}
+	if err := m.runPreRemove(ctx, rec.ProjectID, ws.Path); err != nil {
+		return fmt.Errorf("retire replacement %s: %w", id, err)
+	}
 	if err := m.workspace.ForceDestroy(ctx, ws); err != nil {
 		if staleWorkspace {
 			m.logger.Warn("retire replacement: stale workspace cleanup failed", "sessionID", id, "path", ws.Path, "error", err)
@@ -2458,6 +2470,9 @@ func (m *Manager) retireWorkspaceProjectForReplacement(ctx context.Context, rec 
 		if err := m.runtime.Destroy(ctx, handle); err != nil {
 			return fmt.Errorf("retire replacement %s: runtime: %w", rec.ID, err)
 		}
+	}
+	if err := m.runPreRemove(ctx, rec.ProjectID, rec.Metadata.WorkspacePath); err != nil {
+		return fmt.Errorf("retire replacement %s: %w", rec.ID, err)
 	}
 	for i := len(rows) - 1; i >= 0; i-- {
 		if err := m.workspace.ForceDestroy(ctx, workspaceInfoFromRepoInfo(rows[i])); err != nil {
@@ -4563,6 +4578,10 @@ func (m *Manager) cleanupOne(ctx context.Context, rec domain.SessionRecord, ws p
 		m.logger.Warn("cleanup: attachment preservation failed", "sessionID", rec.ID, "error", err)
 		return ports.WorkspaceReclaimRemoved, "attachment preservation failed"
 	}
+	if err := m.runPreRemove(ctx, rec.ProjectID, ws.Path); err != nil {
+		m.logger.Warn("cleanup: workspace script failed; preserving workspace", "sessionID", rec.ID, "error", err)
+		return ports.WorkspaceReclaimRemoved, cleanupSkipReason(err)
+	}
 
 	if rows, ok, rowErr := m.workspaceProjectRows(ctx, rec); rowErr != nil {
 		m.logger.Warn("cleanup: workspace rows failed", "sessionID", rec.ID, "error", rowErr)
@@ -4602,6 +4621,9 @@ func (m *Manager) cleanupOne(ctx context.Context, rec domain.SessionRecord, ws p
 // it flows to the API response and CLI output, and teardown errors embed
 // internal filesystem paths.
 func cleanupSkipReason(err error) string {
+	if errors.Is(err, ErrCleanupScript) {
+		return err.Error()
+	}
 	if errors.Is(err, ports.ErrWorkspaceDirty) {
 		return "workspace has uncommitted changes"
 	}
