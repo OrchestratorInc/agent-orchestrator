@@ -76,9 +76,40 @@ afterEach(async () => {
 });
 
 describe("SpawnComposerControls on iOS", () => {
+	it("places native Run on menu above the project picker", async () => {
+		await act(async () => {
+			renderer = create(<SpawnComposerControls
+				destinations={[{ source: { kind: "local", id: "desktop-1" }, label: "Local · Paired desktop", available: true }, { source: { kind: "cloud", id: "org-1" }, label: "Cloud", available: true }]}
+				destination={null}
+				onSelectDestination={vi.fn()}
+				projects={[]}
+				projectId={null}
+				onSelectProject={vi.fn()}
+				agents={[]}
+				harness=""
+				onSelectHarness={vi.fn()}
+				models={[]}
+				modelSelection="__auto__"
+				modelLabel="Automatic"
+				onSelectModel={vi.fn()}
+				onAttach={vi.fn()}
+				voice={{ state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn() }}
+				onSpawn={vi.fn()}
+				busy={false}
+				disabled
+			/>);
+		});
+		const menus = renderer!.root.findAll((node) => String(node.type) === "Menu");
+		expect(menus.length).toBeGreaterThanOrEqual(2);
+		const labels = menus[0].findAll((node) => String(node.type) === "Button").map((node) => node.props.label);
+		expect(labels).toEqual(["Local · Paired desktop", "Cloud"]);
+	});
 	it("keeps the Cloud harness picker while hiding attachment and model controls", async () => {
 		await act(async () => {
 			renderer = create(<SpawnComposerControls
+				destinations={[{ source: { kind: "cloud", id: "org-1" }, label: "Cloud", available: true }]}
+				destination={{ kind: "cloud", id: "org-1" }}
+				onSelectDestination={vi.fn()}
 				projects={[{ id: "project-1", label: "Tap" }]}
 				projectId="project-1"
 				onSelectProject={vi.fn()}

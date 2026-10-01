@@ -21,11 +21,13 @@ import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { readyHarnesses } from "../lib/cloud/agentReadiness";
 import { useCloudAuth } from "../lib/cloud/authStore";
+import { sourceKey, type SourceRef } from "../lib/environment/scopedBoard";
 import { haptics } from "../lib/haptics";
 import { resolveSpawnProject } from "../lib/projectFilter";
 import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
 import { appendSpawnAttachments, readSpawnAttachments, type SpawnAttachment } from "../lib/spawn-attachments";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
+import { canSubmitSpawn, initialSpawnDestination, spawnRequestIsCurrent } from "../lib/spawnDestination";
 import { spawnNotices } from "../lib/spawnNotices";
 import { SpawnPromptInput } from "../lib/spawn-prompt-input";
 import { useApp } from "../lib/store";
@@ -35,6 +37,7 @@ import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
 import { Button } from "../lib/ui";
 import { iconSize, space, type } from "../lib/tokens";
 import { backOr } from "../lib/backNavigation";
+import { routeSource } from "../lib/session/sessionRoute";
 
 export { SheetErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
@@ -42,10 +45,20 @@ export default function SpawnModal() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
-	const { projectId: routeProjectId } = useLocalSearchParams<{ projectId?: string }>();
-	const { environment, projects, projectsKnown, activeProjectId, config, connection, unreachable, spawn } = useApp();
+	const { projectId: routeProjectId, source: routeKind, sourceId: routeSourceId } = useLocalSearchParams<{ projectId?: string; source?: string; sourceId?: string }>();
+	const { scopedBoard, availableSources, sourceFor, spawnOn, config, connection, unreachable } = useApp();
 	const { client: cloudClient, orgId: cloudOrgId } = useCloudAuth();
-	const cloudSpawn = environment === "cloud";
+	const routeDestination = routeSource({ source: routeKind, sourceId: routeSourceId });
+	const sourceResolutionComplete = scopedBoard.sources.local.resolved && scopedBoard.sources.cloud.resolved;
+	const [destination, setDestination] = useState<SourceRef | null>(null);
+	const destinationRef = useRef<SourceRef | null>(null);
+	const catalogGeneration = useRef(0);
+	const cloudSpawn = destination?.kind === "cloud";
+	const projects = useMemo(() => destination
+		? scopedBoard.projects.filter((entry) => sourceKey(entry.source) === sourceKey(destination)).map((entry) => entry.value)
+		: [], [destination, scopedBoard.projects]);
+	const projectsKnown = destination !== null && scopedBoard.sources[destination.kind].resolved && !scopedBoard.sources[destination.kind].loading;
+	const destinations = availableSources.map((source) => ({ source, label: source.kind === "local" ? "Local · Paired desktop" : "Cloud", available: !!sourceFor(source), unavailableReason: source.kind === "local" ? scopedBoard.sources.local.error : scopedBoard.sources.cloud.error }));
 
 	const [projectId, setProjectId] = useState<string | null>(null);
 	const [harness, setHarness] = useState("");
@@ -85,25 +98,35 @@ export default function SpawnModal() {
 
 
 
-	// Seed from the active project, or the only project. Mirrors the store's
-	// `targetProject()`; kept here because the screen needs it as UI state to
-	// drive the picker's value and the button's disabled state.
+	useEffect(() => {
+		if (!sourceResolutionComplete) return;
+		const routed = routeDestination && routeDestination.kind !== "invalid" ? routeDestination : null;
+		if (routeDestination?.kind === "invalid") return;
+		const next = initialSpawnDestination(routed, availableSources);
+		if (destinationRef.current && availableSources.some((source) => sourceKey(source) === sourceKey(destinationRef.current!))) return;
+		if (next) { destinationRef.current = next; setDestination(next); }
+	}, [sourceResolutionComplete, routeKind, routeSourceId, availableSources]);
+
+	// A project prefill belongs only to the source named by its route.
 	useEffect(() => {
 		const nextProjectId = resolveSpawnProject(
 			projectId,
-			routeProjectId,
-			activeProjectId,
+			routeDestination && routeDestination.kind !== "invalid" && destination && sourceKey(routeDestination) === sourceKey(destination) ? routeProjectId : undefined,
+			"all",
 			projects,
 			projectsKnown,
 		);
 		if (nextProjectId !== projectId) changeProject(nextProjectId);
-	}, [activeProjectId, projects, projectsKnown, projectId, routeProjectId]);
+	}, [destination, projects, projectsKnown, projectId, routeProjectId, routeKind, routeSourceId]);
 
 	useEffect(() => {
 		let cancelled = false;
+		const generation = ++catalogGeneration.current;
+		const requested = destination;
 		setLoading(true);
 		setCatalogError(null);
-		if (environment === "cloud") {
+		if (!requested || !sourceFor(requested)) { setCatalog(null); setChatHarnesses([]); setLoading(false); return; }
+		if (requested.kind === "cloud") {
 			setMode("chat");
 			setAttachments([]);
 			setModel("");
@@ -119,7 +142,7 @@ export default function SpawnModal() {
 				cloudClient.listProviderConnections(cloudOrgId),
 				cloudClient.listUserProviderConnections(),
 			]).then((results) => {
-				if (cancelled) return;
+				if (cancelled || !spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current)) return;
 				const available = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
 				if (results.every((result) => result.status === "rejected")) {
 					const failure = results[0].status === "rejected" ? results[0].reason : undefined;
@@ -131,12 +154,12 @@ export default function SpawnModal() {
 				setChatHarnesses(harnesses);
 				setCatalogError(null);
 			}).catch((cause) => {
-				if (cancelled) return;
+				if (cancelled || !spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current)) return;
 				setCatalog(null);
 				setChatHarnesses([]);
 				setCatalogError(cause instanceof Error ? cause.message : "Could not load Cloud agents.");
 			}).finally(() => {
-				if (!cancelled) setLoading(false);
+				if (!cancelled && spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current)) setLoading(false);
 			});
 			return () => { cancelled = true; };
 		}
@@ -148,7 +171,7 @@ export default function SpawnModal() {
 		}
 		Promise.all([getAgents(config), getSettings(config)])
 			.then(([c, settings]) => {
-				if (cancelled) return;
+				if (cancelled || !spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current)) return;
 				setCatalog(c);
 				setChatHarnesses(settings.chatHarnesses);
 				setCatalogError(null);
@@ -156,15 +179,15 @@ export default function SpawnModal() {
 			.catch((e) => {
 				// Previously swallowed into `catalog = null`, which left an empty
 				// picker and no way to tell the daemon was unreachable.
-				if (!cancelled) setCatalogError(agentErrorCopy(e));
+				if (!cancelled && spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current)) setCatalogError(agentErrorCopy(e));
 			})
 			.finally(() => {
-				if (!cancelled) setLoading(false);
+				if (!cancelled && spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current)) setLoading(false);
 			});
 		return () => {
 			cancelled = true;
 		};
-	}, [environment, config, cloudClient, cloudOrgId, reloadKey]);
+	}, [destination, config, cloudClient, cloudOrgId, reloadKey, sourceFor]);
 
 	// Refreshing the catalog moved into the agent sheet route, which owns its own
 	// copy of it — see app/sheets/agent.tsx.
@@ -179,13 +202,16 @@ export default function SpawnModal() {
 	// provider picks, and naming a model here promised one the session never ran.
 	const displayedModelLabel = displayedModel ? modelCatalog?.models.find((item) => item.id === displayedModel)?.label ?? displayedModel : "Automatic";
 	const modelSelection = modelTouched ? model : "__auto__";
-	const notices = cloudSpawn
+	const sourceNotices = !destination && sourceResolutionComplete
+		? [availableSources.length === 0 ? "Pair a desktop or sign in to Cloud to start a task." : "Choose where to run this task."]
+		: [];
+	const notices = [...sourceNotices, ...(cloudSpawn
 		? [...new Set([
 			mode === "chat" && !loading && agents.length === 0 ? "Connect a Cloud coding agent before starting a worker." : null,
 			catalogError,
 			modelError ?? null,
 		].filter((notice): notice is string => Boolean(notice)))]
-		: spawnNotices({
+		: destination?.kind === "local" ? spawnNotices({
 			// Only when a reconnect can fix it: a rejected password stops the poll for
 			// good, and its catalog error already says to re-scan the pairing code.
 			offline: unreachable,
@@ -195,7 +221,7 @@ export default function SpawnModal() {
 			catalogError,
 			agentCount: agents.length,
 			modelError,
-		});
+		}) : [])];
 	const hasComposerMessage = Boolean(
 		notices.length > 0
 		|| attachmentError
@@ -206,37 +232,39 @@ export default function SpawnModal() {
 	);
 
 	useEffect(() => {
-		if (environment !== "local" || !config || !projectId) { setProjectDetail(undefined); setProjectDetailLoadedFor(projectId); return; }
+		if (destination?.kind !== "local" || !config || !projectId) { setProjectDetail(undefined); setProjectDetailLoadedFor(projectId); return; }
 		let cancelled = false;
+		const generation = catalogGeneration.current;
 		setProjectDetailLoadedFor(null);
 		getProject(config, projectId)
-			.then((nextProject) => { if (!cancelled) setProjectDetail(nextProject); })
-			.catch((cause) => { if (!cancelled) setModelError(userFacingError(cause)); })
-			.finally(() => { if (!cancelled) setProjectDetailLoadedFor(projectId); });
+			.then((nextProject) => { if (!cancelled && generation === catalogGeneration.current) setProjectDetail(nextProject); })
+			.catch((cause) => { if (!cancelled && generation === catalogGeneration.current) setModelError(userFacingError(cause)); })
+			.finally(() => { if (!cancelled && generation === catalogGeneration.current) setProjectDetailLoadedFor(projectId); });
 		return () => { cancelled = true; };
-	}, [environment, config, projectId, reloadKey]);
+	}, [destination, config, projectId, reloadKey]);
 
 	useEffect(() => {
 		if (agentTouched || loading || !catalog) return;
-		if (environment === "local" && projectId && projectDetailLoadedFor !== projectId) return;
+		if (destination?.kind === "local" && projectId && projectDetailLoadedFor !== projectId) return;
 		const nextHarness = resolveSpawnAgent({
 			projectWorkerAgent: projectDetail?.config?.worker?.agent,
 			projectAgent: projectDetail?.agent,
 			availableAgents: agents.filter((agent) => agent.selectable).map((agent) => agent.id),
 		});
 		setHarness((current) => current === nextHarness ? current : nextHarness);
-	}, [agentTouched, agents, catalog, environment, loading, projectDetail, projectDetailLoadedFor, projectId]);
+	}, [agentTouched, agents, catalog, destination, loading, projectDetail, projectDetailLoadedFor, projectId]);
 
 	useEffect(() => {
-		if (environment !== "local" || !config || !projectId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }
+		if (destination?.kind !== "local" || !config || !projectId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }
 		let cancelled = false;
+		const generation = catalogGeneration.current;
 		setModelLoading(true);
 		getAgentModels(config, harness, projectId)
-			.then((nextCatalog) => { if (!cancelled) { setModelCatalog(nextCatalog); setModelError(nextCatalog.warning); } })
-			.catch((cause) => { if (!cancelled) setModelError(userFacingError(cause)); })
-			.finally(() => { if (!cancelled) setModelLoading(false); });
+			.then((nextCatalog) => { if (!cancelled && generation === catalogGeneration.current) { setModelCatalog(nextCatalog); setModelError(nextCatalog.warning); } })
+			.catch((cause) => { if (!cancelled && generation === catalogGeneration.current) setModelError(userFacingError(cause)); })
+			.finally(() => { if (!cancelled && generation === catalogGeneration.current) setModelLoading(false); });
 		return () => { cancelled = true; };
-	}, [environment, config, harness, projectId, reloadKey]);
+	}, [destination, config, harness, projectId, reloadKey]);
 
 	// Loads that failed while the desktop was unreachable run again once the
 	// board's poll reconnects. Keyed on the reconnect, not on the errors, so an
@@ -245,9 +273,33 @@ export default function SpawnModal() {
 	useEffect(() => {
 		const reconnected = previousConnection.current !== "open" && connection === "open";
 		previousConnection.current = connection;
-		if (environment === "local" && reconnected && (catalogError || modelError)) setReloadKey((key) => key + 1);
+		if (destination?.kind === "local" && reconnected && (catalogError || modelError)) setReloadKey((key) => key + 1);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [connection, environment]);
+	}, [connection, destination]);
+	const selectDestination = (next: SourceRef) => {
+		if (destination && sourceKey(destination) === sourceKey(next)) return;
+		catalogGeneration.current += 1;
+		destinationRef.current = next;
+		setDestination(next);
+		setProjectId(null);
+		setHarness("");
+		setAgentTouched(false);
+		setMode("chat");
+		setCatalog(null);
+		setCatalogError(null);
+		setChatHarnesses([]);
+		setProjectDetail(undefined);
+		setProjectDetailLoadedFor(null);
+		setModel("");
+		setModelTouched(false);
+		setModelCatalog(undefined);
+		setModelError(undefined);
+		attachmentsRef.current = [];
+		setAttachments([]);
+		setAttachmentError(undefined);
+		setError(null);
+		setOfferTUI(false);
+	};
 
 	const clearModelOverride = () => { setModel(""); setModelTouched(false); };
 	const resetModelSource = () => { clearModelOverride(); setModelCatalog(undefined); setModelError(undefined); };
@@ -296,6 +348,7 @@ export default function SpawnModal() {
 	const pickAttachments = async () => {
 		if (pickingAttachments.current) return;
 		pickingAttachments.current = true;
+		const generation = catalogGeneration.current;
 		setAttachmentError(undefined);
 		try {
 			const result = await DocumentPicker.getDocumentAsync({
@@ -315,12 +368,13 @@ export default function SpawnModal() {
 			});
 			const before = attachmentsRef.current;
 			const next = await readSpawnAttachments(before, picked);
+			if (generation !== catalogGeneration.current) return;
 			const merged = appendSpawnAttachments(attachmentsRef.current, next.attachments.slice(before.length));
 			attachmentsRef.current = merged.attachments;
 			setAttachments(merged.attachments);
 			setAttachmentError(next.error ?? merged.error);
 		} catch (cause) {
-			setAttachmentError(userFacingError(cause, "Couldn't read that file."));
+			if (generation === catalogGeneration.current) setAttachmentError(userFacingError(cause, "Couldn't read that file."));
 		} finally {
 			pickingAttachments.current = false;
 
@@ -328,6 +382,7 @@ export default function SpawnModal() {
 	};
 
 	const onSpawn = async () => {
+		if (!canSubmitSpawn(destination, projectId, harness, sourceFor) || !destination) return;
 		if (pickingAttachments.current) {
 			setAttachmentError("Wait for attachments to finish loading.");
 			return;
@@ -339,7 +394,7 @@ export default function SpawnModal() {
 		setError(null);
 		setOfferTUI(false);
 		try {
-			const session = await spawn({
+			const session = await spawnOn(destination, {
 				projectId: projectId ?? undefined,
 				prompt: prompt.trim() || undefined,
 				harness: harness || undefined,
@@ -359,12 +414,12 @@ export default function SpawnModal() {
 			InteractionManager.runAfterInteractions(() => {
 				router.push({
 					pathname: "/session/[id]",
-					params: { id: session.id, projectId: session.projectId },
+					params: { id: session.id, projectId: session.projectId, source: destination.kind, sourceId: destination.id },
 				});
 			});
 		} catch (e) {
 			haptics.error();
-			setError(spawnErrorCopy(e, environment));
+			setError(spawnErrorCopy(e, destination.kind));
 			setOfferTUI(!cloudSpawn && mode === "chat" && isChatPreflightError(e));
 			setBusy(false);
 		}
@@ -431,6 +486,9 @@ export default function SpawnModal() {
 				<KeyboardStickyView offset={{ closed: 0, opened: 0 }}>
 				{Platform.OS === "ios" ? voiceFeedback : null}
 				<SpawnComposerControls
+					destinations={destinations}
+					destination={destination}
+					onSelectDestination={selectDestination}
 					projects={projects.map((item) => ({ id: item.id, label: item.name }))}
 					projectId={project?.id ?? null}
 					onSelectProject={changeProject}
@@ -447,7 +505,7 @@ export default function SpawnModal() {
 					voice={{ state: voice.state, mode: voice.mode, onPressIn: voice.pressIn, onPressOut: voice.pressOut }}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
-					disabled={!projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing"}
+					disabled={!canSubmitSpawn(destination, projectId, harness, sourceFor) || busy || modelLoading || loading || listening || voice.state === "transcribing"}
 				/>
 				</KeyboardStickyView>
 		</View>

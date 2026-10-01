@@ -53,8 +53,29 @@ afterEach(async () => {
 });
 
 describe("SpawnComposerControls", () => {
+	it("opens the destination choice inside the composer", async () => {
+		const onSelectDestination = vi.fn();
+		const props = {
+			destinations: [{ source: { kind: "local", id: "desktop-1" }, label: "Local · Paired desktop", available: true }, { source: { kind: "cloud", id: "org-1" }, label: "Cloud", available: true }],
+			destination: null,
+			onSelectDestination,
+			projects: [], projectId: null, onSelectProject: vi.fn(), agents: [], harness: "", onSelectHarness: vi.fn(),
+			models: [], modelSelection: "__auto__", modelLabel: "Automatic", onSelectModel: vi.fn(), onAttach: vi.fn(),
+			voice: { state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn() }, onSpawn: vi.fn(), busy: false, disabled: true,
+		} as unknown as Parameters<typeof SpawnComposerControls>[0];
+		await act(async () => { renderer = create(<SpawnComposerControls {...props} />); });
+		const runOn = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Run on Choose where to run")[0];
+		await act(async () => runOn.props.onPress());
+		expect(renderer!.root.findAll((node) => String(node.type) === "Text").some((node) => node.props.children === "Run on")).toBe(true);
+		const cloud = renderer!.root.findAll((node) => String(node.type) === "Pressable").find((node) => node.findAll((child) => String(child.type) === "Text" && child.props.children === "Cloud").length > 0);
+		await act(async () => cloud?.props.onPress());
+		expect(onSelectDestination).toHaveBeenCalledWith({ kind: "cloud", id: "org-1" });
+	});
 	it("hides local-only attachment and model controls for a Cloud spawn", async () => {
 		const props = {
+			destinations: [{ source: { kind: "cloud", id: "org-1" }, label: "Cloud", available: true }],
+			destination: { kind: "cloud", id: "org-1" },
+			onSelectDestination: vi.fn(),
 			projects: [{ id: "project-1", label: "Tap" }],
 			projectId: "project-1",
 			onSelectProject: vi.fn(),

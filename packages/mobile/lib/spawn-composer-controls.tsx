@@ -3,8 +3,12 @@ import { StyleSheet, View } from "react-native";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import type { SpawnComposerControlsProps } from "./spawn-composer-controls.types";
 import { space } from "./tokens";
+import { sourceKey } from "./environment/scopedBoard";
 
 export function SpawnComposerControls({
+	destinations,
+	destination,
+	onSelectDestination,
 	projects,
 	projectId,
 	onSelectProject,
@@ -24,6 +28,12 @@ export function SpawnComposerControls({
 	const { scheme } = useThemeState();
 	return (
 		<View style={styles.stack}>
+			<Host style={styles.projectHost} colorScheme={scheme} seedColor={t.accent}>
+				<Picker selectedValue={destination ? sourceKey(destination) : ""} onValueChange={(key) => { const next = destinations.find((option) => sourceKey(option.source) === key); if (next?.available) onSelectDestination(next.source); }} appearance="menu">
+					<Picker.Item label="Run on · Choose destination" value="" />
+					{destinations.map((option) => <Picker.Item key={sourceKey(option.source)} label={`Run on ${option.label}${option.available ? "" : " · Unavailable"}`} value={sourceKey(option.source)} />)}
+				</Picker>
+			</Host>
 			<Host style={styles.projectHost} colorScheme={scheme} seedColor={t.accent}>
 				<Picker selectedValue={projectId ?? ""} onValueChange={onSelectProject} appearance="menu">
 					<Picker.Item label="Choose project" value="" />

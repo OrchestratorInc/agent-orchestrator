@@ -7,10 +7,14 @@ import type { Theme } from "./theme";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
 import { type, space } from "./tokens";
 import { MicKey } from "./voice/MicKey";
+import { sourceKey } from "./environment/scopedBoard";
 
-type OpenMenu = "project" | "harness" | "model" | null;
+type OpenMenu = "destination" | "project" | "harness" | "model" | null;
 
 export function SpawnComposerControls({
+	destinations,
+	destination,
+	onSelectDestination,
 	projects,
 	projectId,
 	onSelectProject,
@@ -35,11 +39,18 @@ export function SpawnComposerControls({
 	const projectLabel = projects.find((project) => project.id === projectId)?.label ?? "Choose project";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
 	const modelOptions = [{ id: "__auto__", label: "Automatic" }, ...models];
-	const options = openMenu === "project" ? projects : openMenu === "harness" ? agents : modelOptions;
-	const selectedValue = openMenu === "project" ? (projectId ?? "") : openMenu === "harness" ? harness : modelSelection;
-	const menuTitle = openMenu === "project" ? "Project" : openMenu === "harness" ? "Agent" : "Model";
+	const destinationOptions = destinations.map((option) => ({ id: sourceKey(option.source), label: option.available ? option.label : `${option.label} · Unavailable` }));
+	const destinationLabel = destinations.find((option) => destination && sourceKey(option.source) === sourceKey(destination))?.label ?? "Choose where to run";
+	const options = openMenu === "destination" ? destinationOptions : openMenu === "project" ? projects : openMenu === "harness" ? agents : modelOptions;
+	const selectedValue = openMenu === "destination" ? (destination ? sourceKey(destination) : "") : openMenu === "project" ? (projectId ?? "") : openMenu === "harness" ? harness : modelSelection;
+	const menuTitle = openMenu === "destination" ? "Run on" : openMenu === "project" ? "Project" : openMenu === "harness" ? "Agent" : "Model";
 
 	const selectOption = (value: string) => {
+		if (openMenu === "destination") {
+			const selected = destinations.find((option) => sourceKey(option.source) === value);
+			if (!selected?.available) return;
+			onSelectDestination(selected.source);
+		}
 		if (openMenu === "project") onSelectProject(value);
 		if (openMenu === "harness") onSelectHarness(value);
 		if (openMenu === "model") onSelectModel(value);
@@ -64,6 +75,7 @@ export function SpawnComposerControls({
 
 	return (
 		<View style={styles.stack}>
+			<SelectorButton label={`Run on ${destinationLabel}`} icon="monitor" onPress={() => setOpenMenu("destination")} style={styles.projectButton} />
 			<SelectorButton label={projectLabel} icon="folder" onPress={() => setOpenMenu("project")} style={styles.projectButton} />
 
 			<View style={styles.rail}>

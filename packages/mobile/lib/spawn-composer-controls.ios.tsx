@@ -25,6 +25,7 @@ import { chipColorFor } from "./harnessLogo";
 import { logoFor } from "./harnessLogoAssets";
 import { glassPanel } from "./glass";
 import { haptics } from "./haptics";
+import { sourceKey } from "./environment/scopedBoard";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { iconSize, press, space, type } from "./tokens";
@@ -41,6 +42,9 @@ const PROJECT_MENU_WIDTH = 224;
 const HARNESS_MENU_WIDTH = 124;
 
 export function SpawnComposerControls({
+	destinations,
+	destination,
+	onSelectDestination,
 	projects,
 	projectId,
 	onSelectProject,
@@ -64,11 +68,20 @@ export function SpawnComposerControls({
 	const logoUris = useHarnessLogoUris(agents);
 	const projectLabel = projects.find((project) => project.id === projectId)?.label ?? "Choose project";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
+	const destinationLabel = destinations.find((option) => destination && sourceKey(option.source) === sourceKey(destination))?.label ?? "Choose where to run";
 
 	return (
 		<View style={styles.stack}>
 			<Host style={styles.controlsHost} colorScheme={scheme} seedColor={t.accent}>
-				<VStack alignment="leading" spacing={10} modifiers={[frame({ height: 104, maxWidth: 1000 })]}>
+				<VStack alignment="leading" spacing={8} modifiers={[frame({ height: 144, maxWidth: 1000 })]}>
+				<Menu
+					label={<HStack spacing={7}><Image systemName="desktopcomputer" size={iconSize.sm} /><Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1)]}>Run on {destinationLabel}</Text><Image systemName="chevron.up.chevron.down" size={iconSize.xs} /></HStack>}
+					modifiers={[buttonStyle("plain"), tint(t.textPrimary), padding({ horizontal: 4 }), frame({ width: PROJECT_MENU_WIDTH, alignment: "leading" }), accessibilityIdentifier("spawn-destination")]}
+				>
+					{destinations.map((option) => (
+						<Button key={sourceKey(option.source)} label={option.available ? option.label : `${option.label} · Unavailable`} systemImage={destination && sourceKey(option.source) === sourceKey(destination) ? "checkmark" : undefined} onPress={() => { if (option.available) { haptics.select(); onSelectDestination(option.source); } }} />
+					))}
+				</Menu>
 				<Menu
 					label={
 						<HStack spacing={7}>
@@ -209,8 +222,8 @@ export function SpawnComposerControls({
 }
 
 const styles = StyleSheet.create({
-	stack: { width: "100%", height: 150, gap: space.hair },
-	controlsHost: { width: "100%", height: 104 },
+	stack: { width: "100%", height: 190, gap: space.hair },
+	controlsHost: { width: "100%", height: 144 },
 	micSlot: { width: MIC_KEY_SIZE, height: MIC_KEY_SIZE, alignItems: "center", justifyContent: "center" },
 	spawnButton: {
 		height: 44,

@@ -106,6 +106,7 @@ type AppState = {
 	localBoard: BoardState<ProjectInfo, DashboardSession, OrchestratorLink>;
 	cloudBoard: BoardState<ProjectInfo, DashboardSession, OrchestratorLink>;
 	scopedBoard: ScopedBoard;
+	availableSources: SourceRef[];
 	localPRs: ReturnType<typeof collectPRs>;
 	sourceFor: (source: SourceRef) => SessionSource | undefined;
 	refreshSource: (source: SourceRef) => Promise<void>;
@@ -691,6 +692,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		cloudAuth.signedIn, cloudAuth.orgId, cloudAuth.orgLoading, cloudAuth.orgError,
 		cloudSource, cloudBoard, cloudBoardOwner, cloudOrgId]);
 	const localPRs = useMemo(() => collectPRs(localBoard.sessions), [localBoard.sessions]);
+	const availableSources = useMemo(() => [
+		...(localMachineId && localSource ? [{ kind: "local" as const, id: localMachineId }] : []),
+		...(cloudOrgId && cloudSource ? [{ kind: "cloud" as const, id: cloudOrgId }] : []),
+	], [localMachineId, localSource, cloudOrgId, cloudSource]);
 	const boardSelection = selectBoardState({
 		environment,
 		sourceKind: sessionSource?.kind,
@@ -907,6 +912,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			localBoard,
 			cloudBoard,
 			scopedBoard,
+			availableSources,
 			localPRs,
 			sourceFor,
 			refreshSource,
@@ -956,6 +962,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			localBoard,
 			cloudBoard,
 			scopedBoard,
+			availableSources,
 			localPRs,
 			sourceFor,
 			refreshSource,
