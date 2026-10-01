@@ -16,7 +16,7 @@ import { HarnessSettingsSection } from "./HarnessSettingsSection";
 const cloudMocks = vi.hoisted(() => ({
 	cloudEnabled: false,
 	org: undefined as { id: string } | undefined,
-	connections: [] as Array<{ provider: string; validationState: string }>,
+	connections: [] as Array<{ provider: string; label?: string; validationState: string }>,
 }));
 
 vi.mock("../../hooks/useCloudGate", () => ({
@@ -168,7 +168,7 @@ describe("HarnessSettingsSection", () => {
 	it("logs cloud harnesses in from the cloud view", async () => {
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.org = { id: "org-1" };
-		cloudMocks.connections = [{ provider: "codex", validationState: "valid" }];
+		cloudMocks.connections = [{ provider: "codex", label: "default", validationState: "valid" }];
 		const user = userEvent.setup();
 		renderSection();
 		await screen.findByText("Goose");
@@ -193,6 +193,24 @@ describe("HarnessSettingsSection", () => {
 		expect(within(codexRow).getByRole("button", { name: "Log in with ChatGPT" })).toBeInTheDocument();
 	});
 
+	it("reads a harness as connected only from its valid default connection", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.org = { id: "org-1" };
+		// Several connections for one provider: whichever comes last must not decide.
+		cloudMocks.connections = [
+			{ provider: "codex", label: "default", validationState: "valid" },
+			{ provider: "codex", label: "secondary", validationState: "invalid" },
+			{ provider: "claude-code", label: "default", validationState: "invalid" },
+			{ provider: "claude-code", label: "secondary", validationState: "valid" },
+		];
+		renderSection(undefined, undefined, "cloud");
+
+		const codexRow = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		expect(within(codexRow).getByText("Connected")).toBeInTheDocument();
+		const claudeRow = screen.getByText("Claude Code").closest('[data-agent="claude-code"]') as HTMLElement;
+		expect(within(claudeRow).getByText("Not connected")).toBeInTheDocument();
+	});
+
 	it("opens straight into the cloud view when asked", async () => {
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.org = { id: "org-1" };
@@ -215,7 +233,7 @@ describe("HarnessSettingsSection", () => {
 	it("offers no cloud view while the cloud feature is off", async () => {
 		cloudMocks.cloudEnabled = false;
 		cloudMocks.org = { id: "org-1" };
-		cloudMocks.connections = [{ provider: "claude-code", validationState: "valid" }];
+		cloudMocks.connections = [{ provider: "claude-code", label: "default", validationState: "valid" }];
 		renderSection(undefined, undefined, "cloud");
 
 		const claudeRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;

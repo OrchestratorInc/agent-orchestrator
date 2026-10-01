@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CloudCpProviderConnection } from "./cloud-cp";
-import { cloudAgentInfos, connectedCredentialType, credentialModelScope } from "./cloud-agents";
+import { cloudAgentInfos, connectedCredentialType, credentialModelScope, isCloudHarnessConnected } from "./cloud-agents";
 
 function connection(
 	provider: string,
@@ -81,5 +81,29 @@ describe("cloudAgentInfos", () => {
 			["cursor", "not_ready"],
 			["opencode", "not_ready"],
 		]);
+	});
+});
+
+describe("isCloudHarnessConnected", () => {
+	it("uses the valid default connection, not whichever connection comes last", () => {
+		const connections = [
+			connection("codex"),
+			connection("codex", { id: "codex-2", label: "secondary", validationState: "invalid" }),
+		];
+		expect(isCloudHarnessConnected(connections, "codex")).toBe(true);
+		expect(cloudAgentInfos(connections).find((agent) => agent.id === "codex")?.effectiveReadiness).toBe("ready");
+	});
+
+	it("does not count a valid non-default connection", () => {
+		const connections = [
+			connection("claude-code", { validationState: "invalid" }),
+			connection("claude-code", { id: "claude-2", label: "secondary" }),
+		];
+		expect(isCloudHarnessConnected(connections, "claude-code")).toBe(false);
+		expect(cloudAgentInfos(connections).find((agent) => agent.id === "claude-code")?.effectiveReadiness).toBe("not_ready");
+	});
+
+	it("is false without connections", () => {
+		expect(isCloudHarnessConnected(undefined, "codex")).toBe(false);
 	});
 });

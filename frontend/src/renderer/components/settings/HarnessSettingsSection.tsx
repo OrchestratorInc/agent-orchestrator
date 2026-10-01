@@ -14,7 +14,7 @@ import { agentModelsQueryPrefix } from "../../hooks/useAgentModelsQuery";
 import { closeShellTerminal, shellTerminalsQueryKey } from "../../hooks/useShellTerminals";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { agentLabel, AGENT_OPTIONS, type AgentId } from "../../lib/agent-options";
-import { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
+import { CLOUD_AGENT_PROVIDERS, isCloudHarnessConnected } from "../../lib/cloud-agents";
 import { useCloudOrg } from "../../hooks/useCloudOrg";
 import { useProviderConnections } from "../../hooks/useProviderConnections";
 import { CloudHarnessLoginPanel, type CloudHarness } from "./CloudHarnessLoginPanel";
@@ -152,10 +152,6 @@ export function HarnessSettingsSection({
 	const cloudView = cloudEnabled && view === "cloud";
 	const signedIntoCloud = Boolean(cloudOrg?.id);
 	const cloudConnections = useProviderConnections();
-	const cloudConnByProvider = useMemo(
-		() => new Map((cloudConnections.data ?? []).map((connection) => [connection.provider, connection])),
-		[cloudConnections.data],
-	);
 	const [search, setSearch] = useState("");
 	const [authStates, setAuthStates] = useState<AgentAuthStates>({});
 	const [actionErrors, setActionErrors] = useState<Partial<Record<AgentId, string>>>({});
@@ -567,7 +563,7 @@ export function HarnessSettingsSection({
 							|| authStatus === "not_applicable"
 							|| mimoConfigured
 							|| (!authPlans.isPending && (!authPlan || authPlan.action === "instructions"));
-						const cloudConnected = cloudConnByProvider.get(agentId)?.validationState === "valid";
+						const cloudConnected = isCloudHarnessConnected(cloudConnections.data, agentId);
 						if (cloudView) {
 							return (
 								<div

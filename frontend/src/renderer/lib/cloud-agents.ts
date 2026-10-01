@@ -43,6 +43,16 @@ export function connectedCredentialType(
 	return typeof credentialType === "string" ? credentialType : "";
 }
 
+/** Whether a cloud harness is connected: its *default* connection is valid.
+ * A provider can have more than one connection, so this never takes whichever
+ * comes last; it is the same rule the cloud orchestrator launcher uses to pick
+ * a harness (cloud-orchestrator.ts connectedProviders). */
+export function isCloudHarnessConnected(connections: CloudCpProviderConnection[] | undefined, provider: string): boolean {
+	return (connections ?? []).some(
+		(connection) => connection.provider === provider && connection.label === "default" && connection.validationState === "valid",
+	);
+}
+
 /** Maps the user's cloud provider connections onto the same AgentInfo shape
  * local readiness uses, so the cloud agent picker is the identical component
  * local's agent sheet already ships (RequiredAgentField, AgentSelectMenuItem,
@@ -52,9 +62,8 @@ export function connectedCredentialType(
  * create-project flow and the task composer can source the cloud picker without
  * importing a heavy component module. */
 export function cloudAgentInfos(connections: CloudCpProviderConnection[] | undefined): AgentInfo[] {
-	const byProvider = new Map((connections ?? []).map((connection) => [connection.provider, connection]));
 	return CLOUD_AGENT_PROVIDERS.map((id) => {
-		const authorized = byProvider.get(id)?.validationState === "valid";
+		const authorized = isCloudHarnessConnected(connections, id);
 		return {
 			id,
 			label: agentLabel(id),

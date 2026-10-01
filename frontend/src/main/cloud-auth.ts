@@ -663,14 +663,6 @@ export function installCloudIPC(
 
     if (credential.provider !== provider) throw new Error("Cloud provider login returned an unexpected provider.");
 
-    // Unified "one login for local + cloud": persist the captured Claude
-    // setup-token locally so local sessions authenticate with the SAME credential
-    // the cloud copy uses. The daemon's claudecode adapter injects it only when no
-    // native login is present, so this never shadows an existing local login.
-    if (persistLocalClaudeToken === true && credential.provider === "claude-code" && credential.credentialType === "oauth_token") {
-      await persistLocalClaudeOAuthToken(dataDir, credential.secret);
-    }
-
     if (provider === "github") {
       // Returned to the renderer, which saves it via the daemon's
       // PUT /api/v1/github/pat endpoint. Include the OAuth refresh material so
@@ -695,6 +687,14 @@ export function installCloudIPC(
       body: JSON.stringify({ credentialType: credential.credentialType, secret: credential.secret }),
     });
     if (!response.ok) throw new Error("AO Cloud could not save the provider credential.");
+
+    // Persist the captured Claude setup-token locally as a fallback for local
+    // sessions, only once the cloud copy is saved: a failed cloud save must not
+    // leave a local login behind. The daemon's claudecode adapter injects it only
+    // when no native login is present, so it never shadows an existing login.
+    if (persistLocalClaudeToken === true && credential.provider === "claude-code" && credential.credentialType === "oauth_token") {
+      await persistLocalClaudeOAuthToken(dataDir, credential.secret);
+    }
     return undefined;
   });
 }
