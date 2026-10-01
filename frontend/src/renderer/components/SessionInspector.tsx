@@ -1720,9 +1720,10 @@ function ReviewsSection({
 			const reviewerConfig = reviewerModel || reviewerMode
 				? { ...(reviewerModel ? { model: reviewerModel } : {}), ...(reviewerMode ? { mode: reviewerMode } : {}) }
 				: undefined;
+			const selectedHarness = harness || reviewerOverride;
 			const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/trigger", {
 				params: { path: { sessionId: session.id } },
-				body: { ...((harness || reviewerOverride) ? { harness: harness || reviewerOverride } : {}), ...(!harness && reviewerConfig ? { agentConfig: reviewerConfig } : {}), interfaceMode },
+				body: { ...(selectedHarness ? { harness: selectedHarness } : {}), ...(!harness && reviewerConfig ? { agentConfig: reviewerConfig } : {}), interfaceMode },
 			});
 			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableStartReview")));
 			return { data, reused: response?.status === 200 };
