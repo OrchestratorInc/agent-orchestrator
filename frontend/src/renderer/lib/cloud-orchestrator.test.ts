@@ -88,7 +88,7 @@ describe("spawnCloudOrchestrator", () => {
 	it("does not send a saved provider absent from this control plane", async () => {
 		window.localStorage.setItem("ao.cloud.sandboxProvider", "coder");
 		const queryClient = primeClient({ id: "project-1" });
-		cloudMocks.listProviderConnections.mockResolvedValue({ providerConnections: [connection("codex")] });
+		cloudMocks.listUserProviderConnections.mockResolvedValue({ providerConnections: [connection("codex")] });
 
 		await spawnCloudOrchestrator(queryClient, "project-1");
 		expect(cloudMocks.createSession).toHaveBeenCalledWith("org-1", expect.not.objectContaining({ provider: "coder" }));
