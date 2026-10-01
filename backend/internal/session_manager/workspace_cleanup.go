@@ -76,7 +76,7 @@ func (m *Manager) runPreRemove(ctx context.Context, projectID domain.ProjectID, 
 					message = strings.ReplaceAll(message, value, "[REDACTED]")
 				}
 			}
-			return fmt.Errorf("%w: step %d: %v: %s", ErrCleanupScript, index+1, err, message)
+			return fmt.Errorf("%w: step %d: %w: %s", ErrCleanupScript, index+1, err, message)
 		}
 	}
 	return nil
