@@ -1292,10 +1292,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			if (left) return;
 			const code = apiErrorCode(error);
 			const message = code === "CHAT_RESUME_FAILED"
-				? "The provider could not reopen the saved conversation. Check the provider, then try again."
+				? "The agent couldn’t restore the saved conversation. Your messages are still here."
 				: code === "CHAT_AUTH_REQUIRED"
-					? "Sign in to the provider, then try again."
-					: "Check the provider connection, then try again.";
+					? "Sign in to the agent provider, then reconnect."
+					: "Check the agent connection, then reconnect.";
 			setFailedChatViewWake({ sessionId, message });
 			void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId) });
 		};

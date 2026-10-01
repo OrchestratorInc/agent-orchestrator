@@ -1319,6 +1319,25 @@ function ChatWorkspaceContent({
 		};
 	}, [conversationEmpty, uiSessionId]);
 
+	const showWakeFailure = Boolean(automaticWakeError && snapshot.controller.state !== "ready" && snapshot.controller.state !== "busy");
+	const controllerBanner = (
+		<ControllerBanner
+			controller={snapshot.controller}
+			agentName={agentLabel(snapshot.harness)}
+			provisionState={session?.provisionState}
+			provisionError={session?.provisionError}
+			transitioning={controllerTransitioning}
+			automaticWakePending={suppressStopped}
+			onResume={newWorkDisabled ? undefined : onResumeAgent}
+			resuming={resumingAgent}
+			resumeError={resumeError}
+			automaticWakeError={automaticWakeError}
+			onOpenShell={onOpenShell}
+			openingShell={openingShell}
+			shellError={shellError}
+		/>
+	);
+
 	return (
 		<section
 			ref={surfaceRef}
@@ -1426,21 +1445,7 @@ function ChatWorkspaceContent({
 					{snapshot.account ? (
 						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} reasonInTimeline={reauthErrorInChat} />
 					) : null}
-					<ControllerBanner
-						controller={snapshot.controller}
-						agentName={agentLabel(snapshot.harness)}
-						provisionState={session?.provisionState}
-						provisionError={session?.provisionError}
-						transitioning={controllerTransitioning}
-						automaticWakePending={suppressStopped}
-						onResume={newWorkDisabled ? undefined : onResumeAgent}
-						resuming={resumingAgent}
-						resumeError={resumeError}
-						automaticWakeError={automaticWakeError}
-						onOpenShell={onOpenShell}
-						openingShell={openingShell}
-						shellError={shellError}
-					/>
+					{showWakeFailure ? null : controllerBanner}
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
 					<McpServerBanner
 						sessionId={uiSessionId}
@@ -1491,6 +1496,7 @@ function ChatWorkspaceContent({
 								data-empty={conversationEmpty || undefined}
 								className="mx-auto flex w-full max-w-3xl flex-col gap-2 transition-[max-width] duration-500 ease-out data-[empty]:max-w-2xl"
 							>
+								{showWakeFailure ? controllerBanner : null}
 								{discarded > 0 ? <RolledBackNotice count={discarded} /> : null}
 								{conversationEmpty ? (
 									<h1 className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl">
@@ -1941,12 +1947,47 @@ function ControllerBanner({
 	const starting = provisioning || failed;
 	const waking = Boolean(resuming && controller.state === "stopped");
 	const wakeFailed = Boolean(automaticWakeError && controller.state !== "ready" && controller.state !== "busy");
+	const resumeClick = () => {
+		void Promise.resolve().then(() => onResume?.()).catch(() => {});
+	};
+
+	if (wakeFailed) return (
+		<div
+			role={resuming ? "status" : "alert"}
+			aria-atomic="true"
+			className={cn(
+				"flex flex-wrap items-center gap-3 rounded-lg border px-3 py-2.5",
+				resuming ? "border-border bg-surface" : "border-warning/30 bg-warning/5",
+			)}
+		>
+			<div className="flex min-w-0 flex-1 items-start gap-2.5">
+				<span aria-hidden="true" className={cn("mt-0.5 grid size-7 shrink-0 place-items-center rounded-md", resuming ? "bg-muted" : "bg-warning/10")}>
+					{resuming
+					? <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+						: <TriangleAlert className="size-3.5 text-warning" />}
+				</span>
+				<div className="min-w-0">
+					<strong className="block text-sm font-medium leading-5 text-foreground">
+						{resuming ? "Reconnecting…" : resumeError ? "Still couldn’t reconnect" : "Couldn’t reconnect"}
+					</strong>
+					<p className="text-xs leading-4 text-muted-foreground">
+						{resuming ? "Restoring the conversation…" : automaticWakeError}
+					</p>
+				</div>
+			</div>
+			{onResume ? (
+				<Button type="button" size="sm" variant="secondary" onClick={resumeClick} disabled={resuming}>
+					{resuming ? "Connecting…" : "Reconnect"}
+				</Button>
+			) : null}
+		</div>
+	);
 
 	// The transition coordinator intentionally stops one controller before it
 	// starts the other. The top-bar handoff state already explains that interval;
 	// presenting its intermediate snapshot as a crash produces a red false alarm.
-	if (!starting && !wakeFailed && (controller.state === "ready" || controller.state === "busy" || controller.state === "hibernated")) return null;
-	if (!starting && !wakeFailed && controller.state === "stopped" && (transitioning || automaticWakePending)) return null;
+	if (!starting && (controller.state === "ready" || controller.state === "busy" || controller.state === "hibernated")) return null;
+	if (!starting && controller.state === "stopped" && (transitioning || automaticWakePending)) return null;
 
 	const copy: Partial<Record<ControllerState, { title: string; tone: string }>> = {
 		connecting: {
@@ -1962,22 +2003,17 @@ function ControllerBanner({
 			tone: waking ? "text-muted-foreground" : "text-destructive",
 		},
 	};
-	const shown = wakeFailed
-		? { title: "Couldn’t reconnect to this chat", tone: "text-destructive" }
-		: provisioning
+	const shown = provisioning
 		? { title: `Starting ${agentName}…`, tone: "text-muted-foreground" }
 		: failed
 			? { title: "This session could not be started", tone: "text-destructive" }
 			: copy[controller.state];
 	if (!shown) return null;
-	const loading = !wakeFailed && (provisioning || (!failed && (controller.state === "connecting" || waking)));
-	const resumeClick = () => {
-		void Promise.resolve().then(() => onResume?.()).catch(() => {});
-	};
+	const loading = provisioning || (!failed && (controller.state === "connecting" || waking));
 
 	return (
 		<div
-			role={wakeFailed || failed || (controller.state === "stopped" && !waking) ? "alert" : "status"}
+			role={failed || (controller.state === "stopped" && !waking) ? "alert" : "status"}
 			aria-atomic="true"
 			className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5"
 		>
@@ -1991,17 +2027,7 @@ function ControllerBanner({
 			)}
 			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<strong className={cn("text-xs font-medium", shown.tone)}>{shown.title}</strong>
-				{wakeFailed ? (
-					<>
-						<span className="text-[11px] leading-snug text-muted-foreground">{automaticWakeError}</span>
-						{resumeError ? <span className="text-[11px] leading-snug text-destructive">{resumeError}</span> : null}
-						{onResume ? (
-							<Button type="button" size="sm" variant="outline" onClick={resumeClick} disabled={resuming}>
-								{resuming ? "Retrying…" : "Try again"}
-							</Button>
-						) : null}
-					</>
-				) : provisioning ? (
+				{provisioning ? (
 					<span className="text-[11px] leading-snug text-muted-foreground">
 						Setting up the worktree and the agent. Keep typing — your messages are
 						queued and sent in order as soon as it is ready.
