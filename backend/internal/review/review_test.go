@@ -490,7 +490,7 @@ func (f *fakeLauncher) Destroy(_ context.Context, handleID string) error {
 	}
 	return nil
 }
-func (f *fakeLauncher) Preflight(_ context.Context, _ domain.ReviewerHarness, _ string) error {
+func (f *fakeLauncher) Preflight(_ context.Context, _ domain.ReviewerHarness, _ string, _ ...domain.ReviewerInterfaceMode) error {
 	f.preflighted = true
 	return f.preflightErr
 }
@@ -603,6 +603,27 @@ func TestTriggerPersistsChatModeBeforeCreatingReviewerConversation(t *testing.T)
 	}
 	if _, err := store.ConversationForReview(ctx, review.ID); err != nil {
 		t.Fatalf("ConversationForReview: %v", err)
+	}
+}
+
+func TestTriggerCanChooseTerminalForChatCapableReviewer(t *testing.T) {
+	store := &fakeStore{}
+	launcher := &fakeLauncher{interfaceMode: domain.ReviewerInterfaceChat, handle: "review-mer-1"}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+
+	res, err := eng.TriggerWithSourceAndMode(context.Background(), "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceTUI)
+	if err != nil {
+		t.Fatalf("TriggerWithSourceAndMode: %v", err)
+	}
+	if !res.Created || launcher.gotSpec.InterfaceMode != domain.ReviewerInterfaceTUI || store.review.InterfaceMode != domain.ReviewerInterfaceTUI {
+		t.Fatalf("terminal mode was not launched and persisted: result=%+v spec=%+v review=%+v", res, launcher.gotSpec, store.review)
+	}
+}
+
+func TestTriggerRejectsChatForTerminalOnlyReviewer(t *testing.T) {
+	eng := newEngineForTest(&fakeStore{}, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, &fakeLauncher{})
+	if _, err := eng.TriggerWithSourceAndMode(context.Background(), "mer-1", "", domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceChat); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("TriggerWithSourceAndMode error = %v, want invalid", err)
 	}
 }
 

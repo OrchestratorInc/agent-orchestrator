@@ -1658,6 +1658,7 @@ function ReviewsSection({
 	);
 	const [reviewerModel, setReviewerModel] = useState(session.reviewerConfig?.model ?? "");
 	const [reviewerMode, setReviewerMode] = useState(session.reviewerConfig?.mode ?? "");
+	const [reviewerInterfaceMode, setReviewerInterfaceMode] = useState<"chat" | "tui">("chat");
 	useEnsureAgentReadiness({
 		agentIds: reviewerOverride ? [reviewerOverride] : [],
 		enabled: reviewerOverride !== "",
@@ -1668,6 +1669,10 @@ function ReviewsSection({
 		setReviewerModel(session.reviewerConfig?.model ?? "");
 		setReviewerMode(session.reviewerConfig?.mode ?? "");
 	}, [hostId, session.id, session.reviewerConfig?.mode, session.reviewerConfig?.model, session.reviewerHarness]);
+	useEffect(() => {
+		const mode = reviewsQuery.data?.reviewerSurface?.mode;
+		if (mode === "chat" || mode === "tui") setReviewerInterfaceMode(mode);
+	}, [reviewsQuery.data?.reviewerSurface?.mode, session.id]);
 	const saveReviewer = useMutation({
 		mutationFn: async ({ harness, model, mode }: { harness: ReviewerHarness | ""; model: string; mode: string }) => {
 			const clearingToProjectDefault = harness === "" && model === "" && mode === "";
@@ -1709,15 +1714,15 @@ function ReviewsSection({
 		},
 	});
 	const triggerReview = useMutation({
-		mutationFn: async () => {
-			// No override sends no body at all, leaving the default path on the wire
-			// exactly as it was.
+		mutationFn: async ({ interfaceMode, harness }: { interfaceMode: "chat" | "tui"; harness?: ReviewerHarness }) => {
+			// Keep agent/model overrides scoped to this pass; the interface choice
+			// must reach the daemon so it launches the matching reviewer surface.
 			const reviewerConfig = reviewerModel || reviewerMode
 				? { ...(reviewerModel ? { model: reviewerModel } : {}), ...(reviewerMode ? { mode: reviewerMode } : {}) }
 				: undefined;
 			const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/trigger", {
 				params: { path: { sessionId: session.id } },
-				...(reviewerOverride || reviewerConfig ? { body: { ...(reviewerOverride ? { harness: reviewerOverride } : {}), ...(reviewerConfig ? { agentConfig: reviewerConfig } : {}) } } : {}),
+				body: { ...((harness || reviewerOverride) ? { harness: harness || reviewerOverride } : {}), ...(!harness && reviewerConfig ? { agentConfig: reviewerConfig } : {}), interfaceMode },
 			});
 			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableStartReview")));
 			return { data, reused: response?.status === 200 };
@@ -1804,7 +1809,15 @@ function ReviewsSection({
 				onCancel={() => cancelReview.mutate()}
 				onAutoReviewChange={(enabled) => saveAutoReview.mutate(enabled)}
 				onKill={() => killReview.mutate()}
-				onTrigger={() => triggerReview.mutate()}
+				onTrigger={() => triggerReview.mutate({ interfaceMode: (reviewerOverride || currentDefaultReviewerHarness) === "codex" ? reviewerInterfaceMode : "tui" })}
+				reviewerInterfaceMode={reviewerInterfaceMode}
+				onReviewerInterfaceModeChange={(mode) => {
+					setReviewerInterfaceMode(mode);
+					const runningHarness = reviewStates.find((review) => review.status === "running")?.latestRun?.harness as ReviewerHarness | undefined;
+					if (reviewStates.some((review) => review.status === "running")) {
+						triggerReview.mutate({ interfaceMode: mode, harness: runningHarness || reviewerOverride || currentDefaultReviewerHarness });
+					}
+				}}
 				reviewerHandleId={reviewsQuery.data?.reviewerHandleId ?? ""}
 				reviewerActivityState={reviewsQuery.data?.reviewerActivityState}
 				reviewStates={reviewStates}
@@ -2302,7 +2315,9 @@ function ReviewPanel({
 	reviewerOverride,
 	reviewerModel,
 	reviewerMode,
+	reviewerInterfaceMode,
 	onReviewerOverrideChange,
+	onReviewerInterfaceModeChange,
 	onReviewerHarnessPreviewChange,
 	onTrigger,
 	onCancel,
@@ -2327,7 +2342,9 @@ function ReviewPanel({
 	reviewerOverride: ReviewerHarness | "";
 	reviewerModel: string;
 	reviewerMode: string;
+	reviewerInterfaceMode: "chat" | "tui";
 	onReviewerOverrideChange: (next: ReviewerHarness | "", config: { model?: string; mode?: string }) => void;
+	onReviewerInterfaceModeChange: (mode: "chat" | "tui") => void;
 	onReviewerHarnessPreviewChange: (next: ReviewerHarness | "") => void;
 	onTrigger: () => void;
 	onCancel: () => void;
@@ -2455,6 +2472,26 @@ function ReviewPanel({
 							value={reviewerOverride}
 						/>
 					</div>
+					{activeReviewerHarness === "codex" ? (
+						<div className="flex min-h-10 min-w-0 items-center justify-between gap-3 py-2">
+							<span className="text-xs font-medium text-foreground">Reviewer interface</span>
+							<div aria-label="Reviewer interface" className="flex rounded-md border border-border p-0.5" role="group">
+								{(["chat", "tui"] as const).map((mode) => (
+									<Button
+										key={mode}
+										aria-pressed={reviewerInterfaceMode === mode}
+										className="h-6 px-2 text-xs"
+										disabled={isTriggering || isCancelling || isKilling || isSwitchingReviewer}
+										onClick={() => onReviewerInterfaceModeChange(mode)}
+										type="button"
+										variant={reviewerInterfaceMode === mode ? "secondary" : "ghost"}
+									>
+										{mode === "chat" ? "Chat" : "Terminal"}
+									</Button>
+								))}
+							</div>
+						</div>
+					) : null}
 					<InspectorPolicyRow
 						checked={autoReviewEnabled}
 						description={t("inspector.autoReviewDescription")}

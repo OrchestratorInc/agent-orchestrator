@@ -14815,6 +14815,11 @@ components:
           - cline
           - autohand
           type: string
+        interfaceMode:
+          enum:
+          - chat
+          - tui
+          type: string
       type: object
     TriggerReviewResponse:
       properties:
