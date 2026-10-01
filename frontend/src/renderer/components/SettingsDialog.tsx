@@ -253,8 +253,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 										</div>
 									) : (
 										<p className="flex items-center gap-2 text-settings-muted">
-											<Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />
-											{t("settings.project.saving")}
+											{projectSaveState.phase === "pending" && activeProjectSection === "environment" ? t("settings.project.unsavedChanges") : <><Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />{t("settings.project.saving")}</>}
 										</p>
 									)}
 								</div>

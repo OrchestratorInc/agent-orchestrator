@@ -1164,6 +1164,7 @@
 	"settings.project.saveFailed": "Speichern fehlgeschlagen",
 	"settings.project.saved": "Gespeichert.",
 	"settings.project.saving": "Wird gespeichert…",
+	"settings.project.unsavedChanges": "Nicht gespeicherte Änderungen",
 	"settings.project.selectOrchestrator": "Orchestrator-Agent auswählen",
 	"settings.project.selectWorker": "Worker-Agent auswählen",
 	"settings.project.sessionPrefix": "Sitzungspräfix",

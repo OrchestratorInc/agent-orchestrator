@@ -47,7 +47,8 @@ it("imports pasted .env entries into the draft, replacing matching names without
 
 it("rejects a pasted reserved name without partially changing the draft", async () => {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-	render(<QueryClientProvider client={client}><ProjectEnvironmentSettings projectId="p" /></QueryClientProvider>);
+	const onSaveState = vi.fn();
+	render(<QueryClientProvider client={client}><ProjectEnvironmentSettings projectId="p" onSaveState={onSaveState} /></QueryClientProvider>);
 	await screen.findByLabelText("Value 1");
 	await userEvent.click(screen.getByRole("button", { name: "Paste .env" }));
 	fireEvent.change(screen.getByLabelText("Paste .env"), { target: { value: "NEW=good\nAO_SESSION_ID=spoof" } });
@@ -56,4 +57,5 @@ it("rejects a pasted reserved name without partially changing the draft", async 
 	expect(screen.queryByLabelText("Value 2")).not.toBeInTheDocument();
 	expect(screen.getByLabelText("Value 1")).toHaveValue("old");
 	expect(putMock).not.toHaveBeenCalled();
+	expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "idle", dirty: false }));
 });

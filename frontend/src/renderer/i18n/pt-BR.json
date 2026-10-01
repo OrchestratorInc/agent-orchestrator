@@ -1184,6 +1184,7 @@
 	"settings.project.saveFailed": "Falha ao salvar",
 	"settings.project.saved": "Salvo.",
 	"settings.project.saving": "Salvando…",
+	"settings.project.unsavedChanges": "Alterações não salvas",
 	"settings.project.selectOrchestrator": "Selecionar agente orchestrator",
 	"settings.project.selectWorker": "Selecionar agente worker",
 	"settings.project.sessionPrefix": "Prefixo da sessão",

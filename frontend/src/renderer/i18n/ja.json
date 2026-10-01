@@ -1164,6 +1164,7 @@
 	"settings.project.saveFailed": "保存に失敗しました",
 	"settings.project.saved": "保存しました。",
 	"settings.project.saving": "保存中…",
+	"settings.project.unsavedChanges": "未保存の変更",
 	"settings.project.selectOrchestrator": "オーケストレーターエージェントを選択",
 	"settings.project.selectWorker": "ワーカーエージェントを選択",
 	"settings.project.sessionPrefix": "セッション接頭辞",

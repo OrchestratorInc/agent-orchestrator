@@ -1164,6 +1164,7 @@
 	"settings.project.saveFailed": "저장 실패",
 	"settings.project.saved": "저장됨.",
 	"settings.project.saving": "저장 중…",
+	"settings.project.unsavedChanges": "저장되지 않은 변경 사항",
 	"settings.project.selectOrchestrator": "오케스트레이터 에이전트 선택",
 	"settings.project.selectWorker": "워커 에이전트 선택",
 	"settings.project.sessionPrefix": "세션 접두사",

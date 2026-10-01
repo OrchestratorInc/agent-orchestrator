@@ -1184,6 +1184,7 @@
 	"settings.project.saveFailed": "Échec de l'enregistrement",
 	"settings.project.saved": "Enregistré.",
 	"settings.project.saving": "Enregistrement…",
+	"settings.project.unsavedChanges": "Modifications non enregistrées",
 	"settings.project.selectOrchestrator": "Sélectionner l'agent orchestrateur",
 	"settings.project.selectWorker": "Sélectionner l'agent worker",
 	"settings.project.sessionPrefix": "Préfixe de session",

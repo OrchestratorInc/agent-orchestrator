@@ -1184,6 +1184,7 @@
 	"settings.project.saveFailed": "Error al guardar",
 	"settings.project.saved": "Guardado.",
 	"settings.project.saving": "Guardando…",
+	"settings.project.unsavedChanges": "Cambios sin guardar",
 	"settings.project.selectOrchestrator": "Seleccionar agente orquestador",
 	"settings.project.selectWorker": "Seleccionar agente de trabajo",
 	"settings.project.sessionPrefix": "Prefijo de sesión",

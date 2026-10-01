@@ -1146,6 +1146,7 @@
 	"settings.project.saveFailed": "保存失败",
 	"settings.project.saved": "已保存。",
 	"settings.project.saving": "正在保存…",
+	"settings.project.unsavedChanges": "未保存的更改",
 	"settings.project.selectOrchestrator": "选择编排代理",
 	"settings.project.selectWorker": "选择 worker 代理",
 	"settings.project.sessionPrefix": "会话前缀",

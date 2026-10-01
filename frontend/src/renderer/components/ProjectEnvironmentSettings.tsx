@@ -98,12 +98,12 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 	});
 	useEffect(() => {
 		onSaveState?.({
-			phase: error || mutation.isError ? "failed" : mutation.isPending ? "saving" : dirty ? "pending" : savedAt ? "saved" : "idle",
+			phase: mutation.isError ? "failed" : mutation.isPending ? "saving" : dirty ? "pending" : savedAt ? "saved" : "idle",
 			dirty,
 			requestPending: mutation.isPending,
-			error: error ?? (mutation.error instanceof Error ? mutation.error.message : undefined),
+			error: mutation.error instanceof Error ? mutation.error.message : undefined,
 		});
-	}, [dirty, error, mutation.error, mutation.isError, mutation.isPending, onSaveState, savedAt]);
+	}, [dirty, mutation.error, mutation.isError, mutation.isPending, onSaveState, savedAt]);
 	const update = (next: Row[]) => { setRows(next); setError(null); setSavedAt(false); setImportedCount(null); };
 	const importPasted = () => {
 		const parsed = parsePastedEnv(pasteText);
