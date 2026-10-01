@@ -1813,6 +1813,67 @@ func TestImportedGlobalCredentialDoesNotBlockNormalAuthentication(t *testing.T) 
 	}
 }
 
+func TestProbeRecognizesFirstCodexLoginWithoutDaemonRestart(t *testing.T) {
+	root := t.TempDir()
+	globalHome := filepath.Join(root, "global-codex")
+	if err := ensurePrivateDirectory(globalHome); err != nil {
+		t.Fatal(err)
+	}
+	email := "signed-in@example.com"
+	factory := &fakeCodexAccountFactory{
+		capabilities: supportedCodexAccountCapabilities(),
+		open: func(ports.CodexAccountContext) (ports.CodexAccountClient, error) {
+			return &fakeCodexAccountClient{read: ports.CodexAccountObservation{
+				Authentication: domain.AgentAuthenticationAuthorized,
+				Method:         domain.CodexAuthMethodChatGPT,
+				Email:          &email,
+			}}, nil
+		},
+	}
+	svc := NewWithDeps(Deps{
+		CodexAccountRoot: filepath.Join(root, "accounts"),
+		CodexPendingRoot: filepath.Join(root, "pending"),
+		CodexSwitchStagingRoot: filepath.Join(root, "staging"),
+		CodexGlobalHome: globalHome,
+		CodexAccounts: factory,
+	})
+	svc.agents = []agentregistry.HarnessAgent{readinessHarness("codex", "Codex", &readinessTestAgent{
+		resolve: func(context.Context) (string, error) { return "codex", nil },
+		// Native Codex sees the new auth.json immediately; the managed account
+		// projection must not override that with its stale signed-out snapshot.
+		auth: func(context.Context) (ports.AgentAuthStatus, error) { return ports.AgentAuthStatusAuthorized, nil },
+	})}
+	svc.readiness = newReadinessCoordinator(readinessCoordinatorConfig{
+		Agents: svc.agents, AuthenticationCheck: svc.structuredCodexAuthentication,
+	})
+	svc.codexAccounts.catalog.newID = func() string { return testAccountID }
+	ctx := context.Background()
+	if err := svc.WaitCodexAccountStoreReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.codexAccounts.reconcileGlobal(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before, err := svc.Probe(ctx, "codex")
+	if err != nil || before.Agent.AuthStatus != ports.AgentAuthStatusUnauthorized {
+		t.Fatalf("pre-login probe = %#v, %v", before, err)
+	}
+	if err := writeGlobalCredentialAtomic(filepath.Join(globalHome, codexCredentialFilename), testOAuthCredential("provider-account", "access")); err != nil {
+		t.Fatal(err)
+	}
+	after, err := svc.Probe(ctx, "codex")
+	if err != nil || after.Agent.AuthStatus != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("post-login probe = %#v, %v; want authorized without restart", after, err)
+	}
+	if id := svc.codexAccounts.activeAccountID(); id == "" {
+		t.Fatal("post-login probe did not import the newly signed-in account")
+	}
+	readiness, err := svc.EnsureAgentReadiness(ctx, "codex", domain.AgentReadinessPurposeDisplay)
+	if err != nil || readiness.Authentication.State != domain.AgentAuthenticationAuthorized {
+		t.Fatalf("post-login Harness readiness = %#v, %v; want authorized", readiness.Authentication, err)
+	}
+}
+
 func TestGlobalSwitchCapabilityAllowsMissingCredentialButRejectsUnsafeCredential(t *testing.T) {
 	root := t.TempDir()
 	globalHome := filepath.Join(root, "global-codex")
