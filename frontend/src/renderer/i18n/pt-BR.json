@@ -1,5 +1,6 @@
 {
 	"agentSelector.manage": "Gerenciar agentes…",
+	"agentSelector.manageCloud": "Gerenciar conexões de harnesses…",
 	"agentSelector.noneReady": "Nenhum agente pronto",
 	"agentSelector.needsSetup": "Requer configuração",
 	"session.statusChecking": "Verificando…",

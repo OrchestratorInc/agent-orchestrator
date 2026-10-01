@@ -1,5 +1,6 @@
 {
 	"agentSelector.manage": "エージェントを管理…",
+	"agentSelector.manageCloud": "ハーネスの接続を管理…",
 	"agentSelector.noneReady": "利用可能なエージェントがありません",
 	"agentSelector.needsSetup": "設定が必要",
 	"session.statusChecking": "確認中…",

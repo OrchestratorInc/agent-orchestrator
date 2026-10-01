@@ -1,5 +1,6 @@
 {
 	"agentSelector.manage": "에이전트 관리…",
+	"agentSelector.manageCloud": "하네스 연결 관리…",
 	"agentSelector.noneReady": "준비된 에이전트 없음",
 	"agentSelector.needsSetup": "설정 필요",
 	"session.statusChecking": "확인 중…",

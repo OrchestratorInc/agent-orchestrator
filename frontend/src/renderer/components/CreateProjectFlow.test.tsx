@@ -1680,9 +1680,11 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(await screen.findByRole("option", { name: /acme\/private-repo/ }));
 		// The picker already shows the repository; no second summary with its URL and branch.
 		expect(screen.queryByText(/github\.com\/acme\/private-repo/)).not.toBeInTheDocument();
-		// Only harnesses logged in for cloud can be picked, and agents are not managed from here.
+		// Only harnesses connected for cloud are offered, with a way to connect more.
 		await user.click(await screen.findByLabelText("Worker agent"));
-		expect(screen.getByRole("option", { name: /Codex/ })).toHaveAttribute("data-disabled");
+		expect(screen.getByRole("option", { name: /Claude Code/ })).toBeInTheDocument();
+		expect(screen.queryByRole("option", { name: /Codex/ })).not.toBeInTheDocument();
+		expect(screen.getByRole("option", { name: "Manage harness connections…" })).toBeInTheDocument();
 		expect(screen.queryByRole("option", { name: "Manage agents…" })).not.toBeInTheDocument();
 		await user.keyboard("{Escape}");
 		await user.click(await screen.findByRole("button", { name: "Create cloud project" }));

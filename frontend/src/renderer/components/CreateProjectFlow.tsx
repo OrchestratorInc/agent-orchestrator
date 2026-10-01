@@ -1281,24 +1281,28 @@ function CloudAgentSetupStep({
 					{createError}
 				</div>
 			) : null}
-			<RequiredAgentField
-				id="cloudWorkerAgent"
-				manageAgents={false}
-				label={t("createProject.workerAgent", { defaultValue: "Worker" })}
-				placeholder={t("createProject.chooseAgent", { defaultValue: "Choose an agent" })}
-				agents={cloudAgents}
-				value={workerAgent}
-				onChange={setWorkerAgent}
-			/>
-			<RequiredAgentField
-				id="cloudOrchestratorAgent"
-				manageAgents={false}
-				label={t("createProject.orchestratorAgent", { defaultValue: "Orchestrator" })}
-				placeholder={t("createProject.chooseAgent", { defaultValue: "Choose an agent" })}
-				agents={cloudAgents}
-				value={orchestratorAgent}
-				onChange={setOrchestratorAgent}
-			/>
+			{/* Only harnesses connected for cloud are offered; the menu links to
+			    Harness settings' Cloud view to connect more. */}
+			<div className="grid grid-cols-2 gap-3">
+				<RequiredAgentField
+					id="cloudWorkerAgent"
+					manageView="cloud"
+					label={t("createProject.workerAgent", { defaultValue: "Worker" })}
+					placeholder={t("createProject.chooseAgent", { defaultValue: "Choose an agent" })}
+					agents={cloudAgents}
+					value={workerAgent}
+					onChange={setWorkerAgent}
+				/>
+				<RequiredAgentField
+					id="cloudOrchestratorAgent"
+					manageView="cloud"
+					label={t("createProject.orchestratorAgent", { defaultValue: "Orchestrator" })}
+					placeholder={t("createProject.chooseAgent", { defaultValue: "Choose an agent" })}
+					agents={cloudAgents}
+					value={orchestratorAgent}
+					onChange={setOrchestratorAgent}
+				/>
+			</div>
 			{/* Harness login lives only in Harness settings; project creation just
 			    points there when no cloud harness is logged in yet. */}
 			{connections.isSuccess && !anyAgentReady ? (
