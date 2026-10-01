@@ -16,12 +16,12 @@ vi.mock("../hooks/useCoderTemplates", () => ({
 
 beforeEach(() => useCoderSessionOptionsStore.getState().reset());
 
-it("chooses a template from the searchable dropdown", async () => {
+it("chooses a template from the dropdown", async () => {
 	const user = userEvent.setup();
 	render(<CoderTemplatePicker orgId="org-1" />);
 	await user.click(screen.getByRole("combobox", { name: "Template" }));
-	await user.type(screen.getByPlaceholderText("Search templates"), "Fast");
-	expect(screen.queryByRole("option", { name: "Lean workspace" })).not.toBeInTheDocument();
+	// A short list has no search box.
+	expect(screen.queryByPlaceholderText("Search templates")).not.toBeInTheDocument();
 	await user.click(screen.getByRole("option", { name: "Fast workspace" }));
 	expect(screen.getByRole("combobox", { name: "Template" })).toHaveTextContent("Fast workspace");
 	expect(screen.getByText("Machine size")).toBeInTheDocument();

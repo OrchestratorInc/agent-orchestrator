@@ -4,6 +4,9 @@ import { useTranslation } from "react-i18next";
 import { cn } from "../lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
+
+/** Lists with more options than this get a search box. */
+const SEARCH_THRESHOLD = 10;
 export interface SearchablePickerOption {
 	value: string;
 	label: string;
@@ -36,6 +39,9 @@ export function SearchablePicker({
 	const [open, setOpen] = useState(false);
 	const [search, setSearch] = useState("");
 	const selected = options.find((option) => option.value === value);
+	// A short list is easier to scan than to search; offer search only once the
+	// list is long enough to need it.
+	const searchable = options.length > SEARCH_THRESHOLD;
 	const filtered = options.filter((option) =>
 		`${option.label} ${option.description ?? ""}`.toLowerCase().includes(search.trim().toLowerCase()),
 	);
@@ -87,17 +93,19 @@ export function SearchablePicker({
 				</button>
 			</PopoverTrigger>
 			<PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] min-w-56 overflow-hidden p-0 shadow-xl">
-				<div className="flex h-10 items-center gap-2 border-b border-border px-3">
-					<Search className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-					<input
-						autoFocus
-						aria-label={searchPlaceholder}
-						placeholder={searchPlaceholder}
-						value={search}
-						onChange={(event) => setSearch(event.target.value)}
-						className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
-					/>
-				</div>
+				{searchable ? (
+					<div className="flex h-10 items-center gap-2 border-b border-border px-3">
+						<Search className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+						<input
+							autoFocus
+							aria-label={searchPlaceholder}
+							placeholder={searchPlaceholder}
+							value={search}
+							onChange={(event) => setSearch(event.target.value)}
+							className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
+						/>
+					</div>
+				) : null}
 				<div
 					ref={listRef}
 					id={`${ariaLabel.replace(/\W+/g, "-").toLowerCase()}-options`}
