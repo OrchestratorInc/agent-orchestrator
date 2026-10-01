@@ -15,6 +15,8 @@ import (
 
 var versionPattern = regexp.MustCompile(`^(?:opencode\s+)?v?([0-9]+)\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]+)?$`)
 
+const versionProbeTimeout = 10 * time.Second
+
 // IncompatibleVersionError reports that the selected OpenCode executable is
 // installed, but its major version does not match the selected harness.
 type IncompatibleVersionError struct {
@@ -58,7 +60,7 @@ func ResolveBinaryForMajor(ctx context.Context, major int) (string, error) {
 }
 
 func probeBinaryMajor(ctx context.Context, binary string, major int) (string, error) {
-	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, versionProbeTimeout)
 	defer cancel()
 	binary, err := filepath.Abs(binary)
 	if err != nil {

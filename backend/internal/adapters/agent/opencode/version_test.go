@@ -25,6 +25,8 @@ func versionBinary(t *testing.T, script string) string {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	return path
 }
 
@@ -94,10 +96,28 @@ func TestResolveBinaryForMajorBoundedAndCanceled(t *testing.T) {
 			if !errors.Is(err, want) {
 				t.Fatalf("error = %v, want %v", err, want)
 			}
-			if time.Since(started) > 5*time.Second {
+			if time.Since(started) > 12*time.Second {
 				t.Fatal("version probe was not bounded")
 			}
 		})
+	}
+}
+
+func TestResolveBinaryForMajorAcceptsSlowShim(t *testing.T) {
+	dir := t.TempDir()
+	name, body := "opencode", "#!/bin/sh\nsleep 4\nprintf '2.0.0\\n'\n"
+	if runtime.GOOS == "windows" {
+		name = "opencode.cmd"
+		body = "@echo off\r\npowershell -NoProfile -Command \"Start-Sleep -Seconds 4\"\r\necho 2.0.0\r\n"
+	}
+	binary := filepath.Join(dir, name)
+	if err := os.WriteFile(binary, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	got, err := ResolveBinaryForMajor(context.Background(), 2)
+	if err != nil || got != binary {
+		t.Fatalf("resolve slow shim = (%q, %v), want %q", got, err, binary)
 	}
 }
 
