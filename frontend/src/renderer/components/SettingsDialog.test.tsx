@@ -114,7 +114,7 @@ describe("SettingsDialog", () => {
 		renderSettingsDialog();
 
 		const cuesSection = await screen.findByRole("button", { name: "Cues" });
-		expect(cuesSection.querySelector(".lucide-disc-3")).not.toBeNull();
+		expect(cuesSection.querySelector(".lucide-play")).not.toBeNull();
 		await userEvent.click(cuesSection);
 
 		expect(screen.getByTestId("project-cues-settings")).toHaveTextContent("proj-1");
