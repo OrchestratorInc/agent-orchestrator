@@ -106,6 +106,27 @@ func (f *fakeStore) CreateAutomationSession(ctx context.Context, rec domain.Sess
 	created, err := f.CreateSession(ctx, rec)
 	return created, err == nil, err
 }
+func (f *fakeStore) CreateClientRequestSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error) {
+	if existing, found, err := f.GetSessionByClientRequestID(ctx, rec.ClientRequestID); err != nil || found {
+		return existing, false, err
+	}
+	created, err := f.CreateSession(ctx, rec)
+	return created, err == nil, err
+}
+func (f *fakeStore) GetSessionByClientRequestID(_ context.Context, id string) (domain.SessionRecord, bool, error) {
+	for _, rec := range f.sessions {
+		if id != "" && rec.ClientRequestID == id {
+			return rec, true, nil
+		}
+	}
+	return domain.SessionRecord{}, false, nil
+}
+func (f *fakeStore) CommitClientRequestSession(_ context.Context, id domain.SessionID) error {
+	rec := f.sessions[id]
+	rec.ClientRequestCommitted = true
+	f.sessions[id] = rec
+	return nil
+}
 func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) error {
 	if f.updateSessionErr != nil {
 		return f.updateSessionErr
@@ -2359,6 +2380,30 @@ func TestSpawnAutomationAdoptsOnlyCompletedLaunch(t *testing.T) {
 	}
 	if adopted.ID != first.ID || rt.created != 1 {
 		t.Fatalf("retry session=%q runtime creates=%d, want %q and 1", adopted.ID, rt.created, first.ID)
+	}
+}
+
+func TestSpawnClientRequestReplaysCommittedWorkerAndRejectsConflictOrIncomplete(t *testing.T) {
+	m, st, rt, _ := newManager()
+	cfg := ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "do it", ClientRequestID: "draft-1", ClientRequestHash: "v1:first"}
+	first, _, _, err := m.Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, _, _, err := m.Spawn(ctx, cfg)
+	if err != nil || replay.ID != first.ID || rt.created != 1 {
+		t.Fatalf("replay = %q, runtime creates = %d, err = %v", replay.ID, rt.created, err)
+	}
+	cfg.ClientRequestHash = "v1:changed"
+	if _, _, _, err := m.Spawn(ctx, cfg); !errors.Is(err, ErrClientRequestConflict) || rt.created != 1 {
+		t.Fatalf("changed payload: runtime creates = %d, err = %v", rt.created, err)
+	}
+	cfg.ClientRequestHash = "v1:first"
+	rec := st.sessions[first.ID]
+	rec.ClientRequestCommitted = false
+	st.sessions[first.ID] = rec
+	if _, _, _, err := m.Spawn(ctx, cfg); !errors.Is(err, ErrClientRequestIncomplete) || rt.created != 1 {
+		t.Fatalf("incomplete retry: runtime creates = %d, err = %v", rt.created, err)
 	}
 }
 

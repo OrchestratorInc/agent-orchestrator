@@ -54,6 +54,7 @@ type Project = components["schemas"]["Project"];
 type DelegateAgent = components["schemas"]["DelegateTaskRequest"]["agent"];
 
 type CreateTaskInput = {
+	clientRequestId?: string;
 	projectId: string;
 	brief: string;
 	agent?: DelegateAgent;
@@ -142,6 +143,7 @@ export function TaskComposer({
 	const [error, setError] = useState<string | undefined>();
 	const [fallbackAction, setFallbackAction] = useState<FallbackAction>();
 	const taskPreparationRef = useRef("");
+	const requestRef = useRef<{ payload: string; id: string } | undefined>(undefined);
 	const {
 		attachments,
 		error: attachmentError,
@@ -205,6 +207,7 @@ export function TaskComposer({
 				const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/orchestrators/delegate", {
 					headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 					body: {
+						clientRequestId: input.clientRequestId,
 						projectId: input.projectId,
 						brief: input.brief,
 						agent: input.agent,
@@ -259,6 +262,7 @@ export function TaskComposer({
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/sessions", {
 				headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 				body: {
+					clientRequestId: input.clientRequestId,
 					kind: "worker",
 					harness: input.agent as components["schemas"]["SpawnSessionRequest"]["harness"],
 					prompt: input.brief,
@@ -596,7 +600,7 @@ export function TaskComposer({
 			}
 			const attachmentPayloads = await toSettledPayload();
 			const submittedPreparation = taskPreparationRef.current;
-			const sessionId = await createTask({
+			const request: CreateTaskInput = {
 				projectId,
 				brief,
 				agent: selectedAgent ? (selectedAgent as CreateTaskInput["agent"]) : undefined,
@@ -607,7 +611,13 @@ export function TaskComposer({
 				approvalMode,
 				attachments: attachmentPayloads.length > 0 ? attachmentPayloads : undefined,
 				taskPreparation: submittedPreparation || undefined,
-			});
+			};
+			const { taskPreparation: _, attachments: _attachments, ...requestPayload } = request;
+			const payload = JSON.stringify({ ...requestPayload, attachmentIds: attachments.map((attachment) => attachment.id) });
+			if (requestRef.current?.payload !== payload) {
+				requestRef.current = { payload, id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}` };
+			}
+			const sessionId = await createTask({ ...request, clientRequestId: requestRef.current.id });
 			const preparationAfterSubmit = taskPreparationRef.current;
 			taskPreparationRef.current = "";
 			// DELETE is intentionally idempotent after a successful claim. It also

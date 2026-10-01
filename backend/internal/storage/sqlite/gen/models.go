@@ -674,6 +674,9 @@ type Session struct {
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
+	ClientRequestID                  string
+	ClientRequestHash                string
+	ClientRequestCommitted           bool
 }
 
 type SessionCleanupFact struct {

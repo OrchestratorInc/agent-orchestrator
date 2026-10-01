@@ -3,7 +3,9 @@ package controllers
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -283,6 +286,10 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
+	if !validClientRequestID(in.ClientRequestID) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "INVALID_CLIENT_REQUEST_ID", "clientRequestId must be 1-128 visible characters", nil)
+		return
+	}
 	mode, err := domain.ParseSessionMode(string(in.Mode))
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "SESSION_MODE_INVALID", err.Error(), nil)
@@ -314,7 +321,14 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", attachErr.code, attachErr.message, nil)
 		return
 	}
-	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}})
+	requestHash := ""
+	if in.ClientRequestID != "" {
+		keyless := in
+		keyless.ClientRequestID = ""
+		keyless.Attachments = nil
+		requestHash = clientRequestFingerprint("session", keyless, attachments)
+	}
+	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -1743,6 +1757,10 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
+	if !validClientRequestID(in.ClientRequestID) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "INVALID_CLIENT_REQUEST_ID", "clientRequestId must be 1-128 visible characters", nil)
+		return
+	}
 	if in.ProjectID == "" {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROJECT_ID_REQUIRED", "projectId is required", nil)
 		return
@@ -1772,23 +1790,50 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", attachErr.code, attachErr.message, nil)
 		return
 	}
+	requestHash := ""
+	if in.ClientRequestID != "" {
+		keyless := in
+		keyless.ClientRequestID = ""
+		keyless.TaskPreparation = ""
+		keyless.Attachments = nil
+		requestHash = clientRequestFingerprint("delegate", keyless, attachments)
+	}
 
 	out, err := c.Svc.DelegateTask(r.Context(), sessionsvc.DelegateTaskInput{
-		ProjectID:       in.ProjectID,
-		Brief:           domain.SanitizeControlChars(in.Brief),
-		RequestedAgent:  in.Agent,
-		Model:           domain.SanitizeControlChars(strings.TrimSpace(in.Model)),
-		Effort:          sanitizedOptionalString(in.Effort),
-		ApprovalMode:    in.ApprovalMode,
-		RequestedMode:   in.Mode,
-		Attachments:     attachments,
-		TaskPreparation: domain.TaskPreparationToken(strings.TrimSpace(in.TaskPreparation)),
+		ClientRequestID:   in.ClientRequestID,
+		ClientRequestHash: requestHash,
+		ProjectID:         in.ProjectID,
+		Brief:             domain.SanitizeControlChars(in.Brief),
+		RequestedAgent:    in.Agent,
+		Model:             domain.SanitizeControlChars(strings.TrimSpace(in.Model)),
+		Effort:            sanitizedOptionalString(in.Effort),
+		ApprovalMode:      in.ApprovalMode,
+		RequestedMode:     in.Mode,
+		Attachments:       attachments,
+		TaskPreparation:   domain.TaskPreparationToken(strings.TrimSpace(in.TaskPreparation)),
 	})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusAccepted, DelegateTaskResponse{OK: true, WorkerID: out.WorkerID, OrchestratorID: out.OrchestratorID})
+}
+
+func validClientRequestID(id string) bool {
+	return id == "" || len(id) <= maxIdempotencyKey && strings.TrimSpace(id) == id && strings.IndexFunc(id, unicode.IsControl) < 0
+}
+
+func clientRequestFingerprint(route string, request any, attachments []ports.SpawnAttachment) string {
+	h := sha256.New()
+	_ = json.NewEncoder(h).Encode(struct {
+		Route   string
+		Request any
+	}{route, request})
+	for _, attachment := range attachments {
+		_, _ = fmt.Fprintf(h, "%d:%s:%d:", len(attachment.Ext), attachment.Ext, len(attachment.Data))
+		_, _ = h.Write(attachment.Data)
+	}
+	return "v1:" + hex.EncodeToString(h.Sum(nil))
 }
 
 func (c *SessionsController) prepareTask(w http.ResponseWriter, r *http.Request) {

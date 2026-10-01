@@ -3414,6 +3414,31 @@ func TestSessionsAPI_DelegateTask(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_DelegateClientRequestHashIgnoresPreparationButBindsTask(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	var firstHash string
+	for i, payload := range []string{
+		`{"projectId":"ao","brief":"Fix it","taskPreparation":"prep-a","clientRequestId":"draft-1"}`,
+		`{"projectId":"ao","brief":"Fix it","taskPreparation":"prep-b","clientRequestId":"draft-1"}`,
+		`{"projectId":"ao","brief":"Fix something else","taskPreparation":"prep-b","clientRequestId":"draft-1"}`,
+	} {
+		_, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/orchestrators/delegate", payload)
+		if status != http.StatusAccepted {
+			t.Fatalf("request %d status = %d", i, status)
+		}
+		hash := svc.delegationInput.ClientRequestHash
+		if svc.delegationInput.ClientRequestID != "draft-1" || hash == "" {
+			t.Fatalf("request %d id/hash = %q/%q", i, svc.delegationInput.ClientRequestID, hash)
+		}
+		if i == 0 {
+			firstHash = hash
+		} else if (i == 1) != (hash == firstHash) {
+			t.Fatalf("request %d hash = %q, first = %q", i, hash, firstHash)
+		}
+	}
+}
+
 func TestSessionsAPI_PreparesAndCancelsTaskWorkspace(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)

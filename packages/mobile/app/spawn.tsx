@@ -73,6 +73,7 @@ function SpawnModalContent() {
 	const [modelError, setModelError] = useState<string>();
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const requestRef = useRef<{ payload: string; attachments: readonly SpawnAttachment[]; id: string } | undefined>(undefined);
 
 	const [catalog, setCatalog] = useState<AgentCatalog | null>(null);
 	const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -303,7 +304,7 @@ function SpawnModalContent() {
 		setError(null);
 		setOfferTUI(false);
 		try {
-			const session = await spawn({
+			const request = {
 				hostId: openedHostId,
 				projectId: projectId ?? undefined,
 				prompt: prompt.trim() || undefined,
@@ -311,7 +312,13 @@ function SpawnModalContent() {
 				model: modelOverride(displayedModel, modelTouched),
 				mode,
 				attachments: attachmentsRef.current.map(({ mimeType, data }) => ({ mimeType, data })),
-			});
+			};
+			const { attachments: _, ...requestFields } = request;
+			const payload = JSON.stringify(requestFields);
+			if (requestRef.current?.payload !== payload || requestRef.current?.attachments !== attachmentsRef.current) {
+				requestRef.current = { payload, attachments: attachmentsRef.current, id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
+			}
+			const session = await spawn({ ...request, clientRequestId: requestRef.current.id });
 			haptics.success();
 			// Dismiss the modal first, then open the freshly spawned session's mode-aware surface
 			// once the dismiss transition has settled. Firing both navigations in the

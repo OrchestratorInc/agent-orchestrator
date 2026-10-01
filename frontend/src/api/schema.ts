@@ -3821,6 +3821,7 @@ export interface components {
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             attachments?: components["schemas"]["AttachmentInput"][];
             brief: string;
+            clientRequestId?: string;
             effort?: null | string;
             /** @enum {string} */
             mode?: "tui" | "chat";
@@ -4920,6 +4921,7 @@ export interface components {
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             attachments?: components["schemas"]["AttachmentInput"][];
             branch?: string;
+            clientRequestId?: string;
             displayName?: string;
             effort?: string;
             /** @enum {string} */

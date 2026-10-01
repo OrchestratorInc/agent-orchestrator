@@ -11399,6 +11399,9 @@ components:
         brief:
           maxLength: 16384
           type: string
+        clientRequestId:
+          maxLength: 128
+          type: string
         effort:
           maxLength: 64
           type:
@@ -14252,6 +14255,9 @@ components:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
         branch:
+          type: string
+        clientRequestId:
+          maxLength: 128
           type: string
         displayName:
           maxLength: 100

@@ -67,6 +67,7 @@ export type SpawnOptions = {
 	attachments?: SpawnAttachmentInput[];
 	/** Mobile defaults to Chat; TUI remains an explicit compatibility choice. */
 	mode?: SessionMode;
+	clientRequestId?: string;
 };
 
 type AppState = {
@@ -682,7 +683,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	}, [activeProjectId, projects]);
 
 	const spawn = useCallback(
-		async ({ hostId, projectId, prompt, harness, model, mode, attachments }: SpawnOptions) => {
+		async ({ hostId, projectId, prompt, harness, model, mode, attachments, clientRequestId }: SpawnOptions) => {
 			const resolvedMode = mode ?? "chat";
 			return trackFeature("spawn", async () => {
 				const c = requireConfig(hostId);
@@ -696,6 +697,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 					model,
 					mode: resolvedMode,
 					attachments,
+					clientRequestId,
 				});
 				await refreshHost(hostId);
 				return session;

@@ -164,10 +164,15 @@ type SessionRecord struct {
 	// AutomationLaunchCompleted is set atomically with the final lifecycle
 	// commit. A seed carrying AutomationRunID alone is not proof that its
 	// workspace/controller launch completed.
-	AutomationLaunchCompleted bool         `json:"-"`
-	IssueID                   IssueID      `json:"issueId,omitempty"`
-	Kind                      SessionKind  `json:"kind"`
-	Harness                   AgentHarness `json:"harness,omitempty"`
+	AutomationLaunchCompleted bool `json:"-"`
+	// ClientRequestID binds one manual task creation attempt to its durable row.
+	// A retry may return this row only after ClientRequestCommitted is set.
+	ClientRequestID        string       `json:"-"`
+	ClientRequestHash      string       `json:"-"`
+	ClientRequestCommitted bool         `json:"-"`
+	IssueID                IssueID      `json:"issueId,omitempty"`
+	Kind                   SessionKind  `json:"kind"`
+	Harness                AgentHarness `json:"harness,omitempty"`
 	// ReviewerHarness is this session's preferred reviewer. Empty delegates to
 	// the project configuration.
 	ReviewerHarness   ReviewerHarness `json:"reviewerHarness,omitempty" enum:"claude-code,codex,copilot,cursor,kilocode,opencode,opencode-v2,kiro,pi,agy,devin,droid,kimi,kimchi,muse,amp,aider,grok,crush,auggie,cline,autohand"`
