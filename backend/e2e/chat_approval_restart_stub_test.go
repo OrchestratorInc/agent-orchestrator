@@ -128,7 +128,8 @@ func TestPendingACPApprovalSurvivesDaemonSIGKILL(t *testing.T) {
 	restarted.mustCall("POST", "/sessions/"+session+"/conversation/approvals/"+replayed.RequestID+"/resolve",
 		http.StatusNoContent, map[string]any{"decisionId": "allow"}, nil)
 	finished := restarted.awaitConversation(session, 30*time.Second, "approved turn to finish", func(s snapshot) bool {
-		return len(s.Turns) == 1 && terminal(s.Turns[0].State)
+		return len(s.Turns) == 1 && terminal(s.Turns[0].State) &&
+			(s.Turns[0].State != "completed" || contains(s.assistantText(), "approved once"))
 	})
 	if finished.Turns[0].State != "completed" || !contains(finished.assistantText(), "approved once") ||
 		len(finished.Activities) != 1 || finished.Activities[0].Status != "resolved" {
