@@ -2167,6 +2167,7 @@ func exitCodeErr(t *testing.T, code int) error {
 func TestRuntime_ServerPID(t *testing.T) {
 	t.Run("parses the server pid tmux reports", func(t *testing.T) {
 		r, fr := newTestRuntime(0)
+		r.socketName = "ao"
 		fr.outputs = [][]byte{[]byte("54321\n")}
 		pid, ok := r.ServerPID(context.Background())
 		if !ok || pid != 54321 {
@@ -2185,10 +2186,26 @@ func TestRuntime_ServerPID(t *testing.T) {
 
 	t.Run("false on unparseable output", func(t *testing.T) {
 		r, fr := newTestRuntime(0)
+		r.socketName = "ao"
 		fr.outputs = [][]byte{[]byte("not-a-pid\n")}
 		pid, ok := r.ServerPID(context.Background())
 		if ok || pid != 0 {
 			t.Fatalf("ServerPID() = %d, %v, want 0, false", pid, ok)
+		}
+	})
+
+	// Without a private socket tmux answers from the machine default server,
+	// which is the user's own tmux: claiming it bills their shells, editors
+	// and anything else they run there as AO memory.
+	t.Run("false without a private socket, never asking tmux", func(t *testing.T) {
+		r, fr := newTestRuntime(0)
+		fr.outputs = [][]byte{[]byte("54321\n")}
+		pid, ok := r.ServerPID(context.Background())
+		if ok || pid != 0 {
+			t.Fatalf("ServerPID() = %d, %v, want 0, false", pid, ok)
+		}
+		if n := countCalls(fr, "display-message"); n != 0 {
+			t.Fatalf("display-message calls = %d, want 0", n)
 		}
 	})
 }

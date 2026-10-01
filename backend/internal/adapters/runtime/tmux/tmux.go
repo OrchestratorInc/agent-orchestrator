@@ -645,8 +645,12 @@ func (r *Runtime) ProcessRootPIDs(ctx context.Context, handle ports.RuntimeHandl
 // this socket shares. It is not reachable by walking up from a pane: the
 // server detaches on startup and is reparented to init, not to anything AO
 // already tracks. Zero, false when the server cannot be reached or the
-// output cannot be parsed.
+// output cannot be parsed, and always without a private socket: the default
+// server is the user's own tmux, and everything in it would read as AO.
 func (r *Runtime) ServerPID(ctx context.Context) (int, bool) {
+	if r.socketName == "" {
+		return 0, false
+	}
 	out, err := r.run(ctx, "display-message", "-p", "#{pid}")
 	if err != nil {
 		return 0, false
