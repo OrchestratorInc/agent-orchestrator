@@ -49,11 +49,13 @@ it("uses the shared create flow and only the selected host for project and orche
 	const bCreated = vi.fn();
 	const closeA = vi.fn();
 	const closeB = vi.fn();
+	const standaloneA = vi.fn();
 	render(<>
-		<RemoteAddProjectDialog hostId="host-a" hostLabel="Host A" connected onCreated={aCreated} onOpenChange={closeA} />
-		<RemoteAddProjectDialog hostId="host-b" hostLabel="Host B" connected onCreated={bCreated} onOpenChange={closeB} />
+		<RemoteAddProjectDialog hostId="host-a" hostLabel="Host A" connected onCreated={aCreated} onCreateStandaloneAgent={standaloneA} onOpenChange={closeA} />
+		<RemoteAddProjectDialog hostId="host-b" hostLabel="Host B" connected onCreated={bCreated} onCreateStandaloneAgent={vi.fn()} onOpenChange={closeB} />
 	</>);
 	expect(flows.get("host-a")).toMatchObject({ mode: "choose", initialOpen: true, hostId: "host-a", hostLabel: "Host A" });
+	expect(flows.get("host-a")?.onCreateStandaloneAgent).toBe(standaloneA);
 	expect(flows.get("host-b")).toMatchObject({ mode: "choose", initialOpen: true, hostId: "host-b", hostLabel: "Host B" });
 	await act(async () => {
 		await Promise.all([
@@ -84,14 +86,14 @@ it("uses the shared create flow and only the selected host for project and orche
 
 it("does not contact any daemon while the selected host is offline", async () => {
 	addHost("host-a");
-	render(<RemoteAddProjectDialog hostId="host-a" hostLabel="Host A" connected={false} onCreated={vi.fn()} onOpenChange={vi.fn()} />);
+	render(<RemoteAddProjectDialog hostId="host-a" hostLabel="Host A" connected={false} onCreated={vi.fn()} onCreateStandaloneAgent={vi.fn()} onOpenChange={vi.fn()} />);
 	await expect(flows.get("host-a")?.onCreateProject(input)).rejects.toThrow("Connect to Host A");
 	expect(clientForHost).not.toHaveBeenCalled();
 });
 
 it("initializes Git on the selected host before the shared flow submits the project", async () => {
 	const a = addHost("host-a");
-	render(<RemoteAddProjectDialog hostId="host-a" hostLabel="Host A" connected onCreated={vi.fn()} onOpenChange={vi.fn()} />);
+	render(<RemoteAddProjectDialog hostId="host-a" hostLabel="Host A" connected onCreated={vi.fn()} onCreateStandaloneAgent={vi.fn()} onOpenChange={vi.fn()} />);
 	await flows.get("host-a")?.onInitializeProject?.("/srv/todo-app");
 	expect(a).toHaveBeenCalledWith("/api/v1/projects/initialize", { body: { path: "/srv/todo-app" } });
 });

@@ -801,7 +801,7 @@ export function CreateProjectFlow({
 							<CloudSignInPanel disabled={isBusy} onBack={() => setOffering("local")} onSignIn={cloudSignIn} />
 						)
 					) : (
-						<ImportSourcePicker cloudEnabled={!hostId && cloudEnabled} disabled={isBusy || !connected} onCloudSelect={() => setOffering("cloud")} onSelect={selectSource} onCreateStandaloneAgent={hostId ? undefined : onCreateStandaloneAgent} remoteHosts={hostId ? [] : remoteHosts} onAddRemoteProject={addRemoteProject} hostLabel={hostLabel} />
+						<ImportSourcePicker cloudEnabled={!hostId && cloudEnabled} disabled={isBusy || !connected} onCloudSelect={() => setOffering("cloud")} onSelect={selectSource} onCreateStandaloneAgent={onCreateStandaloneAgent} remoteHosts={hostId ? [] : remoteHosts} onAddRemoteProject={addRemoteProject} hostLabel={hostLabel} />
 					)}
 					{error && !folderPickerOpen && selectedPath === null && (
 						<p className="text-caption leading-body text-error" role="status">
@@ -824,7 +824,7 @@ export function CreateProjectFlow({
 						onCloudSelect={() => setOffering("cloud")}
 						onCloudBack={() => setOffering("local")}
 						onSignIn={cloudSignIn}
-						onCreateStandaloneAgent={hostId ? undefined : onCreateStandaloneAgent}
+						onCreateStandaloneAgent={onCreateStandaloneAgent}
 						remoteHosts={hostId ? [] : remoteHosts}
 						onAddRemoteProject={addRemoteProject}
 						open={modePickerOpen}

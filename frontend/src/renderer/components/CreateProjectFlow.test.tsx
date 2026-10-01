@@ -477,6 +477,17 @@ describe("CreateProjectFlow droppedPath", () => {
 		await waitFor(() => expect(screen.queryByRole("button", { name: "New standalone agent" })).not.toBeInTheDocument());
 	});
 
+	it("offers the same standalone action for a remote host", async () => {
+		const onCreateStandaloneAgent = vi.fn();
+		const user = userEvent.setup();
+		renderChooseFlow({ hostId: "host-a", hostLabel: "Host A", onCreateStandaloneAgent });
+
+		await user.click(screen.getByRole("button", { name: "New project" }));
+		await user.click(await screen.findByRole("button", { name: "New standalone agent" }));
+
+		expect(onCreateStandaloneAgent).toHaveBeenCalledOnce();
+	});
+
 	it("does not open on mount", () => {
 		render(<CreateProjectFlow mode="choose" {...noop} droppedPath={null} />);
 		expect(screen.queryByRole("button", { name: "Import a workspace folder" })).not.toBeInTheDocument();

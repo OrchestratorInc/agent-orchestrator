@@ -6,11 +6,12 @@ import { useUiStore } from "../stores/ui-store";
 import { CreateProjectFlow, type CreateProjectInput } from "./CreateProjectFlow";
 
 /** Remote creation uses the same source, Git setup, and agent screens as local creation. */
-export function RemoteAddProjectDialog({ hostId, hostLabel, connected, onCreated, onOpenChange }: {
+export function RemoteAddProjectDialog({ hostId, hostLabel, connected, onCreated, onCreateStandaloneAgent, onOpenChange }: {
 	hostId: string;
 	hostLabel: string;
 	connected: boolean;
 	onCreated: (projectId: string, ready: boolean) => void;
+	onCreateStandaloneAgent: () => void;
 	onOpenChange: (open: boolean) => void;
 }) {
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
@@ -57,6 +58,7 @@ export function RemoteAddProjectDialog({ hostId, hostLabel, connected, onCreated
 		hostLabel={hostLabel}
 		connected={connected}
 		onCreateProject={createProject}
+		onCreateStandaloneAgent={onCreateStandaloneAgent}
 		onInitializeProject={initializeProject}
 		onDismiss={() => onOpenChange(false)}
 	/>;

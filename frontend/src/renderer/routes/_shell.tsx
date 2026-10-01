@@ -1097,6 +1097,10 @@ function ShellLayout() {
 					hostId={remoteAddProjectHostId}
 					hostLabel={remoteHosts.find((host) => host.hostId === remoteAddProjectHostId)?.label ?? remoteAddProjectHostId}
 					connected={remoteHosts.find((host) => host.hostId === remoteAddProjectHostId)?.status === "connected"}
+					onCreateStandaloneAgent={() => {
+						requestNewTask(STANDALONE_WORKSPACE_ID, remoteAddProjectHostId);
+						setRemoteAddProjectHostId(null);
+					}}
 					onCreated={(projectId, orchestratorReady) => {
 						void queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(remoteAddProjectHostId) });
 						if (!orchestratorReady) void navigate({ to: "/host/$hostId/project/$projectId", params: { hostId: remoteAddProjectHostId, projectId } });
