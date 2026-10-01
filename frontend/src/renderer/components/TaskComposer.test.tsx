@@ -278,6 +278,36 @@ describe("TaskComposer", () => {
 		expect(onCreated).toHaveBeenCalledWith("demo-1");
 	});
 
+	it("keeps the initial account picker enabled during capability refresh", async () => {
+		h.initialAccountSelection = true;
+		const baseGet = h.get.getMockImplementation();
+		let capabilityReads = 0;
+		let resolveCapability!: (value: unknown) => void;
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/sessions/account-selection") {
+				capabilityReads += 1;
+				if (capabilityReads > 1) return new Promise(resolve => { resolveCapability = resolve; });
+				return { data: { initialSelection: true } };
+			}
+			if (path === "/api/v1/accounts-manager/accounts") return { data: initialAccounts() };
+			if (path === "/api/v1/projects/{id}") return { data: { status: "ok", project: { config: { worker: { agent: "codex" } } } } };
+			return baseGet?.(path);
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="demo" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByLabelText("Initial account");
+		await waitFor(() => expect(capabilityReads).toBe(1));
+
+		void queryClient.invalidateQueries({ queryKey: ["initial-account-selection"] });
+		await waitFor(() => expect(capabilityReads).toBe(2));
+		expect(picker).toBeEnabled();
+		fireEvent.change(picker, { target: { value: "managed:account-b" } });
+		expect(picker).toHaveValue("managed:account-b");
+
+		resolveCapability({ data: { initialSelection: true } });
+	});
+
 	it("rechecks a selected account at submission without replacing a removed choice", async () => {
 		h.initialAccountSelection = true;
 		const baseGet = h.get.getMockImplementation();
