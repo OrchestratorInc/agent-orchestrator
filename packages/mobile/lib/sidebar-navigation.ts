@@ -1,6 +1,7 @@
 import { boardZoneOf } from "./agentsView";
 import type { DashboardSession } from "./api";
 import type { EnvironmentKind } from "./environment/types";
+import type { Scoped } from "./environment/scopedBoard";
 
 export type SidebarEnvironmentOption = {
 	id: EnvironmentKind;
@@ -58,9 +59,27 @@ export function sidebarSessionListPresentation(
 	return { kind: "empty", label: "No active sessions" };
 }
 
-export function sidebarSessionRoute(environment: EnvironmentKind | null, session: Pick<DashboardSession, "id" | "projectId">) {
+export function sidebarSessionRoute(entry: Scoped<Pick<DashboardSession, "id" | "projectId">>): {
+	pathname: "/session/[id]"; params: { id: string; projectId: string; source: EnvironmentKind; sourceId: string };
+};
+export function sidebarSessionRoute(environment: EnvironmentKind | null, session: Pick<DashboardSession, "id" | "projectId">): {
+	pathname: "/session/[id]"; params: { id: string; projectId: string };
+} | undefined;
+export function sidebarSessionRoute(
+	entryOrEnvironment: Scoped<Pick<DashboardSession, "id" | "projectId">> | EnvironmentKind | null,
+	session?: Pick<DashboardSession, "id" | "projectId">,
+) {
+	if (entryOrEnvironment && typeof entryOrEnvironment === "object") {
+		return { pathname: "/session/[id]" as const, params: {
+			id: entryOrEnvironment.value.id,
+			projectId: entryOrEnvironment.value.projectId,
+			source: entryOrEnvironment.source.kind,
+			sourceId: entryOrEnvironment.source.id,
+		} };
+	}
+	const environment = entryOrEnvironment;
 	if (environment === null) return undefined;
-	return { pathname: "/session/[id]" as const, params: { id: session.id, projectId: session.projectId } };
+	return { pathname: "/session/[id]" as const, params: { id: session!.id, projectId: session!.projectId } };
 }
 
 export type SidebarDestinationId = "projects" | "agents" | "prs" | "settings";
@@ -104,6 +123,16 @@ export function sidebarSessions(sessions: readonly DashboardSession[]): Dashboar
 			const pinnedOrder = Number(Boolean(b.isPinned)) - Number(Boolean(a.isPinned));
 			if (pinnedOrder !== 0) return pinnedOrder;
 			return b.lastActivityAt.localeCompare(a.lastActivityAt);
+		});
+}
+
+export function scopedSidebarSessions(sessions: readonly Scoped<DashboardSession>[]): Scoped<DashboardSession>[] {
+	return sessions
+		.filter((entry) => !entry.value.isTerminated && entry.value.status !== "terminated")
+		.sort((a, b) => {
+			const pinnedOrder = Number(Boolean(b.value.isPinned)) - Number(Boolean(a.value.isPinned));
+			if (pinnedOrder !== 0) return pinnedOrder;
+			return b.value.lastActivityAt.localeCompare(a.value.lastActivityAt);
 		});
 }
 

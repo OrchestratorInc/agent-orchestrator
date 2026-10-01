@@ -10,13 +10,25 @@ const list = source("./worker-board-list.tsx");
 const board = source("../app/(tabs)/index.tsx");
 
 describe("worker board list identity", () => {
+	it("keys and dispatches each row by its own source", () => {
+		expect(list).toContain("resourceKey(entry.source, entry.value.id)");
+		expect(list).toContain('entry.source.kind === "local" ? { interactionMode: "full" as const');
+		expect(list).toContain("killOn(entry.source, entry.value.id)");
+		expect(source("./worker-list-row.tsx")).toContain("sourceLabel={source.kind === \"cloud\" ? \"Cloud\" : \"Local\"}");
+	});
+	it("does not let one source's error hide the other source's rows", () => {
+		expect(board).toContain("const { sessions, projects, sources } = scopedBoard;");
+		expect(board).toContain('sourceStatus={sources.local}');
+		expect(board).toContain('sourceStatus={sources.cloud}');
+		expect(board).toContain("initialLoading && sessions.length === 0");
+	});
 	// Swapping the project filter in place left the board showing two lists at
 	// once: recycled cells of the old grouping under the new data, and the empty
 	// state drawn on top of rows that were still on screen. A different set of
 	// workers is a different list, so it is mounted as one.
 	it("remounts the list when the set of workers changes", () => {
 		expect(list).toContain("key={identityKey}");
-		expect(board).toContain("identityKey={`${workerProjectId}|${query.trim()}`}");
+		expect(board).toContain("identityKey={`${environmentFilter}|${workerProjectId}|${query.trim()}`}");
 	});
 });
 

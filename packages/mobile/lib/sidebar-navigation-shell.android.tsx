@@ -27,7 +27,7 @@ import { AgentLogo } from "./AgentLogo";
 import { SidebarDestinationIcon } from "./sidebar-destination-icon";
 import { MascotLamp } from "./ui";
 import type { DashboardSession } from "./api";
-import { boardPresentation } from "./board-presentation";
+import { resourceKey, type Scoped } from "./environment/scopedBoard";
 import { haptics } from "./haptics";
 import { sessionTitle } from "./sessionStatus";
 import {
@@ -37,9 +37,8 @@ import {
 	selectedPrimarySidebarDestination,
 	sidebarNavigationSettled,
 	sidebarDestinations,
-	sidebarSessionHealth,
 	sidebarSessionListPresentation,
-	sidebarSessions,
+	scopedSidebarSessions,
 	sidebarSessionRoute,
 	type PrimarySidebarDestinationId,
 	type SidebarDestination,
@@ -65,11 +64,14 @@ let retainedDrawerOpen = false;
 export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const { sessions, projects, connection, environment, configured, loading, error } = useApp();
-	const { spawnControls, showSidebarSessions } = boardPresentation(environment, configured);
+	const { scopedBoard, connection } = useApp();
+	const { sessions, projects, sources } = scopedBoard;
+	const spawnControls = sources.local.available || sources.cloud.available;
+	const showSidebarSessions = true;
 	// See the iOS shell: Local health is daemon connectivity; Cloud health is the
 	// active board refresh result, because Cloud deliberately has no Local poll.
-	const { stale: sessionsStale, label: sessionsStaleLabel, lampStatus } = sidebarSessionHealth({ environment, configured, connection, error });
+	const sessionsStaleLabel = [sources.local.error && "LOCAL OFFLINE", sources.cloud.error && "CLOUD REFRESH FAILED"].filter(Boolean).join(" · ");
+	const lampStatus = connection === "open" || sources.cloud.available ? "open" : connection;
 	const router = useRouter();
 	const pathname = usePathname();
 	const insets = useSafeAreaInsets();
@@ -93,10 +95,10 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	);
 	lastPrimaryDestination.current = selectedPrimaryDestination;
 	const drawerWidth = Math.min(width * 0.76, 320);
-	const liveSessions = useMemo(() => sidebarSessions(sessions), [sessions]);
-	const sessionListPresentation = sidebarSessionListPresentation(environment, loading, liveSessions.length);
+	const liveSessions = useMemo(() => scopedSidebarSessions(sessions), [sessions]);
+	const sessionListPresentation = sidebarSessionListPresentation(null, !sources.local.resolved || !sources.cloud.resolved || sources.local.loading || sources.cloud.loading, liveSessions.length);
 	const projectNames = useMemo(
-		() => new Map(projects.map((project) => [project.id, project.name])),
+		() => new Map(projects.map((entry) => [resourceKey(entry.source, entry.value.id), entry.value.name])),
 		[projects],
 	);
 
@@ -224,13 +226,13 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 		closeSidebar();
 	}, [activeDestination, closeSidebar, router]);
 
-	const selectSession = useCallback((session: DashboardSession) => {
-		const route = sidebarSessionRoute(environment, session);
+	const selectSession = useCallback((entry: Scoped<DashboardSession>) => {
+		const route = sidebarSessionRoute(entry);
 		if (!route) return;
 		haptics.select();
-		pendingClosePath.current = `/session/${session.id}`;
+		pendingClosePath.current = `/session/${entry.value.id}`;
 		router.push(route);
-	}, [router, environment]);
+	}, [router]);
 
 	const spawnWorker = useCallback(() => {
 		if (!spawnControls) return;
@@ -289,7 +291,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 							key={destination.id}
 							destination={destination}
 							active={destination.id === selectedPrimaryDestination}
-							badge={sidebarDestinationBadge(destination.id, sessions)}
+							badge={sidebarDestinationBadge(destination.id, sessions.map((entry) => entry.value))}
 							onPress={() => selectDestination(destination)}
 						/>
 					))}
@@ -303,14 +305,15 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 			</Text>
 			<FlatList
 				data={liveSessions}
-				keyExtractor={(session) => `${session.projectId}:${session.id}`}
-				style={[styles.sessionList, sessionsStale && styles.sessionListStale]}
+				keyExtractor={(entry) => resourceKey(entry.source, entry.value.id)}
+				style={styles.sessionList}
 				contentContainerStyle={liveSessions.length === 0 ? styles.emptySessionList : styles.sessionListContent}
 				showsVerticalScrollIndicator={false}
 				renderItem={({ item }) => (
 					<SessionRow
-						session={item}
-						projectName={projectNames.get(item.projectId) ?? item.projectId}
+						session={item.value}
+						sourceLabel={item.source.kind === "cloud" ? "Cloud" : "Local"}
+						projectName={projectNames.get(resourceKey(item.source, item.value.projectId)) ?? item.value.projectId}
 						onPress={() => selectSession(item)}
 					/>
 				)}
@@ -399,8 +402,9 @@ function DestinationRow({ destination, active, badge, onPress }: {
 	);
 }
 
-function SessionRow({ session, projectName, onPress }: {
+function SessionRow({ session, sourceLabel, projectName, onPress }: {
 	session: DashboardSession;
+	sourceLabel: "Local" | "Cloud";
 	projectName: string;
 	onPress: () => void;
 }) {
@@ -412,7 +416,7 @@ function SessionRow({ session, projectName, onPress }: {
 		<Pressable
 			onPress={onPress}
 			accessibilityRole="button"
-			accessibilityLabel={`${sessionTitle(session)}, ${statusLabel}, ${projectName}`}
+			accessibilityLabel={`${sessionTitle(session)}, ${statusLabel}, ${projectName}, ${sourceLabel}`}
 			android_ripple={{ color: t.bgElevatedHover }}
 			style={({ pressed }) => [styles.sessionRow, pressed && styles.sessionRowPressed]}
 		>
@@ -421,7 +425,7 @@ function SessionRow({ session, projectName, onPress }: {
 				<Text numberOfLines={1} style={styles.sessionTitle}>{sessionTitle(session)}</Text>
 				<View style={styles.sessionMetaRow}>
 					<View style={[styles.statusDot, { backgroundColor: visual.color }]} />
-					<Text numberOfLines={1} style={styles.sessionMeta}>{statusLabel} · {projectName}</Text>
+					<Text numberOfLines={1} style={styles.sessionMeta}>{statusLabel} · {projectName} · {sourceLabel}</Text>
 				</View>
 			</View>
 			{/* Upright, like the desktop's own row (`{isPinned ? <PinOff/> : <Pin/>}` with

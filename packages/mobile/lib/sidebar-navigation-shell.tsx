@@ -25,7 +25,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AgentLogo } from "./AgentLogo";
 import { MascotLamp } from "./ui";
 import type { DashboardSession } from "./api";
-import { boardPresentation } from "./board-presentation";
+import { resourceKey, type Scoped } from "./environment/scopedBoard";
 import { haptics } from "./haptics";
 import { sessionTitle } from "./sessionStatus";
 import { SidebarDestinationIcon } from "./sidebar-destination-icon";
@@ -36,9 +36,8 @@ import {
 	RECENT_WORKERS_LABEL,
 	selectedPrimarySidebarDestination,
 	sidebarDestinations,
-	sidebarSessionHealth,
 	sidebarSessionListPresentation,
-	sidebarSessions,
+	scopedSidebarSessions,
 	sidebarSessionRoute,
 	type PrimarySidebarDestinationId,
 	type SidebarDestination,
@@ -60,12 +59,15 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { scheme } = useThemeState();
-	const { sessions, projects, connection, environment, configured, loading, error } = useApp();
-	const { spawnControls, showSidebarSessions } = boardPresentation(environment, configured);
+	const { scopedBoard, connection } = useApp();
+	const { sessions, projects, sources } = scopedBoard;
+	const spawnControls = sources.local.available || sources.cloud.available;
+	const showSidebarSessions = true;
 	// The store keeps the last good sessions when a poll fails — that is what lets
 	// the board show rows with a stale banner rather than blanking. Local health
 	// comes from its daemon connection; Cloud has no daemon and uses refresh errors.
-	const { stale: sessionsStale, label: sessionsStaleLabel, lampStatus } = sidebarSessionHealth({ environment, configured, connection, error });
+	const sessionsStaleLabel = [sources.local.error && "LOCAL OFFLINE", sources.cloud.error && "CLOUD REFRESH FAILED"].filter(Boolean).join(" · ");
+	const lampStatus = connection === "open" || sources.cloud.available ? "open" : connection;
 	const router = useRouter();
 	const pathname = usePathname();
 	const insets = useSafeAreaInsets();
@@ -83,10 +85,10 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	);
 	lastPrimaryDestination.current = selectedPrimaryDestination;
 	const drawerWidth = Math.min(width * 0.76, 320);
-	const liveSessions = useMemo(() => sidebarSessions(sessions), [sessions]);
-	const sessionListPresentation = sidebarSessionListPresentation(environment, loading, liveSessions.length);
+	const liveSessions = useMemo(() => scopedSidebarSessions(sessions), [sessions]);
+	const sessionListPresentation = sidebarSessionListPresentation(null, !sources.local.resolved || !sources.cloud.resolved || sources.local.loading || sources.cloud.loading, liveSessions.length);
 	const projectNames = useMemo(
-		() => new Map(projects.map((project) => [project.id, project.name])),
+		() => new Map(projects.map((entry) => [resourceKey(entry.source, entry.value.id), entry.value.name])),
 		[projects],
 	);
 
@@ -156,14 +158,14 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 		[activeDestination, closeSidebar, router],
 	);
 	const selectSession = useCallback(
-		(session: DashboardSession) => {
-			const route = sidebarSessionRoute(environment, session);
+		(entry: Scoped<DashboardSession>) => {
+			const route = sidebarSessionRoute(entry);
 			if (!route) return;
 			haptics.select();
 			closeSidebar();
 			router.push(route);
 		},
-		[closeSidebar, router, environment],
+		[closeSidebar, router],
 	);
 	const spawnWorker = useCallback(() => {
 		if (!spawnControls) return;
@@ -233,7 +235,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 											key={destination.id}
 											destination={destination}
 											active={destination.id === selectedPrimaryDestination}
-											badge={sidebarDestinationBadge(destination.id, sessions)}
+											badge={sidebarDestinationBadge(destination.id, sessions.map((entry) => entry.value))}
 											onPress={() => selectDestination(destination)}
 											drawerWidth={drawerWidth}
 										/>
@@ -250,8 +252,8 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 					</RNText>
 					<FlatList
 						data={liveSessions}
-						keyExtractor={(session) => `${session.projectId}:${session.id}`}
-						style={[styles.sessionList, sessionsStale && styles.sessionListStale]}
+						keyExtractor={(entry) => resourceKey(entry.source, entry.value.id)}
+						style={styles.sessionList}
 						contentContainerStyle={[
 							liveSessions.length === 0 ? styles.emptySessionList : styles.sessionListContent,
 							{ paddingBottom: insets.bottom + 76 },
@@ -259,8 +261,9 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 						showsVerticalScrollIndicator={false}
 						renderItem={({ item }) => (
 							<SessionRow
-								session={item}
-								projectName={projectNames.get(item.projectId) ?? item.projectId}
+								session={item.value}
+								sourceLabel={item.source.kind === "cloud" ? "Cloud" : "Local"}
+								projectName={projectNames.get(resourceKey(item.source, item.value.projectId)) ?? item.value.projectId}
 								onPress={() => selectSession(item)}
 							/>
 						)}
@@ -304,10 +307,12 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 
 function SessionRow({
 	session,
+	sourceLabel,
 	projectName,
 	onPress,
 }: {
 	session: DashboardSession;
+	sourceLabel: "Local" | "Cloud";
 	projectName: string;
 	onPress: () => void;
 }) {
@@ -319,7 +324,7 @@ function SessionRow({
 		<Pressable
 			onPress={onPress}
 			accessibilityRole="button"
-			accessibilityLabel={`${sessionTitle(session)}, ${visual.label}, ${projectName}`}
+			accessibilityLabel={`${sessionTitle(session)}, ${visual.label}, ${projectName}, ${sourceLabel}`}
 			style={({ pressed }) => [styles.sessionRow, pressed && styles.sessionRowPressed]}
 		>
 			<AgentLogo harness={session.harness} size={28} />
@@ -330,7 +335,7 @@ function SessionRow({
 				<View style={styles.sessionMetaRow}>
 					<View style={[styles.statusDot, { backgroundColor: visual.color }]} />
 					<RNText numberOfLines={1} style={styles.sessionMeta}>
-						{visual.label} · {projectName}
+						{visual.label} · {projectName} · {sourceLabel}
 					</RNText>
 				</View>
 			</View>

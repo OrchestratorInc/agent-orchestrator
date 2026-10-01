@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { DashboardSession } from "./api";
+import type { Scoped } from "./environment/scopedBoard";
 import {
 	activeSidebarDestination,
 	sidebarDestinationBadge,
@@ -12,6 +13,7 @@ import {
 	sidebarSessionListPresentation,
 	sidebarSessionHealth,
 	sidebarSessions,
+	scopedSidebarSessions,
 	sidebarSessionRoute,
 } from "./sidebar-navigation";
 
@@ -21,6 +23,10 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => ({
 }));
 
 describe("sidebarSessionRoute", () => {
+	it("routes a source-qualified Cloud worker even when a Local ID matches", () => {
+		const entry = { source: { kind: "cloud", id: "org-1" }, value: { id: "same", projectId: "p" } } as Scoped<DashboardSession>;
+		expect(sidebarSessionRoute(entry)).toEqual({ pathname: "/session/[id]", params: { id: "same", projectId: "p", source: "cloud", sourceId: "org-1" } });
+	});
 	it("routes Cloud workers through the environment-aware session screen", () => {
 		expect(sidebarSessionRoute("cloud", { id: "worker-1", projectId: "project-a" })).toEqual({
 			pathname: "/session/[id]", params: { id: "worker-1", projectId: "project-a" },
@@ -33,6 +39,16 @@ describe("sidebarSessionRoute", () => {
 		expect(sidebarSessionRoute("local", { id: "worker-1", projectId: "project-a" })).toEqual({
 			pathname: "/session/[id]", params: { id: "worker-1", projectId: "project-a" },
 		});
+	});
+});
+
+describe("combined recent workers", () => {
+	it("keeps duplicate IDs from Local and Cloud distinct", () => {
+		const rows = [
+			{ source: { kind: "local", id: "mac" }, value: session({ id: "same" }) },
+			{ source: { kind: "cloud", id: "org" }, value: session({ id: "same" }) },
+		] as Scoped<DashboardSession>[];
+		expect(scopedSidebarSessions(rows)).toHaveLength(2);
 	});
 });
 

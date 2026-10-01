@@ -115,7 +115,7 @@ export default function ProjectScreen() {
 			) : (
 				<WorkerBoardList
 					interactionMode={presentation.interactionMode}
-					sessions={projectSessions}
+					sessions={source ? projectSessions.map((value) => ({ source, value })) : []}
 					showProject={false}
 					contentBottomInset={presentation.spawnControls ? workerListBottomInset(insets.bottom + 12) : insets.bottom + 32}
 					refreshing={refreshing}

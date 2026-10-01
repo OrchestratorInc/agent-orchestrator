@@ -1,4 +1,22 @@
+import type { DashboardSession, ProjectInfo } from "./api";
+import { resourceKey, type Scoped } from "./environment/scopedBoard";
+import type { EnvironmentKind } from "./environment/types";
+
 export const ALL_WORKER_PROJECTS = "all";
+
+export const boardWorkerKey = (entry: Scoped<DashboardSession>): string => resourceKey(entry.source, entry.value.id);
+
+export function scopedWorkerProjectOptions(projects: readonly Scoped<ProjectInfo>[], environment: "all" | EnvironmentKind) {
+	return [
+		{ id: ALL_WORKER_PROJECTS, label: "All projects" },
+		...projects
+			.filter((entry) => environment === "all" || entry.source.kind === environment)
+			.map((entry) => ({
+				id: resourceKey(entry.source, entry.value.id),
+				label: `${entry.value.name} · ${entry.source.kind === "cloud" ? "Cloud" : "Local"}`,
+			})),
+	];
+}
 
 export function spawnProjectParam(projectId: string): { projectId: string } | undefined {
 	return projectId === ALL_WORKER_PROJECTS ? undefined : { projectId };

@@ -4,12 +4,9 @@ import { ActivityIndicator, FlatList, Keyboard, Platform, StyleSheet, View } fro
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
 import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { boardFailure, boardPresentation } from "../../lib/board-presentation";
-import { tunnelMayHaveRotated } from "../../lib/staleTunnel";
 import { haptics } from "../../lib/haptics";
 import { StaleBanner } from "../../lib/StaleBanner";
 import { useApp } from "../../lib/store";
-import { CloudUnreadyState, UnpairedState } from "../../lib/UnpairedState";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useTabScrollToTop } from "../../lib/useTabScrollToTop";
@@ -20,11 +17,11 @@ import { workerDockKeyboardLayout, workerDockLift, workerListBottomInset } from 
 import { WorkerControlsSheet } from "../../lib/worker-controls-sheet";
 import {
 	ALL_WORKER_PROJECTS,
-	filterWorkersByProject,
-	spawnProjectParam,
-	workerProjectLabel,
+	scopedWorkerProjectOptions,
 	workerSearchPresentation,
 } from "../../lib/worker-controls";
+import { filterScopedWorkers, resourceKey } from "../../lib/environment/scopedBoard";
+import type { EnvironmentKind } from "../../lib/environment/types";
 import { space } from "../../lib/tokens";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
@@ -35,14 +32,15 @@ export default function FleetScreen() {
 
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { environment, configured, configResolved, loading, error, errorStatus, connection, config, refresh, sessions, projects, notificationsUnread, activeEndpoints } =
-		useApp();
-	const presentation = boardPresentation(environment, configured);
+	const { scopedBoard, refreshAll, refreshSource, notificationsUnread } = useApp();
+	const { sessions, projects, sources } = scopedBoard;
 	const [refreshing, setRefreshing] = useState(false);
 	const [query, setQuery] = useState("");
 	const [searchRequested, setSearchRequested] = useState(false);
 	const [controlsOpen, setControlsOpen] = useState(false);
 	const [workerProjectId, setWorkerProjectId] = useState(ALL_WORKER_PROJECTS);
+	const [environmentFilter, setEnvironmentFilter] = useState<"all" | EnvironmentKind>("all");
+	const projectOptions = useMemo(() => scopedWorkerProjectOptions(projects, environmentFilter), [projects, environmentFilter]);
 	// Stable identities so the memoised dock is not rebuilt on every poll — a
 	// re-render mid-tap is what made the filter menu open only sometimes.
 	const openSearch = useCallback(() => setSearchRequested(true), []);
@@ -59,8 +57,9 @@ export default function FleetScreen() {
 	const spawnWorker = useCallback(() => {
 		Keyboard.dismiss();
 		haptics.tap();
-		router.push({ pathname: "/spawn", params: spawnProjectParam(workerProjectId) });
-	}, [router, workerProjectId]);
+		const selected = projects.find((entry) => resourceKey(entry.source, entry.value.id) === workerProjectId);
+		router.push({ pathname: "/spawn", params: selected ? { projectId: selected.value.id, source: selected.source.kind, sourceId: selected.source.id } : {} });
+	}, [router, workerProjectId, projects]);
 	// Two selectors rather than the whole state object, so the board re-renders
 	// only when one of these two values actually changes.
 	//
@@ -76,43 +75,25 @@ export default function FleetScreen() {
 	const keyboardAnimation = useReanimatedKeyboardAnimation();
 	const listRef = useTabScrollToTop<FlatList<BoardRow>>();
 
-	const projectSessions = useMemo(
-		() => filterWorkersByProject(sessions, presentation.localControls ? workerProjectId : ALL_WORKER_PROJECTS),
-		[sessions, workerProjectId, presentation.localControls],
-	);
+	const projectSessions = useMemo(() => filterScopedWorkers(sessions, environmentFilter, workerProjectId), [sessions, environmentFilter, workerProjectId]);
 	const searchOpen = workerSearchPresentation(searchRequested, query) === "expanded";
-	const selectedProjectLabel = workerProjectLabel(projects, workerProjectId);
+	const selectedProjectLabel = projectOptions.find((project) => project.id === workerProjectId)?.label ?? "All projects";
 
 	useEffect(() => {
 		if (
 			workerProjectId !== ALL_WORKER_PROJECTS &&
-			!projects.some((project) => project.id === workerProjectId)
+			!projectOptions.some((project) => project.id === workerProjectId)
 		) {
 			setWorkerProjectId(ALL_WORKER_PROJECTS);
 		}
-	}, [projects, workerProjectId]);
-
-	const failure = useMemo(
-		() =>
-			boardFailure(
-				environment,
-				errorStatus ?? undefined,
-				{
-					host: config?.host ?? "",
-					port: config?.httpPort ?? "",
-					platform: Platform.OS,
-				},
-				tunnelMayHaveRotated(activeEndpoints, config?.endpointKind, connection === "open"),
-			),
-		[environment, errorStatus, config?.host, config?.httpPort, config?.endpointKind, activeEndpoints, connection],
-	);
+	}, [projectOptions, workerProjectId]);
 
 	const onRefresh = useCallback(async () => {
 		haptics.tap();
 		setRefreshing(true);
-		await refresh();
+		await refreshAll();
 		setRefreshing(false);
-	}, [refresh]);
+	}, [refreshAll]);
 
 	const keyboardLayout = workerDockKeyboardLayout(keyboardHeight, insets.bottom, keyboardVisible);
 	// `progress`, not the animated `height`: that value is the keyboard's frame
@@ -123,50 +104,15 @@ export default function FleetScreen() {
 		transform: [{ translateY: -keyboardAnimation.progress.value * workerDockLift(keyboardHeight, insets.bottom) }],
 	}));
 
-	// The persisted environment choice hasn't loaded yet. Rendering either
-	// empty state here would guess — and for a returning cloud user, the local
-	// one guesses wrong: "no desktop paired" for someone who deliberately
-	// chose not to use one. Same convention as `shouldShowLoading` for
-	// `config` in lib/configLoading.ts: unresolved means "still working out
-	// what to show", not "assume the common case".
-	if (presentation.state === "loading") {
-		return (
-			<View style={styles.screen}>
-				<View style={{ height: insets.top }} />
-				<ScreenHeader title="Workers" />
-				<View style={styles.center}>
-					<ActivityIndicator color={t.accent} />
-				</View>
-			</View>
-		);
-	}
-
-	if (presentation.state === "cloud-unready") {
-		return (
-			<View style={styles.screen}>
-				<View style={{ height: insets.top }} />
-				<ScreenHeader title="Workers" />
-				<CloudUnreadyState />
-			</View>
-		);
-	}
-
-	if (presentation.state === "unpaired") {
-		return (
-			<View style={styles.screen}>
-				<View style={{ height: insets.top }} />
-				<ScreenHeader title="Workers" />
-				<UnpairedState resolving={!configResolved} />
-			</View>
-		);
-	}
+	const initialLoading = !sources.local.resolved || !sources.cloud.resolved || sources.local.loading || sources.cloud.loading;
+	const anyAvailable = sources.local.available || sources.cloud.available;
 
 	return (
-		<View style={[styles.screen, { paddingBottom: presentation.localControls ? keyboardLayout.rootPaddingBottom : 0 }]}>
+		<View style={[styles.screen, { paddingBottom: keyboardLayout.rootPaddingBottom }]}>
 			<View style={{ height: insets.top }} />
 			<ScreenHeader
 				title="Workers"
-				right={presentation.localControls ?
+				right={sources.local.available ?
 					<HeaderIconButton
 						icon="bell"
 						label="Notifications"
@@ -178,41 +124,44 @@ export default function FleetScreen() {
 			/>
 			{/* Above the list rather than inside ListEmptyComponent: the case this
 			    exists for is a populated board whose poll has died. */}
-			<StaleBanner error={!!error} onRetry={onRefresh} />
+			<StaleBanner sourceLabel="Local" sourceStatus={sources.local} onRetry={() => {
+				const source = sessions.find((entry) => entry.source.kind === "local")?.source ?? projects.find((entry) => entry.source.kind === "local")?.source;
+				if (source) void refreshSource(source);
+			}} />
+			<StaleBanner sourceLabel="Cloud" sourceStatus={sources.cloud} onRetry={() => {
+				const source = sessions.find((entry) => entry.source.kind === "cloud")?.source ?? projects.find((entry) => entry.source.kind === "cloud")?.source;
+				if (source) void refreshSource(source);
+			}} />
 
-			{loading && sessions.length === 0 ? (
+			{initialLoading && sessions.length === 0 ? (
 				<View style={styles.center}>
 					<ActivityIndicator color={t.accent} />
 				</View>
 			) : (
 				<WorkerBoardList
-					interactionMode={presentation.interactionMode}
 					sessions={projectSessions}
-					query={presentation.localControls ? query : ""}
-					identityKey={`${workerProjectId}|${query.trim()}`}
+					query={query}
+					identityKey={`${environmentFilter}|${workerProjectId}|${query.trim()}`}
 					listRef={listRef}
-					contentBottomInset={presentation.spawnControls ? workerListBottomInset(keyboardLayout.dockBottom) : insets.bottom + 32}
+					contentBottomInset={workerListBottomInset(keyboardLayout.dockBottom)}
 					refreshing={refreshing}
 					onRefresh={onRefresh}
 					ListEmptyComponent={
-						presentation.localControls && query.trim() ? (
+						query.trim() ? (
 							<EmptyState icon="search" title="No workers found" message={`No workers match “${query.trim()}”.`} />
-						) : error ? (
+						) : !anyAvailable ? (
 							<EmptyState
-								icon={failure.icon}
-								title={failure.title}
-								message={failure.hint}
+								icon="cloud"
+								title="Connect a workspace"
+								message="Pair a desktop or sign in to Cloud to see workers here."
 								action={
 									<View style={styles.errorActions}>
-										<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />
-										{/* Re-scanning is the only fix for a rotated password, and the
-										    fastest one for a moved/renamed host — so it belongs beside
-										    Retry rather than three taps away in Settings. */}
-										{presentation.localControls && <Button title="Scan" icon="maximize" onPress={() => router.push("/pair")} />}
+										<Button title="Pair desktop" icon="maximize" onPress={() => router.push("/pair")} />
+										<Button title="Sign in to Cloud" onPress={() => router.push("/sheets/cloud-signin")} />
 									</View>
 								}
 							/>
-						) : presentation.localControls && workerProjectId !== ALL_WORKER_PROJECTS ? (
+						) : workerProjectId !== ALL_WORKER_PROJECTS ? (
 							<EmptyState
 								icon="folder"
 								title={`No workers in ${selectedProjectLabel}`}
@@ -222,43 +171,43 @@ export default function FleetScreen() {
 							<EmptyState
 								icon="moon"
 								title="No active workers"
-								message={presentation.localControls ? "Spawn a worker to put your fleet to work." : "Start a Cloud worker for one of your projects."}
-								action={presentation.spawnControls ? <Button title="New worker" icon="plus" onPress={() => router.push({ pathname: "/spawn", params: spawnProjectParam(workerProjectId) })} /> : null}
+								message="Spawn a worker to put your fleet to work."
+								action={<Button title="New worker" icon="plus" onPress={spawnWorker} />}
 							/>
 						)
 					}
 				/>
 			)}
 
-			{presentation.spawnControls && <>
 			{/* Resting position plus the keyboard's lift, animated: the dock travels with
 			    the keys instead of jumping once they have finished moving. */}
 			<Animated.View style={[styles.dock, { bottom: keyboardLayout.restingBottom }, dockRise]}>
 				<WorkerDock
-					controlsEnabled={presentation.localControls}
+					controlsEnabled
 					query={query}
 					onQueryChange={setQuery}
 					searchOpen={searchOpen}
 					onSearchOpen={openSearch}
 					onSearchClose={closeSearch}
 					onOpenControls={openControls}
-					projectFiltered={workerProjectId !== ALL_WORKER_PROJECTS}
-					projects={projects}
+					projectFiltered={workerProjectId !== ALL_WORKER_PROJECTS || environmentFilter !== "all"}
+					projects={[]}
 					selectedProjectId={workerProjectId}
 					onSelectProject={setWorkerProjectId}
 					onSpawn={spawnWorker}
 				/>
 			</Animated.View>
-			</>}
 
-			{presentation.localControls && <WorkerControlsSheet
+			<WorkerControlsSheet
 				open={controlsOpen}
 				onDismiss={() => setControlsOpen(false)}
 				onSearch={() => setSearchRequested(true)}
 				projects={projects}
+				environmentFilter={environmentFilter}
+				onSelectEnvironment={setEnvironmentFilter}
 				selectedProjectId={workerProjectId}
 				onSelectProject={setWorkerProjectId}
-			/>}
+			/>
 		</View>
 	);
 }

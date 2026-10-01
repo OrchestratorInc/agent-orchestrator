@@ -3,6 +3,7 @@ import { useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Keyboard, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import type { DashboardSession } from "./api";
+import { resourceKey, type SourceRef } from "./environment/scopedBoard";
 import { AgentLogo } from "./AgentLogo";
 import { haptics } from "./haptics";
 import { prLine, workerRowPresentation, workerStatusGlyph } from "./agentsView";
@@ -20,7 +21,7 @@ import { normalizeConversationTitle } from "./chat/conversationMenuModel";
 import { iconSize, press, space, type } from "./tokens";
 import { userFacingError } from "./connectionError";
 
-type ReadOnlyWorkerProps = { session: DashboardSession; projectName?: string; nowBucket?: number };
+type ReadOnlyWorkerProps = { session: DashboardSession; source: SourceRef; projectName?: string; nowBucket?: number };
 type WorkerListRowProps =
 	| (ReadOnlyWorkerProps & { interactionMode: "read-only" })
 	| (ReadOnlyWorkerProps & { interactionMode: "open-only" })
@@ -28,10 +29,10 @@ type WorkerListRowProps =
 
 export function WorkerListRow(props: WorkerListRowProps) {
 	if (props.interactionMode === "read-only") {
-		return <PassiveWorkerListRow session={props.session} projectName={props.projectName} />;
+		return <PassiveWorkerListRow session={props.session} source={props.source} projectName={props.projectName} />;
 	}
 	if (props.interactionMode === "open-only") {
-		return <OpenOnlyWorkerListRow session={props.session} projectName={props.projectName} />;
+		return <OpenOnlyWorkerListRow session={props.session} source={props.source} projectName={props.projectName} />;
 	}
 	return <InteractiveWorkerListRow {...props} />;
 }
@@ -47,14 +48,14 @@ function OpenOnlyWorkerListRow(props: ReadOnlyWorkerProps) {
 				haptics.tap();
 				router.push({
 					pathname: "/session/[id]",
-					params: { id: props.session.id, projectId: props.session.projectId },
+					params: { id: props.session.id, projectId: props.session.projectId, source: props.source.kind, sourceId: props.source.id },
 				});
 			}}
 		/>
 	);
 }
 
-function PassiveWorkerListRow({ session, projectName, onPress }: ReadOnlyWorkerProps & { onPress?: () => void }) {
+function PassiveWorkerListRow({ session, source, projectName, onPress }: ReadOnlyWorkerProps & { onPress?: () => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const row = workerRowPresentation(t, session, projectName);
@@ -69,6 +70,7 @@ function PassiveWorkerListRow({ session, projectName, onPress }: ReadOnlyWorkerP
 				details={[row.branch, prs?.text].filter(Boolean).join("  ·  ")}
 				prsTone={prs?.tone}
 				harness={session.harness}
+				sourceLabel={source.kind === "cloud" ? "Cloud" : "Local"}
 				styles={styles}
 				t={t}
 			/>
@@ -79,7 +81,7 @@ function PassiveWorkerListRow({ session, projectName, onPress }: ReadOnlyWorkerP
 			<Pressable
 				onPress={onPress}
 				accessibilityRole="button"
-				accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}.`}
+				accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}. ${source.kind === "cloud" ? "Cloud" : "Local"}.`}
 				accessibilityHint="Opens worker conversation."
 				android_ripple={{ color: t.bgElevatedHover }}
 				style={({ pressed }) => [styles.shell, styles.foreground, styles.row, pressed && styles.rowPressed]}
@@ -89,7 +91,7 @@ function PassiveWorkerListRow({ session, projectName, onPress }: ReadOnlyWorkerP
 		);
 	}
 	return (
-		<View style={[styles.shell, styles.foreground, styles.row]} accessible accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}. Read-only.`}>
+		<View style={[styles.shell, styles.foreground, styles.row]} accessible accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}. ${source.kind === "cloud" ? "Cloud" : "Local"}. Read-only.`}>
 			{contents}
 		</View>
 	);
@@ -97,6 +99,7 @@ function PassiveWorkerListRow({ session, projectName, onPress }: ReadOnlyWorkerP
 
 const InteractiveWorkerListRow = memo(function InteractiveWorkerListRow({
 	session,
+	source,
 	projectName,
 	isRenaming,
 	activeSwipeId,
@@ -112,6 +115,7 @@ const InteractiveWorkerListRow = memo(function InteractiveWorkerListRow({
 	onRestore,
 }: {
 	session: DashboardSession;
+	source: SourceRef;
 	projectName?: string;
 	isRenaming: boolean;
 	activeSwipeId?: string;
@@ -200,7 +204,7 @@ const InteractiveWorkerListRow = memo(function InteractiveWorkerListRow({
 		haptics.tap();
 		router.push({
 			pathname: "/session/[id]",
-			params: { id: session.id, projectId: session.projectId },
+			params: { id: session.id, projectId: session.projectId, source: source.kind, sourceId: source.id },
 		});
 	};
 
@@ -244,7 +248,7 @@ const InteractiveWorkerListRow = memo(function InteractiveWorkerListRow({
 
 	return (
 		<WorkerRowInteraction
-			sessionId={session.id}
+			sessionId={resourceKey(source, session.id)}
 			enabled={!isRenaming}
 			activeSwipeId={activeSwipeId}
 			rightActions={renderRightActions()}
@@ -252,7 +256,7 @@ const InteractiveWorkerListRow = memo(function InteractiveWorkerListRow({
 			foregroundStyle={styles.foreground}
 			rowStyle={styles.row}
 			pressedStyle={styles.rowPressed}
-			accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}.`}
+			accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}. Local.`}
 			accessibilityHint="Swipe left for pin and delete actions. Long press for more."
 			onPress={openSession}
 			actions={contextActions}
@@ -269,6 +273,7 @@ const InteractiveWorkerListRow = memo(function InteractiveWorkerListRow({
 					details={details}
 					prsTone={prs?.tone}
 					harness={session.harness}
+					sourceLabel="Local"
 					isRenaming
 					renameTitle={renameTitle}
 					renameSaving={renameSaving}
@@ -287,6 +292,7 @@ const InteractiveWorkerListRow = memo(function InteractiveWorkerListRow({
 					details={details}
 					prsTone={prs?.tone}
 					harness={session.harness}
+					sourceLabel="Local"
 					styles={styles}
 					t={t}
 				/>
@@ -304,6 +310,7 @@ const InteractiveWorkerListRow = memo(function InteractiveWorkerListRow({
 	(prev, next) =>
 		prev.nowBucket === next.nowBucket &&
 		prev.projectName === next.projectName &&
+		prev.source.kind === next.source.kind && prev.source.id === next.source.id &&
 		prev.isRenaming === next.isRenaming &&
 		prev.activeSwipeId === next.activeSwipeId &&
 		// By value, not identity: the store polls and publishes freshly parsed
@@ -319,6 +326,7 @@ function WorkerRowContents({
 	details,
 	prsTone,
 	harness,
+	sourceLabel,
 	isRenaming = false,
 	renameTitle = "",
 	renameSaving = false,
@@ -335,6 +343,7 @@ function WorkerRowContents({
 	details: string;
 	prsTone?: Parameters<typeof toneColor>[1];
 	harness: DashboardSession["harness"];
+	sourceLabel: "Local" | "Cloud";
 	isRenaming?: boolean;
 	renameTitle?: string;
 	renameSaving?: boolean;
@@ -353,6 +362,7 @@ function WorkerRowContents({
 				<Text style={styles.project} numberOfLines={1}>
 					{row.project}
 				</Text>
+				<Text style={styles.sourceTag}>{sourceLabel}</Text>
 				{/* Paired with the tinted label so status reads by shape as well as
 				    colour. Only shown alongside a real status — when the row is
 				    showing an elapsed time instead, there is no state to depict.
@@ -452,6 +462,7 @@ const makeStyles = (t: Theme) =>
 		renameControlDisabled: { opacity: 0.45 },
 		eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 17 },
 		project: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500" },
+		sourceTag: { color: t.textTertiary, fontSize: type.caption2.fontSize, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, borderRadius: 5, paddingHorizontal: 5, overflow: "hidden" },
 		trailing: { fontFamily: "Geist_500Medium", flexShrink: 0, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500", fontVariant: ["tabular-nums"] },
 		title: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
 		details: { color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontFamily: t.fontMono },

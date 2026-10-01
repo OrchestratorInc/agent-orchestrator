@@ -87,7 +87,7 @@ afterEach(async () => {
 
 describe("Cloud worker row", () => {
 	it("opens the session without mounting Local mutation interactions", async () => {
-		const props = { interactionMode: "open-only", session, projectName: "Tap" } as unknown as Parameters<typeof WorkerListRow>[0];
+		const props = { interactionMode: "open-only", session, source: { kind: "cloud", id: "org-1" }, projectName: "Tap" } as unknown as Parameters<typeof WorkerListRow>[0];
 		await act(async () => { renderer = create(<WorkerListRow {...props} />); });
 
 		const root = renderer!.root;
@@ -98,7 +98,7 @@ describe("Cloud worker row", () => {
 		expect(fixtures.tap).toHaveBeenCalledOnce();
 		expect(fixtures.push).toHaveBeenCalledWith({
 			pathname: "/session/[id]",
-			params: { id: "worker-1", projectId: "project-a" },
+			params: { id: "worker-1", projectId: "project-a", source: "cloud", sourceId: "org-1" },
 		});
 	});
 });
