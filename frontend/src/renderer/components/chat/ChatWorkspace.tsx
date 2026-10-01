@@ -114,7 +114,7 @@ import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { ActivityRun } from "./ActivityRun";
 import { TurnPlan } from "./TurnPlan";
 import { TurnSettingsBar } from "./TurnSettingsBar";
-import { ElicitationDock, elicitationBoundarySource } from "./ElicitationDock";
+import { ElicitationDock, elicitationBoundarySource, forgetUnsavedElicitationDraftsFor } from "./ElicitationDock";
 import {
 	pruneExpiredElicitationDraftsOnce,
 	reconcileElicitationDraftsForConversation,
@@ -1232,39 +1232,58 @@ function ChatWorkspaceContent({
 	//
 	// On a partial page (`hasMoreBefore`), a request id that isn't in
 	// `snapshot.items` at all might just be old enough to sit outside the
-	// loaded window — still genuinely open, not resolved. Only an id actually
-	// seen is safe to act on then: pending ids are kept regardless, and
-	// resolved ids (seen, but not pending) are deleted, since those are known
-	// for certain. A fully loaded page can safely delete everything else too.
+	// loaded window — still genuinely open, not resolved. The daemon's
+	// `pendingUserInputRequestIds` settles that: it lists every open request on
+	// the conversation, so with it, absence from the list is proof of
+	// resolution. Without it (an older daemon), only an id actually seen is
+	// safe to act on: pending ids are kept regardless, and resolved ids (seen,
+	// but not pending) are cleaned up, since those are known for certain. A
+	// fully loaded page can safely clean up everything else too.
 	//
 	// Failed sends are kept here, keyed by request, not only in the dock: the
 	// dock is keyed by request too, so when a newer question replaces it while
 	// an older answer is still in flight, that dock is gone by the time the
 	// send rejects.
 	const [resolveErrors, setResolveErrors] = useState<Record<string, string>>({});
+	const stableOpenUserInputRequestIds = useStableValue(snapshot.pendingUserInputRequestIds);
 	useEffect(() => {
+		const open = stableOpenUserInputRequestIds ?? stableUserInputRequestIds.pending;
+		const complete = stableOpenUserInputRequestIds !== undefined || !snapshot.hasMoreBefore;
+		const isGone = (requestId: string) =>
+			!open.includes(requestId) && (complete || stableUserInputRequestIds.resolved.includes(requestId));
 		pruneExpiredElicitationDraftsOnce();
 		reconcileElicitationDraftsForConversation(
 			snapshot.conversationId,
-			stableUserInputRequestIds.pending,
+			open,
 			stableUserInputRequestIds.resolved,
-			!snapshot.hasMoreBefore,
+			complete,
 		);
 		// A resolved request also clears its own leave/quit-guard slot, if a
 		// prior failed save is still holding one open: this workspace is now
-		// the only place that ever will again. Scoped to requests seen resolved
-		// here, so the reviewer overlay's reconcile — which never sees the
-		// worker's request ids at all — can't reach into the worker's slots,
-		// and vice versa.
-		for (const requestId of stableUserInputRequestIds.resolved) {
+		// the only place that ever will again. Scoped to this conversation's
+		// requests — ones seen resolved here, or whose unsaved answer this
+		// conversation holds — so the reviewer overlay, which shares the
+		// worker's session but not its conversation, can't reach into the
+		// worker's slots, and vice versa.
+		const finished = new Set([
+			...stableUserInputRequestIds.resolved.filter(isGone),
+			...forgetUnsavedElicitationDraftsFor(snapshot.conversationId, isGone),
+		]);
+		for (const requestId of finished) {
 			setChatDraftBoundary(snapshot.sessionId, elicitationBoundarySource(requestId), undefined);
 		}
-		// A failed send for a question that is no longer pending has nothing left to retry.
+		// A failed send for a question that is no longer open has nothing left to retry.
 		setResolveErrors((current) => {
-			const kept = Object.entries(current).filter(([requestId]) => stableUserInputRequestIds.pending.includes(requestId));
+			const kept = Object.entries(current).filter(([requestId]) => !isGone(requestId));
 			return kept.length === Object.keys(current).length ? current : Object.fromEntries(kept);
 		});
-	}, [snapshot.conversationId, snapshot.sessionId, snapshot.hasMoreBefore, stableUserInputRequestIds]);
+	}, [
+		snapshot.conversationId,
+		snapshot.sessionId,
+		snapshot.hasMoreBefore,
+		stableUserInputRequestIds,
+		stableOpenUserInputRequestIds,
+	]);
 	const trackedResolveInput = useCallback(
 		async (requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>) => {
 			if (!onResolveInput) return;

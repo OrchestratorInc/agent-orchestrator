@@ -3408,6 +3408,7 @@ export interface components {
             nativeForkAvailableAfterSequence: number;
             /** Format: int64 */
             oldestSequence?: number;
+            pendingUserInputRequestIds?: null | string[];
             rateLimits?: components["schemas"]["ConversationRateLimitsPayload"];
             sessionId: string;
             settings: components["schemas"]["ConversationTurnSettingsPayload"];

@@ -15,7 +15,7 @@ import {
 	chatFixtureThreadError,
 } from "../../lib/chat-fixture";
 import { appI18n } from "../../i18n";
-import type { ConversationMessage, ConversationSnapshot } from "../../types/conversation";
+import type { ConversationItem, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { useUiStore } from "../../stores/ui-store";
 import type { WorkspaceSession } from "../../types/workspace";
@@ -757,6 +757,31 @@ describe("ChatWorkspace timeline", () => {
 		return snapshot;
 	}
 
+	function secondQuestion(): ConversationItem {
+		return {
+			kind: "activity",
+			id: "input-2",
+			sequence: 101,
+			revision: 1,
+			turnId: "turn-1",
+			activityKind: "user_input",
+			status: "pending",
+			summary: "Choose a language",
+			requestId: "input-2",
+			detail: {
+				inputMode: "form",
+				message: "Choose a language",
+				schema: {
+					type: "object",
+					properties: {
+						question_0: { type: "string", title: "Which language?", oneOf: [{ const: "go", title: "Go" }] },
+					},
+				},
+			},
+			createdAt: "2026-08-24T00:01:00Z",
+		};
+	}
+
 	it("docks a pending question on the composer instead of the transcript", () => {
 		render(<ChatWorkspace snapshot={withUserInput("pending")} onResolveInput={vi.fn()} />);
 
@@ -996,6 +1021,141 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByRole("radio", { name: "ACP" })).toBeInTheDocument();
 		expect(screen.getByText("daemon unreachable")).toBeInTheDocument();
 		expect(screen.queryByText(/earlier question couldn’t be sent/)).not.toBeInTheDocument();
+	});
+
+	it("keeps a failed send's error while its question is only outside the loaded page", async () => {
+		// Absence from a partial page proves nothing: Q1 can still be open,
+		// just older than the loaded window. Its error has to survive that and
+		// come back with Q1, the same way its draft does.
+		const user = userEvent.setup();
+		const withQ1 = withUserInput("pending");
+		const withQ1AndQ2 = structuredClone(withQ1);
+		withQ1AndQ2.items.push(secondQuestion());
+		const q1OutOfPage = structuredClone(withQ1AndQ2);
+		q1OutOfPage.hasMoreBefore = true;
+		q1OutOfPage.items = q1OutOfPage.items.filter((item) => item.id !== "input-1");
+		let rejectQ1!: (reason: unknown) => void;
+		const onResolveInput = vi.fn(
+			(requestId: string) =>
+				requestId === "input-1"
+					? new Promise<void>((_resolve, reject) => {
+							rejectQ1 = reject;
+						})
+					: Promise.resolve(),
+		);
+
+		const view = render(<ChatWorkspace snapshot={withQ1} onResolveInput={onResolveInput} />);
+		await user.click(screen.getByRole("radio", { name: "ACP" }));
+		await user.click(screen.getByRole("button", { name: "Continue" }));
+		view.rerender(<ChatWorkspace snapshot={withQ1AndQ2} onResolveInput={onResolveInput} />);
+		await act(async () => {
+			rejectQ1(new Error("daemon unreachable"));
+		});
+
+		view.rerender(<ChatWorkspace snapshot={q1OutOfPage} onResolveInput={onResolveInput} />);
+		expect(screen.getByText(/earlier question couldn’t be sent/)).toBeInTheDocument();
+
+		view.rerender(<ChatWorkspace snapshot={withQ1} onResolveInput={onResolveInput} />);
+		expect(screen.getByText("daemon unreachable")).toBeInTheDocument();
+	});
+
+	it("drops a failed send's error once the daemon no longer lists its question as open", async () => {
+		const user = userEvent.setup();
+		const withQ1 = withUserInput("pending");
+		const withQ1AndQ2 = structuredClone(withQ1);
+		withQ1AndQ2.items.push(secondQuestion());
+		const q1Answered = structuredClone(withQ1AndQ2);
+		q1Answered.hasMoreBefore = true;
+		q1Answered.items = q1Answered.items.filter((item) => item.id !== "input-1");
+		q1Answered.pendingUserInputRequestIds = ["input-2"];
+		let rejectQ1!: (reason: unknown) => void;
+		const onResolveInput = vi.fn(
+			(requestId: string) =>
+				requestId === "input-1"
+					? new Promise<void>((_resolve, reject) => {
+							rejectQ1 = reject;
+						})
+					: Promise.resolve(),
+		);
+
+		const view = render(<ChatWorkspace snapshot={withQ1} onResolveInput={onResolveInput} />);
+		await user.click(screen.getByRole("radio", { name: "ACP" }));
+		await user.click(screen.getByRole("button", { name: "Continue" }));
+		view.rerender(<ChatWorkspace snapshot={withQ1AndQ2} onResolveInput={onResolveInput} />);
+		await act(async () => {
+			rejectQ1(new Error("daemon unreachable"));
+		});
+		expect(screen.getByText(/earlier question couldn’t be sent/)).toBeInTheDocument();
+
+		view.rerender(<ChatWorkspace snapshot={q1Answered} onResolveInput={onResolveInput} />);
+		expect(screen.queryByText(/earlier question couldn’t be sent/)).not.toBeInTheDocument();
+	});
+
+	it("on a partial page, keeps a listed-open question's draft and drops it once the daemon stops listing it", async () => {
+		const user = userEvent.setup();
+		const pending = withUserInput("pending");
+		const first = render(<ChatWorkspace snapshot={pending} onResolveInput={vi.fn()} />);
+		await user.click(screen.getByRole("radio", { name: "ACP" }));
+		first.unmount();
+
+		const outOfPage = structuredClone(pending);
+		outOfPage.hasMoreBefore = true;
+		outOfPage.items = outOfPage.items.filter((item) => item.id !== "input-1");
+		outOfPage.pendingUserInputRequestIds = ["input-1"];
+		const view = render(<ChatWorkspace snapshot={outOfPage} onResolveInput={vi.fn()} />);
+		expect(readElicitationDraft(chatFixture.conversationId, "input-1")?.values.question_0).toBe("acp");
+
+		view.rerender(<ChatWorkspace snapshot={{ ...outOfPage, pendingUserInputRequestIds: [] }} onResolveInput={vi.fn()} />);
+		expect(readElicitationDraft(chatFixture.conversationId, "input-1")).toBeUndefined();
+	});
+
+	it("clears a failed save's warning and in-memory answer when a question outside the page stops being open", async () => {
+		// The question can be answered elsewhere, time out, or be stopped while
+		// it sits above the loaded page. Nothing on screen ever shows it
+		// resolved, so only the daemon's open list can release the leave/quit
+		// warning and the answer held in memory.
+		const user = userEvent.setup();
+		const pending = withUserInput("pending");
+		const durableStorage = window.localStorage;
+		const storage = {
+			getItem: durableStorage.getItem.bind(durableStorage),
+			removeItem: durableStorage.removeItem.bind(durableStorage),
+			setItem: (key: string, value: string) => {
+				if (key === elicitationDraftKey(chatFixture.conversationId, "input-1")) {
+					throw new DOMException("full", "QuotaExceededError");
+				}
+				durableStorage.setItem(key, value);
+			},
+			key: durableStorage.key.bind(durableStorage),
+			get length() {
+				return durableStorage.length;
+			},
+		} as Storage;
+		const localStorage = vi.spyOn(window, "localStorage", "get").mockReturnValue(storage);
+
+		try {
+			const view = render(<ChatWorkspace snapshot={pending} onResolveInput={vi.fn()} />);
+			await user.click(screen.getByRole("radio", { name: "ACP" }));
+			await waitFor(() => expect(getChatDraftBoundary(chatFixture.sessionId)).toBe("elicitation-persistence-failed"));
+
+			const outOfPage = structuredClone(pending);
+			outOfPage.hasMoreBefore = true;
+			outOfPage.items = outOfPage.items.filter((item) => item.id !== "input-1");
+			outOfPage.pendingUserInputRequestIds = ["input-1"];
+			view.rerender(<ChatWorkspace snapshot={outOfPage} onResolveInput={vi.fn()} />);
+			expect(getChatDraftBoundary(chatFixture.sessionId)).toBe("elicitation-persistence-failed");
+
+			view.rerender(<ChatWorkspace snapshot={{ ...outOfPage, pendingUserInputRequestIds: [] }} onResolveInput={vi.fn()} />);
+			expect(getChatDraftBoundary(chatFixture.sessionId)).toBeUndefined();
+			view.unmount();
+		} finally {
+			localStorage.mockRestore();
+		}
+
+		// Had the in-memory answer survived, a fresh dock for the same request
+		// would restore it ahead of storage.
+		render(<ChatWorkspace snapshot={pending} onResolveInput={vi.fn()} />);
+		expect(screen.getByRole("radio", { name: "ACP" })).not.toBeChecked();
 	});
 
 	it("resets the dock instead of reusing one still disabled from a different question's in-flight resolve", async () => {

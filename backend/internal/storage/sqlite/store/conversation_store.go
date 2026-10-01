@@ -2707,6 +2707,10 @@ type ConversationSnapshot struct {
 	BranchedFromEarlierMessage       bool
 	OldestSequence                   int64
 	HasMoreBefore                    bool
+	// PendingUserInputRequestIDs lists every open input request on the
+	// conversation, not only those inside this page. It is read after the page,
+	// so it is never older than the rows it accompanies.
+	PendingUserInputRequestIDs []string
 }
 
 // DefaultConversationPageSize is the standard bounded read size for conversation snapshots.
@@ -2754,7 +2758,7 @@ func (s *Store) LoadConversationSnapshotPage(
 			OldestSequence:                   visibleAfterSequence,
 			HasMoreBefore:                    false,
 		}
-		return snapshot, nil
+		return s.withPendingUserInputRequestIDs(ctx, conversationID, snapshot)
 	}
 	fetchLimit := limit + 1
 
@@ -2846,6 +2850,19 @@ func (s *Store) LoadConversationSnapshotPage(
 			snapshot.Activities = append(snapshot.Activities, activityToDomain(activityRows[i]))
 		}
 	}
+	return s.withPendingUserInputRequestIDs(ctx, conversationID, snapshot)
+}
+
+func (s *Store) withPendingUserInputRequestIDs(
+	ctx context.Context,
+	conversationID string,
+	snapshot ConversationSnapshot,
+) (ConversationSnapshot, error) {
+	ids, err := s.qr.SelectPendingConversationInputRequestIDs(ctx, conversationID)
+	if err != nil {
+		return ConversationSnapshot{}, fmt.Errorf("select pending input requests: %w", err)
+	}
+	snapshot.PendingUserInputRequestIDs = ids
 	return snapshot, nil
 }
 

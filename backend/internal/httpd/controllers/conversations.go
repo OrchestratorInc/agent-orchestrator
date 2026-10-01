@@ -1058,6 +1058,9 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 		MCPServers:                       mcpServersPayload(s.Conversation.MCPServers),
 		Capabilities:                     capabilityNames(s.Capabilities),
 	}
+	if s.PendingUserInputRequestIDs != nil {
+		out.PendingUserInputRequestIDs = &s.PendingUserInputRequestIDs
+	}
 
 	for _, turn := range s.Turns {
 		out.Turns = append(out.Turns, ConversationTurnResponse{

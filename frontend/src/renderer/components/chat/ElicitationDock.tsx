@@ -54,6 +54,28 @@ function peekUnsavedElicitationDraft(conversationId: string, requestId: string):
 	return unsavedElicitationDrafts.get(elicitationDraftKey(conversationId, requestId));
 }
 
+/**
+ * Drops the remembered answer for every request on `conversationId` that
+ * `isGone` says is no longer open, and returns those request ids. Without this
+ * an answer that never reached disk would stay in memory until the app quits
+ * whenever its question was answered elsewhere, timed out, or was stopped.
+ */
+export function forgetUnsavedElicitationDraftsFor(
+	conversationId: string,
+	isGone: (requestId: string) => boolean,
+): string[] {
+	const prefix = elicitationDraftKey(conversationId, "");
+	const forgotten: string[] = [];
+	for (const key of unsavedElicitationDrafts.keys()) {
+		if (!key.startsWith(prefix)) continue;
+		const requestId = key.slice(prefix.length);
+		if (!isGone(requestId)) continue;
+		unsavedElicitationDrafts.delete(key);
+		forgotten.push(requestId);
+	}
+	return forgotten;
+}
+
 /** Test seam: drops every draft this renderer remembers failed to save. */
 export function resetUnsavedElicitationDraftMemory(): void {
 	unsavedElicitationDrafts.clear();
