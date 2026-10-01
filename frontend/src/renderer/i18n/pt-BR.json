@@ -362,7 +362,7 @@
 	"createProject.projectSuggestWorkspace": "Tente importar esta pasta como workspace se você quiser que o AO trate os repositórios filhos como projetos separados. Continue como projeto se quiser que o AO inicialize apenas a pasta raiz selecionada.",
 	"createProject.repoCannotImport": "O repositório não pode ser importado",
 	"createProject.retry": "Tentar novamente",
-	"terminal.sessionLoader.building": "Criando sua sessão",
+	"terminal.sessionLoader.workspace": "Criando o espaço de trabalho",
 	"terminal.sessionLoader.worker": "Conectando ao worker",
 	"terminal.sessionLoader.repositoryAgent": "Preparando seu repositório e agente",
 	"terminal.sessionLoader.terminal": "Conectando seu terminal",

@@ -362,7 +362,7 @@
 	"createProject.projectSuggestWorkspace": "Essayez d’importer ce dossier comme espace de travail si vous voulez qu’AO traite les dépôts enfants comme des projets séparés. Continuez comme projet si vous voulez qu’AO initialise uniquement le dossier racine sélectionné.",
 	"createProject.repoCannotImport": "Le dépôt ne peut pas être importé",
 	"createProject.retry": "Réessayer",
-	"terminal.sessionLoader.building": "Création de votre session",
+	"terminal.sessionLoader.workspace": "Création de l'espace de travail",
 	"terminal.sessionLoader.worker": "Connexion au worker",
 	"terminal.sessionLoader.repositoryAgent": "Préparation de votre dépôt et de votre agent",
 	"terminal.sessionLoader.terminal": "Connexion à votre terminal",

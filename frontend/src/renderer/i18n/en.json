@@ -356,7 +356,7 @@
 	"createProject.projectFolder": "Project folder",
 	"createProject.repoCannotImport": "Repository cannot be imported",
 	"createProject.retry": "Retry",
-	"terminal.sessionLoader.building": "Building your session",
+	"terminal.sessionLoader.workspace": "Creating the workspace",
 	"terminal.sessionLoader.worker": "Connecting to the worker",
 	"terminal.sessionLoader.repositoryAgent": "Preparing your repository and agent",
 	"terminal.sessionLoader.terminal": "Connecting your terminal",

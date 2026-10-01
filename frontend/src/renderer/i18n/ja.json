@@ -359,7 +359,7 @@
 	"createProject.projectSuggestWorkspace": "AO に子リポジトリを個別のプロジェクトとして扱わせたい場合は、このフォルダーをワークスペースとしてインポートしてください。選択したルートフォルダーだけを初期化したい場合は、プロジェクトとして続行してください。",
 	"createProject.repoCannotImport": "リポジトリをインポートできません",
 	"createProject.retry": "再試行",
-	"terminal.sessionLoader.building": "セッションを作成しています",
+	"terminal.sessionLoader.workspace": "ワークスペースを作成中",
 	"terminal.sessionLoader.worker": "ワーカーに接続しています",
 	"terminal.sessionLoader.repositoryAgent": "リポジトリとエージェントを準備しています",
 	"terminal.sessionLoader.terminal": "ターミナルに接続しています",

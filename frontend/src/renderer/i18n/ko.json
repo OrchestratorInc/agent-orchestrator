@@ -359,7 +359,7 @@
 	"createProject.projectSuggestWorkspace": "AO가 하위 저장소를 별도 프로젝트로 처리하길 원하면 이 폴더를 워크스페이스로 가져오세요. 선택한 루트 폴더만 초기화하려면 프로젝트로 계속 진행하세요.",
 	"createProject.repoCannotImport": "저장소를 가져올 수 없습니다",
 	"createProject.retry": "다시 시도",
-	"terminal.sessionLoader.building": "세션을 생성하는 중",
+	"terminal.sessionLoader.workspace": "작업 공간 만드는 중",
 	"terminal.sessionLoader.worker": "워커에 연결하는 중",
 	"terminal.sessionLoader.repositoryAgent": "리포지토리와 에이전트를 준비하는 중",
 	"terminal.sessionLoader.terminal": "터미널에 연결하는 중",

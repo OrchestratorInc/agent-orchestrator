@@ -359,7 +359,7 @@
 	"createProject.projectSuggestWorkspace": "Importiere diesen Ordner als Workspace, wenn AO die untergeordneten Repositories als separate Projekte behandeln soll. Fahre als Projekt fort, wenn AO nur den ausgewählten Root-Ordner initialisieren soll.",
 	"createProject.repoCannotImport": "Repository kann nicht importiert werden",
 	"createProject.retry": "Erneut versuchen",
-	"terminal.sessionLoader.building": "Deine Sitzung wird erstellt",
+	"terminal.sessionLoader.workspace": "Arbeitsbereich wird erstellt",
 	"terminal.sessionLoader.worker": "Verbindung zum Worker wird hergestellt",
 	"terminal.sessionLoader.repositoryAgent": "Repository und Agent werden vorbereitet",
 	"terminal.sessionLoader.terminal": "Verbindung zum Terminal wird hergestellt",
