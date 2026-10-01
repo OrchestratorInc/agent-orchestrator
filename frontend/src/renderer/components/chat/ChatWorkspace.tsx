@@ -1446,7 +1446,7 @@ function ChatWorkspaceContent({
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
 					>
 						<ChatLinkProvider onLinkOpen={onLinkOpen} onFileOpen={onOpenFile} onSessionLinkOpen={onSessionLinkOpen} workspacePaths={filePaths}>
-							<ChatImageSourceProvider sessionId={draftScope.sessionId}>
+							<ChatImageSourceProvider sessionId={snapshot.sessionId}>
 								<Timeline
 									key={draftScopeKey}
 									snapshot={snapshot}

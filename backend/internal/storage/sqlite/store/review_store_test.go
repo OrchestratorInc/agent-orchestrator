@@ -60,6 +60,42 @@ func TestCreateReviewConversationClaimsChatMode(t *testing.T) {
 	}
 }
 
+func TestRestoreReviewLaunchStateRecoversIdentifiersClearedForModeSwitch(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "review-rollback")
+	session, err := s.CreateSession(ctx, sampleRecord("review-rollback"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	review := domain.Review{ID: "review-rollback", SessionID: session.ID, ProjectID: session.ProjectID,
+		Harness: domain.ReviewerCodex, InterfaceMode: domain.ReviewerInterfaceChat,
+		ReviewerHandleID: "review-chat:review-rollback", AgentSessionID: "provider-1",
+		ReviewerLaunchID: "launch-1", ProviderConversationID: "provider-1", ControllerGeneration: "generation-1",
+		ReviewerActivityState: domain.ActivityActive, CreatedAt: now, UpdatedAt: now}
+	if err := s.UpsertReview(ctx, review); err != nil {
+		t.Fatalf("upsert review: %v", err)
+	}
+	if ok, err := s.SetReviewInterfaceMode(ctx, review.ID, domain.ReviewerInterfaceTUI, now.Add(time.Second)); err != nil || !ok {
+		t.Fatalf("switch to terminal: ok=%v err=%v", ok, err)
+	}
+	if ok, err := s.RestoreReviewLaunchState(ctx, review); err != nil || !ok {
+		t.Fatalf("restore previous launch: ok=%v err=%v", ok, err)
+	}
+	got, ok, err := s.GetReviewByID(ctx, review.ID)
+	if err != nil || !ok {
+		t.Fatalf("get restored review: ok=%v err=%v", ok, err)
+	}
+	if got.InterfaceMode != review.InterfaceMode || got.ReviewerHandleID != review.ReviewerHandleID || got.AgentSessionID != review.AgentSessionID || got.ProviderConversationID != review.ProviderConversationID || got.ControllerGeneration != review.ControllerGeneration || got.ReviewerLaunchID != review.ReviewerLaunchID {
+		t.Fatalf("restored launch = %+v, want %+v", got, review)
+	}
+	recoverable, err := s.ListRecoverableChatReviews(ctx)
+	if err != nil || len(recoverable) != 1 || recoverable[0].ID != review.ID {
+		t.Fatalf("recoverable chats = %+v, err=%v", recoverable, err)
+	}
+}
+
 func TestCreateAndActivateReviewConversationBranchClaimsReview(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
