@@ -35,11 +35,13 @@ vi.mock("./CreateProjectAgentSheet", () => ({
 		onChange,
 		triggerClassName,
 		disabled,
+		manageView,
 	}: {
 		value: string;
 		onChange: (value: string) => void;
 		triggerClassName?: string;
 		disabled?: boolean;
+		manageView?: "local" | "cloud";
 	}) => {
 		h.agentValues.push(value);
 		return (
@@ -49,6 +51,7 @@ vi.mock("./CreateProjectAgentSheet", () => ({
 				className={triggerClassName}
 				data-testid="agent-field"
 				data-value={value}
+				data-manage-view={manageView}
 				disabled={disabled}
 				onClick={() => onChange(value === "codex" ? "claude-code" : "codex")}
 			/>
@@ -1141,6 +1144,17 @@ describe("TaskComposer", () => {
 		expect(body.attachments?.[0].data.length).toBeGreaterThan(0);
 	});
 
+	it("manages cloud harness connections from a cloud project's agent picker", async () => {
+		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
+		const { unmount } = render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		// Only connected harnesses, with "Manage harness connections…" (Harness settings' Cloud view).
+		expect(await screen.findByLabelText("Agent")).toHaveAttribute("data-manage-view", "cloud");
+		unmount();
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		expect(await screen.findByLabelText("Agent")).toHaveAttribute("data-manage-view", "local");
+	});
+
 	it("rejects cloud task attachments instead of silently dropping them", async () => {
 		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
 		const onCreated = vi.fn();
@@ -1673,7 +1687,7 @@ describe("TaskComposer", () => {
 		);
 
 		const picker = await screen.findByRole("button", { name: "Model" });
-		expect(picker).toHaveTextContent("Model not reported");
+		expect(picker).toHaveTextContent("Select model");
 
 		await userEvent.click(picker);
 		expect(await screen.findByRole("menuitem", { name: "GPT-5" })).toBeInTheDocument();

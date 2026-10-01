@@ -354,8 +354,8 @@ export function TaskComposer({
 	const configuredProjectAgent = projectWorkerAgent || globalDefaultAgent;
 	const agentCatalog = agentsQuery.data;
 	// Cloud projects support the control-plane agents listed in CLOUD_AGENT_PROVIDERS
-	// (the single source), with readiness derived from the org's provider connections.
-	const cloudConnectionsQuery = useProviderConnections(isCloudProject ? cloudOrg?.id : undefined);
+	// (the single source), with readiness derived from the user's provider connections.
+	const cloudConnectionsQuery = useProviderConnections();
 	const cloudAgents = useMemo(() => cloudAgentInfos(cloudConnectionsQuery.data), [cloudConnectionsQuery.data]);
 	const standaloneDefaultAgent = useMemo(() => {
 		if (!isStandalone || !agentCatalog) return "";
@@ -760,7 +760,7 @@ export function TaskComposer({
 						: submitTask(brief, "tui")),
 				onSubmit: (brief) => void submitTask(brief, selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined),
 			}}
-			renderAgentControl={(control) => <DesktopAgentControl {...control} manageAgents={!isCloudProject} managedAccountAgentIds={managedAccountAgentIds} />}
+			renderAgentControl={(control) => <DesktopAgentControl {...control} manageView={isCloudProject ? "cloud" : "local"} managedAccountAgentIds={managedAccountAgentIds} />}
 			renderEffortControl={(control) => <TaskEffortPicker {...control} defaultEffort={effortModel?.defaultEffort} />}
 			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={nativeCatalogEnabled ? refreshSelectedModels : undefined}
 				emptyLabel={!nativeCatalogEnabled ? t("newTask.model") : undefined}
@@ -800,11 +800,11 @@ function formatEffortLabel(value: string): string {
 	return value === "xhigh" ? "Extra high" : value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function DesktopAgentControl({ manageAgents, managedAccountAgentIds, ...control }: TaskComposerAgentControl & { manageAgents: boolean; managedAccountAgentIds: readonly string[] }) {
+function DesktopAgentControl({ manageView, managedAccountAgentIds, ...control }: TaskComposerAgentControl & { manageView: "local" | "cloud"; managedAccountAgentIds: readonly string[] }) {
 	return (
 		<RequiredAgentField
 			{...control}
-			manageAgents={manageAgents}
+			manageView={manageView}
 			managedAccountAgentIds={managedAccountAgentIds}
 			variant="chip"
 			triggerClassName="composer-toolbar-option w-full justify-between"
