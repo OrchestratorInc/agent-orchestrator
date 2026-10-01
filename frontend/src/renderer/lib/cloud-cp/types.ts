@@ -797,7 +797,7 @@ export interface CloudCpPutAgentConnectionRequest {
 	secret: string;
 }
 
-/** PUT /orgs/{orgId}/provider-connections/github-pat */
+/** PUT /me/github-pat */
 export interface CloudCpPutGitHubPATRequest {
 	/** Raw GitHub personal access token; stored encrypted and never echoed. */
 	secret: string;
@@ -823,12 +823,12 @@ export interface CloudCpProviderConnection {
 	updatedAt: string;
 }
 
-/** GET /orgs/{orgId}/provider-connections */
+/** GET /me/providers */
 export interface CloudCpProviderConnectionsResponse {
 	providerConnections: CloudCpProviderConnection[];
 }
 
-/** PUT /orgs/{orgId}/provider-connections/agents/{agent} */
+/** PUT /me/providers/{agent}, PUT /me/github-pat */
 export interface CloudCpProviderConnectionResponse {
 	providerConnection: CloudCpProviderConnection;
 }

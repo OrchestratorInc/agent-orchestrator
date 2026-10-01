@@ -9,16 +9,18 @@ export function GlobalSettingsForm({
 	cloudEnabled = true,
 	focusAgentId,
 	hostId,
+	harnessView,
 	section = "all",
 }: {
 	cloudEnabled?: boolean;
 	focusAgentId?: string;
 	hostId?: string;
+	harnessView?: "local" | "cloud";
 	section?: GlobalSettingsSection;
 }) {
 	const { t } = useTranslation();
 	const all = section === "all";
-	const context = { cloudEnabled, focusAgentId, ...(hostId ? { hostId } : {}) };
+	const context = { cloudEnabled, focusAgentId, hostId, harnessView };
 	// One section per page means the dialog header already names it, so a
 	// leading in-page heading would just repeat that title.
 	const titleHidden = !all;

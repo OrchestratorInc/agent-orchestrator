@@ -1034,6 +1034,10 @@ function ShellLayout() {
 			}),
 		[],
 	);
+	const openProject = useCallback(
+		(projectId: string) => void navigate({ to: "/projects/$projectId", params: { projectId } }),
+		[navigate],
+	);
 	const shellContextValue = useMemo(
 		() => ({
 			daemonStatus,
@@ -1042,6 +1046,7 @@ function ShellLayout() {
 			createProject,
 			initializeProjectRepository,
 			openRemoteProjectSettings: (hostId: string, projectId: string) => openProjectSettings(projectId, hostId),
+			openProject,
 			validateImport,
 		}),
 		[
@@ -1050,6 +1055,7 @@ function ShellLayout() {
 			daemonStatus,
 			initializeProjectRepository,
 			openProjectSettings,
+			openProject,
 			validateImport,
 			workspaceStartupState,
 		],

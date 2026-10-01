@@ -1089,7 +1089,8 @@ describe("SessionView", () => {
 			orgId: "cloud-org",
 			sandboxProvider: "coder",
 			desiredState: "running",
-			observedState: "provisioning",
+			// The workspace exists and AO is starting its worker inside it.
+			observedState: "bootstrapping",
 		};
 
 		render(<SessionView sessionId="sess-2" />);
@@ -1106,7 +1107,7 @@ describe("SessionView", () => {
 		expect(loaderScreen.className).not.toMatch(/z-\[\d+\]/);
 		expect(loaderScreen.children).toHaveLength(1);
 		expect(loader).toHaveTextContent("Connecting to the worker");
-		expect(loader).toHaveTextContent("Building your session");
+		expect(loader).toHaveTextContent("Creating the workspace");
 		expect(loader).toHaveTextContent("Preparing your repository and agent");
 		expect(loader).toHaveTextContent("Connecting your terminal");
 		expect(within(loader).getByTestId("multi-step-loader-step").querySelector(".multi-step-loader__step")).toBeInTheDocument();
@@ -1155,13 +1156,13 @@ describe("SessionView", () => {
 		listSessionEventsMock
 			.mockResolvedValueOnce({ events: [], hasMore: false, nextAfter: 0 })
 			.mockResolvedValueOnce({
-				events: [{ type: "sandbox.provisioning", createdAt: new Date().toISOString(), sequence: 1 }],
+				events: [{ type: "worker.connected", createdAt: new Date().toISOString(), sequence: 1 }],
 				hasMore: false,
 				nextAfter: 1,
 			});
 		render(<SessionView sessionId="sess-2" />);
-		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Building your session");
-		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting to the worker"), { timeout: 3_000 });
+		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Creating the workspace");
+		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent"), { timeout: 3_000 });
 		expect(listSessionEventsMock).toHaveBeenLastCalledWith("cloud-org", "sess-2", { after: 0, limit: 500 }, expect.any(Object));
 	});
 
@@ -1198,9 +1199,14 @@ describe("SessionView", () => {
 			observedState: "provisioning",
 		};
 		const view = render(<SessionView sessionId="sess-2" />);
+		// Provisioning is still creating the workspace.
+		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Creating the workspace"));
+
+		// Bootstrapping: the workspace exists and its worker is starting.
+		session.cloud.observedState = "bootstrapping";
+		view.rerender(<SessionView sessionId="sess-2" />);
 		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting to the worker"));
 
-		session.cloud.observedState = "bootstrapping";
 		session.runtimeConnected = true;
 		view.rerender(<SessionView sessionId="sess-2" />);
 		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent"));
@@ -1248,7 +1254,7 @@ describe("SessionView", () => {
 		});
 
 		render(<SessionView sessionId="sess-2" />);
-		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Building your session");
+		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Creating the workspace");
 		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting your terminal"));
 	});
 
@@ -1260,7 +1266,8 @@ describe("SessionView", () => {
 		await waitFor(() => expect(subscribeSessionEventsMock).toHaveBeenCalled());
 		const onEvent = subscribeSessionEventsMock.mock.calls[0][0].onEvent;
 		for (const [type, sequence, phrase, percent] of [
-			["sandbox.provisioning", 1, "Connecting to the worker", "33"],
+			// The start of workspace creation does not complete the workspace step.
+			["sandbox.provisioning", 1, "Creating the workspace", "0"],
 			["worker.connected", 2, "Preparing your repository and agent", "67"],
 			["agent.ready", 3, "Connecting your terminal", "67"],
 		] as const) {

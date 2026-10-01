@@ -25,6 +25,7 @@ type CatalogContext = {
 	cloudEnabled: boolean;
 	focusAgentId?: string;
 	hostId?: string;
+	harnessView?: "local" | "cloud";
 };
 
 export type SettingsCatalogItem = {
@@ -50,7 +51,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		id: "harness",
 		icon: Bot,
 		label: (t) => t("settings.harness"),
-		render: (_t, titleHidden, { focusAgentId, hostId }) => <HarnessSettingsSection focusAgentId={focusAgentId} titleHidden={titleHidden} {...(hostId ? { hostId } : {})} />,
+		render: (_t, titleHidden, { focusAgentId, hostId, harnessView }) => <HarnessSettingsSection focusAgentId={focusAgentId} {...(hostId ? { hostId } : {})} {...(harnessView ? { initialView: harnessView } : {})} titleHidden={titleHidden} />,
 	},
 	{
 		id: "agents",

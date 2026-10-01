@@ -203,10 +203,8 @@ func (s *Service) Probe(ctx context.Context, agentID string) (ProbeResult, error
 	if _, ok := s.agent(agentID); !ok {
 		return ProbeResult{Agent: Info{ID: agentID}, Supported: false, Installed: false}, nil
 	}
-	if agentID == string(domain.HarnessCodex) && s.codexAccounts != nil {
-		// A terminal login can create auth.json after the last device scan.
-		// The native probe below remains the fallback if reconciliation fails.
-		_ = s.codexAccounts.reconcileGlobal(ctx)
+	if agentID == string(domain.HarnessCodex) {
+		s.reconcileCodexDeviceCredentialForRecheck(ctx)
 	}
 	s.InvalidateAgentAuthentication(agentID)
 	readiness, err := s.EnsureReadiness(ctx, []string{agentID}, domain.AgentReadinessPurposeLaunch)

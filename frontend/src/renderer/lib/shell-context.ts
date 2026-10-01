@@ -24,6 +24,8 @@ export type ShellContextValue = {
 	}) => Promise<void>;
 	initializeProjectRepository: (path: string) => Promise<void>;
 	openRemoteProjectSettings: (hostId: string, projectId: string) => void;
+	/** Navigate to a project's board, e.g. a cloud project just created. */
+	openProject?: (projectId: string) => void;
 	validateImport?: (input: {
 		path: string;
 		importKind: "project" | "workspace";

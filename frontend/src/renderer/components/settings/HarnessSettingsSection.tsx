@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, Copy, Download, Info, LoaderCircle, LogIn, Search, TriangleAlert, X } from "lucide-react";
+import { BookOpen, Check, Copy, Download, LoaderCircle, LogIn, Search, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
@@ -14,11 +14,10 @@ import { agentModelsQueryPrefix } from "../../hooks/useAgentModelsQuery";
 import { closeShellTerminal, shellTerminalsQueryKeyForHost, type ShellTerminal } from "../../hooks/useShellTerminals";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { agentLabel, AGENT_OPTIONS, type AgentId } from "../../lib/agent-options";
-import { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
+import { CLOUD_AGENT_PROVIDERS, isCloudHarnessConnected } from "../../lib/cloud-agents";
 import { useCloudOrg } from "../../hooks/useCloudOrg";
-import { useCloudCp } from "../../hooks/useCloudCp";
-import { providerConnectionsQueryKey, useProviderConnections } from "../../hooks/useProviderConnections";
-import { useCredentialDialogStore } from "../../stores/credential-dialog-store";
+import { useProviderConnections } from "../../hooks/useProviderConnections";
+import { CloudHarnessLoginPanel, type CloudHarness } from "./CloudHarnessLoginPanel";
 import { apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { baseUrlForHost, clientForSessionHost, connectedHosts, labelForHost, subscribeConnectedHosts } from "../../lib/host-clients";
@@ -30,6 +29,8 @@ import { useResolvedTheme } from "../../stores/ui-store";
 import { AgentAvatar } from "../AgentAvatar";
 import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
+import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
+import { useCloudGate } from "../../hooks/useCloudGate";
 import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
@@ -41,6 +42,11 @@ const installerQueryKey = ["agent-installers"] as const;
 const installJobsQueryKey = ["agent-install-jobs"] as const;
 const POLL_INTERVAL_MS = 1_000;
 const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
+// The first check right after a login terminal exits can fail transiently (the
+// daemon's own readiness retry succeeds seconds later), so a login is re-checked
+// a few times before the panel reports it did not take.
+const AUTH_VERIFY_ATTEMPTS = 4;
+const AUTH_VERIFY_RETRY_MS = 1_500;
 const FOCUS_HIGHLIGHT_MS = 2_000;
 
 type AgentAuthState = { pending: boolean; error: string | null };
@@ -116,34 +122,104 @@ function installMethodLabel(method: { id: string; label: string } | undefined, f
 	return method.label;
 }
 
+export type HarnessView = "local" | "cloud";
+
 export function HarnessSettingsSection({
 	focusAgentId,
 	hostId,
+	initialView = "local",
 	titleHidden = false,
 }: {
 	focusAgentId?: string;
 	hostId?: string;
+	initialView?: HarnessView;
 	titleHidden?: boolean;
 }) {
 	const { t } = useTranslation();
+	const { cloudEnabled } = useCloudGate();
+	const [view, setView] = useState<HarnessView>(initialView);
+	useEffect(() => setView(initialView), [initialView]);
+	const cloudView = cloudEnabled && view === "cloud";
 	const connected = useSyncExternalStore(subscribeConnectedHosts, connectedHosts);
 	const [selectedHostId, setSelectedHostId] = useState(hostId ?? LOCAL_HOST);
 	useEffect(() => setSelectedHostId(hostId ?? LOCAL_HOST), [hostId]);
 	const remoteOffline = selectedHostId !== LOCAL_HOST && !connected.includes(selectedHostId);
 	return <SettingsSection title={t("settings.harness")} titleHidden={titleHidden} sectionId="harness">
-		{connected.length > 0 || remoteOffline ? <SettingsOptionMenu
-			aria-label={t("remote.host")}
-			value={selectedHostId}
-			options={[{ value: LOCAL_HOST, label: t("settings.harness.thisComputer") }, ...connected.map((id) => ({ value: id, label: labelForHost(id) ?? id })), ...(remoteOffline ? [{ value: selectedHostId, label: t("remote.hostLabel", { hostId: selectedHostId }) }] : [])]}
-			onChange={setSelectedHostId}
-			triggerClassName="w-fit max-w-full"
-		/> : null}
-		{selectedHostId !== LOCAL_HOST && !remoteOffline ? <p className="text-xs text-muted-foreground">{t("settings.harness.remoteBrowserAuthNote")}</p> : null}
-		{remoteOffline ? <p className="text-xs text-error" role="alert">{t("remote.hostOffline")}</p> : <HarnessHostContent key={selectedHostId} focusAgentId={focusAgentId} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} />}
+		<div className="flex items-center gap-2">
+			{!cloudView && (connected.length > 0 || remoteOffline) ? <SettingsOptionMenu
+				aria-label={t("remote.host")}
+				value={selectedHostId}
+				options={[{ value: LOCAL_HOST, label: t("settings.harness.thisComputer") }, ...connected.map((id) => ({ value: id, label: labelForHost(id) ?? id })), ...(remoteOffline ? [{ value: selectedHostId, label: t("remote.hostLabel", { hostId: selectedHostId }) }] : [])]}
+				onChange={setSelectedHostId}
+				triggerClassName="w-fit max-w-full"
+			/> : null}
+			{cloudEnabled ? <Tabs value={cloudView ? "cloud" : "local"} onValueChange={(value) => setView(value as HarnessView)}><TabsList aria-label={t("settings.harness.viewLabel")}><TabsTrigger value="local">{t("settings.harness.viewLocal")}</TabsTrigger><TabsTrigger value="cloud">{t("settings.harness.viewCloud")}</TabsTrigger></TabsList></Tabs> : null}
+		</div>
+		{!cloudView && selectedHostId !== LOCAL_HOST && !remoteOffline ? <p className="text-xs text-muted-foreground">{t("settings.harness.remoteBrowserAuthNote")}</p> : null}
+		{cloudView ? <CloudHarnessContent focusAgentId={focusAgentId} /> : remoteOffline ? <p className="text-xs text-error" role="alert">{t("remote.hostOffline")}</p> : <LocalHarnessContent key={selectedHostId} focusAgentId={focusAgentId} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} />}
 	</SettingsSection>;
 }
 
-function HarnessHostContent({ focusAgentId, hostId }: { focusAgentId?: string; hostId?: string }) {
+function CloudHarnessContent({ focusAgentId }: { focusAgentId?: string }) {
+	const { t } = useTranslation();
+	const { org } = useCloudOrg();
+	const connections = useProviderConnections();
+	const [search, setSearch] = useState("");
+	const [loginAgent, setLoginAgent] = useState<CloudHarness | null>(null);
+	const [highlightedAgentId, setHighlightedAgentId] = useState<AgentId | null>(null);
+	const rowsRef = useRef<HTMLDivElement>(null);
+	const focusHandledRef = useRef(false);
+	const targetAgentId = CLOUD_AGENT_PROVIDERS.find((agentId) => agentId === focusAgentId);
+	const rows = CLOUD_AGENT_PROVIDERS.filter((agentId) =>
+		agentId === targetAgentId || agentLabel(agentId).toLowerCase().includes(search.trim().toLowerCase()),
+	);
+	useEffect(() => {
+		if (focusHandledRef.current || !targetAgentId || !org?.id || connections.isPending) return;
+		const row = rowsRef.current?.querySelector<HTMLElement>(`[data-agent="${targetAgentId}"]`);
+		if (!row) return;
+		focusHandledRef.current = true;
+		row.scrollIntoView({ behavior: "smooth", block: "center" });
+		(row.querySelector<HTMLElement>("[data-harness-primary-action]:not(:disabled)") ?? row).focus({ preventScroll: true });
+		setHighlightedAgentId(targetAgentId);
+		const timer = window.setTimeout(() => setHighlightedAgentId(null), FOCUS_HIGHLIGHT_MS);
+		return () => window.clearTimeout(timer);
+	}, [connections.isPending, org?.id, targetAgentId]);
+
+	return <>
+		<label className="flex h-9! items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3">
+			<Search aria-hidden="true" className="size-4 shrink-0 text-settings-muted" />
+			<span className="sr-only">{t("settings.harness.search")}</span>
+			<input aria-label={t("settings.harness.search")} className="min-w-0 flex-1 bg-transparent text-sm text-settings-label outline-none placeholder:text-settings-muted" placeholder={t("settings.harness.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
+		</label>
+		{!org?.id ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.cloudAgents.signIn")}</p>
+			: connections.error ? <p className="px-3 py-6 text-sm text-error" role="alert">{String(connections.error)}</p>
+			: connections.isPending ? null
+			: <div className="settings-grouped-rows flex w-full flex-col" ref={rowsRef}>
+				{rows.map((agentId) => {
+					const connected = isCloudHarnessConnected(connections.data, agentId);
+					return <div
+						aria-labelledby={`harness-agent-${agentId}`}
+						className={cn("settings-row-bar min-h-14 flex-wrap gap-3 transition-[background-color,box-shadow] duration-200", highlightedAgentId === agentId && "bg-accent-weak ring-2 ring-inset ring-accent")}
+						data-agent={agentId}
+						data-focus-highlighted={highlightedAgentId === agentId ? "" : undefined}
+						key={agentId}
+						tabIndex={-1}
+					>
+						<AgentAvatar className="size-7 shrink-0" decorative provider={agentId} />
+						<div className="min-w-0 flex-1">
+							<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
+							<p className="truncate text-xs text-settings-muted">{connected ? t("settings.harness.loggedIn") : t("settings.harness.cloudNotConnected")}</p>
+						</div>
+						{loginAgent === agentId ? null : <Button data-harness-primary-action="" size="sm" variant={connected ? "outline" : "primary"} onClick={() => setLoginAgent(agentId)}>{t(connected ? "settings.harness.refreshLogin" : "settings.harness.login")}</Button>}
+						{loginAgent === agentId ? <div className="basis-full pl-10"><CloudHarnessLoginPanel agent={agentId} onClose={() => setLoginAgent(null)} /></div> : null}
+					</div>;
+				})}
+				{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
+			</div>}
+	</>;
+}
+
+function LocalHarnessContent({ focusAgentId, hostId }: { focusAgentId?: string; hostId?: string }) {
 	const { i18n, t } = useTranslation();
 	const queryClient = useQueryClient();
 	const client = clientForSessionHost(hostId);
@@ -157,17 +233,6 @@ function HarnessHostContent({ focusAgentId, hostId }: { focusAgentId?: string; h
 	const jobs = useQuery({ queryKey: jobsKey, queryFn: () => fetchInstallJobs(hostId), retry: false });
 	const authPlans = useAgentAuthPlans(hostId);
 	const startAgentAuth = useStartAgentAuth(hostId);
-	// Cloud provider connections: surface each cloud-capable harness's cloud
-	// auth state right here so a developer authorizes once, in one place, for
-	// both local and cloud. Gated on being signed into a cloud org.
-	const { org: cloudOrg } = useCloudOrg();
-	const { baseUrl: cloudBaseUrl } = useCloudCp();
-	const openCloudCredentialDialog = useCredentialDialogStore((state) => state.setOpen);
-	const cloudConnections = useProviderConnections(cloudOrg?.id);
-	const cloudConnByProvider = useMemo(
-		() => new Map((cloudConnections.data ?? []).map((connection) => [connection.provider, connection])),
-		[cloudConnections.data],
-	);
 	const [search, setSearch] = useState("");
 	const [authStates, setAuthStates] = useState<AgentAuthStates>({});
 	const [actionErrors, setActionErrors] = useState<Partial<Record<AgentId, string>>>({});
@@ -419,44 +484,6 @@ function HarnessHostContent({ focusAgentId, hostId }: { focusAgentId?: string; h
 		}
 	};
 
-	// Unified login: one action authorizes the harness for BOTH local and cloud
-	// sessions. When signed into a cloud org, capture a portable credential once,
-	// persist it locally (claude setup-token) and push it to the caller's personal
-	// cloud connection (/me, no admin). Otherwise fall back to local-only login.
-	const startUnifiedAuth = async (agentId: AgentId) => {
-		const cloudCapable = !hostId && Boolean(cloudOrg?.id) && (CLOUD_AGENT_PROVIDERS as readonly string[]).includes(agentId);
-		if (!cloudCapable) {
-			await startAuth(agentId);
-			return;
-		}
-		// cursor and opencode have no browser capture (cursor's session and
-		// opencode's sqlite login are not portable), so their cloud credential is a
-		// pasted provider API key -- handled by the cloud credential dialog.
-		if (agentId === "cursor" || agentId === "opencode") {
-			openCloudCredentialDialog(true, agentId);
-			return;
-		}
-		if (authStartPendingRef.current) return;
-		authStartPendingRef.current = true;
-		updateAuthState(agentId, { pending: true, error: null });
-		try {
-			await aoBridge.cloud.connectProviderAuth({
-				baseUrl: cloudBaseUrl,
-				orgId: cloudOrg!.id,
-				provider: agentId,
-				pushTarget: "me",
-				persistLocalClaudeToken: agentId === "claude-code",
-			});
-			await queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey(cloudOrg!.id) });
-			void checkAuth(agentId, { fresh: true });
-		} catch (error) {
-			updateAuthState(agentId, { error: error instanceof Error ? error.message : t("settings.harness.authFailed") });
-		} finally {
-			authStartPendingRef.current = false;
-			updateAuthState(agentId, { pending: false });
-		}
-	};
-
 	const checkAuth = useCallback(async (
 		agentId: AgentId,
 		{ fresh = false }: { fresh?: boolean } = {},
@@ -485,10 +512,17 @@ function HarnessHostContent({ focusAgentId, hostId }: { focusAgentId?: string; h
 	const finishAuth = useCallback(async (workflow: AuthTerminalWorkflow) => {
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
 		setAuthWorkflow((current) => current?.terminal.handleId === workflow.terminal.handleId ? { ...current, phase: "verifying", reason: undefined } : current);
-		const result = await checkAuth(workflow.agentId, { fresh: true });
-		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
 		// MiMo can confirm a stored provider key locally without validating it upstream.
-		if (result?.agent.authStatus === "authorized" || (workflow.agentId === "mimo-code" && result?.agent.authStatus === "configured")) {
+		const loggedIn = (candidate: AgentAuthProbeResult | undefined) =>
+			candidate?.agent.authStatus === "authorized" || (workflow.agentId === "mimo-code" && candidate?.agent.authStatus === "configured");
+		let result = await checkAuth(workflow.agentId, { fresh: true });
+		for (let attempt = 1; attempt < AUTH_VERIFY_ATTEMPTS && !loggedIn(result); attempt++) {
+			await new Promise((resolve) => window.setTimeout(resolve, AUTH_VERIFY_RETRY_MS));
+			if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
+			result = await checkAuth(workflow.agentId, { fresh: true });
+		}
+		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
+		if (loggedIn(result)) {
 			try {
 				await closeAuthTerminal(workflow.terminal.handleId, hostId);
 			} catch (error) {
@@ -522,6 +556,14 @@ function HarnessHostContent({ focusAgentId, hostId }: { focusAgentId?: string; h
 			return false;
 		}
 	}, [checkAuth, hostId, queryClient, shellKey, t]);
+
+	// A login the panel could not confirm may still have taken: the daemon keeps
+	// re-checking readiness. Once the harness reads as logged in, close the panel
+	// instead of leaving a stale "signed out" terminal on screen.
+	useEffect(() => {
+		if (!authWorkflow || (authWorkflow.phase !== "unauthorized" && authWorkflow.phase !== "unverified")) return;
+		if (readinessAgents.get(authWorkflow.agentId)?.authentication.state === "authorized") void closeAuth(authWorkflow);
+	}, [authWorkflow, readinessAgents, closeAuth]);
 
 	useEffect(() => {
 		if (!authWorkflow || authWorkflow.phase !== "running") return;
@@ -596,19 +638,11 @@ function HarnessHostContent({ focusAgentId, hostId }: { focusAgentId?: string; h
 						const authState = authStates[agentId];
 						const authStatus = readinessAgent?.authentication.state;
 						const mimoConfigured = agentId === "mimo-code" && authStatus === "configured";
-						const installationStatusLabel = authStatus === "authorized"
-							? t("settings.harness.authorized")
-							: mimoConfigured ? t("settings.harness.configured")
-							: t("settings.harness.installed");
+						const installationStatusLabel = t("settings.harness.installed");
 						const showInstallationStatus = authStatus === "authorized"
 							|| authStatus === "not_applicable"
 							|| mimoConfigured
 							|| (!authPlans.isPending && (!authPlan || authPlan.action === "instructions"));
-						const isCloudCapable = !hostId && Boolean(cloudOrg?.id) && (CLOUD_AGENT_PROVIDERS as readonly string[]).includes(agentId);
-						// One login covers BOTH local and cloud sessions: authorized when the
-						// local harness is authenticated OR the cloud connection is valid.
-						const unifiedAuthorized = authStatus === "authorized"
-							|| (!hostId && cloudConnByProvider.get(agentId)?.validationState === "valid");
 						const rowHasError = failed || Boolean(authState?.error);
 						const rowAuthWorkflow = authWorkflow?.agentId === agentId ? authWorkflow : null;
 						const hasDiagnostics = Boolean(
@@ -652,82 +686,32 @@ function HarnessHostContent({ focusAgentId, hostId }: { focusAgentId?: string; h
 								) : null}
 							</>
 						) : null;
-					return (
-						<div
-							aria-labelledby={`harness-agent-${agentId}`}
-							className={cn(
-								"settings-row-bar min-h-14 flex-wrap gap-3 transition-[background-color,box-shadow] duration-200",
-								highlightedAgentId === agentId && "bg-accent-weak ring-2 ring-inset ring-accent",
-							)}
-							data-agent={agentId}
-							data-focus-highlighted={highlightedAgentId === agentId ? "" : undefined}
-							key={agentId}
-							tabIndex={-1}
-						>
-							<AgentAvatar className="size-7 shrink-0" decorative provider={agentId} />
-							<div className="min-w-0 flex-1">
-								<div className="flex items-center gap-1.5">
-									<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
-									{isCloudCapable ? (
-										<span
-											className="inline-flex size-5 shrink-0 cursor-help items-center justify-center rounded-full text-settings-muted transition hover:bg-interactive-hover hover:text-settings-label"
-											role="img"
-											tabIndex={0}
-											aria-label={t("settings.harness.unifiedAuthHint", { defaultValue: "One login for both local and cloud sessions. Your credentials are used on this machine and securely copied to your cloud sandboxes." })}
-											title={t("settings.harness.unifiedAuthHint", { defaultValue: "One login for both local and cloud sessions. Your credentials are used on this machine and securely copied to your cloud sandboxes." })}
-										>
-											<Info className="size-3.5" aria-hidden="true" />
-										</span>
-									) : null}
-								</div>
-								<p className={cn("truncate text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? incompatibleVersionReason ?? authPlan?.reason ?? plan?.reason}>
-									{isInstalled ? authSummary : installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : incompatibleVersionReason ?? (plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired"))))}
-								</p>
-							</div>
-
-			{isCloudCapable ? (
-								<div className="flex shrink-0 items-center gap-2">
-									{unifiedAuthorized ? (
-										<Button
-											type="button"
-											size="none"
-											variant="ghost"
-											className={cn(MENU_TRIGGER_CHROME, "h-8! min-h-8! shrink-0 rounded-md! border-0! bg-[var(--color-bg-settings-trigger)] px-3! text-xs leading-4")}
-											aria-label={t("settings.harness.authorized")}
-											disabled
-										>
-											{t("settings.harness.authorized")}
-										</Button>
-									) : (
-										<Button data-harness-primary-action="" size="sm" disabled={authState?.pending} onClick={() => void startUnifiedAuth(agentId)}>
-											{authState?.pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-											{authState?.pending ? t("settings.harness.loggingIn") : t("settings.harness.login")}
-										</Button>
-									)}
-								</div>
-							) : active ? (
+						// A logged-in harness's only action is to re-run its login.
+						const refreshLocal = authPlan?.action === "login" && authStatus === "authorized" ? (
+							<Button type="button" size="sm" variant="outline" disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} onClick={() => void startAuth(agentId)}>
+								{t("settings.harness.refreshLogin")}
+							</Button>
+						) : null;
+					const localControls = active ? (
 				<span className="inline-flex items-center gap-1.5 text-xs text-settings-muted" role="status"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{job?.status === "installing" ? t("settings.harness.installing") : t("settings.harness.verifying")}</span>
 							) : isInstalled ? (
 								<div className="flex shrink-0 items-center gap-2">
-								{showInstallationStatus ? (
-									isCloudCapable && authStatus === "authorized" ? (
-										<span className="inline-flex h-8 shrink-0 items-center rounded-md border border-[color:var(--color-success)] bg-transparent px-3 text-xs font-medium leading-4 text-[color:var(--color-success)]">
-											{`Local: ${installationStatusLabel}`}
-										</span>
-									) : (
-										<Button
-											type="button"
-											size="none"
-											variant="ghost"
-											className={cn(MENU_TRIGGER_CHROME, "h-8! min-h-8! shrink-0 rounded-md! border-0! bg-[var(--color-bg-settings-trigger)] px-3! text-xs leading-4")}
-											aria-label={installationStatusLabel}
-											disabled
-										>
-											{isCloudCapable ? `Local: ${installationStatusLabel}` : installationStatusLabel}
-										</Button>
-									)
+								{/* The subtitle already states a login ("Connected", "Configured"); the
+								    chip is only for installed harnesses whose subtitle doesn't say so. */}
+								{showInstallationStatus && authStatus !== "authorized" && !mimoConfigured ? (
+									<Button
+										type="button"
+										size="none"
+										variant="ghost"
+										className={cn(MENU_TRIGGER_CHROME, "h-8! min-h-8! shrink-0 rounded-md! border-0! bg-[var(--color-bg-settings-trigger)] px-3! text-xs leading-4")}
+										aria-label={installationStatusLabel}
+										disabled
+									>
+										{installationStatusLabel}
+									</Button>
 								) : null}
 								{authControls}
+								{refreshLocal}
 								</div>
 							) : failed ? (
 								<div className="flex items-center gap-1.5">
@@ -756,7 +740,30 @@ function HarnessHostContent({ focusAgentId, hostId }: { focusAgentId?: string; h
 								</div>
 							) : plan?.command ? (
 								<Button size="sm" variant="outline" onClick={() => void copyText(agentId, plan.command!)}>{copiedAgent === agentId ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{copiedAgent === agentId ? t("settings.harness.copied") : t("settings.harness.copyCommand")}</Button>
-							) : null}
+							) : null;
+					return (
+						<div
+							aria-labelledby={`harness-agent-${agentId}`}
+							className={cn(
+								"settings-row-bar min-h-14 flex-wrap gap-3 transition-[background-color,box-shadow] duration-200",
+								highlightedAgentId === agentId && "bg-accent-weak ring-2 ring-inset ring-accent",
+							)}
+							data-agent={agentId}
+							data-focus-highlighted={highlightedAgentId === agentId ? "" : undefined}
+							key={agentId}
+							tabIndex={-1}
+						>
+							<AgentAvatar className="size-7 shrink-0" decorative provider={agentId} />
+							<div className="min-w-0 flex-1">
+								<div className="flex items-center gap-1.5">
+									<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
+								</div>
+								<p className={cn("truncate text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? incompatibleVersionReason ?? authPlan?.reason ?? plan?.reason}>
+									{isInstalled ? authSummary : installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : incompatibleVersionReason ?? (plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired"))))}
+								</p>
+							</div>
+
+			{localControls}
 
 				{authPlan?.action === "instructions" && authPlan.documentationUrl ? (
 					<Button size="icon-sm" variant="ghost" aria-label={t("settings.harness.instructions")} title={t("settings.harness.instructions")} onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}>
@@ -835,8 +842,10 @@ function HarnessAuthTerminalPanel({ workflow, hostId, onClose, onRetry, onTermin
 	useEffect(() => {
 		panelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 	}, [workflow.terminal.handleId]);
+	// While the login runs, the terminal speaks for itself. Guidance is shown only
+	// when it tells the user to act outside the terminal (the Open login button).
 	const status = workflow.phase === "running"
-		? workflow.guidance || t("settings.harness.loggingIn")
+		? workflow.terminalInput ? workflow.guidance : ""
 		: workflow.phase === "verifying" ? t("settings.harness.checkingLogin")
 			: workflow.phase === "closing" ? t("settings.harness.authClosing")
 				: workflow.reason ?? t("settings.harness.loginUnknown");
@@ -858,7 +867,7 @@ function HarnessAuthTerminalPanel({ workflow, hostId, onClose, onRetry, onTermin
 	return (
 		<div ref={panelRef} className="mt-1 scroll-my-3 overflow-hidden rounded-md border border-(--color-border-settings-input) bg-terminal" data-testid="harness-auth-terminal">
 			<div className="flex min-h-10 items-center justify-between gap-3 border-b border-(--color-border-settings-input) bg-surface/90 px-3 py-2">
-				<div className="min-w-0"><p className="truncate text-xs font-medium text-settings-label">{workflow.terminal.title}</p><p className="truncate text-[11px] text-settings-muted" aria-live="polite" role="status">{status}</p></div>
+				<div className="min-w-0"><p className="truncate text-xs font-medium text-settings-label">{workflow.terminal.title}</p>{status ? <p className="truncate text-[11px] text-settings-muted" aria-live="polite" role="status">{status}</p> : null}</div>
 				<div className="flex shrink-0 items-center gap-2">
 					{workflow.terminalInput && workflow.phase === "running" ? <Button type="button" size="sm" variant="outline" disabled={terminalState !== "attached" || commandPending || commandSent} onClick={openAuthAction}>{commandSent ? <Check aria-hidden="true" /> : <LogIn aria-hidden="true" />}{workflow.action === "setup" ? commandSent ? t("settings.harness.setupOpened") : t("settings.harness.openSetup") : commandSent ? t("settings.harness.loginOpened") : t("settings.harness.openLogin")}</Button> : null}
 					<button type="button" aria-label={t("settings.close")} className="grid size-7 place-items-center rounded text-settings-muted hover:bg-interactive-hover" disabled={workflow.phase === "closing" || workflow.phase === "verifying"} onClick={onClose}><X className="size-4" aria-hidden="true" /></button>
