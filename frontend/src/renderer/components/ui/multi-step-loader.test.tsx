@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { MultiStepLoader } from "./multi-step-loader";
 
-const steps = ["Building your session", "Connecting to the worker", "Preparing your repository and agent", "Connecting your terminal"] as const;
+const steps = ["Creating the workspace", "Connecting to the worker", "Preparing your repository and agent", "Connecting your terminal"] as const;
 
 describe("MultiStepLoader", () => {
 	it("shows every stage, a solid completed bar, and its percentage", () => {

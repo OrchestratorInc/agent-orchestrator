@@ -398,6 +398,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	onManagementAction,
 	placeholder,
 	manageAgents = true,
+	manageView = "local",
 	triggerClassName,
 	labelClassName,
 	contentClassName,
@@ -418,6 +419,8 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	placeholder: string;
 	/** Cloud tasks use remote availability, not this computer's Harness settings. */
 	manageAgents?: boolean;
+	/** Which Harness settings view "manage" opens: local logins or cloud connections. */
+	manageView?: "local" | "cloud";
 	triggerClassName?: string;
 	labelClassName?: string;
 	contentClassName?: string;
@@ -436,10 +439,12 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	const hasReadinessSnapshot = agents !== undefined;
 	const needsSetup = manageAgents && hasReadinessSnapshot && Boolean(selectedOption && !isLaunchableAgent(selectedOption));
 	const visibleOptions = manageAgents && hasReadinessSnapshot ? options.filter(isLaunchableAgent) : options;
-	const management = useAgentManagementMenu(needsSetup ? value : undefined);
+	// Local is Harness settings' default view, so only cloud needs an explicit view.
+	const management = useAgentManagementMenu(needsSetup ? value : undefined, manageView === "cloud" ? "cloud" : undefined);
 	const managementActionHandler = onManagementAction ?? management.requestManagement;
 	const showManagementAction = manageAgents && (variant !== "onboarding" || Boolean(onManagementAction));
-	const managementAction = showManagementAction ? { label: managementActionLabel ?? t("agentSelector.manage"), onSelect: managementActionHandler } : undefined;
+	const manageLabel = manageView === "cloud" ? t("agentSelector.manageCloud") : t("agentSelector.manage");
+	const managementAction = showManagementAction ? { label: managementActionLabel ?? manageLabel, onSelect: managementActionHandler } : undefined;
 	const setupHint = needsSetup ? <span className="text-xs text-muted-foreground">{t("agentSelector.needsSetup")}</span> : null;
 
 	if (variant === "settings-row" || variant === "settings-control") {
@@ -631,7 +636,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 									: "border-t border-border",
 							)}
 						>
-							{managementActionLabel ?? t("agentSelector.manage")}
+							{managementActionLabel ?? manageLabel}
 						</SelectItem>
 					)}
 				</SelectContent>
