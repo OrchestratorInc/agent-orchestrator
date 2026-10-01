@@ -414,6 +414,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSessionMemoryProcessResponse":     "SessionMemoryProcessResponse",
 	"ControllersSystemMemoryResponse":             "SystemMemoryResponse",
 	"ControllersAppMemoryResponse":                "AppMemoryResponse",
+	"ControllersMemoryPressureResponse":           "MemoryPressureResponse",
 	"ControllersSessionActivityResponse":          "SessionActivityResponse",
 	"ControllersSessionStepResponse":              "SessionStepResponse",
 	"ControllersListCompactSessionUsageResponse":  "ListCompactSessionUsageResponse",
@@ -840,6 +841,15 @@ func usageOperations() []operation {
 			pathParams: []any{controllers.ListUsageSessionsQuery{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.ListSessionMemoryResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/usage/memory/pressure", id: "getMemoryPressure", tag: "usage",
+			summary: "Read the machine's memory-pressure verdict without sampling any process",
+			resps: []respUnit{
+				{http.StatusOK, controllers.MemoryPressureResponse{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},

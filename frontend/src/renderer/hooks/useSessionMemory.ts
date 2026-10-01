@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { formatResourceBytes, pressureState, type PressureState } from "@aoagents/product-ui";
+import { formatResourceBytes, pressureStateFromRaw, type PressureState } from "@aoagents/product-ui";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 
@@ -8,17 +8,20 @@ export type SessionMemoryReading = components["schemas"]["SessionMemoryResponse"
 export type SessionStepReading = components["schemas"]["SessionStepResponse"];
 export type SystemMemoryReading = components["schemas"]["SystemMemoryResponse"];
 export type AppMemoryReading = components["schemas"]["AppMemoryResponse"];
+export type MemoryPressureReading = components["schemas"]["MemoryPressureResponse"];
 
 export const sessionMemoryQueryRoot = ["session-memory"] as const;
 export const sessionMemoryQueryKey = (projectId?: string) =>
 	[...sessionMemoryQueryRoot, projectId ?? "all"] as const;
 
 /**
- * Memory is a live reading. The status bar polls slowly; while the memory
- * window is open the same query speeds up, and closing it slows down again.
- * Never faster than a second or two: the numbers only jitter.
+ * The full sample walks every process, so with the memory window closed it
+ * runs once a minute; the board's colour comes from the cheap pressure read
+ * below instead. While the window is open the same query speeds up, and
+ * closing it slows down again. Never faster than a second or two: the
+ * numbers only jitter.
  */
-export const sessionMemoryRefetchIntervalMs = 10_000;
+export const sessionMemoryRefetchIntervalMs = 60_000;
 export const sessionMemoryFastRefetchIntervalMs = 2_000;
 
 type SessionMemoryResponse = {
@@ -95,10 +98,45 @@ export function useAppMemory() {
 	});
 }
 
+/** The light's colour polls on its own: one kernel query, no process walk,
+ * so it stays live while the full sample runs once a minute. */
+export const memoryPressureRefetchIntervalMs = 10_000;
+export const memoryPressureQueryKey = ["memory-pressure"] as const;
+
+export function useMemoryPressure() {
+	return useQuery({
+		queryKey: memoryPressureQueryKey,
+		queryFn: async (): Promise<MemoryPressureReading> => {
+			const { data, error } = await apiClient.GET("/api/v1/usage/memory/pressure");
+			if (error) throw error;
+			return data;
+		},
+		refetchInterval: memoryPressureRefetchIntervalMs,
+		// 501 where the host can't be read is permanent for the run.
+		retry: false,
+	});
+}
+
+/** The last state any caller saw, so a change refreshes the numbers once. */
+const lastPressure: { state?: PressureState } = {};
+
 /** The machine's pressure state, or undefined where the host can't be read. */
 export function usePressureState(): PressureState | undefined {
+	const queryClient = useQueryClient();
+	const light = useMemoryPressure().data;
 	const system = useAppMemory().data?.system;
-	return system ? pressureState(system) : undefined;
+	const reading = light ?? system;
+	const state = reading ? pressureStateFromRaw(reading.pressureRaw, reading.pressureSource) : undefined;
+	// A change of colour is when the numbers matter: fetch them now instead
+	// of at the next minute, so the light and its figure agree.
+	useEffect(() => {
+		if (!state) return;
+		if (lastPressure.state !== undefined && lastPressure.state !== state) {
+			void queryClient.invalidateQueries({ queryKey: sessionMemoryQueryRoot });
+		}
+		lastPressure.state = state;
+	}, [state, queryClient]);
+	return state;
 }
 
 /** How many samples the window's graph keeps: two minutes at the fast cadence. */

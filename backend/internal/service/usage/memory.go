@@ -60,7 +60,11 @@ type MemoryReader struct {
 	// lastSystem is the previous host reading, for the swap rate.
 	lastSystem   procmem.System
 	lastSystemAt time.Time
-	ReadSystem   func() (procmem.System, error)
+	// cachedSystem is the last SystemMemory answer, reused within CacheTTL.
+	cachedSystem   domain.SystemMemory
+	cachedSystemAt time.Time
+	ReadSystem     func() (procmem.System, error)
+	ReadPressure   func() (procmem.Pressure, error)
 }
 
 // NewMemoryReader constructs a memory reader.
@@ -71,7 +75,7 @@ func NewMemoryReader(deps MemoryReaderDeps) *MemoryReader {
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
-	return &MemoryReader{deps: deps, ReadSystem: procmem.ReadSystem}
+	return &MemoryReader{deps: deps, ReadSystem: procmem.ReadSystem, ReadPressure: procmem.ReadPressure}
 }
 
 // ListMemory returns one reading per live session that has a runtime. Sessions
@@ -133,9 +137,39 @@ func treeReading(tree procmem.Tree, prev *procmem.Table, elapsed float64) domain
 	}
 }
 
+// Pressure is the machine's memory-pressure verdict alone, for the board's
+// light. Unlike SystemMemory it never samples the process table.
+func (r *MemoryReader) Pressure(context.Context) (procmem.Pressure, error) {
+	if r == nil || r.ReadPressure == nil {
+		return procmem.Pressure{}, procmem.ErrUnsupported
+	}
+	return r.ReadPressure()
+}
+
 // SystemMemory reports the host's headroom: RAM, swap, swapping rate since
 // the last call, and load. ErrUnsupported on platforms procmem can't read.
+// Readings are shared for CacheTTL, like the process table: on macOS each one
+// runs vm_stat, and every open window and `ao session top` polls this.
 func (r *MemoryReader) SystemMemory(ctx context.Context) (domain.SystemMemory, error) {
+	now := r.deps.Now()
+	r.mu.Lock()
+	if r.deps.CacheTTL > 0 && !r.cachedSystemAt.IsZero() && now.Sub(r.cachedSystemAt) < r.deps.CacheTTL {
+		out := r.cachedSystem
+		r.mu.Unlock()
+		return out, nil
+	}
+	r.mu.Unlock()
+	out, err := r.readSystemMemory(ctx)
+	if err != nil {
+		return domain.SystemMemory{}, err
+	}
+	r.mu.Lock()
+	r.cachedSystem, r.cachedSystemAt = out, now
+	r.mu.Unlock()
+	return out, nil
+}
+
+func (r *MemoryReader) readSystemMemory(ctx context.Context) (domain.SystemMemory, error) {
 	sys, err := r.ReadSystem()
 	if err != nil {
 		return domain.SystemMemory{}, err
@@ -158,10 +192,9 @@ func (r *MemoryReader) SystemMemory(ctx context.Context) (domain.SystemMemory, e
 	case !lastAt.IsZero() && sys.CPUTotalTicks > last.CPUTotalTicks && sys.CPUBusyTicks >= last.CPUBusyTicks:
 		out.CPUPercent = 100 * float64(sys.CPUBusyTicks-last.CPUBusyTicks) / float64(sys.CPUTotalTicks-last.CPUTotalTicks)
 	case sys.CPUTotalTicks == 0:
-		// No system-wide reading at all: `top` failed on macOS, or a
-		// platform procmem genuinely can't read CPU on. The daemon already
-		// samples every process for the session rows, so the same table
-		// gives the machine's busy share: total CPU-seconds used by
+		// No system-wide ticks on this platform (macOS today). The daemon
+		// already samples every process for the session rows, so the same
+		// table gives the machine's busy share: total CPU-seconds used by
 		// everything, divided by elapsed time and core count. This slightly
 		// undercounts processes that start and exit between two samples,
 		// which a whole-machine tick counter would not miss.

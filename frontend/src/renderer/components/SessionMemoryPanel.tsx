@@ -5,7 +5,6 @@ import { Check, ChevronRight, Copy, X } from "lucide-react";
 import {
 	chipTone,
 	largestSession,
-	pressureState,
 	resourceSuggestion,
 	stableResourceOrder,
 	type ChipTone,
@@ -24,6 +23,7 @@ import {
 	formatMemory,
 	useAppMemory,
 	useFastMemorySampling,
+	usePressureState,
 	sampleHistoryLength,
 	useSampleHistory,
 	useSessionMemory,
@@ -93,7 +93,7 @@ function useSuggestion(projectId?: string) {
 		.flatMap((workspace) => workspace.sessions)
 		.filter((session) => session.isTerminated !== true && !isOrchestratorSession(session) && readings?.has(session.id))
 		.map((session) => toSessionFacts(session, readings?.get(session.id), now));
-	const state = memory?.system ? pressureState(memory.system) : undefined;
+	const state = usePressureState();
 	const suggestion: ResourceSuggestion =
 		state && memory?.system && memory.app ? resourceSuggestion(state, memory.system, memory.app.rssBytes, facts) : { kind: "none" };
 	return { state, suggestion, facts };

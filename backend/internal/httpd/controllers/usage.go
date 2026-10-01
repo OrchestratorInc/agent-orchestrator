@@ -32,6 +32,12 @@ type SessionMemoryService interface {
 	AppMemory(context.Context) (domain.AppMemory, error)
 }
 
+// MemoryPressureReader reads the machine's memory-pressure verdict alone:
+// cheap enough to poll while no other memory figure is on screen.
+type MemoryPressureReader interface {
+	Pressure(context.Context) (procmem.Pressure, error)
+}
+
 // SessionStepsReader lists a session's recent tool calls, oldest first.
 type SessionStepsReader interface {
 	Steps(id domain.SessionID) []domain.SessionStep
@@ -44,12 +50,15 @@ type UsageController struct {
 	Memory SessionMemoryService
 	// Steps is optional: without it rows carry no activity.
 	Steps SessionStepsReader
+	// Pressure is optional: without it the pressure route is 501.
+	Pressure MemoryPressureReader
 }
 
 // Register mounts usage routes on the supplied router.
 func (c *UsageController) Register(r chi.Router) {
 	r.Get("/usage/sessions", c.listSessions)
 	r.Get("/usage/sessions/memory", c.listMemory)
+	r.Get("/usage/memory/pressure", c.getPressure)
 	r.Get("/usage/sessions/{sessionId}", c.getSession)
 }
 
@@ -124,6 +133,22 @@ func (c *UsageController) listMemory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	envelope.WriteJSON(w, http.StatusOK, ListSessionMemoryResponse{Sessions: out, System: system, App: app})
+}
+
+func (c *UsageController) getPressure(w http.ResponseWriter, r *http.Request) {
+	if c.Pressure == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/usage/memory/pressure")
+		return
+	}
+	p, err := c.Pressure.Pressure(r.Context())
+	if err != nil {
+		if errors.Is(err, procmem.ErrUnsupported) {
+			err = apierr.NotImplemented("MEMORY_UNSUPPORTED", err.Error())
+		}
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, MemoryPressureResponse{PressureRaw: p.Raw, PressureSource: p.Source})
 }
 
 // recentStepsShown is how many finished steps a row lists; the window is a

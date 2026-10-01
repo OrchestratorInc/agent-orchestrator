@@ -17,11 +17,19 @@ const { appMemoryMock, clipboardMock, memoryQueryMock, postMock, usageQueryMock,
 	workspaceQueryMock: vi.fn(),
 }));
 
-vi.mock("../hooks/useSessionMemory", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../hooks/useSessionMemory")>()),
-	useSessionMemory: memoryQueryMock,
-	useAppMemory: appMemoryMock,
-}));
+vi.mock("../hooks/useSessionMemory", async (importOriginal) => {
+	const { pressureState } = await import("@aoagents/product-ui");
+	return {
+		...(await importOriginal<typeof import("../hooks/useSessionMemory")>()),
+		useSessionMemory: memoryQueryMock,
+		useAppMemory: appMemoryMock,
+		// The light's own poll, fed from the same mocked reading.
+		usePressureState: () => {
+			const system = appMemoryMock()?.data?.system;
+			return system ? pressureState(system) : undefined;
+		},
+	};
+});
 
 vi.mock("../hooks/useSessionUsageSummaries", () => ({ useSessionUsageSummaries: usageQueryMock }));
 

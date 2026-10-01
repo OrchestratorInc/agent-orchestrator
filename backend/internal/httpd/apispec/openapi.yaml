@@ -8571,6 +8571,31 @@ paths:
       summary: Cancel an unclaimed speculative task worktree
       tags:
       - projects
+  /api/v1/usage/memory/pressure:
+    get:
+      operationId: getMemoryPressure
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryPressureResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read the machine's memory-pressure verdict without sampling any process
+      tags:
+      - usage
   /api/v1/usage/sessions:
     get:
       operationId: listCompactSessionUsage
@@ -12291,6 +12316,22 @@ components:
           type: string
       required:
       - status
+      type: object
+    MemoryPressureResponse:
+      properties:
+        pressureRaw:
+          format: double
+          minimum: 0
+          type: number
+        pressureSource:
+          enum:
+          - psi
+          - available_pct
+          - memorystatus
+          type: string
+      required:
+      - pressureRaw
+      - pressureSource
       type: object
     MergePRRequest:
       properties:

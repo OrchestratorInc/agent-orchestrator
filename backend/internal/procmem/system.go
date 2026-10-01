@@ -57,6 +57,14 @@ const (
 	PressureSourceMemoryStatus = "memorystatus"
 )
 
+// Pressure is the machine's memory-pressure verdict alone, the reading the
+// board's light polls between full samples: cheap on every platform because
+// it walks no process and, on macOS, starts no program.
+type Pressure struct {
+	Raw    float64
+	Source string
+}
+
 // availablePressure stands in for PSI where the kernel has none (pre-4.20,
 // CONFIG_PSI off, some containers): 100 minus the percent of RAM available.
 func availablePressure(sys System) float64 {
@@ -112,49 +120,17 @@ func ParseCPUTicks(contents string) (busy, total uint64) {
 	return 0, 0
 }
 
-// ParseTopCPU reads the "CPU usage: N.NN% user, N.NN% sys, N.NN% idle" summary
-// line `top -l 1 -n 0` prints on macOS, where Mach's real per-processor ticks
-// are reachable only through cgo. busyPercent is user+sys, the same
-// everything-but-idle definition ParseCPUTicks uses on Linux.
-func ParseTopCPU(contents string) (busyPercent float64, ok bool) {
-	for _, line := range strings.Split(contents, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "CPU usage:") {
-			continue
-		}
-		var user, sys float64
-		var userFound, sysFound bool
-		for _, field := range strings.Split(strings.TrimPrefix(line, "CPU usage:"), ",") {
-			field = strings.TrimSpace(field)
-			switch {
-			case strings.HasSuffix(field, "% user"):
-				if v, err := strconv.ParseFloat(strings.TrimSuffix(field, "% user"), 64); err == nil {
-					user, userFound = v, true
-				}
-			case strings.HasSuffix(field, "% sys"):
-				if v, err := strconv.ParseFloat(strings.TrimSuffix(field, "% sys"), 64); err == nil {
-					sys, sysFound = v, true
-				}
-			}
-		}
-		if userFound && sysFound {
-			return user + sys, true
-		}
-	}
-	return 0, false
-}
-
 // VMStat is the slice of vm_stat's page counts the monitor needs.
 type VMStat struct {
 	PageSize uint64
-	// Free, Inactive, Speculative and Purgeable are the pages the kernel can
-	// hand out without swapping anything. macOS publishes no single
-	// "available" figure, so this is the nearest honest equivalent of Linux's
-	// MemAvailable.
-	Free        uint64
-	Inactive    uint64
-	Speculative uint64
-	Purgeable   uint64
+	// Anonymous, Purgeable, Wired and Compressor are what Activity Monitor
+	// calls Memory Used: app memory (anonymous pages the app can mark
+	// purgeable are not counted), wired kernel memory, and the pages the
+	// compressor itself occupies. Everything else is file cache or free.
+	Anonymous  uint64
+	Purgeable  uint64
+	Wired      uint64
+	Compressor uint64
 	// PageIns and PageOuts are lifetime counters of ordinary file-backed
 	// paging, not swap: a Mac reads mapped files through these with no swap
 	// traffic at all.
@@ -166,9 +142,12 @@ type VMStat struct {
 	SwapOuts uint64
 }
 
-// AvailableBytes is what the kernel could give out right now.
-func (v VMStat) AvailableBytes() uint64 {
-	return (v.Free + v.Inactive + v.Speculative + v.Purgeable) * v.PageSize
+// AvailableBytes is total RAM less Memory Used, the same split Activity
+// Monitor shows. Inactive pages are not counted as free: many are app memory
+// the kernel must compress or swap before it can hand them out.
+func (v VMStat) AvailableBytes(total uint64) uint64 {
+	used := (v.Anonymous - min(v.Purgeable, v.Anonymous) + v.Wired + v.Compressor) * v.PageSize
+	return total - min(used, total)
 }
 
 // ParseVMStat reads `vm_stat` output: a header naming the page size, then
@@ -195,14 +174,14 @@ func ParseVMStat(contents string) (VMStat, error) {
 			continue
 		}
 		switch strings.TrimSpace(label) {
-		case "Pages free":
-			stat.Free = n
-		case "Pages inactive":
-			stat.Inactive = n
-		case "Pages speculative":
-			stat.Speculative = n
+		case "Anonymous pages":
+			stat.Anonymous = n
 		case "Pages purgeable":
 			stat.Purgeable = n
+		case "Pages wired down":
+			stat.Wired = n
+		case "Pages occupied by compressor":
+			stat.Compressor = n
 		case "Pageins":
 			stat.PageIns = n
 		case "Pageouts":

@@ -246,6 +246,39 @@ func TestSystemMemoryDerivesSwapRateFromReportedPageSize(t *testing.T) {
 	}
 }
 
+// TestSystemMemorySharesOneReadingWithinCacheTTL guards the host read's cost:
+// on macOS each read runs vm_stat, and every open window polls this, so
+// callers inside CacheTTL must share one reading rather than each run their own.
+func TestSystemMemorySharesOneReadingWithinCacheTTL(t *testing.T) {
+	now := time.Unix(2000, 0)
+	reads := 0
+	r := NewMemoryReader(MemoryReaderDeps{Store: memStore{}, Runtime: memRuntime{}, Now: func() time.Time { return now }, CacheTTL: 2 * time.Second})
+	r.ReadSystem = func() (procmem.System, error) {
+		reads++
+		return procmem.System{TotalBytes: 16 << 30, AvailableBytes: uint64(reads) << 30, CPUCount: 8}, nil
+	}
+	first, err := r.SystemMemory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	second, err := r.SystemMemory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reads != 1 || second.AvailableBytes != first.AvailableBytes {
+		t.Fatalf("reads = %d, available %d then %d; want one shared reading", reads, first.AvailableBytes, second.AvailableBytes)
+	}
+	now = now.Add(2 * time.Second)
+	third, err := r.SystemMemory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reads != 2 || third.AvailableBytes != 2<<30 {
+		t.Fatalf("reads = %d, available %d; want a fresh reading after the TTL", reads, third.AvailableBytes)
+	}
+}
+
 func TestSystemMemoryDerivesCPUFromTheProcessTableWhenTheHostHasNoTicks(t *testing.T) {
 	// macOS today: ReadSystem cannot report system-wide ticks (no cgo), so
 	// SystemMemory must fall back to what it already samples for the session

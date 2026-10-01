@@ -36,37 +36,17 @@ func TestParseCPUTicksExcludesGuestTime(t *testing.T) {
 	}
 }
 
-// topSample is representative `top -l 1 -n 0` output on macOS: the summary
-// lines top prints before any per-process rows (n=0 asks for zero of those).
-const topSample = `Processes: 412 total, 2 running, 410 sleeping, 1877 threads
-2026/09/30 10:23:45
-Load Avg: 2.15, 2.30, 2.18
-CPU usage: 12.34% user, 8.76% sys, 78.90% idle
-SharedLibs: 512M resident, 88M data, 28M linkedit.
-MemRegions: 210000 total, 4200M resident, 96M private, 1800M shared.
-PhysMem: 14G used (2900M wired, 3100M compressor), 2100M unused.
-VM: 3200G vsize, 1400M framework vsize, 0(0) swapins, 0(0) swapouts.
-Networks: packets: 128000/180M in, 96000/45M out.
-Disks: 210000/6200M read, 180000/4100M written.
-`
-
-func TestParseTopCPUReadsUserPlusSys(t *testing.T) {
-	pct, ok := ParseTopCPU(topSample)
-	if !ok || pct != 12.34+8.76 {
-		t.Fatalf("pct=%v ok=%v, want %v/true", pct, ok, 12.34+8.76)
-	}
-	if _, ok := ParseTopCPU("Processes: 1 total\n"); ok {
-		t.Fatal("missing CPU usage line must report not ok")
-	}
-}
-
 func TestAvailablePressureIsUsedShare(t *testing.T) {
 	if got := availablePressure(System{TotalBytes: 16 << 30, AvailableBytes: 4 << 30}); got != 75 {
 		t.Fatalf("pressure = %v, want 75", got)
 	}
 }
 
-func TestParseVMStatComputesAvailableFromReclaimablePages(t *testing.T) {
+// TestParseVMStatComputesAvailableAsTotalLessMemoryUsed pins the Activity
+// Monitor split: used is app memory (anonymous less purgeable), wired and the
+// compressor's own pages. Inactive must not count as free — on a busy Mac
+// most of it is app memory that has to be compressed before it can be reused.
+func TestParseVMStatComputesAvailableAsTotalLessMemoryUsed(t *testing.T) {
 	// A real vm_stat header plus the six lines the reader uses; other rows are
 	// present in the real tool and must be ignored, not misparsed.
 	out := `Mach Virtual Memory Statistics: (page size of 16384 bytes)
@@ -100,7 +80,7 @@ Swapouts:                                  0.
 	if stat.PageSize != 16384 {
 		t.Fatalf("page size = %d, want 16384", stat.PageSize)
 	}
-	if stat.Free != 10000 || stat.Inactive != 5000 || stat.Speculative != 2000 || stat.Purgeable != 3000 {
+	if stat.Anonymous != 100000 || stat.Purgeable != 3000 || stat.Wired != 80000 || stat.Compressor != 500 {
 		t.Fatalf("stat = %+v", stat)
 	}
 	if stat.PageIns != 900000 || stat.PageOuts != 1234 {
@@ -109,9 +89,14 @@ Swapouts:                                  0.
 	if stat.SwapIns != 0 || stat.SwapOuts != 0 {
 		t.Fatalf("swapins/outs = %d/%d, want 0/0 from the fixture", stat.SwapIns, stat.SwapOuts)
 	}
-	wantAvailable := uint64(10000+5000+2000+3000) * 16384
-	if got := stat.AvailableBytes(); got != wantAvailable {
+	const total = uint64(16 << 30)
+	wantAvailable := total - uint64(100000-3000+80000+500)*16384
+	if got := stat.AvailableBytes(total); got != wantAvailable {
 		t.Fatalf("available = %d, want %d", got, wantAvailable)
+	}
+	// A reading larger than RAM (counters racing) clamps to zero, never wraps.
+	if got := stat.AvailableBytes(1 << 30); got != 0 {
+		t.Fatalf("available = %d, want 0 when used exceeds total", got)
 	}
 }
 

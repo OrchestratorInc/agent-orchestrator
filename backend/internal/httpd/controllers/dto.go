@@ -1713,6 +1713,14 @@ type SystemMemoryResponse struct {
 	PressureSource string `json:"pressureSource" enum:"psi,available_pct,memorystatus"`
 }
 
+// MemoryPressureResponse is the machine's memory-pressure verdict alone, the
+// same two fields SystemMemoryResponse carries, read without sampling any
+// process so the board can poll it often.
+type MemoryPressureResponse struct {
+	PressureRaw    float64 `json:"pressureRaw" minimum:"0"`
+	PressureSource string  `json:"pressureSource" enum:"psi,available_pct,memorystatus"`
+}
+
 // UsageTotalsResponse is the canonical telemetry aggregate for one scope.
 //
 // Provider-specific counters are no longer projected here: they live verbatim
