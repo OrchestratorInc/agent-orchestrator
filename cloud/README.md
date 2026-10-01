@@ -135,7 +135,8 @@ redirects and production responses, verifies `/readyz` reports
 with the failing readiness URL and HTTP/TLS error before Electron starts. The
 desktop currently uses the URL for staging preflight and future Cloud API
 calls; this branch does not add Cloud project/session UI. WorkOS desktop
-authentication continues to use the `ao-app://callback` deep link.
+authentication lands on the control plane's `/api/cloud/v1/auth/desktop/callback`
+page, which forwards to the `ao-app://callback` deep link.
 
 To launch the web UI against hosted staging:
 
@@ -306,7 +307,8 @@ so local and staging can manage the one App without copying secrets or callback
 state into either environment.
 
 Staging and production intentionally share one WorkOS environment while keeping
-their AO databases separate. Desktop login continues to use the
+their AO databases separate. Desktop login lands on each control plane's
+`/api/cloud/v1/auth/desktop/callback` page, which forwards to the
 `ao-app://callback` deep link.
 
 ## Tenancy

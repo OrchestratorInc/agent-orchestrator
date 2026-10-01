@@ -300,10 +300,13 @@ traffic only from the environment's task group.
 
 ### Authentication and callback readiness
 
-Desktop WorkOS login uses PKCE and the custom `ao-app://callback` redirect. The
-public API hostname is therefore not a WorkOS login callback: the desktop app
-only needs its Cloud client base URL changed to the environment's HTTPS
-hostname. Access-token verification and user synchronization are stateless
+Desktop WorkOS login uses PKCE. Packaged desktop builds register
+`<api-host>/api/cloud/v1/auth/desktop/callback` as the WorkOS redirect URI: that
+unauthenticated page exchanges nothing, it only gives the browser tab a real
+page and forwards `code`/`state` to the `ao-app://callback` deep link, where the
+desktop app holds the PKCE verifier. Each environment's landing URL must be
+registered in WorkOS before a desktop build that targets it ships, and
+`ao-app://callback` stays registered for older desktop builds. Access-token verification and user synchronization are stateless
 across API replicas, with durable identity and organization state in PostgreSQL.
 No ALB stickiness is required.
 
