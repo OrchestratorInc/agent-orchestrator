@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { SearchablePicker } from "./SearchablePicker";
 
 it("filters a long repository list and selects the matching private repository", async () => {
@@ -133,4 +133,16 @@ it("offers search only when the list has more than ten options", async () => {
 
 	rerender(<SearchablePicker ariaLabel="Repository" placeholder="Select a repository" searchPlaceholder="Search repositories" value="" onChange={() => undefined} options={options(11)} />);
 	expect(screen.getByPlaceholderText("Search repositories")).toBeInTheDocument();
+});
+
+it("runs a pinned action below the options and closes the list", async () => {
+	const user = userEvent.setup();
+	const onSelect = vi.fn();
+	render(<SearchablePicker ariaLabel="Repository" placeholder="Select a repository" searchPlaceholder="Search repositories" value="" onChange={() => undefined}
+		options={[{ value: "one", label: "acme/one" }]}
+		action={{ label: "Connect more repositories", onSelect }} />);
+	await user.click(screen.getByRole("combobox", { name: "Repository" }));
+	await user.click(screen.getByRole("button", { name: "Connect more repositories" }));
+	expect(onSelect).toHaveBeenCalledTimes(1);
+	expect(screen.queryByRole("listbox", { name: "Repository" })).not.toBeInTheDocument();
 });

@@ -1965,7 +1965,36 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(cloudMocks.startGitHubInstallation).toHaveBeenCalledTimes(1);
 	}, 10_000);
 
-	it("opens GitHub to add repository access once a repository is connected", async () => {
+	it("connects more repositories from the repository dropdown", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		cloudMocks.listGitHubInstallations.mockResolvedValue({
+			installations: [{
+				id: "inst-1", githubInstallationId: "100", accountLogin: "acme", accountType: "Organization",
+				status: "active", repositorySelection: "selected", syncStatus: "ready", createdAt: "", updatedAt: "before",
+			}],
+		});
+		cloudMocks.listGitHubRepositories.mockResolvedValue({
+			items: [{
+				githubRepositoryId: "555", name: "app", fullName: "acme/app", htmlUrl: "https://github.com/acme/app",
+				defaultBranch: "main", visibility: "private", isPrivate: true, isArchived: false, access: "write", grantedAt: "",
+			}],
+			page: { hasMore: false },
+		});
+		cloudMocks.startGitHubInstallation.mockResolvedValue({ installationUrl: "https://github.com/apps/ao/installations/new", expiresAt: "" });
+		const user = userEvent.setup();
+		render(<CreateProjectFlow embedded mode="choose" {...noop} />, { wrapper: CloudTestProviders });
+
+		await user.click(screen.getByRole("button", { name: "New cloud project" }));
+		// No separate "Add repository" link that reads like adding one to the project.
+		expect(screen.queryByRole("button", { name: "Add repository" })).not.toBeInTheDocument();
+		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
+		await user.click(screen.getByRole("button", { name: "Connect more repositories" }));
+
+		await waitFor(() => expect(bridgeMocks.openExternal).toHaveBeenCalledWith("https://github.com/apps/ao/installations/new"));
+	});
+
+	it("offers Connect repository when GitHub is connected but shares no repositories", async () => {
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.sessionStatus = "authenticated";
 		cloudMocks.listGitHubInstallations.mockResolvedValue({
@@ -1975,16 +2004,12 @@ describe("CreateProjectFlow project import validation", () => {
 			}],
 		});
 		cloudMocks.listGitHubRepositories.mockResolvedValue({ items: [], page: { hasMore: false } });
-		cloudMocks.startGitHubInstallation.mockResolvedValue({ installationUrl: "https://github.com/apps/ao/installations/new", expiresAt: "" });
 		const user = userEvent.setup();
 		render(<CreateProjectFlow embedded mode="choose" {...noop} />, { wrapper: CloudTestProviders });
 
 		await user.click(screen.getByRole("button", { name: "New cloud project" }));
-		expect(await screen.findByText(/No repositories are connected yet/)).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /^Connect repository/ })).not.toBeInTheDocument();
-		await user.click(screen.getByRole("button", { name: "Add repository" }));
-
-		await waitFor(() => expect(bridgeMocks.openExternal).toHaveBeenCalledWith("https://github.com/apps/ao/installations/new"));
+		expect(await screen.findByRole("button", { name: /^Connect repository/ })).toBeInTheDocument();
+		expect(screen.queryByRole("combobox", { name: "Select a repository" })).not.toBeInTheDocument();
 	});
 
 	it("adds a coder session repository without starting another GitHub installation", async () => {

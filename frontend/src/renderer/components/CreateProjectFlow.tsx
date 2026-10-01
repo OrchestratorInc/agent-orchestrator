@@ -1436,6 +1436,9 @@ function CloudProjectCard({
 		void queryClient.invalidateQueries({ queryKey: ["cloud-github-app-repos", baseUrl, org?.id] });
 	}, [baseUrl, org?.id, queryClient, readyInstallationKey]);
 	const selectedRepo = githubAppRepos.data?.find((repo) => repo.githubRepositoryId === selectedRepoId);
+	// GitHub is connected but grants no repositories yet: same next step as a
+	// fresh start, so show the same "Connect repository" card.
+	const noRepositoriesShared = appConnected && allActiveInstallationsReady && githubAppRepos.isSuccess && githubAppRepos.data.length === 0;
 
 	// If the selected repository disappears from the installation (access revoked,
 	// archived, or removed from the App's repo list), drop the stale selection so
@@ -1597,24 +1600,11 @@ function CloudProjectCard({
 			<div className={cn(onboardingPanelBodyClass, "pt-4")}>
 				{/* Repository: the project is created from, and named after, it. */}
 				<div className="space-y-2">
-					{/* In the dialog, the close button sits in this row's top-right corner. */}
-					<div className={cn("flex items-center justify-between", dialog && onClose && "pr-8")}>
-						<Label className={onboardingFormLabelClass}>
-							{t("createProject.cloudRepository", { defaultValue: "Repository" })}
-						</Label>
-						{appConnected ? (
-							<button
-								type="button"
-								className="text-[12px] font-medium text-muted-foreground underline decoration-dotted underline-offset-4 transition-colors hover:text-foreground disabled:opacity-60"
-								disabled={isCreating || githubOAuthBusy}
-								onClick={() => void connectGitHub()}
-							>
-								{t("createProject.addRepository", { defaultValue: "Add repository" })}
-							</button>
-						) : null}
-					</div>
+					<Label className={onboardingFormLabelClass}>
+						{t("createProject.cloudRepository", { defaultValue: "Repository" })}
+					</Label>
 
-					{!appConnected ? (
+					{!appConnected || noRepositoriesShared ? (
 						<button
 							type="button"
 							className="flex w-full items-center gap-3 rounded-lg border border-border/50 bg-[var(--color-bg-import-card)] px-4 py-3 text-left transition-colors hover:bg-accent/50 active:bg-accent disabled:opacity-60"
@@ -1654,6 +1644,11 @@ function CloudProjectCard({
 							onChange={(nextId) => {
 								setSelectedRepoId(nextId);
 								setSubmitError(null);
+							}}
+							action={{
+								label: t("createProject.connectMoreRepositories", { defaultValue: "Connect more repositories" }),
+								disabled: isCreating || githubOAuthBusy,
+								onSelect: () => void connectGitHub(),
 							}}
 						/>
 					)}
@@ -1697,11 +1692,7 @@ function CloudProjectCard({
 									</button>
 								) : null}
 							</div>
-						) : !githubAppRepos.isLoading && (githubAppRepos.data?.length ?? 0) === 0 ? (
-							<p className="text-[12px] leading-5 text-muted-foreground">
-								{t("createProject.githubNoReposAdd", { defaultValue: "No repositories are connected yet. Use Add repository to choose some." })}
-							</p>
-						) : appRepositorySyncFailed ? (
+						) : noRepositoriesShared ? null : appRepositorySyncFailed ? (
 							<div className="flex items-center gap-2 text-[12px] leading-5 text-destructive">
 								<span>{t("createProject.githubReposFailed", { defaultValue: "Failed to load repositories." })}</span>
 								<button type="button" className="underline" disabled={githubOAuthBusy} onClick={() => void retryGitHubRepositorySync()}>

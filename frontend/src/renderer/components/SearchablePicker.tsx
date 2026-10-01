@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Lock, Search } from "lucide-react";
+import { Check, ChevronDown, Lock, Plus, Search } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../lib/utils";
@@ -24,6 +24,7 @@ export function SearchablePicker({
 	disabled = false,
 	fixedScroll = false,
 	className,
+	action,
 }: {
 	ariaLabel: string;
 	placeholder: string;
@@ -34,6 +35,8 @@ export function SearchablePicker({
 	disabled?: boolean;
 	fixedScroll?: boolean;
 	className?: string;
+	/** An action pinned below the options (e.g. "Connect more repositories"). */
+	action?: { label: string; onSelect: () => void; disabled?: boolean };
 }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
@@ -136,6 +139,19 @@ export function SearchablePicker({
 						</button>
 					))}
 				</div>
+				{action ? (
+					<div className="border-t border-border p-1">
+						<button
+							type="button"
+							disabled={action.disabled}
+							onClick={() => { setOpen(false); action.onSelect(); }}
+							className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-[13px] text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:bg-accent disabled:opacity-60"
+						>
+							<Plus className="size-3.5 shrink-0" aria-hidden="true" />
+							<span className="min-w-0 flex-1 truncate">{action.label}</span>
+						</button>
+					</div>
+				) : null}
 			</PopoverContent>
 		</Popover>
 	);
