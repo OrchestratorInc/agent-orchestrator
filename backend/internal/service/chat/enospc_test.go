@@ -111,6 +111,11 @@ func TestSendRetryAfterBindENOSPCAndDaemonRestart(t *testing.T) {
 	if _, err := h.svc.Send(ctx, testSession, msg); !errors.Is(err, syscall.ENOSPC) || first.sendCallCount() != 1 {
 		t.Fatalf("first Send: err=%v provider calls=%d, want ENOSPC after one acceptance", err, first.sendCallCount())
 	}
+	before, err := h.st.LoadConversationSnapshot(ctx, h.ctrl.ConversationID())
+	if err != nil || len(before.Turns) != 1 || before.Turns[0].State != domain.TurnStateRunning || before.Turns[0].ProviderTurnID != "" {
+		t.Fatalf("pre-restart turn = %+v, err=%v; want one unbound running turn", before.Turns, err)
+	}
+	originalTurnID := before.Turns[0].ID
 	h.svc.StopAll(ctx)
 	h.ctrl.Wait()
 
@@ -153,7 +158,19 @@ func TestSendRetryAfterBindENOSPCAndDaemonRestart(t *testing.T) {
 				if got := first.sendCallCount() + second.sendCallCount(); got != 1 {
 					t.Fatalf("provider accepted %d turns for one client ID across restart, want 1", got)
 				}
-				return
+				snapshot, err := h.st.LoadConversationSnapshot(ctx, h.ctrl.ConversationID())
+				if err != nil {
+					t.Fatalf("load post-reconnect snapshot: %v", err)
+				}
+				for _, turn := range snapshot.Turns {
+					if turn.ID == originalTurnID {
+						if !turn.State.Terminal() {
+							t.Fatalf("original turn remains visibly %s after replayed provider completion", turn.State)
+						}
+						return
+					}
+				}
+				t.Fatalf("original turn %s disappeared after reconnect", originalTurnID)
 			}
 		case <-time.After(3 * time.Second):
 			t.Fatal("reconnected provider events were not projected")

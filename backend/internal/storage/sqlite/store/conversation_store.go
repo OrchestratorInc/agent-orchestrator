@@ -1357,6 +1357,30 @@ func (s *Store) SettleOrphanedTurns(ctx context.Context, session domain.SessionI
 	return nil
 }
 
+// SettleUnboundRunningTurn closes an ambiguous dispatch after live reconnect.
+// Recheck under the writer lock so a bound or queued turn is never settled.
+func (s *Store) SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	turn, err := q.SelectConversationTurnByID(ctx, turnID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("select unbound running turn %s: %w", turnID, err)
+	}
+	if turn.ConversationID != conversationID || turn.HandledBySessionID != session || turn.State != domain.TurnStateRunning || turn.ProviderTurnID != "" || turn.RolledBackAt.Valid {
+		return nil
+	}
+	if err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
+		State: domain.TurnStateFailed, ErrorMessage: "provider delivery unconfirmed after reconnect",
+		CompletedAt: sql.NullTime{Time: now, Valid: true}, ID: turnID,
+	}); err != nil {
+		return fmt.Errorf("settle unbound running turn %s: %w", turnID, err)
+	}
+	return nil
+}
+
 // CleanupOwnedControllerWork settles work only when the closing controller still
 // owns its session generation. Branch/interface handoffs start the replacement
 // before closing the source, so an unconditional stream-end cleanup would
