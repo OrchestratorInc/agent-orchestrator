@@ -19,6 +19,7 @@ import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { clientForHost, connectedHosts, subscribeConnectedHosts } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
+import { isLaunchableAgent } from "../lib/agent-select-options";
 import { WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
 import { OrchestratorSpawnError, spawnOrchestrator } from "../lib/spawn-orchestrator";
@@ -195,7 +196,7 @@ function SettingsBody({
 		hostId,
 	});
 	const agentCatalog = agentsQuery.data;
-	const selectableAgents = hostId ? agentCatalog?.agents.filter((agent) => agent.effectiveReadiness === "ready") : agentCatalog?.agents;
+	const selectableAgents = hostId ? agentCatalog?.agents.filter(isLaunchableAgent) : agentCatalog?.agents;
 
 	const intakeForm: IntakeForm = {
 		enabled: form.intakeEnabled,

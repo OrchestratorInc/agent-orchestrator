@@ -294,15 +294,14 @@ describe("NewTaskDialog", () => {
 		expect(requestBody().agent).toBe("cursor");
 	});
 
-	it("hides agents with unknown auth and offers agent management without changing the selection", async () => {
+	it("offers agents with unknown auth without changing the selection", async () => {
 		renderDialog();
 		const user = userEvent.setup();
 		await waitForAgentCatalog();
 
 		await user.click(screen.getByRole("button", { name: "Agent" }));
 		const options = await screen.findAllByRole("menuitem");
-		expect(options.map((option) => option.textContent)).toEqual(["Claude Code", "Cursor", "Manage agents…"]);
-		expect(screen.queryByRole("menuitem", { name: /Kiro/ })).not.toBeInTheDocument();
+		expect(options.map((option) => option.textContent)).toEqual(["Claude Code", "Cursor", "KiroAuth unknown", "Manage agents…"]);
 		await user.keyboard("{Escape}");
 
 		await user.type(screen.getByLabelText("Task"), "B");

@@ -79,6 +79,21 @@ describe("CreateProjectAgentSheet", () => {
 		}));
 	});
 
+	it("can create a remote project with an installed agent whose auth is unknown", async () => {
+		const agents = [agentReadiness("opencode", "OpenCode", { authentication: "unknown" })];
+		remote.get.mockResolvedValue({ data: { agents } });
+		remote.post.mockResolvedValue({ data: { agents } });
+		const onSubmit = renderSheet(vi.fn().mockResolvedValue(undefined), undefined, { hostId: "box-a" });
+
+		await chooseOption(await screen.findByLabelText("Worker agent"), "OpenCode");
+		await chooseOption(screen.getByLabelText("Orchestrator agent"), "OpenCode");
+		await userEvent.click(screen.getByRole("button", { name: "Create and start" }));
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+			workerAgent: "opencode",
+			orchestratorAgent: "opencode",
+		})));
+	});
+
 	it("shakes the active sheet when creation fails", () => {
 		renderSheet(undefined, undefined, { shake: true });
 
@@ -154,7 +169,7 @@ describe("CreateProjectAgentSheet", () => {
 		);
 	});
 
-	it.each(["stacked", "chip", "settings-row"] as const)("%s lists ready and configured agents and opens Harness without changing a saved selection", async (variant) => {
+	it.each(["stacked", "chip", "settings-row"] as const)("%s offers agents with unknown readiness and opens Harness for definite failures", async (variant) => {
 		const onChange = vi.fn();
 		useUiStore.setState({ settingsModal: null });
 		render(<RequiredAgentField
@@ -177,7 +192,8 @@ describe("CreateProjectAgentSheet", () => {
 		expect(screen.getByRole(role, { name: /Claude Code/ })).toBeInTheDocument();
 		expect(screen.getByRole(role, { name: /Aider/ })).toBeInTheDocument();
 		expect(screen.getByRole(role, { name: /fx.*Unverified/ })).toBeInTheDocument();
-		for (const name of [/Codex/, /Cursor/, /OpenCode/]) expect(screen.queryByRole(role, { name })).not.toBeInTheDocument();
+		expect(screen.getByRole(role, { name: /OpenCode.*Auth unknown/ })).not.toHaveAttribute("aria-disabled", "true");
+		for (const name of [/Codex/, /Cursor/]) expect(screen.queryByRole(role, { name })).not.toBeInTheDocument();
 		await userEvent.keyboard("{End}{Enter}");
 		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "harness", focusAgentId: "codex" }));
 		expect(onChange).not.toHaveBeenCalled();

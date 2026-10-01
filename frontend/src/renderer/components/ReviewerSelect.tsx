@@ -8,7 +8,7 @@ import { agentLabel } from "../lib/agent-options";
 import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
 import {
 	buildRankedAgentOptions,
-	isReadyAgent,
+	isLaunchableAgent,
 	type AgentInfo,
 	type RankedAgentOption,
 	unknownAgentReadiness,
@@ -101,7 +101,7 @@ export function ReviewerSelect({
 		fallbackAgents,
 	});
 	const selectableOptions = options.filter((agent) => {
-		if (agents !== undefined && !isReadyAgent(agent)) return false;
+		if (agents !== undefined && !isLaunchableAgent(agent)) return false;
 		if (agent.id === excludedHarness) return false;
 		if (agent.id === defaultHarness) return false;
 		return true;
@@ -109,7 +109,7 @@ export function ReviewerSelect({
 	const catalogDefaultLabel = options.find((agent) => agent.id === defaultHarness)?.label;
 	const defaultHarnessLabel = catalogDefaultLabel && catalogDefaultLabel !== defaultHarness ? catalogDefaultLabel : agentLabel(defaultHarness);
 	const effectiveHarness = value || defaultHarness;
-	const needsSetup = agents !== undefined && Boolean(effectiveHarness && !options.some((agent) => agent.id === effectiveHarness && isReadyAgent(agent)));
+	const needsSetup = agents !== undefined && Boolean(effectiveHarness && !options.some((agent) => agent.id === effectiveHarness && isLaunchableAgent(agent)));
 	const management = useAgentManagementMenu(needsSetup ? effectiveHarness : undefined, hostId);
 	const menuProjectID = projectId ?? "";
 	const triggerCatalog = useQuery(agentModelsQueryOptions(effectiveHarness, menuProjectID, hostId));

@@ -31,6 +31,7 @@ import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices"
 import {
 	buildRankedAgentOptions,
 	DEFAULT_AGENT_PRIORITY_RANK,
+	isLaunchableAgent,
 	isReadyAgent,
 } from "../lib/agent-select-options";
 import { resolveSandboxProviderPreference, useSandboxProviderStore } from "../stores/sandbox-provider-store";
@@ -398,7 +399,7 @@ export function TaskComposer({
 	const rememberedAgent = persistedPreferences?.lastAgent ?? "";
 	const availableAgents = isCloudProject ? cloudAgents : agentCatalog?.agents;
 	const rememberedAgentIsAvailable = Boolean(
-		availableAgents?.some((candidate) => candidate.id === rememberedAgent && isReadyAgent(candidate)),
+		availableAgents?.some((candidate) => candidate.id === rememberedAgent && isLaunchableAgent(candidate)),
 	);
 	const defaultWorkerAgent = rememberedAgentIsAvailable ? rememberedAgent : configuredDefaultAgent;
 	const selectedAgent = agent || defaultWorkerAgent;
@@ -536,13 +537,13 @@ export function TaskComposer({
 		hostConnected &&
 		Boolean(projectId) &&
 		(!isStandalone || selectedAgent !== "") &&
-		(!hostId || selectedAgent !== "") &&
+		(!hostId || Boolean(agentCatalog?.agents.some((candidate) => candidate.id === selectedAgent && isLaunchableAgent(candidate)))) &&
 		(isCloudProject || isStandalone || projectQuery.data !== undefined) &&
 		(!hostId || (remoteAgentsQuery.isSuccess && remoteSettingsQuery.isSuccess));
 	const remoteLoadError = !hostId ? undefined : !hostConnected ? t("remote.hostOffline") :
 		[projectQuery.error, remoteAgentsQuery.error, remoteSettingsQuery.error]
 			.find((cause): cause is Error => cause instanceof Error)?.message ??
-			(remoteAgentsQuery.isSuccess && !agentCatalog?.agents.some(isReadyAgent) ? t("remote.noReadyAgent") : undefined);
+			(remoteAgentsQuery.isSuccess && !agentCatalog?.agents.some(isLaunchableAgent) ? t("remote.noReadyAgent") : undefined);
 	const refreshSelectedModels = useCallback(async () => {
 		const refreshed = await refreshAgentModels(selectedAgent, modelsProjectId, hostId);
 		queryClient.setQueryData(agentModelsQueryKey(selectedAgent, modelsProjectId, hostId), refreshed);

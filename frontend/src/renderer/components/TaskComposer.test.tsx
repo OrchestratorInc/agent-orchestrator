@@ -169,6 +169,23 @@ describe("TaskComposer", () => {
 		expect(h.remotePost.mock.calls.some(([path]) => path === "/api/v1/orchestrators/delegate")).toBe(false);
 	});
 
+	it("does not start a remote task with the project's uninstalled default agent", async () => {
+		h.remoteGet.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: ["opencode"] } }
+			: { data: { status: "ok", project: { id: "project-a", config: { worker: { agent: "claude-code" } } } } });
+		h.remotePost.mockImplementation(async (path: string) => path === "/api/v1/agents/readiness/ensure"
+			? { data: { agents: [
+				agentReadiness("claude-code", "Claude Code", { installation: "not_installed" }),
+				agentReadiness("opencode", "OpenCode", { authentication: "unknown" }),
+			] } }
+			: { data: {} });
+		render(<Wrap><TaskComposer hostId="box-a" projectId="project-a" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "claude-code"));
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toBeEnabled());
+		expect(startTask()).toBeDisabled();
+		expect(screen.queryByText("No agent is ready on this host. Configure one there first.")).not.toBeInTheDocument();
+	});
+
 	it("creates a remote project task through its host, not the local daemon", async () => {
 		const onCreated = vi.fn();
 		h.remoteGet.mockImplementation(async (path: string) => {
@@ -177,13 +194,14 @@ describe("TaskComposer", () => {
 			return { data: { status: "ok", project: { id: "project-a", config: { worker: { agent: "opencode" } } } } };
 		});
 		h.remotePost.mockImplementation(async (path: string) => {
-			if (path === "/api/v1/agents/readiness/ensure") return { data: { agents: [agentReadiness("opencode", "OpenCode")] } };
+			if (path === "/api/v1/agents/readiness/ensure") return { data: { agents: [agentReadiness("opencode", "OpenCode", { authentication: "unknown" })] } };
 			if (path === "/api/v1/projects/{id}/tasks/prepare") return { data: { taskPreparation: "" } };
 			if (path === "/api/v1/orchestrators/delegate") return { data: { workerId: "remote-task" } };
 			return { data: {} };
 		});
 		render(<Wrap><TaskComposer hostId="box-a" projectId="project-a" onCreated={onCreated} /></Wrap>);
 		await waitFor(() => expect(startTask()).toBeEnabled());
+		expect(screen.queryByText("No agent is ready on this host. Configure one there first.")).not.toBeInTheDocument();
 		fireEvent.change(task(), { target: { value: "Fix the issue" } });
 		fireEvent.click(startTask());
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("remote-task"));

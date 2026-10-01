@@ -139,7 +139,7 @@ export function CreateProjectAgentSheet({
 	useEnsureAgentReadiness({ enabled: contentOpen && connected, hostId, purpose: hostId ? "launch" : "display" });
 	const agents = agentsQuery.data;
 	const agentOptions = useMemo(() => agents?.agents ?? [], [agents]);
-	const selectableAgents = useMemo(() => hostId ? agentOptions.filter((agent) => agent.effectiveReadiness === "ready") : agentOptions, [agentOptions, hostId]);
+	const selectableAgents = useMemo(() => hostId ? agentOptions.filter(isLaunchableAgent) : agentOptions, [agentOptions, hostId]);
 	// "configured" belongs here even though it is not a verified credential.
 	// This picks the default preselection, not a gate — every agent stays
 	// selectable — and excluding it would silently stop preselecting an agent
@@ -164,7 +164,7 @@ export function CreateProjectAgentSheet({
 			? agentsQuery.error.message
 			: t("createProject.couldNotLoadAgents")
 		: null;
-	const displayError = agentsError ?? (hostId && agents && selectableAgents.length === 0 ? "No ready agents on this host." : null);
+	const displayError = agentsError ?? (hostId && agents && selectableAgents.length === 0 ? "No available agents on this host." : null);
 	const [workerAgent, setWorkerAgent] = useState("");
 	const [orchestratorAgent, setOrchestratorAgent] = useState("");
 	const [workerAgentTouched, setWorkerAgentTouched] = useState(false);
