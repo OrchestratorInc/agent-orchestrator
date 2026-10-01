@@ -248,7 +248,7 @@ it.each(["native", "ACP config"] as const)(
 		const user = userEvent.setup();
 		const models = [
 			{ id: "claude-sonnet-4-5", displayName: "Claude Sonnet 4.5", default: true },
-			{ id: "claude-opus-4-7", displayName: "Claude Opus 4.7" },
+			{ id: "claude-opus-4-7", displayName: "Claude Opus 4.7", default: false },
 		];
 		const configOption: ChatConfigOption = {
 			id: "model",
