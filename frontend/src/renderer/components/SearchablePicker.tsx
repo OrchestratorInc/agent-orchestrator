@@ -105,7 +105,7 @@ export function SearchablePicker({
 					aria-label={ariaLabel}
 					className={cn(
 						"overscroll-contain p-1",
-						fixedScroll ? "repository-picker-scrollbar h-72 overflow-y-scroll" : "settings-thin-scrollbar max-h-72 overflow-y-auto",
+						fixedScroll ? "repository-picker-scrollbar max-h-72 overflow-y-auto" : "settings-thin-scrollbar max-h-72 overflow-y-auto",
 					)}
 				>
 					{filtered.length === 0 ? <p className="px-3 py-5 text-center text-xs text-muted-foreground">{t("common.noMatches", { defaultValue: "No matches" })}</p> : null}

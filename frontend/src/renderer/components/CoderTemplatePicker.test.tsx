@@ -33,7 +33,7 @@ it("shows additional repositories as a carousel and moves to a newly added card"
 	const user = userEvent.setup();
 	render(<AdditionalRepositoriesPicker repos={[{ label: "acme/one", url: "https://github.com/acme/one" }]} />);
 	await user.click(screen.getByRole("combobox", { name: "Repository 1" }));
-	expect(screen.getByRole("listbox", { name: "Repository 1" })).toHaveClass("overflow-y-scroll");
+	expect(screen.getByRole("listbox", { name: "Repository 1" })).toHaveClass("max-h-72", "repository-picker-scrollbar");
 	await user.keyboard("{Escape}");
 	act(() => useCoderSessionOptionsStore.getState().setExtraRepos([
 		{ url: "https://github.com/acme/one", branch: "main" },

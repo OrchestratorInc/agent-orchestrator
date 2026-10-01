@@ -49,7 +49,7 @@ it("keeps a large result list scrollable below the search field without empty sp
 	expect(screen.getAllByRole("option")).toHaveLength(40);
 });
 
-it("gives repository selectors a fixed, visibly scrollable result area", async () => {
+it("gives repository selectors a visibly scrollable result area that fits short lists", async () => {
 	const user = userEvent.setup();
 	render(<SearchablePicker
 		ariaLabel="Repository"
@@ -62,7 +62,9 @@ it("gives repository selectors a fixed, visibly scrollable result area", async (
 	/>);
 	await user.click(screen.getByRole("combobox", { name: "Repository" }));
 	const list = screen.getByRole("listbox", { name: "Repository" });
-	expect(list).toHaveClass("h-72", "overflow-y-scroll", "repository-picker-scrollbar");
+	// Capped, not fixed: one repository renders as one row, not an 18rem box.
+	expect(list).toHaveClass("max-h-72", "overflow-y-auto", "repository-picker-scrollbar");
+	expect(list).not.toHaveClass("h-72");
 	expect(screen.getAllByRole("option")).toHaveLength(40);
 });
 
