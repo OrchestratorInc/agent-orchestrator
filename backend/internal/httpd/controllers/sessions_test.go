@@ -76,6 +76,7 @@ type fakeSessionService struct {
 	orchestratorApproval       domain.PermissionMode
 	claimErr                   error
 	listPRErr                  error
+	linkedPRs                  []domain.ChangeRequestReference
 	workspaceErr               error
 	staged                     []ports.SpawnAttachment
 	stagedPaths                []string
@@ -566,6 +567,14 @@ func (f *fakeSessionService) ListPRSummaries(_ context.Context, id domain.Sessio
 		CreatedAt:      time.Date(2026, 6, 4, 9, 0, 0, 0, time.UTC),
 		UpdatedAt:      time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC),
 	}}, nil
+}
+
+func (f *fakeSessionService) ListPRListing(ctx context.Context, id domain.SessionID) (sessionsvc.PRListing, error) {
+	prs, err := f.ListPRSummaries(ctx, id)
+	if err != nil {
+		return sessionsvc.PRListing{}, err
+	}
+	return sessionsvc.PRListing{Tracked: prs, Linked: f.linkedPRs}, nil
 }
 
 func (f *fakeSessionService) ClaimPR(_ context.Context, id domain.SessionID, ref string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error) {
@@ -2641,6 +2650,7 @@ func TestSessionsAPI_ListWorkspaceFiles(t *testing.T) {
 			{Path: "README.md", Status: sessionsvc.WorkspaceFileModified, Additions: 2, Deletions: 1, Size: 48, Editable: true},
 			{Path: "notes.txt", PreviousPath: "old-notes.txt", Status: sessionsvc.WorkspaceFileRenamed, Additions: 1, Size: 11},
 		},
+		CommitsTruncated: true,
 	}
 	srv := newSessionTestServer(t, svc)
 
@@ -2663,9 +2673,10 @@ func TestSessionsAPI_ListWorkspaceFiles(t *testing.T) {
 			Size         int64  `json:"size"`
 			Editable     bool   `json:"editable"`
 		} `json:"files"`
+		CommitsTruncated bool `json:"commitsTruncated"`
 	}
 	mustJSON(t, body, &got)
-	if got.SessionID != "ao-1" || len(got.Files) != 2 {
+	if got.SessionID != "ao-1" || len(got.Files) != 2 || !got.CommitsTruncated {
 		t.Fatalf("response = %#v", got)
 	}
 	if got.CompareMode != "base" || got.CompareBaseSHA != "base-sha" || got.CompareBaseRef != "main" {
@@ -2693,6 +2704,7 @@ func TestSessionsAPI_ListPRFiles(t *testing.T) {
 			Author:  "Ada",
 			Files:   []sessionsvc.WorkspaceFileSummary{{Path: "README.md", Status: sessionsvc.WorkspaceFileModified, Additions: 1}},
 		}},
+		CommitsTruncated: true,
 	}
 	srv := newSessionTestServer(t, svc)
 	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/pr/42/files", "")
@@ -2708,6 +2720,9 @@ func TestSessionsAPI_ListPRFiles(t *testing.T) {
 	}
 	if len(got.Commits) != 1 || got.Commits[0].SHA != "abc123" || len(got.Commits[0].Files) != 1 || got.Commits[0].Files[0].Path != "README.md" {
 		t.Fatalf("commits = %+v, want abc123 changing README.md", got.Commits)
+	}
+	if !got.CommitsTruncated {
+		t.Fatal("commitsTruncated = false, want the service's truncated commit list flagged")
 	}
 }
 
@@ -3487,7 +3502,9 @@ type sessionBody struct {
 }
 
 func TestSessionsAPI_PRRoutes(t *testing.T) {
-	srv := newSessionTestServer(t, newFakeSessionService())
+	svc := newFakeSessionService()
+	svc.linkedPRs = []domain.ChangeRequestReference{{URL: "https://gitlab.com/release/notes/-/merge_requests/9", Provider: "gitlab", Host: "gitlab.com", Repository: "release/notes", Number: 9}}
+	srv := newSessionTestServer(t, svc)
 
 	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/pr", "")
 	if status != http.StatusOK {
@@ -3495,7 +3512,11 @@ func TestSessionsAPI_PRRoutes(t *testing.T) {
 	}
 	var listed struct {
 		SessionID string `json:"sessionId"`
-		PRs       []struct {
+		LinkedPRs []struct {
+			URL  string `json:"url"`
+			Repo string `json:"repo"`
+		} `json:"linkedPrs"`
+		PRs []struct {
 			URL            string `json:"url"`
 			Number         int    `json:"number"`
 			Title          string `json:"title"`
@@ -3539,6 +3560,9 @@ func TestSessionsAPI_PRRoutes(t *testing.T) {
 	mustJSON(t, body, &listed)
 	if listed.SessionID != "ao-1" || len(listed.PRs) != 1 || listed.PRs[0].State != "open" || listed.PRs[0].Title == "" {
 		t.Fatalf("GET shape = %#v", listed)
+	}
+	if len(listed.LinkedPRs) != 1 || listed.LinkedPRs[0].Repo != "release/notes" || listed.LinkedPRs[0].URL != svc.linkedPRs[0].URL {
+		t.Fatalf("linked PRs = %#v", listed.LinkedPRs)
 	}
 	if listed.PRs[0].StateChangedAt != "2026-06-04T11:30:00Z" {
 		t.Fatalf("stateChangedAt = %q, want backend-selected PR state time", listed.PRs[0].StateChangedAt)

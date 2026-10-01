@@ -608,6 +608,7 @@ describe("ShellTopbar inspector state", () => {
 	});
 
 	it("keeps the expanded worker controls out of the center topbar", () => {
+		useUiStore.setState({ inspectorSessions: { "sess-1": { isOpen: true, view: "summary" } } });
 		renderTopbarSessions([worker], "sess-1");
 
 		expect(screen.getByTestId("session-pinned-actions-reserve")).toHaveAttribute("data-state", "collapsed");

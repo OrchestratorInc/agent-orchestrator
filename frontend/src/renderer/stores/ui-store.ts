@@ -74,6 +74,9 @@ export type GlobalToast = {
 	body?: string;
 	tone?: "info" | "error";
 	placement?: "bottom-right" | "top-center";
+	dismissible?: boolean;
+	durationMs?: number;
+	dedupeKey?: string;
 	nonce: number;
 };
 
@@ -86,6 +89,8 @@ export type OnboardingFinishRequest = {
 	asWorkspace?: boolean;
 	nonce: number;
 };
+
+export type GlobalToastOptions = Pick<GlobalToast, "tone" | "placement" | "dismissible" | "durationMs" | "dedupeKey">;
 
 // Selection (which project/session is open) now lives in the URL — the router
 // is the single source of truth, read via route params. This store holds only
@@ -191,7 +196,7 @@ export type UiState = {
 	setProjectProvisioning: (projectId: string, provisioning: boolean) => void;
 	setOrchestratorReplacementError: (projectId: string, failure: OrchestratorReplacementFailure | null) => void;
 	setOrchestratorStartupError: (projectId: string, message: string | null) => void;
-	showGlobalToast: (title: string, body?: string, style?: GlobalToast["tone"] | GlobalToast["placement"]) => void;
+	showGlobalToast: (title: string, body?: string, style?: GlobalToast["tone"] | GlobalToast["placement"] | GlobalToastOptions) => void;
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
 	requestNewTask: (projectId: string) => void;
@@ -245,7 +250,13 @@ function syncDeveloperModeToUpdater(enabled: boolean): void {
 }
 
 function inspectorState(sessions: Record<string, InspectorSessionState>, sessionId: string): InspectorSessionState {
-	return sessions[sessionId] ?? { isOpen: true, view: "summary" };
+	return sessions[sessionId] ?? { isOpen: false, view: "summary" };
+}
+
+/** Opening a session keeps the inspector closed until the user (or a browser
+ *  reveal) opens it; read every open check through here so that default can't drift. */
+export function inspectorIsOpen(sessions: Record<string, InspectorSessionState>, sessionId: string): boolean {
+	return sessions[sessionId]?.isOpen ?? false;
 }
 
 export function sidebarIsVisible(state: Pick<UiState, "isSidebarOpen">): boolean {
@@ -502,10 +513,14 @@ export const useUiStore = create<UiState>((set, get) => ({
 	showGlobalToast: (title, body, style) =>
 		set((state) => {
 			const nonce = state.globalToastSequence + 1;
-			const tone = style === "error" || style === "info" ? style : "info";
-			const placement = style === "top-center" || style === "bottom-right" ? style : "bottom-right";
-			const toast = { title, body, tone, placement, nonce };
-			return { globalToast: toast, globalToasts: [...state.globalToasts, toast], globalToastSequence: nonce };
+			const options = typeof style === "object" ? style : undefined;
+			const tone = options?.tone ?? (style === "error" || style === "info" ? style : "info");
+			const placement = options?.placement ?? (style === "top-center" || style === "bottom-right" ? style : "bottom-right");
+			const toast = { title, body, tone, placement, nonce, ...options };
+			const globalToasts = toast.dedupeKey
+				? state.globalToasts.filter((existing) => existing.dedupeKey !== toast.dedupeKey)
+				: state.globalToasts;
+			return { globalToast: toast, globalToasts: [...globalToasts, toast], globalToastSequence: nonce };
 		}),
 	dismissGlobalToast: (nonce) =>
 		set((state) => ({

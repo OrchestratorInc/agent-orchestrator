@@ -4099,6 +4099,8 @@ export interface components {
         };
         ListPRFilesResponse: {
             commits: components["schemas"]["WorkspaceCommitSummary"][];
+            /** @description True when older commits were left out of commits: the list keeps the newest 250, and stops at the last commit whose changes fit the daemon's size cap. */
+            commitsTruncated?: boolean;
             files: components["schemas"]["WorkspaceFileSummary"][];
             sessionId: string;
             summary: components["schemas"]["WorkspaceSummary"];
@@ -4120,6 +4122,7 @@ export interface components {
             runs: components["schemas"]["ReviewRun"][];
         };
         ListSessionPRsResponse: {
+            linkedPrs: components["schemas"]["SessionPRReference"][];
             prs: components["schemas"]["SessionPRSummary"][];
             sessionId: string;
         };
@@ -4133,6 +4136,8 @@ export interface components {
             ahead?: null | number;
             behind?: null | number;
             commits: components["schemas"]["WorkspaceCommitSummary"][];
+            /** @description True when older commits were left out of commits: the list keeps the newest 250, and stops at the last commit whose changes fit the daemon's size cap. */
+            commitsTruncated?: boolean;
             compareBaseRef?: string;
             compareBaseSha?: string;
             /** @enum {string} */
@@ -4252,7 +4257,7 @@ export interface components {
             target: components["schemas"]["NotificationTarget"];
             title: string;
             /** @enum {string} */
-            type: "needs_input" | "ready_to_merge" | "pr_merged" | "pr_closed_unmerged";
+            type: "needs_input" | "ready_to_merge" | "pr_merged" | "pr_closed_unmerged" | "review_completed" | "review_changes_requested";
         };
         NotificationTarget: {
             /** @enum {string} */
@@ -4627,6 +4632,14 @@ export interface components {
             /** @enum {string} */
             state: "unknown" | "mergeable" | "conflicting" | "blocked" | "unstable";
         };
+        SessionPRReference: {
+            host: string;
+            number: number;
+            /** @enum {string} */
+            provider: "github" | "gitlab";
+            repo: string;
+            url: string;
+        };
         SessionPRReviewCommentLink: {
             autoInjectReview: boolean;
             body?: string;
@@ -4838,6 +4851,7 @@ export interface components {
             /** @enum {string} */
             defaultSessionMode: "chat" | "tui";
             localEnabled: boolean;
+            trackerIntakeEnabled: boolean;
         };
         ShellTerminalEnvelope: {
             shellTerminal: components["schemas"]["ShellTerminalResponse"];
