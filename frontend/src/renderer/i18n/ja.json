@@ -2299,6 +2299,8 @@
 	"remote.addHost": "ホストを追加",
 	"remote.loadHostsFailed": "保存済みホストを読み込めませんでした。",
 	"remote.hostOffline": "ホストはオフラインです。アドレスとパスワードを確認してください。",
+	"remote.hostIncompatible": "AO のバージョンに互換性がありません。このコンピューターとリモートホストの AO を更新してください。",
+	"remote.updateAO": "AO を更新",
 	"remote.hostUnauthorized": "ホストがパスワードを拒否しました。アドレスとパスワードを確認してください。",
 	"remote.hostNotDaemon": "このアドレスは AO ホストではありません。アドレスとパスワードを確認してください。",
 	"remote.addHostFailed": "ホストを追加できませんでした。",

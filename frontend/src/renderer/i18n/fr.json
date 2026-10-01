@@ -2329,6 +2329,8 @@
 	"remote.addHost": "Ajouter un hôte",
 	"remote.loadHostsFailed": "Impossible de charger les hôtes enregistrés.",
 	"remote.hostOffline": "L’hôte est hors ligne. Vérifiez son adresse et son mot de passe.",
+	"remote.hostIncompatible": "Les versions d’AO sont incompatibles. Mettez à jour AO sur cet ordinateur et sur l’hôte distant.",
+	"remote.updateAO": "Mettre AO à jour",
 	"remote.hostUnauthorized": "L’hôte a refusé le mot de passe. Vérifiez son adresse et son mot de passe.",
 	"remote.hostNotDaemon": "Cette adresse ne correspond pas à un hôte AO. Vérifiez son adresse et son mot de passe.",
 	"remote.addHostFailed": "Impossible d’ajouter l’hôte.",

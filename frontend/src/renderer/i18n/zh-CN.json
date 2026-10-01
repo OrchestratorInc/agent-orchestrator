@@ -2281,6 +2281,8 @@
 	"remote.addHost": "添加主机",
 	"remote.loadHostsFailed": "无法加载已保存的主机。",
 	"remote.hostOffline": "主机离线。请检查地址和密码。",
+	"remote.hostIncompatible": "AO 版本不兼容。请更新此电脑和远程主机上的 AO。",
+	"remote.updateAO": "更新 AO",
 	"remote.hostUnauthorized": "主机拒绝了密码。请检查地址和密码。",
 	"remote.hostNotDaemon": "此地址不是 AO 主机。请检查地址和密码。",
 	"remote.addHostFailed": "无法添加主机。",

@@ -2329,6 +2329,8 @@
 	"remote.addHost": "Añadir equipo",
 	"remote.loadHostsFailed": "No se pudieron cargar los equipos guardados.",
 	"remote.hostOffline": "El equipo está desconectado. Comprueba su dirección y contraseña.",
+	"remote.hostIncompatible": "Las versiones de AO no son compatibles. Actualiza AO en este equipo y en el host remoto.",
+	"remote.updateAO": "Actualizar AO",
 	"remote.hostUnauthorized": "El equipo rechazó la contraseña. Comprueba su dirección y contraseña.",
 	"remote.hostNotDaemon": "Esta dirección no corresponde a un equipo AO. Comprueba su dirección y contraseña.",
 	"remote.addHostFailed": "No se pudo añadir el equipo.",

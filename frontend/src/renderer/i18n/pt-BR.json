@@ -2329,6 +2329,8 @@
 	"remote.addHost": "Adicionar máquina",
 	"remote.loadHostsFailed": "Não foi possível carregar as máquinas salvas.",
 	"remote.hostOffline": "A máquina está offline. Confira o endereço e a senha.",
+	"remote.hostIncompatible": "As versões do AO são incompatíveis. Atualize o AO neste computador e no host remoto.",
+	"remote.updateAO": "Atualizar AO",
 	"remote.hostUnauthorized": "A máquina rejeitou a senha. Confira o endereço e a senha.",
 	"remote.hostNotDaemon": "Este endereço não pertence a uma máquina AO. Confira o endereço e a senha.",
 	"remote.addHostFailed": "Não foi possível adicionar a máquina.",
