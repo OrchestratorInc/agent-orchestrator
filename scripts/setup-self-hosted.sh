@@ -28,13 +28,42 @@ fi
 host_root="${AO_HOST_INSTALL_DIR:-$HOME/.ao/host}"
 umask 077
 mkdir -p "$host_root/releases"
+command -v python3 >/dev/null || { printf '%s\n' 'python3 is required for host setup.' >&2; exit 1; }
+
+# Python locks Bash's inherited fd; the lock remains while Bash holds fd 9 and
+# the kernel releases it after SIGKILL. This also works when piped to bash.
+lock_path="$host_root/.install.lock"
+if [[ -d "$lock_path" ]]; then
+	printf 'Legacy install lock directory at %s; confirm no older setup is running before removing it.\n' "$lock_path" >&2
+	exit 1
+fi
+exec 9>> "$lock_path"
+lock_state="$(python3 -c '
+import fcntl, os, stat, sys
+path = sys.argv[1]
+opened = os.fstat(9)
+named = os.lstat(path)
+if not stat.S_ISREG(opened.st_mode) or not stat.S_ISREG(named.st_mode) or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino) or opened.st_uid != os.geteuid() or opened.st_mode & 0o077:
+    print("unsafe")
+else:
+    try:
+        fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("held")
+    else:
+        print("ready")
+' "$lock_path")"
+case "$lock_state" in
+	ready) ;;
+	held) printf 'Install lock is held at %s/.install.lock; another setup is running.\n' "$host_root" >&2; exit 1 ;;
+	unsafe) printf 'Install lock at %s/.install.lock is not a private file owned by this user.\n' "$host_root" >&2; exit 1 ;;
+	*) printf 'Cannot acquire install lock: %s\n' "$lock_state" >&2; exit 1 ;;
+esac
+
 stage="$(mktemp -d "$host_root/.setup.XXXXXX")"
-lock_owned=false
 cleanup() {
-	if "$lock_owned"; then
-		rmdir "$lock_dir" 2>/dev/null || true
-	fi
 	rm -rf "$stage"
+	exec 9>&-
 }
 trap cleanup EXIT
 
@@ -50,7 +79,6 @@ case "$platform:$arch" in
 	fi ;;
 	*) printf 'Unsupported host platform: %s/%s\n' "$platform" "$arch" >&2; exit 1 ;;
 esac
-command -v python3 >/dev/null || { printf '%s\n' 'python3 is required for host setup.' >&2; exit 1; }
 command -v git >/dev/null || { printf '%s\n' 'git is required for AO projects and worktrees.' >&2; exit 1; }
 
 if [[ -n "$bundle" ]]; then
@@ -125,17 +153,6 @@ done
 	exit 1
 }
 "$node" --version >/dev/null
-
-lock_dir="$host_root/.install.lock"
-if ! mkdir "$lock_dir" 2>/dev/null; then
-	if [[ -d "$lock_dir" ]]; then
-		printf 'Install lock exists at %s; another setup may be running. If stale, remove it after confirming no setup is running.\n' "$lock_dir" >&2
-	else
-		printf 'Cannot create install lock at %s.\n' "$lock_dir" >&2
-	fi
-	exit 1
-fi
-lock_owned=true
 
 # Do not attach a second service to a daemon owned by another AO installation.
 status="$("$ao" status --json)"

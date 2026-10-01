@@ -129,17 +129,61 @@ case "${1:-}" in
 		env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" \
 			/bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/second.out" 2>&1 || second_status=$?
 		lock_held=false
-		[[ -d "$tmp/host/.install.lock" ]] && lock_held=true
+		[[ -f "$tmp/host/.install.lock" ]] && lock_held=true
 		: > "$block.go"
 		wait "$first_pid"
 		"$lock_held" || { printf '%s\n' 'second installer removed the first installer lock' >&2; exit 1; }
-		[[ ! -e "$tmp/host/.install.lock" ]] || { printf '%s\n' 'install lock was not cleaned up' >&2; exit 1; }
 		[[ "$second_status" -ne 0 ]] || { printf '%s\n' 'concurrent installer was accepted' >&2; exit 1; }
-		grep -q 'Install lock exists' "$tmp/second.out" || { cat "$tmp/second.out" >&2; exit 1; }
+		grep -q 'Install lock is held' "$tmp/second.out" || { cat "$tmp/second.out" >&2; exit 1; }
 		[[ -d "$(readlink "$tmp/host/current")" ]]
 		releases=("$tmp/host/releases"/*)
 		[[ ${#releases[@]} -eq 1 ]]
 		;;
-	*) printf 'Usage: %s {bad-tmux|no-systemd|inactive-systemd|prune|failed-restarts|relative-current|concurrent}\n' "$0" >&2; exit 2 ;;
+	interrupted)
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" /bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/first.out" 2>&1
+		original="$(readlink "$tmp/host/current")"
+		mkdir -p "$tmp/user-data"
+		printf '%s\n' 'keep me' > "$tmp/user-data/keep.txt"
+		block="$tmp/block"
+		env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" TEST_AO_BLOCK_FILE="$block" \
+			/bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/interrupted.out" 2>&1 &
+		installer_pid=$!
+		for attempt in {1..100}; do
+			[[ -e "$block.ready" ]] && break
+			/bin/sleep 0.05
+		done
+		if [[ ! -e "$block.ready" ]]; then
+			: > "$block.go"
+			wait "$installer_pid" || true
+			cat "$tmp/interrupted.out" >&2
+			printf '%s\n' 'installer did not reach locked status' >&2; exit 1
+		fi
+		kill -KILL "$installer_pid"
+		wait "$installer_pid" 2>/dev/null || true
+		blocked_status=0
+		env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" /bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/blocked-retry.out" 2>&1 || blocked_status=$?
+		[[ "$blocked_status" -ne 0 ]] || { printf '%s\n' 'retry entered while the interrupted installer child was active' >&2; exit 1; }
+		grep -q 'Install lock is held' "$tmp/blocked-retry.out" || { cat "$tmp/blocked-retry.out" >&2; exit 1; }
+		: > "$block.go"
+		recovered=false
+		for attempt in {1..100}; do
+			if env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" /bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/retry.out" 2>&1; then
+				recovered=true
+				break
+			fi
+			/bin/sleep 0.05
+		done
+		"$recovered" || { cat "$tmp/retry.out" >&2; exit 1; }
+		[[ -f "$tmp/host/.install.lock" && -d "$original" && -d "$(readlink "$tmp/host/current")" ]]
+		[[ "$(cat "$tmp/user-data/keep.txt")" == 'keep me' ]]
+		;;
+	piped)
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		/bin/cat "$script" | env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" \
+			/bin/bash -s -- --bundle "$bundle" --install-only > "$tmp/out" 2>&1
+		[[ -d "$(readlink "$tmp/host/current")" ]]
+		;;
+	*) printf 'Usage: %s {bad-tmux|no-systemd|inactive-systemd|prune|failed-restarts|relative-current|concurrent|interrupted|piped}\n' "$0" >&2; exit 2 ;;
 esac
 printf 'PASS %s\n' "$1"
