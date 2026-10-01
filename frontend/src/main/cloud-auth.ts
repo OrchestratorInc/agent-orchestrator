@@ -36,15 +36,25 @@ const DEFAULT_WORKOS_CLIENT_ID = "client_01KZ3VRKC374HS91XGRDPT3671";
 const CLIENT_ID =
   import.meta.env.VITE_WORKOS_CLIENT_ID?.trim() ||
   (process.env.VITEST ? "client_test" : DEFAULT_WORKOS_CLIENT_ID);
-// The packaged app receives the WorkOS callback through the ao-app:// deep link.
-// A development build cannot: macOS routes ao-app:// to the installed app, not
-// the unpackaged Electron binary. Dev builds therefore default to a loopback
-// callback server (the standard desktop OAuth pattern) so sign-in works with
-// zero setup; AO_CLOUD_AUTH_REDIRECT overrides either default.
+// The packaged app receives the WorkOS callback through the ao-app:// deep link,
+// but WorkOS redirects to the control plane's HTTPS landing page first. A
+// redirect straight to ao-app:// hands the URL to the OS without the browser
+// committing a page, leaving the tab frozen on the provider's last screen; the
+// landing page gives the tab a real page and then forwards to ao-app://.
+// A development build cannot use the deep link: macOS routes ao-app:// to the
+// installed app, not the unpackaged Electron binary. Dev builds therefore
+// default to a loopback callback server (the standard desktop OAuth pattern) so
+// sign-in works with zero setup; AO_CLOUD_AUTH_REDIRECT overrides either default.
+const DEFAULT_CLOUD_CONTROL_PLANE_URL = "https://api.aoagents.dev";
+const CLOUD_CONTROL_PLANE_URL = (
+  process.env.AO_CLOUD_CONTROL_PLANE_URL?.trim() || DEFAULT_CLOUD_CONTROL_PLANE_URL
+).replace(/\/+$/, "");
 const REDIRECT_URI =
   process.env.AO_CLOUD_AUTH_REDIRECT?.trim() ||
-  (app.isPackaged ? "ao-app://callback" : "http://127.0.0.1:3000/callback");
-const useLoopbackRedirect = /^https?:\/\//i.test(REDIRECT_URI);
+  (app.isPackaged
+    ? `${CLOUD_CONTROL_PLANE_URL}/api/cloud/v1/auth/desktop/callback`
+    : "http://127.0.0.1:3000/callback");
+const useLoopbackRedirect = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(REDIRECT_URI);
 const AUTH_STORE_FILE = "cloud-auth.bin";
 const LEGACY_SESSION_FILE = "cloud-session.json";
 const PKCE_TTL_MS = 10 * 60 * 1000;
