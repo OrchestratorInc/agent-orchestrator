@@ -1523,6 +1523,7 @@ describe("SessionInspector Activity section", () => {
       targets: [],
       preferredEditorId: "cursor",
       workspaceAvailable: false,
+      unavailableCode: "SESSION_WORKSPACE_NOT_FOUND",
       unavailableReason: "Session workspace is not available.",
     });
 
@@ -1538,6 +1539,7 @@ describe("SessionInspector Activity section", () => {
     await waitFor(() =>
       expect(queryClient.getQueryData(editorHandoffQueryKey("sess-1"))).toMatchObject({
         workspaceAvailable: false,
+        unavailableCode: "SESSION_WORKSPACE_NOT_FOUND",
       }),
     );
     expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
@@ -1548,10 +1550,11 @@ describe("SessionInspector Activity section", () => {
       targets: [],
       preferredEditorId: "cursor",
       workspaceAvailable: false,
+      unavailableCode: "SESSION_WORKSPACE_NOT_FOUND",
       unavailableReason: "Session workspace is not available.",
     });
 
-    renderWithQuery(
+    const { queryClient } = renderWithQuery(
       <SessionInspector
         session={session([], {
           status: "exited",
@@ -1561,7 +1564,13 @@ describe("SessionInspector Activity section", () => {
       />,
     );
 
-    expect(await activitySection().findByRole("button", { name: "Resume agent" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(queryClient.getQueryData(editorHandoffQueryKey("sess-1"))).toMatchObject({
+        workspaceAvailable: false,
+        unavailableCode: "SESSION_WORKSPACE_NOT_FOUND",
+      }),
+    );
+    expect(activitySection().getByRole("button", { name: "Resume agent" })).toBeInTheDocument();
   });
 
   it("does not offer agent resume while an agent switch owns the exited source", () => {

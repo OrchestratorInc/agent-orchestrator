@@ -274,6 +274,7 @@ function renderPane(
 	terminalTarget?: TerminalTarget,
 	onTerminalContentReadyChange?: (ready: boolean) => void,
 	workspaceAvailable = true,
+	unavailableCode?: string,
 ) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	if (!window.ao) throw new Error("AO bridge is required to render the terminal pane");
@@ -283,6 +284,7 @@ function renderPane(
 			targets: [],
 			preferredEditorId: "cursor",
 			workspaceAvailable,
+			...(unavailableCode ? { unavailableCode } : {}),
 		});
 	const result = render(
 		<QueryClientProvider client={queryClient}>
@@ -1178,7 +1180,7 @@ describe("terminal restore", () => {
 
 		it("does not offer resume when the session worktree is unavailable", async () => {
 			terminalState.value = "exited";
-			const view = renderPane({ ...worker, ...exited }, undefined, undefined, undefined, false);
+			const view = renderPane({ ...worker, ...exited }, undefined, undefined, undefined, false, "SESSION_WORKSPACE_NOT_FOUND");
 			try {
 				await waitFor(() =>
 					expect(view.queryClient.getQueryData(editorHandoffQueryKey(worker.id))).toMatchObject({
@@ -1186,6 +1188,21 @@ describe("terminal restore", () => {
 					}),
 				);
 				expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+			} finally {
+				view.restore();
+			}
+		});
+
+		it("keeps Resume available when the workspace probe has no definitive code", async () => {
+			terminalState.value = "exited";
+			const view = renderPane({ ...worker, ...exited }, undefined, undefined, undefined, false);
+			try {
+				await waitFor(() =>
+					expect(view.queryClient.getQueryData(editorHandoffQueryKey(worker.id))).toMatchObject({
+						workspaceAvailable: false,
+					}),
+				);
+				expect(await screen.findByRole("button", { name: "Resume agent" })).toBeInTheDocument();
 			} finally {
 				view.restore();
 			}
