@@ -1,4 +1,5 @@
 {
+	"accountsManager.controls.noAlternatives": "사용 가능한 다른 활성 계정이 없습니다",
 	"accountsManager.controls.failureCode": "오류 코드: {{code}}",
 	"switchAgent.accountAction": "계정 전환",
 	"switchAgent.backToAgent": "에이전트로 돌아가기",

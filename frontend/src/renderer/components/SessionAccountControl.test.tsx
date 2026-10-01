@@ -4,17 +4,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionAccountControl } from "./SessionAccountControl";
 import userEvent from "@testing-library/user-event";
 
-const api = vi.hoisted(() => ({ GET: vi.fn(), POST: vi.fn() }));
+const api = vi.hoisted(() => ({ GET: vi.fn(), POST: vi.fn(), inventory: vi.fn() }));
 vi.mock("../lib/api-client", () => ({ apiClient: api }));
 vi.mock("../hooks/useAccountsManagerQuery", () => ({
-  useAccountsManagerQuery: () => ({ data: {
+  useAccountsManagerQuery: () => api.inventory(),
+}));
+
+const inventory = { data: {
     revision: 9, availability: "ready", stale: false,
     accounts: [
       { id: "account-a", provider: "codex", label: "Personal", status: "active", verification: "verified", disabled: false, unavailable: false },
       { id: "account-b", provider: "codex", label: "Work", status: "active", verification: "verified", disabled: false, unavailable: false },
     ],
-  } }),
-}));
+  } };
 
 const binding = { sessionId: "session-a", provider: "codex", mode: "managed", accountId: "account-a", revision: 7, blocked: false };
 const operation = { id: "switch-a", sessionId: "session-a", provider: "codex", sourceMode: "managed", sourceAccountId: "account-a", sourceRevision: 7, targetMode: "managed", targetAccountId: "account-b", targetRevision: 0, policy: "drain", phase: "waiting", newConversation: false, recoveryRequired: false, createdAt: "2026-09-28T00:00:00Z", updatedAt: "2026-09-28T00:00:00Z" };
@@ -42,8 +44,95 @@ function show() {
 describe("SessionAccountControl", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    api.inventory.mockReturnValue(inventory);
     localStorage.clear();
     mockState(binding);
+  });
+
+  it("hides the managed current target and retains native credentials as an alternate", async () => {
+    api.inventory.mockReturnValue({ data: { ...inventory.data, accounts: inventory.data.accounts.slice(0, 1) } });
+    show();
+    await userEvent.click(await screen.findByRole("button", { name: "Target account" }));
+    expect(screen.queryByRole("menuitem", { name: /Personal/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Use native credentials" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Use native credentials" }));
+    await chooseMenu("Switch timing", "Wait for the current turn");
+    expect(screen.getByRole("button", { name: "Request account switch" })).toBeEnabled();
+    expect(screen.queryByText("No other active accounts available")).not.toBeInTheDocument();
+    expect(api.POST).not.toHaveBeenCalled();
+  });
+
+  it("keeps native available for a managed current target when the inventory is unavailable", async () => {
+    api.inventory.mockReturnValue({ data: { ...inventory.data, availability: "unavailable", stale: true }, isError: true });
+    show();
+    await chooseMenu("Target account", "Use native credentials");
+    await chooseMenu("Switch timing", "Wait for the current turn");
+    expect(screen.getByRole("button", { name: "Request account switch" })).toBeEnabled();
+    expect(screen.queryByText("No other active accounts available")).not.toBeInTheDocument();
+  });
+
+  it("hides the native current target and offers eligible managed accounts", async () => {
+    mockState({ ...binding, mode: "native", accountId: "" });
+    show();
+    await userEvent.click(await screen.findByRole("button", { name: "Target account" }));
+    expect(screen.queryByRole("menuitem", { name: "Use native credentials" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Personal/ })).toBeEnabled();
+    expect(screen.queryByText("No other active accounts available")).not.toBeInTheDocument();
+  });
+
+  it.each(["empty", "disabled", "unverified", "unavailable", "inactive", "other provider"])("shows a neutral empty state for native current with %s managed alternatives", async reason => {
+    const account = { ...inventory.data.accounts[0] };
+    if (reason === "disabled") account.disabled = true;
+    if (reason === "unverified") account.verification = "unverified";
+    if (reason === "unavailable") account.unavailable = true;
+    if (reason === "inactive") account.status = "inactive";
+    if (reason === "other provider") account.provider = "other";
+    api.inventory.mockReturnValue({ data: { ...inventory.data, accounts: reason === "empty" ? [] : [account] } });
+    mockState({ ...binding, mode: "native", accountId: "" });
+    show();
+    expect(await screen.findByText("No other active accounts available")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Target account" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Request account switch" })).toBeDisabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(api.POST).not.toHaveBeenCalled();
+  });
+
+  it.each(["managed", "native"])("clears a %s selection that becomes current after refresh", async mode => {
+    show();
+    await chooseMenu("Target account", mode === "native" ? "Use native credentials" : /^Work \(account-b\)/);
+    await chooseMenu("Switch timing", "Wait for the current turn");
+    expect(screen.getByRole("button", { name: "Request account switch" })).toBeEnabled();
+    mockState({ ...binding, mode, accountId: mode === "native" ? "" : "account-b", revision: 8 });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh account state" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Target account" })).toHaveTextContent("Choose explicitly"));
+    expect(screen.getByRole("button", { name: "Request account switch" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Request account switch" }));
+    expect(api.POST).not.toHaveBeenCalled();
+  });
+
+  it("never resends a saved request whose target is now current", async () => {
+    localStorage.setItem("ao:account-switch:session-a", JSON.stringify({ operationId: "saved-current", expectedRevision: 6, mode: "managed", accountId: "account-a", policy: "drain", newConversation: false }));
+    show();
+    const resend = await screen.findByRole("button", { name: "Resend same switch request" });
+    expect(resend).toBeDisabled();
+    fireEvent.click(resend);
+    expect(api.POST).not.toHaveBeenCalled();
+  });
+
+  it("settles a ready no-op response without polling its nonexistent journal", async () => {
+    api.POST.mockImplementation(async (_path, input) => {
+      mockState({ ...binding, accountId: "account-b", revision: 8 });
+      return success({ ...operation, id: input.body.operationId, sourceAccountId: "account-b", sourceRevision: 8, targetRevision: 8, phase: "ready" });
+    });
+    show();
+    await chooseMenu("Target account", /^Work \(account-b\)/);
+    await chooseMenu("Switch timing", "Wait for the current turn");
+    fireEvent.click(screen.getByRole("button", { name: "Request account switch" }));
+    await waitFor(() => expect(api.POST).toHaveBeenCalledOnce());
+    await waitFor(() => expect(localStorage.getItem("ao:account-switch:session-a")).toBeNull());
+    expect(api.GET.mock.calls.filter(([path]) => path.endsWith("/{operationId}"))).toEqual([]);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Request account switch" })).toBeDisabled();
   });
 
   it("uses keyboard menus for account and timing without submitting on selection", async () => {

@@ -10,6 +10,21 @@ const success = (data: unknown) => ({ data, response: new Response(null, { statu
 describe("account control HTTP boundary", () => {
   beforeEach(() => { vi.resetAllMocks(); localStorage.clear(); });
 
+  it("accepts an authoritative ready no-op revision without requiring the stale request revision", async () => {
+    const ready = { ...operation, sourceMode: "managed", sourceAccountId: "account-a", sourceRevision: 8, targetRevision: 8, phase: "ready" };
+    api.POST.mockResolvedValue(success(ready));
+    expect(await startSessionAccountSwitch("session-a", { operationId: "switch-a", expectedRevision: 7, mode: "managed", accountId: "account-a", policy: "drain" })).toEqual(ready);
+  });
+
+  it.each([
+    { phase: "waiting" }, { sourceAccountId: "other" }, { sourceRevision: 6 },
+    { targetAccountId: "other" }, { policy: "interrupt" }, { newConversation: true },
+    { sessionId: "other" }, { id: "other" }, { recoveryRequired: true },
+  ])("rejects changed no-op response intent %j", async change => {
+    api.POST.mockResolvedValue(success({ ...operation, sourceMode: "managed", sourceAccountId: "account-a", sourceRevision: 8, targetRevision: 8, phase: "ready", ...change }));
+    await expect(startSessionAccountSwitch("session-a", { operationId: "switch-a", expectedRevision: 7, mode: "managed", accountId: "account-a", policy: "drain" })).rejects.toMatchObject({ status: 502 });
+  });
+
   it.each(["true", 1, null, {}, []])("rejects malformed retry capability %j", async canRetry => {
     api.GET.mockResolvedValue(success({ ...operation, canRetry }));
     await expect(fetchSessionAccountSwitch("session-a", "switch-a")).rejects.toMatchObject({ status: 502 });

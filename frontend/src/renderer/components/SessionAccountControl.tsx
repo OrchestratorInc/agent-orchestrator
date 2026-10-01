@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAccountsManagerQuery } from "../hooks/useAccountsManagerQuery";
 import {
-  AccountControlError, accountControlMessage, accountSwitchIsActive, changeSessionAccountSwitch,
+  AccountControlError, accountControlMessage, accountSwitchIsActive, accountSwitchIsNoop, changeSessionAccountSwitch,
   fetchSessionAccountControl, fetchSessionAccountSwitch, readSessionSwitchIntent, saveSessionSwitchIntent, startSessionAccountSwitch,
   type AccountSwitch, type AccountSwitchRequest,
 } from "../lib/accounts-manager-controls";
@@ -47,7 +47,13 @@ function SessionAccountPanel({ sessionId, compact = false, onSwitchLockChange }:
     onMutate: async (request) => {
       await client.cancelQueries({ queryKey: operationKey(request.operationId) });
     },
-    onSuccess: (result) => client.setQueryData(operationKey(result.id), result),
+    onSuccess: (result) => {
+      client.setQueryData(operationKey(result.id), result);
+      if (accountSwitchIsNoop(result)) {
+        try { saveSessionSwitchIntent(sessionId); setSubmitted(undefined); setTarget(""); }
+        catch { setLocalError(t("accountsManager.controls.switchSavedError")); }
+      }
+    },
     onError: (error, request) => {
       if (!("action" in request) && error instanceof AccountControlError && [400, 409].includes(error.status)) {
         try { saveSessionSwitchIntent(sessionId); setSubmitted(undefined); }
@@ -60,6 +66,10 @@ function SessionAccountPanel({ sessionId, compact = false, onSwitchLockChange }:
     },
   });
   const binding = current.data;
+  const currentTarget = binding?.mode === "native" ? "native" : binding?.mode === "managed" ? `managed:${binding.accountId}` : "";
+  const targetIsCurrent = Boolean(target && target === currentTarget);
+  const submittedIsCurrent = Boolean(submitted && (submitted.mode === "native" ? "native" : `managed:${submitted.accountId}`) === currentTarget);
+  useEffect(() => { if (targetIsCurrent) setTarget(""); }, [targetIsCurrent]);
   const trackedId = submitted?.operationId ?? binding?.switch?.id;
   const observed = useQuery({
     queryKey: operationKey(trackedId),
@@ -98,10 +108,13 @@ function SessionAccountPanel({ sessionId, compact = false, onSwitchLockChange }:
       ? `${account.label} (${account.email})` : account.email;
     return account?.label || id;
   };
-  const usage = useAccountUsage(accounts);
+  const alternatives = accounts.filter(account => `managed:${account.id}` !== currentTarget);
+  const usage = useAccountUsage(alternatives);
   const inventoryReady = inventory.data?.availability === "ready" && !inventory.data.stale && !inventory.isError;
-  const selected = target.startsWith("managed:") ? accounts.find(account => account.id === target.slice(8)) : undefined;
-  const selectedReady = target === "native" || (inventoryReady && selected && selected.verification === "verified" && !selected.disabled && !selected.unavailable && selected.status === "active");
+  const eligible = (account: (typeof accounts)[number]) => account.verification === "verified" && !account.disabled && !account.unavailable && account.status === "active";
+  const noAlternatives = binding?.mode === "native" && inventoryReady && !alternatives.some(eligible);
+  const selected = target.startsWith("managed:") ? alternatives.find(account => account.id === target.slice(8)) : undefined;
+  const selectedReady = !targetIsCurrent && (target === "native" || (inventoryReady && selected && eligible(selected)));
   const request = () => {
     if (!binding || busy || unavailable || active || serverActive || unconfirmed || pendingCommit || localError || binding.blocked || !selectedReady || !policy || inFlight.current) return;
     const body: AccountSwitchRequest = {
@@ -146,8 +159,8 @@ function SessionAccountPanel({ sessionId, compact = false, onSwitchLockChange }:
         <p className="break-all">{t("accountsManager.controls.unknownId", { id: submitted!.operationId })}</p>
         <p>{t("accountsManager.controls.unknownRequest")}</p>
         <Button size="sm" disabled={busy || observed.isFetching || unavailable} onClick={() => void observed.refetch()}>{t("accountsManager.controls.checkSwitch")}</Button>
-        {observed.error instanceof AccountControlError && observed.error.status === 404 ? <Button size="sm" variant="outline" disabled={busy || unavailable} onClick={() => {
-          if (inFlight.current) return;
+        {observed.error instanceof AccountControlError && observed.error.status === 404 ? <Button size="sm" variant="outline" disabled={busy || unavailable || submittedIsCurrent} onClick={() => {
+          if (inFlight.current || submittedIsCurrent) return;
           inFlight.current = true;
           mutation.mutate(submitted!);
         }}>{t("accountsManager.controls.resendSwitch")}</Button> : null}
@@ -183,18 +196,19 @@ function SessionAccountPanel({ sessionId, compact = false, onSwitchLockChange }:
               triggerClassName="w-full justify-between"
               menuClassName="min-w-64 max-w-[calc(100vw-2rem)]"
               menuAlign="start"
-              value={target}
-              disabled={controlsDisabled}
+              value={targetIsCurrent ? "" : target}
+              disabled={controlsDisabled || noAlternatives}
               placeholder={t("accountsManager.controls.choose")}
-              onChange={value => { if (!controlsDisabled) setTarget(value); }}
+              onChange={value => { if (!controlsDisabled && value !== currentTarget) setTarget(value); }}
               options={[
-                { value: "native", label: t("accountsManager.controls.chooseNative"), disabled: controlsDisabled },
-                ...accounts.map((account,index) => ({ value: `managed:${account.id}`, disabled: controlsDisabled || !inventoryReady || account.verification !== "verified" || account.disabled || account.unavailable || account.status !== "active", label: compact
+                ...(binding.mode !== "native" ? [{ value: "native", label: t("accountsManager.controls.chooseNative"), disabled: controlsDisabled }] : []),
+                ...alternatives.map((account,index) => ({ value: `managed:${account.id}`, disabled: controlsDisabled || !inventoryReady || !eligible(account), label: compact
                 ? `${identity(account.id)}${account.quotaSupported && usage[index] ? ` | ${accountUsageSummary(account, usage[index], t, i18n.resolvedLanguage)}` : ""}`
                 : `${account.label || account.id} (${account.id}) | ${accountUsageSummary(account, usage[index], t, i18n.resolvedLanguage)}` })),
               ]}
             />
           </div>
+          {noAlternatives ? <p role="status" className="text-xs text-muted-foreground">{t("accountsManager.controls.noAlternatives")}</p> : null}
           {!inventoryReady ? <p>{t("accountsManager.controls.inventoryUnavailable")}</p> : null}
           {selected && !compact ? <AccountUsage key={`${selected.id}:${selected.generation}`} account={selected} /> : null}
           <div className="space-y-1">

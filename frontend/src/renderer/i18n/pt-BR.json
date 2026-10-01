@@ -1,4 +1,5 @@
 {
+	"accountsManager.controls.noAlternatives": "Nenhuma outra conta ativa disponível",
 	"accountsManager.controls.failureCode": "Código de erro: {{code}}",
 	"switchAgent.accountAction": "Trocar conta",
 	"switchAgent.backToAgent": "Voltar ao agente",

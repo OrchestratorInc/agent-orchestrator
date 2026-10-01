@@ -113,6 +113,11 @@ export function accountSwitchIsActive(operation?: AccountSwitch): boolean {
   return Boolean(operation && !terminalPhases.has(operation.phase));
 }
 
+export function accountSwitchIsNoop(operation: AccountSwitch): boolean {
+  return operation.phase === "ready" && !operation.recoveryRequired && operation.sourceRevision === operation.targetRevision
+    && operation.sourceMode === operation.targetMode && (operation.sourceAccountId ?? "") === (operation.targetAccountId ?? "");
+}
+
 function ownSwitch(operation: AccountSwitch, sessionId: string, operationId?: string): AccountSwitch {
   if (!operation || operation.sessionId !== sessionId || !validID(operation.id) || (operationId && operation.id !== operationId)
     || !validID(operation.provider) || !switchPhases.has(operation.phase) || !["drain", "interrupt"].includes(operation.policy)
@@ -139,7 +144,7 @@ export async function startSessionAccountSwitch(sessionId: string, body: Account
     throw new AccountControlError(400);
   }
   const operation = ownSwitch(observed(await apiClient.POST("/api/v1/sessions/{sessionId}/account-switches", { params: { path: { sessionId } }, body })), sessionId, body.operationId);
-  if (operation.targetMode !== body.mode || (operation.targetAccountId ?? "") !== (body.accountId ?? "") || operation.sourceRevision !== body.expectedRevision || operation.policy !== body.policy || operation.newConversation !== Boolean(body.newConversation)) {
+  if (operation.targetMode !== body.mode || (operation.targetAccountId ?? "") !== (body.accountId ?? "") || (!accountSwitchIsNoop(operation) && operation.sourceRevision !== body.expectedRevision) || operation.policy !== body.policy || operation.newConversation !== Boolean(body.newConversation)) {
     throw new AccountControlError(502);
   }
   return operation;

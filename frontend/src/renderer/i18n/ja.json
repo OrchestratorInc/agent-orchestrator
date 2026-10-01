@@ -1,4 +1,5 @@
 {
+	"accountsManager.controls.noAlternatives": "他に利用可能なアクティブなアカウントはありません",
 	"accountsManager.controls.failureCode": "エラーコード: {{code}}",
 	"switchAgent.accountAction": "アカウントを切り替え",
 	"switchAgent.backToAgent": "エージェントに戻る",
