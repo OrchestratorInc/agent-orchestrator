@@ -176,7 +176,8 @@ if [[ -e "$host_root/current" && ! -L "$host_root/current" ]]; then
 	printf 'Refusing to replace non-symlink: %s/current\n' "$host_root" >&2
 	exit 1
 fi
-previous_release="$(readlink "$host_root/current" 2>/dev/null || true)"
+previous_target="$(readlink "$host_root/current" 2>/dev/null || true)"
+previous_release="$previous_target"
 prune_allowed=true
 if [[ "$previous_release" == releases/* && "${previous_release#releases/}" =~ ^[0-9]{14}-[0-9]+$ ]]; then
 	previous_release="$host_root/$previous_release"
@@ -195,7 +196,6 @@ fi
 release="$host_root/releases/$(date +%Y%m%d%H%M%S)-$$"
 mkdir -p "$release/resources"
 cp -R "$resources/daemon" "$resources/acp-runtime" "$resources/tmux" "$release/resources/"
-ln -sfn "$release" "$host_root/current"
 prune_old_releases() {
 	[[ "$prune_allowed" == true ]] || return 0
 	for old in "$host_root"/releases/*; do
@@ -207,6 +207,7 @@ prune_old_releases() {
 printf 'Installed AO host at %s\n' "$release"
 
 if "$install_only"; then
+	ln -sfn "$release" "$host_root/current"
 	prune_old_releases
 	printf 'Start with: %s/resources/daemon/ao daemon\n' "$host_root/current"
 	exit 0
@@ -214,7 +215,7 @@ fi
 
 # A daemon launched by a service must see the same harness tools as this shell.
 runner="$host_root/run-daemon.sh"
-service_path="$HOME/.local/bin:$HOME/.ao/bin:$PATH"
+service_path="$HOME/.local/bin:$HOME/.ao/bin:$host_root/current/resources/acp-runtime/node/bin:$PATH"
 printf '#!/usr/bin/env bash\nexport PATH=%q\n' "$service_path" > "$runner"
 for name in AO_DATA_DIR AO_RUN_FILE AO_PORT; do
 	if [[ -n "${!name-}" ]]; then
@@ -235,7 +236,25 @@ if [[ "$platform" == Linux ]]; then
 		"$escaped_runner" > "$unit_dir/ao-self-hosted.service"
 	systemctl --user daemon-reload
 	systemctl --user enable ao-self-hosted.service
-	systemctl --user restart ao-self-hosted.service
+	restore_previous_service() {
+		if [[ -z "$previous_target" ]]; then
+			if ! systemctl --user disable --now ao-self-hosted.service; then
+				printf '%s\n' 'Could not stop and disable the failed AO service.' >&2
+			fi
+			rm -- "$host_root/current"
+			return
+		fi
+		ln -sfn "$previous_target" "$host_root/current"
+		if ! systemctl --user restart ao-self-hosted.service; then
+			printf 'Previous AO release restored at %s/current, but its service did not restart.\n' "$host_root" >&2
+		fi
+	}
+	ln -sfn "$release" "$host_root/current"
+	if ! systemctl --user restart ao-self-hosted.service; then
+		restore_previous_service
+		printf '%s\n' 'AO service restart failed; inspect the service logs.' >&2
+		exit 1
+	fi
 	if command -v loginctl >/dev/null && [[ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || true)" != yes ]]; then
 		printf 'To keep AO running after logout: sudo loginctl enable-linger %s\n' "$(id -un)" >&2
 	fi
@@ -255,8 +274,24 @@ data = {
 with open(os.environ['AO_HOST_PLIST'], 'wb') as f:
     plistlib.dump(data, f)
 PY
+	restore_previous_launch_agent() {
+		launchctl bootout "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
+		if [[ -z "$previous_target" ]]; then
+			rm -- "$host_root/current" "$plist"
+			return
+		fi
+		ln -sfn "$previous_target" "$host_root/current"
+		if ! launchctl bootstrap "gui/$(id -u)" "$plist"; then
+			printf 'Previous AO release restored at %s/current, but its LaunchAgent did not start.\n' "$host_root" >&2
+		fi
+	}
+	ln -sfn "$release" "$host_root/current"
 	launchctl bootout "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
-	launchctl bootstrap "gui/$(id -u)" "$plist"
+	if ! launchctl bootstrap "gui/$(id -u)" "$plist"; then
+		restore_previous_launch_agent
+		printf '%s\n' 'AO LaunchAgent start failed; inspect its logs.' >&2
+		exit 1
+	fi
 fi
 
 for attempt in {1..20}; do
@@ -266,6 +301,11 @@ for attempt in {1..20}; do
 	sleep 1
 done
 [[ "$state" == ready ]] || {
+	if [[ "$platform" == Linux ]]; then
+		restore_previous_service
+	else
+		restore_previous_launch_agent
+	fi
 	printf '%s\n' 'AO service did not become ready; inspect the service logs.' >&2
 	exit 1
 }

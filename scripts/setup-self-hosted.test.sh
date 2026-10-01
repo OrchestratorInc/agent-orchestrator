@@ -9,7 +9,7 @@ mkdir -p "$tmp/bin" "$tmp/pkg/resources/daemon" "$tmp/pkg/resources/acp-runtime/
 	"$tmp/pkg/resources/tmux/bin"
 
 # Keep systemctl absent even when the test runner has it installed.
-for tool in chmod cp date git gzip ln mkdir mktemp python3 readlink rm rmdir sleep tar; do
+for tool in chmod cp date dirname git gzip ln mkdir mktemp python3 readlink rm rmdir sleep tar; do
 	ln -s "$(command -v "$tool")" "$tmp/bin/$tool"
 done
 printf '%s\n' '#!/bin/sh' 'case "$1" in' \
@@ -25,6 +25,9 @@ printf '%s\n' '#!/bin/sh' 'case "$1" in' \
 	'    if [ "${TEST_AO_READY_AFTER_INSTALL:-}" = 1 ] && [ -L "$TEST_AO_HOST_ROOT/current" ]; then' \
 	'      TEST_AO_STATE=ready TEST_AO_EXE="$TEST_AO_HOST_ROOT/current/resources/daemon/ao"' \
 	'    fi' \
+	'    if [ -n "${TEST_AO_READY_FOR_TARGET:-}" ] && [ "$(readlink "$TEST_AO_HOST_ROOT/current")" = "$TEST_AO_READY_FOR_TARGET" ]; then' \
+	'      TEST_AO_STATE=ready TEST_AO_EXE="$TEST_AO_HOST_ROOT/current/resources/daemon/ao"' \
+	'    fi' \
 	'    printf '\''{"state":"%s","executablePath":"%s"}\n'\'' "${TEST_AO_STATE:-stopped}" "${TEST_AO_EXE:-}" ;;' \
 	'  remote-host)' \
 	'    if [ -n "${TEST_AO_TUNNEL_PAIRING:-}" ]; then' \
@@ -37,6 +40,7 @@ printf '%s\n' '#!/bin/sh' 'case "$1" in' \
 	'        status) printf "Remote host enabled\nHost ID: h_test\nAddress: https://example.trycloudflare.com:443\nPassword: test-secret\n" ;;' \
 	'      esac' \
 	'    fi ;;' \
+	'  daemon) printf "%s\n" "$PATH" > "$TEST_SERVICE_PATH_CAPTURE" ;;' \
 	'  version) exit 0 ;;' 'esac' > "$tmp/pkg/resources/daemon/ao"
 printf '%s\n' '#!/bin/sh' 'echo v22.0.0' > "$tmp/pkg/resources/acp-runtime/node/bin/node"
 printf '%s\n' '#!/bin/sh' 'echo tmux' > "$tmp/pkg/resources/tmux/bin/tmux"
@@ -96,18 +100,109 @@ case "${1:-}" in
 		[[ ${#releases[@]} -eq 2 ]]
 		;;
 	failed-restarts)
-		printf '%s\n' '#!/bin/sh' 'case "$2" in restart) exit 1 ;; *) exit 0 ;; esac' > "$tmp/bin/systemctl"
+		printf '%s\n' '#!/bin/sh' \
+			'case "$2" in' \
+			'  restart)' \
+			'    echo restart >> "$TEST_SYSTEMCTL_LOG"' \
+			'    if [ ! -e "$TEST_SYSTEMCTL_FAIL_ONCE" ]; then : > "$TEST_SYSTEMCTL_FAIL_ONCE"; exit 1; fi ;;' \
+			'esac' > "$tmp/bin/systemctl"
 		chmod +x "$tmp/bin/systemctl"
 		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
 		env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" /bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/out" 2>&1
 		good="$(readlink "$tmp/host/current")"
 		for attempt in 1 2; do
-			if env HOME="$tmp/home" PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" /bin/bash "$script" --bundle "$bundle" > "$tmp/out" 2>&1; then
+			log="$tmp/restarts-$attempt.log"
+			if env HOME="$tmp/home" PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" \
+				TEST_SYSTEMCTL_LOG="$log" TEST_SYSTEMCTL_FAIL_ONCE="$tmp/fail-$attempt" \
+				/bin/bash "$script" --bundle "$bundle" > "$tmp/out" 2>&1; then
 				printf '%s\n' 'simulated service restart unexpectedly succeeded' >&2; exit 1
 			fi
+			[[ "$(readlink "$tmp/host/current")" == "$good" ]] || { printf '%s\n' 'failed restart left the new release active' >&2; exit 1; }
+			[[ "$(grep -c '^restart$' "$log")" == 2 ]] || { printf '%s\n' 'failed restart did not restart the previous service' >&2; exit 1; }
 		done
 		[[ -d "$good" ]] || { printf '%s\n' 'last working release was deleted after failed restarts' >&2; exit 1; }
 		grep -qx 'KillMode=process' "$tmp/home/.config/systemd/user/ao-self-hosted.service"
+		;;
+	failed-first-install)
+		printf '%s\n' '#!/bin/sh' \
+			'echo "$*" >> "$TEST_SYSTEMCTL_LOG"' \
+			'case "$2" in' \
+			'  enable) : > "$TEST_SYSTEMCTL_ENABLED" ;;' \
+			'  restart) exit 1 ;;' \
+			'  disable) rm "$TEST_SYSTEMCTL_ENABLED" ;;' \
+			'esac' > "$tmp/bin/systemctl"
+		chmod +x "$tmp/bin/systemctl"
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		result=0
+		env HOME="$tmp/home" PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" \
+			TEST_SYSTEMCTL_LOG="$tmp/systemctl.log" TEST_SYSTEMCTL_ENABLED="$tmp/unit-enabled" \
+			/bin/bash "$script" --bundle "$bundle" > "$tmp/out" 2>&1 || result=$?
+		[[ "$result" != 0 ]] || { printf '%s\n' 'failed first restart unexpectedly succeeded' >&2; exit 1; }
+		[[ ! -e "$tmp/host/current" && ! -L "$tmp/host/current" ]] || { printf '%s\n' 'failed first install left current active' >&2; exit 1; }
+		[[ ! -e "$tmp/unit-enabled" ]] || { printf '%s\n' 'failed first install left the unit enabled' >&2; exit 1; }
+		grep -Fqx -- '--user disable --now ao-self-hosted.service' "$tmp/systemctl.log" || { printf '%s\n' 'failed first install did not stop and disable the unit' >&2; exit 1; }
+		;;
+	failed-readiness)
+		printf '%s\n' '#!/bin/sh' 'if [ "$2" = restart ]; then echo restart >> "$TEST_SYSTEMCTL_LOG"; fi' > "$tmp/bin/systemctl"
+		chmod +x "$tmp/bin/systemctl"
+		rm "$tmp/bin/sleep"
+		printf '%s\n' '#!/bin/sh' 'exit 0' > "$tmp/bin/sleep"
+		chmod +x "$tmp/bin/sleep"
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" /bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/out" 2>&1
+		good="$(readlink "$tmp/host/current")"
+		result=0
+		env HOME="$tmp/home" PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" TEST_AO_HOST_ROOT="$tmp/host" \
+			TEST_AO_READY_FOR_TARGET="$good" TEST_SYSTEMCTL_LOG="$tmp/restarts.log" \
+			/bin/bash "$script" --bundle "$bundle" > "$tmp/out" 2>&1 || result=$?
+		[[ "$result" != 0 ]] || { printf '%s\n' 'unready release unexpectedly succeeded' >&2; exit 1; }
+		[[ "$(readlink "$tmp/host/current")" == "$good" ]] || { printf '%s\n' 'unready release left the new release active' >&2; exit 1; }
+		[[ "$(grep -c '^restart$' "$tmp/restarts.log")" == 2 ]] || { printf '%s\n' 'unready release did not restart the previous service' >&2; exit 1; }
+		;;
+	failed-mac-bootstrap|failed-mac-readiness)
+		rm "$tmp/bin/uname"
+		printf '%s\n' '#!/bin/sh' 'case "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac' > "$tmp/bin/uname"
+		printf '%s\n' '#!/bin/sh' \
+			'echo "$1" >> "$TEST_LAUNCHCTL_LOG"' \
+			'if [ "$1" = bootstrap ] && [ -n "${TEST_LAUNCHCTL_FAIL_ONCE:-}" ] && [ ! -e "$TEST_LAUNCHCTL_FAIL_ONCE" ]; then' \
+			'  : > "$TEST_LAUNCHCTL_FAIL_ONCE"; exit 1' \
+			'fi' > "$tmp/bin/launchctl"
+		chmod +x "$tmp/bin/uname" "$tmp/bin/launchctl"
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		env HOME="$tmp/home" PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" TEST_AO_HOST_ROOT="$tmp/host" \
+			TEST_AO_READY_AFTER_INSTALL=1 TEST_LAUNCHCTL_LOG="$tmp/initial-launch.log" \
+			/bin/bash "$script" --bundle "$bundle" > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; exit 1; }
+		good="$(readlink "$tmp/host/current")"
+		failure=()
+		if [[ "$1" == failed-mac-bootstrap ]]; then
+			failure=(TEST_LAUNCHCTL_FAIL_ONCE="$tmp/fail-once")
+		else
+			rm "$tmp/bin/sleep"
+			printf '%s\n' '#!/bin/sh' 'exit 0' > "$tmp/bin/sleep"
+			chmod +x "$tmp/bin/sleep"
+		fi
+		result=0
+		env HOME="$tmp/home" PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" TEST_AO_HOST_ROOT="$tmp/host" \
+			TEST_AO_READY_FOR_TARGET="$good" TEST_LAUNCHCTL_LOG="$tmp/upgrade-launch.log" "${failure[@]}" \
+			/bin/bash "$script" --bundle "$bundle" > "$tmp/out" 2>&1 || result=$?
+		[[ "$result" != 0 ]] || { printf '%s\n' 'failed Mac upgrade unexpectedly succeeded' >&2; exit 1; }
+		[[ "$(readlink "$tmp/host/current")" == "$good" ]] || { printf '%s\n' 'failed Mac upgrade left the new release active' >&2; exit 1; }
+		[[ "$(grep -c '^bootstrap$' "$tmp/upgrade-launch.log")" == 2 ]] || { printf '%s\n' 'failed Mac upgrade did not restart the previous agent' >&2; exit 1; }
+		[[ "$(grep -c '^bootout$' "$tmp/upgrade-launch.log")" == 2 ]] || { printf '%s\n' 'failed Mac upgrade did not unload the failed agent' >&2; exit 1; }
+		;;
+	failed-mac-first)
+		rm "$tmp/bin/uname"
+		printf '%s\n' '#!/bin/sh' 'case "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac' > "$tmp/bin/uname"
+		printf '%s\n' '#!/bin/sh' 'echo "$1" >> "$TEST_LAUNCHCTL_LOG"' 'if [ "$1" = bootstrap ]; then exit 1; fi' > "$tmp/bin/launchctl"
+		chmod +x "$tmp/bin/uname" "$tmp/bin/launchctl"
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		result=0
+		env HOME="$tmp/home" PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" TEST_LAUNCHCTL_LOG="$tmp/launch.log" \
+			/bin/bash "$script" --bundle "$bundle" > "$tmp/out" 2>&1 || result=$?
+		[[ "$result" != 0 ]] || { printf '%s\n' 'failed first Mac install unexpectedly succeeded' >&2; exit 1; }
+		[[ ! -e "$tmp/host/current" && ! -L "$tmp/host/current" ]] || { printf '%s\n' 'failed first Mac install left current active' >&2; exit 1; }
+		[[ ! -e "$tmp/home/Library/LaunchAgents/dev.aoagents.self-hosted.plist" ]] || { printf '%s\n' 'failed first Mac install left a login agent' >&2; exit 1; }
+		[[ "$(grep -c '^bootout$' "$tmp/launch.log")" == 2 ]] || { printf '%s\n' 'failed first Mac install did not unload the failed agent' >&2; exit 1; }
 		;;
 	relative-current)
 		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
@@ -213,12 +308,16 @@ case "${1:-}" in
 			[[ "$result" == 0 ]] || { cat "$tmp/out" >&2; exit 1; }
 			grep -q '^Address: https://example.trycloudflare.com:443$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 			grep -q 'Enter the address and password above' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			TEST_SERVICE_PATH_CAPTURE="$tmp/service-path" "$tmp/host/run-daemon.sh"
+			[[ ":$(<"$tmp/service-path"):" == *":$tmp/host/current/resources/acp-runtime/node/bin:"* ]] || {
+				printf '%s\n' 'daemon service PATH omits bundled Node' >&2; exit 1;
+			}
 		else
 			[[ "$result" != 0 ]] || { cat "$tmp/out" >&2; exit 1; }
 			grep -q 'Tunnel address is not ready' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 			! grep -q 'Enter the address and password above' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 		fi
 		;;
-	*) printf 'Usage: %s {bad-tmux|no-systemd|inactive-systemd|prune|failed-restarts|relative-current|concurrent|interrupted|piped|tunnel-pairing|tunnel-unavailable}\n' "$0" >&2; exit 2 ;;
+	*) printf 'Usage: %s {bad-tmux|no-systemd|inactive-systemd|prune|failed-restarts|failed-first-install|failed-readiness|failed-mac-bootstrap|failed-mac-readiness|failed-mac-first|relative-current|concurrent|interrupted|piped|tunnel-pairing|tunnel-unavailable}\n' "$0" >&2; exit 2 ;;
 esac
 printf 'PASS %s\n' "$1"
