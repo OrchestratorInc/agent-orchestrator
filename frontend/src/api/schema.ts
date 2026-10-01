@@ -4438,6 +4438,8 @@ export interface components {
         RegisterPushDeviceRequest: {
             /** @description Human-friendly device label. */
             deviceName?: string;
+            /** @description This phone's label for the host; used in OS push notification titles. */
+            hostName?: string;
             /** @description Stable per-install device id, keying the registry so a rotated push token updates the same row. Optional: older app builds omit it and the daemon synthesizes one. */
             installId?: string;
             /**

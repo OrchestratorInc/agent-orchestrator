@@ -2,10 +2,13 @@ package push
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
@@ -139,7 +142,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, rec domain.NotificationRecord
 		if dev.Token == "" {
 			continue
 		}
-		messages = append(messages, messageFor(rec, dev.Token, d.hostID))
+		messages = append(messages, messageFor(rec, dev.Token, d.hostID, dev.HostName))
 	}
 	if len(messages) == 0 {
 		return
@@ -281,10 +284,27 @@ func (d *Dispatcher) sweepReceipts(ctx context.Context) {
 // messageFor builds the Expo message for one device from a notification record.
 // The data blob carries exactly what the app needs to deep-link on tap and to
 // mark the record read; nothing secret beyond the human-readable title/body.
-func messageFor(rec domain.NotificationRecord, token, hostID string) Message {
+func messageFor(rec domain.NotificationRecord, token, hostID, hostName string) Message {
+	// Device-provided labels appear in an OS banner: keep them one line and
+	// prevent control/format characters from altering what the user sees.
+	label := strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return ' '
+		}
+		return r
+	}, hostName)), " ")
+	if label == "" {
+		label = hostID
+		if len(label) > 10 {
+			label = label[:10]
+		}
+	}
+	if runes := []rune(label); len(runes) > 40 {
+		label = string(runes[:40]) + "…"
+	}
 	return Message{
 		To:        token,
-		Title:     rec.Title,
+		Title:     fmt.Sprintf("%s · %s", label, rec.Title),
 		Body:      rec.Body,
 		Sound:     "default",
 		Priority:  "high",

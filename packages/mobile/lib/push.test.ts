@@ -67,6 +67,15 @@ describe("push registration across machines", () => {
 		expect((await getPushStatus(config("h_b", "100.101.102.103"))).registered).toBe(true);
 	});
 
+	it("registers the paired host label for OS banners on each machine", async () => {
+		await saveHost({ id: "h_a", name: "Host A", platform: "linux", endpoints: [], token: "token-h_a", lastConnected: 1 });
+		await saveHost({ id: "h_b", name: "Host B", platform: "linux", endpoints: [], token: "token-h_b", lastConnected: 2 });
+		await registerForPush(config("h_a"));
+		await registerForPush(config("h_b"));
+		expect(registerPushDevice).toHaveBeenNthCalledWith(1, config("h_a"), expect.objectContaining({ hostName: "Host A" }));
+		expect(registerPushDevice).toHaveBeenNthCalledWith(2, config("h_b"), expect.objectContaining({ hostName: "Host B" }));
+	});
+
 	it("keeps one registration when the same machine changes address", async () => {
 		await registerForPush(config("h_a"));
 		await registerForPush(config("h_a", "100.101.102.103"));

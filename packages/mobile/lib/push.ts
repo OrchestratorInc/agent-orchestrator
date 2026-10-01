@@ -255,10 +255,12 @@ async function registerForPushNow(
 	// wrong host) or it answered and rejected us (bad password, lockout, 5xx).
 	// An ApiError carries a status, which is exactly that distinction.
 	try {
+		const hostName = cfg.hostId ? (await findHost(cfg.hostId).catch(() => null))?.name : undefined;
 		await registerPushDevice(cfg, {
 			token,
 			platform: Platform.OS,
 			deviceName: Device.deviceName ?? undefined,
+			hostName,
 		});
 	} catch (e) {
 		const httpStatus = e instanceof ApiError ? e.status : undefined;

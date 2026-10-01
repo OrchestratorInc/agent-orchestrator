@@ -613,7 +613,7 @@ export async function refreshAgentModels(cfg: ServerConfig, agent: string, proje
 // its dispatcher can deliver OS push notifications. Keyed daemon-side by install ID.
 export async function registerPushDevice(
 	cfg: ServerConfig,
-	device: { token: string; platform?: string; deviceName?: string },
+	device: { token: string; platform?: string; deviceName?: string; hostName?: string },
 ): Promise<void> {
 	const installId = await getInstallId();
 	await req(cfg, `${API}/push/devices`, {
@@ -663,6 +663,15 @@ export async function markNotificationRead(cfg: ServerConfig, id: string): Promi
 		method: "PATCH",
 		body: JSON.stringify({ status: "read" }),
 	});
+}
+
+export async function clearNotification(cfg: ServerConfig, id: string): Promise<void> {
+	try {
+		await req(cfg, `${API}/notifications/${encodeURIComponent(id)}`, { method: "DELETE" });
+	} catch (cause) {
+		// Another client may have cleared the same row already.
+		if (!(cause instanceof ApiError) || cause.status !== 404 || cause.code !== "NOTIFICATION_NOT_FOUND") throw cause;
+	}
 }
 
 // ---- Notification history ---------------------------------------------------

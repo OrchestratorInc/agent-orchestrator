@@ -44,7 +44,7 @@ export function PushManager(): null {
 		: [];
 	// Polls can refresh host snapshots without changing a connection. Only a
 	// changed endpoint, credential or open/closed transition refreshes push.
-	const connectedKey = JSON.stringify(connected.map(({ hostId, host, httpPort, secure, password }) => [hostId, host, httpPort, secure, password]));
+	const connectedKey = JSON.stringify(connected.map(({ hostId, host, httpPort, secure, password }) => [hostId, host, httpPort, secure, password, hostStates.find((state) => state.hostId === hostId)?.name]));
 	const connectedRef = useRef(connected);
 	connectedRef.current = connected;
 

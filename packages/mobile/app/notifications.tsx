@@ -15,6 +15,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
+	clearNotification,
 	getNotifications,
 	markAllNotificationsRead,
 	markNotificationRead,
@@ -88,6 +89,7 @@ function NotificationsContent() {
 	const insets = useSafeAreaInsets();
 	const { config, connection, unreachable, errorStatus, sessions, loading: sessionsLoading, restore } = useApp();
 	const [restoringId, setRestoringId] = useState<string>();
+	const [clearingIds, setClearingIds] = useState<Set<string>>(() => new Set());
 	// A brief line rather than an Alert: the row is still there to act on, and
 	// a modal would make a dead tap feel like an error.
 	const [notice, setNotice] = useState<string>();
@@ -209,6 +211,26 @@ function NotificationsContent() {
 		}
 	}
 
+	async function clear(notification: NotificationRecord) {
+		if (!config?.hostId || itemsHostId !== config.hostId || clearingIds.has(notification.id)) return;
+		const source = config;
+		setClearingIds((current) => new Set(current).add(notification.id));
+		try {
+			await clearNotification(source, notification.id);
+			if (currentConfig.current !== source) return;
+			setItems((current) => current.filter((item) => item.id !== notification.id));
+			if (notification.status === "unread") setUnreadCount((count) => Math.max(0, count - 1));
+		} catch (cause) {
+			if (currentConfig.current === source) setError(userFacingError(cause, "Couldn't clear notification."));
+		} finally {
+			setClearingIds((current) => {
+				const next = new Set(current);
+				next.delete(notification.id);
+				return next;
+			});
+		}
+	}
+
 	function sessionState(sessionId?: string) {
 		const session = sessionId ? sessions.find((item) => item.id === sessionId) : undefined;
 		return {
@@ -314,7 +336,9 @@ function NotificationsContent() {
 							now={now}
 							action={notificationAction(item, sessionState(item.sessionId)).kind}
 							restoring={restoringId === item.sessionId}
+							clearing={clearingIds.has(item.id)}
 							onPress={() => open(item)}
+							onClear={() => void clear(item)}
 							onRestore={() => item.sessionId && restoreSession(item.sessionId)}
 						/>
 					)}
@@ -376,12 +400,14 @@ function NotificationSectionHeader({ title, count }: { title: string; count: num
 	);
 }
 
-function NotificationRow({ item, now, action, restoring, onPress, onRestore }: {
+function NotificationRow({ item, now, action, restoring, clearing, onPress, onClear, onRestore }: {
 	item: NotificationRecord;
 	now: number;
 	action: "open" | "review" | "restore" | "prs" | "none";
 	restoring: boolean;
+	clearing: boolean;
 	onPress: () => void;
+	onClear: () => void;
 	onRestore: () => void;
 }) {
 	const t = useTheme();
@@ -432,6 +458,16 @@ function NotificationRow({ item, now, action, restoring, onPress, onRestore }: {
 					: <Feather name="rotate-ccw" size={20} color={t.textSecondary} />}
 			</Pressable>
 		) : null}
+		<Pressable
+			onPress={onClear}
+			disabled={clearing}
+			accessibilityRole="button"
+			accessibilityLabel={`Clear ${item.title || visual.label}`}
+			accessibilityState={{ busy: clearing, disabled: clearing }}
+			style={({ pressed }) => [styles.clearButton, pressed && styles.rowPressed]}
+		>
+			{clearing ? <ActivityIndicator size="small" color={t.textSecondary} /> : <Feather name="x" size={18} color={t.textTertiary} />}
+		</Pressable>
 		</View>
 	);
 }
@@ -482,6 +518,7 @@ const makeStyles = (t: Theme) =>
 		// Its own column, wide enough to hit without aiming: restoring is the only
 		// thing a terminated row can do, and it should not share the row's tap.
 		restoreButton: { width: 56, alignSelf: "stretch", alignItems: "center", justifyContent: "center" },
+		clearButton: { width: 48, alignSelf: "stretch", alignItems: "center", justifyContent: "center" },
 		restorePressed: { backgroundColor: t.bgElevated },
 		rowInert: { opacity: 0.55 },
 		notice: {

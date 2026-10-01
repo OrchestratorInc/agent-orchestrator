@@ -13010,6 +13010,10 @@ components:
         deviceName:
           description: Human-friendly device label.
           type: string
+        hostName:
+          description: This phone's label for the host; used in OS push notification
+            titles.
+          type: string
         installId:
           description: 'Stable per-install device id, keying the registry so a rotated
             push token updates the same row. Optional: older app builds omit it and

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -132,7 +133,7 @@ func TestDispatcherSendsToAllDevicesWithDataBlob(t *testing.T) {
 		t.Fatalf("messages = %d, want 2", len(sender.gotMsgs))
 	}
 	m := sender.gotMsgs[0]
-	if m.Title != "sess needs input" || m.Body == "" {
+	if m.Title != "h_machine_ · sess needs input" || m.Body == "" {
 		t.Fatalf("message copy = %+v", m)
 	}
 	if m.Priority != "high" || m.Sound != "default" || m.ChannelID != "default" {
@@ -142,6 +143,30 @@ func TestDispatcherSendsToAllDevicesWithDataBlob(t *testing.T) {
 		m.Data["projectId"] != "proj_7" || m.Data["prUrl"] != "https://example.com/pr/3" ||
 		m.Data["notificationId"] != "ntf_1" {
 		t.Fatalf("data blob = %+v", m.Data)
+	}
+}
+
+func TestMessageForLabelsEachHost(t *testing.T) {
+	rec := domain.NotificationRecord{Title: "Todo needs input"}
+	a := messageFor(rec, "ExponentPushToken[phone]", "h_a", "Host A")
+	b := messageFor(rec, "ExponentPushToken[phone]", "h_b", "Host B")
+	if a.Title != "Host A · Todo needs input" || b.Title != "Host B · Todo needs input" {
+		t.Fatalf("titles = %q, %q", a.Title, b.Title)
+	}
+	if a.Data["hostId"] != "h_a" || b.Data["hostId"] != "h_b" {
+		t.Fatalf("host data = %v, %v", a.Data, b.Data)
+	}
+	old := messageFor(rec, "ExponentPushToken[phone]", "h_1234567890", "")
+	if old.Title != "h_12345678 · Todo needs input" {
+		t.Fatalf("old registration title = %q", old.Title)
+	}
+	unsafe := messageFor(rec, "ExponentPushToken[phone]", "h_a", "Host\nA\x1b[0m\u202e")
+	if unsafe.Title != "Host A [0m · Todo needs input" {
+		t.Fatalf("unsafe host name in title = %q", unsafe.Title)
+	}
+	long := messageFor(rec, "ExponentPushToken[phone]", "h_a", strings.Repeat("a", 41))
+	if long.Title != strings.Repeat("a", 40)+"… · Todo needs input" {
+		t.Fatalf("unbounded host name in title = %q", long.Title)
 	}
 }
 

@@ -2188,6 +2188,7 @@ type RegisterPushDeviceRequest struct {
 	Token      string `json:"token,omitempty" description:"Expo push token, e.g. ExponentPushToken[...]. Optional: omitted when the phone has no push token yet."`
 	Platform   string `json:"platform,omitempty" enum:"ios,android" description:"Device platform."`
 	DeviceName string `json:"deviceName,omitempty" description:"Human-friendly device label."`
+	HostName   string `json:"hostName,omitempty" description:"This phone's label for the host; used in OS push notification titles."`
 }
 
 // PushDeviceResponse is the stored view of a registered push device.

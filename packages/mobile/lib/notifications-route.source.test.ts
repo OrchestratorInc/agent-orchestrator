@@ -18,4 +18,10 @@ describe("notifications host routing", () => {
 		expect(source).toContain('router.push({ pathname: "/notifications", params: { hostId: host.hostId } })');
 		expect(source).toContain("host.notificationsUnread > 0");
 	});
+
+	it("clears only the item loaded from the active host", () => {
+		expect(source).toContain("itemsHostId !== config.hostId || clearingIds.has(notification.id)");
+		expect(source).toContain("await clearNotification(source, notification.id)");
+		expect(source).toContain("if (currentConfig.current !== source) return");
+	});
 });
