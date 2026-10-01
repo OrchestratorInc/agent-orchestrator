@@ -94,6 +94,9 @@ func startRemovalCrashHost(t *testing.T, dataDir, sessionID string) (*exec.Cmd, 
 func TestRemovalHostCrashReplacementCannotHideOriginalProvider(t *testing.T) {
 	for _, removeReplacement := range []bool{false, true} {
 		t.Run(strconv.FormatBool(removeReplacement), func(t *testing.T) {
+			if !retirementAcceptance {
+				t.Skip("deferred retirement acceptance; run with -tags=retirement_acceptance")
+			}
 			dataDir := t.TempDir()
 			originalHost, original, originalProcesses := startRemovalCrashHost(t, dataDir, "managed")
 			identity := descriptorIdentity(original)

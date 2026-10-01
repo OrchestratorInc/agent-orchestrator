@@ -21,6 +21,32 @@ This workspace is Linux x86_64 and has no `xcrun` or `swiftc`. The Mac guest des
 
 ## Acceptance
 
+### Deferred retirement acceptance classification
+
+The supported-flow CI command remains tagless. The five same-boot retirement
+cases that require a contained execution boundary self-skip in that flow and
+remain runnable with the dedicated `retirement_acceptance` tag. Their
+fail-closed assertions are unchanged.
+
+Default supported-flow command:
+
+```sh
+go test -race -count=1 -timeout=20m ./...
+```
+
+Dedicated deferred gate:
+
+```sh
+go test -race -count=1 -timeout=20m -tags=retirement_acceptance \
+  ./internal/adapters/chatdriver/persistenthost \
+  -run '^(TestRemovalHostCrashReplacementCannotHideOriginalProvider|TestRemovalHostExactShutdownSurvivesReplacementAndReattach|TestRemovalHostCrashLateForkSQLiteRecovery)$'
+```
+
+The dedicated command is expected to retain five failures until kernel-backed
+containment proves exact retirement across original-owner crash, replacement,
+late fork and SQLite recovery. Permanent removal remains disabled while this
+gate is open.
+
 - [x] S1: the existing two-leaf escaped-descendant regression refuses retirement and credential deletion while the child lives, including SQLite reopen/retry
   CHECK: go test -v -race -count=3 -timeout=180s ./internal/adapters/chatdriver/persistenthost -run '^TestProviderOwnerEscapedDescendantBlocksRetirement$'
   EXPECT: /ok\s+.*\/persistenthost/

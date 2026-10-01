@@ -24,6 +24,9 @@ func TestRemovalHostAttachmentCarriesNonSecretIdentity(t *testing.T) {
 }
 
 func TestRemovalHostExactShutdownSurvivesReplacementAndReattach(t *testing.T) {
+	if !retirementAcceptance {
+		t.Skip("deferred retirement acceptance; run with -tags=retirement_acceptance")
+	}
 	cfg := Config{SessionID: "removal-restart", DataDir: t.TempDir(), Workdir: t.TempDir(),
 		Env: append(os.Environ(), "AO_CHAT_HOST_PROVIDER_HELPER=1"), Argv: []string{os.Args[0], "-test.run=TestProviderHelper"}}
 	start := func() (<-chan error, Descriptor) {

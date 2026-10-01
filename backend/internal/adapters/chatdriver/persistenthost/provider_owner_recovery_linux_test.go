@@ -93,6 +93,9 @@ func startRemovalLateForkHost(t *testing.T, dataDir, sessionID string) (*exec.Cm
 func TestRemovalHostCrashLateForkSQLiteRecovery(t *testing.T) {
 	for _, removeReplacement := range []bool{false, true} {
 		t.Run(strconv.FormatBool(removeReplacement), func(t *testing.T) {
+			if !retirementAcceptance {
+				t.Skip("deferred retirement acceptance; run with -tags=retirement_acceptance")
+			}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			dataDir := t.TempDir()
