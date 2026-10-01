@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -100,6 +101,74 @@ func TestAuthLockoutAfterFive(t *testing.T) {
 	h.ServeHTTP(w, req("Bearer secret12"))
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("locked attempt: got %d want 429", w.Code)
+	}
+}
+
+func TestValidTunnelClientSurvivesAnotherClientsLockout(t *testing.T) {
+	h, _ := newAuthUnderTest("secret12", time.Now)
+	for range 5 {
+		w := httptest.NewRecorder()
+		r := reqFrom("127.0.0.1:5555", "Bearer wrong")
+		r.Header.Set("CF-Connecting-IP", "198.51.100.1")
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("bad tunnel request: got %d want 401", w.Code)
+		}
+	}
+	w := httptest.NewRecorder()
+	r := reqFrom("127.0.0.1:6666", "Bearer secret12")
+	r.Header.Set("CF-Connecting-IP", "203.0.113.2")
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("valid tunnel client sharing connector IP: got %d want 200", w.Code)
+	}
+	w = httptest.NewRecorder()
+	r = reqFrom("127.0.0.1:5555", "Bearer wrong")
+	r.Header.Set("CF-Connecting-IP", "198.51.100.1")
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("bad tunnel client after valid request: got %d want 429", w.Code)
+	}
+}
+
+func TestLANClientCannotSpoofTunnelSource(t *testing.T) {
+	h, _ := newAuthUnderTest("secret12", time.Now)
+	for i := range 5 {
+		r := reqFrom("192.168.1.50:5555", "Bearer wrong")
+		r.Header.Set("CF-Connecting-IP", fmt.Sprintf("203.0.113.%d", i+1))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("bad LAN request %d: got %d want 401", i, w.Code)
+		}
+	}
+	r := reqFrom("192.168.1.50:6666", "Bearer secret12")
+	r.Header.Set("CF-Connecting-IP", "203.0.113.99")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("spoofed LAN source: got %d want 429", w.Code)
+	}
+}
+
+func TestLockoutPrunesAbandonedSources(t *testing.T) {
+	now := time.Now()
+	lock := newLockout(func() time.Time { return now })
+	lock.fail("abandoned")
+	now = now.Add(time.Minute + time.Second)
+	lock.fail("current")
+	if _, ok := lock.attempts["abandoned"]; ok {
+		t.Fatal("expired source remains in lockout map")
+	}
+	for range 3 {
+		lock.fail("current")
+	}
+	if lock.blocked("current") {
+		t.Fatal("four failed attempts must not lock out source")
+	}
+	lock.fail("current")
+	if !lock.blocked("current") {
+		t.Fatal("five failed attempts must lock out source")
 	}
 }
 

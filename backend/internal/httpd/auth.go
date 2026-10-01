@@ -58,57 +58,66 @@ func (a *authState) retiredPasswordMatches(token string) bool {
 
 // lockout throttles password guessing per source address.
 type lockout struct {
-	mu    sync.Mutex
-	now   func() time.Time
-	fails map[string]int
-	until map[string]time.Time
+	mu        sync.Mutex
+	now       func() time.Time
+	attempts  map[string]authAttempts
+	lastSweep time.Time
+}
+
+type authAttempts struct {
+	fails   int
+	expires time.Time
 }
 
 func newLockout(now func() time.Time) *lockout {
-	return &lockout{now: now, fails: map[string]int{}, until: map[string]time.Time{}}
+	return &lockout{now: now, attempts: map[string]authAttempts{}}
 }
 
 func (l *lockout) blocked(src string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	t, ok := l.until[src]
+	a, ok := l.attempts[src]
 	if !ok {
 		return false
 	}
-	if l.now().Before(t) {
-		return true
+	if l.now().Before(a.expires) {
+		return a.fails >= 5
 	}
-	// Cooldown elapsed: clear the lockout AND the fail counter so the source
-	// starts a fresh window. Without this the counter stays at the limit and the
-	// very next failure would immediately re-lock for another full cooldown —
-	// and a client that keeps polling would stay locked out forever. This also
-	// bounds map growth, since expired entries are pruned on the next request.
-	delete(l.until, src)
-	delete(l.fails, src)
+	delete(l.attempts, src)
 	return false
 }
 
 func (l *lockout) fail(src string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.fails[src]++
-	if l.fails[src] >= 5 {
-		l.until[src] = l.now().Add(time.Minute)
+	now := l.now()
+	if now.Sub(l.lastSweep) >= time.Minute {
+		for key, a := range l.attempts {
+			if !now.Before(a.expires) {
+				delete(l.attempts, key)
+			}
+		}
+		l.lastSweep = now
 	}
+	a := l.attempts[src]
+	if !now.Before(a.expires) {
+		a.fails = 0
+	}
+	a.fails++
+	a.expires = now.Add(time.Minute)
+	l.attempts[src] = a
 }
 
 func (l *lockout) reset(src string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	delete(l.fails, src)
-	delete(l.until, src)
+	delete(l.attempts, src)
 }
 
 func (l *lockout) resetAll() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.fails = map[string]int{}
-	l.until = map[string]time.Time{}
+	l.attempts = map[string]authAttempts{}
 }
 
 func sourceKey(r *http.Request) string {
@@ -228,7 +237,17 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 				next.ServeHTTP(w, r)
 				return
 			}
-			src := sourceKey(r)
+			remoteSrc := sourceKey(r)
+			src := remoteSrc
+			// Cloudflared connects from loopback, so use its visitor IP for lockout
+			// only. A LAN client must not be able to spoof its source with this header.
+			if ip := net.ParseIP(remoteSrc); ip != nil && ip.IsLoopback() {
+				if forwarded := r.Header.Values("CF-Connecting-IP"); len(forwarded) == 1 {
+					if visitor := net.ParseIP(forwarded[0]); visitor != nil {
+						src = visitor.String()
+					}
+				}
+			}
 			if lock.blocked(src) {
 				envelope.WriteAPIError(w, r, http.StatusTooManyRequests, "too_many_requests", "LOCKED_OUT",
 					"too many failed attempts; try again shortly", nil)
@@ -237,7 +256,7 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 			tok := connectionToken(r)
 			if mobilebridge.PasswordMatches(state.currentHash(), tok) {
 				lock.reset(src)
-				connected.report(src)
+				connected.report(remoteSrc)
 				maybeSetPreviewAuthCookie(w, r, tok)
 				next.ServeHTTP(w, r)
 				return
