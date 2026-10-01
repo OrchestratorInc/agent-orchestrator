@@ -162,7 +162,7 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		{pasteOpen && <div className="space-y-2">
 			<label className="text-sm font-medium text-settings-label" htmlFor="project-env-paste">{t("settings.project.pasteVariables")}</label>
 			<p className="text-sm text-settings-muted">{t("settings.project.envPasteHint")}</p>
-			<textarea autoComplete="off" className="settings-field-control min-h-32 w-full font-mono text-sm" id="project-env-paste" onChange={(event) => setPasteText(event.target.value)} placeholder={"API_URL=https://example.com\nTOKEN=..."} spellCheck={false} value={pasteText} />
+			<textarea autoComplete="off" className="settings-field-control min-h-32 w-full font-mono text-sm" id="project-env-paste" onChange={(event) => setPasteText(event.target.value)} spellCheck={false} value={pasteText} />
 			<div className="flex justify-end gap-2">
 				<Button onClick={() => { setPasteOpen(false); setPasteText(""); setError(null); }} type="button" variant="outline">{t("settings.project.envPasteCancel")}</Button>
 				<Button disabled={!pasteText.trim()} onClick={importPasted} type="button">{t("settings.project.importVariables")}</Button>
