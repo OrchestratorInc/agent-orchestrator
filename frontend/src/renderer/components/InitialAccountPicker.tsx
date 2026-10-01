@@ -43,7 +43,7 @@ export function InitialAccountStatus({ state, value, disabled }: Omit<Props, "on
   return (
     <div className="px-3 text-xs text-muted-foreground" aria-live="polite">
       {needsRefresh ? <div className="flex items-center justify-end">
-        <button type="button" className="text-xs underline" disabled={busy || state.inventory.isPending} onClick={() => {
+        <button type="button" className="text-xs underline" disabled={busy || (state.inventory.isPending && state.inventory.isEnabled)} onClick={() => {
           void state.capability.refetch();
           if (state.capability.data) void state.inventory.refetch();
         }}>{t("accountsManager.controls.refreshSession")}</button>
