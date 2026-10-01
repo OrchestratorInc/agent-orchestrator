@@ -21,6 +21,13 @@ type Principal struct {
 	// optional features such as the coder sandbox provider. Empty for personal or
 	// local organizations.
 	OrgCapabilities []string
+	// SandboxProvider is the organization's preferred sandbox provider, seeded
+	// from WorkOS organization metadata (metadata.sandbox_provider). It is the
+	// per-org override the server routes sessions to; empty means the org takes
+	// the deployment default. The value is provider-agnostic (e.g. "coder",
+	// "lambda-microvms", "ecs") and is validated against the offered providers
+	// before use.
+	SandboxProvider string
 }
 
 type Membership struct {

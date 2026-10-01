@@ -214,14 +214,6 @@ describe("SettingsDialog", () => {
 		expect(screen.queryByRole("button", { name: "Downloads" })).not.toBeInTheDocument();
 	});
 
-	it("falls back to General when Cloud is unavailable", async () => {
-		useUiStore.getState().openGlobalSettings("cloud");
-		renderSettingsDialog();
-
-		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
-		expect(screen.queryByRole("button", { name: "Cloud" })).not.toBeInTheDocument();
-	});
-
 	it("closes Settings without cancelling daemon-owned account login work", async () => {
 		useUiStore.getState().openGlobalSettings("agents");
 		renderSettingsDialog();

@@ -36,7 +36,7 @@ type ProfileResolver func(
 type OrganizationResolver func(
 	ctx context.Context,
 	organizationID string,
-) (displayName string, capabilities []string, err error)
+) (displayName string, capabilities []string, sandboxProvider string, err error)
 
 type OIDCVerifier struct {
 	verifier      *oidc.IDTokenVerifier
@@ -121,8 +121,9 @@ func (v *OIDCVerifier) Verify(ctx context.Context, token string) (domain.Princip
 	orgID := strings.TrimSpace(claims.OrgID)
 	orgName := ""
 	var orgCapabilities []string
+	var sandboxProvider string
 	if orgID != "" && v.organizations != nil {
-		orgName, orgCapabilities, err = v.organizations(ctx, orgID)
+		orgName, orgCapabilities, sandboxProvider, err = v.organizations(ctx, orgID)
 		if err != nil {
 			return domain.Principal{}, fmt.Errorf("%w: resolve WorkOS organization: %v", ErrProviderUnavailable, err)
 		}
@@ -136,6 +137,7 @@ func (v *OIDCVerifier) Verify(ctx context.Context, token string) (domain.Princip
 		OrgName:         strings.TrimSpace(orgName),
 		OrgRole:         normalizeOrganizationRole(claims.Role),
 		OrgCapabilities: orgCapabilities,
+		SandboxProvider: strings.TrimSpace(sandboxProvider),
 	}, nil
 }
 

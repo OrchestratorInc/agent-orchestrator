@@ -88,7 +88,9 @@ describe("spawnCloudOrchestrator", () => {
 		});
 	});
 
-	it("does not send a saved provider absent from this control plane", async () => {
+	it("never sends a client-chosen provider; the server decides per org", async () => {
+		// Even a legacy localStorage preference must be ignored: the provider is
+		// decided server-side per organization, never by the client.
 		window.localStorage.setItem("ao.cloud.sandboxProvider", "coder");
 		const queryClient = primeClient({ id: "project-1" });
 		cloudMocks.listProviderConnections.mockResolvedValue({ providerConnections: [connection("codex")] });

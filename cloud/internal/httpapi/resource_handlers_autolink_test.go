@@ -102,13 +102,16 @@ func TestCreateSessionAutoLinksWorkerToProjectOrchestrator(t *testing.T) {
 }
 
 // With no active orchestrator in the project, the worker stays standalone: no
-// parent, and it keeps the client-selected provider.
+// parent. The client-sent provider is ignored; the org (here with no override)
+// takes the deployment default.
 func TestCreateSessionLeavesWorkerStandaloneWithoutOrchestrator(t *testing.T) {
 	t.Parallel()
 	store := &stubAutolinkStore{orchFound: false}
-	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderCoder)
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderCoder), sandbox.ProviderCoder)
 
 	rec := httptest.NewRecorder()
+	// Client asks for nodeops; it must be ignored in favor of the deployment
+	// default (coder) since this org has no sandbox_provider override.
 	srv.createSession(rec, createSessionRequestHTTP(t, "worker", sandbox.ProviderNodeOps))
 
 	if rec.Code != http.StatusCreated {
@@ -117,8 +120,36 @@ func TestCreateSessionLeavesWorkerStandaloneWithoutOrchestrator(t *testing.T) {
 	if store.captured.ParentSessionID != "" {
 		t.Fatalf("ParentSessionID = %q, want empty (standalone)", store.captured.ParentSessionID)
 	}
-	if store.captured.Provider != sandbox.ProviderNodeOps {
-		t.Fatalf("worker provider = %q, want %q (client selection)", store.captured.Provider, sandbox.ProviderNodeOps)
+	if store.captured.Provider != sandbox.ProviderCoder {
+		t.Fatalf("worker provider = %q, want %q (deployment default; client ignored)", store.captured.Provider, sandbox.ProviderCoder)
+	}
+}
+
+// The sandbox provider is decided by the server from the org's data, never by
+// the client: a client-sent provider is ignored, and the org's WorkOS override
+// (principal.SandboxProvider) wins over the deployment default.
+func TestCreateSessionIgnoresClientProviderUsesOrgDerived(t *testing.T) {
+	t.Parallel()
+	store := &stubAutolinkStore{orchFound: false}
+	// Deployment default is nodeops; the org is overridden to coder in metadata.
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+
+	// Client posts provider=nodeops, but the org override (coder) must win.
+	req := createSessionRequestHTTP(t, "worker", sandbox.ProviderNodeOps)
+	ctx := context.WithValue(req.Context(), principalKey, domain.Principal{
+		UserID:          "00000000-0000-0000-0000-0000000000f6",
+		SandboxProvider: sandbox.ProviderCoder,
+	})
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	srv.createSession(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+	if store.captured.Provider != sandbox.ProviderCoder {
+		t.Fatalf("worker provider = %q, want %q (org override; client ignored)", store.captured.Provider, sandbox.ProviderCoder)
 	}
 }
 

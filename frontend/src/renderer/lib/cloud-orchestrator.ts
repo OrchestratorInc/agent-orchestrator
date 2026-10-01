@@ -3,7 +3,6 @@ import { createRendererCloudCpClient } from "../hooks/useCloudCp";
 import type { CloudCpAgentProvider, CloudCpProviderConnection } from "./cloud-cp";
 import { CLOUD_AGENT_PROVIDERS } from "./cloud-agents";
 import { settingsQueryKey, type Settings } from "../hooks/useSettings";
-import { readSelectedSandboxProvider, resolveSandboxProviderPreference } from "../stores/sandbox-provider-store";
 import { captureRendererEvent } from "./telemetry";
 
 // A cloud project has no locally-configured orchestrator agent (that config
@@ -73,10 +72,6 @@ export async function spawnCloudOrchestrator(queryClient: QueryClient, projectId
 	const me = await client.me();
 	const orgId = me.organizations[0]?.id;
 	if (orgId === undefined) throw new Error("No cloud organization is available.");
-	// The user's client-side provider preference (when the control plane offers
-	// more than one); omitted lets the control plane use its default. Read
-	// directly from localStorage since this launcher is deliberately hook-free.
-	const provider = resolveSandboxProviderPreference(readSelectedSandboxProvider(), me.sandboxProviders?.available ?? []);
 	// Pick the orchestrator harness. Prefer the agent the user configured for
 	// this project (config.orchestrator.agent); only when the project has not
 	// chosen one do we fall back to the connected-credential priority
@@ -105,7 +100,6 @@ export async function spawnCloudOrchestrator(queryClient: QueryClient, projectId
 			// Role instructions are standing system configuration assembled by the
 			// worker; do not duplicate them as a visible user message.
 			prompt: "",
-			...(provider ? { provider } : {}),
 		});
 		void captureRendererEvent("ao.renderer.cloud_orchestrator_spawn_succeeded", { project_id: projectId });
 		return session.id;

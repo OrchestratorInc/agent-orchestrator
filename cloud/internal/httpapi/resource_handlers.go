@@ -87,9 +87,9 @@ type createSessionRequest struct {
 	Model                       string   `json:"model,omitempty"`
 	DeniedCommands              []string `json:"deniedCommands,omitempty"`
 	SandboxProviderConnectionID string   `json:"sandboxProviderConnectionId,omitempty"`
-	// Provider selects which configured sandbox provider runs this session. It
-	// is optional: an empty value uses the control plane default. When set it
-	// must be one of the providers the deployment offers (see /me).
+	// Provider is accepted for backward compatibility but ignored: the sandbox
+	// provider is decided server-side per organization (WorkOS metadata override
+	// or the deployment default), never by the client. See providerForOrg.
 	Provider string `json:"provider,omitempty"`
 }
 
@@ -477,6 +477,12 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// The sandbox provider is decided by the server from data, never by the
+	// client: the per-org override lives in WorkOS org metadata
+	// (metadata.sandbox_provider, surfaced as principal.SandboxProvider) and falls
+	// back to the deployment default. Any provider the client posts is ignored.
+	// The routing is provider-agnostic — see providerForOrg.
+	effectiveProvider := s.providerForOrg(principalFrom(r))
 	// A top-level worker created for a project that already has an active
 	// orchestrator is auto-linked to it: the orchestrator then sees, drives, and
 	// receives reports from it exactly as it would a worker it spawned itself,
@@ -497,16 +503,16 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			}
 			if found {
 				parentSessionID = orchestratorID
-				request.Provider = orchestratorProvider
+				effectiveProvider = orchestratorProvider
 			}
 		}
 	}
 	// Validate the sandbox provider AFTER the auto-link override above: an
 	// auto-linked worker inherits its orchestrator's provider, so the
-	// availability check must run on the final value, not the client-sent one.
-	// Otherwise a UI-created worker whose stale client selection differs from the
-	// orchestrator's provider is rejected before the override can take effect.
-	if request.Provider != "" && !slices.Contains(s.availableSandboxProviders, request.Provider) {
+	// availability check must run on the final value. These checks are
+	// defense-in-depth — the derived value passes by construction — but they keep
+	// the invariant should an orchestrator's stored provider ever go stale.
+	if effectiveProvider != "" && !slices.Contains(s.availableSandboxProviders, effectiveProvider) {
 		writeError(
 			w, r, http.StatusUnprocessableEntity, "provider_unavailable",
 			"The selected sandbox provider is not available on this control plane.",
@@ -515,9 +521,8 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	// The active organization must be entitled to the (final, post-override)
 	// provider: coder is gated on a WorkOS org capability. Enforced here so the
-	// gate holds even when a client bypasses the org-filtered list returned by
-	// /me and posts a gated provider directly.
-	if request.Provider != "" && !s.orgAllowsProvider(principalFrom(r), request.Provider) {
+	// gate holds as defense-in-depth.
+	if effectiveProvider != "" && !s.orgAllowsProvider(principalFrom(r), effectiveProvider) {
 		writeError(
 			w, r, http.StatusForbidden, "provider_forbidden",
 			"Your organization is not enabled for the selected sandbox provider.",
@@ -529,10 +534,6 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	// providers, and projects without a coder config, keep the default-template
 	// behavior. (Extra repos also live on the project config; the worker reads
 	// them from the project at launch — see launchContextFrom.)
-	effectiveProvider := request.Provider
-	if effectiveProvider == "" {
-		effectiveProvider = s.sandboxProvider
-	}
 	var coderOpts *sandbox.CoderSessionOptions
 	if effectiveProvider == sandbox.ProviderCoder {
 		project, projectErr := s.store.GetProject(r.Context(), principalFrom(r), orgID, request.ProjectID)
@@ -551,7 +552,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	// The plan is resolved once, here, and stamped onto the sandbox row. The
 	// reconciler reads it back from the row rather than from configuration, so
 	// a later config change cannot disturb a session already in flight.
-	plan, err := s.provisioning.SessionPlanForProviderWithCoder(request.Harness, request.Provider, coderOpts)
+	plan, err := s.provisioning.SessionPlanForProviderWithCoder(request.Harness, effectiveProvider, coderOpts)
 	if err != nil {
 		s.logger.Error("resolve sandbox provisioning plan", "error", err, "request_id", requestID(r))
 		writeError(

@@ -47,6 +47,35 @@ func TestUngatedServerAllowsEverything(t *testing.T) {
 	}
 }
 
+// providerForOrg decides the session's provider from org data: the per-org
+// WorkOS override (principal.SandboxProvider) wins when set AND offered by the
+// deployment, otherwise the deployment default is used. It is provider-agnostic
+// and does not consult capability gating (that is separate defense-in-depth).
+func TestProviderForOrg(t *testing.T) {
+	s := &Server{
+		sandboxProvider:           "nodeops",
+		availableSandboxProviders: []string{"nodeops", "coder"},
+	}
+	cases := []struct {
+		name            string
+		sandboxProvider string
+		want            string
+	}{
+		{"override set and available", "coder", "coder"},
+		{"override unset falls back to default", "", "nodeops"},
+		{"override blank falls back to default", "   ", "nodeops"},
+		{"override set but not available falls back", "lambda-microvms", "nodeops"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := s.providerForOrg(domain.Principal{SandboxProvider: tc.sandboxProvider})
+			if got != tc.want {
+				t.Fatalf("providerForOrg(sandboxProvider=%q) = %q, want %q", tc.sandboxProvider, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestProvidersForOrg(t *testing.T) {
 	s := gatedServer()
 	available := []string{"nodeops", "coder"}

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
@@ -19,6 +20,20 @@ func (s *Server) orgAllowsProvider(principal domain.Principal, provider string) 
 		return true
 	}
 	return slices.Contains(principal.OrgCapabilities, provider)
+}
+
+// providerForOrg decides which sandbox provider a session for this principal's
+// organization runs on, from server-side data only. The per-org override comes
+// from WorkOS org metadata (metadata.sandbox_provider, surfaced as
+// principal.SandboxProvider); it wins when set and offered by this deployment.
+// Otherwise the org takes the deployment default (what the general public gets).
+// The routing is provider-agnostic: adding a provider later is a metadata/env
+// change, never a change here.
+func (s *Server) providerForOrg(principal domain.Principal) string {
+	if p := strings.TrimSpace(principal.SandboxProvider); p != "" && slices.Contains(s.availableSandboxProviders, p) {
+		return p
+	}
+	return s.sandboxProvider // deployment default
 }
 
 // providersForOrg filters the offered providers down to those the principal's

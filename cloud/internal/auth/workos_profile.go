@@ -25,9 +25,10 @@ type cachedProfile struct {
 }
 
 type cachedOrganization struct {
-	displayName  string
-	capabilities []string
-	expiresAt    time.Time
+	displayName     string
+	capabilities    []string
+	sandboxProvider string
+	expiresAt       time.Time
 }
 
 func NewWorkOSProfileResolver(apiKey string, client *http.Client) (ProfileResolver, error) {
@@ -154,17 +155,17 @@ func newWorkOSOrganizationResolver(
 	var mutex sync.Mutex
 	cache := make(map[string]cachedOrganization)
 
-	return func(ctx context.Context, organizationID string) (string, []string, error) {
+	return func(ctx context.Context, organizationID string) (string, []string, string, error) {
 		organizationID = strings.TrimSpace(organizationID)
 		if organizationID == "" {
-			return "", nil, errors.New("WorkOS organization ID is required")
+			return "", nil, "", errors.New("WorkOS organization ID is required")
 		}
 		now := time.Now()
 		mutex.Lock()
 		cached, ok := cache[organizationID]
 		mutex.Unlock()
 		if ok && now.Before(cached.expiresAt) {
-			return cached.displayName, cached.capabilities, nil
+			return cached.displayName, cached.capabilities, cached.sandboxProvider, nil
 		}
 
 		request, err := http.NewRequestWithContext(
@@ -174,16 +175,16 @@ func newWorkOSOrganizationResolver(
 			http.NoBody,
 		)
 		if err != nil {
-			return "", nil, err
+			return "", nil, "", err
 		}
 		request.Header.Set("Authorization", "Bearer "+apiKey)
 		response, err := client.Do(request)
 		if err != nil {
-			return "", nil, fmt.Errorf("get WorkOS organization: %w", err)
+			return "", nil, "", fmt.Errorf("get WorkOS organization: %w", err)
 		}
 		defer response.Body.Close()
 		if response.StatusCode != http.StatusOK {
-			return "", nil, fmt.Errorf("get WorkOS organization: status %d", response.StatusCode)
+			return "", nil, "", fmt.Errorf("get WorkOS organization: status %d", response.StatusCode)
 		}
 		var organization struct {
 			ID       string            `json:"id"`
@@ -191,27 +192,29 @@ func newWorkOSOrganizationResolver(
 			Metadata map[string]string `json:"metadata"`
 		}
 		if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&organization); err != nil {
-			return "", nil, err
+			return "", nil, "", err
 		}
 		if strings.TrimSpace(organization.ID) != organizationID {
-			return "", nil, errors.New("WorkOS organization response did not match token")
+			return "", nil, "", errors.New("WorkOS organization response did not match token")
 		}
 		displayName := strings.TrimSpace(organization.Name)
 		if displayName == "" {
 			displayName = "WorkOS organization"
 		}
 		capabilities := parseOrganizationCapabilities(organization.Metadata)
+		sandboxProvider := strings.TrimSpace(organization.Metadata["sandbox_provider"])
 		mutex.Lock()
 		trimCache(cache, func(organization cachedOrganization) bool {
 			return !now.Before(organization.expiresAt)
 		})
 		cache[organizationID] = cachedOrganization{
-			displayName:  displayName,
-			capabilities: capabilities,
-			expiresAt:    now.Add(5 * time.Minute),
+			displayName:     displayName,
+			capabilities:    capabilities,
+			sandboxProvider: sandboxProvider,
+			expiresAt:       now.Add(5 * time.Minute),
 		}
 		mutex.Unlock()
-		return displayName, capabilities, nil
+		return displayName, capabilities, sandboxProvider, nil
 	}, nil
 }
 
