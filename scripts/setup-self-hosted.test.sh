@@ -93,6 +93,7 @@ case "${1:-}" in
 			fi
 		done
 		[[ -d "$good" ]] || { printf '%s\n' 'last working release was deleted after failed restarts' >&2; exit 1; }
+		grep -qx 'KillMode=process' "$tmp/home/.config/systemd/user/ao-self-hosted.service"
 		;;
 	relative-current)
 		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources

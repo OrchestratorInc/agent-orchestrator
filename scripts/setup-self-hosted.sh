@@ -230,7 +230,8 @@ if [[ "$platform" == Linux ]]; then
 	escaped_runner="${runner//%/%%}"
 	escaped_runner="${escaped_runner//\\/\\\\}"
 	escaped_runner="${escaped_runner//\"/\\\"}"
-	printf '[Unit]\nDescription=AO self-hosted daemon\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart="%s"\nRestart=on-failure\nRestartSec=3\n\n[Install]\nWantedBy=default.target\n' \
+	# Intentional KillMode=process: a cgroup kill would stop sessions the next daemon must adopt.
+	printf '[Unit]\nDescription=AO self-hosted daemon\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart="%s"\nKillMode=process\nRestart=on-failure\nRestartSec=3\n\n[Install]\nWantedBy=default.target\n' \
 		"$escaped_runner" > "$unit_dir/ao-self-hosted.service"
 	systemctl --user daemon-reload
 	systemctl --user enable ao-self-hosted.service
