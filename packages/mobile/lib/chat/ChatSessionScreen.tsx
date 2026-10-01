@@ -14,14 +14,15 @@ import {
 	Text,
 	View,
 } from "react-native";
-import { mobileReachablePreviewURL, restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
+import { mobileReachablePreviewURL, type DashboardSession, type OrchestratorLink } from "../api";
 import { cloudHeaderControllerState, cloudLifecycleStage, isResumable } from "../cloud/lifecycle";
 import { haptics } from "../haptics";
 import { resetHeaderRightForSwap } from "../headerRightSwap";
 import { openGitHub } from "../openGitHub";
 import { glassHeaderControl } from "../native-header-items";
 import { NativeHeaderButton } from "../native-header-button";
-import { useApp, useSessionSource } from "../store";
+import { useApp } from "../store";
+import type { SourceRef } from "../environment/scopedBoard";
 import {
 	mobileInterfaceTransitionIsActive,
 	mobileInterfaceTransitionIsBusy,
@@ -47,7 +48,7 @@ import { brokenMcpServers, can } from "./types";
 import { useMobileConversation } from "./useConversation";
 import { type, space } from "../tokens";
 import { backOr } from "../backNavigation";
-import { userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
+import { userFacingError } from "../connectionError";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
 
@@ -69,7 +70,7 @@ async function dismissKeyboardBeforeSheet(keyboardVisible: boolean): Promise<voi
 	});
 }
 
-export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
+export function ChatSessionScreen({ session, source }: { session: MobileChatSession; source: SourceRef }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const navigation = useNavigation();
@@ -84,10 +85,12 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		),
 		[navigation],
 	);
-	const { config, connection, unreachable, projects, refresh: refreshBoard, setActiveProject, setWorkerPinned, renameWorker, kill } = useApp();
-	const sessionSource = useSessionSource();
-	const cloudSession = sessionSource?.kind === "cloud";
-	const conversation = useMobileConversation(config, session.id, sessionSource);
+	const { config, connection, unreachable, scopedBoard, sourceFor, refreshSource, setActiveProject,
+		setWorkerPinnedOn, renameWorkerOn, killOn, restoreOn, resumeAgentOn } = useApp();
+	const sessionSource = sourceFor(source);
+	const cloudSession = source.kind === "cloud";
+	const refreshBoard = useCallback(() => refreshSource(source), [refreshSource, source.kind, source.id]);
+	const conversation = useMobileConversation(cloudSession ? null : config, session.id, sessionSource);
 	// A load that failed while the desktop was unreachable retries as soon as the
 	// board's poll reconnects, which is what the offline state promises.
 	// Keyed on a failed load, not a missing one, so the first mount doesn't send a
@@ -198,7 +201,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	const title = sessionName || conversation.snapshot?.title || session.id;
 	const projectName = "projectName" in session
 		? session.projectName
-		: projects.find((project) => project.id === session.projectId)?.name;
+		: scopedBoard.projects.find((entry) => entry.source.kind === source.kind && entry.source.id === source.id && entry.value.id === session.projectId)?.value.name;
 	const headerHarness = conversation.snapshot?.harness || session.harness || "Agent";
 	const headerState = cloudHeaderControllerState(cloudStage, conversation.snapshot?.controller.state ?? "connecting");
 
@@ -318,15 +321,13 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		if (resuming) return;
 		setResuming(true);
 		try {
-			if (!config) throw new Error(NOT_PAIRED_ACTION_COPY);
-			if (terminated) await restoreSession(config, session.id);
-			else await resumeSessionAgent(config, session.id);
-			await refreshBoard();
+			if (terminated) await restoreOn(source, session.id);
+			else await resumeAgentOn(source, session.id);
 			await conversation.refresh();
 		} catch (cause) {
 			Alert.alert("Couldn't resume the agent", userFacingError(cause));
 		} finally { setResuming(false); }
-	}, [config, conversation.refresh, refreshBoard, resuming, session.id, terminated]);
+	}, [conversation.refresh, resuming, restoreOn, resumeAgentOn, session.id, source, terminated]);
 
 	const [cloudResuming, setCloudResuming] = useState(false);
 	const resumeCloudSandbox = useCallback(async () => {
@@ -336,9 +337,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		if (cloudResuming) return;
 		setCloudResuming(true);
 		try {
-			// A cloud session only reaches this screen when the active
-			// environment is cloud, so the source the store hands back here is
-			// the cloud source — this never needs a client or org id of its own.
+			// This route's source is fixed even if another board refreshes.
 			if (!sessionSource) throw new Error("No cloud session source available");
 			await sessionSource.resumeSession(session.id);
 			await refreshBoard();
@@ -364,7 +363,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 
 	const requestInterfaceSwitch = useCallback(() => {
 		if (cloudSession) {
-			router.replace({ pathname: "/session/[id]", params: { id: session.id, view: "terminal" } });
+			router.replace({ pathname: "/session/[id]", params: { id: session.id, view: "terminal", source: source.kind, sourceId: source.id } });
 			return;
 		}
 		if (!interfaceSwitch.status?.supported) {
@@ -386,7 +385,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				{ text: "Stop and switch", style: "destructive", onPress: () => void startInterfaceSwitch("interrupt") },
 			],
 		);
-	}, [cloudSession, interfaceSwitch, router, session.id, startInterfaceSwitch, turnActive, turnWaiting]);
+	}, [cloudSession, interfaceSwitch, router, session.id, source, startInterfaceSwitch, turnActive, turnWaiting]);
 
 	useEffect(() => {
 		const current = conversation.snapshot;
@@ -412,8 +411,8 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			interfaceReason: cloudSession ? (terminated ? "This session has ended." : undefined) : interfaceSwitch.status?.reason || interfaceSwitch.error,
 			interfaceSwitching: !cloudSession && (interfaceTransitionActive || interfaceSwitch.starting),
 			// Orchestrators are not deleted from here; the board owns their lifecycle.
-			canDelete: !("projectName" in session),
-			canPin: !("projectName" in session),
+			canDelete: !cloudSession && !("projectName" in session),
+			canPin: !cloudSession && !("projectName" in session),
 			pinned: "projectName" in session ? false : Boolean(session.isPinned),
 			onMap: () => router.push(chatSheetRoute({ kind: "conversation-map", markers: conversationMarkers(actionsEntryRef.current?.snapshot ?? current), onSelect: setJumpToSequence })),
 			onOpenShell: () => void openShell(),
@@ -426,11 +425,11 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			onRename: () => router.push(chatSheetRoute({
 				kind: "conversation-rename",
 				initialTitle: sessionName,
-				onRename: (next) => renameWorker(session.id, next),
+				onRename: (next) => renameWorkerOn(source, session.id, next),
 			})),
 			onTogglePin: () => {
 				if ("projectName" in session) return;
-				void setWorkerPinned(session.id, !session.isPinned).catch(() => {});
+				void setWorkerPinnedOn(source, session.id, !session.isPinned).catch(() => {});
 			},
 			onRefresh: () => void conversation.refresh(),
 			onDelete: () => {
@@ -442,14 +441,14 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 						{ text: "Cancel", style: "cancel" },
 						// Leave first: the session this screen is showing is about to stop
 						// existing, and the board is where its row disappears from.
-						{ text: "Delete session", style: "destructive", onPress: () => { backOr(router); void kill(session.id).catch(() => {}); } },
+						{ text: "Delete session", style: "destructive", onPress: () => { backOr(router); void killOn(source, session.id).catch(() => {}); } },
 					],
 				);
 			},
 		};
 		actionsEntryRef.current = entry;
 		void dismissKeyboardBeforeSheet(keyboardVisible).then(() => router.push(chatSheetRoute(actionsEntryRef.current ?? entry)));
-	}, [cloudSession, conversation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setActiveProject, setWorkerPinned, terminated, title]);
+	}, [cloudSession, conversation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setActiveProject, setWorkerPinnedOn, renameWorkerOn, killOn, source, terminated, title]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. Nothing else

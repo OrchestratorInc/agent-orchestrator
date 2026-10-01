@@ -9,9 +9,12 @@ vi.mock("react-native", () => ({
 	View: "View",
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 24 }) }));
-vi.mock("expo-router", () => ({ useLocalSearchParams: () => ({ id: "project-1" }), useRouter: () => ({ push: state.push, canGoBack: () => true, back: vi.fn() }) }));
+vi.mock("expo-router", () => ({ useLocalSearchParams: () => ({ id: "project-1", source: "cloud", sourceId: "org-1" }), useRouter: () => ({ push: state.push, canGoBack: () => true, back: vi.fn() }) }));
 vi.mock("./haptics", () => ({ haptics: { tap: vi.fn() } }));
-vi.mock("./store", () => ({ useApp: () => ({ environment: "cloud", configured: true, loading: false, error: null, refresh: vi.fn(), projects: [], sessions: [], orchestrators: [] }) }));
+vi.mock("./store", () => ({ useApp: () => ({ environment: "cloud", configured: true, loading: false, error: null, refresh: vi.fn(), projects: [], sessions: [], orchestrators: [],
+	scopedBoard: { projects: [{ source: { kind: "cloud", id: "org-1" }, value: { id: "project-1", name: "Tappy" } }], sessions: [], orchestrators: [],
+		sources: { local: { resolved: true, available: false, loading: false, error: null }, cloud: { resolved: true, available: true, loading: false, error: null } } },
+	sourceFor: () => ({ kind: "cloud" }), refreshSource: vi.fn(async () => {}) }) }));
 vi.mock("./orchestratorView", () => ({
 	orchestratorProjectSections: () => [{ data: [{ project: { id: "project-1", name: "Tappy", kind: "single_repo" }, action: "start", link: null }] }],
 	projectDetailSessions: () => [],
@@ -55,6 +58,6 @@ describe("Cloud project page", () => {
 		expect(root.find((node) => String(node.type) === "ScreenHeader").props.right).toBeNull();
 		const dock = root.find((node) => String(node.type) === "WorkerDock");
 		await act(async () => dock.props.onSpawn());
-		expect(state.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { projectId: "project-1" } });
+		expect(state.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { projectId: "project-1", source: "cloud", sourceId: "org-1" } });
 	});
 });

@@ -50,8 +50,13 @@ describe("active turn controls", () => {
 	});
 
 	it("renames the session, not the conversation", () => {
-		expect(screenSource).toContain("onRename: (next) => renameWorker(session.id, next)");
+		expect(screenSource).toContain("onRename: (next) => renameWorkerOn(source, session.id, next)");
 		expect(screenSource).not.toContain("conversation.rename(next)");
+	});
+	it("binds conversation and terminal navigation to the routed source", () => {
+		expect(screenSource).toContain("const sessionSource = sourceFor(source)");
+		expect(screenSource).toContain("source: source.kind, sourceId: source.id");
+		expect(screenSource).toContain("killOn(source, session.id)");
 	});
 
 	it("shows a failed start's reason instead of only a stopped-agent banner", () => {

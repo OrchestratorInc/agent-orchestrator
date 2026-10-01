@@ -3,6 +3,8 @@ import { useRouter } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import { Alert, Platform } from "react-native";
 import { ApiError } from "./api";
+import { isConfigured, machineIdentity } from "./config";
+import { resourceKey, type Scoped, type SourceRef } from "./environment/scopedBoard";
 import { chatErrorCopy, isChatPreflightError } from "./chatError";
 import { useCloudAuth } from "./cloud/authStore";
 import { spawnCloudOrchestrator } from "./cloud/orchestrator";
@@ -21,7 +23,7 @@ import { useApp } from "./store";
  */
 export function useOrchestratorLauncher() {
 	const router = useRouter();
-	const { environment, config, refresh, launchConductor } = useApp();
+	const { environment, config, refreshSource, launchConductorOn } = useApp();
 	const { client, orgId } = useCloudAuth();
 	const [busyProjects, setBusyProjects] = useState<ReadonlySet<string>>(() => new Set());
 	// A ref as well as state: state is a render behind, and a fast double tap must
@@ -38,34 +40,50 @@ export function useOrchestratorLauncher() {
 		});
 	}, []);
 
-	const openSession = useCallback((row: OrchestratorProjectRow, id: string) => {
-		router.push({ pathname: "/session/[id]", params: { id, projectId: row.project.id } });
-	}, [router]);
+	const scopedRow = useCallback((row: Scoped<OrchestratorProjectRow> | OrchestratorProjectRow): Scoped<OrchestratorProjectRow> | null => {
+		if ("source" in row) return row;
+		// Compatibility for existing Project cards until the combined Projects view
+		// passes explicit source entries in Task 5.
+		const source: SourceRef | null = environment === "cloud" && orgId
+			? { kind: "cloud", id: orgId }
+			: environment === "local" && config && isConfigured(config)
+				? { kind: "local", id: machineIdentity(config) } : null;
+		return source ? { source, value: row } : null;
+	}, [environment, orgId, config]);
 
-	const runLaunch = useCallback(async (row: OrchestratorProjectRow, mode: "chat" | "tui" = "chat") => {
-		if (launching.current.has(row.project.id)) return;
-		launching.current.add(row.project.id);
-		setBusy(row.project.id, true);
+	const openSession = useCallback((input: Scoped<OrchestratorProjectRow> | OrchestratorProjectRow, id: string) => {
+		const row = scopedRow(input);
+		if (!row) return;
+		router.push({ pathname: "/session/[id]", params: {
+			id, projectId: row.value.project.id, source: row.source.kind, sourceId: row.source.id,
+		} });
+	}, [router, scopedRow]);
+
+	const runLaunch = useCallback(async (row: Scoped<OrchestratorProjectRow>, mode: "chat" | "tui" = "chat") => {
+		const key = resourceKey(row.source, row.value.project.id);
+		if (launching.current.has(key)) return;
+		launching.current.add(key);
+		setBusy(key, true);
 		try {
-			if (environment === "cloud") {
-				if (!orgId) throw new Error("Your Cloud workspace is not ready. Please try again.");
-				let key = cloudRequestKeys.current.get(row.project.id);
-				if (!key) {
-					key = Crypto.randomUUID();
-					cloudRequestKeys.current.set(row.project.id, key);
+			if (row.source.kind === "cloud") {
+				if (row.source.id !== orgId) throw new Error("Your Cloud workspace changed. Please try again.");
+				let requestKey = cloudRequestKeys.current.get(key);
+				if (!requestKey) {
+					requestKey = Crypto.randomUUID();
+					cloudRequestKeys.current.set(key, requestKey);
 				}
-				const id = await spawnCloudOrchestrator(client, orgId, row.project.id, key);
-				cloudRequestKeys.current.delete(row.project.id);
-				await refresh().catch(() => {});
+				const id = await spawnCloudOrchestrator(client, orgId, row.value.project.id, requestKey);
+				cloudRequestKeys.current.delete(key);
+				await refreshSource(row.source).catch(() => {});
 				openSession(row, id);
 				return;
 			}
-			const next = await launchConductor(row.project.id, false, mode);
+			const next = await launchConductorOn(row.source, row.value.project.id, false, mode);
 			if (next?.id) openSession(row, next.id);
-			else await refresh();
+			else await refreshSource(row.source);
 		} catch (cause) {
 			haptics.error();
-			if (environment === "cloud") {
+			if (row.source.kind === "cloud") {
 				Alert.alert("Couldn't open orchestrator", cause instanceof Error ? cause.message : "Please try again.");
 				return;
 			}
@@ -84,21 +102,23 @@ export function useOrchestratorLauncher() {
 			});
 			Alert.alert(copy.title, copy.message);
 		} finally {
-			launching.current.delete(row.project.id);
-			setBusy(row.project.id, false);
+			launching.current.delete(key);
+			setBusy(key, false);
 		}
-	}, [client, config?.host, config?.httpPort, environment, launchConductor, openSession, orgId, refresh, setBusy]);
+	}, [client, config?.host, config?.httpPort, launchConductorOn, openSession, orgId, refreshSource, setBusy]);
 
 	/** Opens a running orchestrator, or starts or resumes one that is not. */
-	const openOrchestrator = useCallback((row: OrchestratorProjectRow) => {
-		if (row.action === "open" && row.link?.id) {
+	const openOrchestrator = useCallback((input: Scoped<OrchestratorProjectRow> | OrchestratorProjectRow) => {
+		const row = scopedRow(input);
+		if (!row) return;
+		if (row.value.action === "open" && row.value.link?.id) {
 			haptics.select();
-			openSession(row, row.link.id);
+			openSession(row, row.value.link.id);
 			return;
 		}
 		haptics.tap();
 		void runLaunch(row);
-	}, [openSession, runLaunch]);
+	}, [openSession, runLaunch, scopedRow]);
 
 	return { busyProjects, openOrchestrator, openSession };
 }

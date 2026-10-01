@@ -11,7 +11,8 @@ import { createCloudTerminal, type CloudTerminalStatus } from "../cloud/terminal
 import { haptics } from "../haptics";
 import { resetHeaderRightForSwap } from "../headerRightSwap";
 import { terminalTheme, type Theme } from "../theme";
-import { useApp, useSessionSource } from "../store";
+import { useApp } from "../store";
+import type { SourceRef } from "../environment/scopedBoard";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
 import { Composer } from "./Composer";
 import { dockInset, rootKeyboardPad } from "./keyboardInset";
@@ -161,13 +162,14 @@ const labels: Record<CloudTerminalStatus, string> = {
 	error: "Cloud terminal unavailable",
 };
 
-export function CloudTerminalSessionScreen({ session }: { session: RouteSession }) {
+export function CloudTerminalSessionScreen({ session, source }: { session: RouteSession; source: SourceRef }) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
 	const { client, orgId } = useCloudAuth();
-	const { refresh: refreshBoard } = useApp();
-	const sessionSource = useSessionSource();
+	const { refreshSource, sourceFor } = useApp();
+	const sessionSource = sourceFor(source);
+	const refreshBoard = useCallback(() => refreshSource(source), [refreshSource, source.kind, source.id]);
 	const pausedByCoder = cloudLifecycleStage(session) === "paused_by_coder";
 	const router = useRouter();
 	const navigation = useNavigation();
@@ -194,8 +196,8 @@ export function CloudTerminalSessionScreen({ session }: { session: RouteSession 
 	});
 
 	const openChat = useCallback(() => {
-		router.replace({ pathname: "/session/[id]", params: { id: session.id } });
-	}, [router, session.id]);
+		router.replace({ pathname: "/session/[id]", params: { id: session.id, source: source.kind, sourceId: source.id } });
+	}, [router, session.id, source.kind, source.id]);
 
 	useLayoutEffect(() => resetHeaderRightForSwap(
 		() => navigation.setOptions({ headerRight: undefined }),
@@ -219,7 +221,7 @@ export function CloudTerminalSessionScreen({ session }: { session: RouteSession 
 		setStatus("connecting");
 		setError(null);
 		if (pausedByCoder) return;
-		if (!orgId) {
+		if (!orgId || source.kind !== "cloud" || orgId !== source.id || !sessionSource) {
 			setStatus("error");
 			setError("Your Cloud workspace is not ready. Sign in again and retry.");
 			return;
@@ -245,7 +247,7 @@ export function CloudTerminalSessionScreen({ session }: { session: RouteSession 
 			xtermReady.current = false;
 			pendingOutput.current = [];
 		};
-	}, [client, orgId, pausedByCoder, scheme, session.id]);
+	}, [client, orgId, pausedByCoder, scheme, session.id, source.kind, source.id, sessionSource]);
 
 	const resumeSandbox = useCallback(async () => {
 		if (resuming) return;

@@ -3,7 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, AppState, StyleSheet, View } from "react-native";
 import { shouldPoll } from "../../lib/appStatePoll";
 import { ChatSessionScreen } from "../../lib/chat/ChatSessionScreen";
-import { isConfigured, machineIdentity } from "../../lib/config";
+import { machineIdentity } from "../../lib/config";
+import { resourceKey, type SourceRef } from "../../lib/environment/scopedBoard";
 import { lookUpSession } from "../../lib/session/sessionLookup";
 import { CloudTerminalSessionScreen } from "../../lib/session/CloudTerminalSessionScreen";
 import TerminalSessionScreen from "../../lib/session/TerminalSessionScreen";
@@ -11,9 +12,10 @@ import {
 	currentSessionLookup,
 	sessionLookupDue,
 	sessionLookupKey,
-	sessionRouteConfigured,
 	sessionDisplaySurface,
 	sessionRouteView,
+	resolveSessionRouteSource,
+	cloudSessionListState,
 	type KeyedSessionLookup,
 } from "../../lib/session/sessionRoute";
 import { useApp } from "../../lib/store";
@@ -29,18 +31,22 @@ import { Button, EmptyState } from "../../lib/ui";
  * `sessionRouteView`, and when the route asks is `sessionLookupDue`.
  */
 export default function MobileSessionRoute() {
-	const { id: rawId, view: requestedView } = useLocalSearchParams<{ id: string; view?: string }>();
+	const { id: rawId, view: requestedView, source: sourceParam, sourceId } = useLocalSearchParams<{ id: string; view?: string; source?: string; sourceId?: string }>();
 	const id = String(rawId ?? "");
 	const router = useRouter();
-	const { sessions, orchestrators, config, connection, environment, loading, sessionSource } = useApp();
-	const listed = sessions.find((item) => item.id === id) ?? orchestrators.find((item) => item.id === id);
+	const { scopedBoard, sourceFor, refreshSource, config, connection } = useApp();
+	const route = resolveSessionRouteSource({ id, source: sourceParam, sourceId }, [...scopedBoard.sessions, ...scopedBoard.orchestrators]);
+	const source: SourceRef | null = route.kind === "found" ? route.source : null;
+	const currentSource = source ? sourceFor(source) : undefined;
+	const listed = source ? [...scopedBoard.sessions, ...scopedBoard.orchestrators]
+		.find((entry) => resourceKey(entry.source, entry.value.id) === resourceKey(source, id))?.value : undefined;
 	const isListed = Boolean(listed);
-	const configured = sessionRouteConfigured({
-		environment,
-		sourceKind: sessionSource?.kind,
-		localConfigured: config === null ? null : isConfigured(config),
-	});
-	const machine = config ? machineIdentity(config) : "";
+	const status = source ? scopedBoard.sources[source.kind] : undefined;
+	const configured = source?.kind === "local"
+		? status?.resolved ? !!currentSource : null
+		: source?.kind === "cloud" ? !!currentSource : false;
+	const routeConnection = source?.kind === "cloud" ? currentSource ? "open" : "closed" : connection;
+	const machine = source?.kind === "local" && config ? machineIdentity(config) : "";
 	const key = sessionLookupKey(machine, id);
 	const [stored, setStored] = useState<KeyedSessionLookup | null>(null);
 	const [attempt, setAttempt] = useState(0);
@@ -66,7 +72,7 @@ export default function MobileSessionRoute() {
 	useEffect(() => {
 		const machineChanged = machineRef.current !== machine;
 		machineRef.current = machine;
-		if (isListed) {
+		if (isListed || source?.kind !== "local") {
 			// Drop the last answer so a later miss starts from a fresh question
 			// instead of briefly showing what the lookup said before it was listed.
 			setStored(null);
@@ -101,7 +107,7 @@ export default function MobileSessionRoute() {
 		// `attempt` is read only through this list: bumping it is how Retry asks
 		// again. `connection` turning "open" is how a lookup that failed, or was
 		// rejected, gets asked again once the board has reconnected.
-	}, [attempt, connection, id, isListed, key, machine]);
+	}, [attempt, connection, id, isListed, key, machine, source?.kind]);
 
 	const retry = useCallback(() => {
 		// Clearing first swaps the button for the spinner, so a second tap cannot
@@ -110,14 +116,42 @@ export default function MobileSessionRoute() {
 		setAttempt((n) => n + 1);
 	}, []);
 
-	const view = sessionRouteView({ listed, configured, connection, loading, lookup });
+	if (route.kind === "ambiguous" || route.kind === "invalid" || route.kind === "missing") return (
+		<View style={styles.center}>
+			<EmptyState icon="search" title={route.kind === "ambiguous" ? "Choose a worker from the board" : "Session source unavailable"}
+				message="This link cannot safely identify its Cloud or desktop session."
+				action={<Button title="Open Workers" onPress={() => router.navigate("/")} />} />
+		</View>
+	);
+	if (source && !currentSource && status?.resolved) return (
+		<View style={styles.center}>
+			<EmptyState icon="wifi-off" title={source.kind === "cloud" ? "Cloud session unavailable" : "Desktop session unavailable"}
+				message="This session belongs to a source that is no longer connected."
+				action={<Button title={source.kind === "cloud" ? "Sign in to Cloud" : "Pair desktop"}
+					onPress={() => router.push(source.kind === "cloud" ? "/sheets/cloud-signin" : "/pair")} />} />
+		</View>
+	);
+	if (source?.kind === "cloud" && currentSource) {
+		const cloudRef = source;
+		const cloudList = cloudSessionListState({ listed: isListed, loading: !!status?.loading, error: status?.error ?? null });
+		if (cloudList === "missing" || cloudList === "failed") return (
+			<View style={styles.center}>
+				<EmptyState icon={cloudList === "failed" ? "wifi-off" : "search"}
+					title={cloudList === "failed" ? "Couldn't load Cloud session" : "Session not found"}
+					message={cloudList === "failed" ? status?.error ?? undefined : "It may have been removed from Cloud."}
+					action={<Button title="Retry" onPress={() => void refreshSource(cloudRef)} />} />
+			</View>
+		);
+	}
+	const view = sessionRouteView({ listed, configured, connection: routeConnection, loading: !!status?.loading, lookup });
 
 	switch (view.kind) {
 		case "screen": {
-			const surface = sessionDisplaySurface({ environment, sessionMode: view.session.mode, requestedView });
-			if (surface === "cloud-terminal") return <CloudTerminalSessionScreen session={view.session} />;
+			const surface = sessionDisplaySurface({ environment: source?.kind ?? null, sessionMode: view.session.mode, requestedView });
+			if (surface === "cloud-terminal" && source) return <CloudTerminalSessionScreen session={view.session} source={source} />;
 			if (surface === "local-terminal") return <TerminalSessionScreen session={view.session} />;
-			return <ChatSessionScreen session={view.session} />;
+			if (source) return <ChatSessionScreen session={view.session} source={source} />;
+			return null;
 		}
 		case "loading":
 			return (

@@ -7,6 +7,7 @@ import {
 	filterScopedWorkers,
 	resolveUnscopedId,
 	resourceKey,
+	sourceSlice,
 	sourceKey,
 	type Scoped,
 	type SourceRef,
@@ -52,6 +53,17 @@ describe("source-qualified board", () => {
 		});
 		expect(result.sessions.map((entry) => entry.source)).toEqual([cloud]);
 		expect(result.sources.local).toEqual(unresolved);
+	});
+
+	it("selects only one source for a project detail even when IDs collide", () => {
+		const combined = composeBoards({
+			local: { status: ready, snapshot: { source: local, board: board("same", "same") } },
+			cloud: { status: ready, snapshot: { source: cloud, board: board("same", "same") } },
+		});
+		const selected = sourceSlice(combined, cloud);
+		expect(selected.projects).toHaveLength(1);
+		expect(selected.sessions).toHaveLength(1);
+		expect(selected.projects[0]).toBe(combined.projects[1].value);
 	});
 
 	it("filters workers by environment and source-qualified project", () => {

@@ -31,12 +31,14 @@ describe("Local push pairing across environment changes", () => {
 });
 
 describe("push notification tap routing", () => {
-	it.each(["cloud", null] as const)("does not route a notification outside Local (%s)", (environment) => {
-		expect(pushNotificationTarget(environment, { type: "needs_input", sessionId: "same-id-as-local" })).toBeUndefined();
-		expect(pushNotificationTarget(environment, { type: "ready_to_merge" })).toBeUndefined();
+	it("routes a legacy Local worker push to Workers because it has no host identity", () => {
+		expect(pushNotificationTarget(true, { type: "needs_input", sessionId: "worker-1" })).toBe("/");
 	});
-	it("preserves Local session and PR notification targets", () => {
-		expect(pushNotificationTarget("local", { type: "needs_input", sessionId: "worker-1" })).toBe("/session/worker-1");
-		expect(pushNotificationTarget("local", { type: "ready_to_merge" })).toBe("/prs");
+	it("does not route a Local notification without a paired desktop", () => {
+		expect(pushNotificationTarget(false, { type: "needs_input", sessionId: "same-id-as-local" })).toBeUndefined();
+		expect(pushNotificationTarget(false, { type: "ready_to_merge" })).toBeUndefined();
+	});
+	it("preserves Local PR target", () => {
+		expect(pushNotificationTarget(true, { type: "ready_to_merge" })).toBe("/prs");
 	});
 });

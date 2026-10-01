@@ -27,16 +27,16 @@ type PushData = {
 };
 
 export function PushManager(): null {
-	const { config, localConfigured, environment, connection } = useApp();
+	const { config, localConfigured, connection } = useApp();
 	const router = useRouter();
 	const navState = useRootNavigationState();
 
 	const handledColdStart = useRef(false);
 	const wasLocallyConfigured = useRef(false);
-	const routingContext = useRef({ environment, config });
+	const routingContext = useRef({ localConfigured, config });
 	useLayoutEffect(() => {
-		routingContext.current = { environment, config };
-	}, [environment, config]);
+		routingContext.current = { localConfigured, config };
+	}, [localConfigured, config]);
 
 	// Create the Android channel once at startup.
 	useEffect(() => {
@@ -103,7 +103,7 @@ export function PushManager(): null {
 	// Route notification taps: warm via the response listener, cold start via
 	// getLastNotificationResponseAsync (the listener alone misses the launch tap).
 	useEffect(() => {
-		if (!navState?.key || environment === null) return; // wait for routing and the saved environment
+		if (!navState?.key) return;
 
 		const handle = (resp: Notifications.NotificationResponse | null, coldStart: boolean) => {
 			if (!resp) return;
@@ -116,18 +116,17 @@ export function PushManager(): null {
 		}
 		const sub = Notifications.addNotificationResponseReceivedListener((r) => handle(r, false));
 		return () => sub.remove();
-		// Pending cold-start responses also read the latest committed environment/config.
+		// Pending cold-start responses read the latest committed pairing/config.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [navState?.key, environment]);
+	}, [navState?.key]);
 
 	function route(data: PushData, coldStart = false) {
 		const current = routingContext.current;
-		// Reuse the one routing rule so the reported target can't disagree with
-		// where the tap actually lands: notificationTarget returns /session/:id
-		// only for a needs_input with a sessionId, and /prs for everything else.
-		const destination = pushNotificationTarget(current.environment, { type: data.type ?? "", sessionId: data.sessionId });
+		// Legacy Local pushes lack host identity, so needs_input opens Workers;
+		// PR notifications still open the Local-only PR tab.
+		const destination = pushNotificationTarget(current.localConfigured, { type: data.type ?? "", sessionId: data.sessionId });
 		if (!destination) return;
-		const target = destination.startsWith("/session") ? "session" : "prs";
+		const target = destination === "/" ? "workers" : "prs";
 		mobileTelemetry()?.capture(MOBILE_EVENTS.notificationOpened, { target, cold_start: coldStart });
 		// Best-effort mark-read so unread counts stay consistent with the dashboard.
 		if (current.config && data.notificationId) {

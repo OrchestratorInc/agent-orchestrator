@@ -17,6 +17,8 @@ import { WorkerBoardList } from "../../lib/worker-board-list";
 import { WorkerDock } from "../../lib/worker-dock";
 import { workerListBottomInset } from "../../lib/worker-dock-layout";
 import { backOr } from "../../lib/backNavigation";
+import { resourceKey, sourceSlice } from "../../lib/environment/scopedBoard";
+import { resolveSessionRouteSource } from "../../lib/session/sessionRoute";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -30,9 +32,17 @@ export default function ProjectScreen() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { id } = useLocalSearchParams<{ id: string }>();
-	const { environment, configured, loading, error, refresh, projects, sessions, orchestrators } = useApp();
+	const { id, source: sourceParam, sourceId } = useLocalSearchParams<{ id: string; source?: string; sourceId?: string }>();
+	const { scopedBoard, sourceFor, refreshSource } = useApp();
+	const route = resolveSessionRouteSource({ id: id ?? "", source: sourceParam, sourceId }, scopedBoard.projects);
+	const source = route.kind === "found" ? route.source : null;
+	const status = source ? scopedBoard.sources[source.kind] : undefined;
+	const configured = source ? !!sourceFor(source) : false;
+	const environment = source?.kind ?? null;
 	const presentation = boardPresentation(environment, configured);
+	const loading = !!status?.loading;
+	const error = status?.error ?? null;
+	const { projects, sessions, orchestrators } = source ? sourceSlice(scopedBoard, source) : { projects: [], sessions: [], orchestrators: [] };
 	const cloudFailure = boardFailure("cloud", undefined, { host: "", port: "", platform: "" });
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
 	const [refreshing, setRefreshing] = useState(false);
@@ -52,15 +62,15 @@ export default function ProjectScreen() {
 		haptics.tap();
 		setRefreshing(true);
 		try {
-			await refresh();
+			if (source) await refreshSource(source);
 		} finally {
 			setRefreshing(false);
 		}
-	}, [refresh]);
+	}, [refreshSource, source?.kind, source?.id]);
 
 	const startTask = () => {
 		haptics.tap();
-		router.push({ pathname: "/spawn", params: { projectId: id } });
+		if (source) router.push({ pathname: "/spawn", params: { projectId: id, source: source.kind, sourceId: source.id } });
 	};
 
 	return (
@@ -81,7 +91,15 @@ export default function ProjectScreen() {
 			/>
 			{presentation.state === "board" && <StaleBanner error={!!error} onRetry={onRefresh} />}
 
-			{detailState === "cloud-unready" ? (
+			{route.kind === "ambiguous" || route.kind === "invalid" || route.kind === "missing" ? (
+				<EmptyState icon="folder" title="Choose a project from Projects" message="This link cannot safely identify its source."
+					action={<Button title="Open Projects" onPress={() => router.navigate("/projects")} />} />
+			) : source && !configured && status?.resolved ? (
+				<EmptyState icon="wifi-off" title={source.kind === "cloud" ? "Cloud project unavailable" : "Desktop project unavailable"}
+					message="This project belongs to a source that is no longer connected."
+					action={<Button title={source.kind === "cloud" ? "Sign in to Cloud" : "Pair desktop"}
+						onPress={() => router.push(source.kind === "cloud" ? "/sheets/cloud-signin" : "/pair")} />} />
+			) : detailState === "cloud-unready" ? (
 				<CloudUnreadyState />
 			) : detailState !== "project" || !row ? (
 				detailState === "loading" ? (
@@ -106,8 +124,8 @@ export default function ProjectScreen() {
 						<ProjectPageHeader
 								row={row}
 								stats={stats}
-								busy={busyProjects.has(row.project.id)}
-								onPress={canUseOrchestratorAction(environment, row.action) ? openOrchestrator : undefined}
+								busy={source ? busyProjects.has(resourceKey(source, row.project.id)) : false}
+								onPress={source && canUseOrchestratorAction(environment, row.action) ? () => openOrchestrator({ source, value: row }) : undefined}
 						/>
 					}
 					ListEmptyComponent={

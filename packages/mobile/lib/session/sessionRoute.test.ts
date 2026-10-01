@@ -14,8 +14,36 @@ import {
 	sessionRouteConfigured,
 	sessionDisplaySurface,
 	sessionRouteView,
+	routeSource,
+	resolveSessionRouteSource,
+	cloudSessionListState,
 	type SessionLookup,
 } from "./sessionRoute";
+
+describe("source-qualified session routes", () => {
+	it("shows an absent Cloud session only after its list loaded, without waiting forever", () => {
+		expect(cloudSessionListState({ listed: false, loading: true, error: null })).toBe("loading");
+		expect(cloudSessionListState({ listed: false, loading: false, error: "timeout" })).toBe("failed");
+		expect(cloudSessionListState({ listed: false, loading: false, error: null })).toBe("missing");
+		expect(cloudSessionListState({ listed: true, loading: false, error: null })).toBe("listed");
+	});
+	it("validates explicit Cloud and Local identities", () => {
+		expect(routeSource({ source: "cloud", sourceId: "org-1" })).toEqual({ kind: "cloud", id: "org-1" });
+		expect(routeSource({ source: "local", sourceId: "mac-1" })).toEqual({ kind: "local", id: "mac-1" });
+		expect(routeSource({ source: "local", sourceId: "" })).toEqual({ kind: "invalid" });
+		expect(routeSource({ source: "unknown", sourceId: "org-1" })).toEqual({ kind: "invalid" });
+	});
+
+	it("never guesses an unscoped ID shared by Local and Cloud", () => {
+		const entries = [
+			{ source: { kind: "local" as const, id: "mac-1" }, value: { id: "same" } },
+			{ source: { kind: "cloud" as const, id: "org-1" }, value: { id: "same" } },
+		];
+		expect(resolveSessionRouteSource({ id: "same" }, entries)).toEqual({ kind: "ambiguous" });
+		expect(resolveSessionRouteSource({ id: "same", source: "cloud", sourceId: "org-1" }, entries)).toEqual({ kind: "found", source: entries[1].source });
+		expect(resolveSessionRouteSource({ id: "same", source: "local", sourceId: "old-mac" }, entries)).toEqual({ kind: "found", source: { kind: "local", id: "old-mac" } });
+	});
+});
 
 describe("sessionDisplaySurface", () => {
 	it("opens a Cloud terminal only for an explicit Cloud terminal view", () => {
@@ -23,6 +51,9 @@ describe("sessionDisplaySurface", () => {
 		expect(sessionDisplaySurface({ environment: "cloud", sessionMode: "chat", requestedView: undefined })).toBe("chat");
 		expect(sessionDisplaySurface({ environment: "local", sessionMode: "chat", requestedView: "terminal" })).toBe("chat");
 		expect(sessionDisplaySurface({ environment: "local", sessionMode: "tui", requestedView: "terminal" })).toBe("local-terminal");
+	});
+	it("does not route a Cloud TUI session to the desktop-only terminal surface", () => {
+		expect(sessionDisplaySurface({ environment: "cloud", sessionMode: "tui" })).toBe("cloud-terminal");
 	});
 });
 

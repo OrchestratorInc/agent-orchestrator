@@ -4,9 +4,34 @@
 import type { DashboardSession, OrchestratorLink } from "../api";
 import { isSessionGone, shouldKeepPolling } from "../connectionError";
 import type { EnvironmentKind } from "../environment/types";
+import { resolveUnscopedId, type Scoped, type SourceRef } from "../environment/scopedBoard";
 import type { ConnStatus } from "../store";
 
 export type RouteSession = DashboardSession | OrchestratorLink;
+
+/** An explicit invalid source is never silently replaced by another board. */
+export function routeSource(params: { source?: string | string[]; sourceId?: string | string[] }): SourceRef | { kind: "invalid" } | null {
+	const { source, sourceId } = params;
+	if (source === undefined && sourceId === undefined) return null;
+	if ((source !== "local" && source !== "cloud") || typeof sourceId !== "string" || !sourceId.trim()) return { kind: "invalid" };
+	return { kind: source, id: sourceId };
+}
+
+export function resolveSessionRouteSource(
+	params: { id: string; source?: string | string[]; sourceId?: string | string[] },
+	entries: readonly Scoped<{ id: string }>[],
+): { kind: "found"; source: SourceRef } | { kind: "missing" | "ambiguous" | "invalid" } {
+	const explicit = routeSource(params);
+	if (explicit) return explicit.kind === "invalid" ? explicit : { kind: "found", source: explicit };
+	const match = resolveUnscopedId(params.id, entries);
+	return match.kind === "found" ? { kind: "found", source: match.entry.source } : match;
+}
+
+export function cloudSessionListState(input: { listed: boolean; loading: boolean; error: string | null }): "listed" | "loading" | "failed" | "missing" {
+	if (input.listed) return "listed";
+	if (input.loading) return "loading";
+	return input.error ? "failed" : "missing";
+}
 
 /** What `GET /sessions/{id}` has said about an id the board's lists do not hold. */
 export type SessionLookup =
@@ -34,7 +59,9 @@ export function sessionDisplaySurface(input: {
 	sessionMode: "chat" | "tui";
 	requestedView?: string;
 }): "chat" | "local-terminal" | "cloud-terminal" {
-	if (input.environment === "cloud" && input.requestedView === "terminal") return "cloud-terminal";
+	if (input.environment === "cloud") {
+		return input.requestedView === "terminal" || input.sessionMode === "tui" ? "cloud-terminal" : "chat";
+	}
 	return input.sessionMode === "chat" ? "chat" : "local-terminal";
 }
 

@@ -53,6 +53,16 @@ export function filterScopedWorkers(
 		(projectKey === "all" || resourceKey(source, value.projectId) === projectKey));
 }
 
+/** One detail page never consumes rows from its peer source. */
+export function sourceSlice(board: ScopedBoard, source: SourceRef): SessionSourceBoard {
+	const belongs = <T,>(entry: Scoped<T>) => sourceKey(entry.source) === sourceKey(source);
+	return {
+		projects: board.projects.filter(belongs).map((entry) => entry.value),
+		sessions: board.sessions.filter(belongs).map((entry) => entry.value),
+		orchestrators: board.orchestrators.filter(belongs).map((entry) => entry.value),
+	};
+}
+
 export function resolveUnscopedId<T extends { id: string }>(
 	id: string,
 	entries: readonly Scoped<T>[],
