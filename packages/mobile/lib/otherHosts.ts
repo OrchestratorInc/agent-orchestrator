@@ -89,7 +89,8 @@ export function startOtherHost(host: Host, previous: HostSnapshot | undefined, p
 			if (stopped) return;
 			if (!result.ok || result.hostId !== host.id) {
 				runner.config = null;
-				update({ config: null, connection: "closed", loading: false, error: "Host is unreachable", errorStatus: null });
+				const incompatible = !result.ok && result.reason === "incompatible";
+				update({ config: null, connection: "closed", loading: false, error: incompatible ? "AO versions are incompatible. Update AO on this phone and the machine." : "Host is unreachable", errorStatus: incompatible ? 426 : null });
 				schedule(15_000);
 				return;
 			}

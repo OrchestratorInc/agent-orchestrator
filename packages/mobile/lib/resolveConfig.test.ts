@@ -11,6 +11,7 @@ import { DEFAULT_CONFIG, type ServerConfig } from "./config";
 import type { Endpoint } from "./endpoints";
 import type { Host } from "./hosts";
 import { resolveActiveConfig } from "./resolveConfig";
+import { IncompatibleHostVersionError } from "./race";
 
 const lan: Endpoint = { kind: "lan", host: "192.168.1.42", port: 3011, secure: false };
 const tunnel: Endpoint = { kind: "tunnel", host: "abc.trycloudflare.com", port: 443, secure: true };
@@ -55,6 +56,25 @@ describe("resolveActiveConfig", () => {
 		await resolveActiveConfig(d);
 
 		expect(d.persist).not.toHaveBeenCalled();
+	});
+
+	it("keeps incompatible host failures distinct from offline without using a cached address", async () => {
+		const d = deps({ connect: vi.fn(async () => ({ ok: false as const, reason: "incompatible" as const })) });
+		await expect(resolveActiveConfig(d)).rejects.toBeInstanceOf(IncompatibleHostVersionError);
+		expect(d.persist).not.toHaveBeenCalled();
+		expect(d.loadLegacyConfig).not.toHaveBeenCalled();
+	});
+
+	it("rejects a host upgrade on reconnect even after a working v1 connection", async () => {
+		const working = deps().connect;
+		const connect = vi.fn()
+			.mockImplementationOnce(working)
+			.mockResolvedValueOnce({ ok: false as const, reason: "incompatible" as const });
+		const d = deps({ connect });
+		await expect(resolveActiveConfig(d)).resolves.toMatchObject({ host: "192.168.1.42" });
+		await expect(resolveActiveConfig(d)).rejects.toBeInstanceOf(IncompatibleHostVersionError);
+		expect(connect).toHaveBeenCalledTimes(2);
+		expect(d.persist).toHaveBeenCalledTimes(1);
 	});
 
 	// Which machine that is belongs to hosts.activeHost — an explicit selection

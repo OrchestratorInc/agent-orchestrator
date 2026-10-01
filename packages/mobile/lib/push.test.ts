@@ -45,7 +45,7 @@ describe("push registration across machines", () => {
 		plain.clear();
 		secure.clear();
 		vi.clearAllMocks();
-		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_b" }) })));
+		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_b", apiVersion: 1 }) })));
 	});
 
 	it("does not send A's bearer to B when B takes A's old address", async () => {
@@ -58,7 +58,7 @@ describe("push registration across machines", () => {
 
 	it("keeps A registered when B connects", async () => {
 		await registerForPush(config("h_a"));
-		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_a" }) })));
+		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_a", apiVersion: 1 }) })));
 
 		await registerForPush(config("h_b", "100.101.102.103"));
 
@@ -104,7 +104,7 @@ describe("push registration across machines", () => {
 		});
 		vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
 			ok: true,
-			json: async () => ({ hostId: url.includes("192.168.1.42") ? "h_a" : "h_b" }),
+			json: async () => ({ hostId: url.includes("192.168.1.42") ? "h_a" : "h_b", apiVersion: 1 }),
 		})));
 
 		const onA = registerForPush(config("h_a"));
@@ -153,7 +153,7 @@ describe("push registration across machines", () => {
 		await registerForPush(config("h_b"));
 		expect(unregisterPushDevice).not.toHaveBeenCalled();
 
-		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_a" }) })));
+		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_a", apiVersion: 1 }) })));
 		await registerForPush(config("h_b"));
 		expect(unregisterPushDevice).toHaveBeenCalledExactlyOnceWith(
 			expect.objectContaining({ hostId: "h_a", host: old.host, password: old.password }),
@@ -167,7 +167,7 @@ describe("push registration across machines", () => {
 		secure.set("ao.pushPendingUnregister", JSON.stringify([{
 			token: "ExponentPushToken[test]", hostId: "h_a", host: "192.168.1.42", httpPort: "3011", secure: false, password: "token-h_a",
 		}]));
-		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_a" }) })));
+		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_a", apiVersion: 1 }) })));
 
 		await registerForPush(config("h_b"));
 
@@ -195,7 +195,7 @@ describe("push registration across machines", () => {
 	it("turns off B without changing A's registration", async () => {
 		await registerForPush(config("h_a"));
 		await registerForPush(config("h_b", "100.101.102.103"));
-		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_b" }) })));
+		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_b", apiVersion: 1 }) })));
 
 		await unregisterFromPush(config("h_b", "100.101.102.103"));
 
@@ -222,7 +222,7 @@ describe("push registration across machines", () => {
 			token: "current-pairing-token", lastConnected: 1,
 		});
 		await setActiveHost("h_a");
-		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_a" }) })));
+		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_a", apiVersion: 1 }) })));
 
 		expect((await getPushStatus(legacy)).registered).toBe(true);
 		await forgetServer();
@@ -275,7 +275,7 @@ describe("push registration across machines", () => {
 			token: "token-h_b", lastConnected: 2,
 		});
 		await setActiveHost("h_b");
-		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_a" }) })));
+		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_a", apiVersion: 1 }) })));
 
 		await forgetServer();
 

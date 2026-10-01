@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { probeRemote, readRemoteIdentity, type RemoteHealth } from "./remote-request";
+import { IncompatibleRemoteVersionError, probeRemote, readRemoteIdentity, type RemoteHealth } from "./remote-request";
 import { findRemote, removeSavedRemote, toHostViews, updateSavedRemote } from "./remotes-ipc";
 import type { RemoteRegistry } from "./remote-registry";
 import { addRemote, readRemotes, type RemoteChanges, type RemoteEntry } from "./remotes-store";
@@ -41,7 +41,8 @@ export function registerRemotesIpc(
 		let actual: string;
 		try {
 			actual = await identity(entry);
-		} catch {
+		} catch (error) {
+			if (error instanceof IncompatibleRemoteVersionError) return "incompatible";
 			return "offline";
 		}
 		if (actual !== entry.hostId) throw new Error(`remote host identity changed for ${entry.url}; connection refused`);
@@ -63,7 +64,8 @@ export function registerRemotesIpc(
 		let hostId: string;
 		try {
 			hostId = await identity(input);
-		} catch {
+		} catch (error) {
+			if (error instanceof IncompatibleRemoteVersionError) return "incompatible" as RemoteHealth;
 			return "offline" as RemoteHealth;
 		}
 		const entry = { label: input.label, url: input.url, password: input.password, hostId };

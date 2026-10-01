@@ -29,7 +29,7 @@ export function configForEndpoint(endpoint: Endpoint, token: string, hostId = ""
 
 export type ConnectResult =
 	| { ok: true; config: ServerConfig; endpoint: Endpoint; hostId: string }
-	| { ok: false; reason: "unknown-host" | "no-candidates" | "none-reachable" };
+	| { ok: false; reason: "unknown-host" | "no-candidates" | "none-reachable" | "incompatible" };
 
 export type ConnectDeps = {
 	findHost: (id: string) => Promise<Host | null>;

@@ -77,6 +77,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			if (health === "offline") throw new Error(t("remote.hostOffline"));
 			if (health === "unauthorized") throw new Error(t("remote.hostUnauthorized"));
 			if (health === "not-a-daemon") throw new Error(t("remote.hostNotDaemon"));
+			if (health === "incompatible") throw new Error(t("remote.hostIncompatible"));
 			if (editing?.hostId) await disconnectHost(editing.hostId);
 			if (editing && !editing.hostId && editing.url !== nextUrl) await aoBridge.remotes.remove(editing.url);
 			await load();

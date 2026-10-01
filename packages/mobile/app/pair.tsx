@@ -125,7 +125,7 @@ export default function PairScreen() {
 				: { host: "", port: "", platform: Platform.OS };
 			setFailure(
 				describeConnectionFailure(
-					result.reason === "not-ao-qr" ? "not-ao-qr" : classifyConnectionFailure(undefined),
+					result.reason === "not-ao-qr" ? "not-ao-qr" : result.reason === "incompatible" ? "incompatible-host" : classifyConnectionFailure(undefined),
 					errorTarget,
 				),
 			);

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { probeRemote, readRemoteIdentity } from "./remote-request";
+import { IncompatibleRemoteVersionError, probeRemote, readRemoteIdentity } from "./remote-request";
 
 const entry = { label: "workbox", url: "http://192.0.2.1:3011", password: "pw" };
 
@@ -27,6 +27,10 @@ describe("readRemoteIdentity", () => {
 	});
 	it("rejects the desktop's reserved local host ID", async () => {
 		await expect(readRemoteIdentity(entry, fakeFetch(200, { hostId: "local" }))).rejects.toThrow(/reserved/);
+	});
+	it.each([undefined, 2])("rejects incompatible API version %s before using the credential", async (apiVersion) => {
+		await expect(readRemoteIdentity(entry, fakeFetch(200, { hostId: "h_workbox", apiVersion })))
+			.rejects.toBeInstanceOf(IncompatibleRemoteVersionError);
 	});
 });
 

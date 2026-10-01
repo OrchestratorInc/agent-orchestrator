@@ -3,6 +3,7 @@ import { loadConfig, saveConfig, type ServerConfig } from "./config";
 import type { Host } from "./hosts";
 import { activeHost, migrateLegacyConfig } from "./hosts";
 import { connectToHost, type ConnectOptions } from "./connectRuntime";
+import { IncompatibleHostVersionError } from "./race";
 
 export type ResolveDeps = {
 	migrate: () => Promise<void>;
@@ -50,7 +51,9 @@ export async function resolveActiveConfig(deps: ResolveDeps): Promise<ServerConf
 				await deps.persist(result.config);
 				return result.config;
 			}
-		} catch {
+			if (result.reason === "incompatible") throw new IncompatibleHostVersionError(host.id);
+		} catch (error) {
+			if (error instanceof IncompatibleHostVersionError) throw error;
 			// An unavailable selected host must not silently become another host.
 		}
 	}

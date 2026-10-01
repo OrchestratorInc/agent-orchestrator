@@ -6,6 +6,7 @@ import { DEFAULT_CONFIG, saveConfig, type ServerConfig } from "./config";
 import { saveHost, setActiveHost } from "./hosts";
 import { adoptManualConnection } from "./manualConnect";
 import { probeIdentity } from "./connectRuntime";
+import { IncompatibleHostVersionError } from "./race";
 import {
 	classifyConnectionFailure,
 	describeConnectionFailure,
@@ -42,6 +43,10 @@ export function ManualConnectSheet({ onConnected }: { onConnected: () => void })
 		setFailure(null);
 		const target = { ...cfg, host: cfg.host.trim() };
 		try {
+			// Identity is public; reject unsupported hosts before presenting a password.
+			let hostId = "";
+			try { hostId = await probeIdentity(target); }
+			catch (error) { if (error instanceof IncompatibleHostVersionError) throw error; }
 			// Verify BEFORE persisting. pingServer takes the config it is handed, so
 			// nothing needs to be saved to test it — and saving first would leave
 			// known-bad credentials on disk. The background poller retries every 8s,
@@ -54,13 +59,7 @@ export function ManualConnectSheet({ onConnected }: { onConnected: () => void })
 			// left resolution reconnecting the previously active machine on the
 			// next launch, so a manual connection silently did not stick.
 			await adoptManualConnection(target, {
-				identity: async (c) => {
-					try {
-						return await probeIdentity(c);
-					} catch {
-						return ""; // Older daemon, or an endpoint that cannot say: still worth storing.
-					}
-				},
+				identity: async () => hostId,
 				saveHost,
 				setActiveHost,
 			});
@@ -69,7 +68,7 @@ export function ManualConnectSheet({ onConnected }: { onConnected: () => void })
 			onConnected();
 		} catch (e) {
 			haptics.warning();
-			const status = e instanceof ApiError ? e.status : undefined;
+			const status = e instanceof IncompatibleHostVersionError ? 426 : e instanceof ApiError ? e.status : undefined;
 			setFailure(
 				describeConnectionFailure(classifyConnectionFailure(status), {
 					host: target.host,

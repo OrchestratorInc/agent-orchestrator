@@ -38,6 +38,7 @@ import { shouldRaceForUpgrade, UPGRADE_RACE_CHECK_MS } from "./upgradeRace";
 import { pollResultIsCurrent, sameServerConfig } from "./sameConfig";
 import { shouldShowLoading } from "./configLoading";
 import { isDesktopUnreachable, shouldKeepPolling, userFacingError } from "./connectionError";
+import { IncompatibleHostVersionError } from "./race";
 import { primeInstallId } from "./installId";
 import { collectPRs } from "./prView";
 import { ALL_PROJECTS, NO_PROJECTS_KNOWN, projectsForMachine, resolveActiveProject, retainProjects, sessionRowsForMachine, type KnownProjects } from "./projectFilter";
@@ -351,6 +352,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			setActiveEndpoints(active?.endpoints ?? []);
 			setSelectedHostId(active?.id ?? null);
 			return next;
+		} catch (cause) {
+			if (!(cause instanceof IncompatibleHostVersionError)) throw cause;
+			if (resolution !== configResolution.current) return null;
+			cfgRef.current = null;
+			setConfig(null);
+			setError(cause.message);
+			setErrorStatus(426);
+			setConnection("closed");
+			return null;
 		} finally {
 			if (resolution === configResolution.current) {
 				setConfigResolved(true);
@@ -532,6 +542,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// Network/other errors are transient, so keep polling for recovery.
 			// Decided from the status, not the message text: see shouldKeepPolling.
 			const keepPolling = shouldKeepPolling(status);
+			if (status === 426) {
+				cfgRef.current = null;
+				setConfig(null);
+			}
 			if (await rejectedEndpointNeedsRace(c, status) && pollResultIsCurrent(c, cfgRef.current)) {
 				// A different machine can acquire the same LAN address while the app
 				// stays foregrounded. Drop that URL before racing verified endpoints.

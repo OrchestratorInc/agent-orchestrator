@@ -154,6 +154,23 @@ it("hides stale chat controls when the upstream daemon fails but its proxy remai
 	expect(localPost).not.toHaveBeenCalled();
 });
 
+it.each([
+	[401, { error: "unauthorized", code: "BAD_PASSWORD" }, "Host rejected the password"],
+	[426, { error: "incompatible", code: "HOST_API_INCOMPATIBLE" }, "AO versions are incompatible"],
+	[502, { error: "remote host identity not verified" }, "Host is offline"],
+])("explains remote session HTTP %i failures while its proxy is still connected", async (status, body, message) => {
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		return Response.json(new URL(request.url).pathname.endsWith("/projects")
+			? { projects: [{ id: "project-1", name: "Remote", path: "/remote" }] }
+			: body, { status: new URL(request.url).pathname.endsWith("/projects") ? 200 : status });
+	}));
+	await connectHost("http://box-a:3001");
+	renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+	await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(message));
+});
+
 it("resolves an approval and interrupts Box B despite equal IDs on Box A and local", async () => {
 	localGet.mockReset();
 	localPost.mockReset();

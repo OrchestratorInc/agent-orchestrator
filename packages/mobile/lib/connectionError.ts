@@ -13,6 +13,7 @@ import type { FeatherIconName } from "./icons";
 export type ConnectionFailure =
 	| "not-ao-qr" // the scanned code wasn't an AO pairing payload
 	| "outdated-desktop" // a v1 code: AO on the computer is too old to pair with
+	| "incompatible-host" // the host reported an API version this phone cannot use
 	| "tunnel-rotated" // nothing answered, and the only remote path was a tunnel
 	| "unreachable" // nothing answered (DNS failure, refused, timeout)
 	| "auth" // 401/403 — the password is wrong or was rotated
@@ -25,6 +26,7 @@ export type ConnectionFailure =
  */
 export function classifyConnectionFailure(status: number | undefined): ConnectionFailure {
 	if (status === undefined) return "unreachable";
+	if (status === 426) return "incompatible-host";
 	if (status === 401 || status === 403) return "auth";
 	if (status === 429) return "rate-limited";
 	return "server-error";
@@ -47,7 +49,7 @@ export function classifyConnectionFailure(status: number | undefined): Connectio
  */
 export function shouldKeepPolling(status: number | undefined): boolean {
 	const failure = classifyConnectionFailure(status);
-	return failure !== "auth" && failure !== "rate-limited";
+	return failure !== "auth" && failure !== "rate-limited" && failure !== "incompatible-host";
 }
 
 /**
@@ -146,6 +148,13 @@ export function describeConnectionFailure(
 		reason === "unreachable" && target.platform === "ios" && isLocalNetworkHost(target.host);
 
 	switch (reason) {
+		case "incompatible-host":
+			return {
+				title: "AO versions are incompatible",
+				icon: "download-cloud",
+				message: "Update AO on this phone and the machine, then reconnect.",
+				showLocalNetworkHint: false,
+			};
 		case "tunnel-rotated":
 			return {
 				title: "Your machine's address changed",

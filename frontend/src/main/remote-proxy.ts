@@ -4,7 +4,7 @@ import { connect as netConnect, isIP, type AddressInfo, type Socket } from "node
 import { connect as tlsConnect } from "node:tls";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import path from "node:path";
-import { readRemoteIdentity } from "./remote-request";
+import { IncompatibleRemoteVersionError, readRemoteIdentity } from "./remote-request";
 import type { RemoteEntry } from "./remotes-store";
 
 // Loopback proxy fronting one remote AO daemon. It exists because the renderer
@@ -204,8 +204,11 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			await verifyUpstream();
 		} catch (error) {
 			warn(`upstream ${upstream.host} identity check failed on ${req.method} ${safeLogPath(path, preview?.kind)} (${(error as Error).message})`);
-			res.writeHead(502, { "content-type": "application/json", ...corsHeaders });
-			res.end('{"error":"remote host identity not verified"}');
+			const incompatible = error instanceof IncompatibleRemoteVersionError;
+			res.writeHead(incompatible ? 426 : 502, { "content-type": "application/json", ...corsHeaders });
+			res.end(incompatible
+				? JSON.stringify({ error: "incompatible", code: "HOST_API_INCOMPATIBLE", message: error.message })
+				: '{"error":"remote host identity not verified"}');
 			return;
 		}
 		if (res.destroyed) return;

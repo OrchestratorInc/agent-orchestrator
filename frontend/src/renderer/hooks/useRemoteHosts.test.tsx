@@ -12,7 +12,7 @@ const remotes = vi.hoisted(() => ({
 vi.mock("../lib/bridge", () => ({ aoBridge: { remotes } }));
 
 import { baseUrlForHost, connectedHosts } from "../lib/host-clients";
-import { useRemoteHosts } from "./useRemoteHosts";
+import { requestRemoteHostsRefresh, useRemoteHosts } from "./useRemoteHosts";
 
 beforeEach(() => {
 	remotes.list.mockReset().mockResolvedValue([
@@ -70,6 +70,28 @@ it("shows password rejected when a connected host rejects its saved credential",
 	remotes.connect.mockRejectedValueOnce(new Error("host http://box-a:3001 is unauthorized"));
 	await act(async () => result.current.refresh());
 	expect(result.current.hosts[0]).toMatchObject({ status: "offline", failureReason: "unauthorized" });
+	expect(connectedHosts()).not.toContain("box-a");
+});
+
+it("turns a connected host offline when a remote request asks for a connection recheck", async () => {
+	remotes.list.mockResolvedValue([{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }]);
+	useUiStore.setState({ remoteHosts: true });
+	const { result } = renderHook(() => useRemoteHosts());
+	await waitFor(() => expect(result.current.hosts[0]?.status).toBe("connected"));
+	remotes.connect.mockRejectedValueOnce(new Error("host http://box-a:3001 is unauthorized"));
+	act(() => requestRemoteHostsRefresh());
+	await waitFor(() => expect(result.current.hosts[0]).toMatchObject({ status: "offline", failureReason: "unauthorized" }));
+	expect(connectedHosts()).not.toContain("box-a");
+});
+
+it("shows an incompatible API version after reconnect without retaining the old proxy", async () => {
+	remotes.list.mockResolvedValue([{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }]);
+	useUiStore.setState({ remoteHosts: true });
+	const { result } = renderHook(() => useRemoteHosts());
+	await waitFor(() => expect(result.current.hosts[0]?.status).toBe("connected"));
+	remotes.connect.mockRejectedValueOnce(new Error("host http://box-a:3001 is incompatible"));
+	await act(async () => result.current.refresh());
+	expect(result.current.hosts[0]).toMatchObject({ status: "offline", failureReason: "incompatible" });
 	expect(connectedHosts()).not.toContain("box-a");
 });
 

@@ -288,6 +288,21 @@ describe("startRemoteProxy", () => {
 		expect(warned.join("\n")).not.toContain("secret-code");
 	});
 
+	it("stops forwarding after a host upgrades to an incompatible API", async () => {
+		const { port, seen } = await startUpstream((request) => ({
+			status: 200,
+			body: request.url === "/api/v1/identity"
+				? '{"hostId":"h_workbox","apiVersion":2}'
+				: "{}",
+		}));
+		proxy = await startRemoteProxy({ hostId: "h_workbox", label: "workbox", url: `http://127.0.0.1:${port}`, password: "secret" });
+		const response = await fetch(`${proxy.base}/api/v1/projects`);
+		expect(response.status).toBe(426);
+		expect(await response.json()).toMatchObject({ code: "HOST_API_INCOMPATIBLE", message: expect.stringContaining("Update AO") });
+		expect(seen.map((request) => request.url)).toEqual(["/api/v1/identity"]);
+		expect(seen[0].auth).toBeUndefined();
+	});
+
 	it("connects a saved address without an explicit scheme", async () => {
 		const { port, seen } = await startUpstream(() => ({ status: 200, body: "{}" }));
 		proxy = await startRemoteProxy({ label: "workbox", url: `127.0.0.1:${port}`, password: "pw" });

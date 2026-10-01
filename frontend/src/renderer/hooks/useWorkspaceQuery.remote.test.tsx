@@ -11,7 +11,7 @@ vi.mock("../lib/agent-switch-visibility", () => ({ agentSwitchVisibility: { setQ
 vi.mock("./useCloudCp", () => ({ useCloudCp: () => ({ ready: false, baseUrl: "", client: {} }) }));
 vi.mock("./useCloudOrg", () => ({ useCloudOrg: () => ({ org: undefined, ready: false }) }));
 
-import { connectHost, disconnectHost } from "../lib/host-clients";
+import { connectHost, connectedHosts, disconnectHost } from "../lib/host-clients";
 import { remoteWorkspaceQueryKey, useRemoteWorkspaces, useWorkspaceQuery, useWorkspaceSession } from "./useWorkspaceQuery";
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -19,8 +19,9 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 afterEach(async () => {
-	await disconnectHost("box-a");
+	for (const hostId of connectedHosts()) await disconnectHost(hostId);
 	vi.unstubAllGlobals();
+	vi.restoreAllMocks();
 });
 
 async function prepareTwoHosts() {
@@ -63,6 +64,39 @@ it("reports a failed remote query instead of treating the host as empty and heal
 	await waitFor(() => expect(result.current.failedHostIds).toEqual(["box-a"]), { timeout: 3000 });
 	expect(result.current.data).toEqual([]);
 	expect(result.current.loadedProjectHostIds).toEqual([]);
+});
+
+it.each([
+	[401, true],
+	[426, true],
+	[502, true],
+	[500, false],
+])("rechecks a connected host after a remote HTTP %i response only when connection health is in doubt", async (status, shouldRecheck) => {
+	const hostId = `box-${status}`;
+	remoteConnect.mockResolvedValue({ hostId, label: "Box", url: "http://box:3001", base: "http://127.0.0.1:4000" });
+	vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "failed" }, { status })));
+	await connectHost("http://box:3001");
+	const dispatched = vi.spyOn(window, "dispatchEvent");
+	const { result } = renderHook(() => useWorkspaceSession("session-1", hostId), { wrapper });
+	await waitFor(() => expect(result.current.isError).toBe(true));
+	expect(dispatched.mock.calls.some(([event]) => event.type === "ao:remote-hosts-changed")).toBe(shouldRecheck);
+});
+
+it("coalesces simultaneous and repeated remote request failures into one host recheck", async () => {
+	remoteConnect.mockResolvedValue({ hostId: "box-gate", label: "Box", url: "http://box:3001", base: "http://127.0.0.1:4000" });
+	vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "unauthorized", code: "BAD_PASSWORD" }, { status: 401 })));
+	await connectHost("http://box:3001");
+	const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+	const dispatched = vi.spyOn(window, "dispatchEvent");
+	const { result } = renderHook(() => useRemoteWorkspaces(), { wrapper });
+	await waitFor(() => expect(result.current.failedHostIds).toEqual(["box-gate"]), { timeout: 3000 });
+	const refreshCount = () => dispatched.mock.calls.filter(([event]) => event.type === "ao:remote-hosts-changed").length;
+	expect(refreshCount()).toBe(1);
+	await act(async () => { await result.current.refetch(); });
+	expect(refreshCount()).toBe(1);
+	now.mockReturnValue(1_015_000);
+	await act(async () => { await result.current.refetch(); });
+	expect(refreshCount()).toBe(2);
 });
 
 it("keeps a host's registered projects visible when its sessions request fails", async () => {

@@ -7,7 +7,7 @@ const remotes = vi.hoisted(() => ({
 	list: vi.fn(async () => saved.entries),
 	add: vi.fn(async ({ label, url }: { label: string; url: string }) => {
 		saved.entries = [{ hostId: "box-a", label, url }];
-		return "online" as const;
+		return "online" as "online" | "incompatible";
 	}),
 	connect: vi.fn(async (url: string) => ({ hostId: "box-a", label: "Box A", url, base: "http://127.0.0.1:4000" })),
 	disconnect: vi.fn(async () => undefined),
@@ -57,6 +57,17 @@ it("pairs a host and shows it in the saved-host list", async () => {
 	await waitFor(() => expect(screen.getByText("Box A")).toBeVisible());
 	expect(remotes.add).toHaveBeenCalledWith({ label: "Box A", url: "http://box-a:3001", password: "secret123" });
 	expect(screen.getByLabelText("Connection password")).toHaveAttribute("type", "password");
+});
+
+it("explains an incompatible host without adding it", async () => {
+	remotes.add.mockResolvedValueOnce("incompatible");
+	render(<RemoteHostsSettings />);
+	fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Box A" } });
+	fireEvent.change(screen.getByRole("textbox", { name: "Address" }), { target: { value: "http://box-a:3001" } });
+	fireEvent.change(screen.getByLabelText("Connection password"), { target: { value: "secret123" } });
+	fireEvent.click(screen.getByRole("button", { name: "Add host" }));
+	await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Update AO"));
+	expect(saved.entries).toEqual([]);
 });
 
 it("explains how to re-pair a saved host without an identity", async () => {

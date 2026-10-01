@@ -33,6 +33,11 @@ describe("classifyConnectionFailure", () => {
 	it("maps 429 to rate-limited", () => {
 		expect(classifyConnectionFailure(429)).toBe("rate-limited");
 	});
+	it("names an incompatible host and stops polling it", () => {
+		expect(classifyConnectionFailure(426)).toBe("incompatible-host");
+		expect(describeConnectionFailure("incompatible-host", target()).message).toContain("Update AO");
+		expect(shouldKeepPolling(426)).toBe(false);
+	});
 
 	it("maps any other status to a server error", () => {
 		expect(classifyConnectionFailure(500)).toBe("server-error");

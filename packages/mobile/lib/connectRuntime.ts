@@ -13,7 +13,13 @@ import type { ServerConfig } from "./config";
 import { type Endpoint, endpointBaseUrl } from "./endpoints";
 import { shouldRetryProbe, TUNNEL_PROBE_RETRY_DELAY_MS } from "./probeRetry";
 import { adoptHostIdentity, findHost, touchHost, updateHostEndpoints } from "./hosts";
-import { type ProbeAnswer, raceEndpoints } from "./race";
+import { IncompatibleHostVersionError, type ProbeAnswer, raceEndpoints } from "./race";
+
+function identityHost(body: { hostId?: unknown; apiVersion?: unknown }): string {
+	const hostId = typeof body.hostId === "string" ? body.hostId : "";
+	if (hostId && body.apiVersion !== 1) throw new IncompatibleHostVersionError(hostId);
+	return hostId;
+}
 
 /** How long a single endpoint gets to identify itself.
  *
@@ -37,6 +43,7 @@ export async function probeEndpoint(endpoint: Endpoint, signal: AbortSignal): Pr
 			return await probeOnce(endpoint, signal);
 		} catch (e) {
 			if (signal.aborted) throw e; // The race already has a winner.
+			if (e instanceof IncompatibleHostVersionError) throw e;
 			if (!shouldRetryProbe(endpoint.kind, Date.now() - startedAt)) throw e;
 			await waitOrAbort(TUNNEL_PROBE_RETRY_DELAY_MS, signal);
 		}
@@ -70,11 +77,11 @@ async function probeOnce(endpoint: Endpoint, signal: AbortSignal): Promise<Probe
 			signal: controller.signal,
 		});
 		if (!res.ok) throw new Error(`identity probe returned ${res.status}`);
-		const body = (await res.json()) as { hostId?: unknown };
-		if (typeof body.hostId !== "string" || body.hostId === "") {
+		const hostId = identityHost((await res.json()) as { hostId?: unknown; apiVersion?: unknown });
+		if (!hostId) {
 			throw new Error("identity probe returned no host id");
 		}
-		return { hostId: body.hostId };
+		return { hostId };
 	} finally {
 		clearTimeout(timeout);
 		signal.removeEventListener("abort", onOuterAbort);
@@ -93,8 +100,7 @@ export async function probeIdentity(cfg: {
 	const base = `${cfg.secure ? "https" : "http"}://${cfg.host}:${cfg.httpPort}`;
 	const res = await fetch(`${base}/api/v1/identity`, { method: "GET" });
 	if (!res.ok) throw new Error(`identity probe returned ${res.status}`);
-	const body = (await res.json()) as { hostId?: unknown };
-	return typeof body.hostId === "string" ? body.hostId : "";
+	return identityHost((await res.json()) as { hostId?: unknown; apiVersion?: unknown });
 }
 
 /** On a host mismatch (or ambiguous auth rejection), re-race verified endpoints. */

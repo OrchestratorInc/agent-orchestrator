@@ -227,14 +227,17 @@ export function RemoteSessionView({ hostId, sessionId }: { hostId: string; sessi
 		><PanelRight aria-hidden="true" className="size-icon-md" /></TopbarButton>
 		<NotificationCenter />
 	</div>;
-	const hostUnavailable = !proxyBase || (session.isError && (
-		apiErrorCode(session.error) === "UPSTREAM_UNAVAILABLE" || apiErrorMessage(session.error) === "remote daemon unreachable"
-	));
+	const sessionErrorCode = apiErrorCode(session.error);
+	const sessionErrorMessage = apiErrorMessage(session.error);
+	const loadErrorKey = sessionErrorCode === "BAD_PASSWORD" ? "remote.hostUnauthorized"
+		: sessionErrorCode === "HOST_API_INCOMPATIBLE" ? "remote.hostIncompatible"
+		: !proxyBase || sessionErrorCode === "UPSTREAM_UNAVAILABLE" || sessionErrorMessage === "remote daemon unreachable" || sessionErrorMessage === "remote host identity not verified"
+			? "remote.hostOffline" : "remote.loadSessionFailed";
 
 	return <div className="relative flex h-full min-h-0 bg-background text-foreground" data-testid="remote-session-view" data-host-id={hostId}>
 		<div className="flex min-w-0 flex-1 flex-col">
 		{proxyBase && !session.isError && interfaceUi.renderedMode === "chat" && <SessionTopbarHost className="relative z-chrome flex h-inspector-tabs w-full shrink-0 overflow-hidden" data-testid="session-topbar-host" />}
-		{(session.isError || !proxyBase) && <p role="alert" className="px-4 py-2 text-sm text-destructive">{t(hostUnavailable ? "remote.hostOffline" : "remote.loadSessionFailed")}</p>}
+		{(session.isError || !proxyBase) && <p role="alert" className="px-4 py-2 text-sm text-destructive">{t(loadErrorKey)}</p>}
 		<div className="relative min-h-0 flex-1" ref={setHandoffDialogContainer}>
 			{session.data && handoffDialogContainer ? <SwitchAgentDialog agentSwitch={handoffAgentSwitch} container={handoffDialogContainer} onOpenChange={handleHandoffDialogOpenChange} open={handoffDialogOpen} session={session.data} /> : null}
 			{proxyBase && !session.isError && session.data && interfaceUi.renderedMode === "chat" ? <>

@@ -102,6 +102,32 @@ describe("registerRemotesIpc", () => {
 		}
 	});
 
+	it("reports an incompatible host before sending or saving its credential", async () => {
+		let authenticated = false;
+		const server = createServer((request, response) => {
+			if (request.headers.authorization) authenticated = true;
+			response.setHeader("content-type", "application/json");
+			response.end(JSON.stringify({ hostId: "h_new", apiVersion: 2 }));
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		try {
+			const address = server.address();
+			if (!address || typeof address === "string") throw new Error("missing test port");
+			const url = `http://127.0.0.1:${address.port}`;
+			const file = await tempFile();
+			const ipc = fakeIpc();
+			registerRemotesIpc(ipc.ipcMain, {
+				file,
+				registry: new RemoteRegistry(async () => { throw new Error("proxy must not start"); }),
+			});
+			await expect(ipc.invoke("remotes:add", { label: "new", url, password: "secret" })).resolves.toBe("incompatible");
+			expect(authenticated).toBe(false);
+			expect((JSON.parse(await readFile(file, "utf8")).remotes as Array<{ url: string }>).some((host) => host.url === url)).toBe(false);
+		} finally {
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
+	});
+
 	it("keeps the real host connected when another saved host points at its URL", async () => {
 		const file = await tempFile();
 		const url = "http://127.0.0.1:9123";

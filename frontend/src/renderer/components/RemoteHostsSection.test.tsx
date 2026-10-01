@@ -285,6 +285,23 @@ it("shows a password hint when a saved host rejects its credential", () => {
 	expect(screen.getByRole("button", { name: "Retry Box A" })).toHaveTextContent("Password rejected");
 });
 
+it("shows an update hint when a host API is incompatible", () => {
+	render(<TooltipProvider><SidebarProvider><SidebarMenu><RemoteHostsSection
+		hosts={[{ hostId: "box-a", label: "Box A", url: "http://box-a:3001", status: "offline", failureReason: "incompatible" }]}
+		workspaces={[]}
+		onOpenSession={vi.fn()}
+		onOpenProject={vi.fn()}
+		onOpenHome={vi.fn()}
+		onNewTask={vi.fn()}
+		onOrchestrator={vi.fn()}
+		onConfigure={vi.fn()}
+		onAddProject={vi.fn()}
+		onRemoveProject={vi.fn()}
+		onRetry={vi.fn()}
+	/></SidebarMenu></SidebarProvider></TooltipProvider>);
+	expect(screen.getByRole("button", { name: "Retry Box A" })).toHaveTextContent("Update AO");
+});
+
 it("confirms removal on the selected host and disables its action while pending", async () => {
 	const user = userEvent.setup();
 	let finishRemove!: () => void;

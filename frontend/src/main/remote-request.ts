@@ -8,7 +8,14 @@ import type { RemoteEntry } from "./remotes-store";
 // "not-a-daemon" is its own answer because the honest sentence differs: the
 // address replied, so telling someone it is unreachable sends them to debug a
 // network that is working.
-export type RemoteHealth = "online" | "unauthorized" | "offline" | "not-a-daemon";
+export type RemoteHealth = "online" | "unauthorized" | "offline" | "not-a-daemon" | "incompatible";
+
+export class IncompatibleRemoteVersionError extends Error {
+	constructor() {
+		super("AO versions are incompatible. Update AO on this computer and the remote host.");
+		this.name = "IncompatibleRemoteVersionError";
+	}
+}
 
 type FetchImpl = typeof fetch;
 
@@ -24,9 +31,10 @@ export async function readRemoteIdentity(
 		throw new Error("remote host must use an HTTP(S) URL without embedded credentials");
 	const response = await fetchImpl(url.href, { method: "GET", redirect: "error", signal });
 	if (!response.ok) throw new Error(`remote identity probe returned ${response.status}`);
-	const body = (await response.json()) as { hostId?: unknown };
+	const body = (await response.json()) as { hostId?: unknown; apiVersion?: unknown };
 	if (typeof body.hostId !== "string" || body.hostId === "") throw new Error("remote identity probe returned no host ID");
 	if (body.hostId === "local") throw new Error("remote identity probe returned reserved local host ID");
+	if (body.apiVersion !== 1) throw new IncompatibleRemoteVersionError();
 	return body.hostId;
 }
 

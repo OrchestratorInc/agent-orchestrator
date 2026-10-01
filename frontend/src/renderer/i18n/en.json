@@ -2279,6 +2279,8 @@
 	"remote.addHost": "Add host",
 	"remote.loadHostsFailed": "Could not load saved hosts.",
 	"remote.hostOffline": "Host is offline. Check its address and password.",
+	"remote.hostIncompatible": "AO versions are incompatible. Update AO on this computer and the remote host.",
+	"remote.updateAO": "Update AO",
 	"remote.hostUnauthorized": "Host rejected the password. Check its address and password.",
 	"remote.hostNotDaemon": "This address is not an AO host. Check its address and password.",
 	"remote.addHostFailed": "Could not add host.",

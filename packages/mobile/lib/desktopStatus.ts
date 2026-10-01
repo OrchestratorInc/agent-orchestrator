@@ -24,6 +24,8 @@ export function describeDesktopStatus(input: {
 	// starting — not an offline desktop.
 	if (input.connection === "connecting" || input.failure === null) return { label: "Connecting…", tone: "neutral" };
 	switch (input.failure) {
+		case "incompatible-host":
+			return { label: "Update AO", tone: "error" };
 		case "auth":
 			return { label: "Password rejected", tone: "error" };
 		case "rate-limited":

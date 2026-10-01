@@ -12,6 +12,7 @@ import { toReviewerHarnessId } from "../lib/reviewer-harnesses";
 import { captureRendererEvent } from "../lib/telemetry";
 import { agentSwitchVisibility } from "../lib/agent-switch-visibility";
 import { clientForHost, connectedHosts, subscribeConnectedHosts } from "../lib/host-clients";
+import { requestRemoteHostsRefresh } from "./useRemoteHosts";
 import { applyOptimisticSessionKills } from "./optimistic-session-kills";
 import { appI18n } from "../i18n";
 import {
@@ -136,6 +137,16 @@ export const workspaceQueryKey = ["workspaces"] as const;
 export const remoteWorkspaceQueryKey = (hostId: string) => ["remote-workspaces", hostId] as const;
 const remoteProjectsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "projects"] as const;
 const remoteSessionsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "sessions"] as const;
+const lastRemoteHealthRecheck = new Map<string, number>();
+
+function recheckRemoteHost(hostId: string, status: number): void {
+	if (![401, 403, 426, 502, 503].includes(status)) return;
+	const now = Date.now();
+	const last = lastRemoteHealthRecheck.get(hostId);
+	if (last !== undefined && now >= last && now - last < 15_000) return;
+	lastRemoteHealthRecheck.set(hostId, now);
+	requestRemoteHostsRefresh();
+}
 export function workspaceStatusesChecking(workspaces: WorkspaceSummary[] | undefined): boolean {
 	return workspaces?.some((workspace) => workspace.sessions.some((session) => session.statusReadiness === "checking")) ?? false;
 }
@@ -265,14 +276,20 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 }
 
 async function fetchRemoteProjects(hostId: string) {
-	const { data, error } = await clientForHost(hostId).GET("/api/v1/projects");
-	if (error) throw error;
+	const { data, error, response } = await clientForHost(hostId).GET("/api/v1/projects");
+	if (error) {
+		recheckRemoteHost(hostId, response.status);
+		throw error;
+	}
 	return data?.projects ?? [];
 }
 
 async function fetchRemoteSessions(hostId: string) {
-	const { data, error } = await clientForHost(hostId).GET("/api/v1/sessions");
-	if (error) throw error;
+	const { data, error, response } = await clientForHost(hostId).GET("/api/v1/sessions");
+	if (error) {
+		recheckRemoteHost(hostId, response.status);
+		throw error;
+	}
 	return data?.sessions ?? [];
 }
 

@@ -19,7 +19,7 @@ export type RemoteHost = {
 	label: string;
 	url: string;
 	status: "connecting" | "connected" | "offline";
-	failureReason?: "unauthorized";
+	failureReason?: "unauthorized" | "incompatible";
 };
 
 export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<void> } {
@@ -59,6 +59,7 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<
 			} catch (error) {
 				status = "offline";
 				if (error instanceof Error && error.message.endsWith(" is unauthorized")) failureReason = "unauthorized";
+				if (error instanceof Error && error.message.endsWith(" is incompatible")) failureReason = "incompatible";
 				if (!current()) return;
 				if (isOfflineError(error)) retryableHosts.current.add(savedHost.hostId);
 				else retryableHosts.current.delete(savedHost.hostId);

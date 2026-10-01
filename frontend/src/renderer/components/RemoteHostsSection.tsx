@@ -285,11 +285,11 @@ export function RemoteHostsSection({ hosts, workspaces, failedHostIds = [], load
 					className="h-9 gap-2 rounded-lg px-2.5 text-sm text-muted-foreground hover:bg-interactive-hover [&_svg]:size-icon-md"
 					disabled={host.status === "connecting"}
 					onClick={onRetry}
-					title={host.status === "offline" ? t("remote.hostOffline") : undefined}
+					title={host.status === "offline" ? t(host.failureReason === "incompatible" ? "remote.hostIncompatible" : "remote.hostOffline") : undefined}
 				>
 					{host.status === "offline" ? <AlertTriangle aria-hidden="true" /> : <Folder aria-hidden="true" />}
 					<span className="truncate">{host.label}</span>
-					<span className="ml-auto text-xs">{host.status === "connecting" ? t("terminal.connecting") : host.failureReason === "unauthorized" ? t("remote.passwordRejected") : t("remote.retryHost", { label: host.label })}</span>
+					<span className="ml-auto text-xs">{host.status === "connecting" ? t("terminal.connecting") : host.failureReason === "unauthorized" ? t("remote.passwordRejected") : host.failureReason === "incompatible" ? t("remote.updateAO") : t("remote.retryHost", { label: host.label })}</span>
 				</SidebarMenuButton>
 			</SidebarMenuItem>;
 			const projects = workspaces.filter((workspace) => workspace.hostId === host.hostId);
