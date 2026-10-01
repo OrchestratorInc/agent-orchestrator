@@ -3,7 +3,7 @@ import { createRendererCloudCpClient } from "../hooks/useCloudCp";
 import type { CloudCpAgentProvider, CloudCpProviderConnection } from "./cloud-cp";
 import { CLOUD_AGENT_PROVIDERS } from "./cloud-agents";
 import { settingsQueryKey, type Settings } from "../hooks/useSettings";
-import { readSelectedSandboxProvider } from "../stores/sandbox-provider-store";
+import { readSelectedSandboxProvider, resolveSandboxProviderPreference } from "../stores/sandbox-provider-store";
 import { captureRendererEvent } from "./telemetry";
 
 // A cloud project has no locally-configured orchestrator agent (that config
@@ -76,7 +76,7 @@ export async function spawnCloudOrchestrator(queryClient: QueryClient, projectId
 	// The user's client-side provider preference (when the control plane offers
 	// more than one); omitted lets the control plane use its default. Read
 	// directly from localStorage since this launcher is deliberately hook-free.
-	const provider = readSelectedSandboxProvider();
+	const provider = resolveSandboxProviderPreference(readSelectedSandboxProvider(), me.sandboxProviders?.available ?? []);
 	// Pick the orchestrator harness. Prefer the agent the user configured for
 	// this project (config.orchestrator.agent); only when the project has not
 	// chosen one do we fall back to the connected-credential priority

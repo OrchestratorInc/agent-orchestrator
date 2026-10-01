@@ -363,6 +363,8 @@ export interface ChatWorkspaceProps {
 	theme?: "light" | "dark";
 	onChooseSettings?: (settings: TurnSettings) => void;
 	onRememberPermissions?: (mode: ApprovalMode) => Promise<unknown> | void;
+	showApprovalMode?: boolean;
+	approvalModes?: ApprovalMode[];
 	rememberPermissionsPending?: boolean;
 	rememberPermissionsError?: string;
 	rememberedPermissionMode?: ApprovalMode;
@@ -437,6 +439,7 @@ export interface ChatWorkspaceProps {
 		clientMessageId?: string,
 		recoverOnly?: boolean,
 	) => Promise<ChatSteerOutcome | void>;
+	showSteerButton?: boolean;
 	sendPending?: boolean;
 	steerPending?: boolean;
 	/** Why the last steer was refused, from the daemon's typed answer. */
@@ -586,6 +589,8 @@ function ChatWorkspaceContent({
 	models,
 	onChooseSettings,
 	onRememberPermissions,
+	showApprovalMode,
+	approvalModes,
 	rememberPermissionsPending,
 	rememberPermissionsError,
 	rememberedPermissionMode,
@@ -615,6 +620,7 @@ function ChatWorkspaceContent({
 	onStageAttachments,
 	nativeImages,
 	onSteer,
+	showSteerButton,
 	sendPending,
 	steerPending,
 	steerRefusal,
@@ -1153,6 +1159,8 @@ function ChatWorkspaceContent({
 					rememberPermissionsError={rememberPermissionsError}
 					rememberedPermissionMode={rememberedPermissionMode}
 					harness={snapshot.harness}
+					showApprovalMode={showApprovalMode ?? !session?.cloud}
+					approvalModes={approvalModes}
 					reroute={stableModelReroute}
 					onChange={newWorkDisabled ? undefined : onChooseSettings}
 					configOptions={configOptions ?? []}
@@ -1177,6 +1185,9 @@ function ChatWorkspaceContent({
 			rememberPermissionsPending,
 			rememberPermissionsError,
 			rememberedPermissionMode,
+			showApprovalMode,
+			approvalModes,
+			session?.cloud,
 			snapshot.controller.state,
 			stableModelReroute,
 			stableSettings,
@@ -1505,6 +1516,7 @@ function ChatWorkspaceContent({
 									// Steering is only meaningful into a turn that is running. A queued turn
 									// has not reached the provider, so there is nothing to steer.
 									onSteer={newWorkDisabled ? undefined : steer}
+									showSteerButton={showSteerButton}
 									canSteer={Boolean(onSteer) && turn?.state === "running"}
 									sendPending={sendPending}
 									steerPending={steerPending}
