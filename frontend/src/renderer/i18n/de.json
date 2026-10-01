@@ -263,6 +263,7 @@
 	"createProject.closeImport": "Import-Dialog schließen",
 	"createProject.closeProjectImport": "Projektimport-Dialog schließen",
 	"createProject.cloudCreate": "Cloud-Projekt erstellen",
+	"createProject.create": "Erstellen",
 	"createProject.cloudDefaultBranch": "Standard-Branch",
 	"createProject.cloudDefaultBranchRequired": "Gib einen Standard-Branch an.",
 	"createProject.cloudDescription": "AO klont das Repository und führt Sessions in einer Cloud-Sandbox aus. Auf diesem Computer wird nichts gespeichert.",

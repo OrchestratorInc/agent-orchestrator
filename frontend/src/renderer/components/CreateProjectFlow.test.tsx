@@ -1628,7 +1628,7 @@ describe("CreateProjectFlow project import validation", () => {
 
 		await user.click(screen.getByRole("button", { name: "New cloud project" }));
 
-		expect(screen.queryByRole("heading", { name: "New cloud project" })).not.toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "Create cloud project" })).toBeInTheDocument();
 		expect(await screen.findByRole("button", { name: /^Connect repository/ })).toBeInTheDocument();
 		expect(screen.queryByLabelText("Project name")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Manually setup" })).not.toBeInTheDocument();
@@ -1687,7 +1687,7 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(screen.getByRole("option", { name: "Manage harness connections…" })).toBeInTheDocument();
 		expect(screen.queryByRole("option", { name: "Manage agents…" })).not.toBeInTheDocument();
 		await user.keyboard("{Escape}");
-		await user.click(await screen.findByRole("button", { name: "Create cloud project" }));
+		await user.click(await screen.findByRole("button", { name: "Create" }));
 
 		// The App path authorizes by repository id and never sends a repo URL or a
 		// desktop-held token.
@@ -2109,7 +2109,7 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(await screen.findByRole("option", { name: /acme\/web-app/ }));
 
 		expect(await screen.findByText(/No harness is logged in for cloud yet/)).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Create cloud project" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
 		await user.click(screen.getByRole("button", { name: "Go to Harness settings" }));
 		expect(openGlobalSettings).toHaveBeenCalledWith("harness", { harnessView: "cloud", preserveProject: true });
 	});

@@ -1333,7 +1333,7 @@ function CloudAgentSetupStep({
 					disabled={!canCreate}
 					onClick={() => onCreate({ workerAgent, orchestratorAgent })}
 				>
-					{isCreating ? t("createProject.creating") : t("createProject.cloudCreate")}
+					{isCreating ? t("createProject.creating") : t("createProject.create")}
 				</Button>
 			</div>
 		</div>
@@ -1584,10 +1584,12 @@ function CloudProjectCard({
 		<div className={onboardingPanelClass}>
 			{dialog ? (
 				<>
-					<Dialog.Title className="sr-only">{t("createProject.cloudTitle")}</Dialog.Title>
+					<Dialog.Title className={cn(onboardingPanelTitleClass, onClose && "pr-12")}>{t("createProject.cloudCreate")}</Dialog.Title>
 					<Dialog.Description className="sr-only">{t("createProject.cloudDescription")}</Dialog.Description>
 				</>
-			) : null}
+			) : (
+				<h2 className={onboardingPanelTitleClass}>{t("createProject.cloudCreate")}</h2>
+			)}
 			{dialog && onClose ? (
 				<button
 					type="button"
@@ -1603,13 +1605,9 @@ function CloudProjectCard({
 			<div className={cn(onboardingPanelBodyClass, "pt-4")}>
 				{/* Repository: the project is created from, and named after, it. */}
 				<div className="space-y-2">
-					{/* As tall as the dialog's close button and clear of it, so the
-					    button never overlaps the repository field below. */}
-					<div className={cn("flex min-h-8 items-center", dialog && onClose && "pr-10")}>
-						<Label className={onboardingFormLabelClass}>
-							{t("createProject.cloudRepository", { defaultValue: "Repository" })}
-						</Label>
-					</div>
+					<Label className={onboardingFormLabelClass}>
+						{t("createProject.cloudRepository", { defaultValue: "Repository" })}
+					</Label>
 
 					{!appConnected || noRepositoriesShared ? (
 						<button

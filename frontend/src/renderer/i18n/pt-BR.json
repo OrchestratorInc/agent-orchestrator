@@ -265,6 +265,7 @@
 	"createProject.closeImport": "Fechar diálogo de importação",
 	"createProject.closeProjectImport": "Fechar diálogo de importação do projeto",
 	"createProject.cloudCreate": "Criar projeto na nuvem",
+	"createProject.create": "Criar",
 	"createProject.cloudDefaultBranch": "Branch padrão",
 	"createProject.cloudDefaultBranchRequired": "Informe uma branch padrão.",
 	"createProject.cloudDescription": "O AO clona o repositório e executa as sessões em um sandbox na nuvem. Nada é armazenado neste computador.",

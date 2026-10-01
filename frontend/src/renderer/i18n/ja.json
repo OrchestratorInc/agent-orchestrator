@@ -263,6 +263,7 @@
 	"createProject.closeImport": "インポートダイアログを閉じる",
 	"createProject.closeProjectImport": "プロジェクトインポートダイアログを閉じる",
 	"createProject.cloudCreate": "クラウドプロジェクトを作成",
+	"createProject.create": "作成",
 	"createProject.cloudDefaultBranch": "デフォルトブランチ",
 	"createProject.cloudDefaultBranchRequired": "デフォルトブランチを入力してください。",
 	"createProject.cloudDescription": "AO がリポジトリをクローンし、クラウドサンドボックスでセッションを実行します。このコンピューターには何も保存されません。",

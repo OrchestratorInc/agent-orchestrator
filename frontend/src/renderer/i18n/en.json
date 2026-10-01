@@ -260,6 +260,7 @@
 	"createProject.closeImport": "Close import dialog",
 	"createProject.closeProjectImport": "Close project import dialog",
 	"createProject.cloudCreate": "Create cloud project",
+	"createProject.create": "Create",
 	"createProject.cloudDefaultBranch": "Default branch",
 	"createProject.cloudDefaultBranchRequired": "Enter a default branch.",
 	"createProject.cloudDescription": "AO clones the repository and runs sessions in a cloud sandbox. Nothing is stored on this computer.",

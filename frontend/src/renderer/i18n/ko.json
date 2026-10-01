@@ -263,6 +263,7 @@
 	"createProject.closeImport": "가져오기 대화상자 닫기",
 	"createProject.closeProjectImport": "프로젝트 가져오기 대화상자 닫기",
 	"createProject.cloudCreate": "클라우드 프로젝트 만들기",
+	"createProject.create": "만들기",
 	"createProject.cloudDefaultBranch": "기본 브랜치",
 	"createProject.cloudDefaultBranchRequired": "기본 브랜치를 입력하세요.",
 	"createProject.cloudDescription": "AO가 리포지토리를 클론하고 클라우드 샌드박스에서 세션을 실행합니다. 이 컴퓨터에는 아무것도 저장되지 않습니다.",

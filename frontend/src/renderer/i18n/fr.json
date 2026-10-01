@@ -265,6 +265,7 @@
 	"createProject.closeImport": "Fermer la boîte de dialogue d'importation",
 	"createProject.closeProjectImport": "Fermer la boîte de dialogue d’importation du projet",
 	"createProject.cloudCreate": "Créer le projet cloud",
+	"createProject.create": "Créer",
 	"createProject.cloudDefaultBranch": "Branche par défaut",
 	"createProject.cloudDefaultBranchRequired": "Saisissez une branche par défaut.",
 	"createProject.cloudDescription": "AO clone le dépôt et exécute les sessions dans un bac à sable cloud. Rien n'est stocké sur cet ordinateur.",

@@ -263,6 +263,7 @@
 	"createProject.closeImport": "关闭导入对话框",
 	"createProject.closeProjectImport": "关闭项目导入对话框",
 	"createProject.cloudCreate": "创建云端项目",
+	"createProject.create": "创建",
 	"createProject.cloudDefaultBranch": "默认分支",
 	"createProject.cloudDefaultBranchRequired": "请输入默认分支。",
 	"createProject.cloudDescription": "AO 会克隆该仓库并在云端沙箱中运行会话，本机不保存任何内容。",
