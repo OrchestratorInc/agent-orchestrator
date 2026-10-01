@@ -1,8 +1,8 @@
 import { create } from "zustand";
 import type { ShareInvite } from "../../shared/share-deeplink";
 
-// Open-state for the two halves of read-only session sharing: the owner's
-// "Share read-only" dialog (opened from a cloud session's ⋮ menu) and the
+// Open-state for the two halves of session sharing: the owner's "Share"
+// dialog (opened from a cloud session's ⋮ menu) and the
 // recipient's consent dialog (opened by an ao-app://share deep link). Both
 // dialogs are mounted once in the shell and driven through this store.
 

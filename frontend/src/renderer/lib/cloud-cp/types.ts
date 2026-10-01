@@ -724,7 +724,7 @@ export interface CloudCpCreateGitHubProjectRequest {
 	config?: Record<string, unknown>;
 }
 
-// Read-only session sharing via ao-app://share deep links.
+// Session sharing via ao-app://share deep links.
 
 export interface CloudCpSessionShareDeepLink {
 	id: string;

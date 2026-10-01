@@ -278,7 +278,7 @@ export const workspaceQueryOptions = {
 export const cloudProjectsQueryKey = ["cloud-projects"] as const;
 export const cloudSessionsQueryKey = ["cloud-sessions"] as const;
 export const sharedCloudSessionsQueryKey = ["cloud-shared-sessions"] as const;
-/** Sidebar group id for sessions other users shared with you (read-only). */
+/** Sidebar group id for sessions other users shared with you. */
 export const SHARED_WITH_ME_WORKSPACE_ID = "cloud-shared-with-me";
 
 // Maps one control-plane session onto the board's session shape. Cloud sessions
@@ -416,8 +416,8 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 }
 
 /**
- * Sessions other users shared with the signed-in user through a read-only
- * deep link. Each lives in the sharer's org, so it is fetched with that org id
+ * Sessions other users shared with the signed-in user through a share deep
+ * link. Each lives in the sharer's org, so it is fetched with that org id
  * (the control plane authorizes it via the share grant, not membership).
  */
 export function useSharedCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}) {

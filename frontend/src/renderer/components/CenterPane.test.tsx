@@ -463,6 +463,31 @@ describe("CenterPane toolbar session label", () => {
 		expect(screen.getByTestId("agent-switch-terminal-overlay")).toHaveFocus();
 	});
 
+	it("keeps a read-only shared terminal scrollable while dropping its input", () => {
+		renderCenterPane({ session: worker, agentInputReadOnly: true });
+
+		// inert would also swallow wheel scrolling and text selection, freezing
+		// the pane for a viewer; only the byte input is gated.
+		expect(screen.getByTestId("terminal-interaction-surface")).not.toHaveAttribute("inert");
+		expect(screen.getByText("terminal body")).toHaveAttribute("data-input-disabled", "true");
+	});
+
+	it("docks the agent composer under the agent terminal only", () => {
+		const shell = { handleId: "h-0", title: "shell", workingDir: "/tmp/ws", createdAt: "2026-07-22T00:00:00Z" };
+		const composer = <div data-testid="agent-composer" />;
+		const { unmount } = renderCenterPane({ session: worker, agentComposer: composer });
+		expect(screen.getByTestId("agent-composer")).toBeInTheDocument();
+		unmount();
+
+		renderCenterPane({
+			session: worker,
+			agentComposer: composer,
+			shellTerminals: [shell],
+			terminalTarget: { generation: shell.createdAt, kind: "shell", handleId: shell.handleId, title: shell.title },
+		});
+		expect(screen.queryByTestId("agent-composer")).not.toBeInTheDocument();
+	});
+
 	it("keeps an auxiliary shell interactive and offers the existing worker-selection action", async () => {
 		const [shell] = makeShells(1);
 		const activeSwitch = switchRecord({ state: "starting_target" });

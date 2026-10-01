@@ -72,6 +72,54 @@ func TestReservedAgentTerminalBuffersEarlyInputAndResize(t *testing.T) {
 	}
 }
 
+// In a shared session a second client's keystrokes stream straight into the
+// agent PTY. A submitted prompt must still reach the agent whole: a keystroke
+// arriving during the Enter delay waits until after the Enter rather than being
+// submitted with the prompt.
+func TestAgentPromptHoldsTerminalUntilEnter(t *testing.T) {
+	t.Parallel()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create pipe: %v", err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	terminal := &terminalProcess{pty: writer, cancel: func() {}, cleanup: func() {}}
+	supervisor := &Supervisor{
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		AgentTerminalID: "agent-1",
+		agentStarted:    true,
+		terminals:       map[string]*terminalProcess{"agent-1": terminal},
+	}
+	promptDone := make(chan error, 1)
+	go func() { promptDone <- supervisor.writeAgentPrompt("agent-1", []byte("hello\r")) }()
+
+	if err := reader.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	body := make([]byte, len("hello"))
+	if _, err := io.ReadFull(reader, body); err != nil {
+		t.Fatalf("read prompt body: %v", err)
+	}
+	// The prompt is now in its Enter delay; a streamed keystroke arrives.
+	keyDone := make(chan error, 1)
+	go func() { keyDone <- terminal.write([]byte("x")) }()
+
+	rest := make([]byte, 2)
+	if _, err := io.ReadFull(reader, rest); err != nil {
+		t.Fatalf("read after prompt body: %v", err)
+	}
+	if got := string(body) + string(rest); got != "hello\rx" {
+		t.Fatalf("pty received %q, want %q", got, "hello\rx")
+	}
+	if err := <-promptDone; err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	if err := <-keyDone; err != nil {
+		t.Fatalf("write keystroke: %v", err)
+	}
+}
+
 type turnClaimSpy struct {
 	Control
 	claims int

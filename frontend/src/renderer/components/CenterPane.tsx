@@ -94,6 +94,14 @@ type CenterPaneProps = {
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	/** Stop forwarding the agent pane's keystrokes while its controller drains. */
 	agentInputDisabled?: boolean;
+	/**
+	 * Never forward keystrokes from this client (a session shared with you), but
+	 * keep the terminal scrollable and selectable — unlike agentInputDisabled,
+	 * which makes the whole pane inert for a transient lock.
+	 */
+	agentInputReadOnly?: boolean;
+	/** Message box docked under the agent terminal. */
+	agentComposer?: ReactNode;
 };
 
 export type CenterPaneWorkspaceTab = {
@@ -178,6 +186,8 @@ export function CenterPane({
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	agentInputDisabled = false,
+	agentInputReadOnly = false,
+	agentComposer,
 }: CenterPaneProps) {
 	const { t } = useTranslation();
 	const paneRef = useRef<HTMLDivElement | null>(null);
@@ -324,8 +334,10 @@ export function CenterPane({
 	const switchLocksWorkerInput = Boolean(
 		presentation?.lockAgentTerminal && !presentation.allowSourceInput,
 	);
-	const workerInputDisabled =
+	const workerInputLocked =
 		target.kind === "worker" && (agentInputDisabled || switchLocksWorkerInput || handoffDialogOpen);
+	const workerInputDisabled = workerInputLocked || (target.kind === "worker" && agentInputReadOnly);
+	const showAgentComposer = Boolean(agentComposer) && target.kind === "worker" && !(reviewerChatSelected && reviewerChatContent);
 	const shownPresentation =
 		presentation?.outcome === "failure" && dismissedFailureSwitchId === agentSwitch?.id
 			? undefined
@@ -748,7 +760,7 @@ export function CenterPane({
 					<div
 						className="h-full min-h-0"
 						data-testid="terminal-interaction-surface"
-						inert={workerInputDisabled ? true : undefined}
+						inert={workerInputLocked ? true : undefined}
 					>
 						<TerminalPane
 							daemonReady={daemonReady}
@@ -792,6 +804,7 @@ export function CenterPane({
 					</p>
 				) : null}
 			</div>
+			{showAgentComposer ? agentComposer : null}
 		</div>
 	);
 }

@@ -111,7 +111,7 @@ func (s *Supervisor) readTerminalStream(
 			if len(frame.Data) == 0 || len(frame.Data) > maxStreamInputBytes {
 				continue
 			}
-			if _, err := terminal.pty.Write(frame.Data); err != nil {
+			if err := terminal.write(frame.Data); err != nil {
 				return false
 			}
 		case "ack":

@@ -3,7 +3,7 @@ import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { aoBridge } from "../lib/bridge";
-import type { CloudCpSessionShareAccess, CloudCpSessionShareDeepLink } from "../lib/cloud-cp";
+import type { CloudCpSessionShareDeepLink } from "../lib/cloud-cp";
 import {
 	centeredOnboardingDialogClass,
 	onboardingFieldErrorClass,
@@ -15,14 +15,14 @@ import { cn } from "../lib/utils";
 import { useShareDialogStore } from "../stores/share-dialog-store";
 import { StyledQRCode } from "./settings/StyledQRCode";
 import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
-import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 // Owner half of session sharing. Mints a single-use, short-lived
-// ao-app://share link bound to one recipient email, at the chosen access
-// level ("Can view" or "Can interact"), and shows it as text + QR. The secret
+// ao-app://share link bound to one recipient email and shows it as text + QR.
+// A share is fully interactive unless the owner ticks "Read-only". The secret
 // is only ever returned once, so closing the dialog discards it.
 export function ShareSessionDialog() {
 	const { t } = useTranslation();
@@ -30,7 +30,7 @@ export function ShareSessionDialog() {
 	const target = useShareDialogStore((s) => s.target);
 	const close = useShareDialogStore((s) => s.closeShareSession);
 	const [email, setEmail] = useState("");
-	const [access, setAccess] = useState<CloudCpSessionShareAccess>("view");
+	const [readOnly, setReadOnly] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [share, setShare] = useState<CloudCpSessionShareDeepLink | null>(null);
@@ -39,7 +39,7 @@ export function ShareSessionDialog() {
 	useEffect(() => {
 		if (!target) return;
 		setEmail("");
-		setAccess("view");
+		setReadOnly(false);
 		setBusy(false);
 		setError(null);
 		setShare(null);
@@ -52,7 +52,12 @@ export function ShareSessionDialog() {
 		setBusy(true);
 		setError(null);
 		try {
-			const response = await client.createSessionShareDeepLink(target.orgId, target.sessionId, trimmed, access);
+			const response = await client.createSessionShareDeepLink(
+				target.orgId,
+				target.sessionId,
+				trimmed,
+				readOnly ? "view" : "interact",
+			);
 			setShare(response.share);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("share.createFailed"));
@@ -88,18 +93,6 @@ export function ShareSessionDialog() {
 					{share === null ? (
 						<>
 						<div className="space-y-2">
-							<Label className={onboardingFormLabelClass}>{t("share.accessLabel")}</Label>
-							<Tabs value={access} onValueChange={(next) => setAccess(next as CloudCpSessionShareAccess)}>
-								<TabsList className="w-full" aria-label={t("share.accessLabel")}>
-									<TabsTrigger value="view" disabled={busy}>{t("share.accessView")}</TabsTrigger>
-									<TabsTrigger value="interact" disabled={busy}>{t("share.accessInteract")}</TabsTrigger>
-								</TabsList>
-							</Tabs>
-							<p className={onboardingFieldHintClass}>
-								{access === "interact" ? t("share.accessInteractHint") : t("share.accessViewHint")}
-							</p>
-						</div>
-						<div className="space-y-2">
 							<Label htmlFor="share-recipient-email" className={onboardingFormLabelClass}>
 								{t("share.recipientEmail")}
 							</Label>
@@ -117,6 +110,19 @@ export function ShareSessionDialog() {
 								}}
 							/>
 							<p className={onboardingFieldHintClass}>{t("share.recipientHint")}</p>
+						</div>
+						<div className="space-y-2">
+							<label className="flex items-center gap-2 text-[13px] text-[var(--color-text-import-title)]">
+								<Checkbox
+									checked={readOnly}
+									disabled={busy}
+									onCheckedChange={(checked) => setReadOnly(checked === true)}
+								/>
+								{t("share.readOnlyOption")}
+							</label>
+							<p className={onboardingFieldHintClass}>
+								{readOnly ? t("share.accessViewHint") : t("share.accessInteractHint")}
+							</p>
 						</div>
 						</>
 					) : (

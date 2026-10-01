@@ -213,7 +213,7 @@ export interface CloudCpClient {
 		body: CloudCpShareDeepLinkRequest,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpSessionShareInviteResponse>;
-	/** Consume a share deep link, granting the signed-in user read-only access. */
+	/** Consume a share deep link, granting the signed-in user the link's access level. */
 	redeemSessionShareDeepLink(
 		body: CloudCpShareDeepLinkRequest,
 		options?: CloudCpRequestOptions,

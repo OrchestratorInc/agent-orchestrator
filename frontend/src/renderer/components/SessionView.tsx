@@ -71,6 +71,7 @@ import { cloudLifecycleStage } from "../lib/cloud-lifecycle";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import { useShareDialogStore } from "../stores/share-dialog-store";
 import { DropdownMenuItem } from "./ui/dropdown-menu";
+import { CloudSessionComposer } from "./CloudSessionComposer";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
 import { useSettings } from "../hooks/useSettings";
@@ -1727,10 +1728,11 @@ export function SessionView({ sessionId }: SessionViewProps) {
 	// The ⋮ only holds the Chat/Terminal switch and Switch agent, and agent
 	// switching is limited to Claude Code and Codex, which both have Chat. A
 	// harness without Chat therefore gets no ⋮ instead of an empty menu.
-	// A cloud session can be shared through a one-time deep link, view-only or
-	// interactive. Sessions someone shared with you carry no Share or handoff
-	// action (they belong to the owner), and a view-only share also disables
-	// terminal input.
+	// A cloud session can be shared through a one-time deep link, interactive by
+	// default or read-only. Sessions someone shared with you carry no Share or
+	// handoff action (they belong to the owner). Their terminal never takes this
+	// client's keystrokes: an interactive recipient works through the message box
+	// under it, so two people never type into one prompt at once.
 	const openShareSession = useShareDialogStore((state) => state.openShareSession);
 	const sharedWithMe = session?.cloud?.sharedBy !== undefined;
 	const sharedReadOnly = sharedWithMe && session?.cloud?.sharedRole !== "editor";
@@ -1755,6 +1757,17 @@ export function SessionView({ sessionId }: SessionViewProps) {
 			</TooltipContent>
 		</Tooltip>
 	) : null, [session?.cloud?.sharedBy, sharedReadOnly, sharedWithMe, t]);
+	const cloudOrgId = session?.cloud?.orgId;
+	const agentWorking = session?.activity?.state === "active";
+	const agentComposer = useMemo(() => cloudOrgId && !sharedReadOnly ? (
+		<CloudSessionComposer
+			agentWorking={agentWorking}
+			autoFocus={sharedWithMe}
+			disabled={terminated}
+			orgId={cloudOrgId}
+			sessionId={sessionId}
+		/>
+	) : undefined, [agentWorking, cloudOrgId, sessionId, sharedReadOnly, sharedWithMe, terminated]);
 	const sessionTabActions = useMemo(() => sharedWithMe ? readOnlyBadge : (interfaceSwitchUnsupported && !shareMenuItem) ? null : (
 		<SessionActionsMenu inlineStatus={interfaceSwitchInlineStatus}>
 			{interfaceSwitchUnsupported ? null : interfaceSwitchMenuItem}
@@ -2121,8 +2134,10 @@ export function SessionView({ sessionId }: SessionViewProps) {
 							) : (
 								<CenterPane
 									agentInputDisabled={
-										sharedReadOnly || ((interfaceSwitch.starting || activeInterfaceTransition) && session?.mode === "tui")
+										(interfaceSwitch.starting || activeInterfaceTransition) && session?.mode === "tui"
 									}
+									agentInputReadOnly={sharedWithMe}
+									agentComposer={agentComposer}
 									daemonReady={daemonStatus.state === "ready"}
 									onCloseShellTerminal={closeShellTerminalByHandle}
 									onRenameShellTerminal={renameShellTerminalByHandle}
