@@ -792,7 +792,9 @@ func (l *agentLauncher) Cancel(ctx context.Context, handleID string, harness dom
 		return nil
 	}
 	if reviewID, ok := reviewerChatID(handleID); ok && l.chat != nil {
-		return l.chat.InterruptReviewChat(ctx, reviewID)
+		// A cancelled review must not leave its Chat controller accepting work or
+		// its in-flight turn looking active. The next trigger starts a fresh one.
+		return l.chat.StopReviewChat(ctx, reviewID)
 	}
 	reviewer, ok := l.reviewers.Reviewer(harness)
 	if !ok {

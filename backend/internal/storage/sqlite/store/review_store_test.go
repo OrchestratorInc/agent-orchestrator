@@ -60,6 +60,101 @@ func TestCreateReviewConversationClaimsChatMode(t *testing.T) {
 	}
 }
 
+func TestCreateAndActivateReviewConversationBranchClaimsReview(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "review-branch")
+	session, err := s.CreateSession(ctx, sampleRecord("review-branch"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	review := domain.Review{ID: "review-branch", SessionID: session.ID, ProjectID: session.ProjectID,
+		Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now}
+	if err := s.UpsertReview(ctx, review); err != nil {
+		t.Fatalf("upsert review: %v", err)
+	}
+	conversation, err := s.CreateReviewConversation(ctx, "review-branch-conversation", review.ID, session.ProjectID, session.ID, now)
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	branch := domain.ConversationBranch{
+		ID: "fresh-review-branch", ConversationID: conversation.ID, SessionID: session.ID,
+		ParentBranchID: conversation.ActiveBranchID, ProviderConversationID: "fresh-provider",
+		ProviderScopeID: "fresh-review-branch", ProviderIDsScoped: true, CreatedAt: now,
+	}
+	if err := s.CreateAndActivateReviewConversationBranch(ctx, review.ID, branch, "review-generation", now.Add(time.Second)); err != nil {
+		t.Fatalf("activate review branch: %v", err)
+	}
+	got, ok, err := s.GetReviewByID(ctx, review.ID)
+	if err != nil || !ok || got.ProviderConversationID != "fresh-provider" || got.ControllerGeneration != "review-generation" {
+		t.Fatalf("review controller = %+v, ok=%v err=%v", got, ok, err)
+	}
+	active, err := s.ConversationBranch(ctx, conversation.ID, branch.ID)
+	if err != nil || active.ProviderConversationID != "fresh-provider" {
+		t.Fatalf("active branch = %+v, err=%v", active, err)
+	}
+}
+
+func TestCleanupOwnedReviewControllerWorkSettlesItsTurn(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "review-cleanup")
+	session, err := s.CreateSession(ctx, sampleRecord("review-cleanup"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	review := domain.Review{
+		ID: "review-cleanup", SessionID: session.ID, ProjectID: session.ProjectID,
+		Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.UpsertReview(ctx, review); err != nil {
+		t.Fatalf("upsert review: %v", err)
+	}
+	conversation, err := s.CreateReviewConversation(ctx, "review-cleanup-conversation", review.ID, session.ProjectID, session.ID, now)
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	if claimed, err := s.ClaimReviewChatController(ctx, review.ID, "provider-1", "review-generation", now); err != nil || !claimed {
+		t.Fatalf("claim reviewer controller: claimed=%v err=%v", claimed, err)
+	}
+	created, err := s.AppendReviewUserMessage(ctx, conversation.ID, session.ID, review.ID, "review-generation", domain.ConversationMessage{
+		ID: "review-message", Text: "Review the change", Origin: domain.MessageOriginHuman,
+	}, "review-turn", now)
+	if err != nil || !created {
+		t.Fatalf("append review message: created=%v err=%v", created, err)
+	}
+	if err := s.BindTurnToProvider(ctx, "review-turn", "provider-turn", now); err != nil {
+		t.Fatalf("bind turn: %v", err)
+	}
+	if err := s.UpsertActivity(ctx, conversation.ID, "provider-turn", domain.ConversationActivity{
+		ID: "review-approval", Kind: domain.ActivityKindApproval, Status: domain.ActivityStatusPending,
+		Summary: "Approve", RequestID: "request-1", ProviderItemID: "item-1",
+	}, now); err != nil {
+		t.Fatalf("upsert approval: %v", err)
+	}
+
+	owned, err := s.CleanupOwnedReviewControllerWork(ctx, review.ID, conversation.ID, "stale-generation", now.Add(time.Minute))
+	if err != nil || owned {
+		t.Fatalf("stale cleanup: owned=%v err=%v", owned, err)
+	}
+	owned, err = s.CleanupOwnedReviewControllerWork(ctx, review.ID, conversation.ID, "review-generation", now.Add(2*time.Minute))
+	if err != nil || !owned {
+		t.Fatalf("owned cleanup: owned=%v err=%v", owned, err)
+	}
+	snapshot, err := s.LoadConversationSnapshot(ctx, conversation.ID)
+	if err != nil {
+		t.Fatalf("load conversation: %v", err)
+	}
+	if len(snapshot.Turns) != 1 || snapshot.Turns[0].State != domain.TurnStateFailed {
+		t.Fatalf("reviewer turns = %+v, want one failed turn", snapshot.Turns)
+	}
+	if len(snapshot.Activities) != 1 || snapshot.Activities[0].Status != domain.ActivityStatusFailed {
+		t.Fatalf("reviewer activities = %+v, want one failed approval", snapshot.Activities)
+	}
+}
+
 func TestInsertReviewRunDuplicatePRSHAMapsToSentinel(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

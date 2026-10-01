@@ -650,6 +650,30 @@ func TestTriggerStopsOldReviewerBeforeSwitchingInterface(t *testing.T) {
 	}
 }
 
+func TestTriggerChatDoesNotResumeTerminalNativeSession(t *testing.T) {
+	old := domain.Review{
+		ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex,
+		ReviewerHandleID: "review-mer-1", AgentSessionID: "tui-native-id",
+		InterfaceMode: domain.ReviewerInterfaceTUI,
+	}
+	store := &fakeStore{
+		review:  &old,
+		reviews: map[domain.ReviewerHarness]domain.Review{domain.ReviewerCodex: old},
+		runs:    []domain.ReviewRun{{ID: "run-1", ReviewID: old.ID, SessionID: "mer-1", Harness: domain.ReviewerCodex, PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Status: domain.ReviewRunRunning}},
+	}
+	launcher := &fakeLauncher{interfaceMode: domain.ReviewerInterfaceChat, alive: true, handle: "review-chat:rev-1"}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+	if _, err := eng.TriggerWithSourceAndMode(context.Background(), "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceChat); err != nil {
+		t.Fatalf("switch to Chat: %v", err)
+	}
+	if launcher.gotSpec.AgentSessionID != "" || launcher.gotSpec.ProviderConversationID != "" {
+		t.Fatalf("Chat inherited Terminal identity: %+v", launcher.gotSpec)
+	}
+	if len(store.agentSessionUpdates) == 0 || store.agentSessionUpdates[0].agentSessionID != "" {
+		t.Fatalf("Terminal identity was not cleared before Chat launch: %+v", store.agentSessionUpdates)
+	}
+}
+
 func TestTriggerPreservesHookOwnedActivityStateAfterLaunch(t *testing.T) {
 	store := &fakeStore{}
 	launcher := &fakeLauncher{
