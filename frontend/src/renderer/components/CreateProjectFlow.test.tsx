@@ -2004,6 +2004,10 @@ describe("CreateProjectFlow project import validation", () => {
 		const user = userEvent.setup();
 		render(<CreateProjectFlow embedded mode="choose" {...noop} />, { wrapper: CloudTestProviders });
 		await user.click(screen.getByRole("button", { name: "New cloud project" }));
+		// Coder options belong to the chosen repository, so they wait for one.
+		expect(screen.queryByRole("button", { name: "Add another repository" })).not.toBeInTheDocument();
+		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
+		await user.click(await screen.findByRole("option", { name: /acme\/app/ }));
 		const addRepository = await screen.findByRole("button", { name: "Add another repository" });
 		await user.click(addRepository);
 		expect(screen.getByRole("combobox", { name: "Repository 1" })).toBeInTheDocument();

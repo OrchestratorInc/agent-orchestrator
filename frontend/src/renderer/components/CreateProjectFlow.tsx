@@ -1597,7 +1597,8 @@ function CloudProjectCard({
 			<div className={cn(onboardingPanelBodyClass, "pt-4")}>
 				{/* Repository: the project is created from, and named after, it. */}
 				<div className="space-y-2">
-					<div className="flex items-center justify-between">
+					{/* In the dialog, the close button sits in this row's top-right corner. */}
+					<div className={cn("flex items-center justify-between", dialog && onClose && "pr-8")}>
 						<Label className={onboardingFormLabelClass}>
 							{t("createProject.cloudRepository", { defaultValue: "Repository" })}
 						</Label>
@@ -1657,20 +1658,22 @@ function CloudProjectCard({
 						/>
 					)}
 
-					{/* Adding repositories reuses the GitHub flow while a picker is shown. */}
-					{appConnected && githubOAuthBusy ? (
-						<p className="text-[12px] leading-5 text-muted-foreground">
-							{t("createProject.githubCompleteInBrowser", { defaultValue: "Install the app on your repositories in the browser, then return here." })}
-						</p>
-					) : null}
+					{/* While GitHub is open in the browser: what to do there, and a way out. */}
 					{githubOAuthBusy ? (
-						<button
-							type="button"
-							className="text-[12px] font-medium text-muted-foreground hover:text-foreground transition-colors"
-							onClick={cancelConnectGitHub}
-						>
-							{t("createProject.cancel", { defaultValue: "Cancel" })}
-						</button>
+						<div className="flex items-center justify-between gap-3 text-[12px] leading-5 text-muted-foreground">
+							<span>
+								{appConnected
+									? t("createProject.githubCompleteInBrowser", { defaultValue: "Install the app on your repositories in the browser, then return here." })
+									: null}
+							</span>
+							<button
+								type="button"
+								className="shrink-0 font-medium transition-colors hover:text-foreground"
+								onClick={cancelConnectGitHub}
+							>
+								{t("createProject.cancel", { defaultValue: "Cancel" })}
+							</button>
+						</div>
 					) : null}
 
 					{appConnected ? (
@@ -1705,10 +1708,10 @@ function CloudProjectCard({
 									{t("createProject.retry")}
 								</button>
 							</div>
-						) : coderAvailable ? (
+						) : coderAvailable && selectedRepo !== undefined ? (
 							<button
 								type="button"
-								className="text-[12px] font-medium text-muted-foreground underline decoration-dotted underline-offset-4 transition-colors hover:text-foreground disabled:opacity-60"
+								className="block text-[12px] font-medium text-muted-foreground underline decoration-dotted underline-offset-4 transition-colors hover:text-foreground disabled:opacity-60"
 								disabled={isCreating}
 								onClick={() => setExtraRepos([...extraRepos, { url: "", branch: "" }])}
 							>
@@ -1719,7 +1722,8 @@ function CloudProjectCard({
 					{githubOAuthError ? (
 						<p className="text-[12px] leading-5 text-destructive" role="alert">{githubOAuthError}</p>
 					) : null}
-					{coderAvailable && appConnected ? (
+					{/* Coder options apply to the chosen repository's sessions. */}
+					{coderAvailable && selectedRepo !== undefined ? (
 						<AdditionalRepositoriesPicker
 							repos={(githubAppRepos.data ?? []).map((repo) => ({ label: repo.fullName, url: repo.htmlUrl, private: repo.isPrivate }))}
 						/>
@@ -1727,7 +1731,7 @@ function CloudProjectCard({
 				</div>
 
 				{/* Coder template and size are inherited by every session. */}
-				{coderAvailable && appConnected ? (
+				{coderAvailable && selectedRepo !== undefined ? (
 					<div className="space-y-2">
 						<CoderTemplatePicker orgId={org?.id} />
 					</div>
