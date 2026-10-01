@@ -272,6 +272,7 @@ func (s *Supervisor) execute(ctx context.Context, turn worker.Turn) error {
 				Attempt: turn.Attempt,
 				Stream:  projected.Stream,
 				Text:    projected.Text,
+				ItemID:  projected.ItemID,
 			}); err != nil {
 				return err
 			}
@@ -368,6 +369,7 @@ func (s *Supervisor) execute(ctx context.Context, turn worker.Turn) error {
 				Attempt: turn.Attempt,
 				Stream:  output.Stream,
 				Text:    output.Text,
+				ItemID:  output.ItemID,
 			}); err != nil {
 				runErr = err
 				break

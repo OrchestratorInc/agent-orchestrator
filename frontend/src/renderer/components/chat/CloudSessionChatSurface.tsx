@@ -8,6 +8,9 @@ import type { WorkspaceSession } from "../../types/workspace";
 import { ChatWorkspace } from "./ChatWorkspace";
 
 type EventPayload = {
+	origin?: unknown;
+	senderLabel?: unknown;
+	itemId?: unknown;
 	attempt?: unknown;
 	clientMessageId?: unknown;
 	requestId?: unknown;
@@ -55,7 +58,7 @@ function eventPayload(event: CloudCpClientEvent): EventPayload {
 
 function eventText(event: CloudCpClientEvent): string | undefined {
 	const text = eventPayload(event).text;
-	return typeof text === "string" && text.trim() !== "" ? text : undefined;
+	return typeof text === "string" && text !== "" ? text : undefined;
 }
 
 function eventTurnID(event: CloudCpClientEvent): string | undefined {
@@ -114,6 +117,7 @@ function cloudTurnDiff(patch: string): (DiffFile & { patch: string })[] {
 export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent[]): ConversationSnapshot {
 	const turns = new Map<string, ConversationTurn>();
 	const assistant = new Map<string, ConversationMessage>();
+	const latestAssistant = new Map<string, ConversationMessage>();
 	const approvals = new Map<string, ConversationActivity>();
 	const activities = new Map<string, ConversationActivity>();
 	const turnPatches = new Map<string, (DiffFile & { patch: string })[]>();
@@ -238,12 +242,17 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 		if (event.type !== "chat.assistant_delta") continue;
 		// Older Cloud workers persisted this Codex CLI status as assistant text.
 		if (session.provider === "codex" && text.trim() === "Reading additional input from stdin...") continue;
-		const itemID = eventPayload(event).itemId;
-		const assistantKey = `${turnID ?? `event-${event.sequence}`}:${typeof itemID === "string" ? itemID : "reply"}`;
+		const payload = eventPayload(event);
+		const itemID = typeof payload.itemId === "string" && payload.itemId !== "" ? payload.itemId : "legacy";
+		const assistantKey = turnID ? JSON.stringify([turnID, payload.attempt ?? 1, itemID]) : `event-${event.sequence}`;
 		const previous = assistant.get(assistantKey);
+		const priorLive = turnID ? latestAssistant.get(turnID) : undefined;
+		if (priorLive && priorLive !== previous) priorLive.streaming = false;
 		if (previous) {
 			previous.text += text;
 			previous.revision += 1;
+			previous.streaming = true;
+			if (turnID) latestAssistant.set(turnID, previous);
 			continue;
 		}
 		const message: ConversationMessage = {
@@ -251,6 +260,7 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			revision: 1, role: "assistant", origin: "provider", text, streaming: true, createdAt: event.createdAt,
 		};
 		assistant.set(assistantKey, message);
+		if (turnID) latestAssistant.set(turnID, message);
 		items.push(message);
 	}
 	for (const activity of activities.values()) {

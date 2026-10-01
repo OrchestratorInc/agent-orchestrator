@@ -360,6 +360,7 @@ func (s *Store) AppendWorkerTurnOutput(
 		return appendTypedEvent(ctx, tx, orgID, sessionID, "chat.assistant_delta", map[string]any{
 			"turnId":  turnID,
 			"attempt": attempt,
+			"itemId":  itemID,
 			"stream":  stream,
 			"text":    text,
 			"itemId":  itemID,

@@ -1559,6 +1559,8 @@ export interface components {
             capabilities: string[];
         };
         WorkerOutputPayload: {
+            /** @description Provider message identity within this turn attempt. */
+            itemId?: string;
             /** Format: uuid */
             turnId: string;
             attempt: number;
