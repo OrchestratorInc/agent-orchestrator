@@ -1487,7 +1487,7 @@ function ChatWorkspaceContent({
 									onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
 									nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
 									autoFocus={!reviewerActive}
-									autoFocusKey={uiSessionId}
+									autoFocusKey={draftScope.sessionId}
 									// Steering is only meaningful into a turn that is running. A queued turn
 									// has not reached the provider, so there is nothing to steer.
 									onSteer={newWorkDisabled ? undefined : steer}
