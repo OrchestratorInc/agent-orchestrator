@@ -26,9 +26,11 @@ function mockState(state: typeof binding & { switch?: typeof operation }) {
     : success(state));
 }
 
+let queryClient: QueryClient;
+
 function show() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(<QueryClientProvider client={client}><SessionAccountControl sessionId="session-a" /></QueryClientProvider>);
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  return render(<QueryClientProvider client={queryClient}><SessionAccountControl sessionId="session-a" /></QueryClientProvider>);
 }
 
 describe("SessionAccountControl", () => {
@@ -85,6 +87,18 @@ describe("SessionAccountControl", () => {
     await waitFor(() => expect(screen.getByRole("region", { name: "Committed account" })).toHaveTextContent("account-b"));
     expect(screen.getByRole("region", { name: "Committed account" })).toHaveTextContent("8");
     await waitFor(() => expect(screen.getByRole("region", { name: "Switch operation" })).toHaveTextContent("Phase: ready"));
+  });
+
+  it("keeps the target selector enabled during a background session refresh", async () => {
+    show();
+    const selector = await screen.findByLabelText("Target account");
+    let resolve!: (value: unknown) => void;
+    api.GET.mockImplementation(() => new Promise(done => { resolve = done; }));
+    void queryClient.refetchQueries({ queryKey: ["accounts-manager", "session", "session-a"], type: "active" });
+    await waitFor(() => expect(api.GET).toHaveBeenCalledTimes(2));
+    expect(selector).toBeEnabled();
+    resolve(success(binding));
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: ["accounts-manager", "session", "session-a"] })).toBe(0));
   });
 
   it.each([501, 503])("shows HTTP %s as unavailable without implicit native fallback", async (status) => {

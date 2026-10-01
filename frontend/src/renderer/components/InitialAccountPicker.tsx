@@ -19,7 +19,7 @@ export function InitialAccountPicker({ state, value, disabled, onChange }: Props
   return <>
     <label className="sr-only" htmlFor={id}>{t("accountsManager.initial.title")}</label>
     <select id={id} className="composer-chip composer-toolbar-option w-full truncate" title={t("accountsManager.initial.description")} value={value}
-      disabled={disabled || state.capability.isFetching || state.capability.isError || state.capability.data !== true} onChange={event => onChange(event.target.value)}>
+      disabled={disabled || state.capability.isPending || state.capability.isError || state.capability.data !== true} onChange={event => onChange(event.target.value)}>
       <option value="" disabled>{t("accountsManager.initial.shortChoose")}</option>
       <option value="native">{t("accountsManager.controls.native")}</option>
       {value.startsWith("managed:") && !state.selected ? <option value={value} disabled>{t("accountsManager.initial.missing", { id: value.slice(8) })}</option> : null}
@@ -38,12 +38,12 @@ export function InitialAccountStatus({ state, value, disabled }: Omit<Props, "on
   const { t } = useTranslation();
   if (!state.enabled || state.capability.data === false) return null;
   const capabilityError = state.capability.error;
-  const busy = disabled || state.capability.isFetching;
+  const busy = disabled || state.capability.isPending;
   const needsRefresh = capabilityError || state.capability.data === true && !state.inventoryReady;
   return (
     <div className="px-3 text-xs text-muted-foreground" aria-live="polite">
       {needsRefresh ? <div className="flex items-center justify-end">
-        <button type="button" className="text-xs underline" disabled={busy || state.inventory.isFetching} onClick={() => {
+        <button type="button" className="text-xs underline" disabled={busy || state.inventory.isPending} onClick={() => {
           void state.capability.refetch();
           if (state.capability.data) void state.inventory.refetch();
         }}>{t("accountsManager.controls.refreshSession")}</button>

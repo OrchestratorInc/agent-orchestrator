@@ -74,7 +74,7 @@ function SessionAccountPanel({ sessionId, compact = false, onSwitchLockChange }:
   const unconfirmed = Boolean(submitted && !operation);
   const pendingCommit = operation?.phase === "ready" && (!binding || binding.revision < operation.targetRevision);
   const unavailable = current.isError || !binding;
-  const busy = mutation.isPending || current.isFetching;
+  const busy = mutation.isPending || current.isPending;
   const switchLocked = mutation.isPending || active || serverActive || unconfirmed || pendingCommit || Boolean(localError) || Boolean(binding?.blocked);
   useEffect(() => { onSwitchLockChange?.(switchLocked); }, [onSwitchLockChange, switchLocked]);
   useEffect(() => {

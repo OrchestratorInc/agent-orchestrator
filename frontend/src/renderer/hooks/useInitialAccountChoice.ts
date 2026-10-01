@@ -36,10 +36,10 @@ export function useInitialAccountChoice(harness: string, active: boolean, value:
   const accounts = inventory.data?.accounts.filter(account => account.provider === provider) ?? [];
   const selected = accounts.find(account => value === "managed:" + account.id);
   const inventoryReady = !inventory.isError && inventory.data?.availability === "ready" && !inventory.data.stale;
-  const managedProviders = active && !capability.isError && !capability.isFetching && capability.data === true && inventoryReady
+  const managedProviders = active && !capability.isError && !capability.isPending && capability.data === true && inventoryReady
     ? [...new Set(inventory.data?.accounts.filter(initialAccountReady).map(account => account.provider))]
     : [];
-  const ready = !enabled || (!capability.isError && !capability.isFetching && (
+  const ready = !enabled || (!capability.isError && !capability.isPending && (
     capability.data === false ? value === "" : capability.data === true && (
       value === "native" || Boolean(inventoryReady && selected && initialAccountReady(selected))
     )
