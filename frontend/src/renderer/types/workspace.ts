@@ -181,6 +181,8 @@ export type WorkspaceSession = {
 	 */
 	cloud?: {
 		orgId: string;
+		/** Maximum permission mode for Cloud turns in this session. */
+		permissionMode?: "read-only" | "standard" | "trusted";
 		sandboxProvider?: string;
 		desiredState?: string;
 		observedState?: string;

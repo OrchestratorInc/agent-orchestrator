@@ -12129,6 +12129,11 @@ components:
           items:
             $ref: '#/components/schemas/WorkspaceCommitSummary'
           type: array
+        commitsTruncated:
+          description: 'True when older commits were left out of commits: the list
+            keeps the newest 250, and stops at the last commit whose changes fit the
+            daemon''s size cap.'
+          type: boolean
         files:
           items:
             $ref: '#/components/schemas/WorkspaceFileSummary'
@@ -12195,6 +12200,10 @@ components:
       type: object
     ListSessionPRsResponse:
       properties:
+        linkedPrs:
+          items:
+            $ref: '#/components/schemas/SessionPRReference'
+          type: array
         prs:
           items:
             $ref: '#/components/schemas/SessionPRSummary'
@@ -12204,6 +12213,7 @@ components:
       required:
       - sessionId
       - prs
+      - linkedPrs
       type: object
     ListSessionsResponse:
       properties:
@@ -12237,6 +12247,11 @@ components:
           items:
             $ref: '#/components/schemas/WorkspaceCommitSummary'
           type: array
+        commitsTruncated:
+          description: 'True when older commits were left out of commits: the list
+            keeps the newest 250, and stops at the last commit whose changes fit the
+            daemon''s size cap.'
+          type: boolean
         compareBaseRef:
           type: string
         compareBaseSha:
@@ -12526,6 +12541,8 @@ components:
           - ready_to_merge
           - pr_merged
           - pr_closed_unmerged
+          - review_completed
+          - review_changes_requested
           type: string
       required:
       - id
@@ -13531,6 +13548,28 @@ components:
       - reasons
       - prUrl
       type: object
+    SessionPRReference:
+      properties:
+        host:
+          type: string
+        number:
+          type: integer
+        provider:
+          enum:
+          - github
+          - gitlab
+          type: string
+        repo:
+          type: string
+        url:
+          type: string
+      required:
+      - url
+      - provider
+      - host
+      - repo
+      - number
+      type: object
     SessionPRReviewCommentLink:
       properties:
         autoInjectReview:
@@ -14035,6 +14074,8 @@ components:
           type: string
         localEnabled:
           type: boolean
+        trackerIntakeEnabled:
+          type: boolean
       required:
       - defaultSessionMode
       - chatHarnesses
@@ -14043,6 +14084,7 @@ components:
       - cloudOffering
       - cloudEnabled
       - cloudControlPlaneUrl
+      - trackerIntakeEnabled
       type: object
     ShellTerminalEnvelope:
       properties:

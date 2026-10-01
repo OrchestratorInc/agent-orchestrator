@@ -29,7 +29,7 @@ import {
 	useTerminateSessionState,
 } from "../hooks/useTerminateSession";
 import { useReapplyPreservedEdits } from "../hooks/useReapplyPreservedEdits";
-import { sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
+import { inspectorIsOpen, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
 import { OrchestratorIcon } from "./icons";
 import { getAgentActivityView } from "../lib/session-presentation";
 import { isLinuxPlatform, isMacPlatform, usesBoardActionsInPanel } from "../lib/platform";
@@ -122,7 +122,7 @@ export function ShellTopbar({
 	const isStandaloneBoardRoute = location.pathname === "/sessions" || location.pathname === "/sessions/";
 	const isOrchestrator = session ? isOrchestratorSession(session) : false;
 	const isInspectorOpen = useUiStore((state) =>
-		currentSessionId ? (state.inspectorSessions[currentSessionId]?.isOpen ?? !isOrchestrator) : false,
+		currentSessionId ? inspectorIsOpen(state.inspectorSessions, currentSessionId) : false,
 	);
 	// Project in scope: the session's workspace wins over the route param so the
 	// cross-project /sessions/$sessionId route still resolves a crumb. A
@@ -217,9 +217,9 @@ export function ShellTopbar({
 				data-compact-actions={compactActions ? "true" : "false"}
 				data-testid="workspace-topbar-actions"
 			>
-			{!boardActionsInPanel && isProjectBoardRoute ? (
+				{!boardActionsInPanel && isProjectBoardRoute ? (
 					<>
-						<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} style={noDragStyle} />
+						<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={project?.kind === CLOUD_PROJECT_KIND} style={noDragStyle} />
 						{supportsLocalCues ? <span className="inline-flex" style={noDragStyle}>
 							<CueRunMenu
 								projectId={projectId!}
@@ -312,14 +312,15 @@ export function ShellTopbar({
 						{session?.hasPreservedEdits && session.isTerminated === true && project?.kind !== CLOUD_PROJECT_KIND ? (
 							<PutEditsBackButton sessionId={session.id} title={session.title} />
 						) : null}
-						{!isOrchestrator && session && (sessionAction || sessionIsActive(session)) ? (
+						{!isOrchestrator &&
+							(sessionAction || (session && !session.cloud && sessionIsActive(session))) ? (
 							<div
 								className="inline-flex shrink-0 items-center gap-1"
 								data-testid="session-local-actions"
 								style={noDragStyle}
 							>
 								{sessionAction ? <div className="inline-flex shrink-0 items-center">{sessionAction}</div> : null}
-								{sessionIsActive(session) ? (
+								{session && !session.cloud && sessionIsActive(session) ? (
 									<TopbarArchiveButton
 										key={session.id}
 										session={session}
