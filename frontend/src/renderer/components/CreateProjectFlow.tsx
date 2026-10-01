@@ -1603,9 +1603,13 @@ function CloudProjectCard({
 			<div className={cn(onboardingPanelBodyClass, "pt-4")}>
 				{/* Repository: the project is created from, and named after, it. */}
 				<div className="space-y-2">
-					<Label className={onboardingFormLabelClass}>
-						{t("createProject.cloudRepository", { defaultValue: "Repository" })}
-					</Label>
+					{/* As tall as the dialog's close button and clear of it, so the
+					    button never overlaps the repository field below. */}
+					<div className={cn("flex min-h-8 items-center", dialog && onClose && "pr-10")}>
+						<Label className={onboardingFormLabelClass}>
+							{t("createProject.cloudRepository", { defaultValue: "Repository" })}
+						</Label>
+					</div>
 
 					{!appConnected || noRepositoriesShared ? (
 						<button
