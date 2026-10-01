@@ -20,13 +20,12 @@ import (
 var ErrUnsupportedPolicy = errors.New("coding-agent policy cannot be enforced safely")
 
 type Command struct {
-	Path            string
-	Args            []string
-	Dir             string
-	Env             map[string]string
-	SystemPrompt    string
-	CursorPluginDir string
-	Cleanup         func()
+	Path         string
+	Args         []string
+	Dir          string
+	Env          map[string]string
+	SystemPrompt string
+	Cleanup      func()
 }
 
 type CommandBuilder interface {
@@ -104,6 +103,11 @@ func (b HarnessBuilder) BuildInteractive(
 			"%w: interactive terminals cannot enforce command-prefix deny rules",
 			ErrUnsupportedPolicy,
 		)
+	}
+	if launch.Harness == "cursor" {
+		if err := removeCursorACPStandingRule(workspace, launch.SessionID); err != nil {
+			return Command{}, err
+		}
 	}
 	binary := b.binary(launch.Harness)
 	systemPrompt := b.systemPrompt(launch, workspace)
@@ -337,14 +341,9 @@ func (b HarnessBuilder) Build(
 		err = fmt.Errorf("unsupported coding-agent harness %q", turn.Harness)
 	}
 	if err == nil {
-		// Native protocol runners consume SystemPrompt or the Cursor plugin.
+		// Native protocol runners consume SystemPrompt or the Cursor ancestor rule.
 		// Keep headless CLI delivery intact for supervisors using OSRunner.
-		if turn.Harness == "cursor" {
-			command.CursorPluginDir, err = b.writeCursorPromptPlugin(b.Launch.SessionID, command.SystemPrompt)
-			if err == nil {
-				command.Args = append([]string{command.Args[0], "--plugin-dir", command.CursorPluginDir}, command.Args[1:]...)
-			}
-		} else {
+		if turn.Harness != "cursor" {
 			var promptFile string
 			promptFile, err = b.writeSystemPromptFile(b.Launch.SessionID, command.SystemPrompt)
 			if err == nil {
@@ -358,6 +357,18 @@ func (b HarnessBuilder) Build(
 	}
 	if err == nil {
 		err = b.configureCredential(&command, turn.Harness, credential)
+	}
+	if err == nil && turn.Harness == "cursor" {
+		err = writeCursorACPStandingRule(workspace, b.Launch.SessionID, command.SystemPrompt)
+		if err == nil {
+			credentialCleanup := command.Cleanup
+			command.Cleanup = func() {
+				_ = removeCursorACPStandingRule(workspace, b.Launch.SessionID)
+				if credentialCleanup != nil {
+					credentialCleanup()
+				}
+			}
+		}
 	}
 	if err != nil {
 		if command.Cleanup != nil {
