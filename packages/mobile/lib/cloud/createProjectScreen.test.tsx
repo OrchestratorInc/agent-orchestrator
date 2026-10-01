@@ -9,6 +9,12 @@ const state = vi.hoisted(() => ({
 	orgError: null as string | null,
 	listUserProviderConnections: vi.fn(async () => []),
 	listProviderConnections: vi.fn(async () => []),
+	listGitHubInstallations: vi.fn(async () => [] as unknown[]),
+	listGitHubRepositories: vi.fn(async () => ({ items: [] as unknown[], page: { hasMore: false } })),
+	startGitHubInstallation: vi.fn(async () => ({ installationUrl: "https://github.com/apps/ao/installations/new" })),
+	syncGitHubInstallation: vi.fn(async () => ({})),
+	createProjectFromGitHub: vi.fn(async () => ({ project: { id: "project-1" } })),
+	createProject: vi.fn(async () => ({ project: { id: "project-2" } })),
 	validateSavedRepositoryAccess: vi.fn(async () => ({ writeAccess: true })),
 }));
 
@@ -41,6 +47,7 @@ vi.mock("../RouteErrorBoundary", () => ({ SheetErrorBoundary: "SheetErrorBoundar
 vi.mock("../harnessLogoAssets", () => ({ logoFor: (harness: string) => `asset-${harness}` }));
 
 import CreateCloudProject from "../../app/create-project";
+import { openGitHub } from "../openGitHub";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -62,11 +69,14 @@ beforeEach(() => {
 	state.orgLoading = true;
 	state.orgError = null;
 	vi.clearAllMocks();
+	state.listGitHubInstallations.mockResolvedValue([]);
+	state.listGitHubRepositories.mockResolvedValue({ items: [], page: { hasMore: false } });
 });
 
 afterEach(async () => {
 	if (renderer) await act(async () => renderer?.unmount());
 	renderer = undefined;
+	vi.useRealTimers();
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 });
@@ -101,6 +111,7 @@ describe("Add Cloud project sheet", () => {
 		] as never);
 		state.listProviderConnections.mockResolvedValueOnce([{ provider: "codex", validationState: "valid" }] as never);
 		const root = await mount();
+		await act(async () => { root.findByProps({ title: "Set up manually with a token" }).props.onPress(); });
 		await act(async () => {
 			root.findByProps({ accessibilityLabel: "Repository URL" }).props.onChangeText("https://github.com/owner/repo");
 			root.findByProps({ accessibilityLabel: "Project name" }).props.onChangeText("Tappy");
@@ -108,5 +119,158 @@ describe("Add Cloud project sheet", () => {
 		await act(async () => { root.findByProps({ title: "Check repository access" }).props.onPress(); });
 		const marks = root.findAll((node) => String(node.type) === "Image").map((node) => node.props.source);
 		expect(marks).toEqual(["asset-claude-code", "asset-codex", "asset-claude-code", "asset-codex"]);
+	});
+
+	it("connects GitHub using the selected Cloud environment and offers manual setup", async () => {
+		state.signedIn = true;
+		state.orgId = "org-1";
+		state.orgLoading = false;
+		const root = await mount();
+		expect(root.findByProps({ title: "Connect GitHub" })).toBeDefined();
+		await act(async () => { await root.findByProps({ title: "Connect GitHub" }).props.onPress(); });
+		expect(state.startGitHubInstallation).toHaveBeenCalledWith("org-1", expect.anything());
+		expect(openGitHub).toHaveBeenCalledWith("https://github.com/apps/ao/installations/new");
+		await act(async () => { root.findByProps({ title: "Set up manually with a token" }).props.onPress(); });
+		expect(root.findByProps({ accessibilityLabel: "GitHub access token" })).toBeDefined();
+	});
+
+	it("searches granted repositories and creates an App-backed project", async () => {
+		state.signedIn = true;
+		state.orgId = "org-1";
+		state.orgLoading = false;
+		state.listGitHubInstallations.mockResolvedValue([{ id: "install-1", status: "active", syncStatus: "ready" }] as never);
+		state.listGitHubRepositories.mockResolvedValue({ items: [
+			{ githubRepositoryId: "1", name: "alpha", fullName: "me/alpha", htmlUrl: "https://github.com/me/alpha", defaultBranch: "main", access: "active", isArchived: false },
+			{ githubRepositoryId: "2", name: "beta", fullName: "me/beta", htmlUrl: "https://github.com/me/beta", defaultBranch: "develop", access: "active", isArchived: false },
+		], page: { hasMore: false } } as never);
+		state.listUserProviderConnections.mockResolvedValue([{ provider: "claude-code", validationState: "valid" }] as never);
+		const root = await mount();
+		await act(async () => { root.findByProps({ accessibilityLabel: "Search repositories" }).props.onChangeText("beta"); });
+		expect(root.findAllByProps({ accessibilityLabel: "Select me/alpha" })).toHaveLength(0);
+		await act(async () => { root.findByProps({ accessibilityLabel: "Select me/beta" }).props.onPress(); });
+		await act(async () => { root.findByProps({ title: "Continue" }).props.onPress(); });
+		await act(async () => { await root.findByProps({ title: "Create project" }).props.onPress(); });
+		expect(state.createProjectFromGitHub).toHaveBeenCalledWith("org-1", {
+			githubRepositoryId: "2",
+			displayName: "beta",
+			config: { worker: { agent: "claude-code" }, orchestrator: { agent: "claude-code" } },
+		}, { idempotencyKey: "test-key" });
+	});
+
+	it("asks Cloud to sync a newly connected installation before listing repositories", async () => {
+		state.signedIn = true;
+		state.orgId = "org-1";
+		state.orgLoading = false;
+		state.listGitHubInstallations
+			.mockResolvedValueOnce([{ id: "install-1", accountLogin: "me", status: "active", syncStatus: "pending" }] as never)
+			.mockResolvedValueOnce([{ id: "install-1", accountLogin: "me", status: "active", syncStatus: "ready" }] as never);
+		await mount();
+		expect(state.syncGitHubInstallation).toHaveBeenCalledWith("org-1", "install-1", expect.anything());
+		expect(state.listGitHubRepositories).toHaveBeenCalledWith("org-1", expect.objectContaining({ limit: 100 }));
+	});
+
+	it("does not call a GitHub installation ready while repository sync is pending", async () => {
+		state.signedIn = true;
+		state.orgId = "org-1";
+		state.orgLoading = false;
+		state.listGitHubInstallations.mockResolvedValue([{ id: "install-1", accountLogin: "me", status: "active", syncStatus: "pending" }] as never);
+		const root = await mount();
+		const text = root.findAll((node) => String(node.type) === "Text").map((node) => node.props.children);
+		expect(text).toContain("Syncing repositories from me");
+		expect(text).not.toContain("Connected to me");
+	});
+
+	it("lets a connected account grant more repositories from the empty state", async () => {
+		state.signedIn = true;
+		state.orgId = "org-1";
+		state.orgLoading = false;
+		state.listGitHubInstallations.mockResolvedValue([{ id: "install-1", accountLogin: "me", status: "active", syncStatus: "ready" }] as never);
+		const root = await mount();
+		await act(async () => { await root.findByProps({ title: "Manage GitHub access" }).props.onPress(); });
+		expect(state.startGitHubInstallation).toHaveBeenCalledWith("org-1", expect.anything());
+		expect(openGitHub).toHaveBeenCalledWith("https://github.com/apps/ao/installations/new");
+	});
+
+	it("lets the user stop waiting when GitHub approval is not finished", async () => {
+		state.signedIn = true;
+		state.orgId = "org-1";
+		state.orgLoading = false;
+		vi.mocked(openGitHub).mockImplementationOnce(() => new Promise(() => {}));
+		const root = await mount();
+		await act(async () => { void root.findByProps({ title: "Connect GitHub" }).props.onPress(); });
+		await act(async () => { root.findByProps({ title: "Stop waiting" }).props.onPress(); });
+		expect(root.findByProps({ title: "Connect GitHub" })).toBeDefined();
+	});
+
+	it("shows when AO is opening GitHub before the browser starts", async () => {
+		state.signedIn = true;
+		state.orgId = "org-1";
+		state.orgLoading = false;
+		state.startGitHubInstallation.mockImplementationOnce(() => new Promise(() => {}));
+		const root = await mount();
+		await act(async () => { void root.findByProps({ title: "Connect GitHub" }).props.onPress(); });
+		expect(root.findByProps({ title: "Opening GitHub…" })).toBeDefined();
+	});
+
+	it("keeps waiting for a changed installation when configuring existing GitHub access", async () => {
+		state.signedIn = true;
+		state.orgId = "org-1";
+		state.orgLoading = false;
+		state.listGitHubInstallations.mockResolvedValue([{ id: "install-1", accountLogin: "me", status: "active", syncStatus: "ready", updatedAt: "2026-09-28T00:00:00Z" }] as never);
+		vi.mocked(openGitHub).mockImplementationOnce(() => new Promise(() => {}));
+		const root = await mount();
+		vi.useFakeTimers();
+		await act(async () => { void root.findByProps({ title: "Manage GitHub access" }).props.onPress(); });
+		await act(async () => { await vi.advanceTimersByTimeAsync(2600); });
+		expect(root.findByProps({ title: "Stop waiting" })).toBeDefined();
+		expect(root.findAll((node) => String(node.type) === "Feather" && node.props.name === "check-circle")).toHaveLength(0);
+	});
+
+	it("shows repository sync after approval creates a pending installation", async () => {
+		state.signedIn = true;
+		state.orgId = "org-1";
+		state.orgLoading = false;
+		const pending = [{ id: "install-2", accountLogin: "me", status: "active", syncStatus: "pending", updatedAt: "2026-09-28T00:01:00Z" }];
+		state.listGitHubInstallations
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([])
+			.mockResolvedValue(pending as never);
+		const root = await mount();
+		await act(async () => { await root.findByProps({ title: "Connect GitHub" }).props.onPress(); });
+		const text = root.findAll((node) => String(node.type) === "Text").map((node) => node.props.children);
+		expect(text).toContain("Syncing repositories from me");
+		expect(text).not.toContain("Waiting for GitHub approval…");
+	});
+
+	it("keeps the manual token and URL path available when GitHub App is unavailable", async () => {
+		state.signedIn = true;
+		state.orgId = "org-1";
+		state.orgLoading = false;
+		state.listGitHubInstallations.mockRejectedValueOnce(new Error("GitHub App unavailable"));
+		state.listUserProviderConnections.mockResolvedValueOnce([{ provider: "github", validationState: "valid" }] as never);
+		const root = await mount();
+		expect(root.findAllByProps({ accessibilityRole: "alert" })).toHaveLength(1);
+		await act(async () => { root.findByProps({ title: "Set up manually with a token" }).props.onPress(); });
+		expect(root.findByProps({ accessibilityLabel: "Repository URL" })).toBeDefined();
+	});
+
+	it("uses the existing manual project endpoint for a saved-token import", async () => {
+		state.signedIn = true;
+		state.orgId = "org-1";
+		state.orgLoading = false;
+		state.listUserProviderConnections.mockResolvedValueOnce([
+			{ provider: "github", validationState: "valid" },
+			{ provider: "codex", validationState: "valid" },
+		] as never);
+		const root = await mount();
+		await act(async () => { root.findByProps({ title: "Set up manually with a token" }).props.onPress(); });
+		await act(async () => {
+			root.findByProps({ accessibilityLabel: "Repository URL" }).props.onChangeText("https://github.com/me/manual");
+			root.findByProps({ accessibilityLabel: "Project name" }).props.onChangeText("Manual");
+		});
+		await act(async () => { await root.findByProps({ title: "Check repository access" }).props.onPress(); });
+		await act(async () => { await root.findByProps({ title: "Create project" }).props.onPress(); });
+		expect(state.createProject).toHaveBeenCalledWith("org-1", expect.objectContaining({ repositoryUrl: "https://github.com/me/manual", displayName: "Manual" }), { idempotencyKey: "test-key" });
+		expect(state.createProjectFromGitHub).not.toHaveBeenCalled();
 	});
 });
