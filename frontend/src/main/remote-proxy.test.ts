@@ -6,6 +6,7 @@ import { startRemoteProxy, type ActiveProxy } from "./remote-proxy";
 type Seen = {
 	url: string;
 	auth: string | undefined;
+	expectedHost: string | undefined;
 	origin: string | undefined;
 	appAuth: string | undefined;
 	appOrigin: string | undefined;
@@ -51,6 +52,7 @@ async function startUpstream(
 			seen.push({
 				url: req.url ?? "",
 				auth: req.headers.authorization,
+				expectedHost: req.headers["x-ao-expected-host-id"] as string | undefined,
 				origin: req.headers.origin,
 				appAuth: req.headers["x-ao-preview-app-authorization"] as string | undefined,
 				appOrigin: req.headers["x-ao-preview-app-origin"] as string | undefined,
@@ -256,11 +258,13 @@ describe("startRemoteProxy", () => {
 				: '{"ok":true}',
 		}));
 		proxy = await startRemoteProxy({ hostId: "h_workbox", label: "workbox", url: `http://127.0.0.1:${port}`, password: "secret" });
-		const response = await fetch(`${proxy.base}/api/v1/projects`);
+		const response = await fetch(`${proxy.base}/api/v1/projects`, {
+			headers: { "X-AO-Expected-Host-ID": "h_spoofed" },
+		});
 		expect(response.status).toBe(200);
-		expect(seen.map(({ url, auth }) => ({ url, auth }))).toEqual([
-			{ url: "/api/v1/identity", auth: undefined },
-			{ url: "/api/v1/projects", auth: "Bearer secret" },
+		expect(seen.map(({ url, auth, expectedHost }) => ({ url, auth, expectedHost }))).toEqual([
+			{ url: "/api/v1/identity", auth: undefined, expectedHost: undefined },
+			{ url: "/api/v1/projects", auth: "Bearer secret", expectedHost: "h_workbox" },
 		]);
 	});
 

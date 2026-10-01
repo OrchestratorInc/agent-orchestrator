@@ -177,7 +177,7 @@ export function startOtherHost(host: Host, previous: HostSnapshot | undefined, p
 				update({ config: null }); // Do not leave a rejected bearer available to actions.
 				return;
 			}
-			if (status === undefined) {
+			if (status === undefined || status === 421) {
 				runner.config = null;
 				update({ config: null }); // An old address is no longer verified for actions.
 				schedule(2_000); // Race LAN/tunnel again after a network change.

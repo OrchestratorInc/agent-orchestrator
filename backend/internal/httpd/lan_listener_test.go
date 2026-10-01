@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,40 @@ func TestLANControlBlockMarksRequestContext(t *testing.T) {
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/cues/cue-a/invoke", nil))
 	if recorder.Code != http.StatusNoContent || !seenLAN {
 		t.Fatalf("status=%d seenLAN=%v", recorder.Code, seenLAN)
+	}
+}
+
+func TestMobileLANRejectsReassignedAddressWithSamePassword(t *testing.T) {
+	calls := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusAccepted)
+	})
+	// The address formerly belonged to h_A; h_B now answers there and happens
+	// to use the same connection password.
+	m := NewMobileLAN(inner, "h_B", 0, nil, nil)
+	m.SetPasswordHash(mobilebridge.HashPassword("same-secret"))
+	request := func(expectedHostID, password string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/orchestrators/delegate", nil)
+		req.Header.Set("Authorization", "Bearer "+password)
+		if expectedHostID != "" {
+			req.Header.Set("X-AO-Expected-Host-ID", expectedHostID)
+		}
+		recorder := httptest.NewRecorder()
+		m.handler.ServeHTTP(recorder, req)
+		return recorder
+	}
+	if got := request("h_A", "same-secret"); got.Code != http.StatusMisdirectedRequest || !strings.Contains(got.Body.String(), `"code":"HOST_ID_MISMATCH"`) || calls != 0 {
+		t.Fatalf("stale h_A request: status=%d body=%q calls=%d", got.Code, got.Body.String(), calls)
+	}
+	if got := request("h_B", "same-secret"); got.Code != http.StatusAccepted || calls != 1 {
+		t.Fatalf("matching h_B request: status=%d calls=%d", got.Code, calls)
+	}
+	if got := request("", "same-secret"); got.Code != http.StatusAccepted || calls != 2 {
+		t.Fatalf("legacy request: status=%d calls=%d", got.Code, calls)
+	}
+	if got := request("h_A", "wrong"); got.Code != http.StatusUnauthorized || calls != 2 {
+		t.Fatalf("unauthenticated request: status=%d calls=%d", got.Code, calls)
 	}
 }
 

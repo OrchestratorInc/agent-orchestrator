@@ -37,11 +37,12 @@ describe("probeRemote", () => {
 
 	it("sends the saved credential only to the configured host and never follows redirects", async () => {
 		const doFetch = fakeFetch(200, daemonProbe);
-		await probeRemote({ ...entry, url: "http://192.0.2.1/ao/" }, doFetch);
+		await probeRemote({ ...entry, hostId: "h_workbox", url: "http://192.0.2.1/ao/" }, doFetch);
 		const [url, init] = doFetch.mock.calls[0] as unknown as [string, RequestInit];
 		expect(url).toBe("http://192.0.2.1/ao/healthz");
 		expect(init.redirect).toBe("error");
 		expect(new Headers(init.headers).get("Authorization")).toBe("Bearer pw");
+		expect(new Headers(init.headers).get("X-AO-Expected-Host-ID")).toBe("h_workbox");
 		await probeRemote({ ...entry, url: "workbox:3011" }, doFetch);
 		expect(doFetch.mock.calls[1][0]).toBe("http://workbox:3011/healthz");
 	});

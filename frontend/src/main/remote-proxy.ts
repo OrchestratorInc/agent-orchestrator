@@ -63,6 +63,7 @@ const STRIP_REQUEST_HEADERS = [
 	"proxy-authorization",
 	"x-ao-preview-app-authorization",
 	"x-ao-preview-app-origin",
+	"x-ao-expected-host-id",
 ];
 
 // Nothing in this file may log a secret. Not the connection password, not the
@@ -156,6 +157,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		}
 		out.host = upstream.host;
 		out.authorization = `Bearer ${entry.password}`;
+		if (entry.hostId) out["x-ao-expected-host-id"] = entry.hostId;
 		return out;
 	};
 

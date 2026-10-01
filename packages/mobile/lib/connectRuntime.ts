@@ -97,10 +97,12 @@ export async function probeIdentity(cfg: {
 	return typeof body.hostId === "string" ? body.hostId : "";
 }
 
-/** On a 401/403, check whether the saved address still names this host. */
+/** On a host mismatch (or ambiguous auth rejection), re-race verified endpoints. */
 export async function rejectedEndpointNeedsRace(cfg: ServerConfig, status: number | undefined): Promise<boolean> {
 	// A 429 is a lockout, and an unidentified legacy config cannot be checked.
-	if (!cfg.hostId || (status !== 401 && status !== 403)) return false;
+	if (!cfg.hostId) return false;
+	if (status === 421) return true;
+	if (status !== 401 && status !== 403) return false;
 	try {
 		// The rejected URL just answered, so one bounded probe is enough here.
 		const answer = await probeOnce({
@@ -132,12 +134,16 @@ export const ENDPOINT_REFRESH_TIMEOUT_MS = 5_000;
  * control routes are 404'd on the LAN listener, which is the only listener a
  * phone can reach.
  */
-async function fetchAdvertisedEndpoints(base: string, token: string): Promise<Endpoint[]> {
+async function fetchAdvertisedEndpoints(config: ServerConfig): Promise<Endpoint[]> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), ENDPOINT_REFRESH_TIMEOUT_MS);
 	try {
+		const base = `${config.secure ? "https" : "http"}://${config.host}:${config.httpPort}`;
 		const res = await fetch(`${base}/api/v1/endpoints`, {
-			headers: token ? { Authorization: `Bearer ${token}` } : {},
+			headers: {
+				...(config.password ? { Authorization: `Bearer ${config.password}` } : {}),
+				...(config.hostId ? { "X-AO-Expected-Host-ID": config.hostId } : {}),
+			},
 			signal: controller.signal,
 		});
 		if (!res.ok) throw new Error(`endpoint refresh returned ${res.status}`);
@@ -168,10 +174,7 @@ export function runtimeConnectDeps(options: ConnectOptions = {}): ConnectDeps {
 		refreshEndpoints: (config) =>
 			options.refreshEndpoints === false
 				? Promise.resolve([])
-				: fetchAdvertisedEndpoints(
-						`${config.secure ? "https" : "http"}://${config.host}:${config.httpPort}`,
-						config.password,
-					),
+				: fetchAdvertisedEndpoints(config),
 		saveEndpoints: updateHostEndpoints,
 		adoptIdentity: adoptHostIdentity,
 		touch: touchHost,

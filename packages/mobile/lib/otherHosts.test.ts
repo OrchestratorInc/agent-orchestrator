@@ -62,13 +62,16 @@ describe("another paired host's live runner", () => {
 		} finally { runner.stop(); }
 	});
 
-	it("re-races and reconnects after a host's network path fails", async () => {
+	it.each([
+		["network path fails", undefined],
+		["saved address reports another host", 421],
+	])("re-races and reconnects after a host's %s", async (_reason, status) => {
 		vi.useFakeTimers();
 		const { connectToHost } = await import("./connectRuntime");
-		const { getSessions, getNotifications } = await import("./api");
+		const { ApiError, getSessions, getNotifications } = await import("./api");
 		vi.mocked(connectToHost).mockResolvedValue({ ok: true, hostId: host.id, endpoint: { kind: "lan", host: config.host, port: 3011, secure: false }, config });
 		vi.mocked(getSessions)
-			.mockRejectedValueOnce(new Error("network lost"))
+			.mockRejectedValueOnce(status === undefined ? new Error("network lost") : new ApiError(status, "host mismatch"))
 			.mockResolvedValue({ projects: [], sessions: [], orchestrators: [], orchestratorId: null, stats: {} });
 		vi.mocked(getNotifications).mockResolvedValue({ notifications: [], unreadCount: 0, nextCursor: undefined });
 		const { emptyHostSnapshot, startOtherHost } = await import("./otherHosts");
@@ -81,6 +84,28 @@ describe("another paired host's live runner", () => {
 			await vi.advanceTimersByTimeAsync(2_000);
 			expect(connectToHost).toHaveBeenCalledTimes(2);
 			expect(snapshot.connection).toBe("open");
+		} finally { runner.stop(); }
+	});
+
+	it("keeps a reassigned address offline when no endpoint still belongs to the paired host", async () => {
+		vi.useFakeTimers();
+		const { connectToHost } = await import("./connectRuntime");
+		const { ApiError, getSessions } = await import("./api");
+		vi.mocked(connectToHost)
+			.mockResolvedValueOnce({ ok: true, hostId: host.id, endpoint: { kind: "lan", host: config.host, port: 3011, secure: false }, config })
+			.mockResolvedValueOnce({ ok: false, reason: "none-reachable" });
+		vi.mocked(getSessions).mockRejectedValue(new ApiError(421, "host mismatch"));
+		const { emptyHostSnapshot, startOtherHost } = await import("./otherHosts");
+		let snapshot = emptyHostSnapshot(host);
+		const runner = startOtherHost(host, undefined, (patch) => { snapshot = { ...snapshot, ...patch }; });
+		try {
+			await runner.refresh();
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(connectToHost).toHaveBeenCalledTimes(2);
+			expect(snapshot.hostId).toBe(host.id);
+			expect(snapshot.connection).toBe("closed");
+			expect(snapshot.config).toBeNull();
+			expect(getSessions).toHaveBeenCalledTimes(1);
 		} finally { runner.stop(); }
 	});
 

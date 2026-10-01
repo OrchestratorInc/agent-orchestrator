@@ -32,6 +32,7 @@ describe("runtimeConnectDeps", () => {
 
 		await expect(rejectedEndpointNeedsRace(paired, 401)).resolves.toBe(true);
 		await expect(rejectedEndpointNeedsRace(paired, 403)).resolves.toBe(false);
+		await expect(rejectedEndpointNeedsRace(paired, 421)).resolves.toBe(true);
 		await expect(rejectedEndpointNeedsRace(paired, 429)).resolves.toBe(false);
 		expect(fetch).toHaveBeenCalledTimes(2);
 		for (const [url, init] of fetch.mock.calls) {
@@ -51,9 +52,9 @@ describe("runtimeConnectDeps", () => {
 	it("refreshes by default", async () => {
 		const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ endpoints: [] }) });
 		vi.stubGlobal("fetch", fetch);
-		await runtimeConnectDeps().refreshEndpoints(config);
+		await runtimeConnectDeps().refreshEndpoints({ ...config, hostId: "h_A" });
 		expect(fetch).toHaveBeenCalledWith("http://192.168.1.5:3011/api/v1/endpoints", {
-			headers: { Authorization: "Bearer stale" },
+			headers: { Authorization: "Bearer stale", "X-AO-Expected-Host-ID": "h_A" },
 			signal: expect.any(AbortSignal),
 		});
 	});

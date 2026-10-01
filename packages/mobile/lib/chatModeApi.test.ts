@@ -165,10 +165,11 @@ describe("mobile Chat API boundaries", () => {
 		vi.mocked(fetch)
 			.mockResolvedValueOnce(response({ ok: true, workerId: "w-2" }, 202))
 			.mockResolvedValueOnce(response({ session: { id: "w-2", projectId: "p-1", harness: "codex", mode: "chat", provisionState: "failed", provisionError: "workspace setup failed" } }));
-		const session = await delegateTask(cfg, { projectId: "p-1", brief: "", agent: "codex", model: "gpt-5", mode: "chat" });
+		const session = await delegateTask({ ...cfg, hostId: "h_A" }, { projectId: "p-1", brief: "", agent: "codex", model: "gpt-5", mode: "chat" });
 		const [url, init] = vi.mocked(fetch).mock.calls[0];
 		expect(url).toBe("http://ao.test:3011/api/v1/orchestrators/delegate");
 		expect(JSON.parse(String(init?.body))).toEqual({ projectId: "p-1", brief: "", agent: "codex", model: "gpt-5", mode: "chat" });
+		expect(init?.headers).toMatchObject({ Authorization: "Bearer secret12", "X-AO-Expected-Host-ID": "h_A" });
 		expect(session).toMatchObject({ id: "w-2", projectId: "p-1", mode: "chat", provisionState: "failed", provisionError: "workspace setup failed" });
 	});
 

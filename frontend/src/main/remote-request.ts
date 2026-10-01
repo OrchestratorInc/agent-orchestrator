@@ -43,7 +43,10 @@ export async function probeRemote(
 		const response = await fetchImpl(url.href, {
 			method: "GET",
 			redirect: "error",
-			headers: { Authorization: `Bearer ${entry.password}` },
+			headers: {
+				Authorization: `Bearer ${entry.password}`,
+				...(entry.hostId ? { "X-AO-Expected-Host-ID": entry.hostId } : {}),
+			},
 			signal: AbortSignal.timeout(timeoutMs),
 		});
 		if (response.status === 401 || response.status === 403) return "unauthorized";

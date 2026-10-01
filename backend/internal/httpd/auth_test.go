@@ -158,7 +158,7 @@ func TestRetiredPasswordDoesNotResetLockout(t *testing.T) {
 func TestLANManagerPasswordRotationClearsPriorLockout(t *testing.T) {
 	m := NewMobileLAN(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	}), 0, nil, nil)
+	}), "", 0, nil, nil)
 	m.SetPasswordHash(mobilebridge.HashPassword("oldpass1"))
 	for range 5 {
 		w := httptest.NewRecorder()
