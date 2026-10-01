@@ -368,6 +368,14 @@ describe("mobile Chat API boundaries", () => {
 		]);
 	});
 
+	it("checks an uncertain attachment send by ID without reposting its image", async () => {
+		vi.mocked(fetch).mockResolvedValue(response({ outcome: "sent", duplicate: true }, 202));
+		await chatApi.recoverSentConversationMessage(cfg, "w-1", "mobile-1");
+		const [url, init] = vi.mocked(fetch).mock.calls[0];
+		expect(url).toBe("http://ao.test:3011/api/v1/sessions/w-1/conversation/steer-or-send");
+		expect(JSON.parse(String(init?.body))).toEqual({ clientMessageId: "mobile-1", recoverOnly: true });
+	});
+
 	it("uses reviewer-owned conversation routes for mobile review chat", async () => {
 		const wire = {
 			conversationId: "review-chat-1", sessionId: "w-1", harness: "codex", mode: "chat", controller: "ready",

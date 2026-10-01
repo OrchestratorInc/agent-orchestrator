@@ -37,8 +37,9 @@ function ReviewerConversationContent() {
 
 	return <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={88}>
 		{conversation.unavailable?.message || conversation.error || conversation.actionError ? <Text accessibilityRole="alert" style={styles.error}>{conversation.unavailable?.message || conversation.error || conversation.actionError}</Text> : null}
+		{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <View key={pendingSend.id} style={styles.pending}><Text accessibilityRole="alert" style={styles.error}>{pendingSend.error || "Message delivery uncertain"}</Text><Button title={pendingSend.restored && pendingSend.hasAttachments ? "Refresh history" : "Retry"} onPress={() => void (pendingSend.restored && pendingSend.hasAttachments ? conversation.refresh() : conversation.retrySend(pendingSend.id)).catch(() => {})} /><Button title="Discard" variant="ghost" onPress={() => void conversation.discardSend(pendingSend.id).catch(() => {})} /></View> : null)}
 		<ChatTimeline snapshot={conversation.snapshot} loadingOlder={conversation.loadingOlder} onLoadOlder={() => void conversation.loadOlder()} approvalPending={conversation.pendingActions.includes("approval")} inputPending={conversation.pendingActions.includes("input")} onDecide={conversation.resolveApproval} onResolveInput={conversation.resolveInput} />
-		<ReviewerComposer attachmentsEnabled={Boolean(workerSessionId)} busy={conversation.snapshot.controller.state === "busy"} stopped={conversation.snapshot.controller.state === "stopped" || Boolean(conversation.unavailable)} onSend={conversation.send} onInterrupt={conversation.interrupt} />
+		<ReviewerComposer attachmentsEnabled={Boolean(workerSessionId)} busy={conversation.snapshot.controller.state === "busy"} stopped={conversation.snapshot.controller.state === "stopped" || Boolean(conversation.unavailable)} onSend={conversation.send} onAcknowledgeSend={conversation.acknowledgeSend} completedRetry={conversation.completedRetry} onInterrupt={conversation.interrupt} />
 	</KeyboardAvoidingView>;
 }
 
@@ -46,4 +47,5 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
 	error: { color: t.red, fontSize: 12, paddingHorizontal: 16, paddingVertical: 8, backgroundColor: t.tintRed },
+	pending: { flexDirection: "row", alignItems: "center", flexWrap: "wrap" },
 });

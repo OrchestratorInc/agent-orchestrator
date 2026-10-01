@@ -588,7 +588,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			{quota ? <DismissibleBanner copy={quotaBanner(quota)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone={quota.severity === "critical" ? "danger" : "warning"} icon="alert-triangle" action="Details" onPress={() => setMenuOpen(true)} /> : null}
 			{conversation.actionError && conversation.actionError !== conversation.error ? <DismissibleBanner copy={errorBanner("action", conversation.actionError)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="alert-circle" /> : null}
 			{rolledBack ? <DismissibleBanner copy={rolledBackBanner(rolledBack)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="muted" icon="rotate-ccw" /> : null}
-			{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <InlineBanner key={pendingSend.id} tone="danger" icon="send" title="Message not sent" body={pendingSend.error || "Delivery failed"} action="Retry" secondary="Discard" onPress={() => void conversation.retrySend(pendingSend.id).catch(() => {})} onSecondary={() => conversation.discardSend(pendingSend.id)} /> : null)}
+			{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <InlineBanner key={pendingSend.id} tone="danger" icon="send" title="Message delivery uncertain" body={pendingSend.error || "Delivery failed"} action="Retry" secondary="Discard" onPress={() => void conversation.retrySend(pendingSend.id).catch(() => {})} onSecondary={() => void conversation.discardSend(pendingSend.id).catch(() => {})} /> : null)}
 			<ChatLinkProvider onLinkOpen={openLink}>
 				<ChatTimeline
 					snapshot={snapshot}
@@ -634,6 +634,8 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				pending={mobileInterfaceTransitionIsBusy(interfaceSwitch.transition) || conversation.pendingSends.some((item) => item.state === "sending")}
 				interrupting={conversation.pendingActions.includes("interrupt")}
 				onSend={conversation.send}
+				onAcknowledgeSend={conversation.acknowledgeSend}
+				completedRetry={conversation.completedRetry}
 				onSteer={conversation.steer}
 				onPromoteQueuedTurn={conversation.promoteQueuedTurn}
 				onCancelQueuedTurn={conversation.cancelQueuedTurn}
