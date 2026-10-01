@@ -36,7 +36,7 @@ import { usePreparedClone } from "../hooks/usePreparedClone";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudProjectsQueryKey } from "../hooks/useWorkspaceQuery";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { cloudAgentInfos } from "../lib/cloud-agents";
 import { aoBridge } from "../lib/bridge";
 import { CloudCpError } from "../lib/cloud-cp";
@@ -633,12 +633,16 @@ export function CreateProjectFlow({
 				return;
 			}
 			setSelectedPath(data.path);
-		} catch {
+		} catch (err) {
 			reportProjectError(clonedPath
 				? t("createProject.cloneValidationFailed", {
 					defaultValue: "AO cloned the repository but could not verify the checkout. Try again.",
 				})
-				: t("createProject.cloneFailedTitle", { defaultValue: "Could not clone repository" }));
+				: apiErrorCode(err) === "GIT_CLONE_FAILED"
+					? t("createProject.cloneFailedGuidance", {
+						defaultValue: "Could not clone this repository. Check the URL, your Git credentials, and your network connection.",
+					})
+					: t("createProject.cloneFailedTitle", { defaultValue: "Could not clone repository" }));
 			if (clonedPath) await abandonPreparedClone();
 			setCloneDialogOpen(true);
 		} finally {

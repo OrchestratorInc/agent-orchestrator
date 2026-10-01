@@ -13,7 +13,8 @@ export function usePreparedClone(hostId?: string) {
 		const { data, error } = await (hostId ? clientForSessionHost(hostId) : apiClient).POST("/api/v1/projects/clone/prepare", {
 			body: { remoteUrl, destinationParent },
 		});
-		if (error || !data) throw new Error(apiErrorMessage(error, "Could not clone repository"));
+		if (error) throw error;
+		if (!data) throw new Error("Could not clone repository");
 		currentRef.current = data;
 		return data;
 	}, [hostId]);

@@ -23,6 +23,8 @@ It prints the host ID, LAN address, and pairing password. The host needs
 No desktop window or Electron process runs on the host. Run the script again
 to install a later AO release. Project and conversation data remain under
 `~/.ao/data`; restarting the daemon may exit running terminals.
+Project builds and dev servers still need their own tools and dependencies on
+the host (for example, npm and `npm ci` for a Next.js project).
 
 For access outside your private network, install `cloudflared` on the host and
 pass `--tunnel`:
@@ -82,6 +84,9 @@ its own harness binaries and credentials. Installing Claude Code does not
 install AO's Chat adapter: the host setup above already includes that adapter
 and its Node runtime. Browser-callback provider logins may still require a
 browser or forwarding on the host.
+For private Git clones, pushes, and PR tracking, install `gh`, then run
+`gh auth login` and `gh auth setup-git` as the host user. Your laptop's GitHub
+login is not forwarded.
 
 To disconnect later, run `~/.ao/host/current/resources/daemon/ao remote-host
 disable` on the host. Removing a host in a client only removes that client's
