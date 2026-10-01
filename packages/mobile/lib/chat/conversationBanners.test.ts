@@ -44,7 +44,7 @@ describe("conversation banners", () => {
 
 	it("surfaces a paused cloud sandbox with a hint that it self-paused", () => {
 		const copy = cloudLifecycleBanner("paused_by_coder");
-		expect(copy).toMatchObject({ key: "cloud:paused_by_coder", title: "Paused" });
+		expect(copy).toMatchObject({ key: "cloud:paused_by_coder", title: "Paused by Coder" });
 		expect(copy?.body).toMatch(/paused after a period of inactivity/);
 	});
 

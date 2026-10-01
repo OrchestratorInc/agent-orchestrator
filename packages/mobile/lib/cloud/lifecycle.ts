@@ -50,7 +50,7 @@ export function isResumable(stage: CloudLifecycleStage | undefined): boolean {
 
 export function stageLabel(stage: CloudLifecycleStage): string {
 	switch (stage) {
-		case "paused_by_coder": return "Paused";
+		case "paused_by_coder": return "Paused by Coder";
 		case "resuming_workspace": return "Resuming workspace…";
 		case "waiting_for_coder_agent": return "Starting sandbox…";
 		case "starting_ao_worker": return "Starting worker…";

@@ -2,14 +2,16 @@ import { Feather } from "@expo/vector-icons";
 import { XtermJsWebView, type XtermWebViewHandle } from "@fressh/react-native-xtermjs-webview";
 import { useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Keyboard, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Keyboard, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { useKeyboardState } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCloudAuth } from "../cloud/authStore";
+import { cloudLifecycleStage } from "../cloud/lifecycle";
 import { createCloudTerminal, type CloudTerminalStatus } from "../cloud/terminal";
 import { haptics } from "../haptics";
 import { resetHeaderRightForSwap } from "../headerRightSwap";
 import { terminalTheme, type Theme } from "../theme";
+import { useApp, useSessionSource } from "../store";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
 import { Composer } from "./Composer";
 import { dockInset, rootKeyboardPad } from "./keyboardInset";
@@ -164,6 +166,9 @@ export function CloudTerminalSessionScreen({ session }: { session: RouteSession 
 	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
 	const { client, orgId } = useCloudAuth();
+	const { refresh: refreshBoard } = useApp();
+	const sessionSource = useSessionSource();
+	const pausedByCoder = cloudLifecycleStage(session) === "paused_by_coder";
 	const router = useRouter();
 	const navigation = useNavigation();
 	const insets = useSafeAreaInsets();
@@ -179,6 +184,7 @@ export function CloudTerminalSessionScreen({ session }: { session: RouteSession 
 	const [error, setError] = useState<string | null>(null);
 	const [draft, setDraft] = useState("");
 	const [sending, setSending] = useState(false);
+	const [resuming, setResuming] = useState(false);
 	const [size, setSize] = useState<{ cols: number; rows: number } | null>(null);
 	const sessionTitle = "displayName" in session ? session.displayName : "Orchestrator";
 	const voice = useVoiceInput({
@@ -212,6 +218,7 @@ export function CloudTerminalSessionScreen({ session }: { session: RouteSession 
 		pendingOutput.current = [];
 		setStatus("connecting");
 		setError(null);
+		if (pausedByCoder) return;
 		if (!orgId) {
 			setStatus("error");
 			setError("Your Cloud workspace is not ready. Sign in again and retry.");
@@ -238,7 +245,21 @@ export function CloudTerminalSessionScreen({ session }: { session: RouteSession 
 			xtermReady.current = false;
 			pendingOutput.current = [];
 		};
-	}, [client, orgId, scheme, session.id]);
+	}, [client, orgId, pausedByCoder, scheme, session.id]);
+
+	const resumeSandbox = useCallback(async () => {
+		if (resuming) return;
+		setResuming(true);
+		try {
+			if (!sessionSource) throw new Error("No cloud session source available");
+			await sessionSource.resumeSession(session.id);
+			await refreshBoard();
+		} catch (cause) {
+			Alert.alert("Could not resume sandbox", cause instanceof Error ? cause.message : String(cause));
+		} finally {
+			setResuming(false);
+		}
+	}, [refreshBoard, resuming, session.id, sessionSource]);
 
 	const onInitialized = useCallback(() => {
 		xtermReady.current = true;
@@ -300,6 +321,20 @@ export function CloudTerminalSessionScreen({ session }: { session: RouteSession 
 
 	const rootPad = rootKeyboardPad(Platform.OS === "android" ? "android" : "ios", keyboardHeight, insets.bottom);
 	const bottomPad = dockInset(keyboardHeight, insets.bottom, keyboardVisible);
+	if (pausedByCoder) return <View style={styles.screen}>
+		<View style={styles.statusBar}>
+			<View style={[styles.dot, { backgroundColor: t.amber }]} />
+			<Text style={styles.statusText}>Paused by Coder</Text>
+		</View>
+		<View style={styles.pausedBody}>
+			<Feather name="cloud" size={22} color={t.amber} />
+			<Text style={styles.pausedTitle}>Paused by Coder</Text>
+			<Text style={styles.pausedCopy}>The sandbox paused after a period of inactivity.</Text>
+			<Pressable accessibilityRole="button" accessibilityLabel="Resume sandbox" disabled={resuming} onPress={() => void resumeSandbox()} style={styles.resumeButton}>
+				<Text style={styles.resumeButtonText}>{resuming ? "Resuming…" : "Resume"}</Text>
+			</Pressable>
+		</View>
+	</View>;
 	return <View style={[styles.screen, rootPad > 0 && { paddingBottom: rootPad }]}>
 		<View style={styles.statusBar}>
 			<View style={[styles.dot, { backgroundColor: status === "ready" ? t.green : status === "error" || status === "exited" ? t.red : t.amber }]} />
@@ -348,6 +383,11 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	statusText: { color: t.textSecondary, fontSize: 12, flex: 1 },
 	dimensions: { color: t.textTertiary, fontSize: 11, fontFamily: t.fontMono },
 	error: { color: t.red, paddingHorizontal: 14, paddingVertical: 9, fontSize: 12 },
+	pausedBody: { flex: 1, alignItems: "center", justifyContent: "center", gap: 14, paddingHorizontal: 28 },
+	pausedTitle: { color: t.textPrimary, fontSize: 18, fontWeight: "600" },
+	pausedCopy: { color: t.textSecondary, fontSize: 14, textAlign: "center" },
+	resumeButton: { minHeight: 42, justifyContent: "center", backgroundColor: t.accent, borderRadius: 12, paddingHorizontal: 20, marginTop: 8 },
+	resumeButtonText: { color: t.onAccent, fontSize: 14, fontWeight: "600" },
 	terminal: { flex: 1 },
 	xterm: { flex: 1, backgroundColor: t.bgBase },
 	dock: { borderTopWidth: 1, borderTopColor: t.borderSubtle, backgroundColor: t.bgSurface },

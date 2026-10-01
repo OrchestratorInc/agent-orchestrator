@@ -60,4 +60,18 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain('startFailure={failedStart}');
 		expect(screenSource).toContain('disabled={interfaceTransitionActive || cloudComposerLocked || Boolean(failedStart)}');
 	});
+
+	it("shows a paused Coder sandbox before an unavailable conversation fallback", () => {
+		const paused = screenSource.indexOf('if (cloudStage === "paused_by_coder" && !conversation.snapshot)');
+		const unavailable = screenSource.indexOf("if (conversation.unavailable && cloudStage !== \"paused_by_coder\") return <Unavailable");
+		expect(paused).toBeGreaterThan(-1);
+		expect(paused).toBeLessThan(unavailable);
+	});
+
+	it("does not offer the local-agent resume path for a paused cloud sandbox", () => {
+		expect(screenSource).toContain('cloudPaused={cloudStage === "paused_by_coder"}');
+		expect(screenSource).toContain('!cloudPaused && snapshot.controller.state === "stopped"');
+		expect(screenSource).toContain('!cloudPaused && !startFailure && (snapshot.controller.state === "recovering"');
+		expect(screenSource).toContain('conversation.error && cloudStage !== "paused_by_coder"');
+	});
 });

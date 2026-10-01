@@ -59,7 +59,7 @@ describe("isResumable", () => {
 
 describe("stageLabel", () => {
 	it("gives every stage a phrase for the chat banner", () => {
-		expect(stageLabel("paused_by_coder")).toBe("Paused");
+		expect(stageLabel("paused_by_coder")).toBe("Paused by Coder");
 		expect(stageLabel("resuming_workspace")).toBe("Resuming workspace…");
 		expect(stageLabel("waiting_for_coder_agent")).toBe("Starting sandbox…");
 		expect(stageLabel("starting_ao_worker")).toBe("Starting worker…");
