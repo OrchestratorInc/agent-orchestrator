@@ -734,7 +734,7 @@
 	"onboarding.step.cloud.title": "在云端运行会话",
 	"onboarding.step.cloud.subtitle": "可选。无论是否启用，本地会话都照常工作",
 	"onboarding.step.cloud.next": "继续",
-	"onboarding.githubConnectedDetail": "代理可以创建拉取请求并读取议题。",
+	"onboarding.githubConnectedDetail": "继续选择你的第一个项目",
 	"onboarding.githubInstallDetail": "用于在 GitHub 上创建拉取请求和读取议题。",
 	"onboarding.githubSignInDetail": "登录一次即可创建拉取请求和读取议题。",
 	"onboarding.cloudOptionYesLabel": "添加云端会话",

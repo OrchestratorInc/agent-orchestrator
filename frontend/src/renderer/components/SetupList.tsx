@@ -8,7 +8,7 @@ export function SetupList({ children, className }: { children: ReactNode; classN
 	return <div className={cn("flex w-full flex-col divide-y divide-border/60", className)}>{children}</div>;
 }
 
-export function SetupRow({ icon, label, description, trailing, trailingAction, disabled, selected, onClick, variant = "row" }: {
+export function SetupRow({ icon, label, description, trailing, trailingAction, disabled, selected, static: isStatic, onClick, variant = "row" }: {
 	icon: ReactNode;
 	label: string;
 	description?: string;
@@ -16,6 +16,8 @@ export function SetupRow({ icon, label, description, trailing, trailingAction, d
 	trailingAction?: { label: string; onClick: () => void; disabled?: boolean };
 	disabled?: boolean;
 	selected?: boolean;
+	/** Render an informative status row without button or disabled styling. */
+	static?: boolean;
 	onClick?: () => void;
 	/** `row` sits in a shared list with dividers and no surface of its own;
 	 *  `card` is a bordered standalone surface, `ghost` is transparent until
@@ -66,6 +68,9 @@ export function SetupRow({ icon, label, description, trailing, trailingAction, d
 				</button>
 			</div>
 		);
+	}
+	if (isStatic) {
+		return <div aria-label={label} className={rowClassName} role="status">{content}</div>;
 	}
 	return (
 		<button

@@ -34,7 +34,7 @@ export function OnboardingGitHubStep({ setup }: { setup: ReturnType<typeof useGi
 					label={t("startup.githubConnected")}
 					description={t("onboarding.githubConnectedDetail")}
 					trailing={<Check aria-hidden="true" className="size-3.5 text-status-ready" />}
-					disabled
+					static
 				/>
 			</SetupList>
 		);
@@ -59,9 +59,9 @@ export function OnboardingGitHubStep({ setup }: { setup: ReturnType<typeof useGi
 						label={setup.loginEnded ? t("startup.githubLoginTryAgain") : t("startup.githubLogin")}
 						description={t("onboarding.githubSignInDetail")}
 						variant="action"
-						disabled={setup.signInPending || setup.loginRunning}
+						disabled={setup.authChecking}
 						onClick={setup.signIn}
-						trailing={setup.signInPending && !setup.loginRunning ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" /> : undefined}
+						trailing={setup.authChecking ? <Loader2 aria-label={t("onboarding.checkingAvailability")} className="size-3.5 animate-spin motion-reduce:animate-none" /> : undefined}
 						trailingAction={setup.loginRunning ? { label: t("confirm.cancel"), onClick: setup.closeSignIn } : undefined}
 					/>
 				)}
@@ -85,6 +85,7 @@ export function OnboardingGitHubStep({ setup }: { setup: ReturnType<typeof useGi
 					onTerminalState={setup.handleTerminalState}
 					closeLabel={t("common.close")}
 					showHeader={false}
+					terminalContextMenu="compact"
 					terminalHeightClass="h-[200px]"
 					testId="github-auth-terminal"
 				/>

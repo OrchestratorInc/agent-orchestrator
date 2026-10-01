@@ -5,9 +5,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import aoLogo from "../../../assets/ao-logo.svg";
-import feedbackBackground from "../../landing/public/optimized/feature4.webp";
 import visibilityBackground from "../../landing/public/optimized/feature.webp";
-import { FeedbackLoopDemo } from "./onboarding/previews/feedback-loop-demo";
 import { FleetBoardDemo, type FleetBoardAssets } from "./onboarding/previews/fleet-board-demo";
 import { OnboardingProjectSetup } from "./OnboardingProjectSetup";
 import { OnboardingGitHubStep } from "./OnboardingGitHubStep";
@@ -30,7 +28,7 @@ import codexLogo from "../assets/agents/codex.svg";
 import cursorLogo from "../assets/agents/cursor.svg";
 import opencodeLogo from "../assets/agents/opencode.svg";
 
-type Step = "welcome" | "feedback" | "github" | "project" | "agent-setup" | "agents" | "guide";
+type Step = "welcome" | "github" | "project" | "agent-setup" | "agents" | "guide";
 
 type StepDetails = {
 	title: MessageKey;
@@ -43,22 +41,17 @@ type AgentSetupEntry = "required" | "optional";
 // Cloud onboarding is intentionally disabled until the product has an explicit
 // entitlement signal. Keep the standalone cloud step available for that later
 // decision, but do not route any onboarding user through it today.
-const STEPS: Step[] = ["welcome", "feedback", "github", "project", "agent-setup", "agents", "guide"];
+const STEPS: Step[] = ["welcome", "github", "project", "agent-setup", "agents", "guide"];
 
 /** Project setup is one stage of the flow: pick a project, conditionally set
  * up a harness, then choose the agent used for both roles. */
-const STAGES: Step[][] = [["welcome"], ["feedback"], ["github"], ["project", "agent-setup", "agents"], ["guide"]];
+const STAGES: Step[][] = [["welcome"], ["github"], ["project", "agent-setup", "agents"], ["guide"]];
 
 const STEP_DETAILS: Record<Step, StepDetails> = {
 	welcome: {
 		title: "onboarding.step.welcome.title",
 		subtitle: "onboarding.step.welcome.subtitle",
 		nextLabel: "onboarding.step.welcome.next",
-	},
-	feedback: {
-		title: "onboarding.step.feedback.title",
-		subtitle: "onboarding.step.feedback.subtitle",
-		nextLabel: "onboarding.step.feedback.next",
 	},
 	github: {
 		title: "onboarding.step.github.title",
@@ -93,7 +86,7 @@ const OPTIONAL_AGENT_SETUP_DETAILS: StepDetails = {
 	nextLabel: "onboarding.step.agentSetupOptional.next",
 };
 
-const ALL_IMAGES = [visibilityBackground, feedbackBackground];
+const ALL_IMAGES = [visibilityBackground];
 // Availability is helpful context, never a gate for setup. A daemon that is
 // still booting (or a stalled local probe) must not leave every choice looking
 // perpetually busy.
@@ -298,8 +291,8 @@ export function OnboardingPage() {
 	const isGuideStep = step === "guide";
 	const isSetupStep = step === "github";
 	const isListStep = isProjectStep || isSetupStep;
-	// The two feature pages open on the product mark; setup pages want the space.
-	const isFeatureStep = step === "welcome" || step === "feedback";
+	// The single product overview opens on the product mark; setup pages want the space.
+	const isFeatureStep = step === "welcome";
 
 	useLayoutEffect(() => {
 		// Onboarding is a branded first-run surface: keep it dark and on the
@@ -399,6 +392,7 @@ export function OnboardingPage() {
 											onRetry={() => void harnessSetup.retryAuth()}
 											onTerminalState={harnessSetup.handleTerminalState}
 											closeLabel={t("common.close")}
+											terminalContextMenu="compact"
 										/>
 									) : (
 										<AgentRolePicker
@@ -489,13 +483,14 @@ export function OnboardingPage() {
 									onRetry={() => void harnessSetup.retryAuth()}
 									onTerminalState={harnessSetup.handleTerminalState}
 									closeLabel={t("common.close")}
+									terminalContextMenu="compact"
 								/>
 							</div>
 						) : (
 							<AgentTopologyPreview orchestratorAgent={selectedAgent} workerAgent={selectedAgent} />
 						)
-					) : step === "welcome" || step === "feedback" ? (
-						<PreviewStage step={step} />
+					) : step === "welcome" ? (
+						<PreviewStage />
 					) : null}
 				</div>
 
@@ -843,19 +838,13 @@ function GenericWorkerIcon() {
 	);
 }
 
-function PreviewStage({ step }: { step: "welcome" | "feedback" }) {
+function PreviewStage() {
 	return (
 		<div className="relative mx-auto aspect-[4/3] w-full max-w-[720px] overflow-hidden">
-			<img src={step === "welcome" ? visibilityBackground : feedbackBackground} alt="" className="pointer-events-none absolute inset-0 size-full select-none object-cover" />
+			<img src={visibilityBackground} alt="" className="pointer-events-none absolute inset-0 size-full select-none object-cover" />
 			<div className="absolute inset-0 bg-background/35" />
 			<div className="relative z-10 flex size-full items-center justify-center p-6">
-				{step === "welcome" ? (
-					<FleetBoardDemo assets={LANDING_PREVIEW_ASSETS} />
-				) : (
-					<div className="w-full [&_[class*='preview-terminal']]:font-mono [&_main]:font-mono">
-						<FeedbackLoopDemo agentIcon={claudeCodeLogo} />
-					</div>
-				)}
+				<FleetBoardDemo assets={LANDING_PREVIEW_ASSETS} />
 			</div>
 		</div>
 	);

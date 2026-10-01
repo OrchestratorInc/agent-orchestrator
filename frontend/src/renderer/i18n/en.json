@@ -729,7 +729,7 @@
 	"onboarding.step.cloud.title": "Run sessions in the cloud",
 	"onboarding.step.cloud.subtitle": "Optional. Everything works locally either way",
 	"onboarding.step.cloud.next": "Continue",
-	"onboarding.githubConnectedDetail": "Agents can open pull requests and read issues.",
+	"onboarding.githubConnectedDetail": "Continue to choose your first project",
 	"onboarding.githubInstallDetail": "Required to open pull requests and read issues on GitHub.",
 	"onboarding.githubSignInDetail": "Sign in once for pull requests and issues.",
 	"onboarding.cloudOptionYesLabel": "Add cloud sessions",

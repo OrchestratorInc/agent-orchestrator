@@ -737,7 +737,7 @@
 	"onboarding.step.cloud.title": "Exécuter les sessions dans le cloud",
 	"onboarding.step.cloud.subtitle": "C'est facultatif. Les sessions locales fonctionnent dans les deux cas",
 	"onboarding.step.cloud.next": "Continuer",
-	"onboarding.githubConnectedDetail": "Les agents peuvent ouvrir des pull requests et lire les issues.",
+	"onboarding.githubConnectedDetail": "Continuez pour choisir votre premier projet",
 	"onboarding.githubInstallDetail": "Nécessaire pour ouvrir des pull requests et lire les issues sur GitHub.",
 	"onboarding.githubSignInDetail": "Connectez-vous une fois pour les pull requests et les issues.",
 	"onboarding.cloudOptionYesLabel": "Ajouter les sessions cloud",

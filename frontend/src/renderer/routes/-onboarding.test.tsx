@@ -35,7 +35,6 @@ async function renderOnboarding() {
 }
 async function prepareProject(user: ReturnType<typeof userEvent.setup>) {
 	await user.click(screen.getByRole("button", { name: "Continue" }));
-	await user.click(await screen.findByRole("button", { name: "Proceed to setup" }));
 	await user.click(await screen.findByRole("button", { name: "Continue" }));
 	await user.click(await screen.findByRole("button", { name: "Prepare project" }));
 }
@@ -95,7 +94,6 @@ describe("onboarding route", () => {
 		const user = userEvent.setup();
 		await renderOnboarding();
 		await user.click(screen.getByRole("button", { name: "Continue" }));
-		await user.click(await screen.findByRole("button", { name: "Proceed to setup" }));
 		await user.click(await screen.findByRole("button", { name: "Continue" }));
 		expect(await screen.findByRole("button", { name: "Prepare project" })).toHaveAttribute("data-cloud-available", "false");
 		expect(screen.queryByRole("heading", { name: "Run sessions in the cloud" })).not.toBeInTheDocument();

@@ -734,7 +734,7 @@
 	"onboarding.step.cloud.title": "Sitzungen in der Cloud ausführen",
 	"onboarding.step.cloud.subtitle": "Optional. Lokale Sitzungen laufen in beiden Fällen weiter",
 	"onboarding.step.cloud.next": "Weiter",
-	"onboarding.githubConnectedDetail": "Agenten können Pull Requests öffnen und Issues lesen.",
+	"onboarding.githubConnectedDetail": "Weiter zum ersten Projekt",
 	"onboarding.githubInstallDetail": "Erforderlich, um Pull Requests zu öffnen und Issues auf GitHub zu lesen.",
 	"onboarding.githubSignInDetail": "Einmal anmelden für Pull Requests und Issues.",
 	"onboarding.cloudOptionYesLabel": "Cloud-Sitzungen hinzufügen",

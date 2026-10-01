@@ -734,7 +734,7 @@
 	"onboarding.step.cloud.title": "クラウドでセッションを実行",
 	"onboarding.step.cloud.subtitle": "任意です。どちらを選んでもローカルのセッションはこれまで通り動きます",
 	"onboarding.step.cloud.next": "続ける",
-	"onboarding.githubConnectedDetail": "エージェントがプルリクエストを作成し、Issue を読み取れます。",
+	"onboarding.githubConnectedDetail": "続行して最初のプロジェクトを選択",
 	"onboarding.githubInstallDetail": "GitHub でプルリクエストを作成し、Issue を読み取るために必要です。",
 	"onboarding.githubSignInDetail": "一度サインインすればプルリクエストと Issue を使えます。",
 	"onboarding.cloudOptionYesLabel": "クラウドセッションを追加",

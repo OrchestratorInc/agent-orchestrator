@@ -8,8 +8,10 @@ import { useGitHubAuthRequirement, useGitHubAuthTerminal, useStartGitHubAuthTerm
 
 const GH_INSTALL_TARGET = "gh" as const;
 /** The GitHub page watches long-running external work (a package install, a
- *  device-code sign-in), so it polls slowly rather than every second. */
+ *  device-code sign-in), so its normal background poll stays deliberately slow. */
 const STEP_POLL_INTERVAL_MS = 2_500;
+const AUTH_RECHECK_INTERVAL_MS = 1_000;
+const AUTH_RECHECK_TIMEOUT_MS = 10_000;
 
 /**
  * GitHub readiness for onboarding: install the CLI in place when it is missing,
@@ -26,6 +28,7 @@ export function useGitHubSetup({ poll = false }: { poll?: boolean } = {}) {
 		handleId: null,
 		state: "idle",
 	});
+	const [authRechecking, setAuthRechecking] = useState(false);
 	const terminal = terminalQuery.data;
 	const resolvedTerminalState = terminalState.handleId === terminal?.handleId ? terminalState.state : "idle";
 	const loginRunning = Boolean(terminal && (resolvedTerminalState === "connecting" || resolvedTerminalState === "attached" || resolvedTerminalState === "reattaching"));
@@ -66,18 +69,34 @@ export function useGitHubSetup({ poll = false }: { poll?: boolean } = {}) {
 		return () => window.clearInterval(timer);
 	}, [authSatisfied, cliReady, poll]);
 
+	// Browser-based authentication can finish just before the CLI writes its
+	// credentials and exits. Recheck briefly after terminal completion instead
+	// of flashing a stale "Try again" state at a successful user.
+	useEffect(() => {
+		if (!authRechecking || authSatisfied) return;
+		const interval = window.setInterval(() => void authRef.current(), AUTH_RECHECK_INTERVAL_MS);
+		const timeout = window.setTimeout(() => setAuthRechecking(false), AUTH_RECHECK_TIMEOUT_MS);
+		return () => {
+			window.clearInterval(interval);
+			window.clearTimeout(timeout);
+		};
+	}, [authRechecking, authSatisfied]);
+
 	const handleTerminalState = useCallback((state: TerminalSessionState) => {
 		setTerminalState({ handleId: terminalQuery.data?.handleId ?? null, state });
 		if (state !== "exited" && state !== "error") return;
+		setAuthRechecking(true);
 		void authRef.current();
 	}, [terminalQuery.data?.handleId]);
 
 	const signIn = useCallback(() => {
+		setAuthRechecking(false);
 		startSignIn.mutate();
 	}, [startSignIn]);
 
 	const closeSignIn = useCallback(() => {
 		if (!terminal) return;
+		setAuthRechecking(false);
 		closeTerminal(terminal.handleId, {
 			onSuccess: () => {
 				terminalQuery.clear();
@@ -115,6 +134,7 @@ export function useGitHubSetup({ poll = false }: { poll?: boolean } = {}) {
 		: null;
 
 	return {
+		authChecking: startSignIn.isPending || loginRunning || authRechecking,
 		authSatisfied,
 		cliMissing,
 		closeSignIn,

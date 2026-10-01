@@ -734,7 +734,7 @@
 	"onboarding.step.cloud.title": "클라우드에서 세션 실행",
 	"onboarding.step.cloud.subtitle": "선택 사항입니다. 어느 쪽이든 로컬 세션은 그대로 동작합니다",
 	"onboarding.step.cloud.next": "계속",
-	"onboarding.githubConnectedDetail": "에이전트가 풀 리퀘스트를 만들고 이슈를 읽을 수 있습니다.",
+	"onboarding.githubConnectedDetail": "계속해서 첫 프로젝트를 선택하세요",
 	"onboarding.githubInstallDetail": "GitHub에서 풀 리퀘스트를 만들고 이슈를 읽는 데 필요합니다.",
 	"onboarding.githubSignInDetail": "한 번 로그인하면 풀 리퀘스트와 이슈를 사용할 수 있습니다.",
 	"onboarding.cloudOptionYesLabel": "클라우드 세션 추가",

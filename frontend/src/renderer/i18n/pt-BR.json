@@ -737,7 +737,7 @@
 	"onboarding.step.cloud.title": "Rodar sessões na nuvem",
 	"onboarding.step.cloud.subtitle": "É opcional. As sessões locais continuam funcionando nos dois casos",
 	"onboarding.step.cloud.next": "Continuar",
-	"onboarding.githubConnectedDetail": "Os agentes podem abrir pull requests e ler issues.",
+	"onboarding.githubConnectedDetail": "Continue para escolher seu primeiro projeto",
 	"onboarding.githubInstallDetail": "Necessário para abrir pull requests e ler issues no GitHub.",
 	"onboarding.githubSignInDetail": "Entre uma vez para pull requests e issues.",
 	"onboarding.cloudOptionYesLabel": "Adicionar sessões na nuvem",
