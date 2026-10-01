@@ -3085,6 +3085,8 @@ export interface components {
             switch: components["schemas"]["AgentSwitch"];
         };
         AppMemoryResponse: {
+            /** @description False when there was no earlier sample to measure against: cpuPercent is unknown, not zero. */
+            cpuMeasured: boolean;
             /** Format: double */
             cpuPercent: number;
             own?: components["schemas"]["SessionMemoryResponse"];
@@ -5112,6 +5114,7 @@ export interface components {
             /** @description What the kernel would hand out without swapping (MemAvailable). */
             availableBytes: number;
             cpuCount: number;
+            cpuMeasured: boolean;
             /** Format: double */
             cpuPercent: number;
             /** Format: double */

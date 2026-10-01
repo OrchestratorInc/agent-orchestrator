@@ -9214,6 +9214,10 @@ components:
       type: object
     AppMemoryResponse:
       properties:
+        cpuMeasured:
+          description: 'False when there was no earlier sample to measure against:
+            cpuPercent is unknown, not zero.'
+          type: boolean
         cpuPercent:
           format: double
           minimum: 0
@@ -9234,6 +9238,7 @@ components:
       - rssBytes
       - processCount
       - cpuPercent
+      - cpuMeasured
       type: object
     AttachmentInput:
       properties:
@@ -14563,6 +14568,8 @@ components:
         cpuCount:
           minimum: 0
           type: integer
+        cpuMeasured:
+          type: boolean
         cpuPercent:
           format: double
           minimum: 0
@@ -14602,6 +14609,7 @@ components:
       - cpuCount
       - load1
       - cpuPercent
+      - cpuMeasured
       - pressureRaw
       - pressureSource
       type: object

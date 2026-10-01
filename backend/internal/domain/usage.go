@@ -444,6 +444,9 @@ type SystemMemory struct {
 	// CPUPercent is the share of all cores the whole host used since the
 	// previous sample, 0..100; zero on the first sample.
 	CPUPercent float64
+	// CPUMeasured is false when there was no earlier sample to measure
+	// against, so CPUPercent's zero means "unknown", not "idle".
+	CPUMeasured bool
 	// PressureRaw is the kernel's memory-pressure figure (PSI some avg10, or
 	// 100 minus available percent where PSI is missing); PressureSource
 	// names which. Clients turn it into fine / tight-soon / tight.
@@ -459,7 +462,10 @@ type AppMemory struct {
 	RSSBytes     uint64
 	ProcessCount int
 	CPUPercent   float64
-	Own          SessionMemory
+	// CPUMeasured is false when there was no earlier sample to measure
+	// against, so CPUPercent's zero means "unknown", not "idle".
+	CPUMeasured bool
+	Own         SessionMemory
 	// Reviewers is memory held by live reviewer panes that outlive (or never
 	// had) a session row of their own — ownership lives on the review record
 	// instead. Kept separate from Own and from ListMemory's per-session rows

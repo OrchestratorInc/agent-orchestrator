@@ -207,6 +207,11 @@ func TestSystemMemoryDerivesSwapRateFromCounters(t *testing.T) {
 	if first.SwapBytesPerSec != 0 || first.CPUPercent != 0 || first.SwapUsedBytes != 1<<30 || first.CPUCount != 8 || first.Load1 != 2.5 {
 		t.Fatalf("first = %+v", first)
 	}
+	// Nothing earlier to measure against: the zero is unknown, and the graph
+	// must be able to tell it from an idle machine.
+	if first.CPUMeasured {
+		t.Fatal("first sample must not claim a measured CPU rate")
+	}
 	pages += 1024                   // 4 MiB in 2s
 	busy, idle = busy+300, idle+300 // half the elapsed ticks were busy
 	now = now.Add(2 * time.Second)
@@ -217,8 +222,8 @@ func TestSystemMemoryDerivesSwapRateFromCounters(t *testing.T) {
 	if second.SwapBytesPerSec != 2<<20 {
 		t.Fatalf("swap rate = %v, want 2 MiB/s", second.SwapBytesPerSec)
 	}
-	if second.CPUPercent != 50 {
-		t.Fatalf("cpu = %v, want 50", second.CPUPercent)
+	if second.CPUPercent != 50 || !second.CPUMeasured {
+		t.Fatalf("cpu = %v measured=%v, want 50 measured", second.CPUPercent, second.CPUMeasured)
 	}
 }
 

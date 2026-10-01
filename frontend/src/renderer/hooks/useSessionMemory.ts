@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatResourceBytes, pressureStateFromRaw, type PressureState } from "@aoagents/product-ui";
 import type { components } from "../../api/schema";
@@ -37,7 +37,10 @@ export async function fetchSessionMemory(projectId?: string): Promise<SessionMem
 		params: { query: projectId ? { projectId } : {} },
 	});
 	if (error) throw error;
-	return { sessions: data?.sessions ?? [], system: data?.system, app: data?.app, fetchedAt: new Date().toISOString() };
+	const reading = { sessions: data?.sessions ?? [], system: data?.system, app: data?.app, fetchedAt: new Date().toISOString() };
+	// Machine and AO figures are the same for every project; record them once.
+	if (!projectId) recordCPU(reading);
+	return reading;
 }
 
 /** How many mounted consumers want the fast cadence; the query reads it. */
@@ -145,19 +148,36 @@ export const sampleHistoryLength = 60;
 /** One point of the CPU graph: the host's busy share and AO's share of the machine. */
 export type CPUSample = { host: number; ao: number };
 
+/** One point from a reading, or undefined when the daemon had nothing earlier
+ * to measure CPU against: that zero is unknown, not an idle machine. */
+export function cpuSampleOf(system?: SystemMemoryReading, app?: AppMemoryReading): CPUSample | undefined {
+	if (!system || !app || !system.cpuMeasured || !app.cpuMeasured) return undefined;
+	return { host: system.cpuPercent, ao: Math.min(100, app.cpuPercent / Math.max(1, system.cpuCount)) };
+}
+
 /**
- * A ring of recent readings for a graph, kept in the renderer: no backend
- * history needed. One entry per distinct sample, keyed on when it arrived.
+ * The CPU graph's recent points. Kept here rather than in the window so
+ * closing and reopening it keeps the graph: every app-wide reading feeds it,
+ * including the once-a-minute ones while the window is closed.
  */
-export function useSampleHistory<T>(sample: T | undefined, sampledAt: string | undefined): T[] {
-	const [history, setHistory] = useState<T[]>([]);
-	const lastSample = useRef<string | undefined>(undefined);
-	useEffect(() => {
-		if (sample === undefined || !sampledAt || sampledAt === lastSample.current) return;
-		lastSample.current = sampledAt;
-		setHistory((prev) => [...prev, sample].slice(-sampleHistoryLength));
-	}, [sample, sampledAt]);
-	return history;
+const cpuHistory = { samples: [] as CPUSample[], listeners: new Set<() => void>() };
+
+function recordCPU(reading: SessionMemoryResponse) {
+	const sample = cpuSampleOf(reading.system, reading.app);
+	if (!sample) return;
+	cpuHistory.samples = [...cpuHistory.samples, sample].slice(-sampleHistoryLength);
+	for (const listener of cpuHistory.listeners) listener();
+}
+
+function subscribeCPUHistory(listener: () => void) {
+	cpuHistory.listeners.add(listener);
+	return () => {
+		cpuHistory.listeners.delete(listener);
+	};
+}
+
+export function useCPUHistory(): CPUSample[] {
+	return useSyncExternalStore(subscribeCPUHistory, () => cpuHistory.samples);
 }
 
 /** Bytes as the monitor shows them everywhere: 10 MB steps, GB above a thousand. */

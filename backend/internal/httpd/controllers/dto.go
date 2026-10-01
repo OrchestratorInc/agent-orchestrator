@@ -1679,6 +1679,7 @@ type AppMemoryResponse struct {
 	RSSBytes     uint64  `json:"rssBytes" minimum:"0"`
 	ProcessCount int     `json:"processCount" minimum:"0"`
 	CPUPercent   float64 `json:"cpuPercent" minimum:"0"`
+	CPUMeasured  bool    `json:"cpuMeasured" description:"False when there was no earlier sample to measure against: cpuPercent is unknown, not zero."`
 	// Own is the daemon and desktop shell alone, without any session.
 	Own *SessionMemoryResponse `json:"own,omitempty"`
 	// Reviewers is memory held by live reviewer panes, named separately from
@@ -1715,6 +1716,9 @@ type SystemMemoryResponse struct {
 	// CPUPercent is how busy the whole host was since the previous sample,
 	// 0..100 across all cores; zero on the first sample.
 	CPUPercent float64 `json:"cpuPercent" minimum:"0"`
+	// CPUMeasured is false when there was no earlier sample to measure
+	// against: cpuPercent is unknown, not zero.
+	CPUMeasured bool `json:"cpuMeasured"`
 	// PressureRaw is the kernel's memory-pressure figure: PSI "some avg10"
 	// (percent of the last ten seconds a task stalled on memory) on Linux,
 	// macOS's own kernel pressure level (1/2/4) on macOS, or 100 minus the

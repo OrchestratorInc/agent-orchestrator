@@ -191,6 +191,7 @@ func (r *MemoryReader) readSystemMemory(ctx context.Context) (domain.SystemMemor
 	switch {
 	case !lastAt.IsZero() && sys.CPUTotalTicks > last.CPUTotalTicks && sys.CPUBusyTicks >= last.CPUBusyTicks:
 		out.CPUPercent = 100 * float64(sys.CPUBusyTicks-last.CPUBusyTicks) / float64(sys.CPUTotalTicks-last.CPUTotalTicks)
+		out.CPUMeasured = true
 	case sys.CPUTotalTicks == 0:
 		// No system-wide ticks on this platform (macOS today). The daemon
 		// already samples every process for the session rows, so the same
@@ -200,13 +201,16 @@ func (r *MemoryReader) readSystemMemory(ctx context.Context) (domain.SystemMemor
 		// which a whole-machine tick counter would not miss.
 		if table, prev, elapsed, err := r.table(ctx); err == nil && sys.CPUCount > 0 {
 			out.CPUPercent = min(100, procmem.CPUPercent(table.All(), prev, elapsed)/float64(sys.CPUCount))
+			out.CPUMeasured = prev != nil && elapsed > 0
 		}
 	}
 	return out, nil
 }
 
 // cpuRateMaxGap is the longest gap between samples a CPU rate is trusted over.
-const cpuRateMaxGap = 60 * time.Second
+// With the memory window closed the renderer samples once a minute, so this
+// must sit well above that; a real sleep is almost always longer.
+const cpuRateMaxGap = 3 * time.Minute
 
 // AppMemory sums AO's own processes and every live session tree. Roots are
 // deduplicated by Table.Tree, so a session that happens to be a daemon
@@ -289,7 +293,8 @@ func (r *MemoryReader) AppMemory(ctx context.Context) (domain.AppMemory, error) 
 	ownReading.SampledAt = r.deps.Now()
 	return domain.AppMemory{
 		RSSBytes: tree.RSSBytes, ProcessCount: len(tree.Processes),
-		CPUPercent: procmem.CPUPercent(tree.Processes, prev, elapsed), Own: ownReading, Reviewers: reviewers,
+		CPUPercent: procmem.CPUPercent(tree.Processes, prev, elapsed), CPUMeasured: prev != nil && elapsed > 0,
+		Own: ownReading, Reviewers: reviewers,
 	}, nil
 }
 

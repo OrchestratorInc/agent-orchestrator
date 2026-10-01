@@ -25,7 +25,8 @@ import {
 	useFastMemorySampling,
 	usePressureState,
 	sampleHistoryLength,
-	useSampleHistory,
+	cpuSampleOf,
+	useCPUHistory,
 	useSessionMemory,
 	type CPUSample,
 	type AppMemoryReading,
@@ -306,16 +307,12 @@ export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow
 /** The CPU graph and its per-core bars. */
 export function CpuSection() {
 	const appMemory = useAppMemory().data;
-	const app = appMemory?.app;
 	const system = appMemory?.system;
-	// One point per response: the host's busy share and AO's share of the whole machine.
-	const cpuSample = useMemo<CPUSample | undefined>(
-		() => (system && app ? { host: system.cpuPercent, ao: Math.min(100, app.cpuPercent / Math.max(1, system.cpuCount)) } : undefined),
-		[system, app],
-	);
-	const cpuHistory = useSampleHistory(cpuSample, appMemory?.fetchedAt);
-	if (!system || !cpuSample) return null;
-	return <CpuGraph current={cpuSample} history={cpuHistory} system={system} />;
+	const cpuHistory = useCPUHistory();
+	// An unmeasured reading shows the last real point instead of a false zero.
+	const current = cpuSampleOf(system, appMemory?.app) ?? cpuHistory.at(-1);
+	if (!system || !current) return null;
+	return <CpuGraph current={current} history={cpuHistory} system={system} />;
 }
 
 /**

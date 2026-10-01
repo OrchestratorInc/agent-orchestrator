@@ -114,13 +114,13 @@ func (c *UsageController) listMemory(w http.ResponseWriter, r *http.Request) {
 		system = &SystemMemoryResponse{
 			TotalBytes: sys.TotalBytes, AvailableBytes: sys.AvailableBytes,
 			SwapTotalBytes: sys.SwapTotalBytes, SwapUsedBytes: sys.SwapUsedBytes, SwapBytesPerSec: sys.SwapBytesPerSec,
-			CPUCount: sys.CPUCount, Load1: sys.Load1, CPUPercent: sys.CPUPercent,
+			CPUCount: sys.CPUCount, Load1: sys.Load1, CPUPercent: sys.CPUPercent, CPUMeasured: sys.CPUMeasured,
 			PressureRaw: sys.PressureRaw, PressureSource: sys.PressureSource,
 		}
 	}
 	var app *AppMemoryResponse
 	if a, appErr := c.Memory.AppMemory(r.Context()); appErr == nil {
-		app = &AppMemoryResponse{RSSBytes: a.RSSBytes, ProcessCount: a.ProcessCount, CPUPercent: a.CPUPercent}
+		app = &AppMemoryResponse{RSSBytes: a.RSSBytes, ProcessCount: a.ProcessCount, CPUPercent: a.CPUPercent, CPUMeasured: a.CPUMeasured}
 		if a.Own.ProcessCount > 0 {
 			own := sessionMemoryResponse(a.Own)
 			app.Own = &own
