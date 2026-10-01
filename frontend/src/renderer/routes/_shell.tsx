@@ -13,6 +13,7 @@ import { NotificationRuntime } from "../components/NotificationCenter";
 import { TrayRuntime } from "../components/TrayRuntime";
 import { GlobalNewTaskDialog } from "../components/GlobalNewTaskDialog";
 import { GlobalToast } from "../components/GlobalToast";
+import { LegacyWorkspaceCleanupDialog } from "../components/LegacyWorkspaceCleanupDialog";
 import { SettingsDialog } from "../components/SettingsDialog";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { KeyboardShortcutsSettingsDialog } from "../components/settings/KeyboardShortcutsSettingsDialog";
@@ -1144,6 +1145,7 @@ function ShellLayout() {
 					projectId={replacementErrorProjectId}
 					workspaces={workspaces}
 				/>
+				<LegacyWorkspaceCleanupDialog />
 					<CommandPalette />
 				</div>
 				</TerminalCacheProvider>

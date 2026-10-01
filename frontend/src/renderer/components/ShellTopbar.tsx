@@ -28,6 +28,7 @@ import {
 	useTerminateSession,
 	useTerminateSessionState,
 } from "../hooks/useTerminateSession";
+import { useReapplyPreservedEdits } from "../hooks/useReapplyPreservedEdits";
 import { inspectorIsOpen, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
 import { OrchestratorIcon } from "./icons";
 import { getAgentActivityView } from "../lib/session-presentation";
@@ -308,6 +309,9 @@ export function ShellTopbar({
 						) : null}
 						{/* Local worker actions share one tight control group. Navigation
 						    remains a separate visual target in the outer top-bar row. */}
+						{session?.hasPreservedEdits && session.isTerminated === true && project?.kind !== CLOUD_PROJECT_KIND ? (
+							<PutEditsBackButton sessionId={session.id} title={session.title} />
+						) : null}
 						{!isOrchestrator &&
 							(sessionAction || (session && !session.cloud && sessionIsActive(session))) ? (
 							<div
@@ -384,6 +388,26 @@ export function ShellTopbar({
 			</div>
 		</motion.header>
 	</LayoutGroup>
+	);
+}
+
+function PutEditsBackButton({ sessionId, title }: { sessionId: string; title: string }) {
+	const { t } = useTranslation();
+	const reapply = useReapplyPreservedEdits();
+	const [pending, setPending] = useState(false);
+	return (
+		<TopbarButton
+			aria-label={t("shell.putEditsBackNamed", { title })}
+			disabled={pending}
+			onClick={() => {
+				setPending(true);
+				void reapply(sessionId).finally(() => setPending(false));
+			}}
+			style={noDragStyle}
+			variant="secondary"
+		>
+			{pending ? t("shell.puttingEditsBack") : t("shell.putEditsBack")}
+		</TopbarButton>
 	);
 }
 

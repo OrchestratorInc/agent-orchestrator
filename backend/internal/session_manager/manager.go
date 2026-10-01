@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +36,7 @@ var (
 	ErrNotFound                      = errors.New("session: not found")
 	ErrSemanticAcceptanceUnsupported = errors.New("session: semantic message acceptance unsupported")
 	ErrNotRestorable                 = errors.New("session: not restorable (not terminal)")
+	ErrSessionNotTerminated          = errors.New("session: must be terminated before reapplying preserved edits")
 	ErrTerminated                    = errors.New("session: terminated")
 	ErrAgentExited                   = errors.New("session: agent exited")
 	ErrAgentNotExited                = errors.New("session: agent has not exited")
@@ -357,6 +359,9 @@ type Store interface {
 	// presence of any row is the marker; preserved_ref may be empty for clean
 	// worktrees.
 	ListSessionWorktrees(ctx context.Context, id domain.SessionID) ([]domain.SessionWorktreeRecord, error)
+	// DeleteSessionWorktree removes only one obsolete restore marker, leaving
+	// preserved refs in other repo rows intact if a write fails.
+	DeleteSessionWorktree(ctx context.Context, id domain.SessionID, repoName string) error
 	// DeleteSessionWorktrees consumes stale shutdown-restore markers. Explicit
 	// Kill and successful RestoreAll must remove these rows to prevent
 	// resurrecting sessions the user intentionally terminated.
@@ -404,15 +409,20 @@ type Manager struct {
 	modelCatalog interface {
 		Models(context.Context, string, string, bool) (ports.AgentModelCatalog, error)
 	}
-	lcm                         lifecycleRecorder
-	preview                     PreviewLifecycle
-	browser                     BrowserLifecycle
-	browserCapabilities         BrowserCapabilityIssuer
-	attachments                 *attachmentstore.Store
-	attachmentSuffix            func() (string, error)
-	dataDir                     string
-	runFilePath                 string
-	clock                       func() time.Time
+	lcm                 lifecycleRecorder
+	preview             PreviewLifecycle
+	browser             BrowserLifecycle
+	browserCapabilities BrowserCapabilityIssuer
+	attachments         *attachmentstore.Store
+	attachmentSuffix    func() (string, error)
+	dataDir             string
+	runFilePath         string
+	clock               func() time.Time
+	// archiveNotices records the latest interactive archive outcome for a
+	// session. Kill stays (bool, error) so lifecycle callers are unchanged;
+	// the HTTP layer reads this after a successful kill.
+	archiveNoticeMu             sync.Mutex
+	archiveNotices              map[domain.SessionID]archiveNotice
 	reconcileWorkers            int
 	defaultBranchRefreshTimeout time.Duration
 	taskPreparationsMu          sync.Mutex
@@ -2148,9 +2158,7 @@ func (m *Manager) recordTermination(ctx context.Context, id domain.SessionID, dr
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), terminalIntentBudget)
 	defer cancel()
 	if dropRestoreMarker {
-		if err := m.store.DeleteSessionWorktrees(ctx, id); err != nil {
-			m.logger.Warn("kill: delete restore marker failed", "sessionID", id, "error", err)
-		}
+		m.dropShutdownRestoreMarkers(ctx, id)
 	}
 	if err := m.lcm.MarkTerminated(ctx, id); err != nil {
 		return fmt.Errorf("kill %s: %w", id, err)
@@ -2160,16 +2168,20 @@ func (m *Manager) recordTermination(ctx context.Context, id domain.SessionID, dr
 }
 
 // Kill tears down the runtime and workspace, then records terminal intent with
-// the LCM. A workspace teardown refused by the worktree-remove safety
-// (uncommitted work) is never forced: Kill succeeds with freed=false,
-// signalling the workspace was preserved for later inspection/cleanup while
-// the session itself is still marked terminated.
+// the LCM. A dirty worktree is snapshotted into a private local ref and then
+// removed. If that snapshot cannot be stored, or the folder cannot be removed
+// afterwards, Kill succeeds with freed=false and the folder stays. The session
+// is still marked terminated. The snapshot is recorded as an active worktree
+// row, not a shutdown-restore row, so the next boot does not put the edits back.
 //
 // A session whose runtime handle or workspace path is missing (e.g. spawn
 // failed partway, handle lost after a crash) is still terminated after the
 // available destroy steps are skipped so it can be cleaned up from the
 // dashboard.
 func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
+	// Kill callers outside Service may never consume the side-channel notice.
+	// Clear that outcome before any early return can expose it to a later call.
+	m.clearArchiveNotice(id)
 	// Teardown deliberately stops riding the caller's context. Kill runs a
 	// sequence (stop the agent, tear the controller down, drop the worktree,
 	// mark the row terminated) where being cancelled partway leaves a session
@@ -2263,7 +2275,8 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 		release, err := m.beginShellTerminalTeardown(ctx, id)
 		if err != nil {
 			// Same shape as the dirty-workspace refusal below: the worktree is
-			// left alone and the session is still terminated.
+			// left alone and the session is still terminated. A saved snapshot stays.
+			m.noteArchive(id, archiveNotice{})
 			return false, m.terminateWithPreservedWorkspace(ctx, id, nil, true)
 		}
 		if release != nil {
@@ -2271,30 +2284,313 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 		}
 	}
 	freed := false
+	notice := archiveNotice{}
 	if workspaceProject {
-		reclaim, err := m.destroyWorkspaceProjectRows(ctx, workspaceProjectRows)
+		var err error
+		freed, notice, err = m.teardownWorkspaceProjectForKill(ctx, rec, workspaceProjectRows)
 		if err != nil {
+			m.noteArchive(id, notice)
 			return false, m.terminateWithPreservedWorkspace(ctx, id, err, false)
 		}
-		freed = reclaim != ""
 		if freed {
 			m.cleanupAgentWorkspace(ctx, rec, ws.Path)
 		}
 	} else if ws.Path != "" {
 		if err := m.workspace.Destroy(ctx, ws); err != nil {
-			return false, m.terminateWithPreservedWorkspace(ctx, id, err, true)
+			if errors.Is(err, ports.ErrWorkspaceDirty) {
+				freed, notice = m.removeDirtyWorkspaceAfterCapture(ctx, rec, ws)
+			} else {
+				m.noteArchive(id, archiveNotice{})
+				return false, m.terminateWithPreservedWorkspace(ctx, id, err, true)
+			}
+		} else {
+			freed = true
+			m.cleanupAgentWorkspace(ctx, rec, ws.Path)
 		}
-		freed = true
-		m.cleanupAgentWorkspace(ctx, rec, ws.Path)
 	}
-	// Clearing the restore marker keeps the next boot's RestoreAll from
-	// resurrecting a killed session (#2319). For workspace projects it must
-	// happen after teardown reads the rows; dirty-preserved rows return above
-	// and are left as non-restorable inventory.
+	// Drop shutdown-restore markers so the next boot's RestoreAll cannot
+	// resurrect a killed session (#2319). Snapshot rows stay, with state active,
+	// so reopening checks out the branch and does not apply the edits.
+	m.noteArchive(id, notice)
 	if err := m.recordTermination(ctx, id, true); err != nil {
 		return false, err
 	}
 	return freed, nil
+}
+
+// archiveNotice is what the latest interactive archive did with uncommitted work.
+type archiveNotice struct {
+	Preserved  bool
+	SaveFailed bool
+}
+
+// LastArchiveNotice reports whether the latest Kill stored a new snapshot, and
+// whether a snapshot could not be stored so the folder stayed.
+func (m *Manager) LastArchiveNotice(id domain.SessionID) (preserved, saveFailed bool) {
+	m.archiveNoticeMu.Lock()
+	defer m.archiveNoticeMu.Unlock()
+	notice := m.archiveNotices[id]
+	delete(m.archiveNotices, id)
+	return notice.Preserved, notice.SaveFailed
+}
+
+func (m *Manager) noteArchive(id domain.SessionID, notice archiveNotice) {
+	m.archiveNoticeMu.Lock()
+	defer m.archiveNoticeMu.Unlock()
+	if m.archiveNotices == nil {
+		m.archiveNotices = map[domain.SessionID]archiveNotice{}
+	}
+	m.archiveNotices[id] = notice
+}
+
+func (m *Manager) clearArchiveNotice(id domain.SessionID) {
+	m.archiveNoticeMu.Lock()
+	defer m.archiveNoticeMu.Unlock()
+	delete(m.archiveNotices, id)
+}
+
+// removeDirtyWorkspaceAfterCapture stores the session's uncommitted work in
+// its private local snapshot, then removes the worktree. The row is written
+// only after StashUncommitted returns a ref, and it uses state active so a
+// reboot does not apply it. A failed snapshot leaves the folder and any
+// previous snapshot in place.
+func (m *Manager) removeDirtyWorkspaceAfterCapture(ctx context.Context, rec domain.SessionRecord, ws ports.WorkspaceInfo) (bool, archiveNotice) {
+	ref, err := m.workspace.StashUncommitted(ctx, ws)
+	if err != nil {
+		m.logger.Warn("archive: preserve uncommitted work failed; leaving worktree", "sessionID", rec.ID, "error", err)
+		return false, archiveNotice{SaveFailed: true}
+	}
+	notice := archiveNotice{}
+	if ref != "" {
+		if err := m.store.UpsertSessionWorktree(ctx, domain.SessionWorktreeRecord{
+			SessionID:    rec.ID,
+			RepoName:     domain.RootWorkspaceRepoName,
+			Branch:       rec.Metadata.Branch,
+			BaseRef:      rec.Metadata.DiffBaseRef,
+			WorktreePath: ws.Path,
+			PreservedRef: ref,
+			State:        "active",
+		}); err != nil {
+			m.logger.Warn("archive: record preserved edits failed; leaving worktree", "sessionID", rec.ID, "error", err)
+			return false, archiveNotice{SaveFailed: true}
+		}
+		notice.Preserved = true
+	}
+	if err := m.workspace.ForceDestroy(ctx, ws); err != nil {
+		m.logger.Warn("archive: remove worktree after preserve failed; leaving worktree", "sessionID", rec.ID, "error", err)
+		return false, notice
+	}
+	m.cleanupAgentWorkspace(ctx, rec, ws.Path)
+	return true, notice
+}
+
+// teardownWorkspaceProjectForKill removes every repo in a workspace project.
+// A dirty repo is snapshotted, then force-removed. A snapshot that cannot be
+// stored leaves that folder. Cleanup keeps using destroyWorkspaceProjectRows,
+// which still skips a dirty tree that was never captured.
+func (m *Manager) teardownWorkspaceProjectForKill(ctx context.Context, rec domain.SessionRecord, rows []ports.WorkspaceRepoInfo) (bool, archiveNotice, error) {
+	allGone := true
+	var notice archiveNotice
+	for i := len(rows) - 1; i >= 0; i-- {
+		if rows[i].Path == "" {
+			continue
+		}
+		info := workspaceInfoForPreserve(rows[i])
+		var err error
+		if reclaimer, ok := m.workspace.(ports.WorkspaceReclaimer); ok {
+			_, err = reclaimer.DestroyReclaim(ctx, info)
+		} else {
+			err = m.workspace.Destroy(ctx, info)
+		}
+		if err == nil {
+			if stateErr := m.upsertWorkspaceProjectRowState(ctx, rows[i], "unavailable"); stateErr != nil {
+				return false, notice, stateErr
+			}
+			continue
+		}
+		if !errors.Is(err, ports.ErrWorkspaceDirty) {
+			if expectedWorkspaceRefusal(err) {
+				allGone = false
+				if stateErr := m.upsertWorkspaceProjectRowState(ctx, rows[i], "retry_remove"); stateErr != nil {
+					return false, notice, stateErr
+				}
+				continue
+			}
+			return false, notice, err
+		}
+		ref, stashErr := m.workspace.StashUncommitted(ctx, info)
+		if stashErr != nil {
+			m.logger.Warn("kill: preserve uncommitted work failed; leaving worktree", "sessionID", rec.ID, "repo", rows[i].RepoName, "error", stashErr)
+			notice.SaveFailed = true
+			allGone = false
+			if stateErr := m.upsertWorkspaceProjectRowState(ctx, rows[i], "retry_remove"); stateErr != nil {
+				return false, notice, stateErr
+			}
+			continue
+		}
+		if ref != "" {
+			if upErr := m.store.UpsertSessionWorktree(ctx, domain.SessionWorktreeRecord{
+				SessionID:    rec.ID,
+				RepoName:     rows[i].RepoName,
+				Branch:       rows[i].Branch,
+				BaseSHA:      rows[i].BaseSHA,
+				BaseRef:      rows[i].BaseRef,
+				WorktreePath: rows[i].Path,
+				PreservedRef: ref,
+				State:        "active",
+			}); upErr != nil {
+				m.logger.Warn("kill: record preserved edits failed; leaving worktree", "sessionID", rec.ID, "repo", rows[i].RepoName, "error", upErr)
+				notice.SaveFailed = true
+				allGone = false
+				continue
+			}
+			notice.Preserved = true
+		}
+		if ferr := m.workspace.ForceDestroy(ctx, info); ferr != nil {
+			m.logger.Warn("kill: remove worktree after preserve failed; leaving worktree", "sessionID", rec.ID, "repo", rows[i].RepoName, "error", ferr)
+			allGone = false
+			continue
+		}
+	}
+	return allGone, notice, nil
+}
+
+// dropShutdownRestoreMarkers removes rows that would make the next boot
+// relaunch this session. A private snapshot is kept, rewritten to state active
+// when it was stored as a shutdown marker, so the edits stay without being
+// applied on reopen. retry_remove rows stay so a later cleanup can retry a
+// folder that is still on disk.
+func (m *Manager) dropShutdownRestoreMarkers(ctx context.Context, id domain.SessionID) {
+	rows, err := m.store.ListSessionWorktrees(ctx, id)
+	if err != nil {
+		m.logger.Warn("kill: list worktrees failed", "sessionID", id, "error", err)
+		return
+	}
+	for _, row := range rows {
+		if kept, ok := keepWorktreeRowAfterUserKill(row); ok {
+			if kept.State != row.State {
+				if err := m.store.UpsertSessionWorktree(ctx, kept); err != nil {
+					m.logger.Warn("kill: keep preserved edits failed", "sessionID", id, "repo", row.RepoName, "error", err)
+				}
+			}
+			continue
+		}
+		if err := m.store.DeleteSessionWorktree(ctx, id, row.RepoName); err != nil {
+			m.logger.Warn("kill: delete restore marker failed", "sessionID", id, "repo", row.RepoName, "error", err)
+		}
+	}
+}
+
+func keepWorktreeRowAfterUserKill(row domain.SessionWorktreeRecord) (domain.SessionWorktreeRecord, bool) {
+	if row.State == "retry_remove" {
+		return row, true
+	}
+	if row.PreservedRef != "" {
+		row.State = "active"
+		return row, true
+	}
+	return row, false
+}
+
+// ReapplyResult is the outcome of putting a private snapshot back onto a worktree.
+type ReapplyResult struct {
+	Conflicts bool
+}
+
+// ErrNoPreservedEdits means the session has no private snapshot to put back.
+var ErrNoPreservedEdits = errors.New("session: no preserved edits")
+
+// ReapplyPreservedEdits checks out the session branch and applies the private
+// snapshot onto that worktree. It does not relaunch the agent and does not
+// create a commit. Conflicts stay in the worktree and the snapshot is kept.
+// A missing local branch is reported and the snapshot is left untouched.
+func (m *Manager) ReapplyPreservedEdits(ctx context.Context, id domain.SessionID) (ReapplyResult, error) {
+	if err := m.beginAgentOperation(ctx, id, agentOperationReapply); err != nil {
+		if errors.Is(err, errAgentOperationInProgress) {
+			err = ErrSwitchInProgress
+		}
+		return ReapplyResult{}, fmt.Errorf("reapply %s: %w", id, err)
+	}
+	defer m.endAgentOperation(id, agentOperationReapply)
+
+	rec, ok, err := m.store.GetSession(ctx, id)
+	if err != nil {
+		return ReapplyResult{}, fmt.Errorf("reapply %s: %w", id, err)
+	}
+	if !ok {
+		return ReapplyResult{}, fmt.Errorf("reapply %s: %w", id, ErrNotFound)
+	}
+	if !rec.IsTerminated {
+		return ReapplyResult{}, fmt.Errorf("reapply %s: %w", id, ErrSessionNotTerminated)
+	}
+	rows, err := m.store.ListSessionWorktrees(ctx, id)
+	if err != nil {
+		return ReapplyResult{}, fmt.Errorf("reapply %s: worktrees: %w", id, err)
+	}
+	snaps := make([]domain.SessionWorktreeRecord, 0, len(rows))
+	for _, row := range rows {
+		if row.PreservedRef != "" {
+			snaps = append(snaps, row)
+		}
+	}
+	if len(snaps) == 0 {
+		return ReapplyResult{}, fmt.Errorf("reapply %s: %w", id, ErrNoPreservedEdits)
+	}
+	project, err := m.loadProject(ctx, rec.ProjectID)
+	if err != nil {
+		return ReapplyResult{}, fmt.Errorf("reapply %s: %w", id, err)
+	}
+	var result ReapplyResult
+	for _, row := range snaps {
+		ws, err := m.restoreSnapshotWorktree(ctx, project, rec, row)
+		if err != nil {
+			return result, fmt.Errorf("reapply %s: %w", id, err)
+		}
+		applyErr := m.workspace.ApplyPreserved(ctx, ws, row.PreservedRef)
+		if applyErr != nil {
+			if errors.Is(applyErr, ports.ErrPreservedConflict) {
+				result.Conflicts = true
+				continue
+			}
+			return result, fmt.Errorf("reapply %s: %w", id, applyErr)
+		}
+		row.PreservedRef = ""
+		row.State = "active"
+		if err := m.store.UpsertSessionWorktree(ctx, row); err != nil {
+			return result, fmt.Errorf("reapply %s: clear snapshot: %w", id, err)
+		}
+	}
+	return result, nil
+}
+
+func (m *Manager) restoreSnapshotWorktree(ctx context.Context, project domain.ProjectRecord, rec domain.SessionRecord, row domain.SessionWorktreeRecord) (ports.WorkspaceInfo, error) {
+	repoPath := rec.Metadata.WorkspaceRepoPath
+	if row.RepoName == "" || row.RepoName == domain.RootWorkspaceRepoName {
+		if project.Path != "" {
+			repoPath = project.Path
+		}
+	} else if project.Path != "" {
+		repos, err := m.store.ListWorkspaceRepos(ctx, project.ID)
+		if err != nil {
+			return ports.WorkspaceInfo{}, err
+		}
+		for _, repo := range repos {
+			if repo.Name == row.RepoName {
+				repoPath = filepath.Join(project.Path, filepath.FromSlash(repo.RelativePath))
+				break
+			}
+		}
+	}
+	return m.workspace.Restore(ctx, ports.WorkspaceConfig{
+		ProjectID:     rec.ProjectID,
+		SessionID:     rec.ID,
+		Kind:          rec.Kind,
+		SessionPrefix: sessionPrefix(project),
+		Branch:        firstNonEmptyString(row.Branch, rec.Metadata.Branch),
+		BaseRef:       firstNonEmptyString(row.BaseRef, rec.Metadata.DiffBaseRef),
+		RepoPath:      repoPath,
+		Path:          firstNonEmptyString(row.WorktreePath, rec.Metadata.WorkspacePath),
+	})
 }
 
 // RetireForReplacement terminates a live orchestrator and releases its branch
@@ -3577,16 +3873,16 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 	defer releaseWorkspaceGate()
 
 	// Check the shutdown-saved marker: is there a session_worktrees row?
-	rows, err := m.store.ListSessionWorktrees(ctx, rec.ID)
+	worktreeRows, err := m.store.ListSessionWorktrees(ctx, rec.ID)
 	if err != nil {
 		m.logger.Error("restore-all: list worktrees failed", "sessionID", rec.ID, "error", err)
 		return
 	}
-	if len(rows) == 0 {
+	if len(worktreeRows) == 0 {
 		// No marker: this session was killed by the user before shutdown.
 		return
 	}
-	rows = restorableWorktreeRows(rows)
+	rows := restorableWorktreeRows(worktreeRows)
 	if len(rows) == 0 {
 		return
 	}
@@ -3641,8 +3937,9 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 	}
 
 	// Step 2: replay preserve ref when one was recorded.
+	var preservedApplied map[string]bool
 	if restoredWorkspaceProject {
-		m.applyWorkspaceProjectPreserved(ctx, projectRows)
+		preservedApplied = m.applyWorkspaceProjectPreserved(ctx, projectRows, rows)
 	} else {
 		var preserveRef string
 		for _, r := range rows {
@@ -3684,8 +3981,30 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 	// One-shot: drop the consumed marker so it never outlives one restart
 	// (#2319). A still-live session re-acquires it at the next quit.
 	if restoredWorkspaceProject {
+		markersByRepo := make(map[string]domain.SessionWorktreeRecord, len(rows))
+		for _, marker := range rows {
+			markersByRepo[marker.RepoName] = marker
+		}
+		recordedRepos := make(map[string]struct{}, len(worktreeRows))
+		for _, row := range worktreeRows {
+			recordedRepos[row.RepoName] = struct{}{}
+		}
 		for _, row := range projectRows {
-			if err := m.upsertWorkspaceProjectRowState(ctx, row, "active"); err != nil {
+			_, shutdownMarker := markersByRepo[row.RepoName]
+			// A successful replay consumes its ref. On conflict or failure,
+			// retain the ref so the user can retry it after startup.
+			keepPreserved := shutdownMarker && !preservedApplied[row.RepoName]
+			if !shutdownMarker {
+				// The one-marker fallback reconstructs the workspace repo list.
+				// Persist newly discovered inventory rows, but do not replay or
+				// rewrite existing non-marker rows (which may hold active archive
+				// refs that must wait for explicit reapply).
+				if _, alreadyRecorded := recordedRepos[row.RepoName]; alreadyRecorded {
+					continue
+				}
+				keepPreserved = false
+			}
+			if err := m.writeWorkspaceProjectRowState(ctx, row, "active", keepPreserved); err != nil {
 				m.logger.Warn("restore-all: marking workspace repo active failed", "sessionID", rec.ID, "repo", row.RepoName, "error", err)
 			}
 		}
@@ -3915,6 +4234,11 @@ func (m *Manager) saveAndTeardownWorkspaceProject(ctx context.Context, rec domai
 	return nil
 }
 
+var errWorkspaceArchiveFailed = errors.New("workspace archive failed")
+
+// destroyWorkspaceProjectRows removes a terminated workspace project's repos.
+// Dirty repos are snapshotted and recorded before force removal; a failed
+// capture or row write leaves that worktree in place.
 func (m *Manager) destroyWorkspaceProjectRows(ctx context.Context, rows []ports.WorkspaceRepoInfo) (ports.WorkspaceReclaim, error) {
 	touched := false
 	aggregate := ports.WorkspaceReclaimAlreadyAbsent
@@ -3933,7 +4257,46 @@ func (m *Manager) destroyWorkspaceProjectRows(ctx context.Context, rows []ports.
 		}
 		if err != nil {
 			if errors.Is(err, ports.ErrWorkspaceDirty) {
-				return aggregate, err
+				info := workspaceInfoForPreserve(rows[i])
+				ref, stashErr := m.workspace.StashUncommitted(ctx, info)
+				if stashErr != nil {
+					if stateErr := m.upsertWorkspaceProjectRowState(ctx, rows[i], "retry_remove"); stateErr != nil && firstErr == nil {
+						firstErr = fmt.Errorf("%w: record retry state: %w", errWorkspaceArchiveFailed, stateErr)
+					}
+					if firstErr == nil {
+						firstErr = fmt.Errorf("%w: %s repo %s: preserve worktree: %w", errWorkspaceArchiveFailed, rows[i].SessionID, rows[i].RepoName, stashErr)
+					}
+					continue
+				}
+				if ref != "" {
+					if rowErr := m.store.UpsertSessionWorktree(ctx, domain.SessionWorktreeRecord{
+						SessionID: rows[i].SessionID, RepoName: rows[i].RepoName, Branch: rows[i].Branch,
+						BaseSHA: rows[i].BaseSHA, BaseRef: rows[i].BaseRef, CreationSHA: rows[i].CreationSHA,
+						WorktreePath: rows[i].Path, PreservedRef: ref, State: "active",
+					}); rowErr != nil {
+						if firstErr == nil {
+							firstErr = fmt.Errorf("%w: %s repo %s: record preserved edits: %w", errWorkspaceArchiveFailed, rows[i].SessionID, rows[i].RepoName, rowErr)
+						}
+						continue
+					}
+				}
+				if forceErr := m.workspace.ForceDestroy(ctx, info); forceErr != nil {
+					if stateErr := m.upsertWorkspaceProjectRowState(ctx, rows[i], "retry_remove"); stateErr != nil && firstErr == nil {
+						firstErr = fmt.Errorf("%w: record retry state: %w", errWorkspaceArchiveFailed, stateErr)
+					}
+					if firstErr == nil {
+						firstErr = fmt.Errorf("%w: %s repo %s: remove preserved worktree: %w", errWorkspaceArchiveFailed, rows[i].SessionID, rows[i].RepoName, forceErr)
+					}
+					continue
+				}
+				if ref == "" {
+					if stateErr := m.upsertWorkspaceProjectRowState(ctx, rows[i], "unavailable"); stateErr != nil && firstErr == nil {
+						firstErr = stateErr
+					}
+				}
+				touched = true
+				aggregate = ports.WorkspaceReclaimRemoved
+				continue
 			}
 			if stateErr := m.upsertWorkspaceProjectRowState(ctx, rows[i], "retry_remove"); stateErr != nil && firstErr == nil {
 				firstErr = stateErr
@@ -3958,6 +4321,23 @@ func (m *Manager) destroyWorkspaceProjectRows(ctx context.Context, rows []ports.
 }
 
 func (m *Manager) upsertWorkspaceProjectRowState(ctx context.Context, row ports.WorkspaceRepoInfo, state string) error {
+	return m.writeWorkspaceProjectRowState(ctx, row, state, true)
+}
+
+func (m *Manager) writeWorkspaceProjectRowState(ctx context.Context, row ports.WorkspaceRepoInfo, state string, keepPreserved bool) error {
+	preserved := ""
+	if keepPreserved {
+		rows, err := m.store.ListSessionWorktrees(ctx, row.SessionID)
+		if err != nil {
+			return err
+		}
+		for _, existing := range rows {
+			if existing.RepoName == row.RepoName {
+				preserved = existing.PreservedRef
+				break
+			}
+		}
+	}
 	return m.store.UpsertSessionWorktree(ctx, domain.SessionWorktreeRecord{
 		SessionID:    row.SessionID,
 		RepoName:     row.RepoName,
@@ -3966,6 +4346,7 @@ func (m *Manager) upsertWorkspaceProjectRowState(ctx context.Context, row ports.
 		BaseRef:      row.BaseRef,
 		CreationSHA:  row.CreationSHA,
 		WorktreePath: row.Path,
+		PreservedRef: preserved,
 		State:        state,
 	})
 }
@@ -3997,32 +4378,30 @@ func (m *Manager) restoreWorkspaceProjectRows(ctx context.Context, rows []ports.
 	return root, nil
 }
 
-func (m *Manager) applyWorkspaceProjectPreserved(ctx context.Context, rows []ports.WorkspaceRepoInfo) {
-	for _, row := range rows {
-		var preserveRef string
-		sessionRows, err := m.store.ListSessionWorktrees(ctx, row.SessionID)
-		if err != nil {
-			m.logger.Error("restore-all: list worktrees failed", "sessionID", row.SessionID, "error", err)
+func (m *Manager) applyWorkspaceProjectPreserved(ctx context.Context, projectRows []ports.WorkspaceRepoInfo, markers []domain.SessionWorktreeRecord) map[string]bool {
+	applied := make(map[string]bool, len(markers))
+	for _, marker := range markers {
+		if marker.PreservedRef == "" {
 			continue
 		}
-		for _, sessionRow := range sessionRows {
-			if sessionRow.RepoName == row.RepoName {
-				preserveRef = sessionRow.PreservedRef
-				break
+		for _, row := range projectRows {
+			if row.RepoName != marker.RepoName {
+				continue
 			}
-		}
-		if preserveRef == "" {
-			continue
-		}
-		if applyErr := m.workspace.ApplyPreserved(ctx, workspaceInfoFromRepoInfo(row), preserveRef); applyErr != nil {
-			if errors.Is(applyErr, ports.ErrPreservedConflict) {
-				m.logger.Warn("restore-all: apply preserved produced conflicts; agent relaunched with conflict markers in place",
-					"sessionID", row.SessionID, "repo", row.RepoName, "ref", preserveRef, "error", applyErr)
+			if applyErr := m.workspace.ApplyPreserved(ctx, workspaceInfoFromRepoInfo(row), marker.PreservedRef); applyErr != nil {
+				if errors.Is(applyErr, ports.ErrPreservedConflict) {
+					m.logger.Warn("restore-all: apply preserved produced conflicts; agent relaunched with conflict markers in place",
+						"sessionID", row.SessionID, "repo", row.RepoName, "ref", marker.PreservedRef, "error", applyErr)
+				} else {
+					m.logger.Error("restore-all: apply preserved failed", "sessionID", row.SessionID, "repo", row.RepoName, "error", applyErr)
+				}
 			} else {
-				m.logger.Error("restore-all: apply preserved failed", "sessionID", row.SessionID, "repo", row.RepoName, "error", applyErr)
+				applied[marker.RepoName] = true
 			}
+			break
 		}
 	}
+	return applied
 }
 
 // Send delivers a message to a running session's agent through the guarded
@@ -4456,10 +4835,131 @@ type CleanupResult struct {
 	Skipped     []CleanupSkip
 }
 
-// Cleanup reclaims the workspaces of terminal sessions in a project. A workspace
-// whose teardown is refused (uncommitted work) is never forced; it is reported
-// in Skipped with the reason so the refusal is visible instead of silent.
+// CleanupPreviewSession describes one terminated workspace that Cleanup can
+// currently consider reclaiming. WorktreeBytes is a logical-size estimate.
+type CleanupPreviewSession struct {
+	SessionID     domain.SessionID
+	ProjectID     domain.ProjectID
+	DisplayName   string
+	WorktreeBytes int64
+}
+
+// CleanupPreview reports terminated worktrees and their approximate on-disk
+// size without changing sessions or worktrees.
+type CleanupPreview struct {
+	Sessions   []CleanupPreviewSession
+	TotalBytes int64
+	Incomplete bool
+}
+
+// PreviewCleanup performs a read-only scan of terminated, reclaimable session
+// worktrees. Cleanup still performs its own ownership and teardown checks.
+func (m *Manager) PreviewCleanup(ctx context.Context, project domain.ProjectID) (CleanupPreview, error) {
+	recs, err := m.cleanupRecords(ctx, project)
+	if err != nil {
+		return CleanupPreview{}, fmt.Errorf("preview cleanup %s: %w", project, err)
+	}
+	preview := CleanupPreview{Sessions: []CleanupPreviewSession{}}
+	sizer, ok := m.workspace.(ports.WorkspaceDiskSizer)
+	if !ok {
+		preview.Incomplete = true
+		return preview, nil
+	}
+	countedPaths := make(map[string]struct{})
+	for _, rec := range recs {
+		if err := ctx.Err(); err != nil {
+			return CleanupPreview{}, err
+		}
+		if !rec.IsTerminated {
+			continue
+		}
+		ws := workspaceInfo(rec)
+		if ws.Path == "" {
+			continue
+		}
+		release := m.acquireWorkspaceGate(rec.ProjectID)
+		inUse, err := m.isWorkspaceInUse(ctx, rec.ProjectID, ws.Path)
+		if err != nil {
+			release()
+			return CleanupPreview{}, fmt.Errorf("preview cleanup %s: check workspace ownership: %w", rec.ID, err)
+		}
+		if inUse {
+			release()
+			continue
+		}
+
+		infos := []ports.WorkspaceInfo{ws}
+		if rows, ok, rowErr := m.workspaceProjectRows(ctx, rec); rowErr != nil {
+			preview.Incomplete = true
+			release()
+			continue
+		} else if ok {
+			infos = infos[:0]
+			for _, row := range rows {
+				if row.Path != "" {
+					infos = append(infos, workspaceInfoFromRepoInfo(row))
+				}
+			}
+		}
+		// DiskUsage may walk a large tree. The paths and ownership were
+		// inventoried under the gate; sizing is advisory and must not block
+		// mutations in this project.
+		release()
+		var sessionBytes int64
+		for _, info := range infos {
+			pathKey := normalizeWorkspacePath(info.Path)
+			if _, counted := countedPaths[pathKey]; counted {
+				continue
+			}
+			countedPaths[pathKey] = struct{}{}
+			bytes, sizeErr := sizer.DiskUsage(ctx, info)
+			if sizeErr != nil {
+				preview.Incomplete = true
+				continue
+			}
+			sessionBytes += bytes
+		}
+		preview.Sessions = append(preview.Sessions, CleanupPreviewSession{
+			SessionID: rec.ID, ProjectID: rec.ProjectID, DisplayName: rec.DisplayName,
+			WorktreeBytes: sessionBytes,
+		})
+		preview.TotalBytes += sessionBytes
+	}
+	sort.Slice(preview.Sessions, func(i, j int) bool {
+		if preview.Sessions[i].ProjectID != preview.Sessions[j].ProjectID {
+			return preview.Sessions[i].ProjectID < preview.Sessions[j].ProjectID
+		}
+		return preview.Sessions[i].SessionID < preview.Sessions[j].SessionID
+	})
+	return preview, nil
+}
+
+// Cleanup reclaims the workspaces of terminal sessions in a project. Dirty
+// worktrees are snapshotted and removed only after the snapshot is recorded; a
+// failed capture or removal is reported in Skipped and leaves the worktree.
 func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) (CleanupResult, error) {
+	return m.cleanup(ctx, project, nil)
+}
+
+// CleanupSelected reclaims only the terminated sessions named by the caller.
+// An empty ID list retains the ordinary project-wide Cleanup behavior.
+func (m *Manager) CleanupSelected(ctx context.Context, project domain.ProjectID, ids []domain.SessionID) (CleanupResult, error) {
+	if len(ids) == 0 {
+		return m.Cleanup(ctx, project)
+	}
+	selected := make(map[domain.SessionID]struct{}, len(ids))
+	for _, id := range ids {
+		if id != "" {
+			selected[id] = struct{}{}
+		}
+	}
+	if len(selected) == 0 {
+		return CleanupResult{Cleaned: []domain.SessionID{}, AlreadyGone: []domain.SessionID{}, Skipped: []CleanupSkip{}}, nil
+	}
+	return m.cleanup(ctx, project, selected)
+}
+
+func (m *Manager) cleanup(ctx context.Context, project domain.ProjectID, selected map[domain.SessionID]struct{}) (CleanupResult, error) {
 	recs, err := m.cleanupRecords(ctx, project)
 	if err != nil {
 		return CleanupResult{}, fmt.Errorf("cleanup %s: %w", project, err)
@@ -4472,6 +4972,11 @@ func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 	for _, rec := range recs {
 		if !rec.IsTerminated {
 			continue
+		}
+		if selected != nil {
+			if _, ok := selected[rec.ID]; !ok {
+				continue
+			}
 		}
 		ws := workspaceInfo(rec)
 		if ws.Path == "" {
@@ -4542,7 +5047,8 @@ func (m *Manager) isWorkspaceInUse(ctx context.Context, projectID domain.Project
 	return live[normalizeWorkspacePath(workspacePath)], nil
 }
 
-// cleanupOne reclaims one terminated session's workspace, gating shut any
+// cleanupOne reclaims one terminated session's workspace, archiving dirty
+// worktrees before force-removing them, and gating shut any
 // shell terminal scoped to it first (same ordering as Kill). Split out of
 // Cleanup's loop so the release function's defer is scoped to one session's
 // call, not deferred across every iteration until Cleanup itself returns.
@@ -4585,6 +5091,13 @@ func (m *Manager) cleanupOne(ctx context.Context, rec domain.SessionRecord, ws p
 	} else {
 		err = m.workspace.Destroy(ctx, ws)
 	}
+	if errors.Is(err, ports.ErrWorkspaceDirty) {
+		freed, _ := m.removeDirtyWorkspaceAfterCapture(ctx, rec, ws)
+		if !freed {
+			return ports.WorkspaceReclaimRemoved, "workspace could not be archived; worktree left in place"
+		}
+		return ports.WorkspaceReclaimRemoved, ""
+	}
 	if err != nil {
 		if !expectedWorkspaceRefusal(err) {
 			// The public reason stays a fixed string (the raw error carries
@@ -4602,6 +5115,9 @@ func (m *Manager) cleanupOne(ctx context.Context, rec domain.SessionRecord, ws p
 // it flows to the API response and CLI output, and teardown errors embed
 // internal filesystem paths.
 func cleanupSkipReason(err error) string {
+	if errors.Is(err, errWorkspaceArchiveFailed) {
+		return "workspace could not be archived; worktree left in place"
+	}
 	if errors.Is(err, ports.ErrWorkspaceDirty) {
 		return "workspace has uncommitted changes"
 	}
@@ -5888,6 +6404,14 @@ func workspaceInfoFromRepoInfo(info ports.WorkspaceRepoInfo) ports.WorkspaceInfo
 		ProjectID: info.ProjectID,
 		RepoPath:  info.RepoPath,
 	}
+}
+
+func workspaceInfoForPreserve(info ports.WorkspaceRepoInfo) ports.WorkspaceInfo {
+	ws := workspaceInfoFromRepoInfo(info)
+	if info.RepoName != "" && info.RepoName != domain.RootWorkspaceRepoName {
+		ws.PreserveKey = string(info.SessionID) + "--" + info.RepoName
+	}
+	return ws
 }
 
 func firstNonEmptyString(values ...string) string {

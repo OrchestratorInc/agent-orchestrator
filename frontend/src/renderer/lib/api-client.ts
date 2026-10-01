@@ -106,6 +106,7 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/prs/{id}/merge",
 	"/api/v1/prs/{id}/resolve-comments",
 	"/api/v1/sessions",
+	"/api/v1/sessions/cleanup/preview",
 	"/api/v1/sessions/{sessionId}",
 	"/api/v1/sessions/{sessionId}/activity",
 	"/api/v1/sessions/{sessionId}/agent-switches",

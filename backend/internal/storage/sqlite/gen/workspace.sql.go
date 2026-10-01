@@ -12,6 +12,20 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+const deleteSessionWorktree = `-- name: DeleteSessionWorktree :exec
+DELETE FROM session_worktrees WHERE session_id = ? AND repo_name = ?
+`
+
+type DeleteSessionWorktreeParams struct {
+	SessionID domain.SessionID
+	RepoName  string
+}
+
+func (q *Queries) DeleteSessionWorktree(ctx context.Context, arg DeleteSessionWorktreeParams) error {
+	_, err := q.db.ExecContext(ctx, deleteSessionWorktree, arg.SessionID, arg.RepoName)
+	return err
+}
+
 const deleteSessionWorktrees = `-- name: DeleteSessionWorktrees :exec
 DELETE FROM session_worktrees WHERE session_id = ?
 `
@@ -88,6 +102,36 @@ func (q *Queries) ListSessionWorktrees(ctx context.Context, sessionID domain.Ses
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSessionsWithPreservedWorktrees = `-- name: ListSessionsWithPreservedWorktrees :many
+SELECT DISTINCT session_worktrees.session_id
+FROM session_worktrees
+JOIN json_each(?) AS wanted ON session_worktrees.session_id = CAST(wanted.value AS TEXT)
+WHERE session_worktrees.preserved_ref != ''
+`
+
+func (q *Queries) ListSessionsWithPreservedWorktrees(ctx context.Context, jsonEach interface{}) ([]domain.SessionID, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionsWithPreservedWorktrees, jsonEach)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []domain.SessionID{}
+	for rows.Next() {
+		var session_id domain.SessionID
+		if err := rows.Scan(&session_id); err != nil {
+			return nil, err
+		}
+		items = append(items, session_id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

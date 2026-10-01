@@ -3,11 +3,10 @@ import { useTranslation } from "react-i18next";
 import type { WorkspaceSession } from "../types/workspace";
 import { ConfirmDialog } from "./ConfirmDialog";
 
-// Archiving is reversible — the session moves to the board's Archive section and
-// can be restored from there — so this reuses the shared confirm modal without
-// the destructive red fill rather than the old inline popover, which read like a
-// delete prompt. Callers keep driving `open` themselves: the trigger is rendered
-// as-is so repeated taps re-open the confirm instead of toggling it shut.
+// The session can be restored from the board's Archive section, but ignored
+// files are not saved and are removed if the worktree is successfully archived.
+// Callers keep driving `open` themselves: the trigger is rendered as-is so
+// repeated taps re-open the confirm instead of toggling it shut.
 export function SessionArchiveDialog({
 	onConfirm,
 	onOpenChange,

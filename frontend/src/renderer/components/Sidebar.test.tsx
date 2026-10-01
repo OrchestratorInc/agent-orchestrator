@@ -2665,7 +2665,8 @@ describe("Sidebar", () => {
 		const dialog = await screen.findByRole("dialog", {
 			name: "Are you sure you want to archive fix login?",
 		});
-		expect(dialog).toHaveTextContent("You can always restore fix login from the Archive section later.");
+		expect(dialog).toHaveTextContent("Archiving fix login saves tracked and non-ignored edits for later reapply.");
+		expect(dialog).toHaveTextContent("Ignored files aren't saved");
 		fireEvent.click(within(dialog).getByRole("button", { name: "No" }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 		expect(postMock).not.toHaveBeenCalled();

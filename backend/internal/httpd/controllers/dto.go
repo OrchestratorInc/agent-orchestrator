@@ -232,6 +232,17 @@ type CleanupSessionsQuery struct {
 	Project string `query:"project,omitempty" description:"Project id filter. When omitted, clean terminated sessions across all projects."`
 }
 
+// CleanupSessionsRequest optionally limits cleanup to sessions included in a
+// prior preview. An omitted/empty list preserves project-wide cleanup behavior.
+type CleanupSessionsRequest struct {
+	SessionIDs []domain.SessionID `json:"sessionIds,omitempty"`
+}
+
+// CleanupPreviewQuery filters the read-only preview for GET /sessions/cleanup/preview.
+type CleanupPreviewQuery struct {
+	Project string `query:"project,omitempty" description:"Project id filter. When omitted, preview terminated sessions across all projects."`
+}
+
 // WorkspaceFileQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/file.
 type WorkspaceFileQuery struct {
 	Path string `query:"path" description:"Session-worktree-relative file path."`
@@ -921,9 +932,20 @@ type InterfaceTransitionNoticeAckResponse struct {
 
 // KillSessionResponse is the body of POST /api/v1/sessions/{sessionId}/kill.
 type KillSessionResponse struct {
+	OK         bool             `json:"ok"`
+	SessionID  domain.SessionID `json:"sessionId"`
+	Freed      bool             `json:"freed,omitempty"`
+	Preserved  bool             `json:"preserved,omitempty"`
+	SaveFailed bool             `json:"saveFailed,omitempty"`
+}
+
+// ReapplyEditsResponse is the body of POST /api/v1/sessions/{sessionId}/reapply-edits.
+// Conflicts is true when some edits did not apply cleanly. Those stay in the
+// worktree, and no commit is created.
+type ReapplyEditsResponse struct {
 	OK        bool             `json:"ok"`
 	SessionID domain.SessionID `json:"sessionId"`
-	Freed     bool             `json:"freed,omitempty"`
+	Conflicts bool             `json:"conflicts,omitempty"`
 }
 
 // RollbackSessionResponse is the body of POST /api/v1/sessions/{sessionId}/rollback.
@@ -953,6 +975,21 @@ type CleanupSessionsResponse struct {
 	// so teardown completed without reclaiming anything.
 	AlreadyGone []domain.SessionID      `json:"alreadyGone"`
 	Skipped     []CleanupSkippedSession `json:"skipped"`
+}
+
+// CleanupPreviewSession is one terminated worktree candidate and its estimated size.
+type CleanupPreviewSession struct {
+	SessionID     domain.SessionID `json:"sessionId"`
+	ProjectID     domain.ProjectID `json:"projectId,omitempty"`
+	DisplayName   string           `json:"displayName,omitempty"`
+	WorktreeBytes int64            `json:"worktreeBytes"`
+}
+
+// CleanupPreviewResponse reports approximate disk usage without modifying workspaces.
+type CleanupPreviewResponse struct {
+	Sessions   []CleanupPreviewSession `json:"sessions"`
+	TotalBytes int64                   `json:"totalBytes"`
+	Incomplete bool                    `json:"incomplete"`
 }
 
 // SendSessionMessageRequest is the body of POST /api/v1/sessions/{sessionId}/send.

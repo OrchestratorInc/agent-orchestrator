@@ -52,6 +52,7 @@ type fakeStore struct {
 	num              int
 	deleteErr        error
 	upsertWTErr      error
+	deleteWTErr      error
 	listAllErr       error
 	getProjectErr    error
 	getSessionErr    error
@@ -298,6 +299,20 @@ func (f *fakeStore) DeleteSessionWorktrees(_ context.Context, id domain.SessionI
 		*f.sharedLog = append(*f.sharedLog, "DeleteSessionWorktrees:"+string(id))
 	}
 	delete(f.worktrees, id)
+	return nil
+}
+
+func (f *fakeStore) DeleteSessionWorktree(_ context.Context, id domain.SessionID, repoName string) error {
+	if f.deleteWTErr != nil {
+		return f.deleteWTErr
+	}
+	rows := f.worktrees[id]
+	for i, row := range rows {
+		if row.RepoName == repoName {
+			f.worktrees[id] = append(rows[:i], rows[i+1:]...)
+			break
+		}
+	}
 	return nil
 }
 
@@ -1056,12 +1071,17 @@ type fakeWorkspace struct {
 	projectCreateInfo ports.WorkspaceProjectInfo
 	// path, when set, is returned as the workspace path so provisioning tests
 	// can point at a real temp directory.
-	path string
+	path            string
+	diskUsageByPath map[string]int64
+	diskUsageErr    error
+	diskUsageHook   func()
 	// stashRef is returned by StashUncommitted (empty means clean worktree).
 	stashRef        string
 	stashErr        error
 	applyErr        error
 	forceDestroyErr error
+	restoreErr      error
+	stashInfos      []ports.WorkspaceInfo
 	// stashCalls counts StashUncommitted invocations.
 	stashCalls int
 	stashHook  func()
@@ -1211,6 +1231,15 @@ func (w *fakeWorkspace) DestroyReclaim(ctx context.Context, info ports.Workspace
 	}
 	return reclaim, err
 }
+func (w *fakeWorkspace) DiskUsage(_ context.Context, info ports.WorkspaceInfo) (int64, error) {
+	if w.diskUsageHook != nil {
+		w.diskUsageHook()
+	}
+	if w.diskUsageErr != nil {
+		return 0, w.diskUsageErr
+	}
+	return w.diskUsageByPath[info.Path], nil
+}
 func (w *fakeWorkspace) DestroyWorkspaceProject(context.Context, ports.WorkspaceProjectInfo) error {
 	w.projectDestroyed++
 	return w.destroyErr
@@ -1218,6 +1247,9 @@ func (w *fakeWorkspace) DestroyWorkspaceProject(context.Context, ports.Workspace
 func (w *fakeWorkspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {
 	w.lastCfg = cfg
 	w.restoreConfigs = append(w.restoreConfigs, cfg)
+	if w.restoreErr != nil {
+		return ports.WorkspaceInfo{}, w.restoreErr
+	}
 	if cfg.RepoPath != "" {
 		entry := "Restore:" + fakeWorkspaceRepoName(ports.WorkspaceInfo{
 			Path:      cfg.Path,
@@ -1245,6 +1277,7 @@ func (w *fakeWorkspace) StashUncommitted(_ context.Context, info ports.Workspace
 		w.stashHook()
 	}
 	w.stashCalls++
+	w.stashInfos = append(w.stashInfos, info)
 	entry := "StashUncommitted:" + string(info.SessionID)
 	if info.RepoPath != "" {
 		entry = "StashUncommitted:" + fakeWorkspaceRepoName(info)
@@ -3650,26 +3683,226 @@ func TestKill_TerminatesIncompleteHandle(t *testing.T) {
 	}
 }
 
-// TestKill_DirtyWorkspacePreservesAndTerminates: a workspace teardown
-// refused because of uncommitted work must NOT force-remove the worktree. Kill
-// succeeds with freed=false and still marks the session terminated; cleanup can
-// reclaim the preserved worktree after the user resolves the dirty state.
-func TestKill_DirtyWorkspacePreservesAndTerminates(t *testing.T) {
+// TestKill_DirtyWorkspaceSnapshotsThenRemoves: uncommitted work is stored in
+// the session's private snapshot, then the worktree is removed. The session
+// is terminated, and no shutdown-restore row is left behind.
+func TestKill_DirtyWorkspaceSnapshotsThenRemoves(t *testing.T) {
 	m, st, rt, ws := newManager()
 	st.sessions["mer-1"] = mkLive("mer-1")
+	st.worktrees["mer-1"] = []domain.SessionWorktreeRecord{
+		{SessionID: "mer-1", RepoName: domain.RootWorkspaceRepoName, WorktreePath: "/ws/mer-1", State: "active"},
+	}
 	ws.destroyErr = fmt.Errorf("gitworktree: refusing to remove: %w", ports.ErrWorkspaceDirty)
+	ws.stashRef = "refs/ao/preserved/mer-1"
+
 	freed, err := m.Kill(ctx, "mer-1")
 	if err != nil {
 		t.Fatalf("kill dirty workspace err = %v, want nil", err)
 	}
-	if freed {
-		t.Fatal("freed = true, want false for preserved workspace")
+	if !freed {
+		t.Fatal("freed = false, want true after the snapshot is stored")
 	}
 	if rt.destroyed != 1 {
 		t.Fatal("runtime should be destroyed")
 	}
 	if !st.sessions["mer-1"].IsTerminated {
-		t.Fatal("session should be terminated even when the workspace is preserved")
+		t.Fatal("session should be terminated")
+	}
+	if ws.stashCalls != 1 {
+		t.Fatalf("stash calls = %d, want 1", ws.stashCalls)
+	}
+	stashAt, forceAt := -1, -1
+	for i, call := range ws.calls {
+		switch call {
+		case "StashUncommitted:mer-1":
+			stashAt = i
+		case "ForceDestroy:mer-1":
+			forceAt = i
+		}
+	}
+	if stashAt < 0 || forceAt < 0 || stashAt > forceAt {
+		t.Fatalf("calls = %v, want stash before force destroy", ws.calls)
+	}
+	rows := st.worktrees["mer-1"]
+	if len(rows) != 1 || rows[0].PreservedRef != "refs/ao/preserved/mer-1" || rows[0].State != "active" {
+		t.Fatalf("snapshot = %+v, want one active row so reboot does not reapply", rows)
+	}
+	preserved, saveFailed := m.LastArchiveNotice("mer-1")
+	if !preserved || saveFailed {
+		t.Fatalf("archive notice preserved=%v saveFailed=%v, want preserved", preserved, saveFailed)
+	}
+}
+
+func TestLastArchiveNoticeConsumesNotice(t *testing.T) {
+	m, _, _, _ := newManager()
+	m.noteArchive("mer-1", archiveNotice{Preserved: true})
+
+	preserved, saveFailed := m.LastArchiveNotice("mer-1")
+	if !preserved || saveFailed {
+		t.Fatalf("first archive notice preserved=%v saveFailed=%v, want preserved", preserved, saveFailed)
+	}
+	preserved, saveFailed = m.LastArchiveNotice("mer-1")
+	if preserved || saveFailed {
+		t.Fatalf("second archive notice preserved=%v saveFailed=%v, want empty notice", preserved, saveFailed)
+	}
+}
+
+func TestKillClearsUnreadArchiveNoticeBeforeEarlyError(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.sessions["mer-1"] = mkLive("mer-1")
+	ws.destroyErr = ports.ErrWorkspaceDirty
+	ws.stashRef = "refs/ao/preserved/mer-1"
+	if _, err := m.Kill(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	// A direct manager caller can leave the notice unread. A subsequent
+	// service call must not report that earlier archive after an early error.
+	st.getSessionErr = errors.New("read failed")
+	if _, err := m.Kill(ctx, "mer-1"); err == nil {
+		t.Fatal("second kill should fail before archive")
+	}
+	if preserved, saveFailed := m.LastArchiveNotice("mer-1"); preserved || saveFailed {
+		t.Fatalf("stale archive notice preserved=%v saveFailed=%v", preserved, saveFailed)
+	}
+}
+
+func TestKillDirtyWorkspaceRetriesAfterRowWriteFailure(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.sessions["mer-1"] = mkLive("mer-1")
+	ws.destroyErr = ports.ErrWorkspaceDirty
+	ws.stashRef = "refs/ao/preserved/mer-1"
+	st.upsertWTErr = errors.New("database busy")
+	if freed, err := m.Kill(ctx, "mer-1"); err != nil || freed {
+		t.Fatalf("initial kill freed=%v err=%v", freed, err)
+	}
+	if len(st.worktrees["mer-1"]) != 0 {
+		t.Fatalf("unrecorded ref must not be represented as durable: %+v", st.worktrees["mer-1"])
+	}
+	st.upsertWTErr = nil
+	result, err := m.Cleanup(ctx, "mer")
+	if err != nil || len(result.Cleaned) != 1 {
+		t.Fatalf("retry cleanup result=%+v err=%v", result, err)
+	}
+	if rows := st.worktrees["mer-1"]; len(rows) != 1 || rows[0].PreservedRef != ws.stashRef {
+		t.Fatalf("retry did not record preserved ref: %+v", rows)
+	}
+}
+
+func TestKillDirtyWorkspaceRetriesAfterForceDestroyFailure(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.sessions["mer-1"] = mkLive("mer-1")
+	ws.destroyErr = ports.ErrWorkspaceDirty
+	ws.stashRef = "refs/ao/preserved/mer-1"
+	ws.forceDestroyErr = errors.New("directory busy")
+	if freed, err := m.Kill(ctx, "mer-1"); err != nil || freed {
+		t.Fatalf("initial kill freed=%v err=%v", freed, err)
+	}
+	ws.forceDestroyErr = nil
+	result, err := m.Cleanup(ctx, "mer")
+	if err != nil || len(result.Cleaned) != 1 {
+		t.Fatalf("retry cleanup result=%+v err=%v", result, err)
+	}
+	if rows := st.worktrees["mer-1"]; len(rows) != 1 || rows[0].PreservedRef != ws.stashRef {
+		t.Fatalf("retry lost preserved ref: %+v", rows)
+	}
+}
+
+// TestKill_DirtyWorkspaceStaysWhenSnapshotFails: a failed snapshot must not
+// remove the folder. The session still terminates.
+func TestKill_DirtyWorkspaceStaysWhenSnapshotFails(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.sessions["mer-1"] = mkLive("mer-1")
+	ws.destroyErr = fmt.Errorf("gitworktree: refusing to remove: %w", ports.ErrWorkspaceDirty)
+	ws.stashErr = errors.New("commit-tree failed")
+
+	freed, err := m.Kill(ctx, "mer-1")
+	if err != nil {
+		t.Fatalf("kill dirty workspace err = %v, want nil", err)
+	}
+	if freed {
+		t.Fatal("freed = true, want false when the snapshot cannot be stored")
+	}
+	for _, call := range ws.calls {
+		if strings.HasPrefix(call, "ForceDestroy:") {
+			t.Fatalf("calls = %v, want no force destroy", ws.calls)
+		}
+	}
+	if !st.sessions["mer-1"].IsTerminated {
+		t.Fatal("session should be terminated even when the folder stays")
+	}
+	_, saveFailed := m.LastArchiveNotice("mer-1")
+	if !saveFailed {
+		t.Fatal("archive notice saveFailed = false, want true")
+	}
+}
+
+func TestKill_DirtyWorkspaceKeepsPreviousSnapshotWhenSaveFails(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.sessions["mer-1"] = mkLive("mer-1")
+	st.worktrees["mer-1"] = []domain.SessionWorktreeRecord{{
+		SessionID:    "mer-1",
+		RepoName:     domain.RootWorkspaceRepoName,
+		PreservedRef: "refs/ao/preserved/previous",
+		State:        "removed",
+		WorktreePath: "/ws/mer-1",
+	}}
+	ws.destroyErr = fmt.Errorf("gitworktree: refusing to remove: %w", ports.ErrWorkspaceDirty)
+	ws.stashErr = errors.New("commit-tree failed")
+
+	freed, err := m.Kill(ctx, "mer-1")
+	if err != nil {
+		t.Fatalf("kill dirty workspace err = %v, want nil", err)
+	}
+	if freed {
+		t.Fatal("freed = true, want false when the snapshot cannot be stored")
+	}
+	rows := st.worktrees["mer-1"]
+	if len(rows) != 1 || rows[0].PreservedRef != "refs/ao/preserved/previous" || rows[0].State != "active" {
+		t.Fatalf("snapshot = %+v, want the previous ref kept as an active row", rows)
+	}
+}
+
+func TestDropShutdownRestoreMarkersKeepsPreservedRowWhenUpdateFails(t *testing.T) {
+	m, st, _, _ := newManager()
+	st.worktrees["mer-1"] = []domain.SessionWorktreeRecord{
+		{SessionID: "mer-1", RepoName: domain.RootWorkspaceRepoName, PreservedRef: "refs/ao/preserved/root", State: "removed"},
+		{SessionID: "mer-1", RepoName: "api", State: "removed"},
+	}
+	st.upsertWTErr = errors.New("database busy")
+	m.dropShutdownRestoreMarkers(ctx, "mer-1")
+	rows := st.worktrees["mer-1"]
+	if len(rows) != 1 || rows[0].RepoName != domain.RootWorkspaceRepoName || rows[0].PreservedRef != "refs/ao/preserved/root" {
+		t.Fatalf("preserved row lost after failed update: %+v", rows)
+	}
+	st.upsertWTErr = nil
+	m.dropShutdownRestoreMarkers(ctx, "mer-1")
+	rows = st.worktrees["mer-1"]
+	if len(rows) != 1 || rows[0].State != "active" {
+		t.Fatalf("preserved row not activated on retry: %+v", rows)
+	}
+}
+
+// TestKill_DirtyWorkspaceStaysWhenRemovalFails: a stored snapshot is not a
+// reason to report the folder gone when the removal itself fails.
+func TestKill_DirtyWorkspaceStaysWhenRemovalFails(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.sessions["mer-1"] = mkLive("mer-1")
+	ws.destroyErr = fmt.Errorf("gitworktree: refusing to remove: %w", ports.ErrWorkspaceDirty)
+	ws.stashRef = "refs/ao/preserved/mer-1"
+	ws.forceDestroyErr = errors.New("prune failed")
+
+	freed, err := m.Kill(ctx, "mer-1")
+	if err != nil {
+		t.Fatalf("kill dirty workspace err = %v, want nil", err)
+	}
+	if freed {
+		t.Fatal("freed = true, want false when removal fails after the snapshot")
+	}
+	if ws.stashCalls != 1 {
+		t.Fatalf("stash calls = %d, want 1", ws.stashCalls)
+	}
+	if !st.sessions["mer-1"].IsTerminated {
+		t.Fatal("session should be terminated even when the folder stays")
 	}
 }
 
@@ -3899,9 +4132,10 @@ func TestKill_WorkspaceProjectFailsClosedOnUnregisteredChildRows(t *testing.T) {
 	}
 }
 
-func TestKill_WorkspaceProjectDirtyRowRefusesRemoval(t *testing.T) {
+func TestKill_WorkspaceProjectDirtyRowSnapshotsThenRemoves(t *testing.T) {
 	m, st, _, ws := newManager()
 	ws.destroyErr = fmt.Errorf("dirty: %w", ports.ErrWorkspaceDirty)
+	ws.stashRef = "refs/ao/preserved/mer-1"
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
 	st.workspaceRepo["mer"] = []domain.WorkspaceRepoRecord{{Name: "api", RelativePath: "api"}}
 	st.sessions["mer-1"] = domain.SessionRecord{
@@ -3916,15 +4150,116 @@ func TestKill_WorkspaceProjectDirtyRowRefusesRemoval(t *testing.T) {
 	}
 
 	freed, err := m.Kill(ctx, "mer-1")
-	if err != nil || freed {
-		t.Fatalf("freed=%v err=%v, want dirty row to preserve workspace", freed, err)
+	if err != nil || !freed {
+		t.Fatalf("freed=%v err=%v, want both repos snapshotted and removed", freed, err)
 	}
-	want := []string{"Destroy:api"}
+	want := []string{
+		"Destroy:api", "StashUncommitted:api", "ForceDestroy:api",
+		"Destroy:__root__", "StashUncommitted:__root__", "ForceDestroy:__root__",
+	}
 	if got := ws.calls; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("calls = %v, want %v", got, want)
 	}
 	if !st.sessions["mer-1"].IsTerminated {
-		t.Fatal("session should be terminated even when dirty workspace cleanup is deferred")
+		t.Fatal("session should be terminated")
+	}
+	preserved, saveFailed := m.LastArchiveNotice("mer-1")
+	if !preserved || saveFailed {
+		t.Fatalf("archive notice preserved=%v saveFailed=%v", preserved, saveFailed)
+	}
+	refs := map[string]string{}
+	for _, row := range st.worktrees["mer-1"] {
+		if row.State == "removed" {
+			t.Fatalf("row %+v is a shutdown restore marker", row)
+		}
+		refs[row.RepoName] = row.PreservedRef
+	}
+	if refs["api"] == "" || refs[domain.RootWorkspaceRepoName] == "" || refs["api"] == refs[domain.RootWorkspaceRepoName] {
+		t.Fatalf("snapshot refs = %v, want a distinct ref per repo", refs)
+	}
+	var apiKey string
+	for _, info := range ws.stashInfos {
+		if strings.HasSuffix(info.Path, "/api") {
+			apiKey = info.PreserveKey
+		}
+	}
+	if apiKey != "mer-1--api" {
+		t.Fatalf("api preserve key = %q, want mer-1--api", apiKey)
+	}
+}
+
+func TestWorkspaceProjectDirtyRepoCanRetryAfterPreserveOrRemovalFailure(t *testing.T) {
+	for _, failAt := range []string{"record", "remove"} {
+		t.Run(failAt, func(t *testing.T) {
+			m, st, _, ws := newManager()
+			ws.destroyErr = ports.ErrWorkspaceDirty
+			ws.stashRef = "refs/ao/preserved/mer-1"
+			rec := mkLive("mer-1")
+			row := ports.WorkspaceRepoInfo{
+				SessionID: rec.ID, ProjectID: rec.ProjectID, RepoName: "api",
+				RepoPath: "/repo/api", Path: "/ws/mer-1/api", Branch: "ao/mer-1",
+			}
+			if failAt == "record" {
+				st.upsertWTErr = errors.New("database busy")
+			} else {
+				ws.forceDestroyErr = errors.New("directory busy")
+			}
+			freed, _, err := m.teardownWorkspaceProjectForKill(ctx, rec, []ports.WorkspaceRepoInfo{row})
+			if err != nil || freed {
+				t.Fatalf("first teardown freed=%v err=%v", freed, err)
+			}
+			st.upsertWTErr = nil
+			ws.forceDestroyErr = nil
+			freed, _, err = m.teardownWorkspaceProjectForKill(ctx, rec, []ports.WorkspaceRepoInfo{row})
+			if err != nil || !freed {
+				t.Fatalf("retry teardown freed=%v err=%v", freed, err)
+			}
+			if rows := st.worktrees[rec.ID]; len(rows) != 1 || rows[0].PreservedRef != "refs/ao/preserved/mer-1/api" {
+				t.Fatalf("retry did not retain repo snapshot: %+v", rows)
+			}
+		})
+	}
+}
+
+func TestKill_WorkspaceProjectStashFailureLeavesFolder(t *testing.T) {
+	m, st, _, ws := newManager()
+	ws.destroyErr = fmt.Errorf("dirty: %w", ports.ErrWorkspaceDirty)
+	ws.stashErr = errors.New("commit-tree failed")
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+	st.workspaceRepo["mer"] = []domain.WorkspaceRepoRecord{{Name: "api", RelativePath: "api"}}
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID:        "mer-1",
+		ProjectID: "mer",
+		Metadata:  domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "ao/mer-1", RuntimeHandleID: "h1"},
+		Activity:  domain.Activity{State: domain.ActivityActive},
+	}
+	st.worktrees["mer-1"] = []domain.SessionWorktreeRecord{
+		{SessionID: "mer-1", RepoName: domain.RootWorkspaceRepoName, Branch: "ao/mer-1", WorktreePath: "/ws/mer-1", PreservedRef: "refs/ao/preserved/root-old", State: "active"},
+		{SessionID: "mer-1", RepoName: "api", Branch: "ao/mer-1", WorktreePath: "/ws/mer-1/api", PreservedRef: "refs/ao/preserved/api-old", State: "active"},
+	}
+
+	freed, err := m.Kill(ctx, "mer-1")
+	if err != nil || freed {
+		t.Fatalf("freed=%v err=%v, want folders kept when the snapshot cannot be stored", freed, err)
+	}
+	for _, call := range ws.calls {
+		if strings.HasPrefix(call, "ForceDestroy:") {
+			t.Fatalf("calls = %v, want no force destroy", ws.calls)
+		}
+	}
+	_, saveFailed := m.LastArchiveNotice("mer-1")
+	if !saveFailed {
+		t.Fatal("archive notice saveFailed = false, want true")
+	}
+	refs := map[string]string{}
+	for _, row := range st.worktrees["mer-1"] {
+		refs[row.RepoName] = row.PreservedRef
+		if row.State == "removed" {
+			t.Fatalf("row %+v must not be a shutdown restore marker", row)
+		}
+	}
+	if refs["api"] != "refs/ao/preserved/api-old" || refs[domain.RootWorkspaceRepoName] != "refs/ao/preserved/root-old" {
+		t.Fatalf("snapshot refs = %v, want the previous refs kept", refs)
 	}
 }
 
@@ -3995,6 +4330,155 @@ func TestRestore_ReopensTerminal(t *testing.T) {
 	}
 	if rt.created != 1 {
 		t.Fatal("restore should relaunch")
+	}
+}
+
+func TestRestore_DoesNotReapplyPreservedEdits(t *testing.T) {
+	m, st, rt, ws := newManager()
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"})
+	st.worktrees["mer-1"] = []domain.SessionWorktreeRecord{{
+		SessionID:    "mer-1",
+		RepoName:     domain.RootWorkspaceRepoName,
+		Branch:       "b",
+		WorktreePath: "/ws/mer-1",
+		PreservedRef: "refs/ao/preserved/mer-1",
+		State:        "active",
+	}}
+
+	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if rt.created != 1 {
+		t.Fatal("restore should relaunch the agent on the branch")
+	}
+	for _, call := range ws.calls {
+		if strings.Contains(call, "ApplyPreserved") {
+			t.Fatalf("calls = %v, restore must not put saved edits back", ws.calls)
+		}
+	}
+}
+
+func TestReapply_AppliesWithoutRelaunchOrCommit(t *testing.T) {
+	m, st, rt, ws := newManager()
+	rec := mkLive("mer-1")
+	rec.Metadata.Branch = "ao/mer-1"
+	rec.IsTerminated = true
+	st.sessions["mer-1"] = rec
+	st.worktrees["mer-1"] = []domain.SessionWorktreeRecord{{
+		SessionID:    "mer-1",
+		RepoName:     domain.RootWorkspaceRepoName,
+		Branch:       "ao/mer-1",
+		WorktreePath: "/ws/mer-1",
+		PreservedRef: "refs/ao/preserved/mer-1",
+		State:        "active",
+	}}
+
+	out, err := m.ReapplyPreservedEdits(ctx, "mer-1")
+	if err != nil || out.Conflicts {
+		t.Fatalf("reapply = %+v err=%v, want a clean apply", out, err)
+	}
+	if rt.created != 0 {
+		t.Fatal("reapply must not relaunch the agent")
+	}
+	applied := false
+	for _, call := range ws.calls {
+		if strings.HasPrefix(call, "ApplyPreserved:") {
+			applied = true
+		}
+	}
+	if !applied {
+		t.Fatalf("calls = %v, want ApplyPreserved", ws.calls)
+	}
+	if st.worktrees["mer-1"][0].PreservedRef != "" {
+		t.Fatal("clean apply must clear the snapshot ref")
+	}
+	if !st.sessions["mer-1"].IsTerminated {
+		t.Fatal("reapply must leave the session terminated")
+	}
+}
+
+func TestReapply_RejectsNonTerminatedSession(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.sessions["mer-1"] = mkLive("mer-1")
+	st.worktrees["mer-1"] = []domain.SessionWorktreeRecord{{
+		SessionID:    "mer-1",
+		RepoName:     domain.RootWorkspaceRepoName,
+		Branch:       "ao/mer-1",
+		WorktreePath: "/ws/mer-1",
+		PreservedRef: "refs/ao/preserved/mer-1",
+		State:        "active",
+	}}
+
+	_, err := m.ReapplyPreservedEdits(ctx, "mer-1")
+	if !errors.Is(err, ErrSessionNotTerminated) {
+		t.Fatalf("reapply error = %v, want ErrSessionNotTerminated", err)
+	}
+	if len(ws.calls) != 0 {
+		t.Fatalf("workspace calls = %v, want no worktree restore or apply", ws.calls)
+	}
+}
+
+func TestReapply_ConflictLeavesMarkersAndKeepsSnapshot(t *testing.T) {
+	m, st, rt, ws := newManager()
+	rec := mkLive("mer-1")
+	rec.Metadata.Branch = "ao/mer-1"
+	rec.IsTerminated = true
+	st.sessions["mer-1"] = rec
+	st.worktrees["mer-1"] = []domain.SessionWorktreeRecord{{
+		SessionID:    "mer-1",
+		RepoName:     domain.RootWorkspaceRepoName,
+		Branch:       "ao/mer-1",
+		WorktreePath: "/ws/mer-1",
+		PreservedRef: "refs/ao/preserved/mer-1",
+		State:        "active",
+	}}
+	ws.applyErr = fmt.Errorf("conflict: %w", ports.ErrPreservedConflict)
+
+	out, err := m.ReapplyPreservedEdits(ctx, "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Conflicts {
+		t.Fatal("conflicts = false, want true")
+	}
+	if rt.created != 0 {
+		t.Fatal("a conflict must not relaunch the agent or create a commit")
+	}
+	if st.worktrees["mer-1"][0].PreservedRef != "refs/ao/preserved/mer-1" {
+		t.Fatal("conflict must keep the snapshot")
+	}
+}
+
+func TestReapply_MissingBranchLeavesSnapshot(t *testing.T) {
+	m, st, rt, ws := newManager()
+	rec := mkLive("mer-1")
+	rec.Metadata.Branch = "ao/mer-1"
+	rec.IsTerminated = true
+	st.sessions["mer-1"] = rec
+	st.worktrees["mer-1"] = []domain.SessionWorktreeRecord{{
+		SessionID:    "mer-1",
+		RepoName:     domain.RootWorkspaceRepoName,
+		Branch:       "ao/mer-1",
+		WorktreePath: "/ws/mer-1",
+		PreservedRef: "refs/ao/preserved/mer-1",
+		State:        "active",
+	}}
+	ws.restoreErr = fmt.Errorf("gone: %w", ports.ErrSessionBranchMissing)
+
+	_, err := m.ReapplyPreservedEdits(ctx, "mer-1")
+	if !errors.Is(err, ports.ErrSessionBranchMissing) {
+		t.Fatalf("err = %v, want missing branch", err)
+	}
+	if rt.created != 0 {
+		t.Fatal("a missing branch must not relaunch or build a branch from the snapshot")
+	}
+	for _, call := range ws.calls {
+		if strings.Contains(call, "ApplyPreserved") {
+			t.Fatalf("calls = %v, want no apply", ws.calls)
+		}
+	}
+	if st.worktrees["mer-1"][0].PreservedRef != "refs/ao/preserved/mer-1" {
+		t.Fatal("missing branch must leave the snapshot")
 	}
 }
 
@@ -4565,25 +5049,30 @@ func TestCleanup_SkipsWorkspaceReleaseWhenShellTerminalsWontClose(t *testing.T) 
 	}
 }
 
-// TestCleanup_ReportsSkippedWorkspaces: a refused teardown must be visible in
-// the result with a reason — a silent skip leaves users staring at
-// "Would clean N … 0 sessions cleaned" with no explanation.
-func TestCleanup_ReportsSkippedWorkspaces(t *testing.T) {
+// TestCleanup_ArchivesDirtyWorkspacesAndReportsOtherFailures: dirty worktrees
+// are archived before removal, while unrelated teardown failures stay visible
+// with a fixed public reason.
+func TestCleanup_ArchivesDirtyWorkspacesAndReportsOtherFailures(t *testing.T) {
 	m, st, _, ws := newManager()
-	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1"})
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", WorkspaceRepoPath: "/repo/mer"})
+	ws.stashRef = "refs/ao/preserved/mer-1"
 	ws.destroyErr = fmt.Errorf("gitworktree: refusing to remove: %w", ports.ErrWorkspaceDirty)
 	res, err := m.Cleanup(ctx, "mer")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Cleaned) != 0 {
-		t.Fatalf("cleaned = %v, want none", res.Cleaned)
+	if len(res.Cleaned) != 1 || res.Cleaned[0] != "mer-1" || len(res.Skipped) != 0 {
+		t.Fatalf("cleanup result = %+v, want dirty session archived", res)
 	}
-	if len(res.Skipped) != 1 || res.Skipped[0].SessionID != "mer-1" {
-		t.Fatalf("skipped = %v, want mer-1", res.Skipped)
+	if ws.stashCalls != 1 {
+		t.Fatalf("StashUncommitted calls = %d, want 1", ws.stashCalls)
 	}
-	if res.Skipped[0].Reason != "workspace has uncommitted changes" {
-		t.Fatalf("reason = %q", res.Skipped[0].Reason)
+	if !strings.Contains(strings.Join(ws.calls, ","), "ForceDestroy:__root__") {
+		t.Fatalf("workspace calls = %v, want ForceDestroy after snapshot", ws.calls)
+	}
+	rows := st.worktrees["mer-1"]
+	if len(rows) != 1 || rows[0].PreservedRef != "refs/ao/preserved/mer-1/__root__" || rows[0].State != "active" {
+		t.Fatalf("preserved worktree row = %+v, want active saved snapshot", rows)
 	}
 
 	// A non-dirty teardown failure is reported too — but with a fixed public
@@ -4614,6 +5103,113 @@ func TestCleanup_ReportsSkippedWorkspaces(t *testing.T) {
 	}
 	if res.Skipped[0].Reason != "project is archived or unregistered — remove worktree manually" {
 		t.Fatalf("reason = %q, want archived-project reason", res.Skipped[0].Reason)
+	}
+}
+
+func TestCleanupLeavesDirtyWorkspaceWhenSnapshotFails(t *testing.T) {
+	m, st, _, ws := newManager()
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", WorkspaceRepoPath: "/repo/mer"})
+	ws.destroyErr = fmt.Errorf("dirty: %w", ports.ErrWorkspaceDirty)
+	ws.stashErr = errors.New("snapshot write failed")
+
+	res, err := m.Cleanup(ctx, "mer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Cleaned) != 0 || len(res.Skipped) != 1 || res.Skipped[0].SessionID != "mer-1" {
+		t.Fatalf("cleanup result = %+v, want failed archive skipped", res)
+	}
+	if res.Skipped[0].Reason != "workspace could not be archived; worktree left in place" {
+		t.Fatalf("skip reason = %q", res.Skipped[0].Reason)
+	}
+	if strings.Contains(strings.Join(ws.calls, ","), "ForceDestroy:") {
+		t.Fatalf("workspace calls = %v, must not force-remove after snapshot failure", ws.calls)
+	}
+}
+
+func TestPreviewCleanupCountsTerminatedWorktreesAndSkipsLiveOwnership(t *testing.T) {
+	m, st, _, ws := newManager()
+	seedTerminal(st, "mer-old", domain.SessionMetadata{WorkspacePath: "/ws/old"})
+	seedTerminal(st, "mer-shared-old", domain.SessionMetadata{WorkspacePath: "/ws/shared"})
+	seedTerminal(st, "mer-small", domain.SessionMetadata{WorkspacePath: "/ws/small"})
+	live := mkLive("mer-live")
+	live.Metadata.WorkspacePath = "/ws/shared"
+	st.sessions["mer-live"] = live
+	ws.diskUsageByPath = map[string]int64{
+		"/ws/old":    3 << 30,
+		"/ws/shared": 5 << 30,
+		"/ws/small":  0,
+	}
+
+	preview, err := m.PreviewCleanup(ctx, "mer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.Incomplete {
+		t.Fatal("preview marked complete measurements as incomplete")
+	}
+	if len(preview.Sessions) != 2 || preview.Sessions[0].SessionID != "mer-old" || preview.Sessions[1].SessionID != "mer-small" {
+		t.Fatalf("preview sessions = %+v, want terminated worktrees except live-owned mer-shared", preview.Sessions)
+	}
+	if preview.TotalBytes != 3<<30 || preview.Sessions[0].WorktreeBytes != 3<<30 {
+		t.Fatalf("preview bytes total=%d session=%d, want 3 GiB", preview.TotalBytes, preview.Sessions[0].WorktreeBytes)
+	}
+	if preview.Sessions[1].WorktreeBytes != 0 {
+		t.Fatalf("small worktree size = %d, want 0", preview.Sessions[1].WorktreeBytes)
+	}
+}
+
+func TestPreviewCleanupReleasesWorkspaceGateBeforeDiskUsage(t *testing.T) {
+	m, st, _, ws := newManager()
+	seedTerminal(st, "mer-old", domain.SessionMetadata{WorkspacePath: "/ws/old"})
+	started := make(chan struct{})
+	continueSizing := make(chan struct{})
+	ws.diskUsageHook = func() {
+		close(started)
+		<-continueSizing
+	}
+	previewDone := make(chan error, 1)
+	go func() {
+		_, err := m.PreviewCleanup(ctx, "mer")
+		previewDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("disk usage did not start")
+	}
+	gateAcquired := make(chan struct{})
+	go func() {
+		release := m.acquireWorkspaceGate("mer")
+		close(gateAcquired)
+		release()
+	}()
+	select {
+	case <-gateAcquired:
+	case <-time.After(time.Second):
+		close(continueSizing)
+		t.Fatal("disk usage kept project workspace gate locked")
+	}
+	close(continueSizing)
+	if err := <-previewDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCleanupSelectedDoesNotTouchUnpreviewedSessions(t *testing.T) {
+	m, st, _, ws := newManager()
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", WorkspaceRepoPath: "/repo/mer"})
+	seedTerminal(st, "mer-2", domain.SessionMetadata{WorkspacePath: "/ws/mer-2", WorkspaceRepoPath: "/repo/mer"})
+
+	result, err := m.CleanupSelected(ctx, "mer", []domain.SessionID{"mer-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Cleaned) != 1 || result.Cleaned[0] != "mer-1" {
+		t.Fatalf("cleaned = %v, want only mer-1", result.Cleaned)
+	}
+	if ws.destroyed != 1 {
+		t.Fatalf("workspace destroys = %d, want exactly one previewed session", ws.destroyed)
 	}
 }
 
@@ -4821,9 +5417,10 @@ func TestCleanup_WorkspaceProjectMarksRetryRemoveAfterTeardownFailure(t *testing
 	}
 }
 
-func TestCleanup_WorkspaceProjectDirtyRowsAreSkipped(t *testing.T) {
-	m, st, _, ws := newManager()
+func TestCleanup_WorkspaceProjectArchivesDirtyRows(t *testing.T) {
+	m, st, rt, ws := newManager()
 	ws.destroyErr = fmt.Errorf("dirty: %w", ports.ErrWorkspaceDirty)
+	ws.stashRef = "refs/ao/preserved/mer-1"
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
 	st.workspaceRepo["mer"] = []domain.WorkspaceRepoRecord{{Name: "api", RelativePath: "api"}}
 	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "ao/mer-1"})
@@ -4836,8 +5433,8 @@ func TestCleanup_WorkspaceProjectDirtyRowsAreSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Skipped) != 1 {
-		t.Fatalf("cleanup result = %+v, want one skipped session", res)
+	if len(res.Cleaned) != 1 || res.Cleaned[0] != "mer-1" || len(res.Skipped) != 0 {
+		t.Fatalf("cleanup result = %+v, want dirty workspace project archived", res)
 	}
 	refs := map[string]string{}
 	states := map[string]string{}
@@ -4845,8 +5442,24 @@ func TestCleanup_WorkspaceProjectDirtyRowsAreSkipped(t *testing.T) {
 		refs[row.RepoName] = row.PreservedRef
 		states[row.RepoName] = row.State
 	}
-	if states["api"] != "" || refs["api"] != "" {
-		t.Fatalf("api state/ref = %q/%q, want unchanged dirty row", states["api"], refs["api"])
+	if states["api"] != "active" || refs["api"] != "refs/ao/preserved/mer-1/api" {
+		t.Fatalf("api state/ref = %q/%q, want active archived row", states["api"], refs["api"])
+	}
+	if states[domain.RootWorkspaceRepoName] != "active" || refs[domain.RootWorkspaceRepoName] != "refs/ao/preserved/mer-1/__root__" {
+		t.Fatalf("root state/ref = %q/%q, want active archived row", states[domain.RootWorkspaceRepoName], refs[domain.RootWorkspaceRepoName])
+	}
+	if got, want := strings.Join(ws.calls, ","), "Destroy:api,StashUncommitted:api,ForceDestroy:api,Destroy:__root__,StashUncommitted:__root__,ForceDestroy:__root__"; got != want {
+		t.Fatalf("workspace calls = %s, want %s", got, want)
+	}
+	if _, err := m.ReapplyPreservedEdits(ctx, "mer-1"); err != nil {
+		t.Fatalf("reapply after cleanup: %v", err)
+	}
+	if rt.created != 0 {
+		t.Fatalf("reapply relaunched the agent %d times", rt.created)
+	}
+	if !strings.Contains(strings.Join(ws.calls, ","), "ApplyPreserved:api:refs/ao/preserved/mer-1/api") ||
+		!strings.Contains(strings.Join(ws.calls, ","), "ApplyPreserved:__root__:refs/ao/preserved/mer-1/__root__") {
+		t.Fatalf("reapply calls = %v, want both archived repos reapplied", ws.calls)
 	}
 }
 
@@ -8975,6 +9588,67 @@ func TestRestoreAll_WorkspaceProjectRootOnlyMarkerRestoresRegisteredChildren(t *
 	}
 }
 
+func TestRestoreAll_OneChildMarkerLeavesOtherArchiveUntouched(t *testing.T) {
+	m, st, rt, ws := newLifecycleManager()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+	st.workspaceRepo["mer"] = []domain.WorkspaceRepoRecord{
+		{Name: "api", RelativePath: "api"},
+		{Name: "web", RelativePath: "web"},
+	}
+	ws.applyErr = ports.ErrPreservedConflict
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID:           "mer-1",
+		ProjectID:    "mer",
+		Kind:         domain.KindWorker,
+		Harness:      domain.HarnessClaudeCode,
+		IsTerminated: true,
+		Metadata:     domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "ao/mer-1", AgentSessionID: "agent-w"},
+		Activity:     domain.Activity{State: domain.ActivityExited},
+	}
+	st.worktrees["mer-1"] = []domain.SessionWorktreeRecord{
+		{SessionID: "mer-1", RepoName: "web", Branch: "ao/mer-1", WorktreePath: "/ws/mer-1/web", PreservedRef: "refs/ao/preserved/mer-1--web", State: "removed"},
+		{SessionID: "mer-1", RepoName: "api", Branch: "ao/mer-1", WorktreePath: "/ws/mer-1/api", PreservedRef: "refs/ao/preserved/mer-1--api", State: "active"},
+	}
+
+	if err := m.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll err = %v", err)
+	}
+
+	if rt.created != 1 {
+		t.Fatalf("runtime.Create calls = %d, want 1", rt.created)
+	}
+	apiApplied := false
+	webApplied := false
+	for _, call := range ws.calls {
+		if strings.HasPrefix(call, "ApplyPreserved:api:") {
+			apiApplied = true
+		}
+		if call == "ApplyPreserved:web:refs/ao/preserved/mer-1--web" {
+			webApplied = true
+		}
+	}
+	if apiApplied {
+		t.Fatalf("active child archive snapshot was replayed: calls=%v", ws.calls)
+	}
+	if !webApplied {
+		t.Fatalf("shutdown marker snapshot was not replayed: calls=%v", ws.calls)
+	}
+	rows, err := st.ListSessionWorktrees(ctx, "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byRepo := make(map[string]domain.SessionWorktreeRecord, len(rows))
+	for _, row := range rows {
+		byRepo[row.RepoName] = row
+	}
+	if web := byRepo["web"]; web.State != "active" || web.PreservedRef != "refs/ao/preserved/mer-1--web" {
+		t.Fatalf("conflicted shutdown marker = %+v, want active with retryable ref", web)
+	}
+	if child := byRepo["api"]; child.State != "active" || child.PreservedRef != "refs/ao/preserved/mer-1--api" {
+		t.Fatalf("active child archive = %+v, want ref retained and not consumed", child)
+	}
+}
+
 func TestReconcileLive_DeadSessionRelaunchesInExistingWorktree(t *testing.T) {
 	st := newFakeStore()
 	st.projects["p1"] = domain.ProjectRecord{ID: "p1", Config: testRoleAgents()}
@@ -10659,6 +11333,9 @@ func TestRestoreRetainsSpawnPermissionsAfterProjectChange(t *testing.T) {
 func TestKill_TerminatesEvenWhenTeardownBudgetExpires(t *testing.T) {
 	m, st, rt, ws := newManager()
 	st.sessions["mer-1"] = mkLive("mer-1")
+	st.worktrees["mer-1"] = []domain.SessionWorktreeRecord{
+		{SessionID: "mer-1", RepoName: domain.RootWorkspaceRepoName, WorktreePath: "/ws/mer-1", PreservedRef: "refs/ao/preserved/mer-1", State: "removed"},
+	}
 	// Smaller than the time the fake workspace burns below, so the budget is
 	// already expired when Kill reaches its terminal-intent write.
 	m.killTeardown = 20 * time.Millisecond
@@ -10676,5 +11353,9 @@ func TestKill_TerminatesEvenWhenTeardownBudgetExpires(t *testing.T) {
 	}
 	if !st.sessions["mer-1"].IsTerminated {
 		t.Fatal("session must be marked terminated even though the teardown budget expired")
+	}
+	rows := st.worktrees["mer-1"]
+	if len(rows) != 1 || rows[0].PreservedRef != "refs/ao/preserved/mer-1" || rows[0].State != "active" {
+		t.Fatalf("saved edits must survive without a shutdown restore marker: %+v", rows)
 	}
 }

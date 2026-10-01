@@ -6824,6 +6824,45 @@ paths:
         preview
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/reapply-edits:
+    post:
+      operationId: reapplySessionEdits
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReapplyEditsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Put a session's saved unfinished edits back onto its worktree
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/restore:
     post:
       operationId: restoreSession
@@ -8082,6 +8121,11 @@ paths:
           description: Project id filter. When omitted, clean terminated sessions
             across all projects.
           type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CleanupSessionsRequest'
       responses:
         "200":
           content:
@@ -8102,6 +8146,40 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Clean up terminated session workspaces
+      tags:
+      - sessions
+  /api/v1/sessions/cleanup/preview:
+    get:
+      operationId: previewSessionCleanup
+      parameters:
+      - description: Project id filter. When omitted, preview terminated sessions
+          across all projects.
+        in: query
+        name: project
+        schema:
+          description: Project id filter. When omitted, preview terminated sessions
+            across all projects.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CleanupPreviewResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Preview terminated workspace disk usage before cleanup
       tags:
       - sessions
   /api/v1/settings:
@@ -9417,6 +9495,44 @@ components:
       - branchChanged
       - takenOverFrom
       type: object
+    CleanupPreviewResponse:
+      properties:
+        incomplete:
+          type: boolean
+        sessions:
+          items:
+            $ref: '#/components/schemas/CleanupPreviewSession'
+          type: array
+        totalBytes:
+          format: int64
+          type: integer
+      required:
+      - sessions
+      - totalBytes
+      - incomplete
+      type: object
+    CleanupPreviewSession:
+      properties:
+        displayName:
+          type: string
+        projectId:
+          type: string
+        sessionId:
+          type: string
+        worktreeBytes:
+          format: int64
+          type: integer
+      required:
+      - sessionId
+      - worktreeBytes
+      type: object
+    CleanupSessionsRequest:
+      properties:
+        sessionIds:
+          items:
+            type: string
+          type: array
+      type: object
     CleanupSessionsResponse:
       properties:
         alreadyGone:
@@ -10153,6 +10269,8 @@ components:
           type: string
         harness:
           type: string
+        hasPreservedEdits:
+          type: boolean
         id:
           type: string
         isPinned:
@@ -11855,6 +11973,10 @@ components:
           type: boolean
         ok:
           type: boolean
+        preserved:
+          type: boolean
+        saveFailed:
+          type: boolean
         sessionId:
           type: string
       required:
@@ -12771,6 +12893,18 @@ components:
           type: integer
       required:
       - pat
+      type: object
+    ReapplyEditsResponse:
+      properties:
+        conflicts:
+          type: boolean
+        ok:
+          type: boolean
+        sessionId:
+          type: string
+      required:
+      - ok
+      - sessionId
       type: object
     RegisterPushDeviceRequest:
       properties:

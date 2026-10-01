@@ -40,6 +40,7 @@ var _ ports.Workspace = (*Workspace)(nil)
 var _ ports.WorkspaceDefaultBranchRefresher = (*Workspace)(nil)
 var _ ports.WorkspaceProject = (*Workspace)(nil)
 var _ ports.WorkspaceObserver = (*Workspace)(nil)
+var _ ports.WorkspaceDiskSizer = (*Workspace)(nil)
 var _ ports.WorkspaceReclaimer = (*Workspace)(nil)
 var _ ports.WorkspacePreparationBranchCleaner = (*Workspace)(nil)
 
@@ -105,6 +106,19 @@ func (w *Workspace) DestroyReclaim(ctx context.Context, info ports.WorkspaceInfo
 		return reclaimer.DestroyReclaim(ctx, info)
 	}
 	return ports.WorkspaceReclaimRemoved, adapter.Destroy(ctx, info)
+}
+
+// DiskUsage delegates the cleanup estimate to the project-appropriate adapter.
+func (w *Workspace) DiskUsage(ctx context.Context, info ports.WorkspaceInfo) (int64, error) {
+	adapter, err := w.adapterForProject(ctx, info.ProjectID)
+	if err != nil {
+		return 0, err
+	}
+	sizer, ok := adapter.(ports.WorkspaceDiskSizer)
+	if !ok {
+		return 0, errors.New("workspace adapter does not report disk usage")
+	}
+	return sizer.DiskUsage(ctx, info)
 }
 
 // DeletePreparedBranch delegates safe speculative-branch cleanup to Git workspaces.

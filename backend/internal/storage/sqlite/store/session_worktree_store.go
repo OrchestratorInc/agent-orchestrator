@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -62,11 +63,36 @@ func (s *Store) ListSessionWorktrees(ctx context.Context, sessionID domain.Sessi
 	return out, nil
 }
 
+// ListSessionsWithPreservedWorktrees returns the requested sessions that have
+// at least one saved-edit ref, in one query for session-list reads.
+func (s *Store) ListSessionsWithPreservedWorktrees(ctx context.Context, ids []domain.SessionID) ([]domain.SessionID, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return nil, fmt.Errorf("marshal session ids: %w", err)
+	}
+	rows, err := s.qr.ListSessionsWithPreservedWorktrees(ctx, string(encoded))
+	if err != nil {
+		return nil, fmt.Errorf("list sessions with preserved worktrees: %w", err)
+	}
+	return rows, nil
+}
+
 // DeleteSessionWorktrees deletes the per-repo worktree rows for a session.
 func (s *Store) DeleteSessionWorktrees(ctx context.Context, sessionID domain.SessionID) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.qw.DeleteSessionWorktrees(ctx, sessionID)
+}
+
+// DeleteSessionWorktree removes one obsolete restore marker without touching
+// other repos' preserved edits.
+func (s *Store) DeleteSessionWorktree(ctx context.Context, sessionID domain.SessionID, repoName string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.qw.DeleteSessionWorktree(ctx, gen.DeleteSessionWorktreeParams{SessionID: sessionID, RepoName: repoName})
 }
 
 func sessionWorktreeFromGen(row gen.SessionWorktree) domain.SessionWorktreeRecord {

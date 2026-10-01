@@ -48,6 +48,7 @@ type Store interface {
 	ListPRsBySession(ctx context.Context, sessionID domain.SessionID) ([]domain.PullRequest, error)
 	ListReportedPRURLs(ctx context.Context, id domain.SessionID) ([]string, error)
 	ListSessionWorktrees(ctx context.Context, id domain.SessionID) ([]domain.SessionWorktreeRecord, error)
+	ListSessionsWithPreservedWorktrees(ctx context.Context, ids []domain.SessionID) ([]domain.SessionID, error)
 	ListChecks(ctx context.Context, prURL string) ([]domain.PullRequestCheck, error)
 	ListPRReviews(ctx context.Context, prURL string) ([]domain.PullRequestReview, error)
 	ListPRReviewThreads(ctx context.Context, prURL string) ([]domain.PullRequestReviewThread, error)
@@ -103,6 +104,10 @@ type exitAgentCommander interface {
 	ExitAgent(context.Context, domain.SessionID) (domain.SessionRecord, error)
 }
 
+type cleanupPreviewCommander interface {
+	PreviewCleanup(context.Context, domain.ProjectID) (sessionmanager.CleanupPreview, error)
+}
+
 // RollbackOutcome reports what happened in a rollback: either the seed row was
 // deleted, or the partially-spawned session was killed (runtime+workspace torn
 // down, row marked terminated).
@@ -116,6 +121,14 @@ type CleanupOutcome struct {
 	Cleaned     []domain.SessionID `json:"cleaned"`
 	AlreadyGone []domain.SessionID `json:"alreadyGone"`
 	Skipped     []CleanupSkipped   `json:"skipped"`
+}
+
+// CleanupPreviewOutcome is a read-only estimate for terminated workspaces
+// that Cleanup could reclaim.
+type CleanupPreviewOutcome struct {
+	Sessions   []sessionmanager.CleanupPreviewSession `json:"sessions"`
+	TotalBytes int64                                  `json:"totalBytes"`
+	Incomplete bool                                   `json:"incomplete"`
 }
 
 // CleanupSkipped is one terminal session whose workspace was preserved by
@@ -785,11 +798,48 @@ func restoreModeView(mode sessionmanager.RestoreMode) RestoreModeView {
 	}
 }
 
+// KillOutcome is the interactive archive result. Freed reports that the
+// worktree folder was removed. Preserved reports that unfinished edits were
+// stored apart from the branch. SaveFailed reports that the folder stayed
+// because those edits could not be stored.
+type KillOutcome struct {
+	Freed      bool
+	Preserved  bool
+	SaveFailed bool
+}
+
+// ReapplyOutcome is the result of putting a private snapshot back on request.
+type ReapplyOutcome struct {
+	Conflicts bool
+}
+
 // Kill delegates terminal intent and teardown to the internal manager.
-func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
+func (s *Service) Kill(ctx context.Context, id domain.SessionID) (KillOutcome, error) {
 	s.cancelTitleRefinement(id)
 	freed, err := s.manager.Kill(ctx, id)
-	return freed, toAPIError(err)
+	out := KillOutcome{Freed: freed}
+	if notice, ok := s.manager.(interface {
+		LastArchiveNotice(domain.SessionID) (bool, bool)
+	}); ok {
+		out.Preserved, out.SaveFailed = notice.LastArchiveNotice(id)
+	}
+	return out, toAPIError(err)
+}
+
+// ReapplyPreservedEdits puts the session's private snapshot onto its worktree
+// when the person asks. It is not part of restore or agent start.
+func (s *Service) ReapplyPreservedEdits(ctx context.Context, id domain.SessionID) (ReapplyOutcome, error) {
+	reapplier, ok := s.manager.(interface {
+		ReapplyPreservedEdits(context.Context, domain.SessionID) (sessionmanager.ReapplyResult, error)
+	})
+	if !ok {
+		return ReapplyOutcome{}, apierr.NotImplemented("REAPPLY_UNAVAILABLE", "Putting saved edits back is not available")
+	}
+	out, err := reapplier.ReapplyPreservedEdits(ctx, id)
+	if err != nil {
+		return ReapplyOutcome{}, toAPIError(err)
+	}
+	return ReapplyOutcome{Conflicts: out.Conflicts}, nil
 }
 
 // RollbackSpawn deletes a seed-state session row, or falls back to a Kill if
@@ -955,6 +1005,25 @@ func (s *Service) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 	if err != nil {
 		return CleanupOutcome{}, err
 	}
+	return cleanupOutcome(res), nil
+}
+
+// CleanupSelected reclaims only the terminated sessions named by the caller.
+func (s *Service) CleanupSelected(ctx context.Context, project domain.ProjectID, ids []domain.SessionID) (CleanupOutcome, error) {
+	manager, ok := s.manager.(interface {
+		CleanupSelected(context.Context, domain.ProjectID, []domain.SessionID) (sessionmanager.CleanupResult, error)
+	})
+	if !ok {
+		return CleanupOutcome{}, apierr.NotImplemented("CLEANUP_SELECTION_UNAVAILABLE", "Selected session cleanup is not available")
+	}
+	res, err := manager.CleanupSelected(ctx, project, ids)
+	if err != nil {
+		return CleanupOutcome{}, err
+	}
+	return cleanupOutcome(res), nil
+}
+
+func cleanupOutcome(res sessionmanager.CleanupResult) CleanupOutcome {
 	out := CleanupOutcome{
 		Cleaned:     res.Cleaned,
 		AlreadyGone: res.AlreadyGone,
@@ -969,7 +1038,24 @@ func (s *Service) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 	for _, skip := range res.Skipped {
 		out.Skipped = append(out.Skipped, CleanupSkipped{SessionID: skip.SessionID, Reason: skip.Reason})
 	}
-	return out, nil
+	return out
+}
+
+// PreviewCleanup reports terminated worktrees and approximate bytes without
+// changing sessions or worktrees.
+func (s *Service) PreviewCleanup(ctx context.Context, project domain.ProjectID) (CleanupPreviewOutcome, error) {
+	previewer, ok := s.manager.(cleanupPreviewCommander)
+	if !ok {
+		return CleanupPreviewOutcome{}, apierr.NotImplemented("CLEANUP_PREVIEW_UNAVAILABLE", "Cleanup preview is not available")
+	}
+	res, err := previewer.PreviewCleanup(ctx, project)
+	if err != nil {
+		return CleanupPreviewOutcome{}, err
+	}
+	if res.Sessions == nil {
+		res.Sessions = []sessionmanager.CleanupPreviewSession{}
+	}
+	return CleanupPreviewOutcome{Sessions: res.Sessions, TotalBytes: res.TotalBytes, Incomplete: res.Incomplete}, nil
 }
 
 // TeardownProject stops every live session in a project concurrently, then asks
@@ -978,7 +1064,7 @@ func (s *Service) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 // the kills in parallel is what makes removing a many-session project fast;
 // sessions of the same project that reach the shared repository are serialized
 // by the workspace adapter's per-repo teardown lock. Dirty worktrees are
-// preserved by Kill and Cleanup; callers only see hard teardown failures.
+// archived before removal; ignored files are discarded.
 func (s *Service) TeardownProject(ctx context.Context, project domain.ProjectID) error {
 	recs, err := s.listRecords(ctx, project)
 	if err != nil {
@@ -1039,6 +1125,14 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session
 	if err != nil {
 		return nil, fmt.Errorf("list review runs: %w", err)
 	}
+	preservedIDs, err := s.store.ListSessionsWithPreservedWorktrees(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list preserved edits: %w", err)
+	}
+	preservedBySession := make(map[domain.SessionID]struct{}, len(preservedIDs))
+	for _, id := range preservedIDs {
+		preservedBySession[id] = struct{}{}
+	}
 	out := make([]domain.Session, 0, len(filtered))
 	for _, rec := range filtered {
 		sess, err := s.toSessionWithFacts(rec, prsBySession[rec.ID], runsBySession[rec.ID])
@@ -1048,6 +1142,7 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session
 		if agentSwitch, ok := activeBySession[rec.ID]; ok {
 			sess.ActiveAgentSwitch = &agentSwitch
 		}
+		_, sess.HasPreservedEdits = preservedBySession[rec.ID]
 		out = append(out, sess)
 	}
 	if s.statusRecoveryRevision() != recoveryRevision {
@@ -1124,7 +1219,21 @@ func (s *Service) Get(ctx context.Context, id domain.SessionID) (domain.Session,
 	if s.statusRecoveryRevision() != recoveryRevision {
 		sess.StatusReadiness = "checking"
 	}
+	s.markPreservedEdits(ctx, &sess)
 	return sess, nil
+}
+
+func (s *Service) markPreservedEdits(ctx context.Context, sess *domain.Session) {
+	rows, err := s.store.ListSessionWorktrees(ctx, sess.ID)
+	if err != nil {
+		return
+	}
+	for _, row := range rows {
+		if row.PreservedRef != "" {
+			sess.HasPreservedEdits = true
+			return
+		}
+	}
 }
 
 func (s *Service) toSessionWithFacts(rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun) (domain.Session, error) {
@@ -1168,6 +1277,12 @@ func mapSessionError(err error) error {
 		return nil
 	case errors.Is(err, sessionmanager.ErrNotFound):
 		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	case errors.Is(err, sessionmanager.ErrNoPreservedEdits):
+		return apierr.Conflict("NO_PRESERVED_EDITS", "This session has no saved edits to put back.", nil)
+	case errors.Is(err, sessionmanager.ErrSessionNotTerminated):
+		return apierr.Conflict("SESSION_NOT_TERMINATED", "Session must be terminated before putting saved edits back.", nil)
+	case errors.Is(err, ports.ErrSessionBranchMissing):
+		return apierr.Conflict("SESSION_BRANCH_MISSING", "The branch for this session is gone, so the saved edits stay saved until that branch exists again.", nil)
 	case errors.Is(err, sessionmanager.ErrNotRestorable):
 		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
 	case errors.Is(err, sessionmanager.ErrTerminated):

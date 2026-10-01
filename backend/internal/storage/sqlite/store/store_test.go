@@ -2061,6 +2061,13 @@ func TestSessionWorktreesRoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(got, rows) {
 		t.Fatalf("worktrees = %#v, want %#v", got, rows)
 	}
+	preservedIDs, err := s.ListSessionsWithPreservedWorktrees(ctx, []domain.SessionID{rec.ID, "not-preserved"})
+	if err != nil || !reflect.DeepEqual(preservedIDs, []domain.SessionID{rec.ID}) {
+		t.Fatalf("sessions with preserved worktrees = %v, err=%v; want [%s]", preservedIDs, err, rec.ID)
+	}
+	if empty, err := s.ListSessionsWithPreservedWorktrees(ctx, nil); err != nil || len(empty) != 0 {
+		t.Fatalf("empty batch = %v, err=%v; want empty result", empty, err)
+	}
 	one, ok, err := s.GetSessionWorktree(ctx, rec.ID, "api")
 	if err != nil || !ok || one.PreservedRef != "refs/ao/preserved/ws-1" {
 		t.Fatalf("get api = %#v ok=%v err=%v", one, ok, err)
@@ -2073,6 +2080,13 @@ func TestSessionWorktreesRoundTrip(t *testing.T) {
 	one, ok, err = s.GetSessionWorktree(ctx, rec.ID, "api")
 	if err != nil || !ok || one.State != "active" || one.PreservedRef != "" {
 		t.Fatalf("updated api = %#v ok=%v err=%v", one, ok, err)
+	}
+	if err := s.DeleteSessionWorktree(ctx, rec.ID, domain.RootWorkspaceRepoName); err != nil {
+		t.Fatalf("delete root worktree: %v", err)
+	}
+	got, err = s.ListSessionWorktrees(ctx, rec.ID)
+	if err != nil || len(got) != 1 || got[0].RepoName != "api" {
+		t.Fatalf("after root-only delete = %#v err=%v", got, err)
 	}
 	if err := s.DeleteSessionWorktrees(ctx, rec.ID); err != nil {
 		t.Fatalf("delete worktrees: %v", err)

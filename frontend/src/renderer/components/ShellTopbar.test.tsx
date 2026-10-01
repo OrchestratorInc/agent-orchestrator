@@ -242,6 +242,16 @@ describe("ShellTopbar route identity", () => {
 });
 
 describe("ShellTopbar status pill", () => {
+	it("offers saved-edit reapply only after the session is terminated", () => {
+		renderTopbar(sessionWith({ hasPreservedEdits: true, isTerminated: false }));
+		expect(screen.queryByRole("button", { name: "Put saved edits back for do the thing" })).toBeNull();
+	});
+
+	it("shows the saved-edit reapply action on a terminated session", () => {
+		renderTopbar(sessionWith({ hasPreservedEdits: true, isTerminated: true }));
+		expect(screen.getByRole("button", { name: "Put saved edits back for do the thing" })).toBeInTheDocument();
+	});
+
 	it("matches the session action edge inset to the toolbar spacing", () => {
 		renderTopbar(sessionWith());
 
@@ -679,7 +689,8 @@ describe("TopbarArchiveButton", () => {
 		expect(postMock).not.toHaveBeenCalled();
 		const confirmation = screen.getByRole("dialog", { name: "Are you sure you want to archive do the thing?" });
 		expect(confirmation).toHaveClass("left-[50%]", "top-[50%]", "bg-popover", "p-0");
-		expect(confirmation).toHaveTextContent("You can always restore do the thing from the Archive section later.");
+		expect(confirmation).toHaveTextContent("Archiving do the thing saves tracked and non-ignored edits for later reapply.");
+		expect(confirmation).toHaveTextContent("Ignored files aren't saved");
 		expect(within(confirmation).getByRole("button", { name: "No" })).toBeInTheDocument();
 		expect(within(confirmation).getByRole("button", { name: "Confirm, archive session" })).toHaveTextContent("Confirm");
 

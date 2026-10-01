@@ -81,6 +81,7 @@ type fakeStore struct {
 	reviewRuns          map[domain.SessionID][]domain.CurrentHeadReviewRun
 	listPRFactsCalls    int
 	listReviewRunsCalls int
+	listPreservedCalls  int
 	num                 int
 }
 
@@ -112,6 +113,7 @@ func TestListBatchesKanbanReads(t *testing.T) {
 	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2", ProjectID: "mer"}
 	st.pr["mer-1"] = domain.PRFacts{URL: "pr-1", HeadSHA: "head-1"}
 	st.pr["mer-2"] = domain.PRFacts{URL: "pr-2", HeadSHA: "head-2"}
+	st.worktrees["mer-1"] = []domain.SessionWorktreeRecord{{PreservedRef: "refs/ao/preserved/mer-1"}}
 	st.reviewRuns["mer-1"] = []domain.CurrentHeadReviewRun{{SessionID: "mer-1", PRURL: "pr-1", Status: domain.ReviewRunRunning, ID: "run-1", CreatedAt: time.Now().UTC()}}
 	st.reviewRuns["mer-2"] = []domain.CurrentHeadReviewRun{{SessionID: "mer-2", PRURL: "pr-2", Status: domain.ReviewRunRunning, ID: "run-2", CreatedAt: time.Now().UTC()}}
 
@@ -122,11 +124,31 @@ func TestListBatchesKanbanReads(t *testing.T) {
 	if len(list) != 2 {
 		t.Fatalf("len(list) = %d, want 2", len(list))
 	}
+	for _, sess := range list {
+		want := sess.ID == "mer-1"
+		if sess.HasPreservedEdits != want {
+			t.Errorf("session %s HasPreservedEdits = %v, want %v", sess.ID, sess.HasPreservedEdits, want)
+		}
+	}
 	if st.listPRFactsCalls != 1 {
 		t.Fatalf("ListPRFacts calls = %d, want 1 batched call", st.listPRFactsCalls)
 	}
 	if st.listReviewRunsCalls != 1 {
 		t.Fatalf("ListCurrentHeadReviewRuns calls = %d, want 1 batched call", st.listReviewRunsCalls)
+	}
+	if st.listPreservedCalls != 1 {
+		t.Fatalf("ListSessionsWithPreservedWorktrees calls = %d, want 1 batched call", st.listPreservedCalls)
+	}
+}
+
+func TestReapplyRejectsNonTerminatedSessionAsConflict(t *testing.T) {
+	got := mapSessionError(sessionmanager.ErrSessionNotTerminated)
+	var apiError *apierr.Error
+	if !errors.As(got, &apiError) {
+		t.Fatalf("mapped error = %T %v, want *apierr.Error", got, got)
+	}
+	if apiError.Kind != apierr.KindConflict || apiError.Code != "SESSION_NOT_TERMINATED" {
+		t.Fatalf("mapped error = %+v, want conflict SESSION_NOT_TERMINATED", apiError)
 	}
 }
 
@@ -481,6 +503,20 @@ func (f *fakeStore) GetProject(_ context.Context, id string) (domain.ProjectReco
 
 func (f *fakeStore) ListSessionWorktrees(_ context.Context, id domain.SessionID) ([]domain.SessionWorktreeRecord, error) {
 	return append([]domain.SessionWorktreeRecord(nil), f.worktrees[id]...), nil
+}
+
+func (f *fakeStore) ListSessionsWithPreservedWorktrees(_ context.Context, ids []domain.SessionID) ([]domain.SessionID, error) {
+	f.listPreservedCalls++
+	var out []domain.SessionID
+	for _, id := range ids {
+		for _, row := range f.worktrees[id] {
+			if row.PreservedRef != "" {
+				out = append(out, id)
+				break
+			}
+		}
+	}
+	return out, nil
 }
 
 func TestSessionListAppliesActivityBeforePRFacts(t *testing.T) {
@@ -2530,6 +2566,8 @@ type fakeCommander struct {
 	sent             []domain.SessionID
 	sentMessages     []string
 	cleanupProjects  []domain.ProjectID
+	cleanupSelected  []domain.SessionID
+	cleanupPreview   sessionmanager.CleanupPreview
 	killErr          error
 	retireErr        error
 	sendErr          error
@@ -2680,6 +2718,16 @@ func (f *fakeCommander) Cleanup(_ context.Context, project domain.ProjectID) (se
 		Skipped: []sessionmanager.CleanupSkip{{SessionID: "mer-2", Reason: "workspace has uncommitted changes"}},
 	}, nil
 }
+
+func (f *fakeCommander) CleanupSelected(_ context.Context, project domain.ProjectID, ids []domain.SessionID) (sessionmanager.CleanupResult, error) {
+	f.cleanupProjects = append(f.cleanupProjects, project)
+	f.cleanupSelected = append([]domain.SessionID(nil), ids...)
+	return sessionmanager.CleanupResult{Cleaned: append([]domain.SessionID(nil), ids...), AlreadyGone: []domain.SessionID{}, Skipped: []sessionmanager.CleanupSkip{}}, nil
+}
+
+func (f *fakeCommander) PreviewCleanup(_ context.Context, _ domain.ProjectID) (sessionmanager.CleanupPreview, error) {
+	return f.cleanupPreview, nil
+}
 func (f *fakeCommander) RollbackSpawn(context.Context, domain.SessionID) (bool, bool, error) {
 	return false, false, nil
 }
@@ -2705,6 +2753,37 @@ func TestCleanupMapsManagerResult(t *testing.T) {
 	}
 	if len(out.Skipped) != 1 || out.Skipped[0].SessionID != "mer-2" || out.Skipped[0].Reason != "workspace has uncommitted changes" {
 		t.Fatalf("skipped = %#v", out.Skipped)
+	}
+}
+
+func TestCleanupSelectedForwardsPreviewedSessionIDs(t *testing.T) {
+	manager := &fakeCommander{}
+	svc := &Service{manager: manager}
+	out, err := svc.CleanupSelected(context.Background(), "mer", []domain.SessionID{"mer-1", "mer-3"})
+	if err != nil {
+		t.Fatalf("CleanupSelected: %v", err)
+	}
+	if len(manager.cleanupSelected) != 2 || manager.cleanupSelected[0] != "mer-1" || manager.cleanupSelected[1] != "mer-3" {
+		t.Fatalf("selected ids = %v", manager.cleanupSelected)
+	}
+	if len(out.Cleaned) != 2 || out.Cleaned[0] != "mer-1" || out.Cleaned[1] != "mer-3" {
+		t.Fatalf("cleanup result = %+v", out)
+	}
+}
+
+func TestPreviewCleanupMapsManagerEstimate(t *testing.T) {
+	manager := &fakeCommander{cleanupPreview: sessionmanager.CleanupPreview{
+		Sessions:   []sessionmanager.CleanupPreviewSession{{SessionID: "mer-old", WorktreeBytes: 2 << 30}},
+		TotalBytes: 2 << 30,
+		Incomplete: true,
+	}}
+	svc := &Service{manager: manager}
+	out, err := svc.PreviewCleanup(context.Background(), "mer")
+	if err != nil {
+		t.Fatalf("PreviewCleanup: %v", err)
+	}
+	if out.TotalBytes != 2<<30 || len(out.Sessions) != 1 || out.Sessions[0].SessionID != "mer-old" || !out.Incomplete {
+		t.Fatalf("preview = %+v", out)
 	}
 }
 

@@ -104,9 +104,10 @@ func commitTreeArgs(worktree, treeSHA, parent, message string) []string {
 	return args
 }
 
-// updateRefArgs creates or moves a ref to point at a commit SHA.
-func updateRefArgs(worktree, ref, commitSHA string) []string {
-	return []string{"-C", worktree, "update-ref", ref, commitSHA}
+// createRefArgs creates a ref only when it does not already exist. The all-zero
+// old value makes update-ref an atomic create rather than an overwrite.
+func createRefArgs(worktree, ref, commitSHA string) []string {
+	return []string{"-C", worktree, "update-ref", ref, commitSHA, strings.Repeat("0", len(commitSHA))}
 }
 
 // deleteRefArgs deletes a ref unconditionally.
@@ -129,6 +130,18 @@ func revParseHeadArgs(worktree string) []string {
 // no sequencer state is left that would require a cherry-pick --quit afterward.
 func cherryPickNoCommitArgs(worktree, commitSHA string) []string {
 	return []string{"-C", worktree, "cherry-pick", "--no-commit", commitSHA}
+}
+
+// mergeTreeWriteArgs merges ours and theirs and prints the result tree. Exit 1
+// means the tree contains conflicts. The worktree itself is not modified.
+func mergeTreeWriteArgs(worktree, ours, theirs string) []string {
+	return []string{"-C", worktree, "merge-tree", "--write-tree", ours, theirs}
+}
+
+// readTreeResetArgs replaces the index with tree and updates the worktree to
+// match it. Ignored files that are not in the tree stay on disk.
+func readTreeResetArgs(worktree, tree string) []string {
+	return []string{"-C", worktree, "read-tree", "--reset", "-u", tree}
 }
 
 // ignoredCountArgs lists files skipped because of .gitignore (dry-run, no mutation).

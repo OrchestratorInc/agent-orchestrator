@@ -128,6 +128,7 @@ var _ ports.Workspace = (*Workspace)(nil)
 var _ ports.WorkspaceDefaultBranchRefresher = (*Workspace)(nil)
 var _ ports.WorkspaceProject = (*Workspace)(nil)
 var _ ports.WorkspaceObserver = (*Workspace)(nil)
+var _ ports.WorkspaceDiskSizer = (*Workspace)(nil)
 var _ ports.WorkspaceReclaimer = (*Workspace)(nil)
 var _ ports.WorkspacePreparationBranchCleaner = (*Workspace)(nil)
 
@@ -334,7 +335,7 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 			return ports.WorkspaceInfo{}, err
 		}
 	}
-	baseRef, err := w.addWorktree(ctx, repo, path, cfg.Branch, cfg.BaseBranch, cfg.BaseRef, seedRef, true)
+	baseRef, err := w.addWorktree(ctx, repo, path, cfg.Branch, cfg.BaseBranch, cfg.BaseRef, seedRef, true, false)
 	if err != nil {
 		if cfg.FreshBranch {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -832,6 +833,65 @@ func (w *Workspace) DestroyReclaim(ctx context.Context, info ports.WorkspaceInfo
 	return w.destroy(ctx, info)
 }
 
+// DiskUsage returns the approximate logical size of a managed worktree without
+// following symlinks. It is used only for cleanup previews, never as proof that
+// a workspace is reclaimable.
+func (w *Workspace) DiskUsage(ctx context.Context, info ports.WorkspaceInfo) (int64, error) {
+	if info.Path == "" {
+		return 0, fmt.Errorf("%w: empty path", ErrUnsafePath)
+	}
+	path, err := w.validateManagedPath(info.Path)
+	if err != nil {
+		return 0, err
+	}
+	stat, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("gitworktree: stat workspace for disk preview %q: %w", path, err)
+	}
+	if !stat.IsDir() {
+		return 0, fmt.Errorf("gitworktree: workspace for disk preview %q is not a directory", path)
+	}
+
+	var total int64
+	var walk func(string) error
+	walk = func(dir string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.Type()&os.ModeSymlink != 0 {
+				continue
+			}
+			entryPath := filepath.Join(dir, entry.Name())
+			if entry.IsDir() {
+				if err := walk(entryPath); err != nil {
+					return err
+				}
+				continue
+			}
+			fileInfo, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			if fileInfo.Mode().IsRegular() {
+				total += fileInfo.Size()
+			}
+		}
+		return nil
+	}
+	if err := walk(path); err != nil {
+		return 0, fmt.Errorf("gitworktree: walk workspace for disk preview %q: %w", path, err)
+	}
+	return total, nil
+}
+
 // DeletePreparedBranch is called only after a speculative worktree is gone.
 // A branch that moved beyond its original base belongs to the user and stays.
 func (w *Workspace) DeletePreparedBranch(ctx context.Context, info ports.WorkspaceInfo) error {
@@ -976,8 +1036,9 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 //
 // ponytail: only safe to call AFTER the session's uncommitted work has been
 // captured via StashUncommitted. Calling it before capture silently
-// discards agent work. For interactive teardown (ao session kill, ao cleanup)
-// use Destroy, which refuses dirty worktrees via ErrWorkspaceDirty.
+// discards agent work. Interactive kill may call it after that capture.
+// ao session cleanup still uses Destroy, which refuses a dirty worktree
+// that was never captured.
 func (w *Workspace) ForceDestroy(ctx context.Context, info ports.WorkspaceInfo) error {
 	if info.Path == "" {
 		return fmt.Errorf("%w: empty path", ErrUnsafePath)
@@ -1032,7 +1093,8 @@ func (w *Workspace) ForceDestroy(ctx context.Context, info ports.WorkspaceInfo) 
 
 // StashUncommitted captures all uncommitted work in the session's worktree
 // into a git commit object WITHOUT mutating the working tree or the global
-// stash stack. The commit is stored at refs/ao/preserved/<session-id>.
+// stash stack. The commit is stored at refs/ao/preserved/<preserve-key>.
+// The key is PreserveKey when set, otherwise the session id.
 //
 // It builds the preserve commit through a temporary index file so tracked
 // edits AND new non-ignored files are captured while .gitignore-d files are
@@ -1040,11 +1102,18 @@ func (w *Workspace) ForceDestroy(ctx context.Context, info ports.WorkspaceInfo) 
 //
 // Returns the full ref name (e.g. "refs/ao/preserved/sess-1"). Returns an
 // empty string (and no error) if the worktree is clean.
+// If that preserve ref already exists for the same tree and HEAD, it is
+// returned unchanged. A different snapshot fails so callers keep the current
+// worktree rather than replace saved edits.
 func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceInfo) (string, error) {
 	if info.Path == "" {
 		return "", fmt.Errorf("%w: empty path", ErrUnsafePath)
 	}
-	if info.SessionID == "" {
+	preserveKey := info.PreserveKey
+	if preserveKey == "" {
+		preserveKey = string(info.SessionID)
+	}
+	if preserveKey == "" {
 		return "", errors.New("gitworktree: session id is required for StashUncommitted")
 	}
 	repo, err := w.repoPathForInfo(info)
@@ -1069,7 +1138,8 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 		return "", fmt.Errorf("gitworktree: worktree %q is not registered: %w", path, ports.ErrWorkspaceStale)
 	}
 
-	// Early exit for clean worktrees: nothing to preserve.
+	ref := "refs/ao/preserved/" + preserveKey
+	// Early exit for clean worktrees, unless a prior snapshot is still pending.
 	dirty, err := w.isDirty(ctx, path)
 	if err != nil {
 		if isNotGitRepositoryError(err) {
@@ -1078,6 +1148,13 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 		return "", fmt.Errorf("gitworktree: StashUncommitted dirty check: %w", err)
 	}
 	if !dirty {
+		exists, err := w.refExists(ctx, path, ref)
+		if err != nil {
+			return "", err
+		}
+		if exists {
+			return "", fmt.Errorf("gitworktree: preserved ref %q already exists for different worktree edits", ref)
+		}
 		return "", nil
 	}
 
@@ -1089,74 +1166,105 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 		)
 	}
 
-	// Reserve a unique path for the temp index in the system temp dir (not ~/.ao).
-	// We must NOT pre-create the file: git requires GIT_INDEX_FILE to either not
-	// exist (it creates it) or be a valid git index. os.CreateTemp gives us a
-	// unique name; we close and remove it immediately so git gets an absent path.
+	commitSHA, err := w.captureWorktreeCommit(ctx, path, "ao preserved "+preserveKey)
+	if err != nil {
+		return "", err
+	}
+	if commitSHA == "" {
+		return "", nil
+	}
+
+	// Create the preserve ref only if absent. The zero old-value makes this an
+	// atomic create, so a second archive cannot replace an earlier snapshot.
+	if _, err := w.run(ctx, w.binary, createRefArgs(path, ref, commitSHA)...); err != nil {
+		exists, lookupErr := w.refExists(ctx, path, ref)
+		if lookupErr != nil {
+			return "", fmt.Errorf("gitworktree: create preserved ref %q: %w (verify existing ref: %w)", ref, err, lookupErr)
+		}
+		if exists {
+			currentState, stateErr := w.preservedCommitState(ctx, path, commitSHA)
+			if stateErr != nil {
+				return "", stateErr
+			}
+			savedState, stateErr := w.preservedCommitState(ctx, path, ref)
+			if stateErr != nil {
+				return "", stateErr
+			}
+			if currentState == savedState {
+				return ref, nil
+			}
+		}
+		return "", fmt.Errorf("gitworktree: create preserved ref %q (an earlier snapshot may already exist): %w", ref, err)
+	}
+	return ref, nil
+}
+
+// preservedCommitState identifies the captured tree and its base commit.
+// Commit metadata can differ across retries even when the snapshot is the same.
+func (w *Workspace) preservedCommitState(ctx context.Context, path, rev string) (string, error) {
+	out, err := w.run(ctx, w.binary, "-C", path, "show", "-s", "--format=%T %P", rev)
+	if err != nil {
+		return "", fmt.Errorf("gitworktree: inspect preserved commit %q: %w", rev, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// captureWorktreeCommit snapshots tracked and non-ignored untracked edits using
+// a temporary index seeded from HEAD. It never changes the real index,
+// worktree, or stash stack. An empty SHA means the worktree matches HEAD
+// (apart from ignored files).
+func (w *Workspace) captureWorktreeCommit(ctx context.Context, path, message string) (string, error) {
+	// Reserve a unique path for the temp index. Git requires GIT_INDEX_FILE to
+	// either be absent or contain a valid index, so remove the empty reservation.
 	tmpIdx, err := os.CreateTemp("", "ao-preserve-idx-*")
 	if err != nil {
 		return "", fmt.Errorf("gitworktree: reserve temp index path: %w", err)
 	}
 	tmpIdxPath := tmpIdx.Name()
 	_ = tmpIdx.Close()
-	// Remove now so git sees an absent path (not a 0-byte corrupt index).
 	_ = os.Remove(tmpIdxPath)
-	// Deferred remove is a best-effort cleanup in case git leaves the file.
 	defer func() { _ = os.Remove(tmpIdxPath) }()
 
-	// Stage all tracked and non-ignored untracked files into the temp index.
-	// GIT_INDEX_FILE overrides the index so the real index is never touched.
-	addCmd := aoprocess.CommandContext(ctx, w.binary, addAllTempIndexArgs(path)...)
-	addCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpIdxPath)
-	if out, err := addCmd.CombinedOutput(); err != nil {
-		return "", commandError{args: append([]string{w.binary}, addAllTempIndexArgs(path)...), output: string(out), err: err}
-	}
-
-	// Write the staged tree to get a tree SHA.
-	writeTreeCmd := aoprocess.CommandContext(ctx, w.binary, writeTreeArgs(path)...)
-	writeTreeCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpIdxPath)
-	treeOut, err := writeTreeCmd.CombinedOutput()
-	if err != nil {
-		return "", commandError{args: append([]string{w.binary}, writeTreeArgs(path)...), output: string(treeOut), err: err}
-	}
-	treeSHA := strings.TrimSpace(string(treeOut))
-
-	// Resolve HEAD. An unborn HEAD (no commits yet) means we omit the -p flag
-	// from commit-tree so the preserve commit has no parent.
 	headOut, headErr := w.run(ctx, w.binary, revParseHeadArgs(path)...)
 	headSHA := ""
 	if headErr == nil {
 		headSHA = strings.TrimSpace(string(headOut))
-	}
-	// headErr != nil means unborn HEAD: headSHA stays empty, commit-tree gets no -p.
-
-	// If the preserve tree SHA equals HEAD's tree SHA the working tree is
-	// effectively clean from git's perspective (only ignored files differ).
-	if headSHA != "" {
-		headTreeOut, err := w.run(ctx, w.binary, "-C", path, "rev-parse", headSHA+"^{tree}")
-		if err == nil {
-			headTreeSHA := strings.TrimSpace(string(headTreeOut))
-			if headTreeSHA == treeSHA {
-				// Nothing to preserve beyond ignored files.
-				return "", nil
-			}
+		readTreeArgs := []string{"-C", path, "read-tree", headSHA}
+		readTreeCmd := aoprocess.CommandContext(ctx, w.binary, readTreeArgs...)
+		readTreeCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpIdxPath)
+		if out, err := readTreeCmd.CombinedOutput(); err != nil {
+			return "", commandError{args: append([]string{w.binary}, readTreeArgs...), output: string(out), err: err}
 		}
 	}
 
-	// Create a commit object that wraps the preserve tree.
-	msg := "ao preserved " + string(info.SessionID)
-	commitOut, err := w.run(ctx, w.binary, commitTreeArgs(path, treeSHA, headSHA, msg)...)
+	addArgs := addAllTempIndexArgs(path)
+	addCmd := aoprocess.CommandContext(ctx, w.binary, addArgs...)
+	addCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpIdxPath)
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		return "", commandError{args: append([]string{w.binary}, addArgs...), output: string(out), err: err}
+	}
+
+	writeArgs := writeTreeArgs(path)
+	writeTreeCmd := aoprocess.CommandContext(ctx, w.binary, writeArgs...)
+	writeTreeCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpIdxPath)
+	treeOut, err := writeTreeCmd.CombinedOutput()
+	if err != nil {
+		return "", commandError{args: append([]string{w.binary}, writeArgs...), output: string(treeOut), err: err}
+	}
+	treeSHA := strings.TrimSpace(string(treeOut))
+
+	if headSHA != "" {
+		headTreeOut, err := w.run(ctx, w.binary, "-C", path, "rev-parse", headSHA+"^{tree}")
+		if err == nil && strings.TrimSpace(string(headTreeOut)) == treeSHA {
+			return "", nil
+		}
+	}
+
+	commitOut, err := w.run(ctx, w.binary, commitTreeArgs(path, treeSHA, headSHA, message)...)
 	if err != nil {
 		return "", fmt.Errorf("gitworktree: commit-tree: %w", err)
 	}
-	commitSHA := strings.TrimSpace(string(commitOut))
-
-	// Point the preserve ref at the commit.
-	ref := "refs/ao/preserved/" + string(info.SessionID)
-	if _, err := w.run(ctx, w.binary, updateRefArgs(path, ref, commitSHA)...); err != nil {
-		return "", fmt.Errorf("gitworktree: update-ref %q: %w", ref, err)
-	}
-	return ref, nil
+	return strings.TrimSpace(string(commitOut)), nil
 }
 
 func isNotGitRepositoryError(err error) bool {
@@ -1184,6 +1292,8 @@ func (w *Workspace) countIgnoredPaths(ctx context.Context, worktree string) (int
 // On clean success, the preserve ref is deleted.
 // On conflict, the ref is kept, conflict markers are left in the affected files,
 // and ErrPreservedConflict (wrapped) is returned so the caller can surface it.
+// If applying succeeds but deleting the ref fails, an error is returned and the
+// ref remains available for retry. Callers must not treat that state as consumed.
 //
 // NEVER deletes the preserve ref on a failed or conflicted apply.
 func (w *Workspace) ApplyPreserved(ctx context.Context, info ports.WorkspaceInfo, ref string) error {
@@ -1200,28 +1310,43 @@ func (w *Workspace) ApplyPreserved(ctx context.Context, info ports.WorkspaceInfo
 		return fmt.Errorf("gitworktree: ApplyPreserved resolve ref %q: %w", ref, err)
 	}
 	commitSHA := strings.TrimSpace(string(resolveOut))
+	// The dirty-worktree fallback writes conflict markers into the index and
+	// worktree. Replaying that unresolved result would treat those markers as
+	// local edits and nest another set of markers inside them.
+	// Disable whitespace diagnostics here: only conflict markers gate replay.
+	diffCheck, checkErr := w.gitCombined(ctx, []string{"-C", info.Path, "-c", "core.whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab", "diff", "--check", "HEAD"})
+	if strings.Contains(diffCheck, "leftover conflict marker") {
+		return fmt.Errorf("%w: resolve existing conflict markers before reapplying preserved edits", ErrPreservedConflict)
+	}
+	if checkErr != nil {
+		return fmt.Errorf("gitworktree: check existing conflict markers: %w", checkErr)
+	}
 
 	// Apply the preserve commit via "git cherry-pick --no-commit <sha>".
 	// cherry-pick computes the diff between the preserve commit and its parent
 	// (the HEAD at save time) and 3-way-merges it onto the current working tree.
 	// On conflict it leaves textual conflict markers in the affected files and
-	// exits non-zero WITHOUT committing or moving HEAD. Conflict detection uses
-	// the exit code only (not output text) to stay locale-independent.
+	// exits non-zero WITHOUT committing or moving HEAD. Inspect the index only
+	// after failure: unmerged entries identify a content conflict, while an
+	// empty result means cherry-pick refused to start because of overlapping
+	// unstaged edits and the dirty-worktree merge fallback can handle it.
 	applyErr := w.runCherryPickNoCommit(ctx, info.Path, commitSHA)
 	if applyErr != nil {
-		// Any non-zero exit from the merge step is a conflict: keep the ref,
-		// leave conflict markers in place, and surface the sentinel.
-		return fmt.Errorf("%w: %w", ErrPreservedConflict, applyErr)
+		unmerged, err := w.gitCombined(ctx, []string{"-C", info.Path, "ls-files", "--unmerged"})
+		if err != nil {
+			return fmt.Errorf("%w: inspect index after cherry-pick: %w (cherry-pick: %w)", ErrPreservedConflict, err, applyErr)
+		}
+		if strings.TrimSpace(unmerged) != "" {
+			return fmt.Errorf("%w: %w", ErrPreservedConflict, applyErr)
+		}
+		if err := w.applyPreservedOntoDirty(ctx, info.Path, commitSHA); err != nil {
+			return err
+		}
 	}
 
 	// Clean apply: remove the preserve ref so it is never replayed twice.
 	if _, err := w.run(ctx, w.binary, deleteRefArgs(info.Path, ref)...); err != nil {
-		// Log but do not fail: the work is already applied. A dangling preserve
-		// ref is harmless; the next StashUncommitted will overwrite it.
-		slog.WarnContext(ctx, "gitworktree: ApplyPreserved could not delete preserve ref",
-			"ref", ref,
-			"err", err,
-		)
+		return fmt.Errorf("gitworktree: preserved edits were applied but could not delete preserve ref %q: %w", ref, err)
 	}
 	return nil
 }
@@ -1380,6 +1505,67 @@ func parseObservedWorkspaceCommits(output string) []ports.WorkspaceCommit {
 	return commits
 }
 
+// applyPreservedOntoDirty merges commitSHA onto a worktree whose unstaged
+// edits made cherry-pick refuse to start. Local edits are captured in a
+// temporary index, including non-ignored untracked files, without touching
+// refs/stash or the real index.
+// A clean merge replaces the index and worktree with the result. A conflict
+// leaves both sides in the file and keeps the caller from deleting the ref.
+func (w *Workspace) applyPreservedOntoDirty(ctx context.Context, worktree, commitSHA string) error {
+	oursOut, err := w.captureWorktreeCommit(ctx, worktree, "ao reapply local edits")
+	if err != nil {
+		return fmt.Errorf("%w: capture local edits: %w", ErrPreservedConflict, err)
+	}
+	ours := firstHexSHA(oursOut)
+	if ours == "" {
+		return fmt.Errorf("%w: capture local edits produced no commit", ErrPreservedConflict)
+	}
+	mergedOut, mergeErr := w.gitCombined(ctx, mergeTreeWriteArgs(worktree, ours, commitSHA))
+	tree := firstHexSHA(mergedOut)
+	if tree == "" {
+		if mergeErr != nil {
+			return fmt.Errorf("%w: %w", ErrPreservedConflict, mergeErr)
+		}
+		return fmt.Errorf("%w: merge produced no tree", ErrPreservedConflict)
+	}
+	if _, err := w.gitCombined(ctx, readTreeResetArgs(worktree, tree)); err != nil {
+		return fmt.Errorf("%w: write merged tree: %w", ErrPreservedConflict, err)
+	}
+	if mergeErr != nil {
+		return fmt.Errorf("%w: %w", ErrPreservedConflict, mergeErr)
+	}
+	return nil
+}
+
+func (w *Workspace) gitCombined(ctx context.Context, args []string) (string, error) {
+	cmd := aoprocess.CommandContext(ctx, w.binary, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), commandError{args: append([]string{w.binary}, args...), output: string(out), err: err}
+	}
+	return string(out), nil
+}
+
+func firstHexSHA(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if len(line) < 40 {
+			continue
+		}
+		hex := true
+		for _, r := range line {
+			if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+				hex = false
+				break
+			}
+		}
+		if hex {
+			return line
+		}
+	}
+	return ""
+}
+
 // runCherryPickNoCommit runs "git -C <worktree> cherry-pick --no-commit <sha>"
 // and captures combined output so any conflict details are available in the
 // returned commandError. Exit code detection happens in the caller.
@@ -1458,7 +1644,9 @@ func (w *Workspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (por
 	if err := w.validateBranch(ctx, repo, recreateBranch); err != nil {
 		return ports.WorkspaceInfo{}, err
 	}
-	baseRef, err := w.addWorktree(ctx, repo, path, recreateBranch, cfg.BaseBranch, cfg.BaseRef, "", false)
+	// addWorktree requires the local branch to exist before choosing its
+	// existing-vs-new branch path, so Restore never recreates a missing branch.
+	baseRef, err := w.addWorktree(ctx, repo, path, recreateBranch, cfg.BaseBranch, cfg.BaseRef, "", false, true)
 	if err != nil {
 		return ports.WorkspaceInfo{}, err
 	}
@@ -1551,7 +1739,7 @@ func registeredWorktreeDirMissing(rec worktreeRecord) (bool, error) {
 	return false, nil
 }
 
-func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBranch, baseRef, seedRef string, resolveExistingBase bool) (string, error) {
+func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBranch, baseRef, seedRef string, resolveExistingBase, requireExistingBranch bool) (string, error) {
 	// Refuse early if the branch is already checked out in another worktree:
 	// `git worktree add` will fail, but its stderr leaks through as an opaque
 	// 500. A typed sentinel lets the HTTP layer surface a 409.
@@ -1575,6 +1763,9 @@ func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBra
 	localBranch, err := w.refExists(ctx, repo, "refs/heads/"+branch)
 	if err != nil {
 		return "", err
+	}
+	if requireExistingBranch && !localBranch {
+		return "", fmt.Errorf("%w: %q", ports.ErrSessionBranchMissing, branch)
 	}
 	if localBranch {
 		// Create needs a freshly resolved base for accurate initial diffs even
@@ -1621,9 +1812,7 @@ func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBra
 		}
 	}
 
-	// Restore reaches this path when its local branch is gone but its durable
-	// comparison ref remains. Fresh creation returns above after resolving its
-	// seed and comparison refs independently.
+	// Create reaches this path when the local branch does not exist yet.
 	if err := w.addNewBranchWorktree(ctx, repo, branch, path, seedRef, force); err != nil {
 		return "", fmt.Errorf("gitworktree: worktree add branch %q from %q: %w", branch, seedRef, err)
 	}
@@ -1785,7 +1974,7 @@ func (w *Workspace) createWorkspaceProjectRepo(ctx context.Context, repo workspa
 	}
 	// addWorktree handles both the ordinary new-branch path and a preparation
 	// recovered after a daemon crash left this branch or registration behind.
-	if _, err := w.addWorktree(ctx, repo.repoPath, repo.outputPath, branch, repo.baseBranch, baseRef, seedRef, false); err != nil {
+	if _, err := w.addWorktree(ctx, repo.repoPath, repo.outputPath, branch, repo.baseBranch, baseRef, seedRef, false, false); err != nil {
 		return "", fmt.Errorf("gitworktree: workspace repo %q worktree add branch %q from %q: %w", repo.name, branch, seedRef, err)
 	}
 	return baseSHA, nil

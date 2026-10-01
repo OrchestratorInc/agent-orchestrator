@@ -52,6 +52,7 @@ Every product command resolves to a daemon HTTP route. Run `ao <command>
 | `ao session get <id>`               | `GET /api/v1/sessions/{id}`                    |
 | `ao session kill <id>`              | `POST /api/v1/sessions/{id}/kill`              |
 | `ao session restore <id>`           | `POST /api/v1/sessions/{id}/restore`           |
+| `ao session reapply-edits <id>`     | `POST /api/v1/sessions/{id}/reapply-edits`     |
 | `ao session exit-agent <id>`        | `POST /api/v1/sessions/{id}/exit-agent`        |
 | `ao session resume-agent <id>`      | `POST /api/v1/sessions/{id}/resume-agent`      |
 | `ao session switch-agent <id> <target-harness>` | `POST /api/v1/sessions/{id}/switch-agent` |
@@ -67,6 +68,24 @@ Every product command resolves to a daemon HTTP route. Run `ao <command>
 | `ao preview start/status/stop`      | `POST/GET/DELETE /api/v1/sessions/{id}/preview/server` |
 | `ao browser ...`                    | `GET /api/v1/browser/status`, `POST /api/v1/browser/commands` |
 | `ao hooks <agent> <event>`          | `POST /api/v1/sessions/{id}/activity` (hidden) |
+
+When `ao session kill` saves dirty-worktree edits before removing the folder, its
+output names the saved-edit outcome and the `ao session reapply-edits <id>`
+command. Reapply is available only while the session is terminated; conflicts
+are left in the worktree for inspection.
+
+`ao session cleanup --dry-run` previews terminated sessions before reclaiming
+their workspaces. Confirmed cleanup archives tracked and non-ignored edits for
+later reapply, then removes the worktree. Ignored files, including local-only
+files, are deleted and cannot be restored. Sessions whose work cannot be
+captured or whose worktree cannot be removed remain on disk and are reported as
+skipped.
+
+The desktop app checks legacy terminated worktrees once and offers cleanup when
+their estimated logical size is at least 1 GiB. The prompt shows how many session
+worktrees are in its preview and requires confirmation before cleanup. To keep a
+legacy worktree instead, choose **Keep worktrees**; to review candidates in a
+terminal, use `ao session cleanup --dry-run`.
 
 `ao agent ls` asks the daemon to ensure display readiness, then prints the
 existing table or legacy JSON projection. The daemon alone decides whether a
