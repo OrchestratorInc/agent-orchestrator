@@ -24,6 +24,7 @@ import {
 	type TerminalSessionState,
 } from "../hooks/useTerminalSession";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
+import { useSessionLinkNavigation } from "../lib/use-session-link-navigation";
 import { getApiBaseUrl } from "../lib/api-client";
 import {
 	createTerminalMux,
@@ -1117,6 +1118,7 @@ function AttachedTerminal({
 		}
 	}, [initFailed, onFatal, onTerminalStateChange]);
 	const handleLinkOpen = useSessionBrowserLink(session);
+	const handleSessionLinkOpen = useSessionLinkNavigation();
 	const restoreSession = useCallback(async () => {
 		if (!session?.id || !canRestoreSession || isRestoring) return;
 		setIsRestoring(true);
@@ -1272,8 +1274,9 @@ function AttachedTerminal({
 					onChangeFontSize={onChangeFontSize}
 					onError={handleInitError}
 					onLinkOpen={handleLinkOpen}
-						onReady={handleReady}
-						onVisibleContent={attachSession?.cloud ? () => setHasVisibleContent(true) : undefined}
+					onSessionLinkOpen={handleSessionLinkOpen}
+					onReady={handleReady}
+					onVisibleContent={attachSession?.cloud ? () => setHasVisibleContent(true) : undefined}
 					onToggleFullscreen={onToggleFullscreen}
 					onVisibleSize={syncVisibleSize}
 					paneScrollsByKeyboard={providerScrollsByKeyboard(provider)}
