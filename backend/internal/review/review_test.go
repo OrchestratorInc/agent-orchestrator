@@ -627,6 +627,29 @@ func TestTriggerRejectsChatForTerminalOnlyReviewer(t *testing.T) {
 	}
 }
 
+func TestTriggerStopsOldReviewerBeforeSwitchingInterface(t *testing.T) {
+	old := domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "review-chat:rev-1", InterfaceMode: domain.ReviewerInterfaceChat}
+	store := &fakeStore{
+		review:  &old,
+		reviews: map[domain.ReviewerHarness]domain.Review{domain.ReviewerCodex: old},
+		runs:    []domain.ReviewRun{{ID: "run-1", ReviewID: old.ID, SessionID: "mer-1", Harness: domain.ReviewerCodex, PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Status: domain.ReviewRunRunning}},
+	}
+	launcher := &fakeLauncher{interfaceMode: domain.ReviewerInterfaceChat, alive: true, handle: "review-mer-1"}
+	launcher.onSpawn = func(LaunchSpec) {
+		if !launcher.destroyed || launcher.destroyedHandle != old.ReviewerHandleID {
+			t.Fatal("old reviewer was still running when replacement launched")
+		}
+	}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+	res, err := eng.TriggerWithSourceAndMode(context.Background(), "mer-1", domain.ReviewerCodex, domain.AgentConfig{}, domain.ReviewTriggerManual, domain.ReviewerInterfaceTUI)
+	if err != nil {
+		t.Fatalf("TriggerWithSourceAndMode: %v", err)
+	}
+	if !res.Created || launcher.gotSpec.InterfaceMode != domain.ReviewerInterfaceTUI || store.review.InterfaceMode != domain.ReviewerInterfaceTUI {
+		t.Fatalf("terminal replacement not durable: result=%+v spec=%+v review=%+v", res, launcher.gotSpec, store.review)
+	}
+}
+
 func TestTriggerPreservesHookOwnedActivityStateAfterLaunch(t *testing.T) {
 	store := &fakeStore{}
 	launcher := &fakeLauncher{
