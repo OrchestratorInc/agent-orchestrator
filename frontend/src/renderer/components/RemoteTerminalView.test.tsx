@@ -1,11 +1,18 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect, useState } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AttachableTerminal } from "../hooks/useTerminalSession";
 
+const sessionLinkMocks = vi.hoisted(() => ({ open: vi.fn(), host: vi.fn() }));
+vi.mock("../lib/use-session-link-navigation", () => ({
+	useSessionLinkNavigation: (hostId: string) => {
+		sessionLinkMocks.host(hostId);
+		return sessionLinkMocks.open;
+	},
+}));
 vi.mock("./XtermTerminal", () => ({
-	XtermTerminal: ({ onReady }: { onReady?: (terminal: AttachableTerminal) => void }) => {
+	XtermTerminal: ({ onReady, onSessionLinkOpen }: { onReady?: (terminal: AttachableTerminal) => void; onSessionLinkOpen?: (url: string) => void }) => {
 		const [output, setOutput] = useState("");
 		useEffect(() => {
 			const inputListeners = new Set<Parameters<AttachableTerminal["onUserInput"]>[0]>();
@@ -22,7 +29,7 @@ vi.mock("./XtermTerminal", () => ({
 				onResize: () => ({ dispose: () => undefined }),
 			});
 		}, []);
-		return <div data-testid="remote-xterm">{output}</div>;
+		return <div data-testid="remote-xterm">{output}<button type="button" onClick={() => onSessionLinkOpen?.("ao://sessions/project/session")}>Open remote session link</button></div>;
 	},
 }));
 
@@ -46,7 +53,19 @@ class FakeWebSocket extends EventTarget {
 
 afterEach(() => {
 	FakeWebSocket.instances = [];
+	sessionLinkMocks.open.mockReset();
+	sessionLinkMocks.host.mockReset();
 	vi.unstubAllGlobals();
+});
+
+it("passes remote terminal session links to navigation with the source host", () => {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	render(<QueryClientProvider client={queryClient}>
+		<RemoteTerminalView hostId="box-a" proxyBase="http://127.0.0.1:4500/token-a" />
+	</QueryClientProvider>);
+	fireEvent.click(screen.getByRole("button", { name: "Open remote session link" }));
+	expect(sessionLinkMocks.host).toHaveBeenCalledWith("box-a");
+	expect(sessionLinkMocks.open).toHaveBeenCalledWith("ao://sessions/project/session");
 });
 
 it("attaches to the selected remote host's terminal mux and shows its output", async () => {

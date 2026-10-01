@@ -9,6 +9,7 @@ import {
 } from "@aoagents/product-ui";
 import { AlertTriangle, LayoutDashboard, RotateCw } from "lucide-react";
 import {
+	CLOUD_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
 	toProjectKind,
 	type WorkspaceSession,
@@ -142,6 +143,11 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		.filter(isArchivedSession)
 		.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 	const activeSessions = sessions.filter((candidate) => !isArchivedSession(candidate));
+	const boardSessions = activeSessions.map((session) =>
+		session.status === "no_signal" || session.displayStatus === "No signal"
+			? { ...session, kanbanColumn: "building" as const }
+			: session,
+	);
 	const boardLabels = sessionsBoardLabels(t);
 	const presentation = useBoardPresentation({
 		projectId,
@@ -187,7 +193,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 
 	const actions = projectId && (!hostId || connected) ? (
 		<>
-			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} />
+			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />
 			{workspace && toProjectKind(workspace.kind) ? <span className="inline-flex">
 				<CueRunMenu
 					projectId={projectId}
@@ -298,7 +304,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 								usage={usageBySession.get(session.id)}
 							/>
 						)}
-						sessions={activeSessions}
+						sessions={boardSessions}
 					/>
 				)}
 			</div>

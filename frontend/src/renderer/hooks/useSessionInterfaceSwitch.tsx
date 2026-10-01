@@ -15,11 +15,14 @@ import {
 	type PendingFileAttachmentCapture,
 } from "./useFileAttachments";
 import { useSettings } from "./useSettings";
+import { useCloudCp } from "./useCloudCp";
+import { useCloudGate } from "./useCloudGate";
 import {
 	interfaceTransitionHasUnacknowledgedNotice,
 	interfaceTransitionIsActive,
 	interfaceTransitionNeedsRestart,
 	useSessionInterfaceTransition,
+	type SessionInterfaceContext,
 } from "./useSessionInterfaceTransition";
 import {
 	chatDraftDiscardWarning,
@@ -36,7 +39,13 @@ type Mode = "chat" | "tui";
 type HistoryPolicy = "strict" | "provider_history";
 type Policy = "drain" | "interrupt";
 
-type DialogScope = { owner: string; targetMode: Mode; historyPolicy?: HistoryPolicy };
+type DialogScope = {
+	owner: string;
+	targetMode: Mode;
+	historyPolicy?: HistoryPolicy;
+	sourceBusy?: boolean;
+	sourceWaitingForInput?: boolean;
+};
 type DraftDecision =
 	| { kind: "safe" }
 	| { kind: "cancelled" }
@@ -69,11 +78,21 @@ function chatLeaveTransitionMatches(lock: ChatLeaveLock, transition: Transition 
 	);
 }
 
-/** The admission, draft, and settlement boundaries shared by local and host-routed sessions. */
-export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceSession | undefined, hostId?: string) {
+/** The admission, draft, and settlement boundaries shared by local, remote, and Cloud sessions. */
+export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceSession | undefined, context?: SessionInterfaceContext) {
 	const { t } = useTranslation();
+	const hostId = typeof context === "string" ? context : undefined;
+	const cloud = context && typeof context === "object" ? context : undefined;
+	const isCloud = Boolean(cloud);
+	const { client: cloudCpClient } = useCloudCp(isCloud);
+	const { cloudEnabled } = useCloudGate(isCloud);
 	const owner = sessionUiKey(sessionId, hostId);
-	const interfaceSwitch = useSessionInterfaceTransition(session?.id, hostId);
+	const currentOwnerRef = useRef(owner);
+	useEffect(() => {
+		currentOwnerRef.current = owner;
+		return () => { currentOwnerRef.current = ""; };
+	}, [owner]);
+	const interfaceSwitch = useSessionInterfaceTransition(isCloud ? sessionId : session?.id, context);
 	const [dialogScope, setDialogScope] = useState<DialogScope>();
 	const [conversationWork, setConversationWork] = useState<ConversationWorkState & { owner?: string }>({
 		controllerBusy: false,
@@ -213,14 +232,26 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	}, [confirmedDraftDiscard, interfaceSwitch.transition, owner]);
 
 	const activeTransition = interfaceTransitionIsActive(interfaceSwitch.transition);
-	const hasNotice = interfaceTransitionHasUnacknowledgedNotice(interfaceSwitch.transition);
+	const cloudDrainWaiting = Boolean(isCloud && (
+		(interfaceSwitch.starting && interfaceSwitch.startingPolicy === "drain") ||
+		(interfaceSwitch.transition?.policy === "drain" &&
+			["requested", "preflighting", "draining"].includes(interfaceSwitch.transition.phase))
+	));
+	const cloudLoader = Boolean(isCloud && !cloudDrainWaiting && (
+		interfaceSwitch.starting || activeTransition || interfaceSwitch.settling ||
+		(interfaceSwitch.transition?.phase === "completed" && session?.mode !== interfaceSwitch.transition.targetMode)
+	));
+	const hasNotice = interfaceTransitionHasUnacknowledgedNotice(interfaceSwitch.transition) &&
+		!(isCloud && session?.mode === "tui" &&
+			interfaceSwitch.transition?.errorCode === "SOURCE_DRAIN_FAILED" &&
+			interfaceSwitch.transition.targetMode === "chat");
 	const historyRecoveryNotice = hasNotice && interfaceTransitionOffersHistoryRecovery(interfaceSwitch.transition);
 	const restartRequiredNotice = interfaceTransitionNeedsRestart(interfaceSwitch.transition);
 	const chatLeaveLocked = Boolean(chatLeaveLock?.owner === owner && session?.mode === "chat");
 	const controllerTransitioning = Boolean(session?.mode === "chat" && (
-		chatLeaveLocked || interfaceSwitch.starting ||
+		(chatLeaveLocked && !cloudDrainWaiting) || (interfaceSwitch.starting && !cloudDrainWaiting) ||
 		(interfaceSwitch.transition?.targetMode === "tui" &&
-			(activeTransition || interfaceSwitch.transition.phase === "completed")) ||
+			((activeTransition && !cloudDrainWaiting) || interfaceSwitch.transition.phase === "completed")) ||
 		(interfaceSwitch.transition?.targetMode === "chat" &&
 			(activeTransition || interfaceSwitch.settling))
 	));
@@ -246,6 +277,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		session.activity?.state === "blocked"
 	));
 	const chatToTerminal = session?.mode === "chat" && target === "tui";
+	const cloudTerminalToChat = isCloud && session?.mode === "tui" && target === "chat";
 	const begin = useCallback(async (
 		policy: Policy,
 		targetMode: Mode,
@@ -280,12 +312,32 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	}, [chatToTerminal, confirmUnsafeDraftLeave, interfaceSwitch, owner, sessionId]);
 	const request = useCallback(() => {
 		interfaceSwitch.resetStartError();
+		if (cloudTerminalToChat && !busy && session?.cloud) {
+			// The Cloud list can lag terminal input. Confirm the current activity
+			// before stopping a controller without asking the user first.
+			void cloudCpClient.getSession(session.cloud.orgId, session.id).then(({ session: latest }) => {
+				if (currentOwnerRef.current !== owner) return;
+				if (["active", "waiting_input", "blocked"].includes(latest.activityState) ||
+					latest.status === "working" || latest.status === "needs_input") {
+					setDialogScope({
+						owner, targetMode: target, sourceBusy: true,
+						sourceWaitingForInput: latest.activityState === "waiting_input" ||
+							latest.activityState === "blocked" || latest.status === "needs_input",
+					});
+					return;
+				}
+				void begin("interrupt", target);
+			}).catch(() => {
+				if (currentOwnerRef.current === owner) setDialogScope({ owner, targetMode: target });
+			});
+			return;
+		}
 		if (!busy) {
-			void begin("drain", target);
+			void begin(cloudTerminalToChat ? "interrupt" : "drain", target);
 			return;
 		}
 		if (session) setDialogScope({ owner, targetMode: target });
-	}, [begin, busy, interfaceSwitch, owner, session, target]);
+	}, [begin, busy, cloudCpClient, cloudTerminalToChat, interfaceSwitch, owner, session, target]);
 	const choosePolicy = useCallback((policy: Policy) => {
 		if (!session || !dialogScope || dialogScope.owner !== owner || dialogScope.targetMode !== target) {
 			setDialogScope(undefined);
@@ -298,28 +350,30 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		if (!session || !failed || failed.sessionId !== session.id || failed.targetMode !== target) return;
 		interfaceSwitch.resetStartError();
 		if (!busy) {
-			void begin("drain", failed.targetMode, undefined, historyPolicy);
+			void begin(cloudTerminalToChat ? "interrupt" : "drain", failed.targetMode, undefined, historyPolicy);
 			return;
 		}
 		setDialogScope({ owner, targetMode: failed.targetMode, historyPolicy });
-	}, [begin, busy, interfaceSwitch, owner, session, target]);
+	}, [begin, busy, cloudTerminalToChat, interfaceSwitch, owner, session, target]);
 
-	const { settings } = useSettings(hostId);
+	const { settings } = useSettings(hostId, !isCloud);
 	const chatHarnesses = settings?.chatHarnesses ?? [];
 	const unsupported = interfaceSwitch.status?.reasonCode === "CHAT_UNSUPPORTED" ||
-		(target === "chat" && session !== undefined && chatHarnesses.length > 0 && !chatHarnesses.includes(session.provider));
+		(!isCloud && target === "chat" && session !== undefined && chatHarnesses.length > 0 && !chatHarnesses.includes(session.provider));
 	const blockedReason = interfaceSwitch.status?.reasonCode === "INTERFACE_HANDOFF_UNSUPPORTED"
 		? t("session.interfaceHandoffUnsupported", {
 			defaultValue: "This agent can't switch a running terminal session to chat. Start a new chat session instead.",
 		})
 		: undefined;
-	const showAction = Boolean(!unsupported && (interfaceSwitch.status || interfaceSwitch.isLoading || interfaceSwitch.statusError));
+	const showAction = Boolean(!unsupported && (isCloud
+		? cloudEnabled && sessionId
+		: interfaceSwitch.status || interfaceSwitch.isLoading || interfaceSwitch.statusError));
 	const disabledReason = interfaceSwitch.isLoading
 		? "Checking whether this agent can switch interfaces…"
 		: blockedReason || interfaceSwitch.status?.reason || interfaceSwitch.statusError;
-	const inlineStatus = session && showAction && activeTransition ? <SessionInterfaceSwitchButton
+	const inlineStatus = session && showAction && (cloudDrainWaiting || (!isCloud && activeTransition)) ? <SessionInterfaceSwitchButton
 		target={target}
-		supported={Boolean(interfaceSwitch.status?.supported) && !activeTransition}
+		supported
 		disabledReason={disabledReason}
 		pending={interfaceSwitch.starting || activeTransition}
 		transition={interfaceSwitch.transition}
@@ -330,7 +384,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	/> : null;
 	const menuItem = session && showAction && !activeTransition ? <SessionInterfaceSwitchMenuItem
 		target={target}
-		supported={Boolean(interfaceSwitch.status?.supported) && !chatLeaveLocked}
+		supported={Boolean(interfaceSwitch.status?.supported) && (isCloud || !chatLeaveLocked)}
 		disabledReason={disabledReason}
 		pending={interfaceSwitch.starting || chatLeaveLocked}
 		onClick={request}
@@ -370,7 +424,8 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		<SessionInterfaceSwitchDialog
 			open={dialogOpen}
 			target={dialogScope?.targetMode ?? target}
-			waitingForInput={waitingForInput}
+			requireExplicitTerminalStop={cloudTerminalToChat && !(busy || dialogScope?.sourceBusy)}
+			waitingForInput={waitingForInput || dialogScope?.sourceWaitingForInput}
 			busy={interfaceSwitch.starting}
 			error={interfaceSwitch.startError}
 			onOpenChange={(open) => { if (!open) setDialogScope(undefined); }}
@@ -389,7 +444,8 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 
 	return {
 		activeTransition,
-		agentInputDisabled: Boolean((interfaceSwitch.starting || activeTransition) && session?.mode === "tui"),
+		agentInputDisabled: Boolean((interfaceSwitch.starting || activeTransition) && !cloudDrainWaiting && session?.mode === "tui"),
+		cloudLoader,
 		confirmUnsafeDraftLeave,
 		controllerTransitioning,
 		dialogs,
@@ -400,6 +456,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		notice,
 		onConversationWorkChange,
 		renderedMode: interfaceSwitch.transition?.phase === "failed" ? interfaceSwitch.transition.sourceMode : session?.mode,
+		target,
 		unsupported,
 	};
 }

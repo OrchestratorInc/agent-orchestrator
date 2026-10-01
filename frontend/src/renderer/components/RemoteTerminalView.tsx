@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useTerminalSession, type AttachableTerminal } from "../hooks/useTerminalSession";
 import { TERMINAL_FONT_SIZE_DEFAULT } from "../lib/design-tokens";
 import { createTerminalMux, muxUrlFromApiBase } from "../lib/terminal-mux";
+import { useSessionLinkNavigation } from "../lib/use-session-link-navigation";
 import { useResolvedTheme } from "../stores/ui-store";
 import { XtermTerminal } from "./XtermTerminal";
 
@@ -16,12 +17,13 @@ type Props = {
 
 /** Mount identity includes the host, so an equal handle on another box never inherits its socket or screen. */
 export function RemoteTerminalView({ hostId, proxyBase, terminalHandleId, terminalGeneration, inputDisabled }: Props) {
-	return <RemoteTerminalAttachment key={`${hostId}:${proxyBase}:${terminalHandleId ?? ""}:${terminalGeneration ?? ""}`} proxyBase={proxyBase} terminalHandleId={terminalHandleId} inputDisabled={inputDisabled} />;
+	return <RemoteTerminalAttachment key={`${hostId}:${proxyBase}:${terminalHandleId ?? ""}:${terminalGeneration ?? ""}`} hostId={hostId} proxyBase={proxyBase} terminalHandleId={terminalHandleId} inputDisabled={inputDisabled} />;
 }
 
-function RemoteTerminalAttachment({ proxyBase, terminalHandleId, inputDisabled }: Omit<Props, "hostId">) {
+function RemoteTerminalAttachment({ hostId, proxyBase, terminalHandleId, inputDisabled }: Props) {
 	const { t } = useTranslation();
 	const theme = useResolvedTheme();
+	const openSessionLink = useSessionLinkNavigation(hostId);
 	const [terminal, setTerminal] = useState<AttachableTerminal | null>(null);
 	const [initError, setInitError] = useState(false);
 	const createMux = useCallback(() => createTerminalMux(muxUrlFromApiBase(proxyBase)), [proxyBase]);
@@ -48,6 +50,7 @@ function RemoteTerminalAttachment({ proxyBase, terminalHandleId, inputDisabled }
 			ariaLabel={t("remote.terminalAria")}
 			fontSize={TERMINAL_FONT_SIZE_DEFAULT}
 			onError={() => setInitError(true)}
+			onSessionLinkOpen={openSessionLink}
 			onReady={setTerminal}
 			onVisibleSize={syncVisibleSize}
 			theme={theme}

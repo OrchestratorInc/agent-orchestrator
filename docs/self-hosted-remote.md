@@ -84,10 +84,11 @@ opt-in remote listener is password-protected but plain HTTP, intended only for
 a trusted private network or an encrypted tunnel. Do not expose it directly
 to the public internet. Clients remember a stable daemon-installation ID and
 reject an address that later answers as a different host when connecting.
-An address reassigned while a client stays connected may receive one
-credentialed request before the client detects it. Use only a trusted private
-network or encrypted tunnel; this is not protection against an active network
-attacker or a copied AO data directory. Desktop connection passwords live in
+The desktop checks the host ID before each new HTTP or WebSocket connection;
+the host also rejects mismatched IDs before handling a request. Older clients
+may not perform these checks. Use only a trusted private network or encrypted
+tunnel; this is not protection against an active network attacker or a copied
+AO data directory. Desktop connection passwords live in
 `~/.ao/remotes.json` (or `AO_DATA_DIR/remotes.json`) with owner-only permissions.
 
 The optional Cloudflare quick tunnel encrypts traffic in transit, but Cloudflare

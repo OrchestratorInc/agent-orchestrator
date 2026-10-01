@@ -256,7 +256,7 @@ export function CloudCredentialDialog() {
 						{needsSecret ? (
 							<div className="space-y-2">
 							<Label htmlFor="cloud-cred-secret" className={onboardingFormLabelClass}>
-								{t("cloudCredential.tokenLabel")}
+								{selectedCredential?.label ?? t("cloudCredential.tokenLabel")}
 							</Label>
 							<Input
 								id="cloud-cred-secret"

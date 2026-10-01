@@ -352,9 +352,9 @@ export const cloudSessionsQueryKey = ["cloud-sessions"] as const;
 // Maps one control-plane session onto the board's session shape. Cloud sessions
 // carry the same status/activity/harness vocabulary as local ones, so the same
 // product-ui mappers apply; fields with no cloud analogue take safe defaults.
-function toCloudWorkspaceSession(
+export function toCloudWorkspaceSession(
 	session: CloudCpSession,
-	project: CloudCpProject,
+	project: Pick<CloudCpProject, "id" | "displayName">,
 	orgId: string,
 ): WorkspaceSession {
 	return {
@@ -376,6 +376,7 @@ function toCloudWorkspaceSession(
 		title: session.displayName || session.id,
 		provider: toAgentProvider(session.harness),
 		kind: session.kind === "orchestrator" ? "orchestrator" : "worker",
+		mode: session.interfaceMode ?? "tui",
 		branch: session.branch || undefined,
 		status: toSessionStatus(session.status, session.isTerminated),
 		isTerminated: session.isTerminated,
@@ -401,6 +402,7 @@ function toCloudWorkspaceSession(
 		// CP (ticket + sandbox WebSocket) instead of the local daemon mux.
 		cloud: {
 			orgId,
+			permissionMode: session.mode === "read-only" || session.mode === "standard" || session.mode === "trusted" ? session.mode : undefined,
 			sandboxProvider: session.sandboxProvider,
 			desiredState: session.desiredState,
 			observedState: session.observedState,
@@ -511,6 +513,28 @@ export function useRemoteProjectQuery(hostId: string, projectId: string) {
 	});
 }
 
+// Route-level recovery for a Cloud session that has just been created or whose
+// list cache is stale. The session screen must resolve it through the control
+// plane, never try the local daemon just because the list query has not caught
+// up yet.
+export function useCloudSessionQuery(
+	orgId: string | undefined,
+	sessionId: string,
+	enabled = true,
+) {
+	const { client, ready, baseUrl } = useCloudCp();
+	return useQuery({
+		queryKey: ["cloud-session", baseUrl, orgId ?? "", sessionId],
+		enabled: enabled && ready && orgId !== undefined && sessionId !== "",
+		retry: 1,
+		queryFn: async (): Promise<CloudCpSession | undefined> => {
+			if (orgId === undefined) return undefined;
+			const response = await client.getSession(orgId, sessionId);
+			return response.session;
+		},
+	});
+}
+
 export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const local = useQuery({ ...workspaceQueryOptions, subscribed: options.subscribed });
 	const cloud = useCloudProjectsQuery(options);
@@ -543,7 +567,7 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
  * tree. TanStack Query applies structural sharing to the selected value, so an
  * activity update elsewhere no longer redraws the open session workspace.
  */
-export function useWorkspaceSession(sessionId: string, hostId?: string) {
+export function useWorkspaceSession(sessionId: string, hostId?: string, localLookupEnabled = true) {
 	const queryClient = useQueryClient();
 	const selectRemoteSession = useMemo(
 		() => (workspaces: WorkspaceSummary[]) => workspaces.flatMap((workspace) => workspace.sessions).find((session) => session.id === sessionId),
@@ -560,11 +584,11 @@ export function useWorkspaceSession(sessionId: string, hostId?: string) {
 			workspaces.flatMap((workspace) => workspace.sessions).find((session) => session.id === sessionId),
 		[sessionId],
 	);
-	const local = useQuery({ ...workspaceQueryOptions, select: selectLocalSession, enabled: !hostId });
-	const localWorkspaces = useQuery({ ...workspaceQueryOptions, subscribed: false, enabled: Boolean(sessionId) && !hostId });
+	const local = useQuery({ ...workspaceQueryOptions, select: selectLocalSession, enabled: localLookupEnabled && !hostId });
+	const localWorkspaces = useQuery({ ...workspaceQueryOptions, subscribed: false, enabled: localLookupEnabled && Boolean(sessionId) && !hostId });
 	const direct = useQuery({
 		queryKey: ["session", sessionId],
-		enabled: Boolean(sessionId) && !hostId && local.data === undefined,
+		enabled: localLookupEnabled && Boolean(sessionId) && !hostId && local.data === undefined,
 		retry: (attempt, error) => apiErrorCode(error) === "SESSION_NOT_FOUND" && attempt < 4,
 		retryDelay: 250,
 		queryFn: async () => {
@@ -598,7 +622,7 @@ export function useWorkspaceSession(sessionId: string, hostId?: string) {
 		return project ? toCloudWorkspaceSession(session, project, org.id) : undefined;
 	}, [cloud.data, cloudSessions.data, org?.id, ready, sessionId]);
 	useEffect(() => {
-		if (hostId) return;
+		if (hostId || !localLookupEnabled) return;
 		if (!resolvedDirectSession) return;
 		queryClient.setQueryData<WorkspaceSummary[]>(workspaceQueryKey, (current) => {
 			if (!current) return current;
@@ -611,7 +635,7 @@ export function useWorkspaceSession(sessionId: string, hostId?: string) {
 			});
 			return changed ? next : current;
 		});
-	}, [queryClient, resolvedDirectSession, hostId]);
+	}, [queryClient, resolvedDirectSession, hostId, localLookupEnabled]);
 	if (hostId) return remote;
 	return {
 		...local,
