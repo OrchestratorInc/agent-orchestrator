@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Keyboard, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import type { DashboardSession } from "./api";
 import { resourceKey, type SourceRef } from "./environment/scopedBoard";
+import { environmentBadgeStyle } from "./environment-badge";
 import { AgentLogo } from "./AgentLogo";
 import { haptics } from "./haptics";
 import { prLine, workerRowPresentation, workerStatusGlyph } from "./agentsView";
@@ -462,7 +463,7 @@ const makeStyles = (t: Theme) =>
 		renameControlDisabled: { opacity: 0.45 },
 		eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 17 },
 		project: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500" },
-		sourceTag: { color: t.textTertiary, fontSize: type.caption2.fontSize, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, borderRadius: 5, paddingHorizontal: 5, overflow: "hidden" },
+		sourceTag: environmentBadgeStyle(t),
 		trailing: { fontFamily: "Geist_500Medium", flexShrink: 0, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500", fontVariant: ["tabular-nums"] },
 		title: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
 		details: { color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontFamily: t.fontMono },

@@ -11,6 +11,7 @@ import {
 } from "./orchestratorView";
 import type { Theme } from "./theme";
 import { rowDividerWidth } from "./divider";
+import { environmentBadgeStyle } from "./environment-badge";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { fontScaleCap, space, type } from "./tokens";
 import { Dot } from "./ui";
@@ -233,7 +234,7 @@ const makeStyles = (t: Theme) =>
 
 		titleRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
 		project: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
-		sourceTag: { color: t.textTertiary, fontSize: type.caption2.fontSize, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, borderRadius: 5, paddingHorizontal: 5, overflow: "hidden" },
+		sourceTag: environmentBadgeStyle(t),
 		timestamp: { color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontVariant: ["tabular-nums"], fontFamily: t.fontMono },
 
 		summaryRow: { flexDirection: "row", alignItems: "center", minWidth: 0 },

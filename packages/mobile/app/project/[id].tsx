@@ -146,8 +146,11 @@ export default function ProjectScreen() {
 						onSearchClose={() => {}}
 						onOpenControls={() => {}}
 						projectFiltered={false}
-						projects={projects}
-						selectedProjectId={id ?? ""}
+						environmentFilter="all"
+						onSelectEnvironment={() => {}}
+						projectOptions={[{ id: "all", label: "All projects" }]}
+						selectedProjectId="all"
+						selectedProjectLabel="All projects"
 						onSelectProject={() => {}}
 						onSpawn={startTask}
 					/>

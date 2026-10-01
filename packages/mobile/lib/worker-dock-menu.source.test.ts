@@ -13,8 +13,8 @@ describe("worker dock menu", () => {
 	// menu that opens upward draws its items in reverse under SwiftUI's default
 	// order. That is what put "All projects" last and the project list above the
 	// search row. `menuOrder("fixed")` is the documented off switch.
-	it("pins the item order for both menus", () => {
-		expect(dock.match(/menuOrder\("fixed"\)/g) ?? []).toHaveLength(2);
+	it("pins the item order for all three menus", () => {
+		expect(dock.match(/menuOrder\("fixed"\)/g) ?? []).toHaveLength(3);
 	});
 
 	// The prefix pushed the row past the width the menu reserves and wrapped it.

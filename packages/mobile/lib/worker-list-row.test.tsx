@@ -2,19 +2,22 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DashboardSession } from "./api";
+import { darkTheme } from "./theme";
 
 const fixtures = vi.hoisted(() => ({
 	push: vi.fn(),
 	tap: vi.fn(),
-	theme: new Proxy({}, { get: () => "#000000" }),
 }));
 
 vi.mock("expo-router", () => ({ useRouter: () => ({ push: fixtures.push }) }));
 vi.mock("./haptics", () => ({ haptics: { tap: fixtures.tap } }));
-vi.mock("./ThemeProvider", () => ({
-	useTheme: () => fixtures.theme,
-	useThemedStyles: (factory: (theme: object) => unknown) => factory(fixtures.theme),
-}));
+vi.mock("./ThemeProvider", async () => {
+	const { darkTheme } = await import("./theme");
+	return {
+		useTheme: () => darkTheme,
+		useThemedStyles: (factory: (theme: typeof darkTheme) => unknown) => factory(darkTheme),
+	};
+});
 vi.mock("./AgentLogo", async () => {
 	const React = await import("react");
 	return { AgentLogo: (props: object) => React.createElement("AgentLogo", props) };
@@ -86,6 +89,16 @@ afterEach(async () => {
 });
 
 describe("Cloud worker row", () => {
+	it("shows the Cloud source as a readable outlined capsule in dark mode", async () => {
+		const props = { interactionMode: "open-only", session, source: { kind: "cloud", id: "org-1" }, projectName: "Tap" } as unknown as Parameters<typeof WorkerListRow>[0];
+		await act(async () => { renderer = create(<WorkerListRow {...props} />); });
+		const badge = renderer!.root.findAll((node) => String(node.type) === "Text" && node.props.children === "Cloud")[0];
+		expect(badge).toBeDefined();
+		expect(badge.props.style).toMatchObject({ color: darkTheme.textPrimary, borderColor: darkTheme.borderStrong, borderWidth: 1, borderRadius: 999, minHeight: 16 });
+		expect(badge.props.style.height).toBeUndefined();
+		expect(badge.props.style.backgroundColor).toBeUndefined();
+	});
+
 	it("opens the session without mounting Local mutation interactions", async () => {
 		const props = { interactionMode: "open-only", session, source: { kind: "cloud", id: "org-1" }, projectName: "Tap" } as unknown as Parameters<typeof WorkerListRow>[0];
 		await act(async () => { renderer = create(<WorkerListRow {...props} />); });

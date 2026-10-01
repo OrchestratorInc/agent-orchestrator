@@ -23,7 +23,6 @@ import { GLASS_CIRCLE_SIZE } from "./native-header-button.ios";
 import { haptics } from "./haptics";
 import { duration } from "./tokens";
 import { useTheme, useThemeState } from "./ThemeProvider";
-import { workerProjectLabel, workerProjectOptions } from "./worker-controls";
 import type { WorkerDockProps } from "./worker-dock";
 import { workerDockVisibility } from "./worker-dock-layout";
 import { workerSearchClearState } from "./worker-search";
@@ -37,16 +36,17 @@ export const WorkerDock = memo(function WorkerDock({
 	onSearchOpen,
 	onSearchClose,
 	projectFiltered,
-	projects,
+	environmentFilter,
+	onSelectEnvironment,
+	projectOptions,
 	selectedProjectId,
+	selectedProjectLabel,
 	onSelectProject,
 }: WorkerDockProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const text = useNativeState(query);
 	const clear = workerSearchClearState(query);
-	const projectOptions = workerProjectOptions(projects);
-	const selectedProjectLabel = workerProjectLabel(projects, selectedProjectId);
 	const visibility = workerDockVisibility(searchOpen, controlsEnabled);
 
 	useEffect(() => {
@@ -98,6 +98,23 @@ export const WorkerDock = memo(function WorkerDock({
 								onSearchOpen();
 							}}
 						/>
+						<Menu
+							label="Environment"
+							systemImage="globe"
+							modifiers={[menuOrder("fixed")]}
+						>
+							{(["all", "local", "cloud"] as const).map((environment) => (
+								<Button
+									key={environment}
+									label={environment === "all" ? "All environments" : environment === "local" ? "Local" : "Cloud"}
+									systemImage={environmentFilter === environment ? "checkmark" : undefined}
+									onPress={() => {
+										haptics.select();
+										onSelectEnvironment(environment);
+									}}
+								/>
+							))}
+						</Menu>
 						{/* The label is the selection on its own: naming the menu in front
 						    of it pushed the row past the width the menu reserves, and it
 						    wrapped. */}

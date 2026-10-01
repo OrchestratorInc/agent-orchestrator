@@ -185,8 +185,11 @@ export default function FleetScreen() {
 					onSearchClose={closeSearch}
 					onOpenControls={openControls}
 					projectFiltered={workerProjectId !== ALL_WORKER_PROJECTS || environmentFilter !== "all"}
-					projects={[]}
+					environmentFilter={environmentFilter}
+					onSelectEnvironment={setEnvironmentFilter}
+					projectOptions={projectOptions}
 					selectedProjectId={workerProjectId}
+					selectedProjectLabel={selectedProjectLabel}
 					onSelectProject={setWorkerProjectId}
 					onSpawn={spawnWorker}
 				/>
