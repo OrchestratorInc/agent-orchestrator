@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 import { buildHostBundle } from "./build-host-bundle.mjs";
 
 test("headless archive contains the daemon, Claude ACP runtime, and tmux in the expected layout", () => {

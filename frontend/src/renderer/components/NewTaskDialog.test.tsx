@@ -226,8 +226,9 @@ describe("NewTaskDialog", () => {
 		await user.click(screen.getByRole("button", { name: "Start task" }));
 
 		await waitFor(() => expect(requestBody).not.toThrow());
-		expect(postMock).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", {
-			body: {
+		expect(postMock).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.objectContaining({
+			body: expect.objectContaining({
+				clientRequestId: expect.any(String),
 				projectId: "proj-1",
 				brief,
 				// The dialog preselects the project's worker agent, so the delegate
@@ -235,8 +236,8 @@ describe("NewTaskDialog", () => {
 				agent: "claude-code",
 				model: "placeholder-model",
 				taskPreparation: "prep-token",
-			},
-		});
+			}),
+		}));
 		expect(requestBody()).not.toHaveProperty("issueId");
 		expect(requestBody()).not.toHaveProperty("branch");
 		expect(requestBody()).not.toHaveProperty("harness");
