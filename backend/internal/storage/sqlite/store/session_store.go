@@ -35,6 +35,7 @@ func (s *Store) CreateClientRequestSession(ctx context.Context, rec domain.Sessi
 	return s.createSessionLocked(ctx, rec)
 }
 
+// GetSessionByClientRequestID finds the session created for a retryable request.
 func (s *Store) GetSessionByClientRequestID(ctx context.Context, key string) (domain.SessionRecord, bool, error) {
 	return s.getSessionByClientRequestID(ctx, s.qr, key)
 }
@@ -51,13 +52,14 @@ func (s *Store) getSessionByClientRequestID(ctx context.Context, q *gen.Queries,
 	if err != nil {
 		return domain.SessionRecord{}, false, fmt.Errorf("load client request session %s: %w", row.ID, err)
 	}
-	rec := rowToRecord(gen.GetSessionRow(session))
+	rec := rowToRecord(session)
 	rec.ClientRequestID = key
 	rec.ClientRequestHash = row.ClientRequestHash
 	rec.ClientRequestCommitted = row.ClientRequestCommitted
 	return rec, true, nil
 }
 
+// CommitClientRequestSession marks a successfully launched session replayable.
 func (s *Store) CommitClientRequestSession(ctx context.Context, id domain.SessionID) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

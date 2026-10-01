@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -1817,6 +1818,9 @@ func TestProbeRecognizesFirstCodexLoginWithoutDaemonRestart(t *testing.T) {
 	root := t.TempDir()
 	globalHome := filepath.Join(root, "global-codex")
 	if err := ensurePrivateDirectory(globalHome); err != nil {
+		if runtime.GOOS == "windows" && strings.Contains(err.Error(), "codex private directory owner is unsafe") {
+			t.Skipf("Windows test temp directory is not owned by the current user: %v", err)
+		}
 		t.Fatal(err)
 	}
 	email := "signed-in@example.com"
@@ -1831,11 +1835,11 @@ func TestProbeRecognizesFirstCodexLoginWithoutDaemonRestart(t *testing.T) {
 		},
 	}
 	svc := NewWithDeps(Deps{
-		CodexAccountRoot: filepath.Join(root, "accounts"),
-		CodexPendingRoot: filepath.Join(root, "pending"),
+		CodexAccountRoot:       filepath.Join(root, "accounts"),
+		CodexPendingRoot:       filepath.Join(root, "pending"),
 		CodexSwitchStagingRoot: filepath.Join(root, "staging"),
-		CodexGlobalHome: globalHome,
-		CodexAccounts: factory,
+		CodexGlobalHome:        globalHome,
+		CodexAccounts:          factory,
 	})
 	svc.agents = []agentregistry.HarnessAgent{readinessHarness("codex", "Codex", &readinessTestAgent{
 		resolve: func(context.Context) (string, error) { return "codex", nil },
