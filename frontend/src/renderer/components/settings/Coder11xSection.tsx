@@ -255,7 +255,6 @@ function Coder11xSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 
 				<div className="flex flex-col gap-1.5">
 					<Label htmlFor="coder11x-endpoint-service" className={onboardingFormLabelClass}>{t("settings.coder11x.endpointServiceLabel")}</Label>
-					<p className={onboardingFieldHintClass}>{t("settings.coder11x.endpointServiceHint")}</p>
 					<Input
 						id="coder11x-endpoint-service"
 						type="text"

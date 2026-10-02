@@ -19,7 +19,6 @@
 	"settings.coder11x.agentHint": "The Coder agent name AO connects through.",
 	"settings.coder11x.agentPlaceholder": "main",
 	"settings.coder11x.endpointServiceLabel": "VPC Endpoint Service Name (Optional)",
-	"settings.coder11x.endpointServiceHint": "Only if your Coder is private. The `coder_endpoint_service_name` output from the PrivateLink Terraform.",
 	"settings.coder11x.endpointServicePlaceholder": "com.amazonaws.vpce.eu-north-1.vpce-svc-…",
 	"settings.coder11x.regionLabel": "AWS Region (Optional)",
 	"settings.coder11x.regionHint": "The AWS region of your PrivateLink VPC endpoint.",
