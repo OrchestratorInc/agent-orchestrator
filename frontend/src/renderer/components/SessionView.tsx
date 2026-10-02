@@ -361,6 +361,10 @@ function SessionInspectorRail({
 		edge: "left",
 		onExpand,
 		restoreMin: restoreMinWidth,
+		// A tab switch re-runs the restore against the live max; in a narrow window
+		// that is the 300px floor. Re-apply the preferred width when the window (or
+		// zoom) widens again so the rail does not stay pinned there.
+		reclampOnWindowResize: true,
 	});
 
 	const transition = prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING;
