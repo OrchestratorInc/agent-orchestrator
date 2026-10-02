@@ -1532,7 +1532,7 @@ describe("SessionsBoard", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Archive idle worker" }));
 
 		expect(navigateMock).not.toHaveBeenCalled();
-		expect(screen.getByRole("dialog", { name: "Are you sure you want to archive idle worker?" })).toBeInTheDocument();
+		expect(screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" })).toBeInTheDocument();
 	});
 
 	it("returns focus to the archive control after backing out of the confirm", async () => {
@@ -1568,7 +1568,7 @@ describe("SessionsBoard", () => {
 		expect(terminateButton).not.toHaveClass("opacity-0");
 		await userEvent.click(terminateButton);
 		expect(navigateMock).not.toHaveBeenCalled();
-		const dialog = screen.getByRole("dialog", { name: "Are you sure you want to archive merged worker?" });
+		const dialog = screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" });
 		await userEvent.click(within(dialog).getByRole("button", { name: "Confirm, archive session" }));
 
 		await waitFor(() =>

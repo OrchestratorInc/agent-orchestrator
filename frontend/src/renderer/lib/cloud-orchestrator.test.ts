@@ -6,7 +6,6 @@ import { selectCloudOrchestratorHarness, spawnCloudOrchestrator } from "./cloud-
 
 const cloudMocks = vi.hoisted(() => ({
 	me: vi.fn(),
-	listProviderConnections: vi.fn(),
 	listUserProviderConnections: vi.fn(),
 	listProjects: vi.fn(),
 	createSession: vi.fn(),
@@ -15,7 +14,6 @@ const cloudMocks = vi.hoisted(() => ({
 vi.mock("../hooks/useCloudCp", () => ({
 	createRendererCloudCpClient: () => ({
 		me: cloudMocks.me,
-		listProviderConnections: cloudMocks.listProviderConnections,
 		listUserProviderConnections: cloudMocks.listUserProviderConnections,
 		listProjects: cloudMocks.listProjects,
 		createSession: cloudMocks.createSession,
@@ -54,7 +52,6 @@ describe("spawnCloudOrchestrator", () => {
 	beforeEach(() => {
 		window.localStorage.removeItem("ao.cloud.sandboxProvider");
 		cloudMocks.me.mockReset();
-		cloudMocks.listProviderConnections.mockReset();
 		cloudMocks.listUserProviderConnections.mockReset();
 		cloudMocks.listProjects.mockReset();
 		cloudMocks.createSession.mockReset();
@@ -75,7 +72,7 @@ describe("spawnCloudOrchestrator", () => {
 	it("starts without a user kickoff prompt so the role comes only from the system prompt", async () => {
 		window.localStorage.setItem("ao.cloud.sandboxProvider", "coder");
 		const queryClient = primeClient({ id: "project-1" });
-		cloudMocks.listProviderConnections.mockResolvedValue({
+		cloudMocks.listUserProviderConnections.mockResolvedValue({
 			providerConnections: [connection("claude-code")],
 		});
 
@@ -93,7 +90,7 @@ describe("spawnCloudOrchestrator", () => {
 	it("does not send a saved provider absent from this control plane", async () => {
 		window.localStorage.setItem("ao.cloud.sandboxProvider", "coder");
 		const queryClient = primeClient({ id: "project-1" });
-		cloudMocks.listProviderConnections.mockResolvedValue({ providerConnections: [connection("codex")] });
+		cloudMocks.listUserProviderConnections.mockResolvedValue({ providerConnections: [connection("codex")] });
 
 		await spawnCloudOrchestrator(queryClient, "project-1");
 		expect(cloudMocks.createSession).toHaveBeenCalledWith("org-1", expect.not.objectContaining({ provider: "coder" }));
@@ -106,7 +103,7 @@ describe("spawnCloudOrchestrator", () => {
 			id: "project-1",
 			config: { orchestrator: { agent: "claude-code" } },
 		});
-		cloudMocks.listProviderConnections.mockResolvedValue({
+		cloudMocks.listUserProviderConnections.mockResolvedValue({
 			providerConnections: [connection("codex"), connection("claude-code")],
 		});
 
@@ -124,7 +121,7 @@ describe("spawnCloudOrchestrator", () => {
 			id: "project-1",
 			config: { orchestrator: { agent: "cursor" } },
 		});
-		cloudMocks.listProviderConnections.mockResolvedValue({
+		cloudMocks.listUserProviderConnections.mockResolvedValue({
 			providerConnections: [connection("codex")],
 		});
 
