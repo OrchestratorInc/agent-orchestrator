@@ -61,28 +61,6 @@ export type ResourceSessionFacts = {
 	idleSeconds?: number;
 };
 
-export type ResourceSuggestion =
-	| { kind: "none" }
-	| { kind: "largest"; sessionId: string; title: string; rssBytes: number };
-
-/**
- * One line at most, and only about AO: while the machine is tight, name the
- * session holding the most. Never a verdict on other applications — the bar
- * already shows AO's size against what is free, and the user can read the
- * rest of the machine in their own monitor.
- */
-export function resourceSuggestion(
-	state: PressureState,
-	_machine: { totalBytes: number; availableBytes: number },
-	_aoBytes: number,
-	sessions: ResourceSessionFacts[],
-): ResourceSuggestion {
-	if (state === "fine") return { kind: "none" };
-	const largest = [...sessions].sort((a, b) => b.rssBytes - a.rssBytes)[0];
-	if (!largest) return { kind: "none" };
-	return { kind: "largest", sessionId: largest.id, title: largest.title, rssBytes: largest.rssBytes };
-}
-
 export type ChipTone = "neutral" | "warning" | "critical";
 
 /**
@@ -105,20 +83,26 @@ export function largestSession(sessions: ResourceSessionFacts[]): string | undef
 	return best?.id;
 }
 
-const MB = 1000 ** 2;
-const GB = 1000 ** 3;
+const MB = 1024 ** 2;
+const GB = 1024 ** 3;
 
 /**
- * Whole megabytes under a gigabyte, one decimal GB above, decimal units like
- * Activity Monitor. Whole MB rather than 10 MB steps: rows are summed into
- * the AO total, and coarse rounding on each row made 123 + 157 read as
- * 120 + 160 against a 280 total.
+ * Whole megabytes under a gigabyte, one decimal GB above. Binary units under
+ * the familiar labels, the way Activity Monitor, Task Manager and btop count
+ * memory: a 16 GB machine reads 16.0 GB, not 17.2. Whole MB rather than 10 MB
+ * steps: rows are summed into the AO total, and coarse rounding on each row
+ * made 123 + 157 read as 120 + 160 against a 280 total.
  */
 export function formatResourceBytes(bytes: number): string {
 	if (bytes >= GB) return `${(bytes / GB).toFixed(1)} GB`;
+	// Below a megabyte, kilobytes: a swapped-out process holds a few KB, and
+	// calling that "1 MB" made a session's lines add up to more than its total.
+	if (bytes < MB) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+	// Below ten, one decimal, so a 4.5 MB line does not read as 5.
+	if (bytes < 10 * MB) return `${(bytes / MB).toFixed(1)} MB`;
 	const mb = Math.round(bytes / MB);
-	if (mb >= 1000) return `${(mb / 1000).toFixed(1)} GB`;
-	return `${Math.max(1, mb)} MB`;
+	if (mb >= 1000) return `${(mb / 1024).toFixed(1)} GB`;
+	return `${mb} MB`;
 }
 
 /** Whole percent of one core; CPU is only shown while working, so zero never appears. */
@@ -147,4 +131,178 @@ export function stableResourceOrder<T extends { id: string; rssBytes: number }>(
 		if (here > above * (1 + RESORT_MARGIN)) return sorted;
 	}
 	return candidate;
+}
+
+/** One process as the memory sample reports it. */
+export type ResourceProcess = { pid: number; ppid: number; rssBytes: number; cpuPercent: number; command: string };
+
+/**
+ * What kind of process, nothing more: "git", "go", "claude". AO's own hosts
+ * keep their subcommand ("ao pty-host") since that is the whole story. The
+ * full command line stays in the tooltip.
+ */
+export function processKind(command: string): string {
+	// A macOS bundle path has a space in it ("Agent Orchestrator.app"); start
+	// inside the bundle so the space is not read as the end of the program.
+	const bundle = command.indexOf(".app/Contents/");
+	const [head, sub] = (bundle >= 0 ? command.slice(bundle) : command).split(" ");
+	const name = head?.split("/").pop() || "?";
+	return name === "ao" && sub && !sub.startsWith("-") ? `ao ${sub}` : name;
+}
+
+/**
+ * One row of the process list: a program and the plumbing folded into it.
+ * Rows add up to the session.
+ */
+export type ProcessRow = { kind: string; pid: number; category: ProcessCategory; commands: string[]; bytes: number; cpu: number };
+
+/**
+ * Where a process comes from: AO's own host, the agent (harness) itself, a
+ * tool server the agent started from its config, or a command it ran. A
+ * guess from the tree: nothing in a process table says "MCP server".
+ */
+export type ProcessCategory = "ao" | "app" | "agent" | "mcp" | "command";
+
+/** The tail of small rows, summed into one so the list still adds up; rows is
+ * the tail itself, for whoever asks to see it. */
+export type ProcessOther = { count: number; bytes: number; cpu: number; commands: string[]; rows: ProcessRow[] };
+
+const processListMaxRows = 10;
+
+const bareName = (command: string) => processKind(command).toLowerCase().replace(/\.exe$/, "");
+
+/** Windows' console host: one per console program, never what the user ran. */
+function isConsoleHost(command: string): boolean {
+	return bareName(command) === "conhost";
+}
+
+/**
+ * A process that only exists to start another: `cmd.exe`, `sh -c …`, npx.
+ * A shell running a script file is not one; the script is real work.
+ */
+function isLauncher(command: string): boolean {
+	const name = bareName(command);
+	const second = command.split(" ")[1];
+	if (name === "cmd" || name === "npx") return true;
+	if (["sh", "bash", "zsh", "dash"].includes(name)) return second === "-c" || second === "-lc";
+	if (name === "npm") return second === "exec" || second === "x";
+	return command.includes("npx-cli.js");
+}
+
+const shells = new Set(["sh", "bash", "zsh", "dash", "fish", "cmd", "powershell", "pwsh"]);
+const commandTools = new Set(["rg", "git", "fd", "grep", "find", "codex-linux-sandbox", "sandbox-exec"]);
+const runtimes = new Set(["npx", "uvx", "uv", "deno", "bun", "docker"]);
+
+function isAOProcess(command: string): boolean {
+	const kind = processKind(command);
+	return kind === "ao" || kind === "ao.exe" || kind.startsWith("ao ") || command.includes("/acp-runtime/");
+}
+
+/** What a process the agent started directly says about its whole branch. */
+function branchCategory(command: string): ProcessCategory {
+	const name = bareName(command);
+	if (/mcp/i.test(command)) return "mcp";
+	if (shells.has(name) || commandTools.has(name)) return "command";
+	if (runtimes.has(name) || name.startsWith("node") || name.startsWith("python")) return "mcp";
+	return "command";
+}
+
+/** The desktop app: Electron in development, the packaged app otherwise. */
+function isAppProcess(command: string): boolean {
+	return /electron|agent[- ]orchestrator|\.app\/Contents\//i.test(command);
+}
+
+/**
+ * AO's own processes have no agent to hang from: the daemon is AO, the
+ * desktop shell is the app, and anything else is something the daemon ran,
+ * like its own `ps` sample or a harness login check.
+ */
+export function ownProcessCategories(processes: ResourceProcess[]): Map<number, ProcessCategory> {
+	return new Map(
+		processes.map((p) => [p.pid, isAOProcess(p.command) ? "ao" : isAppProcess(p.command) ? "app" : "command"] as const),
+	);
+}
+
+/**
+ * A category for every process: AO's hosts by name, the agent as the first
+ * process under them, and everything below the agent by the branch it hangs
+ * from, decided by the process the agent started directly. A shell or a CLI
+ * tool means the agent ran a command; a long-running runtime or an "mcp"
+ * name means a tool server.
+ */
+export function processCategories(processes: ResourceProcess[]): Map<number, ProcessCategory> {
+	const byPid = new Map(processes.map((p) => [p.pid, p] as const));
+	const out = new Map<number, ProcessCategory>();
+	const categoryOf = (p: ResourceProcess, hops = 0): ProcessCategory => {
+		const known = out.get(p.pid);
+		if (known) return known;
+		const parent = p.ppid !== p.pid ? byPid.get(p.ppid) : undefined;
+		let category: ProcessCategory;
+		if (isAOProcess(p.command)) category = "ao";
+		else if (!parent || hops > processes.length) category = "agent";
+		else {
+			const above = categoryOf(parent, hops + 1);
+			category = above === "ao" ? "agent" : above === "agent" ? branchCategory(p.command) : above;
+			// A server that names itself wins over a launcher that hid it: azmcp.exe under cmd.exe.
+			if (category === "command" && /mcp/i.test(processKind(p.command))) category = "mcp";
+		}
+		out.set(p.pid, category);
+		return category;
+	};
+	for (const p of processes) categoryOf(p);
+	return out;
+}
+
+/**
+ * A short flat list for the screen: console hosts and launchers folded into
+ * the program they serve, one row per program, largest first, and anything
+ * past the first ten summed into one "other" row. Every byte lands in exactly one
+ * row, so the rows add up to the session. The copied report keeps the raw
+ * tree instead.
+ */
+export function processList(processes: ResourceProcess[], { own = false }: { own?: boolean } = {}): { rows: ProcessRow[]; other?: ProcessOther } {
+	const byPid = new Map(processes.map((p) => [p.pid, p] as const));
+	const kids = new Map<number, ResourceProcess[]>();
+	for (const p of processes) {
+		if (p.ppid !== p.pid && byPid.has(p.ppid)) kids.set(p.ppid, [...(kids.get(p.ppid) ?? []), p]);
+	}
+	// The process whose row a given process is counted in.
+	const owner = (p: ResourceProcess, hops = 0): ResourceProcess => {
+		if (hops > processes.length) return p;
+		const parent = byPid.get(p.ppid);
+		if (isConsoleHost(p.command) && parent && parent !== p) return owner(parent, hops + 1);
+		const real = (kids.get(p.pid) ?? []).filter((k) => !isConsoleHost(k.command));
+		if (isLauncher(p.command) && real.length > 0) {
+			return owner(real.reduce((a, b) => (b.rssBytes > a.rssBytes ? b : a)), hops + 1);
+		}
+		return p;
+	};
+	const categories = own ? ownProcessCategories(processes) : processCategories(processes);
+	const rows = new Map<number, ProcessRow>();
+	for (const p of processes) {
+		const own = owner(p);
+		let row = rows.get(own.pid);
+		if (!row) {
+			row = { kind: processKind(own.command), pid: own.pid, category: categories.get(own.pid) ?? "command", commands: [own.command], bytes: 0, cpu: 0 };
+			rows.set(own.pid, row);
+		}
+		row.bytes += p.rssBytes;
+		row.cpu += p.cpuPercent;
+		if (own !== p) row.commands.push(p.command);
+	}
+	const sorted = [...rows.values()].sort((a, b) => b.bytes - a.bytes);
+	const shown = processListMaxRows;
+	// One leftover row is better named than hidden behind "1 other".
+	if (sorted.length - shown <= 1) return { rows: sorted };
+	const tail = sorted.slice(shown);
+	return {
+		rows: sorted.slice(0, shown),
+		other: {
+			count: tail.length,
+			bytes: tail.reduce((sum, row) => sum + row.bytes, 0),
+			cpu: tail.reduce((sum, row) => sum + row.cpu, 0),
+			commands: tail.flatMap((row) => row.commands),
+			rows: tail,
+		},
+	};
 }

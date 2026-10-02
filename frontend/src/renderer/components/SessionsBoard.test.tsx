@@ -175,7 +175,7 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		// The card says what the session costs the machine right now; an unsampled one shows nothing, never 0 MB.
 		expect(screen.getAllByTestId("session-resource")).toHaveLength(1);
-		expect(screen.getByTestId("session-resource")).toHaveTextContent("642 MB");
+		expect(screen.getByTestId("session-resource")).toHaveTextContent("612 MB");
 		expect(screen.getByTestId("session-resource")).toHaveAttribute("data-resource-tone", "neutral");
 	});
 
@@ -196,9 +196,9 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		expect(screen.queryByRole("button", { name: /^Archive, \d+ sessions?$/ })).not.toBeInTheDocument();
 		const indicator = screen.getByTestId("app-memory-indicator");
-		expect(indicator).toHaveTextContent("12.9 GB");
+		expect(indicator).toHaveTextContent("12.0 GB");
 		expect(indicator).toHaveAttribute("data-memory-state", "tight");
-		expect(indicator).toHaveAttribute("aria-label", "Tight · 2.1 GB free of 34.4 GB · AO holds 12.9 GB · pressure 35.0");
+		expect(indicator).toHaveAttribute("aria-label", "Tight · 2.0 GB free of 32.0 GB · AO holds 12.0 GB · pressure 35.0");
 		await userEvent.click(indicator);
 		expect(await screen.findByTestId("session-memory-stacked")).toBeInTheDocument();
 	});
@@ -597,7 +597,7 @@ describe("SessionsBoard", () => {
 
 		const card = screen.getByText("tokens worker").closest('[data-testid="board-session-card"]') as HTMLElement;
 		// Memory sits beside token usage, never in place of it.
-		expect(within(card).getByTestId("session-resource")).toHaveTextContent("254 MB");
+		expect(within(card).getByTestId("session-resource")).toHaveTextContent("242 MB");
 		const usage = within(card).getByText("12.4K", { selector: "span" });
 		expect(usage).toHaveAttribute("aria-hidden", "true");
 		expect(within(card).getByText("12,400 tokens")).toHaveClass("sr-only");

@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Check, ChevronRight, Copy, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ChevronUp, Copy, X } from "lucide-react";
 import {
 	chipTone,
 	largestSession,
-	resourceSuggestion,
+	processCategories,
+	processKind,
+	processList,
 	stableResourceOrder,
 	type ChipTone,
 	type PressureState,
+	type ProcessRow as ProcessListRow,
 	type ResourceSessionFacts,
-	type ResourceSuggestion,
 } from "@aoagents/product-ui";
 import { cn } from "@/lib/utils";
 import { aoBridge } from "../lib/bridge";
@@ -83,11 +85,10 @@ const stateText: Record<PressureState, string> = {
 	tight: "text-destructive",
 };
 
-/** The single fix the monitor offers. */
-function useSuggestion(projectId?: string) {
+/** The pressure state and what each live session holds, for the row chips. */
+function usePressureFacts(projectId?: string) {
 	const workspaces = useWorkspaceQuery().data ?? EMPTY_WORKSPACES;
 	const readings = useSessionMemory().data;
-	const memory = useAppMemory().data;
 	const now = Date.now();
 	const facts = workspaces
 		.filter((workspace) => !projectId || workspace.id === projectId)
@@ -95,9 +96,7 @@ function useSuggestion(projectId?: string) {
 		.filter((session) => session.isTerminated !== true && !isOrchestratorSession(session) && readings?.has(session.id))
 		.map((session) => toSessionFacts(session, readings?.get(session.id), now));
 	const state = usePressureState();
-	const suggestion: ResourceSuggestion =
-		state && memory?.system && memory.app ? resourceSuggestion(state, memory.system, memory.app.rssBytes, facts) : { kind: "none" };
-	return { state, suggestion, facts };
+	return { state, facts };
 }
 
 /**
@@ -109,7 +108,7 @@ export function AppMemoryIndicator() {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const memory = useAppMemory();
-	const { state } = useSuggestion();
+	const { state } = usePressureFacts();
 	const app = memory.data?.app;
 	const system = memory.data?.system;
 	if (memory.isError || !app || app.rssBytes === 0) {
@@ -175,26 +174,12 @@ function MachineBar({ appBytes, system }: { appBytes: number; system: SystemMemo
 	);
 }
 
-/** The lone line under the bar: what is going on. It only informs; nothing here ends a session. */
-function SuggestionLine({ state, suggestion }: { state: PressureState; suggestion: ResourceSuggestion }) {
-	const { t } = useTranslation();
-	if (suggestion.kind === "none") return null;
-	const text = t("shell.memorySuggestLargest", { title: suggestion.title });
-	return (
-		<div className="settings-row-bar gap-3 text-sm" data-testid="session-memory-suggestion">
-			<span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", stateDot[state])} />
-			<span className={cn("min-w-0 flex-1 truncate font-medium", stateText[state] || "text-settings-label")}>{text}</span>
-		</div>
-	);
-}
-
-/** The machine's own memory: the bar, and the one line about it. */
-export function MachineSection({ action, projectId }: { action?: ReactNode; projectId?: string }) {
+/** The machine's own memory: AO against what is free. */
+export function MachineSection({ action }: { action?: ReactNode }) {
 	const { t } = useTranslation();
 	const appMemory = useAppMemory().data;
 	const app = appMemory?.app;
 	const system = appMemory?.system;
-	const { state, suggestion } = useSuggestion(projectId);
 	return (
 		<section className="flex w-full flex-col items-stretch gap-(--size-settings-section-inner-gap)">
 			<div className="flex items-center justify-between gap-3">
@@ -203,9 +188,44 @@ export function MachineSection({ action, projectId }: { action?: ReactNode; proj
 			</div>
 			<div className="settings-grouped-rows flex w-full flex-col">
 				{system && app ? <MachineBar appBytes={app.rssBytes} system={system} /> : null}
-				{state ? <SuggestionLine state={state} suggestion={suggestion} /> : null}
 			</div>
 		</section>
+	);
+}
+
+/**
+ * Sessions by CPU, busiest first. CPU jitters every sample, so sessions are
+ * compared in whole percent and an equal pair keeps its previous order
+ * rather than swapping back and forth; memory breaks any remaining tie.
+ */
+function cpuOrder<T extends { id: string; rssBytes: number; reading: SessionMemoryReading }>(previous: string[], rows: T[]): T[] {
+	const rank = new Map(previous.map((id, i) => [id, i] as const));
+	return [...rows].sort(
+		(a, b) =>
+			Math.round(b.reading.cpuPercent) - Math.round(a.reading.cpuPercent) ||
+			(rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity) ||
+			b.rssBytes - a.rssBytes,
+	);
+}
+
+/** A column header that orders the sessions by its own figure; a second click flips the direction. */
+function SortHeader({ active, ascending, className, label, onSort }: { active: boolean; ascending: boolean; className: string; label: string; onSort: () => void }) {
+	const Arrow = active && ascending ? ChevronUp : ChevronDown;
+	return (
+		<th aria-sort={active ? (ascending ? "ascending" : "descending") : undefined} className={cn("bg-popover pb-2 pt-3 text-right font-medium", className)} scope="col">
+			<button
+				className={cn(
+					"inline-flex items-center gap-1 rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+					active && "text-settings-label",
+				)}
+				data-testid="session-memory-sort"
+				onClick={onSort}
+				type="button"
+			>
+				{label}
+				<Arrow aria-hidden="true" className={cn("size-icon-2xs", active ? "opacity-100" : "opacity-0")} />
+			</button>
+		</th>
 	);
 }
 
@@ -217,7 +237,7 @@ export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow
 	const app = useAppMemory().data?.app;
 	// Cost belongs in a shared report even though the window never shows it.
 	const usage = useSessionUsageSummaries(projectId).data;
-	const { state, facts } = useSuggestion(projectId);
+	const { state, facts } = usePressureFacts(projectId);
 	// Orchestrators are listed too: they hold memory like any session, and
 	// leaving them out made the rows add up to less than AO's total.
 	const sessions = useMemo(
@@ -231,15 +251,19 @@ export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow
 	// Rows with a reading are the live ones; a session without a process tree
 	// is not listed, never shown as 0 MB.
 	const orderRef = useRef<string[]>([]);
+	// Sessions only: AO's own row stays pinned below them whatever the order.
+	const [sort, setSort] = useState<{ by: "memory" | "cpu"; ascending: boolean }>({ by: "memory", ascending: false });
+	// Clicking the active column flips its direction; another column starts largest first.
+	const sortBy = (by: "memory" | "cpu") => setSort((current) => ({ by, ascending: current.by === by ? !current.ascending : false }));
 	const live = useMemo(() => {
 		const rows = sessions
 			.map((session) => ({ id: session.id, session, reading: readings?.get(session.id) }))
 			.filter((row): row is { id: string; session: WorkspaceSession; reading: SessionMemoryReading } => row.reading !== undefined)
 			.map((row) => ({ ...row, rssBytes: row.reading.rssBytes }));
-		const ordered = stableResourceOrder(orderRef.current, rows);
-		orderRef.current = ordered.map((row) => row.id);
-		return ordered;
-	}, [sessions, readings]);
+		const largestFirst = sort.by === "cpu" ? cpuOrder(orderRef.current, rows) : stableResourceOrder(orderRef.current, rows);
+		orderRef.current = largestFirst.map((row) => row.id);
+		return sort.ascending ? [...largestFirst].reverse() : largestFirst;
+	}, [sessions, readings, sort]);
 	const largest = largestSession(facts);
 	const maxBytes = Math.max(app?.own?.rssBytes ?? 0, ...live.map((row) => row.rssBytes), 1);
 	// The copy button sits above the table, so the rows it would copy travel
@@ -262,6 +286,7 @@ export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow
 		<table className="w-full table-fixed border-collapse text-xs" data-testid="session-memory-table">
 			<colgroup>
 				<col />
+				<col className="w-20" />
 				<col className="w-24" />
 				<col className="w-28" />
 				<col className="w-16" />
@@ -270,9 +295,10 @@ export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow
 			<thead className="sticky top-8 z-10 bg-popover">
 				<tr className="border-b border-(--color-border-settings-dialog-header) text-xs text-settings-muted">
 					<th className="bg-popover px-4 pb-2 pt-3 text-left font-medium" scope="col">{t("shell.memoryColumnName")}</th>
+					<th className="bg-popover px-2 pb-2 pt-3 text-left font-medium" scope="col">{t("shell.memoryColumnType")}</th>
 					<th className="bg-popover px-4 pb-2 pt-3 text-right font-medium" scope="col">{t("shell.memoryColumnPid")}</th>
-					<th className="bg-popover px-3 pb-2 pt-3 text-right font-medium" scope="col">{t("shell.memoryColumnRss")}</th>
-					<th className="bg-popover px-4 pb-2 pt-3 text-right font-medium" scope="col">{t("shell.memoryColumnCpu")}</th>
+					<SortHeader active={sort.by === "memory"} ascending={sort.ascending} className="px-3" label={t("shell.memoryColumnRss")} onSort={() => sortBy("memory")} />
+					<SortHeader active={sort.by === "cpu"} ascending={sort.ascending} className="px-4" label={t("shell.memoryColumnCpu")} onSort={() => sortBy("cpu")} />
 				</tr>
 			</thead>
 			<tbody className="[&_tr:not(.memory-group)+tr.memory-row]:border-t [&_tr.memory-row]:border-(--color-border-settings-dialog-header)">
@@ -342,7 +368,6 @@ export function DiagnosticsBody({ projectId, scroller }: { projectId?: string; s
 							<span>{t("shell.memoryCopyReport")}</span>
 						</CopyControl>
 					}
-					projectId={projectId}
 				/>
 				<CpuSection />
 			</div>
@@ -444,7 +469,7 @@ export function SessionMemoryPanel({
 function GroupRow({ label }: { label: string }) {
 	return (
 		<tr className="memory-group">
-			<td className="pb-2 pt-6 text-xs font-medium leading-4 text-settings-muted first:pt-0" colSpan={4}>{label}</td>
+			<td className="pb-2 pt-6 text-xs font-medium leading-4 text-settings-muted first:pt-0" colSpan={5}>{label}</td>
 		</tr>
 	);
 }
@@ -529,6 +554,10 @@ function SessionRow({
 						</div>
 					</div>
 				</td>
+				{/* Collapsed, the type is which agent runs the session; opened, each line has its own. */}
+				<td className="whitespace-nowrap px-2 py-2 align-middle font-mono text-xs text-passive" data-testid="session-memory-type">
+					{session.provider ?? ""}
+				</td>
 				<ProcessCountCell count={reading.processes.length} isExpanded={isExpanded} />
 				<MemoryCell bytes={reading.rssBytes} maxBytes={maxBytes} tone={chip} />
 				<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-xs tabular-nums text-settings-muted">
@@ -609,8 +638,11 @@ export function sessionReport(
 		const names = tree.map(({ process, depth }) => `${"  ".repeat(depth)}${processKind(process.command)}`);
 		const width = Math.max(...names.map((name) => name.length));
 		lines.push("", t("shell.memoryGroupProcesses"));
+		const categories = processCategories(reading.processes);
 		tree.forEach(({ process }, i) => {
-			lines.push(`  ${names[i].padEnd(width)}  ${formatMemory(process.rssBytes).padStart(8)}  ${formatCPU(process.cpuPercent).padStart(4)}`);
+			const category = categories.get(process.pid);
+			const type = category ? `  ${t(`shell.memoryCategory.${category}`)}` : "";
+			lines.push(`  ${names[i].padEnd(width)}  ${formatMemory(process.rssBytes).padStart(8)}  ${formatCPU(process.cpuPercent).padStart(4)}${type}`);
 		});
 	}
 	const recent = reading.activity?.recent ?? [];
@@ -664,7 +696,7 @@ function RecentSteps({ steps }: { steps: SessionStepReading[] }) {
 	return (
 		<>
 			<tr>
-				<td className="pb-1 pl-11 pt-2 text-xs font-medium text-settings-muted" colSpan={4}>{t("shell.memoryRecent")}</td>
+				<td className="pb-1 pl-11 pt-2 text-xs font-medium text-settings-muted" colSpan={5}>{t("shell.memoryRecent")}</td>
 			</tr>
 			{steps.map((step) => {
 				const started = new Date(step.startedAt);
@@ -678,6 +710,7 @@ function RecentSteps({ steps }: { steps: SessionStepReading[] }) {
 								{step.failed ? <span className="shrink-0 text-error">{t("shell.memoryStepFailed")}</span> : null}
 							</div>
 						</td>
+						<td />
 						<td />
 						<td />
 						<td className="whitespace-nowrap px-4 py-1 text-right font-mono tabular-nums text-passive">
@@ -713,11 +746,14 @@ function OwnRow({ isExpanded, maxBytes, onToggle, reading }: { isExpanded: boole
 						<div className="truncate text-sm font-medium text-settings-label">{t("shell.memoryOwnRow")}</div>
 					</div>
 				</td>
+				<td className="whitespace-nowrap px-2 py-2 align-middle font-mono text-xs text-passive" data-testid="session-memory-type">
+					{t("shell.memoryCategory.ao")}
+				</td>
 				<ProcessCountCell count={reading.processes.length} isExpanded={isExpanded} />
 				<MemoryCell bytes={reading.rssBytes} maxBytes={maxBytes} tone="neutral" />
 				<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-xs tabular-nums text-settings-muted">{formatCPU(reading.cpuPercent)}</td>
 			</tr>
-			{isExpanded ? <ProcessRows processes={reading.processes} /> : null}
+			{isExpanded ? <ProcessRows own processes={reading.processes} /> : null}
 			{isExpanded ? <SpacerRow /> : null}
 		</>
 	);
@@ -727,21 +763,13 @@ function OwnRow({ isExpanded, maxBytes, onToggle, reading }: { isExpanded: boole
 function SpacerRow() {
 	return (
 		<tr aria-hidden="true">
-			<td className="h-2 p-0" colSpan={4} />
+			<td className="h-2 p-0" colSpan={5} />
 		</tr>
 	);
 }
 
-/**
- * What kind of process, nothing more: "git", "go", "claude". AO's own hosts
- * keep their subcommand ("ao pty-host") since that is the whole story. The
- * full command line stays in the tooltip.
- */
-export function processKind(command: string): string {
-	const [head, sub] = command.split(" ");
-	const name = head?.split("/").pop() || "?";
-	return name === "ao" && sub && !sub.startsWith("-") ? `ao ${sub}` : name;
-}
+// The copied report and older imports still name processes the same way.
+export { processKind };
 
 /**
  * Each process under its parent, siblings largest first, depth as indent. A
@@ -767,37 +795,71 @@ export function processTree(processes: SessionMemoryReading["processes"]): { pro
 	return rows;
 }
 
-/** btop's tree, on screen. */
-function ProcessRows({ processes }: { processes: SessionMemoryReading["processes"] }) {
+/**
+ * The process list on screen: one flat line per program, plumbing folded in,
+ * the small tail summed into "N other processes". The rows add up to the
+ * session; the copied report keeps every raw process instead.
+ */
+function ProcessRows({ processes, own = false }: { processes: SessionMemoryReading["processes"]; own?: boolean }) {
 	const { t } = useTranslation();
-	const rows = processTree(processes);
+	const { rows, other } = useMemo(() => processList(processes, { own }), [processes, own]);
+	const [showAll, setShowAll] = useState(false);
+	const toggle = () => setShowAll((current) => !current);
 	return (
 		<>
-			{rows.map(({ process, depth, last }) => (
-				<tr className="text-xs" data-process-depth={depth} data-testid="session-memory-process-row" key={process.pid}>
-					<td className="py-1 pl-11 pr-4 font-mono text-settings-muted">
-						<div className="flex min-w-0 items-baseline">
-							<span aria-hidden="true" className="shrink-0 whitespace-pre text-passive">{"   ".repeat(depth)}{last ? "└─ " : "├─ "}</span>
-							<span className="min-w-0 truncate" title={process.command}>{processKind(process.command)}</span>
-						</div>
+			{[...rows, ...(showAll && other ? other.rows : [])].map((row) => (
+				<ProcessRow key={row.pid} row={row} />
+			))}
+			{other ? (
+				<tr
+					aria-expanded={showAll}
+					className="cursor-pointer text-xs hover:bg-interactive-hover"
+					data-testid="session-memory-process-other"
+					onClick={toggle}
+					onKeyDown={toggleOnKeyDown(toggle)}
+					tabIndex={0}
+				>
+					<td className="py-1 pl-11 pr-4 font-mono text-passive">
+						<span className="flex min-w-0 items-center gap-1" title={showAll ? undefined : other.commands.join("\n")}>
+							<span className="truncate">{showAll ? t("shell.memoryProcessFewer") : t("shell.memoryProcessOther", { count: other.count })}</span>
+							<ChevronRight aria-hidden="true" className={cn("size-icon-2xs shrink-0 transition-transform", showAll ? "-rotate-90" : "rotate-90")} />
+						</span>
 					</td>
-					<td className="whitespace-nowrap px-4 py-1 text-right align-middle font-mono tabular-nums">
-						<CopyControl
-							copiedLabel={t("shell.memoryPidCopied", { pid: process.pid })}
-							label={t("shell.memoryCopyPid", { pid: process.pid })}
-							testId="session-memory-pid"
-							value={() => String(process.pid)}
-						>
-							<span>{process.pid}</span>
-						</CopyControl>
-					</td>
-					<td className="whitespace-nowrap px-4 py-1 text-right font-mono tabular-nums text-settings-muted">{formatMemory(process.rssBytes)}</td>
+					<td />
+					<td />
+					<td className="whitespace-nowrap px-4 py-1 text-right font-mono tabular-nums text-settings-muted">{showAll ? null : formatMemory(other.bytes)}</td>
 					<td className="whitespace-nowrap px-4 py-1 text-right font-mono tabular-nums text-passive">
-						{process.cpuPercent >= 1 ? formatCPU(process.cpuPercent) : "·"}
+						{showAll ? null : other.cpu >= 1 ? formatCPU(other.cpu) : "·"}
 					</td>
 				</tr>
-			))}
+			) : null}
 		</>
+	);
+}
+
+function ProcessRow({ row }: { row: ProcessListRow }) {
+	const { t } = useTranslation();
+	return (
+		<tr className="text-xs" data-testid="session-memory-process-row">
+			<td className="py-1 pl-11 pr-4 font-mono text-settings-muted">
+				<span className="block truncate" title={row.commands.join("\n")}>{row.kind}</span>
+			</td>
+			<td className="whitespace-nowrap px-2 py-1 font-mono text-passive" data-testid="session-memory-process-type">
+				<span title={t(`shell.memoryCategoryHint.${row.category}`)}>{t(`shell.memoryCategory.${row.category}`)}</span>
+			</td>
+			<td className="whitespace-nowrap px-4 py-1 text-right align-middle font-mono tabular-nums">
+				<CopyControl
+					copiedLabel={t("shell.memoryPidCopied", { pid: row.pid })}
+					label={t("shell.memoryCopyPid", { pid: row.pid })}
+					testId="session-memory-pid"
+					value={() => String(row.pid)}
+				>
+					<span>{row.pid}</span>
+				</CopyControl>
+			</td>
+			<td className="whitespace-nowrap px-4 py-1 text-right font-mono tabular-nums text-settings-muted">{formatMemory(row.bytes)}</td>
+			<td className="whitespace-nowrap px-4 py-1 text-right font-mono tabular-nums text-passive">{row.cpu >= 1 ? formatCPU(row.cpu) : "·"}</td>
+		</tr>
 	);
 }
 

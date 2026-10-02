@@ -1150,9 +1150,9 @@ describe("HarnessSettingsSection", () => {
 		const copied = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0] as string;
 		// The machine the install died on is part of the report.
 		expect(copied).toContain("permission denied");
-		expect(copied).toContain("Memory: AO 2.1 GB · available 4.3 GB of 34.4 GB");
+		expect(copied).toContain("Memory: AO 2.0 GB · available 4.0 GB of 32.0 GB");
 		expect(copied).toContain("CPU: 30% of 8 cores · load 1.25");
-		expect(copied).toContain("Live sessions: 1 · 642 MB");
+		expect(copied).toContain("Live sessions: 1 · 612 MB");
 	});
 
 	it("leaves load out of copied diagnostics on a platform with no load average", async () => {
