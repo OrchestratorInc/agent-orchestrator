@@ -11,7 +11,8 @@ import (
 // can change only through the durable interface-transition coordinator.
 //
 //   - SessionInterfaceTUI: the provider's native interactive TUI inside the
-//     sandbox agent PTY. This is the historical behavior and the default.
+//     sandbox agent PTY. This is the historical behavior; existing sessions
+//     without an interface value retain it.
 //   - SessionInterfaceChat: a durable, structured, event-projected headless
 //     controller; the provider is invoked per-turn with headless flags.
 type SessionInterface string

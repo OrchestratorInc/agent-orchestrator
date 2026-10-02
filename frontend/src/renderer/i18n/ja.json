@@ -1,4 +1,6 @@
 {
+	"chat.cloud.repositoryPreparing": "リポジトリを準備しています… ワークスペースの準備が整うまで、メッセージはキューに残ります。",
+	"chat.cloud.repositoryFailed": "リポジトリの準備に失敗しました。キュー内のメッセージは実行されていません。",
 	"share.pasteMenuItem": "共有リンクを開く…",
 	"share.pasteTitle": "共有リンクを開く",
 	"share.pasteDescription": "受け取った ao-app://share リンクを貼り付けてください。承認する前に招待者が表示されます。",

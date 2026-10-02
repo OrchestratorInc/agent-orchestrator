@@ -1,4 +1,6 @@
 {
+	"chat.cloud.repositoryPreparing": "저장소 준비 중… 작업 공간이 준비될 때까지 메시지는 대기열에 유지됩니다.",
+	"chat.cloud.repositoryFailed": "저장소 준비에 실패했습니다. 대기열의 메시지는 실행되지 않았습니다.",
 	"share.pasteMenuItem": "공유 링크 열기…",
 	"share.pasteTitle": "공유 링크 열기",
 	"share.pasteDescription": "받은 ao-app://share 링크를 붙여넣으세요. 수락하기 전에 누가 초대했는지 확인할 수 있습니다.",

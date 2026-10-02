@@ -379,10 +379,7 @@ func (s *Supervisor) forwardTurn(ctx context.Context) (bool, error) {
 	if turn.CancelRequested {
 		return true, s.Control.CompleteTurn(ctx, turn.ID, turn.Attempt, true)
 	}
-	if err := s.writeTerminal(worker.TerminalCommand{
-		TerminalID: agentTerminalID,
-		Data:       []byte(turn.Prompt + "\r"),
-	}); err != nil {
+	if err := s.writeAgentPrompt(agentTerminalID, worker.EncodeTerminalInput(turn.Prompt)); err != nil {
 		if failErr := s.Control.FailTurn(
 			ctx, turn.ID, turn.Attempt, err.Error(),
 		); failErr != nil {
@@ -502,13 +499,28 @@ func (s *Supervisor) handle(
 			response, err = fetchBrowser(ctx, input)
 		}
 	case "chat.models":
-		if s.Harness != "codex" {
+		if _, supported := workerexec.SupportedHarness(s.Harness); !supported {
 			err = errors.New("model catalog is unavailable for this provider")
+		} else if s.Harness != "codex" {
+			response = worker.ChatModelsResponse{Models: []worker.ChatModel{}}
 		} else {
-			var models []worker.ChatModel
-			models, err = workerexec.DiscoverCodexModels(ctx, "codex", s.Workspace)
-			if err == nil {
-				response = worker.ChatModelsResponse{Models: models}
+			credentials, ok := s.Control.(interface {
+				Credential(context.Context) (worker.CredentialResponse, error)
+			})
+			if !ok {
+				err = errors.New("coding-agent credentials are unavailable")
+			} else {
+				var credential worker.CredentialResponse
+				credential, err = credentials.Credential(ctx)
+				if err == nil {
+					var models []worker.ChatModel
+					builder := workerexec.HarnessBuilder{DataDir: s.DataDir}
+					models, err = builder.DiscoverModels(ctx, s.Harness, credential, s.Workspace)
+					credential.Secret = ""
+					if err == nil {
+						response = worker.ChatModelsResponse{Models: models}
+					}
+				}
 			}
 		}
 	case "chat.steer":

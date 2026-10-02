@@ -915,6 +915,82 @@ type turnClaimSpy struct {
 	claims int
 }
 
+type queuedTurnControl struct {
+	Control
+	turn             worker.Turn
+	completedID      string
+	completedAttempt int
+	cancelled        bool
+}
+
+func (c *queuedTurnControl) ClaimTurn(context.Context) (*worker.Turn, error) {
+	return &c.turn, nil
+}
+
+func (c *queuedTurnControl) CompleteTurn(_ context.Context, id string, attempt int, cancelled bool) error {
+	c.completedID, c.completedAttempt, c.cancelled = id, attempt, cancelled
+	return nil
+}
+
+func TestForwardQueuedTurnSubmitsPromptSeparatelyFromPaste(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, prompt, body string
+	}{
+		{"single line", "hello from the collaborator", "hello from the collaborator"},
+		{"multiple lines", "first line\nsecond line", "\x1b[200~first line\nsecond line\x1b[201~"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			reader, writer, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reader.Close()
+			defer writer.Close()
+			control := &queuedTurnControl{turn: worker.Turn{ID: "turn-1", Attempt: 2, Prompt: tc.prompt}}
+			supervisor := &Supervisor{
+				Control: control, AgentTerminalID: "agent-1", agentStarted: true,
+				terminals: map[string]*terminalProcess{"agent-1": {pty: writer}},
+			}
+			done := make(chan error, 1)
+			go func() {
+				handled, err := supervisor.forwardTurn(context.Background())
+				if err == nil && !handled {
+					err = os.ErrNotExist
+				}
+				done <- err
+			}()
+			if err := reader.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			// Read room for the body AND Enter: the first write must contain only
+			// the paste, so the harness gets a distinct submit keypress later.
+			first := make([]byte, len(tc.body)+1)
+			count, err := reader.Read(first)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := string(first[:count]); got != tc.body {
+				t.Fatalf("first PTY input = %q, want paste body %q without Enter", got, tc.body)
+			}
+			enter := make([]byte, 1)
+			if _, err := io.ReadFull(reader, enter); err != nil {
+				t.Fatal(err)
+			}
+			if string(enter) != "\r" {
+				t.Fatalf("submit key = %q, want carriage return", enter)
+			}
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if control.completedID != "turn-1" || control.completedAttempt != 2 || control.cancelled {
+				t.Fatalf("completion = (%q, %d, %v), want (turn-1, 2, false)", control.completedID, control.completedAttempt, control.cancelled)
+			}
+		})
+	}
+}
+
 func (s *turnClaimSpy) ClaimTurn(context.Context) (*worker.Turn, error) {
 	s.claims++
 	return nil, nil

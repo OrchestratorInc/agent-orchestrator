@@ -48,6 +48,39 @@ func TestCreateSessionReturnsCompleteSession(t *testing.T) {
 	}
 }
 
+func TestCreateSessionDefaultsToTerminalWithoutChangingExplicitChatMode(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	for _, test := range []struct {
+		name      string
+		harness   string
+		requested domain.SessionInterface
+		want      domain.SessionInterface
+	}{
+		{"codex", "codex", "", domain.SessionInterfaceTUI},
+		{"claude", "claude-code", "", domain.SessionInterfaceTUI},
+		{"cursor", "cursor", "", domain.SessionInterfaceTUI},
+		{"opencode retains supported terminal", "opencode", "", domain.SessionInterfaceTUI},
+		{"explicit terminal", "codex", domain.SessionInterfaceTUI, domain.SessionInterfaceTUI},
+		{"explicit codex chat", "codex", domain.SessionInterfaceChat, domain.SessionInterfaceChat},
+		{"explicit claude chat", "claude-code", domain.SessionInterfaceChat, domain.SessionInterfaceChat},
+		{"explicit cursor chat", "cursor", domain.SessionInterfaceChat, domain.SessionInterfaceChat},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session, err := store.CreateSession(context.Background(),
+				domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID,
+				"terminal-default-"+uuid.NewString(), 10,
+				domain.CreateSession{ProjectID: fixture.projectID, Kind: "worker", Harness: test.harness,
+					DisplayName: test.name, Provider: "docker", Interface: test.requested})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if session.Interface != test.want {
+				t.Fatalf("created interface = %q, want %q", session.Interface, test.want)
+			}
+		})
+	}
+}
+
 func TestQueuedTurnDoesNotOverrideIdleWorkerActivity(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()

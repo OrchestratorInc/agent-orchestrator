@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
@@ -40,7 +40,101 @@ const session = {
 } satisfies WorkspaceSession;
 
 describe("CloudSessionChatSurface", () => {
-	beforeEach(() => localStorage.clear());
+	beforeEach(() => {
+		localStorage.clear();
+		cloudMocks.chatProps.mockClear();
+	});
+	it("does not reveal the composer before its startup events have loaded", async () => {
+		let finish!: (value: unknown) => void;
+		cloudMocks.listChatEvents.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}>
+			<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} />
+		</QueryClientProvider>);
+		expect(screen.getByRole("status")).toHaveTextContent("Preparing repository");
+		expect(screen.queryByTestId("cloud-chat")).not.toBeInTheDocument();
+		await act(async () => { finish({ events: [
+			{ sessionId: session.id, sequence: 1, type: "worker.ready", payload: { workspaceState: "ready", epoch: 1 }, createdAt: session.updatedAt },
+		], hasMore: false, nextAfter: 1 }); });
+		expect(await screen.findByTestId("cloud-chat")).toBeInTheDocument();
+	});
+	it("keeps legacy worker readiness compatible", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [
+			{ sessionId: session.id, sequence: 1, type: "worker.ready", payload: { epoch: 1 }, createdAt: session.updatedAt },
+		], hasMore: false, nextAfter: 1 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}>
+			<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} />
+		</QueryClientProvider>);
+		expect(await screen.findByTestId("cloud-chat")).toBeInTheDocument();
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+	});
+	it("lets a queued Cloud message be cancelled before the worker starts", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Queued", turnId: "queued-1" }, createdAt: session.updatedAt },
+		], hasMore: false, nextAfter: 1 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.cancelTurn.mockReset().mockResolvedValue({ ok: true });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}>
+			<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} />
+		</QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.turns).toEqual([
+			expect.objectContaining({ id: "queued-1", state: "queued" }),
+		]));
+		await act(async () => { await cloudMocks.chatProps.mock.lastCall?.[0].onCancelQueuedTurn("queued-1"); });
+		expect(cloudMocks.cancelTurn).toHaveBeenCalledWith("org-1", session.id, "queued-1");
+	});
+	it("shows repository preparation until the current worker reports ready", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [
+			{ sessionId: session.id, sequence: 1, type: "worker.ready", payload: { workspaceState: "preparing", epoch: 1 }, createdAt: session.updatedAt },
+		], hasMore: false, nextAfter: 1 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatModels.mockClear();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}>
+			<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} />
+		</QueryClientProvider>);
+		expect(await screen.findByRole("status")).toHaveTextContent("Preparing repository");
+		expect(screen.queryByTestId("cloud-chat")).not.toBeInTheDocument();
+		expect(cloudMocks.listChatModels).not.toHaveBeenCalled();
+		act(() => { queryClient.setQueryData(["cloud-chat-events", "org-1", session.id], [
+			{ sessionId: session.id, sequence: 1, type: "worker.ready", payload: { workspaceState: "preparing", epoch: 1 }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "worker.ready", payload: { workspaceState: "ready", epoch: 1 }, createdAt: session.updatedAt },
+		]); });
+		await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+		expect(screen.getByTestId("cloud-chat")).toBeInTheDocument();
+		// A replacement worker invalidates the previous worker's readiness.
+		act(() => { queryClient.setQueryData(["cloud-chat-events", "org-1", session.id], [
+			{ sessionId: session.id, sequence: 1, type: "worker.ready", payload: { workspaceState: "ready", epoch: 1 }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 3, type: "worker.connected", payload: { epoch: 2 }, createdAt: session.updatedAt },
+		]); });
+		await waitFor(() => expect(screen.queryByTestId("cloud-chat")).not.toBeInTheDocument());
+		expect(screen.getByRole("status")).toHaveTextContent("Preparing repository");
+		act(() => { queryClient.setQueryData(["cloud-chat-events", "org-1", session.id], [
+			{ sessionId: session.id, sequence: 4, type: "worker.ready", payload: { workspaceState: "failed", epoch: 2 }, createdAt: session.updatedAt },
+		]); });
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Repository preparation failed"));
+		expect(screen.queryByTestId("cloud-chat")).not.toBeInTheDocument();
+	});
+	it("prevents read-only recipients from sending messages or controlling the agent", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}>
+			<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1", sharedBy: "Owner", sharedRole: "viewer" } }} />
+		</QueryClientProvider>);
+		await screen.findByTestId("cloud-chat");
+		const props = cloudMocks.chatProps.mock.lastCall?.[0];
+		await expect(props.onSend("not allowed", [], "viewer-message")).rejects.toThrow("read-only");
+		expect(props.newWorkDisabled).toBe(true);
+		expect(props.onInterrupt).toBeUndefined();
+		expect(props.onSteer).toBeUndefined();
+		expect(props.onDecide).toBeUndefined();
+		expect(props.onCancelQueuedTurn).toBeUndefined();
+	});
 	it("wakes a paused worker before loading model choices", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockReset()
@@ -109,6 +203,7 @@ describe("CloudSessionChatSurface", () => {
 				<CloudSessionChatSurface session={{ ...session, provider, cloud: { orgId: "org-1", permissionMode: ceiling } }} />
 			</QueryClientProvider>,
 		);
+		await screen.findByTestId("cloud-chat");
 		const props = cloudMocks.chatProps.mock.lastCall?.[0];
 		expect(props.configOptions).toBeUndefined();
 		expect(props.approvalModes).toEqual(modes);
@@ -128,6 +223,7 @@ describe("CloudSessionChatSurface", () => {
 				<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1", permissionMode: "standard" } }} />
 			</QueryClientProvider>,
 		);
+		await screen.findByTestId("cloud-chat");
 		const props = cloudMocks.chatProps.mock.lastCall?.[0];
 		expect(props.approvalModes).toEqual(["accept-edits", "auto"]);
 		act(() => props.onChooseSettings({ approvalMode: "bypass-permissions" }));
@@ -154,6 +250,7 @@ describe("CloudSessionChatSurface", () => {
 				<CloudSessionChatSurface session={{ ...session, id: "session-2", cloud: { orgId: "org-1" } }} />
 			</QueryClientProvider>,
 		);
+		await screen.findByTestId("cloud-chat");
 		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("next", [], "message-3");
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", "session-2", { text: "next" }, { idempotencyKey: "message-3" });
 	});
@@ -261,13 +358,22 @@ describe("CloudSessionChatSurface", () => {
 			.toEqual([expect.objectContaining({ text: "Hello!" })]);
 	});
 
-	it("shows an idle Cloud send as active while the worker claims it", () => {
+	it("keeps an unclaimed Cloud send queued instead of showing a model response spinner", () => {
 		const events: CloudCpClientEvent[] = [
 			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Next", turnId: "turn-next" }, createdAt: session.updatedAt },
 		];
 		const snapshot = toSnapshot(session, events);
-		expect(snapshot.turns).toEqual([expect.objectContaining({ id: "turn-next", state: "running" })]);
-		expect(snapshot.controller.state).toBe("busy");
+		expect(snapshot.turns).toEqual([expect.objectContaining({ id: "turn-next", state: "queued" })]);
+		expect(snapshot.controller.state).toBe("ready");
+	});
+	it("retains cancelled queued messages in history without leaving them in the queue", () => {
+		const snapshot = toSnapshot(session, [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Keep in history", turnId: "queued-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.turn_interrupted", payload: { turnId: "queued-1", cancelled: true }, createdAt: session.updatedAt },
+		]);
+		expect(snapshot.turns).toEqual([expect.objectContaining({ id: "queued-1", state: "interrupted" })]);
+		expect(snapshot.items).toContainEqual(expect.objectContaining({ role: "user", text: "Keep in history" }));
+		expect(snapshot.items).toContainEqual(expect.objectContaining({ summary: "Queued message cancelled" }));
 	});
 
 	it("keeps a second Cloud message queued behind an active turn", () => {

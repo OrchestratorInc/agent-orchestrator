@@ -1,4 +1,6 @@
 {
+	"chat.cloud.repositoryPreparing": "Repository wird vorbereitet… Nachrichten bleiben in der Warteschlange, bis der Arbeitsbereich bereit ist.",
+	"chat.cloud.repositoryFailed": "Die Vorbereitung des Repositorys ist fehlgeschlagen. Nachrichten in der Warteschlange wurden nicht ausgeführt.",
 	"share.pasteMenuItem": "Freigabelink öffnen…",
 	"share.pasteTitle": "Freigabelink öffnen",
 	"share.pasteDescription": "Füge den ao-app://share-Link ein, den du erhalten hast. Du siehst, wer dich einlädt, bevor etwas angenommen wird.",

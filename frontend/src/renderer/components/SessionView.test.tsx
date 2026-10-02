@@ -382,6 +382,7 @@ vi.mock("./chat/ReviewerChatSurface", () => ({
 vi.mock("./CenterPane", () => ({
 	CenterPane: ({
 		agentInputDisabled,
+		agentComposer,
 		session,
 		terminalGeneration,
 		shellTerminals = [],
@@ -401,6 +402,7 @@ vi.mock("./CenterPane", () => ({
 		auxiliaryTabOrder,
 	}: {
 		agentInputDisabled?: boolean;
+		agentComposer?: ReactNode;
 		session?: WorkspaceSession;
 		terminalGeneration?: string;
 		shellTerminals?: Array<{ handleId: string; title: string }>;
@@ -428,6 +430,7 @@ vi.mock("./CenterPane", () => ({
 		<div data-testid="terminal-center" data-agent-input-disabled={agentInputDisabled ? "true" : "false"} data-terminal-generation={terminalGeneration ?? ""}>
 
 			terminal center
+			{agentComposer}
 			<div data-testid={`auxiliary-tab-order-tui-${session?.id ?? "none"}`}>
 				{auxiliaryTabOrder?.join("|") ?? ""}
 			</div>
@@ -998,6 +1001,14 @@ describe("SessionView", () => {
 		fireEvent.click(newTerminalButton);
 		expect(openShellTerminalMock).toHaveBeenCalledWith({ projectId: "proj-1", sessionId: "sess-2" }, expect.anything());
 		expect(useUiStore.getState().activeShellTerminalHandleId).toBe("pending-shell:test");
+	});
+
+	it("does not add a second composer beneath the owner's cloud terminal", () => {
+		const session = workerSession("sess-2");
+		session.cloud = { orgId: "cloud-org" };
+		render(<SessionView sessionId="sess-2" />);
+		expect(screen.getByText("terminal center")).toBeInTheDocument();
+		expect(screen.queryByTestId("cloud-session-composer")).not.toBeInTheDocument();
 	});
 
 	it("routes a cloud session's new terminal through its control-plane identity", () => {

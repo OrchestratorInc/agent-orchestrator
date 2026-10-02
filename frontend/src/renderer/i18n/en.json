@@ -1,4 +1,6 @@
 {
+	"chat.cloud.repositoryPreparing": "Preparing repository… Messages will stay queued until the workspace is ready.",
+	"chat.cloud.repositoryFailed": "Repository preparation failed. Queued messages have not run.",
 	"share.pasteMenuItem": "Open share link…",
 	"share.pasteTitle": "Open a share link",
 	"share.pasteDescription": "Paste the ao-app://share link someone sent you. You will see who is inviting you before anything is accepted.",

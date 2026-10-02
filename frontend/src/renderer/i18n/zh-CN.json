@@ -1,4 +1,6 @@
 {
+	"chat.cloud.repositoryPreparing": "正在准备代码仓库… 工作区就绪前，消息将保留在队列中。",
+	"chat.cloud.repositoryFailed": "代码仓库准备失败。队列中的消息尚未执行。",
 	"share.pasteMenuItem": "打开共享链接…",
 	"share.pasteTitle": "打开共享链接",
 	"share.pasteDescription": "粘贴别人发给你的 ao-app://share 链接。在接受之前，你会看到是谁邀请了你。",

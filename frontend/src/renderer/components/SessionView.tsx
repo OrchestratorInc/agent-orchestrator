@@ -1985,7 +1985,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	) : null, [session?.cloud?.sharedBy, sharedReadOnly, sharedWithMe, t]);
 	const composerOrgId = session?.cloud?.orgId;
 	const agentWorking = session?.activity?.state === "active";
-	const agentComposer = useMemo(() => composerOrgId && !sharedReadOnly ? (
+	// Only terminal-mode collaborators need the fallback composer: owners can
+	// type in their terminal, and Chat mode already has its own message box.
+	const agentComposer = useMemo(() => composerOrgId && sharedWithMe && !sharedReadOnly && session?.mode !== "chat" ? (
 		<CloudSessionComposer
 			agentWorking={agentWorking}
 			autoFocus={sharedWithMe}
@@ -1993,7 +1995,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 			orgId={composerOrgId}
 			sessionId={sessionId}
 		/>
-	) : undefined, [agentWorking, composerOrgId, sessionId, sharedReadOnly, sharedWithMe, terminated]);
+	) : undefined, [agentWorking, composerOrgId, session?.mode, sessionId, sharedReadOnly, sharedWithMe, terminated]);
 	const sessionTabActions = useMemo(() => sharedWithMe ? readOnlyBadge : (interfaceSwitchUnsupported && !shareMenuItem) ? null : (
 		<SessionActionsMenu inlineStatus={interfaceSwitchInlineStatus}>
 			{interfaceSwitchUnsupported ? null : interfaceSwitchMenuItem}

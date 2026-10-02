@@ -1,4 +1,6 @@
 {
+	"chat.cloud.repositoryPreparing": "Préparation du dépôt… Les messages resteront en attente jusqu’à ce que l’espace de travail soit prêt.",
+	"chat.cloud.repositoryFailed": "La préparation du dépôt a échoué. Les messages en attente n’ont pas été exécutés.",
 	"share.pasteMenuItem": "Ouvrir un lien de partage…",
 	"share.pasteTitle": "Ouvrir un lien de partage",
 	"share.pasteDescription": "Collez le lien ao-app://share que vous avez reçu. Vous verrez qui vous invite avant d’accepter quoi que ce soit.",

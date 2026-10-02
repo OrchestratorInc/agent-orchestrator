@@ -1,4 +1,6 @@
 {
+	"chat.cloud.repositoryPreparing": "Preparando o repositório… As mensagens permanecerão na fila até que o espaço de trabalho esteja pronto.",
+	"chat.cloud.repositoryFailed": "Falha ao preparar o repositório. As mensagens na fila não foram executadas.",
 	"share.pasteMenuItem": "Abrir link compartilhado…",
 	"share.pasteTitle": "Abrir um link compartilhado",
 	"share.pasteDescription": "Cole o link ao-app://share que você recebeu. Você verá quem está convidando antes de aceitar qualquer coisa.",

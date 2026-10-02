@@ -287,14 +287,6 @@ func run(logger *slog.Logger) error {
 		}
 		return fmt.Errorf("start workspace transport: %w", err)
 	}
-	if err := client.publishEvent(ctx, "worker.ready", map[string]any{
-		"workerId":     bootstrap.WorkerID,
-		"epoch":        bootstrap.Epoch,
-		"version":      workerVersion,
-		"capabilities": workerCapabilities,
-	}); err != nil {
-		logger.Warn("publish worker.ready failed", "error", err)
-	}
 	// rehydrateDone gates the coding agent on delete/restore rehydration: the
 	// preserved uncommitted work must be applied and the transcript written
 	// before the agent is built, so --resume finds the conversation and the
@@ -311,9 +303,6 @@ func run(logger *slog.Logger) error {
 			close(rehydrateDone)
 			return
 		}
-		// Restore a previously deleted session's state before the agent launches.
-		// A fresh session finds nothing captured and this returns quickly.
-		rehydrateSession(runCtx, logger, client, bootstrap, workspace, dataDir)
 		close(rehydrateDone)
 		close(chatWorkspaceReady)
 		transportSupervisor.MarkWorkspaceReady()
@@ -353,7 +342,45 @@ func prepareWorkspace(
 	client *client,
 	bootstrap worker.BootstrapResponse,
 	workspace, dataDir, publicURL string,
-) error {
+) (startupErr error) {
+	// Transport readiness is distinct from workspace readiness. Publish both
+	// through the existing readiness envelope so Chat can explain a queued send.
+	publishState := func(state string) {
+		publishCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		var deliveryErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			deliveryErr = client.publishEvent(publishCtx, "worker.ready", map[string]any{
+				"workerId": bootstrap.WorkerID, "epoch": bootstrap.Epoch,
+				"version": workerVersion, "capabilities": workerCapabilities,
+				"workspaceState": state,
+			})
+			if deliveryErr == nil {
+				return
+			}
+			if attempt == 2 || publishCtx.Err() != nil {
+				break
+			}
+			select {
+			case <-publishCtx.Done():
+			case <-time.After(200 * time.Millisecond):
+			}
+		}
+		if ctx.Err() == nil {
+			logger.Warn("publish workspace startup state failed", "state", state, "error", deliveryErr)
+		}
+	}
+	publishState("preparing")
+	defer func() {
+		if ctx.Err() != nil {
+			return
+		}
+		if startupErr != nil {
+			publishState("failed")
+		} else {
+			publishState("ready")
+		}
+	}()
 	if worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
 		if err := worker.PrepareScratchWorkspace(ctx, worker.ExecGitRunner{}, workspace); err != nil {
 			return fmt.Errorf("prepare scratch workspace: %w", err)
@@ -398,6 +425,9 @@ func prepareWorkspace(
 	); err != nil {
 		return fmt.Errorf("record workspace review base: %w", err)
 	}
+	// Include delete/restore rehydration in workspace readiness. Both Chat and
+	// Terminal controllers stay gated until the preserved files are applied.
+	rehydrateSession(ctx, logger, client, bootstrap, workspace, dataDir)
 	return nil
 }
 
