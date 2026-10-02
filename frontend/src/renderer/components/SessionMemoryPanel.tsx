@@ -8,6 +8,7 @@ import {
 	processCategories,
 	processKind,
 	processList,
+	rootPid,
 	stableResourceOrder,
 	type ChipTone,
 	type PressureState,
@@ -194,6 +195,23 @@ export function MachineSection({ action }: { action?: ReactNode }) {
 }
 
 /**
+ * Each column's width, padding and alignment, in one place: the header and
+ * every row take their classes from here, so the columns line up.
+ */
+const columnWidth = { type: "w-24", pid: "w-28", memory: "w-28", cpu: "w-16" } as const;
+const cell = {
+	name: "pl-4 pr-3 text-left",
+	process: "pl-11 pr-3 text-left",
+	type: "px-3 text-left",
+	pid: "px-3 text-right",
+	memory: "px-3 text-right",
+	cpu: "pl-3 pr-4 text-right",
+} as const;
+
+/** Every full-width row (group label, spacer, step heading) spans all five. */
+const columnCount = 5;
+
+/**
  * Sessions by CPU, busiest first. CPU jitters every sample, so sessions are
  * compared in whole percent and an equal pair keeps its previous order
  * rather than swapping back and forth; memory breaks any remaining tie.
@@ -212,7 +230,7 @@ function cpuOrder<T extends { id: string; rssBytes: number; reading: SessionMemo
 function SortHeader({ active, ascending, className, label, onSort }: { active: boolean; ascending: boolean; className: string; label: string; onSort: () => void }) {
 	const Arrow = active && ascending ? ChevronUp : ChevronDown;
 	return (
-		<th aria-sort={active ? (ascending ? "ascending" : "descending") : undefined} className={cn("bg-popover pb-2 pt-3 text-right font-medium", className)} scope="col">
+		<th aria-sort={active ? (ascending ? "ascending" : "descending") : undefined} className={cn("bg-popover pb-2 pt-3 font-medium", className)} scope="col">
 			<button
 				className={cn(
 					"inline-flex items-center gap-1 rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
@@ -286,19 +304,19 @@ export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow
 		<table className="w-full table-fixed border-collapse text-xs" data-testid="session-memory-table">
 			<colgroup>
 				<col />
-				<col className="w-20" />
-				<col className="w-24" />
-				<col className="w-28" />
-				<col className="w-16" />
+				<col className={columnWidth.type} />
+				<col className={columnWidth.pid} />
+				<col className={columnWidth.memory} />
+				<col className={columnWidth.cpu} />
 			</colgroup>
 			{/* The columns stay readable however far the list scrolls. */}
 			<thead className="sticky top-8 z-10 bg-popover">
 				<tr className="border-b border-(--color-border-settings-dialog-header) text-xs text-settings-muted">
-					<th className="bg-popover px-4 pb-2 pt-3 text-left font-medium" scope="col">{t("shell.memoryColumnName")}</th>
-					<th className="bg-popover px-2 pb-2 pt-3 text-left font-medium" scope="col">{t("shell.memoryColumnType")}</th>
-					<th className="bg-popover px-4 pb-2 pt-3 text-right font-medium" scope="col">{t("shell.memoryColumnPid")}</th>
-					<SortHeader active={sort.by === "memory"} ascending={sort.ascending} className="px-3" label={t("shell.memoryColumnRss")} onSort={() => sortBy("memory")} />
-					<SortHeader active={sort.by === "cpu"} ascending={sort.ascending} className="px-4" label={t("shell.memoryColumnCpu")} onSort={() => sortBy("cpu")} />
+					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.name)} scope="col">{t("shell.memoryColumnName")}</th>
+					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.type)} scope="col">{t("shell.memoryColumnType")}</th>
+					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.pid)} scope="col">{t("shell.memoryColumnPid")}</th>
+					<SortHeader active={sort.by === "memory"} ascending={sort.ascending} className={cell.memory} label={t("shell.memoryColumnRss")} onSort={() => sortBy("memory")} />
+					<SortHeader active={sort.by === "cpu"} ascending={sort.ascending} className={cell.cpu} label={t("shell.memoryColumnCpu")} onSort={() => sortBy("cpu")} />
 				</tr>
 			</thead>
 			<tbody className="[&_tr:not(.memory-group)+tr.memory-row]:border-t [&_tr.memory-row]:border-(--color-border-settings-dialog-header)">
@@ -469,26 +487,42 @@ export function SessionMemoryPanel({
 function GroupRow({ label }: { label: string }) {
 	return (
 		<tr className="memory-group">
-			<td className="pb-2 pt-6 text-xs font-medium leading-4 text-settings-muted first:pt-0" colSpan={5}>{label}</td>
+			<td className="pb-2 pt-6 text-xs font-medium leading-4 text-settings-muted first:pt-0" colSpan={columnCount}>{label}</td>
 		</tr>
 	);
 }
 
-/** A session is not a process, so its PID cell says what is under it and
- * that the row opens: "3 processes ›". */
-function ProcessCountCell({ count, isExpanded }: { count: number; isExpanded: boolean }) {
+/** The top of a row's process tree, copyable, to find the whole tree in btop
+ * or Activity Monitor. */
+function RootPidCell({ pid }: { pid: number | undefined }) {
 	const { t } = useTranslation();
 	return (
-		<td className="whitespace-nowrap px-4 py-2 text-right align-middle text-xs text-settings-muted" data-testid="session-memory-process-count">
-			{count > 0 && !isExpanded ? t("shell.memoryProcessCount", { count }) : null}
+		<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs tabular-nums", cell.pid)}>
+			{pid !== undefined ? (
+				<CopyControl
+					copiedLabel={t("shell.memoryPidCopied", { pid })}
+					label={t("shell.memoryCopyPid", { pid })}
+					testId="session-memory-root-pid"
+					value={() => String(pid)}
+				>
+					<span>{pid}</span>
+				</CopyControl>
+			) : null}
 		</td>
 	);
+}
+
+/** How many processes a row holds, under its title. */
+function ProcessCount({ count }: { count: number }) {
+	const { t } = useTranslation();
+	if (count === 0) return null;
+	return <span data-testid="session-memory-process-count">{t("shell.memoryProcessCount", { count })}</span>;
 }
 
 /** Memory cell: the number over a bar scaled to the biggest row, so "which one is the pig" reads at a glance. */
 function MemoryCell({ bytes, maxBytes, tone }: { bytes: number; maxBytes: number; tone: ChipTone }) {
 	return (
-		<td className="whitespace-nowrap px-3 py-2 text-right align-middle font-mono text-xs tabular-nums">
+		<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs tabular-nums", cell.memory)}>
 			<span className={cn("font-medium", tone === "critical" ? "text-destructive" : tone === "warning" ? "text-warning" : "text-settings-label")}>
 				{formatMemory(bytes)}
 			</span>
@@ -542,7 +576,7 @@ function SessionRow({
 				onKeyDown={canExpand ? toggleOnKeyDown(onToggle) : undefined}
 				tabIndex={canExpand ? 0 : undefined}
 			>
-				<td className="px-4 py-2 align-middle">
+				<td className={cn("py-2 align-middle", cell.name)}>
 					<div className="flex items-center gap-1.5">
 						<ChevronRight
 							aria-hidden="true"
@@ -550,17 +584,17 @@ function SessionRow({
 						/>
 						<div className="min-w-0">
 							<div className="truncate text-sm font-medium text-settings-label" title={session.title}>{session.title}</div>
-							<StatusLine current={reading.activity?.current} session={session} working={working} />
+							<StatusLine count={reading.processes.length} current={reading.activity?.current} session={session} working={working} />
 						</div>
 					</div>
 				</td>
 				{/* Collapsed, the type is which agent runs the session; opened, each line has its own. */}
-				<td className="whitespace-nowrap px-2 py-2 align-middle font-mono text-xs text-passive" data-testid="session-memory-type">
+				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs text-passive", cell.type)} data-testid="session-memory-type">
 					{session.provider ?? ""}
 				</td>
-				<ProcessCountCell count={reading.processes.length} isExpanded={isExpanded} />
+				<RootPidCell pid={rootPid(reading.processes)} />
 				<MemoryCell bytes={reading.rssBytes} maxBytes={maxBytes} tone={chip} />
-				<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-xs tabular-nums text-settings-muted">
+				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs tabular-nums text-settings-muted", cell.cpu)}>
 					{formatCPU(reading.cpuPercent)}
 				</td>
 			</tr>
@@ -593,20 +627,23 @@ function statusText(current: SessionStepReading | undefined, session: WorkspaceS
 	return since === "now" ? t("shell.memoryRowIdle") : t("shell.memoryRowIdleFor", { time: since });
 }
 
-function StatusLine({ current, session, working }: { current?: SessionStepReading; session: WorkspaceSession; working: boolean }) {
+function StatusLine({ count, current, session, working }: { count: number; current?: SessionStepReading; session: WorkspaceSession; working: boolean }) {
 	const { t } = useTranslation();
 	return (
-		<div className="truncate text-xs text-settings-muted" data-testid="session-memory-status">
-			{statusText(current, session, working, t)}
+		<div className="truncate text-xs text-settings-muted">
+			<span data-testid="session-memory-status">{statusText(current, session, working, t)}</span>
+			{count > 0 ? " · " : null}
+			<ProcessCount count={count} />
 		</div>
 	);
 }
 
 /**
  * One session as plain text: who it is, what it is doing,
- * what it costs the machine, and what it has been running. Process IDs are
- * deliberately left out — they mean nothing to whoever reads the report —
- * and so are tool arguments, which can carry paths and prompts.
+ * what it costs the machine, and what it has been running. Per-process IDs
+ * are deliberately left out — they mean nothing to whoever reads the report —
+ * and so are tool arguments, which can carry paths and prompts. The session's
+ * top PID is the exception: it finds the whole tree in btop.
  */
 export function sessionReport(
 	session: WorkspaceSession,
@@ -631,7 +668,8 @@ export function sessionReport(
 	const cost = formatEstimatedCost(usage?.estimatedCost);
 	const tokens = usage?.processedTokens != null ? formatTokenCount(usage.processedTokens) : undefined;
 	if (cost || tokens) lines.push(`Usage    ${[cost, tokens].filter(Boolean).join(" · ")}`);
-	lines.push(`Memory   ${formatMemory(reading.rssBytes)} · CPU ${formatCPU(reading.cpuPercent)} · ${reading.sampledAt}`);
+	const top = rootPid(reading.processes);
+	lines.push(`Memory   ${formatMemory(reading.rssBytes)} · CPU ${formatCPU(reading.cpuPercent)}${top !== undefined ? ` · PID ${top}` : ""} · ${reading.sampledAt}`);
 
 	const tree = processTree(reading.processes);
 	if (tree.length > 0) {
@@ -696,14 +734,14 @@ function RecentSteps({ steps }: { steps: SessionStepReading[] }) {
 	return (
 		<>
 			<tr>
-				<td className="pb-1 pl-11 pt-2 text-xs font-medium text-settings-muted" colSpan={5}>{t("shell.memoryRecent")}</td>
+				<td className="pb-1 pl-11 pt-2 text-xs font-medium text-settings-muted" colSpan={columnCount}>{t("shell.memoryRecent")}</td>
 			</tr>
 			{steps.map((step) => {
 				const started = new Date(step.startedAt);
 				const duration = step.endedAt ? Date.parse(step.endedAt) - started.getTime() : undefined;
 				return (
 					<tr className="text-xs" data-testid="session-memory-step-row" key={`${step.startedAt}-${step.tool}`}>
-						<td className="py-1 pl-11 pr-4 font-mono">
+						<td className={cn("py-1 font-mono", cell.process)}>
 							<div className="flex min-w-0 items-baseline gap-3">
 								<span className="shrink-0 text-passive">{started.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
 								<span className={cn("min-w-0 truncate", step.failed ? "text-error" : "text-settings-label")}>{step.tool}</span>
@@ -713,7 +751,7 @@ function RecentSteps({ steps }: { steps: SessionStepReading[] }) {
 						<td />
 						<td />
 						<td />
-						<td className="whitespace-nowrap px-4 py-1 text-right font-mono tabular-nums text-passive">
+						<td className={cn("whitespace-nowrap py-1 font-mono tabular-nums text-passive", cell.cpu)}>
 							{duration !== undefined && duration >= 1000 ? formatDuration(duration) : "·"}
 						</td>
 					</tr>
@@ -737,21 +775,26 @@ function OwnRow({ isExpanded, maxBytes, onToggle, reading }: { isExpanded: boole
 				onKeyDown={canExpand ? toggleOnKeyDown(onToggle) : undefined}
 				tabIndex={canExpand ? 0 : undefined}
 			>
-				<td className="px-4 py-2 align-middle">
+				<td className={cn("py-2 align-middle", cell.name)}>
 					<div className="flex items-center gap-1.5">
 						<ChevronRight
 							aria-hidden="true"
 							className={cn("size-icon-2xs shrink-0 text-passive transition-transform", canExpand ? "opacity-100" : "opacity-0", isExpanded && "rotate-90")}
 						/>
-						<div className="truncate text-sm font-medium text-settings-label">{t("shell.memoryOwnRow")}</div>
+						<div className="min-w-0">
+							<div className="truncate text-sm font-medium text-settings-label">{t("shell.memoryOwnRow")}</div>
+							<div className="truncate text-xs text-settings-muted">
+								<ProcessCount count={reading.processes.length} />
+							</div>
+						</div>
 					</div>
 				</td>
-				<td className="whitespace-nowrap px-2 py-2 align-middle font-mono text-xs text-passive" data-testid="session-memory-type">
+				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs text-passive", cell.type)} data-testid="session-memory-type">
 					{t("shell.memoryCategory.ao")}
 				</td>
-				<ProcessCountCell count={reading.processes.length} isExpanded={isExpanded} />
+				<RootPidCell pid={rootPid(reading.processes)} />
 				<MemoryCell bytes={reading.rssBytes} maxBytes={maxBytes} tone="neutral" />
-				<td className="whitespace-nowrap px-4 py-2 text-right align-middle font-mono text-xs tabular-nums text-settings-muted">{formatCPU(reading.cpuPercent)}</td>
+				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs tabular-nums text-settings-muted", cell.cpu)}>{formatCPU(reading.cpuPercent)}</td>
 			</tr>
 			{isExpanded ? <ProcessRows own processes={reading.processes} /> : null}
 			{isExpanded ? <SpacerRow /> : null}
@@ -763,7 +806,7 @@ function OwnRow({ isExpanded, maxBytes, onToggle, reading }: { isExpanded: boole
 function SpacerRow() {
 	return (
 		<tr aria-hidden="true">
-			<td className="h-2 p-0" colSpan={5} />
+			<td className="h-2 p-0" colSpan={columnCount} />
 		</tr>
 	);
 }
@@ -803,12 +846,13 @@ export function processTree(processes: SessionMemoryReading["processes"]): { pro
 function ProcessRows({ processes, own = false }: { processes: SessionMemoryReading["processes"]; own?: boolean }) {
 	const { t } = useTranslation();
 	const { rows, other } = useMemo(() => processList(processes, { own }), [processes, own]);
+	const root = useMemo(() => rootPid(processes), [processes]);
 	const [showAll, setShowAll] = useState(false);
 	const toggle = () => setShowAll((current) => !current);
 	return (
 		<>
 			{[...rows, ...(showAll && other ? other.rows : [])].map((row) => (
-				<ProcessRow key={row.pid} row={row} />
+				<ProcessRow isRoot={row.pid === root} key={row.pid} row={row} />
 			))}
 			{other ? (
 				<tr
@@ -819,7 +863,7 @@ function ProcessRows({ processes, own = false }: { processes: SessionMemoryReadi
 					onKeyDown={toggleOnKeyDown(toggle)}
 					tabIndex={0}
 				>
-					<td className="py-1 pl-11 pr-4 font-mono text-passive">
+					<td className={cn("py-1 font-mono text-passive", cell.process)}>
 						<span className="flex min-w-0 items-center gap-1" title={showAll ? undefined : other.commands.join("\n")}>
 							<span className="truncate">{showAll ? t("shell.memoryProcessFewer") : t("shell.memoryProcessOther", { count: other.count })}</span>
 							<ChevronRight aria-hidden="true" className={cn("size-icon-2xs shrink-0 transition-transform", showAll ? "-rotate-90" : "rotate-90")} />
@@ -827,8 +871,8 @@ function ProcessRows({ processes, own = false }: { processes: SessionMemoryReadi
 					</td>
 					<td />
 					<td />
-					<td className="whitespace-nowrap px-4 py-1 text-right font-mono tabular-nums text-settings-muted">{showAll ? null : formatMemory(other.bytes)}</td>
-					<td className="whitespace-nowrap px-4 py-1 text-right font-mono tabular-nums text-passive">
+					<td className={cn("whitespace-nowrap py-1 font-mono tabular-nums text-settings-muted", cell.memory)}>{showAll ? null : formatMemory(other.bytes)}</td>
+					<td className={cn("whitespace-nowrap py-1 font-mono tabular-nums text-passive", cell.cpu)}>
 						{showAll ? null : other.cpu >= 1 ? formatCPU(other.cpu) : "·"}
 					</td>
 				</tr>
@@ -837,28 +881,35 @@ function ProcessRows({ processes, own = false }: { processes: SessionMemoryReadi
 	);
 }
 
-function ProcessRow({ row }: { row: ProcessListRow }) {
+function ProcessRow({ isRoot, row }: { isRoot: boolean; row: ProcessListRow }) {
 	const { t } = useTranslation();
 	return (
 		<tr className="text-xs" data-testid="session-memory-process-row">
-			<td className="py-1 pl-11 pr-4 font-mono text-settings-muted">
+			<td className={cn("py-1 font-mono text-settings-muted", cell.process)}>
 				<span className="block truncate" title={row.commands.join("\n")}>{row.kind}</span>
 			</td>
-			<td className="whitespace-nowrap px-2 py-1 font-mono text-passive" data-testid="session-memory-process-type">
+			<td className={cn("whitespace-nowrap py-1 font-mono text-passive", cell.type)} data-testid="session-memory-process-type">
 				<span title={t(`shell.memoryCategoryHint.${row.category}`)}>{t(`shell.memoryCategory.${row.category}`)}</span>
 			</td>
-			<td className="whitespace-nowrap px-4 py-1 text-right align-middle font-mono tabular-nums">
-				<CopyControl
-					copiedLabel={t("shell.memoryPidCopied", { pid: row.pid })}
-					label={t("shell.memoryCopyPid", { pid: row.pid })}
-					testId="session-memory-pid"
-					value={() => String(row.pid)}
-				>
-					<span>{row.pid}</span>
-				</CopyControl>
+			<td className={cn("whitespace-nowrap py-1 align-middle font-mono tabular-nums", cell.pid)}>
+				{/* The session row already shows this PID: the top of the tree. */}
+				{isRoot ? (
+					<span className="text-passive" data-testid="session-memory-pid-root" title={t("shell.memoryRootPidHint")}>
+						↑
+					</span>
+				) : (
+					<CopyControl
+						copiedLabel={t("shell.memoryPidCopied", { pid: row.pid })}
+						label={t("shell.memoryCopyPid", { pid: row.pid })}
+						testId="session-memory-pid"
+						value={() => String(row.pid)}
+					>
+						<span>{row.pid}</span>
+					</CopyControl>
+				)}
 			</td>
-			<td className="whitespace-nowrap px-4 py-1 text-right font-mono tabular-nums text-settings-muted">{formatMemory(row.bytes)}</td>
-			<td className="whitespace-nowrap px-4 py-1 text-right font-mono tabular-nums text-passive">{row.cpu >= 1 ? formatCPU(row.cpu) : "·"}</td>
+			<td className={cn("whitespace-nowrap py-1 font-mono tabular-nums text-settings-muted", cell.memory)}>{formatMemory(row.bytes)}</td>
+			<td className={cn("whitespace-nowrap py-1 font-mono tabular-nums text-passive", cell.cpu)}>{row.cpu >= 1 ? formatCPU(row.cpu) : "·"}</td>
 		</tr>
 	);
 }

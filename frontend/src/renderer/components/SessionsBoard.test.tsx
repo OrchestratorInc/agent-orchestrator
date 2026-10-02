@@ -108,6 +108,7 @@ vi.mock("../lib/platform", async (importOriginal) => {
 });
 
 import { archiveToggleHeightClassName, archiveToggleOffsetClassName } from "@aoagents/product-ui";
+import { useUiStore } from "../stores/ui-store";
 import { SessionsBoard } from "./SessionsBoard";
 import { toBoardSessionPresentation } from "./SessionsBoardAdapters";
 import { TooltipProvider } from "./ui/tooltip";
@@ -135,6 +136,8 @@ async function expandArchive() {
 }
 
 beforeEach(() => {
+	// The memory light and card chips are Developer mode tools.
+	useUiStore.setState({ developerMode: true });
 	navigateMock.mockReset();
 	notificationShowMock.mockReset().mockResolvedValue(undefined);
 	postMock.mockReset().mockResolvedValue({ data: {} });
@@ -177,6 +180,23 @@ describe("SessionsBoard", () => {
 		expect(screen.getAllByTestId("session-resource")).toHaveLength(1);
 		expect(screen.getByTestId("session-resource")).toHaveTextContent("612 MB");
 		expect(screen.getByTestId("session-resource")).toHaveAttribute("data-resource-tone", "neutral");
+	});
+
+	it("shows no memory light or card memory outside Developer mode", async () => {
+		useUiStore.setState({ developerMode: false });
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({ id: "running", title: "Running task", status: "idle", activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" } })])],
+			isSuccess: true, isError: false,
+		});
+		sessionMemoryMock.mockReturnValue({
+			isError: false,
+			data: new Map([["running", { sessionId: "running", rssBytes: 641_728_512, processCount: 3, cpuPercent: 82.4, sampledAt: "", processes: [] }]]),
+		});
+		appMemoryMock.mockReturnValue({ isError: false, data: { app: { rssBytes: 2 * 1024 ** 3, processCount: 4, cpuPercent: 0 }, liveCount: 1 } });
+		renderBoard("p1");
+		expect(await screen.findByText("Running task")).toBeInTheDocument();
+		expect(screen.queryByTestId("session-resource")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("app-memory-indicator")).not.toBeInTheDocument();
 	});
 
 	it("shows AO memory pressure in the archive bar even with nothing archived", async () => {

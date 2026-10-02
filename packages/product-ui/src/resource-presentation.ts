@@ -254,6 +254,20 @@ export function processCategories(processes: ResourceProcess[]): Map<number, Pro
 }
 
 /**
+ * The top of a row's process tree: the process whose parent is not in the
+ * list (AO's host for a session), the largest if there are several. Searching
+ * it in btop's tree view shows everything under it.
+ */
+export function rootPid(processes: ResourceProcess[]): number | undefined {
+	const pids = new Set(processes.map((p) => p.pid));
+	let top: ResourceProcess | undefined;
+	for (const p of processes) {
+		if ((p.ppid === p.pid || !pids.has(p.ppid)) && (!top || p.rssBytes > top.rssBytes)) top = p;
+	}
+	return top?.pid;
+}
+
+/**
  * A short flat list for the screen: console hosts and launchers folded into
  * the program they serve, one row per program, largest first, and anything
  * past the first ten summed into one "other" row. Every byte lands in exactly one

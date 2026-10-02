@@ -197,8 +197,8 @@ describe("AppMemoryIndicator", () => {
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		const table = await screen.findByTestId("session-memory-table");
 		expect(within(table).getAllByRole("columnheader").map((th) => th.textContent)).toEqual(["Name", "Type", "PID", "Memory", "CPU"]);
-		// A session is not a process: its PID cell says what is under it and that the row opens.
-		expect(within(within(table).getAllByTestId("session-memory-row")[0]).getByTestId("session-memory-process-count")).toHaveTextContent("2 processes ›");
+		// How many processes a session holds sits under its title.
+		expect(within(within(table).getAllByTestId("session-memory-row")[0]).getByTestId("session-memory-process-count")).toHaveTextContent("2 processes");
 		expect(screen.getByTestId("session-memory-stacked")).toHaveTextContent("AO 2.0 GB");
 		expect(screen.getByTestId("session-memory-stacked")).toHaveTextContent("Available 20.0 GB");
 		expect(screen.getByTestId("session-memory-stacked")).not.toHaveTextContent("In use");
@@ -225,12 +225,17 @@ describe("AppMemoryIndicator", () => {
 		const own = within(table).getByTestId("session-memory-own-row");
 		expect(own).toHaveTextContent("Daemon and app");
 		expect(own).toHaveTextContent("300 MB");
-		expect(within(own).queryByRole("button")).not.toBeInTheDocument();
+		// AO's row has nothing to act on: its one button copies its PID.
+		expect(within(own).getAllByRole("button").map((button) => button.dataset.testid)).toEqual(["session-memory-root-pid"]);
 
 		// The window only measures: its rows copy, they never end a session.
 		expect(within(table).queryByRole("button", { name: /terminate|kill|pause/i })).not.toBeInTheDocument();
-		// The only buttons are the two sort headers.
-		expect(within(table).queryAllByRole("button").filter((button) => button.dataset.testid !== "session-memory-sort")).toHaveLength(0);
+		// The only buttons sort the list or copy a PID.
+		expect(
+			within(table)
+				.queryAllByRole("button")
+				.filter((button) => !["session-memory-sort", "session-memory-root-pid"].includes(button.dataset.testid ?? "")),
+		).toHaveLength(0);
 		expect(postMock).not.toHaveBeenCalled();
 	});
 
@@ -280,13 +285,18 @@ describe("AppMemoryIndicator", () => {
 		expect(children[0]).toHaveTextContent("claude");
 		expect(children[0]).toHaveTextContent("1.7 GB");
 		expect(children[0]).not.toHaveAttribute("aria-expanded");
-		// The PID sits in its own column, and a click copies it without toggling the row.
-		const pid = within(children[0]).getByTestId("session-memory-pid");
-		expect(pid).toHaveTextContent("111");
-		await userEvent.click(pid);
+		// claude is the top of this session's tree: its PID is on the session row, not repeated here.
+		expect(within(children[0]).getByTestId("session-memory-pid-root")).toHaveTextContent("↑");
+		const rootPid = within(bigRow).getByTestId("session-memory-root-pid");
+		expect(rootPid).toHaveTextContent("111");
+		await userEvent.click(rootPid);
 		expect(clipboardMock).toHaveBeenCalledWith("111");
-		expect(await within(children[0]).findByRole("button", { name: "Copied PID 111" })).toBeInTheDocument();
+		expect(await within(bigRow).findByRole("button", { name: "Copied PID 111" })).toBeInTheDocument();
+		// Copying did not close the row.
 		expect(screen.getAllByTestId("session-memory-process-row")).toHaveLength(2);
+		// Every other line copies its own PID.
+		await userEvent.click(within(children[1]).getByTestId("session-memory-pid"));
+		expect(clipboardMock).toHaveBeenCalledWith("222");
 		expect(children[1]).toHaveTextContent("go");
 		expect(children[1]).toHaveTextContent("222");
 		expect(children[1]).toHaveTextContent("434 MB");
@@ -359,6 +369,25 @@ describe("AppMemoryIndicator", () => {
 		expect(order()).toEqual(["big", "small"]);
 		// AO's own row is not a session: it stays last whatever the order.
 		expect(within(table).getAllByRole("row").at(-1)).toHaveAttribute("data-testid", "session-memory-own-row");
+	});
+
+	it("lines every column up with its header, and puts the session PID in the report", async () => {
+		renderButton();
+		await userEvent.click(screen.getByTestId("app-memory-indicator"));
+		const table = await screen.findByTestId("session-memory-table");
+		const headers = within(table).getAllByRole("columnheader");
+		const cells = within(within(table).getAllByTestId("session-memory-row")[0]).getAllByRole("cell");
+		// A row has exactly as many cells as the header has columns.
+		expect(cells).toHaveLength(headers.length);
+		// Header and body share each column's alignment and padding.
+		headers.slice(1).forEach((th, i) => {
+			for (const c of ["text-left", "text-right", "px-3", "pl-3", "pr-4"]) {
+				expect(cells[i + 1].classList.contains(c)).toBe(th.classList.contains(c));
+			}
+		});
+		// The copied report carries the session's top PID, to find it in btop.
+		await userEvent.click(screen.getByTestId("session-memory-copy"));
+		expect(clipboardMock.mock.calls.at(-1)?.[0]).toContain("CPU 82% · PID 111 ·");
 	});
 
 	it("opens a row from the keyboard alone: Tab to reach it, Enter or Space to open it", async () => {
@@ -528,8 +557,10 @@ describe("AppMemoryIndicator", () => {
 		expect(report).toMatch(/claude\s+1.7 GB\s+80%\s+Agent/);
 		// The child keeps its indent, and the tree is not truncated the way the screen truncates it.
 		expect(report).toMatch(/ {2}sh\s+434 MB\s+2%/);
-		// A process id means nothing to whoever reads the report; a tool's arguments may carry a path.
-		expect(report).not.toContain("111");
+		// The session's top PID finds its tree in btop; per-process IDs mean nothing to a reader,
+		// and a tool's arguments may carry a path.
+		expect(report).toContain("· PID 111 ·");
+		expect(report).not.toContain("222");
 		expect(report).not.toContain("go test");
 		expect(report).toContain("Edit");
 		expect(await screen.findByRole("button", { name: "Report copied" })).toBeInTheDocument();

@@ -29,6 +29,8 @@ const UpdatesSection = lazy(async () => {
 
 type CatalogContext = {
 	cloudEnabled: boolean;
+	/** The memory and CPU diagnostics page is a developer tool. */
+	developerMode?: boolean;
 	focusAgentId?: string;
 	harnessView?: "local" | "cloud";
 };
@@ -121,6 +123,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: Activity,
 		label: (t) => t("settings.diagnostics"),
 		pageOnly: true,
+		visible: ({ developerMode }) => developerMode === true,
 		render: (t, titleHidden) => (
 			<SettingsSection titleHidden={titleHidden} title={t("settings.diagnostics")}>
 				<MemoryDiagnostics />

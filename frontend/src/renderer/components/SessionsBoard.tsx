@@ -142,11 +142,15 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 		hasProjects: workspaces.length > 0,
 		hasWorkerSessions: liveSessions.length > 0,
 	});
-	const hasMemory = useHasAppMemory();
+	// Memory and CPU monitoring is a developer tool: the light, the card chips
+	// and the window behind them only exist in Developer mode.
+	const developerMode = useUiStore((state) => state.developerMode);
+	const hasMemory = useHasAppMemory() && developerMode;
 	// Per-session readings feed each card's resource chip. Chips are grey
 	// unless the machine is tight and the card is part of the fix (idle, or
 	// the single largest).
-	const memoryBySession = useSessionMemory(projectId).data;
+	const sessionMemory = useSessionMemory(projectId).data;
+	const memoryBySession = developerMode ? sessionMemory : undefined;
 	const pressure = usePressureState();
 	const chipToneOf = useMemo(() => {
 		const now = Date.now();
@@ -327,6 +331,7 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
+	const developerMode = useUiStore((state) => state.developerMode);
 	const restoreSessionById = useRestoreSession();
 	const [restoringSessionId, setRestoringSessionId] = useState<string | undefined>();
 	const [restoreErrors, setRestoreErrors] = useState<Record<string, string>>({});
@@ -399,7 +404,7 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 					archiveAria: t("shell.archiveSessionsAria", { count: sessions.length }),
 					archivedSessions: t("shell.archivedSessions"),
 				}}
-				trailing={<AppMemoryIndicator />}
+				trailing={developerMode ? <AppMemoryIndicator /> : undefined}
 				renderSessionCard={(session) => (
 					<ArchivedSessionCardAdapter
 						isRestoreDisabled={restoringSessionId !== undefined}

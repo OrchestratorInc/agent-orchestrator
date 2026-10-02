@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatResourceBytes, pressureStateFromRaw, type PressureState } from "@aoagents/product-ui";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
+import { useUiStore } from "../stores/ui-store";
 
 export type SessionMemoryReading = components["schemas"]["SessionMemoryResponse"];
 export type SessionStepReading = components["schemas"]["SessionStepResponse"];
@@ -69,8 +70,15 @@ export function useFastMemorySampling() {
 	}, [queryClient]);
 }
 
+/** Memory monitoring is a Developer mode tool: with it off, nothing polls the daemon. */
+function useMemoryEnabled(): boolean {
+	return useUiStore((state) => state.developerMode);
+}
+
 export function useSessionMemory(projectId?: string) {
+	const enabled = useMemoryEnabled();
 	return useQuery({
+		enabled,
 		...sessionMemoryQueryOptions(projectId),
 		select: (data: SessionMemoryResponse) =>
 			new Map(data.sessions.map((item) => [item.sessionId, item] as const)),
@@ -80,7 +88,9 @@ export function useSessionMemory(projectId?: string) {
 /** Host RAM and pressure. Shares the session-memory query, so mounting both
  * hooks costs one fetch, not two. Absent where unsupported. */
 export function useSystemMemory(projectId?: string) {
+	const enabled = useMemoryEnabled();
 	return useQuery({
+		enabled,
 		...sessionMemoryQueryOptions(projectId),
 		select: (data: SessionMemoryResponse) => data.system,
 	});
@@ -89,7 +99,9 @@ export function useSystemMemory(projectId?: string) {
 /** Everything AO runs, app-wide, for the status bar. Same query as the
  * sessions so the bar and the window it opens never disagree. */
 export function useAppMemory() {
+	const enabled = useMemoryEnabled();
 	return useQuery({
+		enabled,
 		...sessionMemoryQueryOptions(),
 		select: (data: SessionMemoryResponse) => ({
 			app: data.app,
@@ -107,7 +119,9 @@ export const memoryPressureRefetchIntervalMs = 10_000;
 export const memoryPressureQueryKey = ["memory-pressure"] as const;
 
 export function useMemoryPressure() {
+	const enabled = useMemoryEnabled();
 	return useQuery({
+		enabled,
 		queryKey: memoryPressureQueryKey,
 		queryFn: async (): Promise<MemoryPressureReading> => {
 			const { data, error } = await apiClient.GET("/api/v1/usage/memory/pressure");
