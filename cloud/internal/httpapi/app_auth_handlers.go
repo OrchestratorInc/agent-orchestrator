@@ -8,10 +8,10 @@ import "net/http"
 // than letting WorkOS redirect the browser straight to the ao-app:// custom
 // scheme — does two things:
 //
-//   1. The browser lands on a loadable page instead of hanging indefinitely on
-//      an unresolvable custom-scheme navigation (the "stuck loading tab").
-//   2. The OS "open Agent Orchestrator?" prompt is attributed to this AO-owned
-//      origin rather than the opaque WorkOS AuthKit subdomain.
+//  1. The browser lands on a loadable page instead of hanging indefinitely on
+//     an unresolvable custom-scheme navigation (the "stuck loading tab").
+//  2. The OS "open Agent Orchestrator?" prompt is attributed to this AO-owned
+//     origin rather than the opaque WorkOS AuthKit subdomain.
 //
 // The page does no server-side processing of the query: the desktop app performs
 // the PKCE code exchange. The OAuth result (code/state, or error) is read and
