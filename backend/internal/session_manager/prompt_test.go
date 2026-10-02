@@ -229,9 +229,9 @@ func TestBuildProjectRules_ReadsInlineAndFileRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := buildProjectRules(projectRulesConfig{
-		ProjectPath:    dir,
-		AgentRules:     "Inline rule.",
-		AgentRulesFile: "rules.md",
+		ProjectPath: dir,
+		Rules:       "Inline rule.",
+		RulesFile:   "rules.md",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -239,6 +239,20 @@ func TestBuildProjectRules_ReadsInlineAndFileRules(t *testing.T) {
 	for _, want := range []string{"Inline rule.", "File rule."} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rules missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBuildProjectRules_ErrorsNameConfigKey(t *testing.T) {
+	dir := t.TempDir()
+	for _, field := range []string{"agentRulesFile", "orchestratorRulesFile"} {
+		_, err := buildProjectRules(projectRulesConfig{ProjectPath: dir, RulesFile: "missing.md", RulesFileField: field})
+		if err == nil || !strings.Contains(err.Error(), "read "+field+" missing.md") {
+			t.Fatalf("missing file error should name %s, got %v", field, err)
+		}
+		_, err = buildProjectRules(projectRulesConfig{ProjectPath: dir, RulesFile: "../x.md", RulesFileField: field})
+		if err == nil || !strings.HasPrefix(err.Error(), field+":") {
+			t.Fatalf("traversal error should name %s, got %v", field, err)
 		}
 	}
 }

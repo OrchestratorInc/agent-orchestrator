@@ -40,11 +40,12 @@ Project settings expose the fields that AO consumes at spawn time:
 | `agentRules` | Inline standing instructions for workers |
 | `agentRulesFile` | Repo-relative rules file appended to worker instructions |
 | `orchestratorRules` | Standing instructions for orchestrator sessions |
+| `orchestratorRulesFile` | Repo-relative rules file appended to orchestrator instructions |
 | `reviewers` | Reviewer harnesses used for AO review runs |
 | `trackerIntake` | Opt-in, read-only issue intake that can spawn workers; inert unless the daemon also has `AO_TRACKER_INTAKE=on` |
 | `containerReap` | Project-wide opt-out from AO's session-container cleanup |
 
-`symlinks` and `agentRulesFile` must remain inside the repository. AO rejects absolute paths and traversal. Scratch rejects Git-only fields such as `defaultBranch` and symlinks.
+`symlinks`, `agentRulesFile`, and `orchestratorRulesFile` must remain inside the repository. AO rejects absolute paths and traversal. Scratch rejects Git-only fields such as `defaultBranch` and symlinks.
 
 `defaultBranch: "auto"` resolves each repository independently. AO selects the remote named by Git's `checkout.defaultRemote`, otherwise `origin`, otherwise the repository's only remote. It asks that remote for its symbolic `HEAD`, fetches the exact advertised branch, and can fall back to the same remote's cached `HEAD` while offline.
 
@@ -83,7 +84,7 @@ Choose the default interface in desktop project settings. Override it for a sing
 
 Use `env`, `symlinks`, and `postCreate` for repeatable workspace setup. A failing `postCreate` command prevents the agent from starting, so keep setup deterministic.
 
-Use `agentRules` or `agentRulesFile` for worker instructions and `orchestratorRules` for supervision-specific guidance. AO combines inline and file-based worker rules when both are present.
+Use `agentRules` or `agentRulesFile` for worker instructions and `orchestratorRules` or `orchestratorRulesFile` for supervision-specific guidance. AO combines inline and file-based rules for a role when both are present.
 
 ## Reviewer agents
 
@@ -177,6 +178,14 @@ orchestratorRules: |
   Split large issues into small worker tasks.
   Review worker output before asking for a merge.
 ```
+
+Use `orchestratorRulesFile` to keep orchestrator instructions in a versioned file, the same way as `agentRulesFile`:
+
+```yaml
+orchestratorRulesFile: docs/orchestrator-rules.md
+```
+
+AO reads rules files when a session is spawned or restored. A resumed conversation keeps the instructions it started with, so after editing a rules file use **Restart** on the orchestrator to start a fresh session that picks up the change.
 
 ## Split Orchestrator And Worker Roles
 
@@ -325,6 +334,7 @@ These fields are valid in a local project config:
 | `agentRules`                   | `string`   | Inline worker instructions                   |
 | `agentRulesFile`               | `string`   | Path to a rules file                         |
 | `orchestratorRules`            | `string`   | Orchestrator-only instructions               |
+| `orchestratorRulesFile`        | `string`   | Path to an orchestrator rules file           |
 | `orchestratorSessionStrategy`  | `string`   | Duplicate orchestrator recovery behavior     |
 | `opencodeIssueSessionStrategy` | `string`   | Duplicate OpenCode issue-session behavior    |
 | `decomposer`                   | `object`   | Advanced decomposition settings              |
