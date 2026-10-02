@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
-import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { ApprovalMode, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, TurnSettings } from "../../types/conversation";
 import type { WorkspaceSession } from "../../types/workspace";
 import { ChatWorkspace } from "./ChatWorkspace";
@@ -218,7 +217,6 @@ export function CloudSessionChatSurface({
 }) {
 	const cloud = session.cloud;
 	const { client, ready } = useCloudCp();
-	const openSessionLink = useSessionLinkNavigation(undefined, "cloud");
 	const queryClient = useQueryClient();
 	const settingsKey = `cloud-chat-settings:${cloud?.orgId ?? ""}:${session.id}:${session.provider}`;
 	const projectKey = `cloud-chat-approval:${cloud?.orgId ?? ""}:${session.workspaceId}:${session.provider}`;
@@ -345,7 +343,6 @@ export function CloudSessionChatSurface({
 	return (
 		<ChatWorkspace
 			snapshot={snapshot}
-			onSessionLinkOpen={openSessionLink}
 			models={modelsQuery.data?.models ?? []}
 			onChooseSettings={(next) => updateSettings({ ...settingsRef.current.settings, ...next })}
 			showApprovalMode={approvalModes.length > 0}

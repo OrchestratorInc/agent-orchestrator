@@ -15,13 +15,9 @@ const cloudMocks = vi.hoisted(() => ({
 	listChatModels: vi.fn(),
 	resumeSession: vi.fn(),
 	chatProps: vi.fn(),
-	openSessionLink: vi.fn(),
 }));
 vi.mock("../../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, client: cloudMocks }),
-}));
-vi.mock("../../lib/use-session-link-navigation", () => ({
-	useSessionLinkNavigation: () => cloudMocks.openSessionLink,
 }));
 vi.mock("./ChatWorkspace", () => ({
 	ChatWorkspace: (props: unknown) => {
