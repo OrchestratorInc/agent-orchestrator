@@ -211,18 +211,13 @@ const cell = {
 const columnCount = 5;
 
 /**
- * Sessions by CPU, busiest first. CPU jitters every sample, so sessions are
- * compared in whole percent and an equal pair keeps its previous order
- * rather than swapping back and forth; memory breaks any remaining tie.
+ * Sessions by CPU, busiest first, by the exact figure: memory plays no part.
+ * Only an exact tie (say, two idle sessions at 0) keeps its previous place,
+ * so those two do not swap on every sample.
  */
-function cpuOrder<T extends { id: string; rssBytes: number; reading: SessionMemoryReading }>(previous: string[], rows: T[]): T[] {
+function cpuOrder<T extends { id: string; reading: SessionMemoryReading }>(previous: string[], rows: T[]): T[] {
 	const rank = new Map(previous.map((id, i) => [id, i] as const));
-	return [...rows].sort(
-		(a, b) =>
-			Math.round(b.reading.cpuPercent) - Math.round(a.reading.cpuPercent) ||
-			(rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity) ||
-			b.rssBytes - a.rssBytes,
-	);
+	return [...rows].sort((a, b) => b.reading.cpuPercent - a.reading.cpuPercent || (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity));
 }
 
 /** A column header that orders the sessions by its own figure; a second click flips the direction. */

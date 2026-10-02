@@ -379,6 +379,24 @@ describe("AppMemoryIndicator", () => {
 		});
 	});
 
+	it("sorts by CPU alone, even below one percent, never by memory", async () => {
+		memoryQueryMock.mockReturnValue({
+			isError: false,
+			data: new Map([
+				["s-small", reading("s-small", 641_728_512, 1, [], 0.4)],
+				["s-big", reading("s-big", 2_254_857_830, 2, [], 0.1)],
+			]),
+		});
+		renderButton();
+		await userEvent.click(screen.getByTestId("app-memory-indicator"));
+		const table = await screen.findByTestId("session-memory-table");
+		const order = () => within(table).getAllByTestId("session-memory-row").map((row) => (row.textContent?.includes("big worker") ? "big" : "small"));
+		expect(order()).toEqual(["big", "small"]);
+		await userEvent.click(within(table).getAllByTestId("session-memory-sort")[1]);
+		// Both read 0% on screen, but 0.4% is busier than 0.1%: the smaller session leads.
+		expect(order()).toEqual(["small", "big"]);
+	});
+
 	it("opens a row from the keyboard alone: Tab to reach it, Enter or Space to open it", async () => {
 		renderButton();
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
