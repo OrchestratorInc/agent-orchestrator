@@ -140,7 +140,7 @@ const COPY_TOAST_MS = 1400;
 const LINK_PREVIEW_OPEN_MS = 300;
 /** Grace period to move the pointer from the link into the preview card. */
 const LINK_PREVIEW_CLOSE_MS = 300;
-const AUTOFOCUS_RETRY_FRAMES = 2;
+const AUTOFOCUS_RETRY_FRAMES = 6;
 const COLOR_SCHEME_UPDATE_MODE = 2031;
 const COLOR_SCHEME_QUERY = 996;
 
@@ -310,7 +310,9 @@ function canAutoFocusTerminal(host: HTMLElement): boolean {
 	return (
 		activeElement.matches("button[aria-current='page']") ||
 		activeElement.matches("button[data-terminal-focus-handoff='true']") ||
-		(activeElement.matches("button[role='tab'][aria-current]") &&
+		// Any control in the terminal topbar — tab buttons, the new-tab action,
+		// a tab's close button — is an intentional terminal focus handoff.
+		(activeElement.matches("button") &&
 			activeElement.closest('[data-testid="session-workspace-topbar"]') !== null)
 	);
 }
@@ -1561,6 +1563,18 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			writeln: (line) => term.writeln(line, scheduleScrollbarUpdate),
 			showLatestOutput,
 			prepareForActivation,
+			requestActivationFocus: () => {
+				// Parked terminals were deliberately blurred on switch-away and the
+				// autofocus effect's guarded attempt can be cancelled or refused by
+				// the momentary focus holder (issue #6140). The cache asks again on
+				// every re-activation; the guard below keeps this from stealing
+				// focus from dialogs or other legitimately focused controls.
+				window.setTimeout(() => {
+					const host = hostRef.current;
+					if (!host || callbacksRef.current.isVisible === false || !canAutoFocusTerminal(host)) return;
+					focusTerminal();
+				}, 0);
+			},
 			notifyCursorColorScheme: () => {
 				if (callbacksRef.current.supportsCursorColorScheme) {
 					notifyCursorScheme(callbacksRef.current.theme, false, true);

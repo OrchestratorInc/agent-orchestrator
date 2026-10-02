@@ -22,6 +22,7 @@ const {
 	getMock,
 	postMock,
 	prepareForActivationMock,
+	requestActivationFocusMock,
 	sendUserInputMock,
 	terminalError,
 	terminalState,
@@ -40,6 +41,7 @@ const {
 		getMock: vi.fn(async (_path: string, _options: unknown) => ({ data: undefined })),
 		postMock: vi.fn(),
 		prepareForActivationMock: vi.fn(async (): Promise<void> => undefined),
+		requestActivationFocusMock: vi.fn(),
 		sendUserInputMock: vi.fn(),
 		terminalError: { value: undefined as string | undefined },
 		terminalState: { value: "idle" },
@@ -118,6 +120,7 @@ vi.mock("./XtermTerminal", () => ({
 				writeln: vi.fn(),
 				showLatestOutput: vi.fn(),
 				prepareForActivation: prepareForActivationMock,
+				requestActivationFocus: requestActivationFocusMock,
 				notifyCursorColorScheme: vi.fn(),
 				sendUserInput: sendUserInputMock,
 				onUserInput: vi.fn(() => disposable),
@@ -182,6 +185,7 @@ beforeEach(() => {
 	attachMock.mockClear();
 	prepareForActivationMock.mockReset();
 	prepareForActivationMock.mockResolvedValue(undefined);
+	requestActivationFocusMock.mockReset();
 	sendUserInputMock.mockReset();
 	sendUserInputMock.mockReturnValue(true);
 	xtermMounts.value = 0;
@@ -742,6 +746,21 @@ describe("TerminalCacheProvider", () => {
 
 			view.show(tuiA);
 			await waitFor(() => expect(xtermFocusRequests.value).toBe(3));
+		} finally {
+			view.restore();
+		}
+	});
+
+	it("asks a retained terminal to restore focus on every re-activation", async () => {
+		const view = renderCachedPane({ session: sessionA, sessions: [sessionA, sessionB] });
+		try {
+			await waitFor(() => expect(requestActivationFocusMock).toHaveBeenCalledTimes(1));
+
+			view.show(sessionB);
+			await waitFor(() => expect(requestActivationFocusMock).toHaveBeenCalledTimes(2));
+
+			view.show(sessionA);
+			await waitFor(() => expect(requestActivationFocusMock).toHaveBeenCalledTimes(3));
 		} finally {
 			view.restore();
 		}

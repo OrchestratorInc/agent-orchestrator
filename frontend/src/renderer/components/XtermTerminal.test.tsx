@@ -605,6 +605,56 @@ describe("XtermTerminal", () => {
 		await waitFor(() => expect(state.lastTerminal!.focus).toHaveBeenCalled());
 	});
 
+	it("restores focus when the cache requests activation focus", async () => {
+		let terminal: AttachableTerminal | undefined;
+		render(<XtermTerminal theme="dark" onReady={(ready) => { terminal = ready; }} />);
+		state.lastTerminal!.focus.mockClear();
+
+		act(() => terminal!.requestActivationFocus());
+
+		await waitFor(() => expect(state.lastTerminal!.focus).toHaveBeenCalled());
+	});
+
+	it("does not steal focus from a dialog when the cache requests activation focus", () => {
+		vi.useFakeTimers();
+		try {
+			let terminal: AttachableTerminal | undefined;
+			render(<XtermTerminal theme="dark" onReady={(ready) => { terminal = ready; }} />);
+			state.lastTerminal!.focus.mockClear();
+			const dialog = document.createElement("div");
+			dialog.setAttribute("role", "dialog");
+			dialog.dataset.state = "open";
+			const dialogInput = document.createElement("input");
+			dialog.appendChild(dialogInput);
+			document.body.appendChild(dialog);
+			dialogInput.focus();
+
+			act(() => terminal!.requestActivationFocus());
+			act(() => vi.runAllTimers());
+
+			expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+			dialog.remove();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("allows any terminal topbar control to hand focus to the terminal", async () => {
+		const { rerender } = render(<XtermTerminal theme="dark" />);
+		const topbar = document.createElement("div");
+		topbar.dataset.testid = "session-workspace-topbar";
+		const action = document.createElement("button");
+		topbar.appendChild(action);
+		document.body.appendChild(topbar);
+		action.focus();
+		state.lastTerminal!.focus.mockClear();
+
+		rerender(<XtermTerminal focusRequested theme="dark" />);
+
+		await waitFor(() => expect(state.lastTerminal!.focus).toHaveBeenCalled());
+		topbar.remove();
+	});
+
 	it("updates the live terminal palette when the named color theme changes", () => {
 		const style = document.createElement("style");
 		style.textContent = `

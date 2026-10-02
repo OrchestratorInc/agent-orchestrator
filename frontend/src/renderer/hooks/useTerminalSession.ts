@@ -48,6 +48,12 @@ export type AttachableTerminal = {
 	 * without exposing an intermediate row.
 	 */
 	prepareForActivation: () => Promise<void>;
+	/**
+	 * Restore the caret after the owner re-activates a retained terminal (tab
+	 * switch back to this pane). Must stay guarded: it may not steal focus from
+	 * dialogs or other controls that legitimately hold it.
+	 */
+	requestActivationFocus: () => void;
 	/** Tell Cursor Agent the live light/dark scheme (private 997 notification). */
 	notifyCursorColorScheme: () => void;
 	/** Send an explicit UI action through the same guarded path as user input. */
