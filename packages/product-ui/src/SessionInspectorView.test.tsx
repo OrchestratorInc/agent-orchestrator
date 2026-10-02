@@ -187,9 +187,10 @@ describe("portable inspector presentations", () => {
   it("renders PR facts and host-owned actions from a neutral view model", () => {
     render(
       <InspectorPullRequestCardView
+        countNounLabel={(count, noun) => `${count} ${noun}s`}
         externalLink={ExternalLink}
         mergeAction={<button type="button">Merge</button>}
-        viewLabel="View PR"
+        openLabel="Open PR #12"
         pr={{
           additions: 4,
           author: "ada",
@@ -215,15 +216,14 @@ describe("portable inspector presentations", () => {
         }}
       />,
     );
-    const title = screen.getByText("Portable inspector");
-    expect(screen.queryByText("open", { exact: true })).not.toBeInTheDocument();
-    expect(screen.getByText("feature → main")).toBeInTheDocument();
-    expect(title.parentElement).toContainElement(screen.getByText("#12"));
-    expect(screen.queryByText("@ada")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Portable inspector" }),
+    ).toHaveAttribute("href", "https://example.com/pull/12");
+    expect(
+      screen.getByRole("link", { name: "Open PR #12" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Ready to merge")).toHaveClass("text-success");
     expect(screen.getByRole("button", { name: "Merge" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "View PR" })).toHaveAttribute("href", "https://example.com/pull/12");
-    expect(screen.getAllByRole("link")).toHaveLength(1);
   });
 
   it("renders timeline events with current-state marker treatment", () => {

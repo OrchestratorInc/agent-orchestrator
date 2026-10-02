@@ -3,7 +3,6 @@ package httpapi
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -49,40 +48,8 @@ func (v *agentCredentialValidator) Validate(
 	agent, credentialType string,
 	secret []byte,
 ) error {
-	switch agent {
-	case "claude-code":
-		return v.validateClaude(ctx, credentialType, secret)
-	case "codex":
-		if credentialType == "auth_json" {
-			// Codex owns this refreshable credential document. AO intentionally
-			// does not inspect its fields; a non-empty JSON object is the only
-			// safe local validation before the worker hands it back to Codex.
-			var document map[string]json.RawMessage
-			if json.Unmarshal(secret, &document) != nil || document == nil {
-				return errInvalidAgentCredential
-			}
-			return nil
-		}
-		if credentialType != "api_key" && credentialType != "access_token" {
-			return errInvalidAgentCredential
-		}
-		return v.validateBearerEndpoint(
-			ctx,
-			"OpenAI",
-			strings.TrimRight(v.openAIBaseURL, "/")+"/models",
-			secret,
-		)
-	case "cursor":
-		if credentialType != "api_key" {
-			return errInvalidAgentCredential
-		}
-		return v.validateBearerEndpoint(
-			ctx,
-			"Cursor",
-			strings.TrimRight(v.cursorBaseURL, "/")+"/v1/me",
-			secret,
-		)
-	case "github":
+	// GitHub is validated here (it is a PAT provider, not a coding-agent harness).
+	if agent == "github" {
 		if credentialType != "personal_access_token" {
 			return errInvalidAgentCredential
 		}
@@ -92,9 +59,13 @@ func (v *agentCredentialValidator) Validate(
 			strings.TrimRight(v.githubBaseURL, "/")+"/user",
 			secret,
 		)
-	default:
+	}
+	// Every coding-agent harness carries its own validation business logic.
+	spec, ok := agentCredentialSpecFor(agent)
+	if !ok {
 		return errInvalidAgentCredential
 	}
+	return spec.validate(ctx, credentialType, secret, v)
 }
 
 func (v *agentCredentialValidator) validateClaude(
@@ -102,8 +73,16 @@ func (v *agentCredentialValidator) validateClaude(
 	credentialType string,
 	secret []byte,
 ) error {
-	if credentialType == "oauth_token" && len(secret) == 0 {
-		return errInvalidAgentCredential
+	if credentialType == "oauth_token" {
+		s := string(secret)
+		// #nosec G101 -- checks a public credential-format prefix, not a secret value.
+		if len(s) == 0 || strings.HasPrefix(s, "sk-ant-api") {
+			// Empty secrets are never valid. An sk-ant-api* shape in the oauth_token
+			// path is a structural misclassification: api keys use x-api-key, not
+			// Bearer auth. Reject here before the live probe so a mislabeled key is
+			// never persisted to the cloud as an OAuth credential.
+			return errInvalidAgentCredential
+		}
 	}
 	request, err := http.NewRequestWithContext(
 		ctx,
@@ -122,6 +101,7 @@ func (v *agentCredentialValidator) validateClaude(
 		request.Header.Set("x-api-key", string(secret))
 	case "oauth_token":
 		request.Header.Set("Authorization", "Bearer "+string(secret))
+		request.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
 		request.Header.Set("x-app", "cli")
 	default:
 		return errInvalidAgentCredential

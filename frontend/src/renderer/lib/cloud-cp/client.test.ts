@@ -1,7 +1,170 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCloudCpClient } from "./client";
 
+describe("Cloud control-plane interface transitions", () => {
+	it("preserves caller message ids for Cloud send retries and steering", async () => {
+		const fetchImpl = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ event: {} }), { status: 202, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		await client.sendSessionMessage("org", "session", { text: "retry me" }, { idempotencyKey: "stable-message-id" });
+		await client.steerTurn("org", "session", "turn", { text: "change course" }, { idempotencyKey: "stable-steer-id" });
+		expect((fetchImpl.mock.calls[0]?.[1] as RequestInit).headers).toBeInstanceOf(Headers);
+		expect(((fetchImpl.mock.calls[0]?.[1] as RequestInit).headers as Headers).get("Idempotency-Key")).toBe("stable-message-id");
+		expect(fetchImpl.mock.calls[1]?.[0]).toContain("/turns/turn/steer");
+		expect(((fetchImpl.mock.calls[1]?.[1] as RequestInit).headers as Headers).get("Idempotency-Key")).toBe("stable-steer-id");
+	});
+	it("routes an ACP approval decision to the session request", async () => {
+		const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 202, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test/api/cloud/v1", getToken: async () => "token", fetchImpl });
+		await client.decideChatApproval("org", "session", "request", "allow-once");
+		expect(fetchImpl.mock.calls[0]?.[0]).toContain("/orgs/org/sessions/session/approvals/request/decide");
+		expect(JSON.parse((fetchImpl.mock.calls[0]?.[1] as RequestInit).body as string)).toEqual({ decisionId: "allow-once" });
+	});
+
+	it("cancels an active interface transition through the Cloud API", async () => {
+		const fetchImpl = vi.fn().mockResolvedValue(
+			new Response(JSON.stringify({ ok: true }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+		const client = createCloudCpClient({
+			baseUrl: "https://cloud.example.test",
+			getToken: async () => "bearer-token",
+			fetchImpl,
+		});
+
+		await expect(client.cancelInterfaceTransition("org/a", "session b")).resolves.toEqual({ ok: true });
+		expect(fetchImpl).toHaveBeenCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2Fa/sessions/session%20b/interface-transition",
+			expect.objectContaining({ method: "DELETE" }),
+		);
+	});
+
+	it("acknowledges an interface transition notice through the Cloud API", async () => {
+		const fetchImpl = vi.fn().mockResolvedValue(
+			new Response(JSON.stringify({ ok: true }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+		const client = createCloudCpClient({
+			baseUrl: "https://cloud.example.test",
+			getToken: async () => "bearer-token",
+			fetchImpl,
+		});
+
+		await expect(
+			client.acknowledgeInterfaceTransitionNotice("org/a", "session b", "transition/c"),
+		).resolves.toEqual({ ok: true });
+		expect(fetchImpl).toHaveBeenCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2Fa/sessions/session%20b/interface-transition/transition%2Fc/notice-acknowledgement",
+			expect.objectContaining({ method: "PUT" }),
+		);
+	});
+});
+
 describe("cloud control-plane session lifecycle", () => {
+	it("pages startup events through JSON without opening an SSE stream", async () => {
+		const page = { events: [{ sessionId: "session/1", sequence: 4, type: "worker.ready", payload: {}, createdAt: "2026-09-29T00:00:00Z" }], hasMore: false, nextAfter: 4 };
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify(page), {
+			status: 200,
+			headers: { "Content-Type": "application/json" },
+		}));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+		await expect(client.listChatEvents("org/1", "session/1", { after: 3, limit: 500 })).resolves.toEqual(page);
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/chat-events?after=3&limit=500",
+			expect.objectContaining({ method: "GET" }),
+		);
+		expect(new Headers((fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0]?.[1].headers).get("authorization")).toBe("Bearer token");
+	});
+
+	it("uses the organization GitHub App installation and repository routes", async () => {
+		const responses = [
+			{ installationUrl: "https://github.com/apps/ao/installations/new", expiresAt: "2026-09-22T12:00:00Z" },
+			{ installations: [] },
+			{ items: [], page: { hasMore: false } },
+			{ project: { id: "project-1" } },
+		];
+		const fetchMock = vi.fn(async () =>
+			new Response(JSON.stringify(responses.shift()), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+		const client = createCloudCpClient({
+			baseUrl: "https://cloud.example.test",
+			getToken: async () => "token",
+			fetchImpl: fetchMock as typeof fetch,
+		});
+
+		await client.startGitHubInstallation("org/1");
+		await client.listGitHubInstallations("org/1");
+		await client.listGitHubRepositories("org/1");
+		await client.createGitHubProject("org/1", {
+			githubRepositoryId: "42",
+			displayName: "widgets",
+			config: { worker: { agent: "codex" } },
+		});
+
+		const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+		expect(calls.map(([url]) => url)).toEqual([
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/github/installations/start",
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/github/installations",
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/github/repositories",
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/github/projects",
+		]);
+		expect(calls[0]?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
+		expect(calls[3]?.[1]).toEqual(expect.objectContaining({
+			method: "POST",
+			body: JSON.stringify({
+				githubRepositoryId: "42",
+				displayName: "widgets",
+				config: { worker: { agent: "codex" } },
+			}),
+		}));
+	});
+
+	it("loads detailed pull requests for a cloud session", async () => {
+		const fetchMock = vi.fn(async () =>
+			new Response(JSON.stringify({ sessionId: "session/1", pullRequests: [] }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+		const client = createCloudCpClient({
+			baseUrl: "https://cloud.example.test/",
+			getToken: async () => "token",
+			fetchImpl: fetchMock as typeof fetch,
+		});
+
+		const response = await client.listSessionPullRequests("org/1", "session/1");
+
+		expect(response).toEqual({ sessionId: "session/1", pullRequests: [] });
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/pull-requests",
+			expect.objectContaining({ method: "GET" }),
+		);
+	});
+
+	it("merges a cloud pull request with its URL and reviewed head", async () => {
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "merge_accepted" }), {
+			status: 202,
+			headers: { "Content-Type": "application/json" },
+		}));
+		const client = createCloudCpClient({
+			baseUrl: "https://cloud.example.test",
+			getToken: async () => "token",
+			fetchImpl: fetchMock as typeof fetch,
+		});
+		await expect(client.mergePullRequest("org/1", "session/1", 7, "https://github.com/acme/repo/pull/7", "abc123"))
+			.resolves.toEqual({ status: "merge_accepted" });
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/pull-requests/7/merge",
+			expect.objectContaining({ method: "POST", body: JSON.stringify({ prUrl: "https://github.com/acme/repo/pull/7", expectedHeadSha: "abc123" }) }),
+		);
+	});
+
 	it("posts explicit resume intent for one encoded session", async () => {
 		const fetchMock = vi.fn(async () =>
 			new Response(
@@ -127,6 +290,33 @@ describe("cloud control-plane session lifecycle", () => {
 		expect(fetchMock).toHaveBeenCalledWith(
 			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/restore",
 			expect.objectContaining({ method: "POST" }),
+		);
+	});
+
+	it("patches automatic CI feedback for one cloud session", async () => {
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify({ session: { id: "session/1", autoInjectCI: false } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test/", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+
+		await client.setSessionAutoInjectCI("org/1", "session/1", false);
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/auto-inject-ci",
+			expect.objectContaining({ method: "PATCH", body: JSON.stringify({ autoInjectCI: false }) }),
+		);
+	});
+
+	it.each([
+		["review feedback", "setSessionAutoInjectReview", "auto-inject-review", "autoInjectReview"],
+		["terminate-on-merge", "setSessionMergePolicy", "merge-policy", "terminateOnPrMerge"],
+	] as const)("patches %s for one cloud session", async (_label, method, path, field) => {
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify({ session: { id: "session/1", [field]: false } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test/", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+
+		await client[method]("org/1", "session/1", false);
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			`https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/${path}`,
+			expect.objectContaining({ method: "PATCH", body: JSON.stringify({ [field]: false }) }),
 		);
 	});
 });

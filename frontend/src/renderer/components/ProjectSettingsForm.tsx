@@ -20,6 +20,7 @@ import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices"
 import { WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
 import { OrchestratorSpawnError, spawnOrchestrator } from "../lib/spawn-orchestrator";
+import { useSettings } from "../hooks/useSettings";
 import { captureRendererEvent } from "../lib/telemetry";
 import { type OrchestratorReplacementFailure, useUiStore } from "../stores/ui-store";
 import { newestActiveOrchestrator } from "../types/workspace";
@@ -52,6 +53,8 @@ type SettingsSaveResult = {
 export type ProjectSettingsSection = "general" | "agents";
 export type ProjectSettingsSaveState = {
 	phase: "idle" | "pending" | "saving" | "saved" | "failed";
+	dirty?: boolean;
+	requestPending?: boolean;
 	error?: string;
 	replacementError?: string;
 };
@@ -123,6 +126,8 @@ function SettingsBody({
 	const workspaceQuery = useWorkspaceQuery();
 	const config = project.config ?? {};
 	const isScratchProject = project.kind === "scratch";
+	const { settings } = useSettings();
+	const intakeVisible = !isScratchProject && !!settings?.trackerIntakeEnabled;
 	const workspace = workspaceQuery.data?.find((item) => item.id === projectId);
 	const activeOrchestrator = newestActiveOrchestrator(workspace?.sessions ?? []);
 	const intake: TrackerIntakeConfig = config.trackerIntake ?? {};
@@ -185,7 +190,7 @@ function SettingsBody({
 			intakeAssignee: patch.assignee ?? f.intakeAssignee,
 		}));
 	const effectiveIntakeRepo = form.intakeRepo.trim() || deriveRepoPath(project.repo);
-	const intakeSetupIncomplete = !isScratchProject && intakeNeedsRule(intakeForm);
+	const intakeSetupIncomplete = intakeVisible && intakeNeedsRule(intakeForm);
 	const reviewerWarning = reviewerTrustWarning(form.reviewerHarness);
 	const defaultReviewerHarness = WORKER_DEFAULT_REVIEWERS[form.workerAgent] ?? "claude-code";
 	const mutation = useMutation({
@@ -355,7 +360,7 @@ function SettingsBody({
 		if (key === lastSavedRef.current || key === failedKeyRef.current || mutation.isPending) return;
 		const timeout = window.setTimeout(() => {
 			const validation = validateProjectSettings(form, {
-				validateIntake: !isScratchProject,
+				validateIntake: intakeVisible,
 				originalDisplayName: project.name,
 			});
 			if (validation === "intake_assignee_required") {
@@ -387,6 +392,8 @@ function SettingsBody({
 		const mutationError = mutation.isError ? (mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")) : undefined;
 		const hasUnsavedChanges = JSON.stringify(form) !== lastSavedRef.current;
 		onSaveState?.({
+			dirty: hasUnsavedChanges && !intakeSetupIncomplete,
+			requestPending: mutation.isPending,
 			phase:
 				validationError || mutationError
 					? "failed"
@@ -430,7 +437,7 @@ function SettingsBody({
 				setSavedAt(null);
 				setReplacementError(null);
 				const validation = validateProjectSettings(form, {
-					validateIntake: !isScratchProject,
+					validateIntake: intakeVisible,
 					originalDisplayName: project.name,
 				});
 				if (validation === "intake_assignee_required") {
@@ -515,17 +522,19 @@ function SettingsBody({
 									}),
 								}}
 							/>
-							<ProjectSettingsSection title={t("settings.project.issues")} grouped>
-								<IntakeFields
-									variant="settings"
-									form={intakeForm}
-									onChange={patchIntake}
-									repoPreview={{
-										value: effectiveIntakeRepo,
-										host: deriveRepoHost(project.repo),
-									}}
-								/>
-							</ProjectSettingsSection>
+							{intakeVisible && (
+								<ProjectSettingsSection title={t("settings.project.issues")} grouped>
+									<IntakeFields
+										variant="settings"
+										form={intakeForm}
+										onChange={patchIntake}
+										repoPreview={{
+											value: effectiveIntakeRepo,
+											host: deriveRepoHost(project.repo),
+										}}
+									/>
+								</ProjectSettingsSection>
+							)}
 							<ProjectSettingsSection title={t("settings.project.pullRequests")} grouped>
 								<div className="settings-row-bar">
 									<div className="flex shrink-0 items-center gap-1.5">
@@ -845,7 +854,6 @@ function AgentModelField({
 						agentLabel={agentId}
 						onRefresh={refreshCatalog}
 						refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
-						lastSuccessAt={catalog?.lastSuccessAt}
 						refreshError={catalog?.refreshError}
 						retryAt={catalog?.retryAt}
 						disabled={(query.isFetching && !catalog) || agentId === ""}

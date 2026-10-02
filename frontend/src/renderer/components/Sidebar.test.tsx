@@ -164,6 +164,10 @@ vi.mock("../lib/bridge", async (importOriginal) => {
 	};
 });
 
+vi.mock("../hooks/useSettings", () => ({
+	useSettings: () => ({ settings: { trackerIntakeEnabled: true }, isLoading: false, error: undefined }),
+}));
+
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
 	hasTrustedApiBaseUrl: () => false,
@@ -196,6 +200,13 @@ const session: WorkspaceSession = {
 	updatedAt: "2026-06-30T00:00:00Z",
 	prs: [],
 };
+
+// The row archive is confirmed, not instant: open the shared modal and accept.
+async function confirmArchiveFromRow(row: HTMLElement) {
+	fireEvent.click(within(row).getByLabelText("Archive session"));
+	const dialog = await screen.findByRole("dialog");
+	fireEvent.click(within(dialog).getByRole("button", { name: "Confirm, archive session" }));
+}
 
 const exitedOrchestrator: WorkspaceSession = {
 	...session,
@@ -336,6 +347,19 @@ function renderSidebar({
 		</QueryClientProvider>,
 	);
 	return onRemoveProject;
+}
+
+function mockAgentReadinessResponse(response: {
+	data: { agents: ReturnType<typeof agentReadiness>[] };
+	error: undefined;
+} | Promise<{
+	data: { agents: ReturnType<typeof agentReadiness>[] };
+	error: undefined;
+}>) {
+	const fallback = getMock.getMockImplementation();
+	getMock.mockImplementation((path: string) =>
+		path === "/api/v1/agents/readiness" ? Promise.resolve(response) : fallback?.(path),
+	);
 }
 
 /** Projects restore their persisted disclosure state. */
@@ -756,6 +780,36 @@ describe("Sidebar", () => {
 		expect(request?.nonce ?? 0).toBeGreaterThan(before);
 	});
 
+	it("opens the standalone board from the Scratchpad archived sessions action", () => {
+		renderSidebar({
+			workspaces: [
+				{
+					id: STANDALONE_WORKSPACE_ID,
+					name: "Scratchpad",
+					kind: STANDALONE_PROJECT_KIND,
+					path: "",
+					sessions: [
+						{
+							...session,
+							id: "adhoc-archived",
+							title: "archived",
+							workspaceId: STANDALONE_WORKSPACE_ID,
+							workspaceName: "Scratchpad",
+							isTerminated: true,
+							status: "terminated",
+						},
+					],
+				},
+			],
+		});
+
+		const archiveAction = screen.getByRole("button", { name: "Archived sessions" }).closest("[data-scratchpad-archive-action]");
+		expect(archiveAction).toHaveClass("opacity-0", "scale-[0.8]");
+		fireEvent.click(screen.getByRole("button", { name: "Archived sessions" }));
+
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/sessions" });
+	});
+
 	it("opens a new ad hoc agent directly from the ad hoc row action", async () => {
 		const user = userEvent.setup();
 		renderSidebar({
@@ -1005,7 +1059,7 @@ describe("Sidebar", () => {
 		expect(screen.getByLabelText("Project actions for Project One")).toHaveProperty("tabIndex", 0);
 		expect(screen.getByLabelText("Pin session")).toHaveProperty("tabIndex", 0);
 		expect(screen.queryByRole("button", { name: "Rename fix login" })).not.toBeInTheDocument();
-		expect(screen.getByLabelText("Kill session")).toHaveProperty("tabIndex", 0);
+		expect(screen.getByLabelText("Archive session")).toHaveProperty("tabIndex", 0);
 	});
 
 	it("fades the message age out in favor of the overlaid hover actions", () => {
@@ -1372,7 +1426,7 @@ describe("Sidebar", () => {
 		const user = userEvent.setup();
 		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
-		getMock.mockResolvedValueOnce({
+		mockAgentReadinessResponse({
 			data: {
 				agents: [
 					agentReadiness("goose", "Goose"),
@@ -1825,7 +1879,7 @@ describe("Sidebar", () => {
 		const user = userEvent.setup();
 		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
-		getMock.mockResolvedValueOnce({
+		mockAgentReadinessResponse({
 			data: {
 				agents: [
 					agentReadiness("claude-code", "Claude Code"),
@@ -1865,7 +1919,7 @@ describe("Sidebar", () => {
 			data: { agents: ReturnType<typeof agentReadiness>[] };
 			error: undefined;
 		}) => void;
-		getMock.mockReturnValueOnce(
+		mockAgentReadinessResponse(
 			new Promise((resolve) => {
 				resolveAgents = resolve;
 			}),
@@ -2147,6 +2201,74 @@ describe("Sidebar", () => {
 
 		expect(screen.queryByText("Project 11")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Show 4 more projects" })).toBeInTheDocument();
+	});
+
+	it("keeps the active project row at the top of the scroller", () => {
+		mockParams.projectId = "proj-1";
+		const other: WorkspaceSummary = {
+			...workspace,
+			id: "proj-2",
+			name: "Project Two",
+			path: "/repo/project-two",
+		};
+
+		renderSidebar({ workspaces: [workspace, other] });
+
+		const activeRow = document.querySelector('[data-project-drag-row][data-project-id="proj-1"]');
+		expect(activeRow).toHaveClass("sticky", "top-0", "z-20", "bg-sidebar");
+	});
+
+	it("caps each project's agent list at 6 until its Show more is clicked", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: Array.from({ length: 9 }, (_, index) => ({
+						...session,
+						id: `proj-1-${index + 1}`,
+						title: `Agent ${index + 1}`,
+						// Descending so sortedWorkerSessions keeps the fixture order.
+						updatedAt: `2026-06-${30 - index}T00:00:00Z`,
+					})),
+				},
+			],
+		});
+
+		const list = screen.getByTestId("session-list-proj-1");
+		expect(within(list).getByText("Agent 6")).toBeInTheDocument();
+		expect(screen.queryByText("Agent 7")).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Show 3 more agents" }));
+
+		expect(screen.getByText("Agent 7")).toBeInTheDocument();
+		expect(screen.getByText("Agent 9")).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Show fewer agents" }));
+
+		expect(screen.queryByText("Agent 7")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show 3 more agents" })).toBeInTheDocument();
+	});
+
+	it("lifts a project's agent cap when the open session sits past it", () => {
+		mockParams.projectId = "proj-1";
+		mockParams.sessionId = "proj-1-8";
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: Array.from({ length: 9 }, (_, index) => ({
+						...session,
+						id: `proj-1-${index + 1}`,
+						title: `Agent ${index + 1}`,
+						updatedAt: `2026-06-${30 - index}T00:00:00Z`,
+					})),
+				},
+			],
+		});
+
+		expect(screen.getByText("Agent 8")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show fewer agents" })).toBeInTheDocument();
 	});
 
 	it("fits the project list to content up to the full available height", async () => {
@@ -2530,6 +2652,34 @@ describe("Sidebar", () => {
 		expect(screen.queryByLabelText("Open merged terminated task")).not.toBeInTheDocument();
 	});
 
+	it("confirms before archiving a session and names the action archive, not delete", async () => {
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		const row = screen.getByLabelText("Open fix login").closest<HTMLElement>("[data-session-row]")!;
+		const archiveButton = within(row).getByLabelText("Archive session");
+		expect(archiveButton.querySelector("svg")).toHaveClass("lucide-archive");
+
+		fireEvent.click(archiveButton);
+		expect(postMock).not.toHaveBeenCalled();
+
+		const dialog = await screen.findByRole("dialog", {
+			name: "Are you sure you want to archive fix login?",
+		});
+		expect(dialog).toHaveTextContent("You can always restore fix login from the Archive section later.");
+		fireEvent.click(within(dialog).getByRole("button", { name: "No" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		expect(postMock).not.toHaveBeenCalled();
+
+		await confirmArchiveFromRow(row);
+
+		await waitFor(() =>
+			expect(postMock).toHaveBeenCalledWith(
+				"/api/v1/sessions/{sessionId}/kill",
+				expect.objectContaining({ params: { path: { sessionId: "proj-1-1" } } }),
+			),
+		);
+	});
+
 	it("shifts to the adjacent session when deleting the active session", async () => {
 		mockParams.projectId = "proj-1";
 		mockParams.sessionId = "proj-1-2";
@@ -2546,7 +2696,7 @@ describe("Sidebar", () => {
 		});
 
 		const row = screen.getByLabelText("Open second task").closest<HTMLElement>("[data-session-row]")!;
-		fireEvent.click(within(row).getByLabelText("Kill session"));
+		await confirmArchiveFromRow(row);
 
 		await waitFor(() =>
 			expect(postMock).toHaveBeenCalledWith(
@@ -2584,7 +2734,7 @@ describe("Sidebar", () => {
 		});
 
 		const row = screen.getByLabelText("Open sole worker").closest<HTMLElement>("[data-session-row]")!;
-		fireEvent.click(within(row).getByLabelText("Kill session"));
+		await confirmArchiveFromRow(row);
 
 		await waitFor(() =>
 			expect(postMock).toHaveBeenCalledWith(
@@ -2614,7 +2764,7 @@ describe("Sidebar", () => {
 		});
 
 		const row = screen.getByLabelText("Open sole worker").closest<HTMLElement>("[data-session-row]")!;
-		fireEvent.click(within(row).getByLabelText("Kill session"));
+		await confirmArchiveFromRow(row);
 
 		await waitFor(() =>
 			expect(postMock).toHaveBeenCalledWith(
@@ -2647,7 +2797,7 @@ describe("Sidebar", () => {
 		});
 
 		const row = screen.getByLabelText("Open inactive task").closest<HTMLElement>("[data-session-row]")!;
-		fireEvent.click(within(row).getByLabelText("Kill session"));
+		await confirmArchiveFromRow(row);
 
 		await waitFor(() =>
 			expect(postMock).toHaveBeenCalledWith(
@@ -2675,7 +2825,7 @@ describe("Sidebar", () => {
 
 		const pinnedList = screen.getByTestId("pinned-session-list");
 		const row = within(pinnedList).getByLabelText("Open pinned task").closest<HTMLElement>("[data-session-row]")!;
-		fireEvent.click(within(row).getByLabelText("Kill session"));
+		await confirmArchiveFromRow(row);
 
 		await waitFor(() =>
 			expect(postMock).toHaveBeenCalledWith(
@@ -2709,7 +2859,7 @@ describe("Sidebar", () => {
 
 		const pinnedList = screen.getByTestId("pinned-session-list");
 		const row = within(pinnedList).getByLabelText("Open oldest pinned task").closest<HTMLElement>("[data-session-row]")!;
-		fireEvent.click(within(row).getByLabelText("Kill session"));
+		await confirmArchiveFromRow(row);
 
 		await waitFor(() =>
 			expect(postMock).toHaveBeenCalledWith(
@@ -2747,7 +2897,7 @@ describe("Sidebar", () => {
 		});
 
 		const row = screen.getByLabelText("Open first task").closest<HTMLElement>("[data-session-row]")!;
-		fireEvent.click(within(row).getByLabelText("Kill session"));
+		await confirmArchiveFromRow(row);
 
 		// Navigation occurs optimistically on click rather than waiting for daemon round-trip.
 		expect(navigateMock).toHaveBeenCalledWith({

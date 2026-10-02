@@ -380,6 +380,18 @@ type ConversationTurn struct {
 	HandledByReviewID    sql.NullString
 }
 
+type Cue struct {
+	ID          domain.CueID
+	ProjectID   domain.ProjectID
+	Name        string
+	Description string
+	Type        domain.CueType
+	Command     string
+	Prompt      string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 type ModelUsageEvent struct {
 	ID                    int64
 	BindingID             int64
@@ -415,6 +427,7 @@ type Notification struct {
 	CreatedAt   time.Time
 	ResolvedAt  sql.NullTime
 	DismissedAt sql.NullTime
+	SourceKey   string
 }
 
 type PR struct {
@@ -462,8 +475,6 @@ type PR struct {
 	ProviderID               string
 	AuthorAvatarURL          string
 	ReviewPartial            bool
-	DiscussionCommentCount   int64
-	DiscussionCommentersJson string
 }
 
 type PRCheck struct {

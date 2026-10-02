@@ -95,34 +95,70 @@ func (s *Service) ListPRSummaries(ctx context.Context, id domain.SessionID) ([]P
 	return out, nil
 }
 
+// PRListing keeps reported references separate from SCM facts and actions.
+type PRListing struct {
+	Tracked []PRSummary
+	Linked  []domain.ChangeRequestReference
+}
+
+// ListPRListing combines tracked PRs with created PRs reported by the worker.
+func (s *Service) ListPRListing(ctx context.Context, id domain.SessionID) (PRListing, error) {
+	tracked, err := s.ListPRSummaries(ctx, id)
+	if err != nil {
+		return PRListing{}, err
+	}
+	urls, err := s.store.ListReportedPRURLs(ctx, id)
+	if err != nil {
+		return PRListing{}, err
+	}
+	seen := make(map[string]bool, len(tracked)+len(urls))
+	for _, pr := range tracked {
+		ref, err := domain.ParseChangeRequestURL(pr.HTMLURL)
+		if err != nil {
+			ref, err = domain.ParseChangeRequestURL(pr.URL)
+		}
+		if err == nil {
+			seen[ref.Key()] = true
+		}
+	}
+	linked := make([]domain.ChangeRequestReference, 0, len(urls))
+	for _, raw := range urls {
+		ref, err := domain.ParseChangeRequestURL(raw)
+		if err != nil || seen[ref.Key()] {
+			continue
+		}
+		seen[ref.Key()] = true
+		linked = append(linked, ref)
+	}
+	return PRListing{Tracked: tracked, Linked: linked}, nil
+}
+
 func summarizePR(pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, threadsExact bool) PRSummary {
 	return PRSummary{
-		URL:                    pr.URL,
-		HTMLURL:                firstNonEmpty(pr.HTMLURL, pr.URL),
-		Number:                 pr.Number,
-		Title:                  pr.Title,
-		State:                  pullRequestState(pr),
-		Provider:               firstNonEmpty(pr.Provider, "github"),
-		Repo:                   pr.Repo,
-		Author:                 pr.Author,
-		AuthorAvatarURL:        pr.AuthorAvatarURL,
-		DiscussionCommentCount: pr.DiscussionCommentCount,
-		DiscussionCommenters:   pr.DiscussionCommenters,
-		SourceBranch:           pr.SourceBranch,
-		TargetBranch:           pr.TargetBranch,
-		HeadSHA:                pr.HeadSHA,
-		Additions:              pr.Additions,
-		Deletions:              pr.Deletions,
-		ChangedFiles:           pr.ChangedFiles,
-		CI:                     summarizeCI(pr, checks),
-		Review:                 summarizeReview(pr, comments, reviews, threads, threadsExact),
-		Mergeability:           summarizeMergeability(pr, threads),
-		StateChangedAt:         summarizePRStateChangedAt(pr),
-		CreatedAt:              pr.CreatedAtProvider,
-		UpdatedAt:              pr.UpdatedAt,
-		ObservedAt:             pr.ObservedAt,
-		CIObservedAt:           pr.CIObservedAt,
-		ReviewObservedAt:       pr.ReviewObservedAt,
+		URL:              pr.URL,
+		HTMLURL:          firstNonEmpty(pr.HTMLURL, pr.URL),
+		Number:           pr.Number,
+		Title:            pr.Title,
+		State:            pullRequestState(pr),
+		Provider:         firstNonEmpty(pr.Provider, "github"),
+		Repo:             pr.Repo,
+		Author:           pr.Author,
+		AuthorAvatarURL:  pr.AuthorAvatarURL,
+		SourceBranch:     pr.SourceBranch,
+		TargetBranch:     pr.TargetBranch,
+		HeadSHA:          pr.HeadSHA,
+		Additions:        pr.Additions,
+		Deletions:        pr.Deletions,
+		ChangedFiles:     pr.ChangedFiles,
+		CI:               summarizeCI(pr, checks),
+		Review:           summarizeReview(pr, comments, reviews, threads, threadsExact),
+		Mergeability:     summarizeMergeability(pr, threads),
+		StateChangedAt:   summarizePRStateChangedAt(pr),
+		CreatedAt:        pr.CreatedAtProvider,
+		UpdatedAt:        pr.UpdatedAt,
+		ObservedAt:       pr.ObservedAt,
+		CIObservedAt:     pr.CIObservedAt,
+		ReviewObservedAt: pr.ReviewObservedAt,
 	}
 }
 

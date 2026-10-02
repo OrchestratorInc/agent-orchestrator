@@ -35,6 +35,8 @@ import Disc from "lucide-react-native/icons/disc";
 import CloudDownload from "lucide-react-native/icons/cloud-download";
 import Pen from "lucide-react-native/icons/pen";
 import PenLine from "lucide-react-native/icons/pen-line";
+import Eye from "lucide-react-native/icons/eye";
+import EyeOff from "lucide-react-native/icons/eye-off";
 import ExternalLink from "lucide-react-native/icons/external-link";
 import FeatherGlyph from "lucide-react-native/icons/feather";
 import File from "lucide-react-native/icons/file";
@@ -68,6 +70,12 @@ import MicOff from "lucide-react-native/icons/mic-off";
 import Minus from "lucide-react-native/icons/minus";
 import CircleMinus from "lucide-react-native/icons/circle-minus";
 import Monitor from "lucide-react-native/icons/monitor";
+import MonitorCog from "lucide-react-native/icons/monitor-cog";
+import MonitorOff from "lucide-react-native/icons/monitor-off";
+import MonitorSmartphone from "lucide-react-native/icons/monitor-smartphone";
+import RouteOff from "lucide-react-native/icons/route-off";
+import Timer from "lucide-react-native/icons/timer";
+import Unplug from "lucide-react-native/icons/unplug";
 import Moon from "lucide-react-native/icons/moon";
 import Ellipsis from "lucide-react-native/icons/ellipsis";
 import Paperclip from "lucide-react-native/icons/paperclip";
@@ -149,6 +157,8 @@ export const glyphs = {
 	"download-cloud": CloudDownload,
 	"edit-2": Pen,
 	"edit-3": PenLine,
+	"eye": Eye,
+	"eye-off": EyeOff,
 	"external-link": ExternalLink,
 	"feather": FeatherGlyph,
 	"file": File,
@@ -182,6 +192,9 @@ export const glyphs = {
 	"minus": Minus,
 	"minus-circle": CircleMinus,
 	"monitor": Monitor,
+	"monitor-cog": MonitorCog,
+	"monitor-off": MonitorOff,
+	"monitor-smartphone": MonitorSmartphone,
 	"moon": Moon,
 	"more-horizontal": Ellipsis,
 	"paperclip": Paperclip,
@@ -196,6 +209,7 @@ export const glyphs = {
 	"repeat": Repeat,
 	"rotate-ccw": RotateCcw,
 	"rotate-cw": RotateCw,
+	"route-off": RouteOff,
 	"save": Save,
 	"search": Search,
 	"send": Send,
@@ -212,10 +226,12 @@ export const glyphs = {
 	"table": Table,
 	"terminal": Terminal,
 	"tool": Wrench,
+	"timer": Timer,
 	"trash": Trash,
 	"trash-2": Trash,
 	"type": Type,
 	"underline": Underline,
+	"unplug": Unplug,
 	"user": User,
 	"wifi-off": WifiOff,
 	"x": X,

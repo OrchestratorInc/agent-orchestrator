@@ -9,6 +9,9 @@ import {
 } from "@aoagents/product-ui";
 import { AlertTriangle, LayoutDashboard, RotateCw } from "lucide-react";
 import {
+	CLOUD_PROJECT_KIND,
+	STANDALONE_WORKSPACE_ID,
+	toProjectKind,
 	type WorkspaceSession,
 	newestActiveOrchestrator,
 	orchestratorHealth,
@@ -45,6 +48,7 @@ import {
 	BoardSessionCardAdapter,
 	sessionsBoardLabels,
 } from "./SessionsBoardAdapters";
+import { CueRunMenu } from "./chat/CueRunMenu";
 
 type SessionsBoardProps = {
 	/** When set, the board shows only this project's sessions. */
@@ -84,7 +88,9 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 	/** Bell lives in the board action row when the shell topbar does not host it. */
 	const boardOwnsNotificationCenter = isLinuxPlatform() || boardActionsInPanel;
 	const all = workspaceQuery.data ?? [];
-	const workspaces = projectId ? all.filter((workspace) => workspace.id === projectId) : all;
+	const workspaces = projectId
+		? all.filter((workspace) => workspace.id === projectId)
+		: all;
 	const workspace = projectId ? workspaces[0] : undefined;
 	// Board chrome stays route-oriented; project context remains in the sidebar.
 	const boardLabel = t("shell.board");
@@ -113,11 +119,15 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
 	const health = workspace ? orchestratorHealth(workspace, isProjectRestarting) : { state: "ok" as const };
-
 	const archived = sessions
 		.filter(isArchivedSession)
 		.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 	const activeSessions = sessions.filter((candidate) => !isArchivedSession(candidate));
+	const boardSessions = activeSessions.map((session) =>
+		session.status === "no_signal" || session.displayStatus === "No signal"
+			? { ...session, kanbanColumn: "building" as const }
+			: session,
+	);
 	const boardLabels = sessionsBoardLabels(t);
 	const { showStartup, showWelcome, showProjectEmpty, workspaceStartupState } = useBoardPresentation({
 		projectId,
@@ -131,11 +141,16 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 	const activeProjectIdRef = useRef(projectId);
 	activeProjectIdRef.current = projectId;
 
-	const openSession = useCallback((session: WorkspaceSession) =>
+	const openSession = useCallback((session: WorkspaceSession) => {
+		if (session.workspaceId === STANDALONE_WORKSPACE_ID) {
+			void navigate({ to: "/sessions/$sessionId", params: { sessionId: session.id } });
+			return;
+		}
 		void navigate({
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: session.workspaceId, sessionId: session.id },
-		}), [navigate]);
+		});
+	}, [navigate]);
 
 	const restartOrchestrator = async () => {
 		if (!projectId) return;
@@ -150,7 +165,13 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 
 	const actions = projectId ? (
 		<>
-			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} />
+			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />
+			{workspace && toProjectKind(workspace.kind) ? <span className="inline-flex">
+				<CueRunMenu
+					projectId={projectId}
+					disabled={isProjectRestarting || isProvisioning}
+				/>
+			</span> : null}
 			{boardOwnsNotificationCenter ? (
 				<>
 					<NotificationCenter />
@@ -245,7 +266,7 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 								usage={usageBySession.get(session.id)}
 							/>
 						)}
-						sessions={activeSessions}
+						sessions={boardSessions}
 					/>
 				)}
 			</div>
@@ -324,6 +345,10 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 			const result = await restoreSessionById(session.id);
 			if (!isStillActiveProject()) return;
 			if (result.status === "success") {
+				if (session.workspaceId === STANDALONE_WORKSPACE_ID) {
+					void navigate({ to: "/sessions/$sessionId", params: { sessionId: session.id } });
+					return;
+				}
 				void navigate({
 					to: "/projects/$projectId/sessions/$sessionId",
 					params: { projectId: session.workspaceId, sessionId: session.id },
