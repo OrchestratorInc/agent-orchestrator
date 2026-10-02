@@ -491,11 +491,15 @@ function GroupRow({ label }: { label: string }) {
 	);
 }
 
-/** How many processes a row holds, under its title. */
-function ProcessCount({ count }: { count: number }) {
+/** A session is not a process, so its PID cell says what is under it and
+ * that the row opens: "3 processes ›". */
+function ProcessCountCell({ count, isExpanded }: { count: number; isExpanded: boolean }) {
 	const { t } = useTranslation();
-	if (count === 0) return null;
-	return <span data-testid="session-memory-process-count">{t("shell.memoryProcessCount", { count })}</span>;
+	return (
+		<td className={cn("whitespace-nowrap py-2 align-middle text-xs text-settings-muted", cell.pid)} data-testid="session-memory-process-count">
+			{count > 0 && !isExpanded ? t("shell.memoryProcessCount", { count }) : null}
+		</td>
+	);
 }
 
 /** Memory cell: the number over a bar scaled to the biggest row, so "which one is the pig" reads at a glance. */
@@ -563,7 +567,7 @@ function SessionRow({
 						/>
 						<div className="min-w-0">
 							<div className="truncate text-sm font-medium text-settings-label" title={session.title}>{session.title}</div>
-							<StatusLine count={reading.processes.length} current={reading.activity?.current} session={session} working={working} />
+							<StatusLine current={reading.activity?.current} session={session} working={working} />
 						</div>
 					</div>
 				</td>
@@ -571,8 +575,7 @@ function SessionRow({
 				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs text-passive", cell.type)} data-testid="session-memory-type">
 					{session.provider ?? ""}
 				</td>
-				{/* A session is not a process: no PID of its own. */}
-				<td className={cell.pid} />
+				<ProcessCountCell count={reading.processes.length} isExpanded={isExpanded} />
 				<MemoryCell bytes={reading.rssBytes} maxBytes={maxBytes} tone={chip} />
 				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs tabular-nums text-settings-muted", cell.cpu)}>
 					{formatCPU(reading.cpuPercent)}
@@ -607,13 +610,11 @@ function statusText(current: SessionStepReading | undefined, session: WorkspaceS
 	return since === "now" ? t("shell.memoryRowIdle") : t("shell.memoryRowIdleFor", { time: since });
 }
 
-function StatusLine({ count, current, session, working }: { count: number; current?: SessionStepReading; session: WorkspaceSession; working: boolean }) {
+function StatusLine({ current, session, working }: { current?: SessionStepReading; session: WorkspaceSession; working: boolean }) {
 	const { t } = useTranslation();
 	return (
-		<div className="truncate text-xs text-settings-muted">
-			<span data-testid="session-memory-status">{statusText(current, session, working, t)}</span>
-			{count > 0 ? " · " : null}
-			<ProcessCount count={count} />
+		<div className="truncate text-xs text-settings-muted" data-testid="session-memory-status">
+			{statusText(current, session, working, t)}
 		</div>
 	);
 }
@@ -759,19 +760,13 @@ function OwnRow({ isExpanded, maxBytes, onToggle, reading }: { isExpanded: boole
 							aria-hidden="true"
 							className={cn("size-icon-2xs shrink-0 text-passive transition-transform", canExpand ? "opacity-100" : "opacity-0", isExpanded && "rotate-90")}
 						/>
-						<div className="min-w-0">
-							<div className="truncate text-sm font-medium text-settings-label">{t("shell.memoryOwnRow")}</div>
-							<div className="truncate text-xs text-settings-muted">
-								<ProcessCount count={reading.processes.length} />
-							</div>
-						</div>
+						<div className="truncate text-sm font-medium text-settings-label">{t("shell.memoryOwnRow")}</div>
 					</div>
 				</td>
 				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs text-passive", cell.type)} data-testid="session-memory-type">
 					{t("shell.memoryCategory.ao")}
 				</td>
-				{/* A session is not a process: no PID of its own. */}
-				<td className={cell.pid} />
+				<ProcessCountCell count={reading.processes.length} isExpanded={isExpanded} />
 				<MemoryCell bytes={reading.rssBytes} maxBytes={maxBytes} tone="neutral" />
 				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs tabular-nums text-settings-muted", cell.cpu)}>{formatCPU(reading.cpuPercent)}</td>
 			</tr>
