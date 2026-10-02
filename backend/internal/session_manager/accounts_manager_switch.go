@@ -74,6 +74,35 @@ func (m *Manager) StartAccountsManagerSwitch(ctx context.Context, id domain.Sess
 			m.agentSwitchWorkers.Done()
 		}
 	}()
+	// Probe only an exact no-op before closing input admission. Real switches
+	// reread and validate their state after the original operation admission.
+	operationActive := m.SessionMutationInProgress(id)
+	if rec, err := m.getRecord(ctx, id); err == nil && !rec.IsTerminated && rec.ProvisionState.WithDefault() == domain.SessionProvisionReady {
+		if provider, ok := accountsManagerProvider(rec.Harness); ok {
+			if binding, found, err := store.GetAccountsManagerSessionRoute(ctx, id, provider); err == nil && found && !binding.Blocked && binding.Mode == cfg.Mode && binding.AccountID == cfg.AccountID {
+				if operationActive || m.SessionMutationInProgress(id) {
+					return previous, errAgentOperationInProgress
+				}
+				latest, found, err := store.GetLatestAccountsManagerSwitch(ctx, id)
+				if err != nil {
+					return previous, err
+				}
+				if found && !latest.Phase.Terminal() {
+					return previous, domain.ErrAccountsManagerSwitchConflict
+				}
+				if m.SessionMutationInProgress(id) {
+					return previous, errAgentOperationInProgress
+				}
+				return domain.AccountsManagerSwitch{
+					ID: cfg.OperationID, SessionID: id, Provider: provider,
+					SourceMode: binding.Mode, SourceAccountID: binding.AccountID, SourceRevision: binding.Revision,
+					TargetMode: binding.Mode, TargetAccountID: binding.AccountID, TargetRevision: binding.Revision,
+					Policy: cfg.Policy, NewConversation: cfg.NewConversation, Phase: domain.AccountsManagerSwitchReady,
+					CreatedAt: binding.UpdatedAt, UpdatedAt: binding.UpdatedAt,
+				}, nil
+			}
+		}
+	}
 	if err := m.beginAgentOperation(ctx, id, agentOperationAccountSwitch); err != nil {
 		return previous, err
 	}
@@ -90,24 +119,6 @@ func (m *Manager) StartAccountsManagerSwitch(ctx context.Context, id domain.Sess
 	provider, ok := accountsManagerProvider(rec.Harness)
 	if !ok || rec.IsTerminated || rec.ProvisionState.WithDefault() != domain.SessionProvisionReady {
 		return previous, domain.ErrAccountsManagerSwitchConflict
-	}
-	// Only an exact no-op skips handoff validation. Other requests read the
-	// binding again at the original validation boundary, including lookup errors.
-	if binding, found, err := store.GetAccountsManagerSessionRoute(ctx, id, provider); err == nil && found && !binding.Blocked && binding.Mode == cfg.Mode && binding.AccountID == cfg.AccountID {
-		latest, found, err := store.GetLatestAccountsManagerSwitch(ctx, id)
-		if err != nil {
-			return previous, err
-		}
-		if found && !latest.Phase.Terminal() {
-			return previous, domain.ErrAccountsManagerSwitchConflict
-		}
-		return domain.AccountsManagerSwitch{
-			ID: cfg.OperationID, SessionID: id, Provider: provider,
-			SourceMode: binding.Mode, SourceAccountID: binding.AccountID, SourceRevision: binding.Revision,
-			TargetMode: binding.Mode, TargetAccountID: binding.AccountID, TargetRevision: binding.Revision,
-			Policy: cfg.Policy, NewConversation: cfg.NewConversation, Phase: domain.AccountsManagerSwitchReady,
-			CreatedAt: binding.UpdatedAt, UpdatedAt: binding.UpdatedAt,
-		}, nil
 	}
 	chatHandoff, chatSupported := m.chat.(accountsManagerChatHandoff)
 	if rec.Mode == domain.SessionModeChat {

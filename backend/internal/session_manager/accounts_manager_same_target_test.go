@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -118,11 +119,32 @@ func TestAccountsManagerSameTargetNoMutations(t *testing.T) {
 					if beforeVersion == control {
 						t.Fatal("mutation detector missed the positive control")
 					}
+					releaseInput, ok := m.AcquireSessionInput(rec.ID)
+					if !ok {
+						t.Fatal("could not acquire the initial input lease")
+					}
+					defer releaseInput()
+					m.store = sameTargetStore{Store: st, routeRead: func() (domain.AccountsManagerSessionRoute, bool, error) {
+						if release, ok := m.AcquireSessionInput(rec.ID); !ok {
+							t.Fatal("same target closed input admission during its binding read")
+						} else {
+							release()
+						}
+						return binding, true, nil
+					}}
 					var first domain.AccountsManagerSwitch
 					for i := range 2 {
-						op, err := m.StartAccountsManagerSwitch(t.Context(), rec.ID, cfg)
+						ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+						op, err := m.StartAccountsManagerSwitch(ctx, rec.ID, cfg)
+						cancel()
 						if err != nil {
-							t.Fatal(err)
+							t.Fatal("same target failed while a valid input lease remained held", err)
+						}
+						m.agentOpMu.Lock()
+						leases, fenced := m.inputLeases[rec.ID], m.agentOperationActiveLocked(rec.ID)
+						m.agentOpMu.Unlock()
+						if leases != 1 || fenced {
+							t.Fatalf("same target changed input state: leases=%d fenced=%v", leases, fenced)
 						}
 						if op.ID != cfg.OperationID || op.SessionID != rec.ID || op.Provider != binding.Provider || op.Phase != domain.AccountsManagerSwitchReady ||
 							op.SourceRevision != binding.Revision || op.TargetRevision != binding.Revision || op.TargetGeneration != "" ||
@@ -152,6 +174,29 @@ func TestAccountsManagerSameTargetNoMutations(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+func TestAccountsManagerDifferentTargetRetainsInputDrainBeforeValidation(t *testing.T) {
+	m, st, rt, _, rec, cfg := accountSwitchFixture(t)
+	rec.Metadata.RuntimeHandleID = ""
+	if err := st.UpdateSession(t.Context(), rec); err != nil {
+		t.Fatal(err)
+	}
+	release, ok := m.AcquireSessionInput(rec.ID)
+	if !ok {
+		t.Fatal("could not acquire the input lease")
+	}
+	defer release()
+	dataVersion := sameTargetDataVersion(t, rec.Metadata.WorkspacePath)
+	before := dataVersion()
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := m.StartAccountsManagerSwitch(ctx, rec.ID, cfg); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("different target skipped input draining before launch validation: %v", err)
+	}
+	if m.SessionMutationInProgress(rec.ID) || dataVersion() != before || rt.created != 0 || rt.destroyed != 0 {
+		t.Fatal("cancelled admission left a fence or mutated durable/runtime state")
 	}
 }
 
