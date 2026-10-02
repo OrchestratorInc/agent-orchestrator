@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/cloud/internal/attachments"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/auth"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/cifeedback"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/config"
@@ -403,7 +404,31 @@ func run(logger *slog.Logger) error {
 			break
 		}
 	}
+	attachmentStorage, err := attachments.FromEnvironment(ctx, cfg.Environment)
+	if err != nil {
+		return fmt.Errorf("configure attachment storage: %w", err)
+	}
+	if fs, ok := attachmentStorage.(*attachments.Filesystem); ok {
+		defer fs.Close()
+	}
+	if attachmentStorage != nil {
+		go func() {
+			ticker := time.NewTicker(time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := store.CleanupAttachments(ctx, attachmentStorage); err != nil {
+						logger.Warn("attachment cleanup failed")
+					}
+				}
+			}
+		}()
+	}
 	apiOptions := httpapi.Options{
+		AttachmentStorage:         attachmentStorage,
 		Store:                     store,
 		CoderTemplates:            coderTemplates,
 		Transcripts:               store.SessionTranscripts(),

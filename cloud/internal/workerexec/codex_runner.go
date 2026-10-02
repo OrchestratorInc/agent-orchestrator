@@ -145,7 +145,10 @@ type codexSession struct {
 }
 
 func (s *codexSession) Steer(ctx context.Context, turnID, text string) error {
-	if turnID != s.turnID || strings.TrimSpace(text) == "" {
+	return s.SteerImages(ctx, turnID, text, nil)
+}
+func (s *codexSession) SteerImages(ctx context.Context, turnID, text string, paths []string) error {
+	if turnID != s.turnID || (strings.TrimSpace(text) == "" && len(paths) == 0) {
 		return errors.New("the steer does not target this Codex turn")
 	}
 	s.mu.Lock()
@@ -160,7 +163,7 @@ func (s *codexSession) Steer(ctx context.Context, turnID, text string) error {
 	err := s.conn.request(ctx, "turn/steer", map[string]any{
 		"threadId":       s.threadID,
 		"expectedTurnId": providerID,
-		"input":          []map[string]any{{"type": "text", "text": text}},
+		"input":          codexImageInput(text, paths),
 	}, &result)
 	if err != nil {
 		return err
@@ -318,7 +321,7 @@ func (s *Supervisor) runCodex(ctx context.Context, turn worker.Turn, command Com
 	conn.onRequest = func(frame codexFrame) { handleCodexApproval(ctx, conn, control, turn, frame) }
 	conn.mu.Unlock()
 	turnParams := map[string]any{
-		"threadId": threadID, "input": []map[string]any{{"type": "text", "text": turn.Prompt}},
+		"threadId": threadID, "input": codexImageInput(turn.Prompt, turn.ImagePaths),
 		"approvalPolicy": policy, "approvalsReviewer": reviewer,
 		"sandboxPolicy": codexTurnSandbox(sandbox),
 	}
@@ -494,4 +497,15 @@ func handleCodexApproval(ctx context.Context, conn *codexRPC, control approvalCo
 		case <-ticker.C:
 		}
 	}
+}
+
+func codexImageInput(text string, paths []string) []map[string]any {
+	input := []map[string]any{}
+	if text != "" {
+		input = append(input, map[string]any{"type": "text", "text": text})
+	}
+	for _, path := range paths {
+		input = append(input, map[string]any{"type": "localImage", "path": path})
+	}
+	return input
 }

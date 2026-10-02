@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"io"
@@ -260,4 +261,40 @@ func trimNL(s string) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+func TestPreservedCheckpointExcludesImagesEvenWhenForceStaged(t *testing.T) {
+	ctx := context.Background()
+	git := worker.ExecGitRunner{}
+	root := t.TempDir()
+	origin := filepath.Join(root, "origin.git")
+	workspace := filepath.Join(root, "workspace")
+	mustGit(t, ctx, git, root, "init", "--bare", origin)
+	mustGit(t, ctx, git, root, "clone", origin, workspace)
+	configIdentity(t, ctx, git, workspace)
+	os.WriteFile(filepath.Join(workspace, "tracked.txt"), []byte("base"), 0600)
+	mustGit(t, ctx, git, workspace, "add", "-A")
+	mustGit(t, ctx, git, workspace, "commit", "-m", "base")
+	mustGit(t, ctx, git, workspace, "push", "origin", "HEAD:refs/heads/main")
+	os.MkdirAll(filepath.Join(workspace, ".ao", "attachments"), 0700)
+	os.WriteFile(filepath.Join(workspace, ".ao", "attachments", "image.png"), []byte("private pixels"), 0600)
+	mustGit(t, ctx, git, workspace, "add", "-f", ".ao/attachments/image.png")
+	if err := os.WriteFile(filepath.Join(workspace, "tracked.txt"), []byte("edited"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cp := &checkpointer{git: git, workspace: workspace, sessionID: "exclude-images", logger: discardLogger()}
+	ref, _, err := cp.preserveWork(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref == "" {
+		t.Fatal("checkpoint did not preserve the code edit")
+	}
+	out, err := exec.Command("git", "-C", workspace, "ls-tree", "-r", ref).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(out, []byte("attachments")) {
+		t.Fatal("image entered a checkpoint", string(out))
+	}
 }

@@ -1,3 +1,5 @@
+import { AttachmentPreview, type AttachmentPreviewResolver } from "./AttachmentPreview";
+import { CLOUD_IMAGE_LIMITS } from "../../lib/cloud-attachments";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 /**
  * The Chat composer.
@@ -154,6 +156,8 @@ export const ChatComposer = memo(function ChatComposer({
 	skills = [],
 	filePaths = [],
 	filePathsTruncated,
+	onUploadAttachments,
+	resolveAttachmentPreview,
 	onStageAttachments,
 	nativeImages,
 	onSteer,
@@ -190,6 +194,7 @@ export const ChatComposer = memo(function ChatComposer({
 		attachments?: FileAttachmentPayload[],
 		clientMessageId?: string,
 		retainedContent?: number[],
+		attachmentIds?: string[],
 	) => void | Promise<unknown>;
 	settings?: ReactNode;
 	/** A provider decision that temporarily replaces ordinary message entry. */
@@ -214,6 +219,8 @@ export const ChatComposer = memo(function ChatComposer({
 	 * can open. Absent means files cannot be delivered, and no attach control is
 	 * offered at all.
 	 */
+	onUploadAttachments?: (attachments: FileAttachment[]) => Promise<FileAttachment[]>;
+	resolveAttachmentPreview?: AttachmentPreviewResolver;
 	onStageAttachments?: (attachments: FileAttachmentPayload[]) => Promise<string[]>;
 	/** Send the same staged bytes as native ACP image blocks when negotiated. */
 	nativeImages?: boolean;
@@ -221,7 +228,13 @@ export const ChatComposer = memo(function ChatComposer({
 	 * Deliver this text into the turn already running. Absent means the harness
 	 * cannot steer and the choice is never offered.
 	 */
-	onSteer?: (text: string, attachments?: FileAttachmentPayload[], clientMessageId?: string, recoverOnly?: boolean) => Promise<ChatSteerOutcome | void>;
+	onSteer?: (
+		text: string,
+		attachments?: FileAttachmentPayload[],
+		clientMessageId?: string,
+		recoverOnly?: boolean,
+		attachmentIds?: string[],
+	) => Promise<ChatSteerOutcome | void>;
 	/** Expose steering as a separate action while a Cloud turn is running. */
 	showSteerButton?: boolean;
 	/** Stop the turn already running when there is no draft to send. */
@@ -373,14 +386,28 @@ export const ChatComposer = memo(function ChatComposer({
 				mimeType: attachment.mimeType,
 				bytes: attachment.bytes,
 				stagedPath: attachment.path,
+				attachmentId: attachment.attachmentId,
+				pendingUpload: attachment.pendingUpload,
 			})) ?? [],
 		[persistedDraft, draftSeed?.stagedAttachments],
 	);
 	const persistAttachments = useCallback(
 		(attachments: FileAttachment[]) => {
-			const descriptors = attachments.flatMap((attachment) => attachment.stagedPath
-				? [{ id: attachment.id, path: attachment.stagedPath, name: attachment.name, mimeType: attachment.mimeType, bytes: attachment.bytes }]
-				: []);
+			const descriptors = attachments.flatMap((attachment) =>
+				attachment.stagedPath || attachment.attachmentId
+					? [
+							{
+								id: attachment.id,
+								path: attachment.stagedPath ?? "",
+								attachmentId: attachment.attachmentId,
+								pendingUpload: attachment.pendingUpload,
+								name: attachment.name,
+								mimeType: attachment.mimeType,
+								bytes: attachment.bytes,
+							},
+						]
+					: [],
+			);
 			if (!draftScope) {
 				onQueuedAttachmentsChange?.(descriptors);
 				return;
@@ -429,11 +456,13 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [draftScope, draftScopeKey]);
 	const fileAttachments = useFileAttachments({
 		initialAttachments: restoredAttachments,
+		uploadFiles: onUploadAttachments,
+		limits: onUploadAttachments ? CLOUD_IMAGE_LIMITS : undefined,
 		initialKey: attachmentScopeKey,
 		prepareAttachments: onStageAttachments ? prepareAttachments : undefined,
 		onAttachmentsChange: persistAttachments,
 	});
-	const canAttach = Boolean(onStageAttachments) && !queuedEditRecovery;
+	const canAttach = Boolean(onStageAttachments || onUploadAttachments) && !queuedEditRecovery;
 
 	const slashCommands = useMemo<ChatSkill[]>(() => {
 		if (!onCompact || compactUnavailable === "This agent cannot compact its history") return skills;
@@ -751,6 +780,8 @@ export const ChatComposer = memo(function ChatComposer({
 					mimeType: attachment.mimeType,
 					bytes: attachment.bytes,
 					stagedPath: attachment.path,
+					attachmentId: attachment.attachmentId,
+					pendingUpload: attachment.pendingUpload,
 				})),
 			);
 		}
@@ -1039,15 +1070,18 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 			return;
 		}
-		if (hasAttachments && settledPaths.length !== settledAttachments.length) {
+		if (hasAttachments && !onUploadAttachments && settledPaths.length !== settledAttachments.length) {
 			setSendError("chat.draft.filesUnavailable");
 			return;
 		}
 		const shouldSteer = Boolean(forceSteer && !savingQueuedEdit);
-		const message = withAttachmentReferences(body, [
-			...visibleRetainedAttachments.flatMap((attachment) => attachment.path ? [attachment.path] : []),
-			...settledPaths,
-		]);
+		const attachmentIds = settledAttachments.flatMap((a) => (a.attachmentId ? [a.attachmentId] : []));
+		const message = onUploadAttachments
+			? body
+			: withAttachmentReferences(body, [
+					...visibleRetainedAttachments.flatMap((attachment) => (attachment.path ? [attachment.path] : [])),
+					...settledPaths,
+				]);
 		// Ordinary delivery reserves its exact draft before these staged reads await.
 		// Queue editors use their existing owner/revision CAS before mutation.
 		const attachmentScope = queuedDraftScope ?? draftScope;
@@ -1107,9 +1141,12 @@ export const ChatComposer = memo(function ChatComposer({
 			try {
 				if (clearForLocalEcho) clearEditorView();
 				if (shouldSteer && onSteer) {
-					const outcome = nativePayloads.length > 0
-						? await onSteer(message, nativePayloads)
-						: await onSteer(message);
+					const outcome =
+						nativePayloads.length > 0
+							? await onSteer(message, nativePayloads)
+							: onUploadAttachments
+								? await onSteer(message, undefined, undefined, undefined, attachmentIds)
+								: await onSteer(message);
 					if (outcome?.status === "not-accepted") {
 						setSteerOutcomeNotice(outcome.reason);
 						return;
@@ -1122,7 +1159,8 @@ export const ChatComposer = memo(function ChatComposer({
 				} else if (nativePayloads.length > 0) {
 					await onSend(message, nativePayloads);
 				} else {
-					await onSend(message);
+					if (onUploadAttachments) await onSend(message, undefined, undefined, undefined, attachmentIds);
+					else await onSend(message);
 				}
 				if (!clearForLocalEcho) clearEditorView();
 				fileAttachments.clear();
@@ -1154,14 +1192,18 @@ export const ChatComposer = memo(function ChatComposer({
 			nativeImages: sendNativeImages,
 			composerText: currentText,
 			attachments: settledAttachments.flatMap((attachment) =>
-				attachment.stagedPath
-					? [{
-							id: attachment.id,
-							path: attachment.stagedPath,
-							name: attachment.name,
-							mimeType: attachment.mimeType,
-							bytes: attachment.bytes,
-						}]
+				attachment.stagedPath || attachment.attachmentId
+					? [
+							{
+								id: attachment.id,
+								path: attachment.stagedPath ?? "",
+								attachmentId: attachment.attachmentId,
+								pendingUpload: attachment.pendingUpload,
+								name: attachment.name,
+								mimeType: attachment.mimeType,
+								bytes: attachment.bytes,
+							},
+						]
 					: [],
 			),
 			requestText,
@@ -1197,7 +1239,16 @@ export const ChatComposer = memo(function ChatComposer({
 			if (!isChatComposerMutationCurrent(draftScope, mutationToken)) return;
 			if (delivery.kind === "steer") {
 				if (!onSteer) throw new Error("Steering is unavailable");
-				const outcome = await onSteer(delivery.requestText, prepared.recovered || nativePayloads.length === 0 ? undefined : nativePayloads, delivery.clientMessageId, prepared.recovered);
+				const payloads = prepared.recovered || nativePayloads.length === 0 ? undefined : nativePayloads;
+				const outcome = onUploadAttachments
+					? await onSteer(
+							delivery.requestText,
+							payloads,
+							delivery.clientMessageId,
+							prepared.recovered,
+							attachmentIds,
+						)
+					: await onSteer(delivery.requestText, payloads, delivery.clientMessageId, prepared.recovered);
 				if (outcome?.status === "not-accepted") {
 					const cleared = clearRejectedChatComposerDelivery(
 						draftScope,
@@ -1218,11 +1269,10 @@ export const ChatComposer = memo(function ChatComposer({
 					return;
 				}
 			} else {
-				await onSend(
-					delivery.requestText,
-					sendNativeImages && nativePayloads.length > 0 ? nativePayloads : undefined,
-					delivery.clientMessageId,
-				);
+				const payloads = sendNativeImages && nativePayloads.length > 0 ? nativePayloads : undefined;
+				if (onUploadAttachments)
+					await onSend(delivery.requestText, payloads, delivery.clientMessageId, undefined, attachmentIds);
+				else await onSend(delivery.requestText, payloads, delivery.clientMessageId);
 			}
 			acceptAndClearDurableDelivery(delivery, mutationToken);
 			mutationFinished = true;
@@ -1375,8 +1425,11 @@ export const ChatComposer = memo(function ChatComposer({
 		draftPersistenceError ??
 		deliveryRecoveryNotice ??
 		sendError ??
-		(fileAttachments.attachments.some((file) => !file.data && !file.stagedPath)
-			? "chat.draft.filesUnavailable" : null) ??
+		(fileAttachments.attachments.some(
+			(file) => !file.data && !file.stagedPath && (!file.attachmentId || file.pendingUpload),
+		)
+			? "chat.draft.filesUnavailable"
+			: null) ??
 		commandError;
 	const withQueueStack = (form: ReactElement) =>
 		(
@@ -1481,7 +1534,17 @@ export const ChatComposer = memo(function ChatComposer({
 								key={file.id}
 								className="flex items-center gap-1.5 rounded border border-border bg-background py-0.5 pl-0.5 pr-1"
 							>
-								{preview ? (
+								{"attachmentId" in file &&
+								file.attachmentId &&
+								!file.pendingUpload &&
+								resolveAttachmentPreview ? (
+									<AttachmentPreview
+										id={file.attachmentId}
+										resolve={resolveAttachmentPreview}
+										alt={file.name}
+										className="size-6 rounded-sm object-cover"
+									/>
+								) : preview ? (
 									<img src={preview} alt="" className="size-6 rounded-sm object-cover" />
 								) : (
 									<div className="flex size-6 items-center justify-center rounded-sm bg-surface">

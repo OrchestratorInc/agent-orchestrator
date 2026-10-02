@@ -75,12 +75,13 @@ type projectResponse struct {
 }
 
 type createSessionRequest struct {
-	ProjectID   string `json:"projectId"`
-	Kind        string `json:"kind"`
-	Harness     string `json:"harness"`
-	DisplayName string `json:"displayName"`
-	Prompt      string `json:"prompt"`
-	Mode        string `json:"mode,omitempty"`
+	AttachmentIDs []string `json:"attachmentIds,omitempty"`
+	ProjectID     string   `json:"projectId"`
+	Kind          string   `json:"kind"`
+	Harness       string   `json:"harness"`
+	DisplayName   string   `json:"displayName"`
+	Prompt        string   `json:"prompt"`
+	Mode          string   `json:"mode,omitempty"`
 	// Model is the coding-agent model the session launches with (harness-native
 	// id, e.g. "anthropic/claude-opus-4-8" for opencode). Optional: empty uses
 	// the harness default.
@@ -567,6 +568,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		key,
 		s.maxSandboxes,
 		domain.CreateSession{
+			AttachmentIDs:       request.AttachmentIDs,
 			ProjectID:           request.ProjectID,
 			Kind:                request.Kind,
 			Harness:             request.Harness,

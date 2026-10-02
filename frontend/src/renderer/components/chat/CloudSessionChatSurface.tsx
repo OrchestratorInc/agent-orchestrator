@@ -1,5 +1,7 @@
+import { uploadCloudAttachments } from "../../lib/cloud-attachments";
+import type { FileAttachment } from "../../hooks/useFileAttachments";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
@@ -8,6 +10,7 @@ import type { WorkspaceSession } from "../../types/workspace";
 import { ChatWorkspace } from "./ChatWorkspace";
 
 type EventPayload = {
+	attachments?: unknown;
 	attempt?: unknown;
 	clientMessageId?: unknown;
 	requestId?: unknown;
@@ -134,16 +137,55 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			}
 			continue;
 		}
-		const text = eventText(event);
-		if (!text) continue;
+		const text = eventText(event) ?? "";
+		const rawAttachments = eventPayload(event).attachments;
+		const imageAttachments = Array.isArray(rawAttachments)
+			? rawAttachments.filter((a): a is NonNullable<ConversationMessage["attachments"]>[number] =>
+					Boolean(
+						a &&
+						typeof a === "object" &&
+						typeof a.id === "string" &&
+						typeof a.filename === "string" &&
+						typeof a.mimeType === "string" &&
+						typeof a.size === "number" &&
+						typeof a.sha256 === "string",
+					),
+				)
+			: [];
+		if (!text && imageAttachments.length === 0) continue;
 		if (event.type === "chat.user_message") {
 			items.push({
-				kind: "message", id: `cloud-event-${event.sequence}`, sequence: event.sequence, revision: 1,
-				turnId: turnID, role: "user", origin: "human", text, streaming: false, delivery: "accepted", createdAt: event.createdAt,
+				kind: "message",
+				id: `cloud-event-${event.sequence}`,
+				sequence: event.sequence,
+				revision: 1,
+				turnId: turnID,
+				role: "user",
+				origin: "human",
+				text,
+				attachments: imageAttachments,
+				streaming: false,
+				delivery: "accepted",
+				createdAt: event.createdAt,
 			});
 			continue;
 		}
 		if (event.type === "chat.turn_steered") {
+			if (imageAttachments.length)
+				items.push({
+					kind: "message",
+					id: `cloud-steer-images-${event.sequence}`,
+					sequence: event.sequence,
+					revision: 1,
+					turnId: turnID,
+					role: "user",
+					origin: "human",
+					text: "",
+					attachments: imageAttachments,
+					streaming: false,
+					delivery: "accepted",
+					createdAt: event.createdAt,
+				});
 			const clientMessageID = eventPayload(event).clientMessageId;
 			items.push({
 				kind: "activity", id: `cloud-steer-${event.sequence}`, turnId: turnID, sequence: event.sequence,
@@ -216,7 +258,29 @@ export function CloudSessionChatSurface({
 	}) => void;
 }) {
 	const cloud = session.cloud;
-	const { client, ready } = useCloudCp();
+
+	const { client, ready, baseUrl, userId } = useCloudCp();
+	const uploadAttachments = useCallback(
+		(files: FileAttachment[]) => {
+			if (!cloud) throw new Error("Cloud session context is unavailable.");
+			return uploadCloudAttachments(
+				client,
+				baseUrl,
+				cloud.orgId,
+				session.workspaceId ?? "",
+				session.id,
+				files,
+			);
+		},
+		[client, baseUrl, cloud, session.id, session.workspaceId],
+	);
+	const resolveAttachmentPreview = useCallback(
+		async (id: string) => {
+			if (!cloud) throw new Error("Cloud session context is unavailable.");
+			return new URL((await client.attachmentReadGrant(cloud.orgId, id)).url, baseUrl).toString();
+		},
+		[client, baseUrl, cloud],
+	);
 	const queryClient = useQueryClient();
 	const settingsKey = `cloud-chat-settings:${cloud?.orgId ?? ""}:${session.id}:${session.provider}`;
 	const projectKey = `cloud-chat-approval:${cloud?.orgId ?? ""}:${session.workspaceId}:${session.provider}`;
@@ -279,18 +343,35 @@ export function CloudSessionChatSurface({
 	const invalidate = () =>
 		queryClient.invalidateQueries({ queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id] });
 	const send = useMutation({
-		mutationFn: async ({ text, clientMessageId }: { text: string; clientMessageId?: string }) => {
+		mutationFn: async ({
+			text,
+			clientMessageId,
+			attachmentIds,
+		}: {
+			text: string;
+			clientMessageId?: string;
+			attachmentIds?: string[];
+		}) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
-			const selectedSettings: CloudTurnSettings = settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
-			const approvalMode = selectedSettings.approvalMode && approvalModes.includes(selectedSettings.approvalMode)
-				? selectedSettings.approvalMode : approvalModes[0];
-			return client.sendSessionMessage(cloud.orgId, session.id, {
-				text,
-				...(selectedSettings.model ? { model: selectedSettings.model } : {}),
-				...(selectedSettings.reasoningEffort ? { reasoningEffort: selectedSettings.reasoningEffort } : {}),
-				...(cloud.permissionMode ? { mode: cloud.permissionMode } : {}),
-				...(approvalMode ? { approvalMode } : {}),
-			}, { idempotencyKey: clientMessageId });
+			const selectedSettings: CloudTurnSettings =
+				settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
+			const approvalMode =
+				selectedSettings.approvalMode && approvalModes.includes(selectedSettings.approvalMode)
+					? selectedSettings.approvalMode
+					: approvalModes[0];
+			return client.sendSessionMessage(
+				cloud.orgId,
+				session.id,
+				{
+					text,
+					attachmentIds,
+					...(selectedSettings.model ? { model: selectedSettings.model } : {}),
+					...(selectedSettings.reasoningEffort ? { reasoningEffort: selectedSettings.reasoningEffort } : {}),
+					...(cloud.permissionMode ? { mode: cloud.permissionMode } : {}),
+					...(approvalMode ? { approvalMode } : {}),
+				},
+				{ idempotencyKey: clientMessageId },
+			);
 		},
 		onSuccess: () => void invalidate(),
 	});
@@ -321,10 +402,25 @@ export function CloudSessionChatSurface({
 		onSettled: () => void invalidate(),
 	});
 	const steer = useMutation({
-		mutationFn: async ({ text, clientMessageId }: { text: string; clientMessageId?: string }) => {
-			if (!cloud || !activeTurn) return { status: "not-accepted" as const, reason: "There is no active turn." };
+		mutationFn: async ({
+			text,
+			clientMessageId,
+			attachmentIds,
+		}: {
+			text: string;
+			clientMessageId?: string;
+			attachmentIds?: string[];
+		}) => {
+			if (!cloud || !activeTurn)
+				return { status: "not-accepted" as const, reason: "There is no active turn." };
 			const key = clientMessageId ?? crypto.randomUUID();
-			const accepted = await client.steerTurn(cloud.orgId, session.id, activeTurn.id, { text }, { idempotencyKey: key });
+			const accepted = await client.steerTurn(
+				cloud.orgId,
+				session.id,
+				activeTurn.id,
+				{ text, attachmentIds },
+				{ idempotencyKey: key },
+			);
 			let after = accepted.event.sequence;
 			for (let attempt = 0; attempt < 60; attempt++) {
 				const page = await client.listChatEvents(cloud.orgId, session.id, { after, limit: 100 });
@@ -372,13 +468,21 @@ export function CloudSessionChatSurface({
 			}
 			headerActions={headerActions}
 			onInterrupt={activeTurn ? () => interrupt.mutate() : undefined}
-			onSteer={activeTurn && snapshot.capabilities?.includes("steer") ? (text, attachments, clientMessageId) => {
-				if (attachments?.length) return Promise.resolve({ status: "not-accepted" as const, reason: "Cloud steering currently accepts text only." });
-				return steer.mutateAsync({ text, clientMessageId });
-			} : undefined}
+			onSteer={
+				activeTurn && snapshot.capabilities?.includes("steer")
+					? (text, _attachments, clientMessageId, _recoverOnly, attachmentIds) => {
+							return steer.mutateAsync({ text, clientMessageId, attachmentIds });
+						}
+					: undefined
+			}
 			steerPending={steer.isPending}
 			showSteerButton
-			onSend={(text, _attachments, clientMessageId) => send.mutateAsync({ text, clientMessageId })}
+			onUploadAttachments={uploadAttachments}
+			resolveAttachmentPreview={resolveAttachmentPreview}
+			draftNamespace={`cloud:${baseUrl}:${userId}:${cloud?.orgId}:`}
+			onSend={(text, _attachments, clientMessageId, _retained, attachmentIds) =>
+				send.mutateAsync({ text, clientMessageId, attachmentIds })
+			}
 			session={session}
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}

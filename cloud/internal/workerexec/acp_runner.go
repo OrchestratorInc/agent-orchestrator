@@ -3,9 +3,14 @@ package workerexec
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/attachments"
+	"image"
+	"image/png"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -31,6 +36,7 @@ type acpSession struct {
 	sessionID acp.SessionId
 	turnID    string
 	steering  bool
+	images    bool
 }
 
 type lockedBuffer struct {
@@ -46,12 +52,19 @@ func (b *lockedBuffer) Write(value []byte) (int, error) {
 func (b *lockedBuffer) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.Buffer.String() }
 
 func (s *acpSession) Steer(ctx context.Context, turnID, text string) error {
+	return s.SteerImages(ctx, turnID, text, nil, nil)
+}
+func (s *acpSession) SteerImages(ctx context.Context, turnID, text string, paths []string, metadata []attachments.Metadata) error {
 	if s == nil || turnID != s.turnID || !s.steering {
 		return errors.New("the active provider turn does not support steering")
 	}
+	prompt, err := acpImagePrompt(text, paths, metadata, s.images)
+	if err != nil {
+		return err
+	}
 	raw, err := s.conn.CallExtension(ctx, "_session/steering", map[string]any{
 		"sessionId": s.sessionID,
-		"prompt":    []acp.ContentBlock{{Text: &acp.ContentBlockText{Type: "text", Text: text}}},
+		"prompt":    prompt,
 		"_meta":     map[string]any{"steering": map[string]any{"idleBehavior": "promptRequired"}},
 	})
 	if err != nil {
@@ -138,7 +151,7 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 	if err := configureACPSession(ctx, conn, sessionID, turn, configOptions, modes); err != nil {
 		return err
 	}
-	active := &acpSession{conn: conn, sessionID: sessionID, turnID: turn.ID, steering: acpSteeringSupported(initialized.Meta)}
+	active := &acpSession{conn: conn, sessionID: sessionID, turnID: turn.ID, steering: acpSteeringSupported(initialized.Meta), images: initialized.AgentCapabilities.PromptCapabilities.Image}
 	if publisher, ok := s.Control.(capabilityPublisher); ok {
 		if err := publisher.PublishTurnCapabilities(ctx, turn.ID, turn.Attempt, active.steering); err != nil {
 			return err
@@ -157,7 +170,11 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 	// The LoadSession/NewSession handshake above is complete, so any replayed
 	// history has already been dropped; record from here on — this turn's output.
 	client.live.Store(true)
-	_, err = conn.Prompt(ctx, acp.PromptRequest{SessionId: sessionID, Prompt: []acp.ContentBlock{{Text: &acp.ContentBlockText{Type: "text", Text: turn.Prompt}}}})
+	prompt, err := acpImagePrompt(turn.Prompt, turn.ImagePaths, turn.Attachments, active.images)
+	if err != nil {
+		return err
+	}
+	_, err = conn.Prompt(ctx, acp.PromptRequest{SessionId: sessionID, Prompt: prompt})
 	if err != nil {
 		return fmt.Errorf("ACP prompt: %w: %s", err, boundedError(stderr.String()))
 	}
@@ -417,3 +434,41 @@ func (*cloudACPClient) WaitForTerminalExit(context.Context, acp.WaitForTerminalE
 }
 
 var _ acp.Client = (*cloudACPClient)(nil)
+
+func acpImagePrompt(text string, paths []string, metadata []attachments.Metadata, native bool) ([]acp.ContentBlock, error) {
+	if len(paths) != len(metadata) {
+		return nil, errors.New("images were not materialized")
+	}
+	if !native {
+		text = worker.ImageToolPrompt(text, paths)
+	}
+	blocks := []acp.ContentBlock{}
+	if text != "" {
+		blocks = append(blocks, acp.ContentBlock{Text: &acp.ContentBlockText{Type: "text", Text: text}})
+	}
+	if native {
+		for i, path := range paths {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil, err
+			}
+			mime := metadata[i].MIMEType
+			// Claude's image input does not accept BMP. Preserve the verified sandbox
+			// file, but send a lossless PNG representation to the native image input.
+			if mime == "image/bmp" {
+				img, _, err := image.Decode(bytes.NewReader(data))
+				if err != nil {
+					return nil, err
+				}
+				var encoded bytes.Buffer
+				if err := png.Encode(&encoded, img); err != nil {
+					return nil, err
+				}
+				data = encoded.Bytes()
+				mime = "image/png"
+			}
+			blocks = append(blocks, acp.ContentBlock{Image: &acp.ContentBlockImage{Type: "image", MimeType: mime, Data: base64.StdEncoding.EncodeToString(data)}})
+		}
+	}
+	return blocks, nil
+}

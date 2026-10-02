@@ -44,6 +44,49 @@ describe("CloudClient", () => {
     );
   });
 
+  it("uses metadata-only image operations with scoped attachment IDs", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse({}),
+    );
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "token",
+      fetch: fetchMock as typeof fetch,
+    });
+    const metadata = {
+      projectId: "project",
+      filename: "image.png",
+      size: 100,
+      mimeType: "image/png" as const,
+      sha256: "a".repeat(64),
+    };
+    await client.prepareAttachment("org", metadata, {
+      idempotencyKey: "image-upload",
+    });
+    await client.completeAttachment("org", "image");
+    await client.attachmentReadGrant("org", "image");
+    await client.materializeAttachments("org", "session", ["image"]);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://cloud.example.com/api/cloud/v1/orgs/org/attachments",
+      "https://cloud.example.com/api/cloud/v1/orgs/org/attachments/image/complete",
+      "https://cloud.example.com/api/cloud/v1/orgs/org/attachments/image/read-grant",
+      "https://cloud.example.com/api/cloud/v1/orgs/org/sessions/session/attachments/materialize",
+    ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual(
+      metadata,
+    );
+    expect(
+      new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Idempotency-Key"),
+    ).toBe("image-upload");
+    expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toEqual({
+      attachmentIds: ["image"],
+    });
+    expect(
+      fetchMock.mock.calls.every(([, init]) => init?.method === "POST"),
+    ).toBe(true);
+  });
+
   it("requests durable deletion on the session resource", async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
@@ -115,10 +158,7 @@ describe("CloudClient", () => {
   it("requests durable project deletion on the project resource", async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
-        jsonResponse(
-          { project: { id: "project one", deleted: true } },
-          202,
-        ),
+        jsonResponse({ project: { id: "project one", deleted: true } }, 202),
     );
     const client = createCloudClient({
       baseUrl: "https://cloud.example.com",
@@ -204,9 +244,9 @@ describe("CloudClient", () => {
       fetch: fetchMock as typeof fetch,
     });
 
-    await expect(
-      client.listGitHubInstallations("tenant one"),
-    ).resolves.toEqual([installation]);
+    await expect(client.listGitHubInstallations("tenant one")).resolves.toEqual(
+      [installation],
+    );
     await client.startGitHubInstallation("tenant one");
     await client.listGitHubRepositories("tenant one", {
       cursor: "next page",
@@ -353,34 +393,37 @@ describe("CloudClient", () => {
     });
   });
 
-	 it("reads a Docker workspace file with its unified diff", async () => {
-		const file = {
-			path: "src/main.ts",
-			status: "modified",
-			additions: 1,
-			deletions: 1,
-			size: 12,
-			binary: false,
-			deleted: false,
-			content: "export {}\n",
-			contentTruncated: false,
-			diff: "@@ -1 +1 @@\n-export {};\n+export {}\n",
-			diffTruncated: false,
-		} as const;
-		const fetchMock = vi.fn(
-			async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(file),
-		);
-		const client = createCloudClient({
-			baseUrl: "https://cloud.example.com",
-			getAccessToken: () => "access-token",
-			fetch: fetchMock as typeof fetch,
-		});
+  it("reads a Docker workspace file with its unified diff", async () => {
+    const file = {
+      path: "src/main.ts",
+      status: "modified",
+      additions: 1,
+      deletions: 1,
+      size: 12,
+      binary: false,
+      deleted: false,
+      content: "export {}\n",
+      contentTruncated: false,
+      diff: "@@ -1 +1 @@\n-export {};\n+export {}\n",
+      diffTruncated: false,
+    } as const;
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse(file),
+    );
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
 
-		await expect(client.readWorkspaceDiffFile("tenant one", "session one", file.path)).resolves.toEqual(file);
-		expect(fetchMock.mock.calls[0]?.[0]).toBe(
-			"https://cloud.example.com/api/cloud/v1/orgs/tenant%20one/sessions/session%20one/workspace/file/diff?path=src%2Fmain.ts",
-		);
-	});
+    await expect(
+      client.readWorkspaceDiffFile("tenant one", "session one", file.path),
+    ).resolves.toEqual(file);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/tenant%20one/sessions/session%20one/workspace/file/diff?path=src%2Fmain.ts",
+    );
+  });
 
   it("reads normalized pull requests and AO review state for a session", async () => {
     const pullRequest = {
@@ -654,38 +697,51 @@ describe("CloudClient", () => {
       "tenant",
       "session",
       {
-        text: "Ship it", model: "gpt-5.6-codex", reasoningEffort: "high",
-        mode: "standard", approvalMode: "accept-edits",
+        text: "Ship it",
+        model: "gpt-5.6-codex",
+        reasoningEffort: "high",
+        mode: "standard",
+        approvalMode: "accept-edits",
       },
       { idempotencyKey: "message-command-2" },
     );
 
     expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
       JSON.stringify({
-        text: "Ship it", model: "gpt-5.6-codex", reasoningEffort: "high",
-        mode: "standard", approvalMode: "accept-edits",
+        text: "Ship it",
+        model: "gpt-5.6-codex",
+        reasoningEffort: "high",
+        mode: "standard",
+        approvalMode: "accept-edits",
       }),
     );
   });
 
   it("loads chat model choices for a session", async () => {
     const catalog = {
-      models: [{
-        id: "gpt-5.6-codex",
-        displayName: "Codex",
-        default: true,
-        efforts: ["high"],
-        defaultEffort: "high",
-      }],
+      models: [
+        {
+          id: "gpt-5.6-codex",
+          displayName: "Codex",
+          default: true,
+          efforts: ["high"],
+          defaultEffort: "high",
+        },
+      ],
     };
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(catalog));
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse(catalog),
+    );
     const client = createCloudClient({
       baseUrl: "https://cloud.example.com",
       getAccessToken: () => "access-token",
       fetch: fetchMock as typeof fetch,
     });
 
-    await expect(client.listChatModels("tenant", "session")).resolves.toEqual(catalog);
+    await expect(client.listChatModels("tenant", "session")).resolves.toEqual(
+      catalog,
+    );
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
       "https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/chat-models",
     );
@@ -875,8 +931,11 @@ describe("CloudClient", () => {
 
   it("steers an active turn through the public client", async () => {
     const event = {
-      sessionId: "session", sequence: 2, type: "chat.turn_steered",
-      payload: { text: "Use the existing parser" }, createdAt: "2026-08-09T00:00:00Z",
+      sessionId: "session",
+      sequence: 2,
+      type: "chat.turn_steered",
+      payload: { text: "Use the existing parser" },
+      createdAt: "2026-08-09T00:00:00Z",
     };
     const fetchMock = vi.fn<
       (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
@@ -887,15 +946,27 @@ describe("CloudClient", () => {
       fetch: fetchMock as typeof fetch,
     });
 
-    await expect(client.steerTurn("tenant", "session", "turn one", "Use the existing parser", {
-      idempotencyKey: "steer-one",
-    })).resolves.toEqual({ event });
+    await expect(
+      client.steerTurn(
+        "tenant",
+        "session",
+        "turn one",
+        "Use the existing parser",
+        {
+          idempotencyKey: "steer-one",
+        },
+      ),
+    ).resolves.toEqual({ event });
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
       "https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/turns/turn%20one/steer",
     );
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
-    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ text: "Use the existing parser" }));
-    expect(requestHeaders(fetchMock, 0).get("Idempotency-Key")).toBe("steer-one");
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({ text: "Use the existing parser" }),
+    );
+    expect(requestHeaders(fetchMock, 0).get("Idempotency-Key")).toBe(
+      "steer-one",
+    );
   });
 
   it("submits an approval decision through the public client", async () => {
@@ -908,17 +979,43 @@ describe("CloudClient", () => {
       fetch: fetchMock as typeof fetch,
     });
 
-    await expect(client.decideChatApproval("tenant", "session", "request one", "approve"))
-      .resolves.toEqual({ ok: true });
+    await expect(
+      client.decideChatApproval("tenant", "session", "request one", "approve"),
+    ).resolves.toEqual({ ok: true });
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
       "https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/approvals/request%20one/decide",
     );
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
-    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ decisionId: "approve" }));
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({ decisionId: "approve" }),
+    );
   });
 });
 
 describe("WorkerClient", () => {
+  it("requests only a current-session image read grant", async () => {
+    const fetchMock = vi.fn(
+      async (_url: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse({
+          url: "https://storage.example/image",
+          expiresAt: "2026-10-02T00:00:00Z",
+        }),
+    );
+    const client = createWorkerClient({
+      baseUrl: "https://cloud.example.com",
+      getWorkerToken: () => "worker-token",
+      fetch: fetchMock as typeof fetch,
+    });
+    await client.attachmentReadGrant("image one");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/worker/attachments/image%20one/read-grant",
+    );
+    expect(
+      new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Authorization"),
+    ).toBe("Worker worker-token");
+    expect(fetchMock.mock.calls[0]?.[1]?.cache).toBe("no-store");
+  });
+
   it("matches the worker lifecycle, execution, orchestration, and transport routes", async () => {
     const turn = {
       id: "1933df78-7495-492a-bfde-31448c448e12",
@@ -967,9 +1064,7 @@ describe("WorkerClient", () => {
       .mockResolvedValueOnce(jsonResponse({ turn }))
       .mockResolvedValueOnce(jsonResponse({ requested: false }))
       .mockResolvedValueOnce(jsonResponse({ ok: true, alreadyFinished: false }))
-      .mockResolvedValueOnce(
-        jsonResponse({ ok: true, alreadyFinished: false }),
-      )
+      .mockResolvedValueOnce(jsonResponse({ ok: true, alreadyFinished: false }))
       .mockResolvedValueOnce(
         jsonResponse({
           provider: "claude-code",
@@ -984,7 +1079,9 @@ describe("WorkerClient", () => {
           expiresAt: "2026-08-12T12:00:00Z",
         }),
       )
-      .mockResolvedValueOnce(jsonResponse({ items: [], page: { hasMore: false } }))
+      .mockResolvedValueOnce(
+        jsonResponse({ items: [], page: { hasMore: false } }),
+      )
       .mockResolvedValueOnce(jsonResponse({ session: { id: "child" } }, 201))
       .mockResolvedValueOnce(jsonResponse({ event: { sequence: 1 } }, 202))
       .mockResolvedValueOnce(
@@ -1088,7 +1185,9 @@ describe("WorkerClient", () => {
     expect(fetchMock.mock.calls[1]?.[1]?.cache).toBe("no-store");
     expect(fetchMock.mock.calls[7]?.[1]?.cache).toBe("no-store");
     expect(fetchMock.mock.calls[8]?.[1]?.cache).toBe("no-store");
-    expect(requestHeaders(fetchMock, 10).get("Idempotency-Key")).toBe("child-1");
+    expect(requestHeaders(fetchMock, 10).get("Idempotency-Key")).toBe(
+      "child-1",
+    );
     expect(requestHeaders(fetchMock, 11).get("Idempotency-Key")).toBe(
       "message-1",
     );
@@ -1113,9 +1212,7 @@ describe("WorkerClient", () => {
       fetch: vi
         .fn()
         .mockResolvedValueOnce(jsonResponse({ turn: null }))
-        .mockResolvedValueOnce(
-          jsonResponse({ request: null }),
-        ) as typeof fetch,
+        .mockResolvedValueOnce(jsonResponse({ request: null })) as typeof fetch,
     });
 
     await expect(client.claimTurn()).resolves.toBeNull();
@@ -1134,8 +1231,7 @@ function sseResponse(...events: ClientEvent[]): Response {
   return new Response(
     events
       .map(
-        (event) =>
-          `id: ${event.sequence}\ndata: ${JSON.stringify(event)}\n\n`,
+        (event) => `id: ${event.sequence}\ndata: ${JSON.stringify(event)}\n\n`,
       )
       .join(""),
     {

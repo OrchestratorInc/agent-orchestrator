@@ -37,6 +37,7 @@ func (s *Store) ClaimWorkerTurn(
 			return err
 		}
 
+		var attachmentJSON []byte
 		var state string
 		var turnModeCap string
 		var requestedMode string
@@ -52,6 +53,10 @@ func (s *Store) ClaimWorkerTurn(
 				WHERE turn.org_id = $1
 					AND turn.session_id = $2
 					AND session.is_terminated = false
+      AND (
+       NOT EXISTS(SELECT 1 FROM ao_message_attachments ma WHERE ma.org_id=turn.org_id AND ma.session_id=turn.session_id AND ma.event_sequence=turn.user_message_sequence)
+       OR EXISTS(SELECT 1 FROM ao_worker_connections wc WHERE wc.org_id=$1 AND wc.session_id=$2 AND wc.epoch=$3 AND wc.disconnected_at IS NULL AND wc.capabilities ? 'attachments.images.v1')
+      )
 					AND (
 						turn.state = 'queued'
 						OR (
@@ -95,7 +100,7 @@ func (s *Store) ClaimWorkerTurn(
 				claimed.user_message_sequence,
 				COALESCE(claimed_turn.mode_cap, ''), COALESCE(claimed_turn.denied_commands, ARRAY[]::text[]),
 				COALESCE(event.payload->>'model', ''), COALESCE(event.payload->>'reasoningEffort', ''),
-				COALESCE(event.payload->>'mode', ''), COALESCE(event.payload->>'approvalMode', '')
+				COALESCE(event.payload->>'mode', ''), COALESCE(event.payload->>'approvalMode', ''), COALESCE(event.payload->'attachments','[]'::jsonb)
 			FROM claimed
 			JOIN ao_sessions session
 				ON session.org_id = $1 AND session.id = claimed.session_id
@@ -126,12 +131,16 @@ func (s *Store) ClaimWorkerTurn(
 			&turn.ReasoningEffort,
 			&requestedMode,
 			&approvalMode,
+			&attachmentJSON,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
 		if err != nil {
 			return fmt.Errorf("claim worker turn: %w", err)
+		}
+		if err := json.Unmarshal(attachmentJSON, &turn.Attachments); err != nil {
+			return err
 		}
 		// The session's own mode/denied_commands are the ceiling; a turn
 		// created from a capped share-grant holder's message narrows that
@@ -200,18 +209,19 @@ func (s *Store) RequestTurnCancellation(
 
 // SteerTurn queues guidance for the active worker. Delivery is recorded only
 // after its live provider connection acknowledges the injection.
-func (s *Store) SteerTurn(
+func (s *Store) steerTurn(
 	ctx context.Context,
 	principal domain.Principal,
 	orgID, sessionID, turnID, idempotencyKey, text string,
+	ids []string,
 ) (domain.ClientEvent, error) {
 	var event domain.ClientEvent
 	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
 		if access.Role == "viewer" {
 			return ErrForbidden
 		}
-		payload, err := json.Marshal(map[string]string{
-			"turnId": turnID, "text": text,
+		payload, err := json.Marshal(map[string]any{
+			"turnId": turnID, "text": text, "attachmentIds": ids,
 		})
 		if err != nil {
 			return err
@@ -239,8 +249,12 @@ func (s *Store) SteerTurn(
 		if state != "running" {
 			return ErrTurnFinished
 		}
-		requestPayload, err := json.Marshal(map[string]string{
-			"turnId": turnID, "text": text, "clientMessageId": idempotencyKey, "commandId": commandID,
+		metadata, err := attachmentMetadataTx(ctx, tx, orgID, sessionID, ids, "", principal.UserID, "")
+		if err != nil {
+			return err
+		}
+		requestPayload, err := json.Marshal(map[string]any{
+			"turnId": turnID, "text": text, "clientMessageId": idempotencyKey, "commandId": commandID, "attachments": metadata,
 		})
 		if err != nil {
 			return err
@@ -249,13 +263,16 @@ func (s *Store) SteerTurn(
 			return err
 		}
 		if err := appendTypedEvent(ctx, tx, orgID, sessionID, "chat.turn_steer_requested", map[string]any{
-			"turnId": turnID, "text": text, "clientMessageId": idempotencyKey,
+			"turnId": turnID, "text": text, "clientMessageId": idempotencyKey, "attachments": metadata,
 		}); err != nil {
 			return err
 		}
 		if err := scanClientEvent(tx.QueryRow(ctx, `SELECT session_id, sequence, type, payload, created_at
 			FROM ao_events WHERE org_id = $1 AND session_id = $2
 			ORDER BY sequence DESC LIMIT 1`, orgID, sessionID), &event); err != nil {
+			return err
+		}
+		if err := linkAttachmentsTx(ctx, tx, orgID, sessionID, event.Sequence, metadata); err != nil {
 			return err
 		}
 		_, err = tx.Exec(ctx, `UPDATE ao_commands
@@ -647,4 +664,11 @@ func appendTypedEvent(
 		encoded,
 	)
 	return err
+}
+
+func (s *Store) SteerTurn(ctx context.Context, p domain.Principal, org, session, turn, key, text string) (domain.ClientEvent, error) {
+	return s.steerTurn(ctx, p, org, session, turn, key, text, nil)
+}
+func (s *Store) SteerTurnWithAttachments(ctx context.Context, p domain.Principal, org, session, turn, key, text string, ids []string) (domain.ClientEvent, error) {
+	return s.steerTurn(ctx, p, org, session, turn, key, text, ids)
 }

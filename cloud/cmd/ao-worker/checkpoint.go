@@ -189,8 +189,11 @@ func (cp *checkpointer) buildPreserveTree(ctx context.Context) (treeSHA, headSHA
 			return "", "", false, fmt.Errorf("seed preserve index from HEAD: %w", rerr)
 		}
 	}
-	if _, aerr := cp.git.Run(ctx, cp.workspace, env, "add", "-A"); aerr != nil {
+	if _, aerr := cp.git.Run(ctx, cp.workspace, env, "add", "-A", "--", ".", ":(exclude).ao/attachments/**"); aerr != nil {
 		return "", "", false, fmt.Errorf("stage preserve tree: %w", aerr)
+	}
+	if _, err := cp.git.Run(ctx, cp.workspace, env, "rm", "--cached", "-r", "--ignore-unmatch", "--", ".ao/attachments"); err != nil {
+		return "", "", false, fmt.Errorf("exclude images from checkpoint: %w", err)
 	}
 	treeOut, terr := cp.git.Run(ctx, cp.workspace, env, "write-tree")
 	if terr != nil {

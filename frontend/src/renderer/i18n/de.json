@@ -2267,5 +2267,14 @@
 	"standalone.archive.heading_other": "{{count}} archivierte Sitzungen",
 	"standalone.archive.newAgent": "Neuer Agent",
 	"standalone.archive.empty.title": "Keine archivierten eigenständigen Agenten",
-	"standalone.archive.empty.body": "Eigenständige Agenten, die du aus dem Notizblock archivierst, erscheinen hier. Aktive eigenständige Agenten bleiben in der Notizblockliste."
+	"standalone.archive.empty.body": "Eigenständige Agenten, die du aus dem Notizblock archivierst, erscheinen hier. Aktive eigenständige Agenten bleiben in der Notizblockliste.",
+	"terminal.images.contextUnavailable": "Die Cloud-Sitzungsinformationen sind nicht verfügbar.",
+	"terminal.images.selectFirst": "Wähle zuerst ein unterstütztes Bild aus.",
+	"terminal.images.changed": "Das Terminal hat sich während der Bildvorbereitung geändert. Versuche es erneut, um die aktuellen Pfade einzufügen.",
+	"terminal.images.failed": "Die Bildvorbereitung ist fehlgeschlagen. Versuche es erneut.",
+	"terminal.images.attachAria": "Bilder an das Terminal anhängen",
+	"terminal.images.attach": "Bild anhängen",
+	"terminal.images.preparing": "Bilder werden in der Sandbox vorbereitet...",
+	"terminal.images.hint": "Fügt einen Pfad ein. Drücke selbst Enter zum Senden.",
+	"terminal.images.clear": "Löschen"
 }

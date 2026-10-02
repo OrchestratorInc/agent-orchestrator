@@ -1,3 +1,4 @@
+import { AttachmentPreview, type AttachmentPreviewResolver } from "./AttachmentPreview";
 /**
  * Resolves relative chat image references against the current session workspace.
  *
@@ -11,6 +12,21 @@ import { getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { resolveMarkdownImageSrc } from "../../lib/markdown-image-resolver";
 
 type ChatImageSource = { sessionId: string; version: number; baseUrl: string };
+
+const AttachmentSourceContext = createContext<AttachmentPreviewResolver | undefined>(undefined);
+export const AttachmentSourceProvider = AttachmentSourceContext.Provider;
+export function TypedAttachmentImage({
+	id,
+	name,
+	className,
+}: {
+	id: string;
+	name: string;
+	className?: string;
+}) {
+	const resolve = useContext(AttachmentSourceContext);
+	return resolve ? <AttachmentPreview id={id} alt={name} resolve={resolve} className={className} /> : null;
+}
 
 const ChatImageSourceContext = createContext<ChatImageSource | undefined>(undefined);
 

@@ -2298,5 +2298,14 @@
 	"standalone.archive.heading_other": "{{count}} sessions archivées",
 	"standalone.archive.newAgent": "Nouvel agent",
 	"standalone.archive.empty.title": "Aucun agent autonome archivé",
-	"standalone.archive.empty.body": "Les agents autonomes que vous archivez depuis le bloc-notes apparaîtront ici. Les agents autonomes actifs restent dans la liste du bloc-notes."
+	"standalone.archive.empty.body": "Les agents autonomes que vous archivez depuis le bloc-notes apparaîtront ici. Les agents autonomes actifs restent dans la liste du bloc-notes.",
+	"terminal.images.contextUnavailable": "Les informations de la session Cloud sont indisponibles.",
+	"terminal.images.selectFirst": "Sélectionnez d’abord une image prise en charge.",
+	"terminal.images.changed": "Le terminal a changé avant la fin de la préparation. Réessayez pour insérer les chemins actuels.",
+	"terminal.images.failed": "La préparation de l’image a échoué. Réessayez.",
+	"terminal.images.attachAria": "Joindre des images au terminal",
+	"terminal.images.attach": "Joindre une image",
+	"terminal.images.preparing": "Préparation des images dans le sandbox...",
+	"terminal.images.hint": "Insère un chemin. Appuyez sur Entrée pour envoyer.",
+	"terminal.images.clear": "Effacer"
 }

@@ -1,3 +1,10 @@
+import type {
+	CloudCpAttachment,
+	CloudCpPrepareAttachmentRequest,
+	CloudCpUploadGrant,
+	CloudCpReadGrant,
+	CloudCpMaterializedAttachments,
+} from "./types";
 // Typed client for the cloud control plane's renderer-facing v0 surface
 // (`/api/cloud/v1/*`). The transport is injected — `getToken` supplies the
 // WorkOS bearer token and `fetchImpl` can be `window.fetch` today or an
@@ -130,6 +137,19 @@ export interface CloudCpNotificationEventsOptions {
 }
 
 export interface CloudCpClient {
+	prepareAttachment(
+		orgId: string,
+		body: CloudCpPrepareAttachmentRequest,
+		options?: CloudCpMutationOptions,
+	): Promise<{ attachment: CloudCpAttachment; upload: CloudCpUploadGrant }>;
+	completeAttachment(orgId: string, id: string): Promise<{ attachment: CloudCpAttachment }>;
+	attachmentReadGrant(orgId: string, id: string): Promise<CloudCpReadGrant>;
+	materializeAttachments(
+		orgId: string,
+		sessionId: string,
+		attachmentIds: string[],
+	): Promise<CloudCpMaterializedAttachments>;
+
 	me(options?: CloudCpRequestOptions): Promise<CloudCpMeResponse>;
 	createOrganization(
 		body: CloudCpCreateOrganizationRequest,
@@ -539,6 +559,19 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions`, {
 				query: { projectId: query?.projectId, limit: query?.limit, cursor: query?.cursor },
 				signal: o?.signal,
+			}),
+		prepareAttachment: (orgId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/attachments`, {
+				body,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		completeAttachment: (orgId, id) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/attachments/${seg(id)}/complete`, { body: {} }),
+		attachmentReadGrant: (orgId, id) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/attachments/${seg(id)}/read-grant`, { body: {} }),
+		materializeAttachments: (orgId, sessionId, attachmentIds) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/attachments/materialize`, {
+				body: { attachmentIds },
 			}),
 		createSession: (orgId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions`, {

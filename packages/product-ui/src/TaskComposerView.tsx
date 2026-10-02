@@ -102,6 +102,7 @@ export type TaskComposerAttachment = {
 	id: string;
 	name: string;
 	previewUrl?: string;
+	preview?: ReactNode;
 };
 
 export type TaskComposerAttachments = {
@@ -312,13 +313,11 @@ export function TaskComposerView({
 						<ul className="scrollbar-none flex w-full flex-row flex-nowrap items-center gap-2 overflow-x-auto px-3 pt-1.5 pb-2">
 							{attachments.items.map((attachment) => (
 								<li key={attachment.id} className="shrink-0">
-									{attachment.previewUrl ? (
+									{attachment.preview || attachment.previewUrl ? (
 										<div className="relative size-14 rounded-lg border border-border bg-surface overflow-hidden group">
-											<img
-												src={attachment.previewUrl}
-												alt=""
-												className="size-full object-cover"
-											/>
+											{attachment.preview ?? (
+												<img src={attachment.previewUrl} alt="" className="size-full object-cover" />
+											)}
 											<button
 												type="button"
 												disabled={submission.isSubmitting}

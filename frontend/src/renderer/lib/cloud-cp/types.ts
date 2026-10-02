@@ -225,6 +225,7 @@ export type CloudCpInterfaceMode = "tui" | "chat";
 
 /** POST /orgs/{orgId}/sessions (requires an Idempotency-Key header). */
 export interface CloudCpCreateSessionRequest {
+	attachmentIds?: string[];
 	projectId: string;
 	kind: CloudCpSessionKind;
 	/** Coding-agent harness identifier (e.g. "claude-code"), 1-120 characters. */
@@ -701,6 +702,7 @@ export interface CloudCpRestoreSessionResponse {
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/messages (requires an Idempotency-Key header). */
 export interface CloudCpSendMessageRequest {
+	attachmentIds?: string[];
 	/** 1-65536 bytes. */
 	text: string;
 	model?: string;
@@ -933,4 +935,35 @@ export interface CloudCpCreateGitHubProjectRequest {
 	githubRepositoryId: string;
 	displayName?: string;
 	config?: Record<string, unknown>;
+}
+
+export interface CloudCpAttachment {
+	id: string;
+	filename: string;
+	size: number;
+	mimeType: string;
+	sha256: string;
+	status: "pending" | "ready" | "expired";
+}
+export interface CloudCpPrepareAttachmentRequest {
+	projectId: string;
+	sessionId?: string;
+	filename: string;
+	size: number;
+	mimeType: string;
+	sha256: string;
+}
+export interface CloudCpUploadGrant {
+	url: string;
+	fields: Record<string, string>;
+	expiresAt: string;
+}
+export interface CloudCpReadGrant {
+	url: string;
+	expiresAt: string;
+}
+export interface CloudCpMaterializedAttachments {
+	paths: string[];
+	workerId: string;
+	epoch: number;
 }

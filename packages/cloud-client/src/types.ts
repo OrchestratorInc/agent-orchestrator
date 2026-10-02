@@ -224,3 +224,10 @@ export interface IdempotentRequestOptions {
 export interface RequestOptions {
   signal?: AbortSignal;
 }
+
+export type ImageAttachment = Schemas["ImageAttachment"];
+export type PrepareAttachmentInput = Schemas["PrepareAttachmentInput"];
+export type PrepareAttachmentResponse = Schemas["PrepareAttachmentResponse"];
+export type AttachmentResponse = Schemas["AttachmentResponse"];
+export type AttachmentReadGrant = Schemas["AttachmentReadGrant"];
+export type MaterializedAttachments = Schemas["MaterializedAttachments"];

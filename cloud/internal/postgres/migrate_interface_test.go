@@ -73,8 +73,8 @@ func TestMigrateInterfaceHandoffFromMainVersion(t *testing.T) {
 		WHERE is_applied ORDER BY id DESC LIMIT 1`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 55 {
-		t.Fatalf("post-upgrade migration version = %d, want 55", version)
+	if version != 56 {
+		t.Fatalf("post-upgrade migration version = %d, want 56", version)
 	}
 	var transitionTableExists bool
 	if err := db.QueryRowContext(ctx,

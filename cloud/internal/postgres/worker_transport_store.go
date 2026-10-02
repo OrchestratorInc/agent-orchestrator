@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/cloud/internal/attachments"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/jackc/pgx/v5"
 )
@@ -80,11 +81,12 @@ func createWorkerRequest(
 	if len(payload) == 0 {
 		payload = json.RawMessage(`{}`)
 	}
+	var imageCapable bool
 	var epoch int64
 	var terminated bool
 	var mode string
 	if err := tx.QueryRow(ctx,
-		`SELECT worker.epoch, session.is_terminated, session.mode
+		`SELECT worker.epoch, session.is_terminated, session.mode,worker.capabilities ? 'attachments.images.v1'
 		FROM ao_sessions session
 		JOIN ao_worker_connections worker
 		  ON worker.org_id = session.org_id
@@ -93,10 +95,21 @@ func createWorkerRequest(
 		WHERE session.org_id = $1 AND session.id = $2
 		FOR UPDATE OF session`,
 		orgID, sessionID,
-	).Scan(&epoch, &terminated, &mode); errors.Is(err, pgx.ErrNoRows) {
+	).Scan(&epoch, &terminated, &mode, &imageCapable); errors.Is(err, pgx.ErrNoRows) {
 		return domain.WorkerRequest{}, ErrWorkerUnavailable
 	} else if err != nil {
 		return domain.WorkerRequest{}, err
+	}
+	var imageInput struct {
+		Attachments []attachments.Metadata `json:"attachments"`
+	}
+	if kind == "chat.steer" {
+		if err := json.Unmarshal(payload, &imageInput); err != nil {
+			return domain.WorkerRequest{}, ErrInvalid
+		}
+	}
+	if (kind == "attachments.materialize" || len(imageInput.Attachments) > 0) && !imageCapable {
+		return domain.WorkerRequest{}, ErrImageWorkerUpgrade
 	}
 	if terminated {
 		return domain.WorkerRequest{}, ErrWorkerUnavailable
@@ -350,10 +363,11 @@ func (s *Store) finishWorkerRequest(
 		}
 		if kind == "chat.steer" {
 			var steer struct {
-				TurnID          string `json:"turnId"`
-				Text            string `json:"text"`
-				ClientMessageID string `json:"clientMessageId"`
-				CommandID       string `json:"commandId"`
+				TurnID          string                 `json:"turnId"`
+				Text            string                 `json:"text"`
+				ClientMessageID string                 `json:"clientMessageId"`
+				CommandID       string                 `json:"commandId"`
+				Attachments     []attachments.Metadata `json:"attachments"`
 			}
 			if err := json.Unmarshal(payload, &steer); err != nil {
 				return err
@@ -369,7 +383,7 @@ func (s *Store) finishWorkerRequest(
 			}
 			return appendTypedEvent(ctx, tx, orgID, sessionID, eventType, map[string]any{
 				"turnId": steer.TurnID, "text": steer.Text, "clientMessageId": steer.ClientMessageID,
-				"error": message,
+				"error": message, "attachments": steer.Attachments,
 			})
 		}
 		return err

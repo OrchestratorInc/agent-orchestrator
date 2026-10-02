@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/cloud/internal/attachments"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
@@ -102,15 +103,18 @@ func (s *Supervisor) Interrupt() bool {
 // Steer delivers guidance to the exact in-flight provider turn. The transport
 // request is acknowledged only after the provider reports an injected steer.
 func (s *Supervisor) Steer(ctx context.Context, turnID, text string) error {
+	return s.SteerImages(ctx, turnID, text, nil, nil)
+}
+func (s *Supervisor) SteerImages(ctx context.Context, turnID, text string, paths []string, metadata []attachments.Metadata) error {
 	s.activeMu.Lock()
 	active := s.activeACP
 	codex := s.activeCodex
 	s.activeMu.Unlock()
 	if active != nil {
-		return active.Steer(ctx, turnID, text)
+		return active.SteerImages(ctx, turnID, text, paths, metadata)
 	}
 	if codex != nil {
-		return codex.Steer(ctx, turnID, text)
+		return codex.SteerImages(ctx, turnID, text, paths)
 	}
 	return errors.New("there is no steerable provider turn")
 }

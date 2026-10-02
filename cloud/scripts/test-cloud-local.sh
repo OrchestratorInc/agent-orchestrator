@@ -28,6 +28,8 @@ PY
 export AO_CLOUD_PORT="${AO_CLOUD_SMOKE_PORT:-$(free_port)}"
 export AO_CLOUD_POSTGRES_PORT="${AO_CLOUD_SMOKE_POSTGRES_PORT:-$(free_port)}"
 export AO_CLOUD_LOCAL_POSTGRES_DATA_DIR="$state_directory/postgres"
+export AO_CLOUD_LOCAL_ATTACHMENT_DATA_DIR="$state_directory/attachments"
+mkdir -p "$AO_CLOUD_LOCAL_ATTACHMENT_DATA_DIR"
 export AO_CLOUD_PROVIDER_SECRET_KEY
 AO_CLOUD_PROVIDER_SECRET_KEY="$(openssl rand -base64 32)"
 export AO_CLOUD_WORKER_SIGNING_KEY

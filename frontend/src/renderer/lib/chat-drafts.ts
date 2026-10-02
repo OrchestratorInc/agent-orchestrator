@@ -38,6 +38,8 @@ export type ChatDraftScopeActivationResult =
 	| { ok: false; reason: "obsolete" | "storage" };
 
 export interface ChatDraftAttachment {
+	attachmentId?: string;
+	pendingUpload?: boolean;
 	id: string;
 	path: string;
 	name: string;
@@ -680,7 +682,11 @@ function isAttachment(value: unknown): value is ChatDraftAttachment {
 		typeof attachment.id === "string" &&
 		attachment.id.length > 0 &&
 		typeof attachment.path === "string" &&
-		(attachment.path === "" || attachment.path.startsWith(".ao/attachments/")) &&
+		(attachment.path.startsWith(".ao/attachments/") ||
+			(attachment.path === "" &&
+				typeof attachment.attachmentId === "string" &&
+				attachment.attachmentId.length > 0)) &&
+		(attachment.pendingUpload === undefined || typeof attachment.pendingUpload === "boolean") &&
 		typeof attachment.name === "string" &&
 		typeof attachment.mimeType === "string" &&
 		typeof attachment.bytes === "number" &&
@@ -928,6 +934,7 @@ function attachmentsEqual(
 				candidate !== undefined &&
 				attachment.id === candidate.id &&
 				attachment.path === candidate.path &&
+				attachment.attachmentId === candidate.attachmentId &&
 				attachment.name === candidate.name &&
 				attachment.mimeType === candidate.mimeType &&
 				attachment.bytes === candidate.bytes

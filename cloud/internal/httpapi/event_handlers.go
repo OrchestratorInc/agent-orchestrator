@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,17 +22,18 @@ const (
 )
 
 type sendMessageRequest struct {
-	Text            string `json:"text"`
-	Model           string `json:"model,omitempty"`
-	ReasoningEffort string `json:"reasoningEffort,omitempty"`
-	Mode            string `json:"mode,omitempty"`
-	ApprovalMode    string `json:"approvalMode,omitempty"`
+	AttachmentIDs   []string `json:"attachmentIds,omitempty"`
+	Text            string   `json:"text"`
+	Model           string   `json:"model,omitempty"`
+	ReasoningEffort string   `json:"reasoningEffort,omitempty"`
+	Mode            string   `json:"mode,omitempty"`
+	ApprovalMode    string   `json:"approvalMode,omitempty"`
 }
 
 var chatModelIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
 
 func validateSendMessageRequest(request sendMessageRequest) error {
-	if strings.TrimSpace(request.Text) == "" || len(request.Text) > 65536 {
+	if (strings.TrimSpace(request.Text) == "" && len(request.AttachmentIDs) == 0) || len(request.Text) > 65536 {
 		return errors.New("Message text must be between 1 and 65536 bytes.")
 	}
 	if request.Model != "" && !chatModelIDPattern.MatchString(request.Model) {
@@ -91,7 +93,7 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		sessionID,
 		key,
 		request.Text,
-		domain.ChatTurnSettings{Model: request.Model, ReasoningEffort: request.ReasoningEffort, Mode: request.Mode, ApprovalMode: request.ApprovalMode},
+		domain.ChatTurnSettings{AttachmentIDs: request.AttachmentIDs, Model: request.Model, ReasoningEffort: request.ReasoningEffort, Mode: request.Mode, ApprovalMode: request.ApprovalMode},
 	)
 	if err != nil {
 		s.writeStoreError(w, r, err)
@@ -141,11 +143,23 @@ func (s *Server) steerTurn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body is invalid.")
 		return
 	}
-	if strings.TrimSpace(request.Text) == "" || len(request.Text) > 65536 {
+	if (strings.TrimSpace(request.Text) == "" && len(request.AttachmentIDs) == 0) || len(request.Text) > 65536 {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Message text must be between 1 and 65536 bytes.")
 		return
 	}
-	event, err := s.store.SteerTurn(r.Context(), principalFrom(r), orgID, sessionID, turnID, key, request.Text)
+	var event domain.ClientEvent
+	if len(request.AttachmentIDs) > 0 {
+		store, ok := s.store.(interface {
+			SteerTurnWithAttachments(context.Context, domain.Principal, string, string, string, string, string, []string) (domain.ClientEvent, error)
+		})
+		if !ok {
+			writeError(w, r, 503, "attachments_unavailable", "Image steering is unavailable.")
+			return
+		}
+		event, err = store.SteerTurnWithAttachments(r.Context(), principalFrom(r), orgID, sessionID, turnID, key, request.Text, request.AttachmentIDs)
+	} else {
+		event, err = s.store.SteerTurn(r.Context(), principalFrom(r), orgID, sessionID, turnID, key, request.Text)
+	}
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return

@@ -2249,5 +2249,14 @@
 	"standalone.archive.heading_other": "{{count}} 个已归档会话",
 	"standalone.archive.newAgent": "新建代理",
 	"standalone.archive.empty.title": "没有已归档的独立代理",
-	"standalone.archive.empty.body": "从草稿区归档的独立代理会显示在这里。活跃的独立代理会保留在草稿区列表中。"
+	"standalone.archive.empty.body": "从草稿区归档的独立代理会显示在这里。活跃的独立代理会保留在草稿区列表中。",
+	"terminal.images.contextUnavailable": "云会话信息不可用。",
+	"terminal.images.selectFirst": "请先选择支持的图片。",
+	"terminal.images.changed": "图片准备完成前终端已更改。请重试以插入当前路径。",
+	"terminal.images.failed": "图片准备失败，请重试。",
+	"terminal.images.attachAria": "向终端附加图片",
+	"terminal.images.attach": "附加图片",
+	"terminal.images.preparing": "正在沙盒中准备图片...",
+	"terminal.images.hint": "插入路径后，请自行按 Enter 提交。",
+	"terminal.images.clear": "清除"
 }

@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/attachments"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
@@ -117,6 +118,7 @@ func (s Session) Status(now time.Time, prs []contract.PRFacts) contract.SessionS
 }
 
 type CreateSession struct {
+	AttachmentIDs  []string `json:"attachmentIds,omitempty"`
 	ProjectID      string
 	Kind           string
 	Harness        string
@@ -208,6 +210,7 @@ type ClientEvent struct {
 // epoch. Attempt fences callbacks from an earlier claim even if a request is
 // delayed and delivered after the turn has moved on.
 type WorkerTurn struct {
+	Attachments       []attachments.Metadata
 	ID                string
 	SessionID         string
 	Prompt            string
@@ -225,10 +228,12 @@ type WorkerTurn struct {
 }
 
 type ChatTurnSettings struct {
-	Model           string `json:"model,omitempty"`
-	ReasoningEffort string `json:"reasoningEffort,omitempty"`
-	Mode            string `json:"mode,omitempty"`
-	ApprovalMode    string `json:"approvalMode,omitempty"`
+	AttachmentIDs   []string               `json:"attachmentIds,omitempty"`
+	Attachments     []attachments.Metadata `json:"attachments,omitempty"`
+	Model           string                 `json:"model,omitempty"`
+	ReasoningEffort string                 `json:"reasoningEffort,omitempty"`
+	Mode            string                 `json:"mode,omitempty"`
+	ApprovalMode    string                 `json:"approvalMode,omitempty"`
 }
 
 // WorkerCredential is the encrypted coding-agent credential selected by the

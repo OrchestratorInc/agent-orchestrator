@@ -4,6 +4,86 @@
  */
 
 export interface paths {
+    "/api/cloud/v1/orgs/{orgId}/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["prepareAttachment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/attachments/{attachmentId}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["completeAttachment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/attachments/{attachmentId}/read-grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["attachmentReadGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/attachments/materialize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["materializeAttachments"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/worker/attachments/{attachmentId}/read-grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workerAttachmentReadGrant"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/me": {
         parameters: {
             query?: never;
@@ -1449,6 +1529,7 @@ export interface components {
             capabilities?: string[];
         };
         WorkerLaunchContext: {
+            attachments?: components["schemas"]["ImageAttachment"][];
             /** Format: uuid */
             sessionId: string;
             /** Format: uuid */
@@ -1554,6 +1635,7 @@ export interface components {
             ok: true;
         };
         WorkerTurn: {
+            attachments?: components["schemas"]["ImageAttachment"][];
             /** Format: uuid */
             id: string;
             prompt: string;
@@ -1596,6 +1678,7 @@ export interface components {
             sandboxProviderConnectionId?: string;
         };
         ChatMessageInput: {
+            attachmentIds?: components["schemas"]["AttachmentIds"];
             text: string;
             model?: string;
             /** @enum {string} */
@@ -1619,6 +1702,7 @@ export interface components {
             models: components["schemas"]["ChatModel"][];
         };
         SendMessageInput: {
+            attachmentIds?: components["schemas"]["AttachmentIds"];
             text: string;
         };
         WorkerWorkspaceListPayload: {
@@ -1773,7 +1857,39 @@ export interface components {
             kind: "WorkerTerminalCloseTransport";
             payload: components["schemas"]["WorkerTerminalClosePayload"];
         };
-        WorkerTransportRequest: components["schemas"]["WorkerWorkspaceListTransport"] | components["schemas"]["WorkerWorkspaceReadTransport"] | components["schemas"]["WorkerWorkspaceWriteTransport"] | components["schemas"]["WorkerWorkspaceDiffTransport"] | components["schemas"]["WorkerWorkspaceDiffFileTransport"] | components["schemas"]["WorkerTerminalOpenTransport"] | components["schemas"]["WorkerTerminalInputTransport"] | components["schemas"]["WorkerTerminalResizeTransport"] | components["schemas"]["WorkerTerminalCloseTransport"];
+        WorkerImageMaterializeTransport: {
+            /** Format: uuid */
+            id: string;
+            attempt: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "WorkerImageMaterializeTransport";
+            payload: {
+                attachments: components["schemas"]["ImageAttachment"][];
+            };
+        };
+        WorkerImageSteerTransport: {
+            /** Format: uuid */
+            id: string;
+            attempt: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "WorkerImageSteerTransport";
+            payload: {
+                /** Format: uuid */
+                turnId: string;
+                text: string;
+                clientMessageId: string;
+                /** Format: uuid */
+                commandId: string;
+                attachments: components["schemas"]["ImageAttachment"][];
+            };
+        };
+        WorkerTransportRequest: components["schemas"]["WorkerWorkspaceListTransport"] | components["schemas"]["WorkerWorkspaceReadTransport"] | components["schemas"]["WorkerWorkspaceWriteTransport"] | components["schemas"]["WorkerWorkspaceDiffTransport"] | components["schemas"]["WorkerWorkspaceDiffFileTransport"] | components["schemas"]["WorkerTerminalOpenTransport"] | components["schemas"]["WorkerTerminalInputTransport"] | components["schemas"]["WorkerTerminalResizeTransport"] | components["schemas"]["WorkerTerminalCloseTransport"] | components["schemas"]["WorkerImageMaterializeTransport"] | components["schemas"]["WorkerImageSteerTransport"];
         WorkerClaimTransportResponse: {
             request: components["schemas"]["WorkerTransportRequest"] | null;
         };
@@ -1886,6 +2002,7 @@ export interface components {
             updatedAt: string;
         };
         CreateSessionInput: {
+            attachmentIds?: components["schemas"]["AttachmentIds"];
             /** Format: uuid */
             projectId: string;
             kind: components["schemas"]["SessionKind"];
@@ -2069,6 +2186,7 @@ export interface components {
             /** @constant */
             type: "chat.user_message";
             payload: {
+                attachments?: components["schemas"]["ImageAttachment"][];
                 text: string;
                 /** Format: uuid */
                 turnId?: string;
@@ -2165,6 +2283,7 @@ export interface components {
             /** @constant */
             type: "chat.turn_steered";
             payload: {
+                attachments?: components["schemas"]["ImageAttachment"][];
                 /** Format: uuid */
                 turnId: string;
                 text: string;
@@ -2309,6 +2428,59 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
+        AttachmentIds: string[];
+        ImageAttachment: {
+            /** Format: uuid */
+            id: string;
+            filename: string;
+            size: number;
+            /** @enum {string} */
+            mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" | "image/bmp";
+            sha256: string;
+            /** @enum {string} */
+            status: "pending" | "ready" | "expired";
+        };
+        PrepareAttachmentInput: {
+            /** Format: uuid */
+            projectId: string;
+            /** Format: uuid */
+            sessionId?: string;
+            filename: string;
+            size: number;
+            /** @enum {string} */
+            mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" | "image/bmp";
+            sha256: string;
+        };
+        AttachmentUploadGrant: {
+            /** @description Absolute storage URL, or development URL relative to the control-plane origin. */
+            url: string;
+            fields: {
+                [key: string]: string;
+            };
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        AttachmentReadGrant: {
+            url: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        PrepareAttachmentResponse: {
+            attachment: components["schemas"]["ImageAttachment"];
+            upload: components["schemas"]["AttachmentUploadGrant"];
+        };
+        AttachmentResponse: {
+            attachment: components["schemas"]["ImageAttachment"];
+        };
+        MaterializeAttachmentsInput: {
+            attachmentIds: components["schemas"]["AttachmentIds"];
+        };
+        MaterializedAttachments: {
+            paths: string[];
+            workerId: string;
+            /** Format: int64 */
+            epoch: number;
+        };
     };
     responses: {
         /** @description Standard Cloud API error. */
@@ -2369,6 +2541,7 @@ export interface components {
         };
     };
     parameters: {
+        AttachmentId: string;
         OrgId: string;
         ProjectId: string;
         SessionId: string;
@@ -2397,6 +2570,137 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    prepareAttachment: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrepareAttachmentInput"];
+            };
+        };
+        responses: {
+            /** @description Attachment operation succeeded. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrepareAttachmentResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    completeAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                attachmentId: components["parameters"]["AttachmentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Attachment operation succeeded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachmentResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    attachmentReadGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                attachmentId: components["parameters"]["AttachmentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Attachment operation succeeded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachmentReadGrant"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    materializeAttachments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterializeAttachmentsInput"];
+            };
+        };
+        responses: {
+            /** @description Attachment operation succeeded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterializedAttachments"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    workerAttachmentReadGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attachmentId: components["parameters"]["AttachmentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Attachment operation succeeded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachmentReadGrant"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getCurrentAccount: {
         parameters: {
             query?: never;

@@ -1,3 +1,5 @@
+import type { FileAttachment } from "../../hooks/useFileAttachments";
+import type { AttachmentPreviewResolver } from "./AttachmentPreview";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 /**
  * The Chat surface for a session whose persisted mode is `chat`.
@@ -106,7 +108,7 @@ import {
 } from "./ChatTimelineItems";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
-import { ChatImageSourceProvider } from "./chat-image-source";
+import { AttachmentSourceProvider, ChatImageSourceProvider } from "./chat-image-source";
 import { ChatComposer, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
@@ -320,6 +322,8 @@ export interface ChatWorkspaceProps {
 		text: string,
 		attachments?: { mimeType: string; data: string }[],
 		clientMessageId?: string,
+		retainedContent?: number[],
+		attachmentIds?: string[],
 	) => void | Promise<unknown>;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	onResolveInput?: (
@@ -424,6 +428,9 @@ export interface ChatWorkspaceProps {
 	 * can open. Absent means no attach control is offered — the fixture preview has
 	 * no worktree to write into.
 	 */
+	onUploadAttachments?: (attachments: FileAttachment[]) => Promise<FileAttachment[]>;
+	resolveAttachmentPreview?: AttachmentPreviewResolver;
+	draftNamespace?: string;
 	onStageAttachments?: (attachments: { mimeType: string; data: string }[]) => Promise<string[]>;
 	/** The provider negotiated native image prompt blocks. */
 	nativeImages?: boolean;
@@ -438,6 +445,7 @@ export interface ChatWorkspaceProps {
 		attachments?: { mimeType: string; data: string }[],
 		clientMessageId?: string,
 		recoverOnly?: boolean,
+		attachmentIds?: string[],
 	) => Promise<ChatSteerOutcome | void>;
 	showSteerButton?: boolean;
 	sendPending?: boolean;
@@ -469,15 +477,15 @@ type ChatWorkspaceActivation =
  */
 export function ChatWorkspace(props: ChatWorkspaceProps) {
 	const translateDraft = useChatDraftTranslation();
-	const { snapshot, session } = props;
+	const { snapshot, session, draftNamespace } = props;
 	const draftScope = useMemo<ChatDraftScope>(
 		() => ({
 			sessionId: snapshot.sessionId,
 			// Live surfaces carry the daemon-created session timestamp. Snapshot-only
 			// fixtures retain the legacy logical scope for deterministic previews.
-			incarnation: session?.createdAt ?? snapshot.sessionId,
+			incarnation: (draftNamespace ?? "") + (session?.createdAt ?? snapshot.sessionId),
 		}),
-		[session?.createdAt, snapshot.sessionId],
+		[session?.createdAt, snapshot.sessionId, draftNamespace],
 	);
 	const scopeKey = chatDraftScopeKey(draftScope);
 	const [activation, setActivation] = useState<ChatWorkspaceActivation>();
@@ -617,6 +625,8 @@ function ChatWorkspaceContent({
 	filePaths,
 	filePathsTruncated,
 	localEchos,
+	onUploadAttachments,
+	resolveAttachmentPreview,
 	onStageAttachments,
 	nativeImages,
 	onSteer,
@@ -830,7 +840,13 @@ function ChatWorkspaceContent({
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
 	const handleComposerSend = useCallback(
-		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[]) => {
+		async (
+			text: string,
+			attachments?: Parameters<NonNullable<typeof onSend>>[1],
+			clientMessageId?: string,
+			retainedContent?: number[],
+			attachmentIds?: string[],
+		) => {
 			if (queueEdit) {
 				if (!onEditQueuedTurn) {
 					throw new Error("chat.draft.queueUnavailable");
@@ -877,7 +893,9 @@ function ChatWorkspaceContent({
 				}
 				return;
 			}
-			return onSend?.(text, attachments, clientMessageId);
+			return attachmentIds !== undefined
+				? onSend?.(text, attachments, clientMessageId, retainedContent, attachmentIds)
+				: onSend?.(text, attachments, clientMessageId);
 		},
 		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
 	);
@@ -915,7 +933,11 @@ function ChatWorkspaceContent({
 			attachments?: { mimeType: string; data: string }[],
 			clientMessageId?: string,
 			recoverOnly?: boolean,
-		) => stableSteer(text, attachments, clientMessageId, recoverOnly),
+			attachmentIds?: string[],
+		) =>
+			attachmentIds !== undefined
+				? stableSteer(text, attachments, clientMessageId, recoverOnly, attachmentIds)
+				: stableSteer(text, attachments, clientMessageId, recoverOnly),
 		[stableSteer],
 	);
 	const acceptedClientMessageIds = useMemo(
@@ -1443,32 +1465,39 @@ function ChatWorkspaceContent({
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
 					>
-						<ChatLinkProvider onLinkOpen={onLinkOpen} onFileOpen={onOpenFile} onSessionLinkOpen={onSessionLinkOpen} workspacePaths={filePaths}>
-							<ChatImageSourceProvider sessionId={snapshot.sessionId}>
-								<Timeline
-									key={draftScopeKey}
-									snapshot={snapshot}
-									draftScope={draftScope}
-									hasOlder={hasOlder}
-									loadingOlder={loadingOlder}
-									onLoadOlder={onLoadOlder}
-									onDecide={onDecide}
-									busy={busy}
-									onRollback={rollbackTarget}
-									onOpenFiles={onOpenFiles}
-									onOpenFile={onOpenFile}
-									retryControl={retryControl}
-									onEditHumanMessage={editHumanMessage}
-									editPending={editMessagePending}
-									editBusy={Boolean(turn)}
-									editError={editMessageError}
-									onActivateBranch={onActivateBranch}
-									activateBranchPending={activateBranchPending}
-									activateBranchError={activateBranchError}
-									newWorkDisabled={newWorkDisabled}
-									localEchos={localEchos}
-								/>
-							</ChatImageSourceProvider>
+						<ChatLinkProvider
+							onLinkOpen={onLinkOpen}
+							onFileOpen={onOpenFile}
+							onSessionLinkOpen={onSessionLinkOpen}
+							workspacePaths={filePaths}
+						>
+							<AttachmentSourceProvider value={resolveAttachmentPreview}>
+								<ChatImageSourceProvider sessionId={snapshot.sessionId}>
+									<Timeline
+										key={draftScopeKey}
+										snapshot={snapshot}
+										draftScope={draftScope}
+										hasOlder={hasOlder}
+										loadingOlder={loadingOlder}
+										onLoadOlder={onLoadOlder}
+										onDecide={onDecide}
+										busy={busy}
+										onRollback={rollbackTarget}
+										onOpenFiles={onOpenFiles}
+										onOpenFile={onOpenFile}
+										retryControl={retryControl}
+										onEditHumanMessage={editHumanMessage}
+										editPending={editMessagePending}
+										editBusy={Boolean(turn)}
+										editError={editMessageError}
+										onActivateBranch={onActivateBranch}
+										activateBranchPending={activateBranchPending}
+										activateBranchError={activateBranchError}
+										newWorkDisabled={newWorkDisabled}
+										localEchos={localEchos}
+									/>
+								</ChatImageSourceProvider>
+							</AttachmentSourceProvider>
 						</ChatLinkProvider>
 
 						<div ref={composerDockRef} className="cursor-chat-composer-dock shrink-0 px-4 pb-3">
@@ -1509,8 +1538,12 @@ function ChatWorkspaceContent({
 									skills={skills}
 									filePaths={filePaths}
 									filePathsTruncated={filePathsTruncated}
+									onUploadAttachments={newWorkDisabled ? undefined : onUploadAttachments}
+									resolveAttachmentPreview={resolveAttachmentPreview}
 									onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
-									nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
+									nativeImages={
+										queueEdit?.clientMessageId ? (queueEdit.nativeImages ?? nativeImages) : nativeImages
+									}
 									autoFocus={!reviewerActive}
 									autoFocusKey={snapshot.sessionId}
 									// Steering is only meaningful into a turn that is running. A queued turn

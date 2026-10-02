@@ -2267,5 +2267,14 @@
 	"standalone.archive.heading_other": "{{count}} 件のアーカイブ済みセッション",
 	"standalone.archive.newAgent": "新しいエージェント",
 	"standalone.archive.empty.title": "アーカイブ済みのスタンドアロンエージェントはありません",
-	"standalone.archive.empty.body": "スクラッチパッドからアーカイブしたスタンドアロンエージェントがここに表示されます。アクティブなスタンドアロンエージェントはスクラッチパッドの一覧に残ります。"
+	"standalone.archive.empty.body": "スクラッチパッドからアーカイブしたスタンドアロンエージェントがここに表示されます。アクティブなスタンドアロンエージェントはスクラッチパッドの一覧に残ります。",
+	"terminal.images.contextUnavailable": "クラウドセッションの情報を取得できません。",
+	"terminal.images.selectFirst": "対応する画像を先に選択してください。",
+	"terminal.images.changed": "画像の準備中にターミナルが変わりました。再試行して現在のパスを挿入してください。",
+	"terminal.images.failed": "画像の準備に失敗しました。再試行してください。",
+	"terminal.images.attachAria": "ターミナルに画像を添付",
+	"terminal.images.attach": "画像を添付",
+	"terminal.images.preparing": "サンドボックスで画像を準備中...",
+	"terminal.images.hint": "パスを挿入します。送信するには Enter を押してください。",
+	"terminal.images.clear": "クリア"
 }

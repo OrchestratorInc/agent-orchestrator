@@ -62,6 +62,9 @@ const {
 		visibleContentCallback: { value: undefined as (() => void) | undefined },
 	}),
 );
+let imageInsert:((paths:string[],epoch:number)=>boolean)|undefined;
+vi.mock("./CloudTerminalAttachments",()=>({CloudTerminalAttachments:(props:{onInsert:(paths:string[],epoch:number)=>boolean})=>{imageInsert=props.onInsert;return <div/>}}));
+
 let terminalLinkHandler: ((uri: string) => void) | undefined;
 
 vi.mock("../hooks/useCloudCp", () => ({
@@ -1248,4 +1251,16 @@ describe("terminal link preview", () => {
 			view.restore();
 		}
 	});
+});
+
+it("inserts acknowledged Cloud image paths without Enter and rejects stale epochs",async()=>{
+ terminalState.value="attached";hasAttached.value=true;sendUserInputMock.mockReturnValue(true);
+ const view=renderPane({...worker,cloud:{orgId:"org-1"},terminalGeneration:"4"});
+ await waitFor(()=>expect(imageInsert).toBeTypeOf("function"));
+ expect(imageInsert?.([".ao/attachments/image.png"],3)).toBe(false);
+ expect(sendUserInputMock).not.toHaveBeenCalled();
+ expect(imageInsert?.([".ao/attachments/image.png"],4)).toBe(true);
+ expect(sendUserInputMock).toHaveBeenCalledWith("'.ao/attachments/image.png' ");
+ expect(sendUserInputMock.mock.lastCall?.[0]).not.toMatch(/[\r\n]/);
+ view.restore();
 });

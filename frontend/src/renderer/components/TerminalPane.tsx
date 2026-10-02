@@ -1,3 +1,4 @@
+import { CloudTerminalAttachments } from "./CloudTerminalAttachments";
 import { useQueryClient } from "@tanstack/react-query";
 import { RotateCcw } from "lucide-react";
 import {
@@ -1042,6 +1043,9 @@ function AttachedTerminal({
 	// box is being torn down, so you cannot type. Clear the reconnecting signal the
 	// instant the epoch advances past the baseline, which is also when the pane
 	// re-mints against the new epoch (terminalGeneration drives the mux key).
+	const [pastedImageFiles, setPastedImageFiles] = useState<File[]>();
+	const imageInputRef = useRef({ session, terminal, state, inputDisabled, isVisible });
+	imageInputRef.current = { session, terminal, state, inputDisabled, isVisible };
 	const currentEpoch = session?.terminalGeneration ? Number(session.terminalGeneration) || 0 : 0;
 	const baselineEpoch = useTerminalResetStore((store) =>
 		session?.id ? (store.baselineEpoch[session.id] ?? 0) : 0,
@@ -1248,6 +1252,29 @@ function AttachedTerminal({
 
 	return (
 		<div className="terminal-surface flex h-full min-h-0 flex-col" data-testid="session-terminal">
+			{session?.cloud && (!terminalTarget || terminalTarget.kind === "worker") && (
+				<CloudTerminalAttachments
+					session={session}
+					disabled={inputDisabled || state !== "attached" || !isVisible}
+					pastedFiles={pastedImageFiles}
+					onInsert={(paths, epoch) => {
+						const current = imageInputRef.current;
+						if (
+							current.session?.id !== session.id ||
+							current.inputDisabled ||
+							!current.isVisible ||
+							current.state !== "attached" ||
+							Number(current.session?.terminalGeneration) !== epoch
+						)
+							return false;
+						return (
+							current.terminal?.sendUserInput(
+								paths.map((path) => `'${path.replaceAll("'", "'\\''")}'`).join(" ") + " ",
+							) ?? false
+						);
+					}}
+				/>
+			)}
 			{showEndedState && (
 				<TerminalEndedStrip
 					canRestore={canRestoreSession}
@@ -1266,6 +1293,11 @@ function AttachedTerminal({
 			    overlays (empty state, banner) keep covering the full padding box. */}
 			<div className="relative min-h-0 flex-1 pl-2">
 				<XtermTerminal
+					onPasteFiles={
+						session?.cloud && (!terminalTarget || terminalTarget.kind === "worker")
+							? setPastedImageFiles
+							: undefined
+					}
 					ariaLabel={terminalTarget?.kind === "shell" ? t("terminal.shellAria") : t("terminal.sessionAria")}
 					fontSize={fontSize}
 					focusRequested={focusRequested}
