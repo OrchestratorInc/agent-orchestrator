@@ -89,6 +89,16 @@ describe("TurnOutcome", () => {
 });
 
 describe("AssistantMessage streaming", () => {
+	it("shows completed messages without a duplicate animation segmentation pass", () => {
+		const segment = vi.spyOn(Intl.Segmenter.prototype, "segment");
+		const text = "Completed 👨‍👩‍👧‍👦 é answer";
+		render(<AssistantMessage message={message({ text, streaming: false })} />);
+		expect(document.querySelector("p")?.textContent).toBe(text);
+		// Markdown may segment for emoji typography; settled text needs no
+		// additional pass for the streaming animation.
+		expect(segment.mock.calls.filter(([input]) => input === text).length).toBeLessThanOrEqual(1);
+	});
+
 	it("shows the first durable snapshot and a replacement message immediately", () => {
 		const text = "A first snapshot 👨‍👩‍👧‍👦";
 		const view = render(<AssistantMessage message={message({ text })} />);
