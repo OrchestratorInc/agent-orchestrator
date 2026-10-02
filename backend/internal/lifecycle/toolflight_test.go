@@ -316,6 +316,9 @@ func TestToolPrecedence_PostStopNeedsInputNotificationStaysIdle(t *testing.T) {
 	// waiting_input (which suppresses automated delivery until a human acts).
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityActive)
+	seeded := st.sessions["mer-1"]
+	seeded.Harness = domain.HarnessClaudeCode
+	st.sessions["mer-1"] = seeded
 	mustApply(t, m, "mer-1", sig(domain.ActivityIdle, "stop", "", ""))
 
 	mustApply(t, m, "mer-1", sig(domain.ActivityWaitingInput, "notification", "", ""))
@@ -329,6 +332,31 @@ func TestToolPrecedence_PostStopNeedsInputNotificationStaysIdle(t *testing.T) {
 	mustApply(t, m, "mer-1", sig(domain.ActivityWaitingInput, "notification", "", ""))
 	if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
 		t.Fatalf("state after genuine agent_needs_input = %q, want waiting_input", got)
+	}
+}
+
+func TestToolPrecedence_PostStopNeedsInputNotificationOnlySuppressedForClaudeFamily(t *testing.T) {
+	// The phantom 60s timer is Claude Code-specific. Harnesses whose
+	// notification → waiting_input is genuine must keep it even post-Stop:
+	// aider's completion notification is its ONLY activity signal (markSpawned
+	// seeds idle, so suppression would freeze it at idle/no_signal forever),
+	// and droid deliberately upgrades its post-Stop idle Notification to
+	// sticky waiting_input to suppress nudges (droid/activity.go).
+	for _, harness := range []domain.AgentHarness{
+		domain.HarnessAider, domain.HarnessDroid, domain.AgentHarness(""),
+	} {
+		t.Run(string(harness), func(t *testing.T) {
+			m, st, _ := newManager()
+			seedSignaled(st, "mer-1", domain.ActivityIdle)
+			seeded := st.sessions["mer-1"]
+			seeded.Harness = harness
+			st.sessions["mer-1"] = seeded
+
+			mustApply(t, m, "mer-1", sig(domain.ActivityWaitingInput, "notification", "", ""))
+			if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
+				t.Fatalf("state after genuine post-idle notification = %q, want waiting_input", got)
+			}
+		})
 	}
 }
 
