@@ -612,6 +612,15 @@ describe("ChatMarkdown image sources", () => {
 		);
 	});
 
+	it("does not resolve an offline remote image against the laptop daemon", () => {
+		render(
+			<ChatImageSourceProvider sessionId="session-1" remoteHost>
+				<ChatMarkdown text="![remote](docs/shot.png)" />
+			</ChatImageSourceProvider>,
+		);
+		expect(screen.queryByRole("img", { name: "remote" })).not.toBeInTheDocument();
+	});
+
 	it("keeps absolute image sources unchanged", () => {
 		renderInSession("![remote](https://example.com/a.png)");
 		expect(screen.getByRole("img", { name: "remote" })).toHaveAttribute("src", "https://example.com/a.png");

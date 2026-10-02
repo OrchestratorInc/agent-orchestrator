@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getApiBaseUrl } from "../lib/api-client";
-import { baseUrlForHost } from "../lib/host-clients";
+import { useHostConnection } from "../hooks/useHostConnection";
 import { cn } from "../lib/utils";
 import type { WorkspaceFileSummary } from "../hooks/useSessionWorkspaceFiles";
 
@@ -17,9 +17,9 @@ const CHECKERBOARD =
 // route sets no-store, so `version` — the file detail's load timestamp — is what
 // makes an edited image reload: without a changing URL the element never
 // refetches at all.
-function workspaceImageUrl(sessionId: string, path: string, side: ImageDiffSide, version: number, hostId?: string): string | undefined {
-	const base = hostId ? baseUrlForHost(hostId) : getApiBaseUrl();
-	if (hostId && !base) return undefined;
+function workspaceImageUrl(sessionId: string, path: string, side: ImageDiffSide, version: number, hostId?: string, remoteBaseUrl?: string): string | undefined {
+	const base = hostId ? remoteBaseUrl : getApiBaseUrl();
+	if (base === undefined) return undefined;
 	const query = new URLSearchParams({ path, side, v: String(version) });
 	return `${base}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/file/blob?${query}`;
 }
@@ -100,6 +100,7 @@ function ImageDiffPane({
 	version: number;
 }) {
 	const { t } = useTranslation();
+	const { baseUrl: remoteBaseUrl } = useHostConnection(hostId);
 	const [size, setSize] = useState<{ width: number; height: number } | null>(null);
 	const [failed, setFailed] = useState(false);
 	return (
@@ -125,7 +126,7 @@ function ImageDiffPane({
 						onLoad={(event) =>
 							setSize({ height: event.currentTarget.naturalHeight, width: event.currentTarget.naturalWidth })
 						}
-						src={workspaceImageUrl(sessionId, path, side, version, hostId)}
+						src={workspaceImageUrl(sessionId, path, side, version, hostId, remoteBaseUrl)}
 					/>
 				)}
 			</div>

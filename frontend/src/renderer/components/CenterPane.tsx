@@ -26,7 +26,8 @@ import {
 import { useObservedAgentSwitchLifecycle } from "../hooks/useObservedAgentSwitchLifecycle";
 import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } from "../hooks/useAgentSwitchVisibility";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
-import { remoteWorkspaceQueryKey, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { useHostConnection } from "../hooks/useHostConnection";
 import { MAX_SESSION_DISPLAY_NAME_LEN, useSessionRename } from "../hooks/useSessionRename";
 import { useSwitchAgentState } from "../hooks/useSwitchAgent";
 import { useTruncatedText } from "../hooks/useTruncatedText";
@@ -56,9 +57,7 @@ import { ShellTerminalTab } from "./ShellTerminalTab";
 import { TerminalTabFrame } from "./TerminalTabFrame";
 import { TerminalPane } from "./TerminalPane";
 import { RemoteTerminalView } from "./RemoteTerminalView";
-import { baseUrlForHost, subscribeConnectedHosts } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
-import { useSyncExternalStore } from "react";
 import { SessionTopbarPortal } from "./SessionTopbarPortal";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "./ui/context-menu";
 
@@ -187,10 +186,10 @@ export function CenterPane({
 	const [tabOrderBySession, setTabOrderBySession] = useState<Record<string, string[]>>({});
 	const queryClient = useQueryClient();
 	const refreshWorkspaces = useCallback(
-		() => queryClient.invalidateQueries({ queryKey: hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey }),
+		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) }),
 		[hostId, queryClient],
 	);
-	const remoteBase = useSyncExternalStore(subscribeConnectedHosts, () => hostId ? baseUrlForHost(hostId) : undefined);
+	const { baseUrl: remoteBase } = useHostConnection(hostId);
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const sessionId = session?.id;
 	const auxiliaryTabs = useMemo<AuxiliaryTab[]>(

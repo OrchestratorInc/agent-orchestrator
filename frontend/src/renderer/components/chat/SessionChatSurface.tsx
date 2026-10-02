@@ -496,6 +496,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				key={uiSessionId}
 				uiSessionId={uiSessionId}
 				assetBaseUrl={assetBaseUrl}
+				remoteHostId={hostId}
 				snapshot={renderSnapshot}
 				agentInputDisabled={switchLocksChat || handoffDialogOpen}
 				newWorkDisabled={newWorkDisabled}

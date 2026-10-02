@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore, type MouseEvent } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -10,7 +10,6 @@ import {
 import { AlertTriangle, LayoutDashboard, RotateCw } from "lucide-react";
 import {
 	CLOUD_PROJECT_KIND,
-	STANDALONE_WORKSPACE_ID,
 	toProjectKind,
 	type WorkspaceSession,
 	newestActiveOrchestrator,
@@ -29,7 +28,7 @@ import {
 } from "../hooks/useSessionUsageSummaries";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useTerminateSession } from "../hooks/useTerminateSession";
-import { useRemoteProjectQuery, useWorkspaceQuery, remoteWorkspaceQueryKey, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { useRemoteProjectQuery, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { NotificationCenter } from "./NotificationCenter";
 import { BoardWelcome, ProjectBoardEmpty } from "./BoardEmptyStates";
 import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
@@ -44,9 +43,11 @@ import { DaemonStartupLoader } from "./DaemonStartupLoader";
 import { useBoardPresentation } from "../hooks/useBoardPresentation";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { useRemoteProjectBoardActions } from "../hooks/useRemoteProjectBoardActions";
-import { connectedHosts, labelForHost, subscribeConnectedHosts } from "../lib/host-clients";
+import { labelForHost } from "../lib/host-clients";
+import { useConnectedHosts } from "../hooks/useHostConnection";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { useShellMaybe } from "../lib/shell-context";
+import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { ProjectBoardActions } from "./ProjectBoardActions";
 import {
 	ArchivedSessionCardAdapter,
@@ -84,7 +85,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const shell = useShellMaybe();
-	const connected = useSyncExternalStore(subscribeConnectedHosts, connectedHosts, connectedHosts).includes(hostId ?? "");
+	const connected = useConnectedHosts().includes(hostId ?? "");
 	const scopeKey = refKey({ host: hostId ?? LOCAL_HOST, id: projectId ?? "all" });
 	// Lanes follow the daemon's delivery order: building -> validating ->
 	// in review -> ready. The middle two are one review-feedback loop, split by
@@ -167,16 +168,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	activeScopeRef.current = scopeKey;
 
 	const openSession = useCallback((session: WorkspaceSession) => {
-		if (hostId) void navigate({
-			to: "/host/$hostId/project/$projectId/session/$sessionId",
-			params: { hostId, projectId: session.workspaceId, sessionId: session.id },
-		});
-		else if (session.workspaceId === STANDALONE_WORKSPACE_ID) {
-			void navigate({ to: "/sessions/$sessionId", params: { sessionId: session.id } });
-		} else void navigate({
-			to: "/projects/$projectId/sessions/$sessionId",
-			params: { projectId: session.workspaceId, sessionId: session.id },
-		});
+		void navigate(sessionNavigateTarget(session.workspaceId, session.id, hostId));
 	}, [navigate, hostId]);
 
 	const restartOrchestrator = async () => {
@@ -389,18 +381,7 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 			const result = await restoreSessionById(session.id, hostId);
 			if (!isStillActiveProject()) return;
 			if (result.status === "success") {
-				if (hostId) void navigate({
-					to: "/host/$hostId/project/$projectId/session/$sessionId",
-					params: { hostId, projectId: session.workspaceId, sessionId: session.id },
-				});
-				else if (session.workspaceId === STANDALONE_WORKSPACE_ID) {
-					void navigate({ to: "/sessions/$sessionId", params: { sessionId: session.id } });
-					return;
-				}
-				else void navigate({
-					to: "/projects/$projectId/sessions/$sessionId",
-					params: { projectId: session.workspaceId, sessionId: session.id },
-				});
+				void navigate(sessionNavigateTarget(session.workspaceId, session.id, hostId));
 				return;
 			}
 			if (result.status === "not_resumable") {
@@ -445,7 +426,7 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 						if (!open) setRestoreUnavailableSession(undefined);
 					}}
 					onRecreated={async () => {
-						await queryClient.invalidateQueries({ queryKey: hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey });
+						await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 					}}
 				/>
 			) : null}

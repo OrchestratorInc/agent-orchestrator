@@ -41,8 +41,9 @@ import type { components } from "../../api/schema";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
+import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
-import { remoteWorkspaceQueryKey, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { captureRendererEvent } from "../lib/telemetry";
 import { formatTimeCompact } from "../lib/format-time";
 import { AgentAvatar } from "./AgentAvatar";
@@ -693,7 +694,7 @@ function UsageAgentAttribution({ harness }: { harness: SessionUsage["harnesses"]
 function AutoInjectCIPolicyControl({ session, hostId }: { session: WorkspaceSession; hostId?: string }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	const workspaceKey = hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey;
+	const workspaceKey = workspaceQueryKeyForHost(hostId);
 	const { client: cloudClient } = useCloudCp();
 	const [enabled, setEnabled] = useState(session.autoInjectCI ?? true);
 	useEffect(() => {
@@ -802,7 +803,7 @@ function ProviderUsageDetails({ harness }: { harness: SessionUsage["harnesses"][
 function AutoInjectReviewPolicyControl({ session, hostId }: { session: WorkspaceSession; hostId?: string }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	const workspaceKey = hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey;
+	const workspaceKey = workspaceQueryKeyForHost(hostId);
 	const { client: cloudClient } = useCloudCp();
 	const [enabled, setEnabled] = useState(session.autoInjectReview ?? true);
 	useEffect(() => {
@@ -1180,7 +1181,7 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
-	const workspaceKey = hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey;
+	const workspaceKey = workspaceQueryKeyForHost(hostId);
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const terminate = useTerminateSession();
 	const { client: cloudClient } = useCloudCp();
@@ -1225,22 +1226,13 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 		terminate.mutate(hostId ? { ...session, hostId } : session);
 		
 		if (nextNav.target === "session") {
-			if (hostId && isStandaloneSession) void navigate({
-				to: "/host/$hostId/session/$sessionId", params: { hostId, sessionId: nextNav.sessionId },
-			});
-			else if (hostId) void navigate({
-				to: "/host/$hostId/project/$projectId/session/$sessionId", params: { hostId, projectId: session.workspaceId, sessionId: nextNav.sessionId },
-			});
-			else void navigate({
-				to: "/projects/$projectId/sessions/$sessionId", params: { projectId: session.workspaceId, sessionId: nextNav.sessionId },
-			});
+			void navigate(sessionNavigateTarget(session.workspaceId, nextNav.sessionId, hostId));
 		} else {
 			if (session.workspaceId === STANDALONE_WORKSPACE_ID) {
 				void navigate({ to: "/" });
 				return;
 			}
-			if (hostId) void navigate({ to: "/host/$hostId/project/$projectId", params: { hostId, projectId: session.workspaceId } });
-			else void navigate({ to: "/projects/$projectId", params: { projectId: session.workspaceId } });
+			void navigate(projectNavigateTarget(session.workspaceId, hostId));
 		}
 	};
 
@@ -1342,7 +1334,7 @@ function PRSummaryCard({
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	const workspaceKey = hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey;
+	const workspaceKey = workspaceQueryKeyForHost(hostId);
 	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp();
 	const presentation = prCardPresentation(pr);
 	const canMerge = prCanMerge(pr) && Boolean(pr.url && pr.headSha);
@@ -1620,7 +1612,7 @@ function ReviewsSection({
 	const { t } = useTranslation();
 	const hasPr = sortedPRs(session).length > 0;
 	const queryClient = useQueryClient();
-	const workspaceKey = hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey;
+	const workspaceKey = workspaceQueryKeyForHost(hostId);
 	const reviewsKey = sessionReviewsQueryKey(session.id, hostId);
 	const [reviewNotice, setReviewNotice] = useState<string | null>(null);
 	useEffect(() => {
@@ -1870,7 +1862,7 @@ function MergedReviewsSection({
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const openInAOBrowser = useSessionBrowserLink(hostId ? undefined : session);
-	const workspaceKey = hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey;
+	const workspaceKey = workspaceQueryKeyForHost(hostId);
 	const openReviewStates = openReviewStatesFor(session, reviewStates);
 	const runsByPR = runsByPRFrom(openReviewStates, runs);
 	const aoStates = triggeredReviewStatesFrom(openReviewStates, runs);

@@ -12,7 +12,7 @@ import { clientForSessionHost } from "../lib/host-clients";
 import type { CloudCpInterfaceTransition } from "../lib/cloud-cp";
 import { conversationQueryKey } from "./useConversation";
 import { useCloudCp } from "./useCloudCp";
-import { cloudSessionsQueryKey, remoteWorkspaceQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
+import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
 export type SessionInterfaceTransition = components["schemas"]["SessionInterfaceTransition"];
 export type SessionInterfaceTransitionStatus =
@@ -458,7 +458,7 @@ export function useSessionInterfaceTransition(
 		const attempt = ++refreshAttemptRef.current;
 		setRefreshingTransition({ attempt, key: transitionKey });
 		const refreshes = [
-			queryClient.invalidateQueries({ queryKey: hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey }),
+			queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) }),
 			queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) }),
 		];
 		if (isCloud) {

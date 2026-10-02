@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { WorkspaceSession } from "../types/workspace";
-import { remoteWorkspaceQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
+import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 
@@ -21,7 +21,7 @@ export function usePinSession() {
 			}
 		},
 		onSuccess: async (_data, session) => {
-			await queryClient.invalidateQueries({ queryKey: session.hostId ? remoteWorkspaceQueryKey(session.hostId) : workspaceQueryKey });
+			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
 		},
 		onError: (error) => {
 			console.error("Failed to pin session:", error);
@@ -43,7 +43,7 @@ export function useUnpinSession() {
 			}
 		},
 		onSuccess: async (_data, session) => {
-			await queryClient.invalidateQueries({ queryKey: session.hostId ? remoteWorkspaceQueryKey(session.hostId) : workspaceQueryKey });
+			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
 		},
 		onError: (error) => {
 			console.error("Failed to unpin session:", error);

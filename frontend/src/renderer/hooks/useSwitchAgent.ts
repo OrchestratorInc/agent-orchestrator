@@ -9,7 +9,7 @@ import {
 	clearConversationProviderCatalogs,
 	conversationQueryKey,
 } from "./useConversation";
-import { remoteWorkspaceQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
+import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
 export type SwitchAgentHarness = components["schemas"]["SwitchAgentRequest"]["targetHarness"];
 
@@ -122,7 +122,7 @@ export function useSwitchAgent() {
 			void queryClient.invalidateQueries({ queryKey: conversationQueryKey(variables.session.id, variables.session.hostId) });
 		},
 		onSettled: (_data, _error, variables) => {
-			void queryClient.invalidateQueries({ queryKey: variables.session.hostId ? remoteWorkspaceQueryKey(variables.session.hostId) : workspaceQueryKey });
+			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(variables.session.hostId) });
 			void queryClient.invalidateQueries({ queryKey: agentSwitchesQueryKey(variables.session.id, variables.session.hostId) });
 		},
 	});
@@ -152,7 +152,7 @@ export function useRecoverAgentSwitch() {
 			);
 		},
 		onSettled: (_data, _error, variables) => {
-			void queryClient.invalidateQueries({ queryKey: variables.hostId ? remoteWorkspaceQueryKey(variables.hostId) : workspaceQueryKey });
+			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(variables.hostId) });
 			void queryClient.invalidateQueries({ queryKey: agentSwitchesQueryKey(variables.sessionId, variables.hostId) });
 		},
 	});

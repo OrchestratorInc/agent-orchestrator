@@ -9,14 +9,15 @@ import {
 } from "@aoagents/product-ui";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Info, Pencil } from "lucide-react";
 import type { components } from "../../api/schema";
 import { agentModelsQueryKey, agentModelsQueryOptions, refreshAgentModels, revalidateAgentModels, type AgentModelCatalog } from "../hooks/useAgentModelsQuery";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
-import { useRemoteProjectQuery, remoteWorkspaceQueryKey, workspaceQueryKey, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
+import { useRemoteProjectQuery, workspaceQueryKeyForHost, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
-import { clientForHost, connectedHosts, subscribeConnectedHosts } from "../lib/host-clients";
+import { clientForHost } from "../lib/host-clients";
+import { useConnectedHosts } from "../hooks/useHostConnection";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
 import { isLaunchableAgent } from "../lib/agent-select-options";
@@ -76,7 +77,7 @@ export function ProjectSettingsForm({
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	const connected = useSyncExternalStore(subscribeConnectedHosts, connectedHosts, connectedHosts);
+	const connected = useConnectedHosts();
 	const hostConnected = !hostId || connected.includes(hostId);
 	useEffect(() => {
 		if (!hostConnected) onSaveState?.({ phase: "idle" });
@@ -108,7 +109,7 @@ export function ProjectSettingsForm({
 					key={refKey({ host: hostId ?? LOCAL_HOST, id: projectId })}
 					project={query.data}
 					onSaved={() =>
-						queryClient.invalidateQueries({ queryKey: hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey }).catch(() => {
+						queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) }).catch(() => {
 							// Saving succeeds even if the cache refresh fails.
 						})
 					}

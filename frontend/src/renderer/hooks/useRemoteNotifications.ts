@@ -1,7 +1,7 @@
 import { useQueries } from "@tanstack/react-query";
-import { useSyncExternalStore } from "react";
 import { apiErrorMessage } from "../lib/api-client";
-import { clientForHost, connectedHosts, labelForHost, subscribeConnectedHosts } from "../lib/host-clients";
+import { clientForHost, labelForHost } from "../lib/host-clients";
+import { useConnectedHosts } from "./useHostConnection";
 import { NOTIFICATION_PAGE_SIZE, type NotificationListStatus, type NotificationsPage } from "../lib/notifications";
 
 export const remoteNotificationsQueryKey = (hostId: string, status: NotificationListStatus) =>
@@ -16,7 +16,7 @@ export async function fetchRemoteNotificationsPage(hostId: string, status: Notif
 }
 
 export function useRemoteNotificationHosts(status: NotificationListStatus, enabled = true) {
-	const connected = useSyncExternalStore(subscribeConnectedHosts, connectedHosts, connectedHosts);
+	const connected = useConnectedHosts();
 	const queries = useQueries({
 		queries: connected.map((hostId) => ({
 			queryKey: remoteNotificationsQueryKey(hostId, status),

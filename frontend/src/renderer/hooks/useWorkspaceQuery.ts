@@ -1,6 +1,6 @@
 import { useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
 import type { TraySessionEntry } from "../../shared/tray";
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useEffect, useMemo } from "react";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
 import type { CloudCpProject, CloudCpSession } from "../lib/cloud-cp";
@@ -11,7 +11,8 @@ import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { toReviewerHarnessId } from "../lib/reviewer-harnesses";
 import { captureRendererEvent } from "../lib/telemetry";
 import { agentSwitchVisibility } from "../lib/agent-switch-visibility";
-import { clientForHost, connectedHosts, subscribeConnectedHosts } from "../lib/host-clients";
+import { clientForHost } from "../lib/host-clients";
+import { useConnectedHosts } from "./useHostConnection";
 import { requestRemoteHostsRefresh } from "./useRemoteHosts";
 import { applyOptimisticSessionKills } from "./optimistic-session-kills";
 import { appI18n } from "../i18n";
@@ -135,6 +136,7 @@ function toWorkspaceSession(
 
 export const workspaceQueryKey = ["workspaces"] as const;
 export const remoteWorkspaceQueryKey = (hostId: string) => ["remote-workspaces", hostId] as const;
+export const workspaceQueryKeyForHost = (hostId?: string) => hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey;
 const remoteProjectsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "projects"] as const;
 const remoteSessionsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "sessions"] as const;
 const lastRemoteHealthRecheck = new Map<string, number>();
@@ -472,7 +474,7 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 }
 
 export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions = {}) {
-	const connected = useSyncExternalStore(subscribeConnectedHosts, connectedHosts, connectedHosts);
+	const connected = useConnectedHosts();
 	const projects = useQueries({
 		queries: connected.map((hostId) => ({
 			queryKey: remoteProjectsQueryKey(hostId),

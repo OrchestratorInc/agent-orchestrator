@@ -7,7 +7,21 @@ import type { FileAnnotationModel } from "./WorkspaceDiffView";
 
 const { baseUrlForHostMock } = vi.hoisted(() => ({ baseUrlForHostMock: vi.fn((_hostId: string): string | undefined => undefined) }));
 vi.mock("../lib/api-client", () => ({ getApiBaseUrl: () => "" }));
-vi.mock("../lib/host-clients", () => ({ baseUrlForHost: baseUrlForHostMock }));
+vi.mock("../lib/host-clients", () => {
+	const snapshots = new Map<string, { base: string }>();
+	return {
+		connectedHost: (hostId: string) => {
+			const base = baseUrlForHostMock(hostId);
+			if (base === undefined) return undefined;
+			const cached = snapshots.get(hostId);
+			if (cached?.base === base) return cached;
+			const next = { base };
+			snapshots.set(hostId, next);
+			return next;
+		},
+		subscribeConnectedHosts: () => () => undefined,
+	};
+});
 vi.mock("@pierre/diffs/react", () => ({
 	File: ({ edit, editStateKey, file, lineAnnotations, onEditChange, options, renderAnnotation, renderGutterUtility }: {
 		edit?: boolean;

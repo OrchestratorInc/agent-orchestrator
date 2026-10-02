@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "./ui-store";
+import { sessionUiKey } from "../lib/hosts";
 
 describe("sidebar visibility", () => {
 	beforeEach(() => {
@@ -107,5 +108,40 @@ describe("terminalCopyOnSelect flag", () => {
 	it("reads a stored opt-out back at startup", async () => {
 		window.localStorage.setItem("ao.terminalCopyOnSelect", "false");
 		expect((await bootStore()).getState().terminalCopyOnSelect).toBe(false);
+	});
+});
+
+describe("project UI state across hosts", () => {
+	beforeEach(() => {
+		useUiStore.setState({
+			restartingProjectIds: new Set(),
+			provisioningProjectIds: new Set(),
+			orchestratorStartupErrors: {},
+			newTaskRequest: null,
+		});
+	});
+
+	it("keeps equal project IDs on two hosts and local separate", () => {
+		const state = useUiStore.getState();
+		state.setProjectRestarting("project", true, "host-a");
+		state.setProjectProvisioning("project", true, "host-a");
+		state.setOrchestratorStartupError("project", "Host A failed", "host-a");
+		state.setOrchestratorStartupError("project", "Host B failed", "host-b");
+
+		expect(useUiStore.getState().restartingProjectIds.has(sessionUiKey("project", "host-a"))).toBe(true);
+		expect(useUiStore.getState().restartingProjectIds.has(sessionUiKey("project", "host-b"))).toBe(false);
+		expect(useUiStore.getState().restartingProjectIds.has("project")).toBe(false);
+		expect(useUiStore.getState().orchestratorStartupErrors[sessionUiKey("project", "host-b")]).toBe("Host B failed");
+		state.setOrchestratorStartupError("project", null, "host-a");
+		expect(useUiStore.getState().orchestratorStartupErrors[sessionUiKey("project", "host-b")]).toBe("Host B failed");
+	});
+
+	it("blocks a new task only for the project still provisioning on its host", () => {
+		const state = useUiStore.getState();
+		state.setProjectProvisioning("project", true, "host-a");
+		state.requestNewTask("project", "host-a");
+		expect(useUiStore.getState().newTaskRequest).toBeNull();
+		state.requestNewTask("project", "host-b");
+		expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: "project", hostId: "host-b" });
 	});
 });

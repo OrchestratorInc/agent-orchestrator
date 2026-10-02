@@ -269,6 +269,8 @@ export interface ChatWorkspaceProps {
 	sessionRole?: SessionKind;
 	/** Host-specific proxy origin for images and staged attachments. */
 	assetBaseUrl?: string;
+	/** Selected remote host, even while its connection has no proxy origin. */
+	remoteHostId?: string;
 	/** Session-level actions owned above the conversation surface. */
 	headerActions?: ReactNode;
 	/** Agent-session actions on the primary chat tab (interface switch, handoff). */
@@ -447,6 +449,11 @@ type ChatWorkspaceActivation =
 	| { key: string; state: "active" }
 	| { key: string; state: "failed"; reason: "obsolete" | "storage" };
 
+function OfflineRemoteTerminal() {
+	const { t } = useTranslation();
+	return <div className="flex h-full items-center justify-center text-sm text-muted-foreground" role="status">{t("remote.hostOffline")}</div>;
+}
+
 /**
  * Do not mount any renderer draft owner until the daemon incarnation has
  * authoritatively claimed its storage scope. The activation transition itself
@@ -527,6 +534,7 @@ function ChatWorkspaceContent({
 	sessionTitle,
 	sessionRole = "worker",
 	assetBaseUrl,
+	remoteHostId,
 	headerActions,
 	sessionTabAction,
 	sessionTabActionWide = false,
@@ -625,6 +633,7 @@ function ChatWorkspaceContent({
 }: ChatWorkspaceProps & { draftScope: ChatDraftScope }) {
 	const draftScopeKey = chatDraftScopeKey(draftScope);
 	const uiSessionId = draftScope.sessionId;
+	const activeRemoteHostId = remoteHostId ?? session?.hostId;
 	const turn = activeTurn(snapshot);
 	const hasPendingInteraction = snapshot.items.some(
 		(item) =>
@@ -1352,7 +1361,7 @@ function ChatWorkspaceContent({
 						role="tabpanel"
 					>
 						<div className="h-full min-h-0" data-testid="chat-reviewer-terminal">
-							{session.hostId && assetBaseUrl ? <RemoteTerminalView fontSize={terminalFontSize} hostId={session.hostId} isFullscreen={isFullscreen} onChangeFontSize={updateTerminalFontSize} onToggleFullscreen={toggleFullscreen} proxyBase={assetBaseUrl} terminalHandleId={reviewerTarget.handleId} /> : <TerminalPane
+							{activeRemoteHostId ? assetBaseUrl ? <RemoteTerminalView fontSize={terminalFontSize} hostId={activeRemoteHostId} isFullscreen={isFullscreen} onChangeFontSize={updateTerminalFontSize} onToggleFullscreen={toggleFullscreen} proxyBase={assetBaseUrl} terminalHandleId={reviewerTarget.handleId} /> : <OfflineRemoteTerminal /> : <TerminalPane
 								daemonReady={Boolean(daemonReady)}
 								fontSize={terminalFontSize}
 								isFullscreen={isFullscreen}
@@ -1374,7 +1383,7 @@ function ChatWorkspaceContent({
 						role="tabpanel"
 					>
 						<div className="h-full min-h-0" data-testid="chat-shell-terminal">
-							{session.hostId && assetBaseUrl ? <RemoteTerminalView fontSize={terminalFontSize} hostId={session.hostId} isFullscreen={isFullscreen} onChangeFontSize={updateTerminalFontSize} onToggleFullscreen={toggleFullscreen} proxyBase={assetBaseUrl} terminalHandleId={shellTarget.handleId} /> : <TerminalPane
+							{activeRemoteHostId ? assetBaseUrl ? <RemoteTerminalView fontSize={terminalFontSize} hostId={activeRemoteHostId} isFullscreen={isFullscreen} onChangeFontSize={updateTerminalFontSize} onToggleFullscreen={toggleFullscreen} proxyBase={assetBaseUrl} terminalHandleId={shellTarget.handleId} /> : <OfflineRemoteTerminal /> : <TerminalPane
 								daemonReady={Boolean(daemonReady)}
 								fontSize={terminalFontSize}
 								focusRequested
@@ -1431,12 +1440,13 @@ function ChatWorkspaceContent({
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
 					>
-						<ChatLinkProvider onLinkOpen={onLinkOpen} onFileOpen={onOpenFile} onSessionLinkOpen={onSessionLinkOpen} remoteHost={Boolean(assetBaseUrl)} workspacePaths={filePaths}>
-							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl}>
+						<ChatLinkProvider onLinkOpen={onLinkOpen} onFileOpen={onOpenFile} onSessionLinkOpen={onSessionLinkOpen} remoteHost={Boolean(activeRemoteHostId)} workspacePaths={filePaths}>
+							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)}>
 								<Timeline
 									key={draftScopeKey}
 									snapshot={snapshot}
 									assetBaseUrl={assetBaseUrl}
+									remoteHost={Boolean(activeRemoteHostId)}
 									draftScope={draftScope}
 									hasOlder={hasOlder}
 									loadingOlder={loadingOlder}
@@ -1518,6 +1528,7 @@ function ChatWorkspaceContent({
 									draftSessionIncarnation={draftScope.incarnation}
 									assetBaseUrl={assetBaseUrl}
 									assetSessionId={snapshot.sessionId}
+									remoteHost={Boolean(activeRemoteHostId)}
 									acceptedClientMessageIds={acceptedClientMessageIds}
 								/>
 							</div>
@@ -2036,6 +2047,7 @@ function ControllerBanner({
 function Timeline({
 	snapshot,
 	assetBaseUrl,
+	remoteHost,
 	draftScope,
 	hasOlder,
 	loadingOlder,
@@ -2058,6 +2070,7 @@ function Timeline({
 }: {
 	snapshot: ConversationSnapshot;
 	assetBaseUrl?: string;
+	remoteHost?: boolean;
 	draftScope: ChatDraftScope;
 	hasOlder?: boolean;
 	loadingOlder?: boolean;
@@ -2184,7 +2197,7 @@ function Timeline({
 	const openFile = useStableCallback(onOpenFile);
 	const retryTurn = useStableCallback(retryControl?.retry);
 	const localBaseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
-	const apiBaseUrl = assetBaseUrl ?? localBaseUrl;
+	const apiBaseUrl = remoteHost ? assetBaseUrl ?? null : assetBaseUrl ?? localBaseUrl;
 	const editHumanMessage = useStableCallback(onEditHumanMessage);
 	const activateBranch = useStableCallback(onActivateBranch);
 	const canEditHumanMessage = Boolean(onEditHumanMessage) && !newWorkDisabled;
@@ -3195,7 +3208,7 @@ const TurnGroup = memo(function TurnGroup({
 }: {
 	group: TimelineGroup;
 	sessionId: string;
-	apiBaseUrl: string;
+	apiBaseUrl: string | null;
 	onDecide: (requestId: string, decisionId: string) => void;
 	onRollback: (turnId: string) => void;
 	onOpenFiles?: () => void;
@@ -3458,7 +3471,7 @@ function TimelineItem({
 }: {
 	item: ConversationItem;
 	sessionId: string;
-	apiBaseUrl: string;
+	apiBaseUrl: string | null;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
 	messageEdit?: MessageEditDraft;

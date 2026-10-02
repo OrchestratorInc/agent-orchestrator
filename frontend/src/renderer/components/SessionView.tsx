@@ -9,7 +9,6 @@ import {
 	useMemo,
 	useRef,
 	useState,
-	useSyncExternalStore,
 	type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
@@ -56,8 +55,7 @@ import {
 	useCloudSessionQuery,
 	useWorkspaceQuery,
 	useWorkspaceSession,
-	remoteWorkspaceQueryKey,
-	workspaceQueryKey,
+	workspaceQueryKeyForHost,
 } from "../hooks/useWorkspaceQuery";
 import { cloudLifecycleStage } from "../lib/cloud-lifecycle";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
@@ -66,7 +64,9 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
 import { clearSwitchAgentState } from "../hooks/useSwitchAgent";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
-import { baseUrlForHost, clientForSessionHost, labelForHost, subscribeConnectedHosts } from "../lib/host-clients";
+import { clientForSessionHost } from "../lib/host-clients";
+import { useHostConnection } from "../hooks/useHostConnection";
+import { sessionReviewsQueryKey } from "../lib/session-reviews";
 import { sessionUiKey } from "../lib/hosts";
 import { sessionWorkspaceFilesQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { matchWorkspaceFilePath } from "../lib/workspace-file-path";
@@ -338,10 +338,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const uiSessionId = sessionUiKey(sessionId, hostId);
-	const remoteBase = useSyncExternalStore(subscribeConnectedHosts, () => hostId ? baseUrlForHost(hostId) : undefined);
-	const hostLabel = useSyncExternalStore(subscribeConnectedHosts, () => hostId ? labelForHost(hostId) : undefined);
+	const { baseUrl: remoteBase, label: hostLabel } = useHostConnection(hostId);
 	const refreshWorkspaces = useCallback(
-		() => queryClient.invalidateQueries({ queryKey: hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey }),
+		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) }),
 		[hostId, queryClient],
 	);
 	const workspaceQuery = useWorkspaceQuery({ enabled: !hostId });
@@ -620,7 +619,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			: "history";
 	useAgentSwitchRouteVisibility(`session/${uiSessionId}`, routeVisibilityOperation);
 	const reviewerQuery = useQuery({
-		queryKey: hostId ? ["session-reviews", hostId, sessionId] : ["session-reviews", sessionId],
+		queryKey: sessionReviewsQueryKey(sessionId, hostId),
 		enabled: Boolean(
 			(hostId ? remoteBase : window.ao) && session && !session.cloud && sessionIsActive(session) && !isOrchestratorSession(session) && session.prs.length > 0,
 		),
@@ -1454,10 +1453,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const cloudSessionResolving = cloudLookupEnabled && cloudRouteSession.isLoading;
 	if (!session && (hostId ? !remoteSessionQuery.isLoading : !workspaceQuery.isLoading && !cloudSessionResolving)) {
 		const remoteCode = hostId && remoteSessionQuery.error ? apiErrorCode(remoteSessionQuery.error) : undefined;
-		const remoteMessage = hostId && remoteSessionQuery.error ? apiErrorMessage(remoteSessionQuery.error) : undefined;
 		const remoteError = hostId ? t(remoteCode === "BAD_PASSWORD" ? "remote.hostUnauthorized"
 			: remoteCode === "HOST_API_INCOMPATIBLE" ? "remote.hostIncompatible"
-			: !remoteBase || remoteCode === "UPSTREAM_UNAVAILABLE" || remoteMessage === "remote daemon unreachable" || remoteMessage === "remote host identity not verified"
+			: !remoteBase || remoteCode === "UPSTREAM_UNAVAILABLE" || remoteCode === "HOST_IDENTITY_UNVERIFIED"
 				? "remote.hostOffline" : remoteSessionQuery.isError ? "remote.loadSessionFailed" : "session.notFound") : undefined;
 		return (
 			<div className="grid h-full place-items-center p-6 text-center font-mono text-xs text-passive" role={remoteError ? "alert" : undefined}>

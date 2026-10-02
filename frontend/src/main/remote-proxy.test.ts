@@ -283,6 +283,11 @@ describe("startRemoteProxy", () => {
 		});
 		const response = await fetch(`${proxy.base}/api/v1/projects?code=secret-code`);
 		expect(response.status).toBe(502);
+		expect(await response.json()).toEqual({
+			error: "remote host identity not verified",
+			code: "HOST_IDENTITY_UNVERIFIED",
+			message: "remote host identity not verified",
+		});
 		expect(seen.map((request) => request.url)).toEqual(["/api/v1/identity"]);
 		expect(seen[0].auth).toBeUndefined();
 		expect(warned.join("\n")).not.toContain("secret-code");
@@ -352,6 +357,11 @@ describe("startRemoteProxy", () => {
 		// outcome is a failed request — never a plaintext one that succeeds.
 		const res = await fetch(`${proxy.base}/api/v1/projects`);
 		expect(res.status).toBe(502);
+		expect(await res.json()).toEqual({
+			error: "remote daemon unreachable",
+			code: "UPSTREAM_UNAVAILABLE",
+			message: "remote daemon unreachable",
+		});
 		expect(seen).toHaveLength(0);
 	});
 
@@ -459,6 +469,7 @@ describe("startRemoteProxy", () => {
 		});
 		const res = await fetch(`${proxy.base}/api/v1/projects`);
 		expect(res.status).toBe(502);
+		expect(await res.json()).toMatchObject({ code: "UPSTREAM_UNAVAILABLE" });
 	});
 
 	// "The app can't reach my host" had no answer anywhere before this, and the
@@ -495,14 +506,15 @@ describe("startRemoteProxy", () => {
 		expect(warning).not.toContain(token);
 	});
 
-	it("listens on loopback only", async () => {
+	it("binds only to 127.0.0.1, not every interface", async () => {
 		const { port } = await startUpstream(() => ({ status: 200, body: "{}" }));
 		proxy = await startRemoteProxy({
 			label: "workbox",
 			url: `http://127.0.0.1:${port}`,
 			password: "pw",
 		});
-		expect(new URL(proxy.base).hostname).toBe("127.0.0.1");
+		expect((await fetch(`${proxy.base}/healthz`)).status).toBe(200);
+		expect(proxy.listeningAddress).toBe("127.0.0.1");
 	});
 });
 

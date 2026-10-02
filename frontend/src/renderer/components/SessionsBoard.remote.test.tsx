@@ -27,6 +27,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"],
 	cloudSessionsQueryKey: ["cloud-sessions"],
 	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
+	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 	useWorkspaceQuery: () => ({
 		data: [{ id: "shared", name: "Local", sessions: [worker("local", "Local worker")] }],
 		isError: false, isSuccess: false,
@@ -61,7 +62,15 @@ vi.mock("../lib/shell-context", () => ({
 	useShellMaybe: () => ({ openRemoteProjectSettings: mocks.openRemoteProjectSettings }),
 }));
 vi.mock("../stores/ui-store", () => {
-	const state = { requestNewTask: mocks.requestNewTask, showGlobalToast: vi.fn() };
+	const state = {
+		requestNewTask: mocks.requestNewTask,
+		showGlobalToast: vi.fn(),
+		restartingProjectIds: new Set<string>(),
+		provisioningProjectIds: new Set<string>(),
+		orchestratorStartupErrors: {} as Record<string, string>,
+		setProjectRestarting: vi.fn(),
+		setOrchestratorStartupError: vi.fn(),
+	};
 	return { useUiStore: Object.assign((selector: (value: typeof state) => unknown) => selector(state), { getState: () => state }) };
 });
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => null }));

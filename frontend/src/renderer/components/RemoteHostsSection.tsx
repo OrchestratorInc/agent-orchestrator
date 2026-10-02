@@ -8,6 +8,7 @@ import { MAX_SESSION_DISPLAY_NAME_LEN, useSessionRename } from "../hooks/useSess
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { formatTimeCompact, formatTimeTerse } from "../lib/format-time";
+import { sessionUiKey } from "../lib/hosts";
 import { getSessionStatusDotView } from "../lib/session-presentation";
 import { cn } from "../lib/utils";
 import { newestActiveOrchestrator, openPRs, STANDALONE_WORKSPACE_ID, sortedWorkerSessions, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
@@ -20,6 +21,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { SidebarMenuButton, SidebarMenuItem, SidebarMenuSub, SidebarMenuSubItem } from "./ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { useUiStore } from "../stores/ui-store";
 
 type Props = {
 	hosts: RemoteHost[];
@@ -146,6 +148,10 @@ function RemoteProjectRow({ host, workspace, activeProjectId, activeSessionId, o
 	const [removeError, setRemoveError] = useState<string | null>(null);
 	const nameWithHost = `${workspace.name} · ${host.label}`;
 	const orchestrator = newestActiveOrchestrator(workspace.sessions);
+	const projectKey = sessionUiKey(workspace.id, host.hostId);
+	const isProjectProvisioning = useUiStore((state) => state.provisioningProjectIds.has(projectKey));
+	const isProjectRestarting = useUiStore((state) => state.restartingProjectIds.has(projectKey));
+	const projectBusy = isProjectProvisioning || isProjectRestarting;
 	const orchestratorActive = active && activeSessionId === orchestrator?.id;
 	const dashboardActive = active && !activeSessionId;
 	const sessions = sortedWorkerSessions(workspace.sessions).filter((session) => session.isTerminated !== true);
@@ -205,14 +211,14 @@ function RemoteProjectRow({ host, workspace, activeProjectId, activeSessionId, o
 							aria-current={orchestratorActive ? "page" : undefined}
 							aria-label={orchestrator ? t("shell.openProjectOrchestrator", { name: nameWithHost }) : t("shell.spawnProjectOrchestrator", { name: nameWithHost })}
 							className={cn(ACTION_CLASS, orchestratorActive && "text-foreground")}
-							disabled={isRemoving}
+							disabled={isRemoving || projectBusy}
 							onClick={() => onOrchestrator(host.hostId, workspace.id)}
 							type="button"
 						>
 							<OrchestratorIcon aria-hidden="true" strokeWidth={orchestratorActive ? 2.5 : 2} />
 						</button>
 					</TooltipTrigger>
-					<TooltipContent>{orchestrator ? t("shell.orchestrator") : t("shell.spawnOrchestratorLower")}</TooltipContent>
+					<TooltipContent>{projectBusy ? t("shell.restarting") : orchestrator ? t("shell.orchestrator") : t("shell.spawnOrchestratorLower")}</TooltipContent>
 				</Tooltip>
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
@@ -226,7 +232,7 @@ function RemoteProjectRow({ host, workspace, activeProjectId, activeSessionId, o
 						</button>
 					</DropdownMenuTrigger>
 					<DropdownMenuContent side="right" align="start" className="min-w-44">
-						<DropdownMenuItem disabled={isRemoving} onSelect={() => onNewTask(host.hostId, workspace.id)}>
+						<DropdownMenuItem disabled={isRemoving || projectBusy} onSelect={() => onNewTask(host.hostId, workspace.id)}>
 							<Plus aria-hidden="true" />
 							{t("shell.newTask")}
 						</DropdownMenuItem>
@@ -248,7 +254,7 @@ function RemoteProjectRow({ host, workspace, activeProjectId, activeSessionId, o
 		</div>
 		</ContextMenuTrigger>
 		<ContextMenuContent className="min-w-44">
-			<ContextMenuItem disabled={isRemoving} onSelect={() => onNewTask(host.hostId, workspace.id)}><Plus aria-hidden="true" />{t("shell.newTask")}</ContextMenuItem>
+			<ContextMenuItem disabled={isRemoving || projectBusy} onSelect={() => onNewTask(host.hostId, workspace.id)}><Plus aria-hidden="true" />{t("shell.newTask")}</ContextMenuItem>
 			<ContextMenuItem disabled={isRemoving} onSelect={() => onConfigure(host.hostId, workspace.id)}><Settings aria-hidden="true" />{t("shell.projectSettings")}</ContextMenuItem>
 			<ContextMenuItem className="text-destructive focus:text-destructive [&_svg]:text-destructive" disabled={isRemoving} onSelect={() => { setRemoveError(null); setConfirmOpen(true); }}><Trash2 aria-hidden="true" />{t("shell.removeProjectTitle")}</ContextMenuItem>
 		</ContextMenuContent>

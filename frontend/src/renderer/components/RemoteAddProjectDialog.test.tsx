@@ -20,6 +20,8 @@ vi.mock("./CreateProjectFlow", () => ({
 vi.mock("../lib/host-clients", () => ({ clientForHost }));
 
 import { RemoteAddProjectDialog } from "./RemoteAddProjectDialog";
+import { useUiStore } from "../stores/ui-store";
+import { sessionUiKey } from "../lib/hosts";
 
 const input: CreateProjectInput = {
 	path: "/srv/todo-app",
@@ -40,6 +42,25 @@ beforeEach(() => {
 	flows.clear();
 	requests.clear();
 	clientForHost.mockClear();
+	useUiStore.setState({ provisioningProjectIds: new Set(), orchestratorStartupErrors: {} });
+});
+
+it("shows remote provisioning and startup failure only for the creating host", async () => {
+	let rejectOrchestrator!: (error: Error) => void;
+	const orchestrator = new Promise<never>((_resolve, reject) => { rejectOrchestrator = reject; });
+	requests.set("host-a", { POST: vi.fn((path: string) => path === "/api/v1/projects"
+		? Promise.resolve({ data: { project: { id: "same-project-id" } } })
+		: orchestrator) });
+	render(<RemoteAddProjectDialog hostId="host-a" hostLabel="Host A" connected onCreated={vi.fn()} onCreateStandaloneAgent={vi.fn()} onOpenChange={vi.fn()} />);
+	await act(async () => { await flows.get("host-a")?.onCreateProject(input); });
+	const a = sessionUiKey("same-project-id", "host-a");
+	const b = sessionUiKey("same-project-id", "host-b");
+	expect(useUiStore.getState().provisioningProjectIds.has(a)).toBe(true);
+	expect(useUiStore.getState().provisioningProjectIds.has(b)).toBe(false);
+	await act(async () => { rejectOrchestrator(new Error("Agent unavailable")); });
+	await waitFor(() => expect(useUiStore.getState().provisioningProjectIds.has(a)).toBe(false));
+	expect(useUiStore.getState().orchestratorStartupErrors[a]).toContain("Agent unavailable");
+	expect(useUiStore.getState().orchestratorStartupErrors[b]).toBeUndefined();
 });
 
 it("uses the shared create flow and only the selected host for project and orchestrator creation", async () => {

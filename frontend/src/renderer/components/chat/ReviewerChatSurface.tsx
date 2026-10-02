@@ -1,7 +1,7 @@
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useReviewerConversation, useReviewerConversationCommands } from "../../hooks/useReviewerConversation";
-import { baseUrlForHost } from "../../lib/host-clients";
+import { useHostConnection } from "../../hooks/useHostConnection";
 import { sessionUiKey } from "../../lib/hosts";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import { ChatWorkspace } from "./ChatWorkspace";
@@ -11,6 +11,7 @@ export function ReviewerChatSurface({ reviewId, hostId, hideHeader = false }: { 
 	const { snapshot, isLoading, error, hasOlder, isLoadingOlder, loadOlder } = useReviewerConversation(reviewId, hostId);
 	const commands = useReviewerConversationCommands(reviewId, hostId);
 	const openSessionLink = useSessionLinkNavigation(hostId);
+	const { baseUrl: remoteBase } = useHostConnection(hostId);
 	if (isLoading)
 		return (
 			<Centered>
@@ -28,7 +29,8 @@ export function ReviewerChatSurface({ reviewId, hostId, hideHeader = false }: { 
 	return (
 		<ChatWorkspace
 			uiSessionId={hostId ? sessionUiKey(reviewId, hostId) : undefined}
-			assetBaseUrl={hostId ? baseUrlForHost(hostId) : undefined}
+			assetBaseUrl={remoteBase}
+			remoteHostId={hostId}
 			snapshot={snapshot}
 			onSessionLinkOpen={openSessionLink}
 			sessionTitle={t("terminal.reviewer")}

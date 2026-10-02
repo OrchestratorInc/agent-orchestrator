@@ -24,7 +24,7 @@ import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
-import { remoteWorkspaceQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
+import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import type {
 	ActivityKind,
 	ApprovalMode,
@@ -639,7 +639,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		},
 		onSuccess: () => {
 			invalidate();
-			void queryClient.invalidateQueries({ queryKey: hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey });
+			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 		},
 	});
 

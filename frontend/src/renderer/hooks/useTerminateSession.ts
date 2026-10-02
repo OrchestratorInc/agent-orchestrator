@@ -1,6 +1,6 @@
 import { type QueryClient, useMutation, useMutationState, useQueryClient } from "@tanstack/react-query";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
-import { cloudSessionsQueryKey, remoteWorkspaceQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
+import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import {
 	applyTerminatedSession,
 	clearOptimisticSessionKill,
@@ -123,7 +123,7 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 			options.onOptimistic?.(session);
 			// Drop in-flight workspace fetches so they cannot overwrite the optimistic
 			// remove with a pre-kill snapshot (CDC + refetchInterval race).
-			const queryKey = session.hostId ? remoteWorkspaceQueryKey(session.hostId) : workspaceQueryKey;
+			const queryKey = workspaceQueryKeyForHost(session.hostId);
 			await queryClient.cancelQueries({ queryKey });
 			const workspace: WorkspaceSnapshot = [
 				queryKey,
@@ -149,7 +149,7 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 		onSuccess: async (_data, session) => {
 			void captureRendererEvent("ao.renderer.session_kill_succeeded", { project_id: session.workspaceId });
 			// Reinforce before refresh; keep the optimistic id until this refetch finishes.
-			const queryKey = session.hostId ? remoteWorkspaceQueryKey(session.hostId) : workspaceQueryKey;
+			const queryKey = workspaceQueryKeyForHost(session.hostId);
 			queryClient.setQueryData<WorkspaceSummary[]>(queryKey, (workspaces) =>
 				applyTerminatedSession(workspaces, session.id, session.hostId),
 			);

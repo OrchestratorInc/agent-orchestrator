@@ -403,7 +403,7 @@ function StagedAttachmentItems({
 }: {
 	paths: string[];
 	sessionId: string;
-	apiBaseUrl: string;
+	apiBaseUrl: string | null;
 	ariaLabel: string;
 	className?: string;
 }) {
@@ -412,7 +412,7 @@ function StagedAttachmentItems({
 		<ul aria-label={ariaLabel} className={cn("flex max-w-full flex-wrap gap-2", className)}>
 			{paths.map((path) => {
 				const name = attachmentName(path);
-				return IMAGE_ATTACHMENT_PATH.test(path) ? (
+				return IMAGE_ATTACHMENT_PATH.test(path) && apiBaseUrl !== null ? (
 					<li
 						key={path}
 						className="max-w-full overflow-hidden rounded-md border border-border bg-background"
@@ -513,7 +513,7 @@ export function HumanMessage({
 	/** The staged paths are relative to this session's workspace. */
 	sessionId: string;
 	/** The live daemon origin; passed by the timeline so daemon restarts refresh images. */
-	apiBaseUrl?: string;
+	apiBaseUrl?: string | null;
 	/** Typed while the agent was busy, and not sent yet. */
 	queued?: boolean;
 	/** True only for a human message added after the timeline first mounted. */
@@ -2166,7 +2166,7 @@ export function SteerMessage({
 }: {
 	activity: ConversationActivity;
 	sessionId: string;
-	apiBaseUrl?: string;
+	apiBaseUrl?: string | null;
 }) {
 	const text = activity.detail?.text ?? activity.summary;
 	const { body, attachments } = stagedAttachmentParts(text);

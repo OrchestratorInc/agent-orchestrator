@@ -4,7 +4,7 @@ import { Play } from "lucide-react";
 import { aoBridge } from "../lib/bridge";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
-import { remoteWorkspaceQueryKey, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCanResumeAgent } from "../hooks/useCanResumeAgent";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import { cn } from "../lib/utils";
@@ -41,7 +41,7 @@ export function ResumeAgentControl({
 			return data;
 		},
 		onSuccess: async (data) => {
-			await queryClient.invalidateQueries({ queryKey: hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey });
+			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 			if (data?.resumeMode === "saved_prompt") {
 				void aoBridge.notifications
 					.show({

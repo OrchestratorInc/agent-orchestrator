@@ -668,6 +668,7 @@ vi.mock("../lib/shell-context", () => ({
 	useShell: () => ({ daemonStatus: { state: "ready" } }),
 }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
+	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 	toCloudWorkspaceSession: vi.fn(),
 	useCloudSessionQuery: (orgId: string | undefined, sessionId: string, enabled: boolean) => {
 		cloudSessionLookup(orgId, sessionId, enabled);

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { aoBridge } from "../lib/bridge";
+import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
 import type { FilesSource } from "../hooks/useSessionWorkspaceFiles";
@@ -181,10 +182,10 @@ export type UiState = {
 	setFilesChangedOnly: (sessionId: string, changedOnly: boolean) => void;
 	setFilesSource: (sessionId: string, source: FilesSource) => void;
 	setCommandPaletteOpen: (open: boolean) => void;
-	setProjectRestarting: (projectId: string, restarting: boolean) => void;
-	setProjectProvisioning: (projectId: string, provisioning: boolean) => void;
+	setProjectRestarting: (projectId: string, restarting: boolean, hostId?: string) => void;
+	setProjectProvisioning: (projectId: string, provisioning: boolean, hostId?: string) => void;
 	setOrchestratorReplacementError: (projectId: string, failure: OrchestratorReplacementFailure | null) => void;
-	setOrchestratorStartupError: (projectId: string, message: string | null) => void;
+	setOrchestratorStartupError: (projectId: string, message: string | null, hostId?: string) => void;
 	showGlobalToast: (title: string, body?: string, style?: GlobalToast["tone"] | GlobalToast["placement"] | GlobalToastOptions) => void;
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
@@ -456,23 +457,25 @@ export const useUiStore = create<UiState>((set, get) => ({
 			};
 		}),
 	setCommandPaletteOpen: (isCommandPaletteOpen) => set({ isCommandPaletteOpen }),
-	setProjectRestarting: (projectId, restarting) =>
+	setProjectRestarting: (projectId, restarting, hostId) =>
 		set((state) => {
 			const restartingProjectIds = new Set(state.restartingProjectIds);
+			const key = sessionUiKey(projectId, hostId);
 			if (restarting) {
-				restartingProjectIds.add(projectId);
+				restartingProjectIds.add(key);
 			} else {
-				restartingProjectIds.delete(projectId);
+				restartingProjectIds.delete(key);
 			}
 			return { restartingProjectIds };
 		}),
-	setProjectProvisioning: (projectId, provisioning) =>
+	setProjectProvisioning: (projectId, provisioning, hostId) =>
 		set((state) => {
 			const provisioningProjectIds = new Set(state.provisioningProjectIds);
+			const key = sessionUiKey(projectId, hostId);
 			if (provisioning) {
-				provisioningProjectIds.add(projectId);
+				provisioningProjectIds.add(key);
 			} else {
-				provisioningProjectIds.delete(projectId);
+				provisioningProjectIds.delete(key);
 			}
 			return { provisioningProjectIds };
 		}),
@@ -486,13 +489,14 @@ export const useUiStore = create<UiState>((set, get) => ({
 			}
 			return { orchestratorReplacementErrors };
 		}),
-	setOrchestratorStartupError: (projectId, message) =>
+	setOrchestratorStartupError: (projectId, message, hostId) =>
 		set((state) => {
 			const orchestratorStartupErrors = { ...state.orchestratorStartupErrors };
+			const key = sessionUiKey(projectId, hostId);
 			if (message) {
-				orchestratorStartupErrors[projectId] = message;
+				orchestratorStartupErrors[key] = message;
 			} else {
-				delete orchestratorStartupErrors[projectId];
+				delete orchestratorStartupErrors[key];
 			}
 			return { orchestratorStartupErrors };
 		}),
@@ -518,7 +522,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 		// Central gate: every New Task entry point (buttons, sidebar menus,
 		// shortcuts) funnels through here, so a project whose orchestrator is
 		// still provisioning cannot start tasks before it exists.
-		if (!hostId && get().provisioningProjectIds.has(projectId)) {
+		if (get().provisioningProjectIds.has(sessionUiKey(projectId, hostId))) {
 			get().showGlobalToast(
 				"Project is still being set up",
 				"The orchestrator is starting. Try again in a moment.",

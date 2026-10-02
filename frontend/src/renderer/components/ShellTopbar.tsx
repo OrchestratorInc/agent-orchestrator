@@ -20,8 +20,9 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { remoteWorkspaceQueryKey, useWorkspaceQuery, useWorkspaceScope, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { useWorkspaceQuery, useWorkspaceScope, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { sessionUiKey } from "../lib/hosts";
+import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { archivedStandaloneSessions } from "../lib/standalone-archive";
 import {
 	clearTerminateSessionState,
@@ -326,20 +327,18 @@ export function ShellTopbar({
 										session={session}
 										orchestratorId={orchestrator?.id}
 										onKilled={(workspaceId) => {
-											const workspaces = queryClient.getQueryData<WorkspaceSummary[]>(hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey) ?? [];
+											const workspaces = queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId)) ?? [];
 											const fullWorkspace = workspaces.find((w: WorkspaceSummary) => w.id === workspaceId);
 											const nextRoute = resolveNextNavigationAfterSessionKill(fullWorkspace, session.id);
 											if (nextRoute.target === "session") {
-												if (hostId) void navigate({ to: "/host/$hostId/project/$projectId/session/$sessionId", params: { hostId, projectId: workspaceId, sessionId: nextRoute.sessionId } });
-												else void navigate({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: workspaceId, sessionId: nextRoute.sessionId } });
+												void navigate(sessionNavigateTarget(workspaceId, nextRoute.sessionId, hostId));
 												return;
 											}
 											if (workspaceId === STANDALONE_WORKSPACE_ID) {
 												void navigate({ to: "/" });
 												return;
 											}
-											if (hostId) void navigate({ to: "/host/$hostId/project/$projectId", params: { hostId, projectId: workspaceId } });
-											else void navigate({ to: "/projects/$projectId", params: { projectId: workspaceId } });
+											void navigate(projectNavigateTarget(workspaceId, hostId));
 										}}
 									/>
 								) : null}

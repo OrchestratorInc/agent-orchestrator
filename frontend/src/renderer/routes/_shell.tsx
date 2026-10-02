@@ -62,6 +62,8 @@ import { RemoteAddProjectDialog } from "../components/RemoteAddProjectDialog";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
+import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
+import { sessionUiKey } from "../lib/hosts";
 
 export const Route = createFileRoute("/_shell")({
 	// Prefetch the workspace list for the whole shell (parent loaders run before
@@ -405,25 +407,7 @@ function ShellLayout() {
 					: (currentIndex + direction + sessions.length) % sessions.length;
 			const session = sessions[nextIndex];
 			if (!session || session.id === routeParams.sessionId) return;
-			if (hostId) {
-				if (projectId === STANDALONE_WORKSPACE_ID) {
-					void navigate({ to: "/host/$hostId/session/$sessionId", params: { hostId, sessionId: session.id } });
-				} else {
-					void navigate({
-						to: "/host/$hostId/project/$projectId/session/$sessionId",
-						params: { hostId, projectId, sessionId: session.id },
-					});
-				}
-				return;
-			}
-			if (projectId === STANDALONE_WORKSPACE_ID) {
-				void navigate({ to: "/sessions/$sessionId", params: { sessionId: session.id } });
-				return;
-			}
-			void navigate({
-				to: "/projects/$projectId/sessions/$sessionId",
-				params: { projectId, sessionId: session.id },
-			});
+			void navigate(sessionNavigateTarget(projectId, session.id, hostId));
 		},
 		[navigate, routeParams.hostId, routeParams.projectId, routeParams.sessionId, scopedProjectId],
 	);
@@ -777,18 +761,24 @@ function ShellLayout() {
 	const openRemoteProjectOrchestrator = useCallback(async (hostId: string, projectId: string) => {
 		const workspace = remoteWorkspaces.find((item) => item.hostId === hostId && item.id === projectId);
 		if (!workspace) return;
+		const projectKey = sessionUiKey(projectId, hostId);
+		const uiState = useUiStore.getState();
+		if (uiState.provisioningProjectIds.has(projectKey) || uiState.restartingProjectIds.has(projectKey)) return;
 		if (!hasConfiguredOrchestratorAgent(workspace)) {
 			openProjectSettings(projectId, hostId);
 			return;
 		}
+		setOrchestratorStartupError(projectId, null, hostId);
 		try {
 			const sessionId = await openRemoteOrchestrator(hostId, projectId, newestActiveOrchestrator(workspace.sessions));
 			await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
-			void navigate({ to: "/host/$hostId/project/$projectId/session/$sessionId", params: { hostId, projectId, sessionId } });
+			void navigate(sessionNavigateTarget(projectId, sessionId, hostId));
 		} catch (cause) {
-			showGlobalToast(t("shell.couldNotSpawn"), cause instanceof Error ? cause.message : t("shell.couldNotSpawn"), "error");
+			const message = cause instanceof Error ? cause.message : t("shell.couldNotSpawn");
+			setOrchestratorStartupError(projectId, message, hostId);
+			showGlobalToast(t("shell.couldNotSpawn"), message, "error");
 		}
-	}, [navigate, openProjectSettings, queryClient, remoteWorkspaces, showGlobalToast, t]);
+	}, [navigate, openProjectSettings, queryClient, remoteWorkspaces, setOrchestratorStartupError, showGlobalToast, t]);
 
 	const restartOrchestrator = useCallback(
 		async (projectId: string, mode?: "chat" | "tui", approvalMode?: "bypass-permissions") => {
@@ -1103,7 +1093,7 @@ function ShellLayout() {
 					}}
 					onCreated={(projectId, orchestratorReady) => {
 						void queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(remoteAddProjectHostId) });
-						if (!orchestratorReady) void navigate({ to: "/host/$hostId/project/$projectId", params: { hostId: remoteAddProjectHostId, projectId } });
+						if (!orchestratorReady) void navigate(projectNavigateTarget(projectId, remoteAddProjectHostId));
 					}}
 					onOpenChange={(open) => { if (!open) setRemoteAddProjectHostId(null); }}
 				/>}
@@ -1187,7 +1177,7 @@ function ShellLayout() {
 						workspaces={workspaces}
 						remoteHosts={remoteHosts}
 						onAddRemoteProject={setRemoteAddProjectHostId}
-						onOpenRemoteProject={(hostId, projectId) => { void navigate({ to: "/host/$hostId/project/$projectId", params: { hostId, projectId } }); }}
+						onOpenRemoteProject={(hostId, projectId) => { void navigate(projectNavigateTarget(projectId, hostId)); }}
 						onNewRemoteTask={(hostId, projectId) => requestNewTask(projectId, hostId)}
 						onOpenRemoteOrchestrator={(hostId, projectId) => { void openRemoteProjectOrchestrator(hostId, projectId); }}
 						onConfigureRemoteProject={(hostId, projectId) => openProjectSettings(projectId, hostId)}

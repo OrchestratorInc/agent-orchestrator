@@ -37,6 +37,7 @@ vi.mock("../lib/host-clients", () => ({
 		throw new Error(`Host ${hostId} is not connected`);
 	},
 	baseUrlForHost: (hostId: string) => hostId === "host-a" || hostId === "host-b" ? `http://127.0.0.1:4000/${hostId}` : undefined,
+	connectedHost: (hostId: string) => hostId === "host-a" || hostId === "host-b" ? { base: `http://127.0.0.1:4000/${hostId}` } : undefined,
 	isQuickTunnelHost: () => false,
 	subscribeConnectedHosts: () => () => undefined,
 }));

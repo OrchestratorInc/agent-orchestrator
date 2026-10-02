@@ -20,7 +20,7 @@ import {
 	useRecoverAgentSwitch,
 	useSwitchAgentState,
 } from "../hooks/useSwitchAgent";
-import { remoteWorkspaceQueryKey, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { isConcreteModelID } from "../lib/agent-model-choices";
@@ -322,7 +322,7 @@ export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpe
 		try {
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: agentSwitchesQueryKey(session.id, hostId) }),
-				queryClient.invalidateQueries({ queryKey: hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey }),
+				queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) }),
 			]);
 		} finally {
 			setRefreshingRecovery(false);

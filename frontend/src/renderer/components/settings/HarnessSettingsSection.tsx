@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookOpen, Check, Copy, Download, LoaderCircle, LogIn, Search, TriangleAlert, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
 import {
@@ -20,7 +20,8 @@ import { useProviderConnections } from "../../hooks/useProviderConnections";
 import { CloudHarnessLoginPanel, type CloudHarness } from "./CloudHarnessLoginPanel";
 import { apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
-import { baseUrlForHost, clientForSessionHost, connectedHosts, labelForHost, subscribeConnectedHosts } from "../../lib/host-clients";
+import { baseUrlForHost, clientForSessionHost, labelForHost } from "../../lib/host-clients";
+import { useConnectedHosts } from "../../hooks/useHostConnection";
 import { LOCAL_HOST } from "../../lib/hosts";
 import { createTerminalMux, muxUrlFromApiBase } from "../../lib/terminal-mux";
 import { cn } from "../../lib/utils";
@@ -140,7 +141,7 @@ export function HarnessSettingsSection({
 	const [view, setView] = useState<HarnessView>(initialView);
 	useEffect(() => setView(initialView), [initialView]);
 	const cloudView = cloudEnabled && view === "cloud";
-	const connected = useSyncExternalStore(subscribeConnectedHosts, connectedHosts);
+	const connected = useConnectedHosts();
 	const [selectedHostId, setSelectedHostId] = useState(hostId ?? LOCAL_HOST);
 	useEffect(() => setSelectedHostId(hostId ?? LOCAL_HOST), [hostId]);
 	const remoteOffline = selectedHostId !== LOCAL_HOST && !connected.includes(selectedHostId);

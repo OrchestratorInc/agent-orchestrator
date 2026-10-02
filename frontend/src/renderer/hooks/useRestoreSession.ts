@@ -6,7 +6,7 @@ import { aoBridge } from "../lib/bridge";
 import type { CloudCpSession } from "../lib/cloud-cp";
 import { createRendererCloudCpClient } from "./useCloudCp";
 import { settingsQueryKey, type Settings } from "./useSettings";
-import { cloudSessionsQueryKey, remoteWorkspaceQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
+import { cloudSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 
 export type RestoreSessionResult =
@@ -88,7 +88,7 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 					}
 					return { status: "error", message };
 				}
-				await queryClient.invalidateQueries({ queryKey: hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey });
+				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				if (data?.restoreMode === "saved_prompt") {
 					void aoBridge.notifications
 						.show({

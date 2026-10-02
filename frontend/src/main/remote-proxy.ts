@@ -19,6 +19,7 @@ import type { RemoteEntry } from "./remotes-store";
 // stripped before forwarding: the remote daemon and its logs never see it.
 export type ActiveProxy = {
 	base: string;
+	listeningAddress?: string;
 	previewUrl: (sessionId: string, sourceUrl: string) => string;
 	close: () => Promise<void>;
 };
@@ -208,7 +209,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			res.writeHead(incompatible ? 426 : 502, { "content-type": "application/json", ...corsHeaders });
 			res.end(incompatible
 				? JSON.stringify({ error: "incompatible", code: "HOST_API_INCOMPATIBLE", message: error.message })
-				: '{"error":"remote host identity not verified"}');
+				: '{"error":"remote host identity not verified","code":"HOST_IDENTITY_UNVERIFIED","message":"remote host identity not verified"}');
 			return;
 		}
 		if (res.destroyed) return;
@@ -264,7 +265,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 				"content-type": "application/json",
 				...corsHeaders,
 			});
-			res.end('{"error":"remote daemon unreachable"}');
+			res.end('{"error":"remote daemon unreachable","code":"UPSTREAM_UNAVAILABLE","message":"remote daemon unreachable"}');
 		});
 		// Closing an EventSource or tab must also close its upstream stream.
 		// Otherwise the remote daemon keeps the SSE request alive after the
@@ -334,10 +335,11 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	});
 
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-	const port = (server.address() as AddressInfo).port;
+	const { address: listeningAddress, port } = server.address() as AddressInfo;
 	log(`started on 127.0.0.1:${port} for ${upstream.host}`);
 	return {
 		base: `http://127.0.0.1:${port}/${token}`,
+		listeningAddress,
 		previewUrl: (sessionId, sourceUrl) => {
 			if (!sessionId || sessionId.length > 256) throw new Error("invalid preview session");
 			const previous = previewSessions.get(sessionId);

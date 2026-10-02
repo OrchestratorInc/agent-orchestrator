@@ -57,6 +57,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	},
 	workspaceQueryKey: ["workspaces"],
 	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
+	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 }));
 
 vi.mock("../lib/api-client", () => ({

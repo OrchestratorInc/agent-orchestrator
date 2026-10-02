@@ -28,6 +28,10 @@ export function baseUrlForHost(hostId: HostId): string | undefined {
 	return hosts.get(hostId)?.base;
 }
 
+export function connectedHost(hostId: HostId): Readonly<ConnectedHost> | undefined {
+	return hosts.get(hostId);
+}
+
 export function isQuickTunnelHost(hostId: HostId): boolean {
 	const url = hosts.get(hostId)?.url;
 	return Boolean(url && new URL(url).hostname.endsWith(".trycloudflare.com"));

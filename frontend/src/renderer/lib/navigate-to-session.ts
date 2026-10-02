@@ -9,6 +9,12 @@ export type SessionNavigateTarget =
 	| { to: "/host/$hostId/project/$projectId/session/$sessionId"; params: { hostId: string; projectId: string; sessionId: string } }
 	| { to: "/host/$hostId/session/$sessionId"; params: { hostId: string; sessionId: string } };
 
+export function projectNavigateTarget(projectId: string, host: HostId = LOCAL_HOST) {
+	return host === LOCAL_HOST
+		? { to: "/projects/$projectId" as const, params: { projectId } }
+		: { to: "/host/$hostId/project/$projectId" as const, params: { hostId: host, projectId } };
+}
+
 export function sessionNavigateTarget(projectId: string | undefined, sessionId: string, host: HostId = LOCAL_HOST): SessionNavigateTarget {
 	if (host !== LOCAL_HOST) {
 		if (!projectId || projectId === STANDALONE_WORKSPACE_ID) {
