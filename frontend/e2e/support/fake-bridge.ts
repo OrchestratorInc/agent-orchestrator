@@ -302,6 +302,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					request: async () => ({ status: 0, body: null }),
 				},
 				cloud: {
+					takePendingShareInvite: async () => null,
+					onShareInvitePending: unsubscribe,
 					getSession: async () => null,
 					signIn: async () => undefined,
 					signOut: async () => undefined,
@@ -867,6 +869,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					request: async () => ({ status: 0, body: null }),
 				},
 				cloud: {
+					takePendingShareInvite: async () => null,
+					onShareInvitePending: unsubscribe,
 					getSession: async () => null,
 					signIn: async () => undefined,
 					signOut: async () => undefined,
