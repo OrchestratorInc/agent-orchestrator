@@ -1350,6 +1350,18 @@ func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, cur domain.Acti
 		// waiting_input: background tool traffic must not clear the "waiting
 		// on the user" marker; only an explicit user/turn signal does.
 		return suppressed
+	case cur == domain.ActivityIdle && s.Event == "notification" && s.State == domain.ActivityWaitingInput:
+		// Claude Code fires Notification(agent_needs_input) on a ~60s
+		// client-side idle timer even when the finished turn asked no question
+		// (#3738). While the durable state is idle, AO has already observed
+		// the turn's Stop and no user-prompt-submit has followed, so no turn
+		// is in flight and no question can be pending: the notification is a
+		// timer artifact contradicting AO's own record, not a question. It
+		// must not promote a known-idle session into sticky waiting_input,
+		// which suppresses automated delivery until a human intervenes. A
+		// genuine agent_needs_input arrives mid-turn (cur active) and still
+		// lands; re-assertions over waiting_input are same-state no-ops.
+		return suppressed
 
 	default:
 		if isTurnBoundaryEvent(s.Event) {

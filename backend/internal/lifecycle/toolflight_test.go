@@ -307,6 +307,31 @@ func TestToolPrecedence_LegacySignalsKeepLastWriterWins(t *testing.T) {
 	}
 }
 
+func TestToolPrecedence_PostStopNeedsInputNotificationStaysIdle(t *testing.T) {
+	// #3738: Claude Code fires Notification(agent_needs_input) on a ~60s
+	// client-side idle timer even when the finished turn asked no question.
+	// A Stop has landed and no user-prompt-submit followed, so AO's own record
+	// says no turn is in flight — the notification is a timer artifact, not a
+	// question, and must not promote a known-idle session into sticky
+	// waiting_input (which suppresses automated delivery until a human acts).
+	m, st, _ := newManager()
+	seedSignaled(st, "mer-1", domain.ActivityActive)
+	mustApply(t, m, "mer-1", sig(domain.ActivityIdle, "stop", "", ""))
+
+	mustApply(t, m, "mer-1", sig(domain.ActivityWaitingInput, "notification", "", ""))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityIdle {
+		t.Fatalf("state after phantom agent_needs_input = %q, want idle", got)
+	}
+
+	// A genuine agent_needs_input arrives mid-turn (a question tool holds the
+	// turn open), so it must still land once a new prompt is in flight.
+	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "user-prompt-submit", "", ""))
+	mustApply(t, m, "mer-1", sig(domain.ActivityWaitingInput, "notification", "", ""))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
+		t.Fatalf("state after genuine agent_needs_input = %q, want waiting_input", got)
+	}
+}
+
 func TestToolPrecedence_ToolEventsDoNotDemoteWaitingInput(t *testing.T) {
 	// waiting_input marks "the user's turn". Background subagent tool traffic
 	// must not clear it; an explicit user signal does.
