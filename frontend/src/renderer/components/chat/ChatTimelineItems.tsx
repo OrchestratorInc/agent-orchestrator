@@ -266,9 +266,9 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 		// different target grapheme. Reconcile that trailing fragment before using
 		// the old grapheme count, otherwise the drain can skip the merged suffix.
 		const reconciled = reconciledStreamPrefix(visibleRef.current, targetGraphemesRef.current);
+		visibleGraphemeCountRef.current = reconciled.count;
 		if (reconciled.text !== visibleRef.current) {
 			visibleRef.current = reconciled.text;
-			visibleGraphemeCountRef.current = reconciled.count;
 			setVisibleText(reconciled.text);
 		}
 		if (visibleGraphemeCountRef.current < targetGraphemesRef.current.length) scheduleDrain();

@@ -35,7 +35,7 @@ const renameSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 let restoreTimelineGeometry: (() => void) | undefined;
 
 /** Emulate browser geometry and scroll range without mocking the virtualizer. */
-function stubVirtualTimelineGeometry() {
+function stubVirtualTimelineGeometry(rowHeight: (index: number) => number = () => 600) {
 	const bounds = HTMLElement.prototype.getBoundingClientRect;
 	const height = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight")!.get!;
 	const scrollHeight = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight")!.get!;
@@ -47,7 +47,7 @@ function stubVirtualTimelineGeometry() {
 				const offset = this.style.transform
 					? Number(this.style.transform.match(/translateY\(([-\d.]+)px\)/)?.[1] ?? 0)
 					: Number(this.dataset.index) * 618;
-				return { ...bounds.call(this), top: 20 + offset - (log?.scrollTop ?? 0), height: 600, width: 768 } as DOMRect;
+				return { ...bounds.call(this), top: 20 + offset - (log?.scrollTop ?? 0), height: rowHeight(Number(this.dataset.index)), width: 768 } as DOMRect;
 			}
 			if (this.classList.contains("relative") && this.style.height) {
 				const log = this.closest<HTMLElement>('[role="log"]');
@@ -66,7 +66,7 @@ function stubVirtualTimelineGeometry() {
 				.reduce((sum, node) => sum + (Number.parseFloat(node.style.height) || 0), 0);
 		}),
 		vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
-			return this.hasAttribute("data-index") ? 600 : Number.parseFloat(this.style.height) || offsetHeight.call(this);
+			return this.hasAttribute("data-index") ? rowHeight(Number(this.dataset.index)) : Number.parseFloat(this.style.height) || offsetHeight.call(this);
 		}),
 	];
 	restoreTimelineGeometry = () => spies.forEach((spy) => spy.mockRestore());
@@ -1467,6 +1467,20 @@ describe("ChatWorkspace timeline", () => {
 		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 	});
 
+	it("opens at the bottom after measuring very tall latest turns", async () => {
+		stubVirtualTimelineGeometry((index) => index >= 98 ? 24000 : 600);
+		const snapshot = chatFixtureLongHistory(100);
+		const latest = snapshot.items.find((item) => item.kind === "message" && item.role === "user" && item.turnId === "turn-h99") as ConversationMessage;
+		latest.text = "Latest tall historical prompt";
+		render(<ChatWorkspace snapshot={snapshot} />);
+		const log = screen.getByRole("log");
+		await waitFor(() => expect(log.scrollTop).toBeGreaterThanOrEqual(log.scrollHeight - log.clientHeight));
+		fireEvent.scroll(log);
+		expect(screen.getByText("Latest tall historical prompt")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+	});
+
 	it("scrolls virtual history, keeps all minimap targets, and returns to the latest turn", async () => {
 		stubVirtualTimelineGeometry();
 		useUiStore.setState({ inspectorSessions: { "ao-long": { isOpen: false, view: "summary" } } });
@@ -1572,6 +1586,44 @@ describe("ChatWorkspace timeline", () => {
 			});
 			expect(log.scrollTop).toBe(19140);
 			expect(reader().getBoundingClientRect().top).toBe(top);
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+		} finally {
+			window.ResizeObserver = originalObserver;
+		}
+	});
+
+	it.each([1200, 300])("preserves the spacer and bottom anchor during a disclosure resize to %ipx", async (height) => {
+		stubVirtualTimelineGeometry();
+		const originalObserver = window.ResizeObserver;
+		const observers: TestResizeObserver[] = [];
+		class TestResizeObserver {
+			targets = new Set<Element>();
+			constructor(public callback: ResizeObserverCallback) { observers.push(this); }
+			observe(target: Element) { this.targets.add(target); }
+			unobserve(target: Element) { this.targets.delete(target); }
+			disconnect() { this.targets.clear(); }
+		}
+		window.ResizeObserver = TestResizeObserver as unknown as typeof ResizeObserver;
+		try {
+			render(<ChatWorkspace snapshot={chatFixtureLongHistory(100)} />);
+			const log = screen.getByRole("log");
+			const spacer = screen.getByTestId("chat-prompt-spacer");
+			log.scrollTop = log.scrollHeight - log.clientHeight;
+			fireEvent.scroll(log);
+			const initialSpacer = spacer.style.height;
+			const initialScrollTop = log.scrollTop;
+			const latest = log.querySelector<HTMLElement>('[data-index="99"]')!;
+			expect(latest).toBeInTheDocument();
+			// A disclosure changes row geometry without a new conversation snapshot.
+			act(() => {
+				const entry = { target: latest, borderBoxSize: [{ blockSize: height, inlineSize: 768 }] } as unknown as ResizeObserverEntry;
+				for (const observer of observers) {
+					if (observer.targets.has(latest)) observer.callback([entry], observer as unknown as ResizeObserver);
+				}
+			});
+			expect(spacer.style.height).toBe(initialSpacer);
+			// Keep the virtualizer's size compensation without an extra forced pin.
+			expect(log.scrollTop).toBe(initialScrollTop + height - 600);
 			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 		} finally {
 			window.ResizeObserver = originalObserver;

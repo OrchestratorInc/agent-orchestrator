@@ -2101,6 +2101,8 @@ function Timeline({
 	const scrollContent = useRef<HTMLDivElement>(null);
 	const virtualContent = useRef<HTMLDivElement>(null);
 	const [virtualScrollMargin, setVirtualScrollMargin] = useState(20);
+	const measuredVirtualGroups = useRef(new WeakSet<TimelineGroup>());
+	const pendingVirtualLayout = useRef(false);
 	const promptSpacer = useRef<HTMLDivElement>(null);
 	const scrollTrack = useRef<HTMLDivElement>(null);
 	const drag = useRef<{
@@ -2693,8 +2695,14 @@ function Timeline({
 		// Bootstrap unmeasurable panels until their real geometry is available.
 		observeElementRect: (instance, callback) => observeElementRect(instance, (rect) =>
 			callback(rect.height ? rect : { width: rect.width, height: CHAT_INITIAL_VIEWPORT_HEIGHT })),
-		measureElement: (element, entry, instance) =>
-			measureElement(element, entry, instance) || CHAT_ESTIMATED_TURN_HEIGHT,
+		measureElement: (element, entry, instance) => {
+			const group = groups[Number(element.getAttribute("data-index"))];
+			if (group && !measuredVirtualGroups.current.has(group)) {
+				measuredVirtualGroups.current.add(group);
+				pendingVirtualLayout.current = true;
+			}
+			return measureElement(element, entry, instance) || CHAT_ESTIMATED_TURN_HEIGHT;
+		},
 		scrollToFn: (offset, { adjustments = 0 }, instance) => {
 			if (instance.scrollElement) instance.scrollElement.scrollTop = offset + adjustments;
 		},
@@ -2852,8 +2860,14 @@ function Timeline({
 		syncScrollLayout();
 	}, [pinned, snapshot.latestSequence, groups.length, messageEdit?.turnId, syncScrollLayout]);
 	useEffect(() => {
-		if (virtualized) syncScrollLayout();
-	}, [virtualized, virtualHeight, syncScrollLayout]);
+		if (!virtualized) return;
+		// Wait for measured sizes to reach the DOM before following new content.
+		// Resizing an already measured group only refreshes scroll metrics.
+		if (pendingVirtualLayout.current && virtualHeight === virtualizer.getTotalSize()) {
+			pendingVirtualLayout.current = false;
+			syncScrollLayout();
+		} else syncScrollMetrics();
+	}, [virtualized, virtualHeight, virtualizer, syncScrollLayout, syncScrollMetrics]);
 
 	useEffect(() => {
 		const content = scrollContent.current;

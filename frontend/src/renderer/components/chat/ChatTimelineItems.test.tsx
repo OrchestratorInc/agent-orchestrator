@@ -99,6 +99,23 @@ describe("AssistantMessage streaming", () => {
 		expect(segment.mock.calls.filter(([input]) => input === text).length).toBeLessThanOrEqual(1);
 	});
 
+	it("resumes a completed message without repeating its visible prefix", () => {
+		const prefix = "Hello 👨‍👩‍👧‍👦 é";
+		const text = prefix + " continued".repeat(20);
+		const view = render(<AssistantMessage message={message({ text: prefix, streaming: false })} />);
+		view.rerender(<AssistantMessage message={message({ text, streaming: true, revision: 2 })} />);
+
+		runFrame(0);
+		runFrame(100);
+		const visible = document.querySelector("p")?.textContent ?? "";
+		expect(visible.startsWith(prefix)).toBe(true);
+		expect(text.startsWith(visible)).toBe(true);
+
+		runFrame(250);
+		expect(document.querySelector("p")?.textContent).toBe(text);
+		expect(frames.size).toBe(0);
+	});
+
 	it("shows the first durable snapshot and a replacement message immediately", () => {
 		const text = "A first snapshot 👨‍👩‍👧‍👦";
 		const view = render(<AssistantMessage message={message({ text })} />);
