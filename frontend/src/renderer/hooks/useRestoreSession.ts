@@ -8,6 +8,8 @@ import { createRendererCloudCpClient } from "./useCloudCp";
 import { settingsQueryKey, type Settings } from "./useSettings";
 import { cloudSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
+import type { WorkspaceSummary } from "../types/workspace";
+import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 
 export type RestoreSessionResult =
 	{ status: "success" } | { status: "not_resumable"; message: string } | { status: "error"; message: string };
@@ -43,6 +45,10 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 
 	return useCallback(
 		async (sessionId: string, hostId?: string) => {
+			const role = queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId))
+				?.flatMap((workspace) => workspace.sessions)
+				.find((session) => session.id === sessionId)?.kind;
+			recordDirectWorkerInteraction(sessionId, "lifecycle", role);
 			// Cloud sessions re-provision through the control plane, not the local
 			// daemon: restore keeps the conversation and work intact server-side.
 			const cloudSession = hostId ? undefined : findCloudSession(queryClient, sessionId);

@@ -65,6 +65,7 @@ import { clientForHost } from "../lib/host-clients";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
+import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 
 export const Route = createFileRoute("/_shell")({
 	// Prefetch the workspace list for the whole shell (parent loaders run before
@@ -322,9 +323,18 @@ function ShellLayout() {
 		: routeParams.sessionId
 			? workspaces.find((workspace) => workspace.sessions.some((session) => session.id === routeParams.sessionId))?.id
 			: undefined;
-	const scopedSession = !routeParams.hostId && routeParams.sessionId
-		? workspaces.flatMap((workspace) => workspace.sessions).find((session) => session.id === routeParams.sessionId)
+	const scopedSession = routeParams.sessionId
+		? (routeParams.hostId ? remoteWorkspaces : workspaces)
+			.flatMap((workspace) => workspace.sessions)
+			.find((session) => session.id === routeParams.sessionId)
 		: undefined;
+	useEffect(() => {
+		recordSessionSurface(
+			scopedSession?.kind === "orchestrator" || scopedSession?.kind === "worker"
+				? { kind: scopedSession.kind, sessionId: sessionUiKey(scopedSession.id, routeParams.hostId) }
+				: null,
+		);
+	}, [routeParams.hostId, scopedSession?.id, scopedSession?.kind]);
 	// Warms the New Task composer's model-catalog cache while the user is just
 	// looking at the project, so the picker never shows a loading flash the
 	// first time they actually open the dialog.
@@ -406,6 +416,7 @@ function ShellLayout() {
 					: (currentIndex + direction + sessions.length) % sessions.length;
 			const session = sessions[nextIndex];
 			if (!session || session.id === routeParams.sessionId) return;
+			if (session.kind === "worker") recordManualWorkerOpen(sessionUiKey(session.id, hostId));
 			void navigate(sessionNavigateTarget(projectId, session.id, hostId));
 		},
 		[navigate, routeParams.hostId, routeParams.projectId, routeParams.sessionId, scopedProjectId],
