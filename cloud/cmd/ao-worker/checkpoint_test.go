@@ -3,14 +3,17 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -263,6 +266,15 @@ func trimNL(s string) string {
 	return s
 }
 
+func containsArg(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
+}
+
 // recordingGitRunner wraps a real runner and records every command so tests can
 // assert which git operations (if any) a checkpoint performed.
 type recordingGitRunner struct {
@@ -408,8 +420,10 @@ func TestPushSessionBranchSkipsScratch(t *testing.T) {
 }
 
 // TestPushSessionBranchToleratesNonFastForward: when origin's branch has
-// diverged, the push must fail without force and leave the remote untouched —
-// and the checkpointer must not panic, since it is a best-effort step.
+// diverged but the workspace's tracking ref is stale (does not know yet), the
+// push is attempted once, rejected without force, and the tip is preserved on
+// the AO-owned preserved-branch ref so the lineage stays fetchable. The failure
+// latches, so an immediate retry performs no further push.
 func TestPushSessionBranchToleratesNonFastForward(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git unavailable")
@@ -425,6 +439,7 @@ func TestPushSessionBranchToleratesNonFastForward(t *testing.T) {
 	}
 	mustGit(t, ctx, git, workspace, "add", "-A")
 	mustGit(t, ctx, git, workspace, "commit", "-m", "local")
+	localTip := strings.TrimSpace(mustGit(t, ctx, git, workspace, "rev-parse", "HEAD"))
 
 	// Diverged remote: an unrelated commit already on origin's ao/div.
 	other := filepath.Join(root, "other")
@@ -446,10 +461,138 @@ func TestPushSessionBranchToleratesNonFastForward(t *testing.T) {
 	}
 	cp.pushSessionBranch(ctx) // must not panic; failure is logged only
 
-	if got := len(rec.pushCalls()); got != 1 {
-		t.Fatalf("push attempts = %d, want 1", got)
+	pushes := rec.pushCalls()
+	if len(pushes) != 2 {
+		t.Fatalf("push attempts = %v, want one rejected branch push plus the preserved-branch fallback", pushes)
+	}
+	if !containsArg(pushes[1], "--force") ||
+		!containsArg(pushes[1], worker.PreservedBranchRef("s")) {
+		t.Fatalf("second push = %v, want a force-push to the preserved-branch ref", pushes[1])
 	}
 	if got := strings.TrimSpace(mustGit(t, ctx, git, origin, "rev-parse", "refs/heads/ao/div")); got != remoteTip {
 		t.Fatalf("remote tip changed to %s, want %s (non-fast-forward must not overwrite)", got, remoteTip)
+	}
+	preserved := strings.TrimSpace(mustGit(t, ctx, git, origin, "rev-parse", worker.PreservedBranchRef("s")))
+	if preserved != localTip {
+		t.Fatalf("preserved-branch tip %s, want the local tip %s", preserved, localTip)
+	}
+
+	// Latched: an immediate retry performs no further push for this tip.
+	before := len(rec.pushCalls())
+	cp.pushSessionBranch(ctx)
+	if got := len(rec.pushCalls()); got != before {
+		t.Fatalf("latched tip retried: %v", rec.pushCalls()[before:])
+	}
+}
+
+// TestPushSessionBranchDivergenceGateSkipsDoomedPush locks the bounded-failure
+// behavior: once the workspace's origin tracking ref shows the remote branch
+// ahead, the checkpoint must not attempt the doomed non-fast-forward push at
+// all. It force-pushes the local tip to the AO-owned preserved-branch ref
+// instead, publishes session.branch_backup_degraded exactly once per tip, and
+// latches retries for branchPushRetryInterval - after which the attempt is
+// retried but the event is still not re-sent.
+func TestPushSessionBranchDivergenceGateSkipsDoomedPush(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	ctx := context.Background()
+	git := worker.ExecGitRunner{}
+	root, origin, workspace := newPushFixture(t, ctx)
+
+	// Local commit on the session branch.
+	mustGit(t, ctx, git, workspace, "checkout", "-b", "ao/gate")
+	if err := os.WriteFile(filepath.Join(workspace, "local.txt"), []byte("local\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, ctx, git, workspace, "add", "-A")
+	mustGit(t, ctx, git, workspace, "commit", "-m", "local")
+	localTip := strings.TrimSpace(mustGit(t, ctx, git, workspace, "rev-parse", "HEAD"))
+
+	// Diverged remote, fetched so the workspace's tracking ref reflects it -
+	// the divergence gate's precondition.
+	other := filepath.Join(root, "other")
+	mustGit(t, ctx, git, root, "clone", origin, other)
+	configIdentity(t, ctx, git, other)
+	mustGit(t, ctx, git, other, "checkout", "-b", "ao/gate", "origin/main")
+	if err := os.WriteFile(filepath.Join(other, "remote.txt"), []byte("remote\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, ctx, git, other, "add", "-A")
+	mustGit(t, ctx, git, other, "commit", "-m", "remote")
+	mustGit(t, ctx, git, other, "push", "origin", "ao/gate")
+	remoteTip := strings.TrimSpace(mustGit(t, ctx, git, origin, "rev-parse", "refs/heads/ao/gate"))
+	mustGit(t, ctx, git, workspace, "fetch", "origin")
+	if got := strings.TrimSpace(mustGit(t, ctx, git, workspace, "rev-parse", "refs/remotes/origin/ao/gate")); got != remoteTip {
+		t.Fatalf("tracking ref %s, want %s", got, remoteTip)
+	}
+
+	// Control-plane event sink: records every published event request.
+	var mu sync.Mutex
+	var events []worker.EventRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req worker.EventRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		events = append(events, req)
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	clock := time.Now()
+	rec := &recordingGitRunner{inner: git}
+	cp := &checkpointer{
+		git: rec, workspace: workspace, sessionID: "s-gate",
+		branch: "ao/gate", defaultBranch: "main", logger: discardLogger(),
+		client: &client{baseURL: srv.URL, http: srv.Client()},
+		nowFn:  func() time.Time { return clock },
+	}
+
+	cp.pushSessionBranch(ctx)
+
+	pushes := rec.pushCalls()
+	if len(pushes) != 1 || !containsArg(pushes[0], "--force") ||
+		!containsArg(pushes[0], worker.PreservedBranchRef("s-gate")) {
+		t.Fatalf("push calls = %v, want only the preserved-branch force-push (doomed push must be skipped)", pushes)
+	}
+	if got := strings.TrimSpace(mustGit(t, ctx, git, origin, "rev-parse", "refs/heads/ao/gate")); got != remoteTip {
+		t.Fatalf("remote tip changed to %s, want %s", got, remoteTip)
+	}
+	preserved := strings.TrimSpace(mustGit(t, ctx, git, origin, "rev-parse", worker.PreservedBranchRef("s-gate")))
+	if preserved != localTip {
+		t.Fatalf("preserved-branch tip %s, want local tip %s", preserved, localTip)
+	}
+	mu.Lock()
+	published := append([]worker.EventRequest(nil), events...)
+	mu.Unlock()
+	if len(published) != 1 || published[0].Type != "session.branch_backup_degraded" {
+		t.Fatalf("published events = %+v, want exactly one session.branch_backup_degraded", published)
+	}
+
+	// Latched: an immediate retry performs no push and re-publishes nothing.
+	cp.pushSessionBranch(ctx)
+	if got := len(rec.pushCalls()); got != 1 {
+		t.Fatalf("latched tip retried: %v", rec.pushCalls()[1:])
+	}
+	mu.Lock()
+	count := len(events)
+	mu.Unlock()
+	if count != 1 {
+		t.Fatalf("event re-published for latched tip: %d", count)
+	}
+
+	// After the retry interval the push is attempted again (still just the
+	// preserved-branch ref), but the failure was already announced for this tip.
+	clock = clock.Add(branchPushRetryInterval + time.Second)
+	cp.pushSessionBranch(ctx)
+	if got := len(rec.pushCalls()); got != 2 {
+		t.Fatalf("push not retried after the retry interval: %v", rec.pushCalls())
+	}
+	mu.Lock()
+	count = len(events)
+	mu.Unlock()
+	if count != 1 {
+		t.Fatalf("published %d events for one tip, want 1", count)
 	}
 }
