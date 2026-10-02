@@ -262,9 +262,12 @@ export function InstallDownloads() {
             <tr key={platform}>
               <th scope="row">{platform}</th>
               <td>
-                <div style={{ display: "flex", flexWrap: "wrap", columnGap: "1rem", rowGap: "0.25rem" }}>
-                  {assets.map(([label, asset]) => (
-                    <a key={asset} href={`${release}/agent-orchestrator-${asset}`}>{label}</a>
+                <div style={{ display: "flex", flexWrap: "wrap", columnGap: "0.4rem", rowGap: "0.25rem" }}>
+                  {assets.map(([label, asset], index) => (
+                    <span key={asset}>
+                      {index > 0 && <span aria-hidden="true"> · </span>}
+                      <a href={`${release}/agent-orchestrator-${asset}`}>{label}</a>
+                    </span>
                   ))}
                 </div>
               </td>

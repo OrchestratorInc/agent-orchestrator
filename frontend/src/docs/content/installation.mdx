@@ -3,7 +3,11 @@ title: Installation
 description: Download the AO desktop app and connect your coding tools.
 ---
 
+For the latest stable desktop build, start at the [official AO download page](https://orchestrator.inc/download/). It also lists nightly builds and the mobile apps. If you want a direct desktop package, choose one below:
+
 <InstallDownloads />
+
+On your phone, install [AO Mobile for iPhone or iPad](https://apps.apple.com/app/ao-mobile/id6792552173) or [AO Mobile for Android](https://play.google.com/store/apps/details?id=aoagents.dev). Then use [Connect Mobile](/configuration/remote-access) in the desktop app to pair it.
 
 The desktop app is the canonical install path. It owns the local daemon, requires no global `ao` command, and checks for updates after launch and while it is running.
 
@@ -13,7 +17,7 @@ The desktop app is the canonical install path. It owns the local daemon, require
 | --- | --- | --- |
 | Git | Repository projects | Creates and manages isolated worktrees and branches. |
 | GitHub CLI `gh` | GitHub projects | Uses your existing authentication for repository and pull-request operations. |
-| An agent harness | Agent sessions | The coding agent AO launches, such as Claude Code, Codex, Cursor, Aider, or OpenCode. |
+| An agent harness | Agent sessions | Install a supported coding agent, such as Claude Code, Codex, Cursor, Aider, or OpenCode. See the [full harness catalog](/plugins/agents) for the current list and interface support. |
 | tmux | macOS preflight and legacy/fallback terminal sessions | Desktop macOS/Linux packages include it. Source launches may need system tmux; see [Runtime](/plugins/runtimes). |
 
 AO uses installed provider binaries and sign-ins. **Settings → Harnesses** offers setup and readiness checks for supported harnesses; some need installation or authentication outside AO. Unreal Agent is a built-in Chat-only exception, with its own platform and permission limits. See the [catalog](/plugins/agents).

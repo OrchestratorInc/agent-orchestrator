@@ -83,16 +83,6 @@ Do not delete the old or new data directories until you have inspected and prese
 
 Installed desktop builds check for updates on launch and periodically while running. If an update is unavailable through the app, download the latest desktop artifact directly. Running a package-manager update cannot move the frozen npm package beyond `0.10.0`.
 
-## Historical Package Names
-
-Some very old installations used `@composio/agent-orchestrator`. Removing that global package is safe once you have moved to the desktop app:
-
-```bash
-npm uninstall -g @composio/agent-orchestrator
-```
-
-Installing `@aoagents/ao` is only useful when you intentionally need the frozen legacy bridge.
-
 ## Next
 
 <Cards>
