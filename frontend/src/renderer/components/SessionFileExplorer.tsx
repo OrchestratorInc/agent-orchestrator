@@ -183,15 +183,13 @@ export function SessionFileExplorer({
 		}
 		: null;
 	const sourceMenu = source.kind === "pull_request" ? prSourceMenu : reviewMenu;
-	// With no review scopes or commits (nothing changed) and no PR to switch to,
-	// the picker's only entry is the already-selected Workspace, so it is hidden
-	// until there is something to choose.
-	const showSourcePicker = sourceMenu !== null || source.kind !== "workspace" || sourceOptions.length > 1;
-	// Workspace is its own item (it is not a branch) and Branch › lists only PRs.
+	// Branch › lists only PRs (Workspace is not a branch; it gets its own button
+	// before the picker), so it appears only when there is a PR to switch to.
 	const showBranchMenu = sourceOptions.length > 1;
-	// Keep the escape back to Workspace available if an active PR outlives its
-	// SCM summary query (for example, while it is loading or after a failure).
-	const showWorkspaceSource = showBranchMenu || source.kind === "pull_request";
+	// The picker is hidden until it has something to choose: no review scopes or
+	// commits (nothing changed) and no PR listed, e.g. while an active PR's
+	// summary is still loading — the Workspace button stays the way back.
+	const showSourcePicker = sourceMenu !== null || showBranchMenu;
 	const currentSourceLabel = sourceOptions.find((option) => option.value === sourceValue)?.label;
 	const selectSource = (value: string) => {
 		setSourceNotice("");
@@ -243,12 +241,20 @@ export function SessionFileExplorer({
 				    flyouts (Branch = Workspace or a PR). */}
 				{/* -ml-2 cancels the trigger's own 8px inline padding so its label
 				    starts on the same 12px gutter as the context row's text below. */}
+				{/* While a PR is shown, Workspace sits before the picker as the way back;
+				    on the workspace itself the trigger already names it. It keys off the
+				    source alone, so it stays reachable while the PR list loads or fails. */}
+				{source.kind === "pull_request" ? (
+					<Button className="-ml-2 h-control-md shrink-0 text-xs" onClick={() => selectSource("workspace")} size="sm" type="button" variant="ghost">
+						{t("files.explorer.workspaceSource")}
+					</Button>
+				) : null}
 				{showSourcePicker ? (
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
 						<SettingsMenuTrigger
 							aria-label={t("files.explorer.source")}
-							className="-ml-2 h-control-md min-w-0 max-w-72 shrink text-xs"
+							className={cn(source.kind !== "pull_request" && "-ml-2", "h-control-md min-w-0 max-w-72 shrink text-xs")}
 							title={currentSourceLabel}
 						>
 							<span className="min-w-0 truncate">{currentSourceLabel}</span>
@@ -284,14 +290,6 @@ export function SessionFileExplorer({
 									</div>
 								</DropdownMenuSubContent>
 							</DropdownMenuSub>
-						) : null}
-						{showWorkspaceSource ? (
-							<DropdownMenuItem className="gap-1.5" onSelect={() => selectSource("workspace")}>
-								<span className="min-w-0 truncate">{t("files.explorer.workspaceSource")}</span>
-								<span className="ml-auto flex size-4 shrink-0 items-center justify-center">
-									{sourceValue === "workspace" ? <Check aria-hidden="true" className="text-logo-accent" /> : null}
-								</span>
-							</DropdownMenuItem>
 						) : null}
 						{showBranchMenu ? <DropdownMenuSub>
 							<DropdownMenuSubTrigger>{t("files.branch")}</DropdownMenuSubTrigger>
