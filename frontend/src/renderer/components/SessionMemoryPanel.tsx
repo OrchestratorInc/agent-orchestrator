@@ -211,13 +211,18 @@ const cell = {
 const columnCount = 5;
 
 /**
- * Sessions by CPU, busiest first, by the exact figure: memory plays no part.
- * Only an exact tie (say, two idle sessions at 0) keeps its previous place,
- * so those two do not swap on every sample.
+ * Sessions by CPU alone: memory plays no part. Sessions with exactly the same
+ * CPU (most often every one idle at 0) fall back to their names, A to Z, in
+ * either direction, so a tie never reads as some other order turned around.
  */
-function cpuOrder<T extends { id: string; reading: SessionMemoryReading }>(previous: string[], rows: T[]): T[] {
-	const rank = new Map(previous.map((id, i) => [id, i] as const));
-	return [...rows].sort((a, b) => b.reading.cpuPercent - a.reading.cpuPercent || (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity));
+function cpuOrder<T extends { id: string; session: WorkspaceSession; reading: SessionMemoryReading }>(rows: T[], ascending: boolean): T[] {
+	const direction = ascending ? 1 : -1;
+	return [...rows].sort(
+		(a, b) =>
+			direction * (a.reading.cpuPercent - b.reading.cpuPercent) ||
+			a.session.title.localeCompare(b.session.title) ||
+			a.id.localeCompare(b.id),
+	);
 }
 
 /** A column header that orders the sessions by its own figure; a second click flips the direction. */
@@ -274,7 +279,8 @@ export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow
 			.map((session) => ({ id: session.id, session, reading: readings?.get(session.id) }))
 			.filter((row): row is { id: string; session: WorkspaceSession; reading: SessionMemoryReading } => row.reading !== undefined)
 			.map((row) => ({ ...row, rssBytes: row.reading.rssBytes }));
-		const largestFirst = sort.by === "cpu" ? cpuOrder(orderRef.current, rows) : stableResourceOrder(orderRef.current, rows);
+		if (sort.by === "cpu") return cpuOrder(rows, sort.ascending);
+		const largestFirst = stableResourceOrder(orderRef.current, rows);
 		orderRef.current = largestFirst.map((row) => row.id);
 		return sort.ascending ? [...largestFirst].reverse() : largestFirst;
 	}, [sessions, readings, sort]);

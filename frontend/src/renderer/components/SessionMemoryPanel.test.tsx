@@ -397,6 +397,29 @@ describe("AppMemoryIndicator", () => {
 		expect(order()).toEqual(["small", "big"]);
 	});
 
+	it("orders sessions tied on CPU by name, in either direction, never by memory", async () => {
+		memoryQueryMock.mockReturnValue({
+			isError: false,
+			data: new Map([
+				["s-small", reading("s-small", 641_728_512, 1, [], 0)],
+				["s-big", reading("s-big", 2_254_857_830, 2, [], 0)],
+			]),
+		});
+		renderButton();
+		await userEvent.click(screen.getByTestId("app-memory-indicator"));
+		const table = await screen.findByTestId("session-memory-table");
+		const order = () => within(table).getAllByTestId("session-memory-row").map((row) => (row.textContent?.includes("big worker") ? "big" : "small"));
+		// Memory order puts the small session last; reversed, first.
+		await userEvent.click(within(table).getAllByTestId("session-memory-sort")[0]);
+		expect(order()).toEqual(["small", "big"]);
+		// Both idle at 0% CPU: name order, A to Z, both ways round.
+		const cpu = within(table).getAllByTestId("session-memory-sort")[1];
+		await userEvent.click(cpu);
+		expect(order()).toEqual(["big", "small"]);
+		await userEvent.click(cpu);
+		expect(order()).toEqual(["big", "small"]);
+	});
+
 	it("opens a row from the keyboard alone: Tab to reach it, Enter or Space to open it", async () => {
 		renderButton();
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
