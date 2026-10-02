@@ -387,7 +387,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		? undefined : fallbackSession;
 	const session = hostId ? (remoteBase && !remoteSessionQuery.isError && remoteSessionQuery.data?.workspaceId === (projectId ?? remoteSessionQuery.data?.workspaceId) ? remoteSessionQuery.data : undefined)
 		: ambiguousRoute ? undefined : listedSession ?? directCloudSession ?? scopedFallback;
-	const interfaceContext = hostId ?? (session ? session.cloud ?? undefined : cloudOrgId && projectId ? { orgId: cloudOrgId } : undefined);
+	const interfaceContext = hostId ?? (session ? session.cloud ?? null : cloudOrgId && projectId ? { orgId: cloudOrgId } : undefined);
 	const interfaceUi = useSessionInterfaceSwitch(sessionId, session, interfaceContext);
 	const { draftBoundaries: chatDraftBoundaries, confirmUnsafeDraftLeave } = interfaceUi;
 	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);

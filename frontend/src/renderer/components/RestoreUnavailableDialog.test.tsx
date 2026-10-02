@@ -100,7 +100,7 @@ describe("RestoreUnavailableDialog", () => {
 
 		await waitFor(() => expect(onRecreated).toHaveBeenCalledWith("remote-new"));
 		expect(workspaceQueryMock).toHaveBeenCalledWith("proj-1", undefined, "box-b");
-		expect(remoteSpawnMock).toHaveBeenCalledWith("box-b", "proj-1", undefined, undefined, true);
+		expect(remoteSpawnMock).toHaveBeenCalledWith("box-b", "proj-1", undefined, undefined, true, "restore_dialog");
 		expect(spawnMock).not.toHaveBeenCalled();
 	});
 

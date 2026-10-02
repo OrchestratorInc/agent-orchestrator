@@ -11,9 +11,9 @@ import (
 // fakeLAN is a minimal httpd.LANController fake for exercising
 // restoreMobileOnBoot without a real listener.
 type fakeLAN struct {
-	started  bool
-	hash     string
-	port     int
+	started bool
+	hash    string
+	port    int
 	// returnPort, when non-zero, is what Start returns instead of the port it
 	// was asked for — simulating LANManager's ephemeral-port fallback when the
 	// requested port is already taken (e.g. by another AO instance). Left zero,

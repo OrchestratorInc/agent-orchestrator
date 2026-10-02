@@ -84,12 +84,12 @@ it("uses the shared create flow and only the selected host for project and orche
 			flows.get("host-b")?.onCreateProject({ ...input, clonePreparationId: "prepared-b" }),
 		]);
 	});
-	// false means durable registration: the shell can navigate before the agent starts.
-	expect(aCreated).toHaveBeenNthCalledWith(1, "same-project-id", false);
-	expect(bCreated).toHaveBeenNthCalledWith(1, "same-project-id", false);
+	// The first callback means durable registration; the second carries the started orchestrator.
+	expect(aCreated).toHaveBeenNthCalledWith(1, "same-project-id");
+	expect(bCreated).toHaveBeenNthCalledWith(1, "same-project-id");
 	await waitFor(() => {
-		expect(aCreated).toHaveBeenNthCalledWith(2, "same-project-id", true);
-		expect(bCreated).toHaveBeenNthCalledWith(2, "same-project-id", true);
+		expect(aCreated).toHaveBeenNthCalledWith(2, "same-project-id", "host-a-orchestrator");
+		expect(bCreated).toHaveBeenNthCalledWith(2, "same-project-id", "host-b-orchestrator");
 		expect(closeA).toHaveBeenCalledWith(false);
 		expect(closeB).toHaveBeenCalledWith(false);
 	});
