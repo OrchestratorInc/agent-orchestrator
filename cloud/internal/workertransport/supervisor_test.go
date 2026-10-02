@@ -166,19 +166,23 @@ func TestChatToTerminalContinuesReopenedTerminalOutputSequence(t *testing.T) {
 }
 
 func TestRefreshAgentCommandUsesLatestConversationID(t *testing.T) {
-	var gotID string
+	var gotID, gotModel, gotEffort string
 	supervisor := &Supervisor{
 		AgentCommand: workerexec.Command{Path: "stale-codex"},
-		AgentCommandFactory: func(_ context.Context, nativeConversationID string) (workerexec.Command, error) {
+		AgentCommandFactory: func(_ context.Context, nativeConversationID, model, effort string) (workerexec.Command, error) {
 			gotID = nativeConversationID
+			gotModel, gotEffort = model, effort
 			return workerexec.Command{Path: "codex", Args: []string{"resume", nativeConversationID}}, nil
 		},
 	}
-	if err := supervisor.refreshAgentCommand(context.Background(), "native-chat"); err != nil {
+	if err := supervisor.refreshAgentCommand(context.Background(), "native-chat", "pending-model", "high"); err != nil {
 		t.Fatalf("refresh agent command: %v", err)
 	}
 	if gotID != "native-chat" {
 		t.Fatalf("factory native conversation id = %q, want native-chat", gotID)
+	}
+	if gotModel != "pending-model" || gotEffort != "high" {
+		t.Fatalf("factory pending selection = %q/%q", gotModel, gotEffort)
 	}
 	if supervisor.AgentCommand.Path != "codex" {
 		t.Fatalf("refreshed command path = %q, want codex", supervisor.AgentCommand.Path)
@@ -199,7 +203,7 @@ func TestStartInterfaceKeepsBootstrapCommandWithoutConversation(t *testing.T) {
 			Args: []string{"-c", "sleep 30"},
 			Dir:  workspace,
 		},
-		AgentCommandFactory: func(context.Context, string) (workerexec.Command, error) {
+		AgentCommandFactory: func(context.Context, string, string, string) (workerexec.Command, error) {
 			called = true
 			return workerexec.Command{Path: "unexpected"}, nil
 		},
@@ -956,6 +960,28 @@ func TestWorkspaceReviewDispatchHandlesEveryOperation(t *testing.T) {
 				t.Fatalf("completed=%T failure=%q", control.completed, control.failureCode)
 			}
 		})
+	}
+}
+
+func TestWorkspaceCheckoutDispatchRequestsRetry(t *testing.T) {
+	repo := newGitWorkspace(t)
+	workspace, err := openWorkspace(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workspace.Close()
+	control := &reviewDispatchControl{}
+	calls := 0
+	supervisor := &Supervisor{
+		Control:         control,
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RequestCheckout: func() error { calls++; return nil },
+	}
+	supervisor.handle(context.Background(), workspace, &worker.TransportRequest{
+		ID: "checkout-request", Attempt: 1, Kind: "workspace.checkout",
+	})
+	if calls != 1 || control.failureCode != "" {
+		t.Fatalf("checkout calls=%d failure=%q", calls, control.failureCode)
 	}
 }
 

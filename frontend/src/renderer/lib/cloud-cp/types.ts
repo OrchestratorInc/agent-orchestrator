@@ -347,6 +347,8 @@ export interface CloudCpInterfaceTransitionStatusResponse {
 export interface CloudCpStartInterfaceTransitionRequest {
 	targetMode: CloudCpInterfaceMode;
 	policy: "drain" | "interrupt";
+	model?: string;
+	reasoningEffort?: string;
 }
 
 export interface CloudCpStartInterfaceTransitionResponse {
@@ -711,6 +713,8 @@ export interface CloudCpSendMessageRequest {
 }
 
 export interface CloudCpChatModelsResponse {
+	model?: string;
+	reasoningEffort?: string;
 	models: Array<{
 		id: string;
 		displayName: string;

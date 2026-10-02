@@ -25,7 +25,7 @@ import {
 	SessionChatSurface,
 	type ConversationWorkState,
 } from "./chat/SessionChatSurface";
-import { CloudSessionChatSurface } from "./chat/CloudSessionChatSurface";
+import { CloudSessionChatSurface, readCloudTurnSettings } from "./chat/CloudSessionChatSurface";
 import { ReviewerChatSurface } from "./chat/ReviewerChatSurface";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { NotificationCenter } from "./NotificationCenter";
@@ -957,6 +957,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	const requestCloudResume = useCallback(async () => {
 		if (!session?.cloud) return;
 		await cloudCpClient.resumeSession(session.cloud.orgId, session.id);
+		await cloudCpClient.requestWorkspaceCheckout(session.cloud.orgId, session.id);
 		await refreshWorkspaces();
 	}, [cloudCpClient, refreshWorkspaces, session]);
 	useEffect(() => {
@@ -1601,7 +1602,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 				});
 			}
 			try {
-				const response = await interfaceSwitch.start({ targetMode, policy, historyPolicy });
+				const selected = chatToTerminal && session?.cloud && session.provider === "codex"
+					? readCloudTurnSettings(`cloud-chat-settings:${session.cloud.orgId}:${session.id}:${session.provider}`)
+					: undefined;
+				const response = await interfaceSwitch.start({
+					targetMode, policy, historyPolicy,
+					...(selected?.model ? { model: selected.model } : {}),
+					...(selected?.reasoningEffort ? { reasoningEffort: selected.reasoningEffort } : {}),
+				});
 				if (chatLeaveRequestId !== undefined) {
 					setChatLeaveLock((current) =>
 						current?.requestId === chatLeaveRequestId && response?.transition?.id
@@ -1636,6 +1644,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 			chatToTerminal,
 			confirmUnsafeDraftLeave,
 			interfaceSwitch,
+			session,
 			sessionId,
 		],
 	);
@@ -2285,6 +2294,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 									headerActions={sessionHeaderActions}
 									newWorkDisabled={chatNewWorkDisabled}
 									onConversationWorkChange={handleConversationWorkChange}
+									onOpenFiles={browserOnly ? undefined : prepareFilesInspector}
+									onOpenFile={openCenterFile}
 									session={session}
 									sessionTabAction={sessionTabActions}
 								/>

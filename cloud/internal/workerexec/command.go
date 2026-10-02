@@ -119,6 +119,9 @@ func (b HarnessBuilder) BuildInteractive(
 	switch launch.Harness {
 	case "codex":
 		providerArgs = codexActivityHookArgs(hookHelperPath(b.DataDir))
+		if launch.ReasoningEffort != "" {
+			providerArgs = append(providerArgs, "-c", "model_reasoning_effort="+launch.ReasoningEffort)
+		}
 	case "cursor":
 		pluginDir, err := b.writeCursorPromptPlugin(launch.SessionID, systemPrompt)
 		if err != nil {
