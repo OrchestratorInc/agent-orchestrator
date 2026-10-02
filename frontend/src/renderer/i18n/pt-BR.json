@@ -2047,6 +2047,7 @@
 	"shell.memoryCopyPid": "Copiar PID {{pid}}",
 	"shell.memoryPidCopied": "PID {{pid}} copiado",
 	"shell.memoryProcessOther_one": "{{count}} outro processo",
+	"shell.memoryProcessOther_many": "{{count}} outros processos",
 	"shell.memoryProcessOther_other": "{{count}} outros processos",
 	"shell.memoryProcessFewer": "Mostrar menos",
 	"shell.memoryCategory.ao": "AO",
