@@ -97,7 +97,8 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   carries your GitHub handle. That one event sets a person property so activity
   can be grouped by GitHub username, and clears build details (version,
   platform, surface, build mode) that older AO versions stored on the profile;
-  every other event stays anonymous.
+  other events do not set a person profile. Project-add events still carry the
+  GitHub owner segment described above, so this is not an anonymity guarantee.
 
 Separately from remote telemetry, the daemon can keep a local copy of
 operational events in AO's SQLite database. While local telemetry is active, AO
