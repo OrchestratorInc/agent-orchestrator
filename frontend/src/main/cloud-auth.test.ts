@@ -101,7 +101,7 @@ describe("native WorkOS authentication", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  it("starts PKCE and exchanges the callback without an AO website", async () => {
+  it("starts PKCE via the control-plane landing page and exchanges the deep-link callback", async () => {
     await beginCloudSignIn(dataDir);
     expect(mocks.openExternal).toHaveBeenCalledWith(
       "https://workos.example/authorize",
@@ -111,7 +111,7 @@ describe("native WorkOS authentication", () => {
         provider: "authkit",
         prompt: "login",
         maxAge: 0,
-        redirectUri: "ao-app://callback",
+        redirectUri: "https://api.aoagents.dev/api/cloud/v1/auth/desktop/callback",
       }),
     );
 
