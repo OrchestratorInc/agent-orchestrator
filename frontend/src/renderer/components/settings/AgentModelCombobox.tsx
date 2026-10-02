@@ -64,7 +64,6 @@ export function AgentModelCombobox({
 	agentLabel,
 	onRefresh,
 	refreshing = false,
-	lastSuccessAt,
 	refreshError,
 	retryAt,
 	onChange,
@@ -88,7 +87,6 @@ export function AgentModelCombobox({
 	agentLabel?: string;
 	onRefresh?: () => void | Promise<void>;
 	refreshing?: boolean;
-	lastSuccessAt?: string | null;
 	refreshError?: string;
 	retryAt?: string | null;
 	onChange: (value: string) => void;
@@ -184,7 +182,8 @@ export function AgentModelCombobox({
 	);
 	const customSearchValue = search.trim();
 	const showCustomSearchAction = allowDirectCustom && customSearchValue !== "" && rankedModels.length === 0;
-	const currentLabel = (triggerLabel ?? selected?.label ?? explicitModel) || emptyLabel || t("settings.models.modelNotReported");
+	// With no identified model, nothing is selected and the menu just lists models.
+	const currentLabel = (triggerLabel ?? selected?.label ?? explicitModel) || emptyLabel || t("settings.models.selectModel");
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const effortTriggerRef = useRef<HTMLDivElement>(null);
 	const [canScrollDown, setCanScrollDown] = useState(false);
@@ -315,32 +314,23 @@ export function AgentModelCombobox({
 						)}
 					</div>
 				)}
-				{(lastSuccessAt || refreshError || refreshFailed) && (
+				{(refreshError || refreshFailed) && (
 					<div className="flex items-center gap-2 px-2 pb-1 text-xs text-settings-muted" aria-live="polite">
-						{lastSuccessAt && (
-							<span>
-								{t("settings.models.lastSuccess", {
-									time: new Date(lastSuccessAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
-								})}
-							</span>
-						)}
-						{(refreshError || refreshFailed) && (
-							<button
-								type="button"
-								className="truncate text-warning underline underline-offset-2"
-								title={refreshError}
-								onClick={(event) => {
-									event.stopPropagation();
-									runRefresh();
-								}}
-								disabled={refreshBusy}
-							>
-								{t("settings.models.retry")}
-								{retryAt
-									? ` · ${new Date(retryAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
-									: ""}
-							</button>
-						)}
+						<button
+							type="button"
+							className="truncate text-warning underline underline-offset-2"
+							title={refreshError}
+							onClick={(event) => {
+								event.stopPropagation();
+								runRefresh();
+							}}
+							disabled={refreshBusy}
+						>
+							{t("settings.models.retry")}
+							{retryAt
+								? ` · ${new Date(retryAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+								: ""}
+						</button>
 					</div>
 				)}
 

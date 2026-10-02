@@ -13,9 +13,7 @@ import {
 	InspectorSection as Section,
 	SessionInspectorShellView,
 	SessionInspectorSummaryView,
-	UserAvatar,
 	inspectorEmptyClass,
-	scmUserAvatarUrl,
 	type InspectorPullRequest,
 	type InspectorInlineComment,
 	type InspectorGithubReview,
@@ -26,9 +24,11 @@ import {
 	type InspectorView,
 } from "@aoagents/product-ui";
 import {
+	Archive,
 	ArrowUpRight,
 	ChevronDown,
 	ChevronRight,
+	GitPullRequest,
 	GitMerge,
 	Info,
 	Play,
@@ -46,10 +46,12 @@ import { formatTimeCompact } from "../lib/format-time";
 import { AgentAvatar } from "./AgentAvatar";
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
 import { ProductExternalLink } from "./ProductExternalLink";
+import { CopyButton } from "./chat/CopyButton";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import {
 	sessionScmSummaryQueryKey,
 	useSessionScmSummary,
+	type SessionPRReference,
 	type SessionPRSummary,
 } from "../hooks/useSessionScmSummary";
 import { useSessionUsage, type SessionUsage } from "../hooks/useSessionUsage";
@@ -58,7 +60,7 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { clearTerminateSessionState, useTerminateSession } from "../hooks/useTerminateSession";
 import { formatEstimatedCost, type EstimatedCost } from "../lib/format-cost";
-import { prBrowserUrl, prCanMerge, prCardPresentation, sessionPRDisplaySummaries } from "../lib/pr-display";
+import { prBrowserUrl, prCanMerge, prCardPresentation, prNounKeys, sessionPRDisplaySummaries } from "../lib/pr-display";
 import { formatTokenCount } from "../lib/format-token-count";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import {
@@ -70,10 +72,11 @@ import {
 import { getAgentActivityView, getSessionTimelinePillView } from "../lib/session-presentation";
 import { BrowserPanelView, type BrowserAnnotationQueueModel } from "./BrowserPanel";
 import type { BrowserViewModel } from "../hooks/useBrowserView";
+import { FilesTopbarHostContext } from "./files-topbar-host";
 import { useUiStore } from "../stores/ui-store";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
-import { SessionTerminationPopover } from "./SessionTerminationPopover";
+import { SessionArchiveDialog } from "./SessionArchiveDialog";
 import { ReviewerSelect } from "./ReviewerSelect";
 import { agentLabel } from "../lib/agent-options";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
@@ -201,13 +204,16 @@ export const SessionInspector = memo(function SessionInspector({
 	const { t } = useTranslation();
 	const [internalView, setInternalView] = useState<InspectorView>("summary");
 	const [browserTopbarHost, setBrowserTopbarHost] = useState<HTMLDivElement | null>(null);
+	const [filesTopbarHost, setFilesTopbarHost] = useState<HTMLDivElement | null>(null);
 	const requestedView = viewProp ?? internalView;
 	// Badge the Browser tab when a preview target arrived without us opening it.
 	const browserUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[session.id]?.browserUnseen) : false,
 	);
 	const inspectorQueryClient = useQueryClient();
-	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(browserOnly ? undefined : session?.id);
+	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
+		browserOnly || session?.cloud ? undefined : session?.id,
+	);
 	const localWorkspaceData = session ? inspectorQueryClient.getQueryData<{ files?: unknown[] }>(sessionWorkspaceFilesQueryKey(session.id)) : undefined;
 	const { client: cloudCpClient, ready: cloudReady, baseUrl: cloudBaseUrl } = useCloudCp();
 	const cloudOrgId = session?.cloud?.orgId;
@@ -225,6 +231,7 @@ export const SessionInspector = memo(function SessionInspector({
 		onViewChange?.(next);
 		if (next === "files") onOpenFiles?.();
 	}, [onOpenFiles, onViewChange]);
+	const openReviews = useCallback(() => setView("reviews"), [setView]);
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
@@ -274,11 +281,22 @@ export const SessionInspector = memo(function SessionInspector({
 						/>
 					) : undefined
 				}
-				filesView={session ? <FilesView filesView={filesView} onOpenFiles={onOpenFiles} /> : undefined}
+				filesView={
+					session ? (
+						<FilesTopbarHostContext.Provider value={filesTopbarHost}>
+							<FilesView filesView={filesView} onOpenFiles={onOpenFiles} />
+						</FilesTopbarHostContext.Provider>
+					) : undefined
+				}
 						headerActions={
 							view === "browser" && !browserPoppedOut ? (
 								<>
 									<div className="browser-panel__topbar-host min-w-0 flex-1" ref={setBrowserTopbarHost} />
+									<span aria-hidden="true" className="session-inspector-actions-spacer" />
+								</>
+							) : view === "files" && filesView ? (
+								<>
+									<div className="files-panel__topbar-host min-w-0 flex-1" ref={setFilesTopbarHost} />
 									<span aria-hidden="true" className="session-inspector-actions-spacer" />
 								</>
 							) : (
@@ -292,7 +310,7 @@ export const SessionInspector = memo(function SessionInspector({
 					session ? <ReviewsView onOpenReviewFile={onOpenReviewFile} onOpenReviewerTerminal={onOpenReviewerTerminal} onOpenReviewerChat={onOpenReviewerChat} onWorkerMessageSent={onWorkerMessageSent} session={session} /> : undefined
 				}
 				summaryView={
-					session ? <SummaryView session={session} /> : undefined
+					session ? <SummaryView canOpenReviews={reviewsAvailable} onOpenReviews={openReviews} session={session} /> : undefined
 				}
 				tabs={tabs}
 			/>
@@ -315,9 +333,29 @@ function normalizeReviewerId(value: string | undefined): string {
 	return value?.trim().replace(/^@+/, "").toLowerCase() ?? "";
 }
 
-const SummaryView = memo(function SummaryView({ session }: { session: WorkspaceSession }) {
+const SummaryView = memo(function SummaryView({
+	canOpenReviews,
+	onOpenReviews,
+	session,
+}: {
+	canOpenReviews: boolean;
+	onOpenReviews: () => void;
+	session: WorkspaceSession;
+}) {
 	const { t } = useTranslation();
-	const query = useSessionScmSummary(session.id);
+	const query = useSessionScmSummary(session.id, true, session.cloud?.orgId, session.autoInjectCI === true);
+	const linkedPRs = query.data?.linkedPrs ?? [];
+	const projectQuery = useQuery({
+		queryKey: ["project", session.workspaceId],
+		enabled: linkedPRs.length > 0 && !session.cloud,
+		queryFn: async () => {
+			const { data, error } = await apiClient.GET("/api/v1/projects/{id}", {
+				params: { path: { id: session.workspaceId } },
+			});
+			if (error) throw error;
+			return data?.status === "ok" && "repo" in data.project ? data.project : undefined;
+		},
+	});
 	const developerMode = useUiStore((state) => state.developerMode);
 	const usageQuery = useSessionUsage(session.id, developerMode);
 	const showUsage =
@@ -326,9 +364,10 @@ const SummaryView = memo(function SummaryView({ session }: { session: WorkspaceS
 		!usageQuery.isError &&
 		hasMeaningfulSessionUsage(usageQuery.data);
 	const showUsageError = developerMode && usageQuery.isError;
-	const prSummaries = sessionPRDisplaySummaries(session, query.data);
-	const prSectionTitle = prSummaries.length > 1 ? t("inspector.pullRequests", { count: prSummaries.length }) : t("inspector.pullRequest");
-	const hasPRs = prSummaries.length > 0;
+	const prSummaries = sessionPRDisplaySummaries(session, query.data?.prs);
+	const prCount = prSummaries.length + linkedPRs.length;
+	const prSectionTitle = prCount > 1 ? t("inspector.pullRequests", { count: prCount }) : t("inspector.pullRequest");
+	const hasPRs = prCount > 0;
 	// Cloud orchestrators list the workers they spawned; local orchestrators
 	// have no parent/child model and every other session has no children.
 	const showWorkers =
@@ -350,13 +389,19 @@ const SummaryView = memo(function SummaryView({ session }: { session: WorkspaceS
 			pullRequestCards={
 				<div className="flex flex-col gap-1.5">
 					{hasPRs ? (
-						prSummaries.map((pr) => (
-							<PRSummaryCard
-								key={pr.url || pr.htmlUrl || pr.number}
-								pr={pr}
-								sessionId={session.id}
-							/>
-						))
+						<>
+							{prSummaries.map((pr) => (
+								<PRSummaryCard
+									canOpenReviews={canOpenReviews}
+									key={pr.url || pr.htmlUrl || pr.number}
+									onOpenReviews={onOpenReviews}
+									pr={pr}
+									sessionId={session.id}
+									cloudOrgId={session.cloud?.orgId}
+								/>
+							))}
+							{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectQuery.data)} key={pr.url} pr={pr} />)}
+						</>
 					) : (
 						<p className={inspectorEmptyClass}>{t("inspector.noPROpened")}</p>
 					)}
@@ -449,6 +494,51 @@ function InspectorPolicyRow({
 				onCheckedChange={onCheckedChange}
 			/>
 		</div>
+	);
+}
+
+function isExternalRepository(pr: SessionPRReference, project: components["schemas"]["Project"] | undefined): boolean {
+	if (!project) return false;
+	const repositories = [project.repo, project.config?.canonicalRepoURL, ...(project.workspaceRepos?.map((repo) => repo.repo) ?? [])];
+	const identities = repositories.flatMap((repository) => {
+		if (!repository) return [];
+		try {
+			const url = new URL(repository.replace(/^git@([^:]+):/, "ssh://git@$1/"));
+			return [`${url.hostname.toLowerCase()}/${url.pathname.replace(/^\/|\/$|\.git$/g, "").toLowerCase()}`];
+		} catch {
+			return [];
+		}
+	});
+	return identities.length > 0 && !identities.includes(`${pr.host.toLowerCase()}/${pr.repo.toLowerCase()}`);
+}
+
+function LinkedPRCard({ external, pr }: { external: boolean; pr: SessionPRReference }) {
+	const { t } = useTranslation();
+	return (
+		<article className="min-w-0 w-full rounded-lg border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 py-2.5">
+			<div className="flex min-w-0 items-center justify-between gap-2">
+				<ProductExternalLink className="inline-flex min-w-0 items-center gap-1 font-mono text-xs font-medium text-settings-label underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" href={pr.url}>
+					<GitPullRequest className="size-icon-sm shrink-0" aria-hidden="true" />
+					<span className="truncate">{pr.host}/{pr.repo} {pr.provider === "gitlab" ? "MR" : "PR"} #{pr.number}</span>
+					<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" />
+				</ProductExternalLink>
+				<CopyButton compact label={t("link.copy")} text={pr.url} />
+			</div>
+			<div className="mt-1.5 flex items-center justify-between gap-2">
+				<div className="flex min-w-0 items-center gap-1 text-2xs text-settings-muted">
+					<span>{t("inspector.reportedByWorker")}</span>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<button aria-label={t("inspector.linkedPRInfo")} className="inline-flex size-5 shrink-0 items-center justify-center rounded-full hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" type="button">
+								<Info aria-hidden="true" className="size-icon-2xs" />
+							</button>
+						</TooltipTrigger>
+						<TooltipContent className="max-w-72 leading-normal text-pretty">{t("inspector.linkedPRInfo")}</TooltipContent>
+					</Tooltip>
+				</div>
+				{external ? <span className="shrink-0 rounded-full border border-(--color-border-settings-input) px-1.5 py-0.5 text-[9px] leading-none text-settings-muted">{t("inspector.externalRepository")}</span> : null}
+			</div>
+		</article>
 	);
 }
 
@@ -590,6 +680,7 @@ function UsageAgentAttribution({ harness }: { harness: SessionUsage["harnesses"]
 function AutoInjectCIPolicyControl({ session }: { session: WorkspaceSession }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
+	const { client: cloudClient } = useCloudCp();
 	const [enabled, setEnabled] = useState(session.autoInjectCI ?? true);
 	useEffect(() => {
 		setEnabled(session.autoInjectCI ?? true);
@@ -597,6 +688,10 @@ function AutoInjectCIPolicyControl({ session }: { session: WorkspaceSession }) {
 	const save = useMutation({
 		mutationFn: async (autoInjectCI: boolean) => {
 			if (usePreviewData) return;
+			if (session.cloud) {
+				await cloudClient.setSessionAutoInjectCI(session.cloud.orgId, session.id, autoInjectCI);
+				return;
+			}
 			const { error, response } = await apiClient.PATCH("/api/v1/sessions/{sessionId}/auto-inject-ci", {
 				params: { path: { sessionId: session.id } },
 				body: { autoInjectCI },
@@ -693,12 +788,18 @@ function ProviderUsageDetails({ harness }: { harness: SessionUsage["harnesses"][
 function AutoInjectReviewPolicyControl({ session }: { session: WorkspaceSession }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
+	const { client: cloudClient } = useCloudCp();
 	const [enabled, setEnabled] = useState(session.autoInjectReview ?? true);
 	useEffect(() => {
 		setEnabled(session.autoInjectReview ?? true);
 	}, [session.id, session.autoInjectReview]);
 	const save = useMutation({
 		mutationFn: async (autoInjectReview: boolean) => {
+			if (usePreviewData) return;
+			if (session.cloud) {
+				await cloudClient.setSessionAutoInjectReview(session.cloud.orgId, session.id, autoInjectReview);
+				return;
+			}
 			const { error } = await apiClient.PATCH("/api/v1/sessions/{sessionId}/auto-inject-review", {
 				params: { path: { sessionId: session.id } },
 				body: { autoInjectReview },
@@ -1066,9 +1167,14 @@ function SessionControls({ session }: { session: WorkspaceSession }) {
 	const queryClient = useQueryClient();
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const terminate = useTerminateSession();
+	const { client: cloudClient } = useCloudCp();
 	const policy = useMutation({
 		mutationFn: async (terminateOnPrMerge: boolean) => {
 			if (usePreviewData) return;
+			if (session.cloud) {
+				await cloudClient.setSessionMergePolicy(session.cloud.orgId, session.id, terminateOnPrMerge);
+				return;
+			}
 			const { error, response } = await apiClient.PATCH("/api/v1/sessions/{sessionId}/merge-policy", {
 				params: { path: { sessionId: session.id } },
 				body: { terminateOnPrMerge },
@@ -1120,34 +1226,33 @@ function SessionControls({ session }: { session: WorkspaceSession }) {
 
 	const terminateAction = (
 		<div className="flex items-center justify-between gap-3 py-1">
-			<span className="min-w-0 text-xs font-medium text-settings-label">{t("inspector.terminateShort")}</span>
+			<span className="min-w-0 text-xs font-medium text-settings-label">{t("inspector.archiveShort")}</span>
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<span className="inline-flex">
-						<SessionTerminationPopover
+						<SessionArchiveDialog
 							onConfirm={confirmTermination}
 							onOpenChange={setConfirmOpen}
 							open={confirmOpen}
 							session={session}
 							trigger={
 								<button
-									aria-label={t("inspector.terminate")}
-									className="inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-colors hover:bg-error/10 hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+									aria-label={t("inspector.archive")}
+									className="inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 									onClick={() => {
 										clearTerminateSessionState(queryClient, session.id);
-										// Force the confirm open instead of toggling it, so repeated
-										// trash taps keep the dialog up rather than dismissing it.
+										// Always open the confirm; the modal owns its own dismissal.
 										setConfirmOpen(true);
 									}}
 									type="button"
 								>
-									<Trash2 className="size-icon-sm" aria-hidden="true" />
+									<Archive className="size-icon-sm" aria-hidden="true" />
 								</button>
 							}
 						/>
 					</span>
 				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("inspector.terminate")}</TooltipContent>
+				<TooltipContent side="bottom">{t("inspector.archive")}</TooltipContent>
 			</Tooltip>
 		</div>
 	);
@@ -1198,14 +1303,31 @@ function updateSessionMergePolicy(
 	}));
 }
 
-function PRSummaryCard({ pr, sessionId }: { pr: SessionPRSummary; sessionId: string }) {
+function PRSummaryCard({
+	canOpenReviews,
+	cloudOrgId,
+	onOpenReviews,
+	pr,
+	sessionId,
+}: {
+	canOpenReviews: boolean;
+	cloudOrgId?: string;
+	onOpenReviews: () => void;
+	pr: SessionPRSummary;
+	sessionId: string;
+}) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
+	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp();
 	const presentation = prCardPresentation(pr);
 	const canMerge = prCanMerge(pr) && Boolean(pr.url && pr.headSha);
 	const mergePr = useMutation({
 		mutationFn: async () => {
 			if (usePreviewData) return;
+			if (cloudOrgId) {
+				await cloudClient.mergePullRequest(cloudOrgId, sessionId, pr.number, pr.url, pr.headSha);
+				return;
+			}
 			const { error } = await apiClient.POST("/api/v1/prs/{id}/merge", {
 				params: { path: { id: String(pr.number) } },
 				body: { prUrl: pr.url, expectedHeadSha: pr.headSha },
@@ -1214,64 +1336,26 @@ function PRSummaryCard({ pr, sessionId }: { pr: SessionPRSummary; sessionId: str
 		},
 		onSuccess: async () => {
 			await Promise.all([
-				queryClient.invalidateQueries({ queryKey: sessionScmSummaryQueryKey(sessionId) }),
+				queryClient.invalidateQueries({ queryKey: cloudOrgId ? ["cloud-session-scm-summary", cloudBaseUrl, cloudOrgId, sessionId] : sessionScmSummaryQueryKey(sessionId) }),
 				queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
 			]);
 		},
 	});
 	const mergeError = mergePr.error instanceof Error ? mergePr.error.message : null;
-	const commenters = Array.from(new Set([
-		...(pr.discussionCommenters ?? []),
-		...(pr.review.reviews ?? []).filter((review) => review.body?.trim()).map((review) => review.reviewerId),
-		...pr.review.unresolvedBy.filter((person) => person.count > 0).map((person) => person.reviewerId),
-		...(pr.review.resolvedBy ?? []).filter((person) => person.count > 0).map((person) => person.reviewerId),
-	].map((login) => login.trim()).filter(Boolean)));
-	const commenterAvatars = commenters.length > 0 ? (
-		<div className="inline-flex h-5 shrink-0 items-center" aria-label={t("pr.commenters", { names: commenters.join(", ") })}>
-			{commenters.slice(0, 5).map((login, index) => (
-				<span
-					aria-label={t("pr.commentBy", { name: login })}
-					className={cn("group relative inline-flex size-5 shrink-0 items-center justify-center cursor-default outline-none hover:z-20 focus-visible:z-20", index > 0 && "-ml-0.5")}
-					key={login}
-					role="img"
-					tabIndex={0}
-				>
-					<UserAvatar
-						className="!size-5 border border-(--color-bg-settings-input) shadow-sm transition-transform duration-200 ease-out group-hover:-translate-y-1 group-hover:scale-[1.7] group-focus-visible:-translate-y-1 group-focus-visible:scale-[1.7]"
-						imageUrl={scmUserAvatarUrl(pr.provider, prBrowserUrl(pr), login)}
-						name={login}
-					/>
-					<span className="pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-border-strong bg-popover px-2 py-1 text-2xs text-foreground opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100">
-						@{login}
-					</span>
-				</span>
-			))}
-			{commenters.length > 5 ? (
-				<span className="ml-1.5 text-2xs text-settings-muted">
-					+{commenters.length - 5}
-				</span>
-			) : null}
-		</div>
-	) : null;
-	const discussionCommentCount = pr.discussionCommentCount ?? 0;
-	const discussionCount = discussionCommentCount > 0 ? (
-		<span aria-label={`${discussionCommentCount} ${t("pr.noun.comment", { count: discussionCommentCount })}`} className="inline-flex h-5 items-center gap-1 text-xs leading-none text-settings-muted">
-			<MessageSquare aria-hidden="true" className="size-3.5 shrink-0" />
-			{discussionCommentCount}
-		</span>
-	) : null;
-	const reviewDetailsAction = discussionCount || commenterAvatars ? (
-		<div className="inline-flex h-5 items-center gap-1">{discussionCount}{commenterAvatars}</div>
-	) : undefined;
 	const viewModel: InspectorPullRequest = {
 		...pr,
 		card: presentation,
 		href: prBrowserUrl(pr),
 		stateLabel: t(prStateLabelKeys[pr.state]),
-		reviewDetailsAction,
+		reviewDetailsAction: canOpenReviews && pr.review.decision !== "none" ? (
+			<button className="whitespace-nowrap text-2xs text-settings-muted underline-offset-2 hover:underline" onClick={onOpenReviews} type="button">
+				{t("pr.review.viewDetails")} ↗
+			</button>
+		) : undefined,
 	};
 	return (
 		<InspectorPullRequestCardView
+			countNounLabel={(count, noun) => `${count} ${t(prNounKeys[noun], { count })}`}
 			externalIcon={<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" strokeWidth={2} />}
 			externalLink={ProductExternalLink}
 			mergeAction={
@@ -1294,8 +1378,9 @@ function PRSummaryCard({ pr, sessionId }: { pr: SessionPRSummary; sessionId: str
 				) : undefined
 			}
 			mergeError={mergeError}
+			openLabel={t("inspector.openPR", { number: pr.number })}
 			pr={viewModel}
-			viewLabel={t("pr.card.viewPR")}
+			pullRequestIcon={<GitPullRequest className="size-icon-sm shrink-0" aria-hidden="true" />}
 		/>
 	);
 }
@@ -1656,8 +1741,8 @@ function ReviewsSection({
 	});
 	const reviewStates = reviewsQuery.data?.reviews ?? [];
 	const autoReviewEnabled = session.autoReviewEnabled === true;
-	const scmSummary = useSessionScmSummary(session.id);
-	const prSummaries = sessionPRDisplaySummaries(session, scmSummary.data);
+	const scmSummary = useSessionScmSummary(session.id, true, session.cloud?.orgId, session.autoInjectCI === true);
+	const prSummaries = sessionPRDisplaySummaries(session, scmSummary.data?.prs);
 	const githubReviews = prSummaries.filter(
 		(pr) =>
 			(pr.state === "open" || pr.state === "draft") &&

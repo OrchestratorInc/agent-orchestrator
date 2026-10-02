@@ -46,6 +46,7 @@ type Store interface {
 	ListCurrentHeadReviewRunsForSession(ctx context.Context, id domain.SessionID) ([]domain.CurrentHeadReviewRun, error)
 	ListCurrentHeadReviewRunsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.CurrentHeadReviewRun, error)
 	ListPRsBySession(ctx context.Context, sessionID domain.SessionID) ([]domain.PullRequest, error)
+	ListReportedPRURLs(ctx context.Context, id domain.SessionID) ([]string, error)
 	ListSessionWorktrees(ctx context.Context, id domain.SessionID) ([]domain.SessionWorktreeRecord, error)
 	ListChecks(ctx context.Context, prURL string) ([]domain.PullRequestCheck, error)
 	ListPRReviews(ctx context.Context, prURL string) ([]domain.PullRequestReview, error)
@@ -78,6 +79,7 @@ type commander interface {
 	RetireForReplacement(ctx context.Context, id domain.SessionID) error
 	WaitForMessageDeliveryReady(ctx context.Context, id domain.SessionID) error
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
+	SendWithOptions(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error
 	Cleanup(ctx context.Context, project domain.ProjectID) (sessionmanager.CleanupResult, error)
 	RollbackSpawn(ctx context.Context, id domain.SessionID) (deleted, killed bool, err error)
 	StageAttachments(ctx context.Context, id domain.SessionID, attachments []ports.SpawnAttachment) ([]string, error)
@@ -808,6 +810,11 @@ func (s *Service) RollbackSpawn(ctx context.Context, id domain.SessionID) (Rollb
 // session worktree and referenced from the delivered message.
 func (s *Service) Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error {
 	return toAPIError(s.manager.Send(ctx, id, message, attachment))
+}
+
+// SendWithOptions preserves authorship facts supplied by trusted UI surfaces.
+func (s *Service) SendWithOptions(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error {
+	return toAPIError(s.manager.SendWithOptions(ctx, id, message, attachment, options))
 }
 
 // Rename updates the user-facing session display name.

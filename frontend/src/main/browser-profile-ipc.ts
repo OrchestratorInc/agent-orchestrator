@@ -43,6 +43,7 @@ export type BrowserProfileIpcOptions = {
 	importer: BrowserProfileImportService;
 	buildMenu: (items: BrowserProfileMenuItem[]) => BrowserProfileMenu;
 	confirmSwitch: (labels: BrowserProfileMenuInput["labels"]) => Promise<boolean>;
+	reportSwitchFailure: (message: string, labels: BrowserProfileMenuInput["labels"]) => void;
 };
 
 export type BrowserProfileIpc = {
@@ -171,9 +172,9 @@ export function registerBrowserProfileIpc(options: BrowserProfileIpcOptions): Br
 			await options.store.deleteProfile(profileId);
 		});
 	});
-	handle("browserProfiles:import:discover", async (event) => {
+	handle("browserProfiles:import:discover", async (event, input: unknown) => {
 		if (!trustedShellSender(event, options.shellWebContents)) return { sources: [] };
-		return options.importer.discover();
+		return options.importer.discover(isRecord(input) && typeof input.sourceId === "string" ? { sourceId: input.sourceId } : undefined);
 	});
 	handle("browserProfiles:import:start", async (event, input: unknown) => {
 		if (!trustedShellSender(event, options.shellWebContents)) throw invalid("Untrusted browser profile sender.");
@@ -257,5 +258,6 @@ async function selectFromMenu(
 		await options.host.switchProfile(viewId, profileId);
 	} catch (error) {
 		console.error("browser profile switch failed:", error);
+		options.reportSwitchFailure(error instanceof Error ? error.message : "Browser profile could not be switched.", labels);
 	}
 }

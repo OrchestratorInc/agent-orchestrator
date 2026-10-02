@@ -159,11 +159,14 @@ describe("AgentModelCombobox", () => {
 			{ id: "sonnet", label: "Sonnet" },
 		]);
 		const picker = screen.getByRole("button", { name: "Worker model" });
-		expect(picker).toHaveTextContent("Model not reported");
+		expect(picker).toHaveTextContent("Select model");
+		expect(picker).not.toHaveTextContent("Model not reported");
 		expect(onChange).not.toHaveBeenCalled();
 		await userEvent.click(picker);
 		expect(screen.queryByRole("menuitem", { name: /Default/ })).not.toBeInTheDocument();
-		expect(screen.getByRole("menuitem", { name: "Sonnet" })).toBeInTheDocument();
+		// The models are listed with none selected.
+		const sonnet = screen.getByRole("menuitem", { name: "Sonnet" });
+		expect(sonnet).not.toHaveAttribute("aria-current");
 	});
 
 	it("keeps the model menu closed while its owning operation is pending", async () => {
@@ -297,7 +300,6 @@ describe("AgentModelCombobox", () => {
 		const onRefresh = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
 		renderCombobox(Array.from({ length: 10 }, (_, index) => ({ id: `model-${index}`, label: `Model ${index}` })), {
 			onRefresh,
-			lastSuccessAt: "2026-09-07T08:00:00Z",
 		});
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		const search = screen.getByRole("searchbox", { name: "Search worker model" });
@@ -305,7 +307,7 @@ describe("AgentModelCombobox", () => {
 		await userEvent.type(search, "missing-model");
 		const refresh = screen.getByRole("button", { name: "Refresh models" });
 		expect(search.parentElement?.parentElement).toContainElement(refresh);
-		expect(screen.getByText(/Last updated/)).toBeInTheDocument();
+		expect(screen.queryByText(/Last updated/)).not.toBeInTheDocument();
 		await userEvent.click(refresh);
 		const busy = screen.getByRole("button", { name: /Refreshing/ });
 		expect(busy).toBeDisabled();
