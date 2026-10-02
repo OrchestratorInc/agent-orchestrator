@@ -1874,6 +1874,7 @@
 	"files.openFullFileGeneric": "Open full file",
 	"files.openRichPreview": "Open rich preview",
 	"files.openDiffInCenter": "Open diff in center",
+	"files.moreFileActions": "More actions",
 	"files.editFile": "Edit file",
 	"files.saveFile": "Save",
 	"files.cancelEditing": "Cancel",
