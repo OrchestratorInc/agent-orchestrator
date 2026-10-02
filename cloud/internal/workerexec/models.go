@@ -14,9 +14,35 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
+// DiscoverModels prepares the same isolated credentials used by agent turns
+// before asking a provider for its account-entitled model catalog. A fresh
+// Chat-first worker has not built a turn or an interactive command yet.
+func (b HarnessBuilder) DiscoverModels(ctx context.Context, harness string, credential worker.CredentialResponse, workspace string) ([]worker.ChatModel, error) {
+	if _, ok := SupportedHarness(harness); !ok {
+		return nil, fmt.Errorf("unsupported coding-agent harness %q", harness)
+	}
+	if harness != "codex" {
+		// These harnesses do not expose an account catalog through this API.
+		// Let the provider choose its default; do not invent model choices.
+		return []worker.ChatModel{}, nil
+	}
+	if credential.Provider != harness || strings.TrimSpace(credential.Secret) == "" {
+		return nil, errors.New("credential does not match the selected harness")
+	}
+	command := Command{Path: b.binary(harness), Env: map[string]string{}}
+	if err := b.configureCredential(&command, harness, credential); err != nil {
+		return nil, err
+	}
+	return discoverCodexModels(ctx, command.Path, workspace, command.Env)
+}
+
 // DiscoverCodexModels asks the installed Codex app-server for this worker's
 // account-entitled catalog. No catalog is guessed or stored by AO.
 func DiscoverCodexModels(ctx context.Context, binary, workspace string) ([]worker.ChatModel, error) {
+	return discoverCodexModels(ctx, binary, workspace, nil)
+}
+
+func discoverCodexModels(ctx context.Context, binary, workspace string, env map[string]string) ([]worker.ChatModel, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if binary == "" {
@@ -24,6 +50,7 @@ func DiscoverCodexModels(ctx context.Context, binary, workspace string) ([]worke
 	}
 	command := exec.CommandContext(ctx, binary, "app-server")
 	command.Dir = workspace
+	command.Env = mergedEnvironment(env)
 	command.Stderr = io.Discard
 	stdin, err := command.StdinPipe()
 	if err != nil {

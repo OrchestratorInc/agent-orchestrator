@@ -255,3 +255,86 @@ func TestTerminalRelayWritesLiveOutputBeforeDurableWake(t *testing.T) {
 		t.Fatal("relay writer did not exit after browser close")
 	}
 }
+
+// readOnlyTerminalStore fails the test if a viewer's frame ever reaches the
+// worker queues.
+type readOnlyTerminalStore struct {
+	Store
+	mu     sync.Mutex
+	queued []string
+}
+
+func (s *readOnlyTerminalStore) QueueTerminalResize(context.Context, domain.TerminalSession, uint16, uint16) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queued = append(s.queued, "resize")
+	return nil
+}
+
+func (s *readOnlyTerminalStore) QueueTerminalInput(context.Context, domain.TerminalSession, string, []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queued = append(s.queued, "input")
+	return nil
+}
+
+// A read-only (viewer) terminal must ignore client frames rather than close:
+// the desktop pane sends a resize on attach, and closing on it made every
+// viewer attach loop through "disconnected, reattaching".
+func TestReadOnlyTerminalIgnoresClientFrames(t *testing.T) {
+	store := &readOnlyTerminalStore{}
+	server := &Server{store: store, logger: slog.Default()}
+	result := make(chan error, 1)
+	listener := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connection, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			result <- err
+			return
+		}
+		defer connection.CloseNow()
+		var writeMu sync.Mutex
+		result <- server.readTerminalInput(r.Context(), connection, domain.TerminalSession{
+			ID: "term", OrgID: "org", SessionID: "session", WorkerEpoch: 1,
+			Scopes: []string{"terminal:read"},
+		}, &writeMu)
+	}))
+	defer listener.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	connection, _, err := websocket.Dial(ctx, "ws"+listener.URL[len("http"):], nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer connection.CloseNow()
+	for _, frame := range []string{
+		`{"type":"resize","columns":120,"rows":40}`,
+		`{"type":"input","inputId":"i1","data":"rm -rf /\n"}`,
+		"raw keystrokes",
+	} {
+		if err := connection.Write(ctx, websocket.MessageText, []byte(frame)); err != nil {
+			t.Fatalf("write %q: %v", frame, err)
+		}
+	}
+	select {
+	case err := <-result:
+		t.Fatalf("server ended the viewer socket after client frames: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := connection.Close(websocket.StatusNormalClosure, "done"); err != nil {
+		t.Fatalf("client close: %v", err)
+	}
+	select {
+	case err := <-result:
+		if websocket.CloseStatus(err) != websocket.StatusNormalClosure {
+			t.Fatalf("reader ended with %v, want the client's normal closure", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reader did not exit after the client closed")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.queued) != 0 {
+		t.Fatalf("viewer frames reached the worker: %v", store.queued)
+	}
+}

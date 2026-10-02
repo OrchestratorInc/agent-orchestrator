@@ -157,23 +157,43 @@ func (s *Store) RequestTurnCancellation(
 	principal domain.Principal,
 	orgID, sessionID, turnID string,
 ) error {
-	return s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+	return s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
+		if access.Role == "viewer" {
+			return ErrForbidden
+		}
 		var state string
+		var attempts int
 		err := tx.QueryRow(
 			ctx,
-			`SELECT state
+			`SELECT state, attempt_count
 			FROM ao_turns
 			WHERE org_id = $1 AND session_id = $2 AND id = $3
 			FOR UPDATE`,
 			orgID,
 			sessionID,
 			turnID,
-		).Scan(&state)
+		).Scan(&state, &attempts)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
 		if err != nil {
 			return err
+		}
+		// No provider has accepted an unclaimed turn, so cancellation can
+		// finish here even while the worker is preparing its repository.
+		// Also settle pre-fix cancellation requests with no execution attempt.
+		if state == "queued" || (state == "cancel_requested" && attempts == 0) {
+			if _, err := tx.Exec(ctx, `UPDATE ao_turns
+				SET state = 'completed', completed_at = now(), updated_at = now()
+				WHERE org_id = $1 AND session_id = $2 AND id = $3`, orgID, sessionID, turnID); err != nil {
+				return err
+			}
+			return appendTypedEvent(ctx, tx, orgID, sessionID, "chat.turn_interrupted", map[string]any{
+				"turnId": turnID, "cancelled": true,
+			})
+		}
+		if state == "completed" && attempts == 0 {
+			return nil // Idempotent retry of an immediately cancelled turn.
 		}
 		switch state {
 		case "completed", "failed":

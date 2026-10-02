@@ -159,6 +159,18 @@ type terminalProcess struct {
 	// stream redial must continue its sequence so direct relay frames and the
 	// durable replay log use the same cursor.
 	outputID atomic.Int64
+	// writeMu serializes writes to the PTY. A submitted prompt holds it across
+	// its body, the Enter delay, and the Enter, so a keystroke streamed from
+	// another attached client (a shared session) cannot split the prompt or be
+	// submitted along with it.
+	writeMu sync.Mutex
+}
+
+func (t *terminalProcess) write(data []byte) error {
+	t.writeMu.Lock()
+	defer t.writeMu.Unlock()
+	_, err := t.pty.Write(data)
+	return err
 }
 
 func (s *Supervisor) Run(ctx context.Context) error {
@@ -367,10 +379,7 @@ func (s *Supervisor) forwardTurn(ctx context.Context) (bool, error) {
 	if turn.CancelRequested {
 		return true, s.Control.CompleteTurn(ctx, turn.ID, turn.Attempt, true)
 	}
-	if err := s.writeTerminal(worker.TerminalCommand{
-		TerminalID: agentTerminalID,
-		Data:       []byte(turn.Prompt + "\r"),
-	}); err != nil {
+	if err := s.writeAgentPrompt(agentTerminalID, worker.EncodeTerminalInput(turn.Prompt)); err != nil {
 		if failErr := s.Control.FailTurn(
 			ctx, turn.ID, turn.Attempt, err.Error(),
 		); failErr != nil {
@@ -490,13 +499,28 @@ func (s *Supervisor) handle(
 			response, err = fetchBrowser(ctx, input)
 		}
 	case "chat.models":
-		if s.Harness != "codex" {
+		if _, supported := workerexec.SupportedHarness(s.Harness); !supported {
 			err = errors.New("model catalog is unavailable for this provider")
+		} else if s.Harness != "codex" {
+			response = worker.ChatModelsResponse{Models: []worker.ChatModel{}}
 		} else {
-			var models []worker.ChatModel
-			models, err = workerexec.DiscoverCodexModels(ctx, "codex", s.Workspace)
-			if err == nil {
-				response = worker.ChatModelsResponse{Models: models}
+			credentials, ok := s.Control.(interface {
+				Credential(context.Context) (worker.CredentialResponse, error)
+			})
+			if !ok {
+				err = errors.New("coding-agent credentials are unavailable")
+			} else {
+				var credential worker.CredentialResponse
+				credential, err = credentials.Credential(ctx)
+				if err == nil {
+					var models []worker.ChatModel
+					builder := workerexec.HarnessBuilder{DataDir: s.DataDir}
+					models, err = builder.DiscoverModels(ctx, s.Harness, credential, s.Workspace)
+					credential.Secret = ""
+					if err == nil {
+						response = worker.ChatModelsResponse{Models: models}
+					}
+				}
 			}
 		}
 	case "chat.steer":
@@ -736,6 +760,23 @@ func (s *Supervisor) writeAgentPrompt(terminalID string, data []byte) error {
 	if len(data) < 2 || data[len(data)-1] != '\r' {
 		return s.writeTerminal(worker.TerminalCommand{TerminalID: terminalID, Data: data})
 	}
+	if len(data) > 16<<10 {
+		return errors.New("invalid terminal input request")
+	}
+	s.mu.Lock()
+	terminal := s.terminals[terminalID]
+	buffering := s.agentStarting && terminalID == s.AgentTerminalID
+	s.mu.Unlock()
+	if terminal != nil && !buffering {
+		terminal.writeMu.Lock()
+		defer terminal.writeMu.Unlock()
+		if _, err := terminal.pty.Write(data[:len(data)-1]); err != nil {
+			return err
+		}
+		time.Sleep(promptEnterDelay)
+		_, err := terminal.pty.Write([]byte("\r"))
+		return err
+	}
 	if err := s.writeTerminal(worker.TerminalCommand{
 		TerminalID: terminalID, Data: data[:len(data)-1],
 	}); err != nil {
@@ -769,8 +810,7 @@ func (s *Supervisor) writeTerminal(input worker.TerminalCommand) error {
 	if terminal == nil {
 		return errors.New("terminal is not open")
 	}
-	_, err := terminal.pty.Write(input.Data)
-	return err
+	return terminal.write(input.Data)
 }
 
 func (s *Supervisor) resizeTerminal(input worker.TerminalCommand) error {
@@ -824,7 +864,7 @@ func (s *Supervisor) flushReadyAgentTerminal() {
 		}
 	}
 	for _, data := range pendingData {
-		if _, err := terminal.pty.Write(data); err != nil {
+		if err := terminal.write(data); err != nil {
 			s.Logger.Warn("flush queued agent terminal input", "error", err)
 			return
 		}

@@ -284,6 +284,8 @@ export const aoBridge: AoBridge =
 				throw new Error("AO Cloud sign-in requires the desktop app.");
 			},
 			onSessionChanged: () => () => undefined,
+			takePendingShareInvite: async () => null,
+			onShareInvitePending: () => () => undefined,
 		},
 		cloudCp: {
 			request: async () => {

@@ -330,6 +330,7 @@ func (s *Store) RedeemProjectShareLink(
 		WHERE token_hash = $1
 		  AND org_id = $2
 		  AND status = 'active'
+		  AND NOT single_use
 		  AND (expires_at IS NULL OR expires_at > now())`,
 		tokenHash, orgID,
 	), &link)

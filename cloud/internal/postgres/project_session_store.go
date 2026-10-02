@@ -760,9 +760,15 @@ func createSessionTx(
 		return domain.Session{}, normalizeConstraintError(err)
 	}
 	if input.Prompt != "" {
-		if _, err := appendUserMessageEvent(
-			ctx, tx, orgID, session.ID, input.Prompt,
-		); err != nil {
+		// Chat starts only from queued turns; unlike the interactive terminal,
+		// its worker does not consume the session prompt at launch.
+		if input.Interface == domain.SessionInterfaceChat {
+			_, err = appendUserMessage(ctx, tx, orgID, session.ID, idempotencyKey,
+				input.Prompt, "", nil, domain.ChatTurnSettings{Model: input.Model})
+		} else {
+			_, err = appendUserMessageEvent(ctx, tx, orgID, session.ID, input.Prompt)
+		}
+		if err != nil {
 			return domain.Session{}, err
 		}
 	}

@@ -219,7 +219,7 @@ func (s *Supervisor) readTerminalStream(
 				s.lastTUIInputAt = time.Now()
 			}
 			s.mu.Unlock()
-			if _, err := terminal.pty.Write(frame.Data); err != nil {
+			if err := terminal.write(frame.Data); err != nil {
 				return false
 			}
 		case "ack":

@@ -22,6 +22,7 @@ import {
 	Folder,
 	FolderOpen,
 	LogIn,
+	Link2,
 	LogOut,
 	MoreVertical,
 	PanelLeft,
@@ -87,6 +88,8 @@ import { useResizable } from "../hooks/useResizable";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudLocalAuth } from "../hooks/useCloudLocalAuth";
 import { useLocalSignInDialogStore } from "../stores/local-signin-dialog-store";
+import { useShareDialogStore } from "../stores/share-dialog-store";
+import { useLeaveSharedSession } from "../hooks/useLeaveSharedSession";
 import { useShellMaybe } from "../lib/shell-context";
 import { useSidebarUpdateDismissal } from "../hooks/useSidebarUpdateDismissal";
 import { useUpdateStatus } from "../hooks/useUpdateStatus";
@@ -1527,7 +1530,7 @@ const ProjectItem = memo(function ProjectItem({
 											variant="outline"
 											className="sidebar-expanded-chrome relative z-[1] h-4 shrink-0 px-1.5 text-2xs group-data-[collapsible=icon]:hidden"
 										>
-											{t("shell.cloudProjectBadge")}
+											{workspace.sharedWithMe ? t("share.sharedBadge") : t("shell.cloudProjectBadge")}
 										</Badge>
 									)}
 								</SidebarMenuButton>
@@ -1545,8 +1548,9 @@ const ProjectItem = memo(function ProjectItem({
 								/>
 							</div>
 							{/* Per-project actions: orchestrator and kebab menu. Outside the row's
-		navigation surface so their own presses stay independent. */}
-							<div
+		navigation surface so their own presses stay independent. A read-only
+		"shared with me" group has no project to act on. */}
+							{!workspace.sharedWithMe && <div
 								className={cn(
 									"sidebar-expanded-chrome absolute top-0 right-0.5 z-chrome flex h-control-form items-center gap-px",
 									"group-data-[collapsible=icon]:hidden",
@@ -1621,7 +1625,7 @@ const ProjectItem = memo(function ProjectItem({
 										</DropdownMenuItem>
 									</DropdownMenuContent>
 								</DropdownMenu>
-							</div>
+							</div>}
 						</div>
 						{/* end outer relative */}
 					</div>
@@ -1721,7 +1725,7 @@ const ProjectItem = memo(function ProjectItem({
 					/>
 				</motion.li>
 			</ContextMenuTrigger>
-			<ContextMenuContent className="min-w-44">
+			<ContextMenuContent className={cn("min-w-44", workspace.sharedWithMe && "hidden")}>
 				<ContextMenuItem disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id)}>
 					<Plus aria-hidden="true" />
 					{t("shell.newTask")}
@@ -2158,6 +2162,10 @@ function SessionRow({
 	const rename = useSessionRename(session, refreshWorkspaces);
 	const lastTouchAtRef = useRef(0);
 	const suppressTouchOpenRef = useRef(false);
+	// A session someone shared with you belongs to them: you cannot rename or
+	// archive it, only remove it from your own list.
+	const sharedWithMe = Boolean(session.cloud?.shareGrantId);
+	const [leaveOpen, setLeaveOpen] = useState(false);
 	const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 	const canPrefetch = session.mode === "chat" && !session.cloud && !active && !listIsDragging && !reorder?.isDragging;
 	useEffect(() => () => clearTimeout(hoverTimerRef.current), [canPrefetch]);
@@ -2166,8 +2174,9 @@ function SessionRow({
 		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(session.id));
 	};
 	const beginRename = useCallback(() => {
+		if (sharedWithMe) return;
 		rename.begin();
-	}, [rename.begin]);
+	}, [rename.begin, sharedWithMe]);
 
 	if (rename.isEditing) {
 		return (
@@ -2308,20 +2317,37 @@ function SessionRow({
 					</div>
 					{/* The timestamp is stable at the right edge. Pin and kill use label
 					    space while idle, then reveal without changing the row footprint. */}
-					<SessionActions
-						isDragging={Boolean(reorder?.isDragging)}
-						onKilled={onKilled}
-						session={session}
-					/>
+					{sharedWithMe ? (
+						<SharedSessionActions
+							isDragging={Boolean(reorder?.isDragging)}
+							onLeft={onKilled}
+							onOpenChange={setLeaveOpen}
+							open={leaveOpen}
+							session={session}
+						/>
+					) : (
+						<SessionActions
+							isDragging={Boolean(reorder?.isDragging)}
+							onKilled={onKilled}
+							session={session}
+						/>
+					)}
 				</div>
 			</motion.div>
 				</SidebarMenuSubItem>
 			</ContextMenuTrigger>
 			<ContextMenuContent className="min-w-44">
-				<ContextMenuItem aria-label={t("shell.renameSession", { title: session.title })} onSelect={beginRename}>
-					<Pencil aria-hidden="true" />
-					{t("shell.rename")}
-				</ContextMenuItem>
+				{sharedWithMe ? (
+					<ContextMenuItem onSelect={() => setLeaveOpen(true)}>
+						<LogOut aria-hidden="true" />
+						{t("share.removeFromList")}
+					</ContextMenuItem>
+				) : (
+					<ContextMenuItem aria-label={t("shell.renameSession", { title: session.title })} onSelect={beginRename}>
+						<Pencil aria-hidden="true" />
+						{t("shell.rename")}
+					</ContextMenuItem>
+				)}
 			</ContextMenuContent>
 		</ContextMenu>
 	);
@@ -2447,6 +2473,78 @@ const SessionActions = memo(function SessionActions({
 	);
 });
 
+// Row actions for a session someone shared with you. Archiving would try to
+// delete the owner's session (and be refused), so the only action is removing
+// it from your own list, which revokes just your access.
+const SharedSessionActions = memo(function SharedSessionActions({
+	session,
+	isDragging,
+	open,
+	onOpenChange,
+	onLeft,
+}: {
+	session: WorkspaceSession;
+	isDragging: boolean;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	onLeft?: (session: WorkspaceSession) => void;
+}) {
+	const { t } = useTranslation();
+	const leave = useLeaveSharedSession({ onLeft });
+	useEffect(() => {
+		if (open) leave.reset();
+	}, [leave.reset, open]);
+
+	return (
+		<div
+			className="pointer-events-none absolute inset-y-0 right-0 z-chrome"
+			data-session-actions=""
+			onPointerDown={(event) => event.stopPropagation()}
+		>
+			<div
+				className={cn(
+					"absolute inset-y-0 right-0.5 flex origin-center scale-[0.8] items-center gap-px opacity-0",
+					"transition-[scale] duration-normal ease-[var(--ease-out)]",
+					"motion-reduce:transition-none",
+					!isDragging &&
+						"group-focus-within/session-row:pointer-events-auto group-focus-within/session-row:scale-100 group-focus-within/session-row:opacity-100",
+				)}
+				data-session-action-buttons=""
+			>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<button
+							aria-label={t("share.removeFromList")}
+							className={cn(SESSION_ACTION_CLASS, "focus-visible:text-foreground")}
+							disabled={leave.isPending}
+							onClick={(event) => {
+								event.stopPropagation();
+								onOpenChange(true);
+							}}
+							type="button"
+						>
+							<LogOut aria-hidden="true" />
+						</button>
+					</TooltipTrigger>
+					<TooltipContent side="top">{t("share.removeFromList")}</TooltipContent>
+				</Tooltip>
+			</div>
+			<SessionMessageAge session={session} />
+			<ConfirmDialog
+				open={open}
+				onOpenChange={onOpenChange}
+				title={t("share.removeTitle")}
+				description={t("share.removeDescription", { title: session.title, name: session.cloud?.sharedBy ?? "" })}
+				confirmLabel={t("share.removeConfirm")}
+				destructive
+				busy={leave.isPending}
+				error={leave.isError ? t("share.removeFailed") : null}
+				onConfirm={() => leave.mutate(session, { onSuccess: () => onOpenChange(false) })}
+			/>
+		</div>
+	);
+});
+
 // CloudSignInRow: the entry point that starts the WorkOS sign-in flow. Shown
 // only when the cloud offering is enabled (entitled client + flag + control
 // plane), WorkOS is configured, and no one is signed in yet.
@@ -2515,6 +2613,7 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
 	const { cloudEnabled } = useCloudGate();
 	const { configured, session, status, signOut } = useCloudSession();
+	const openSharePaste = useShareDialogStore((s) => s.setPasteOpen);
 	if (!configured || !cloudEnabled || status !== "authenticated") return null;
 
 	return (
@@ -2538,6 +2637,10 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 				</button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent side="top" align="start" className="min-w-44">
+				<DropdownMenuItem onSelect={() => openSharePaste(true)}>
+					<Link2 aria-hidden="true" />
+					{t("share.pasteMenuItem")}
+				</DropdownMenuItem>
 				<DropdownMenuItem
 					className="text-destructive focus:text-destructive [&_svg]:text-destructive"
 					onSelect={() => void signOut()}

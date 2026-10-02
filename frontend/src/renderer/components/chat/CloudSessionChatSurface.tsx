@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
@@ -17,6 +18,8 @@ type EventPayload = {
 	toolKind?: unknown;
 	steering?: unknown;
 	error?: unknown;
+	cancelled?: unknown;
+	workspaceState?: unknown;
 	text?: unknown;
 	turnId?: unknown;
 };
@@ -101,6 +104,13 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 		if (turnID && (event.type === "chat.turn_completed" || event.type === "chat.turn_interrupted" || event.type === "chat.turn_aborted")) {
 			const turn = turns.get(turnID)!;
 			turn.state = event.type === "chat.turn_completed" ? "completed" : event.type === "chat.turn_interrupted" ? "interrupted" : "failed";
+			if (event.type === "chat.turn_interrupted" && eventPayload(event).cancelled === true) {
+				// Keep the interrupted turn in history. ChatWorkspace intentionally
+				// hides local turns projected as "cancelled", including their prompts.
+				items.push({ kind: "activity", id: `cloud-cancel-${event.sequence}`, turnId: turnID,
+					sequence: event.sequence, revision: 1, activityKind: "system", status: "completed",
+					summary: "Queued message cancelled", createdAt: event.createdAt });
+			}
 			turn.completedAt = event.createdAt;
 			const error = eventPayload(event).error;
 			turn.errorMessage = typeof error === "string" ? error : undefined;
@@ -180,12 +190,6 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 		}
 	}
 	const orderedTurns = [...turns.values()];
-	// The first Cloud turn is briefly durable but unclaimed while the worker
-	// wakes. It is the active send, not a message waiting behind another turn.
-	if (!orderedTurns.some((turn) => turn.state === "running")) {
-		const next = orderedTurns.find((turn) => turn.state === "queued");
-		if (next) next.state = "running";
-	}
 	const hasRunningTurn = orderedTurns.some((turn) => turn.state === "running");
 	const activeTurn = orderedTurns.find((turn) => turn.state === "running");
 	return {
@@ -216,6 +220,7 @@ export function CloudSessionChatSurface({
 	}) => void;
 }) {
 	const cloud = session.cloud;
+	const readOnly = cloud?.sharedBy !== undefined && cloud.sharedRole !== "editor";
 	const { client, ready } = useCloudCp();
 	const queryClient = useQueryClient();
 	const settingsKey = `cloud-chat-settings:${cloud?.orgId ?? ""}:${session.id}:${session.provider}`;
@@ -240,9 +245,26 @@ export function CloudSessionChatSurface({
 			// The choice still applies for this mounted session when storage is unavailable.
 		}
 	};
+	const eventsQuery = useQuery({
+		queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id],
+		enabled: Boolean(cloud && ready),
+		refetchInterval: 1_000,
+		queryFn: async () => {
+			if (!cloud) return [] as CloudCpClientEvent[];
+			const previous = queryClient.getQueryData<CloudCpClientEvent[]>(["cloud-chat-events", cloud.orgId, session.id]) ?? [];
+			return loadCloudChatEvents(client, cloud.orgId, session.id, previous);
+		},
+	});
+	// A new worker connection supersedes readiness from the previous worker.
+	// Legacy workers have no workspaceState; retain their existing behavior.
+	const latestWorker = eventsQuery.data?.filter((event) => event.type === "worker.ready" || event.type === "worker.connected").at(-1);
+	const workspaceState = latestWorker?.type === "worker.connected" ? "preparing"
+		: latestWorker ? eventPayload(latestWorker).workspaceState : undefined;
+	const workspacePreparing = eventsQuery.isPending || workspaceState === "preparing";
+	const workspaceFailed = workspaceState === "failed" || (eventsQuery.isError && !eventsQuery.data);
 	const modelsQuery = useQuery({
 		queryKey: ["cloud-chat-models", cloud?.orgId ?? "", session.id],
-		enabled: Boolean(cloud && ready && session.provider === "codex"),
+		enabled: Boolean(cloud && ready && !workspacePreparing && !workspaceFailed && session.provider === "codex"),
 		staleTime: 5 * 60 * 1000,
 		retry: false,
 		queryFn: async ({ signal }) => {
@@ -266,20 +288,11 @@ export function CloudSessionChatSurface({
 			throw new Error("The Cloud worker did not become available.");
 		},
 	});
-	const eventsQuery = useQuery({
-		queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id],
-		enabled: Boolean(cloud && ready),
-		refetchInterval: 1_000,
-		queryFn: async () => {
-			if (!cloud) return [] as CloudCpClientEvent[];
-			const previous = queryClient.getQueryData<CloudCpClientEvent[]>(["cloud-chat-events", cloud.orgId, session.id]) ?? [];
-			return loadCloudChatEvents(client, cloud.orgId, session.id, previous);
-		},
-	});
 	const invalidate = () =>
 		queryClient.invalidateQueries({ queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id] });
 	const send = useMutation({
 		mutationFn: async ({ text, clientMessageId }: { text: string; clientMessageId?: string }) => {
+			if (readOnly) throw new Error("This shared session is read-only.");
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
 			const selectedSettings: CloudTurnSettings = settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
 			const approvalMode = selectedSettings.approvalMode && approvalModes.includes(selectedSettings.approvalMode)
@@ -313,6 +326,14 @@ export function CloudSessionChatSurface({
 		},
 		onSettled: () => void invalidate(),
 	});
+	const cancelQueued = useMutation({
+		mutationFn: async (turnId: string) => {
+			if (readOnly) throw new Error("This shared session is read-only.");
+			if (!cloud) throw new Error("Cloud session context is unavailable.");
+			await client.cancelTurn(cloud.orgId, session.id, turnId);
+		},
+		onSettled: () => void invalidate(),
+	});
 	const decide = useMutation({
 		mutationFn: async ({ requestId, decisionId }: { requestId: string; decisionId: string }) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
@@ -340,7 +361,16 @@ export function CloudSessionChatSurface({
 		},
 		onSettled: () => void invalidate(),
 	});
+	const { t } = useTranslation();
+	if (workspacePreparing || workspaceFailed) {
+		return <div className="flex h-full min-h-0 min-w-0 flex-1 items-center justify-center p-4">
+			<div role={workspaceFailed ? "alert" : "status"} className={workspaceFailed ? "text-sm text-destructive" : "text-sm text-muted-foreground"}>
+				{t(workspaceFailed ? "chat.cloud.repositoryFailed" : "chat.cloud.repositoryPreparing")}
+			</div>
+		</div>;
+	}
 	return (
+		<div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
 		<ChatWorkspace
 			snapshot={snapshot}
 			models={modelsQuery.data?.models ?? []}
@@ -351,12 +381,14 @@ export function CloudSessionChatSurface({
 				try { localStorage.setItem(projectKey, JSON.stringify({ approvalMode: mode })); } catch { /* keep this session's choice */ }
 				updateSettings({ ...settingsRef.current.settings, approvalMode: mode });
 			} : undefined}
-			onDecide={(requestId, decisionId) => decide.mutate({ requestId, decisionId })}
+			onDecide={readOnly ? undefined : (requestId, decisionId) => decide.mutate({ requestId, decisionId })}
 			busy={send.isPending}
 			controllerTransitioning={controllerTransitioning}
-			newWorkDisabled={newWorkDisabled}
+			newWorkDisabled={newWorkDisabled || readOnly}
 			commandError={
-				interrupt.error instanceof Error
+				cancelQueued.error instanceof Error
+					? cancelQueued.error.message
+					: interrupt.error instanceof Error
 					? interrupt.error.message
 					: decide.error instanceof Error
 						? decide.error.message
@@ -371,8 +403,10 @@ export function CloudSessionChatSurface({
 								: undefined
 			}
 			headerActions={headerActions}
-			onInterrupt={activeTurn ? () => interrupt.mutate() : undefined}
-			onSteer={activeTurn && snapshot.capabilities?.includes("steer") ? (text, attachments, clientMessageId) => {
+			onInterrupt={!readOnly && activeTurn ? () => interrupt.mutate() : undefined}
+			onCancelQueuedTurn={readOnly ? undefined : (turnId) => cancelQueued.mutateAsync(turnId)}
+			cancelQueuedTurnPendingTurnId={cancelQueued.isPending ? cancelQueued.variables : undefined}
+			onSteer={!readOnly && activeTurn && snapshot.capabilities?.includes("steer") ? (text, attachments, clientMessageId) => {
 				if (attachments?.length) return Promise.resolve({ status: "not-accepted" as const, reason: "Cloud steering currently accepts text only." });
 				return steer.mutateAsync({ text, clientMessageId });
 			} : undefined}
@@ -384,5 +418,6 @@ export function CloudSessionChatSurface({
 			sessionTabAction={sessionTabAction}
 			sessionTitle={session.title}
 		/>
+		</div>
 	);
 }

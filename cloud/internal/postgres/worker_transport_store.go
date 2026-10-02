@@ -47,6 +47,27 @@ func isWorkspaceWriteKind(kind string) bool {
 	return kind == "workspace.write" || kind == "workspace.review.write"
 }
 
+// viewerForbiddenRequest reports whether a viewer (a read-only share-grant
+// holder) must be refused a worker request. Beyond the workspace file writes,
+// the session browser proxy forwards arbitrary HTTP methods to the sandbox's
+// dev server, so a viewer may only issue safe (GET/HEAD) browser fetches.
+func viewerForbiddenRequest(kind string, payload json.RawMessage) bool {
+	if isWorkspaceWriteKind(kind) {
+		return true
+	}
+	if kind != "browser.fetch" {
+		return false
+	}
+	var fetch struct {
+		Method string `json:"method"`
+	}
+	if json.Unmarshal(payload, &fetch) != nil {
+		return true
+	}
+	method := strings.ToUpper(strings.TrimSpace(fetch.Method))
+	return method != "" && method != "GET" && method != "HEAD"
+}
+
 func (s *Store) CreateWorkspaceRequest(
 	ctx context.Context,
 	principal domain.Principal,
@@ -56,7 +77,7 @@ func (s *Store) CreateWorkspaceRequest(
 ) (domain.WorkerRequest, error) {
 	var request domain.WorkerRequest
 	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
-		if access.Role == "viewer" && isWorkspaceWriteKind(kind) {
+		if access.Role == "viewer" && viewerForbiddenRequest(kind, payload) {
 			return ErrForbidden
 		}
 		var err error

@@ -184,6 +184,12 @@ export type WorkspaceSession = {
 		sandboxProvider?: string;
 		desiredState?: string;
 		observedState?: string;
+		/** Set when another user shared this session with you via a share link. */
+		sharedBy?: string;
+		/** Your grant on a session shared with you: "viewer" is read-only, "editor" can interact. */
+		sharedRole?: string;
+		/** Id of your grant, used to remove the session from your list. */
+		shareGrantId?: string;
 	};
 };
 
@@ -368,6 +374,8 @@ export type WorkspaceSummary = {
 		deletions: number;
 	};
 	sessions: WorkspaceSession[];
+	/** The "Shared with me" group: other users' cloud sessions (view or interact). */
+	sharedWithMe?: boolean;
 };
 
 export function hasConfiguredOrchestratorAgent(

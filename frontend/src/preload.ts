@@ -40,6 +40,7 @@ import {
 import type { MigrationState } from "./main/app-state";
 import type { UpdateSettings, UpdateStatus, UpdateInstallResult } from "./main/update-settings";
 import type { CloudAccount } from "./shared/cloud-account";
+import type { ShareInvite } from "./shared/share-deeplink";
 import type { LocalLoginInput, LocalRegisterInput } from "./main/cloud-auth-local";
 import type {
 	CloudCpProxyRequestInit,
@@ -680,6 +681,18 @@ const api = {
 			ipcRenderer.on("cloud:sessionChanged", wrapped);
 			return () => {
 				ipcRenderer.off("cloud:sessionChanged", wrapped);
+			};
+		},
+		// ao-app://share deep links. Main only validates and queues the invite;
+		// the renderer shows a consent dialog and nothing is redeemed until the
+		// user accepts.
+		takePendingShareInvite: () =>
+			ipcRenderer.invoke("cloud:takePendingShareInvite") as Promise<ShareInvite | null>,
+		onShareInvitePending: (listener: () => void) => {
+			const wrapped = () => listener();
+			ipcRenderer.on("cloud:shareInvitePending", wrapped);
+			return () => {
+				ipcRenderer.off("cloud:shareInvitePending", wrapped);
 			};
 		},
 	},

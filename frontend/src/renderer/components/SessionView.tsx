@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Globe2, Loader2, PanelRight, Plus } from "lucide-react";
+import { Globe2, Loader2, PanelRight, Plus, Share2 } from "lucide-react";
 import { useBlocker } from "@tanstack/react-router";
 import { motion, useReducedMotion } from "motion/react";
 import {
@@ -78,6 +78,9 @@ import { useCloudGate } from "../hooks/useCloudGate";
 import { cloudLifecycleStage } from "../lib/cloud-lifecycle";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
+import { useShareDialogStore } from "../stores/share-dialog-store";
+import { DropdownMenuItem } from "./ui/dropdown-menu";
+import { CloudSessionComposer } from "./CloudSessionComposer";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
 import { useSettings } from "../hooks/useSettings";
@@ -1948,16 +1951,58 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 			switchError={handoffSwitchError}
 		/>
 	) : null, [handoffAgentSwitch, handoffControlPresentation, handoffDialogOpen, handoffSwitchError, handleHandoffDialogOpenChange, session]);
-	// Cloud sessions expose only the interface switch here; agent handoff is a
-	// local daemon feature. Hide the empty actions menu for harnesses without
-	// Chat, including when local settings identify one before transition status
-	// becomes available.
-	const sessionTabActions = useMemo(() => interfaceSwitchUnsupported ? null : (
+	// The ⋮ only holds the Chat/Terminal switch and Switch agent, and agent
+	// switching is limited to Claude Code and Codex, which both have Chat. A
+	// harness without Chat therefore gets no ⋮ instead of an empty menu.
+	// A cloud session can be shared through a one-time deep link, interactive by
+	// default or read-only. Sessions someone shared with you carry no Share or
+	// handoff action (they belong to the owner). Their terminal never takes this
+	// client's keystrokes: an interactive recipient works through the message box
+	// under it, so two people never type into one prompt at once.
+	const openShareSession = useShareDialogStore((state) => state.openShareSession);
+	const sharedWithMe = session?.cloud?.sharedBy !== undefined;
+	const sharedReadOnly = sharedWithMe && session?.cloud?.sharedRole !== "editor";
+	const shareMenuItem = useMemo(() => session?.cloud && !sharedWithMe ? (
+		<DropdownMenuItem
+			key="share-read-only"
+			onSelect={() => openShareSession({ orgId: session.cloud!.orgId, sessionId: session.id, title: session.title })}
+		>
+			<Share2 aria-hidden="true" className="size-icon-md" />
+			{t("share.menuItem")}
+		</DropdownMenuItem>
+	) : null, [openShareSession, session, sharedWithMe, t]);
+	const readOnlyBadge = useMemo(() => sharedWithMe ? (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<span className="inline-flex h-5 shrink-0 items-center rounded border border-border px-1.5 text-2xs font-medium text-muted-foreground">
+					{sharedReadOnly ? t("share.readOnlyBadge") : t("share.sharedBadge")}
+				</span>
+			</TooltipTrigger>
+			<TooltipContent>
+				{t(sharedReadOnly ? "share.readOnlyBanner" : "share.interactBanner", { name: session?.cloud?.sharedBy ?? "" })}
+			</TooltipContent>
+		</Tooltip>
+	) : null, [session?.cloud?.sharedBy, sharedReadOnly, sharedWithMe, t]);
+	const composerOrgId = session?.cloud?.orgId;
+	const agentWorking = session?.activity?.state === "active";
+	// Only terminal-mode collaborators need the fallback composer: owners can
+	// type in their terminal, and Chat mode already has its own message box.
+	const agentComposer = useMemo(() => composerOrgId && sharedWithMe && !sharedReadOnly && session?.mode !== "chat" ? (
+		<CloudSessionComposer
+			agentWorking={agentWorking}
+			autoFocus={sharedWithMe}
+			disabled={terminated}
+			orgId={composerOrgId}
+			sessionId={sessionId}
+		/>
+	) : undefined, [agentWorking, composerOrgId, session?.mode, sessionId, sharedReadOnly, sharedWithMe, terminated]);
+	const sessionTabActions = useMemo(() => sharedWithMe ? readOnlyBadge : (interfaceSwitchUnsupported && !shareMenuItem) ? null : (
 		<SessionActionsMenu inlineStatus={interfaceSwitchInlineStatus}>
-			{interfaceSwitchMenuItem}
-			{handoffMenuItem}
+			{interfaceSwitchUnsupported ? null : interfaceSwitchMenuItem}
+			{interfaceSwitchUnsupported ? null : handoffMenuItem}
+			{shareMenuItem}
 		</SessionActionsMenu>
-	), [handoffMenuItem, interfaceSwitchInlineStatus, interfaceSwitchMenuItem, interfaceSwitchUnsupported]);
+	), [handoffMenuItem, interfaceSwitchInlineStatus, interfaceSwitchMenuItem, interfaceSwitchUnsupported, readOnlyBadge, shareMenuItem, sharedWithMe]);
 	const sessionHeaderActions = (
 		<div
 			className="session-topbar-session-chrome flex shrink-0 items-center"
@@ -2345,6 +2390,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 									agentInputDisabled={
 										(interfaceSwitch.starting || activeInterfaceTransition) && !cloudDrainWaiting && session?.mode === "tui"
 									}
+									agentInputReadOnly={sharedWithMe}
+									agentComposer={agentComposer}
 									daemonReady={daemonStatus.state === "ready"}
 									onCloseShellTerminal={closeShellTerminalByHandle}
 									onRenameShellTerminal={renameShellTerminalByHandle}
