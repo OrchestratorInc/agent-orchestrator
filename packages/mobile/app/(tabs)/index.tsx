@@ -1,14 +1,13 @@
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, FlatList, Keyboard, Platform, StyleSheet, View } from "react-native";
+import { ActivityIndicator, FlatList, Keyboard, StyleSheet, View } from "react-native";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
 import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { classifyConnectionFailure, describeConnectionFailure } from "../../lib/connectionError";
-import { tunnelMayHaveRotated } from "../../lib/staleTunnel";
 import { haptics } from "../../lib/haptics";
 import { StaleBanner } from "../../lib/StaleBanner";
 import { useApp } from "../../lib/store";
+import { useBoardFailure } from "../../lib/useBoardFailure";
 import { UnpairedState } from "../../lib/UnpairedState";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
@@ -35,8 +34,7 @@ export default function FleetScreen() {
 
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { configured, loading, error, errorStatus, connection, config, refresh, sessions, projects, notificationsUnread, activeEndpoints } =
-		useApp();
+	const { configured, loading, error, refresh, sessions, projects, notificationsUnread } = useApp();
 	const [refreshing, setRefreshing] = useState(false);
 	const [query, setQuery] = useState("");
 	const [searchRequested, setSearchRequested] = useState(false);
@@ -91,27 +89,8 @@ export default function FleetScreen() {
 		}
 	}, [projects, workerProjectId]);
 
-	// Turn the poll's raw failure ("401 - missing or invalid connection password")
-	// into the same human copy the pairing screens use, keyed on the cause.
-	const failure = useMemo(
-		() =>
-			describeConnectionFailure(
-				// A stored tunnel that no longer answers means the hostname
-				// rotated, which no amount of retrying fixes — rescanning does.
-				// Distinguished here rather than in the classifier because it
-				// depends on what the machine advertised, not on a status code.
-				classifyConnectionFailure(errorStatus ?? undefined) === "unreachable" &&
-					tunnelMayHaveRotated(activeEndpoints, connection === "open")
-					? "tunnel-rotated"
-					: classifyConnectionFailure(errorStatus ?? undefined),
-				{
-					host: config?.host ?? "",
-					port: config?.httpPort ?? "",
-					platform: Platform.OS,
-				},
-			),
-		[errorStatus, config?.host, config?.httpPort, activeEndpoints, connection],
-	);
+	// The poll's failure as the same human copy the pairing screens use.
+	const failure = useBoardFailure();
 
 	const onRefresh = useCallback(async () => {
 		haptics.tap();
@@ -175,9 +154,9 @@ export default function FleetScreen() {
 							<EmptyState icon="search" title="No workers found" message={`No workers match “${query.trim()}”.`} />
 						) : error ? (
 							<EmptyState
-								icon="wifi-off"
+								icon={failure.icon}
 								title={failure.title}
-								message={failure.message}
+								message={failure.hint}
 								action={
 									<View style={styles.errorActions}>
 										<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />

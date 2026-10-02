@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -44,7 +45,7 @@ type Store interface {
 	ClaimGitHubWebhook(context.Context, string, time.Time) (domain.GitHubWebhookDelivery, error)
 	CompleteGitHubWebhook(context.Context, string, string) error
 	RetryGitHubWebhook(context.Context, string, string, string, time.Time, bool) error
-	GitHubInstallationRoute(context.Context, int64) (string, string, error)
+	GitHubInstallationRoutes(context.Context, int64) ([]domain.GitHubInstallationRoute, error)
 	GitHubInstallationByRoute(context.Context, string, string) (domain.GitHubInstallation, error)
 	ApplyGitHubInstallationEvent(context.Context, string, string, string) error
 	WorkerGitHubCheckoutContext(context.Context, string, string) (domain.GitHubCheckoutContext, error)
@@ -60,11 +61,12 @@ type Store interface {
 	) (domain.PullRequest, error)
 	ClaimPullRequestRecord(context.Context, string, string, domain.PullRequest) (domain.PullRequest, error)
 	GitHubInstallationForRepository(ctx context.Context, orgID, repository string) (installationID, repositoryID int64, err error)
-	UpdatePullRequestObservation(
-		ctx context.Context,
-		orgID, pullRequestID string,
-		observation domain.PullRequestObservation,
-	) (domain.PullRequest, error)
+	PullRequestByGitHubReference(ctx context.Context, orgID string, repositoryID int64, number int) (domain.PullRequest, error)
+	PullRequestByGitHubHead(ctx context.Context, orgID string, repositoryID int64, headSHA string) (domain.PullRequest, error)
+	PullRequestsByGitHubRepository(ctx context.Context, orgID string, repositoryID int64) ([]domain.PullRequest, error)
+	RecordPullRequestOpened(ctx context.Context, orgID string, pr domain.PullRequest, deliveryID string) error
+	ApplyPullRequestSnapshot(ctx context.Context, orgID, pullRequestID string, snapshot domain.PullRequestSnapshot, refresh domain.PullRequestRefreshContext) (domain.PullRequestTransition, error)
+	SchedulePullRequestRefresh(ctx context.Context, orgID, pullRequestID string, reason domain.PullRequestRefreshReason, dueAt time.Time, message string) error
 	CreateReviewRun(ctx context.Context, orgID, pullRequestID, reviewSessionID, targetSHA string) (domain.ReviewRun, bool, error)
 	OpenReviewTerminal(ctx context.Context, orgID, sessionID, reviewRunID, prompt string) error
 	CloseReviewTerminal(ctx context.Context, orgID, sessionID, reviewRunID string) error
@@ -89,19 +91,37 @@ type CheckoutGrant struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
+// MergePullRequest uses the installation's repository-scoped write token.
+func (s *Service) MergePullRequest(ctx context.Context, orgID, repository string, number int, expectedHeadSHA string) error {
+	installationID, repositoryID, err := s.store.GitHubInstallationForRepository(ctx, orgID, repository)
+	if err != nil {
+		return err
+	}
+	owner, repo, ok := strings.Cut(repository, "/")
+	if !ok || owner == "" || repo == "" {
+		return postgres.ErrInvalid
+	}
+	access, err := s.client.repositoryWriteToken(ctx, installationID, repositoryID)
+	if err != nil {
+		return err
+	}
+	return s.client.MergePullRequest(ctx, access.Token, owner, repo, number, expectedHeadSHA)
+}
+
 type Service struct {
-	store         Store
-	client        *Client
-	stateKey      []byte
-	webhookSecret string
-	installTTL    time.Duration
-	logger        *slog.Logger
-	workerID      string
-	credentialKey []byte
-	userTokenMu   sync.Mutex
-	checkMu       sync.Mutex
-	checkAt       time.Time
-	checkErr      error
+	store                    Store
+	client                   *Client
+	stateKey                 []byte
+	webhookSecret            string
+	installTTL               time.Duration
+	logger                   *slog.Logger
+	workerID                 string
+	credentialKey            []byte
+	userTokenMu              sync.Mutex
+	checkMu                  sync.Mutex
+	checkAt                  time.Time
+	checkErr                 error
+	refreshPullRequestStatus func(context.Context, domain.PullRequestRef, domain.PullRequestRefreshContext) (domain.PullRequest, error)
 }
 
 func (s *Service) Check(ctx context.Context) error {
@@ -516,30 +536,28 @@ func gitHubRepositoryFullName(repoURL string) (string, bool) {
 }
 
 // IssuePushGrant is IssueCheckoutGrant's write-scoped counterpart: the token
-// it mints carries contents:write (and pull_requests:write, unused for a
-// push but harmless to request once rather than adding a third token
-// shape). Only ever handed to a worker immediately before a git push, never
-// cached — see repositoryWriteToken.
+// it mints carries contents:write and pull_requests:write, scoped to the
+// project's primary repository plus any declared extra repositories that
+// resolve within the same installation — the write-side mirror of
+// IssueCheckoutGrant's multi-repository scope. One broad token backs a worker's
+// push and gh-CLI pull-request creation across every repository the session
+// checked out, so a push to an extra dev-kit repository is no longer scoped
+// out. Only ever handed to a worker immediately before a git operation, never
+// cached — see repositoryWriteTokenForRepos.
 func (s *Service) IssuePushGrant(
 	ctx context.Context,
 	orgID, sessionID string,
-) (CheckoutGrant, error) {
-	return s.issueGrant(ctx, orgID, sessionID, s.client.repositoryWriteToken)
-}
-
-// issueGrant is IssueCheckoutGrant and IssuePushGrant's shared authorization
-// and token-minting path; they differ only in which of the client's two
-// token-scope functions mints the access token.
-func (s *Service) issueGrant(
-	ctx context.Context,
-	orgID, sessionID string,
-	mintToken func(ctx context.Context, installationID, repositoryID int64) (installationAccessToken, error),
 ) (CheckoutGrant, error) {
 	authorization, err := s.resolveWorkerCheckoutAuthorization(ctx, orgID, sessionID)
 	if err != nil {
 		return CheckoutGrant{}, err
 	}
-	access, err := mintToken(ctx, authorization.GitHubInstallationID, authorization.GitHubRepositoryID)
+	repositoryIDs := s.checkoutRepositoryIDs(ctx, orgID, sessionID, authorization)
+	access, err := s.client.repositoryWriteTokenForRepos(
+		ctx,
+		authorization.GitHubInstallationID,
+		repositoryIDs,
+	)
 	if err != nil {
 		return CheckoutGrant{}, err
 	}
@@ -551,6 +569,92 @@ func (s *Service) issueGrant(
 		Token:     access.Token,
 		ExpiresAt: access.ExpiresAt,
 	}, nil
+}
+
+// IssuePushGrantForRepo is IssuePushGrant scoped to one specific repository —
+// the session's primary repository or one of its declared extra repositories.
+// It mints a write token for exactly that repository when the App installation
+// can access it, and returns postgres.ErrForbidden when it cannot (the name is
+// not declared for the session, or the App is not installed on it) so the
+// caller falls back to a stored PAT. This is the per-repository, App-first half
+// of the worker credential helper's App-first/PAT-fallback precedence: the
+// helper forwards the repository git is asking about, and an App-uninstalled
+// extra can still push through a PAT that covers it.
+func (s *Service) IssuePushGrantForRepo(
+	ctx context.Context,
+	orgID, sessionID, repoFullName string,
+) (CheckoutGrant, error) {
+	authorization, err := s.resolveWorkerCheckoutAuthorization(ctx, orgID, sessionID)
+	if err != nil {
+		return CheckoutGrant{}, err
+	}
+	repositoryID, err := s.pushRepositoryID(ctx, orgID, sessionID, authorization, repoFullName)
+	if err != nil {
+		return CheckoutGrant{}, err
+	}
+	access, err := s.client.repositoryWriteToken(ctx, authorization.GitHubInstallationID, repositoryID)
+	if err != nil {
+		return CheckoutGrant{}, err
+	}
+	if access.ExpiresAt.After(time.Now().UTC().Add(2 * time.Hour)) {
+		return CheckoutGrant{}, errors.New("GitHub returned an unexpectedly long-lived installation token")
+	}
+	return CheckoutGrant{
+		CloneURL:  authorization.CloneURL,
+		Token:     access.Token,
+		ExpiresAt: access.ExpiresAt,
+	}, nil
+}
+
+// pushRepositoryID resolves the single repository a write grant should target.
+// An empty name (or one equal to the session's primary repository) resolves to
+// the primary repository. Any other name must be one of the project's declared
+// extra repositories AND resolve within the same installation; otherwise it
+// returns postgres.ErrForbidden so the caller can fall back to a stored PAT.
+// This is the write-side, single-repository mirror of checkoutRepositoryIDs —
+// it never broadens write access beyond a repository the session already
+// checked out.
+func (s *Service) pushRepositoryID(
+	ctx context.Context,
+	orgID, sessionID string,
+	authorization domain.GitHubCheckoutContext,
+	repoFullName string,
+) (int64, error) {
+	primaryFullName := strings.Trim(authorization.FullName, "/")
+	requested := strings.Trim(strings.TrimSpace(repoFullName), "/")
+	if requested == "" || strings.EqualFold(requested, primaryFullName) {
+		return authorization.GitHubRepositoryID, nil
+	}
+	extras, err := s.store.WorkerSessionExtraRepos(ctx, orgID, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	canonical := ""
+	for _, extra := range extras {
+		fullName, ok := gitHubRepositoryFullName(extra.URL)
+		if ok && strings.EqualFold(fullName, requested) {
+			canonical = fullName
+			break
+		}
+	}
+	if canonical == "" {
+		// The requested repository is not one the session is authorized to
+		// touch. Forbid the App grant; the caller decides whether a PAT applies.
+		return 0, postgres.ErrForbidden
+	}
+	ids, unresolved, err := s.client.resolveInstallationRepositoryIDs(
+		ctx, authorization.GitHubInstallationID, []string{canonical},
+	)
+	if err != nil {
+		return 0, err
+	}
+	if len(unresolved) > 0 || len(ids) == 0 || ids[0] <= 0 {
+		// Declared for the project but the installation cannot access it (the App
+		// is not installed on it). Forbid the App grant so the caller falls back
+		// to a stored PAT that may still cover it.
+		return 0, postgres.ErrForbidden
+	}
+	return ids[0], nil
 }
 
 // resolveWorkerCheckoutAuthorization loads and re-validates a session's
@@ -880,7 +984,9 @@ func (s *Service) processWebhook(
 	if delivery.GitHubInstallationID <= 0 {
 		return postgres.ErrInvalid
 	}
-	orgID, installationID, err := s.store.GitHubInstallationRoute(
+	// One GitHub App installation may be connected by several organizations, so
+	// a single delivery must be applied to every organization that routes it.
+	routes, err := s.store.GitHubInstallationRoutes(
 		ctx,
 		delivery.GitHubInstallationID,
 	)
@@ -888,7 +994,19 @@ func (s *Service) processWebhook(
 		return err
 	}
 	switch delivery.Event {
+	case "pull_request", "check_suite", "check_run", "pull_request_review",
+		"pull_request_review_comment", "pull_request_review_thread", "status", "push":
+		var processErr error
+		for _, route := range routes {
+			if err := s.processSCMWebhook(ctx, route.OrgID, delivery); err != nil {
+				processErr = errors.Join(processErr, err)
+			}
+		}
+		return processErr
 	case "installation":
+		// The installation's suspended/deleted state is a property of the GitHub
+		// installation itself, so resolve it once and apply it to every
+		// organization that connected the installation.
 		action := "unsuspend"
 		providerInstallation, err := s.client.GetInstallation(
 			ctx,
@@ -904,25 +1022,48 @@ func (s *Service) processWebhook(
 		} else if providerInstallation.SuspendedAt != nil {
 			action = "suspend"
 		}
-		if err := s.store.ApplyGitHubInstallationEvent(
-			ctx,
-			orgID,
-			installationID,
-			action,
-		); err != nil {
-			return err
+		var processErr error
+		for _, route := range routes {
+			if err := s.store.ApplyGitHubInstallationEvent(
+				ctx,
+				route.OrgID,
+				route.InstallationID,
+				action,
+			); err != nil {
+				processErr = errors.Join(processErr, err)
+				continue
+			}
+			if action == "suspend" || action == "deleted" {
+				continue
+			}
+			if err := s.syncRoute(ctx, route); err != nil {
+				processErr = errors.Join(processErr, err)
+			}
 		}
-		if action == "suspend" || action == "deleted" {
-			return nil
-		}
+		return processErr
 	case "installation_repositories":
+		var processErr error
+		for _, route := range routes {
+			if err := s.syncRoute(ctx, route); err != nil {
+				processErr = errors.Join(processErr, err)
+			}
+		}
+		return processErr
 	default:
 		return postgres.ErrInvalid
 	}
+}
+
+// syncRoute loads one organization's installation record and reconciles its
+// repository grants.
+func (s *Service) syncRoute(
+	ctx context.Context,
+	route domain.GitHubInstallationRoute,
+) error {
 	installation, err := s.store.GitHubInstallationByRoute(
 		ctx,
-		orgID,
-		installationID,
+		route.OrgID,
+		route.InstallationID,
 	)
 	if err != nil {
 		return err
@@ -1042,9 +1183,33 @@ func (s *Service) completionHTML(success bool) []byte {
 		title = "GitHub connected"
 		message = "Return to AO. Your repositories will appear in the project picker as soon as they finish syncing. You can close this tab."
 	}
+	return renderCallbackHTML(title, message)
+}
+
+// InstallationConflictHTML renders the callback page shown when the GitHub
+// account the user tried to connect is already connected by a different AO
+// workspace. It names the GitHub account (public information the connecting
+// admin already has) but not the owning workspace, which is not disclosed
+// across the tenant boundary.
+func (s *Service) InstallationConflictHTML(accountLogin string) []byte {
+	subject := "This GitHub account"
+	if account := strings.TrimSpace(accountLogin); account != "" {
+		subject = "This GitHub account (" + account + ")"
+	}
+	return renderCallbackHTML(
+		"Already connected elsewhere",
+		subject+" is already connected to another AO workspace. Ask that workspace to"+
+			" disconnect it, or connect a different GitHub account.",
+	)
+}
+
+// renderCallbackHTML builds the plain callback page shared by every GitHub OAuth
+// completion outcome. Both the title and the message are HTML-escaped so a
+// value derived from GitHub (such as an account login) can be embedded safely.
+func renderCallbackHTML(title, message string) []byte {
 	return []byte(fmt.Sprintf(
 		`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>%s</title>
 <body style="font:15px -apple-system,system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1.5rem;color:#111">
 <main><h1 style="font-size:1.25rem">%s</h1><p style="color:#555">%s</p></main></body></html>`,
-		title, title, message))
+		html.EscapeString(title), html.EscapeString(title), html.EscapeString(message)))
 }

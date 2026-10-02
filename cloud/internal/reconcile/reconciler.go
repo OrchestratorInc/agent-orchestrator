@@ -62,6 +62,15 @@ type Options struct {
 	WorkerHelperDestination string
 	// WorkerUser is the unprivileged account used to run hosted workers.
 	WorkerUser string
+	// KeepWarm disables idle teardown. When set (AO_CLOUD_IDLE_PAUSE_THRESHOLD=0),
+	// the reconciler keeps a running session's compute alive through idle: it
+	// extends the provider deadline (e.g. Coder's autostop) even with no active
+	// turn, and refuses to accept a provider's external-idle stop (restoring
+	// instead). Paired with the idle scanner being off, a session is never paused
+	// for idleness, so its worker stays connected and the terminal never has to
+	// reconnect under a new epoch — matching the local experience. The trade-off
+	// is continuous compute cost for every non-terminated session.
+	KeepWarm bool
 	// AllowAnonymousCheckout lets a worker clone a public repository directly,
 	// with no GitHub App grant, when the checkout broker denies a grant. The
 	// docker provider always allows this for local development; this extends it
@@ -113,8 +122,12 @@ type Options struct {
 // Reconciler defaults, tuned for a decentralized provider whose provisioning
 // latency is variable by design.
 const (
-	DefaultInterval               = 2 * time.Second
-	DefaultStartupTimeout         = 180 * time.Second
+	DefaultInterval = 2 * time.Second
+	// Cold coder/Azure VMs routinely need >3 min to check in (VM boot + snap/lxd,
+	// a fresh durable-disk mkfs, and harness warming), which tripped the 180s
+	// window and triggered a needless worker reinstall mid-startup. 6 min covers
+	// a normal cold boot so only a genuinely stuck worker is reinstalled.
+	DefaultStartupTimeout         = 360 * time.Second
 	DefaultTerminalStartupTimeout = 10 * time.Minute
 	// maxStartupRepairs bounds how many times a never-checked-in worker is
 	// reinstalled, each with a fresh startup window. Past it the sandbox is
@@ -574,7 +587,7 @@ func (r *Reconciler) reconcileSandbox(ctx context.Context, record domain.Sandbox
 		// guard is bounded by the startup window (startingUp), so a box that never
 		// converges ages out and is paused/failed normally rather than looping.
 		if environment.StopCause == sandbox.StopCauseExternalIdle && !record.KeepAlive &&
-			!r.startingUp(record) {
+			!r.options.KeepWarm && !r.startingUp(record) {
 			accepted, err := r.store.AcceptSandboxProviderPause(
 				ctx, r.owner, record.OrgID, record.SessionID,
 				string(environment.ID), time.Now().Add(30*time.Second),
@@ -667,7 +680,7 @@ func (r *Reconciler) extendActiveDeadline(
 	environment sandbox.Environment,
 	provider sandbox.Provider,
 ) {
-	if !record.KeepAlive || environment.Deadline == nil ||
+	if (!record.KeepAlive && !r.options.KeepWarm) || environment.Deadline == nil ||
 		(environment.State != sandbox.StateRunning && environment.State != sandbox.StateProvisioning) {
 		return
 	}
@@ -1189,10 +1202,12 @@ func (r *Reconciler) workerSpec(ctx context.Context, record domain.Sandbox) (san
 			"worker:turn:poll",
 			"worker:turn:complete",
 			"worker:credential:read",
+			"worker:session:read",
 			"worker:git",
 			"worker:orchestrate",
 			"worker:report",
 			"worker:transport",
+			"worker:notification",
 		},
 		bootstrapTicketTTL,
 	)

@@ -77,7 +77,7 @@ import { agentLabel } from "../../lib/agent-options";
 import type { ApprovalMode } from "../../types/conversation";
 import type { ConversationLocalEcho } from "../../hooks/useConversation";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
-import { sidebarOccupiesLayout, useUiStore } from "../../stores/ui-store";
+import { inspectorIsOpen, sidebarOccupiesLayout, useUiStore } from "../../stores/ui-store";
 import type { TerminalTarget } from "../../types/terminal";
 import {
 	isOrchestratorSession,
@@ -108,6 +108,7 @@ import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
 import { ChatComposer, type StoredComposerAttachment } from "./ChatComposer";
+import { ContextMeter } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
@@ -336,6 +337,7 @@ export interface ChatWorkspaceProps {
 	shellError?: string;
 	/** Open an HTTP(S) link in this session's AO Browser panel. */
 	onLinkOpen?: (url: string) => void;
+	onSessionLinkOpen?: (url: string) => void;
 	/** A send or decision is in flight. */
 	busy?: boolean;
 	/** The provider's model catalog. Empty hides the model control. */
@@ -361,6 +363,8 @@ export interface ChatWorkspaceProps {
 	theme?: "light" | "dark";
 	onChooseSettings?: (settings: TurnSettings) => void;
 	onRememberPermissions?: (mode: ApprovalMode) => Promise<unknown> | void;
+	showApprovalMode?: boolean;
+	approvalModes?: ApprovalMode[];
 	rememberPermissionsPending?: boolean;
 	rememberPermissionsError?: string;
 	rememberedPermissionMode?: ApprovalMode;
@@ -435,6 +439,7 @@ export interface ChatWorkspaceProps {
 		clientMessageId?: string,
 		recoverOnly?: boolean,
 	) => Promise<ChatSteerOutcome | void>;
+	showSteerButton?: boolean;
 	sendPending?: boolean;
 	steerPending?: boolean;
 	/** Why the last steer was refused, from the daemon's typed answer. */
@@ -579,10 +584,13 @@ function ChatWorkspaceContent({
 	openingShell,
 	shellError,
 	onLinkOpen,
+	onSessionLinkOpen,
 	busy,
 	models,
 	onChooseSettings,
 	onRememberPermissions,
+	showApprovalMode,
+	approvalModes,
 	rememberPermissionsPending,
 	rememberPermissionsError,
 	rememberedPermissionMode,
@@ -612,6 +620,7 @@ function ChatWorkspaceContent({
 	onStageAttachments,
 	nativeImages,
 	onSteer,
+	showSteerButton,
 	sendPending,
 	steerPending,
 	steerRefusal,
@@ -662,9 +671,10 @@ function ChatWorkspaceContent({
 		// A click fires after a drag selection ends. Focusing the composer here would
 		// collapse the range the user just selected in the transcript.
 		if (window.getSelection()?.isCollapsed === false) return;
+		// The focusable context tooltip must not redirect focus to the composer.
 		if (
 			target.closest(
-				"button, a, input, textarea, select, [contenteditable='true'], [role='button'], [role='option'], [role='menuitem'], [role='dialog'], [data-testid='session-terminal'], .xterm, .terminal-surface",
+				"button, a, input, textarea, select, [contenteditable='true'], [role='button'], [role='option'], [data-context-meter], [role='menuitem'], [role='dialog'], [data-testid='session-terminal'], .xterm, .terminal-surface",
 			)
 		)
 			return;
@@ -1149,6 +1159,8 @@ function ChatWorkspaceContent({
 					rememberPermissionsError={rememberPermissionsError}
 					rememberedPermissionMode={rememberedPermissionMode}
 					harness={snapshot.harness}
+					showApprovalMode={showApprovalMode ?? !session?.cloud}
+					approvalModes={approvalModes}
 					reroute={stableModelReroute}
 					onChange={newWorkDisabled ? undefined : onChooseSettings}
 					configOptions={configOptions ?? []}
@@ -1173,6 +1185,9 @@ function ChatWorkspaceContent({
 			rememberPermissionsPending,
 			rememberPermissionsError,
 			rememberedPermissionMode,
+			showApprovalMode,
+			approvalModes,
+			session?.cloud,
 			snapshot.controller.state,
 			stableModelReroute,
 			stableSettings,
@@ -1404,6 +1419,9 @@ function ChatWorkspaceContent({
 					) : null}
 					<ControllerBanner
 						controller={snapshot.controller}
+						agentName={agentLabel(snapshot.harness)}
+						provisionState={session?.provisionState}
+						provisionError={session?.provisionError}
 						transitioning={controllerTransitioning}
 						onResume={newWorkDisabled ? undefined : onResumeAgent}
 						resuming={resumingAgent}
@@ -1414,6 +1432,7 @@ function ChatWorkspaceContent({
 					/>
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
 					<McpServerBanner
+						sessionId={snapshot.sessionId}
 						servers={brokenServers}
 						onReload={newWorkDisabled ? undefined : onReloadMcpServers}
 						reloading={reloadingMcpServers}
@@ -1424,7 +1443,7 @@ function ChatWorkspaceContent({
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
 					>
-						<ChatLinkProvider onLinkOpen={onLinkOpen} onFileOpen={onOpenFile} workspacePaths={filePaths}>
+						<ChatLinkProvider onLinkOpen={onLinkOpen} onFileOpen={onOpenFile} onSessionLinkOpen={onSessionLinkOpen} workspacePaths={filePaths}>
 							<ChatImageSourceProvider sessionId={snapshot.sessionId}>
 								<Timeline
 									key={draftScopeKey}
@@ -1479,9 +1498,9 @@ function ChatWorkspaceContent({
 									onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
 									onInterrupt={turn && !newWorkDisabled ? stableInterrupt : undefined}
 									commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
-									settings={composerSettings}
+									settings={<><ContextMeter usage={snapshot.usage} />{composerSettings}</>}
 									busy={busy}
-									willQueue={Boolean(turn)}
+									willQueue={Boolean(turn) || session?.provisionState === "provisioning"}
 									disabled={(snapshot.controller.state === "stopped" || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
 									// Switch/reconnect status is the topbar spinner beside ⋮ — not composer text.
 									disabledPlaceholder={
@@ -1497,6 +1516,7 @@ function ChatWorkspaceContent({
 									// Steering is only meaningful into a turn that is running. A queued turn
 									// has not reached the provider, so there is nothing to steer.
 									onSteer={newWorkDisabled ? undefined : steer}
+									showSteerButton={showSteerButton}
 									canSteer={Boolean(onSteer) && turn?.state === "running"}
 									sendPending={sendPending}
 									steerPending={steerPending}
@@ -1865,6 +1885,9 @@ function ChatHeader({
  */
 function ControllerBanner({
 	controller,
+	agentName,
+	provisionState,
+	provisionError,
 	transitioning,
 	onResume,
 	resuming,
@@ -1874,6 +1897,9 @@ function ControllerBanner({
 	shellError,
 }: {
 	controller: { state: ControllerState; error?: string };
+	agentName: string;
+	provisionState?: WorkspaceSession["provisionState"];
+	provisionError?: string;
 	transitioning?: boolean;
 	onResume?: () => void;
 	resuming?: boolean;
@@ -1882,11 +1908,15 @@ function ControllerBanner({
 	openingShell?: boolean;
 	shellError?: string;
 }) {
+	const provisioning = provisionState === "provisioning";
+	const failed = provisionState === "failed";
+	const starting = provisioning || failed;
+
 	// The transition coordinator intentionally stops one controller before it
 	// starts the other. The top-bar handoff state already explains that interval;
 	// presenting its intermediate snapshot as a crash produces a red false alarm.
-	if (transitioning && controller.state === "stopped") return null;
-	if (controller.state === "ready" || controller.state === "busy") return null;
+	if (!starting && transitioning && controller.state === "stopped") return null;
+	if (!starting && (controller.state === "ready" || controller.state === "busy")) return null;
 
 	const copy: Partial<Record<ControllerState, { title: string; tone: string }>> = {
 		connecting: {
@@ -1902,16 +1932,21 @@ function ControllerBanner({
 			tone: "text-destructive",
 		},
 	};
-	const shown = copy[controller.state];
+	const shown = provisioning
+		? { title: `Starting ${agentName}…`, tone: "text-muted-foreground" }
+		: failed
+			? { title: "This session could not be started", tone: "text-destructive" }
+			: copy[controller.state];
 	if (!shown) return null;
+	const loading = provisioning || (!failed && controller.state === "connecting");
 
 	return (
 		<div
-			role={controller.state === "stopped" ? "alert" : "status"}
+			role={failed || controller.state === "stopped" ? "alert" : "status"}
 			aria-atomic="true"
 			className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5"
 		>
-			{controller.state === "connecting" ? (
+			{loading ? (
 				<Loader2
 					aria-hidden="true"
 					className="mt-0.5 size-3.5 shrink-0 animate-spin text-muted-foreground"
@@ -1921,10 +1956,34 @@ function ControllerBanner({
 			)}
 			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<strong className={cn("text-xs font-medium", shown.tone)}>{shown.title}</strong>
-				{controller.error ? (
+				{provisioning ? (
+					<span className="text-[11px] leading-snug text-muted-foreground">
+						Setting up the worktree and the agent. Keep typing — your messages are
+						queued and sent in order as soon as it is ready.
+					</span>
+				) : failed ? (
+					<>
+						{provisionError ? (
+							<span className="text-[11px] leading-snug text-muted-foreground">
+								{provisionError}
+							</span>
+						) : null}
+						<span className="text-[11px] leading-snug text-muted-foreground">
+							Your messages are saved here and will be sent if you retry.
+						</span>
+						{resumeError ? (
+							<span className="text-[11px] leading-snug text-destructive">{resumeError}</span>
+						) : null}
+						{onResume ? (
+							<Button type="button" size="sm" variant="outline" onClick={onResume} disabled={resuming}>
+								{resuming ? "Retrying…" : "Retry start"}
+							</Button>
+						) : null}
+					</>
+				) : controller.error ? (
 					<span className="text-[11px] leading-snug text-muted-foreground">{controller.error}</span>
 				) : null}
-				{controller.state === "stopped" ? (
+				{!starting && controller.state === "stopped" ? (
 					<>
 						<span className="text-[11px] leading-snug text-muted-foreground">
 							History is kept. Resume the agent or open a shell in the same worktree.
@@ -2105,7 +2164,7 @@ function Timeline({
 	// DOM nodes, and inspector toggles are otherwise a broad synchronous commit.
 	// Keep that small accessibility/interaction boundary imperative instead.
 	const inspectorOpenRef = useRef(
-		useUiStore.getState().inspectorSessions[snapshot.sessionId]?.isOpen ?? true,
+		inspectorIsOpen(useUiStore.getState().inspectorSessions, snapshot.sessionId),
 	);
 	const turn = activeTurn(snapshot);
 	const [scrollbar, setScrollbar] = useState({
@@ -2234,10 +2293,10 @@ function Timeline({
 				if (hoveredMarkerRef.current !== null) setHoveredMarker(null);
 			}
 		};
-		setInspectorOpen(useUiStore.getState().inspectorSessions[snapshot.sessionId]?.isOpen ?? true);
+		setInspectorOpen(inspectorIsOpen(useUiStore.getState().inspectorSessions, snapshot.sessionId));
 		return useUiStore.subscribe((state, previous) => {
-			const currentOpen = state.inspectorSessions[snapshot.sessionId]?.isOpen ?? true;
-			const previousOpen = previous.inspectorSessions[snapshot.sessionId]?.isOpen ?? true;
+			const currentOpen = inspectorIsOpen(state.inspectorSessions, snapshot.sessionId);
+			const previousOpen = inspectorIsOpen(previous.inspectorSessions, snapshot.sessionId);
 			if (currentOpen !== previousOpen) setInspectorOpen(currentOpen);
 		});
 	}, [minimapEnabled, snapshot.sessionId]);
@@ -2956,7 +3015,7 @@ function Timeline({
 							</div>
 						);
 					})}
-					{turn && !groups.some((group) => group.turnId === turn.id) ? (
+					{turn?.state === "running" && !groups.some((group) => group.turnId === turn.id) ? (
 						<TurnLiveStatus startedAt={turn.startedAt ?? turn.requestedAt} />
 					) : null}
 					{messageEdit && !editedMessageVisible ? (

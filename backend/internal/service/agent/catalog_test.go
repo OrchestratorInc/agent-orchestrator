@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -142,6 +144,13 @@ type fakeModelDiscoverer struct {
 	overlap                atomic.Bool
 }
 
+type blockingSubsequentModelDiscoverer struct {
+	*fakeModelDiscoverer
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
 func (f *fakeModelDiscoverer) Discover(ctx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
 	f.discoverCalls.Add(1)
 	active := f.active.Add(1)
@@ -182,6 +191,18 @@ func (f *fakeModelDiscoverer) Discover(ctx context.Context, request ports.AgentM
 		f.successfulCalls.Add(1)
 	}
 	return catalog, discoverErr
+}
+
+func (f *blockingSubsequentModelDiscoverer) Discover(ctx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
+	if f.discoverCalls.Load() > 0 {
+		f.once.Do(func() { close(f.started) })
+		select {
+		case <-f.release:
+		case <-ctx.Done():
+			return ports.AgentModelCatalog{}, ctx.Err()
+		}
+	}
+	return f.fakeModelDiscoverer.Discover(ctx, request)
 }
 
 func TestCatalogFreshnessUsesMachineLocalDateAndTimezone(t *testing.T) {
@@ -1032,6 +1053,22 @@ func TestDefaultCatalogDisplaysPrimeAgent(t *testing.T) {
 	t.Fatal("default catalog does not contain prime-agent")
 }
 
+func TestDefaultCatalogDisplaysFX(t *testing.T) {
+	got, err := New().List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, info := range got.Supported {
+		if info.ID == "fx" {
+			if info.Label != "fx" {
+				t.Fatalf("fx label = %q, want fx", info.Label)
+			}
+			return
+		}
+	}
+	t.Fatal("default catalog does not contain fx")
+}
+
 func TestRefreshReportsInstalledAgentsAndIgnoresDetectorErrors(t *testing.T) {
 	svc := NewWithAgents([]agentregistry.HarnessAgent{
 		harnessAgent("codex", "Codex", nil),
@@ -1054,6 +1091,7 @@ func TestRefreshReportsInstalledAgentsAndIgnoresDetectorErrors(t *testing.T) {
 func TestRefreshReportsAuthorizedInstalledAgents(t *testing.T) {
 	svc := NewWithAgents([]agentregistry.HarnessAgent{
 		harnessAuthAgent("codex", "Codex", ports.AgentAuthStatusAuthorized, nil),
+		harnessAuthAgent("fx", "fx", ports.AgentAuthStatusConfigured, nil),
 		harnessAuthAgent("claude-code", "Claude Code", ports.AgentAuthStatusUnauthorized, nil),
 		harnessAgent("opencode", "OpenCode", nil),
 		harnessAuthAgent("broken-auth", "Broken Auth", ports.AgentAuthStatusAuthorized, errors.New("probe failed")),
@@ -1063,8 +1101,8 @@ func TestRefreshReportsAuthorizedInstalledAgents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
-	if len(got.Supported) != 4 || len(got.Installed) != 4 {
-		t.Fatalf("inventory = %#v, want supported=4 installed=4", got)
+	if len(got.Supported) != 5 || len(got.Installed) != 5 {
+		t.Fatalf("inventory = %#v, want supported=5 installed=5", got)
 	}
 	if len(got.Authorized) != 1 || got.Authorized[0].ID != "codex" {
 		t.Fatalf("authorized = %#v, want only codex", got.Authorized)
@@ -1076,6 +1114,9 @@ func TestRefreshReportsAuthorizedInstalledAgents(t *testing.T) {
 	}
 	if byID["codex"].AuthStatus != ports.AgentAuthStatusAuthorized {
 		t.Fatalf("codex authStatus = %q", byID["codex"].AuthStatus)
+	}
+	if byID["fx"].AuthStatus != ports.AgentAuthStatusConfigured {
+		t.Fatalf("fx authStatus = %q, want configured", byID["fx"].AuthStatus)
 	}
 	if byID["claude-code"].AuthStatus != ports.AgentAuthStatusUnauthorized {
 		t.Fatalf("claude-code authStatus = %q", byID["claude-code"].AuthStatus)
@@ -1542,6 +1583,26 @@ func TestModelsPassesProjectEnvironmentToDiscovery(t *testing.T) {
 	}
 }
 
+func TestGlobalModelDiscoveryUsesAODirectoryWithoutProject(t *testing.T) {
+	discoveryDir := filepath.Join(t.TempDir(), "model-discovery")
+	svc := NewWithDeps(Deps{ModelDiscoveryDir: discoveryDir})
+
+	request, err := svc.modelDiscoveryRequest(context.Background(), "deepseek-harness", "", "/usr/local/bin/dsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.WorkingDir != discoveryDir {
+		t.Fatalf("working directory = %q, want %q", request.WorkingDir, discoveryDir)
+	}
+	info, err := os.Stat(discoveryDir)
+	if err != nil {
+		t.Fatalf("stat model discovery directory: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("model discovery directory permissions = %o, want 700", got)
+	}
+}
+
 func TestModelsCachesProjectScopesIndependently(t *testing.T) {
 	projects := &fakeProjectLookup{records: map[string]domain.ProjectRecord{
 		"proj-a": {ID: "proj-a", Path: "/work/a", Config: domain.ProjectConfig{Env: map[string]string{"ANTHROPIC_MODEL": "model-a"}}},
@@ -1972,6 +2033,7 @@ func TestModelsFingerprintsTheSameProjectInputsDiscoveryReads(t *testing.T) {
 	fingerprinted := discoverer.lastFingerprintRequest.Load()
 	if fingerprinted == nil {
 		t.Fatal("catalog fingerprint was never requested")
+		return
 	}
 	if !reflect.DeepEqual(*fingerprinted, discoverer.lastRequest) {
 		t.Fatalf("fingerprint request = %#v, want the discovery request %#v", *fingerprinted, discoverer.lastRequest)
@@ -1983,11 +2045,16 @@ func TestModelsFingerprintsTheSameProjectInputsDiscoveryReads(t *testing.T) {
 
 func TestModelsAsksClientsToRevalidateAnAgedCatalog(t *testing.T) {
 	cache := &fakeModelCache{}
-	discoverer := &fakeModelDiscoverer{version: "v1", catalog: ports.AgentModelCatalog{
-		SelectionMode: ports.ModelSelectionCatalog,
-		Models:        []ports.AgentModelInfo{{ID: "model-one"}},
-		Source:        "cli",
-	}}
+	discoverer := &blockingSubsequentModelDiscoverer{
+		fakeModelDiscoverer: &fakeModelDiscoverer{version: "v1", catalog: ports.AgentModelCatalog{
+			SelectionMode: ports.ModelSelectionCatalog,
+			Models:        []ports.AgentModelInfo{{ID: "model-one"}},
+			Source:        "cli",
+		}},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	defer close(discoverer.release)
 	svc := newService([]agentregistry.HarnessAgent{
 		harnessAgent("opencode", "OpenCode", nil),
 	}, cache, nil, discoverer)
@@ -2015,6 +2082,9 @@ func TestModelsAsksClientsToRevalidateAnAgedCatalog(t *testing.T) {
 	}
 	record.CatalogJSON = string(data)
 	cache.records["opencode\x00"] = record
+	discoverer.mu.Lock()
+	discoverer.catalog.Models = []ports.AgentModelInfo{{ID: "model-two"}}
+	discoverer.mu.Unlock()
 
 	// A CLI-backed catalog can drift with no change to the binary or its config,
 	// so an aged cache hit is what replaces the manual "Refresh models" button.
@@ -2025,8 +2095,16 @@ func TestModelsAsksClientsToRevalidateAnAgedCatalog(t *testing.T) {
 	if !stale.RefreshRecommended {
 		t.Fatalf("catalog validated %s ago did not ask for revalidation", time.Since(aged.ValidatedAt))
 	}
+	if len(stale.Models) != 1 || stale.Models[0].ID != "model-one" {
+		t.Fatalf("models = %#v, want the cached catalog served immediately", stale.Models)
+	}
+	select {
+	case <-discoverer.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for background cache revalidation")
+	}
 	if discoverer.discoverCalls.Load() != 1 {
-		t.Fatalf("discovery calls = %d, want the cached catalog served immediately", discoverer.discoverCalls.Load())
+		t.Fatalf("discovery calls = %d before releasing revalidation, want the cached catalog served immediately", discoverer.discoverCalls.Load())
 	}
 }
 

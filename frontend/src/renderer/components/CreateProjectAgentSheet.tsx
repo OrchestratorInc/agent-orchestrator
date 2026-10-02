@@ -14,7 +14,7 @@ import { workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
 import {
 	buildRankedAgentOptions,
-	isReadyAgent,
+	isLaunchableAgent,
 	DEFAULT_AGENT_PRIORITY_RANK,
 	defaultAuthorizedAgentForRole,
 	type AgentInfo,
@@ -22,6 +22,7 @@ import {
 } from "../lib/agent-select-options";
 import { cn } from "../lib/utils";
 import { useAgentManagementMenu } from "../hooks/useAgentManagementMenu";
+import { useSettings } from "../hooks/useSettings";
 import { AgentAvatar } from "./AgentAvatar";
 import { FieldDefaultHint } from "./FieldDefaultHint";
 import { buildIntake, type IntakeForm, IntakeFields, intakeNeedsRule } from "./IntakeFields";
@@ -169,12 +170,14 @@ export function CreateProjectAgentSheet({
 	});
 	const isBusy = isCreating || isInitializing;
 	const [intake, setIntake] = useState<IntakeForm>(EMPTY_INTAKE);
-	const intakeIncomplete = intakeNeedsRule(intake);
+	const { settings } = useSettings();
+	const intakeVisible = !!settings?.trackerIntakeEnabled;
+	const intakeIncomplete = intakeVisible && intakeNeedsRule(intake);
 	const canSubmit =
 		canSubmitProjectSetup({
 			workerAgent,
 			orchestratorAgent,
-			intakeEnabled: intake.enabled,
+			intakeEnabled: intakeVisible && intake.enabled,
 			intakeAssignee: intake.assignee,
 		}) &&
 		!intakeIncomplete &&
@@ -315,18 +318,20 @@ export function CreateProjectAgentSheet({
 						}
 						canSubmit={canSubmit}
 						intakeControl={
-							<IntakeFields
-								form={intake}
-								onChange={(patch) => setIntake((f) => ({ ...f, ...patch }))}
-								compact
-								controlClassName="agents-sheet-control"
-								labelClassName="agents-sheet-label"
-							/>
+							intakeVisible ? (
+								<IntakeFields
+									form={intake}
+									onChange={(patch) => setIntake((f) => ({ ...f, ...patch }))}
+									compact
+									controlClassName="agents-sheet-control"
+									labelClassName="agents-sheet-label"
+								/>
+							) : null
 						}
 						isBusy={isBusy}
 						onCancel={() => onOpenChange(false)}
 						onSubmit={() =>
-							void onSubmit({ workerAgent, orchestratorAgent, trackerIntake: buildIntake(intake) })
+							void onSubmit({ workerAgent, orchestratorAgent, trackerIntake: intakeVisible ? buildIntake(intake) : undefined })
 						}
 						setupNotice={
 							repositorySetupNeeded
@@ -391,6 +396,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	onChange,
 	placeholder,
 	manageAgents = true,
+	manageView = "local",
 	triggerClassName,
 	labelClassName,
 	contentClassName,
@@ -409,11 +415,13 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	placeholder: string;
 	/** Cloud tasks use remote availability, not this computer's Harness settings. */
 	manageAgents?: boolean;
+	/** Which Harness settings view "manage" opens: local logins or cloud connections. */
+	manageView?: "local" | "cloud";
 	triggerClassName?: string;
 	labelClassName?: string;
 	contentClassName?: string;
 	value: string;
-	variant?: "stacked" | "settings-row" | "chip";
+	variant?: "stacked" | "settings-row" | "settings-control" | "chip";
 }) {
 	const { t } = useTranslation();
 	const fallbackAgents: AgentInfo[] = AGENT_OPTIONS.map((agent) => unknownAgentReadiness(agent, agentLabel(agent)));
@@ -425,21 +433,22 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 
 	const selectedOption = options.find((agent) => agent.id === value) ?? (value ? unknownAgentReadiness(value, agentLabel(value)) : undefined);
 	const hasReadinessSnapshot = agents !== undefined;
-	const needsSetup = manageAgents && hasReadinessSnapshot && Boolean(selectedOption && !isReadyAgent(selectedOption));
-	const visibleOptions = manageAgents && hasReadinessSnapshot ? options.filter(isReadyAgent) : options;
-	const management = useAgentManagementMenu(needsSetup ? value : undefined);
-	const managementAction = manageAgents ? { label: t("agentSelector.manage"), onSelect: management.requestManagement } : undefined;
+	const needsSetup = manageAgents && hasReadinessSnapshot && Boolean(selectedOption && !isLaunchableAgent(selectedOption));
+	const visibleOptions = manageAgents && hasReadinessSnapshot ? options.filter(isLaunchableAgent) : options;
+	// Local is Harness settings' default view, so only cloud needs to ask for one.
+	const management = useAgentManagementMenu(needsSetup ? value : undefined, manageView === "cloud" ? "cloud" : undefined);
+	const manageLabel = manageView === "cloud" ? t("agentSelector.manageCloud") : t("agentSelector.manage");
+	const managementAction = manageAgents ? { label: manageLabel, onSelect: management.requestManagement } : undefined;
 	const setupHint = needsSetup ? <span className="text-xs text-muted-foreground">{t("agentSelector.needsSetup")}</span> : null;
 
-	if (variant === "settings-row") {
+	if (variant === "settings-row" || variant === "settings-control") {
 		const menuOptions = visibleOptions.map((agent) => ({
 			value: agent.id,
 			label: agent.label,
 			disabled: agent.disabled,
 		}));
 
-		return (
-			<SettingsRow icon={icon} label={label}>
+		const control = (
 				<SettingsOptionMenu
 					aria-label={label}
 					value={value}
@@ -451,15 +460,15 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 					onCloseAutoFocus={management.onCloseAutoFocus}
 					disabled={disabled}
 					onChange={onChange}
-					triggerClassName={invalid ? "text-error" : undefined}
+					triggerClassName={cn(variant === "settings-control" && "w-full justify-between", invalid && "text-error")}
 					menuClassName={cn("settings-agent-menu-surface", AGENT_MENU_WIDTH)}
 					menuItemClassName="settings-agent-menu-item"
 					renderTrigger={() => (
-						<>
+						<span className="flex min-w-0 items-center gap-2">
 							{selectedOption ? <AgentAvatar provider={selectedOption.id} className="size-icon-lg" /> : null}
 							<span className="min-w-0 truncate">{selectedOption?.label ?? placeholder}</span>
 							{setupHint}
-						</>
+						</span>
 					)}
 					renderMenuItem={(option, selected) => {
 						const agent = options.find((entry) => entry.id === option.value);
@@ -476,8 +485,8 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 						);
 					}}
 				/>
-			</SettingsRow>
 		);
+		return variant === "settings-row" ? <SettingsRow icon={icon} label={label}>{control}</SettingsRow> : control;
 	}
 
 	// Chip: the value reads as part of a sentence ("Runs with Codex") rather than
@@ -601,7 +610,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 						</SelectItem>
 					))}
 					{manageAgents && visibleOptions.length === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">{t("agentSelector.noneReady")}</p>}
-					{manageAgents && <SelectItem value="__manage_agents__" className="mt-1 border-t border-border">{t("agentSelector.manage")}</SelectItem>}
+					{manageAgents && <SelectItem value="__manage_agents__" className="mt-1 border-t border-border">{manageLabel}</SelectItem>}
 				</SelectContent>
 			</Select>
 		</div>

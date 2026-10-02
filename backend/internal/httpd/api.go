@@ -27,6 +27,7 @@ type APIDeps struct {
 	CodexAccounts      controllers.CodexAccountService
 	Projects           projectsvc.Manager
 	Sessions           controllers.SessionService
+	Automations        controllers.AutomationService
 	DesktopWorkspaces  controllers.DesktopWorkspaceService
 	Activity           controllers.ActivityRecorder
 	UsageHooks         controllers.UsageHookRecorder
@@ -40,6 +41,7 @@ type APIDeps struct {
 	Import             controllers.ImportService
 	Directories        controllers.DirectoryBrowserService
 	ShellTerminals     controllers.ShellTerminalService
+	Cues               controllers.CueService
 	// Conversations is nil until a Chat driver is wired; the controller then
 	// answers 501 rather than panicking, matching the other optional surfaces.
 	Conversations controllers.ConversationService
@@ -115,6 +117,7 @@ type API struct {
 	codexAccounts *controllers.CodexAccountsController
 	projects      *controllers.ProjectsController
 	sessions      *controllers.SessionsController
+	automations   *controllers.AutomationsController
 	desktop       *controllers.DesktopWorkspaceController
 	usage         *controllers.UsageController
 	prs           *controllers.PRsController
@@ -125,6 +128,7 @@ type API struct {
 	imports       *controllers.ImportController
 	fs            *controllers.FSController
 	shellTerms    *controllers.ShellTerminalsController
+	cues          *controllers.CuesController
 	conversations *controllers.ConversationsController
 	settings      *controllers.SettingsController
 	dev           *controllers.DevController
@@ -167,6 +171,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			PreviewServer: deps.PreviewServer,
 			Capabilities:  deps.SessionCapabilities,
 		},
+		automations:   &controllers.AutomationsController{Svc: deps.Automations},
 		desktop:       &controllers.DesktopWorkspaceController{Svc: deps.DesktopWorkspaces},
 		usage:         &controllers.UsageController{Svc: deps.UsageSummary, Log: loggerOrDefault(log)},
 		prs:           &controllers.PRsController{Svc: deps.PRs},
@@ -177,6 +182,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		imports:       &controllers.ImportController{Svc: deps.Import},
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
+		cues:          &controllers.CuesController{Svc: deps.Cues},
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
@@ -225,6 +231,7 @@ func (a *API) Register(root chi.Router) {
 			a.codexAccounts.Register(r)
 			a.projects.Register(r)
 			a.sessions.Register(r)
+			a.automations.Register(r)
 			a.desktop.Register(r)
 			a.usage.Register(r)
 			a.prs.Register(r)
@@ -235,6 +242,7 @@ func (a *API) Register(root chi.Router) {
 			a.imports.Register(r)
 			a.fs.Register(r)
 			a.shellTerms.Register(r)
+			a.cues.Register(r)
 			a.conversations.Register(r)
 			a.settings.Register(r)
 			a.dev.Register(r)

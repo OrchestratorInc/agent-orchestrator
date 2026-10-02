@@ -27,6 +27,17 @@ func TestModelCommandUsesProjectWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestNormalizeShowsConcreteNameForDefaultCatalogModel(t *testing.T) {
+	got := normalize([]ports.AgentModelInfo{
+		{ID: "opus", Label: "Opus (default)"},
+		{ID: "sonnet", Label: "Default (recommended)"},
+	})
+	if len(got) != 2 || got[0].ID != "opus" || got[0].Label != "Opus" || !got[0].IsDefault ||
+		got[1].ID != "sonnet" || got[1].Label != "sonnet" || !got[1].IsDefault {
+		t.Fatalf("normalized models = %#v", got)
+	}
+}
+
 func environmentContains(env []string, wanted string) bool {
 	for _, item := range env {
 		if item == wanted {
@@ -45,9 +56,61 @@ func TestCommandDiscoveryTimeoutAllowsSlowModelRegistries(t *testing.T) {
 func TestModelDiscoveryErrorExplainsTimeout(t *testing.T) {
 	deadlineCtx, deadlineCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer deadlineCancel()
-	err := modelDiscoveryError(deadlineCtx, "kilocode", errors.New("signal: killed"))
+	err := modelDiscoveryError(deadlineCtx, "kilocode", errors.New("signal: killed"), nil)
 	if !strings.Contains(err.Error(), "kilocode model discovery timed out after 20s") {
 		t.Fatalf("error = %q, want clear timeout", err)
+	}
+}
+
+func TestModelDiscoveryErrorSurfacesCommandOutput(t *testing.T) {
+	// A live-exit failure must carry the CLI's own stderr so an "exit status 1"
+	// is diagnosable; ANSI is stripped and whitespace collapsed to one line.
+	err := modelDiscoveryError(context.Background(), "opencode", errors.New("exit status 1"),
+		[]byte("\x1b[31mError:\x1b[0m Configuration is invalid at\n  /x/opencode.json: bad file reference\n"))
+	msg := err.Error()
+	if !strings.Contains(msg, "opencode model discovery: exit status 1") {
+		t.Fatalf("error = %q, want wrapped exit status", err)
+	}
+	if !strings.Contains(msg, "Configuration is invalid at /x/opencode.json: bad file reference") {
+		t.Fatalf("error = %q, want single-line command output", err)
+	}
+	if strings.Contains(msg, "\x1b[") {
+		t.Fatalf("error = %q, want ANSI stripped", err)
+	}
+}
+
+func TestOpenCodeCredentialPresenceUnlocksProvider(t *testing.T) {
+	base := map[string]string{"EXISTING": "1"}
+	got := withOpenCodeCredentialPresence(base, "anthropic_api_key")
+	if got["ANTHROPIC_API_KEY"] != modelDiscoveryPresenceValue {
+		t.Fatalf("ANTHROPIC_API_KEY = %q, want presence placeholder", got["ANTHROPIC_API_KEY"])
+	}
+	if got["EXISTING"] != "1" {
+		t.Fatalf("existing env not preserved: %v", got)
+	}
+	// The caller's map must not be mutated (it may be reused/cached).
+	if _, leaked := base["ANTHROPIC_API_KEY"]; leaked {
+		t.Fatalf("input env was mutated: %v", base)
+	}
+}
+
+func TestOpenCodeCredentialPresenceUnknownTypeIsNoop(t *testing.T) {
+	base := map[string]string{"EXISTING": "1"}
+	got := withOpenCodeCredentialPresence(base, "not_a_provider")
+	if len(got) != 1 || got["EXISTING"] != "1" {
+		t.Fatalf("unknown credential type must be a no-op, got %v", got)
+	}
+}
+
+func TestModelDiscoveryErrorTailBounded(t *testing.T) {
+	err := modelDiscoveryError(context.Background(), "opencode", errors.New("exit status 1"),
+		[]byte(strings.Repeat("x", discoveryErrorDetailMax*3)))
+	// The detail is the wrapped error plus a bounded, ellipsis-prefixed tail.
+	if detail := discoveryErrorDetail([]byte(strings.Repeat("x", discoveryErrorDetailMax*3))); len([]rune(detail)) != discoveryErrorDetailMax+1 {
+		t.Fatalf("detail rune length = %d, want %d", len([]rune(detail)), discoveryErrorDetailMax+1)
+	}
+	if !strings.Contains(err.Error(), "…") {
+		t.Fatalf("error = %q, want truncation ellipsis", err)
 	}
 }
 
@@ -154,10 +217,42 @@ func TestDiscoveryWithoutASignInCheckNeverProbes(t *testing.T) {
 	}
 }
 
-func TestOpenCodeDiscoveryUsesPureMode(t *testing.T) {
-	spec := commandSpecs["opencode"]
-	if len(spec.args) != 2 || spec.args[0] != "--pure" || spec.args[1] != "models" {
-		t.Fatalf("opencode discovery args = %q, want [--pure models]", spec.args)
+func TestOpenCodeDiscoveryUsesStableModelsCommandForEachMajor(t *testing.T) {
+	// Must be the bare `models` subcommand. `--pure` is a global flag some
+	// opencode builds reject ("Unrecognized flag: --pure"), which would empty the
+	// picker; the stable contract for both verified majors is `opencode models`
+	// with no rejectable flag.
+	for _, agentID := range []string{"opencode", "opencode-v2"} {
+		spec, ok := commandSpecs[agentID]
+		if !ok {
+			t.Errorf("%s has no discovery command", agentID)
+			continue
+		}
+		if len(spec.args) != 1 || spec.args[0] != "models" {
+			t.Errorf("%s discovery args = %q, want [models]", agentID, spec.args)
+		}
+		models, err := spec.parser([]byte("anthropic/claude-sonnet-4-6\nopenai/gpt-5.4\n"))
+		if err != nil || len(models) != 2 || models[0].ID != "anthropic/claude-sonnet-4-6" || models[1].ID != "openai/gpt-5.4" {
+			t.Errorf("%s parsed models = %#v, %v", agentID, models, err)
+		}
+		base := Base(agentID)
+		if !base.AllowCustom || base.CustomModelEntry != ports.CustomModelEntryDirect {
+			t.Errorf("%s custom model policy = (%v, %q), want direct", agentID, base.AllowCustom, base.CustomModelEntry)
+		}
+	}
+}
+
+func TestMiMoCodeDiscoveryUsesNativeModelsCommand(t *testing.T) {
+	spec, ok := commandSpecs["mimo-code"]
+	if !ok {
+		t.Fatal("mimo-code has no discovery command")
+	}
+	if !reflect.DeepEqual(spec.args, []string{"models"}) {
+		t.Fatalf("mimo-code discovery args = %q, want [models]", spec.args)
+	}
+	base := Base("mimo-code")
+	if !base.AllowCustom || base.CustomModelEntry != ports.CustomModelEntryDirect {
+		t.Fatalf("mimo-code custom model policy = (%v, %q), want direct", base.AllowCustom, base.CustomModelEntry)
 	}
 }
 
@@ -178,6 +273,7 @@ func TestOMPAndHelpBackedAgentsUseDocumentedDiscoveryCommands(t *testing.T) {
 		{agent: "copilot", want: []string{"help", "config"}},
 		{agent: "droid", want: []string{"exec", "--help"}},
 		{agent: "crush", want: []string{"models"}},
+		{agent: "fx", want: []string{"models", "--json"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.agent, func(t *testing.T) {
@@ -192,6 +288,44 @@ func TestOMPAndHelpBackedAgentsUseDocumentedDiscoveryCommands(t *testing.T) {
 				t.Fatalf("%s discovery parser is nil", tc.agent)
 			}
 		})
+	}
+}
+
+func TestParseFXModelsUsesOnlyIDsAndPreservesThem(t *testing.T) {
+	got, err := parseFXModels([]byte(`{
+		"ids": ["anthropic/claude-sonnet-4-6", "openai/gpt-5.6-sol-high"],
+		"models": [{"id": "must-not-be-used"}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ports.AgentModelInfo{
+		{ID: "anthropic/claude-sonnet-4-6", Label: "anthropic/claude-sonnet-4-6"},
+		{ID: "openai/gpt-5.6-sol-high", Label: "openai/gpt-5.6-sol-high"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("models = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseFXModelsPreservesEveryNonEmptyIDExactly(t *testing.T) {
+	got, err := parseFXModels([]byte(`{"ids":["  padded/model  ","","   ","plain"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ports.AgentModelInfo{
+		{ID: "  padded/model  ", Label: "  padded/model  "},
+		{ID: "   ", Label: "   "},
+		{ID: "plain", Label: "plain"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("models = %#v, want exact non-empty IDs %#v", got, want)
+	}
+}
+
+func TestParseFXModelsRejectsMalformedJSON(t *testing.T) {
+	if _, err := parseFXModels([]byte(`{"ids":`)); err == nil {
+		t.Fatal("parseFXModels error = nil, want malformed JSON error")
 	}
 }
 
@@ -333,6 +467,7 @@ func TestCustomModelEntryPolicy(t *testing.T) {
 		{agent: "kimchi", wantEntryMode: "configured", wantSelection: ports.ModelSelectionCatalog},
 		{agent: "prime-agent", wantEntryMode: "configured", wantSelection: ports.ModelSelectionCatalog},
 		{agent: "autohand", wantEntryMode: "direct", wantSelection: ports.ModelSelectionCatalog},
+		{agent: "fx", wantEntryMode: "direct", wantSelection: ports.ModelSelectionCatalog},
 	}
 
 	for _, tc := range tests {
@@ -447,7 +582,7 @@ func TestCodexDiscoveryListsNewestModelsFirst(t *testing.T) {
 }
 
 func TestClineDiscoveryUsesACPModelOptions(t *testing.T) {
-	discoverer := Discoverer{ClineOptions: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+	discoverer := Discoverer{ACPOptions: map[string]ACPOptionListFunc{"cline": func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
 		return []ports.ChatConfigOption{
 			{
 				ID: "model", Name: "Model", Category: "model", Type: ports.ChatConfigOptionSelect,
@@ -459,7 +594,7 @@ func TestClineDiscoveryUsesACPModelOptions(t *testing.T) {
 			},
 			{ID: "mode", Name: "Mode", Category: "mode", Type: ports.ChatConfigOptionSelect},
 		}, nil
-	}}
+	}}}
 	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "cline", Binary: "/bin/cline"})
 	if err != nil {
 		t.Fatal(err)
@@ -880,5 +1015,57 @@ func TestCatalogFingerprintKeepsTheExecutableOnlyValueForConfiglessAgents(t *tes
 	got := CatalogFingerprint(context.Background(), "codex", "codex", dir, nil)
 	if want := BinaryVersion(context.Background(), "codex"); got != want {
 		t.Fatalf("fingerprint = %q, want the executable fingerprint %q", got, want)
+	}
+}
+
+// TestACPOnlyHarnessReportsDiscoveryFailure guards the difference between the
+// two ACP harnesses. Cline keeps configured provider selections, so an ACP
+// failure falls back to those. DeepSeek Harness has no second source, and the
+// generic path answers with an empty catalog and no error — which the caller
+// stores as a successful discovery, parking the picker until the next calendar
+// day and skipping the retry ladder. The error has to survive instead.
+func TestACPOnlyHarnessReportsDiscoveryFailure(t *testing.T) {
+	boom := errors.New("workspace path must be absolute")
+	discoverer := Discoverer{ACPOptions: map[string]ACPOptionListFunc{
+		"deepseek-harness": func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+			return nil, boom
+		},
+	}}
+	_, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{
+		AgentID: "deepseek-harness", Binary: "/bin/dsh",
+	})
+	if err == nil {
+		t.Fatal("an ACP-only harness swallowed its discovery failure; the caller will cache an empty catalog as success")
+	}
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want it to wrap %v", err, boom)
+	}
+}
+
+// TestCatalogFingerprintTracksTheDeepSeekProfile pins the invalidation the ACP
+// catalog depends on: the models come from a live `dsh --profile acp` session,
+// so a profile edit — a model route changed in the web setup flow — must not
+// leave the day's cached choices in place.
+func TestCatalogFingerprintTracksTheDeepSeekProfile(t *testing.T) {
+	home := t.TempDir()
+	profile := filepath.Join(home, "profiles", "acp")
+	if err := os.MkdirAll(profile, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(profile, "cordis.patch.yml")
+	if err := os.WriteFile(manifest, []byte("llm:\n  route: deepseek-v4-flash\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"DSH_HOME": home}
+
+	first := CatalogFingerprint(context.Background(), "deepseek-harness", "", "", env)
+	if first == "" {
+		t.Fatal("fingerprint is empty for a present profile")
+	}
+	if err := os.WriteFile(manifest, []byte("llm:\n  route: deepseek-v4-pro\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if second := CatalogFingerprint(context.Background(), "deepseek-harness", "", "", env); second == first {
+		t.Fatalf("fingerprint unchanged (%q) after the profile's model route changed", second)
 	}
 }

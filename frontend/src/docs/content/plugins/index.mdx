@@ -12,7 +12,7 @@ AO's current Go backend uses built-in adapters and services. These capabilities 
 | [Agents](/plugins/agents) | 24 terminal agent adapters; four also support structured Chat | Per project or session |
 | [Runtime](/plugins/runtimes) | `tmux` on macOS/Linux; ConPTY on Windows | Automatic by platform |
 | [Workspace](/plugins/workspaces) | Git worktrees and AO-managed Scratch directories | Automatic by project kind |
-| [Tracker](/plugins/trackers) | GitHub issue intake | Per-project, opt-in |
+| [Tracker](/plugins/trackers) | GitHub issue intake | Per-project opt-in, plus `AO_TRACKER_INTAKE` on the daemon |
 | [SCM](/plugins/scm) | GitHub PR, checks, reviews, and mergeability | Derived from the Git repository |
 | [Notifications](/plugins/notifiers) | Durable in-app history and Electron toasts | Built in |
 | [Terminal](/plugins/terminals) | Desktop xterm surface over AO's terminal mux | Built in |

@@ -69,6 +69,7 @@ type fakeStore struct {
 	pr                  map[domain.SessionID]domain.PRFacts
 	prFacts             map[domain.SessionID][]domain.PRFacts
 	prs                 map[domain.SessionID][]domain.PullRequest
+	reportedPRURLs      map[domain.SessionID][]string
 	projects            map[string]domain.ProjectRecord
 	worktrees           map[domain.SessionID][]domain.SessionWorktreeRecord
 	checks              map[string][]domain.PullRequestCheck
@@ -90,6 +91,7 @@ func newFakeStore() *fakeStore {
 		pr:             map[domain.SessionID]domain.PRFacts{},
 		prFacts:        map[domain.SessionID][]domain.PRFacts{},
 		prs:            map[domain.SessionID][]domain.PullRequest{},
+		reportedPRURLs: map[domain.SessionID][]string{},
 		projects:       map[string]domain.ProjectRecord{},
 		worktrees:      map[domain.SessionID][]domain.SessionWorktreeRecord{},
 		checks:         map[string][]domain.PullRequestCheck{},
@@ -125,6 +127,28 @@ func TestListBatchesKanbanReads(t *testing.T) {
 	}
 	if st.listReviewRunsCalls != 1 {
 		t.Fatalf("ListCurrentHeadReviewRuns calls = %d, want 1 batched call", st.listReviewRunsCalls)
+	}
+}
+
+func TestTaskPreparationsStayOutOfSessionReads(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", IsTaskPreparation: true}
+	svc := &Service{store: st}
+
+	list, err := svc.List(context.Background(), ListFilter{ProjectID: "mer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("list = %+v, want no preparations", list)
+	}
+	_, err = svc.Get(context.Background(), "mer-1")
+	var apiError *apierr.Error
+	if !errors.As(err, &apiError) || apiError.Code != "SESSION_NOT_FOUND" {
+		t.Fatalf("get preparation error = %v", err)
+	}
+	if first, err := svc.isFirstSession(context.Background()); err != nil || !first {
+		t.Fatalf("isFirstSession = %v, %v", first, err)
 	}
 }
 
@@ -180,6 +204,40 @@ func writeWorkspaceFile(t *testing.T, root, rel, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+// fixtureCommit is one commit for importCommits: its message and the files it
+// writes.
+type fixtureCommit struct {
+	message string
+	files   map[string]string
+}
+
+// importCommits appends commits to branch on top of parent in one git
+// fast-import, far faster than a git commit per commit for the hundreds a
+// capped commit list needs, and returns their SHAs oldest first.
+func importCommits(t *testing.T, repo, branch, parent string, commits []fixtureCommit) []string {
+	t.Helper()
+	var stream strings.Builder
+	for i, commit := range commits {
+		fmt.Fprintf(&stream, "commit refs/heads/%s\ncommitter AO Tests <ao@example.com> %d +0000\ndata %d\n%s\n", branch, 1700000000+i, len(commit.message), commit.message)
+		if i == 0 {
+			fmt.Fprintf(&stream, "from %s\n", parent)
+		}
+		for path, content := range commit.files {
+			fmt.Fprintf(&stream, "M 100644 inline %s\ndata %d\n%s\n", path, len(content), content)
+		}
+	}
+	cmd := exec.Command("git", "-C", repo, "fast-import", "--quiet")
+	cmd.Stdin = strings.NewReader(stream.String())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git fast-import: %v\n%s", err, out)
+	}
+	shas := strings.Fields(runGit(t, repo, "rev-list", "--reverse", parent+".."+branch))
+	if len(shas) != len(commits) {
+		t.Fatalf("imported %d commits, want %d", len(shas), len(commits))
+	}
+	return shas
 }
 
 func linkWorkspaceDir(t *testing.T, target, link string) {
@@ -344,6 +402,10 @@ func (f *fakeStore) ListPRsBySession(_ context.Context, id domain.SessionID) ([]
 		return nil, nil
 	}
 	return []domain.PullRequest{{URL: pr.URL, SessionID: id, Number: pr.Number, Draft: pr.Draft, Merged: pr.Merged, Closed: pr.Closed, CI: pr.CI, Review: pr.Review, Mergeability: pr.Mergeability, UpdatedAt: pr.UpdatedAt, TargetBranch: pr.TargetBranch}}, nil
+}
+
+func (f *fakeStore) ListReportedPRURLs(_ context.Context, id domain.SessionID) ([]string, error) {
+	return append([]string(nil), f.reportedPRURLs[id]...), nil
 }
 
 func (f *fakeStore) ListPRFactsForSession(_ context.Context, id domain.SessionID) ([]domain.PRFacts, error) {
@@ -2514,6 +2576,12 @@ func (f *fakeCommander) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.
 	}
 	return domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness}, len(cfg.Prompt), 0, nil
 }
+func (*fakeCommander) PrepareTaskWorkspace(context.Context, domain.ProjectRecord) (domain.TaskPreparationToken, error) {
+	return "", nil
+}
+func (*fakeCommander) CancelTaskPreparation(context.Context, domain.TaskPreparationToken) error {
+	return nil
+}
 func (*fakeCommander) SwitchAgent(context.Context, domain.SessionID, sessionmanager.SwitchAgentConfig) (domain.AgentSwitch, error) {
 	return domain.AgentSwitch{}, nil
 }
@@ -2582,6 +2650,9 @@ func (f *fakeCommander) Send(_ context.Context, id domain.SessionID, message str
 	f.sent = append(f.sent, id)
 	f.sentMessages = append(f.sentMessages, message)
 	return nil
+}
+func (f *fakeCommander) SendWithOptions(_ context.Context, id domain.SessionID, message string, _ *ports.SpawnAttachment, _ ports.MessageDeliveryOptions) error {
+	return f.Send(context.Background(), id, message, nil)
 }
 func (f *fakeCommander) RunBackgroundTask(ctx context.Context, id domain.SessionID, systemPrompt, prompt string) (string, error) {
 	call := backgroundTaskCall{
@@ -3870,6 +3941,26 @@ func TestSpawnGenericOrchestratorReturnsExistingActiveSession(t *testing.T) {
 	}
 }
 
+// A scheduled orchestrator must never be falsely linked to an unrelated
+// interactive orchestrator. It stays retryable until the active one exits.
+func TestSpawnAutomationOrchestratorConflictsWithUnrelatedActiveSession(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	st.sessions["mer-orch"] = domain.SessionRecord{ID: "mer-orch", ProjectID: "mer", Kind: domain.KindOrchestrator}
+	fc := &fakeCommander{}
+	svc := &Service{manager: fc, store: st}
+	runID := domain.AutomationRunID("run-1")
+
+	_, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindOrchestrator, AutomationRunID: &runID})
+	var apiError *apierr.Error
+	if !errors.As(err, &apiError) || apiError.Kind != apierr.KindConflict || apiError.Code != "ORCHESTRATOR_ALREADY_ACTIVE" {
+		t.Fatalf("Spawn error = %v, want ORCHESTRATOR_ALREADY_ACTIVE conflict", err)
+	}
+	if fc.spawned {
+		t.Fatal("manager.Spawn must not run while another orchestrator is active")
+	}
+}
+
 func TestSpawnGenericOrchestratorAllowsReplacementAfterTermination(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
@@ -4540,6 +4631,28 @@ func TestListPRsOrdersActiveBeforeClosedThenUpdatedDesc(t *testing.T) {
 	}
 	if len(got) != 3 || got[0].URL != "open-new" || got[1].URL != "open-old" || got[2].URL != "closed-new" {
 		t.Fatalf("order = %+v", got)
+	}
+}
+
+func TestListPRListingKeepsExternalReportsLinkedAndDedupesTracked(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
+	st.prs["mer-1"] = []domain.PullRequest{{
+		URL: "https://github.com/acme/app/pull/7", SessionID: "mer-1", Number: 7,
+		CI: domain.CIUnknown, Review: domain.ReviewNone, Mergeability: domain.MergeUnknown,
+		UpdatedAt: time.Now().UTC(),
+	}}
+	st.reportedPRURLs["mer-1"] = []string{
+		"https://www.github.com/ACME/App/pull/007", // tracked through existing SCM facts
+		"https://gitlab.com/release/notes/-/merge_requests/9",
+		"https://gitlab.com/release/notes/-/merge_requests/9", // report retry
+	}
+	got, err := (&Service{store: st}).ListPRListing(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Tracked) != 1 || len(got.Linked) != 1 || got.Linked[0].URL != "https://gitlab.com/release/notes/-/merge_requests/9" {
+		t.Fatalf("listing = %+v", got)
 	}
 }
 

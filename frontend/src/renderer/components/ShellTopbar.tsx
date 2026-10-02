@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { useNavigate, useParams } from "@tanstack/react-router";
-import { Folder, LayoutDashboard, Plus, Trash2 } from "lucide-react";
+import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
+import { Archive, CalendarClock, Folder, LayoutDashboard, Plus } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { animate, LayoutGroup, motion, useMotionValue, useReducedMotion } from "motion/react";
 import { NotificationCenter } from "./NotificationCenter";
@@ -13,19 +13,22 @@ import {
 	isOrchestratorSession,
 	resolveNextNavigationAfterSessionKill,
 	sessionIsActive,
+	sessionCueTargetAvailable,
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
+	toProjectKind,
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { useWorkspaceScope, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { useWorkspaceQuery, useWorkspaceScope, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { archivedStandaloneSessions } from "../lib/standalone-archive";
 import {
 	clearTerminateSessionState,
 	useProjectTerminateSessionStates,
 	useTerminateSession,
 	useTerminateSessionState,
 } from "../hooks/useTerminateSession";
-import { sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
+import { inspectorIsOpen, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
 import { OrchestratorIcon } from "./icons";
 import { getAgentActivityView } from "../lib/session-presentation";
 import { isLinuxPlatform, isMacPlatform, usesBoardActionsInPanel } from "../lib/platform";
@@ -34,13 +37,14 @@ import { SHELL_PANEL_SPRING } from "../lib/motion-spring";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
 import { StatusPill } from "./StatusPill";
 import { TopbarActionError, TopbarButton, topbarHeaderClass, topbarProjectLabelClass } from "./TopbarButton";
-import { SessionTerminationPopover } from "./SessionTerminationPopover";
+import { SessionArchiveDialog } from "./SessionArchiveDialog";
 import { TopbarOpenEditorButton } from "./TopbarOpenEditorButton";
 import {
 	agentSwitchStatusVisual,
 	deriveSessionAgentSwitchPresentation,
 } from "../lib/agent-switch-presentation";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { CueRunMenu } from "./chat/CueRunMenu";
 
 const isMac = isMacPlatform();
 const dragStyle = isMac ? ({ WebkitAppRegion: "drag" } as React.CSSProperties) : undefined;
@@ -81,6 +85,7 @@ export function ShellTopbar({
 	compactActions?: boolean;
 } = {}) {
 	const { t } = useTranslation();
+	const location = useLocation();
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const params = useParams({ strict: false }) as { projectId?: string; sessionId?: string };
@@ -112,9 +117,11 @@ export function ShellTopbar({
 	const workspaceScope = workspaceQuery.data;
 	const session = workspaceScope?.session;
 	const isSessionRoute = Boolean(params.sessionId);
+	const isAutomationsRoute = location.pathname === "/automations";
+	const isStandaloneBoardRoute = location.pathname === "/sessions" || location.pathname === "/sessions/";
 	const isOrchestrator = session ? isOrchestratorSession(session) : false;
 	const isInspectorOpen = useUiStore((state) =>
-		currentSessionId ? (state.inspectorSessions[currentSessionId]?.isOpen ?? !isOrchestrator) : false,
+		currentSessionId ? inspectorIsOpen(state.inspectorSessions, currentSessionId) : false,
 	);
 	// Project in scope: the session's workspace wins over the route param so the
 	// cross-project /sessions/$sessionId route still resolves a crumb. A
@@ -123,8 +130,9 @@ export function ShellTopbar({
 	// route slug. "Board" is the root-board crumb only.
 	const projectId = session?.workspaceId ?? params.projectId;
 	const isProjectBoardRoute = !isSessionRoute && Boolean(projectId);
-	const isRootBoardRoute = !isSessionRoute && !isProjectBoardRoute;
+	const isRootBoardRoute = !isSessionRoute && !isProjectBoardRoute && !isAutomationsRoute && !isStandaloneBoardRoute;
 	const project = workspaceScope?.project;
+	const supportsLocalCues = Boolean(project && toProjectKind(project.kind));
 	const projectLabel = project?.name ?? session?.workspaceName ?? (projectId ? "" : t("shell.board"));
 	const orchestrator = workspaceScope?.orchestrator;
 	const supportsProjectActions = project?.kind !== STANDALONE_PROJECT_KIND && projectId !== STANDALONE_WORKSPACE_ID;
@@ -172,18 +180,30 @@ export function ShellTopbar({
 						<span aria-hidden="true" className="workspace-topbar__identity-separator" />
 						<SessionStatusPill session={session} />
 					</div>
+				) : isAutomationsRoute ? (
+					<div className="inline-flex min-w-0 items-center gap-1.5" data-testid="automations-topbar-label">
+						<span className={cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5")}>
+							<CalendarClock aria-hidden="true" className="size-icon-md" />
+							{t("automations.title")}
+						</span>
+					</div>
 				) : (isProjectBoardRoute && boardActionsInPanel) ||
-				  (isMac && isRootBoardRoute && boardActionsInPanel) ? null : (
+				  (isMac && isRootBoardRoute && boardActionsInPanel) ||
+				  (isStandaloneBoardRoute && boardActionsInPanel) ? null : (
 					<div className="inline-flex min-w-0 items-center gap-1.5" data-testid="board-topbar-label">
-						<motion.span
-							layoutId="topbar-project-label"
-							layout="position"
-							className={cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5")}
-							transition={{ type: "spring", stiffness: 400, damping: 40 }}
-						>
-							<LayoutDashboard aria-hidden="true" className="size-icon-md" />
-							{t("shell.board")}
-						</motion.span>
+						{isStandaloneBoardRoute ? (
+							<StandaloneArchiveTopbarLabel />
+						) : (
+							<motion.span
+								layoutId="topbar-project-label"
+								layout="position"
+								className={cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5")}
+								transition={{ type: "spring", stiffness: 400, damping: 40 }}
+							>
+								<LayoutDashboard aria-hidden="true" className="size-icon-md" />
+								{t("shell.board")}
+							</motion.span>
+						)}
 					</div>
 				)}
 				</div>
@@ -197,7 +217,15 @@ export function ShellTopbar({
 				data-testid="workspace-topbar-actions"
 			>
 				{!boardActionsInPanel && isProjectBoardRoute ? (
-					<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} style={noDragStyle} />
+					<>
+						<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={project?.kind === CLOUD_PROJECT_KIND} style={noDragStyle} />
+						{supportsLocalCues ? <span className="inline-flex" style={noDragStyle}>
+							<CueRunMenu
+								projectId={projectId!}
+								disabled={isProjectRestarting || isProvisioning}
+							/>
+						</span> : null}
+					</>
 				) : null}
 				{isSessionRoute ? (
 					<>
@@ -266,17 +294,30 @@ export function ShellTopbar({
 								style={noDragStyle}
 							/>
 						) : null}
+						{/* Cues run from the topbar, not the composer: with a session in
+						    scope they dispatch into it, where the board's project-level
+						    runner (above) spawns a worker instead. */}
+						{session && supportsLocalCues ? (
+							<span className="inline-flex" style={noDragStyle}>
+								<CueRunMenu
+									projectId={session.workspaceId}
+									sessionId={session.id}
+									disabled={!sessionCueTargetAvailable(session)}
+								/>
+							</span>
+						) : null}
 						{/* Local worker actions share one tight control group. Navigation
 						    remains a separate visual target in the outer top-bar row. */}
-						{!isOrchestrator && session && (sessionAction || sessionIsActive(session)) ? (
+						{!isOrchestrator &&
+							(sessionAction || (session && !session.cloud && sessionIsActive(session))) ? (
 							<div
 								className="inline-flex shrink-0 items-center gap-1"
 								data-testid="session-local-actions"
 								style={noDragStyle}
 							>
 								{sessionAction ? <div className="inline-flex shrink-0 items-center">{sessionAction}</div> : null}
-								{sessionIsActive(session) ? (
-									<TopbarKillButton
+								{session && !session.cloud && sessionIsActive(session) ? (
+									<TopbarArchiveButton
 										key={session.id}
 										session={session}
 										orchestratorId={orchestrator?.id}
@@ -333,7 +374,12 @@ export function ShellTopbar({
 						aria-hidden="true"
 					/>
 				) : (
-					<NotificationCenter style={noDragStyle} />
+					<>
+						{!boardActionsInPanel && isStandaloneBoardRoute ? (
+							<StandaloneArchiveTopbarNewAgent style={noDragStyle} />
+						) : null}
+						<NotificationCenter style={noDragStyle} />
+					</>
 				)}
 			</div>
 		</motion.header>
@@ -341,11 +387,40 @@ export function ShellTopbar({
 	);
 }
 
+function StandaloneArchiveTopbarLabel() {
+	const { t } = useTranslation();
+	const count = archivedStandaloneSessions(useWorkspaceQuery().data ?? []).length;
+	return (
+		<span className={topbarProjectLabelClass} data-testid="standalone-archive-title">
+			{t("standalone.archive.heading", { count })}
+		</span>
+	);
+}
+
+function StandaloneArchiveTopbarNewAgent({ style }: { style?: React.CSSProperties }) {
+	const { t } = useTranslation();
+	const requestNewTask = useUiStore((state) => state.requestNewTask);
+	return (
+		<TopbarButton
+			className="topbar-control--labeled"
+			onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
+			style={style}
+			type="button"
+			variant="primary"
+		>
+			<Plus className="size-icon-md" aria-hidden="true" />
+			{t("standalone.archive.newAgent")}
+		</TopbarButton>
+	);
+}
+
 // Confirmation is modal, but teardown progress is not: confirming closes the
 // dialog and returns to the project's orchestrator while the daemon finishes.
+// The control archives rather than deletes, so it carries the Archive icon and
+// the neutral icon treatment instead of the danger-red kill affordance.
 // Mutation-cache state is filtered by worker ID so rapid route switches never
-// carry another worker's Killing/error state into the current topbar.
-export function TopbarKillButton({
+// carry another worker's Archiving/error state into the current topbar.
+export function TopbarArchiveButton({
 	session,
 	orchestratorId,
 	onKilled,
@@ -371,31 +446,29 @@ export function TopbarKillButton({
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<span className="inline-flex">
-						<SessionTerminationPopover
+						<SessionArchiveDialog
 							onConfirm={confirmKill}
 							onOpenChange={setConfirmOpen}
 							open={confirmOpen}
 							session={session}
 							trigger={
 								<TopbarButton
-									aria-label={isPending ? t("shell.killing") : t("shell.killSession")}
+									aria-label={isPending ? t("shell.archiving") : t("shell.archiveSession")}
 									disabled={isPending}
 									onClick={() => {
 										clearTerminateSessionState(queryClient, session.id);
-										// Force the confirm open rather than letting the trigger toggle
-										// it: a second trash tap would otherwise dismiss the dialog, so
-										// the delete "needed" several clicks to land on the Yes button.
+										// Always open the confirm; the modal owns its own dismissal.
 										setConfirmOpen(true);
 									}}
-									variant="killIcon"
+									variant="icon"
 								>
-									<Trash2 className="size-icon-md" aria-hidden="true" />
+									<Archive className="size-icon-md" aria-hidden="true" />
 								</TopbarButton>
 							}
 						/>
 					</span>
 				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("shell.killSession")}</TooltipContent>
+				<TooltipContent side="bottom">{t("shell.archiveSession")}</TooltipContent>
 			</Tooltip>
 			{error ? <TopbarActionError>{error}</TopbarActionError> : null}
 		</div>
@@ -419,9 +492,9 @@ function ProjectTerminationFeedback({ projectId }: { projectId: string | undefin
 						className="max-w-40 truncate text-caption text-muted-foreground"
 						key={state.session.id}
 						role="status"
-						title={t("shell.killingNamed", { title: state.session.title })}
+						title={t("shell.archivingNamed", { title: state.session.title })}
 					>
-						{t("shell.killingNamed", { title: state.session.title })}
+						{t("shell.archivingNamed", { title: state.session.title })}
 					</span>
 				),
 			)}

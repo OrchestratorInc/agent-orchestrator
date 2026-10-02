@@ -267,7 +267,7 @@ export function KeyboardShortcutsContent({
 		await resetBinding(id);
 		showToast({
 			title: t("shortcut.restored"),
-			body: `${definition(id)?.label ?? id} now uses its default binding.`,
+			body: `${definition(id)?.label ?? id} now uses its original binding.`,
 			undo: async () => {
 				await setOverrides(before);
 				showToast({ title: t("shortcut.undone") });
@@ -293,7 +293,7 @@ export function KeyboardShortcutsContent({
 	return (
 		<>
 			<div className="relative flex flex-col gap-3">
-				<div className="sticky top-0 z-10 flex flex-col gap-3 bg-[var(--color-bg-settings-row)] pb-2">
+				<div className="sticky top-0 z-10 flex flex-col gap-3 bg-(--color-bg-settings-dialog) pb-2">
 					<label className="flex h-9! min-w-0 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3">
 						<Search
 							className="size-4 shrink-0 text-settings-muted"

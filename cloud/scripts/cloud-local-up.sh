@@ -91,11 +91,22 @@ PY
 fi
 export AO_CLOUD_LOCAL_DOCKERFILE
 
+compose_env_args=()
+if [[ "${AO_CLOUD_GITHUB_LOCAL_TEST:-false}" == "1" || "${AO_CLOUD_GITHUB_LOCAL_TEST:-false}" == "true" ]]; then
+	local_env_file="$repository_root/.env.local"
+	if [[ ! -f "$local_env_file" ]]; then
+		echo "AO_CLOUD_GITHUB_LOCAL_TEST requires $local_env_file" >&2
+		exit 1
+	fi
+	compose_env_args=(--env-file "$local_env_file")
+fi
+
 compose() {
 	docker compose \
 		--project-directory "$repository_root" \
 		--file "$repository_root/compose.yaml" \
 		--file "$repository_root/compose.local.yaml" \
+		"${compose_env_args[@]}" \
 		"$@"
 }
 
