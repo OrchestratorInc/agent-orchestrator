@@ -137,7 +137,7 @@ const BROWSER_CHAT_MIN_PX = 440;
 // Files sizes like the other utility views (same default, cap and remembered
 // width); it only keeps a wider floor so its tree + preview stay usable.
 const FILES_WORKSPACE_MIN_PX = 460;
-type CenterFileOpenRequest = { commitSha?: string; editing: boolean; key: number; mode: FileViewMode; scope?: FileOpenOptions["scope"] };
+type CenterFileOpenRequest = { commitSha?: string; editing: boolean; key: number; line?: number; mode: FileViewMode; scope?: FileOpenOptions["scope"] };
 const EMPTY_AUXILIARY_TAB_ORDER: string[] = [];
 // The inspector tab labels respond to the tablist's remaining width. The
 // 239px tablist breakpoint plus the 76px pinned-action reserve and 10px leading
@@ -748,9 +748,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	const [filesPoppedOut, setFilesPoppedOut] = useState(false);
 	const [filesPopoutTopbarHost, setFilesPopoutTopbarHost] = useState<HTMLDivElement | null>(null);
 	const [filesSplit, setFilesSplit] = useState(() => window.localStorage.getItem("ao.files.diffStyle") === "split");
-	const [filePreviewRequestsBySession, setFilePreviewRequestsBySession] = useState<
-		Record<string, { path: string; key: number }>
-	>({});
 	const [fileTabsBySession, setFileTabsBySession] = useState<Record<string, SessionFileTabState>>({});
 	const fileTabs = fileTabsBySession[sessionId] ?? EMPTY_SESSION_FILE_TABS;
 	const [dirtyFilesBySession, setDirtyFilesBySession] = useState<Record<string, Record<string, true>>>({});
@@ -1344,6 +1341,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	}, [sessionId, setActiveShellTerminal]);
 	const openCenterFile = useCallback((path: string, options?: FileOpenOptions) => {
 		setReviewerChatId(null);
+		setActiveShellTerminal(null);
+		setTerminalTarget({ kind: "worker" });
 		setCenterFileRequestsBySession((current) => {
 			const sessionRequests = current[sessionId] ?? {};
 			return {
@@ -1354,6 +1353,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 						commitSha: options?.commitSha,
 						editing: options?.editing ?? false,
 						key: (sessionRequests[path]?.key ?? 0) + 1,
+						line: options?.line,
 						mode: options?.mode ?? "file",
 						scope: options?.scope,
 					},
@@ -1364,7 +1364,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 			...current,
 			[sessionId]: openSessionFile(current[sessionId] ?? EMPTY_SESSION_FILE_TABS, path),
 		}));
-	}, [sessionId]);
+	}, [sessionId, setActiveShellTerminal]);
 	const markCenterFileEditingConsumed = useCallback((path: string, requestKey: number) => {
 		consumedCenterEditingRequestsRef.current.add(`${sessionId}:${path}:${requestKey}`);
 	}, [sessionId]);
@@ -1383,11 +1383,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	}, [sessionId]);
 	const activateCenterFile = useCallback((path: string) => {
 		setReviewerChatId(null);
+		setActiveShellTerminal(null);
+		setTerminalTarget({ kind: "worker" });
 		setFileTabsBySession((current) => ({
 			...current,
 			[sessionId]: activateSessionFile(current[sessionId] ?? EMPTY_SESSION_FILE_TABS, path),
 		}));
-	}, [sessionId]);
+	}, [sessionId, setActiveShellTerminal]);
 	const closeCenterFile = useCallback((path: string) => {
 		setFileTabsBySession((current) => ({
 			...current,
@@ -1999,19 +2001,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	}, [queryClient, sessionId, t]);
 
 	const revealResolvedWorkspaceFile = useCallback(
-		async (rawPath: string) => {
+		async (rawPath: string, options?: FileOpenOptions) => {
 			const data = await fetchWorkspaceFiles();
 			const path = matchWorkspaceFilePath(rawPath, data.files ?? []);
-			if (browserOnly) {
-				openCenterFile(path);
-				return;
-			}
-			setFilePreviewRequestsBySession((current) => ({
-				...current,
-				[sessionId]: { path, key: (current[sessionId]?.key ?? 0) + 1 },
-			}));
+			openCenterFile(path, options);
 		},
-		[browserOnly, openCenterFile, fetchWorkspaceFiles, sessionId],
+		[openCenterFile, fetchWorkspaceFiles],
 	);
 
 	const handleOpenFiles = useCallback(() => {
@@ -2021,18 +2016,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 
 	const handleOpenReviewFile = useCallback(
 		(target: { line?: number; path: string }) => {
-			prepareFilesInspector();
-			void revealResolvedWorkspaceFile(target.path);
+			void revealResolvedWorkspaceFile(target.path, { line: target.line, mode: "diff" });
 		},
-		[prepareFilesInspector, revealResolvedWorkspaceFile],
+		[revealResolvedWorkspaceFile],
 	);
 
 	const handleOpenFile = useCallback(
-		(path: string) => {
-			prepareFilesInspector();
-			void revealResolvedWorkspaceFile(path);
+		(path: string, line?: number) => {
+			void revealResolvedWorkspaceFile(path, { line, mode: "file" });
 		},
-		[prepareFilesInspector, revealResolvedWorkspaceFile],
+		[revealResolvedWorkspaceFile],
 	);
 
 	const handleToggleFilesPopOut = useCallback(
@@ -2381,6 +2374,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 							annotation={fileAnnotation}
 							commitSha={activeCenterFileRequest?.commitSha}
 							initialEditing={activeCenterFileInitialEditing}
+							initialLine={activeCenterFileRequest?.line}
 							initialMode={activeCenterFileRequest?.mode ?? "file"}
 							initialRequestKey={activeCenterFileRequest?.key ?? 0}
 							onDirtyChange={setCenterFileDirty}
@@ -2394,6 +2388,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 											annotation={fileAnnotation}
 											commitSha={activeCenterFileRequest?.commitSha}
 											initialEditing={activeCenterFileInitialEditing}
+											initialLine={activeCenterFileRequest?.line}
 											initialMode={activeCenterFileRequest?.mode ?? "file"}
 											initialRequestKey={activeCenterFileRequest?.key ?? 0}
 											onDirtyChange={setCenterFileDirty}
@@ -2469,7 +2464,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 										onOpenFile={openCenterFile}
 										onSplitChange={setFilesSplit}
 										onToggleMaximized={handleToggleFilesPopOut}
-										revealRequest={filePreviewRequestsBySession[sessionId] ?? null}
 										sessionId={session.id}
 										split={filesSplit}
 										/>
