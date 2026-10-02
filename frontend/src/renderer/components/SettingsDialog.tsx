@@ -20,6 +20,7 @@ import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCa
 const CODER_PAGE_TEST_EMAILS = new Set([
 	"prateekkarnal77@gmail.com",
 	"pritommazumdar1995@gmail.com",
+	"c.mohak2004@gmail.com",
 ]);
 
 function initialProjectSaveState(): ProjectSettingsSaveState {
