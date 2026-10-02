@@ -17,7 +17,7 @@
 通过了解项目上下文的编排器规划和委派更大的目标。<br />
 在实时看板中跟踪每个 worker、拉取请求、CI 运行和评审。
 
-[**下载 AO**](#安装) &nbsp;&bull;&nbsp; [文档](https://docs.aoagents.dev) &nbsp;&bull;&nbsp; [版本](https://github.com/Untrivial-ai/agent-orchestrator/releases) &nbsp;&bull;&nbsp; [参与贡献](../CONTRIBUTING.md) &nbsp;&bull;&nbsp; [Discord](https://discord.com/invite/UZv7JjxbwG)
+[**下载 AO**](#安装) &nbsp;&bull;&nbsp; [文档](https://docs.orchestrator.inc) &nbsp;&bull;&nbsp; [版本](https://github.com/Untrivial-ai/agent-orchestrator/releases) &nbsp;&bull;&nbsp; [参与贡献](../CONTRIBUTING.md) &nbsp;&bull;&nbsp; [Discord](https://discord.com/invite/UZv7JjxbwG)
 
 [English](../README.md) · **简体中文** · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português (Brasil)](README.pt-BR.md)
 
@@ -111,7 +111,7 @@ AO 与你现有的编程智能体和源代码管理流程配合使用。智能�
 
 ## 支持的智能体
 
-**支持 26 种编程智能体**，全部纳入同一个受监督的工作流。
+在同一个受监督的工作流中使用编程智能体。当前支持的智能体和模式请查看[功能目录](https://docs.orchestrator.inc/plugins/agents)。
 
 <table>
   <tr valign="middle">
@@ -161,7 +161,7 @@ AO 与你现有的编程智能体和源代码管理流程配合使用。智能�
   </tr>
 </table>
 
-[浏览智能体设置指南 →](https://docs.aoagents.dev/plugins/agents)
+[浏览智能体设置指南 →](https://docs.orchestrator.inc/plugins/agents)
 
 **根据当下的需要选择交互方式：结构化 Chat 或智能体原生的终端界面。**
 
@@ -178,7 +178,7 @@ AO 与你现有的编程智能体和源代码管理流程配合使用。智能�
 | Linux（Debian/Ubuntu） | [下载](https://github.com/Untrivial-ai/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.deb)      |
 | Linux（Fedora/RHEL）   | [下载](https://github.com/Untrivial-ai/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.rpm)      |
 
-打开 Agent Orchestrator，并选择你希望 AO 管理的仓库。桌面应用会为你运行守护进程，因此无需使用 CLI。有关智能体 CLI 的设置和故障排除，请参阅[安装指南](https://docs.aoagents.dev/installation)。
+打开 Agent Orchestrator，并选择你希望 AO 管理的仓库。桌面应用会为你运行守护进程，因此无需使用 CLI。有关智能体 CLI 的设置和故障排除，请参阅[安装指南](https://docs.orchestrator.inc/installation)。
 
 ## 报告 bug
 
@@ -213,7 +213,7 @@ cd agent-orchestrator
 
 | 文档                                                                | 需要以下内容时从这里开始                                      |
 | ------------------------------------------------------------------- | ------------------------------------------------------------- |
-| [产品文档](https://docs.aoagents.dev)                                  | 安装、智能体设置和日常产品使用。                              |
+| [产品文档](https://docs.orchestrator.inc)                                  | 安装、智能体设置和日常产品使用。                              |
 | [docs/architecture.md](../docs/architecture.md)                     | 后端心智模型、生命周期、持久化、CDC、状态推导和守护进程边界。 |
 | [docs/backend-code-structure.md](../docs/backend-code-structure.md) | 包职责以及各项后端关注点应归属的位置。                        |
 | [docs/cli/README.md](../docs/cli/README.md)                         | CLI 行为和守护进程路由映射。                                  |
@@ -241,9 +241,9 @@ cd agent-orchestrator
 
 加入 [Discord](https://discord.com/invite/UZv7JjxbwG) 获取帮助并参与贡献者讨论，关注 [@ao_build](https://x.com/ao_build) 了解最新动态，或在 [GitHub Issues](https://github.com/Untrivial-ai/agent-orchestrator/issues) 中发起讨论。
 
-## 匿名遥测
+## 产品遥测
 
-AO 使用注重隐私的产品使用和可靠性指标，这些指标在设计上排除了个人身份信息及项目内容。它们帮助我们了解产品采用情况并改进产品。[进一步了解遥测和隐私](../docs/telemetry.md)。
+AO 收集不包含项目内容的使用和可靠性指标。但项目的 GitHub 所有者及已登录的 GitHub 用户名可能识别个人，因此这些遥测数据并非匿名。关闭遥测也会停止发送这些信息。[查看详情和设置](../docs/telemetry.md)。
 
 ## 许可证
 

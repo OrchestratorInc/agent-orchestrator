@@ -5,6 +5,8 @@ description: Configure a registered project, its worker and orchestrator agents,
 
 A project is a repository, a multi-repository workspace, or an AO-managed Scratch directory. AO stores project identity and typed configuration in its database; there is no current `agent-orchestrator.yaml` lookup or global YAML registry.
 
+To get started, choose **Add project** in the desktop sidebar, select a repository, set the worker agent in Project Settings, and start a small task. A **worker** is the agent doing that task in its own workspace. An **orchestrator** supervises workers; a **reviewer** is a separate agent run that inspects a worker's pull request. You can add their defaults later. The CLI examples below are for scripting; Project Settings is safer for interactive changes because `set-config` replaces the whole stored configuration.
+
 ## Project kinds
 
 | Kind | Use it for |
@@ -105,7 +107,7 @@ ao project get <project-id> --json
 ao project set-config <project-id> --config-json '{"worker":{"agent":"codex"}}'
 ```
 
-The second command intentionally replaces the whole config with just that worker override. Preserve existing setup, rules, reviewers, and intake fields in real updates. Focused flags also build a replacement; they are not a patch. `--config-json` does not read a filename. Use `--help` for supported flags and `--clear` to reset.
+The second command intentionally replaces the whole config with just that worker override. Preserve existing setup, rules, reviewers, and intake fields in real updates. Focused flags also build a replacement; they are not a patch. `--config-json` does not read a filename. The CLI currently ignores unknown JSON keys before sending the replacement. A typo-only object can therefore clear the configuration without an unknown-key error. Check supported keys before applying and inspect the stored result afterward. Use `--help` for supported flags and `--clear` to reset.
 
 ## Choose The Workspace
 
@@ -198,7 +200,7 @@ Keep the harness installed and authenticated. Recovery can retain the session/wo
 
 The [current configuration fields](#current-configuration-fields) table is the accepted ProjectConfig vocabulary. `agentConfig` and role overrides hold supported provider model, effort, mode, and permission choices; `reviewers` holds reviewer entries; `trackerIntake` holds the opt-in intake rule.
 
-Identity such as project ID, path, and origin belongs to project registration. `sessionPrefix` is a typed config field. Unknown keys are rejected. Inspect the stored result with `ao project get <project-id> --json`; there is no parallel local YAML file or global registry file to maintain.
+Identity such as project ID, path, and origin belongs to project registration. `sessionPrefix` is a typed config field. Direct API requests reject unknown keys, but the CLI's JSON decoder currently ignores them. Inspect the stored result with `ao project get <project-id> --json`; there is no parallel local YAML file or global registry file to maintain.
 
 ## Common Problems
 

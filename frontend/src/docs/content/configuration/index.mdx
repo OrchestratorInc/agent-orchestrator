@@ -41,7 +41,7 @@ ao project set-config <project-id> --worker-agent codex
 
 `set-config` replaces the stored project configuration. Prefer project settings in the desktop app for interactive edits, or first inspect `ao project get <project-id> --json` before replacing configuration in a script. `--config-json` accepts a JSON object string, not a filename.
 
-Current project configuration is typed. It covers the base branch, session prefix, environment variables, symlinks, setup commands, worker and orchestrator agents, agent options, project rules, reviewer agents, automatic review defaults, trusted canonical repository URLs, tracker intake, and container cleanup. Unknown fields are rejected instead of being silently ignored.
+Current project configuration is typed. It covers the base branch, session prefix, environment variables, symlinks, setup commands, worker and orchestrator agents, agent options, project rules, reviewer agents, automatic review defaults, trusted canonical repository URLs, tracker intake, and container cleanup. The daemon rejects unknown fields in direct API requests. The CLI's `--config-json` decoder currently ignores unknown keys before sending the replacement, so check the result after any CLI update; a typo-only object can replace the configuration with an empty one.
 
 See [Projects](/configuration/projects) for the current field reference.
 

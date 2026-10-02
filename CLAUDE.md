@@ -7,8 +7,11 @@ Read and follow [`AGENTS.md`](AGENTS.md) for repository layout, commands, coding
 All app state, the daemon's data dir, `running.json`, worktrees, and the Electron
 supervisor's `userData` (Chromium cache, cookies, local/session storage, crash
 dumps), must resolve under `~/.ao` (overridable via `AO_DATA_DIR`/`AO_RUN_FILE`).
-Never write to or read from `~/Library/Application Support` or any other OS-default
-app-data location. `frontend/src/main.ts` pins Electron's `userData` to
+Never write AO state to `~/Library/Application Support` or any other OS-default
+app-data location. The sole read exception is an explicit user-initiated import
+from a validated Chrome, Firefox, or Safari profile: read known source files
+without modifying them and keep snapshots and results under `~/.ao`.
+`frontend/src/main.ts` pins Electron's `userData` to
 `~/.ao/electron`; do not remove that override. See the hard rule in `AGENTS.md`.
 
 ## Design System

@@ -105,7 +105,9 @@ surface (`npm run sqlc`, `npm run api`).
 - Durable dashboard notifications for `needs_input`, `ready_to_merge`,
   `pr_merged`, and `pr_closed_unmerged`: backend enrichment/persistence,
   cursor-paginated read/unread history, live notification stream, and read
-  acknowledgement API.
+  acknowledgement API. The desktop presents one newest-first feed; opening it
+  acknowledges loaded unread items. It has clear-one/clear-all controls, not
+  separate Unread/All tabs or per-item mark-read buttons.
 - SCM observer (`internal/observe/scm`) wired into the daemon: GitHub and GitLab providers; the GitHub path has
   lazy/non-blocking auth, per-PR polling with ETag guards and semantic diffing,
   feeding PR facts into lifecycle, which sends agent nudges for CI failures,

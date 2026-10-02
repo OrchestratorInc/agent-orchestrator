@@ -17,7 +17,7 @@ Donnez à chaque tâche de développement son propre agent, son propre espace de
 Planifiez et déléguez les objectifs plus vastes avec un orchestrateur qui connaît votre projet.<br />
 Suivez chaque worker, pull request, exécution CI et revue sur un Kanban actualisé en direct.
 
-[**Télécharger AO**](#installation) &nbsp;&bull;&nbsp; [Documentation](https://docs.aoagents.dev) &nbsp;&bull;&nbsp; [Versions](https://github.com/Untrivial-ai/agent-orchestrator/releases) &nbsp;&bull;&nbsp; [Contribuer](../CONTRIBUTING.md) &nbsp;&bull;&nbsp; [Discord](https://discord.com/invite/UZv7JjxbwG)
+[**Télécharger AO**](#installation) &nbsp;&bull;&nbsp; [Documentation](https://docs.orchestrator.inc) &nbsp;&bull;&nbsp; [Versions](https://github.com/Untrivial-ai/agent-orchestrator/releases) &nbsp;&bull;&nbsp; [Contribuer](../CONTRIBUTING.md) &nbsp;&bull;&nbsp; [Discord](https://discord.com/invite/UZv7JjxbwG)
 
 [English](../README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · **Français** · [Deutsch](README.de.md) · [Português (Brasil)](README.pt-BR.md)
 
@@ -111,7 +111,7 @@ AO fonctionne avec les agents de développement et le workflow de contrôle de v
 
 ## Agents pris en charge
 
-**26 agents de développement pris en charge** dans un workflow supervisé unique.
+Les agents de développement fonctionnent dans un même workflow supervisé. Consultez le [catalogue des capacités](https://docs.orchestrator.inc/plugins/agents) pour les agents et modes pris en charge.
 
 <table>
   <tr valign="middle">
@@ -161,7 +161,7 @@ AO fonctionne avec les agents de développement et le workflow de contrôle de v
   </tr>
 </table>
 
-[Consulter les guides de configuration des agents →](https://docs.aoagents.dev/plugins/agents)
+[Consulter les guides de configuration des agents →](https://docs.orchestrator.inc/plugins/agents)
 
 **Utilisez l'interface adaptée au moment : le Chat structuré ou l'interface de terminal native de l'agent.**
 
@@ -178,7 +178,7 @@ Téléchargez la dernière application de bureau AO pour votre plateforme. AO v�
 | Linux (Debian/Ubuntu) | [Télécharger](https://github.com/Untrivial-ai/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.deb)      |
 | Linux (Fedora/RHEL)   | [Télécharger](https://github.com/Untrivial-ai/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.rpm)      |
 
-Ouvrez Agent Orchestrator et sélectionnez le dépôt qu'AO doit gérer. L'application de bureau exécute le daemon pour vous, aucune CLI n'est donc nécessaire. Consultez le [guide d'installation](https://docs.aoagents.dev/installation) pour configurer les CLI des agents et résoudre les problèmes.
+Ouvrez Agent Orchestrator et sélectionnez le dépôt qu'AO doit gérer. L'application de bureau exécute le daemon pour vous, aucune CLI n'est donc nécessaire. Consultez le [guide d'installation](https://docs.orchestrator.inc/installation) pour configurer les CLI des agents et résoudre les problèmes.
 
 ## Signaler un bug
 
@@ -211,7 +211,7 @@ Commencez par le [guide de développement](../docs/development.md) pour connaît
 
 | Document                                                            | Commencez ici pour                                                                                   |
 | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| [Documentation produit](https://docs.aoagents.dev)                     | Installation, configuration des agents et utilisation quotidienne du produit.                        |
+| [Documentation produit](https://docs.orchestrator.inc)                     | Installation, configuration des agents et utilisation quotidienne du produit.                        |
 | [docs/architecture.md](../docs/architecture.md)                     | Modèle mental du backend, cycle de vie, persistance, CDC, dérivation de l'état et limites du daemon. |
 | [docs/backend-code-structure.md](../docs/backend-code-structure.md) | Responsabilité des paquets et emplacement de chaque domaine du backend.                              |
 | [docs/cli/README.md](../docs/cli/README.md)                         | Comportement de la CLI et correspondance avec les routes du daemon.                                  |
@@ -239,9 +239,9 @@ Commencez par le [guide de développement](../docs/development.md) pour connaît
 
 Rejoignez [Discord](https://discord.com/invite/UZv7JjxbwG) pour obtenir de l'aide et échanger avec les contributeurs, suivez [@ao_build](https://x.com/ao_build) pour les nouveautés ou lancez une discussion dans les [GitHub Issues](https://github.com/Untrivial-ai/agent-orchestrator/issues).
 
-## Télémétrie anonyme
+## Télémétrie produit
 
-AO utilise des métriques d'usage et de fiabilité respectueuses de la vie privée, conçues pour exclure les données personnelles et le contenu des projets. Ces métriques nous aident à comprendre l'adoption et à améliorer le produit. [En savoir plus sur la télémétrie et la confidentialité](../docs/telemetry.md).
+AO collecte des métriques d'usage et de fiabilité sans contenu des projets. Le propriétaire GitHub d'un projet et le nom d'utilisateur GitHub connecté peuvent toutefois identifier une personne; la télémétrie n'est donc pas anonyme. La désactiver arrête aussi l'envoi de ces identifiants. [Détails et réglages](../docs/telemetry.md).
 
 ## Licence
 

@@ -9,7 +9,7 @@ average CPU utilization.
 
 ## Release flow
 
-Run from a clean private `main` checkout:
+Run from a clean checkout of the release commit, inside `cloud/`:
 
 ```bash
 AWS_PROFILE=ao-cloud ./scripts/deploy-staging.sh
@@ -24,8 +24,10 @@ AO_CLOUD_SANDBOX_PROVIDER=coder \
   ./scripts/deploy-staging.sh
 ```
 
-The script requires `AO_CLOUD_RELEASE` to resolve to the clean checkout's
-current full Git SHA and:
+The script takes an optional release tag or Git SHA as its first positional
+argument (default: the current commit). That ref must resolve to the clean
+checkout's current commit. `AO_CLOUD_RELEASE` labels the running hosted
+service; it does not select the input to this deployment script. The script:
 
 1. Builds separate non-root, read-only `linux/amd64` control-plane and worker
    images.

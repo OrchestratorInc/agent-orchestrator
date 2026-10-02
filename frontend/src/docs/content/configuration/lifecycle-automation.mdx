@@ -31,7 +31,11 @@ ao automation update <automation-id> --enabled=false
 
 Use exactly one supported five-field cron expression or RRULE, with an IANA timezone. Cron accepts numeric minute/hour, `*` for day-of-month/month, and a supported weekday selection; arbitrary cron ranges/steps are not accepted. RRULE rejects `COUNT`/`UNTIL` and intervals faster than one minute. It runs in the local daemon, so it cannot dispatch while the host is asleep or AO is stopped. On recovery it catches up at most three missed occurrences; runs of the same definition are coordinated to avoid overlapping dispatch. Deleting a definition also deletes its run history.
 
+For a first run, create one definition in **Automations** with a short prompt and a schedule a few minutes ahead, then open its run history and linked session. If nothing runs, verify the timezone, that the definition is enabled, and that the desktop/daemon stayed awake. Pause the definition before changing a schedule you are still testing. After a restart, AO catches up at most three missed occurrences; it does not replay every missed time slot.
+
 Project **Cues** provide reusable instructions or exact shell commands for manual invocation, not schedules. An agent Cue targets an eligible session or starts a worker; a command Cue opens a fresh local terminal. Manage these from the project Cues dialog and use **Run a cue** in a session.
+
+For example, add an agent Cue named **Check tests** with the prompt `Run the focused tests and report failures`, then use **Run a cue** from a project session. If that session cannot accept a prompt, choose the offered new-worker path or wait for it to become eligible. A command Cue such as `npm test` runs that exact command in a fresh local shell; it is not reviewed or interpreted by an agent, so check the command and working context before running it.
 
 ## Mode-aware delivery
 

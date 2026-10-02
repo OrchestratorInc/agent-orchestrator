@@ -1,0 +1,36 @@
+---
+title: Cloud sessions
+description: Set up a hosted project and work on a remote session from the desktop app.
+---
+
+AO Cloud runs a project's worker in a remote workspace. It is separate from a local desktop project and from Connect Mobile, which reaches your own computer. Cloud requires an enabled desktop build, an eligible account, and a reachable control plane; the Cloud choice may be absent in your app. The local product still works without Cloud.
+
+## Before you start
+
+1. Install the current [desktop release](/installation) and sign in using **Sign in to AO Cloud** in the sidebar. If that entry is missing, Cloud is not enabled for your build or account. Contact the team that granted access; a local GitHub sign-in alone does not enable it.
+2. In **Settings → Harnesses → Cloud**, connect a supported provider. The Cloud worker picker offers Claude Code, Codex, Cursor, and OpenCode only when the corresponding Cloud connection is valid. A local agent installation or local CLI login does not supply a Cloud credential.
+3. Have access to the GitHub repository you want to work on. Cloud project creation uses a GitHub installation and repository grant, separate from the `gh` login used by local projects. Follow the **Connect GitHub** flow in project setup if the repository is missing.
+
+Cloud authorization is scoped to the signed-in account and organization. Select the intended organization before creating the project; if access expires, sign in again and retry the action. Do not paste provider keys or GitHub tokens into a task prompt.
+
+## Create a project and session
+
+Choose **Add project → Cloud**, select a granted GitHub repository, then choose worker and orchestrator agents from the connected Cloud providers. Complete the project setup and open it from the sidebar. A Cloud project is labeled as such; it does not use a local folder picker or create a worktree on your computer.
+
+Create a task inside that Cloud project. Choose an available agent and enter a focused prompt. Cloud tasks currently reject file attachments at creation, so put required files in the repository or send supported content after the session starts. The control plane provisions a remote workspace and starts the worker; initial setup can take time. If creation fails, check the account session, repository grant, provider connection, and the error shown in the app before retrying. Avoid repeatedly creating the same task while provisioning is in progress.
+
+## Follow the work
+
+Open the session to use Chat, inspect activity, and follow its terminal when available. The **Files** inspector reads the remote workspace; the source picker separates workspace changes from pull-request changes and available commits. The session terminal connects to the remote worker, not a shell on your desktop. A Cloud PR and its reviews still live on the repository host; check the PR link and current head before merging. Availability of individual controls depends on the selected provider, account access, and session state.
+
+Cloud stores project, session, conversation, and event records in its hosted control plane. Workspace persistence belongs to the selected remote sandbox provider; do not assume an uncommitted file survives an explicit delete or failed replacement. Commit and push important work to the repository. Stopping or deleting a Cloud session is distinct from closing the desktop window or signing out. Read the confirmation in the session menu before deleting; it may remove the remote workspace. Signing out clears the desktop's Cloud view but does not itself delete remote sessions.
+
+## If access stops working
+
+- **Cloud option missing:** verify that the build and account have Cloud enabled. A local project remains available.
+- **Repository missing:** reconnect GitHub or check installation and repository grants for the selected organization.
+- **Agent unavailable:** reconnect its Cloud credential in **Settings → Harnesses → Cloud**. Local harness readiness is a separate check.
+- **Session stuck or disconnected:** reopen the session and check its state. A sleeping or replacing remote worker can need time to reconnect; retry a failed action only after checking whether it already completed.
+- **Provider or organization access changed:** sign in again and select the right organization. Do not copy a local project into Cloud merely to work around an authorization error.
+
+This guide describes the Cloud controls in the desktop source and the production control plane's public health endpoint as checked on 3 October 2026. It does not claim an authenticated, end-to-end production session test. Cloud entitlements, sandbox provider, quotas, and available agents can differ by organization; use the choices shown in your app as the final check.

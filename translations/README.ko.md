@@ -17,7 +17,7 @@
 프로젝트를 이해하는 오케스트레이터와 더 큰 목표를 계획하고 위임하세요.<br />
 모든 워커, 풀 리퀘스트, CI 실행, 리뷰를 실시간 Kanban에서 확인하세요.
 
-[**AO 다운로드**](#설치) &nbsp;&bull;&nbsp; [문서](https://docs.aoagents.dev) &nbsp;&bull;&nbsp; [릴리스](https://github.com/Untrivial-ai/agent-orchestrator/releases) &nbsp;&bull;&nbsp; [기여하기](../CONTRIBUTING.md) &nbsp;&bull;&nbsp; [Discord](https://discord.com/invite/UZv7JjxbwG)
+[**AO 다운로드**](#설치) &nbsp;&bull;&nbsp; [문서](https://docs.orchestrator.inc) &nbsp;&bull;&nbsp; [릴리스](https://github.com/Untrivial-ai/agent-orchestrator/releases) &nbsp;&bull;&nbsp; [기여하기](../CONTRIBUTING.md) &nbsp;&bull;&nbsp; [Discord](https://discord.com/invite/UZv7JjxbwG)
 
 [English](../README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · **한국어** · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português (Brasil)](README.pt-BR.md)
 
@@ -111,7 +111,7 @@ AO는 이미 사용 중인 코딩 에이전트와 소스 제어 워크플로와 
 
 ## 지원 에이전트
 
-하나의 감독된 워크플로에서 **26개의 코딩 에이전트**를 지원합니다.
+코딩 에이전트를 하나의 감독 워크플로에서 사용할 수 있습니다. 현재 지원되는 에이전트와 모드는 [기능 목록](https://docs.orchestrator.inc/plugins/agents)을 확인하세요.
 
 <table>
   <tr valign="middle">
@@ -161,7 +161,7 @@ AO는 이미 사용 중인 코딩 에이전트와 소스 제어 워크플로와 
   </tr>
 </table>
 
-[에이전트 설정 가이드 살펴보기 →](https://docs.aoagents.dev/plugins/agents)
+[에이전트 설정 가이드 살펴보기 →](https://docs.orchestrator.inc/plugins/agents)
 
 **상황에 맞는 인터페이스를 사용하세요. 구조화된 Chat과 에이전트 고유의 터미널 UI를 모두 지원합니다.**
 
@@ -178,7 +178,7 @@ AO는 이미 사용 중인 코딩 에이전트와 소스 제어 워크플로와 
 | Linux (Debian/Ubuntu) | [다운로드](https://github.com/Untrivial-ai/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.deb)      |
 | Linux (Fedora/RHEL)   | [다운로드](https://github.com/Untrivial-ai/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.rpm)      |
 
-Agent Orchestrator를 열고 AO가 관리할 저장소를 지정하세요. 데스크톱 앱이 데몬을 실행하므로 CLI는 필요하지 않습니다. 에이전트 CLI 설정 및 문제 해결은 [설치 가이드](https://docs.aoagents.dev/installation)를 참고하세요.
+Agent Orchestrator를 열고 AO가 관리할 저장소를 지정하세요. 데스크톱 앱이 데몬을 실행하므로 CLI는 필요하지 않습니다. 에이전트 CLI 설정 및 문제 해결은 [설치 가이드](https://docs.orchestrator.inc/installation)를 참고하세요.
 
 ## 버그 신고
 
@@ -211,7 +211,7 @@ cd agent-orchestrator
 
 | 문서                                                                | 다음 정보가 필요할 때                                               |
 | ------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| [제품 문서](https://docs.aoagents.dev)                                 | 설치, 에이전트 설정, 일상적인 제품 사용법.                          |
+| [제품 문서](https://docs.orchestrator.inc)                                 | 설치, 에이전트 설정, 일상적인 제품 사용법.                          |
 | [docs/architecture.md](../docs/architecture.md)                     | 백엔드 멘탈 모델, 라이프사이클, 영속성, CDC, 상태 도출, 데몬 경계.  |
 | [docs/backend-code-structure.md](../docs/backend-code-structure.md) | 패키지 소유권과 각 백엔드 관심사가 속하는 위치.                     |
 | [docs/cli/README.md](../docs/cli/README.md)                         | CLI 동작과 데몬 라우트 매핑.                                        |
@@ -239,9 +239,9 @@ cd agent-orchestrator
 
 도움 및 기여자 논의를 위해 [Discord](https://discord.com/invite/UZv7JjxbwG)에 참여하고, 업데이트를 보려면 [@ao_build](https://x.com/ao_build)를 팔로우하세요. [GitHub Issues](https://github.com/Untrivial-ai/agent-orchestrator/issues)에서 대화를 시작할 수도 있습니다.
 
-## 익명 텔레메트리
+## 제품 텔레메트리
 
-AO는 PII와 프로젝트 콘텐츠를 제외하도록 설계된 개인정보 보호 중심의 제품 사용 및 안정성 지표를 사용합니다. 이 지표는 도입 현황을 파악하고 제품을 개선하는 데 도움이 됩니다. [텔레메트리와 개인정보 보호에 대해 자세히 알아보세요](../docs/telemetry.md).
+AO는 프로젝트 내용을 제외한 사용 및 안정성 지표를 수집합니다. 프로젝트의 GitHub 소유자와 로그인한 GitHub 사용자 이름은 개인을 식별할 수 있으므로 이 텔레메트리는 익명이 아닙니다. 텔레메트리를 끄면 이 정보 전송도 중단됩니다. [세부 정보와 설정](../docs/telemetry.md).
 
 ## 라이선스
 

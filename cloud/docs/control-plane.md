@@ -18,10 +18,10 @@ Creating a session commits one PostgreSQL transaction containing:
 6. an audit event; and
 7. the completed command result.
 
-The sandbox row is desired-state intent only. This service does not call ECS,
-Daytona, Docker, or any worker API. A future reconciler can claim requested
-sandboxes and update their observed state without changing the client-facing
-creation flow.
+The sandbox row is desired-state intent only. The request handler does not
+provision a worker inline. A reconciler claims requested sandboxes and updates
+their observed state through the configured provider without changing the
+client-facing creation flow.
 
 `AO_CLOUD_SANDBOX_PROVIDER` selects the default provider recorded on new
 sandboxes. An explicit provider connection, when supplied, determines the

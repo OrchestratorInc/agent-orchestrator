@@ -7,11 +7,11 @@ The daemon enriches and stores notification records in SQLite. The desktop reads
 
 ## Available controls
 
-- filter Unread or All notifications;
+- browse one newest-first feed and load older records by scrolling;
 - open the related session or pull request;
-- mark individual records as read;
+- open the panel to mark loaded unread records as read;
 - catch up through paginated history after the app reconnects.
 
 Electron app toasts are a presentation of the same durable records while the desktop is running. There is no `ao notify`, `ao setup`, routing preset, JSONL notification store, or external notifier configuration in the current CLI.
 
-Marking a notification read preserves history; clearing one or all removes it from the center. Paired mobile devices can receive push notifications when permission is granted and the daemon can reach the push service. Use Connect Mobile device controls to mute or unpair a device. This does not enable legacy Slack, Discord, or webhook notifier plugins.
+Opening the panel marks loaded items as read and preserves history; clearing one or all removes them from the center. There are no Unread/All tabs or per-item mark-read controls. Paired mobile devices can receive push notifications when permission is granted and the daemon can reach the push service. Use Connect Mobile device controls to mute or unpair a device. This does not enable legacy Slack, Discord, or webhook notifier plugins.
