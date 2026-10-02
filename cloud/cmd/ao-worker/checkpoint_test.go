@@ -466,8 +466,8 @@ func TestPushSessionBranchToleratesNonFastForward(t *testing.T) {
 		t.Fatalf("push attempts = %v, want one rejected branch push plus the preserved-branch fallback", pushes)
 	}
 	if !containsArg(pushes[1], "--force") ||
-		!containsArg(pushes[1], worker.PreservedBranchRef("s")) {
-		t.Fatalf("second push = %v, want a force-push to the preserved-branch ref", pushes[1])
+		!containsArg(pushes[1], localTip+":"+worker.PreservedBranchRef("s")) {
+		t.Fatalf("second push = %v, want a force-push of the local tip to the preserved-branch ref", pushes[1])
 	}
 	if got := strings.TrimSpace(mustGit(t, ctx, git, origin, "rev-parse", "refs/heads/ao/div")); got != remoteTip {
 		t.Fatalf("remote tip changed to %s, want %s (non-fast-forward must not overwrite)", got, remoteTip)
@@ -553,7 +553,7 @@ func TestPushSessionBranchDivergenceGateSkipsDoomedPush(t *testing.T) {
 
 	pushes := rec.pushCalls()
 	if len(pushes) != 1 || !containsArg(pushes[0], "--force") ||
-		!containsArg(pushes[0], worker.PreservedBranchRef("s-gate")) {
+		!containsArg(pushes[0], localTip+":"+worker.PreservedBranchRef("s-gate")) {
 		t.Fatalf("push calls = %v, want only the preserved-branch force-push (doomed push must be skipped)", pushes)
 	}
 	if got := strings.TrimSpace(mustGit(t, ctx, git, origin, "rev-parse", "refs/heads/ao/gate")); got != remoteTip {
