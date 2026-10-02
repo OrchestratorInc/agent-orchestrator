@@ -13,7 +13,7 @@ const operation = { id: "remove-a", accountId: "account-a", phase: "requested", 
 const success = (data: unknown) => ({ data, response: new Response(null, { status: 200 }) });
 function show() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(<QueryClientProvider client={client}><AccountRemovalControl accountId="account-a" /></QueryClientProvider>);
+  return { ...render(<QueryClientProvider client={client}><AccountRemovalControl accountId="account-a" /></QueryClientProvider>), client };
 }
 
 describe("coordinated account removal controls", () => {
@@ -21,6 +21,19 @@ describe("coordinated account removal controls", () => {
     vi.resetAllMocks();
     localStorage.clear();
     api.GET.mockImplementation(async path => success(path.endsWith("removal-impact") ? impact : operation));
+  });
+
+  it("disables permanent removal after impact loads and never sends a mutation", async () => {
+    const { client } = show();
+    await waitFor(() => expect(client.isFetching()).toBe(0));
+    const submit = screen.getByRole("button", { name: "Remove account" });
+    expect(submit).toBeDisabled();
+    expect(screen.getByText("Permanent account removal is unavailable until safe session shutdown can be verified. You can still inspect removal impact and recovery status.")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Removal impact" })).toHaveTextContent("Affected sessions (2)");
+    fireEvent.click(submit);
+    expect(api.POST).not.toHaveBeenCalled();
+    expect(api.DELETE).not.toHaveBeenCalled();
+    expect(localStorage.getItem("ao:account-removals:v1")).toBeNull();
   });
 
   it("shows durable removal failure after reload without claiming credential removal", async () => {
@@ -39,21 +52,15 @@ describe("coordinated account removal controls", () => {
     expect(api.DELETE).not.toHaveBeenCalled();
   });
 
-  it("submits one confirmation with the exact fresh impact revision", async () => {
+  it("shows the exact fresh impact revision while keeping destructive confirmation disabled", async () => {
     show();
     const submit = await screen.findByRole("button", { name: "Remove account" });
-    await waitFor(() => expect(submit).toBeEnabled());
-    let resolve!: (value: unknown) => void;
-    api.POST.mockImplementation(() => new Promise(done => { resolve = done; }));
+    expect(await screen.findByText("Impact revision: 0")).toBeInTheDocument();
+    expect(screen.getByText("session-active (codex): stop not acknowledged")).toBeInTheDocument();
+    expect(screen.getByText("session-dormant (codex): stop acknowledged")).toBeInTheDocument();
+    expect(submit).toBeDisabled();
     fireEvent.click(submit);
-    await waitFor(() => expect(api.POST).toHaveBeenCalledOnce());
-    const body = api.POST.mock.calls[0][1].body;
-    expect(api.POST.mock.calls[0][0]).toBe("/api/v1/accounts-manager/accounts/{accountId}/removals");
-    expect(body).toEqual({ operationId: expect.any(String), expectedRevision: 0, confirmed: true });
-    const accepted = { ...operation, id: body.operationId };
-    api.GET.mockImplementation(async path => success(path.endsWith("removal-impact") ? impact : accepted));
-    resolve(success(accepted));
-    expect(screen.getByRole("button", { name: "Remove account" })).toBeDisabled();
+    expect(api.POST).not.toHaveBeenCalled();
     expect(api.DELETE).not.toHaveBeenCalled();
   });
 
@@ -67,32 +74,35 @@ describe("coordinated account removal controls", () => {
     expect(api.DELETE).not.toHaveBeenCalled();
   });
 
-  it("rejects a stale impact revision and requires renewed confirmation", async () => {
-    api.POST.mockResolvedValue({ error: { requestId: "removal-conflict" }, response: new Response(null, { status: 409 }) });
+  it("keeps submission disabled when the impact read reports stale state", async () => {
+    api.GET.mockResolvedValue({ error: { requestId: "removal-conflict" }, response: new Response(null, { status: 409 }) });
     show();
     const submit = await screen.findByRole("button", { name: "Remove account" });
-    await waitFor(() => expect(submit).toBeEnabled());
-    fireEvent.click(submit);
     expect(await screen.findByRole("alert")).toHaveTextContent("removal-conflict");
+    fireEvent.click(submit);
+    expect(api.POST).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Remove account" })).toBeDisabled();
     expect(screen.queryByText("Removal complete")).not.toBeInTheDocument();
   });
 
   it("keeps an uncertain accepted request safe after remount without resubmitting", async () => {
-    api.POST.mockRejectedValue(new Error("response lost"));
+    const id = "uncertain-remove-a";
+    const saved = JSON.stringify([{ accountId: "account-a", operationId: id, request: { operationId: id, expectedRevision: 0, confirmed: true } }]);
+    localStorage.setItem("ao:account-removals:v1", saved);
+    api.GET.mockRejectedValue(new Error("response lost"));
     const view = show();
     const submit = await screen.findByRole("button", { name: "Remove account" });
-    await waitFor(() => expect(submit).toBeEnabled());
+    await screen.findByRole("alert");
     fireEvent.click(submit);
-    await waitFor(() => expect(api.POST).toHaveBeenCalledOnce());
-    const id = api.POST.mock.calls[0][1].body.operationId;
+    expect(api.POST).not.toHaveBeenCalled();
     view.unmount();
     api.GET.mockResolvedValue({ error: { requestId: "unknown-removal" }, response: new Response(null, { status: 404 }) });
     show();
     expect(screen.queryByText(`Unconfirmed removal ID: ${id}`)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove account" })).toBeDisabled();
-    expect(api.POST).toHaveBeenCalledOnce();
+    expect(api.POST).not.toHaveBeenCalled();
     expect(api.DELETE).not.toHaveBeenCalled();
+    expect(localStorage.getItem("ao:account-removals:v1")).toBe(saved);
   });
 
   it("polls an existing removal without exposing recovery controls", async () => {

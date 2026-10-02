@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -21,6 +21,8 @@ import {
 import { Input } from "../ui/input";
 
 const referencesKey = ["accounts-manager", "removal-references"];
+// Retirement ownership proof is still required before destructive submission.
+const permanentRemovalEnabled = false;
 
 export function AccountRemovalControl({
   accountId,
@@ -46,6 +48,7 @@ function RemovalPanel({ accountId, onOptimisticRemove, onRemovalFailed, onRemova
   onCancel?: () => void;
 }) {
   const { t } = useTranslation();
+  const unavailableDescriptionId = useId();
   const client = useQueryClient();
   const [initial] = useState(() => {
     try { return { reference: readAccountRemovalReferences().find(value => value.accountId === accountId), unreadable: false }; }
@@ -103,7 +106,7 @@ function RemovalPanel({ accountId, onOptimisticRemove, onRemovalFailed, onRemova
     if (operation?.phase === "complete") void client.invalidateQueries({ queryKey: ["accounts-manager", "accounts"] });
   }, [client, operation?.id, operation?.phase]);
   const request = (body: AccountRemovalRequest) => {
-    if (inFlight.current || busy || localError || !impact) return;
+    if (!permanentRemovalEnabled || inFlight.current || busy || localError || !impact) return;
     if (!persist({ accountId, operationId: body.operationId, request: body })) return;
     inFlight.current = true;
     onOptimisticRemove?.();
@@ -115,7 +118,14 @@ function RemovalPanel({ accountId, onOptimisticRemove, onRemovalFailed, onRemova
   };
   const error = localError || (reference ? operationQuery.error : impactQuery.error) || mutation.error;
   return <div className="space-y-3 text-sm">
+    <p id={unavailableDescriptionId} role="status" className="text-sm text-muted-foreground">{t("accountsManager.controls.removalUnavailable")}</p>
     {error ? <p role="alert" className="text-sm text-destructive">{localError || accountControlMessage(error, t)}</p> : null}
+    {impact ? <section aria-label={t("accountsManager.controls.impact")} className="space-y-1">
+      <h4 className="font-medium">{t("accountsManager.controls.impact")}</h4>
+      <p className="text-xs text-muted-foreground">{t("accountsManager.controls.impactRevision", { revision: impact.revision })}</p>
+      <p>{impact.sessions.length ? t("accountsManager.controls.affectedSessions", { count: impact.sessions.length }) : t("accountsManager.controls.noBindings")}</p>
+      {impact.sessions.length ? <ul className="space-y-1 text-xs text-muted-foreground">{impact.sessions.map(session => <li key={session.sessionId}>{t("accountsManager.controls.impactSession", { id: session.sessionId, provider: session.provider, status: t(session.stopped ? "accountsManager.controls.stopAcknowledged" : "accountsManager.controls.stopUnconfirmed") })}</li>)}</ul> : null}
+    </section> : null}
     {operation ? <section aria-label={t("accountsManager.controls.removalOperation")} className="space-y-2" aria-live="polite">
       <h4 className="font-medium">{operation.phase === "complete" ? t("accountsManager.controls.removalComplete") : t("accountsManager.controls.removalOperation")}</h4>
       <p>{t("accountsManager.controls.phase", { phase: operation.phase })}</p>
@@ -126,7 +136,7 @@ function RemovalPanel({ accountId, onOptimisticRemove, onRemovalFailed, onRemova
     </section> : null}
     <div className="flex justify-end gap-2">
       <Button type="button" size="sm" variant="outline" disabled={mutation.isPending} onClick={onCancel}>{t("confirm.cancel")}</Button>
-      <Button type="button" size="sm" variant="primary" disabled={Boolean(reference) || busy || Boolean(error) || !impact} onClick={requestRemoval}>{t("accountsManager.controls.requestRemoval")}</Button>
+      <Button type="button" size="sm" variant="primary" aria-describedby={unavailableDescriptionId} disabled={!permanentRemovalEnabled || Boolean(reference) || busy || Boolean(error) || !impact} onClick={requestRemoval}>{t("accountsManager.controls.requestRemoval")}</Button>
     </div>
   </div>;
 }

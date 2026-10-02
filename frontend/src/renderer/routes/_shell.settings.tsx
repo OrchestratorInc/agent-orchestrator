@@ -1,8 +1,11 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
-import { useUiStore } from "../stores/ui-store";
+import { resolveGlobalSettingsSection, useUiStore, type GlobalSettingsSection } from "../stores/ui-store";
 
 export const Route = createFileRoute("/_shell/settings")({
+	validateSearch: (search: Record<string, unknown>): { section?: GlobalSettingsSection } => ({
+		section: resolveGlobalSettingsSection(search.section),
+	}),
 	component: LegacyGlobalSettingsRoute,
 });
 
@@ -10,12 +13,13 @@ export const Route = createFileRoute("/_shell/settings")({
 // openGlobalSettings() directly; this route only handles cold loads of /settings.
 function LegacyGlobalSettingsRoute() {
 	const navigate = useNavigate();
+	const { section } = Route.useSearch();
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 
 	useEffect(() => {
-		openGlobalSettings();
+		openGlobalSettings(section);
 		void navigate({ to: "/", replace: true });
-	}, [navigate, openGlobalSettings]);
+	}, [navigate, openGlobalSettings, section]);
 
 	return null;
 }

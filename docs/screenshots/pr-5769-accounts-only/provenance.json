@@ -1,0 +1,261 @@
+{
+  "base": "635efb9a2f4cdd848bc41fc59842f820a136b69a",
+  "source_sha256": {
+    "frontend/src/renderer/components/SettingsDialog.test.tsx": "e30b668a531642739b4c6ebc93b5edf1d56b2a2e22dc634fc67df6afdf1922ca",
+    "frontend/src/renderer/components/settings/AccountRemovalControl.test.tsx": "76bc9b2401acd39fbeebc18c8271c69ac9226e76e59f2ab4f50670e036de2a32",
+    "frontend/src/renderer/components/settings/AccountRemovalControl.tsx": "d416ae5a089ba0740e288599fc2362efc4ca452ca16bacda9e12b33a2e2fd5db",
+    "frontend/src/renderer/components/settings/AccountsManagerNavigation.test.ts": "7c3a44cbba10bec7a5eb4e2bb84d6b4c43cac6ebecaf35cdd01187b3f9e55d69",
+    "frontend/src/renderer/components/settings/AccountsManagerSection.test.tsx": "c94d5a961dc70c319cc15b56fa32916d00f8b942638bcb79305656175747151b",
+    "frontend/src/renderer/components/settings/AccountsSettingsSection.test.tsx": "960d316f1e99c35abbed942a35903472de0d87effa7b4467179b720e14ca3411",
+    "frontend/src/renderer/components/settings/AccountsSettingsSection.tsx": "9f32d721b9c404c6056aa4ed7376df64b8d3b2a8e85fb5ab636a1e56771ba669",
+    "frontend/src/renderer/components/settings/settingsCatalog.tsx": "3a7f6378bb313327de7d0ccc04ea69b9f65496ac6af0c57f3df1b63aa53fd580",
+    "frontend/src/renderer/i18n/de.json": "4c650f8957d0343e091e1cd74c0c763b9e1bddaa34cfea5e12da253b1d8909bc",
+    "frontend/src/renderer/i18n/en.json": "146a558d1ebdbe2371ca978b474bc8a1a1fe068de82a7afebe692d5ab36d5568",
+    "frontend/src/renderer/i18n/es.json": "b9cc6d63eb0e9ab4d36e7f642aa221594a74277b618d61e8d2fc1f6d5eb6921e",
+    "frontend/src/renderer/i18n/fr.json": "0de89064db68a9a0d657a371307c37de7fa9c6ceb3c786b2968347fda7c305b2",
+    "frontend/src/renderer/i18n/ja.json": "b2e19947c8b115932f3a02e9cc12494b953a2bb8c5e708ee7a5aa429fd8d4243",
+    "frontend/src/renderer/i18n/ko.json": "d05a2b2a68e876db3553e7d7bf6775435454f4130550988eaeeb4c8c88ce747e",
+    "frontend/src/renderer/i18n/pt-BR.json": "55a6b5f90bc65a36ababf7e45ceaf17940bebb3e6de21b050f9ba4c77304e8b8",
+    "frontend/src/renderer/i18n/zh-CN.json": "8df6520cc797a29d6fc5bb98a62e72ff2d3626bfa97e2741d410fe773508b508",
+    "frontend/src/renderer/routes/_shell.settings.test.tsx": "24d0643d54df4186bcee19bdd48d05ff701fe3629deeb2261f8013a63252497b",
+    "frontend/src/renderer/routes/_shell.settings.tsx": "8ef8504f832e7790538e6f3f8226c665d1d1a4554078f7008e1407434d71f51d",
+    "frontend/src/renderer/stores/ui-store.test.ts": "b361e318d73e1ed0c83e6f1ff23143103c477ac5e93007a62fa652ed7dbef3ad",
+    "frontend/src/renderer/stores/ui-store.ts": "7d85e634e6ce4cbc8888e6d5cd9969d730cb665082bbd6df835e64f527697588"
+  },
+  "before_source": "635efb9a2f4cdd848bc41fc59842f820a136b69a",
+  "runtime": {
+    "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) AgentOrchestrator/0.13.0 Chrome/130.0.6723.191 Electron/33.4.11 Safari/537.36",
+    "daemon": {
+      "state": "ready",
+      "port": 30889
+    },
+    "provider_catalog": {
+      "supported": [
+        {
+          "id": "agy",
+          "label": "Agy",
+          "authStatus": "authorized"
+        },
+        {
+          "id": "aider",
+          "label": "Aider",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "amp",
+          "label": "Amp",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "auggie",
+          "label": "Auggie",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "autohand",
+          "label": "Autohand",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "claude-code",
+          "label": "Claude Code",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "cline",
+          "label": "Cline",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "codex",
+          "label": "Codex",
+          "authStatus": "unauthorized"
+        },
+        {
+          "id": "continue",
+          "label": "Continue",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "crush",
+          "label": "Crush",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "cursor",
+          "label": "Cursor",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "deepseek-harness",
+          "label": "DeepSeek",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "devin",
+          "label": "Devin",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "droid",
+          "label": "Droid",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "gemini",
+          "label": "Gemini CLI",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "copilot",
+          "label": "GitHub Copilot",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "goose",
+          "label": "Goose",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "grok",
+          "label": "Grok Build",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "kilocode",
+          "label": "Kilo Code",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "kimchi",
+          "label": "Kimchi",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "kimi",
+          "label": "Kimi",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "kiro",
+          "label": "Kiro",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "mimo-code",
+          "label": "MiMo Code",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "vibe",
+          "label": "Mistral Vibe",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "muse",
+          "label": "Muse Code",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "omp",
+          "label": "OMP",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "opencode-v2",
+          "label": "OpenCode 2",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "pi",
+          "label": "Pi",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "prime-agent",
+          "label": "Prime Agent",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "qwen",
+          "label": "Qwen Code",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "unreal-agent",
+          "label": "Unreal Agent",
+          "authStatus": "unauthorized"
+        },
+        {
+          "id": "fx",
+          "label": "fx",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "opencode",
+          "label": "opencode",
+          "authStatus": "unknown"
+        }
+      ],
+      "installed": [
+        {
+          "id": "agy",
+          "label": "Agy",
+          "authStatus": "authorized"
+        },
+        {
+          "id": "codex",
+          "label": "Codex",
+          "authStatus": "unauthorized"
+        },
+        {
+          "id": "gemini",
+          "label": "Gemini CLI",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "copilot",
+          "label": "GitHub Copilot",
+          "authStatus": "unknown"
+        },
+        {
+          "id": "unreal-agent",
+          "label": "Unreal Agent",
+          "authStatus": "unauthorized"
+        }
+      ],
+      "authorized": [
+        {
+          "id": "agy",
+          "label": "Agy",
+          "authStatus": "authorized"
+        }
+      ]
+    },
+    "api_mocks": false,
+    "isolated_home": true,
+    "isolated_network": true
+  },
+  "checks": [
+    "One Accounts navigation entry; no Subscriptions entry",
+    "Provider selected using keyboard menu",
+    "Escape restores focus to provider trigger",
+    "Default routing updated through real isolated daemon",
+    "Permanent removal disabled with explanation and readable impact; no removal submitted",
+    "Removal recovery inspector remains accessible",
+    "Legacy subscriptions link opened Accounts in actual packaged router",
+    "Legacy global agents link opened Accounts"
+  ],
+  "removal_submit_disabled": true,
+  "removal_mutation_requests": [],
+  "recording": {
+    "duration": "7.720000",
+    "frames": 23,
+    "sha256": "7b72db83df0f5ba5c5da791bb4ce0502347518c24844819cf3303ed2d5b278b4"
+  },
+  "data": "Synthetic session vault entry and signed-out device descriptor. No real credentials or live provider authentication.",
+  "limitations": [
+    "No fresh runtime proof of live subscription quota/reset credits, completed provider switch or same-target API no-op. Existing focused/API checks cover those contracts; prior same-target visual evidence is provenance-separated.",
+    "Permanent removal remains blocked. Five retirement acceptance leaves remain unresolved. Native platform and release acceptance are not claimed."
+  ]
+}

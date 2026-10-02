@@ -166,21 +166,21 @@ describe("AccountsManagerSection", () => {
     expect(mocks.snapshot.accounts).toHaveLength(1);
   });
 
-  it("shows a simple removal warning and does not delete until confirmed", async () => {
+  it("shows removal impact and an unavailable notice without deleting", async () => {
     mocks.snapshot.accounts = [{ id: "saved-a", provider: "codex", kind: "api_key", label: "Work", status: "active", verification: "verified", generation: 4, cooldowns: [] }];
     mocks.GET.mockResolvedValue({ data: { accountId: "saved-a", revision: 0, sessions: [] }, response: new Response(null, { status: 200 }) });
     renderSection();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "More account actions" }));
     await user.click(await screen.findByRole("menuitem", { name: "Remove account" }));
-    expect(await screen.findByText("This account will be deleted and you won’t be able to use it anymore.")).toBeInTheDocument();
+    expect(await screen.findByText("Review affected sessions and removal status.")).toBeInTheDocument();
     expect(mocks.GET).toHaveBeenCalledWith("/api/v1/accounts-manager/accounts/{accountId}/removal-impact", expect.objectContaining({ params: { path: { accountId: "saved-a" } } }));
     expect(mocks.DELETE).not.toHaveBeenCalled();
     expect(mocks.POST).not.toHaveBeenCalled();
     expect(mocks.snapshot.accounts).toHaveLength(1);
   });
 
-  it("switches to the empty provider state immediately when removing its last account", async () => {
+  it("keeps the last account visible while permanent removal is disabled", async () => {
     mocks.snapshot.accounts = [{ id: "saved-a", provider: "codex", kind: "api_key", label: "Work", status: "active", verification: "verified", generation: 4, cooldowns: [] }];
     mocks.GET.mockImplementation(async path => ({ data: path.endsWith("removal-impact")
       ? { accountId: "saved-a", revision: 0, sessions: [] }
@@ -190,13 +190,16 @@ describe("AccountsManagerSection", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "More account actions" }));
     await user.click(await screen.findByRole("menuitem", { name: "Remove account" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Remove account" })).toBeEnabled());
+    await screen.findByText("No sessions are using this account.");
+    expect(screen.getByRole("button", { name: "Remove account" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Remove account" }));
-    await waitFor(() => expect(mocks.POST).toHaveBeenCalledOnce());
+    expect(mocks.POST).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
     const codexGroup = document.querySelector('[data-agent-provider="codex"]');
     expect(codexGroup).not.toBeNull();
-    expect(within(codexGroup as HTMLElement).getByRole("button", { name: "Add codex account" })).toHaveTextContent("Add an account");
-    expect(within(codexGroup as HTMLElement).queryByRole("button", { name: /Work/ })).not.toBeInTheDocument();
+    expect(within(codexGroup as HTMLElement).getByRole("button", { name: "Add codex account" })).toBeInTheDocument();
+    expect(within(codexGroup as HTMLElement).getByRole("button", { name: /Work/ })).toBeInTheDocument();
+    expect(mocks.DELETE).not.toHaveBeenCalled();
   });
 
   it.each(["pending", "pruned"])("closes the cancelled %s sign-in flow and keeps saved accounts", async state => {

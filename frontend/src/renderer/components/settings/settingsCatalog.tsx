@@ -1,13 +1,12 @@
-import { BadgeCheck, Bot, CircleHelp, Cloud, Globe2, Keyboard, RefreshCw, Settings2, Smartphone, UsersRound, type LucideIcon } from "lucide-react";
+import { Bot, CircleHelp, Cloud, Globe2, Keyboard, RefreshCw, Settings2, Smartphone, UsersRound, type LucideIcon } from "lucide-react";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
-import type { GlobalSettingsSection } from "../../stores/ui-store";
+import { resolveGlobalSettingsSection, type GlobalSettingsSection } from "../../stores/ui-store";
 import { BrowserDownloadsSection } from "./BrowserDownloadsSection";
 import { BrowserProfilesSection } from "./BrowserProfilesSection";
 import { CloudCredentialsSection } from "./CloudCredentialsSection";
 import { CloudProviderSection } from "./CloudProviderSection";
-import { CodexAccountsSection } from "./CodexAccountsSection";
-import { AccountsManagerSection } from "./AccountsManagerSection";
+import { AccountsSettingsSection } from "./AccountsSettingsSection";
 import { ConnectMobileContent } from "./ConnectMobileContent";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
@@ -53,16 +52,10 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		render: (_t, titleHidden, { focusAgentId, harnessView }) => <HarnessSettingsSection focusAgentId={focusAgentId} initialView={harnessView} titleHidden={titleHidden} />,
 	},
 	{
-		id: "agents",
-		icon: BadgeCheck,
-		label: (t) => t("settings.agents"),
-		render: (_t, titleHidden) => <CodexAccountsSection titleHidden={titleHidden} />,
-	},
-	{
 		id: "accounts",
 		icon: UsersRound,
 		label: (t) => t("accountsManager.title"),
-		render: (_t, titleHidden) => <AccountsManagerSection titleHidden={titleHidden} />,
+		render: (_t, titleHidden) => <AccountsSettingsSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "browserProfiles",
@@ -135,7 +128,7 @@ export function visibleGlobalSettings(context: CatalogContext): SettingsCatalogI
 }
 
 export function globalSettingsItem(section: GlobalSettingsSection, context: CatalogContext): SettingsCatalogItem {
-	return visibleGlobalSettings(context).find((item) => item.id === section) ?? globalSettingsCatalog[0];
+	return visibleGlobalSettings(context).find((item) => item.id === resolveGlobalSettingsSection(section)) ?? globalSettingsCatalog[0];
 }
 
 export function globalSettingsItemsFor(section: GlobalSettingsSection | "all", context: CatalogContext): SettingsCatalogItem[] {

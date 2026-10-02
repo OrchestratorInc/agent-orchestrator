@@ -174,7 +174,8 @@ describe("SettingsDialog", () => {
 		expect(form).toHaveTextContent("harness");
 		expect(form).toHaveAttribute("data-focus-agent", "claude-code");
 		expect(screen.getByRole("button", { name: "Harness" })).toHaveAttribute("aria-current", "page");
-		expect(screen.getByRole("button", { name: "Subscriptions" })).not.toHaveAttribute("aria-current", "page");
+		expect(screen.queryByRole("button", { name: "Subscriptions" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Accounts" })).not.toHaveAttribute("aria-current", "page");
 	});
 
 	it("does not replay the Harness focus target after navigating away during the same modal opening", async () => {
@@ -226,7 +227,9 @@ describe("SettingsDialog", () => {
 		useUiStore.getState().openGlobalSettings("agents");
 		renderSettingsDialog();
 
-		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("agents");
+		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("accounts");
+		expect(screen.getByRole("button", { name: "Accounts" })).toHaveAttribute("aria-current", "page");
+		expect(screen.queryByRole("button", { name: "Subscriptions" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "General" })).toBeEnabled();
 		await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
 
