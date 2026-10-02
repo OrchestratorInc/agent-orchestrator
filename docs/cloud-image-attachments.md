@@ -61,6 +61,8 @@ archive and sandbox replacement. Storage lifecycle rules for `upload-*` keys
 provide an additional cleanup backstop. Never log signed URLs or image contents.
 Expired preparations cannot renew their grants. Grant issuance holds the metadata
 row lock and records the returned expiry before the grant reaches the client.
+Filesystem uploads recheck expiry after reading the body and serialize writes
+with deletion, so an in-flight request cannot recreate a cleaned object.
 
 A worker advertises `attachments.images.v1`. Older workers reject or hold image
 work instead of accepting text-only delivery. Workers restore the retained
@@ -99,3 +101,5 @@ checksum rejection, renderer CORS, canonical-key protection, grant expiry,
 worker downloads and replacement restore. Run live Claude/Cursor/Codex turns,
 including image-only prompts and every accepted format. Development tests do
 not replace this release gate.
+Test S3 uploads that begin before expiry and finish after cleanup. Bucket lifecycle
+rules must remove late temporary objects; that live behavior remains unverified.

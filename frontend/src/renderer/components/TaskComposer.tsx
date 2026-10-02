@@ -175,9 +175,10 @@ export function TaskComposer({
 		toSettledPayload,
 		getAttachments,
 	} = useFileAttachments({
+		// Local task bytes stay with this composer; only Cloud shares descriptors.
 		initialKey: isCloudProject
 			? `cloud:${cloudBaseUrl}:${cloudUserId}:${cloudOrg?.id}:${projectId}`
-			: projectId,
+			: undefined,
 		uploadFiles: isCloudProject ? uploadAttachments : undefined,
 		limits: isCloudProject ? CLOUD_IMAGE_LIMITS : undefined,
 	});

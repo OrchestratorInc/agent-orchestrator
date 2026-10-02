@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,7 @@ const StorageRoute = "/api/cloud/v1/attachment-storage/"
 type Filesystem struct {
 	root   *os.Root
 	secret []byte
+	writes sync.Mutex
 }
 type fileGrant struct {
 	Key      string
@@ -69,6 +71,8 @@ func (f *Filesystem) Open(_ context.Context, key string) (io.ReadCloser, error) 
 	return f.root.Open(key)
 }
 func (f *Filesystem) Delete(_ context.Context, key string) error {
+	f.writes.Lock()
+	defer f.writes.Unlock()
 	err := f.root.Remove(key)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -76,6 +80,8 @@ func (f *Filesystem) Delete(_ context.Context, key string) error {
 	return err
 }
 func (f *Filesystem) PutVerified(_ context.Context, key string, _ Metadata, data []byte) error {
+	f.writes.Lock()
+	defer f.writes.Unlock()
 	return f.write(key, data)
 }
 func (f *Filesystem) write(key string, data []byte) error {
@@ -159,6 +165,15 @@ func (f *Filesystem) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := reader.NextPart(); err != io.EOF {
 		w.WriteHeader(400)
+		return
+	}
+	// A POST may begin before expiry and finish reading after cleanup. Check
+	// again under the deletion lock so expiry, publication and cleanup cannot
+	// interleave and recreate an object after its metadata has been removed.
+	f.writes.Lock()
+	defer f.writes.Unlock()
+	if time.Now().Unix() >= grant.Expires {
+		http.Error(w, "expired grant", http.StatusForbidden)
 		return
 	}
 	if err := f.write(grant.Key, data); err != nil {

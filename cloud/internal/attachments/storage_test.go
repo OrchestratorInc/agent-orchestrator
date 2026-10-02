@@ -147,6 +147,79 @@ func TestFilesystemHTTPGrants(t *testing.T) {
 	}
 }
 
+type pausedUploadBody struct {
+	io.Reader
+	started chan struct{}
+	resume  <-chan struct{}
+}
+
+func (b *pausedUploadBody) Read(p []byte) (int, error) {
+	if b.started != nil {
+		close(b.started)
+		b.started = nil
+		<-b.resume
+	}
+	return b.Reader.Read(p)
+}
+
+func TestFilesystemInflightUploadCannotRecreateObjectAfterExpiry(t *testing.T) {
+	ctx := context.Background()
+	data, m := testImage(t)
+	f, err := NewFilesystem("test", t.TempDir(), bytes.Repeat([]byte{7}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := f.PutVerified(ctx, "upload-id", m, data); err != nil {
+		t.Fatal(err)
+	}
+	expires := time.Now().Add(2 * time.Second).Unix()
+	token, err := f.token(fileGrant{Key: "upload-id", Metadata: m, Expires: expires})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	part, err := w.CreateFormFile("file", "image.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	part.Write(data)
+	w.Close()
+	started, resume, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	request := httptest.NewRequest(http.MethodPost, StorageRoute+token, &pausedUploadBody{Reader: &body, started: started, resume: resume})
+	request.Header.Set("Content-Type", w.FormDataContentType())
+	response := httptest.NewRecorder()
+	go func() {
+		defer close(done)
+		f.ServeHTTP(response, request)
+	}()
+	defer func() { close(resume); <-done }()
+	select {
+	case <-started:
+	case <-done:
+		t.Fatalf("request did not reach its body while grant live: status=%d", response.Code)
+	case <-time.After(5 * time.Second):
+		t.Fatal("request did not reach its body")
+	}
+	// Wait for the actual signed expiry while the request body is paused.
+	timer := time.NewTimer(time.Until(time.Unix(expires, 0)))
+	defer timer.Stop()
+	<-timer.C
+	if err := f.Delete(ctx, "upload-id"); err != nil {
+		t.Fatal(err)
+	}
+	resume <- struct{}{}
+	<-done
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expired in-flight upload accepted: status=%d", response.Code)
+	}
+	if object, err := f.Open(ctx, "upload-id"); err == nil {
+		object.Close()
+		t.Fatal("in-flight upload recreated orphan after cleanup")
+	}
+}
+
 type testCredentials struct{}
 
 func (testCredentials) Retrieve(context.Context) (aws.Credentials, error) {

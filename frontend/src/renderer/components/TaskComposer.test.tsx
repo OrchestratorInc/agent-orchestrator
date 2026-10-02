@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -913,6 +913,25 @@ describe("TaskComposer", () => {
 		expect(body.attachments).toHaveLength(1);
 		expect(body.attachments?.[0].mimeType).toBe("text/plain");
 		expect(body.attachments?.[0].data.length).toBeGreaterThan(0);
+	});
+
+	it("keeps local task bytes private to each composer in the same project", async () => {
+		h.post.mockResolvedValue({ data: { workerId: "sess-1" } });
+		const first = render(<Wrap><TaskComposer projectId="same-local-project" onCreated={vi.fn()} /></Wrap>);
+		const firstUI = within(first.container);
+		fireEvent.change(first.container.querySelector('input[type="file"]')!, {
+			target: { files: [new File([new Uint8Array([1, 2, 3])], "notes.txt", { type: "text/plain" })] },
+		});
+		await firstUI.findByText("notes.txt");
+		const second = render(<Wrap><TaskComposer projectId="same-local-project" onCreated={vi.fn()} /></Wrap>);
+		expect(within(second.container).queryByText("notes.txt")).not.toBeInTheDocument();
+		fireEvent.change(firstUI.getByRole("textbox", { name: "Task" }), { target: { value: "Use my notes" } });
+		await waitFor(() => expect(firstUI.getByRole("button", { name: "Start task" })).toBeEnabled());
+		fireEvent.click(firstUI.getByRole("button", { name: "Start task" }));
+		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(1));
+		expect(h.post.mock.calls[0][1].body.attachments).toEqual([
+			{ mimeType: "text/plain", data: "AQID" },
+		]);
 	});
 
 	it("manages cloud harness connections from a cloud project's agent picker", async () => {
