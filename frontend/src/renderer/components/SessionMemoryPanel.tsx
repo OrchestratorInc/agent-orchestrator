@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Check, ChevronDown, ChevronRight, ChevronUp, ChevronsUpDown, Copy, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ChevronUp, Copy, X } from "lucide-react";
 import {
 	chipTone,
 	largestSession,
@@ -227,9 +227,9 @@ function cpuOrder<T extends { id: string; rssBytes: number; reading: SessionMemo
 
 /** A column header that orders the sessions by its own figure; a second click flips the direction. */
 function SortHeader({ active, ascending, className, label, onSort }: { active: boolean; ascending: boolean; className: string; label: string; onSort: () => void }) {
-	// Always visible, so the header reads as sortable before any click: a faint
-	// up/down on an idle column, the direction on the active one.
-	const Arrow = !active ? ChevronsUpDown : ascending ? ChevronUp : ChevronDown;
+	// Always visible, so the header reads as sortable before any click: faint
+	// on an idle column, full strength showing the direction on the active one.
+	const Arrow = active && ascending ? ChevronUp : ChevronDown;
 	return (
 		<th aria-sort={active ? (ascending ? "ascending" : "descending") : undefined} className={cn("bg-popover pb-2 pt-3 font-medium", className)} scope="col">
 			<button
