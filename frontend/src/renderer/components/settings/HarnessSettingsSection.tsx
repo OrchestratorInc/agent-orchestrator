@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, Copy, Download, LoaderCircle, LogIn, Search, TriangleAlert, X } from "lucide-react";
+import { BookOpen, Check, Copy, Download, KeyRound, LoaderCircle, LogIn, Search, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
@@ -15,9 +15,12 @@ import { closeShellTerminal, shellTerminalsQueryKey } from "../../hooks/useShell
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { agentLabel, AGENT_OPTIONS, type AgentId } from "../../lib/agent-options";
 import { CLOUD_AGENT_PROVIDERS, isCloudHarnessConnected } from "../../lib/cloud-agents";
+import { useCloudCp } from "../../hooks/useCloudCp";
 import { useCloudOrg } from "../../hooks/useCloudOrg";
-import { useProviderConnections } from "../../hooks/useProviderConnections";
+import { providerConnectionsQueryKey, useProviderConnections } from "../../hooks/useProviderConnections";
+import { GitHubTokenField } from "../onboarding/GitHubTokenField";
 import { CloudHarnessLoginPanel, type CloudHarness } from "./CloudHarnessLoginPanel";
+import { SettingsRow } from "./SettingsRow";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
@@ -768,7 +771,88 @@ export function HarnessSettingsSection({
 				{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
 			</div>
 			)}
+
+			{cloudView && signedIntoCloud ? (
+				<div className="mt-3 border-t border-border px-3 pt-3">
+					<CloudGitHubPatRow />
+				</div>
+			) : null}
 		</SettingsSection>
+	);
+}
+
+/**
+ * GitHub personal access token for cloud workers to clone private repositories.
+ * Lives on the Harness page's cloud view (the only place cloud credentials are
+ * managed) so GitHub connectivity stays reachable once a user is signed into a
+ * cloud org. The PAT is personal: stored encrypted and never echoed back.
+ */
+function CloudGitHubPatRow() {
+	const { t } = useTranslation();
+	const { client } = useCloudCp();
+	const queryClient = useQueryClient();
+	const userConnections = useProviderConnections();
+	const [githubPAT, setGitHubPAT] = useState("");
+	const [githubPATBusy, setGitHubPATBusy] = useState(false);
+	const [githubPATError, setGitHubPATError] = useState<string | null>(null);
+
+	const githubPATConnected = (userConnections.data ?? []).some(
+		(connection) => connection.provider === "github" && connection.label === "default" && connection.validationState === "valid",
+	);
+	const saveGitHubPAT = async () => {
+		if (githubPAT.trim() === "") return;
+		setGitHubPATBusy(true);
+		setGitHubPATError(null);
+		try {
+			await client.putGitHubPAT({ secret: githubPAT.trim() });
+			setGitHubPAT("");
+			await queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey });
+		} catch (error) {
+			setGitHubPATError(error instanceof Error ? error.message : t("settings.cloudAgents.github.errorSave"));
+		} finally {
+			setGitHubPATBusy(false);
+		}
+	};
+	const removeGitHubPAT = async () => {
+		setGitHubPATBusy(true);
+		setGitHubPATError(null);
+		try {
+			await client.deleteGitHubPAT();
+			await queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey });
+		} catch (error) {
+			setGitHubPATError(error instanceof Error ? error.message : t("settings.cloudAgents.github.errorRemove"));
+		} finally {
+			setGitHubPATBusy(false);
+		}
+	};
+	return (
+		<div className="flex w-full flex-col gap-1.5">
+			<SettingsRow key="github-pat" icon={KeyRound} label={t("settings.cloudAgents.github.title")}>
+				<span className="text-sm leading-5 text-settings-muted">{githubPATConnected ? t("settings.cloudAgents.github.connected") : t("settings.cloudAgents.github.notConnected")}</span>
+			</SettingsRow>
+			<GitHubTokenField
+				id="settings-github-pat"
+				bare
+				className="mt-2"
+				label={t("settings.cloudAgents.github.tokenLabel")}
+				hint={t("settings.cloudAgents.github.tokenHint")}
+				value={githubPAT}
+				disabled={githubPATBusy}
+				error={githubPATError}
+				submitLabel={githubPATBusy ? t("settings.cloudAgents.github.saving") : t("settings.cloudAgents.github.save")}
+				submitVariant="outline"
+				submitDisabled={githubPATBusy}
+				onChange={setGitHubPAT}
+				onSubmit={() => void saveGitHubPAT()}
+			/>
+			{githubPATConnected ? (
+				<div className="mt-2 flex justify-end">
+					<Button type="button" variant="footer" disabled={githubPATBusy} onClick={() => void removeGitHubPAT()}>
+						{t("settings.cloudAgents.github.remove")}
+					</Button>
+				</div>
+			) : null}
+		</div>
 	);
 }
 

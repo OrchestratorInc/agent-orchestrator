@@ -73,6 +73,12 @@ vi.mock("../hooks/useCloudGate", () => ({
 	useCloudGate: () => ({ cloudEnabled: false, localEnabled: true }),
 }));
 
+// The dialog reads the cloud session email to gate the 11x-only Coder page.
+// Signed out here, so that page is never visible.
+vi.mock("../lib/cloud-session", () => ({
+	useCloudSession: () => ({ status: "unauthenticated", session: null }),
+}));
+
 describe("SettingsDialog", () => {
 	beforeEach(() => {
 		postMock.mockReset().mockImplementation((path: string) => path === "/api/v1/agents/codex/accounts/ensure"
@@ -214,12 +220,12 @@ describe("SettingsDialog", () => {
 		expect(screen.queryByRole("button", { name: "Downloads" })).not.toBeInTheDocument();
 	});
 
-	it("falls back to General when Cloud is unavailable", async () => {
-		useUiStore.getState().openGlobalSettings("cloud");
+	it("falls back to General when the Coder page is unavailable", async () => {
+		useUiStore.getState().openGlobalSettings("coder11x");
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
-		expect(screen.queryByRole("button", { name: "Cloud" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Coder" })).not.toBeInTheDocument();
 	});
 
 	it("closes Settings without cancelling daemon-owned account login work", async () => {

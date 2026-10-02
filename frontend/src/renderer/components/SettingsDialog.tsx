@@ -4,6 +4,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../hooks/useCloudGate";
+import { useCloudSession } from "../lib/cloud-session";
 import { ensureCodexAccounts } from "../hooks/useCodexAccountsQuery";
 import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
@@ -13,6 +14,14 @@ import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, setti
 import { type GlobalSettingsSection, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
 import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
+
+// Internal testers who see the Coder (bring-your-own) settings page in addition
+// to @11x.ai users, so the flow can be exercised on non-11x accounts.
+const CODER_PAGE_TEST_EMAILS = new Set([
+	"prateekkarnal77@gmail.com",
+	"pritommazumdar1995@gmail.com",
+	"c.mohak2004@gmail.com",
+]);
 
 function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
@@ -35,6 +44,10 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 	const closeSettings = useUiStore((state) => state.closeSettings);
 	// Reads the daemon settings the dialog tree already queries; no extra fetch.
 	const { cloudEnabled } = useCloudGate();
+	// The bring-your-own-Coder page is for @11x.ai users, plus a small allowlist
+	// of internal testers so the flow can be exercised on non-11x accounts.
+	const email = (useCloudSession().session?.user.email ?? "").toLowerCase();
+	const is11x = email.endsWith("@11x.ai") || CODER_PAGE_TEST_EMAILS.has(email);
 
 	const displaySettings = settingsModal;
 	// The selected page includes several store/query subscribers. Mount it one
@@ -55,7 +68,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 	}, [deferSettingsBody, settingsModal]);
 	const isBodyReady = bodySettings === displaySettings;
 
-	const globalSections = visibleGlobalSettings({ cloudEnabled });
+	const globalSections = visibleGlobalSettings({ cloudEnabled, is11x });
 
 	const projectSections: Array<{
 		id: ProjectSettingsSection;
@@ -79,7 +92,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 
 	const activeLabel = isProjectSettings
 		? (projectSections.find((s) => s.id === activeProjectSection)?.label ?? t("settings.project.general"))
-		: globalSettingsItem(activeSection, { cloudEnabled }).label(t);
+		: globalSettingsItem(activeSection, { cloudEnabled, is11x }).label(t);
 
 	const closeSettingsDialog = () => {
 		if (cueBusy) return;
@@ -135,14 +148,14 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 
 	useEffect(() => {
 		if (settingsModal?.scope === "global") {
-			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled }).id);
+			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, is11x }).id);
 		}
 		if (settingsModal?.scope === "project") {
 			setActiveProjectSection(settingsModal.section ?? "general");
 			setProjectSaveState(initialProjectSaveState());
 			setCueBusy(false);
 		}
-	}, [cloudEnabled, settingsModal]);
+	}, [cloudEnabled, is11x, settingsModal]);
 
 	useEffect(() => {
 		setFocusAgentId(settingsModal?.scope === "global" ? settingsModal.focusAgentId : undefined);
@@ -282,7 +295,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 									) : displaySettings?.scope === "project" ? (
 										<ProjectSettingsForm projectId={displaySettings.projectId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />
 									) : (
-										<GlobalSettingsForm cloudEnabled={cloudEnabled} focusAgentId={focusAgentId} harnessView={harnessView} section={activeSection} />
+										<GlobalSettingsForm cloudEnabled={cloudEnabled} is11x={is11x} focusAgentId={focusAgentId} harnessView={harnessView} section={activeSection} />
 									)
 								) : (
 									<div aria-hidden="true" className="h-full" data-testid="settings-dialog-body-pending" />

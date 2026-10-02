@@ -95,6 +95,7 @@ func provisioningDefaults(cfg config.Config) sandbox.ProvisioningDefaults {
 func newSandboxReconciler(
 	cfg config.Config,
 	store *postgres.Store,
+	providerCipher *secrets.Cipher,
 	logger *slog.Logger,
 ) (*reconcile.Reconciler, error) {
 	// Build every provider this control plane offers, not just the default, so a
@@ -161,7 +162,7 @@ func newSandboxReconciler(
 			coderProvider = provider
 		}
 	}
-	return reconcile.New(store, sandboxresolve.New(nodeOpsProvider, dockerProvider, coderProvider), reconcile.Options{
+	return reconcile.New(store, sandboxresolve.New(nodeOpsProvider, dockerProvider, coderProvider, store, providerCipher), reconcile.Options{
 		PublicURL:              cfg.PublicURL,
 		TerminalStreamEnabled:  cfg.TerminalStreamEnabled,
 		WorkerBinary:           workerBinary,
@@ -340,7 +341,7 @@ func run(logger *slog.Logger) error {
 			githubapp.NewRESTClient("", nil), store,
 		)
 	}
-	reconciler, err := newSandboxReconciler(cfg, store, logger)
+	reconciler, err := newSandboxReconciler(cfg, store, providerCipher, logger)
 	if err != nil {
 		return err
 	}
