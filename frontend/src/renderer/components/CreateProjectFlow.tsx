@@ -836,7 +836,6 @@ export function CreateProjectFlow({
 						}}
 						onSelect={selectSource}
 						onSelectHost={(nextHostId) => {
-							setModePickerOpen(false);
 							onSelectHost?.(nextHostId);
 						}}
 					/>
@@ -1899,7 +1898,7 @@ function ImportSourcePicker({
 				<Label htmlFor="create-project-machine">{t("createProject.machine")}</Label>
 				<Select value={hostId ?? "__local__"} onValueChange={(value) => onSelectHost(value === "__local__" ? undefined : value)}>
 					<SelectTrigger id="create-project-machine" className="max-w-[65%]"><SelectValue /></SelectTrigger>
-					<SelectContent>
+					<SelectContent position="popper" side="bottom" align="end" sideOffset={4}>
 						<SelectItem value="__local__">{t("settings.harness.thisComputer")}</SelectItem>
 						{remoteHosts.map((host) => <SelectItem key={host.hostId} value={host.hostId} disabled={host.status !== "connected"}>{host.label}</SelectItem>)}
 					</SelectContent>

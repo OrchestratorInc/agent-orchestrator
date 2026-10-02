@@ -22,6 +22,7 @@ import { OrchestratorReplacementDialog } from "../components/OrchestratorReplace
 import { RestartToUpdateDialog } from "../components/RestartToUpdateDialog";
 import { TelemetryConsentRenewalDialog } from "../components/TelemetryConsentRenewalDialog";
 import { Sidebar } from "../components/Sidebar";
+import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { useRemoteHosts } from "../hooks/useRemoteHosts";
 import { SidebarProvider } from "../components/ui/sidebar";
 import { TitlebarNav } from "../components/TitlebarNav";
@@ -58,7 +59,6 @@ import { matchesRendererShortcut } from "../stores/keybindings-store";
 import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
 import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry";
-import { RemoteAddProjectDialog } from "../components/RemoteAddProjectDialog";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
@@ -192,7 +192,6 @@ function ShellLayout() {
 	useEffect(() => {
 		if (failedRemoteHostKey) void refreshRemoteHosts();
 	}, [failedRemoteHostKey, refreshRemoteHosts]);
-	const [remoteAddProjectHostId, setRemoteAddProjectHostId] = useState<string | null>(null);
 	// Global shortcut listeners need the latest workspace list, but recreating
 	// those subscriptions for every streamed activity update is avoidable.
 	const workspacesRef = useRef(workspaces);
@@ -658,6 +657,47 @@ function ShellLayout() {
 			throw failure;
 		}
 	}, []);
+	const createRemoteProject = useCallback(async (hostId: string, input: CreateProjectInput) => {
+		const host = remoteHosts.find((candidate) => candidate.hostId === hostId);
+		if (host?.status !== "connected") throw new Error(`Connect to ${host?.label ?? hostId} before adding a project.`);
+		const client = clientForHost(hostId);
+		const { data, error } = await client.POST("/api/v1/projects", { body: {
+			path: input.path,
+			asWorkspace: input.asWorkspace || undefined,
+			clonePreparationId: input.clonePreparationId,
+			config: createProjectConfig(input),
+		} });
+		if (error || !data?.project) throw Object.assign(new Error(apiErrorMessage(error, "Could not add project on this host.")), { code: apiErrorCode(error) });
+		const projectId = data.project.id;
+		const showProject = (sessionId?: string) => {
+			void queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
+			void navigate(sessionId ? sessionNavigateTarget(projectId, sessionId, hostId) : projectNavigateTarget(projectId, hostId));
+		};
+		showProject();
+		setOrchestratorStartupError(projectId, null, hostId);
+		setProjectProvisioning(projectId, true, hostId);
+		const provisioningGuard = window.setTimeout(() => {
+			setProjectProvisioning(projectId, false, hostId);
+			setOrchestratorStartupError(projectId, "Project added, but orchestrator startup timed out. Try starting it again.", hostId);
+		}, PROVISIONING_TIMEOUT_MS);
+		void client.POST("/api/v1/orchestrators", { body: { projectId } }).then(({ data, error }) => {
+			if (error || !data?.orchestrator?.id) throw new Error(apiErrorMessage(error, "Could not start the orchestrator."));
+			window.clearTimeout(provisioningGuard);
+			setProjectProvisioning(projectId, false, hostId);
+			setOrchestratorStartupError(projectId, null, hostId);
+			showProject(data.orchestrator.id);
+		}).catch((cause) => {
+			window.clearTimeout(provisioningGuard);
+			setProjectProvisioning(projectId, false, hostId);
+			const message = cause instanceof Error ? cause.message : "Try starting it from project settings.";
+			setOrchestratorStartupError(projectId, `Project added, but orchestrator did not start: ${message}`, hostId);
+			showGlobalToast("Orchestrator did not start", message, "error");
+		});
+	}, [navigate, queryClient, remoteHosts, setOrchestratorStartupError, setProjectProvisioning, showGlobalToast]);
+	const initializeRemoteProject = useCallback(async (hostId: string, path: string) => {
+		const { error } = await clientForHost(hostId).POST("/api/v1/projects/initialize", { body: { path } });
+		if (error) throw Object.assign(new Error(apiErrorMessage(error)), { code: apiErrorCode(error) });
+	}, []);
 
 	const validateImport = useCallback(
 		async (input: { path: string; importKind: "project" | "workspace" }) => {
@@ -1082,28 +1122,6 @@ function ShellLayout() {
 					</div>
 				) : null}
 				<GlobalNewTaskDialog />
-				{remoteAddProjectHostId && <RemoteAddProjectDialog
-					key={remoteAddProjectHostId}
-					hostId={remoteAddProjectHostId}
-					hostLabel={remoteHosts.find((host) => host.hostId === remoteAddProjectHostId)?.label ?? remoteAddProjectHostId}
-					connected={remoteHosts.find((host) => host.hostId === remoteAddProjectHostId)?.status === "connected"}
-					remoteHosts={remoteHosts}
-					onSelectHost={(hostId) => {
-						setRemoteAddProjectHostId(hostId ?? null);
-						if (!hostId) useUiStore.getState().requestCreateProject();
-					}}
-					onCreateStandaloneAgent={() => {
-						requestNewTask(STANDALONE_WORKSPACE_ID, remoteAddProjectHostId);
-						setRemoteAddProjectHostId(null);
-					}}
-					onCreated={(projectId, orchestratorSessionId) => {
-						void queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(remoteAddProjectHostId) });
-						void navigate(orchestratorSessionId
-							? sessionNavigateTarget(projectId, orchestratorSessionId, remoteAddProjectHostId)
-							: projectNavigateTarget(projectId, remoteAddProjectHostId));
-					}}
-					onOpenChange={(open) => { if (!open) setRemoteAddProjectHostId(null); }}
-				/>}
 				<GlobalToast />
 				<SettingsDialog />
 				<RestartToUpdateDialog />
@@ -1183,7 +1201,8 @@ function ShellLayout() {
 						workspaceError={workspaceQuery.isError ? errorMessage(workspaceQuery.error) : undefined}
 						workspaces={workspaces}
 						remoteHosts={remoteHosts}
-						onAddRemoteProject={setRemoteAddProjectHostId}
+						onCreateRemoteProject={createRemoteProject}
+						onInitializeRemoteProject={initializeRemoteProject}
 						onOpenRemoteProject={(hostId, projectId) => { void navigate(projectNavigateTarget(projectId, hostId)); }}
 						onOpenRemoteOrchestrator={(hostId, projectId) => { void openRemoteProjectOrchestrator(hostId, projectId); }}
 						onConfigureRemoteProject={(hostId, projectId) => openProjectSettings(projectId, hostId)}

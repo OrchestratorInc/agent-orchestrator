@@ -470,7 +470,8 @@ type SidebarProps = {
 	workspaceError?: string;
 	workspaces: WorkspaceSummary[];
 	remoteHosts?: RemoteHost[];
-	onAddRemoteProject?: (hostId: string) => void;
+	onCreateRemoteProject: (hostId: string, input: CreateProjectInput) => Promise<void>;
+	onInitializeRemoteProject: (hostId: string, path: string) => Promise<void>;
 	onOpenRemoteProject?: (hostId: string, projectId: string) => void;
 	onOpenRemoteOrchestrator?: (hostId: string, projectId: string) => void;
 	onConfigureRemoteProject?: (hostId: string, projectId: string) => void;
@@ -580,7 +581,8 @@ export function Sidebar({
 	workspaceError,
 	workspaces,
 	remoteHosts = [],
-	onAddRemoteProject = () => undefined,
+	onCreateRemoteProject,
+	onInitializeRemoteProject,
 	onOpenRemoteProject = () => undefined,
 	onOpenRemoteOrchestrator = () => undefined,
 	onConfigureRemoteProject = () => undefined,
@@ -1018,7 +1020,8 @@ export function Sidebar({
 							<CreateProjectButton
 								existingProjectPaths={existingProjectPaths}
 								remoteHosts={remoteHosts}
-								onAddRemoteProject={onAddRemoteProject}
+								onCreateRemoteProject={onCreateRemoteProject}
+								onInitializeRemoteProject={onInitializeRemoteProject}
 								onCloneProject={onCloneProject}
 								onCreateProject={onCreateProject}
 								onInitializeProject={onInitializeProject}
@@ -3200,12 +3203,13 @@ function SidebarSearchButton({ onOpen }: { onOpen: () => void }) {
 function CreateProjectButton({
 	existingProjectPaths,
 	remoteHosts,
-	onAddRemoteProject,
+	onCreateRemoteProject,
+	onInitializeRemoteProject,
 	onCloneProject,
 	onCreateProject,
 	onInitializeProject,
 	onOpenExistingProject,
-}: Pick<SidebarProps, "onCloneProject" | "onCreateProject" | "onInitializeProject" | "onAddRemoteProject" | "remoteHosts"> & {
+}: Pick<SidebarProps, "onCloneProject" | "onCreateProject" | "onInitializeProject" | "onCreateRemoteProject" | "onInitializeRemoteProject" | "remoteHosts"> & {
 	existingProjectPaths: readonly string[];
 	onOpenExistingProject: (path: string) => void | Promise<void>;
 }) {
@@ -3217,17 +3221,28 @@ function CreateProjectButton({
 	const createProjectNonce = useUiStore((state) => state.createProjectNonce);
 	const folderDropRequest = useUiStore((state) => state.folderDropRequest);
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
+	const [hostId, setHostId] = useState<string>();
+	const host = remoteHosts?.find((candidate) => candidate.hostId === hostId);
 	return (
 		<CreateProjectFlow
 			droppedPath={folderDropRequest}
 			existingProjectPaths={existingProjectPaths}
 			remoteHosts={remoteHosts}
-			onSelectHost={(hostId) => { if (hostId) onAddRemoteProject?.(hostId); }}
+			hostId={hostId}
+			hostLabel={host?.label ?? hostId}
+			connected={!hostId || host?.status === "connected"}
+			onSelectHost={setHostId}
+			onDismiss={() => setHostId(undefined)}
 			mode="choose"
 			onCloneProject={onCloneProject}
-			onCreateProject={onCreateProject}
-			onCreateStandaloneAgent={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
-			onInitializeProject={onInitializeProject}
+			onCreateProject={async (input) => {
+				if (hostId) {
+					await onCreateRemoteProject(hostId, input);
+					setHostId(undefined);
+				} else await onCreateProject(input);
+			}}
+			onCreateStandaloneAgent={() => requestNewTask(STANDALONE_WORKSPACE_ID, hostId)}
+			onInitializeProject={(path) => hostId ? onInitializeRemoteProject(hostId, path) : onInitializeProject(path)}
 			onOpenExistingProject={onOpenExistingProject}
 			openSignal={createProjectNonce}
 		>

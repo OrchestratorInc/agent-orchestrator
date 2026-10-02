@@ -302,7 +302,8 @@ function renderSidebar({
 	workspaces = [workspace],
 	remoteHosts = [],
 	remoteWorkspaces = [],
-	onAddRemoteProject = vi.fn(),
+	onCreateRemoteProject = vi.fn().mockResolvedValue(undefined),
+	onInitializeRemoteProject = vi.fn().mockResolvedValue(undefined),
 	onRemoveRemoteProject = vi.fn().mockResolvedValue(undefined),
 	initialOpen = true,
 	topbarOffset = "toolbar",
@@ -317,7 +318,8 @@ function renderSidebar({
 	workspaces?: WorkspaceSummary[];
 	remoteHosts?: RemoteHost[];
 	remoteWorkspaces?: WorkspaceSummary[];
-	onAddRemoteProject?: (hostId: string) => void;
+	onCreateRemoteProject?: (hostId: string, input: CreateProjectInput) => Promise<void>;
+	onInitializeRemoteProject?: (hostId: string, path: string) => Promise<void>;
 	onRemoveRemoteProject?: (hostId: string, projectId: string) => Promise<void>;
 	initialOpen?: boolean;
 	topbarOffset?: "toolbar" | "titlebar" | "trafficLights" | "session";
@@ -352,7 +354,8 @@ function renderSidebar({
 						workspaces={workspaces}
 						remoteHosts={remoteHosts}
 						remoteWorkspaces={remoteWorkspaces}
-						onAddRemoteProject={onAddRemoteProject}
+						onCreateRemoteProject={onCreateRemoteProject}
+						onInitializeRemoteProject={onInitializeRemoteProject}
 						onRemoveRemoteProject={onRemoveRemoteProject}
 					/>
 				</SidebarProvider>
@@ -516,7 +519,6 @@ afterEach(() => {
 
 describe("Sidebar", () => {
 	it("creates local or remote projects from the header button", async () => {
-		const onAddRemoteProject = vi.fn();
 		const user = userEvent.setup();
 		renderSidebar({
 			workspaces: [],
@@ -524,7 +526,6 @@ describe("Sidebar", () => {
 				{ hostId: "box-a", label: "Host A", url: "http://box-a:3011", status: "connected" },
 				{ hostId: "box-b", label: "Host B", url: "http://box-b:3011", status: "connected" },
 			],
-			onAddRemoteProject,
 		});
 
 		await user.click(screen.getByRole("button", { name: "New project" }));
@@ -532,7 +533,11 @@ describe("Sidebar", () => {
 		expect(screen.queryByRole("button", { name: "Add project on Host B" })).not.toBeInTheDocument();
 		await user.click(within(chooser).getByRole("combobox", { name: "Machine" }));
 		await user.click(screen.getByRole("option", { name: "Host B" }));
-		expect(onAddRemoteProject).toHaveBeenCalledWith("box-b");
+		expect(screen.getByRole("dialog")).toBe(chooser);
+		expect(within(chooser).getByRole("combobox", { name: "Machine" })).toHaveTextContent("Host B");
+		await user.click(within(chooser).getByRole("combobox", { name: "Machine" }));
+		await user.click(screen.getByRole("option", { name: "This computer" }));
+		expect(screen.getByRole("dialog")).toBe(chooser);
 	});
 
 	it("lists remote projects beside local and Cloud projects with host-qualified sessions", () => {
