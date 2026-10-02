@@ -406,6 +406,46 @@ func TestForwardTurnLeavesQueueToChatController(t *testing.T) {
 	}
 }
 
+func TestForwardTurnSubmitsQueuedReportAfterPaste(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	control := &supervisorControlStub{turn: &worker.Turn{ID: "report-turn", Attempt: 1, Prompt: "[from worker] report"}}
+	supervisor := &Supervisor{
+		Control: control, AgentTerminalID: "agent-1", agentStarted: true,
+		terminals: map[string]*terminalProcess{"agent-1": {pty: writer}},
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := supervisor.forwardTurn(context.Background())
+		done <- err
+	}()
+	if err := reader.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	first := make([]byte, 64)
+	n, err := reader.Read(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(first[:n]); got != "[from worker] report" {
+		t.Fatalf("queued report paste = %q", got)
+	}
+	second := make([]byte, 1)
+	if _, err := io.ReadFull(reader, second); err != nil {
+		t.Fatal(err)
+	}
+	if string(second) != "\r" {
+		t.Fatalf("queued report submit = %q", second)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInspectInterfaceDrainsOnlyActiveChatWork(t *testing.T) {
 	tests := []struct {
 		name string

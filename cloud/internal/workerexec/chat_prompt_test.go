@@ -51,7 +51,13 @@ func TestCloudPromptProviderHelper(t *testing.T) {
 			root = parent
 		}
 	}
-	if err := record.Encode(map[string]any{"args": os.Args, "cursorRules": cursorRules, "env": map[string]string{"AO_PULL_REQUEST_SOCKET": os.Getenv("AO_PULL_REQUEST_SOCKET"), "AO_REVIEW_SOCKET": os.Getenv("AO_REVIEW_SOCKET")}}); err != nil {
+	if err := record.Encode(map[string]any{"args": os.Args, "cursorRules": cursorRules, "env": map[string]string{
+		"AO_PULL_REQUEST_SOCKET":     os.Getenv("AO_PULL_REQUEST_SOCKET"),
+		"AO_REVIEW_SOCKET":           os.Getenv("AO_REVIEW_SOCKET"),
+		"AO_CLOUD_WORKER_API_URL":    os.Getenv("AO_CLOUD_WORKER_API_URL"),
+		"AO_CLOUD_WORKER_TOKEN_FILE": os.Getenv("AO_CLOUD_WORKER_TOKEN_FILE"),
+		"AO_SESSION_KIND":            os.Getenv("AO_SESSION_KIND"),
+	}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -141,7 +147,13 @@ func TestCloudChatDeliversTerminalRolePromptOnStartAndResume(t *testing.T) {
 					}
 					builder := HarnessBuilder{
 						DataDir: dataDir, Launch: launch, Binaries: map[string]string{harness: binary},
-						Env:        map[string]string{"AO_PULL_REQUEST_SOCKET": filepath.Join(dataDir, "pr.sock"), "AO_REVIEW_SOCKET": filepath.Join(dataDir, "review.sock")},
+						Env: map[string]string{
+							"AO_PULL_REQUEST_SOCKET":     filepath.Join(dataDir, "pr.sock"),
+							"AO_REVIEW_SOCKET":           filepath.Join(dataDir, "review.sock"),
+							"AO_CLOUD_WORKER_API_URL":    "https://cloud.example.test/api/cloud/v1",
+							"AO_CLOUD_WORKER_TOKEN_FILE": filepath.Join(dataDir, "worker-token"),
+							"AO_SESSION_KIND":            role,
+						},
 						CodexLogin: func(_, _, _, _ string) error { return nil },
 					}
 					credential := worker.CredentialResponse{Provider: harness, CredentialType: "api_key", Secret: "test-secret"}
@@ -171,6 +183,12 @@ func TestCloudChatDeliversTerminalRolePromptOnStartAndResume(t *testing.T) {
 					}
 					if !strings.Contains(command.SystemPrompt, roleHeader) {
 						t.Fatalf("wrong role instructions for %s", role)
+					}
+					if role == "orchestrator" && !strings.Contains(command.SystemPrompt, "Never say a worker") {
+						t.Fatal("Chat orchestrator may claim a worker without an ao spawn result")
+					}
+					if role == "orchestrator" && !strings.Contains(command.SystemPrompt, "ao spawn --name") {
+						t.Fatal("Chat orchestrator has no AO worker creation command")
 					}
 					if !strings.Contains(command.SystemPrompt, "PROJECT RULE MARKER") || strings.Contains(command.SystemPrompt, turn.Prompt) {
 						t.Fatal("project rules missing or user task mixed into standing instructions")
