@@ -1294,7 +1294,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			hasResizeFrame = true;
 		});
 		// Commit before paint; onResize immediately forwards the grid to the PTY.
-		function resizeGrid(cols: number, rows: number, allowHidden = false) {
+		const resizeGrid = (cols: number, rows: number, allowHidden = false) => {
 			if (disposed || (!allowHidden && callbacksRef.current.isVisible === false)) return;
 			if (cols !== term.cols || rows !== term.rows) {
 				const buffer = term.buffer.active;
@@ -1309,7 +1309,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 				term.resize(cols, rows);
 				if (wasAtBottom) term.scrollToBottom();
 			}
-		}
+		};
 		const synchronizedFrames = term.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) => {
 			if (params.includes(2026)) usesSynchronizedOutput = true;
 			return false;
