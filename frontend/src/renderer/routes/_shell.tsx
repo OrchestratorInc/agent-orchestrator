@@ -187,7 +187,7 @@ function ShellLayout() {
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
 	const { hosts: remoteHosts, refresh: refreshRemoteHosts } = useRemoteHosts();
-	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds, loadedProjectHostIds } = useRemoteWorkspaces();
+	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds } = useRemoteWorkspaces();
 	const failedRemoteHostKey = remoteFailedHostIds.join("\0");
 	useEffect(() => {
 		if (failedRemoteHostKey) void refreshRemoteHosts();
@@ -1087,6 +1087,11 @@ function ShellLayout() {
 					hostId={remoteAddProjectHostId}
 					hostLabel={remoteHosts.find((host) => host.hostId === remoteAddProjectHostId)?.label ?? remoteAddProjectHostId}
 					connected={remoteHosts.find((host) => host.hostId === remoteAddProjectHostId)?.status === "connected"}
+					remoteHosts={remoteHosts}
+					onSelectHost={(hostId) => {
+						setRemoteAddProjectHostId(hostId ?? null);
+						if (!hostId) useUiStore.getState().requestCreateProject();
+					}}
 					onCreateStandaloneAgent={() => {
 						requestNewTask(STANDALONE_WORKSPACE_ID, remoteAddProjectHostId);
 						setRemoteAddProjectHostId(null);
@@ -1188,7 +1193,6 @@ function ShellLayout() {
 							void queryClient.invalidateQueries({ queryKey: ["remote-workspaces"] });
 						}}
 						remoteWorkspaces={remoteWorkspaces}
-						remoteLoadedProjectHostIds={loadedProjectHostIds}
 						remoteFailedHostIds={remoteFailedHostIds}
 					/>
 					<main className={cn("flex min-w-0 flex-1 flex-col overflow-x-hidden", !sidebarHasLayout && "sidebar-hidden")}>

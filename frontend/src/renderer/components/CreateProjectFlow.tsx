@@ -31,6 +31,7 @@ import { SearchablePicker } from "./SearchablePicker";
 import { buildCoderRequestOptions, useCoderSessionOptionsStore } from "../stores/coder-session-options-store";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOrg } from "../hooks/useCloudOrg";
+import type { RemoteHost } from "../hooks/useRemoteHosts";
 import { usePreparedClone } from "../hooks/usePreparedClone";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useProviderConnections } from "../hooks/useProviderConnections";
@@ -155,6 +156,7 @@ export function CreateProjectFlow({
 	idleLabel,
 	hostId,
 	hostLabel,
+	remoteHosts = [],
 	initialOpen = false,
 	mode = "single_repo",
 	onCreateProject,
@@ -162,6 +164,7 @@ export function CreateProjectFlow({
 	onCreateStandaloneAgent,
 	onDismiss,
 	onOpenExistingProject,
+	onSelectHost,
 	openSignal,
 	sourceSignal,
 }: {
@@ -179,6 +182,7 @@ export function CreateProjectFlow({
 	idleLabel?: string;
 	hostId?: string;
 	hostLabel?: string;
+	remoteHosts?: readonly RemoteHost[];
 	initialOpen?: boolean;
 	mode?: CreateProjectFlowMode;
 	onCloneProject?: (input: CloneProjectInput) => Promise<void>;
@@ -187,6 +191,7 @@ export function CreateProjectFlow({
 	onCreateStandaloneAgent?: () => void;
 	onDismiss?: () => void;
 	onOpenExistingProject?: (path: string) => void | Promise<void>;
+	onSelectHost?: (hostId?: string) => void;
 	// Monotonic counter: each new value opens the flow programmatically (the ⌘N
 	// "no project in scope" fallback). Lets the shortcut reuse the sidebar's own
 	// create-project flow instead of a separate delegating component.
@@ -790,7 +795,7 @@ export function CreateProjectFlow({
 							<CloudSignInPanel disabled={isBusy} onBack={() => setOffering("local")} onSignIn={cloudSignIn} />
 						)
 					) : (
-						<ImportSourcePicker cloudEnabled={!hostId && cloudEnabled} disabled={isBusy || !connected} onCloudSelect={() => setOffering("cloud")} onSelect={selectSource} onCreateStandaloneAgent={onCreateStandaloneAgent} hostLabel={hostLabel} />
+						<ImportSourcePicker cloudEnabled={!hostId && cloudEnabled} disabled={isBusy || !connected} onCloudSelect={() => setOffering("cloud")} onSelect={selectSource} onCreateStandaloneAgent={onCreateStandaloneAgent} hostId={hostId} hostLabel={hostLabel} remoteHosts={remoteHosts} onSelectHost={onSelectHost} />
 					)}
 					{error && !folderPickerOpen && selectedPath === null && (
 						<p className="text-caption leading-body text-error" role="status">
@@ -808,6 +813,8 @@ export function CreateProjectFlow({
 						closeDisabled={isBusy}
 						disabled={isBusy || !connected}
 						hostLabel={hostLabel}
+						hostId={hostId}
+						remoteHosts={remoteHosts}
 						offering={offering}
 						onCloudCreated={onCloudProjectCreated}
 						onCloudSelect={() => setOffering("cloud")}
@@ -828,6 +835,10 @@ export function CreateProjectFlow({
 							}
 						}}
 						onSelect={selectSource}
+						onSelectHost={(nextHostId) => {
+							setModePickerOpen(false);
+							onSelectHost?.(nextHostId);
+						}}
 					/>
 					{cloneDialogOpen ? (
 						<CloneRepositoryDialog
@@ -1190,6 +1201,8 @@ function CreateProjectSourceDialog({
 	cloudEnabled,
 	disabled,
 	hostLabel,
+	hostId,
+	remoteHosts,
 	offering,
 	onCloudCreated,
 	onCloudSelect,
@@ -1198,6 +1211,7 @@ function CreateProjectSourceDialog({
 	onOpenChange,
 	onCreateStandaloneAgent,
 	onSelect,
+	onSelectHost,
 	open,
 }: {
 	childOpen: boolean;
@@ -1206,6 +1220,8 @@ function CreateProjectSourceDialog({
 	cloudEnabled: boolean;
 	disabled: boolean;
 	hostLabel?: string;
+	hostId?: string;
+	remoteHosts: readonly RemoteHost[];
 	offering: ProjectOffering;
 	onCloudCreated: (projectId: string) => void;
 	onSignIn: () => void;
@@ -1214,6 +1230,7 @@ function CreateProjectSourceDialog({
 	onOpenChange: (open: boolean) => void;
 	onCreateStandaloneAgent?: () => void;
 	onSelect: (source: ProjectSource) => void;
+	onSelectHost?: (hostId?: string) => void;
 	open: boolean;
 }) {
 	const { t } = useTranslation();
@@ -1239,7 +1256,7 @@ function CreateProjectSourceDialog({
 								<CloudSignInPanel dialog disabled={disabled} onBack={onCloudBack} onSignIn={onSignIn} />
 							)
 						) : (
-							<ImportSourcePicker cloudEnabled={cloudEnabled} closeDisabled={closeDisabled} disabled={disabled} hostLabel={hostLabel} onCloudSelect={onCloudSelect} onClose={() => onOpenChange(false)} onSelect={onSelect} onCreateStandaloneAgent={onCreateStandaloneAgent} dialog />
+							<ImportSourcePicker cloudEnabled={cloudEnabled} closeDisabled={closeDisabled} disabled={disabled} hostId={hostId} hostLabel={hostLabel} remoteHosts={remoteHosts} onSelectHost={onSelectHost} onCloudSelect={onCloudSelect} onClose={() => onOpenChange(false)} onSelect={onSelect} onCreateStandaloneAgent={onCreateStandaloneAgent} dialog />
 						)}
 					</div>
 				</Dialog.Content>
@@ -1818,20 +1835,26 @@ function ImportSourcePicker({
 	dialog = false,
 	disabled,
 	hostLabel,
+	hostId,
+	remoteHosts = [],
 	onCloudSelect,
 	onClose,
 	onCreateStandaloneAgent,
 	onSelect,
+	onSelectHost,
 }: {
 	cloudEnabled?: boolean;
 	closeDisabled?: boolean;
 	dialog?: boolean;
 	disabled: boolean;
 	hostLabel?: string;
+	hostId?: string;
+	remoteHosts?: readonly RemoteHost[];
 	onCloudSelect?: () => void;
 	onClose?: () => void;
 	onCreateStandaloneAgent?: () => void;
 	onSelect: (source: ProjectSource) => void;
+	onSelectHost?: (hostId?: string) => void;
 }) {
 	const { t } = useTranslation();
 	const createStandaloneAgent = () => {
@@ -1872,6 +1895,16 @@ function ImportSourcePicker({
 			) : (
 				<p className={onboardingPanelDescriptionClass}>{hostLabel ? t("remote.projectPathHint", { label: hostLabel, defaultValue: "Use a repository folder on {{label}}, or clone one there from Git." }) : t("createProject.addCodeDescription")}</p>
 			)}
+			{remoteHosts.length > 0 && onSelectHost && <div className="mx-4 mb-4 flex items-center justify-between gap-3">
+				<Label htmlFor="create-project-machine">{t("createProject.machine")}</Label>
+				<Select value={hostId ?? "__local__"} onValueChange={(value) => onSelectHost(value === "__local__" ? undefined : value)}>
+					<SelectTrigger id="create-project-machine" className="max-w-[65%]"><SelectValue /></SelectTrigger>
+					<SelectContent>
+						<SelectItem value="__local__">{t("settings.harness.thisComputer")}</SelectItem>
+						{remoteHosts.map((host) => <SelectItem key={host.hostId} value={host.hostId} disabled={host.status !== "connected"}>{host.label}</SelectItem>)}
+					</SelectContent>
+				</Select>
+			</div>}
 			<div className="mx-4 mb-4 flex flex-col gap-3">
 				{cloudEnabled && onCloudSelect ? (
 					<div className="overflow-hidden rounded-md border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)]">

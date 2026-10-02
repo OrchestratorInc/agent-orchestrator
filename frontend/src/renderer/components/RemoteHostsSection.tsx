@@ -1,22 +1,20 @@
 import { Fragment, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Folder, FolderPlus } from "lucide-react";
+import { AlertTriangle, Folder } from "lucide-react";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
-import { STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
+import type { WorkspaceSummary } from "../types/workspace";
 import { SidebarMenuButton, SidebarMenuItem } from "./ui/sidebar";
 
 type Props = {
 	hosts: RemoteHost[];
 	workspaces: WorkspaceSummary[];
 	failedHostIds?: string[];
-	loadedProjectHostIds?: string[];
 	renderProject: (host: RemoteHost, workspace: WorkspaceSummary) => ReactNode;
-	onAddProject: (hostId: string) => void;
 	onRetry: () => void;
 };
 
 /** Only host-specific chrome lives here; project and session rows are shared. */
-export function RemoteHostsSection({ hosts, workspaces, failedHostIds = [], loadedProjectHostIds = [], renderProject, onAddProject, onRetry }: Props) {
+export function RemoteHostsSection({ hosts, workspaces, failedHostIds = [], renderProject, onRetry }: Props) {
 	const { t } = useTranslation();
 	return <>
 		{hosts.map((host) => {
@@ -34,20 +32,8 @@ export function RemoteHostsSection({ hosts, workspaces, failedHostIds = [], load
 				</SidebarMenuButton>
 			</SidebarMenuItem>;
 			const projects = workspaces.filter((workspace) => workspace.hostId === host.hostId);
-			const projectCount = projects.filter((workspace) => workspace.id !== STANDALONE_WORKSPACE_ID).length;
 			return <Fragment key={host.url}>
 				{projects.map((workspace) => <Fragment key={`${host.hostId}:${workspace.id}`}>{renderProject(host, workspace)}</Fragment>)}
-				<SidebarMenuItem>
-					<SidebarMenuButton
-						aria-label={t("remote.addProjectOnHost", { label: host.label, defaultValue: "Add project on {{label}}" })}
-						className="h-8 gap-2 rounded-lg px-2.5 text-sm text-muted-foreground hover:bg-interactive-hover hover:text-foreground [&_svg]:size-icon-md"
-						onClick={() => onAddProject(host.hostId)}
-					>
-						<FolderPlus aria-hidden="true" />
-						<span className="truncate">{t("remote.addProjectOnHost", { label: host.label, defaultValue: "Add project on {{label}}" })}</span>
-						{loadedProjectHostIds.includes(host.hostId) && <span className="ml-auto shrink-0 text-xs tabular-nums">{t("remote.projectCount", { count: projectCount, defaultValue: projectCount === 1 ? "{{count}} project" : "{{count}} projects" })}</span>}
-					</SidebarMenuButton>
-				</SidebarMenuItem>
 				{failedHostIds.includes(host.hostId) && <SidebarMenuItem>
 					<SidebarMenuButton className="h-8 rounded-lg px-2.5 text-left text-xs text-destructive hover:bg-interactive-hover" onClick={onRetry}>{t("remoteHosts.loadFailed")}</SidebarMenuButton>
 				</SidebarMenuItem>}

@@ -374,6 +374,21 @@ beforeEach(() => {
 });
 
 describe("CreateProjectFlow remote host", () => {
+	it("switches the shared picker back to this computer", async () => {
+		const user = userEvent.setup();
+		const onSelectHost = vi.fn();
+		renderChooseFlow({
+			initialOpen: true,
+			hostId: "host-a",
+			hostLabel: "Host A",
+			remoteHosts: [{ hostId: "host-a", label: "Host A", url: "https://a.test", status: "connected" }],
+			onSelectHost,
+		});
+		await user.click(screen.getByRole("combobox", { name: "Machine" }));
+		await user.click(screen.getByRole("option", { name: "This computer" }));
+		expect(onSelectHost).toHaveBeenCalledWith(undefined);
+	});
+
 	it("shows safe Git clone guidance from a failed host clone", async () => {
 		const user = userEvent.setup();
 		hostMocks.aPost.mockResolvedValueOnce({

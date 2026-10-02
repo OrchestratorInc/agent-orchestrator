@@ -478,7 +478,6 @@ type SidebarProps = {
 	onRetryRemoteHosts?: () => void;
 	remoteWorkspaces?: WorkspaceSummary[];
 	remoteFailedHostIds?: string[];
-	remoteLoadedProjectHostIds?: string[];
 	onCloneProject: (input: CloneProjectInput) => Promise<void>;
 	onCreateProject: (input: CreateProjectInput) => Promise<void>;
 	onInitializeProject: (path: string) => Promise<void>;
@@ -589,7 +588,6 @@ export function Sidebar({
 	onRetryRemoteHosts = () => undefined,
 	remoteWorkspaces = [],
 	remoteFailedHostIds = [],
-	remoteLoadedProjectHostIds = [],
 	onCloneProject,
 	onCreateProject,
 	onInitializeProject,
@@ -1019,6 +1017,8 @@ export function Sidebar({
 						trailing={
 							<CreateProjectButton
 								existingProjectPaths={existingProjectPaths}
+								remoteHosts={remoteHosts}
+								onAddRemoteProject={onAddRemoteProject}
 								onCloneProject={onCloneProject}
 								onCreateProject={onCreateProject}
 								onInitializeProject={onInitializeProject}
@@ -1075,7 +1075,6 @@ export function Sidebar({
 											hosts={remoteHosts}
 											workspaces={remoteWorkspaces}
 											failedHostIds={remoteFailedHostIds}
-											loadedProjectHostIds={remoteLoadedProjectHostIds}
 											renderProject={(host, workspace) => {
 												const hostId = host.hostId;
 												const projectKey = sessionUiKey(workspace.id, hostId);
@@ -1111,7 +1110,6 @@ export function Sidebar({
 													onProjectDrop={() => undefined}
 												/>;
 											}}
-											onAddProject={onAddRemoteProject}
 											onRetry={onRetryRemoteHosts}
 										/>
 										{isCollapsed && <CreateProjectListItem />}
@@ -3201,11 +3199,13 @@ function SidebarSearchButton({ onOpen }: { onOpen: () => void }) {
 
 function CreateProjectButton({
 	existingProjectPaths,
+	remoteHosts,
+	onAddRemoteProject,
 	onCloneProject,
 	onCreateProject,
 	onInitializeProject,
 	onOpenExistingProject,
-}: Pick<SidebarProps, "onCloneProject" | "onCreateProject" | "onInitializeProject"> & {
+}: Pick<SidebarProps, "onCloneProject" | "onCreateProject" | "onInitializeProject" | "onAddRemoteProject" | "remoteHosts"> & {
 	existingProjectPaths: readonly string[];
 	onOpenExistingProject: (path: string) => void | Promise<void>;
 }) {
@@ -3221,6 +3221,8 @@ function CreateProjectButton({
 		<CreateProjectFlow
 			droppedPath={folderDropRequest}
 			existingProjectPaths={existingProjectPaths}
+			remoteHosts={remoteHosts}
+			onSelectHost={(hostId) => { if (hostId) onAddRemoteProject?.(hostId); }}
 			mode="choose"
 			onCloneProject={onCloneProject}
 			onCreateProject={onCreateProject}

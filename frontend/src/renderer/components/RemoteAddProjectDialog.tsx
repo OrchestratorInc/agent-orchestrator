@@ -2,17 +2,20 @@ import { useRef } from "react";
 import type { components } from "../../api/schema";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
+import type { RemoteHost } from "../hooks/useRemoteHosts";
 import { useUiStore } from "../stores/ui-store";
 import { CreateProjectFlow, type CreateProjectInput } from "./CreateProjectFlow";
 
 /** Remote creation uses the same source, Git setup, and agent screens as local creation. */
-export function RemoteAddProjectDialog({ hostId, hostLabel, connected, onCreated, onCreateStandaloneAgent, onOpenChange }: {
+export function RemoteAddProjectDialog({ hostId, hostLabel, connected, remoteHosts, onCreated, onCreateStandaloneAgent, onOpenChange, onSelectHost }: {
 	hostId: string;
 	hostLabel: string;
 	connected: boolean;
+	remoteHosts?: readonly RemoteHost[];
 	onCreated: (projectId: string, orchestratorSessionId?: string) => void;
 	onCreateStandaloneAgent: () => void;
 	onOpenChange: (open: boolean) => void;
+	onSelectHost?: (hostId?: string) => void;
 }) {
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const setProjectProvisioning = useUiStore((state) => state.setProjectProvisioning);
@@ -71,6 +74,8 @@ export function RemoteAddProjectDialog({ hostId, hostLabel, connected, onCreated
 		initialOpen
 		hostId={hostId}
 		hostLabel={hostLabel}
+		remoteHosts={remoteHosts}
+		onSelectHost={onSelectHost}
 		connected={connected}
 		onCreateProject={createProject}
 		onCreateStandaloneAgent={onCreateStandaloneAgent}

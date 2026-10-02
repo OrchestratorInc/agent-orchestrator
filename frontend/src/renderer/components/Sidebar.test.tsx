@@ -515,7 +515,7 @@ afterEach(() => {
 });
 
 describe("Sidebar", () => {
-	it("keeps remote project creation in the sidebar without changing the generic chooser", async () => {
+	it("creates local or remote projects from the header button", async () => {
 		const onAddRemoteProject = vi.fn();
 		const user = userEvent.setup();
 		renderSidebar({
@@ -529,9 +529,9 @@ describe("Sidebar", () => {
 
 		await user.click(screen.getByRole("button", { name: "New project" }));
 		const chooser = await screen.findByRole("dialog");
-		expect(within(chooser).queryByRole("button", { name: "Add project on Host A" })).not.toBeInTheDocument();
-		await user.keyboard("{Escape}");
-		await user.click(screen.getByRole("button", { name: "Add project on Host B" }));
+		expect(screen.queryByRole("button", { name: "Add project on Host B" })).not.toBeInTheDocument();
+		await user.click(within(chooser).getByRole("combobox", { name: "Machine" }));
+		await user.click(screen.getByRole("option", { name: "Host B" }));
 		expect(onAddRemoteProject).toHaveBeenCalledWith("box-b");
 	});
 
