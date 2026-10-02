@@ -22,7 +22,7 @@ func reviewerLaunch(base worker.LaunchContext, input worker.TerminalCommand) (wo
 	base.Model = input.Reviewer.AgentConfig.Model
 	base.AgentSessionID = ""
 	base.ParentSessionID = ""
-	base.Prompt = ""
+	base.Prompt = string(input.Data)
 	base.SystemPrompt = ""
 	return base, nil
 }

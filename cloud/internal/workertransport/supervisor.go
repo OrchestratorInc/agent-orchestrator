@@ -734,7 +734,7 @@ func (s *Supervisor) terminalCommand(
 			return nil, func() {}, errors.New("interactive agent command is unavailable")
 		}
 		args := append([]string(nil), commandConfig.Args...)
-		if (input.Review || input.Kind == "reviewer") && len(input.Data) > 0 {
+		if input.Review && len(input.Data) > 0 {
 			// Codex accepts an initial positional prompt. Supplying it at process
 			// startup avoids racing its interactive TUI initialization, which can
 			// drop a prompt typed immediately after the PTY opens.

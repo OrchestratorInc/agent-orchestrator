@@ -349,11 +349,11 @@ func TestSavedProjectSettingsReachWorkerOrchestratorAndReviewerProcesses(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, created, err := store.CreateReviewRun(ctx, fixture.orgID, pr.ID, fixture.sessionID, "settings-sha")
+	run, created, err := store.CreateReviewRun(ctx, fixture.orgID, pr.ID, fixture.sessionID, "settings-sha", "", "auto")
 	if err != nil || !created {
 		t.Fatalf("review creation: created=%v err=%v", created, err)
 	}
-	if err := store.OpenReviewTerminal(ctx, fixture.orgID, fixture.sessionID, run.ID, "Review"); err != nil {
+	if _, err := store.OpenReviewTerminal(ctx, fixture.orgID, fixture.sessionID, run.ID, "Review", ""); err != nil {
 		t.Fatal(err)
 	}
 	var payload json.RawMessage

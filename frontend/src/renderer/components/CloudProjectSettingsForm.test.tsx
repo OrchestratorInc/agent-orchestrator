@@ -9,7 +9,7 @@ import { useUiStore } from "../stores/ui-store";
 import { TooltipProvider } from "./ui/tooltip";
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), patch: vi.fn(), localGet: vi.fn(), connections: vi.fn(), ready: true }));
-vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: { getProject: mocks.get, updateProjectSettings: mocks.patch, listProviderConnections: mocks.connections }, ready: mocks.ready, baseUrl: "https://cloud.test" }) }));
+vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: { getProject: mocks.get, updateProjectSettings: mocks.patch, listUserProviderConnections: mocks.connections }, ready: mocks.ready, baseUrl: "https://cloud.test" }) }));
 vi.mock("../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true }) }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({ workspaceQueryKey: ["workspaces"], cloudProjectsQueryKey: ["cloud-projects"], useWorkspaceQuery: () => ({ data: [] }) }));
 vi.mock("../lib/api-client", () => ({ apiClient: { GET: mocks.localGet }, apiErrorMessage: (error: { message: string }) => error.message }));
