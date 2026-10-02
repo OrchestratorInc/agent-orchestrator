@@ -1091,7 +1091,12 @@ function AttachedTerminal({
 		// fresh connection attempt once the user has fixed their network policy.
 		if (terminal) attach(terminal);
 	}, [attach, terminal]);
-	const provider = terminalTarget?.kind === "reviewer" ? terminalTarget.harness : session?.provider;
+	const provider =
+		terminalTarget?.kind === "reviewer"
+			? terminalTarget.harness
+			: terminalTarget?.kind === "shell"
+				? undefined
+				: session?.provider;
 	const isSessionActive = session ? sessionIsActive(session) : false;
 	// A standalone shell is never restorable: there is no session row to restore.
 	const canRestoreSession =
