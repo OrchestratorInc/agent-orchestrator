@@ -7,6 +7,7 @@ it("does not send machine A's saved bearer when manually pairing machine B", () 
 	// Connect sends cfg.password to the typed address. The new-machine form must
 	// start blank rather than load the active machine's saved credentials.
 	expect(config).toMatch(/export const DEFAULT_CONFIG:[\s\S]*?host: ""[\s\S]*?password: ""/);
-	expect(sheet).toContain("useState<ServerConfig>(DEFAULT_CONFIG)");
+	expect(sheet).toContain('password: editingHost?.token ?? ""');
+	expect(sheet).toContain("const [cfg, setCfg] = useState<ServerConfig>(() => {");
 	expect(sheet).not.toMatch(/\bloadConfig\b/);
 });

@@ -42,6 +42,16 @@ export async function adoptManualConnection(
 	return hostId;
 }
 
+/** Replace one saved address and its password without dropping other discovered addresses. */
+export function editedManualHost(host: Host, cfg: ServerConfig, name: string, endpointIndex: number): Host {
+	const endpoint = manualEndpoint(cfg);
+	const previous = host.endpoints[endpointIndex];
+	if (previous) endpoint.kind = previous.kind;
+	const endpoints = [...host.endpoints];
+	endpoints[endpointIndex] = endpoint;
+	return { ...host, name: name.trim(), token: cfg.password, endpoints };
+}
+
 /**
  * A typed address is one endpoint, not a list — the daemon's own list replaces
  * this on the first successful connect. TLS by hand means the tailnet path;

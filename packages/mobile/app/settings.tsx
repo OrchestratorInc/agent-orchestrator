@@ -7,7 +7,7 @@ import Constants from "expo-constants";
 import { useFocusEffect, useRouter } from "expo-router";
 import * as Updates from "expo-updates";
 import { Children, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ActivityIndicator, Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { ApiError, pingServer } from "../lib/api";
 import { formatVersionLine, type BuildInfo } from "../lib/appInfo";
 import { bugReportClipboard, bugReportOpenUrl, bugReportUrl } from "../lib/bugReport";
@@ -17,7 +17,7 @@ import { describeDesktopStatus } from "../lib/desktopStatus";
 import { discordFeatureRequestURL } from "../lib/discord";
 import { forgetServer } from "../lib/disconnect";
 import { haptics } from "../lib/haptics";
-import { activeHost, loadHosts, renameHost, type Host as PairedHost } from "../lib/hosts";
+import { activeHost, loadHosts, type Host as PairedHost } from "../lib/hosts";
 import { toggleLayoutGrid, useLayoutGrid } from "../lib/layoutGrid";
 import { checkStore, openOrStartUpdate } from "../lib/inAppUpdates";
 import { describePrompt } from "../lib/storeUpdate";
@@ -121,10 +121,7 @@ export default function SettingsScreen() {
 								selected={host.id === selectedHostId}
 								loading={switchingHostId === host.id}
 								onSelect={() => { void selectHost(host.id); }}
-								onRenamed={async () => {
-									setPairedHosts(await loadHosts());
-									void reloadConfig().catch(() => {});
-								}}
+								onEdit={() => router.push({ pathname: "/sheets/connect", params: { hostId: host.id } })}
 							/>
 						))}
 						{selectedHost && !selectedConfigReady ? (
@@ -285,53 +282,15 @@ function CardRow({
 	return <Pressable disabled={disabled || loading} onPress={() => { haptics.tap(); onPress(); }} style={({ pressed }) => [styles.row, pressed && styles.rowPressed, disabled && styles.disabled]}>{content}</Pressable>;
 }
 
-function MachineRow({ host, selected, loading, onSelect, onRenamed }: {
+function MachineRow({ host, selected, loading, onSelect, onEdit }: {
 	host: PairedHost;
 	selected: boolean;
 	loading: boolean;
 	onSelect(): void;
-	onRenamed(): Promise<void>;
+	onEdit(): void;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const [editing, setEditing] = useState(false);
-	const [name, setName] = useState(host.name);
-	const [saving, setSaving] = useState(false);
-
-	async function save() {
-		if (!name.trim() || saving) return;
-		setSaving(true);
-		try {
-			await renameHost(host.id, name);
-			await onRenamed();
-			setEditing(false);
-		} catch {
-			Alert.alert("Could not rename machine", "Try again from Settings.");
-		} finally {
-			setSaving(false);
-		}
-	}
-
-	if (editing) return <View style={styles.row}>
-		<Feather name="server" size={17} color={t.textSecondary} style={styles.rowIcon} />
-		<TextInput
-			accessibilityLabel="Machine name"
-			autoFocus
-			value={name}
-			onChangeText={setName}
-			onSubmitEditing={() => { void save(); }}
-			returnKeyType="done"
-			maxLength={48}
-			selectTextOnFocus
-			style={styles.machineNameInput}
-		/>
-		<Pressable accessibilityRole="button" accessibilityLabel="Cancel rename" onPress={() => setEditing(false)} style={styles.machineAction}>
-			<Feather name="x" size={17} color={t.textSecondary} />
-		</Pressable>
-		<Pressable accessibilityRole="button" accessibilityLabel="Save machine name" accessibilityState={{ disabled: !name.trim() || saving }} disabled={!name.trim() || saving} onPress={() => { void save(); }} style={styles.machineAction}>
-			{saving ? <ActivityIndicator size="small" color={t.textSecondary} /> : <Feather name="check" size={17} color={t.textPrimary} />}
-		</Pressable>
-	</View>;
 
 	return <View style={styles.row}>
 		<Feather name="server" size={17} color={t.textSecondary} style={styles.rowIcon} />
@@ -339,7 +298,7 @@ function MachineRow({ host, selected, loading, onSelect, onRenamed }: {
 			<Text style={styles.rowLabel} numberOfLines={1}>{host.name}</Text>
 			{loading ? <ActivityIndicator size="small" color={t.textTertiary} /> : <Text style={styles.rowValue}>{selected ? "Default" : "Make default"}</Text>}
 		</Pressable>
-		<Pressable accessibilityRole="button" accessibilityLabel={`Rename ${host.name}`} onPress={() => { setName(host.name); setEditing(true); }} style={styles.machineAction}>
+		<Pressable accessibilityRole="button" accessibilityLabel={`Edit connection for ${host.name}`} onPress={() => { haptics.tap(); onEdit(); }} style={styles.machineAction}>
 			<Feather name="edit-2" size={17} color={t.textSecondary} />
 		</Pressable>
 	</View>;
@@ -781,7 +740,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	rowValue: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, maxWidth: "42%" },
 	machineSelect: { flex: 1, minWidth: 0, minHeight: 52, flexDirection: "row", alignItems: "center", gap: space.sm },
 	machineAction: { width: 44, minHeight: 44, alignItems: "center", justifyContent: "center" },
-	machineNameInput: { flex: 1, minWidth: 0, color: t.textPrimary, fontFamily: "Geist_600SemiBold", fontSize: type.subheadline.fontSize, paddingVertical: 0 },
 	appearancePicker: { width: 124, height: 38, alignItems: "flex-end", justifyContent: "center" },
 	disabled: { opacity: 0.45 },
 	disconnect: { minHeight: 52, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md, borderRadius: 16, borderCurve: "continuous" },
