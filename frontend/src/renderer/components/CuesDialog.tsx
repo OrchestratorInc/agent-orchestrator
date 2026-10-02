@@ -12,7 +12,6 @@ import {
 import { CUE_LIMITS } from "../lib/cues";
 import type { CueDTO, CueInput } from "../lib/cues";
 import { Button } from "./ui/button";
-import { Input } from "./ui/input";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 
@@ -260,7 +259,7 @@ function ProjectCuesSettings({ projectId, onBusyChange }: CuesSettingsProps) {
 				<label htmlFor="cue-name" className="settings-field-label">
 					{t("cues.nameLabel")}
 				</label>
-				<Input
+				<input
 					id="cue-name"
 					value={draft.name}
 					onChange={(event) => setDraft((d) => ({ ...d, name: event.target.value }))}
@@ -274,7 +273,7 @@ function ProjectCuesSettings({ projectId, onBusyChange }: CuesSettingsProps) {
 				<label htmlFor="cue-description" className="settings-field-label">
 					{t("cues.descriptionLabel")}
 				</label>
-				<Input
+				<input
 					id="cue-description"
 					value={draft.description}
 					onChange={(event) => setDraft((d) => ({ ...d, description: event.target.value }))}
@@ -324,7 +323,7 @@ function ProjectCuesSettings({ projectId, onBusyChange }: CuesSettingsProps) {
 
 	return (
 		<div className="flex flex-col gap-(--size-settings-section-inner-gap)">
-			<fieldset disabled={busy}>{formOpen ? renderForm() : renderList()}</fieldset>
+			<fieldset className="min-w-0" disabled={busy}>{formOpen ? renderForm() : renderList()}</fieldset>
 			<div className="flex items-center justify-end gap-2">
 				{formOpen ? (
 					<>
