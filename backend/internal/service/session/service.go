@@ -13,11 +13,13 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	accountcore "github.com/aoagents/agent-orchestrator/backend/internal/accountsmanager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/reqid"
+	accountsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/accountsmanager"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
@@ -287,7 +289,7 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			if cfg.AutomationRunID != nil {
 				for _, candidate := range existing {
 					if candidate.AutomationRunID != nil && *candidate.AutomationRunID == *cfg.AutomationRunID {
-						return candidate, 0, 0, nil
+						return s.reuseOrchestratorWithAccount(ctx, cfg, candidate)
 					}
 				}
 				return domain.Session{}, 0, 0, apierr.Conflict(
@@ -296,13 +298,16 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 					nil,
 				)
 			}
-			return newestSession(existing), 0, 0, nil
+			return s.reuseOrchestratorWithAccount(ctx, cfg, newestSession(existing))
 		}
 	}
 	return s.spawn(ctx, cfg)
 }
 
 func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
+	if cfg.Account != nil && !cfg.Account.Valid() {
+		return domain.Session{}, 0, 0, toSpawnAPIError(domain.ErrAccountsManagerSelectionInvalid)
+	}
 	var project domain.ProjectRecord
 	var err error
 	if cfg.ProjectID != "" {
@@ -327,6 +332,7 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return domain.Session{}, 0, 0, apierr.Invalid("AGENT_BINARY_NOT_FOUND", "The selected agent harness is not installed", map[string]any{"agentId": cfg.Harness})
 		}
 		if cfg.Harness == domain.HarnessCodex &&
+			(cfg.Account == nil || cfg.Account.Mode != domain.AccountsManagerManaged) &&
 			readiness.Authentication.State == domain.AgentAuthenticationUnauthorized &&
 			readiness.Authentication.Freshness == domain.AgentReadinessFresh {
 			return domain.Session{}, 0, 0, apierr.Conflict("CODEX_ACCOUNT_AUTH_UNVERIFIED", "Add or sign in to a Codex account in Settings before starting a Codex session", nil)
@@ -1166,6 +1172,14 @@ func mapSessionError(err error) error {
 	switch {
 	case err == nil:
 		return nil
+	case errors.Is(err, accountcore.ErrUnavailable):
+		return apierr.Conflict("ACCOUNTS_MANAGER_UNAVAILABLE", "Accounts Manager is unavailable. Open Settings > Accounts or disable routing.", nil)
+	case errors.Is(err, accountsvc.ErrRoutingNotConfigured):
+		return apierr.Conflict("ROUTING_NOT_CONFIGURED", "Configure an account in Settings > Accounts or disable routing.", nil)
+	case errors.Is(err, accountsvc.ErrRoutingAccountUnavailable):
+		return apierr.Conflict("ROUTING_ACCOUNT_UNAVAILABLE", "This session's selected account is unavailable. Open Settings > Accounts or disable routing for new sessions.", nil)
+	case errors.Is(err, accountsvc.ErrRoutingNoEligibleAccount):
+		return apierr.Conflict("ROUTING_NO_ELIGIBLE_ACCOUNT", "No eligible account is available. Open Settings > Accounts or disable routing.", nil)
 	case errors.Is(err, sessionmanager.ErrNotFound):
 		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	case errors.Is(err, sessionmanager.ErrNotRestorable):
@@ -1334,6 +1348,16 @@ func mapSessionError(err error) error {
 func toSpawnAPIError(err error) error {
 	if err == nil {
 		return nil
+	}
+	switch {
+	case errors.Is(err, domain.ErrAccountsManagerSelectionInvalid):
+		return apierr.Invalid("ACCOUNT_SELECTION_INVALID", "Choose native mode or one managed account for this provider", nil)
+	case errors.Is(err, domain.ErrAccountsManagerSelectionUnavailable):
+		return apierr.NotImplemented("ACCOUNT_SELECTION_UNAVAILABLE", "Initial account selection is unavailable")
+	case errors.Is(err, domain.ErrAccountsManagerAccountDeleting):
+		return apierr.Conflict("ACCOUNT_DELETING", "The selected account is being removed", nil)
+	case errors.Is(err, domain.ErrAccountsManagerBindingConflict):
+		return apierr.Conflict("ACCOUNT_BINDING_CHANGED", "The session account choice changed", nil)
 	}
 	var already *apierr.Error
 	if errors.As(err, &already) {

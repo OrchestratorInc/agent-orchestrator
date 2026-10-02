@@ -41,6 +41,8 @@ type Protocol string
 const (
 	// ProtocolRaw preserves the original newline-delimited forwarding profile.
 	ProtocolRaw Protocol = ""
+	// ProtocolManagedRaw fences raw streams by the explicit managed launch identity.
+	ProtocolManagedRaw Protocol = "managed-raw"
 	// ProtocolACP enables the host-owned ACP correlation and replay profile.
 	ProtocolACP Protocol = "acp"
 	// ProtocolUnreal preserves Unreal Agent's AO-private JSONL stream while
@@ -124,6 +126,7 @@ type ACPState struct {
 
 // Transport is one authenticated attachment to a persistent provider host.
 type Transport struct {
+	identity      string
 	Stdin         io.WriteCloser
 	Stdout        io.Reader
 	Reconnected   bool
@@ -273,9 +276,9 @@ func validateDescriptor(cfg Config, d Descriptor) error {
 	if d.Protocol != cfg.Protocol {
 		return fmt.Errorf("%w: host protocol=%q requested=%q", ErrIncompatible, d.Protocol, cfg.Protocol)
 	}
-	// Codex raw hosts predate this ACP compatibility contract and retain their
-	// existing version/protocol fencing.
-	if d.Protocol == ProtocolRaw {
+	// Legacy native raw hosts carry no fingerprint. Managed raw hosts must
+	// prove the same managed binding before an existing transport is used.
+	if d.Protocol == ProtocolRaw && cfg.OwnershipFingerprint == "" && d.OwnershipFingerprint == "" {
 		return nil
 	}
 	if cfg.OwnershipFingerprint == "" || d.OwnershipFingerprint != cfg.OwnershipFingerprint {
@@ -334,6 +337,11 @@ func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 	}
 	if !filepath.IsAbs(cfg.Workdir) {
 		return nil, errors.New("chat host start requires an absolute workdir")
+	}
+	if cfg.Protocol == ProtocolManagedRaw {
+		if err := confirmManagedHostStops(cfg.DataDir, cfg.SessionID); err != nil {
+			return nil, err
+		}
 	}
 	if cfg.Prepare != nil {
 		prepared, err := cfg.Prepare(ctx)
@@ -467,7 +475,8 @@ func attach(ctx context.Context, d Descriptor, reconnected bool) (*Transport, er
 		}
 	}
 	return &Transport{
-		Stdin: conn, Stdout: reader, Reconnected: reconnected,
+		identity: descriptorIdentity(d),
+		Stdin:    conn, Stdout: reader, Reconnected: reconnected,
 		NextRequestID: response.NextRequestID, ACPState: response.ACPState,
 	}, nil
 }
@@ -495,6 +504,35 @@ func Shutdown(ctx context.Context, dataDir, sessionID string) error {
 	if err != nil {
 		return err
 	}
+	return shutdownDescriptor(ctx, dataDir, sessionID, d)
+}
+
+// ShutdownHost stops one authenticated host and joins its provider process.
+// Account retirement must use ShutdownExact for descendant-death proof.
+func ShutdownHost(ctx context.Context, dataDir, sessionID, identity string) error {
+	if stopped, err := hostStopped(dataDir, sessionID, identity); err != nil || stopped {
+		return err
+	}
+	d, err := readDescriptor(dataDir, sessionID)
+	if err != nil {
+		return errors.Join(ErrOwnershipInconclusive, err)
+	}
+	if descriptorIdentity(d) != identity {
+		return ErrOwnershipInconclusive
+	}
+	if d.Protocol != ProtocolManagedRaw {
+		return ErrIncompatible
+	}
+	if err := shutdownDescriptor(ctx, dataDir, sessionID, d); err != nil {
+		return err
+	}
+	if stopped, err := hostStopped(dataDir, sessionID, identity); err != nil || !stopped {
+		return errors.Join(ErrOwnershipInconclusive, err)
+	}
+	return nil
+}
+
+func shutdownDescriptor(ctx context.Context, dataDir, sessionID string, d Descriptor) error {
 	if d.Version != ProtocolVersion {
 		return ErrIncompatible
 	}
@@ -559,6 +597,11 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer releaseLock()
+	if cfg.Protocol == ProtocolManagedRaw {
+		if err := confirmManagedHostStops(cfg.DataDir, cfg.SessionID); err != nil {
+			return err
+		}
+	}
 	token, err := randomToken()
 	if err != nil {
 		return err
@@ -568,7 +611,6 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer func() { _ = listener.Close() }()
-
 	child := exec.Command(cfg.Argv[0], cfg.Argv[1:]...) //nolint:gosec // provider argv is constructed by AO's driver.
 	child.Dir = cfg.Workdir
 	child.Env = cfg.Env
@@ -577,14 +619,22 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = stdin.Close() }()
 	stdout, err := child.StdoutPipe()
 	if err != nil {
 		return err
 	}
+	defer func() { _ = stdout.Close() }()
 	child.Stderr = io.Discard
-	if err := child.Start(); err != nil {
+	owner, err := beginProviderOwner(cfg.DataDir, cfg.SessionID, descriptorIdentity(Descriptor{Token: token}), cfg.Protocol)
+	if err != nil {
 		return err
 	}
+	ownedChild, err := startProviderChild(ctx, child, cfg.DataDir, &owner)
+	if err != nil {
+		return err
+	}
+	defer ownedChild.close()
 
 	d := Descriptor{
 		Version: ProtocolVersion, SessionID: cfg.SessionID, Protocol: cfg.Protocol,
@@ -592,7 +642,8 @@ func Run(ctx context.Context, cfg Config) error {
 		Address:              listener.Addr().String(), Token: token, PID: os.Getpid(), StartedAt: time.Now().UTC(),
 	}
 	if err := writeDescriptor(cfg.DataDir, d); err != nil {
-		_ = killProviderProcess(context.WithoutCancel(ctx), child)
+		_ = ownedChild.stop(context.WithoutCancel(ctx))
+		_ = ownedChild.wait()
 		return err
 	}
 	path, _ := descriptorPath(cfg.DataDir, cfg.SessionID)
@@ -606,7 +657,8 @@ func Run(ctx context.Context, cfg Config) error {
 	if cfg.Protocol == ProtocolACP {
 		h.acp, err = newACPRelay(ctx, filepath.Join(filepath.Dir(path), "acp-prompt.journal"))
 		if err != nil {
-			_ = killProviderProcess(context.WithoutCancel(ctx), child)
+			_ = ownedChild.stop(context.WithoutCancel(ctx))
+			_ = ownedChild.wait()
 			return err
 		}
 		defer func() { _ = h.acp.close(context.WithoutCancel(ctx)) }()
@@ -621,18 +673,16 @@ func Run(ctx context.Context, cfg Config) error {
 		_ = stdin.Close()
 		select {
 		case <-providerDone:
-			// Wrapper adapters may exit before their provider child. The hosted
-			// process group is the ownership boundary, so explicit shutdown reaps
-			// any descendant that did not follow stdin closure.
-			_ = killProviderProcess(context.WithoutCancel(ctx), child)
+			// A wrapper can exit before its provider child follows stdin closure.
+			_ = ownedChild.stop(context.WithoutCancel(ctx))
 		case <-time.After(3 * time.Second):
-			_ = killProviderProcess(context.WithoutCancel(ctx), child)
+			_ = ownedChild.stop(context.WithoutCancel(ctx))
 		}
 	}
 	var runErr error
 	select {
 	case runErr = <-providerDone:
-		_ = killProviderProcess(context.WithoutCancel(ctx), child)
+		_ = ownedChild.stop(context.WithoutCancel(ctx))
 	case <-h.shutdown:
 		stopProvider()
 	case <-ctx.Done():
@@ -640,13 +690,26 @@ func Run(ctx context.Context, cfg Config) error {
 		stopProvider()
 	case err := <-acceptDone:
 		if err != nil && !errors.Is(err, net.ErrClosed) {
-			_ = killProviderProcess(context.WithoutCancel(ctx), child)
+			_ = ownedChild.stop(context.WithoutCancel(ctx))
+			_ = ownedChild.wait()
 			return err
 		}
 	}
 	_ = listener.Close()
-	_ = child.Wait()
-	return runErr
+	_ = ownedChild.wait()
+	var hostStopErr error
+	if cfg.Protocol == ProtocolManagedRaw {
+		hostStopErr = recordHostStopped(cfg.DataDir, cfg.SessionID, owner.Identity)
+	}
+	proofCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	proofErr := finishProviderOwner(proofCtx, cfg.DataDir, owner)
+	if errors.Is(proofErr, errProviderContainmentRequired) {
+		// Ordinary host exit is not an exact-retirement acknowledgement.
+		// Preserve the unresolved owner without changing native shutdown.
+		proofErr = nil
+	}
+	return errors.Join(runErr, proofErr, hostStopErr)
 }
 
 type host struct {

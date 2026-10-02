@@ -16,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/presence"
+	accountsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/accountsmanager"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
@@ -23,25 +24,28 @@ import (
 
 // APIDeps bundles every service the API layer's controllers depend on.
 type APIDeps struct {
-	Agents             controllers.AgentCatalog
-	CodexAccounts      controllers.CodexAccountService
-	Projects           projectsvc.Manager
-	Sessions           controllers.SessionService
-	Automations        controllers.AutomationService
-	DesktopWorkspaces  controllers.DesktopWorkspaceService
-	Activity           controllers.ActivityRecorder
-	UsageHooks         controllers.UsageHookRecorder
-	UsageSummary       controllers.UsageSummaryService
-	PRs                prsvc.ActionManager
-	Reviews            reviewsvc.Manager
-	Notifications      controllers.NotificationService
-	Reports            controllers.ReportService
-	NotificationStream controllers.NotificationStream
-	Push               controllers.PushRegistry
-	Import             controllers.ImportService
-	Directories        controllers.DirectoryBrowserService
-	ShellTerminals     controllers.ShellTerminalService
-	Cues               controllers.CueService
+	AccountsManagerStatus   controllers.AccountsManagerStatusSource
+	AccountsManagerService  *accountsvc.Service
+	AccountsManagerControls controllers.AccountsManagerControls
+	Agents                  controllers.AgentCatalog
+	CodexAccounts           controllers.CodexAccountService
+	Projects                projectsvc.Manager
+	Sessions                controllers.SessionService
+	Automations             controllers.AutomationService
+	DesktopWorkspaces       controllers.DesktopWorkspaceService
+	Activity                controllers.ActivityRecorder
+	UsageHooks              controllers.UsageHookRecorder
+	UsageSummary            controllers.UsageSummaryService
+	PRs                     prsvc.ActionManager
+	Reviews                 reviewsvc.Manager
+	Notifications           controllers.NotificationService
+	Reports                 controllers.ReportService
+	NotificationStream      controllers.NotificationStream
+	Push                    controllers.PushRegistry
+	Import                  controllers.ImportService
+	Directories             controllers.DirectoryBrowserService
+	ShellTerminals          controllers.ShellTerminalService
+	Cues                    controllers.CueService
 	// Conversations is nil until a Chat driver is wired; the controller then
 	// answers 501 rather than panicking, matching the other optional surfaces.
 	Conversations controllers.ConversationService
@@ -111,36 +115,37 @@ func normalizeAPIDeps(deps APIDeps, log *slog.Logger) APIDeps {
 // API owns one controller per resource and is the single Register call the
 // router invokes to mount the /api/v1 surface.
 type API struct {
-	cfg           config.Config
-	deps          APIDeps
-	agents        *controllers.AgentsController
-	codexAccounts *controllers.CodexAccountsController
-	projects      *controllers.ProjectsController
-	sessions      *controllers.SessionsController
-	automations   *controllers.AutomationsController
-	desktop       *controllers.DesktopWorkspaceController
-	usage         *controllers.UsageController
-	prs           *controllers.PRsController
-	reviews       *controllers.ReviewsController
-	notifications *controllers.NotificationsController
-	reports       *controllers.ReportsController
-	push          *controllers.PushController
-	imports       *controllers.ImportController
-	fs            *controllers.FSController
-	shellTerms    *controllers.ShellTerminalsController
-	cues          *controllers.CuesController
-	conversations *controllers.ConversationsController
-	settings      *controllers.SettingsController
-	dev           *controllers.DevController
-	browser       *controllers.BrowserController
-	system        *controllers.SystemController
-	identity      *controllers.IdentityController
-	endpoints     *controllers.EndpointsController
-	systemInstall *controllers.SystemInstallController
-	agentAuth     *controllers.AgentAuthController
-	linkPreview   *controllers.LinkPreviewController
-	github        *controllers.GitHubController
-	events        *EventsController
+	cfg             config.Config
+	deps            APIDeps
+	accountsManager *controllers.AccountsManagerController
+	agents          *controllers.AgentsController
+	codexAccounts   *controllers.CodexAccountsController
+	projects        *controllers.ProjectsController
+	sessions        *controllers.SessionsController
+	automations     *controllers.AutomationsController
+	desktop         *controllers.DesktopWorkspaceController
+	usage           *controllers.UsageController
+	prs             *controllers.PRsController
+	reviews         *controllers.ReviewsController
+	notifications   *controllers.NotificationsController
+	reports         *controllers.ReportsController
+	push            *controllers.PushController
+	imports         *controllers.ImportController
+	fs              *controllers.FSController
+	shellTerms      *controllers.ShellTerminalsController
+	conversations   *controllers.ConversationsController
+	settings        *controllers.SettingsController
+	dev             *controllers.DevController
+	browser         *controllers.BrowserController
+	system          *controllers.SystemController
+	identity        *controllers.IdentityController
+	endpoints       *controllers.EndpointsController
+	systemInstall   *controllers.SystemInstallController
+	agentAuth       *controllers.AgentAuthController
+	linkPreview     *controllers.LinkPreviewController
+	github          *controllers.GitHubController
+	events          *EventsController
+	cues            *controllers.CuesController
 }
 
 // NewAPI constructs the API surface from its dependencies. cfg carries the
@@ -154,8 +159,9 @@ func NewAPI(cfg config.Config, deps APIDeps) *API {
 // errors, so their logs use the same configured handler as the rest of HTTP.
 func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 	return &API{
-		cfg:  cfg,
-		deps: deps,
+		cfg:             cfg,
+		deps:            deps,
+		accountsManager: &controllers.AccountsManagerController{Status: deps.AccountsManagerStatus, Service: deps.AccountsManagerService, Controls: deps.AccountsManagerControls},
 		agents: &controllers.AgentsController{
 			Catalog: deps.Agents,
 		},
@@ -227,6 +233,7 @@ func (a *API) Register(root chi.Router) {
 				})
 			})
 			r.Use(presenceMiddleware(a.deps.Presence))
+			a.accountsManager.Register(r)
 			a.agents.Register(r)
 			a.codexAccounts.Register(r)
 			a.projects.Register(r)
@@ -258,6 +265,7 @@ func (a *API) Register(root chi.Router) {
 		})
 		// Long-lived streams intentionally bypass the REST timeout middleware.
 		a.notifications.RegisterStream(r)
+		a.accountsManager.RegisterStreams(r)
 		a.codexAccounts.RegisterStreams(r)
 		a.sessions.RegisterStreams(r)
 		a.events.Register(r)

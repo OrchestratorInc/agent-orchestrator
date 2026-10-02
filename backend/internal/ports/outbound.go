@@ -119,6 +119,7 @@ const (
 	FencedReasonRegistryMalformed  FencedProbeReason = "registry_malformed"
 	FencedReasonProbeFailed        FencedProbeReason = "probe_failed"
 	FencedReasonGenerationMismatch FencedProbeReason = "generation_mismatch"
+	FencedReasonOwnershipAmbiguous FencedProbeReason = "ownership_ambiguous"
 )
 
 // FencedRuntimeRef identifies the exact AO-owned runtime generation whose
@@ -142,6 +143,15 @@ type FencedProbeResult struct {
 // generation without treating uncertainty as death.
 type FencedRuntimeProber interface {
 	ProbeFencedRuntime(context.Context, FencedRuntimeRef) FencedProbeResult
+}
+
+// RuntimeLaunchHandleResolver identifies every slot Create can affect, including
+// partial failures and fallback. The nonempty, unique handle set must be stable
+// across daemon restarts, independent of backend availability, and resolvable
+// before any side effects. A slot is not ownership evidence: each still requires
+// an exact generation probe. Versioned handle forms must remain recoverable.
+type RuntimeLaunchHandleResolver interface {
+	LaunchHandles(domain.SessionID) ([]RuntimeHandle, error)
 }
 
 // RuntimeEffectOutcome describes whether a failed runtime operation may have

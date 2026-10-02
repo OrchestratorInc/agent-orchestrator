@@ -312,25 +312,14 @@ func consumeEscape(output string, start int) (next int, params string, sgr bool)
 }
 
 func applySGRDim(current bool, params string) bool {
-	if params == "" {
-		return false
-	}
-	for _, raw := range strings.FieldsFunc(params, func(r rune) bool { return r == ';' || r == ':' }) {
-		code, err := strconv.Atoi(raw)
-		if err != nil {
-			continue
-		}
-		switch code {
-		case 0, 22:
-			current = false
-		case 2:
-			current = true
-		}
-	}
-	return current
+	return applySGRIntensity(current, params, 2)
 }
 
 func applySGRBold(current bool, params string) bool {
+	return applySGRIntensity(current, params, 1)
+}
+
+func applySGRIntensity(current bool, params string, attribute int) bool {
 	if params == "" {
 		return false
 	}
@@ -363,7 +352,7 @@ func applySGRBold(current bool, params string) bool {
 		switch code {
 		case 0, 22:
 			current = false
-		case 1:
+		case attribute:
 			current = true
 		}
 	}

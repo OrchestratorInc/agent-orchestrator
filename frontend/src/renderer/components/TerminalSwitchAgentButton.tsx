@@ -6,7 +6,7 @@ import { clearSwitchAgentState } from "../hooks/useSwitchAgent";
 import type { AgentSwitchPresentation } from "../lib/agent-switch-presentation";
 import { cn } from "../lib/utils";
 import { sessionIsActive, type AgentSwitchSummary, type WorkspaceSession } from "../types/workspace";
-import { canSwitchAgentHarness, SwitchAgentDialog } from "./SwitchAgentDialog";
+import { canControlSessionAccount, canSwitchAgentHarness, SwitchAgentDialog } from "./SwitchAgentDialog";
 import { TopbarButton } from "./TopbarButton";
 import { DropdownMenuItem } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -15,6 +15,7 @@ type TerminalSwitchAgentButtonProps = {
 	agentSwitch?: AgentSwitchSummary;
 	container?: HTMLElement | null;
 	disabled?: boolean;
+	includeAccountControls?: boolean;
 	onOpenChange: ((open: boolean) => void) | undefined;
 	open: boolean;
 	presentation?: AgentSwitchPresentation;
@@ -27,6 +28,7 @@ export function TerminalSwitchAgentButton({
 	agentSwitch,
 	container,
 	disabled,
+	includeAccountControls = false,
 	onOpenChange,
 	open,
 	presentation,
@@ -45,12 +47,12 @@ export function TerminalSwitchAgentButton({
 		if (switchError) onOpenChange?.(true);
 	}, [onOpenChange, switchError]);
 
-	if (
+	if (!(includeAccountControls && canControlSessionAccount(session)) && (
 		session.kind !== "worker" ||
 		session.isTerminated ||
 		!canSwitchAgentHarness(session.provider, session.mode) ||
 		(!controlPresentation && !sessionIsActive(session))
-	) {
+	)) {
 		return null;
 	}
 
@@ -112,6 +114,7 @@ export function TerminalSwitchAgentButton({
 			)}
 			{open && container && variant !== "menu-item" ? (
 				<SwitchAgentDialog
+					includeAccountControls={includeAccountControls}
 					agentSwitch={agentSwitch}
 					container={container}
 					onOpenChange={handleOpenChange}

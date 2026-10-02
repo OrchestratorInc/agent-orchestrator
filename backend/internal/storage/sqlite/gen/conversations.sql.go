@@ -3511,7 +3511,18 @@ UPDATE conversation_turns
 SET state = 'failed',
     error_message = 'controller ended before the turn completed',
     completed_at = ?
-WHERE handled_by_session_id = ? AND state IN ('queued', 'running')
+WHERE handled_by_session_id = ? AND (
+    state = 'running' OR (
+        state = 'queued' AND NOT EXISTS (
+            SELECT 1 FROM accounts_manager_queue_obligations AS obligation
+            WHERE obligation.turn_id = conversation_turns.id
+        ) AND NOT EXISTS (
+            SELECT 1 FROM accounts_manager_switches AS account_switch
+            WHERE account_switch.session_id = conversation_turns.handled_by_session_id
+              AND account_switch.phase NOT IN ('ready', 'cancelled', 'failed')
+        )
+    )
+)
 `
 
 type SettleOrphanedConversationTurnsParams struct {

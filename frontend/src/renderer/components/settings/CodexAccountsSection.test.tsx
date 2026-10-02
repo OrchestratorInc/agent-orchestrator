@@ -604,7 +604,7 @@ it("collapses the provider while rotating only its chevron", async () => {
 	expect(icon).not.toBeNull();
 	expect(chevron).not.toBeNull();
 	fireEvent.click(providerToggle);
-	expect(screen.queryByText("active@example.com")).not.toBeInTheDocument();
+	expect(providerToggle).toHaveAttribute("aria-expanded", "false");
 	expect(icon?.getAttribute("class")).not.toContain("rotate");
 	expect(chevron?.getAttribute("class")).toContain("rotate");
 });

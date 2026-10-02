@@ -202,6 +202,21 @@ describe("subscribeApiBaseUrl", () => {
 });
 
 describe("normalizeApiOperation", () => {
+	it.each([
+		["/api/v1/sessions/session-private/account", "/api/v1/sessions/:id/account"],
+		["/api/v1/sessions/session-private/account-switches", "/api/v1/sessions/:id/account-switches"],
+		["/api/v1/sessions/session-private/account-switches/operation-private", "/api/v1/sessions/:id/account-switches/:id"],
+		["/api/v1/sessions/session-private/account-switches/operation-private/retry", "/api/v1/sessions/:id/account-switches/:id/retry"],
+		["/api/v1/sessions/session-private/account-switches/operation-private/cancel", "/api/v1/sessions/:id/account-switches/:id/cancel"],
+		["/api/v1/accounts-manager/accounts/account-private/removal-impact", "/api/v1/accounts-manager/accounts/:id/removal-impact"],
+		["/api/v1/accounts-manager/accounts/account-private/removals", "/api/v1/accounts-manager/accounts/:id/removals"],
+		["/api/v1/accounts-manager/removals/operation-private", "/api/v1/accounts-manager/removals/:id"],
+		["/api/v1/accounts-manager/removals/operation-private/retry", "/api/v1/accounts-manager/removals/:id/retry"],
+		["/api/v1/accounts-manager/removals/operation-private/cancel", "/api/v1/accounts-manager/removals/:id/cancel"],
+	])("redacts managed control identities in %s", (path, normalized) => {
+		expect(normalizeApiOperation("POST", path)).toBe(`POST ${normalized}`);
+	});
+
 	it("replaces identifier segments after resource collections", () => {
 		expect(normalizeApiOperation("get", "/api/v1/projects/my project id")).toBe("GET /api/v1/projects/:id");
 		expect(normalizeApiOperation("POST", "/api/v1/sessions/ao-42/kill")).toBe("POST /api/v1/sessions/:id/kill");

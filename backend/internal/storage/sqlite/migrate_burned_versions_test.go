@@ -174,6 +174,14 @@ var shippedMigrations = map[int64]string{
 	168: "0168_cues.sql",
 	169: "0169_reported_pr_cdc.sql",
 	170: "0170_review_result_notifications.sql",
+	171: "0171_accounts_manager_routing.sql",
+	172: "0172_accounts_manager_bindings.sql",
+	173: "0173_accounts_manager_switches.sql",
+	174: "0174_accounts_manager_removals.sql",
+	175: "0175_accounts_manager_retry_owner.sql",
+	176: "0176_accounts_manager_history_decision.sql",
+	177: "0177_accounts_manager_queue_obligations.sql",
+	178: "0178_accounts_manager_deletion_coordination.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

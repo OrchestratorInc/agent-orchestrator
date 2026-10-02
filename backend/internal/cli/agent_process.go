@@ -61,7 +61,7 @@ func newAgentProcessSuperviseCommand(ctx *commandContext) *cobra.Command {
 			if activityReviewID != "" && !sessionIDPattern.MatchString(activityReviewID) {
 				return usageError{fmt.Errorf("invalid review activity id")}
 			}
-			if !sessionIDPattern.MatchString(strings.TrimSpace(launchID)) {
+			if !launchIDPattern.MatchString(launchID) {
 				return usageError{fmt.Errorf("invalid launch id")}
 			}
 			if activityReviewID == "" {

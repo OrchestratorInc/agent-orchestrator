@@ -49,6 +49,30 @@ func TestInvalidateBinaryResolutionClearsCachedPath(t *testing.T) {
 	}
 }
 
+func TestGetLaunchCommandRoutesThroughAccountsManagerWithoutEmbeddingToken(t *testing.T) {
+	cmd, err := (&Plugin{resolvedBinary: "codex"}).GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Route: &ports.AgentProviderRoute{BaseURL: "http://127.0.0.1:43127", TokenEnv: "AO_ACCOUNTS_MANAGER_SESSION_TOKEN"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(cmd, " ")
+	for _, want := range []string{
+		`model_provider='ao_accounts_manager'`,
+		`model_providers.ao_accounts_manager.base_url='http://127.0.0.1:43127/v1'`,
+		`model_providers.ao_accounts_manager.env_key='AO_ACCOUNTS_MANAGER_SESSION_TOKEN'`,
+		`model_providers.ao_accounts_manager.wire_api='responses'`,
+		`model_providers.ao_accounts_manager.requires_openai_auth=false`,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("command missing %q: %v", want, cmd)
+		}
+	}
+	if strings.Contains(joined, "opaque-secret") {
+		t.Fatalf("command exposed route token: %v", cmd)
+	}
+}
+
 func TestNativeConversationIDRequiresCapturedCodexThreadForTUI(t *testing.T) {
 	p := &Plugin{}
 	if id, ok, err := p.NativeConversationID(context.Background(), ports.SessionRef{

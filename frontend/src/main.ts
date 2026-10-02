@@ -116,6 +116,7 @@ import {
 } from "./shared/shell-env";
 import { DEFAULT_TERMINAL_SHELL, type TerminalShellPreference } from "./shared/ui-locale";
 import { bundledTmuxBinaryPath, stableBundledTmuxBinaryPath } from "./shared/bundled-tmux";
+import { resolveAccountsManagerBinary } from "./main/accounts-manager-binary";
 import {
 	handleCloudDeepLink,
 	installCloudIPC,
@@ -1146,10 +1147,22 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
 	// User-opened shells remain attachable across launches while their PTYs live.
 	const AO_OWNER = forceKeep ? "persistent" : "app";
 	const bundledTmuxBinary = stagedBundledTmuxBinary;
+	const accountsManagerBinary = resolveAccountsManagerBinary({
+		explicitPath: process.env.AO_ACCOUNTS_MANAGER_BINARY,
+		isPackaged: app.isPackaged,
+		resourcesPath: process.resourcesPath,
+		appPath: app.getAppPath(),
+		platform: process.platform,
+		readDevManifest:
+			!app.isPackaged && process.platform === "win32"
+				? () => readFileSync(path.join(app.getAppPath(), "accounts-manager", "dev-accounts-manager.json"), "utf8")
+				: undefined,
+	});
 	const ownerTag = {
 		AO_OWNER,
 		AO_DATA_DIR: desktopDataDir,
 		AO_APP_RUN_ID: appRunId,
+		AO_ACCOUNTS_MANAGER_BINARY: accountsManagerBinary,
 		// The browser runtime token is handed over through the child's private
 		// stdin pipe below. Never put it in the daemon environment, where a
 		// same-UID worker could inspect the parent process.

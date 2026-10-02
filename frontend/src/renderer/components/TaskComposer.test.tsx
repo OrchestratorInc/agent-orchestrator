@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
 	ensureReadiness: vi.fn(),
 	ensureTargetedReadiness: vi.fn(),
 	agentValues: [] as string[],
+	initialAccountSelection: false,
 	agentCatalog: undefined as { agents: ReturnType<typeof import("../test/agent-readiness-fixtures").agentReadiness>[] } | undefined,
 	cloudProjects: [] as Array<{ id: string; displayName: string; repositoryUrl: string; defaultBranch: string; config: Record<string, unknown> }>,
 	cloudCreateSession: vi.fn(),
@@ -61,7 +62,8 @@ vi.mock("./CreateProjectAgentSheet", () => ({
 vi.mock("../lib/api-client", () => ({
 	apiClient: {
 		DELETE: h.delete,
-		GET: h.get,
+		GET: (...args: unknown[]) => args[0] === "/api/v1/sessions/account-selection" && !h.initialAccountSelection
+			? Promise.resolve({ data: { initialSelection: false } }) : h.get(...args),
 		POST: h.post,
 	},
 	apiErrorCode: (error: { code?: string }) => error?.code,
@@ -109,8 +111,22 @@ async function waitForTaskReady() {
 	await waitFor(() => expect(startTask()).toBeEnabled());
 }
 
+async function chooseInitialAccount(name: string) {
+	await userEvent.click(await screen.findByRole("button", { name: "Initial account" }));
+	await userEvent.click(await screen.findByRole("menuitem", { name }));
+}
+
+async function chooseManagedModel() {
+	const user = userEvent.setup();
+	await user.click(await screen.findByRole("button", { name: "Model" }));
+	await user.click(await screen.findByRole("menuitem", { name: "Managed model" }));
+}
+
 beforeEach(() => {
 	h.get.mockImplementation(async (path: string) => {
+		if (path === "/api/v1/accounts-manager/accounts/{accountId}/models") {
+			return { data: { models: [{ id: "managed-model", displayName: "Managed model" }] } };
+		}
 		if (path.includes("/models")) {
 			return {
 				data: {
@@ -134,6 +150,7 @@ afterEach(() => {
 	h.ensureReadiness.mockReset();
 	h.ensureTargetedReadiness.mockReset();
 	h.agentCatalog = undefined;
+	h.initialAccountSelection = false;
 	h.cloudProjects.length = 0;
 	h.cloudCreateSession.mockReset();
 	h.cloudProviders = ["docker"];
@@ -145,6 +162,222 @@ afterEach(() => {
 });
 
 describe("TaskComposer", () => {
+	describe.each([
+		{ scope: "project", projectId: "demo", endpoint: "/api/v1/orchestrators/delegate", success: { workerId: "synthetic-tui" } },
+		{ scope: "standalone", projectId: "__standalone__", endpoint: "/api/v1/sessions", success: { session: { id: "synthetic-tui" } } },
+	])("initial account Chat errors ($scope)", ({ projectId, endpoint, success }) => {
+		async function prepare(account: "managed" | "native" | "none" = "managed") {
+			h.initialAccountSelection = account !== "none";
+			const baseGet = h.get.getMockImplementation();
+			h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+			h.get.mockImplementation(async (path: string) => {
+				if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["codex"] } };
+				if (path === "/api/v1/sessions/account-selection") return { data: { initialSelection: true } };
+				if (path === "/api/v1/accounts-manager/accounts") return { data: initialAccounts() };
+				if (path === "/api/v1/projects/{id}") return { data: { status: "ok", project: { config: { worker: { agent: "codex" } } } } };
+				return baseGet?.(path);
+			});
+			const onCreated = vi.fn();
+			render(<Wrap><TaskComposer projectId={projectId} onCreated={onCreated} /></Wrap>);
+			if (account !== "none") {
+				await chooseInitialAccount(account === "managed" ? "Work (account-b)" : "Native credentials");
+			}
+			if (account === "managed") await chooseManagedModel();
+			fireEvent.change(task(), { target: { value: "Keep this synthetic task" } });
+			await waitForTaskReady();
+			fireEvent.click(startTask());
+			return onCreated;
+		}
+
+		it.each(["managed", "native", "none"] as const)("shows a neutral capability notice and explicit Terminal UI fallback with %s account selection", async (account) => {
+			const message = "spawn: session mode unsupported: managed Chat is not supported";
+			h.post.mockResolvedValueOnce({ error: { code: "SESSION_MODE_UNSUPPORTED", message, requestId: "synthetic-chat-409" }, response: new Response(null, { status: 409 }) })
+				.mockResolvedValueOnce({ data: success });
+			const onCreated = await prepare(account);
+			const fallback = await screen.findByRole("button", { name: "Create as Terminal UI" });
+			expect(fallback).toBeEnabled();
+			const primary = account === "managed" ? "Managed accounts are available in Terminal UI only." : "This agent does not support the selected Chat options.";
+			const notice = fallback.closest("[role]")!;
+			expect(notice).toHaveAttribute("role", "status");
+			expect(notice).toHaveTextContent(primary);
+			expect(notice).not.toHaveTextContent(message);
+			expect(notice).not.toHaveTextContent("spawn:");
+			expect(notice).not.toHaveTextContent("Account state changed");
+			expect(notice).toHaveClass("border-border", "bg-muted", "text-foreground");
+			expect(notice.className).not.toContain("destructive");
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+			expect(screen.getByText(primary)).not.toHaveTextContent("Request ID:");
+			expect(screen.getByText("Request ID: synthetic-chat-409")).toHaveClass("text-muted-foreground");
+			expect(h.post).toHaveBeenCalledTimes(1);
+			expect(onCreated).not.toHaveBeenCalled();
+			const firstBody = h.post.mock.calls[0][1].body;
+			if (account === "none") expect(firstBody).not.toHaveProperty("account");
+			else expect(firstBody.account).toEqual(account === "managed" ? { mode: "managed", accountId: "account-b" } : { mode: "native" });
+			await waitForTaskReady();
+			fireEvent.click(fallback);
+			await waitFor(() => expect(onCreated).toHaveBeenCalledWith("synthetic-tui"));
+			expect(screen.queryByText(primary)).not.toBeInTheDocument();
+			expect(h.post).toHaveBeenCalledTimes(2);
+			expect(h.post).toHaveBeenLastCalledWith(endpoint, expect.objectContaining({ body: { ...firstBody, mode: "tui" } }));
+		});
+
+		it.each(["ACCOUNTS_MANAGER_CONTROL_CONFLICT", "UNKNOWN_CONFLICT"])("keeps safe account-state copy without Terminal UI fallback for %s", async (code) => {
+			h.post.mockResolvedValue({ error: { code, message: "private-synthetic-detail", requestId: "synthetic-stale-409" }, response: new Response(null, { status: 409 }) });
+			const onCreated = await prepare();
+			await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Account state changed. Refresh before trying again. Request ID: synthetic-stale-409"));
+			expect(screen.getByRole("alert")).toHaveClass("border-destructive/40", "bg-destructive/10", "text-destructive");
+			expect(screen.queryByText("Managed accounts are available in Terminal UI only.")).not.toBeInTheDocument();
+			expect(screen.getByRole("alert")).not.toHaveTextContent("private-synthetic-detail");
+			expect(screen.queryByRole("button", { name: "Create as Terminal UI" })).not.toBeInTheDocument();
+			expect(screen.getByLabelText("Initial account")).toHaveTextContent("Work (account-b)");
+			expect(h.post).toHaveBeenCalledTimes(1);
+			expect(onCreated).not.toHaveBeenCalled();
+		});
+
+		it.each([undefined, "private synthetic detail"])("omits absent or malformed request IDs from capability notices (%s)", async (requestId) => {
+			h.post.mockResolvedValue({ error: { code: "SESSION_MODE_UNSUPPORTED", message: "managed Chat is not supported", requestId }, response: new Response(null, { status: 409 }) });
+			await prepare();
+			const fallback = await screen.findByRole("button", { name: "Create as Terminal UI" });
+			const notice = fallback.closest("[role]")!;
+			expect(notice).toHaveAttribute("role", "status");
+			expect(notice).toHaveTextContent("Managed accounts are available in Terminal UI only.");
+			expect(notice).not.toHaveTextContent("private synthetic detail");
+			expect(notice).not.toHaveTextContent("Request ID:");
+		});
+
+		it("retains red error behavior for an unknown 409 without account selection", async () => {
+			h.post.mockResolvedValue({ error: { code: "UNKNOWN_CONFLICT", message: "Task cannot start" }, response: new Response(null, { status: 409 }) });
+			await prepare("none");
+			expect(await screen.findByRole("alert")).toHaveTextContent("Task cannot start");
+			expect(screen.getByRole("alert")).toHaveClass("text-destructive", "bg-destructive/10");
+			expect(screen.queryByRole("button", { name: "Create as Terminal UI" })).not.toBeInTheDocument();
+		});
+	});
+
+	it("requires an explicit initial account and forwards it through task delegation", async () => {
+		h.initialAccountSelection = true;
+		const baseGet = h.get.getMockImplementation();
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex", { authentication: "unauthorized" })] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/sessions/account-selection") return { data: { initialSelection: true } };
+			if (path === "/api/v1/accounts-manager/accounts") return { data: initialAccounts() };
+			if (path === "/api/v1/projects/{id}") return { data: { status: "ok", project: { config: { worker: { agent: "codex" } } } } };
+			return baseGet?.(path);
+		});
+		let complete!: (value: unknown) => void;
+		h.post.mockImplementation((path: string) => path === "/api/v1/orchestrators/delegate"
+			? new Promise(resolve => { complete = resolve; }) : Promise.resolve({ data: {} }));
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="demo" onCreated={onCreated} /></Wrap>);
+		const picker = await screen.findByLabelText("Initial account");
+		expect(picker).toHaveTextContent("Account");
+		expect(startTask()).toBeDisabled();
+		await chooseInitialAccount("Work (account-b)");
+		await chooseManagedModel();
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "Keep my account choice" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.objectContaining({ body: expect.objectContaining({ account: { mode: "managed", accountId: "account-b" } }) })));
+		expect(onCreated).not.toHaveBeenCalled();
+		await act(async () => complete({ data: { workerId: "demo-1" } }));
+		expect(onCreated).toHaveBeenCalledWith("demo-1");
+	});
+
+	it("keeps the initial account picker enabled during capability refresh", async () => {
+		h.initialAccountSelection = true;
+		const baseGet = h.get.getMockImplementation();
+		let capabilityReads = 0;
+		let resolveCapability!: (value: unknown) => void;
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/sessions/account-selection") {
+				capabilityReads += 1;
+				if (capabilityReads > 1) return new Promise(resolve => { resolveCapability = resolve; });
+				return { data: { initialSelection: true } };
+			}
+			if (path === "/api/v1/accounts-manager/accounts") return { data: initialAccounts() };
+			if (path === "/api/v1/projects/{id}") return { data: { status: "ok", project: { config: { worker: { agent: "codex" } } } } };
+			return baseGet?.(path);
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="demo" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByLabelText("Initial account");
+		await waitFor(() => expect(capabilityReads).toBe(1));
+
+		void queryClient.invalidateQueries({ queryKey: ["initial-account-selection"] });
+		await waitFor(() => expect(capabilityReads).toBe(2));
+		expect(picker).toBeEnabled();
+		await chooseInitialAccount("Work (account-b)");
+		expect(picker).toHaveTextContent("Work (account-b)");
+
+		resolveCapability({ data: { initialSelection: true } });
+	});
+
+	it("rechecks a selected account at submission without replacing a removed choice", async () => {
+		h.initialAccountSelection = true;
+		const baseGet = h.get.getMockImplementation();
+		let inventory = initialAccounts();
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/sessions/account-selection") return { data: { initialSelection: true } };
+			if (path === "/api/v1/accounts-manager/accounts") return { data: inventory };
+			if (path === "/api/v1/projects/{id}") return { data: { status: "ok", project: { config: { worker: { agent: "codex" } } } } };
+			return baseGet?.(path);
+		});
+		h.post.mockResolvedValue({ data: {} });
+		render(<Wrap><TaskComposer projectId="demo" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByLabelText("Initial account");
+		await chooseInitialAccount("Work (account-b)");
+		await chooseManagedModel();
+		await waitForTaskReady();
+		inventory = { ...inventory, revision: 2, accounts: [] };
+		fireEvent.click(startTask());
+		await screen.findAllByText("The selected account is no longer available. Choose an account explicitly.");
+		expect(h.post.mock.calls.some(([path]) => path === "/api/v1/orchestrators/delegate")).toBe(false);
+		expect(picker).toHaveTextContent("Unavailable account (account-b)");
+	});
+
+	it("sends an explicit native choice for standalone creation", async () => {
+		h.initialAccountSelection = true;
+		const baseGet = h.get.getMockImplementation();
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/sessions/account-selection") return { data: { initialSelection: true } };
+			if (path === "/api/v1/accounts-manager/accounts") return { data: initialAccounts() };
+			return baseGet?.(path);
+		});
+		h.post.mockResolvedValue({ data: { session: { id: "scratch-1" } } });
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await chooseInitialAccount("Native credentials");
+		await waitForTaskReady();
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/sessions", expect.objectContaining({ body: expect.objectContaining({ account: { mode: "native" } }) })));
+	});
+
+	it("preserves request IDs and redacts daemon details for an unconfirmed initial choice", async () => {
+		h.initialAccountSelection = true;
+		const baseGet = h.get.getMockImplementation();
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/sessions/account-selection") return { data: { initialSelection: true } };
+			if (path === "/api/v1/accounts-manager/accounts") return { data: initialAccounts() };
+			return baseGet?.(path);
+		});
+		h.post.mockResolvedValue({ error: { code: "ACCOUNT_DELETING", requestId: "initial-renderer-request", message: "private-runtime-secret at http://127.0.0.1:23456" }, response: new Response(null, { status: 409 }) });
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={onCreated} /></Wrap>);
+		const picker = await screen.findByLabelText("Initial account");
+		await chooseInitialAccount("Work (account-b)");
+		await chooseManagedModel();
+		await waitForTaskReady();
+		fireEvent.click(startTask());
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("initial-renderer-request"));
+		expect(screen.getByRole("alert")).not.toHaveTextContent("private-runtime-secret");
+		expect(screen.getByRole("alert")).not.toHaveTextContent("127.0.0.1");
+		expect(picker).toHaveTextContent("Work (account-b)");
+		expect(onCreated).not.toHaveBeenCalled();
+	});
+
 	it("preselects the highest-ranked ready agent for a standalone task", async () => {
 		h.agentCatalog = {
 			agents: [
@@ -1822,3 +2055,10 @@ describe("TaskComposer", () => {
 		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
 	});
 });
+
+function initialAccounts() {
+	return { revision: 1, availability: "ready", stale: false, routing: [{ provider: "codex", enabled: false, accountIds: [] }], oauthSessions: [], accounts: [
+		{ id: "account-a", provider: "codex", label: "Personal", status: "active", verification: "verified", disabled: false, unavailable: false },
+		{ id: "account-b", provider: "codex", label: "Work", status: "active", verification: "verified", disabled: false, unavailable: false },
+	] };
+}

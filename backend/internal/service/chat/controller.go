@@ -174,6 +174,7 @@ const (
 	controllerHandoffInterfaceDrain
 	controllerHandoffInterfaceInterrupt
 	controllerHandoffIdleBranch
+	controllerHandoffAccount
 )
 
 func interfaceHandoff(policy domain.SessionInterfaceTransitionPolicy) controllerHandoff {

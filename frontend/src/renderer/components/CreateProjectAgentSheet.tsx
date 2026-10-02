@@ -396,6 +396,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	onChange,
 	placeholder,
 	manageAgents = true,
+	managedAccountAgentIds = [],
 	manageView = "local",
 	triggerClassName,
 	labelClassName,
@@ -415,6 +416,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	placeholder: string;
 	/** Cloud tasks use remote availability, not this computer's Harness settings. */
 	manageAgents?: boolean;
+	managedAccountAgentIds?: readonly string[];
 	/** Which Harness settings view "manage" opens: local logins or cloud connections. */
 	manageView?: "local" | "cloud";
 	triggerClassName?: string;
@@ -425,16 +427,21 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 }) {
 	const { t } = useTranslation();
 	const fallbackAgents: AgentInfo[] = AGENT_OPTIONS.map((agent) => unknownAgentReadiness(agent, agentLabel(agent)));
+	const supportsManagedAccount = (agent: AgentInfo) => manageAgents && manageView === "local" && agent.installation.state === "installed" &&
+		agent.installation.freshness === "fresh" && managedAccountAgentIds.includes(agent.id);
 	const options = buildRankedAgentOptions({
 		agents,
 		priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
 		fallbackAgents,
-	});
+	}).map((agent) => supportsManagedAccount(agent) ? {
+		...agent, disabled: false, status: t("accountsManager.initial.available"), statusTone: "muted" as const,
+	} : agent);
 
 	const selectedOption = options.find((agent) => agent.id === value) ?? (value ? unknownAgentReadiness(value, agentLabel(value)) : undefined);
 	const hasReadinessSnapshot = agents !== undefined;
-	const needsSetup = manageAgents && hasReadinessSnapshot && Boolean(selectedOption && !isLaunchableAgent(selectedOption));
-	const visibleOptions = manageAgents && hasReadinessSnapshot ? options.filter(isLaunchableAgent) : options;
+	const selectable = (agent: AgentInfo) => isLaunchableAgent(agent) || supportsManagedAccount(agent);
+	const needsSetup = manageAgents && hasReadinessSnapshot && Boolean(selectedOption && !selectable(selectedOption));
+	const visibleOptions = manageAgents && hasReadinessSnapshot ? options.filter(selectable) : options;
 	// Local is Harness settings' default view, so only cloud needs to ask for one.
 	const management = useAgentManagementMenu(needsSetup ? value : undefined, manageView === "cloud" ? "cloud" : undefined);
 	const manageLabel = manageView === "cloud" ? t("agentSelector.manageCloud") : t("agentSelector.manage");

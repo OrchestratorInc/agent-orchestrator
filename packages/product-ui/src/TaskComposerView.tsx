@@ -114,6 +114,7 @@ export type TaskComposerAttachments = {
 export type TaskComposerSubmission = {
 	showFallbackAction: boolean;
 	error?: string;
+	notice?: { message: string; detail?: string };
 	isSubmitting: boolean;
 	modelWarning?: string;
 	onFallbackAction: (prompt: string) => void;
@@ -138,6 +139,7 @@ export type TaskComposerViewProps = {
 	autoFocusPrompt?: boolean;
 	canSubmit: boolean;
 	context?: ReactNode;
+	accountControl?: ReactNode;
 	initialPrompt?: string;
 	labels: TaskComposerLabels;
 	model: Omit<TaskComposerModelControl, "id">;
@@ -217,6 +219,7 @@ export function TaskComposerView({
 	autoFocusPrompt,
 	canSubmit,
 	context,
+	accountControl,
 	initialPrompt = "",
 	labels,
 	model,
@@ -380,14 +383,19 @@ export function TaskComposerView({
 				<p className="px-4 pb-2 text-caption text-destructive" role="alert">{attachments.error}</p>
 			)}
 
-			{(submission.error || submission.modelWarning) && (
+			{(submission.error || submission.notice || submission.modelWarning) && (
 				<div className="px-3 pb-2">
-					{submission.error && (
+					{(submission.error || submission.notice) && (
 						<div
-							className="flex items-center justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-							role="alert"
+							className={`flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-xs ${submission.error ? "border-destructive/40 bg-destructive/10 text-destructive" : "border-border bg-muted text-foreground"}`}
+							role={submission.error ? "alert" : "status"}
 						>
-							<span>{submission.error}</span>
+							{submission.error ? <span>{submission.error}</span> : (
+								<div className="min-w-0 space-y-1">
+									<p>{submission.notice?.message}</p>
+									{submission.notice?.detail && <p className="break-all text-muted-foreground">{submission.notice.detail}</p>}
+								</div>
+							)}
 							{submission.showFallbackAction ? (
 								<button
 									type="button"
@@ -400,7 +408,7 @@ export function TaskComposerView({
 							) : null}
 						</div>
 					)}
-					{!submission.error && submission.modelWarning && (
+					{!submission.error && !submission.notice && submission.modelWarning && (
 						<p className="text-caption text-warning" role="status">{submission.modelWarning}</p>
 					)}
 				</div>
@@ -408,7 +416,7 @@ export function TaskComposerView({
 
 			<div className="composer-toolbar">
 				<div
-					className={`composer-run-controls${showEffort ? " composer-run-controls-with-effort" : ""}`}
+					className={`composer-run-controls${showEffort ? " composer-run-controls-with-effort" : ""}${accountControl ? " composer-run-controls-with-account" : ""}`}
 					role="group"
 					aria-label={labels.runsWith}
 				>
@@ -423,6 +431,7 @@ export function TaskComposerView({
 							{renderEffortControl({ ...effort, id: effortId, label: labels.effort })}
 						</div>
 					) : null}
+					{accountControl ? <div className="composer-toolbar-slot composer-toolbar-account-slot">{accountControl}</div> : null}
 				</div>
 
 				<button

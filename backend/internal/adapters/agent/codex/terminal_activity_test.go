@@ -133,7 +133,7 @@ func TestInspectTerminalSurfaceSeparatesCodexWorkFromComposer(t *testing.T) {
 		{
 			name: "completed approval picker above the current composer is idle",
 			output: "Run this command?\n› 1. Approve once\n  2. Deny\nPress enter to confirm or esc to go back\n" +
-				"› \x1b[2mAdd tests\x1b[0m\n\ngpt-5.6-sol low · ~/project\n",
+				"\x1b[1m›\x1b[0m \x1b[2mAdd tests\x1b[0m\n\ngpt-5.6-sol low · ~/project\n",
 			wantWork:   ports.TerminalSurfaceWorkIdle,
 			wantEditor: ports.TerminalComposerEmpty,
 		},

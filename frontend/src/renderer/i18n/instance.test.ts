@@ -48,6 +48,16 @@ describe("coerceLocale", () => {
 });
 
 describe("app i18next instance", () => {
+	it("translates the compact agent and account switch controls in every locale", () => {
+		for (const locale of APP_LOCALES) {
+			const catalog = allCatalogs[locale] as unknown as Record<string, string>;
+			for (const key of ["switchAgent.accountAction", "switchAgent.backToAgent", "switchAgent.accountDetails", "switchAgent.accountClose", "switchAgent.accountDescription"]) {
+				expect(catalog[key], `${locale} is missing ${key}`).toBeTruthy();
+			}
+			expect(catalog["switchAgent.accountDescription"]).toContain("{{current}}");
+		}
+	});
+
 	it("provides agent management and readiness labels for every supported locale", () => {
 		for (const locale of APP_LOCALES) {
 			const catalog = allCatalogs[locale] as unknown as Record<string, string>;

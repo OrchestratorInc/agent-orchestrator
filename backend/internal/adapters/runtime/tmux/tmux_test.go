@@ -1499,8 +1499,8 @@ func TestProbeFencedRuntimeMultipleSupervisorGenerationsIsUnknown(t *testing.T) 
 	got := r.ProbeFencedRuntime(context.Background(), ports.FencedRuntimeRef{
 		Handle: ports.RuntimeHandle{ID: "sess-1"}, SessionID: "sess-1", Generation: "launch-2",
 	})
-	if got.Liveness != ports.FencedUnknown || got.Reason != ports.FencedReasonGenerationMismatch {
-		t.Fatalf("ProbeFencedRuntime multi-generation scan = %+v, want unknown/generation_mismatch", got)
+	if got.Liveness != ports.FencedUnknown || got.Reason != ports.FencedReasonOwnershipAmbiguous {
+		t.Fatalf("ProbeFencedRuntime multi-generation scan = %+v, want unknown/ownership_ambiguous", got)
 	}
 }
 

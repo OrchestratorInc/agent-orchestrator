@@ -63,6 +63,7 @@ async function prepareNativeDependencies(platform: NodeJS.Platform, arch: string
 export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
 	return [
 		"daemon",
+		"accounts-manager",
 		"agent-browser",
 		"resources/acp-runtime",
 		...(platform === "darwin" ? ["update-helper"] : []),
@@ -201,7 +202,6 @@ const config: ForgeConfig = {
 		// pipeline. A source build succeeding is not enough: a missing extraResource
 		// would otherwise publish an app that silently fell back to machine tmux.
 		postPackage: async (_forgeConfig, packageResult) => {
-			if (packageResult.platform !== "darwin" && packageResult.platform !== "linux") return;
 			for (const outputPath of packageResult.outputPaths) {
 				let resourcesPath = path.join(outputPath, "resources");
 				if (packageResult.platform === "darwin") {
@@ -211,6 +211,29 @@ const config: ForgeConfig = {
 					const helper = path.join(resourcesPath, "update-helper", "ao-update-progress");
 					if (!existsSync(helper)) throw new Error(`packaged macOS update helper missing from ${helper}`);
 				}
+				const accountsManagerBinary = path.join(
+					resourcesPath,
+					"accounts-manager",
+					packageResult.platform === "win32" ? "ao-accounts-manager.exe" : "ao-accounts-manager",
+				);
+				if (!existsSync(accountsManagerBinary)) {
+					throw new Error(`packaged Accounts Manager missing from ${accountsManagerBinary}`);
+				}
+				for (const notice of ["CLIProxyAPI-LICENSE", "UPSTREAM.md", "dependency.json"]) {
+					const noticePath = path.join(resourcesPath, "accounts-manager", notice);
+					if (!existsSync(noticePath)) throw new Error(`packaged Accounts Manager notice missing from ${noticePath}`);
+				}
+				const accountsManagerVersion = spawnSync(accountsManagerBinary, ["version"], { encoding: "utf8" });
+				if (
+					accountsManagerVersion.status !== 0 ||
+					!accountsManagerVersion.stdout.includes("ao-accounts-manager") ||
+					!accountsManagerVersion.stdout.includes("CLIProxyAPI v7.3.8")
+				) {
+					throw new Error(
+						`packaged Accounts Manager failed verification at ${accountsManagerBinary}: ${accountsManagerVersion.stderr || accountsManagerVersion.stdout}`,
+					);
+				}
+				if (packageResult.platform !== "darwin" && packageResult.platform !== "linux") continue;
 				const binary = path.join(resourcesPath, "tmux", "bin", "tmux");
 				if (!existsSync(binary)) throw new Error(`packaged tmux missing from ${binary}`);
 				const version = spawnSync(binary, ["-V"], { encoding: "utf8" });

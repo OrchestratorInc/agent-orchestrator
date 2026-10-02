@@ -168,6 +168,13 @@ func TestCodexAccountOriginBoundaryBlocksPreviewAndAllowsRenderers(t *testing.T)
 			wantStatus: http.StatusForbidden,
 		},
 		{
+			name:       "preview cannot access accounts manager",
+			method:     http.MethodGet,
+			path:       "/api/v1/accounts-manager/accounts",
+			origin:     "http://ao-preview.hostile.localhost:5181",
+			wantStatus: http.StatusForbidden,
+		},
+		{
 			name:       "packaged renderer can read accounts",
 			method:     http.MethodGet,
 			path:       "/api/v1/agents/codex/accounts",

@@ -160,8 +160,9 @@ func (m *Manager) executeChatAgentSwitch(
 	if m.chat == nil {
 		return result, fmt.Errorf("switch Chat agent %s: %w", id, ports.ErrChatUnsupported)
 	}
-	if err := m.chat.PreflightChat(
+	if err := m.preflightBoundChat(
 		ctx,
+		rec.ID,
 		cfg.TargetHarness,
 		effectiveAgentConfig(cfg.TargetHarness, rec.Kind, project.Config).Permissions,
 	); err != nil {

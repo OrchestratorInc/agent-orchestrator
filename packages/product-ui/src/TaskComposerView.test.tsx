@@ -157,6 +157,20 @@ describe("TaskComposerView", () => {
 		expect(screen.queryByRole("button", { name: "Effort" })).not.toBeInTheDocument();
 	});
 
+	it("keeps optional account control after model and effort without changing clients that omit it", () => {
+		const { rerender } = render(<TaskComposerView {...viewProps({ accountControl: <select aria-label="Account"><option>Account A</option></select> })} />);
+		const group = screen.getByRole("group", { name: "Runs with" });
+		const account = screen.getByRole("combobox", { name: "Account" });
+		expect(group).toContainElement(account);
+		expect(group).toHaveClass("composer-run-controls-with-account");
+		for (const control of [screen.getByRole("textbox", { name: "Model" }), screen.getByRole("button", { name: "Effort" })]) {
+			expect(Boolean(control.compareDocumentPosition(account) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+		}
+		rerender(<TaskComposerView {...viewProps()} />);
+		expect(group).not.toHaveClass("composer-run-controls-with-account");
+		expect(screen.queryByRole("combobox", { name: "Account" })).not.toBeInTheDocument();
+	});
+
 	it("claims the caret when asked to autofocus, and reclaims it from a surface that steals it", async () => {
 		render(<TaskComposerView {...viewProps({ autoFocusPrompt: true })} />);
 		const prompt = screen.getByRole("textbox", { name: "Task" });
@@ -345,6 +359,27 @@ describe("TaskComposerView", () => {
 		);
 
 		expect(lastAttachmentTransition.current).toEqual({ duration: 0 });
+	});
+
+	it("shows a neutral capability notice with secondary diagnostics and a prompt-preserving fallback", () => {
+		const onFallbackAction = vi.fn();
+		render(<TaskComposerView {...viewProps({
+			submission: {
+				showFallbackAction: true,
+				notice: { message: "Managed accounts are available in Terminal UI only.", detail: "Request ID: synthetic-request" },
+				isSubmitting: false,
+				modelWarning: "Hidden model warning",
+				onFallbackAction,
+				onSubmit: vi.fn(),
+			},
+		})} />);
+		expect(screen.getByRole("status")).toHaveClass("border-border", "bg-muted", "text-foreground");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.getByText("Request ID: synthetic-request")).toHaveClass("text-muted-foreground");
+		expect(screen.queryByText("Hidden model warning")).not.toBeInTheDocument();
+		fireEvent.change(screen.getByRole("textbox", { name: "Task" }), { target: { value: "Keep this task" } });
+		fireEvent.click(screen.getByRole("button", { name: "Create as Terminal UI" }));
+		expect(onFallbackAction).toHaveBeenCalledWith("Keep this task");
 	});
 
 	it("shows attachment and submission errors with a fallback action", () => {

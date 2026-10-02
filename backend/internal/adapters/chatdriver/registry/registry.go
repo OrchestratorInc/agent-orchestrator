@@ -43,6 +43,7 @@ import (
 // Registry maps a harness to its Chat driver.
 type Registry struct {
 	drivers map[domain.AgentHarness]ports.ChatDriver
+	managed map[domain.AgentHarness]ports.ChatDriver
 }
 
 var _ ports.ChatDriverRegistry = (*Registry)(nil)
@@ -74,7 +75,7 @@ func New(drivers ...ports.ChatDriver) *Registry {
 // reuses the harness's existing agent plugin for binary resolution and auth, so
 // registration adds no second answer to "is this agent installed and logged in".
 func Build(log *slog.Logger, onClaudeAuthRejected func()) *Registry {
-	return New(
+	r := New(
 		codexappserver.New(codex.New(), log),
 		claudeacp.New(claudecode.New(), log, onClaudeAuthRejected),
 		opencodeacp.New(opencode.New(), log),
@@ -89,6 +90,19 @@ func Build(log *slog.Logger, onClaudeAuthRejected func()) *Registry {
 		unrealchat.New(unrealagent.New(), log),
 		deepseekharnessacp.New(deepseekharness.New(), log),
 	)
+	r.managed = map[domain.AgentHarness]ports.ChatDriver{
+		domain.HarnessCodex: codexappserver.NewManaged(codex.New(), log),
+	}
+	return r
+}
+
+// ManagedDriver never substitutes a device-authenticated driver.
+func (r *Registry) ManagedDriver(harness domain.AgentHarness) (ports.ChatDriver, error) {
+	driver := r.managed[harness]
+	if driver == nil {
+		return nil, ports.ErrChatUnsupported
+	}
+	return driver, nil
 }
 
 // Driver returns the driver for a harness.

@@ -45,7 +45,7 @@ import {
 	interfaceTransitionOffersHistoryRecovery,
 } from "./SessionInterfaceSwitch";
 import { ShellTopbar } from "./ShellTopbar";
-import { SwitchAgentDialog } from "./SwitchAgentDialog";
+import { canControlSessionAccount, SwitchAgentDialog } from "./SwitchAgentDialog";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
 import { TerminalSwitchAgentButton } from "./TerminalSwitchAgentButton";
 import { TopbarButton } from "./TopbarButton";
@@ -1939,6 +1939,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	const handoffMenuItem = useMemo(() => session && !session.cloud ? (
 		<TerminalSwitchAgentButton
 			key={session.id}
+			includeAccountControls
 			variant="menu-item"
 			agentSwitch={handoffAgentSwitch}
 			onOpenChange={handleHandoffDialogOpenChange}
@@ -1948,16 +1949,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 			switchError={handoffSwitchError}
 		/>
 	) : null, [handoffAgentSwitch, handoffControlPresentation, handoffDialogOpen, handoffSwitchError, handleHandoffDialogOpenChange, session]);
+	const accountControlsAvailable = Boolean(session && canControlSessionAccount(session));
 	// Cloud sessions expose only the interface switch here; agent handoff is a
 	// local daemon feature. Hide the empty actions menu for harnesses without
 	// Chat, including when local settings identify one before transition status
 	// becomes available.
-	const sessionTabActions = useMemo(() => interfaceSwitchUnsupported ? null : (
+	const sessionTabActions = useMemo(() => interfaceSwitchUnsupported && !accountControlsAvailable ? null : (
 		<SessionActionsMenu inlineStatus={interfaceSwitchInlineStatus}>
 			{interfaceSwitchMenuItem}
 			{handoffMenuItem}
 		</SessionActionsMenu>
-	), [handoffMenuItem, interfaceSwitchInlineStatus, interfaceSwitchMenuItem, interfaceSwitchUnsupported]);
+	), [accountControlsAvailable, handoffMenuItem, interfaceSwitchInlineStatus, interfaceSwitchMenuItem, interfaceSwitchUnsupported]);
 	const sessionHeaderActions = (
 		<div
 			className="session-topbar-session-chrome flex shrink-0 items-center"
@@ -2266,6 +2268,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 							{cloudStage === "paused_by_coder" ? <CloudPausedStatus /> : null}
 							{session && !session.cloud && handoffDialogContainer ? (
 								<SwitchAgentDialog
+									key={session.id}
+									includeAccountControls
 									agentSwitch={handoffAgentSwitch}
 									container={handoffDialogContainer}
 									onOpenChange={handleHandoffDialogOpenChange}

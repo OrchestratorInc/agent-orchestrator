@@ -34,22 +34,25 @@ type spawnOptions struct {
 	noTakeover      bool
 	skipAgentCheck  bool
 	trackerProvider string
+	accountMode     string
+	accountID       string
 }
 
 // spawnRequest mirrors the daemon's SpawnSessionRequest body for
 // POST /api/v1/sessions. The CLI keeps its own copy so it need not import httpd.
 type spawnRequest struct {
-	ProjectID       string `json:"projectId,omitempty"`
-	IssueID         string `json:"issueId,omitempty"`
-	ParentSessionID string `json:"parentSessionId,omitempty"`
-	TrackerProvider string `json:"trackerProvider,omitempty"`
-	Kind            string `json:"kind,omitempty"`
-	Mode            string `json:"mode,omitempty"`
-	Harness         string `json:"harness,omitempty"`
-	Branch          string `json:"branch,omitempty"`
-	Prompt          string `json:"prompt,omitempty"`
-	Model           string `json:"model,omitempty"`
-	DisplayName     string `json:"displayName"`
+	Account         *spawnAccountChoice `json:"account,omitempty"`
+	ProjectID       string              `json:"projectId,omitempty"`
+	IssueID         string              `json:"issueId,omitempty"`
+	ParentSessionID string              `json:"parentSessionId,omitempty"`
+	TrackerProvider string              `json:"trackerProvider,omitempty"`
+	Kind            string              `json:"kind,omitempty"`
+	Mode            string              `json:"mode,omitempty"`
+	Harness         string              `json:"harness,omitempty"`
+	Branch          string              `json:"branch,omitempty"`
+	Prompt          string              `json:"prompt,omitempty"`
+	Model           string              `json:"model,omitempty"`
+	DisplayName     string              `json:"displayName"`
 }
 
 type spawnResult struct {
@@ -72,6 +75,10 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 			"fresh isolated workspace. Git projects use worktrees; standalone agents use an AO-managed plain directory.",
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			account, err := initialSpawnAccount(cmd, opts.accountMode, opts.accountID)
+			if err != nil {
+				return err
+			}
 			if opts.standalone && strings.TrimSpace(opts.project) != "" {
 				return usageError{fmt.Errorf("--standalone and --project cannot be used together")}
 			}
@@ -117,7 +124,6 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 			opts.trackerProvider = tp
 
 			var project projectDetails
-			var err error
 			if !opts.standalone {
 				project, err = ctx.resolveSpawnProject(cmd.Context(), opts.project)
 				if err != nil {
@@ -131,6 +137,11 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				return err
 			}
 			opts.harness = harness
+			if account != nil {
+				if err := ctx.requireInitialAccountSelection(cmd.Context()); err != nil {
+					return err
+				}
+			}
 
 			if isScratchProject(project) {
 				if strings.TrimSpace(opts.branch) != "" {
@@ -142,7 +153,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 			}
 
 			if !opts.skipAgentCheck {
-				if err := ctx.preflightSpawnAgentAuth(cmd.Context(), cmd, opts.harness); err != nil {
+				if err := ctx.preflightSpawnAgentReadiness(cmd.Context(), cmd, opts.harness, account != nil && account.Mode == "managed"); err != nil {
 					return err
 				}
 			}
@@ -154,6 +165,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				}
 			}
 			req := spawnRequest{
+				Account:         account,
 				ProjectID:       opts.project,
 				IssueID:         opts.issue,
 				ParentSessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID")),
@@ -231,6 +243,8 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.claimPR, "claim-pr", "", "Claim PR ownership metadata only for the spawned session; does not check out the PR branch")
 	f.BoolVar(&opts.noTakeover, "no-takeover", false, "Refuse if another active session owns the claimed PR (requires --claim-pr)")
 	f.BoolVar(&opts.skipAgentCheck, "skip-agent-check", false, "Skip CLI readiness warnings (the daemon still validates launch readiness)")
+	f.StringVar(&opts.accountMode, "account-mode", "", "Initial connection mode: native or managed (requires --account-id for managed)")
+	f.StringVar(&opts.accountID, "account-id", "", "Public account ID for this session only (requires --account-mode managed)")
 	return cmd
 }
 
@@ -386,7 +400,7 @@ func resolveSpawnHarness(explicit, kind string, project projectDetails) (string,
 	return "", usageError{fmt.Errorf("agent could not be resolved; pass --agent or configure `ao project set-config %s --worker-agent <agent>`", project.ID)}
 }
 
-func (c *commandContext) preflightSpawnAgentAuth(ctx context.Context, cmd *cobra.Command, agentID string) error {
+func (c *commandContext) preflightSpawnAgentReadiness(ctx context.Context, cmd *cobra.Command, agentID string, managed bool) error {
 	readiness, err := c.ensureAgentReadiness(ctx, []string{agentID}, "launch")
 	if err != nil {
 		var apiErr apiResponseError
@@ -405,6 +419,9 @@ func (c *commandContext) preflightSpawnAgentAuth(ctx context.Context, cmd *cobra
 	if snapshot.Installation.State == "unknown" {
 		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "warning: agent %q installation status is unknown; continuing and letting spawn validate runtime readiness\n", agentID)
 		return err
+	}
+	if managed {
+		return nil
 	}
 	if snapshot.Authentication.State == "authorized" || snapshot.Authentication.State == "not_applicable" {
 		return nil

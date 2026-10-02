@@ -245,6 +245,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersCleanupSessionsQuery":                     "CleanupSessionsQuery",
 	"ControllersListSessionsResponse":                     "ListSessionsResponse",
 	"ControllersSpawnSessionRequest":                      "SpawnSessionRequest",
+	"ControllersSpawnAccountChoice":                       "SpawnAccountChoice",
+	"ControllersInitialAccountSelectionResponse":          "InitialAccountSelectionResponse",
 	"ControllersSpawnSessionResponse":                     "SpawnSessionResponse",
 	"ControllersSessionResponse":                          "SessionResponse",
 	"ControllersSessionPreviewResponse":                   "SessionPreviewResponse",
@@ -253,6 +255,35 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersPreviewServerStatusResponse":              "PreviewServerStatusResponse",
 	"ControllersBrowserStatusQuery":                       "BrowserStatusQuery",
 	"ControllersBrowserStatusResponse":                    "BrowserStatusResponse",
+	"ControllersAccountsManagerStatusResponse":            "AccountsManagerStatusResponse",
+	"ControllersAccountsManagerCooldownResponse":          "AccountsManagerCooldownResponse",
+	"ControllersAccountsManagerAccountResponse":           "AccountsManagerAccountResponse",
+	"ControllersAccountsManagerOAuthSessionResponse":      "AccountsManagerOAuthSessionResponse",
+	"ControllersAccountsManagerAccountsResponse":          "AccountsManagerAccountsResponse",
+	"ControllersAccountsManagerRoutingResponse":           "AccountsManagerRoutingResponse",
+	"ControllersUpdateAccountsManagerRoutingRequest":      "UpdateAccountsManagerRoutingRequest",
+	"ControllersStartAccountsManagerOAuthRequest":         "StartAccountsManagerOAuthRequest",
+	"ControllersAccountsManagerAPIKeyRequest":             "AccountsManagerAPIKeyRequest",
+	"ControllersAccountsManagerImportRequest":             "AccountsManagerImportRequest",
+	"ControllersUpdateAccountsManagerAccountRequest":      "UpdateAccountsManagerAccountRequest",
+	"ControllersAccountsManagerModelResponse":             "AccountsManagerModelResponse",
+	"ControllersAccountsManagerModelsResponse":            "AccountsManagerModelsResponse",
+	"ControllersAccountsManagerQuotaResponse":             "AccountsManagerQuotaResponse",
+	"ControllersAccountsManagerAccountIDParam":            "AccountsManagerAccountIDParam",
+	"ControllersAccountsManagerOAuthOperationIDParam":     "AccountsManagerOAuthOperationIDParam",
+	"ControllersAccountsManagerProviderParam":             "AccountsManagerProviderParam",
+	"ControllersAccountsManagerSwitchRequest":             "AccountsManagerSwitchRequest",
+	"ControllersAccountsManagerRemovalRequest":            "AccountsManagerRemovalRequest",
+	"ControllersAccountsManagerControlOperationIDParam":   "AccountsManagerControlOperationIDParam",
+	"ControllersAccountsManagerSessionResponse":           "AccountsManagerSessionResponse",
+	"ControllersAccountsManagerSwitchResponse":            "AccountsManagerSwitchResponse",
+	"ControllersAccountsManagerRemovalSessionResponse":    "AccountsManagerRemovalSessionResponse",
+	"ControllersAccountsManagerRemovalImpactResponse":     "AccountsManagerRemovalImpactResponse",
+	"ControllersAccountsManagerRemovalResponse":           "AccountsManagerRemovalResponse",
+	"AccountsmanagerQuotaSubscription":                    "AccountsManagerQuotaSubscription",
+	"AccountsmanagerQuotaMetric":                          "AccountsManagerQuotaMetric",
+	"AccountsmanagerQuotaGroup":                           "AccountsManagerQuotaGroup",
+	"AccountsmanagerQuotaBucket":                          "AccountsManagerQuotaBucket",
 	"ControllersBrowserCommandRequest":                    "BrowserCommandRequest",
 	"ControllersBrowserCommandResponse":                   "BrowserCommandResponse",
 	"ControllersSetSessionMergePolicyRequest":             "SetSessionMergePolicyRequest",
@@ -620,6 +651,8 @@ func operations() []operation {
 	ops = append(ops, identityOperations()...)
 	ops = append(ops, endpointsOperations()...)
 	ops = append(ops, linkPreviewOperations()...)
+	ops = append(ops, accountsManagerOperations()...)
+	ops = append(ops, accountsManagerControlOperations()...)
 	return ops
 }
 
@@ -658,6 +691,36 @@ func linkPreviewOperations() []operation {
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
+	}
+}
+
+func accountsManagerOperations() []operation {
+	accountID := []any{controllers.AccountsManagerAccountIDParam{}}
+	provider := []any{controllers.AccountsManagerProviderParam{}}
+	return []operation{{
+		method:  http.MethodGet,
+		path:    "/api/v1/accounts-manager/status",
+		id:      "getAccountsManagerStatus",
+		tag:     "system",
+		summary: "Return the safe status of the private Accounts Manager runner",
+		resps: []respUnit{
+			{http.StatusOK, controllers.AccountsManagerStatusResponse{}},
+			{http.StatusNotImplemented, envelope.APIError{}},
+		},
+	},
+		{method: http.MethodGet, path: "/api/v1/accounts-manager/accounts", id: "getAccountsManagerAccounts", tag: "system", summary: "List safe Accounts Manager account state", resps: []respUnit{{http.StatusOK, controllers.AccountsManagerAccountsResponse{}}, {http.StatusNotImplemented, envelope.APIError{}}}},
+		{method: http.MethodGet, path: "/api/v1/accounts-manager/accounts/events", id: "streamAccountsManagerAccounts", tag: "system", summary: "Stream Accounts Manager account snapshots", resps: []respUnit{{http.StatusOK, controllers.AccountsManagerAccountsResponse{}}}, contentTypes: map[int]string{http.StatusOK: "text/event-stream"}},
+		{method: http.MethodPost, path: "/api/v1/accounts-manager/oauth-sessions", id: "startAccountsManagerOAuth", tag: "system", summary: "Start account sign-in", reqBody: controllers.StartAccountsManagerOAuthRequest{}, resps: []respUnit{{http.StatusCreated, controllers.AccountsManagerOAuthSessionResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}}},
+		{method: http.MethodDelete, path: "/api/v1/accounts-manager/oauth-sessions/{operationId}", id: "cancelAccountsManagerOAuth", tag: "system", summary: "Cancel account sign-in", pathParams: []any{controllers.AccountsManagerOAuthOperationIDParam{}}, resps: []respUnit{{http.StatusNoContent, struct{}{}}, {http.StatusServiceUnavailable, envelope.APIError{}}}},
+		{method: http.MethodPost, path: "/api/v1/accounts-manager/accounts/api-key", id: "addAccountsManagerAPIKey", tag: "system", summary: "Add provider API key", reqBody: controllers.AccountsManagerAPIKeyRequest{}, resps: []respUnit{{http.StatusCreated, controllers.AccountsManagerAccountsResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusRequestEntityTooLarge, envelope.APIError{}}}},
+		{method: http.MethodPost, path: "/api/v1/accounts-manager/accounts/import", id: "importAccountsManagerCredential", tag: "system", summary: "Import provider credential JSON", reqBody: controllers.AccountsManagerImportRequest{}, resps: []respUnit{{http.StatusCreated, controllers.AccountsManagerAccountsResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusRequestEntityTooLarge, envelope.APIError{}}}},
+		{method: http.MethodPatch, path: "/api/v1/accounts-manager/accounts/{accountId}", id: "updateAccountsManagerAccount", tag: "system", summary: "Rename, enable, or disable an account", pathParams: accountID, reqBody: controllers.UpdateAccountsManagerAccountRequest{}, resps: []respUnit{{http.StatusOK, controllers.AccountsManagerAccountsResponse{}}, {http.StatusNotFound, envelope.APIError{}}}},
+		{method: http.MethodPost, path: "/api/v1/accounts-manager/accounts/{accountId}/refresh", id: "refreshAccountsManagerAccount", tag: "system", summary: "Refresh an account", pathParams: accountID, resps: []respUnit{{http.StatusOK, controllers.AccountsManagerAccountsResponse{}}, {http.StatusNotFound, envelope.APIError{}}}},
+		{method: http.MethodDelete, path: "/api/v1/accounts-manager/accounts/{accountId}", id: "removeAccountsManagerAccount", tag: "system", summary: "Remove an account", pathParams: accountID, resps: []respUnit{{http.StatusOK, controllers.AccountsManagerAccountsResponse{}}, {http.StatusNotFound, envelope.APIError{}}}},
+		{method: http.MethodGet, path: "/api/v1/accounts-manager/accounts/{accountId}/models", id: "getAccountsManagerAccountModels", tag: "system", summary: "List account models", pathParams: accountID, resps: []respUnit{{http.StatusOK, controllers.AccountsManagerModelsResponse{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusUnprocessableEntity, envelope.APIError{}}}},
+		{method: http.MethodGet, path: "/api/v1/accounts-manager/accounts/{accountId}/quota", id: "getAccountsManagerAccountQuota", tag: "system", summary: "Get account quota", pathParams: accountID, resps: []respUnit{{http.StatusOK, controllers.AccountsManagerQuotaResponse{}}, {http.StatusUnauthorized, envelope.APIError{}}, {http.StatusForbidden, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusUnprocessableEntity, envelope.APIError{}}, {http.StatusTooManyRequests, envelope.APIError{}}, {http.StatusBadGateway, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}}},
+		{method: http.MethodPost, path: "/api/v1/accounts-manager/accounts/{accountId}/quota/reset", id: "resetAccountsManagerAccountQuota", tag: "system", summary: "Reset account quota", pathParams: accountID, resps: []respUnit{{http.StatusNoContent, struct{}{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusUnprocessableEntity, envelope.APIError{}}}},
+		{method: http.MethodPut, path: "/api/v1/accounts-manager/routing/{provider}", id: "updateAccountsManagerRouting", tag: "system", summary: "Update routing for new sessions", pathParams: provider, reqBody: controllers.UpdateAccountsManagerRoutingRequest{}, resps: []respUnit{{http.StatusOK, controllers.AccountsManagerAccountsResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}}},
 	}
 }
 

@@ -665,10 +665,14 @@ func (r *Runtime) IsUnsupervisedReviewerAlive(ctx context.Context, handle ports.
 
 // ProbeFencedRuntime returns liveness evidence for the exact fenced runtime identity.
 func (r *Runtime) ProbeFencedRuntime(ctx context.Context, ref ports.FencedRuntimeRef) ports.FencedProbeResult {
-	if ref.Handle.ID == "" || ref.SessionID == "" || strings.TrimSpace(ref.Generation) == "" || ref.Handle.ID != string(ref.SessionID) {
+	name, err := tmuxSessionName(ref.SessionID)
+	if err != nil || strings.TrimSpace(ref.Generation) == "" || ref.Handle.ID != name {
 		return ports.FencedProbeResult{Liveness: ports.FencedUnknown, Reason: ports.FencedReasonIdentityMissing}
 	}
 	alive, err := r.IsAlive(ctx, ref.Handle)
+	if errors.Is(err, ports.ErrRuntimeUnavailable) {
+		return ports.FencedProbeResult{Liveness: ports.FencedDead, Reason: ports.FencedReasonExactAbsent}
+	}
 	if err != nil {
 		return ports.FencedProbeResult{Liveness: ports.FencedUnknown, Reason: ports.FencedReasonProbeFailed}
 	}
@@ -681,6 +685,7 @@ func (r *Runtime) ProbeFencedRuntime(ctx context.Context, ref ports.FencedRuntim
 	}
 	descendants := descendantPIDs(entries, panePID)
 	exactSupervisorFound := false
+	otherSupervisorFound := false
 	for _, entry := range entries {
 		if entry.pid == panePID || !descendants[entry.pid] || !isAnySupervisorCommand(entry.command) {
 			continue
@@ -688,6 +693,12 @@ func (r *Runtime) ProbeFencedRuntime(ctx context.Context, ref ports.FencedRuntim
 		if isSupervisorCommand(entry.command, string(ref.SessionID), ref.Generation) {
 			exactSupervisorFound = true
 			continue
+		}
+		otherSupervisorFound = true
+	}
+	if otherSupervisorFound {
+		if exactSupervisorFound {
+			return ports.FencedProbeResult{Liveness: ports.FencedUnknown, Reason: ports.FencedReasonOwnershipAmbiguous}
 		}
 		return ports.FencedProbeResult{Liveness: ports.FencedUnknown, Reason: ports.FencedReasonGenerationMismatch}
 	}
@@ -700,7 +711,7 @@ func (r *Runtime) ProbeFencedRuntime(ctx context.Context, ref ports.FencedRuntim
 	// A live pane without the exact AO supervisor may contain a workload that a
 	// user manually relaunched from the preserved shell. That is not proof of
 	// the requested generation, but it is also not proof that the pane is dead.
-	return ports.FencedProbeResult{Liveness: ports.FencedUnknown, Reason: ports.FencedReasonIdentityMissing}
+	return r.probeRetainedPane(ctx, ref, entries, panePID)
 }
 
 // IsSupervisedProcessAlive reports whether the managed workload for ref is

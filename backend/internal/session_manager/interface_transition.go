@@ -105,6 +105,9 @@ func (m *Manager) InterfaceTransitionStatus(
 	if rec.IsTerminated {
 		status.ReasonCode = "SESSION_TERMINATED"
 		status.Reason = "Terminated sessions must be restored before switching interfaces."
+	} else if target == domain.SessionModeChat && m.checkAccountsManagerChatMode(ctx, rec.ID, rec.Harness) != nil {
+		status.ReasonCode = "MANAGED_CHAT_UNAVAILABLE"
+		status.Reason = "The session's Accounts Manager binding cannot be used in Chat."
 	} else if target == domain.SessionModeChat && (m.chat == nil || !m.chat.SupportsChat(rec.Harness)) {
 		status.ReasonCode = "CHAT_UNSUPPORTED"
 		status.Reason = fmt.Sprintf("%s does not support Chat UI.", rec.Harness)
@@ -169,6 +172,11 @@ func (m *Manager) StartInterfaceTransition(
 		return domain.SessionInterfaceTransition{}, ErrTerminated
 	}
 	source := domain.NormalizeSessionMode(rec.Mode)
+	if target == domain.SessionModeChat {
+		if err := m.checkAccountsManagerChatMode(ctx, rec.ID, rec.Harness); err != nil {
+			return domain.SessionInterfaceTransition{}, err
+		}
+	}
 	if target == source {
 		return domain.SessionInterfaceTransition{}, fmt.Errorf("%w: session %s is already in %s mode",
 			ErrInterfaceAlreadySelected, id, source)
@@ -793,6 +801,9 @@ func (m *Manager) preflightInterfaceTarget(
 	transition domain.SessionInterfaceTransition,
 ) error {
 	if transition.TargetMode == domain.SessionModeChat {
+		if err := m.checkAccountsManagerChatMode(ctx, rec.ID, rec.Harness); err != nil {
+			return err
+		}
 		if m.chat == nil {
 			return ports.ErrChatUnsupported
 		}
@@ -801,7 +812,7 @@ func (m *Manager) preflightInterfaceTarget(
 			return err
 		}
 		permissions := effectiveAgentConfig(rec.Harness, rec.Kind, project.Config).Permissions
-		return m.chat.PreflightChat(ctx, rec.Harness, permissions)
+		return m.preflightBoundChat(ctx, rec.ID, rec.Harness, permissions)
 	}
 	agent, ok := m.agents.Agent(rec.Harness)
 	if !ok {
@@ -819,6 +830,10 @@ func (m *Manager) preflightInterfaceTarget(
 	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
 	pinRuntimePermissionEnv(env, config.Permissions)
 	m.augmentAgentRuntimeEnv(agent, env)
+	route, err := m.prepareAccountsManagerRoute(ctx, rec.ID, rec.Harness, config.Model, env)
+	if err != nil {
+		return err
+	}
 	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok {
 		status, authErr := validator.ValidateLaunchAuth(ctx, rec.Metadata.WorkspacePath, env)
 		if authErr != nil {
@@ -831,7 +846,7 @@ func (m *Manager) preflightInterfaceTarget(
 	var cmd []string
 	if transition.NativeConversationID == "" {
 		cmd, _, _, err = freshLaunchArgv(ctx, agent, rec.ID, rec.Metadata.WorkspacePath,
-			rec.Metadata, systemPrompt, "", config, rec.Kind, m.dataDir, true)
+			rec.Metadata, systemPrompt, "", config, rec.Kind, m.dataDir, route, true)
 	} else {
 		var resumable bool
 		cmd, resumable, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
@@ -840,7 +855,7 @@ func (m *Manager) preflightInterfaceTarget(
 				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: transition.NativeConversationID},
 			},
 			Kind: rec.Kind, DataDir: m.dataDir, SystemPrompt: systemPrompt,
-			Config: config, Permissions: config.Permissions,
+			Config: config, Permissions: config.Permissions, Route: route,
 		})
 		if err == nil && !resumable {
 			return ErrNativeConversationMissing

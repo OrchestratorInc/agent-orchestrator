@@ -404,6 +404,7 @@ type Manager struct {
 	modelCatalog interface {
 		Models(context.Context, string, string, bool) (ports.AgentModelCatalog, error)
 	}
+	accountsManager             ports.AccountsManagerLaunchRouter
 	lcm                         lifecycleRecorder
 	preview                     PreviewLifecycle
 	browser                     BrowserLifecycle
@@ -492,6 +493,10 @@ type Manager struct {
 	agentSwitchWorkers       sync.WaitGroup
 	agentSwitchWorkerMu      sync.Mutex
 	agentSwitchWorkersClosed bool
+	accountSwitchMu          sync.Mutex
+	accountSwitches          map[domain.SessionID]*accountsManagerSwitchRun
+	accountRemovalMu         sync.Mutex
+	accountRemovals          map[string]*accountsManagerRemovalRun
 
 	transitionMu sync.Mutex
 	transitions  map[domain.SessionID]*interfaceTransitionRun
@@ -771,6 +776,9 @@ type Deps struct {
 	// CodexOperationGate is shared with account clients and reviewer launches.
 	// Nil preserves focused-test compatibility by disabling device-global gating.
 	CodexOperationGate ports.CodexOperationGate
+	// AccountsManager prepares optional, child-scoped routes for Codex and
+	// Claude launches. Nil preserves native provider behavior.
+	AccountsManager ports.AccountsManagerLaunchRouter
 	// ReconcileWorkers bounds concurrent live-session recovery during daemon
 	// startup. Values below one preserve the serial default for embedders/tests;
 	// production explicitly opts into a small worker pool.
@@ -814,6 +822,7 @@ func New(d Deps) *Manager {
 		executable:                     d.Executable,
 		newLaunchID:                    d.NewLaunchID,
 		codexOperationGate:             defaultCodexOperationGate(d.CodexOperationGate),
+		accountsManager:                d.AccountsManager,
 		backgroundContext:              d.BackgroundContext,
 		startupBackgroundReconcileDone: make(chan struct{}),
 		agentOperations:                make(map[domain.SessionID]agentOperationKind),
@@ -883,6 +892,10 @@ func New(d Deps) *Manager {
 // materialization fails the still-seed row is deleted outright; a later failure
 // parks the row as terminated and rolls back what was built.
 func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	if cfg.Account != nil {
+		choice := *cfg.Account
+		cfg.Account = &choice
+	}
 	project, err := m.loadProject(ctx, cfg.ProjectID)
 	if err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
@@ -946,6 +959,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if err := validateSpawnModel(cfg.Harness, agentConfig.Model); err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %s", ErrUnsupportedModel, err.Error())
 	}
+	if err := m.validateInitialAccountChoice(ctx, cfg, agentConfig.Model); err != nil {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
+	}
 	// Resolve the controller mode here, before anything durable is created, for
 	// the same reason an unknown harness is rejected above: an explicit Chat
 	// request AO cannot honor should cost nothing, not leave a terminated row and
@@ -961,18 +977,24 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			m.logger.Warn("spawn: default Chat unavailable; falling back to TUI",
 				"harness", cfg.Harness, "error", ports.ErrChatUnsupported)
 			mode = domain.SessionModeTUI
-		} else if err := m.chat.PreflightChat(ctx, cfg.Harness, agentConfig.Permissions); err != nil {
-			fallbackAllowed := errors.Is(err, ports.ErrChatUnsupported) ||
-				errors.Is(err, ports.ErrChatDriverUnavailable) ||
-				errors.Is(err, ports.ErrChatDriverIncompatible) ||
-				errors.Is(err, ports.ErrChatAuthRequired)
-			if modeExplicitlyRequested || !fallbackAllowed ||
-				errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
+		} else if preflightErr := m.preflightSpawnChat(ctx, cfg, agentConfig.Permissions); preflightErr != nil {
+			// A routed Claude ACP process authenticates with its child-scoped
+			// gateway token, so native device auth is not a prerequisite.
+			routedClaude := errors.Is(preflightErr, ports.ErrChatAuthRequired) &&
+				cfg.Harness == domain.HarnessClaudeCode && m.accountsManagerSpawnRoutingEnabled(ctx, cfg)
+			if !routedClaude {
+				fallbackAllowed := errors.Is(preflightErr, ports.ErrChatUnsupported) ||
+					errors.Is(preflightErr, ports.ErrChatDriverUnavailable) ||
+					errors.Is(preflightErr, ports.ErrChatDriverIncompatible) ||
+					errors.Is(preflightErr, ports.ErrChatAuthRequired)
+				if modeExplicitlyRequested || !fallbackAllowed ||
+					errors.Is(preflightErr, context.Canceled) || errors.Is(preflightErr, context.DeadlineExceeded) {
+					return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", preflightErr)
+				}
+				m.logger.Warn("spawn: default Chat unavailable; falling back to TUI",
+					"harness", cfg.Harness, "error", preflightErr)
+				mode = domain.SessionModeTUI
 			}
-			m.logger.Warn("spawn: default Chat unavailable; falling back to TUI",
-				"harness", cfg.Harness, "error", err)
-			mode = domain.SessionModeTUI
 		}
 		if mode == domain.SessionModeChat {
 			resolved, err := m.resolveAgentConfig(ctx, cfg, project.Config)
@@ -1029,17 +1051,13 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			seed.Metadata.Model = cfg.AgentConfig.Model
 			seed.Metadata.Effort = cfg.AgentConfig.Effort
 		}
-		if cfg.AutomationRunID != nil {
-			var fresh bool
-			rec, fresh, err = m.store.CreateAutomationSession(ctx, seed)
-			if err == nil && !fresh {
-				if rec.AutomationLaunchCompleted {
-					return rec, promptBytes, systemPromptBytes, nil
-				}
-				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: automation session %s has an incomplete prior launch", rec.ID)
+		var fresh bool
+		rec, fresh, err = m.createSpawnSeed(ctx, seed, cfg.Account)
+		if err == nil && cfg.AutomationRunID != nil && !fresh {
+			if rec.AutomationLaunchCompleted {
+				return rec, promptBytes, systemPromptBytes, nil
 			}
-		} else {
-			rec, err = m.store.CreateSession(ctx, seed)
+			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: automation session %s has an incomplete prior launch", rec.ID)
 		}
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStageEarly(ErrSpawnCreate, err)
@@ -1078,7 +1096,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		if asyncChat {
 			seed.ProvisionState = domain.SessionProvisionProvisioning
 		}
-		rec, err = m.promoteTaskPreparation(ctx, prep, seed)
+		rec, err = m.promoteTaskPreparation(ctx, prep, seed, cfg.Account)
 		if err != nil {
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
 			m.discardClaimedTaskPreparation(cleanupCtx, prep)
@@ -1219,6 +1237,11 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, adapterConfig.Permissions)
+	route, err := m.prepareAccountsManagerRoute(ctx, id, cfg.Harness, adapterConfig.Model, env)
+	if err != nil {
+		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
+		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrepare, err)
+	}
 	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok {
 		status, authErr := validator.ValidateLaunchAuth(ctx, ws.Path, env)
 		if authErr != nil {
@@ -1244,6 +1267,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		IssueID:          string(cfg.IssueID),
 		Config:           adapterConfig,
 		Permissions:      adapterConfig.Permissions,
+		Route:            route,
 	}
 	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
 	if err != nil {
@@ -1388,22 +1412,34 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		return resolved, nil
 	}
 	modelID := strings.TrimSpace(resolved.Model)
-	validateClaudeModel := cfg.Harness == domain.HarnessClaudeCode && modelID != ""
-	if resolved.Effort == "" && !validateClaudeModel {
+	managed := cfg.Account != nil && cfg.Account.Mode == domain.AccountsManagerManaged
+	validateModel := (cfg.Harness == domain.HarnessClaudeCode || managed) && modelID != ""
+	if resolved.Effort == "" && !validateModel {
 		return resolved, nil
 	}
-	if m.modelCatalog == nil {
-		if validateClaudeModel {
+	if m.modelCatalog == nil && !managed {
+		if validateModel {
 			return ports.AgentConfig{}, fmt.Errorf("%w: model catalog is unavailable", ports.ErrModelCapabilitiesUnavailable)
 		}
 		return resolved, nil
 	}
-	catalog, err := m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), true)
+	var catalog ports.AgentModelCatalog
+	var err error
+	if managed {
+		reader, ok := m.accountsManager.(ports.AccountsManagerModelCatalog)
+		provider, supported := accountsManagerProvider(cfg.Harness)
+		if !ok || !supported {
+			return ports.AgentConfig{}, ports.ErrModelCapabilitiesUnavailable
+		}
+		catalog, err = reader.AgentAccountModels(ctx, provider, cfg.Account.AccountID)
+	} else {
+		catalog, err = m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), true)
+	}
 	if err != nil {
 		if modelChangedWithoutExplicitEffort {
 			resolved.Effort = ""
 		}
-		if validateClaudeModel || resolved.Effort != "" {
+		if validateModel || resolved.Effort != "" {
 			return ports.AgentConfig{}, fmt.Errorf("%w: %w", ports.ErrModelCapabilitiesUnavailable, err)
 		}
 		return resolved, nil
@@ -1416,7 +1452,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			}
 		}
 	}
-	if catalog.Stale && validateClaudeModel {
+	if catalog.Stale && validateModel {
 		return ports.AgentConfig{}, fmt.Errorf("%w for model %q: catalog is stale", ports.ErrModelCapabilitiesUnavailable, modelID)
 	}
 	var selected *ports.AgentModelInfo
@@ -1426,7 +1462,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			break
 		}
 	}
-	if validateClaudeModel && selected == nil {
+	if validateModel && selected == nil {
 		return ports.AgentConfig{}, fmt.Errorf("%w: model %q is not in the active provider catalog", ErrUnsupportedModel, modelID)
 	}
 	if modelChangedWithoutExplicitEffort {
@@ -2792,6 +2828,10 @@ func (m *Manager) relaunchSessionWithPolicy(
 }
 
 func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, operation string, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo, restartHandle *ports.RuntimeHandle, forceFresh, requireNativeHistory bool, reservedGeneration string, historyPolicy domain.SessionInterfaceTransitionHistoryPolicy) (RestoreResult, error) {
+	return m.relaunchSessionWithOptions(ctx, operation, rec, project, ws, restartHandle, forceFresh, requireNativeHistory, reservedGeneration, historyPolicy, false)
+}
+
+func (m *Manager) relaunchSessionWithOptions(ctx context.Context, operation string, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo, restartHandle *ports.RuntimeHandle, forceFresh, requireNativeHistory bool, reservedGeneration string, historyPolicy domain.SessionInterfaceTransitionHistoryPolicy, passive bool) (RestoreResult, error) {
 	// Relaunch dispatches from the currently committed persisted mode, never from
 	// a caller hint. The interface-transition coordinator changes that fact only
 	// after stopping the old controller, then reuses this ordinary restore path.
@@ -2844,6 +2884,10 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, agentConfig.Permissions)
+	route, err := m.prepareAccountsManagerRoute(ctx, rec.ID, rec.Harness, agentConfig.Model, env)
+	if err != nil {
+		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+	}
 	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok {
 		status, authErr := validator.ValidateLaunchAuth(ctx, ws.Path, env)
 		if authErr != nil {
@@ -2859,12 +2903,19 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	var argv []string
 	var delivery ports.PromptDeliveryStrategy
 	var mode RestoreMode
+	launchMetadata := rec.Metadata
+	if passive {
+		launchMetadata.Prompt = ""
+		if forceFresh {
+			launchMetadata.AgentSessionID = ""
+		}
+	}
 	if forceFresh {
-		argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
-			systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true)
+		argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, launchMetadata,
+			systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, route, true)
 	} else {
-		argv, delivery, mode, err = restoreArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
-			systemPrompt, systemPromptFile, agentConfig, rec.Kind, rec.Harness, m.dataDir, env)
+		argv, delivery, mode, err = restoreArgv(ctx, agent, rec.ID, ws.Path, launchMetadata,
+			systemPrompt, systemPromptFile, agentConfig, rec.Kind, rec.Harness, m.dataDir, env, route)
 	}
 	if err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
@@ -2942,7 +2993,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		WorkspaceRepoPath:         ws.RepoPath,
 		RuntimeHandleID:           handle.ID,
 		RuntimeLaunchID:           launchID,
-		AgentSessionID:            rec.Metadata.AgentSessionID,
+		AgentSessionID:            launchMetadata.AgentSessionID,
 		Prompt:                    rec.Metadata.Prompt,
 		BrowserCapabilityVerifier: rec.Metadata.BrowserCapabilityVerifier,
 	}
@@ -2963,7 +3014,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, fmt.Errorf("%s %s: completed: %w", operation, rec.ID, err)
 	}
-	if delivery == ports.PromptDeliveryAfterStart && afterStartPrompt != "" {
+	if !passive && delivery == ports.PromptDeliveryAfterStart && afterStartPrompt != "" {
 		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, rec.ID, afterStartPrompt); err != nil {
 			m.destroySpawnRuntimeAfterFailure(ctx, handle)
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
@@ -3369,6 +3420,12 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 // ReconcileStartupSafety closes interrupted operations or quarantines ambiguous
 // interface targets and agent switches with a restored input fence before the API accepts input.
 func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
+	if err := m.reconcileAccountsManagerRemovals(ctx); err != nil {
+		return fmt.Errorf("reconcile: managed account removals: %w", err)
+	}
+	if err := m.reconcileAccountsManagerSwitches(ctx); err != nil {
+		return fmt.Errorf("reconcile: managed account switches: %w", err)
+	}
 	// A daemon restart destroys the in-memory input fence. Close any durable
 	// non-terminal switch before adopting runtimes so the API never implies an
 	// unconfirmed continuation was delivered.
@@ -5643,13 +5700,13 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 // signals via ok=false (e.g. no native session id captured yet). Returns
 // ErrNotResumable when transcript-preserving restore is required but unavailable,
 // or when a promptless, unresumable worker has nothing to restore from.
-func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, _ domain.AgentHarness, dataDir string, env map[string]string) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
+func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, _ domain.AgentHarness, dataDir string, env map[string]string, route *ports.AgentProviderRoute) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
 	ref := ports.SessionRef{
 		ID:            string(id),
 		WorkspacePath: workspacePath,
 		Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: meta.AgentSessionID},
 	}
-	cmd, ok, err := agent.GetRestoreCommand(ctx, ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions})
+	cmd, ok, err := agent.GetRestoreCommand(ctx, ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions, Route: route})
 	if err != nil {
 		return nil, "", "", fmt.Errorf("restore command: %w", err)
 	}
@@ -5667,7 +5724,7 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 	// a saved prompt, rather than stranding the work behind ErrNotResumable. A
 	// worker that never got that far (no id, no prompt) still stays unresumable.
 	return freshLaunchArgv(ctx, agent, id, workspacePath, meta, systemPrompt,
-		systemPromptFile, agentConfig, kind, dataDir, conversationLost)
+		systemPromptFile, agentConfig, kind, dataDir, route, conversationLost)
 }
 
 // nativeConversationMissing reports whether the agent can see a persisted
@@ -5702,7 +5759,7 @@ func nativeConversationMissing(ctx context.Context, agent ports.Agent, ref ports
 // freshLaunchArgv builds the non-resume half of restoreArgv. Interface
 // transitions also use it when an adapter proves its reserved id has no
 // persisted history, both for preflight and for the actual target launch.
-func freshLaunchArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, dataDir string, allowPromptless bool) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
+func freshLaunchArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, dataDir string, route *ports.AgentProviderRoute, allowPromptless bool) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
 	// A saved prompt is replayed fresh. An orchestrator is promptless by design
 	// and relaunches with the system prompt only. A promptless WORKER has no task
 	// and no session id to restore from: do not blank-relaunch it.
@@ -5722,6 +5779,7 @@ func freshLaunchArgv(ctx context.Context, agent ports.Agent, id domain.SessionID
 		SystemPromptFile: systemPromptFile,
 		Config:           agentConfig,
 		Permissions:      agentConfig.Permissions,
+		Route:            route,
 	}
 	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
 	if err != nil {

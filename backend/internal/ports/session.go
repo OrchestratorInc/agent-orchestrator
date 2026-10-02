@@ -54,6 +54,8 @@ type SpawnConfig struct {
 	// controller while preserving the AO session. An unsupported explicit request
 	// fails the spawn rather than falling back to the other mode.
 	RequestedMode domain.SessionMode
+	// Account is nil for a legacy spawn; an explicit choice must be persisted before launch.
+	Account *domain.AccountsManagerAccountChoice
 
 	// DisplayName is the user-facing sidebar label. Empty falls back to the
 	// session id in the read model (e.g. orchestrator sessions).

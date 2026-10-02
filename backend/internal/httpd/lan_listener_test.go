@@ -142,6 +142,8 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 		"/api/v1/agents/codex/accounts/login-terminal",
 		"/api/v1/agents/codex/accounts/login-operations/op-1/verify",
 		"/api/v1/agents/codex/account-switches",
+		"/api/v1/accounts-manager/accounts",
+		"/api/v1/accounts-manager/accounts/events",
 	}
 	for _, path := range blocked {
 		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", port, path), nil)
@@ -371,6 +373,8 @@ func TestLANListenerServesCodexModelRoutesFromRealRouter(t *testing.T) {
 		"/api/v1/agents/codex/accounts",
 		"/api/v1/agents/codex/accounts/events",
 		"/api/v1/agents/codex/account-switches",
+		"/api/v1/accounts-manager/accounts",
+		"/api/v1/accounts-manager/accounts/events",
 	} {
 		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", port, path), nil)
 		req.Host = "127.0.0.1"

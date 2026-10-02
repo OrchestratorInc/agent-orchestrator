@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	accountsmanager "github.com/aoagents/agent-orchestrator/backend/internal/accountsmanager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/devimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/legacyimport"
@@ -386,7 +387,8 @@ type SpawnSessionRequest struct {
 	// never mutates existing sessions automatically; compatible sessions may later
 	// switch through the durable interface-transition endpoint. An unsupported
 	// explicit request fails rather than quietly producing the other kind of session.
-	Mode domain.SessionMode `json:"mode,omitempty" enum:"chat,tui"`
+	Mode    domain.SessionMode  `json:"mode,omitempty" enum:"chat,tui"`
+	Account *SpawnAccountChoice `json:"account,omitempty" nullable:"false"`
 	// ApprovalMode overrides the project/default policy for this spawn.
 	ApprovalMode domain.PermissionMode `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
 	Prompt       string                `json:"prompt,omitempty" maxLength:"16384"`
@@ -774,6 +776,151 @@ type BrowserStatusResponse struct {
 	Transport   string           `json:"transport"`
 }
 
+// AccountsManagerStatusResponse is the redacted health projection for AO's
+// private Accounts Manager runner. Runtime coordinates and credentials are
+// intentionally not part of this contract.
+type AccountsManagerStatusResponse struct {
+	State         string  `json:"state" enum:"starting,ready,degraded"`
+	Reason        *string `json:"reason" enum:"binary_missing,configuration_invalid,start_failed,health_timeout,process_exited"`
+	EngineVersion string  `json:"engineVersion,omitempty"`
+}
+
+// AccountsManagerCooldownResponse retains the scope and timing of an observed provider restriction.
+type AccountsManagerCooldownResponse struct {
+	Scope            string    `json:"scope"`
+	Model            string    `json:"model,omitempty"`
+	Reason           string    `json:"reason,omitempty"`
+	RetryAt          time.Time `json:"retryAt,omitempty"`
+	RemainingSeconds int64     `json:"remainingSeconds,omitempty"`
+	HTTPStatus       int       `json:"httpStatus,omitempty"`
+}
+
+// AccountsManagerAccountResponse excludes raw credential references and authentication material.
+type AccountsManagerAccountResponse struct {
+	Verification       string                            `json:"verification,omitempty" enum:"unverified,verified,invalid"`
+	VerifiedAt         time.Time                         `json:"verifiedAt,omitempty"`
+	Label              string                            `json:"label,omitempty"`
+	Generation         uint64                            `json:"generation"`
+	ReconnectSupported bool                              `json:"reconnectSupported"`
+	ID                 string                            `json:"id"`
+	Provider           string                            `json:"provider" enum:"codex,claude"`
+	Kind               string                            `json:"kind" enum:"oauth,api_key,access_token,unknown"`
+	Email              string                            `json:"email,omitempty"`
+	Status             string                            `json:"status" enum:"active,pending,refreshing,error,disabled,unknown"`
+	Disabled           bool                              `json:"disabled"`
+	Unavailable        bool                              `json:"unavailable"`
+	CreatedAt          time.Time                         `json:"createdAt,omitempty"`
+	UpdatedAt          time.Time                         `json:"updatedAt,omitempty"`
+	LastRefreshedAt    time.Time                         `json:"lastRefreshedAt,omitempty"`
+	QuotaSupported     bool                              `json:"quotaSupported"`
+	Cooldowns          []AccountsManagerCooldownResponse `json:"cooldowns"`
+}
+
+// AccountsManagerOAuthSessionResponse exposes sign-in instructions with an opaque operation ID.
+type AccountsManagerOAuthSessionResponse struct {
+	AccountID        string    `json:"accountId,omitempty"`
+	ID               string    `json:"id"`
+	Provider         string    `json:"provider" enum:"codex,claude"`
+	Mode             string    `json:"mode" enum:"callback,device"`
+	Status           string    `json:"status" enum:"pending,completed,failed,expired"`
+	FailureCode      string    `json:"failureCode,omitempty"`
+	AuthorizationURL string    `json:"authorizationUrl,omitempty"`
+	UserCode         string    `json:"userCode,omitempty"`
+	ExpiresAt        time.Time `json:"expiresAt"`
+}
+
+// AccountsManagerAccountsResponse marks stale projections explicitly for disconnected clients.
+type AccountsManagerAccountsResponse struct {
+	Revision      int64                                 `json:"revision"`
+	Availability  string                                `json:"availability" enum:"starting,ready,degraded"`
+	Stale         bool                                  `json:"stale"`
+	Accounts      []AccountsManagerAccountResponse      `json:"accounts"`
+	OAuthSessions []AccountsManagerOAuthSessionResponse `json:"oauthSessions"`
+	Routing       []AccountsManagerRoutingResponse      `json:"routing"`
+}
+
+// AccountsManagerRoutingResponse contains public account IDs, never engine references.
+type AccountsManagerRoutingResponse struct {
+	Provider   string   `json:"provider" enum:"codex,claude"`
+	Enabled    bool     `json:"enabled"`
+	AccountIDs []string `json:"accountIds"`
+}
+
+// UpdateAccountsManagerRoutingRequest replaces the provider's ordered routing preference.
+type UpdateAccountsManagerRoutingRequest struct {
+	Enabled    bool     `json:"enabled"`
+	AccountIDs []string `json:"accountIds"`
+}
+
+// AccountsManagerProviderParam binds the managed provider path parameter.
+type AccountsManagerProviderParam struct {
+	Provider string `path:"provider"`
+}
+
+// StartAccountsManagerOAuthRequest selects the provider and supported sign-in mode.
+type StartAccountsManagerOAuthRequest struct {
+	Provider   string `json:"provider" enum:"codex,claude"`
+	Mode       string `json:"mode" enum:"callback,device"`
+	AccountID  string `json:"accountId,omitempty"`
+	Generation uint64 `json:"generation,omitempty"`
+}
+
+// AccountsManagerAccountIDParam accepts a public account ID rather than a credential filename.
+type AccountsManagerAccountIDParam struct {
+	AccountID string `path:"accountId"`
+}
+
+// AccountsManagerOAuthOperationIDParam accepts a public operation ID rather than callback state.
+type AccountsManagerOAuthOperationIDParam struct {
+	OperationID string `path:"operationId"`
+}
+
+// AccountsManagerAPIKeyRequest is secret-bearing input and must not be logged or echoed.
+type AccountsManagerAPIKeyRequest struct {
+	OperationID string `json:"operationId,omitempty"`
+	Provider    string `json:"provider" enum:"codex,claude"`
+	Key         string `json:"key"`
+	BaseURL     string `json:"baseUrl,omitempty"`
+}
+
+// AccountsManagerImportRequest carries an explicit import without granting filesystem access.
+type AccountsManagerImportRequest struct {
+	OperationID string          `json:"operationId,omitempty"`
+	Provider    string          `json:"provider" enum:"codex,claude"`
+	Filename    string          `json:"filename"`
+	Credential  json.RawMessage `json:"credential"`
+}
+
+// UpdateAccountsManagerAccountRequest changes one user-owned account property.
+type UpdateAccountsManagerAccountRequest struct {
+	Disabled   *bool   `json:"disabled,omitempty"`
+	Label      *string `json:"label,omitempty"`
+	Generation uint64  `json:"generation,omitempty"`
+}
+
+// AccountsManagerModelResponse describes a model available to the selected account.
+type AccountsManagerModelResponse struct {
+	ID          string   `json:"id"`
+	DisplayName string   `json:"displayName,omitempty"`
+	Type        string   `json:"type,omitempty"`
+	Owner       string   `json:"owner,omitempty"`
+	Efforts     []string `json:"efforts,omitempty"`
+}
+
+// AccountsManagerModelsResponse bounds model discovery to one resolved account.
+type AccountsManagerModelsResponse struct {
+	Models []AccountsManagerModelResponse `json:"models"`
+}
+
+// AccountsManagerQuotaResponse preserves provider windows and server clock offset.
+type AccountsManagerQuotaResponse struct {
+	ObservedAt         time.Time                          `json:"observedAt"`
+	Subscription       *accountsmanager.QuotaSubscription `json:"subscription,omitempty"`
+	Summary            []accountsmanager.QuotaMetric      `json:"summary"`
+	ServerTimeOffsetMS int64                              `json:"serverTimeOffsetMs"`
+	Groups             []accountsmanager.QuotaGroup       `json:"groups"`
+}
+
 // BrowserCommandRequest is the stable daemon-facing command envelope. Action
 // arguments remain action-specific JSON so new target-scoped operations do not
 // require a new transport or Electron IPC surface.
@@ -977,6 +1124,7 @@ type SendSessionMessageResponse struct {
 // DelegateTaskRequest is the body of POST /api/v1/orchestrators/delegate.
 // An omitted agent tells the orchestrator to use the project's worker default.
 type DelegateTaskRequest struct {
+	Account   *SpawnAccountChoice `json:"account,omitempty" nullable:"false"`
 	ProjectID domain.ProjectID    `json:"projectId"`
 	Brief     string              `json:"brief" maxLength:"16384"`
 	Agent     domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,mimo-code,deepseek-harness,fake"`

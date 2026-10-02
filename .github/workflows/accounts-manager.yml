@@ -1,0 +1,112 @@
+name: Accounts Manager
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "accounts-manager/**"
+      - "backend/go.mod"
+      - ".github/workflows/accounts-manager.yml"
+      - "frontend/scripts/*accounts-manager*"
+      - "frontend/forge.config.ts"
+  pull_request:
+    paths:
+      - "accounts-manager/**"
+      - "backend/go.mod"
+      - ".github/workflows/accounts-manager.yml"
+      - "frontend/scripts/*accounts-manager*"
+      - "frontend/forge.config.ts"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: accounts-manager-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GOWORK: "off"
+  GOMAXPROCS: "2"
+
+jobs:
+  runner:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: accounts-manager/runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: accounts-manager/runner/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: node --test ../../frontend/scripts/accounts-manager-dependency.node-test.mjs
+      - run: go mod tidy -diff
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race -count=1 -timeout=20m ./...
+      - run: node ../../frontend/scripts/build-accounts-manager.mjs
+
+  dependency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Read immutable dependency identity
+        id: dependency
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const pin = JSON.parse(readFileSync('accounts-manager/dependency.json', 'utf8'));
+          if (!/^github\.com\/[A-Za-z0-9_-]+\/CLIProxyAPI\/v7$/.test(pin.replacement.module) || !/^[a-f0-9]{40}$/.test(pin.replacement.commit)) throw new Error('invalid dependency identity');
+          appendFileSync(process.env.GITHUB_OUTPUT, `repository=${pin.replacement.module.slice(11, -3)}\ncommit=${pin.replacement.commit}\n`);
+          JS
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.dependency.outputs.repository }}
+          ref: ${{ steps.dependency.outputs.commit }}
+          path: dependency-source
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: dependency-source/go.sum
+      - run: go mod tidy -diff
+        working-directory: dependency-source
+      - run: go build ./...
+        working-directory: dependency-source
+      - run: go vet ./...
+        working-directory: dependency-source
+      - run: go test -race -count=1 -p 1 -timeout=20m ./...
+        working-directory: dependency-source
+
+  runner-cross-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+    defaults:
+      run:
+        working-directory: accounts-manager/runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: accounts-manager/runner/go.sum
+      - run: go build ./...
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}

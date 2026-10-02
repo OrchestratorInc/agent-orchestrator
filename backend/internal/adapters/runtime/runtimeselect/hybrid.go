@@ -101,6 +101,14 @@ func (r *hybridRuntime) IsUnsupervisedReviewerAlive(ctx context.Context, handle 
 }
 
 func (r *hybridRuntime) ProbeFencedRuntime(ctx context.Context, ref ports.FencedRuntimeRef) ports.FencedProbeResult {
+	handles, err := r.LaunchHandles(ref.SessionID)
+	valid := false
+	for _, handle := range handles {
+		valid = valid || handle == ref.Handle
+	}
+	if err != nil || !valid {
+		return ports.FencedProbeResult{Liveness: ports.FencedUnknown, Reason: ports.FencedReasonIdentityMissing}
+	}
 	backend, raw := r.route(ref.Handle)
 	ref.Handle = raw
 	return backend.ProbeFencedRuntime(ctx, ref)

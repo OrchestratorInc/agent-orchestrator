@@ -12,6 +12,97 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+type AccountsManagerBindingClock struct {
+	ID       int64
+	Revision int64
+}
+
+type AccountsManagerChatHost struct {
+	SessionID    string
+	Generation   string
+	HostIdentity string
+}
+
+type AccountsManagerQueueObligation struct {
+	TurnID string
+}
+
+type AccountsManagerRemoval struct {
+	ID              string
+	AccountID       string
+	Impact          string
+	Phase           string
+	ErrorCode       string
+	StopStarted     int64
+	BindingsRevoked int64
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+type AccountsManagerRemovedChoice struct {
+	SessionID string
+	Provider  string
+	AccountID string
+	Revision  int64
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type AccountsManagerRoutingPolicy struct {
+	Provider  string
+	Enabled   int64
+	UpdatedAt time.Time
+}
+
+type AccountsManagerRoutingPolicyAccount struct {
+	Provider  string
+	AccountID string
+	Position  int64
+}
+
+type AccountsManagerSessionBinding struct {
+	SessionID      string
+	Provider       string
+	ConnectionMode string
+	AccountID      string
+	Revision       int64
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type AccountsManagerSessionRoute struct {
+	SessionID string
+	Provider  string
+	AccountID string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type AccountsManagerSwitch struct {
+	ID                         string
+	SessionID                  string
+	Provider                   string
+	SourceMode                 string
+	SourceAccountID            string
+	SourceRevision             int64
+	SourceOwner                string
+	SourceRuntimeHandleID      string
+	TargetMode                 string
+	TargetAccountID            string
+	TargetRevision             int64
+	TargetGeneration           string
+	Policy                     string
+	NewConversation            int64
+	Phase                      string
+	ErrorCode                  string
+	CreatedAt                  time.Time
+	UpdatedAt                  time.Time
+	RetiredTargetGeneration    string
+	RetiredTargetHandleID      string
+	EmptySource                int64
+	SourceNativeConversationID string
+}
+
 type AgentInstallJob struct {
 	Target              string
 	Status              string

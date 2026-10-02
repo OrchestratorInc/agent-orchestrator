@@ -602,7 +602,8 @@ func (d *Driver) connectProcess(
 	}
 	gate := newGatedReader(transport.Stdout, !transport.Reconnected)
 	proc := &process{
-		stdin: transport.Stdin, stdout: gate, gate: gate,
+		hostIdentity: transport.HostIdentity(),
+		stdin:        transport.Stdin, stdout: gate, gate: gate,
 		reconnected: transport.Reconnected, acpState: transport.ACPState,
 	}
 	proc.stop = persistentStop(gate, transport.Stdin)

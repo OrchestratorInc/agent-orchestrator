@@ -25,12 +25,31 @@ export type GlobalSettingsSection =
 	| "general"
 	| "harness"
 	| "agents"
+	| "accounts"
 	| "cloud"
 	| "mobile"
 	| "shortcuts"
 	| "browserProfiles"
 	| "updates"
 	| "help";
+
+export function resolveGlobalSettingsSection(section: unknown): GlobalSettingsSection | undefined {
+	if (section === "agents" || section === "subscriptions") return "accounts";
+	switch (section) {
+		case "general":
+		case "harness":
+		case "accounts":
+		case "cloud":
+		case "mobile":
+		case "shortcuts":
+		case "browserProfiles":
+		case "updates":
+		case "help":
+			return section;
+		default:
+			return undefined;
+	}
+}
 
 /** Project settings pages: the project form sections plus the cues manager. */
 export type ProjectSettingsSection = ProjectFormSection | "cues";
@@ -316,7 +335,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	openGlobalSettings: (section, options) => set((state) => ({
 		settingsModal: {
 			scope: "global",
-			section,
+			section: resolveGlobalSettingsSection(section),
 			...(options?.focusAgentId ? { focusAgentId: options.focusAgentId } : {}),
 			...(options?.harnessView ? { harnessView: options.harnessView } : {}),
 			...(options?.preserveProject && state.settingsModal?.scope === "project"

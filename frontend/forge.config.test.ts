@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MachOParseError } from "./makers/macho-archs";
@@ -86,6 +86,50 @@ afterEach(() => {
 });
 
 describe("native runtime resources", () => {
+	it.each(["darwin", "linux", "win32"] as const)("bundles Accounts Manager on %s", (platform) => {
+		expect(extraResourcesForPlatform(platform)).toContain("accounts-manager");
+	});
+
+	it("fails packaging when Accounts Manager is missing", async () => {
+		mkdirSync(join(fixtureDir, "resources"), { recursive: true });
+		const hook = config.hooks?.postPackage;
+		expect(hook).toBeTypeOf("function");
+		if (typeof hook !== "function") return;
+		await expect(hook(config, { platform: "win32", arch: "x64", outputPaths: [fixtureDir] })).rejects.toThrow(
+			"packaged Accounts Manager missing",
+		);
+	});
+
+	it("executes the packaged Accounts Manager version check", async () => {
+		const managerDir = join(fixtureDir, "resources", "accounts-manager");
+		mkdirSync(managerDir, { recursive: true });
+		const binary = join(managerDir, "ao-accounts-manager.exe");
+		writeFileSync(binary, "#!/bin/sh\necho 'ao-accounts-manager test (CLIProxyAPI v7.3.8)'\n");
+		chmodSync(binary, 0o755);
+		writeFileSync(join(managerDir, "CLIProxyAPI-LICENSE"), "MIT\n");
+		writeFileSync(join(managerDir, "UPSTREAM.md"), "upstream\n");
+		writeFileSync(join(managerDir, "dependency.json"), "{}\n");
+		const hook = config.hooks?.postPackage;
+		expect(hook).toBeTypeOf("function");
+		if (typeof hook !== "function") return;
+		await expect(hook(config, { platform: "win32", arch: "x64", outputPaths: [fixtureDir] })).resolves.toBeUndefined();
+	});
+
+	it.each(["CLIProxyAPI-LICENSE", "UPSTREAM.md", "dependency.json"])("fails packaging without the %s notice", async (missing) => {
+		const managerDir = join(fixtureDir, "resources", "accounts-manager");
+		mkdirSync(managerDir, { recursive: true });
+		writeFileSync(join(managerDir, "ao-accounts-manager.exe"), "");
+		for (const notice of ["CLIProxyAPI-LICENSE", "UPSTREAM.md", "dependency.json"]) {
+			if (notice !== missing) writeFileSync(join(managerDir, notice), "fixture\n");
+		}
+		const hook = config.hooks?.postPackage;
+		expect(hook).toBeTypeOf("function");
+		if (typeof hook !== "function") return;
+		await expect(hook(config, { platform: "win32", arch: "x64", outputPaths: [fixtureDir] })).rejects.toThrow(
+			`packaged Accounts Manager notice missing from ${join(managerDir, missing)}`,
+		);
+	});
+
 	it("fails packaging when the macOS helper was not copied into Resources", async () => {
 		mkdirSync(join(fixtureDir, "AO.app", "Contents", "Resources"), { recursive: true });
 		const hook = config.hooks?.postPackage;

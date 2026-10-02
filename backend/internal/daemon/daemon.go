@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/accountsmanager"
 	claudecodeagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
@@ -49,6 +50,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
 	"github.com/aoagents/agent-orchestrator/backend/internal/push"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
+	accountsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/accountsmanager"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
@@ -296,6 +298,19 @@ func Run() error {
 	// graceful shutdown inside Server.Run and stops the background goroutines.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	accountsManager := accountsmanager.New(accountsmanager.Config{
+		StateDir: cfg.StateDir,
+		Binary:   os.Getenv("AO_ACCOUNTS_MANAGER_BINARY"),
+		Logger:   log,
+	})
+	// Accounts Manager is an optional supervised capability. Start it outside
+	// the daemon readiness boundary: missing or unhealthy runner binaries must
+	// never prevent AO, unrelated agents, or the existing account flows from
+	// becoming available. Cancelling ctx stops lease renewal without killing a
+	// healthy runner, allowing a replacement daemon to reattach.
+	accountsManager.Start(ctx)
+	accountsManagerService := accountsvc.New(accountsmanager.NewManagementClient(accountsManager, nil), store)
+	accountsManagerService.Start(ctx)
 	policyCoordinator.StartWatcher(ctx)
 	defer func() { _ = policyCoordinator.CloseAndDrain(context.Background()) }()
 	// Constructing the synchronous sender performs no I/O. The hard production
@@ -407,6 +422,12 @@ func Run() error {
 		StopProviderHost: func(ctx context.Context, id domain.SessionID) error {
 			return persistenthost.Shutdown(ctx, cfg.DataDir, string(id))
 		},
+		StopExactProviderHost: func(ctx context.Context, id domain.SessionID, identity string) error {
+			return persistenthost.ShutdownExact(ctx, cfg.DataDir, string(id), identity)
+		},
+		StopBoundProviderHost: func(ctx context.Context, id domain.SessionID, identity string) error {
+			return persistenthost.ShutdownHost(ctx, cfg.DataDir, string(id), identity)
+		},
 		// Adapts the store's own snapshot type, so the chat service never has to
 		// import the storage layer.
 		Reader: chatsvc.SnapshotReaderFunc(func(ctx context.Context, conversationID string) (chatsvc.ConversationRows, error) {
@@ -445,7 +466,8 @@ func Run() error {
 				HasMoreBefore:                    rows.HasMoreBefore,
 			}, nil
 		}),
-		Drivers: chatDrivers,
+		Drivers:         chatDrivers,
+		AccountsManager: accountsManagerService,
 		// The LCM satisfies ActivityRecorder directly: a chat turn is a pure
 		// lifecycle reduction, same as a hook signal from a terminal session.
 		Activity: lcStack.LCM,
@@ -550,7 +572,7 @@ func Run() error {
 	agentSvc = agentsvc.NewWithDeps(agentDeps)
 	agentSvc.WarmModelCatalogs(ctx)
 
-	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc}, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
+	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc}, settingsSvc, policyCoordinator, tracker, codexOperationGate, accountsManagerService, log)
 	if err != nil {
 		stop()
 		lcStack.Stop()
@@ -859,40 +881,43 @@ func Run() error {
 	}
 
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
-		Projects:           projectSvc,
-		HostID:             hostIdentity.HostID,
-		Endpoints:          bs,
-		Agents:             agentSvc,
-		CodexAccounts:      agentSvc,
-		SystemChecks:       systemChecks,
-		Installer:          systemInstall,
-		Sessions:           sessionSvc,
-		Automations:        automationSvc,
-		DesktopWorkspaces:  sessionSvc,
-		PRs:                prActions,
-		Reviews:            reviewSvc,
-		Notifications:      notifier,
-		Reports:            reportSvc,
-		NotificationStream: notificationHub,
-		Push:               pushRegistry,
-		Presence:           presenceTracker,
-		DeviceRoster:       deviceRoster,
-		DeviceLive:         presenceTracker,
-		Import:             importsvc.New(importsvc.Deps{Store: store}),
-		Directories:        fsbrowsersvc.New(),
-		ShellTerminals:     shellTermSvc,
-		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
-		AgentAuth:          agentAuthSvc,
-		GitHub:             githubpat.New(cfg.DataDir),
-		Conversations:      chatSvc,
-		Settings:           settingsSvc,
-		CDC:                store,
-		Events:             cdcPipe.Broadcaster,
-		Activity:           lcStack.LCM,
-		UsageHooks:         usageCollector,
-		UsageSummary:       usagesvc.NewSummaryReader(store),
-		Telemetry:          telemetrySink,
-		Mobile:             mc,
+		AccountsManagerStatus:   accountsManager,
+		AccountsManagerService:  accountsManagerService,
+		AccountsManagerControls: sessionSvc,
+		Projects:                projectSvc,
+		HostID:                  hostIdentity.HostID,
+		Endpoints:               bs,
+		Agents:                  agentSvc,
+		CodexAccounts:           agentSvc,
+		SystemChecks:            systemChecks,
+		Installer:               systemInstall,
+		Sessions:                sessionSvc,
+		Automations:             automationSvc,
+		DesktopWorkspaces:       sessionSvc,
+		PRs:                     prActions,
+		Reviews:                 reviewSvc,
+		Notifications:           notifier,
+		Reports:                 reportSvc,
+		NotificationStream:      notificationHub,
+		Push:                    pushRegistry,
+		Presence:                presenceTracker,
+		DeviceRoster:            deviceRoster,
+		DeviceLive:              presenceTracker,
+		Import:                  importsvc.New(importsvc.Deps{Store: store}),
+		Directories:             fsbrowsersvc.New(),
+		ShellTerminals:          shellTermSvc,
+		AgentAuth:               agentAuthSvc,
+		GitHub:                  githubpat.New(cfg.DataDir),
+		Conversations:           chatSvc,
+		Settings:                settingsSvc,
+		CDC:                     store,
+		Events:                  cdcPipe.Broadcaster,
+		Activity:                lcStack.LCM,
+		UsageHooks:              usageCollector,
+		UsageSummary:            usagesvc.NewSummaryReader(store),
+		Telemetry:               telemetrySink,
+		Mobile:                  mc,
+		Cues:                    cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
 		DevImport: devimportsvc.New(devimportsvc.Deps{
 			Store:         store,
 			TargetDataDir: cfg.DataDir,

@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, Copy, Download, LoaderCircle, LogIn, Search, TriangleAlert, X } from "lucide-react";
+import { BookOpen, Check, Copy, Download, Info, LoaderCircle, LogIn, Search, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
@@ -11,6 +11,7 @@ import {
 } from "../../hooks/useAgentReadinessQuery";
 import { agentAuthPlansQueryKey, probeAgentAuth, useAgentAuthPlans, useStartAgentAuth } from "../../hooks/useAgentAuth";
 import { agentModelsQueryPrefix } from "../../hooks/useAgentModelsQuery";
+import { useAccountsManagerEvents, useAccountsManagerQuery } from "../../hooks/useAccountsManagerQuery";
 import { closeShellTerminal, shellTerminalsQueryKey } from "../../hooks/useShellTerminals";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { agentLabel, AGENT_OPTIONS, type AgentId } from "../../lib/agent-options";
@@ -31,6 +32,7 @@ import { useCloudGate } from "../../hooks/useCloudGate";
 import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
+import { ManagedAccountAvailability } from "./ManagedAccountAvailability";
 
 type AgentInstallPlan = components["schemas"]["AgentInstallPlan"];
 type InstallJob = components["schemas"]["InstallJob"];
@@ -133,6 +135,8 @@ export function HarnessSettingsSection({
 	const { i18n, t } = useTranslation();
 	const queryClient = useQueryClient();
 	const agents = useAgentReadinessQuery();
+	const managedAccounts = useAccountsManagerQuery();
+	useAccountsManagerEvents();
 	const installers = useQuery({ queryKey: installerQueryKey, queryFn: fetchInstallers, staleTime: 60_000 });
 	const jobs = useQuery({ queryKey: installJobsQueryKey, queryFn: fetchInstallJobs, retry: false });
 	const authPlans = useAgentAuthPlans();
@@ -564,6 +568,17 @@ export function HarnessSettingsSection({
 							|| mimoConfigured
 							|| (!authPlans.isPending && (!authPlan || authPlan.action === "instructions"));
 						const cloudConnected = isCloudHarnessConnected(cloudConnections.data, agentId);
+						const authScopeHint = cloudEnabled && signedIntoCloud && (CLOUD_AGENT_PROVIDERS as readonly string[]).includes(agentId) ? (
+							<span
+								className="inline-flex size-5 shrink-0 cursor-help items-center justify-center rounded-full text-settings-muted transition hover:bg-interactive-hover hover:text-settings-label"
+								role="img"
+								tabIndex={0}
+								aria-label={t("settings.harness.unifiedAuthHint", { defaultValue: "Local and cloud logins are managed separately. Select managed accounts when starting a local session." })}
+								title={t("settings.harness.unifiedAuthHint", { defaultValue: "Local and cloud logins are managed separately. Select managed accounts when starting a local session." })}
+							>
+								<Info className="size-3.5" aria-hidden="true" />
+							</span>
+						) : null;
 						if (cloudView) {
 							return (
 								<div
@@ -581,6 +596,7 @@ export function HarnessSettingsSection({
 									<div className="min-w-0 flex-1">
 										<div className="flex items-center gap-1.5">
 											<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
+										{authScopeHint}
 										</div>
 										<p className="truncate text-xs text-settings-muted">
 											{cloudConnected ? t("settings.harness.loggedIn") : t("settings.harness.cloudNotConnected")}
@@ -718,10 +734,12 @@ export function HarnessSettingsSection({
 							<div className="min-w-0 flex-1">
 								<div className="flex items-center gap-1.5">
 									<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
+										{authScopeHint}
 								</div>
 								<p className={cn("truncate text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? incompatibleVersionReason ?? authPlan?.reason ?? plan?.reason}>
 									{isInstalled ? authSummary : installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : incompatibleVersionReason ?? (plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired"))))}
 								</p>
+								<ManagedAccountAvailability harness={agentId} installed={isInstalled} inventory={managedAccounts} />
 							</div>
 
 			{localControls}

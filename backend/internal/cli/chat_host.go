@@ -20,7 +20,7 @@ func newChatHostCommand() *cobra.Command {
 			protocol := persistenthost.ProtocolRaw
 			fingerprint := ""
 			separator := 3
-			if len(args) > 3 && (args[3] == string(persistenthost.ProtocolACP) || args[3] == string(persistenthost.ProtocolUnreal)) {
+			if len(args) > 3 && (args[3] == string(persistenthost.ProtocolACP) || args[3] == string(persistenthost.ProtocolUnreal) || args[3] == string(persistenthost.ProtocolManagedRaw)) {
 				protocol = persistenthost.Protocol(args[3])
 				if len(args) > 4 {
 					fingerprint = strings.TrimSpace(args[4])
@@ -28,7 +28,7 @@ func newChatHostCommand() *cobra.Command {
 				separator = 5
 			}
 			if len(args) < separator+2 || args[separator] != "--" || (protocol != persistenthost.ProtocolRaw && fingerprint == "") {
-				return usageError{errors.New("chat-host requires <session> <data-dir> <workdir> [acp|unreal <fingerprint>] -- <provider> [args...]")}
+				return usageError{errors.New("chat-host requires <session> <data-dir> <workdir> [acp|unreal|managed-raw <fingerprint>] -- <provider> [args...]")}
 			}
 			return persistenthost.Run(cmd.Context(), persistenthost.Config{
 				SessionID:            strings.TrimSpace(args[0]),

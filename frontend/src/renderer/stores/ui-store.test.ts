@@ -35,7 +35,15 @@ describe("global settings deep links", () => {
 		});
 
 		useUiStore.getState().openGlobalSettings("agents");
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "agents" });
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "accounts" });
+	});
+
+	it("redirects legacy subscriptions while retaining the project recovery destination", () => {
+		useUiStore.getState().openProjectSettings("project-1", { section: "agents" });
+		useUiStore.getState().openGlobalSettings("agents", { preserveProject: true });
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "accounts", returnTo: { scope: "project", projectId: "project-1", section: "agents" } });
+		useUiStore.getState().closeSettings();
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "project-1", section: "agents" });
 	});
 
 	it("preserves project settings only for explicit recovery navigation", () => {

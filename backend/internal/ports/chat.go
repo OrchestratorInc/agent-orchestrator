@@ -276,6 +276,8 @@ func MissingCapabilitiesForPermissions(caps ChatCapabilities, permissions Permis
 // ChatStartConfig is what a driver needs to open a new provider conversation.
 type ChatStartConfig struct {
 	SessionID domain.SessionID
+	// ControllerGeneration identifies this controller's durable event fence.
+	ControllerGeneration string
 	// DataDir is AO's state root. Provider bindings may write process-scoped
 	// configuration beneath it, but must never use the worktree or an OS-default
 	// application-data directory for AO-owned state.
@@ -319,6 +321,9 @@ type ChatStartConfig struct {
 	// MCPServers are client-supplied tool servers for this provider conversation.
 	// User/provider configuration still loads normally; these are additive.
 	MCPServers []ChatMCPServerConfig
+	// Route carries an AO-private gateway override for provider process launches.
+	// Secrets remain in Env and never enter conversation persistence.
+	Route *AgentProviderRoute
 }
 
 // ChatResumeConfig reattaches to a provider conversation after a restart.
@@ -326,6 +331,7 @@ type ChatResumeConfig struct {
 	// See ChatStartConfig.ProviderIDsScoped.
 	ProviderIDsScoped      bool
 	SessionID              domain.SessionID
+	ControllerGeneration   string
 	ProviderConversationID string
 	DataDir                string
 	WorkspacePath          string
@@ -346,6 +352,7 @@ type ChatResumeConfig struct {
 	ProviderScopeID       string
 	AdditionalDirectories []string
 	MCPServers            []ChatMCPServerConfig
+	Route                 *AgentProviderRoute
 }
 
 // ChatMCPServerConfig is the provider-neutral session-setup shape for a tool
