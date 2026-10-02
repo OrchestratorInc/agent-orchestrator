@@ -2125,6 +2125,16 @@ export interface components {
             type: "chat.user_message";
             payload: {
                 text: string;
+                /**
+                 * @description Server-owned message attribution; absent on older events.
+                 * @enum {string}
+                 */
+                origin?: "human" | "automation";
+                /**
+                 * Format: uuid
+                 * @description Source worker session for automation messages.
+                 */
+                senderSessionId?: string;
                 /** Format: uuid */
                 turnId?: string;
             };
