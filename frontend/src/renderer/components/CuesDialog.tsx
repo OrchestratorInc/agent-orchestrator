@@ -193,7 +193,13 @@ function ProjectCuesSettings({ projectId, onBusyChange }: CuesSettingsProps) {
 		const cues = cuesQuery.data ?? [];
 		if (cues.length === 0) {
 			return (
-				<p className="text-sm leading-5 text-settings-muted">{t("cues.empty")}</p>
+				<div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
+					<p className="text-sm leading-5 text-settings-muted">{t("cues.empty")}</p>
+					<Button type="button" disabled={busy} onClick={openNew}>
+						<Plus aria-hidden="true" />
+						{t("cues.newCue")}
+					</Button>
+				</div>
 			);
 		}
 		return (
@@ -293,6 +299,7 @@ function ProjectCuesSettings({ projectId, onBusyChange }: CuesSettingsProps) {
 					]}
 					triggerClassName="w-fit self-start"
 					menuAlign="start"
+					menuClassName="border-foreground/25!"
 					onChange={(type) => setDraft((current) => ({ ...current, type }))}
 				/>
 			</div>
@@ -321,9 +328,11 @@ function ProjectCuesSettings({ projectId, onBusyChange }: CuesSettingsProps) {
 		</div>;
 	};
 
+	const empty = !formOpen && cuesQuery.isFetchedAfterMount && !cuesQuery.isFetching && !cuesQuery.isError && (cuesQuery.data ?? []).length === 0;
 	return (
-		<div className="flex flex-col gap-(--size-settings-section-inner-gap)">
-			<fieldset className="min-w-0" disabled={busy}>{formOpen ? renderForm() : renderList()}</fieldset>
+		<div className={empty ? "flex h-full min-h-0 flex-1 flex-col" : "flex flex-col gap-(--size-settings-section-inner-gap)"}>
+			<fieldset className={empty ? "flex min-h-0 min-w-0 flex-1 flex-col" : "min-w-0"} disabled={busy}>{formOpen ? renderForm() : renderList()}</fieldset>
+			{empty ? null : (
 			<div className="flex items-center justify-end gap-2">
 				{formOpen ? (
 					<>
@@ -342,6 +351,7 @@ function ProjectCuesSettings({ projectId, onBusyChange }: CuesSettingsProps) {
 					</Button>
 				)}
 			</div>
+			)}
 
 			<ConfirmDialog
 				open={deletingCue !== null}

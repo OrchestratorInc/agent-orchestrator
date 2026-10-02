@@ -412,7 +412,7 @@
 	"cues.descriptionLabel": "Description",
 	"cues.descriptionPlaceholder": "Briefly describe what this cue does",
 	"cues.edit": "Edit",
-	"cues.empty": "No cues yet. Create one to run a prompt or command on demand.",
+	"cues.empty": "No cues set up yet",
 	"cues.emptyMenu": "No cues in this project",
 	"cues.invokeFailed": "Could not run the cue.",
 	"cues.invokeCommandSent": "命令已发送",
