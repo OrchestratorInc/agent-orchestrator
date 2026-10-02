@@ -43,6 +43,16 @@ On the VM, get the current address and password (keep it private):
 
 If the HTTPS address is not ready, rerun the command after a few seconds.
 
+For private Git clones, pushes, or PRs, authenticate on the VM as the AO user:
+
+```bash
+gh auth login
+gh auth setup-git
+gh auth status
+```
+
+Pairing does not copy GitHub credentials from your laptop.
+
 1. On your laptop, run this PR's desktop build, or the updated desktop release
    after merge. Open **Settings → General** and turn on **Developer mode**.
 2. Open **Settings → Remote hosts**, turn on **Connect to remote hosts**, then
@@ -51,10 +61,7 @@ If the HTTPS address is not ready, rerun the command after a few seconds.
    project. In **Settings → Harness**, select the VM to install/sign in to an
    agent there.
 
-For private Git clones, pushes, and PRs, authenticate on the VM as the same
-user (for example, `gh auth login` then `gh auth setup-git`). Pairing does not
-forward laptop credentials. If a quick-tunnel URL changes, edit the saved
-address in desktop Settings.
+If a quick-tunnel URL changes, edit the saved address in desktop Settings.
 
 On mobile, pair the VM in **Settings → Machines** with the same address and
 password.
