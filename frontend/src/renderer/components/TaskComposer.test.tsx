@@ -1463,6 +1463,36 @@ describe("TaskComposer", () => {
 		expect(await screen.findByRole("button", { name: "Effort" })).toBeInTheDocument();
 	});
 
+	it("omits the repeated Claude prefix from Claude Code model labels", async () => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) {
+				return {
+					data: {
+						agent: "claude-code",
+						selectionMode: "catalog",
+						models: [
+							{ id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", isDefault: true },
+							{ id: "claude-opus-4-7", label: "Claude Opus 4.7" },
+						],
+						allowCustom: true,
+					},
+				};
+			}
+			return { data: { status: "ok", project: { agent: "claude-code", config: {} } } };
+		});
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+
+		const picker = await screen.findByRole("button", { name: "Model" });
+		expect(picker).toHaveTextContent("Sonnet 4.5");
+		expect(picker).not.toHaveTextContent("Claude");
+
+		await userEvent.click(picker);
+		expect(await screen.findByRole("menuitem", { name: "Sonnet 4.5" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Opus 4.7" })).toBeInTheDocument();
+		expect(screen.queryByText(/^Claude /)).not.toBeInTheDocument();
+	});
+
 	it("preselects the agent's default model when the project configures none", async () => {
 		h.get.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) {

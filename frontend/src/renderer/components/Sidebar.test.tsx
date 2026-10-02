@@ -2731,9 +2731,9 @@ describe("Sidebar", () => {
 		expect(postMock).not.toHaveBeenCalled();
 
 		const dialog = await screen.findByRole("dialog", {
-			name: "Are you sure you want to archive fix login?",
+			name: "Are you sure you want to archive this session?",
 		});
-		expect(dialog).toHaveTextContent("You can always restore fix login from the Archive section later.");
+		expect(dialog).toHaveTextContent("You can always restore it from the Archive section later.");
 		fireEvent.click(within(dialog).getByRole("button", { name: "No" }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 		expect(postMock).not.toHaveBeenCalled();

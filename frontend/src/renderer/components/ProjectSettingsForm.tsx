@@ -19,7 +19,7 @@ import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
-import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
+import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
 import { isLaunchableAgent } from "../lib/agent-select-options";
 import { WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
@@ -844,7 +844,7 @@ function AgentModelField({
 		const selectedMode = isConcreteModelID(mode) ? mode : "";
 		const options = (catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
 			value: item.id,
-			label: modelChoiceLabel(item),
+			label: agentModelDisplayLabel(agentId, modelChoiceLabel(item)),
 		}));
 		return (
 			<>
@@ -883,6 +883,10 @@ function AgentModelField({
 		onModelChange(value);
 		onModeChange("");
 	};
+	const displayModels = (catalog?.models ?? []).map((item) => ({
+		...item,
+		label: agentModelDisplayLabel(agentId, item.label),
+	}));
 	return (
 		<>
 			<div className="min-w-0">
@@ -890,7 +894,7 @@ function AgentModelField({
 					<AgentModelCombobox
 						aria-label={label}
 						value={model}
-						models={catalog?.models ?? []}
+						models={displayModels}
 						allowCustom={catalog?.allowCustom}
 						customModelEntry={customModelEntry}
 						agentLabel={agentId}
