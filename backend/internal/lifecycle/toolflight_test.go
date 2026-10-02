@@ -314,24 +314,30 @@ func TestToolPrecedence_PostStopNeedsInputNotificationStaysIdle(t *testing.T) {
 	// says no turn is in flight — the notification is a timer artifact, not a
 	// question, and must not promote a known-idle session into sticky
 	// waiting_input (which suppresses automated delivery until a human acts).
-	m, st, _ := newManager()
-	seedSignaled(st, "mer-1", domain.ActivityActive)
-	seeded := st.sessions["mer-1"]
-	seeded.Harness = domain.HarnessClaudeCode
-	st.sessions["mer-1"] = seeded
-	mustApply(t, m, "mer-1", sig(domain.ActivityIdle, "stop", "", ""))
+	// Grok routes its Notification hook through the claudecode deriver, so it
+	// shares both the contract and the phantom-timer exposure.
+	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessGrok} {
+		t.Run(string(harness), func(t *testing.T) {
+			m, st, _ := newManager()
+			seedSignaled(st, "mer-1", domain.ActivityActive)
+			seeded := st.sessions["mer-1"]
+			seeded.Harness = harness
+			st.sessions["mer-1"] = seeded
+			mustApply(t, m, "mer-1", sig(domain.ActivityIdle, "stop", "", ""))
 
-	mustApply(t, m, "mer-1", sig(domain.ActivityWaitingInput, "notification", "", ""))
-	if got := stateOf(st, "mer-1"); got != domain.ActivityIdle {
-		t.Fatalf("state after phantom agent_needs_input = %q, want idle", got)
-	}
+			mustApply(t, m, "mer-1", sig(domain.ActivityWaitingInput, "notification", "", ""))
+			if got := stateOf(st, "mer-1"); got != domain.ActivityIdle {
+				t.Fatalf("state after phantom agent_needs_input = %q, want idle", got)
+			}
 
-	// A genuine agent_needs_input arrives mid-turn (a question tool holds the
-	// turn open), so it must still land once a new prompt is in flight.
-	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "user-prompt-submit", "", ""))
-	mustApply(t, m, "mer-1", sig(domain.ActivityWaitingInput, "notification", "", ""))
-	if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
-		t.Fatalf("state after genuine agent_needs_input = %q, want waiting_input", got)
+			// A genuine agent_needs_input arrives mid-turn (a question tool holds
+			// the turn open), so it must still land once a new prompt is in flight.
+			mustApply(t, m, "mer-1", sig(domain.ActivityActive, "user-prompt-submit", "", ""))
+			mustApply(t, m, "mer-1", sig(domain.ActivityWaitingInput, "notification", "", ""))
+			if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
+				t.Fatalf("state after genuine agent_needs_input = %q, want waiting_input", got)
+			}
+		})
 	}
 }
 

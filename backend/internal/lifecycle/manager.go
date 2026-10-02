@@ -1215,14 +1215,17 @@ func isTurnBoundaryEvent(event string) bool {
 
 // claudeHookFamily reports harnesses whose CLIs speak Claude Code's hook
 // contract, including its ~60s client-side idle Notification(agent_needs_input)
-// that fires even when the finished turn asked no question (#3738). The
-// suppression scoped to this family must not leak to harnesses whose
+// that fires even when the finished turn asked no question (#3738). Grok
+// routes its Notification hook through the claudecode deriver
+// (activitydispatch), so it shares the same phantom-timer exposure; continue
+// wraps the claude CLI and kimchi mirrors its semantics. The suppression
+// scoped to this family must not leak to harnesses whose
 // notification → waiting_input is genuine: aider's completion notification is
 // its ONLY activity signal, and droid deliberately upgrades its post-Stop
 // idle Notification to sticky waiting_input to suppress nudges.
 func claudeHookFamily(harness domain.AgentHarness) bool {
 	switch harness {
-	case domain.HarnessClaudeCode, domain.HarnessContinue, domain.HarnessKimchi:
+	case domain.HarnessClaudeCode, domain.HarnessGrok, domain.HarnessContinue, domain.HarnessKimchi:
 		return true
 	default:
 		return false
