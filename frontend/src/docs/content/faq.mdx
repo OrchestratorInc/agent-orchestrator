@@ -9,7 +9,7 @@ description: Common questions about the current Agent Orchestrator desktop produ
 	</Accordion>
 
 	<Accordion title="Do I have to use Claude Code?">
-		No. AO includes adapters for more than twenty harnesses, including Claude Code, Codex, Cursor, Aider, OpenCode, Droid, Kimi Code, and others. Native Chat currently supports installed Codex, Claude Code, OpenCode, and Droid; other harnesses use Terminal UI.
+		No. AO includes adapters for more than twenty harnesses, including Claude Code, Codex, Cursor, Aider, OpenCode, Droid, Kimi Code, and others. Chat support depends on the harness and installed version; see the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui). Unreal Agent is Chat-only; most remaining harnesses also have terminal interfaces.
 	</Accordion>
 
 	<Accordion title="Does AO merge pull requests?">
@@ -17,11 +17,11 @@ description: Common questions about the current Agent Orchestrator desktop produ
 	</Accordion>
 
 	<Accordion title="Which source-control systems are supported?">
-		GitHub is the shipped SCM observer in the current Go rewrite. It supplies pull-request, CI, review, and mergeability facts. Historical docs listed broader GitLab and tracker plugins; those integrations are not all active in the current daemon lifecycle.
+		GitHub and GitLab supply normalized PR/MR, CI, review, and mergeability facts. Issue intake supports both with daemon and project opt-in, and is read-only toward issues. Linear and legacy external plugin packages are unsupported. See [SCM setup](/plugins/scm).
 	</Accordion>
 
 	<Accordion title="Does AO need webhooks?">
-		No. The current GitHub SCM observer polls with authentication, ETag guards, and semantic diffing. Live desktop updates come from the daemon's SQLite CDC event stream.
+		The local SCM observation workflow does not require webhooks. GitHub polling uses authentication, ETag guards, and semantic diffing. Live desktop updates come from the daemon's SQLite CDC event stream.
 	</Accordion>
 
 	<Accordion title="Does it work on Windows?">
@@ -33,15 +33,15 @@ description: Common questions about the current Agent Orchestrator desktop produ
 	</Accordion>
 
 	<Accordion title="Can I expose AO on a remote server?">
-		Do not expose the primary daemon listener. It is unauthenticated and fixed to `127.0.0.1`. Connect Mobile is the only built-in LAN path: it is opt-in, password-protected, plaintext, and intended only for a trusted home network.
+		Do not expose the primary daemon listener. It is unauthenticated and fixed to `127.0.0.1`. Connect Mobile creates a separate authenticated path. Its direct LAN listener is plaintext for trusted networks; available secure Tailscale or managed connector endpoints support remote pairing. See [Connect Mobile](/configuration/remote-access).
 	</Accordion>
 
 	<Accordion title="What does AO cost?">
-		AO is Apache-2.0 licensed. Agent usage is billed according to the provider account or subscription used by each installed harness. Chat records usage data when the provider reports it.
+		AO is Apache-2.0 licensed. Agent usage is billed according to the provider account or subscription used by each installed harness. Chat records usage data when the provider reports it. Cloud is a separately gated service; check the account offering shown in your app rather than assuming the local license includes remote execution or provider credits.
 	</Accordion>
 
 	<Accordion title="Does AO upload my source code?">
-		AO coordinates local worktrees and invokes your installed agents and GitHub tooling. Those tools follow their own provider data policies. AO's Electron renderer also sends anonymous usage events to PostHog in standard builds; session recording is disabled by default, and local paths and URLs are redacted if a time-boxed investigation enables it.
+		Local sessions use local worktrees and your provider/source-control tools, which follow their own data policies. Enabled Cloud sessions execute remotely and require sharing the work needed by that service. Production builds also send product telemetry to PostHog: installation identifiers, coarse usage/reliability data, GitHub remote-owner names on project creation, and authenticated GitHub usernames on session start. It is not wholly anonymous. Product telemetry is designed to exclude source code and conversation content, and session recording is disabled. Desktop telemetry environment controls, separate Event reporting consent, and mobile controls have different scopes; see the [telemetry reference](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/telemetry.md#turn-desktop-and-daemon-telemetry-off).
 	</Accordion>
 
 	<Accordion title="Can I still install AO from npm?">

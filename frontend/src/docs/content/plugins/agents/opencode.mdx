@@ -3,7 +3,7 @@ title: OpenCode
 description: Built-in Terminal UI and native ACP Chat support for the user's OpenCode installation.
 ---
 
-AO resolves your local `opencode` executable and reuses its authentication.
+AO resolves your local `opencode` executable and reuses its authentication. Choose `opencode` for OpenCode 1 or `opencode-v2` for OpenCode 2; both have terminal, Chat, and reviewer adapters. They share the executable name but have distinct AO identities. The v2 adapter validates major version 2, so selecting it with a v1 binary fails preflight.
 
 ```bash
 ao agent ls --refresh

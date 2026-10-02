@@ -21,7 +21,7 @@ Watch provider activities and changed files in Chat. If an approval or structure
 
 ## Use A Native Terminal UI
 
-Create another task and choose **Terminal UI**. AO creates the worktree and launches the harness's native interface through tmux on macOS/Linux or conpty on Windows.
+Create another task and choose **Terminal UI**. AO creates the worktree and launches the harness's native interface through native PTY hosts on macOS/Linux (tmux for legacy/fallback) or ConPTY on Windows.
 
 Use the desktop terminal for native interactive commands. Send normal follow-up guidance through AO's message controls:
 
@@ -31,12 +31,12 @@ The failing case is on Windows path normalization. Keep the Unix behavior unchan
 
 ## Switch Claude Code Or Codex To Chat
 
-For a compatible idle TUI session, choose **Open Chat**. AO stops the old controller, resumes the provider conversation through the native Chat driver, and keeps the same session and worktree.
+For a compatible idle TUI session, choose **Switch to chat UI**. AO stops the old controller, resumes the provider conversation through the native Chat driver, and keeps the same session and worktree.
 
 If the session is busy, choose deliberately:
 
-- **Finish and drain** waits for accepted work to finish before switching.
-- **Stop and interrupt** cancels the active turn before switching.
+- **Finish work, then switch** waits for accepted work to finish before switching.
+- **Stop now and switch** cancels the active turn before switching.
 
 Switching preserves provider context, but a first TUI-to-Chat switch does not reconstruct old terminal screen output as structured Chat cards.
 
@@ -58,11 +58,11 @@ ao session claim-pr <session-id> 142
 
 The shorter form reads the current worker from `AO_SESSION_ID`.
 
-AO then observes the GitHub pull request and displays CI, review, and mergeability facts with the session.
+AO observes GitHub PRs or GitLab MRs and displays their normalized facts. A claim only attaches ownership metadata; it does not check out the PR branch. Prepare the correct branch separately before implementation.
 
 ## Run A Reviewer
 
-Open a session with a linked pull request, go to **Reviews**, select a configured reviewer harness, and start a review. Reviewer runs are separate from worker harness configuration. Current reviewer harnesses include Claude Code, Codex, and OpenCode.
+Open a session with a linked pull request, go to **Reviews**, select a configured reviewer harness, and start a review. Reviewer runs are separate from worker harness configuration. See the [agent catalog](/plugins/agents) for reviewer support. Enable the session auto-review toggle if you want reviews on eligible PR heads while the worker is idle; merge remains explicit.
 
 Inspect the result, then send actionable findings to the worker. Keep human review in the loop before merging.
 
@@ -82,6 +82,8 @@ ao preview status
 ```
 
 Open the Browser tab in the session inspector. Preview targets are session-scoped; AO does not auto-discover one when a worker starts.
+
+Use the Browser toolbar to annotate the rendered page and send the annotation to Chat, open DevTools, or pop out the view. Choose a named profile only when you intend to reuse its saved cookies/storage; the default temporary profile remains session-isolated. Browser settings manage profiles, supported imports, and downloads.
 
 ## Use Browser Controls From An Agent
 
@@ -103,7 +105,7 @@ Temporary network-metadata capture must be started explicitly and expires automa
 3. Treat the QR as a bearer credential and do not share it or screenshots of it. Rotate the connection password in desktop settings if it is exposed.
 4. Create or open a session from the phone.
 
-Use this only on a trusted home network. Turning Connect Mobile off closes the LAN listener.
+Use direct LAN access only on a trusted network. Wait for a ready QR; available secure remote endpoints can be added to its offer as setup completes. See [Connect Mobile](/configuration/remote-access). Turning it off closes the authenticated listener.
 
 ## Useful CLI Checks
 
@@ -117,6 +119,12 @@ ao send --session <session-id> --message "Run the targeted test and report the r
 ```
 
 The desktop app remains the recommended control surface.
+
+For reusable project work, create an agent Cue such as `ao cue create --project my-project --name "Check tests" --prompt "Run relevant tests and summarize failures"`, then choose **Run a cue** from a session. Use `--command "npm test"` instead of `--prompt` for an exact command in a fresh local shell.
+
+For recurring work, create an **Automation** with a project, prompt, and schedule; inspect each run in Automations. [Lifecycle automation](/configuration/lifecycle-automation) includes a daily CLI example. For projectless notes, use `ao spawn --standalone --agent codex --name notes`.
+
+Workers can use `ao report "Tests passed; ready for review"` to report to an existing orchestrator and the command's artifact flags to attach outputs. Chat also exposes provider-supported skills, MCP tools, model/effort controls, and compaction actions.
 
 ## Next
 

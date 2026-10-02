@@ -7,4 +7,6 @@ The session view renders an xterm terminal connected to the daemon's `/mux` WebS
 
 Terminal UI sessions attach to the agent's live platform runtime. Chat sessions do not create an agent TUI runtime, but the session can still open worktree shells through the same mux infrastructure.
 
+New macOS/Linux Terminal UI sessions use a detached native PTY host; existing tmux sessions and native-host startup fallback use tmux. Windows uses ConPTY. Closing the terminal view is not the same as stopping its agent or archiving the session. Detached hosts may reconnect after an app/daemon restart; provider recovery remains capability-dependent.
+
 This is built into the desktop app. There is no `terminal: web` setting, `ao open` command, or iTerm2/AppleScript terminal plugin in the current release.

@@ -1,6 +1,6 @@
 ---
 title: Connect Mobile
-description: Pair the native AO mobile app through the authenticated, opt-in LAN listener.
+description: Pair the native mobile app using authenticated local or available secure remote endpoints.
 ---
 
 AO's primary daemon listener is always bound to `127.0.0.1`. It is unauthenticated because it is loopback-only, and its host cannot be changed. Do not expose it with `HOST=0.0.0.0`, a public reverse proxy, or port forwarding.
@@ -9,35 +9,42 @@ For a phone, the desktop app creates a separate listener through **Connect Mobil
 
 ## Pair on the same network
 
-1. Install the AO mobile app and put the phone on the same trusted Wi-Fi as the desktop.
-2. Open desktop **Settings → Connect Mobile**.
-3. Enable mobile access.
-4. In the mobile app, scan the pairing code to fill the address, port, and connection password automatically.
-5. If entering details manually, copy all three values from the desktop.
+1. Install the AO mobile app and open desktop **Settings → Connect Mobile**.
+2. Enable mobile access. For direct LAN pairing, keep both devices on the same trusted network.
+3. Wait for a real pairing code. AO needs at least one advertised endpoint; a preparing placeholder cannot pair a phone.
+4. Scan the code in the mobile app. The current v2 link includes host identity and available endpoints so the phone can find the same desktop across transports. The credential is carried in the link fragment; treat the entire QR/link as a password.
+5. If using manual entry, use the host, port, and password actually displayed. The listener normally starts at port `3011` but can choose another free port.
 
-The listener normally uses port `3011` and can fall back to another available port. Always use the actually displayed port. Disabling Connect Mobile closes the listener; regenerating the password disconnects existing clients.
+Turning mobile access off closes the authenticated listener. Regenerating its password invalidates old pairing credentials. If the phone reports an incompatible pairing or identity contract, update both apps; current desktop pairing does not generate a legacy v1 fallback.
+
+Where available, AO can manage a remote-access connector using `cloudflared`. Follow the connector install/status controls offered in Connect Mobile. A LAN code can be ready before the connector; rescan the refreshed code once a remote endpoint appears if needed. Without a ready remote endpoint, a successful home-network connection does not promise access away from home.
 
 ## Tailscale
 
-For access away from the same Wi-Fi, install Tailscale on both devices and sign in to the same tailnet. Enable Connect Mobile, find the desktop's `100.x` address with `tailscale ip -4`, then enter that address, the displayed mobile port, and the connection password in the mobile app. Leave TLS disabled.
+Install Tailscale on both devices and use the same tailnet. With Connect Mobile enabled, AO detects the desktop's tailnet address and attempts secure pairing where supported. TLS is managed automatically when available; use the endpoints in the pairing offer instead of forcing plaintext or a hidden mode selector.
 
-Do not use `tailscale serve` to expose the primary loopback daemon. The native app should connect to the authenticated mobile listener.
+Secure pairing depends on Tailscale being running and its HTTPS/Serve setup succeeding. Inspect the setup/status reason if it is unavailable. A direct plaintext LAN endpoint remains suitable only for a trusted network. The phone can try the advertised LAN, Tailscale, and connector endpoints and verify that they identify the paired host.
+
+Do not point `tailscale serve`, a public proxy, or port forwarding at the unauthenticated primary daemon. AO's secure endpoint setup targets the separate authenticated mobile listener.
 
 ## Security model
 
-- The mobile listener uses plaintext HTTP by design and is intended for a trusted home network or private tailnet.
-- Every REST and terminal connection requires the rotating password.
-- Repeated failed authentication is locked out per source.
-- `/shutdown`, telemetry controls, and mobile-control routes remain loopback-only.
-- Mobile settings are persisted in a mode-`0600` file under `~/.ao/mobile/config.json`. The rotating password is stored there so the desktop can redisplay it; authentication comparisons use its in-memory hash.
+- The primary API stays on `127.0.0.1`, with no network-facing bind or added authentication.
+- Connect Mobile's separate listener is password-protected. Direct HTTP transport is for trusted networks; secure Tailscale/managed connector endpoints wrap this authenticated path for remote access.
+- Exactly `GET /api/v1/identity` is unauthenticated. It returns an opaque host identity and mobile contract version, allowing the phone to check the host before presenting a credential; it does not expose sessions.
+- Other mobile REST and terminal connections require the rotating bearer password. Repeated failed authentication is locked out per source.
+- Shutdown, telemetry, mobile-control, and browser-control routes remain loopback-only.
+- Mobile settings live at `AO_DATA_DIR/mobile/config.json` (normally `~/.ao/data/mobile/config.json`). The file stores the rotating password so the desktop can redisplay it and is written with mode `0600`; authentication comparisons use an in-memory hash. It is not a persisted password-hash-only store.
 
-Anyone who can observe traffic on an untrusted network may read the password and session traffic. Turn Connect Mobile off when it is not needed, and do not expose its port to the public internet.
+Do not share pairing screenshots or links. Use device mute/unpair controls in Connect Mobile to manage paired phones, and rotate the connection password if a credential was exposed. Keep direct plaintext traffic off untrusted networks. The historical LAN-only design describes the listener itself; current managed secure endpoints do not change the primary listener boundary.
 
 ## What mobile supports
 
 The Expo/React Native app is a native control surface over the same daemon resources as desktop. New mobile sessions prefer Chat when a compatible installed harness is available; Terminal UI remains an explicit compatibility choice.
 
 Mobile supports structured Chat, Terminal UI, session creation, the same capability-gated Chat/TUI handoff, approvals and structured input, changed files, model/provider controls, compaction and rollback, voice dictation, attachments, and a session-scoped worktree shell.
+
+Mobile also exposes PR/workspace review and reviewer-run views. Push notifications need mobile permission, an unmuted paired device, and a running daemon with network access to its push service. Pairing alone does not guarantee push delivery. Supported macOS hosts can enable keep-awake in Connect Mobile; the host must remain awake and reachable for interactive access.
 
 <Callout type="info">
 	Chat and Terminal UI are two controllers for the same AO session. Switching does not create a new worktree, but a first switch from Terminal UI to Chat does not reconstruct old terminal screen output as structured messages.

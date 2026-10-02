@@ -1,7 +1,7 @@
 # AO CLI
 
 The `ao` CLI is a thin Go/Cobra client for the local Agent Orchestrator daemon.
-It starts, discovers, inspects, and stops the daemon through the loopback HTTP
+It opens the desktop app, and discovers, inspects, and stops its daemon through the loopback HTTP
 surface and the `running.json` handshake. It must not open SQLite directly or
 call runtime, workspace, tracker, or agent adapters in-process.
 
@@ -26,13 +26,13 @@ Every product command resolves to a daemon HTTP route. Run `ao <command>
 
 | Command                       | Purpose                                                                                                                           |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `ao start`                    | Start the daemon in the background and wait for `/readyz`.                                                                        |
+| `ao start`                    | Open the desktop application, downloading a release if necessary; the app supervises its daemon.                                                                        |
 | `ao stop`                     | Gracefully stop the daemon via loopback `POST /shutdown` after verifying daemon identity.                                         |
 | `ao status` / `--json`        | Report daemon state from `running.json`, process liveness, `/healthz`, and `/readyz`.                                             |
 | `ao doctor` / `--json`        | Check config, data directory, DB-file presence, daemon state, `git`, and (on Darwin/Linux) `tmux`; on Windows conpty is built in. |
 | `ao completion <shell>`       | Generate completions for `bash`, `zsh`, `fish`, or `powershell`.                                                                  |
 | `ao version` / `ao --version` | Print build metadata.                                                                                                             |
-| `ao daemon`                   | Hidden internal daemon entrypoint used by `ao start`.                                                                             |
+| `ao daemon`                   | Hidden internal entrypoint used by the desktop supervisor and source-development tools.                                                                             |
 
 ### Product commands
 
@@ -202,9 +202,9 @@ command reports `STALE_REFERENCE`.
 Browser waits cover load completion, text or selector appearance and
 disappearance, URL matching, fixed delays, and a configurable DOM-stability
 window for HMR-driven verification.
-Browser tabs in the same worker share a memory-only Electron profile. Different
-workers receive distinct partitions, so cookies, authentication, local storage,
-and session storage do not leak between their browser runtimes.
+Temporary browser profiles are isolated per worker. Named profiles persist and
+can be reused across sessions, intentionally sharing cookies and storage.
+Profile selection does not broaden the session authorization on browser commands.
 Network capture is disabled by default and must be started explicitly. It is
 scoped to the active tab at start time, expires after 60 seconds by default
 (maximum 300), retains at most 200 in-memory entries, and is cleared with the
@@ -233,7 +233,8 @@ The CLI and daemon share the same environment-driven config:
 | `AO_KEEP_DAEMON`      | unset (off)          | Keep the desktop app's daemon running after the window closes; stop only via `ao stop`. (fork) |
 | `AO_DISABLE_GPU`      | unset (off)          | Skip Chromium hardware acceleration; escape hatch for broken Linux GPU drivers.                |
 
-The daemon always binds `127.0.0.1`.
+The primary daemon always binds `127.0.0.1`. Connect Mobile is a separate,
+opt-in authenticated listener; see [network boundaries](../architecture.md#multi-listener-architecture-loopback--lan).
 
 ## Manual smoke test
 
@@ -248,7 +249,8 @@ export AO_PORT=3037
 
 /tmp/ao status --json
 /tmp/ao doctor
-/tmp/ao start
+/tmp/ao daemon &
+# In another shell with the same AO_* values, after /readyz succeeds:
 /tmp/ao status --json
 /tmp/ao stop
 /tmp/ao status --json

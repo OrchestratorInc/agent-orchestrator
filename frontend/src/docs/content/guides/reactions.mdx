@@ -50,9 +50,11 @@ Merge is always an explicit action:
 ao pr merge <pr-number>
 ```
 
+For work on a schedule, use **Automations** rather than lifecycle reaction keys. For a reusable manual instruction or command, use project **Cues**. See [Lifecycle automation configuration](/configuration/lifecycle-automation) for both workflows and local-daemon scheduling limits.
+
 ## Switch interfaces when useful
 
-For compatible Claude Code and Codex sessions, use **Open Chat** or **Open Terminal UI**. AO preserves the session and worktree, drains or interrupts active work according to your choice, and commits only one controller at a time.
+For compatible Claude Code and Codex sessions, use **Switch to chat UI** or **Switch to terminal UI**. AO preserves the session and worktree, drains or interrupts active work according to your choice, and commits only one controller at a time.
 
 <Callout type="info">
 	A first Terminal UI → Chat switch preserves provider-native context where supported, but it does not convert old terminal screen output into structured Chat cards.

@@ -10,10 +10,10 @@ Agent Orchestrator is a local, single-user system built around a long-running Go
 ```text
 Electron + React desktop ─┐
 ao CLI ──────────────────┼─> Go daemon ─> services/managers ─> SQLite
-Expo mobile (opt-in LAN) ┘       │                 │
+Expo mobile (opt-in)     ┘       │                 │
                                 │                 ├─> agent/runtime/workspace adapters
                                 ├─> SSE events    ├─> native Chat drivers
-                                ├─> terminal mux  └─> GitHub SCM observer
+                                ├─> terminal mux  └─> GitHub/GitLab SCM observer
                                 └─> browser bridge to Electron
 ```
 
@@ -21,9 +21,9 @@ The desktop app discovers, launches, and supervises the daemon. The renderer use
 
 ## Sessions And Worktrees
 
-Workers in Git projects own isolated worktrees; workspace projects can materialize a root plus child-repository worktrees, while Scratch sessions use an AO-managed directory. A session also commits to exactly one agent interface at a time:
+Workers in Git projects own isolated worktrees; workspace projects can materialize a root plus child-repository worktrees, while Scratch and projectless standalone sessions use AO-managed directories. A session also commits to exactly one agent interface at a time:
 
-- **Terminal UI** runs the harness inside a tmux runtime on macOS/Linux or a conpty host on Windows.
+- **Terminal UI** runs the harness inside a detached native PTY host on macOS/Linux (tmux for legacy/fallback) or a ConPTY host on Windows.
 - **Chat** runs a native provider controller without an agent terminal runtime.
 
 Chat conversations are durable and include provider identity, turns, messages, activities, approvals, structured input, usage, compaction, and rollback state.
@@ -56,13 +56,13 @@ All application state remains under `~/.ao`, including the run file, managed wor
 
 HTTP controllers validate requests and call domain services. Services own read/write policy; session and lifecycle managers coordinate multi-step work. External systems sit behind Go port interfaces and leaf adapters.
 
-Current adapters include more than twenty agent harnesses, tmux/conpty runtime support, git-worktree isolation, native Chat drivers, and GitHub SCM observation. AO reuses installed provider binaries and their existing authentication.
+Current adapters include more than twenty agent harnesses, native PTY/ConPTY hosts with legacy/fallback tmux support, git-worktree isolation, native Chat drivers, and GitHub/GitLab SCM observation. AO reuses installed provider binaries and their existing authentication.
 
-GitHub PR observation is shipped. The broader tracker lane is still incomplete, so historical claims that every tracker plugin participates in lifecycle automation should not be treated as current behavior.
+GitHub and GitLab issue intake requires both daemon and project opt-in and remains read-only toward the tracker. Recurring automations run through a durable local scheduler; project Cues store reusable prompts or commands. These are separate from SCM lifecycle reactions.
 
 ## Pull Requests And Lifecycle Reactions
 
-The SCM observer polls GitHub using lazy authentication, ETag guards, and semantic diffing. It writes pull-request facts to SQLite and notifies lifecycle logic when CI fails, reviews request changes, or merge conflicts appear.
+The SCM observer dispatches to GitHub and GitLab providers. The GitHub path uses lazy authentication, ETag guards, and semantic diffing. It writes pull-request facts to SQLite and notifies lifecycle logic when CI fails, reviews request changes, or merge conflicts appear.
 
 The daemon also exposes pull-request merge and comment-resolution actions plus reviewer-agent routes. Desktop clients receive concise summaries rather than raw CI logs or complete review bodies.
 
@@ -70,13 +70,17 @@ The daemon also exposes pull-request merge and comment-resolution actions plus r
 
 The primary daemon listener binds `127.0.0.1:3001` and is unauthenticated. It serves the desktop app and CLI and is never configurable to a public bind.
 
-Connect Mobile creates a second listener only when explicitly enabled. It binds the LAN interface behind bearer-password authentication and serves the app API and authenticated terminal mux, but excludes shutdown, telemetry, mobile-control, and browser-control routes. Transport is plaintext and intended only for a trusted home network.
+Connect Mobile creates a second listener only when explicitly enabled. It binds the LAN interface behind bearer-password authentication and serves the app API and authenticated terminal mux, but excludes shutdown, telemetry, mobile-control, and browser-control routes. Direct listener transport is plaintext for trusted networks; available Tailscale TLS and managed connector endpoints wrap that authenticated listener. Exactly `GET /api/v1/identity` is public for host/version verification. See [Connect Mobile](/configuration/remote-access).
 
 ## Terminal And Browser Bridges
 
 `/mux` provides per-client terminal attachment. TUI sessions attach to the agent runtime; Chat sessions can use it for a separate worktree shell.
 
 Browser automation crosses a dedicated local daemon-to-Electron socket. The daemon authorizes and correlates commands; Electron owns the selected session's isolated `WebContentsView`. Browser control is blocked on the mobile LAN listener.
+
+The default temporary browser profile is isolated per session. Named browser profiles persist cookies and storage and can be reused across sessions; sessions using the same named profile deliberately share that browser state. Imported source-browser data is read only and copied into AO-owned storage.
+
+The architecture above describes local sessions. Cloud execution is a separate gated integration requiring build enablement, account access, and a reachable control plane. Standalone local workers are projectless; they are not Cloud sessions.
 
 ## Load-Bearing Rules
 

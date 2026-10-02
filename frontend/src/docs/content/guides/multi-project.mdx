@@ -25,11 +25,11 @@ Register a parent directory containing direct child repositories as one workspac
 ao project add --path /absolute/path/to/product --as-workspace
 ```
 
-Fresh installations also have Scratch for tasks that do not require Git. Scratch sessions cannot use `--branch` or `--claim-pr`.
+Existing Scratch projects use plain AO-managed directories. Projectless work can instead use `ao spawn --standalone --agent codex --name notes`. Standalone requires an explicit agent and rejects project, branch, issue, PR, and orchestrator options; Scratch also excludes Git branch/PR operations.
 
 ## Give each project its own roles
 
-Open each project's settings and choose its worker, orchestrator, model, rules, setup, reviewers, and default session interface. Project configuration is typed and independent; changing one project does not set global YAML defaults for the others.
+Open each project's settings and choose its worker, orchestrator, model, rules, setup, reviewers, and automatic review default. Select the global default session interface in **Settings → General**; override it per task. Project configuration is typed and independent; changing one project does not set global YAML defaults for the others.
 
 ## Spawn in the right project
 
@@ -38,7 +38,7 @@ ao spawn --project api --name api-issue --issue 42 --mode chat
 ao spawn --project web --name web-fix --prompt "Fix the header" --mode tui
 ```
 
-When `--project` is omitted, AO can resolve `AO_PROJECT_ID`, the current registered repository, or Scratch when it is the only project. Supplying the project explicitly is clearest in scripts.
+When `--project` is omitted, AO resolves `AO_PROJECT_ID`, the project of `AO_SESSION_ID`, then the closest registered project containing the current directory. It does not fall back to a sole Scratch project. Supplying the project explicitly is clearest in scripts.
 
 ## Inspect across projects
 
@@ -57,7 +57,7 @@ ao session ls --project api --json
 
 Kill one session with `ao session kill <session-id>`. Use `ao session cleanup --dry-run` before reclaiming eligible terminated-session workspaces. Dirty worktrees are preserved.
 
-`ao stop` stops the daemon and takes no project argument. Closing a desktop-owned app normally reaps its linked daemon; a headless daemon remains until explicitly stopped.
+`ao stop` stops the daemon and takes no project argument. Closing a view does not archive a session. Detached native terminal and supported Chat hosts can survive daemon replacement, subject to provider recovery. `exit-agent`/`resume-agent` stop and restart only the controller; kill/restore act on the session.
 
 ## Use mobile across projects
 

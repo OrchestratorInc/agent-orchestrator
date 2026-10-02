@@ -17,7 +17,10 @@ ao
 ├── project                       add, ls, get, set-config, rm
 ├── spawn                         Create a worker or orchestrator session
 ├── session                       ls, get, kill, restore, rename, cleanup, claim-pr,
-│                                 switch-agent, agent-switch
+│                                 exit-agent, resume-agent, switch-agent, agent-switch
+├── automation                    create, list, get, update, delete, runs
+├── cue                           create, list
+├── report                        Report worker progress or artifacts
 ├── orchestrator ls               List orchestrator sessions
 ├── send                           Send a message to a session
 ├── pr                             merge, resolve-comments
@@ -29,7 +32,7 @@ ao
 └── version                        Print build information
 ```
 
-Internal commands such as `daemon`, `hooks`, `launch`, `agent-process`, and `pty-host` are intentionally omitted.
+Internal commands such as `daemon`, `hooks`, `launch`, `agent-process`, and `pty-host` are intentionally omitted. `ao dev` is a developer launcher; see the repository development guide for source builds.
 
 ## Desktop and daemon
 
@@ -93,13 +96,17 @@ Agent adapters are compiled into AO. There is no plugin marketplace or `ao plugi
 | `ao project set-config <id>` | Update typed per-project configuration. |
 | `ao project rm <id>` | Remove a project registration. |
 
-Project configuration is persisted by the daemon in SQLite. `set-config` supports common flags and `--config-json`; it does not edit `agent-orchestrator.yaml`. Use command help for the complete typed fields.
+Project configuration is persisted by the daemon in SQLite. `set-config` replaces the entire config, including when using focused flags; inspect and preserve existing fields. It supports common flags and `--config-json`; it does not edit `agent-orchestrator.yaml`. Use command help for the complete typed fields.
+
+Recurring tasks use `ao automation create|list|get|update|delete|runs`. Supply a project, name, prompt, and exactly one `--cron` or `--rrule` to create; `--timezone` accepts an IANA name. Pause with `ao automation update <id> --enabled=false`. See [schedule behavior](/configuration/lifecycle-automation#what-ao-handles).
+
+`ao cue create --project <id> --name <name>` requires exactly one `--command` or `--prompt`. `ao cue list --project <id>` lists definitions. Editing, deleting, and invoking Cues is available in the desktop; the CLI does not have a `cue run` command.
 
 ## Sessions
 
 ### `ao spawn`
 
-Creates a session in a registered project. The command takes no positional arguments and requires a display name.
+Creates a session in a registered project, or a projectless worker with `--standalone`. The command takes no positional arguments and requires a display name.
 
 ```bash
 ao spawn --name fix-login --project my-app --agent codex --prompt "Fix the login regression"
@@ -116,6 +123,9 @@ Important flags include:
 | `--mode chat\|tui` | Select structured Chat or the agent's native terminal UI. |
 | `--branch <name>` | Branch for Git projects. Scratch projects do not support it. |
 | `--prompt <text>` | Initial prompt. |
+| `--standalone` | Projectless worker; requires an explicit agent and excludes project, branch, issue, PR, and orchestrator options. |
+| `--model <model>` | Override the selected provider model for this spawn. |
+| `--tracker-provider github\|gitlab` | Select the issue provider for `--issue`. |
 | `--issue <id>` | Associate a tracker issue. |
 | `--claim-pr <ref>` | Claim an existing pull request after spawning. |
 | `--no-takeover` | Refuse a PR already owned by another active session. |
@@ -130,7 +140,9 @@ Project resolution order is explicit `--project`, `AO_PROJECT_ID`, the project o
 | `ao session ls` | List active worker sessions. Use `--all` for orchestrators and `--include-terminated` for history. |
 | `ao session get <id>` | Show one session. |
 | `ao session kill <id>` | Terminate a session. Dirty workspaces are preserved. |
-| `ao session restore <id>` | Relaunch a terminated session. |
+| `ao session restore <id>` | Relaunch a terminated session when recovery is supported. |
+| `ao session exit-agent <id>` | Stop the controller while retaining the session. |
+| `ao session resume-agent <id>` | Start the controller again in that session. |
 | `ao session rename <id> <name>` | Change its display name. |
 | `ao session cleanup` | Reclaim eligible terminated workspaces; supports `--dry-run`. |
 | `ao session claim-pr [<session-id>] <pr-ref>` | Attach an existing PR; omitting the session uses `AO_SESSION_ID`. |
@@ -138,6 +150,8 @@ Project resolution order is explicit `--project`, `AO_PROJECT_ID`, the project o
 | `ao session agent-switch ls <session-id>` | Inspect agent-switch attempts. |
 
 Most lookup commands accept `--project` to disambiguate a session ID.
+
+PR claiming records ownership and starts observation; it does not check out the PR branch. Prepare the appropriate branch/worktree separately. Desktop **Archive** corresponds to ending the session, whereas exit/resume acts on its controller. Closing a view alone does neither.
 
 ### `ao send`
 
@@ -147,17 +161,35 @@ Sends a message through the daemon to a running session.
 ao send --session ao-123 --message "Please address the failing test"
 ```
 
-Both flags are required. When called from a session with `AO_SESSION_ID`, AO prefixes the sender identity.
+`--session` and `--message` are required for ordinary sends. When called from a session with `AO_SESSION_ID`, AO prefixes the sender identity.
+
+Use `--steer` to steer an active supported Chat turn or submit a normal turn when idle. `--client-message-id` supplies a stable delivery handle. If delivery is uncertain, recover the recorded result without resending:
+
+```bash
+ao send --session <session-id> --steer --recover-only --client-message-id <handle>
+```
+
+`--recover-only` requires `--steer` and a handle; it does not require a new message or contact the provider. A receipt confirms acceptance state, not that the agent completed the instruction.
 
 ### `ao orchestrator ls`
 
 Lists orchestrator sessions. Add `--json` for structured output.
 
+Inside a worker, `ao report "Progress summary"` reports to its existing orchestrator. Use `--help` for attention/completion and artifact/PR reporting flags. Needs-input reports notify immediately; stuck reports can interrupt or coalesce, while completion reports settle before delivery (currently five minutes) and ordinary checkpoints have a longer fallback (currently one hour). Reporting does not auto-create an orchestrator or replace claiming PR ownership.
+
+For a structured report, choose one of `--checkpoint`, `--needs-input`, `--stuck`, or `--done` and include `--note`. Attach outputs with repeatable `--artifact`, `--pr-created`, or `--pr-reviewed`; PR/MR flags require full URLs. Free-form text cannot be combined with structured state or output flags.
+
+```bash
+ao report --done --note "Focused tests passed" --artifact ./test-results.txt
+```
+
+Reporting requires `AO_SESSION_ID` from the worker environment.
+
 ## Pull requests and reviews
 
 | Command | Purpose |
 | --- | --- |
-| `ao pr merge <pr-number>` | Request a merge through AO's GitHub action engine. |
+| `ao pr merge <pr-number>` | Request a merge through the owning SCM provider. |
 | `ao pr resolve-comments <pr-number> [comment-id...]` | Resolve selected or eligible review comments. |
 | `ao review ls <worker-session-id>` | List review state for a worker. |
 | `ao review trigger [worker-session-id]` | Start or restart a reviewer run. Aliases: `execute`, `restart`. |

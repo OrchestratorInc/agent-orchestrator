@@ -13,3 +13,5 @@ The daemon enriches and stores notification records in SQLite. The desktop reads
 - catch up through paginated history after the app reconnects.
 
 Electron app toasts are a presentation of the same durable records while the desktop is running. There is no `ao notify`, `ao setup`, routing preset, JSONL notification store, or external notifier configuration in the current CLI.
+
+Marking a notification read preserves history; clearing one or all removes it from the center. Paired mobile devices can receive push notifications when permission is granted and the daemon can reach the push service. Use Connect Mobile device controls to mute or unpair a device. This does not enable legacy Slack, Discord, or webhook notifier plugins.

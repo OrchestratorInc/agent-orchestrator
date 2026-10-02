@@ -7,18 +7,43 @@ AO compiles agent adapters into the daemon. It uses your locally installed agent
 
 ## Shipped terminal harnesses
 
-The daemon registry currently advertises these worker harnesses:
+The current daemon registers the following capabilities. Availability still depends on platform, installed version, credentials, and permissions; a registered adapter is not proof that it is ready on your machine.
 
-| | | | |
+| Harness | Terminal UI | Chat | Reviewer |
 | --- | --- | --- | --- |
-| `claude-code` | `codex` | `opencode` | `grok` |
-| `cursor` | `qwen` | `copilot` | `kimi` |
-| `muse` | `droid` | `amp` | `agy` |
-| `crush` | `aider` | `goose` | `auggie` |
-| `continue` | `devin` | `cline` | `kiro` |
-| `kilocode` | `vibe` | `pi` | `kimchi` |
-| `prime-agent` | `autohand` | `omp` | `fx` (experimental) |
-| `deepseek-harness` | | | |
+| `claude-code` | Yes | Yes | Yes |
+| `codex` | Yes | Yes | Yes |
+| `opencode` | Yes | Yes | Yes |
+| `opencode-v2` | Yes | Yes | Yes |
+| `grok` | Yes | — | Yes |
+| `cursor` | Yes | Yes | Yes |
+| `qwen` | Yes | Yes | — |
+| `gemini` | Yes | — | — |
+| `copilot` | Yes | — | Yes |
+| `kimi` | Yes | Yes | Yes |
+| `muse` | Yes | — | Yes |
+| `droid` | Yes | Yes | Yes |
+| `amp` | Yes | — | Yes |
+| `agy` | Yes | — | Yes |
+| `crush` | Yes | — | Yes |
+| `aider` | Yes | — | Yes |
+| `goose` | Yes | — | — |
+| `auggie` | Yes | — | Yes |
+| `continue` | Yes | — | — |
+| `devin` | Yes | — | Yes |
+| `omp` | Yes | Yes | — |
+| `cline` | Yes | — | Yes |
+| `kiro` | Yes | — | Yes |
+| `kilocode` | Yes | — | Yes |
+| `vibe` | Yes | — | — |
+| `pi` | Yes | Yes | Yes |
+| `kimchi` | Yes | Yes | Yes |
+| `prime-agent` | Yes | — | — |
+| `autohand` | Yes | — | Yes |
+| `fx` | Yes | — | — |
+| `unreal-agent` | No | Yes | — |
+| `mimo-code` | Yes | — | — |
+| `deepseek-harness` | Yes | Yes | — |
 
 Run the catalog instead of relying on a static page when scripting:
 
@@ -31,7 +56,7 @@ The readiness probe reports whether a harness is supported, installed, and authe
 
 ### fx (experimental)
 
-Install fx from Settings → Agents on macOS or Linux (expected at
+Install fx from Settings → Harnesses on macOS or Linux (expected at
 `~/.local/bin/fx`; on Windows use WSL), then spawn it in Terminal UI mode.
 fx Chat is not supported.
 
@@ -41,17 +66,18 @@ ao spawn --name fx-task --agent fx --mode tui
 
 ## Chat versus Terminal UI
 
-All advertised harnesses can run through their native terminal interface. These also have structured Chat drivers:
+Unreal Agent is Chat-only; the other worker adapters provide a terminal interface. These harnesses have structured Chat drivers:
 
 | Harness | Chat transport |
 | --- | --- |
 | `codex` | Codex native app-server |
 | `claude-code` | `claude-agent-acp` using the user's Claude executable |
-| `opencode` | Native ACP |
+| `opencode` | Native ACP (OpenCode 1) |
+| `opencode-v2` | Native ACP (OpenCode 2) |
 | `droid` | Native ACP |
 | `kimi` | Native ACP |
 | `kimchi` | Native ACP |
-| `pi` | Native ACP |
+| `pi` | Separately installed ACP adapter; explicit bypass permissions required |
 | `cursor` | Native ACP |
 | `omp` | Native ACP |
 | `qwen` | Native ACP |
@@ -60,6 +86,10 @@ All advertised harnesses can run through their native terminal interface. These 
 
 Every other harness is Terminal UI-only. Choose the initial interface with `ao spawn --mode chat|tui`. Compatible Claude Code and Codex sessions can hand off between Chat and Terminal UI while retaining the AO session and worktree.
 
+Qwen Chat needs version 0.16 or newer; OMP Chat needs version 15 or newer. MiMo Code needs version 0.1.14 or newer and is Terminal UI-only, as is Gemini. Unreal Agent is built into AO for macOS/Linux, is Chat-only, and requires bypass permissions because it has no interactive approval flow. DeepSeek Chat uses `dsh --profile acp`. Check readiness and the provider options offered by your installed AO version before launching.
+
+Chat registration does not imply interface handoff support. Use the switch action and its disabled reason in the session UI. Experimental reviewer modes and prompts do not sandbox tools or network access.
+
 ## Choosing and configuring a harness
 
 ```bash
@@ -67,12 +97,12 @@ ao project set-config my-app --worker-agent codex
 ao spawn --project my-app --name auth-fix --agent claude-code --mode chat
 ```
 
-`--agent` and `--harness` are aliases. Project configuration may also specify model, permission mode, environment, prompt rules, and separate worker/orchestrator defaults. Use `ao project set-config --help` for the typed fields.
+`--agent` and `--harness` are aliases. The `set-config` example replaces the full config; preserve existing fields before applying it. Project configuration may also specify model, effort, permission mode, environment, prompt rules, and separate worker/orchestrator defaults. Use `ao project set-config --help` for the typed fields.
 
 <Cards>
 	<Card title="Claude Code" description="Terminal UI and structured Chat." href="/plugins/agents/claude-code" />
 	<Card title="Codex" description="Terminal UI and native app-server Chat." href="/plugins/agents/codex" />
 	<Card title="OpenCode" description="Terminal UI and native ACP Chat." href="/plugins/agents/opencode" />
-	<Card title="Cursor" description="Built-in terminal harness." href="/plugins/agents/cursor" />
+	<Card title="Cursor" description="Terminal UI and native ACP Chat." href="/plugins/agents/cursor" />
 	<Card title="Aider" description="Built-in terminal harness." href="/plugins/agents/aider" />
 </Cards>

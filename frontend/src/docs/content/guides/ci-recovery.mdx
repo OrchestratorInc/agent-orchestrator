@@ -36,6 +36,8 @@ ao spawn --project my-project --name fix-pr-42 \
 
 Use `--no-takeover` if the operation should fail when another active session already owns the PR.
 
+Claiming records ownership; it does not check out a PR branch. Prepare the matching workspace before requesting a fix. `ao report` can report worker outcomes to an existing orchestrator, but does not replace PR ownership.
+
 ## What the agent receives
 
 The message includes the failing checks and available run URLs, plus the PR identity. Raw CI logs are not copied into AO's desktop API; the agent can follow the supplied links and use the repository host's CLI to inspect logs.
@@ -46,7 +48,7 @@ Open the session inspector to see the PR, CI state, and failing-check links. The
 
 ## Current limits
 
-- The shipped SCM observer is the GitHub path.
+- GitHub and GitLab are supported; this example describes GitHub checks. Pipeline and review semantics depend on the provider.
 - CI automation is built in and is not configured through a `reactions:` YAML block.
 - There is no `ao review-check` command or configurable CI retry/escalation budget.
 - Draft and required-check semantics come from the normalized PR facts rather than a user reaction rule.

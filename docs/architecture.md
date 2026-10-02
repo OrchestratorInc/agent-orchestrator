@@ -1,6 +1,6 @@
 # Agent Orchestrator Architecture
 
-Agent Orchestrator is a long-running Go daemon that supervises multiple parallel AI coding agent sessions. Project sessions own isolated git worktrees; projectless standalone workers own AO-managed plain-directory workspaces. Every session commits to one interface mode at a time. A TUI session runs its agent inside a tmux/conpty runtime; a Chat session runs a native protocol controller without an agent terminal runtime. Codex and all ACP Chat processes live in detached per-session hosts so daemon/desktop replacement reconnects without stopping an in-flight turn. The ACP host additionally preserves connection setup, JSON-RPC correlation, pending interactions, and acknowledged prompt replay while the replacement daemon rebuilds its typed controller. A durable handoff may move a compatible native conversation between TUI and Chat, but both controllers are never live at once. The daemon coordinates both through the same session, lifecycle, workspace, storage, and observation boundaries.
+Agent Orchestrator is a long-running Go daemon that supervises multiple parallel AI coding agent sessions. Project sessions own isolated git worktrees; projectless standalone workers own AO-managed plain-directory workspaces. Every session commits to one interface mode at a time. A TUI session runs its agent inside a native PTY/ConPTY (legacy/fallback tmux) runtime; a Chat session runs a native protocol controller without an agent terminal runtime. Codex and all ACP Chat processes live in detached per-session hosts so daemon/desktop replacement reconnects without stopping an in-flight turn. The ACP host additionally preserves connection setup, JSON-RPC correlation, pending interactions, and acknowledged prompt replay while the replacement daemon rebuilds its typed controller. A durable handoff may move a compatible native conversation between TUI and Chat, but both controllers are never live at once. The daemon coordinates both through the same session, lifecycle, workspace, storage, and observation boundaries.
 
 ## Table of Contents
 
@@ -87,10 +87,10 @@ graph TB
 
     subgraph Adapters["Adapters"]
         AgentAdapter[Agent Adapters]
-        RuntimeAdapter[Runtime tmux/conpty]
+        RuntimeAdapter[Runtime native PTY / ConPTY / tmux]
         ChatDriver[Native Chat / ACP Drivers]
         WorkspaceAdapter[Git worktree / standalone directory]
-        SCMAdapter[SCM GitHub]
+        SCMAdapter[SCM GitHub/GitLab]
     end
 
     FE -->|REST/SSE| Controllers
@@ -202,7 +202,7 @@ backend/internal/
 ├── session_manager/     # Internal session command engine
 ├── lifecycle/           # Durable session fact reducer
 ├── observe/             # Observation loops
-│   ├── scm/             # SCM (GitHub) observer
+│   ├── scm/             # SCM (GitHub/GitLab) observer
 │   └── reaper/          # Runtime liveness observer
 ├── storage/             # SQLite persistence
 │   └── sqlite/          # DB, migrations, queries, stores
@@ -212,10 +212,10 @@ backend/internal/
 ├── adapters/            # Concrete adapter implementations
 │   ├── agent/           # 23+ agent harnesses
 │   ├── chatdriver/      # Native provider protocols and reusable ACP transport
-│   ├── runtime/         # tmux/conpty runtimes
+│   ├── runtime/         # native PTY/ConPTY (legacy/fallback tmux) runtimes
 │   ├── workspace/       # git worktree and standalone-directory adapters
-│   ├── scm/             # GitHub
-│   └── tracker/         # GitHub tracker
+│   ├── scm/             # GitHub/GitLab
+│   └── tracker/         # GitHub/GitLab trackers
 ├── daemon/              # Production wiring
 └── config/              # Environment-based configuration
 ```
@@ -265,7 +265,7 @@ sequenceDiagram
     alt persisted mode = tui
         Note over Mgr: 3a. Launch terminal controller
         Mgr->>Runtime: Create(session)
-        Runtime->>Runtime: Start tmux/conpty
+        Runtime->>Runtime: Start native PTY/ConPTY (legacy/fallback tmux)
         Mgr->>Agent: GetLaunchCommand()
         Agent-->>Mgr: launch command
         Mgr->>Runtime: Execute(agent command)
@@ -307,7 +307,7 @@ flowchart TD
     CreateRow --> Trigger1[CDC: session.created]
     CreateRow --> CreateWS[Create git worktree or standalone directory]
     CreateWS --> LaunchMode{Persisted mode}
-    LaunchMode -->|tui| CreateRT[Launch runtime tmux/conpty]
+    LaunchMode -->|tui| CreateRT[Launch native PTY / ConPTY / tmux]
     CreateRT --> GetCmd[Get agent launch command]
     GetCmd --> ExecAgent[Execute agent in runtime]
     LaunchMode -->|chat| ChatController[Start or resume provider controller]
@@ -833,7 +833,7 @@ flowchart TD
 flowchart LR
     subgraph External["External State"]
         GitHub[GitHub API]
-        Runtimes[tmux/conpty]
+        Runtimes[native PTY / ConPTY / tmux]
     end
 
     subgraph Observers["Observation Layer"]
@@ -912,7 +912,7 @@ flowchart TD
 The daemon runs two independent HTTP listeners sharing the same chi router:
 
 1. **Primary (Loopback) Listener** — binds `127.0.0.1:3001` with no authentication. All existing daemon operations (CLI, desktop app) use this listener.
-2. **LAN Listener** (Connect Mobile) — an opt-in second listener that binds `0.0.0.0:3011` (or ephemeral fallback) **only when explicitly enabled** by the user through the desktop app's Settings. It wraps the shared router in bearer-password authentication middleware, serves app API routes to mobile clients, but never exposes loopback-gated control routes (`/shutdown`, telemetry, mobile control commands). All traffic is plaintext HTTP on a home network only, by deliberate security decision — see `docs/adr/0001-lan-listener-for-mobile.md` for rationale and threat model. Auth state (hashed password, per-source lockout) is persisted to `~/.ao/mobile/config.json` and restored on daemon boot.
+2. **LAN Listener** (Connect Mobile) — an opt-in second listener that binds `0.0.0.0:3011` (or ephemeral fallback) **only when explicitly enabled** through desktop settings. Bearer-password middleware protects the app API; loopback-gated shutdown, telemetry, mobile-control, and browser-control routes remain unavailable. Exactly `GET /api/v1/identity` is public for host/contract verification. Direct LAN transport is plaintext for trusted networks; managed cloudflared and Tailscale TLS endpoints wrap the authenticated mobile path. The rotating password is persisted in a mode-`0600` file at `AO_DATA_DIR/mobile/config.json` (normally `~/.ao/data/mobile/config.json`); its comparison hash is in memory. See the [current access guide](../frontend/src/docs/content/configuration/remote-access.mdx) and [historical LAN ADR](adr/0001-lan-listener-for-mobile.md).
 
 The mobile app is a second thin renderer over those same session resources. It
 branches on the session's persisted `mode`: TUI attaches the existing mux PTY,
@@ -987,15 +987,15 @@ flowchart TD
 
     subgraph Runtime
         TMux[tmux Runtime]
-        MacPTY[macOS native PTY Host]
+        MacPTY[macOS/Linux native PTY Host]
         ConPTY[conpty Runtime]
     end
 
     Browser -->|WebSocket| WS
     WS -->|attach| Mux
     Mux --> Sessions
-    Sessions -->|create| TMux
-    Sessions -->|create new macOS| MacPTY
+    Sessions -->|legacy or startup fallback| TMux
+    Sessions -->|create new macOS/Linux| MacPTY
     Sessions -->|create| ConPTY
 
     TMux -->|PTY attach| Mux
@@ -1014,14 +1014,13 @@ sequenceDiagram
     participant Client as Browser
     participant WS as WebSocket Handler
     participant Mux as Terminal Mux
-    participant Runtime as tmux/conpty
+    participant Runtime as native PTY/ConPTY (legacy/fallback tmux)
 
     Client->>WS: WebSocket upgrade
     WS->>Mux: Attach(session, rows, cols)
     Mux->>Runtime: Attach(handle, rows, cols)
 
-    Runtime->>Runtime: Create PTY
-    Runtime->>Runtime: Spawn tmux attach
+    Runtime->>Runtime: Connect to detached host or create tmux attach PTY
 
     loop Data Loop
         Runtime->>Mux: PTY output
@@ -1035,7 +1034,7 @@ sequenceDiagram
 
     Client->>WS: Close
     WS->>Mux: Detach
-    Mux->>Runtime: Close PTY
+    Mux->>Runtime: Close attachment stream
 ```
 
 ## Browser Runtime Bridge
@@ -1050,6 +1049,8 @@ Electron attaches its debugger directly to the selected session's
 `WebContentsView`, so the protocol transport cannot enumerate or attach to the
 AO renderer or a different session. The loopback `/api/v1/browser` surface is
 blocked entirely on the opt-in LAN listener.
+
+Temporary browser profiles isolate sessions by default. Named persistent profiles can be reused across sessions, sharing their cookies/storage deliberately. Browser import reads supported source profiles without modifying them and stores results under AO data.
 
 Request observation is an explicit, temporary browser command rather than a
 standing debugger feature. Capture is off by default, bound to the active tab
@@ -1069,7 +1070,7 @@ These rules are **load-bearing** — changing them breaks fundamental architectu
 2. **Never treat failed probes as death** — A failed probe is a fact, not a termination signal
 3. **Never force-delete dirty worktrees** — User data safety over cleanup convenience
 4. **All app state under ~/.ao** — No OS-default app-data locations
-5. **Daemon binds to 127.0.0.1 only** — No network exposure, ever
+5. **Primary daemon stays on loopback** — Only the opt-in authenticated mobile path provides off-device access; control routes remain loopback-gated
 6. **CLI is thin** — All logic lives in the daemon, CLI is just an HTTP client
 7. **CDC is source-truth for events** — DB triggers write to change_log, poller fans out
 8. **Adapters are leaves** — Adapters never import core packages, only ports and domain

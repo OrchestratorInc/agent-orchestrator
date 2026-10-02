@@ -19,7 +19,8 @@ The agents still write the code. AO provides the control layer around them: proj
 - Send follow-up instructions to the right worker.
 - Run reviewer agents and route requested changes back to the worker.
 - Preview a session's local app beside its Chat or terminal.
-- Check and respond from the companion mobile app on your home network.
+- Schedule recurring work with Automations and reuse project instructions or shell commands with Cues.
+- Check and respond from the companion mobile app through Connect Mobile.
 
 AO works best when each worker has a clear, reviewable outcome: a focused bug, feature, refactor, test, documentation update, or review follow-up.
 
@@ -40,19 +41,21 @@ Every session has one active agent interface at a time:
 | **Chat** | Structured messages, activities, approvals, plans, usage, and conversation history. |
 | **Terminal UI** | The agent harness's native interactive terminal experience. |
 
-Chat is currently available for installed Codex, Claude Code, OpenCode, and Droid harnesses. Compatible Claude Code and Codex sessions can switch between Chat and Terminal UI without changing the AO session or worktree.
+Chat support depends on the harness and installed version; see the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui). Compatible sessions can switch interfaces without changing their session or worktree; the UI shows which transitions are available.
 
 ## Local By Design
 
 The desktop app runs a Go daemon on `127.0.0.1` and communicates with it over a local API. Durable product state, Electron data, and worktree metadata live under `~/.ao` by default. Your agent CLIs and source-control credentials remain your own; AO does not bundle provider CLIs.
 
-Connect Mobile is a separate, opt-in home-network listener protected by a connection password. It is off until you enable it in the desktop app.
+Connect Mobile is a separate, opt-in listener protected by a connection password. See [Connect Mobile](/configuration/remote-access) for local and secure remote pairing.
+
+These docs follow the current `main` branch; availability depends on your installed version. Cloud sessions are a separate, gated integration: they require an enabled build, account access, and a reachable control plane. Local sessions continue to use your machine; Cloud work executes remotely and has different data and account requirements.
 
 ## Supported Agents
 
 AO includes adapters for more than twenty agent harnesses, including Claude Code, Codex, Cursor, Aider, OpenCode, Droid, Kimi Code, GitHub Copilot, and others. Native Chat support is a smaller capability-gated subset; other harnesses use Terminal UI.
 
-GitHub is the currently shipped source-control observation path. Broader tracker and SCM integrations described in older AO documentation are not all available in the current daemon rewrite.
+GitHub and GitLab provide source-control observation and issue intake. Intake is opt-in and read-only toward the issue tracker; Linear and legacy Node plugin packages are not supported.
 
 ## Where To Go Next
 

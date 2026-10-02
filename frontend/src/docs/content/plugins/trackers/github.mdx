@@ -3,7 +3,7 @@ title: GitHub issue intake
 description: Opt-in, assignee-scoped worker creation from GitHub issues.
 ---
 
-GitHub is the only tracker provider supported by the current backend. The adapter reads issues using the user's existing GitHub authentication.
+This guide uses the GitHub tracker and your existing GitHub authentication. GitLab is also supported; select the provider explicitly for issue spawning or intake and follow [GitLab authentication](/plugins/scm).
 
 ## Configure intake
 
@@ -23,6 +23,8 @@ The provider defaults to `github`. When the repository is omitted, AO can derive
 With `AO_TRACKER_INTAKE` unset, that configuration is still stored and validated, but no sessions are spawned. The daemon logs a warning at startup naming how many projects are in that state.
 
 On the desktop app you do not start the daemon yourself, so set the variable where your login shell will export it, for example in `~/.zshrc`, then relaunch the app. AO probes the login shell and passes its environment through to the daemon it spawns. Note that the warning above is only written at daemon startup, so enabling intake on a project while the app is already running produces no notice until the next launch.
+
+`set-config` replaces the full stored config even when using focused flags. Preserve existing roles, setup, and review settings when enabling intake. For a single GitLab issue, use `ao spawn --project my-app --name issue-42 --tracker-provider gitlab --issue 42`; intake itself is optional.
 
 ## Current boundary
 

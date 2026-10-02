@@ -5,6 +5,6 @@ description: The built-in desktop terminal backed by AO's WebSocket mux.
 
 AO does not select between terminal plugins. The desktop app provides an xterm-based terminal surface and the daemon exposes a WebSocket terminal mux.
 
-For Terminal UI sessions, the mux attaches to the platform runtime: `tmux` on macOS/Linux and ConPTY on Windows. Structured Chat sessions can open a separate shell scoped to the same session worktree without creating an agent terminal pane.
+For Terminal UI sessions, the mux attaches to the platform runtime: native PTY hosts on macOS/Linux (tmux for legacy/fallback) and ConPTY on Windows. Structured Chat sessions can open a separate shell scoped to the same session worktree without creating an agent terminal pane.
 
 See [desktop terminal](/plugins/terminals/web) for connection behavior.

@@ -9,7 +9,7 @@ AO ships as a desktop application for macOS, Windows, and Linux. The core workfl
 	macos="full"
 	linux="full"
 	windows="full"
-	note={<>Terminal UI uses tmux on macOS/Linux and a native conpty host on Windows. Chat uses native provider controllers.</>}
+	note={<>New Terminal UI sessions use native PTY hosts on macOS/Linux and ConPTY on Windows. Legacy/fallback tmux remains supported. Agent availability varies by platform.</>}
 />
 
 ## Desktop Downloads
@@ -25,31 +25,21 @@ Use the download selector on [Installation](/installation) for the current relea
 
 ## macOS
 
-Both Chat and Terminal UI are supported. Install tmux if you want to use native terminal sessions:
+Both Chat and Terminal UI are supported, subject to the selected harness. New terminal sessions use a detached native PTY host. Packaged builds include tmux for compatibility and fallback; macOS spawn still validates its availability. Source launches can install it with:
 
 ```bash
 brew install tmux
 ```
 
-If you launch the app with `ao start` from a terminal and tmux is missing, it warns you and names this exact command to run.
+macOS packages include both a `.dmg` for first installation and a `.zip` used by the updater. Keep both release artifacts available.
 
-macOS packages include both a `.dmg` and `.zip`. The disk image is convenient for first installation; the zip is also part of the release because the desktop updater uses it for future updates.
-
-If macOS says the developer cannot be verified, follow the Gatekeeper steps in [Common Installation Problems](/installation#common-installation-problems).
+If macOS says the developer cannot be verified, follow [Common Installation Problems](/installation#common-installation-problems).
 
 ## Linux
 
-Linux supports the desktop app, Chat, tmux-backed Terminal UI, and the in-app browser inspector. Install tmux with your distribution package manager when needed:
+Linux supports the desktop app, Chat, native PTY terminal sessions, and the browser inspector. Existing tmux sessions and fallback launches still use tmux; desktop packages bundle it. Source users who need it can install it with their distribution package manager, for example `sudo apt install tmux`.
 
-```bash
-sudo apt install tmux
-```
-
-If you launch the app with `ao start` from a terminal and tmux is missing, it warns you and names the exact
-`sudo` command for whichever package manager it finds (`apt-get`, `dnf`, `pacman`, `zypper`, or `apk`). Run it
-yourself: AO never asks for your administrator password.
-
-Choose the AppImage for a portable launch, or the `.deb`/`.rpm` package that matches your distribution.
+Choose the AppImage for a portable launch, or the `.deb`/`.rpm` package that matches your distribution. `ao doctor` still probes tmux even though new Linux sessions normally use the native host.
 
 ## Windows
 
@@ -59,23 +49,25 @@ Use PowerShell, Command Prompt, or Git Bash for optional CLI commands. AO suppre
 
 ## Mobile Companion
 
-AO's Expo mobile app is a second interface to the desktop daemon, not a cloud relay. In desktop settings, choose **Connect Mobile** to enable a separate LAN listener and pair the phone.
+AO's Expo mobile app is a second interface to the desktop daemon. In desktop settings, choose **Connect Mobile** to enable a separate LAN listener and pair the phone.
 
 Security properties:
 
 - The LAN listener is off by default and exists only while Connect Mobile is enabled.
 - It is protected by a rotating connection password.
 - Scanning the pairing QR fills the advertised host, port, connection password, and any secure transport mode automatically. Treat the QR as a bearer credential: do not share it or screenshots of it, and rotate the connection password if it is exposed.
-- Traffic is plaintext HTTP and intended only for a trusted home network.
+- Direct LAN traffic is plaintext and belongs on a trusted network. Available secure Tailscale or managed connector endpoints are described in [Connect Mobile](/configuration/remote-access).
 - Daemon control, telemetry, and browser-control routes remain loopback-only.
 
 Mobile defaults new workers and orchestrators to Chat when the selected harness supports it. Terminal UI remains available as a compatibility choice.
 
 ## Remote And Server Use
 
-The desktop daemon's primary listener is deliberately bound to `127.0.0.1` without authentication. Do not expose it through a public bind or reverse proxy. Connect Mobile is the only built-in off-device listener and is deliberately limited to an explicitly enabled home-network workflow.
+The desktop daemon's primary listener is deliberately bound to `127.0.0.1` without authentication. Do not expose it through a public bind or reverse proxy. Connect Mobile provides a separate authenticated listener with advertised local or secure remote endpoints. Never publish the primary listener.
 
 For unattended work, keep the desktop host awake and reachable on its local network. AO does not turn the local desktop product into a hosted multi-user service.
+
+When Cloud is enabled for your build and account, its remote sessions use a separate control plane. Availability and provider choices are gated; local desktop installation alone does not grant Cloud access.
 
 ## Next
 

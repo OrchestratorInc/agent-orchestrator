@@ -15,3 +15,5 @@ The desktop notification center provides Unread and All views, pagination, live 
 Slack, Discord, generic webhook, Composio, OpenClaw, and standalone desktop notifier configuration from the legacy TypeScript release are not supported in the rewrite.
 
 See [notification center](/plugins/notifiers/dashboard) for the current behavior.
+
+Marking a notification read preserves history; clearing one or all removes it from the center. Paired mobile devices can receive push notifications when permission is granted and the daemon can reach the push service. Use Connect Mobile device controls to mute or unpair a device. This does not enable legacy Slack, Discord, or webhook notifier plugins.

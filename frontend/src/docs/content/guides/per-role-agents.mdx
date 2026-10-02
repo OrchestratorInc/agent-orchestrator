@@ -58,10 +58,12 @@ ao spawn --project my-project --kind worker \
 
 ## Choose Chat or Terminal UI
 
-- Use **Chat** for structured messages, provider activity, approvals, plans, changed files, usage, compaction, and rollback. Current native drivers cover Codex, Claude Code, OpenCode, and Droid.
+- Use **Chat** for structured messages, provider activity, approvals, plans, changed files, usage, compaction, and rollback. Chat support depends on the harness and installed version; see the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui).
 - Use **Terminal UI** when you want the agent's native interface or a harness without native Chat support.
 
-Compatible Claude Code and Codex sessions expose **Open Chat** or **Open Terminal UI**. Idle sessions switch directly. When work is active, AO asks whether to finish and drain it or stop and interrupt it before switching controllers.
+Compatible Claude Code and Codex sessions expose **Switch to chat UI** or **Switch to terminal UI**. Idle sessions switch directly. When work is active, AO asks whether to finish and drain it or stop and interrupt it before switching controllers.
+
+The default interface comes from **Settings → General**, not project `agentConfig.mode`. Explicit task/CLI mode wins; provider model, effort, permissions, and execution modes remain role-specific. Chat and handoff capabilities are separate, so use the switch action offered for the selected session.
 
 ## Project rules
 

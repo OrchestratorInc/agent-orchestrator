@@ -13,8 +13,9 @@ so the split is intentional rather than incidental.
 | Machine-readable contract | Coding agents, CI, generators | `openapi.yaml`, `AGENTS.md`, `skills/`, sqlc `gen/`             | Generated from source and/or checked by CI drift gates. |
 
 The rule of thumb: **if an artifact in the contract layer disagrees with prose,
-the contract layer wins**, because it is either generated from the code or gated
-in CI. Fix the prose.
+generated contracts and their source win** for implemented behavior. Handwritten
+operating rules and skills still need comparison with current code and tests;
+being listed in the contract layer does not make their prose drift-proof.
 
 ## Human-facing layer
 
@@ -29,10 +30,16 @@ in CI. Fix the prose.
 | [docs/STATUS.md](STATUS.md)                                 | What ships on `main` today and what is in flight.                            |
 | [docs/adr/](adr/)                                           | Architecture decision records: why a boundary exists, not just what it is.   |
 | https://docs.aoagents.dev                                          | Published product documentation for end users.                               |
+| [frontend/src/docs/content/](../frontend/src/docs/content/)  | MDX sources for the public manual; `meta.json` files preserve navigation and order. |
 
 These documents explain intent and rationale. They are reviewed by people and
 are not machine-checked, so treat them as the _why_ and confirm the _what_
 against the contract layer below.
+
+For capability claims, compare the worker, Chat-driver, and reviewer registries
+separately. For user flows, check the current renderer and daemon wiring as well
+as DTOs. The manual follows `main`; release availability and gated Cloud/mobile
+features still need verification against the installed build.
 
 ## Machine-readable contract layer
 

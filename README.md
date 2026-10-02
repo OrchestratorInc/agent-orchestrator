@@ -110,7 +110,7 @@ AO works with the coding agents and source-control workflow you already use. Age
   <tr>
     <td width="36%" valign="middle">
       <h3>Agent-controllable browser</h3>
-      <p>Preview and inspect a worker's local app beside its interface. Browser profiles are isolated per worker so parallel UI tasks do not share state.</p>
+      <p>Preview and inspect a worker's local app beside its interface. Temporary browser profiles are isolated per worker; named profiles deliberately reuse saved cookies and storage across sessions.</p>
     </td>
     <td width="64%">
       <img src="docs/assets/readme/browser.png" alt="A worker controlling its isolated in-app browser preview" width="100%" />
@@ -129,7 +129,7 @@ AO works with the coding agents and source-control workflow you already use. Age
 
 ## Supported agents
 
-**32 coding agents supported** through one supervised workflow.
+**Coding agent harnesses in one supervised workflow.** Worker, Chat, and reviewer support differ; see the capability catalog linked below for the current matrix.
 
 <table>
   <tr valign="middle">
@@ -185,7 +185,7 @@ AO works with the coding agents and source-control workflow you already use. Age
   <tr valign="middle">
     <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/gemini.svg" alt="Gemini CLI" width="24" height="24" align="middle" /> &nbsp; <b>Gemini CLI</b></td>
     <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/deepseek-harness.svg" alt="DeepSeek" width="24" height="24" align="middle" /> &nbsp; <b>DeepSeek</b></td>
-    <td valign="middle" nowrap></td>
+    <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/opencode.svg" alt="OpenCode 2" width="24" height="24" align="middle" /> &nbsp; <b>OpenCode 2</b></td>
   </tr>
 </table>
 
@@ -247,7 +247,7 @@ Join [Discord](https://discord.com/invite/UZv7JjxbwG) for help and contributor d
 
 ## Anonymous telemetry
 
-AO uses privacy-preserving product usage and reliability metrics designed to exclude PII and project content. These metrics help us understand adoption and improve the product. To understand which teams and developers get the most value from AO, we also record the GitHub organization or account that owns a project (the owner segment only, never the repository, path, or URL); for a personal repository this is the owner's own username, so that single field is not anonymous. We use it to prioritize improvements and reach out for feedback.
+AO uses limited product usage and reliability metrics designed to exclude project content, with the GitHub identity exceptions described below. These metrics help us understand adoption and improve the product. To understand which teams and developers get the most value from AO, we also record the GitHub organization or account that owns a project (the owner segment only, never the repository, path, or URL); for a personal repository this is the owner's own username, so that single field is not anonymous. We use it to prioritize improvements and reach out for feedback.
 
 AO also shares the GitHub username signed in to its GitHub integration on session-start events, so we can see which developers are most active and reach out for feedback. AO only sends a personal (human) account, never an organization or a bot token, and sends nothing if no GitHub token is available. The handle is part of product telemetry and has no separate control; turning telemetry off stops it along with everything else.
 

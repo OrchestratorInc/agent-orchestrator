@@ -1,10 +1,9 @@
 # Product telemetry
 
 AO collects limited product-usage and reliability data to learn which parts of
-the app are useful and whether releases are working as expected. The data is
-not account-linked: AO does not attach a name or email address. It is
-pseudonymous rather than unlinkable, because a random installation identifier
-lets events from the same installation be counted together over time.
+the app are useful and whether releases are working as expected. AO does not attach an email address, but the GitHub owner and authenticated
+username events described below can identify an account. Other events use a
+random installation identifier to group activity; telemetry is not wholly anonymous.
 
 Remote telemetry is enabled in production desktop and mobile releases. A
 packaged desktop release also enables telemetry for the daemon it starts.
@@ -55,7 +54,8 @@ available for aggregate analysis.
 The installation identifier lets PostHog group activity from one AO
 installation over time. Hashed project and session identifiers can likewise
 group events for the same project or session without sending those identifiers
-in plain text. Neither is linked to an AO account.
+in plain text. These hashes are distinct from the explicit GitHub account attribution on
+session-start events described below.
 
 ## What AO does not intentionally send
 

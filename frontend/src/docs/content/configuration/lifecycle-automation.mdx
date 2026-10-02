@@ -18,6 +18,21 @@ AO has built-in lifecycle automation. It is not currently a user-configurable `r
 
 Messages are signature-deduplicated, so an unchanged set of failures or comments is not sent on every poll. A changed failure set or changed unresolved feedback can produce a fresh nudge.
 
+Recurring **Automations** are separate from these event reactions. In the sidebar, create a definition with a project, prompt, harness/role, timezone, and schedule; inspect its run history, edit it, pause/resume it, or delete it. The CLI supports the same stored definitions:
+
+```bash
+ao automation create --project my-app --name "Daily checks" \
+  --prompt "Run the project checks and summarize failures" \
+  --cron "0 9 * * *" --timezone UTC
+ao automation list --project my-app
+ao automation runs <automation-id>
+ao automation update <automation-id> --enabled=false
+```
+
+Use exactly one supported five-field cron expression or RRULE, with an IANA timezone. Cron accepts numeric minute/hour, `*` for day-of-month/month, and a supported weekday selection; arbitrary cron ranges/steps are not accepted. RRULE rejects `COUNT`/`UNTIL` and intervals faster than one minute. It runs in the local daemon, so it cannot dispatch while the host is asleep or AO is stopped. On recovery it catches up at most three missed occurrences; runs of the same definition are coordinated to avoid overlapping dispatch. Deleting a definition also deletes its run history.
+
+Project **Cues** provide reusable instructions or exact shell commands for manual invocation, not schedules. An agent Cue targets an eligible session or starts a worker; a command Cue opens a fresh local terminal. Manage these from the project Cues dialog and use **Run a cue** in a session.
+
 ## Mode-aware delivery
 
 Lifecycle messages go through the same session manager as user messages:
@@ -29,7 +44,7 @@ AO does not run both controllers at once. A handoff between compatible interface
 
 ## Notifications
 
-The desktop notification center keeps durable read/unread history for input requests, merge-ready PRs, merged PRs, and PRs closed without merging. Electron also shows an app toast while the app is running.
+The desktop notification center keeps durable read/unread history for input requests, merge-ready PRs, merged PRs, and PRs closed without merging. Electron also shows an app toast while the app is running. Marking read retains history; clear-one and clear-all remove records from the center. Paired phones can receive push notifications when their permissions, device mute setting, and daemon connectivity allow.
 
 AO does not currently configure Slack, Discord, webhook notifiers, per-reaction retry budgets, or automatic merge from project config. Merge explicitly from the desktop or with:
 
@@ -41,8 +56,10 @@ ao pr merge <pr-number>
 
 SCM observation and AO reviewer agents are related but distinct:
 
-- The GitHub observer watches a claimed PR and feeds CI/review/merge facts into lifecycle.
+- The GitHub/GitLab observer watches a claimed PR/MR and feeds CI/review/merge facts into lifecycle.
 - AO review runs launch a configured reviewer agent against a worker PR. Use the desktop Reviews view or `ao review trigger`, `ao review ls`, and `ao review cancel`.
+
+`autoReview` is a project default copied into new worker sessions; each session also has its own toggle. Automatic review waits for an eligible PR head and an idle worker. It does not automatically merge or convert every workspace inspection into a published review. Reviewer support is listed in the [agent catalog](/plugins/agents).
 
 <Cards>
 	<Card title="CI recovery" href="/guides/ci-recovery" description="Follow the built-in CI feedback loop." />

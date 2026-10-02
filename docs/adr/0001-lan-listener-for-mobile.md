@@ -3,6 +3,15 @@
 Date: 2026-07-07
 Status: Accepted
 
+Implementation note (2026-10-03): this ADR records the original LAN decision.
+Current Connect Mobile also advertises managed remote/Tailscale secure endpoints
+around the authenticated listener; the primary listener remains loopback-only.
+The implementation persists the rotating password in a mode-`0600` file and
+derives its comparison hash in memory, rather than persisting only a hash.
+See the [current access guide](../../frontend/src/docs/content/configuration/remote-access.mdx)
+and [identity-probe ADR](0003-unauthenticated-identity-probe.md). The historical
+decision below is retained for context.
+
 ## Context
 
 The daemon binds `127.0.0.1` only. AGENTS.md carries a hard rule: _"The daemon is
