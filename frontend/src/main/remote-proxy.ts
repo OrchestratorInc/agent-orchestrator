@@ -21,6 +21,7 @@ export type ActiveProxy = {
 	base: string;
 	listeningAddress?: string;
 	previewUrl: (sessionId: string, sourceUrl: string) => string;
+	resolvePreviewUrl: (sessionId: string, viewedUrl: string) => string;
 	close: () => Promise<void>;
 };
 
@@ -121,7 +122,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	const prefix = upstream.pathname.replace(/\/+$/, "");
 	const server: Server = createServer();
 	const previewHosts = new Map<string, PreviewTarget>();
-	const previewSessions = new Map<string, { host: string; sourceUrl: string; url: string }>();
+	const previewSessions = new Map<string, { host: string; sourceUrl: string; sourceHref: string; url: string }>();
 	const tunnels = new Set<() => void>();
 	// Allow slow uploads; SSE response timeouts are disabled on the upstream request below.
 	server.requestTimeout = 0;
@@ -365,8 +366,20 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			const host = `ao-preview-${randomBytes(16).toString("hex")}.localhost:${port}`;
 			previewHosts.set(host, { sessionId, kind, entry: parsed.pathname });
 			const url = `http://${host}${parsed.pathname}${parsed.search}${parsed.hash}`;
-			previewSessions.set(sessionId, { host, sourceUrl, url });
+			previewSessions.set(sessionId, { host, sourceUrl, sourceHref: parsed.href, url });
 			return url;
+		},
+		resolvePreviewUrl: (sessionId, viewedUrl) => {
+			let viewed: URL;
+			try { viewed = new URL(viewedUrl); } catch { return viewedUrl; }
+			if (!/^ao-preview-[0-9a-f]{32}\.localhost$/.test(viewed.hostname)) return viewedUrl;
+			const active = previewSessions.get(sessionId);
+			if (!active || viewed.origin !== new URL(active.url).origin) return "";
+			const source = new URL(active.sourceHref);
+			source.pathname = viewed.pathname;
+			source.search = viewed.search;
+			source.hash = viewed.hash;
+			return source.href;
 		},
 		close: () =>
 			new Promise((resolve) => {

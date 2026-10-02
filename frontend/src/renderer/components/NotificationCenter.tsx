@@ -30,9 +30,7 @@ import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import type { WorkspaceSummary } from "../types/workspace";
 import { aoBridge } from "../lib/bridge";
-import { apiErrorMessage } from "../lib/api-client";
 import { formatTimeCompact } from "../lib/format-time";
-import { clientForHost } from "../lib/host-clients";
 import { LOCAL_HOST, parseRefKey, refKey, sessionUiKey, type HostId } from "../lib/hosts";
 import {
 	createNotificationsTransport,
@@ -54,7 +52,7 @@ import { TopbarButton } from "./TopbarButton";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useCloudNotifications } from "../hooks/useCloudNotifications";
-import { fetchRemoteNotificationsPage, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
+import { clearRemoteNotification, clearRemoteNotifications, connectRemoteNotificationStreams, fetchRemoteNotificationsPage, markRemoteNotificationsRead, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
 
 type SessionMeta = { projectId: string; projectName: string; sessionName: string };
@@ -208,6 +206,7 @@ export function NotificationRuntime() {
 		() => createNotificationsTransport(queryClient, getVisibleAgentSessionId).connect(),
 		[getVisibleAgentSessionId, queryClient],
 	);
+	useEffect(() => connectRemoteNotificationStreams(queryClient), [queryClient]);
 
 	// Keep the OS launcher badge in sync here rather than in NotificationCenter:
 	// NotificationRuntime is always mounted in the shell, whereas the notification
@@ -221,8 +220,10 @@ export function NotificationRuntime() {
 			if (!host.data) continue;
 			const currentIds = new Set(host.data.notifications.map((item) => item.id));
 			const previousIds = seenRemoteIds.current.get(host.hostId);
-			seenRemoteIds.current.set(host.hostId, currentIds);
-			if (!previousIds) continue; // Reconnecting to a host must not replay its existing inbox.
+			if (!previousIds) {
+				seenRemoteIds.current.set(host.hostId, currentIds);
+				continue; // Reconnecting to a host must not replay its existing inbox.
+			}
 			for (const notification of host.data.notifications) {
 				if (previousIds.has(notification.id)) continue;
 				const id = `${REMOTE_NOTIFICATION_PREFIX}${notificationKey(host.hostId, notification.id)}`;
@@ -241,6 +242,11 @@ export function NotificationRuntime() {
 					type: notification.type,
 					watched,
 				});
+			}
+			for (const id of currentIds) {
+				previousIds.delete(id);
+				previousIds.add(id);
+				if (previousIds.size > 512) previousIds.delete(previousIds.values().next().value!);
 			}
 		}
 	}, [remoteUnread.hosts]);
@@ -430,10 +436,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			});
 			void (async () => {
 				try {
-					const { error } = await clientForHost(host.hostId).POST("/api/v1/notifications/read-all", { body: { ids: unreadIds } });
-					if (error) throw new Error(apiErrorMessage(error, "Could not mark notifications read"));
-					await queryClient.invalidateQueries({ queryKey: remoteNotificationsQueryKey(host.hostId, "unread") });
-					await queryClient.invalidateQueries({ queryKey: remoteNotificationsQueryKey(host.hostId, "all") });
+					await markRemoteNotificationsRead(host.hostId, unreadIds, queryClient);
 				} catch (error) {
 					for (const id of unreadIds) acknowledgedRemoteIdsRef.current.delete(notificationKey(host.hostId, id));
 					setMarkReadError(`${host.label}: ${error instanceof Error ? error.message : t("notify.couldNotMarkAllRead")}`);
@@ -564,10 +567,10 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			...(clearLocal ? [clearAll.mutateAsync()] : []),
 			...(clearCloud ? [clearCloud()] : []),
 			...remoteAll.hosts.map(async (host) => {
-				const { error } = await clientForHost(host.hostId).DELETE("/api/v1/notifications");
-				if (error) throw new Error(`${host.label}: ${apiErrorMessage(error, t("notify.couldNotClearAll"))}`);
+				await clearRemoteNotifications(host.hostId, queryClient).catch((error: unknown) => {
+					throw new Error(`${host.label}: ${error instanceof Error ? error.message : t("notify.couldNotClearAll")}`);
+				});
 				setRemoteOlderPages((current) => ({ ...current, [host.hostId]: [] }));
-				await queryClient.invalidateQueries({ queryKey: ["remote-notifications", host.hostId] });
 			}),
 		]).then((results) => {
 			const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
@@ -580,10 +583,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		const key = notificationKey(hostId, notification.id);
 		setClearingNotificationIds((current) => new Set(current).add(key));
 		void (hostId === LOCAL_HOST ? clearOne.mutateAsync(notification) : (async () => {
-			const { error, response } = await clientForHost(hostId).DELETE("/api/v1/notifications/{id}", {
-				params: { path: { id: notification.id } },
-			});
-			if (error && response.status !== 404) throw new Error(apiErrorMessage(error, t("notify.couldNotClearOne")));
+			await clearRemoteNotification(hostId, notification.id, queryClient);
 			remoteHistoryGeneration.current += 1;
 			setRemoteLoadingEarlierHost(null);
 			setRemoteOlderPages((current) => ({
@@ -592,7 +592,6 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 					...page, notifications: page.notifications.filter((item) => item.id !== notification.id),
 				})),
 			}));
-			await queryClient.invalidateQueries({ queryKey: ["remote-notifications", hostId] });
 		})())
 			.catch((error: unknown) => {
 				setActionError(error instanceof Error ? error.message : t("notify.couldNotClearOne"));
@@ -739,7 +738,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						</button>
 					</div>
 				) : null}
-				{localLoadFailed && !isEmpty ? (
+				{(localLoadFailed || remoteLoadFailed) && !isEmpty ? (
 					<div
 						aria-live="polite"
 						className="flex items-center justify-between gap-2 border-b border-border bg-error/5 px-4 py-2 text-caption text-error"
@@ -747,7 +746,12 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						<span>{t("notify.loadFailed")}</span>
 						<button
 							className="shrink-0 font-medium underline underline-offset-2 hover:text-foreground"
-							onClick={() => void allQuery.refetch()}
+							onClick={() => {
+								if (localLoadFailed) void allQuery.refetch();
+								for (const host of remoteAll.hosts) {
+									if (host.isError) void queryClient.invalidateQueries({ queryKey: remoteNotificationsQueryKey(host.hostId, "all") });
+								}
+							}}
 							type="button"
 						>
 							{t("notify.retry")}

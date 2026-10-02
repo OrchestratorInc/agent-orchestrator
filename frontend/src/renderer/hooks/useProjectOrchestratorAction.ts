@@ -18,6 +18,7 @@ import { useCanResumeAgent } from "./useCanResumeAgent";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { sessionUiKey } from "../lib/hosts";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
+import { useConnectedHosts } from "./useHostConnection";
 
 export function useProjectOrchestratorAction({
 	projectId,
@@ -37,6 +38,8 @@ export function useProjectOrchestratorAction({
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
+	const connectedHosts = useConnectedHosts();
+	const hostConnected = !hostId || connectedHosts.includes(hostId);
 	const mutationKey = hostId ? ["project-orchestrator-open", hostId, projectId] : ["project-orchestrator-open", projectId];
 	const routeKey = `${hostId ?? "local"}/${projectId ?? ""}/${sessionId ?? ""}`;
 	const activeRoute = useRef<string | null>(routeKey);
@@ -82,7 +85,7 @@ export function useProjectOrchestratorAction({
 			if (!projectId) return;
 			setStartupError(projectId, null, hostId);
 			const openedSessionId = hostId
-				? await openRemoteOrchestrator(hostId, projectId, orchestrator, mode)
+				? await openRemoteOrchestrator(hostId, projectId, orchestrator, mode, false, source)
 				: resumableOrchestrator
 				? (await resumeOrchestrator(resumableOrchestrator.id), resumableOrchestrator.id)
 				: project?.kind === CLOUD_PROJECT_KIND
@@ -106,7 +109,7 @@ export function useProjectOrchestratorAction({
 		},
 	});
 	const openOrchestrator = (mode?: "tui") => {
-		if (!projectId || isProjectRestarting || isProvisioning) return;
+		if (!projectId || !hostConnected || isProjectRestarting || isProvisioning) return;
 		// Read the cache synchronously as well as disabling both rendered copies.
 		// Two clicks in the same render must still produce just one request.
 		if (queryClient.isMutating({ mutationKey, exact: true })) return;
@@ -128,7 +131,7 @@ export function useProjectOrchestratorAction({
 		}
 	};
 	const openNewTask = () => {
-		if (projectId && !isProjectRestarting && !isProvisioning) useUiStore.getState().requestNewTask(projectId, hostId);
+		if (projectId && hostConnected && !isProjectRestarting && !isProvisioning) useUiStore.getState().requestNewTask(projectId, hostId);
 	};
 	return { orchestrator, isSpawning, isProjectRestarting, isProvisioning, spawnError,
 		canCreateAsTui: isChatPreflightError(error), openOrchestrator, openNewTask };

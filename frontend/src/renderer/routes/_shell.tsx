@@ -369,7 +369,7 @@ function ShellLayout() {
 	// rounded center panel. Settings owns its complete frame and remains
 	// self-framed.
 	const selfFramedCenterPanel = isSettingsRoute;
-	const hideShellTopbar = isHomeRoute || selfFramedCenterPanel || shellTopbarHiddenByPlatform || Boolean(routeParams.hostId);
+	const hideShellTopbar = isHomeRoute || selfFramedCenterPanel || shellTopbarHiddenByPlatform;
 	const restartingProjectIds = useUiStore((state) => state.restartingProjectIds);
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const orchestratorReplacementErrors = useUiStore((state) => state.orchestratorReplacementErrors);
@@ -1091,9 +1091,11 @@ function ShellLayout() {
 						requestNewTask(STANDALONE_WORKSPACE_ID, remoteAddProjectHostId);
 						setRemoteAddProjectHostId(null);
 					}}
-					onCreated={(projectId, orchestratorReady) => {
+					onCreated={(projectId, orchestratorSessionId) => {
 						void queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(remoteAddProjectHostId) });
-						if (!orchestratorReady) void navigate(projectNavigateTarget(projectId, remoteAddProjectHostId));
+						void navigate(orchestratorSessionId
+							? sessionNavigateTarget(projectId, orchestratorSessionId, remoteAddProjectHostId)
+							: projectNavigateTarget(projectId, remoteAddProjectHostId));
 					}}
 					onOpenChange={(open) => { if (!open) setRemoteAddProjectHostId(null); }}
 				/>}
@@ -1178,7 +1180,6 @@ function ShellLayout() {
 						remoteHosts={remoteHosts}
 						onAddRemoteProject={setRemoteAddProjectHostId}
 						onOpenRemoteProject={(hostId, projectId) => { void navigate(projectNavigateTarget(projectId, hostId)); }}
-						onNewRemoteTask={(hostId, projectId) => requestNewTask(projectId, hostId)}
 						onOpenRemoteOrchestrator={(hostId, projectId) => { void openRemoteProjectOrchestrator(hostId, projectId); }}
 						onConfigureRemoteProject={(hostId, projectId) => openProjectSettings(projectId, hostId)}
 						onRemoveRemoteProject={removeRemoteProject}

@@ -136,7 +136,7 @@ export function CreateProjectAgentSheet({
 		displayedOnBack.current = onBack;
 	}
 	const agentsQuery = useAgentReadinessQuery(contentOpen && connected, hostId);
-	useEnsureAgentReadiness({ enabled: contentOpen && connected, hostId, purpose: hostId ? "launch" : "display" });
+	useEnsureAgentReadiness({ enabled: contentOpen && connected, hostId });
 	const agents = agentsQuery.data;
 	const agentOptions = useMemo(() => agents?.agents ?? [], [agents]);
 	const selectableAgents = useMemo(() => hostId ? agentOptions.filter(isLaunchableAgent) : agentOptions, [agentOptions, hostId]);
@@ -164,7 +164,7 @@ export function CreateProjectAgentSheet({
 			? agentsQuery.error.message
 			: t("createProject.couldNotLoadAgents")
 		: null;
-	const displayError = agentsError ?? (hostId && agents && selectableAgents.length === 0 ? "No available agents on this host." : null);
+	const displayError = agentsError ?? (hostId && agents && selectableAgents.length === 0 ? t("agentSelector.noneReady") : null);
 	const [workerAgent, setWorkerAgent] = useState("");
 	const [orchestratorAgent, setOrchestratorAgent] = useState("");
 	const [workerAgentTouched, setWorkerAgentTouched] = useState(false);
@@ -173,10 +173,11 @@ export function CreateProjectAgentSheet({
 		agentIds: [workerAgent, orchestratorAgent],
 		enabled: contentOpen && connected && (workerAgent !== "" || orchestratorAgent !== ""),
 		hostId,
+		purpose: hostId ? "launch" : "display",
 	});
 	const isBusy = isCreating || isInitializing;
 	const [intake, setIntake] = useState<IntakeForm>(EMPTY_INTAKE);
-	const { settings } = useSettings();
+	const { settings } = useSettings(hostId);
 	const intakeVisible = !!settings?.trackerIntakeEnabled;
 	const intakeIncomplete = intakeVisible && intakeNeedsRule(intake);
 	const canSubmit =

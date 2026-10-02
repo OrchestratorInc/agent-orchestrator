@@ -139,6 +139,7 @@ export function HarnessSettingsSection({
 	const { t } = useTranslation();
 	const { cloudEnabled } = useCloudGate();
 	const [view, setView] = useState<HarnessView>(initialView);
+	const [search, setSearch] = useState("");
 	useEffect(() => setView(initialView), [initialView]);
 	const cloudView = cloudEnabled && view === "cloud";
 	const connected = useConnectedHosts();
@@ -146,26 +147,30 @@ export function HarnessSettingsSection({
 	useEffect(() => setSelectedHostId(hostId ?? LOCAL_HOST), [hostId]);
 	const remoteOffline = selectedHostId !== LOCAL_HOST && !connected.includes(selectedHostId);
 	return <SettingsSection title={t("settings.harness")} titleHidden={titleHidden} sectionId="harness">
-		<div className="flex items-center gap-2">
-			{!cloudView && (connected.length > 0 || remoteOffline) ? <SettingsOptionMenu
+		<div className="sticky top-0 z-10 flex items-center gap-2 bg-card pb-2">
+			<label className="flex h-9! min-w-0 flex-1 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3">
+				<Search aria-hidden="true" className="size-4 shrink-0 text-settings-muted" />
+				<span className="sr-only">{t("settings.harness.search")}</span>
+				<input aria-label={t("settings.harness.search")} className="min-w-0 flex-1 bg-transparent text-sm text-settings-label outline-none placeholder:text-settings-muted" placeholder={t("settings.harness.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
+			</label>
+			{cloudEnabled ? <Tabs value={cloudView ? "cloud" : "local"} onValueChange={(value) => setView(value as HarnessView)}><TabsList aria-label={t("settings.harness.viewLabel")}><TabsTrigger value="local">{t("settings.harness.viewLocal")}</TabsTrigger><TabsTrigger value="cloud">{t("settings.harness.viewCloud")}</TabsTrigger></TabsList></Tabs> : null}
+		</div>
+		{!cloudView && (connected.length > 0 || remoteOffline) ? <SettingsOptionMenu
 				aria-label={t("remote.host")}
 				value={selectedHostId}
 				options={[{ value: LOCAL_HOST, label: t("settings.harness.thisComputer") }, ...connected.map((id) => ({ value: id, label: labelForHost(id) ?? id })), ...(remoteOffline ? [{ value: selectedHostId, label: t("remote.hostLabel", { hostId: selectedHostId }) }] : [])]}
 				onChange={setSelectedHostId}
 				triggerClassName="w-fit max-w-full"
 			/> : null}
-			{cloudEnabled ? <Tabs value={cloudView ? "cloud" : "local"} onValueChange={(value) => setView(value as HarnessView)}><TabsList aria-label={t("settings.harness.viewLabel")}><TabsTrigger value="local">{t("settings.harness.viewLocal")}</TabsTrigger><TabsTrigger value="cloud">{t("settings.harness.viewCloud")}</TabsTrigger></TabsList></Tabs> : null}
-		</div>
 		{!cloudView && selectedHostId !== LOCAL_HOST && !remoteOffline ? <p className="text-xs text-muted-foreground">{t("settings.harness.remoteBrowserAuthNote")}</p> : null}
-		{cloudView ? <CloudHarnessContent focusAgentId={focusAgentId} /> : remoteOffline ? <p className="text-xs text-error" role="alert">{t("remote.hostOffline")}</p> : <LocalHarnessContent key={selectedHostId} focusAgentId={focusAgentId} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} />}
+		{cloudView ? <CloudHarnessContent focusAgentId={focusAgentId} search={search} /> : remoteOffline ? <p className="text-xs text-error" role="alert">{t("remote.hostOffline")}</p> : <LocalHarnessContent key={selectedHostId} focusAgentId={focusAgentId} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} search={search} />}
 	</SettingsSection>;
 }
 
-function CloudHarnessContent({ focusAgentId }: { focusAgentId?: string }) {
+function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: string; search: string }) {
 	const { t } = useTranslation();
 	const { org } = useCloudOrg();
 	const connections = useProviderConnections();
-	const [search, setSearch] = useState("");
 	const [loginAgent, setLoginAgent] = useState<CloudHarness | null>(null);
 	const [highlightedAgentId, setHighlightedAgentId] = useState<AgentId | null>(null);
 	const rowsRef = useRef<HTMLDivElement>(null);
@@ -187,11 +192,6 @@ function CloudHarnessContent({ focusAgentId }: { focusAgentId?: string }) {
 	}, [connections.isPending, org?.id, targetAgentId]);
 
 	return <>
-		<label className="flex h-9! items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3">
-			<Search aria-hidden="true" className="size-4 shrink-0 text-settings-muted" />
-			<span className="sr-only">{t("settings.harness.search")}</span>
-			<input aria-label={t("settings.harness.search")} className="min-w-0 flex-1 bg-transparent text-sm text-settings-label outline-none placeholder:text-settings-muted" placeholder={t("settings.harness.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
-		</label>
 		{!org?.id ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.cloudAgents.signIn")}</p>
 			: connections.error ? <p className="px-3 py-6 text-sm text-error" role="alert">{String(connections.error)}</p>
 			: connections.isPending ? null
@@ -220,7 +220,7 @@ function CloudHarnessContent({ focusAgentId }: { focusAgentId?: string }) {
 	</>;
 }
 
-function LocalHarnessContent({ focusAgentId, hostId }: { focusAgentId?: string; hostId?: string }) {
+function LocalHarnessContent({ focusAgentId, hostId, search }: { focusAgentId?: string; hostId?: string; search: string }) {
 	const { i18n, t } = useTranslation();
 	const queryClient = useQueryClient();
 	const client = clientForSessionHost(hostId);
@@ -234,7 +234,6 @@ function LocalHarnessContent({ focusAgentId, hostId }: { focusAgentId?: string; 
 	const jobs = useQuery({ queryKey: jobsKey, queryFn: () => fetchInstallJobs(hostId), retry: false });
 	const authPlans = useAgentAuthPlans(hostId);
 	const startAgentAuth = useStartAgentAuth(hostId);
-	const [search, setSearch] = useState("");
 	const [authStates, setAuthStates] = useState<AgentAuthStates>({});
 	const [actionErrors, setActionErrors] = useState<Partial<Record<AgentId, string>>>({});
 	const [selectedMethods, setSelectedMethods] = useState<Partial<Record<AgentId, string>>>({});
@@ -596,14 +595,6 @@ function LocalHarnessContent({ focusAgentId, hostId }: { focusAgentId?: string; 
 
 	return (
 		<>
-			<div className="sticky top-0 z-10 flex items-center gap-2 bg-card pb-2">
-				<label className="flex h-9! min-w-0 flex-1 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3">
-					<Search aria-hidden="true" className="size-4 shrink-0 text-settings-muted" />
-					<span className="sr-only">{t("settings.harness.search")}</span>
-					<input aria-label={t("settings.harness.search")} className="min-w-0 flex-1 bg-transparent text-sm text-settings-label outline-none placeholder:text-settings-muted" placeholder={t("settings.harness.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
-				</label>
-			</div>
-
 			{installers.error || authPlans.error || agents.error || jobs.error ? (
 				<div className="flex items-center gap-2 rounded-md border border-error/30 bg-error/10 px-3 py-2 text-xs text-error">
 					<TriangleAlert className="size-4" aria-hidden="true" />

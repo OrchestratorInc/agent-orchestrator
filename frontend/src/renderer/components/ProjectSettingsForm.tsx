@@ -98,13 +98,13 @@ export function ProjectSettingsForm({
 
 	return (
 		<>
-			{!hostConnected ? (
-				<p role="alert" className="text-pretty text-sm text-error">{t("remote.hostOffline")}</p>
-			) : query.isLoading ? (
+			{!hostConnected ? <p role="alert" className="text-pretty text-sm text-error">{t("remote.hostOffline")}</p> : null}
+			{!query.data && hostConnected && query.isLoading ? (
 				<p className="text-sm text-settings-muted">{t("settings.project.loading")}</p>
-			) : query.isError || !query.data ? (
+			) : !query.data && hostConnected ? (
 				<p className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p>
-			) : (
+			) : query.data ? (
+				<div hidden={!hostConnected}>
 				<SettingsBody
 					key={refKey({ host: hostId ?? LOCAL_HOST, id: projectId })}
 					project={query.data}
@@ -115,10 +115,12 @@ export function ProjectSettingsForm({
 					}
 					projectId={projectId}
 					hostId={hostId}
+					hostConnected={hostConnected}
 					section={section}
 					onSaveState={onSaveState}
 				/>
-			)}
+				</div>
+			) : null}
 		</>
 	);
 }
@@ -127,6 +129,7 @@ function SettingsBody({
 	project,
 	projectId,
 	hostId,
+	hostConnected,
 	onSaved,
 	section = "general",
 	onSaveState,
@@ -134,6 +137,7 @@ function SettingsBody({
 	project: Project;
 	projectId: string;
 	hostId?: string;
+	hostConnected: boolean;
 	onSaved: () => Promise<void>;
 	section?: ProjectSettingsSection;
 	onSaveState?: (state: ProjectSettingsSaveState) => void;
@@ -190,11 +194,12 @@ function SettingsBody({
 	});
 	const missingRequiredAgent = form.workerAgent === "" || form.orchestratorAgent === "";
 	const agentsQuery = useAgentReadinessQuery(true, hostId);
-	useEnsureAgentReadiness({ hostId, ...(hostId ? { purpose: "launch" as const } : {}) });
+	useEnsureAgentReadiness({ hostId });
 	useEnsureAgentReadiness({
 		agentIds: [form.workerAgent, form.orchestratorAgent, form.reviewerHarness],
 		enabled: form.workerAgent !== "" || form.orchestratorAgent !== "" || form.reviewerHarness !== "",
 		hostId,
+		purpose: hostId ? "launch" : "display",
 	});
 	const agentCatalog = agentsQuery.data;
 	const selectableAgents = hostId ? agentCatalog?.agents.filter(isLaunchableAgent) : agentCatalog?.agents;
@@ -309,7 +314,7 @@ function SettingsBody({
 				replacementAttemptedRef.current = true;
 				try {
 					const sessionId = hostId
-						? await openRemoteOrchestrator(hostId, projectId, undefined, undefined, true)
+						? await openRemoteOrchestrator(hostId, projectId, undefined, undefined, true, "settings")
 						: await spawnOrchestrator(projectId, "settings", true);
 					replacementFailedRef.current = false;
 					return {
@@ -383,6 +388,7 @@ function SettingsBody({
 	}, [mutation.isPending]);
 
 	useEffect(() => {
+		if (!hostConnected) return;
 		const key = JSON.stringify(form);
 		if (key === lastSavedRef.current || key === failedKeyRef.current || mutation.isPending) return;
 		const timeout = window.setTimeout(() => {
@@ -413,7 +419,7 @@ function SettingsBody({
 			mutation.mutate(form);
 		}, 650);
 		return () => window.clearTimeout(timeout);
-	}, [form, isScratchProject, mutation.isPending, project.name, t, tuningValidity]);
+	}, [form, hostConnected, isScratchProject, mutation.isPending, project.name, t, tuningValidity]);
 
 	useEffect(() => {
 		const mutationError = mutation.isError ? (mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")) : undefined;
@@ -461,6 +467,7 @@ function SettingsBody({
 			id="project-settings-form"
 			className="project-settings-form gap-5"
 			onSubmit={() => {
+				if (!hostConnected) return;
 				setSavedAt(null);
 				setReplacementError(null);
 				const validation = validateProjectSettings(form, {

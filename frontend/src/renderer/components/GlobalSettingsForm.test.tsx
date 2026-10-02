@@ -215,12 +215,6 @@ describe("GlobalSettingsForm", () => {
 		expect(harnessSettingsSectionMock).toHaveBeenCalledWith({ focusAgentId: "cursor", titleHidden: true });
 	});
 
-	it("propagates a remote host through the settings catalog", async () => {
-		renderForm("harness", "codex", "box-a");
-		expect(await screen.findByTestId("harness-settings-section")).toBeInTheDocument();
-		expect(harnessSettingsSectionMock).toHaveBeenCalledWith({ focusAgentId: "codex", hostId: "box-a", titleHidden: true });
-	});
-
 	it("keeps Browser in its dedicated settings page", async () => {
 		renderForm("general");
 		expect(await screen.findByLabelText("Settings")).toBeInTheDocument();

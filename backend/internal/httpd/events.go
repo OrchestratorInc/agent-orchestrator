@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -124,15 +123,15 @@ func (c *EventsController) stream(w http.ResponseWriter, r *http.Request) {
 	// stream is instant directly. The bulk replay always arrives because it is
 	// large enough to flush on its own.
 	//
-	// A comment frame is the SSE no-op — clients ignore it and no cursor moves —
-	// and it carries any buffered event out with it.
+	// A named heartbeat lets remote clients verify that an intermediary actually
+	// delivers stream frames; it does not move the cursor.
 	heartbeat := time.NewTicker(eventsHeartbeatInterval)
 	defer heartbeat.Stop()
 
 	for {
 		select {
 		case <-heartbeat.C:
-			if _, err := io.WriteString(w, ":\n\n"); err != nil {
+			if _, err := fmt.Fprint(w, "event: heartbeat\ndata: {}\n\n"); err != nil {
 				return
 			}
 			flusher.Flush()

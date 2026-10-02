@@ -4,7 +4,7 @@ import type { WorkspaceSession } from "../types/workspace";
 
 const mocks = vi.hoisted(() => ({ post: vi.fn(), selectedHosts: [] as string[] }));
 vi.mock("./host-clients", () => ({
-	clientForHost: (hostId: string) => {
+	clientForSessionHost: (hostId: string) => {
 		mocks.selectedHosts.push(hostId);
 		return { POST: mocks.post };
 	},
@@ -22,7 +22,7 @@ it("deduplicates concurrent spawns for one host and project", async () => {
 	const second = openRemoteOrchestrator("box-b", "shared");
 	expect(first).toBe(second);
 	expect(mocks.selectedHosts).toEqual(["box-b"]);
-	expect(mocks.post).toHaveBeenCalledWith("/api/v1/orchestrators", { body: { projectId: "shared" } });
+	expect(mocks.post).toHaveBeenCalledWith("/api/v1/orchestrators", { body: { projectId: "shared", clean: false } });
 	finish({ data: { orchestrator: { id: "orch-b" } } });
 	await expect(first).resolves.toBe("orch-b");
 });

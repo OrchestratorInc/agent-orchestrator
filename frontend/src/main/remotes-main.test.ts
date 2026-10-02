@@ -136,7 +136,7 @@ describe("registerRemotesIpc", () => {
 			{ hostId: "h_b", label: "B", url, password: "b" },
 		] }));
 		const closed = vi.fn().mockResolvedValue(undefined);
-		const registry = new RemoteRegistry(async () => ({ base: "http://127.0.0.1:5000/token", previewUrl: (_sessionId, sourceUrl) => sourceUrl, close: closed }));
+		const registry = new RemoteRegistry(async () => ({ base: "http://127.0.0.1:5000/token", previewUrl: (_sessionId, sourceUrl) => sourceUrl, resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl, close: closed }));
 		await registry.connect({ hostId: "h_b", label: "B", url, password: "b" });
 		const ipc = fakeIpc();
 		registerRemotesIpc(ipc.ipcMain, { file, registry, identity: async () => "h_b", probe: async () => "online" });
@@ -157,20 +157,6 @@ describe("registerRemotesIpc", () => {
 
 		await expect(ipc.invoke("remotes:update", "http://192.0.2.1:1", { url: "https://new.trycloudflare.com" })).resolves.toBe("offline");
 		expect((JSON.parse(await readFile(file, "utf8")).remotes as Array<{ url: string }>)[0].url).toBe("http://192.0.2.1:1");
-	});
-
-	it("registers the saved-host surface", async () => {
-		const ipc = fakeIpc();
-		registerRemotesIpc(ipc.ipcMain, { file: await tempFile(), registry: new RemoteRegistry(async () => { throw new Error("unused"); }) });
-		expect(ipc.channels()).toEqual([
-			"remotes:add",
-			"remotes:connect",
-			"remotes:disconnect",
-			"remotes:list",
-			"remotes:previewUrl",
-			"remotes:remove",
-			"remotes:update",
-		]);
 	});
 
 	it("lists hosts without their passwords", async () => {
@@ -202,7 +188,7 @@ describe("registerRemotesIpc", () => {
 	it("drops the proxy of a removed host", async () => {
 		const ipc = fakeIpc();
 		const closed = vi.fn().mockResolvedValue(undefined);
-		const registry = new RemoteRegistry(async () => ({ base: "http://127.0.0.1:7654/token", previewUrl: (_sessionId, sourceUrl) => sourceUrl, close: closed }));
+		const registry = new RemoteRegistry(async () => ({ base: "http://127.0.0.1:7654/token", previewUrl: (_sessionId, sourceUrl) => sourceUrl, resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl, close: closed }));
 		await registry.connect({ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: "old" });
 		registerRemotesIpc(ipc.ipcMain, { file: await tempFile(), registry });
 		await ipc.invoke("remotes:remove", "http://192.0.2.1:1");

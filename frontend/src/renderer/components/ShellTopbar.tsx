@@ -22,6 +22,7 @@ import {
 } from "../types/workspace";
 import { useWorkspaceQuery, useWorkspaceScope, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { sessionUiKey } from "../lib/hosts";
+import { labelForHost } from "../lib/host-clients";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { archivedStandaloneSessions } from "../lib/standalone-archive";
 import {
@@ -158,9 +159,7 @@ export function ShellTopbar({
 	const orchestratorTooltip = isProjectRestarting ? t("shell.restarting") : isSpawning
 		? t("shell.spawning") : orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestrator");
 
-	const openBoard = () =>
-		hostId && projectId ? void navigate({ to: "/host/$hostId/project/$projectId", params: { hostId, projectId } })
-			: projectId ? void navigate({ to: "/projects/$projectId", params: { projectId } }) : void navigate({ to: "/" });
+	const openBoard = () => void navigate(projectId ? projectNavigateTarget(projectId, hostId) : { to: "/" });
 
 	return (
 		<LayoutGroup id="shell-topbar">
@@ -207,6 +206,7 @@ export function ShellTopbar({
 							>
 								<LayoutDashboard aria-hidden="true" className="size-icon-md" />
 								{t("shell.board")}
+								{hostId ? <span className="truncate text-muted-foreground">· {labelForHost(hostId) ?? hostId}</span> : null}
 							</motion.span>
 						)}
 					</div>

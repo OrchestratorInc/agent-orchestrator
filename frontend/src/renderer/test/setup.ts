@@ -95,6 +95,7 @@ if (typeof window !== "undefined") {
 	Element.prototype.setPointerCapture = (() => undefined) as typeof Element.prototype.setPointerCapture;
 	Element.prototype.releasePointerCapture = (() => undefined) as typeof Element.prototype.releasePointerCapture;
 	Element.prototype.scrollIntoView = (() => undefined) as typeof Element.prototype.scrollIntoView;
+	document.elementFromPoint = (() => null) as typeof document.elementFromPoint;
 
 	window.ao = {
 		app: {
@@ -350,6 +351,7 @@ if (typeof window !== "undefined") {
 			connect: async () => { throw new Error("no remote hosts in test bridge"); },
 			disconnect: async () => undefined,
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
+			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 		},
 		cloud: {
 			getSession: async () => null,

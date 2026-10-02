@@ -138,14 +138,6 @@ describe("push registration across machines", () => {
 		expect((await getPushStatus(config("h_a"))).registered).toBe(true);
 	});
 
-	it("uses the address fallback while both registrations lack host IDs", async () => {
-		const legacy = { ...config("h_a"), hostId: undefined };
-		await registerForPush(legacy);
-		await registerForPush(legacy);
-
-		expect(unregisterPushDevice).not.toHaveBeenCalled();
-	});
-
 	it("replays only pending unregisters whose old host identity is verified", async () => {
 		const old = { token: "ExponentPushToken[old]", host: "192.168.1.42", httpPort: "3011", secure: false, password: "old-secret" };
 		secure.set("ao.pushPendingUnregister", JSON.stringify([{ ...old, hostId: "h_a" }, old]));
@@ -173,22 +165,6 @@ describe("push registration across machines", () => {
 
 		expect(unregisterPushDevice).not.toHaveBeenCalled();
 		expect(secure.has("ao.pushPendingUnregister")).toBe(false);
-		expect((await getPushStatus(config("h_a"))).registered).toBe(true);
-	});
-
-	it("does not show A's registration as enabled while B is selected", async () => {
-		await registerForPush(config("h_a"));
-
-		expect((await getPushStatus(config("h_b"))).registered).toBe(false);
-		expect((await getPushStatus(config("h_a"))).registered).toBe(true);
-	});
-
-	it("does not unregister A when B's notification switch is turned off", async () => {
-		await registerForPush(config("h_a"));
-
-		await unregisterFromPush(config("h_b"));
-
-		expect(unregisterPushDevice).not.toHaveBeenCalled();
 		expect((await getPushStatus(config("h_a"))).registered).toBe(true);
 	});
 

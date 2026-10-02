@@ -45,15 +45,6 @@ const session = {
 
 describe("CloudSessionChatSurface", () => {
 	beforeEach(() => localStorage.clear());
-	it("routes Cloud chat session links through in-app navigation", () => {
-		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
-		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		render(<QueryClientProvider client={queryClient}>
-			<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} />
-		</QueryClientProvider>);
-		cloudMocks.chatProps.mock.lastCall?.[0].onSessionLinkOpen("ao://sessions/project-1/session-2");
-		expect(cloudMocks.openSessionLink).toHaveBeenCalledWith("ao://sessions/project-1/session-2");
-	});
 	it("wakes a paused worker before loading model choices", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockReset()

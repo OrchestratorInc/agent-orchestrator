@@ -93,4 +93,6 @@ export function registerRemotesIpc(
 	ipcMain.handle("remotes:disconnect", async (_event, url: string) => ordered(() => disconnect(url)));
 	ipcMain.handle("remotes:previewUrl", async (_event, hostId: string, sessionId: string, sourceUrl: string) =>
 		registry.previewUrl(hostId, sessionId, sourceUrl));
+	ipcMain.handle("remotes:resolvePreviewUrl", async (_event, hostId: string, sessionId: string, viewedUrl: string) =>
+		registry.resolvePreviewUrl(hostId, sessionId, viewedUrl));
 }

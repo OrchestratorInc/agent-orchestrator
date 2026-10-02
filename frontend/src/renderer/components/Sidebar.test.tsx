@@ -515,7 +515,7 @@ afterEach(() => {
 });
 
 describe("Sidebar", () => {
-	it("shows the Projects plus button with host choices when there are no local projects", async () => {
+	it("keeps remote project creation in the sidebar without changing the generic chooser", async () => {
 		const onAddRemoteProject = vi.fn();
 		const user = userEvent.setup();
 		renderSidebar({
@@ -529,8 +529,9 @@ describe("Sidebar", () => {
 
 		await user.click(screen.getByRole("button", { name: "New project" }));
 		const chooser = await screen.findByRole("dialog");
-		expect(within(chooser).getByRole("button", { name: "Add project on Host A" })).toBeInTheDocument();
-		await user.click(within(chooser).getByRole("button", { name: "Add project on Host B" }));
+		expect(within(chooser).queryByRole("button", { name: "Add project on Host A" })).not.toBeInTheDocument();
+		await user.keyboard("{Escape}");
+		await user.click(screen.getByRole("button", { name: "Add project on Host B" }));
 		expect(onAddRemoteProject).toHaveBeenCalledWith("box-b");
 	});
 

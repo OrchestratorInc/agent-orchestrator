@@ -9,9 +9,8 @@ const { getApiBaseUrlMock, hasTrustedApiBaseUrlMock, subscribeApiBaseUrlMock, un
 		unsubscribeBaseUrlMock: vi.fn(),
 	}),
 );
-const { baseUrlForHostMock, isQuickTunnelHostMock, subscribeConnectedHostsMock } = vi.hoisted(() => ({
+const { baseUrlForHostMock, subscribeConnectedHostsMock } = vi.hoisted(() => ({
 	baseUrlForHostMock: vi.fn((_hostId: string): string | undefined => undefined),
-	isQuickTunnelHostMock: vi.fn((_hostId: string): boolean => false),
 	subscribeConnectedHostsMock: vi.fn(),
 }));
 
@@ -22,7 +21,6 @@ vi.mock("./api-client", () => ({
 }));
 vi.mock("./host-clients", () => ({
 	baseUrlForHost: baseUrlForHostMock,
-	isQuickTunnelHost: isQuickTunnelHostMock,
 	subscribeConnectedHosts: subscribeConnectedHostsMock,
 }));
 
@@ -83,7 +81,6 @@ beforeEach(() => {
 	});
 	unsubscribeBaseUrlMock.mockReset();
 	baseUrlForHostMock.mockReset().mockReturnValue(undefined);
-	isQuickTunnelHostMock.mockReset().mockReturnValue(false);
 	subscribeConnectedHostsMock.mockReset().mockImplementation((listener: () => void) => {
 		hostListeners.push(listener);
 		return () => { hostListeners = hostListeners.filter((candidate) => candidate !== listener); };
@@ -98,19 +95,17 @@ afterEach(() => {
 });
 
 describe("subscribeWorkspaceFileChanges", () => {
-	it("polls workspace files over a quick tunnel, then returns to SSE on a direct path", () => {
+	it("polls while probing, then uses SSE after a delivered frame", () => {
 		vi.useFakeTimers();
 		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/host-a");
-		isQuickTunnelHostMock.mockReturnValue(true);
 		const queryClient = fakeQueryClient();
 		const stop = subscribeWorkspaceFileChanges("session-a", queryClient, "host-a");
-		expect(EventSourceStub.instances).toHaveLength(0);
+		expect(EventSourceStub.instances).toHaveLength(1);
 		expect(getWorkspaceFileConnectionState("session-a", "host-a")).toBe("connected");
 		vi.advanceTimersByTime(2_150);
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "host-a", "session-a"] });
-		isQuickTunnelHostMock.mockReturnValue(false);
-		hostListeners[0]();
-		expect(EventSourceStub.instances).toHaveLength(1);
+		EventSourceStub.instances[0].dispatch("ready");
+		vi.advanceTimersByTime(150);
 		vi.mocked(queryClient.invalidateQueries).mockClear();
 		vi.advanceTimersByTime(2_150);
 		expect(queryClient.invalidateQueries).not.toHaveBeenCalled();
@@ -128,6 +123,8 @@ describe("subscribeWorkspaceFileChanges", () => {
 			"http://127.0.0.1:4000/host-a/api/v1/sessions/same/workspace/events",
 			"http://127.0.0.1:4000/host-b/api/v1/sessions/same/workspace/events",
 		]);
+		vi.advanceTimersByTime(150);
+		vi.mocked(queryClient.invalidateQueries).mockClear();
 		EventSourceStub.instances[0].dispatch("workspace_changed");
 		vi.advanceTimersByTime(150);
 		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "host-a", "same"] });

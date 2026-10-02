@@ -472,7 +472,6 @@ type SidebarProps = {
 	remoteHosts?: RemoteHost[];
 	onAddRemoteProject?: (hostId: string) => void;
 	onOpenRemoteProject?: (hostId: string, projectId: string) => void;
-	onNewRemoteTask?: (hostId: string, projectId: string) => void;
 	onOpenRemoteOrchestrator?: (hostId: string, projectId: string) => void;
 	onConfigureRemoteProject?: (hostId: string, projectId: string) => void;
 	onRemoveRemoteProject?: (hostId: string, projectId: string) => Promise<void>;
@@ -584,7 +583,6 @@ export function Sidebar({
 	remoteHosts = [],
 	onAddRemoteProject = () => undefined,
 	onOpenRemoteProject = () => undefined,
-	onNewRemoteTask = () => undefined,
 	onOpenRemoteOrchestrator = () => undefined,
 	onConfigureRemoteProject = () => undefined,
 	onRemoveRemoteProject = async () => undefined,
@@ -644,6 +642,7 @@ export function Sidebar({
 	// Disclosure state is persisted as the IDs of projects that were expanded.
 	// An empty/missing store intentionally means all projects start collapsed.
 	const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => readExpandedProjectIds());
+	const [collapsedRemoteProjects, setCollapsedRemoteProjects] = useState<ReadonlySet<string>>(() => new Set());
 	const [dismissedInitialActiveProjectIds, setDismissedInitialActiveProjectIds] = useState<ReadonlySet<string>>(
 		() => new Set(),
 	);
@@ -1021,8 +1020,6 @@ export function Sidebar({
 							<CreateProjectButton
 								existingProjectPaths={existingProjectPaths}
 								hideTrigger={workspaces.length === 0 && remoteHosts.length === 0}
-								remoteHosts={remoteHosts}
-								onAddRemoteProject={onAddRemoteProject}
 								onCloneProject={onCloneProject}
 								onCreateProject={onCreateProject}
 								onInitializeProject={onInitializeProject}
@@ -1080,20 +1077,43 @@ export function Sidebar({
 											workspaces={remoteWorkspaces}
 											failedHostIds={remoteFailedHostIds}
 											loadedProjectHostIds={remoteLoadedProjectHostIds}
-											activeHostId={selection.activeRemoteHostId}
-											activeProjectId={selection.activeRemoteProjectId}
-											activeSessionId={selection.activeRemoteSessionId}
-											onAddProject={onAddRemoteProject}
-											onOpenProject={onOpenRemoteProject}
-											onOpenHome={selection.goHome}
-											onNewTask={onNewRemoteTask}
-											onOrchestrator={onOpenRemoteOrchestrator}
-											onConfigure={onConfigureRemoteProject}
-											onRemoveProject={onRemoveRemoteProject}
-											onRetry={onRetryRemoteHosts}
-											onOpenSession={(hostId, projectId, sessionId) => {
-												void remoteNavigate(sessionNavigateTarget(projectId, sessionId, hostId));
+											renderProject={(host, workspace) => {
+												const hostId = host.hostId;
+												const projectKey = sessionUiKey(workspace.id, hostId);
+												const scopedSelection: Selection = {
+													...selection,
+													activeProjectId: selection.activeRemoteHostId === hostId ? selection.activeRemoteProjectId : undefined,
+													activeSessionId: selection.activeRemoteHostId === hostId ? selection.activeRemoteSessionId : undefined,
+												goProject: (projectId) => { onOpenRemoteProject(hostId, projectId); return undefined; },
+													goSession: (projectId, sessionId) => { void remoteNavigate(sessionNavigateTarget(projectId, sessionId, hostId)); },
+													goSettings: (projectId) => onConfigureRemoteProject(hostId, projectId),
+												};
+												return <ProjectItem
+													key={projectKey}
+													workspace={workspace}
+													hostLabel={host.label}
+													expanded={!collapsedRemoteProjects.has(projectKey)}
+													selection={scopedSelection}
+													isDragged={false}
+													projectDragInProgress={false}
+													consumeDragClick={() => false}
+													layoutSettled={layoutSettled}
+													onToggle={() => setCollapsedRemoteProjects((previous) => {
+														const next = new Set(previous);
+														next.has(projectKey) ? next.delete(projectKey) : next.add(projectKey);
+														return next;
+													})}
+													onRemoveProject={(projectId) => onRemoveRemoteProject(hostId, projectId)}
+													onOpenOrchestrator={() => onOpenRemoteOrchestrator(hostId, workspace.id)}
+													suppressInitialExpandAnimation
+													onProjectDragStart={() => undefined}
+													onProjectDragEnd={() => undefined}
+													onProjectDragOver={() => undefined}
+													onProjectDrop={() => undefined}
+												/>;
 											}}
+											onAddProject={onAddRemoteProject}
+											onRetry={onRetryRemoteHosts}
 										/>
 										{isCollapsed && <CreateProjectListItem />}
 										<div
@@ -1265,6 +1285,8 @@ type Selection = ReturnType<typeof useSelection>;
 
 type ProjectItemProps = {
 	workspace: WorkspaceSummary;
+	hostLabel?: string;
+	onOpenOrchestrator?: () => void;
 	expanded: boolean;
 	selection: Selection;
 	isDragged: boolean;
@@ -1282,6 +1304,8 @@ type ProjectItemProps = {
 
 const ProjectItem = memo(function ProjectItem({
 	workspace,
+	hostLabel,
+	onOpenOrchestrator,
 	expanded,
 	selection,
 	isDragged,
@@ -1297,6 +1321,8 @@ const ProjectItem = memo(function ProjectItem({
 	onProjectDrop,
 }: ProjectItemProps) {
 	const { t } = useTranslation();
+	const nameWithHost = hostLabel ? `${workspace.name} · ${hostLabel}` : workspace.name;
+	const isStandalone = workspace.id === STANDALONE_WORKSPACE_ID;
 	const prefersReducedMotion = useReducedMotion();
 	const activeProjectMatches = selection.activeProjectId === workspace.id;
 	const dashboardActive = activeProjectMatches && !selection.activeSessionId;
@@ -1320,8 +1346,9 @@ const ProjectItem = memo(function ProjectItem({
 		const id = window.setTimeout(() => setAnimReady(true), 500);
 		return () => window.clearTimeout(id);
 	}, []);
-	const isProjectProvisioning = useUiStore((state) => state.provisioningProjectIds.has(workspace.id));
-	const isProjectRestarting = useUiStore((state) => state.restartingProjectIds.has(workspace.id));
+	const projectKey = sessionUiKey(workspace.id, workspace.hostId);
+	const isProjectProvisioning = useUiStore((state) => state.provisioningProjectIds.has(projectKey));
+	const isProjectRestarting = useUiStore((state) => state.restartingProjectIds.has(projectKey));
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const projectIsDragging = isDragged;
@@ -1363,6 +1390,8 @@ const ProjectItem = memo(function ProjectItem({
 			const nextRoute = resolveNextNavigationAfterSessionKill(workspace, killedSession.id, sessions);
 			if (nextRoute.target === "session") {
 				selection.goSession(workspace.id, nextRoute.sessionId);
+			} else if (workspace.id === STANDALONE_WORKSPACE_ID) {
+				selection.goHome();
 			} else {
 				selection.goProject(workspace.id);
 			}
@@ -1372,7 +1401,7 @@ const ProjectItem = memo(function ProjectItem({
 	// The project's live orchestrator (if any) backs the hover Orchestrator
 	// button: navigate to it when present, otherwise spawn one first.
 	const orchestrator = newestActiveOrchestrator(workspace.sessions);
-	const canResumeOrchestrator = useCanResumeAgent(orchestrator);
+	const canResumeOrchestrator = useCanResumeAgent(orchestrator, workspace.hostId);
 	const toggleDisclosure = () => {
 		hasInteractedWithDisclosure.current = true;
 		onToggle(workspace.id);
@@ -1385,6 +1414,10 @@ const ProjectItem = memo(function ProjectItem({
 	const openOrchestrator = async () => {
 		if (isProjectProvisioning || isProjectRestarting) return;
 		if (!expanded) toggleDisclosure();
+		if (onOpenOrchestrator) {
+			onOpenOrchestrator();
+			return;
+		}
 		if (orchestrator) {
 			// Mirrors useProjectOrchestratorAction; both launchers must stay in step.
 			if (canResumeOrchestrator && workspace.kind !== "cloud") {
@@ -1445,6 +1478,10 @@ const ProjectItem = memo(function ProjectItem({
 	// one-click path back from the orchestrator button.
 	const onProjectClick = () => {
 		if (consumeDragClick(workspace.id)) return;
+		if (isStandalone) {
+			toggleDisclosure();
+			return;
+		}
 		if (!expanded) {
 			toggleDisclosure();
 			selection.goProject(workspace.id);
@@ -1501,6 +1538,8 @@ const ProjectItem = memo(function ProjectItem({
 					data-dragging={projectIsDragging ? "true" : undefined}
 					data-project-drop-target=""
 					data-project-id={workspace.id}
+					data-remote-project-row={workspace.hostId ? "" : undefined}
+					data-host-id={workspace.hostId}
 					data-sidebar="menu-item"
 					data-slot="sidebar-menu-item"
 					initial={{ opacity: 0, y: -4 }}
@@ -1518,7 +1557,7 @@ const ProjectItem = memo(function ProjectItem({
 						)}
 						data-project-drag-row=""
 						data-project-id={workspace.id}
-						draggable
+						draggable={!workspace.hostId}
 						onDragStart={(event) => onProjectDragStart(event, workspace.id)}
 						onDragEnd={onProjectDragEnd}
 					>
@@ -1526,17 +1565,18 @@ const ProjectItem = memo(function ProjectItem({
 							<div>
 								{/* project-sidebar__proj-row */}
 								<SidebarMenuButton
+									aria-label={hostLabel ? t(isStandalone ? "shell.toggleProject" : "shell.openProjectDashboard", { name: nameWithHost }) : undefined}
 									aria-current={dashboardActive ? "page" : undefined}
 									aria-expanded={expanded}
 									isActive={projectActive}
-									tooltip={workspace.name}
+									tooltip={nameWithHost}
 									onClick={onProjectClick}
 									className={cn(
 										NAV_ROW_CLASS,
 										NAV_ROW_HIGHLIGHT_HOST_CLASS,
 										// gap-2 matches SectionDisclosure so project icons/labels share the
 										// Projects header's left edge (NAV_ROW defaults to gap-2.5).
-										"cursor-grab active:cursor-grabbing",
+										!workspace.hostId && "cursor-grab active:cursor-grabbing",
 										"gap-2 pr-sidebar-project-actions [&_svg]:size-icon-md",
 										"transition-none",
 										projectIsDragging && "!cursor-grabbing",
@@ -1587,6 +1627,7 @@ const ProjectItem = memo(function ProjectItem({
 									>
 										{workspace.name}
 									</span>
+									{hostLabel && <Badge variant="outline" className="sidebar-expanded-chrome relative z-[1] h-4 shrink-0 px-1.5 text-2xs group-data-[collapsible=icon]:hidden">{hostLabel}</Badge>}
 									{workspace.kind === "cloud" && (
 										<Badge
 											variant="outline"
@@ -1600,7 +1641,7 @@ const ProjectItem = memo(function ProjectItem({
 	    the icon area so it intercepts clicks there without nesting buttons. */}
 								<button
 									aria-label={t("shell.toggleProject", {
-										name: workspace.name,
+										name: nameWithHost,
 									})}
 									aria-expanded={expanded}
 									className="absolute inset-y-0 left-0 z-10 w-9 cursor-pointer bg-transparent group-data-[collapsible=icon]:hidden"
@@ -1611,7 +1652,7 @@ const ProjectItem = memo(function ProjectItem({
 							</div>
 							{/* Per-project actions: orchestrator and kebab menu. Outside the row's
 		navigation surface so their own presses stay independent. */}
-							<div
+						{!isStandalone && <div
 								className={cn(
 									"sidebar-expanded-chrome absolute top-0 right-0.5 z-chrome flex h-control-form items-center gap-px",
 									"group-data-[collapsible=icon]:hidden",
@@ -1630,10 +1671,10 @@ const ProjectItem = memo(function ProjectItem({
 												aria-label={
 													orchestrator
 														? t("shell.openProjectOrchestrator", {
-																name: workspace.name,
+														name: nameWithHost,
 															})
 														: t("shell.spawnProjectOrchestrator", {
-																name: workspace.name,
+														name: nameWithHost,
 															})
 												}
 													className={cn(HOVER_ACTION_CLASS, orchestratorActive && "text-foreground")}
@@ -1659,7 +1700,7 @@ const ProjectItem = memo(function ProjectItem({
 									<DropdownMenuTrigger asChild>
 										<button
 											aria-label={t("shell.projectActions", {
-												name: workspace.name,
+														name: nameWithHost,
 											})}
 											className={HOVER_ACTION_CLASS}
 											type="button"
@@ -1668,7 +1709,7 @@ const ProjectItem = memo(function ProjectItem({
 										</button>
 									</DropdownMenuTrigger>
 									<DropdownMenuContent side="right" align="start" className="min-w-44">
-										<DropdownMenuItem disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id)}>
+										<DropdownMenuItem disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id, workspace.hostId)}>
 											<Plus aria-hidden="true" />
 											{t("shell.newTask")}
 										</DropdownMenuItem>
@@ -1686,7 +1727,7 @@ const ProjectItem = memo(function ProjectItem({
 										</DropdownMenuItem>
 									</DropdownMenuContent>
 								</DropdownMenu>
-							</div>
+							</div>}
 						</div>
 						{/* end outer relative */}
 					</div>
@@ -1726,8 +1767,8 @@ const ProjectItem = memo(function ProjectItem({
 						transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.14, ease: [0.25, 0.46, 0.45, 0.94] }}
 					>
 											<SessionReorderList
-												dndId={sessionDndId(workspace.id)}
-												testId={`session-list-${workspace.id}`}
+										dndId={sessionDndId(projectKey)}
+										testId={`session-list-${projectKey}`}
 												className={cn(
 													"mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 pt-1",
 													hiddenSessionCount > 0 ? "pb-px" : "pb-1",
@@ -1787,22 +1828,22 @@ const ProjectItem = memo(function ProjectItem({
 				</motion.li>
 			</ContextMenuTrigger>
 			<ContextMenuContent className="min-w-44">
-				<ContextMenuItem disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id)}>
+				<ContextMenuItem disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id, workspace.hostId)}>
 					<Plus aria-hidden="true" />
 					{t("shell.newTask")}
 				</ContextMenuItem>
-				<ContextMenuItem onSelect={() => selection.goSettings(workspace.id)}>
+				{!isStandalone && <ContextMenuItem onSelect={() => selection.goSettings(workspace.id)}>
 					<Settings aria-hidden="true" />
 					{t("shell.projectSettings")}
-				</ContextMenuItem>
-				<ContextMenuItem
+				</ContextMenuItem>}
+				{!isStandalone && <ContextMenuItem
 					className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
 					disabled={isRemoving}
 					onSelect={() => void removeProject()}
 				>
 					<Trash2 aria-hidden="true" />
 					{t("shell.removeProjectTitle")}
-				</ContextMenuItem>
+				</ContextMenuItem>}
 			</ContextMenuContent>
 		</ContextMenu>
 	);
@@ -2309,6 +2350,7 @@ function SessionRow({
 					<div className={cn("relative z-[1] flex min-w-0 flex-1", reorder?.isDragging && "cursor-grabbing")}>
 						<button
 							aria-current={active ? "page" : undefined}
+							data-testid={session.hostId ? "remote-session-row" : undefined}
 							aria-describedby={describedBy}
 							aria-keyshortcuts="F2"
 							aria-label={t("shell.openSession", { title: hostLabel ? `${session.title} · ${hostLabel}` : session.title })}
@@ -3161,13 +3203,11 @@ function SidebarSearchButton({ onOpen }: { onOpen: () => void }) {
 function CreateProjectButton({
 	existingProjectPaths,
 	hideTrigger = false,
-	remoteHosts,
-	onAddRemoteProject,
 	onCloneProject,
 	onCreateProject,
 	onInitializeProject,
 	onOpenExistingProject,
-}: Pick<SidebarProps, "onCloneProject" | "onCreateProject" | "onInitializeProject" | "remoteHosts" | "onAddRemoteProject"> & {
+}: Pick<SidebarProps, "onCloneProject" | "onCreateProject" | "onInitializeProject"> & {
 	existingProjectPaths: readonly string[];
 	hideTrigger?: boolean;
 	onOpenExistingProject: (path: string) => void | Promise<void>;
@@ -3185,8 +3225,6 @@ function CreateProjectButton({
 			droppedPath={folderDropRequest}
 			existingProjectPaths={existingProjectPaths}
 			mode="choose"
-			remoteHosts={remoteHosts}
-			onAddRemoteProject={onAddRemoteProject}
 			onCloneProject={onCloneProject}
 			onCreateProject={onCreateProject}
 			onCreateStandaloneAgent={() => requestNewTask(STANDALONE_WORKSPACE_ID)}

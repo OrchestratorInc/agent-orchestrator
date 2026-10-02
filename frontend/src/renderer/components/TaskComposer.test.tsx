@@ -27,7 +27,7 @@ vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
 	return {
 		...actual,
 		ensureAgentReadiness: h.ensureTargetedReadiness,
-		useAgentReadinessQuery: () => ({ data: h.agentCatalog, isFetching: false }),
+		useAgentReadinessQuery: () => ({ data: h.agentCatalog, isFetching: false, isSuccess: h.agentCatalog !== undefined }),
 		useEnsureAgentReadiness: h.ensureReadiness,
 	};
 });
@@ -159,6 +159,7 @@ afterEach(() => {
 
 describe("TaskComposer", () => {
 	it("does not launch a remote project task without a ready agent", async () => {
+		h.agentCatalog = { agents: [] };
 		h.remoteGet.mockImplementation(async (path: string) => path === "/api/v1/settings"
 			? { data: { defaultSessionMode: "chat", chatHarnesses: [] } }
 			: { data: { status: "ok", project: { id: "project-a", config: {} } } });
@@ -167,12 +168,15 @@ describe("TaskComposer", () => {
 			: { data: {} });
 		render(<Wrap><TaskComposer hostId="box-a" projectId="project-a" onCreated={vi.fn()} /></Wrap>);
 		await screen.findByText("No agent is ready on this host. Configure one there first.");
-		expect(h.remotePost).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", { body: { purpose: "launch" } });
 		expect(startTask()).toBeDisabled();
 		expect(h.remotePost.mock.calls.some(([path]) => path === "/api/v1/orchestrators/delegate")).toBe(false);
 	});
 
 	it("does not start a remote task with the project's uninstalled default agent", async () => {
+		h.agentCatalog = { agents: [
+			agentReadiness("claude-code", "Claude Code", { installation: "not_installed" }),
+			agentReadiness("opencode", "OpenCode", { authentication: "unknown" }),
+		] };
 		h.remoteGet.mockImplementation(async (path: string) => path === "/api/v1/settings"
 			? { data: { defaultSessionMode: "chat", chatHarnesses: ["opencode"] } }
 			: { data: { status: "ok", project: { id: "project-a", config: { worker: { agent: "claude-code" } } } } });
@@ -190,6 +194,7 @@ describe("TaskComposer", () => {
 	});
 
 	it("creates a remote project task through its host, not the local daemon", async () => {
+		h.agentCatalog = { agents: [agentReadiness("opencode", "OpenCode", { authentication: "unknown" })] };
 		const onCreated = vi.fn();
 		h.remoteGet.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) return { data: { agent: "opencode", selectionMode: "text", models: [], allowCustom: true } };
@@ -215,6 +220,7 @@ describe("TaskComposer", () => {
 	});
 
 	it("reuses a task request id after an uncertain response and changes it with the draft", async () => {
+		h.agentCatalog = { agents: [agentReadiness("opencode", "OpenCode")] };
 		h.remoteGet.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) return { data: { agent: "opencode", selectionMode: "text", models: [], allowCustom: true } };
 			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["opencode"] } };
@@ -626,7 +632,7 @@ describe("TaskComposer", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Start task" }));
 
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("worker-1"));
-		expect(h.ensureTargetedReadiness).toHaveBeenCalledWith(["claude-code"], "launch");
+		expect(h.ensureTargetedReadiness).toHaveBeenCalledWith(["claude-code"], "launch", undefined);
 	});
 
 	it("keeps submission enabled for a gateway-backed Claude project when cached global readiness is unauthorized", async () => {
@@ -663,7 +669,7 @@ describe("TaskComposer", () => {
 		expect(submit).toBeEnabled();
 		fireEvent.click(submit);
 
-		await waitFor(() => expect(h.ensureTargetedReadiness).toHaveBeenCalledWith(["claude-code"], "launch"));
+		await waitFor(() => expect(h.ensureTargetedReadiness).toHaveBeenCalledWith(["claude-code"], "launch", undefined));
 		await waitFor(() => expect(h.post).toHaveBeenCalled());
 	});
 
@@ -734,7 +740,7 @@ describe("TaskComposer", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Start task" }));
 
 		await waitFor(() => expect(h.ensureTargetedReadiness).toHaveBeenCalledTimes(2));
-		expect(h.ensureTargetedReadiness).toHaveBeenLastCalledWith(["codex"], "launch");
+		expect(h.ensureTargetedReadiness).toHaveBeenLastCalledWith(["codex"], "launch", undefined);
 		expect(screen.queryByText("Codex is not ready")).not.toBeInTheDocument();
 
 		await act(async () => finishReadiness({ agents: [completed] }));

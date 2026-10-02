@@ -206,8 +206,20 @@ prune_old_releases() {
 }
 printf 'Installed AO host at %s\n' "$release"
 
+install_cli_link() {
+	[[ -z "${AO_HOST_INSTALL_DIR:-}" ]] || return 0
+	local link="$HOME/.local/bin/ao" target="$host_root/current/resources/daemon/ao"
+	mkdir -p "$(dirname "$link")"
+	if [[ ! -e "$link" && ! -L "$link" ]] || [[ -L "$link" && "$(readlink "$link")" == "$target" ]]; then
+		ln -sfn "$target" "$link"
+	else
+		printf 'Existing %s left unchanged; use %s directly.\n' "$link" "$target" >&2
+	fi
+}
+
 if "$install_only"; then
 	ln -sfn "$release" "$host_root/current"
+	install_cli_link
 	prune_old_releases
 	printf 'Start with: %s/resources/daemon/ao daemon\n' "$host_root/current"
 	exit 0
@@ -314,6 +326,7 @@ args=(remote-host enable)
 "$tunnel" && args+=(--tunnel-only)
 enable_output="$("$host_root/current/resources/daemon/ao" "${args[@]}")"
 printf '%s\n' "$enable_output"
+install_cli_link
 prune_old_releases
 if "$tunnel" && [[ "$enable_output" != *"Address: https://"* ]]; then
 	address=""

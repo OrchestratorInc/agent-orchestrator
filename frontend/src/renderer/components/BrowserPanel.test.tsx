@@ -1612,7 +1612,8 @@ describe("BrowserPanel", () => {
 		{ viewedHost: `ao-preview-${"b".repeat(32)}.localhost`, expectedUrl: "(unknown)" },
 	])("maps only this session's preview URL in annotation chat ($viewedHost)", async ({ viewedHost, expectedUrl }) => {
 		const ownPreview = `http://ao-preview-${"a".repeat(32)}.localhost:4321/`;
-		const previewUrl = vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue(ownPreview);
+		const resolvePreviewUrl = vi.spyOn(aoBridge.remotes, "resolvePreviewUrl").mockResolvedValue(expectedUrl === "(unknown)" ? "" : expectedUrl);
+		const previewUrl = vi.spyOn(aoBridge.remotes, "previewUrl");
 		try {
 			const { result } = renderHook(() => useBrowserAnnotationQueue({
 				sessionId: "sess-1", hostId: "host-1", sourcePreviewUrl: "http://localhost:5173/", navUrl: ownPreview,
@@ -1624,8 +1625,10 @@ describe("BrowserPanel", () => {
 			const message = (postMock.mock.calls[0][1].body as { message: string }).message;
 			expect(message).toContain(`URL: ${expectedUrl}`);
 			expect(message).not.toContain(viewedHost);
-			expect(previewUrl).toHaveBeenCalledWith("host-1", "sess-1", "http://localhost:5173/");
+			expect(resolvePreviewUrl).toHaveBeenCalledWith("host-1", "sess-1", payload.session.page.url);
+			expect(previewUrl).not.toHaveBeenCalled();
 		} finally {
+			resolvePreviewUrl.mockRestore();
 			previewUrl.mockRestore();
 		}
 	});

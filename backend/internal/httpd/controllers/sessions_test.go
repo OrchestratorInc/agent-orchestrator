@@ -3241,7 +3241,7 @@ func TestSessionsAPI_StreamWorkspaceChanges(t *testing.T) {
 	go func() {
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
-			if strings.HasPrefix(scanner.Text(), "event:") {
+			if scanner.Text() == "event: workspace_changed" {
 				event <- scanner.Text()
 				return
 			}

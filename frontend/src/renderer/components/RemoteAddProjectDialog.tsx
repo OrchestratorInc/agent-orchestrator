@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import type { components } from "../../api/schema";
-import { apiErrorMessage } from "../lib/api-client";
+import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { useUiStore } from "../stores/ui-store";
 import { CreateProjectFlow, type CreateProjectInput } from "./CreateProjectFlow";
@@ -10,7 +10,7 @@ export function RemoteAddProjectDialog({ hostId, hostLabel, connected, onCreated
 	hostId: string;
 	hostLabel: string;
 	connected: boolean;
-	onCreated: (projectId: string, ready: boolean) => void;
+	onCreated: (projectId: string, orchestratorSessionId?: string) => void;
 	onCreateStandaloneAgent: () => void;
 	onOpenChange: (open: boolean) => void;
 }) {
@@ -34,9 +34,9 @@ export function RemoteAddProjectDialog({ hostId, hostLabel, connected, onCreated
 				clonePreparationId: input.clonePreparationId,
 				config,
 			} });
-			if (error || !data?.project) throw new Error(apiErrorMessage(error, "Could not add project on this host."));
+			if (error || !data?.project) throw Object.assign(new Error(apiErrorMessage(error, "Could not add project on this host.")), { code: apiErrorCode(error) });
 			createdProjectId.current = data.project.id;
-			onCreated(data.project.id, false);
+			onCreated(data.project.id);
 		}
 		const projectId = createdProjectId.current;
 		setOrchestratorStartupError(projectId, null, hostId);
@@ -51,7 +51,7 @@ export function RemoteAddProjectDialog({ hostId, hostLabel, connected, onCreated
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(projectId, false, hostId);
 			setOrchestratorStartupError(projectId, null, hostId);
-			onCreated(projectId, true);
+			onCreated(projectId, data.orchestrator.id);
 		}).catch((cause) => {
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(projectId, false, hostId);
@@ -64,7 +64,7 @@ export function RemoteAddProjectDialog({ hostId, hostLabel, connected, onCreated
 	const initializeProject = async (path: string) => {
 		if (!connected) throw new Error(`Connect to ${hostLabel} before initializing a repository.`);
 		const { error } = await clientForHost(hostId).POST("/api/v1/projects/initialize", { body: { path } });
-		if (error) throw new Error(apiErrorMessage(error));
+		if (error) throw Object.assign(new Error(apiErrorMessage(error)), { code: apiErrorCode(error) });
 	};
 	return <CreateProjectFlow
 		mode="choose"

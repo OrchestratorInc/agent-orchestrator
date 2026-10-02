@@ -7,138 +7,54 @@ or new global database. The existing AO Cloud path is separate.
 
 ## Set up a host
 
-These are complete commands for a **fresh Ubuntu 24.04 x64 host**, run as a
-normal user with `sudo` access. The machine needs internet access and a working
-systemd user session. Do not run the installer as root. Windows is not a native
-host for this feature. macOS arm64/x64 is supported by the installer, but the
-fresh-machine build commands below are Linux-specific.
-
-| When | Host steps | Laptop app |
-| --- | --- | --- |
-| Right now, before this PR is released | 1 → 2A → 3 | Desktop build from this PR |
-| After this PR is merged **and** published | 1 → 2B → 3 | Updated released desktop app |
-
-The release one-liner cannot install this PR's unpublished daemon. Both paths
-use the same host installer and desktop-pairing steps.
-
-### 1. SSH in and prepare Ubuntu (both choices)
-
-From your laptop, replace the key path, user, and host address:
+These commands run on a **fresh Ubuntu 24.04 x64 VM** as a normal user with
+`sudo` access. SSH from your laptop first:
 
 ```bash
 ssh -i /path/to/private-key USER@HOST_ADDRESS
 ```
 
-Run the following **on the host**, not on the laptop:
+Then run **one** of the following on the VM. The first uses this PR's source
+branch before release; the second uses the verified published binary **only
+after this PR is merged and released**. Both install Ubuntu prerequisites,
+Cloudflare quick tunnel, an always-on user service, and print the address and
+password to enter on the laptop. The source build also installs Go and Node
+under your user account; the release path does not need build tools.
+
+Current PR/dev desktop:
 
 ```bash
-uname -s    # must print Linux
-uname -m    # must print x86_64 for these commands
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl git python3
-sudo loginctl enable-linger "$(id -un)"
-systemctl --user show-environment >/dev/null
+bash -c 'set -o pipefail; sudo apt-get update && sudo apt-get install -y curl && curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/codex/remote-hosts-integrated/scripts/bootstrap-self-hosted.sh | bash -s -- --source-ref codex/remote-hosts-integrated'
 ```
 
-If the last command fails, fix the host's systemd user session before
-continuing; the installer needs it to start AO and keep it running after SSH
-logout. The host must also remain powered on.
-
-For access **away from the host's private network**, install `cloudflared`
-before step 2 and use `--tunnel` in your chosen install command. On Ubuntu
-24.04, these are [Cloudflare's package-repository steps](https://pkg.cloudflare.com/):
+Published release/updated desktop:
 
 ```bash
-sudo mkdir -p --mode=0755 /usr/share/keyrings
-curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
-echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared noble main' | sudo tee /etc/apt/sources.list.d/cloudflared.list
-sudo apt-get update
-sudo apt-get install -y cloudflared
+bash -c 'set -o pipefail; sudo apt-get update && sudo apt-get install -y curl && curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash'
 ```
 
-On a trusted LAN or private VPN, skip `cloudflared` and omit `--tunnel`; never
-expose the direct plaintext listener to the public internet. `--tunnel` uses
-an HTTPS Cloudflare quick tunnel and binds AO's authenticated listener only
-to `127.0.0.1`. The quick-tunnel URL changes when it restarts.
+For a trusted LAN or private VPN only, add `--lan` after the script arguments
+(`bash -s -- --lan` for the release command). This skips Cloudflare and uses
+AO's password-protected but plaintext private-network listener; never expose
+that port to the public internet. Quick-tunnel URLs change when the tunnel
+restarts. The VM must remain powered on, and its systemd user session must be
+available. Windows is not a native host for this feature.
 
-### 2A. Install the current PR before release
+The bootstrap calls [the lower-level installer](../scripts/setup-self-hosted.sh),
+which verifies a published release's SHA-256 digest or uses the locally built
+host bundle. It installs AO under `~/.ao/host`, not a desktop window. It does
+**not** install an agent harness or copy provider/GitHub credentials from your
+laptop. It installs the `gh` CLI, but you must authenticate it separately.
+Re-run the same command to upgrade AO without deleting conversations.
 
-The source directory does **not** exist on a fresh host. First install build
-tools, then clone this PR branch into `~/ao-host-build`. The build is native:
-do it on the Ubuntu x64 host (or another Linux x64 builder), not on a macOS
-laptop for a Linux host. Go 1.27.1 is required by `backend/go.mod`; the
-commands below install Go and Node only under your user account. The Go
-checksum comes from [go.dev/dl](https://go.dev/dl/) and the Node checksum is
-checked against Node's published `SHASUMS256.txt`.
-
-```bash
-sudo apt-get install -y build-essential pkg-config xz-utils
-mkdir -p "$HOME/.local/ao-build-tools"
-cd "$HOME/.local/ao-build-tools"
-curl -fsSLO https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
-printf '%s  %s\n' 63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445 go1.27.1.linux-amd64.tar.gz | sha256sum -c -
-tar -xzf go1.27.1.linux-amd64.tar.gz
-curl -fsSLO https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-x64.tar.xz
-curl -fsSLO https://nodejs.org/dist/v22.23.2/SHASUMS256.txt
-grep '  node-v22.23.2-linux-x64.tar.xz$' SHASUMS256.txt | sha256sum -c -
-tar -xJf node-v22.23.2-linux-x64.tar.xz
-export PATH="$HOME/.local/ao-build-tools/go/bin:$HOME/.local/ao-build-tools/node-v22.23.2-linux-x64/bin:$PATH"
-go version
-node --version
-npm --version
-```
-
-Stay in the **same SSH shell** so that `PATH` still includes those build
-tools. Clone and build the PR, then run its installer with the bundle you
-just created:
-
-```bash
-git clone --single-branch --branch codex/remote-hosts-integrated https://github.com/Untrivial-ai/agent-orchestrator.git "$HOME/ao-host-build"
-cd "$HOME/ao-host-build/frontend"
-npm ci
-npm run build:daemon
-npm run build:tmux
-npm run build:acp-runtime
-npm run build:host
-cd "$HOME/ao-host-build"
-./scripts/setup-self-hosted.sh --bundle "$HOME/ao-host-build/frontend/dist-host/ao-host-linux-x64.tar.gz" --tunnel
-```
-
-If you chose a trusted LAN/private VPN instead, omit `--tunnel` on the last
-line. The script installs AO under `~/.ao/host`, starts the systemd user
-service, and prints the Host ID, address, and connection password. It does
-not install a desktop window on the host. On a machine with an existing AO
-daemon, resolve that conflict instead of overwriting it; this walkthrough
-assumes a fresh host.
-
-### 2B. Install after this PR is merged **and published**
-
-Skip all of step 2A: no repository checkout, Go, Node, npm, or local build is
-needed. After step 1, run this on the host for an off-network connection:
-
-```bash
-bash -c 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/setup-self-hosted.sh | bash -s -- --tunnel'
-```
-
-For a trusted LAN/private VPN, omit `--tunnel`:
-
-```bash
-bash -c 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/setup-self-hosted.sh | bash'
-```
-
-The script fetches the latest published desktop release, verifies its SHA-256
-digest, and installs only its daemon, AO Chat adapter runtime (currently
-including the Claude Code ACP bridge), and tmux. It does **not** install
-Claude Code, OpenCode, Codex, or their credentials. Run it again later to
-upgrade AO; project and conversation data remain under `~/.ao/data`.
-
-### 3. Check the host and connect your desktop (both choices)
+### Check the host and connect your desktop
 
 On the host, run this whenever you need the current address, password, or
 service status. Keep the password private:
 
 ```bash
-~/.ao/host/current/resources/daemon/ao remote-host status
+~/.local/bin/ao remote-host status
+~/.local/bin/ao status
 systemctl --user status ao-self-hosted.service --no-pager
 ```
 
@@ -146,8 +62,8 @@ The tunnel may take a few seconds to publish its HTTPS address. If it does
 not appear yet, rerun `remote-host status`. For service errors, run
 `journalctl --user -u ao-self-hosted.service -n 100 --no-pager`.
 
-1. On your laptop, use a desktop build **from this PR** for step 2A, or an
-   updated released AO desktop app for step 2B. An older released desktop
+1. On your laptop, use a desktop build **from this PR** for the source command,
+   or an updated released AO desktop app for the release command. An older app
    may not have the Remote hosts screen.
 2. Open **Settings → Remote hosts**, turn on **Connect to remote hosts**, and
    enter a label, the exact `Address:` and `Password:` from the host's status.
@@ -169,7 +85,7 @@ same way to continue a session.
 
 ## Other host notes
 
-On macOS arm64/x64, the released installer in step 2B also installs a
+On macOS arm64/x64, the lower-level released installer also installs a
 LaunchAgent, but it runs only while the host user is logged in. Install
 `curl`, `git`, and `python3` first, plus `cloudflared` (for example with
 `brew install cloudflared`) if using `--tunnel`. Before release, build the
@@ -191,11 +107,11 @@ Harness install progress and sign-in terminals run on the selected host. Each
 host keeps its own harness binaries and credentials; AO's bundled Chat adapter
 is separate from installing Claude Code itself. Browser-callback provider
 logins may require a browser or callback-port forwarding on the host. For
-private Git clones, pushes, and PR tracking, install `gh`, then run
+private Git clones, pushes, and PR tracking, run
 `gh auth login` and `gh auth setup-git` as the host user.
 
-To disconnect later, run `~/.ao/host/current/resources/daemon/ao remote-host
-disable` on the host. Removing a host in a client only removes that client's
+To disconnect later, run `~/.local/bin/ao remote-host disable` on the host.
+Removing a host in a client only removes that client's
 saved connection; it does not stop the host or its sessions.
 
 The daemon's normal unauthenticated listener remains on `127.0.0.1`. The
@@ -215,9 +131,9 @@ The optional Cloudflare quick tunnel encrypts traffic in transit, but Cloudflare
 terminates TLS and can see the connection password, conversations, and terminal
 traffic. It has no uptime guarantee and its HTTPS hostname changes on restart;
 update the saved address on each client if that happens. The host daemon still
-needs an OS service manager to survive logout or reboot. The desktop refreshes
-remote data while a quick tunnel is active because these tunnels buffer SSE
-events; terminals continue over WebSocket.
+needs an OS service manager to survive logout or reboot. The desktop first
+probes the normal SSE stream and falls back to two-second polling if stream
+events are not delivered; terminals continue over WebSocket.
 
 The desktop reuses the normal project creation, settings, board, Chat,
 inspector, and file surfaces, with requests routed to the owning host. The

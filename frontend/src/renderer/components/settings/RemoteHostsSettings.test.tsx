@@ -55,6 +55,7 @@ it("pairs a host and shows it in the saved-host list", async () => {
 	fireEvent.change(screen.getByLabelText("Connection password"), { target: { value: "secret123" } });
 	fireEvent.click(screen.getByRole("button", { name: "Add host" }));
 	await waitFor(() => expect(screen.getByText("Box A")).toBeVisible());
+	expect(screen.getByRole("switch", { name: "Connect to remote hosts" })).toHaveAttribute("aria-checked", "true");
 	expect(remotes.add).toHaveBeenCalledWith({ label: "Box A", url: "http://box-a:3001", password: "secret123" });
 	expect(screen.getByLabelText("Connection password")).toHaveAttribute("type", "password");
 });

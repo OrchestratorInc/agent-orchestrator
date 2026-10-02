@@ -42,7 +42,7 @@ import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
 import { useBoardPresentation } from "../hooks/useBoardPresentation";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
-import { useRemoteProjectBoardActions } from "../hooks/useRemoteProjectBoardActions";
+import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { labelForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
@@ -95,7 +95,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const remoteProjectQuery = useRemoteProjectQuery(hostId ?? "", projectId ?? "");
 	const liveUsageBySession = useSessionUsageSummaries(projectId, hostId).data ?? emptyUsageBySession;
 	// Evaluated at render so platform mocks in tests can flip the in-panel chrome.
-	const boardActionsInPanel = Boolean(hostId) || usesBoardActionsInPanel();
+	const boardActionsInPanel = usesBoardActionsInPanel();
 	/** Bell lives in the board action row when the shell topbar does not host it. */
 	const boardOwnsNotificationCenter = isLinuxPlatform() || boardActionsInPanel;
 	const all = localWorkspaceQuery.data ?? [];
@@ -125,20 +125,17 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			)
 		: liveUsageBySession;
 	const orchestrator = projectId ? newestActiveOrchestrator(workspaces[0]?.sessions ?? []) : undefined;
-	const localProjectActions = useProjectOrchestratorAction({
-		projectId: hostId ? undefined : projectId,
-		project: hostId ? undefined : workspace,
-		orchestrator: hostId ? undefined : orchestrator,
+	const projectActions = useProjectOrchestratorAction({
+		projectId,
+		project: workspace,
+		orchestrator,
 		source: "board",
+		hostId,
 	});
-	const remoteProjectActions = useRemoteProjectBoardActions({
-		hostId, projectId, project: hostId ? workspace : undefined,
-		orchestrator: hostId ? orchestrator : undefined, connected,
-	});
-	const projectActions = hostId ? remoteProjectActions : localProjectActions;
 	const { isProjectRestarting, isProvisioning } = projectActions;
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
+	const setOrchestratorStartupError = useUiStore((state) => state.setOrchestratorStartupError);
 	const health = workspace ? orchestratorHealth(workspace, isProjectRestarting) : { state: "ok" as const };
 	const archived = sessions
 		.filter(isArchivedSession)
@@ -172,8 +169,22 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	}, [navigate, hostId]);
 
 	const restartOrchestrator = async () => {
-		if (!projectId) return;
-		if (hostId) return remoteProjectActions.restartOrchestrator();
+		if (!projectId || isProjectRestarting || isProvisioning) return;
+		if (hostId) {
+			if (!connected) return;
+			setProjectRestarting(projectId, true, hostId);
+			setOrchestratorStartupError(projectId, null, hostId);
+			try {
+				const sessionId = await openRemoteOrchestrator(hostId, projectId, orchestrator, undefined, true, "restart");
+				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
+				if (activeScopeRef.current === scopeKey) void navigate(sessionNavigateTarget(projectId, sessionId, hostId));
+			} catch (error) {
+				setOrchestratorStartupError(projectId, error instanceof Error ? error.message : t("shell.couldNotSpawn"), hostId);
+			} finally {
+				setProjectRestarting(projectId, false, hostId);
+			}
+			return;
+		}
 		await restartProjectOrchestrator({
 			projectId,
 			queryClient,
@@ -186,7 +197,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const actions = projectId && (!hostId || connected) ? (
 		<>
 			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />
-			{workspace && toProjectKind(workspace.kind) ? <span className="inline-flex">
+			{!hostId && workspace && toProjectKind(workspace.kind) ? <span className="inline-flex">
 				<CueRunMenu
 					projectId={projectId}
 					disabled={isProjectRestarting || isProvisioning}

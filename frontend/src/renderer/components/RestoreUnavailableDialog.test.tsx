@@ -5,16 +5,14 @@ import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 
-const { spawnMock, remoteSpawnMock, workspaceQueryMock, remoteProjectQueryMock } = vi.hoisted(() => ({
+const { spawnMock, remoteSpawnMock, workspaceQueryMock } = vi.hoisted(() => ({
 	spawnMock: vi.fn(),
 	remoteSpawnMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
-	remoteProjectQueryMock: vi.fn(),
 }));
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
-	useWorkspaceScope: () => workspaceQueryMock(),
-	useRemoteProjectQuery: (hostId: string, projectId: string) => remoteProjectQueryMock(hostId, projectId),
+	useWorkspaceScope: (projectId: string, sessionId?: string, hostId?: string) => workspaceQueryMock(projectId, sessionId, hostId),
 }));
 
 vi.mock("../lib/spawn-orchestrator", () => ({
@@ -46,7 +44,6 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	useUiStore.setState({ settingsModal: null });
 	workspaceQueryMock.mockReturnValue({ data: { project: workspace }, isLoading: false });
-	remoteProjectQueryMock.mockReturnValue({ data: workspace, isLoading: false });
 });
 
 describe("RestoreUnavailableDialog", () => {
@@ -102,13 +99,13 @@ describe("RestoreUnavailableDialog", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Create new orchestrator" }));
 
 		await waitFor(() => expect(onRecreated).toHaveBeenCalledWith("remote-new"));
-		expect(remoteProjectQueryMock).toHaveBeenCalledWith("box-b", "proj-1");
+		expect(workspaceQueryMock).toHaveBeenCalledWith("proj-1", undefined, "box-b");
 		expect(remoteSpawnMock).toHaveBeenCalledWith("box-b", "proj-1", undefined, undefined, true);
 		expect(spawnMock).not.toHaveBeenCalled();
 	});
 
 	it("opens host-qualified settings when a remote project lacks an orchestrator", async () => {
-		remoteProjectQueryMock.mockReturnValue({ data: { ...workspace, orchestratorAgent: undefined }, isLoading: false });
+		workspaceQueryMock.mockReturnValue({ data: { project: { ...workspace, orchestratorAgent: undefined } }, isLoading: false });
 		render(<RestoreUnavailableDialog open hostId="box-b" session={session} onOpenChange={vi.fn()} onRecreated={vi.fn()} />);
 
 		await userEvent.click(screen.getByRole("button", { name: "Configure orchestrator agent" }));

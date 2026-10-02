@@ -351,7 +351,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
-	const openLinkInBrowser = useSessionBrowserLink(hostId ? undefined : session, onOpenLinkInBrowser, paths);
+	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser, paths);
 	const openSessionLink = useSessionLinkNavigation(hostId);
 	const conversationLinkBaselines = useRef(new Map<string, ConversationLinkBaseline>());
 	useEffect(() => {
@@ -388,7 +388,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			else if (pendingCompleted.get(item.id) !== item.revision) pendingCompleted.delete(item.id);
 		}
 		conversationLinkBaselines.current.set(uiSessionId, { latestSequence, messages, pendingCompleted });
-		if (hostId || autoOpenedLinkSessions.has(uiSessionId)) return;
+		if (autoOpenedLinkSessions.has(uiSessionId)) return;
 		// Do not surprise users by opening links from history when a session is first
 		// mounted. The exception is the current turn: a fast agent can finish before
 		// the first conversation request resolves, so its response is already present
@@ -408,7 +408,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				break;
 			}
 		}
-	}, [hostId, isLoading, openLinkInBrowser, paths, snapshot, uiSessionId]);
+	}, [isLoading, openLinkInBrowser, paths, snapshot, uiSessionId]);
 	const observedSuccessfulSwitch = Boolean(
 		agentSwitch &&
 			observedSettledSwitchId === agentSwitch.id &&
@@ -500,7 +500,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				snapshot={renderSnapshot}
 				agentInputDisabled={switchLocksChat || handoffDialogOpen}
 				newWorkDisabled={newWorkDisabled}
-				onLinkOpen={hostId ? undefined : openLinkInBrowser}
+				onLinkOpen={openLinkInBrowser}
 				onSessionLinkOpen={openSessionLink}
 				sessionTitle={session.title}
 				sessionRole={session.kind}

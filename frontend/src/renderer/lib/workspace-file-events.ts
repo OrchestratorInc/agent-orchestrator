@@ -1,7 +1,8 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
-import { baseUrlForHost, isQuickTunnelHost, subscribeConnectedHosts } from "./host-clients";
+import { baseUrlForHost, subscribeConnectedHosts } from "./host-clients";
 import { sessionUiKey } from "./hosts";
+import { probeRemoteSse } from "./remote-sse-probe";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 
 const INVALIDATE_DEBOUNCE_MS = 150;
@@ -24,6 +25,7 @@ type WorkspaceStream = {
 	retries: number;
 	source?: EventSource;
 	poll?: ReturnType<typeof setInterval>;
+	stopRemote?: () => void;
 	sourceBaseUrl?: string;
 	debounce?: ReturnType<typeof setTimeout>;
 	retry?: ReturnType<typeof setTimeout>;
@@ -114,6 +116,8 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 		stream.retry = undefined;
 		if (stream.poll !== undefined) clearInterval(stream.poll);
 		stream.poll = undefined;
+		stream.stopRemote?.();
+		stream.stopRemote = undefined;
 		stream.source?.close();
 		stream.source = undefined;
 		stream.sourceBaseUrl = undefined;
@@ -147,21 +151,29 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 			return;
 		}
 		const baseUrl = hostId ? baseUrlForHost(hostId)! : getApiBaseUrl();
-		const quickTunnel = Boolean(hostId && isQuickTunnelHost(hostId));
-		if (stream.sourceBaseUrl && (stream.sourceBaseUrl !== baseUrl || (stream.poll !== undefined) !== quickTunnel)) {
+		if (stream.sourceBaseUrl && stream.sourceBaseUrl !== baseUrl) {
 			resetConnection();
 			stream.failures = 0;
 			stream.retries = 0;
 			setWorkspaceFileConnectionState(key, "connecting");
 		}
-		if (quickTunnel) {
-			if (stream.poll === undefined) {
-				stream.sourceBaseUrl = baseUrl;
-				stream.phase = "open";
-				setWorkspaceFileConnectionState(key, "connected");
-				invalidate();
-				stream.poll = setInterval(invalidate, 2_000);
-			}
+		if (hostId) {
+			if (stream.sourceBaseUrl === baseUrl) return;
+			stream.sourceBaseUrl = baseUrl;
+			invalidate();
+			stream.poll = setInterval(invalidate, 2_000);
+			setWorkspaceFileConnectionState(key, "connected");
+			stream.stopRemote = probeRemoteSse(
+				`${baseUrl.replace(/\/+$/, "")}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/events`,
+				["workspace_changed"],
+				invalidate,
+				() => {
+					if (stream.poll !== undefined) clearInterval(stream.poll);
+					stream.poll = undefined;
+					invalidate();
+				},
+				invalidate,
+			);
 			return;
 		}
 		if (typeof EventSource === "undefined") {

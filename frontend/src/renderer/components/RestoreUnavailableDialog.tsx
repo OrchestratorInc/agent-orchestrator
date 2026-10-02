@@ -2,7 +2,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Loader2, X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useRemoteProjectQuery, useWorkspaceScope } from "../hooks/useWorkspaceQuery";
+import { useWorkspaceScope } from "../hooks/useWorkspaceQuery";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { useUiStore } from "../stores/ui-store";
@@ -26,16 +26,13 @@ type RestoreUnavailableDialogProps = {
 
 export function RestoreUnavailableDialog({ open, session, hostId, onOpenChange, onRecreated }: RestoreUnavailableDialogProps) {
 	const { t } = useTranslation();
-	const workspaceQuery = useWorkspaceScope(session.workspaceId);
-	const remoteProjectQuery = useRemoteProjectQuery(hostId ?? "", session.workspaceId);
+	const workspaceQuery = useWorkspaceScope(session.workspaceId, undefined, hostId);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | undefined>();
 	const orchestrator = isOrchestratorSession(session);
-	const workspace = hostId ? remoteProjectQuery.data : workspaceQuery.data?.project;
+	const workspace = workspaceQuery.data?.project;
 	const hasOrchestratorAgent = hasConfiguredOrchestratorAgent(workspace);
-	const checkingProject = hostId
-		? remoteProjectQuery.isLoading && remoteProjectQuery.data === undefined
-		: workspaceQuery.isLoading && workspaceQuery.data === undefined;
+	const checkingProject = workspaceQuery.isLoading && workspaceQuery.data === undefined;
 
 	const recreate = async () => {
 		if (checkingProject) return;
@@ -48,7 +45,7 @@ export function RestoreUnavailableDialog({ open, session, hostId, onOpenChange, 
 		setError(undefined);
 		try {
 			const id = hostId
-				? await openRemoteOrchestrator(hostId, session.workspaceId, undefined, undefined, true)
+				? await openRemoteOrchestrator(hostId, session.workspaceId, undefined, undefined, true, "restore_dialog")
 				: await spawnOrchestrator(session.workspaceId, "restore_dialog", true);
 			onOpenChange(false);
 			onRecreated(id);

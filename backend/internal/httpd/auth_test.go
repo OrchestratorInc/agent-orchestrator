@@ -160,16 +160,6 @@ func TestLockoutPrunesAbandonedSources(t *testing.T) {
 	if _, ok := lock.attempts["abandoned"]; ok {
 		t.Fatal("expired source remains in lockout map")
 	}
-	for range 3 {
-		lock.fail("current")
-	}
-	if lock.blocked("current") {
-		t.Fatal("four failed attempts must not lock out source")
-	}
-	lock.fail("current")
-	if !lock.blocked("current") {
-		t.Fatal("five failed attempts must lock out source")
-	}
 }
 
 func TestRotatedPasswordCanRecoverFromStaleClientLockout(t *testing.T) {

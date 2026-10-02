@@ -216,7 +216,7 @@ export const SessionInspector = memo(function SessionInspector({
 	const requestedView = viewProp ?? internalView;
 	// Badge the Browser tab when a preview target arrived without us opening it.
 	const browserUnseen = useUiStore((state) =>
-		session ? Boolean(state.inspectorSessions[session.id]?.browserUnseen) : false,
+		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.browserUnseen) : false,
 	);
 	const inspectorQueryClient = useQueryClient();
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
@@ -1861,7 +1861,7 @@ function MergedReviewsSection({
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	const openInAOBrowser = useSessionBrowserLink(hostId ? undefined : session);
+	const openInAOBrowser = useSessionBrowserLink(session);
 	const workspaceKey = workspaceQueryKeyForHost(hostId);
 	const openReviewStates = openReviewStatesFor(session, reviewStates);
 	const runsByPR = runsByPRFrom(openReviewStates, runs);
@@ -2133,7 +2133,7 @@ function MergedReviewsSection({
 			labels={labels}
 			onRequestRereview={requestRereview}
 			onResolveInlineComment={resolveInlineComment}
-			onOpenInAOBrowser={hostId ? undefined : openInAOBrowser}
+			onOpenInAOBrowser={openInAOBrowser}
 			onSendInlineComment={sendInlineCommentToWorker}
 			onSendReviewSummary={sendReviewSummaryToWorker}
 			onViewInlineCommentInFile={(comment) => {
@@ -2443,7 +2443,6 @@ function ReviewPanel({
 							model={reviewerModel}
 							mode={reviewerMode}
 							hostId={hostId}
-							manageAgents
 							projectId={session.workspaceId}
 							triggerClassName="review-run-agent-select ml-auto h-control-md w-auto min-w-0 max-w-[11rem] shrink-0 justify-end px-2 text-right text-xs"
 							value={reviewerOverride}

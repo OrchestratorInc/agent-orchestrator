@@ -67,6 +67,7 @@ import { apiErrorCode, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-
 import { aoBridge } from "../../lib/bridge";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { clampTerminalFontSize, initialTerminalFontSize, terminalFontSizeStorageKey } from "../../lib/terminal-font-size";
+import { createTerminalMux, muxUrlFromApiBase } from "../../lib/terminal-mux";
 import { isLinuxPlatform, isMacPlatform } from "../../lib/platform";
 import { handleTerminalTabListKeyDown } from "../../lib/terminal-tabs";
 import { agentLabel } from "../../lib/agent-options";
@@ -87,7 +88,6 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { SessionTopbarPortal } from "../SessionTopbarPortal";
 import { ShellTerminalTab } from "../ShellTerminalTab";
 import { TerminalPane } from "../TerminalPane";
-import { RemoteTerminalView } from "../RemoteTerminalView";
 import {
 	ActivityRow,
 	ApprovalCard,
@@ -634,6 +634,10 @@ function ChatWorkspaceContent({
 	const draftScopeKey = chatDraftScopeKey(draftScope);
 	const uiSessionId = draftScope.sessionId;
 	const activeRemoteHostId = remoteHostId ?? session?.hostId;
+	const remoteCreateMux = useMemo(
+		() => assetBaseUrl ? () => createTerminalMux(muxUrlFromApiBase(assetBaseUrl)) : undefined,
+		[assetBaseUrl],
+	);
 	const turn = activeTurn(snapshot);
 	const hasPendingInteraction = snapshot.items.some(
 		(item) =>
@@ -1361,8 +1365,10 @@ function ChatWorkspaceContent({
 						role="tabpanel"
 					>
 						<div className="h-full min-h-0" data-testid="chat-reviewer-terminal">
-							{activeRemoteHostId ? assetBaseUrl ? <RemoteTerminalView fontSize={terminalFontSize} hostId={activeRemoteHostId} isFullscreen={isFullscreen} onChangeFontSize={updateTerminalFontSize} onToggleFullscreen={toggleFullscreen} proxyBase={assetBaseUrl} terminalHandleId={reviewerTarget.handleId} /> : <OfflineRemoteTerminal /> : <TerminalPane
-								daemonReady={Boolean(daemonReady)}
+							{activeRemoteHostId && !assetBaseUrl ? <OfflineRemoteTerminal /> : <TerminalPane
+								key={activeRemoteHostId ? `${activeRemoteHostId}:${assetBaseUrl}` : undefined}
+								createMux={activeRemoteHostId ? remoteCreateMux : undefined}
+								daemonReady={activeRemoteHostId ? Boolean(assetBaseUrl) : Boolean(daemonReady)}
 								fontSize={terminalFontSize}
 								isFullscreen={isFullscreen}
 								onChangeFontSize={updateTerminalFontSize}
@@ -1383,8 +1389,10 @@ function ChatWorkspaceContent({
 						role="tabpanel"
 					>
 						<div className="h-full min-h-0" data-testid="chat-shell-terminal">
-							{activeRemoteHostId ? assetBaseUrl ? <RemoteTerminalView fontSize={terminalFontSize} hostId={activeRemoteHostId} isFullscreen={isFullscreen} onChangeFontSize={updateTerminalFontSize} onToggleFullscreen={toggleFullscreen} proxyBase={assetBaseUrl} terminalHandleId={shellTarget.handleId} /> : <OfflineRemoteTerminal /> : <TerminalPane
-								daemonReady={Boolean(daemonReady)}
+							{activeRemoteHostId && !assetBaseUrl ? <OfflineRemoteTerminal /> : <TerminalPane
+								key={activeRemoteHostId ? `${activeRemoteHostId}:${assetBaseUrl}` : undefined}
+								createMux={activeRemoteHostId ? remoteCreateMux : undefined}
+								daemonReady={activeRemoteHostId ? Boolean(assetBaseUrl) : Boolean(daemonReady)}
 								fontSize={terminalFontSize}
 								focusRequested
 								isFullscreen={isFullscreen}

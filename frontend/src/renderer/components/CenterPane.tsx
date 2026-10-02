@@ -33,6 +33,7 @@ import { useSwitchAgentState } from "../hooks/useSwitchAgent";
 import { useTruncatedText } from "../hooks/useTruncatedText";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
 import { clampTerminalFontSize, initialTerminalFontSize, terminalFontSizeStorageKey } from "../lib/terminal-font-size";
+import { createTerminalMux, muxUrlFromApiBase } from "../lib/terminal-mux";
 import { getAgentActivityView } from "../lib/session-presentation";
 import {
 	deriveAgentSwitchPresentation,
@@ -56,7 +57,6 @@ import { AgentSwitchProgressTrack } from "./AgentSwitchProgressTrack";
 import { ShellTerminalTab } from "./ShellTerminalTab";
 import { TerminalTabFrame } from "./TerminalTabFrame";
 import { TerminalPane } from "./TerminalPane";
-import { RemoteTerminalView } from "./RemoteTerminalView";
 import { sessionUiKey } from "../lib/hosts";
 import { SessionTopbarPortal } from "./SessionTopbarPortal";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "./ui/context-menu";
@@ -190,6 +190,10 @@ export function CenterPane({
 		[hostId, queryClient],
 	);
 	const { baseUrl: remoteBase } = useHostConnection(hostId);
+	const remoteCreateMux = useMemo(
+		() => remoteBase ? () => createTerminalMux(muxUrlFromApiBase(remoteBase)) : undefined,
+		[remoteBase],
+	);
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const sessionId = session?.id;
 	const auxiliaryTabs = useMemo<AuxiliaryTab[]>(
@@ -748,18 +752,10 @@ export function CenterPane({
 						data-testid="terminal-interaction-surface"
 						inert={workerInputDisabled ? true : undefined}
 					>
-						{hostId ? remoteBase ? <RemoteTerminalView
-							hostId={hostId}
-							proxyBase={remoteBase}
-							terminalHandleId={target.kind === "shell" || target.kind === "reviewer" ? target.handleId : session?.terminalHandleId}
-							terminalGeneration={session?.terminalGeneration}
-							fontSize={fontSize}
-							onChangeFontSize={updateFontSize}
-							isFullscreen={isFullscreen}
-							onToggleFullscreen={toggleFullscreen}
-							inputDisabled={workerInputDisabled}
-						/> : null : <TerminalPane
-							daemonReady={daemonReady}
+						{hostId && !remoteBase ? null : <TerminalPane
+							key={hostId ? `${hostId}:${remoteBase}` : undefined}
+							createMux={hostId ? remoteCreateMux : undefined}
+							daemonReady={hostId ? Boolean(remoteBase) : daemonReady}
 							fontSize={fontSize}
 						// A terminal you can type into should already hold the caret when you
 						// open or switch to the session, the same way the chat composer does.

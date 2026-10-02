@@ -17,7 +17,6 @@ import {
 	Globe,
 	LoaderCircle,
 	Lock,
-	Server,
 	X,
 	XCircle,
 } from "lucide-react";
@@ -43,7 +42,6 @@ import { CloudCpError } from "../lib/cloud-cp";
 import type { CloudCpGitHubAppRepository } from "../lib/cloud-cp/types";
 import { useCloudSession } from "../lib/cloud-session";
 import { useUiStore } from "../stores/ui-store";
-import type { RemoteHost } from "../hooks/useRemoteHosts";
 import { useShellMaybe } from "../lib/shell-context";
 import { resolveSandboxProviderPreference, useSandboxProviderStore } from "../stores/sandbox-provider-store";
 import {
@@ -163,8 +161,6 @@ export function CreateProjectFlow({
 	onInitializeProject,
 	onCreateStandaloneAgent,
 	onDismiss,
-	remoteHosts = [],
-	onAddRemoteProject,
 	onOpenExistingProject,
 	openSignal,
 	sourceSignal,
@@ -190,8 +186,6 @@ export function CreateProjectFlow({
 	onInitializeProject: (path: string) => Promise<void>;
 	onCreateStandaloneAgent?: () => void;
 	onDismiss?: () => void;
-	remoteHosts?: readonly RemoteHost[];
-	onAddRemoteProject?: (hostId: string) => void;
 	onOpenExistingProject?: (path: string) => void | Promise<void>;
 	// Monotonic counter: each new value opens the flow programmatically (the ⌘N
 	// "no project in scope" fallback). Lets the shortcut reuse the sidebar's own
@@ -248,11 +242,6 @@ export function CreateProjectFlow({
 	const setCloneDialogOpen = (open: boolean) => dispatchView(open ? { type: "open", view: "clone" } : { type: "close", view: "clone" });
 	const setFolderPickerOpen = (open: boolean) => dispatchView(open ? { type: "open", view: "folder" } : { type: "close", view: "folder" });
 	const setProjectImportStep = (step: ProjectImportStep | null) => dispatchView(step ? { type: "open", view: step } : { type: "closeProjectImport" });
-	const addRemoteProject = (hostId: string) => {
-		setModePickerOpen(false);
-		onAddRemoteProject?.(hostId);
-	};
-
 	useEffect(() => {
 		if (!createProgress.open) return;
 		const startedAt = Date.now();
@@ -801,7 +790,7 @@ export function CreateProjectFlow({
 							<CloudSignInPanel disabled={isBusy} onBack={() => setOffering("local")} onSignIn={cloudSignIn} />
 						)
 					) : (
-						<ImportSourcePicker cloudEnabled={!hostId && cloudEnabled} disabled={isBusy || !connected} onCloudSelect={() => setOffering("cloud")} onSelect={selectSource} onCreateStandaloneAgent={onCreateStandaloneAgent} remoteHosts={hostId ? [] : remoteHosts} onAddRemoteProject={addRemoteProject} hostLabel={hostLabel} />
+						<ImportSourcePicker cloudEnabled={!hostId && cloudEnabled} disabled={isBusy || !connected} onCloudSelect={() => setOffering("cloud")} onSelect={selectSource} onCreateStandaloneAgent={onCreateStandaloneAgent} hostLabel={hostLabel} />
 					)}
 					{error && !folderPickerOpen && selectedPath === null && (
 						<p className="text-caption leading-body text-error" role="status">
@@ -825,8 +814,6 @@ export function CreateProjectFlow({
 						onCloudBack={() => setOffering("local")}
 						onSignIn={cloudSignIn}
 						onCreateStandaloneAgent={onCreateStandaloneAgent}
-						remoteHosts={hostId ? [] : remoteHosts}
-						onAddRemoteProject={addRemoteProject}
 						open={modePickerOpen}
 						onOpenChange={(open) => {
 							if (isBusy) return;
@@ -1210,8 +1197,6 @@ function CreateProjectSourceDialog({
 	onSignIn,
 	onOpenChange,
 	onCreateStandaloneAgent,
-	remoteHosts,
-	onAddRemoteProject,
 	onSelect,
 	open,
 }: {
@@ -1228,8 +1213,6 @@ function CreateProjectSourceDialog({
 	onCloudBack: () => void;
 	onOpenChange: (open: boolean) => void;
 	onCreateStandaloneAgent?: () => void;
-	remoteHosts: readonly RemoteHost[];
-	onAddRemoteProject: (hostId: string) => void;
 	onSelect: (source: ProjectSource) => void;
 	open: boolean;
 }) {
@@ -1256,7 +1239,7 @@ function CreateProjectSourceDialog({
 								<CloudSignInPanel dialog disabled={disabled} onBack={onCloudBack} onSignIn={onSignIn} />
 							)
 						) : (
-							<ImportSourcePicker cloudEnabled={cloudEnabled} closeDisabled={closeDisabled} disabled={disabled} hostLabel={hostLabel} onCloudSelect={onCloudSelect} onClose={() => onOpenChange(false)} onSelect={onSelect} onCreateStandaloneAgent={onCreateStandaloneAgent} remoteHosts={remoteHosts} onAddRemoteProject={onAddRemoteProject} dialog />
+							<ImportSourcePicker cloudEnabled={cloudEnabled} closeDisabled={closeDisabled} disabled={disabled} hostLabel={hostLabel} onCloudSelect={onCloudSelect} onClose={() => onOpenChange(false)} onSelect={onSelect} onCreateStandaloneAgent={onCreateStandaloneAgent} dialog />
 						)}
 					</div>
 				</Dialog.Content>
@@ -1838,8 +1821,6 @@ function ImportSourcePicker({
 	onCloudSelect,
 	onClose,
 	onCreateStandaloneAgent,
-	remoteHosts = [],
-	onAddRemoteProject,
 	onSelect,
 }: {
 	cloudEnabled?: boolean;
@@ -1850,8 +1831,6 @@ function ImportSourcePicker({
 	onCloudSelect?: () => void;
 	onClose?: () => void;
 	onCreateStandaloneAgent?: () => void;
-	remoteHosts?: readonly RemoteHost[];
-	onAddRemoteProject?: (hostId: string) => void;
 	onSelect: (source: ProjectSource) => void;
 }) {
 	const { t } = useTranslation();
@@ -1880,7 +1859,7 @@ function ImportSourcePicker({
 		},
 	];
 	return (
-		<div className={cn(onboardingPanelClass, remoteHosts.length > 0 && "flex max-h-[min(640px,calc(100dvh-24px))] flex-col")}>
+		<div className={onboardingPanelClass}>
 			{dialog ? (
 				<Dialog.Title className={onboardingPanelTitleClass}>{hostLabel ? t("remote.addProjectOn", { label: hostLabel, defaultValue: "Add project on {{label}}" }) : t("createProject.addCodeTitle")}</Dialog.Title>
 			) : (
@@ -1893,29 +1872,7 @@ function ImportSourcePicker({
 			) : (
 				<p className={onboardingPanelDescriptionClass}>{hostLabel ? t("remote.projectPathHint", { label: hostLabel, defaultValue: "Use a repository folder on {{label}}, or clone one there from Git." }) : t("createProject.addCodeDescription")}</p>
 			)}
-			<div className={cn("mx-4 mb-4 flex flex-col gap-3", remoteHosts.length > 0 && "min-h-0 overflow-y-auto")}>
-				{remoteHosts.length > 0 && onAddRemoteProject ? (
-					<div className="overflow-hidden rounded-md border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)]">
-						{remoteHosts.map((host) => (
-							<button
-								key={host.hostId}
-								type="button"
-								aria-label={t("remote.addProjectOn", { label: host.label, defaultValue: "Add project on {{label}}" })}
-								className="group flex min-h-[76px] w-full items-center gap-3 border-b border-[var(--color-border-import-modal)] px-3.5 py-3 text-left hover:bg-accent/50 active:bg-accent disabled:pointer-events-none disabled:opacity-50 last:border-b-0"
-								disabled={disabled || host.status !== "connected"}
-								onClick={() => onAddRemoteProject(host.hostId)}
-							>
-								<span className="grid w-9 shrink-0 place-items-center text-muted-foreground group-hover:text-foreground">
-									<Server className="size-5" aria-hidden="true" strokeWidth={1.8} />
-								</span>
-								<span className="min-w-0">
-									<span className="block truncate text-[14px] font-medium text-foreground">{t("remote.addProjectOn", { label: host.label, defaultValue: "Add project on {{label}}" })}</span>
-									<span className="mt-0.5 block text-[12px] leading-5 text-muted-foreground">{t("remote.projectPathHint", { label: host.label, defaultValue: "Use a repository folder on {{label}}, or clone one there from Git." })}</span>
-								</span>
-							</button>
-						))}
-					</div>
-				) : null}
+			<div className="mx-4 mb-4 flex flex-col gap-3">
 				{cloudEnabled && onCloudSelect ? (
 					<div className="overflow-hidden rounded-md border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)]">
 						<button
@@ -2614,7 +2571,7 @@ function mergeWorkspaceImportRepos(scan: ImportFolderScan | null, validation: Im
 			name: repo?.name ?? path.split(/[\\/]/).pop() ?? path,
 			path,
 			relativePath: repo?.relativePath ?? ".",
-			branch: repo?.branch ?? (status?.hasCommit ? "HEAD" : ""),
+			branch: repo?.branch ?? "",
 			remote: repo?.remote ?? "",
 			hasRemote: status?.hasOrigin ?? repo?.hasRemote ?? false,
 			status: repo?.status ?? (status?.blockingErrors.length ? "error" : "ok"),

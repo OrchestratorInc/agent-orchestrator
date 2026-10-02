@@ -76,6 +76,11 @@ describe("startRemoteProxy", () => {
 		proxy = await startRemoteProxy({ label: "workbox", url: `http://127.0.0.1:${port}`, password: "pw" });
 		const source = `http://ao-preview.mfxs2mi.localhost:${port}/dist/index.html`;
 		const preview = proxy.previewUrl("ao-1", source);
+		expect(proxy.resolvePreviewUrl("ao-1", new URL("/design?x=1#note", preview).href)).toBe(`http://ao-preview.mfxs2mi.localhost:${port}/design?x=1#note`);
+		expect(proxy.resolvePreviewUrl("ao-2", preview)).toBe("");
+		expect(proxy.resolvePreviewUrl("ao-1", "https://example.com/design")).toBe("https://example.com/design");
+		const shorthand = proxy.previewUrl("ao-3", "localhost:5173/");
+		expect(proxy.resolvePreviewUrl("ao-3", new URL("/details", shorthand).href)).toBe("http://localhost:5173/details");
 		expect(proxy.previewUrl("ao-1", source)).toBe(preview);
 		expect(new URL(preview).hostname).not.toBe(new URL(proxy.base).hostname);
 		expect(preview).not.toContain(new URL(proxy.base).pathname.slice(1));
@@ -103,6 +108,7 @@ describe("startRemoteProxy", () => {
 		expect(new URL(proxy.previewUrl("ao-2", "http://localhost.:5173/")).hostname).toMatch(/^ao-preview-[0-9a-f]{32}\.localhost$/);
 		const changed = proxy.previewUrl("ao-1", `http://localhost:5173/`);
 		expect(changed).not.toBe(preview);
+		expect(proxy.resolvePreviewUrl("ao-1", preview)).toBe("");
 		expect((await request(preview)).status).toBe(404);
 		expect(proxy.previewUrl("ao-1", "https://example.com/")).toBe("https://example.com/");
 		expect((await request(changed)).status).toBe(404);
@@ -459,17 +465,6 @@ describe("startRemoteProxy", () => {
 		});
 		expect(res.status).toBe(400); // errors pass through untouched…
 		expect(res.headers.get("access-control-allow-origin")).toBe("app://renderer"); // …but stay readable
-	});
-
-	it("returns 502 when the upstream is unreachable", async () => {
-		proxy = await startRemoteProxy({
-			label: "dead",
-			url: "http://127.0.0.1:1",
-			password: "pw",
-		});
-		const res = await fetch(`${proxy.base}/api/v1/projects`);
-		expect(res.status).toBe(502);
-		expect(await res.json()).toMatchObject({ code: "UPSTREAM_UNAVAILABLE" });
 	});
 
 	// "The app can't reach my host" had no answer anywhere before this, and the

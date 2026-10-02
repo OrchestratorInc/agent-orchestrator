@@ -15,25 +15,31 @@ const mocks = vi.hoisted(() => ({
 	localPut: vi.fn(),
 }));
 
-vi.mock("../lib/host-clients", () => ({
-	connectedHosts: () => mocks.connected,
-	subscribeConnectedHosts: (listener: () => void) => {
-		mocks.listeners.add(listener);
-		return () => mocks.listeners.delete(listener);
-	},
-	clientForHost: (hostId: string) => {
+vi.mock("../lib/host-clients", () => {
+	const clientForHost = (hostId: string) => {
 		if (!mocks.connected.includes(hostId)) throw new Error(`Host ${hostId} is not connected`);
 		return {
 			GET: (path: string, options?: unknown) => mocks.get(hostId, path, options),
 			POST: (path: string, options?: unknown) => mocks.post(hostId, path, options),
 			PUT: (path: string, options?: unknown) => mocks.put(hostId, path, options),
 		};
-	},
-}));
+	};
+	return {
+		connectedHosts: () => mocks.connected,
+		subscribeConnectedHosts: (listener: () => void) => {
+			mocks.listeners.add(listener);
+			return () => mocks.listeners.delete(listener);
+		},
+		clientForHost,
+		clientForSessionHost: (hostId?: string) => hostId ? clientForHost(hostId) : { GET: mocks.localGet, POST: mocks.localPost, PUT: mocks.localPut },
+	};
+});
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: mocks.localGet, POST: mocks.localPost, PUT: mocks.localPut },
 	apiErrorCode: () => undefined,
+	apiErrorDetails: () => undefined,
 	apiErrorMessage: (error: { message?: string }) => error.message ?? "Request failed",
+	apiErrorRequestId: () => undefined,
 	hasTrustedApiBaseUrl: () => true,
 }));
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
@@ -97,7 +103,7 @@ it("keeps same-ID projects and their paths on separate hosts", async () => {
 	const { queryClient, rerenderHost } = renderForm("box-a");
 	expect(await screen.findByText("Alpha")).toBeVisible();
 	await waitFor(() => expect(mocks.post).toHaveBeenCalledWith("box-a", "/api/v1/agents/readiness/ensure", {
-		body: { agentIds: [], purpose: "launch" },
+		body: { agentIds: [], purpose: "display" },
 	}));
 	expect(screen.getByText("/srv/alpha").closest("a")).toBeNull();
 	expect(screen.getByText("/srv/alpha.git").closest("a")).toBeNull();
@@ -132,14 +138,14 @@ it("replaces and retries the orchestrator on the selected host", async () => {
 	mocks.post.mockImplementation(async (_hostId: string, path: string) => {
 		if (path === "/api/v1/agents/readiness/ensure") return { data: agents };
 		attempts += 1;
-		return attempts === 1 ? { error: { message: "startup failed" } } : { data: { orchestrator: { id: "new-orchestrator" } } };
+		return attempts === 1 ? { error: { message: "startup failed" }, response: { status: 500 } } : { data: { orchestrator: { id: "new-orchestrator" } } };
 	});
 	const onSaveState = vi.fn<(state: ProjectSettingsSaveState) => void>();
 	renderForm("box-b", "agents", onSaveState);
 	await userEvent.click(await screen.findByRole("button", { name: "Orchestrator agent" }));
 	await userEvent.click(await screen.findByRole("menuitem", { name: /^Codex/ }));
 	fireEvent.submit(document.getElementById("project-settings-form")!);
-	await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ replacementError: "startup failed" })));
+	await waitFor(() => expect(onSaveState.mock.lastCall?.[0].replacementError).toBe("startup failed"));
 	expect(mocks.post).toHaveBeenCalledWith("box-b", "/api/v1/orchestrators", { body: { projectId: "shared", clean: true } });
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	await waitFor(() => expect(attempts).toBe(2));
@@ -152,4 +158,19 @@ it("shows offline state without contacting the local daemon", () => {
 	expect(mocks.get).not.toHaveBeenCalled();
 	expect(mocks.put).not.toHaveBeenCalled();
 	expect(mocks.localGet).not.toHaveBeenCalled();
+});
+
+it("keeps an unsaved remote draft through disconnect and saves after reconnect", async () => {
+	connect("box-b");
+	renderForm("box-b");
+	await userEvent.click(await screen.findByRole("button", { name: "Edit Project name" }));
+	const name = screen.getByRole("textbox", { name: "Project name" });
+	await userEvent.clear(name);
+	await userEvent.type(name, "Draft Beta");
+	connect();
+	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
+	expect(mocks.put).not.toHaveBeenCalled();
+	connect("box-b");
+	expect(screen.getByRole("textbox", { name: "Project name" })).toHaveValue("Draft Beta");
+	await waitFor(() => expect(mocks.put).toHaveBeenCalledWith("box-b", "/api/v1/projects/{id}", expect.objectContaining({ body: expect.objectContaining({ displayName: "Draft Beta" }) })));
 });

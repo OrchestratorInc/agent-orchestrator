@@ -82,6 +82,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			if (editing && !editing.hostId && editing.url !== nextUrl) await aoBridge.remotes.remove(editing.url);
 			await load();
 			resetForm();
+			if (!enabled) setEnabled(true);
 			requestRemoteHostsRefresh();
 		} catch (cause) {
 			setFormError(cause instanceof Error ? cause.message : t("remote.addHostFailed"));

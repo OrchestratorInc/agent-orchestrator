@@ -80,6 +80,10 @@ vi.mock("../lib/spawn-orchestrator", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/spawn-orchestrator")>(),
 	spawnOrchestrator: spawnMock,
 }));
+vi.mock("../hooks/useHostConnection", async (importOriginal) => ({
+	...await importOriginal<typeof import("../hooks/useHostConnection")>(),
+	useConnectedHosts: () => ["box-a"],
+}));
 vi.mock("../lib/telemetry", () => ({
 	addRendererExceptionStep: vi.fn(),
 	captureRendererEvent: vi.fn(),

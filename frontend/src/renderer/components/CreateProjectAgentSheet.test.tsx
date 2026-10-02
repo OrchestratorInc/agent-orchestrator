@@ -69,13 +69,13 @@ function hoursAgo(hours: number): string {
 }
 
 describe("CreateProjectAgentSheet", () => {
-	it("ensures launch readiness when creating on a remote host", async () => {
+	it("checks only the selected agent for launch readiness on a remote host", async () => {
 		remote.get.mockResolvedValue({ data: { agents: [agentReadiness("codex")] } });
 		remote.post.mockResolvedValue({ data: { agents: [agentReadiness("codex")] } });
 		renderSheet(undefined, undefined, { hostId: "box-a" });
 
 		await waitFor(() => expect(remote.post).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", {
-			body: { agentIds: [], purpose: "launch" },
+			body: { agentIds: [], purpose: "display" },
 		}));
 	});
 

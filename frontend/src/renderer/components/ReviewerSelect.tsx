@@ -9,6 +9,7 @@ import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices"
 import {
 	buildRankedAgentOptions,
 	isLaunchableAgent,
+	isReadyAgent,
 	type AgentInfo,
 	type RankedAgentOption,
 	unknownAgentReadiness,
@@ -64,7 +65,6 @@ export function ReviewerSelect({
 	disabled = false,
 	agents,
 	excludedHarness,
-	manageAgents = true,
 }: {
 	value: string;
 	onChange: (value: string) => void;
@@ -81,7 +81,6 @@ export function ReviewerSelect({
 	disabled?: boolean;
 	agents?: components["schemas"]["AgentReadinessSnapshot"][];
 	excludedHarness?: string;
-	manageAgents?: boolean;
 }) {
 	const { t } = useTranslation();
 	const reviewerAriaLabel = ariaLabel ?? t("settings.project.defaultReviewer");
@@ -100,8 +99,9 @@ export function ReviewerSelect({
 		priorityRank: REVIEWER_AGENT_PRIORITY_RANK,
 		fallbackAgents,
 	});
+	const isSelectable = hostId ? isLaunchableAgent : isReadyAgent;
 	const selectableOptions = options.filter((agent) => {
-		if (agents !== undefined && !isLaunchableAgent(agent)) return false;
+		if (agents !== undefined && !isSelectable(agent)) return false;
 		if (agent.id === excludedHarness) return false;
 		if (agent.id === defaultHarness) return false;
 		return true;
@@ -109,7 +109,7 @@ export function ReviewerSelect({
 	const catalogDefaultLabel = options.find((agent) => agent.id === defaultHarness)?.label;
 	const defaultHarnessLabel = catalogDefaultLabel && catalogDefaultLabel !== defaultHarness ? catalogDefaultLabel : agentLabel(defaultHarness);
 	const effectiveHarness = value || defaultHarness;
-	const needsSetup = agents !== undefined && Boolean(effectiveHarness && !options.some((agent) => agent.id === effectiveHarness && isLaunchableAgent(agent)));
+	const needsSetup = agents !== undefined && Boolean(effectiveHarness && !options.some((agent) => agent.id === effectiveHarness && isSelectable(agent)));
 	const management = useAgentManagementMenu(needsSetup ? effectiveHarness : undefined, hostId);
 	const menuProjectID = projectId ?? "";
 	const triggerCatalog = useQuery(agentModelsQueryOptions(effectiveHarness, menuProjectID, hostId));
@@ -188,7 +188,7 @@ export function ReviewerSelect({
 						closeMenu={() => setMenuOpen(false)}
 					/>
 				))}
-				{manageAgents && <OptionMenuItem className="mt-1 border-t border-border" onSelect={management.requestManagement}>{t("agentSelector.manage")}</OptionMenuItem>}
+				<OptionMenuItem className="mt-1 border-t border-border" onSelect={management.requestManagement}>{t("agentSelector.manage")}</OptionMenuItem>
 			</OptionMenuContent>
 		</OptionMenu>
 	);

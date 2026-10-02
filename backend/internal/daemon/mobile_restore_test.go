@@ -14,7 +14,6 @@ type fakeLAN struct {
 	started  bool
 	hash     string
 	port     int
-	loopback bool
 	// returnPort, when non-zero, is what Start returns instead of the port it
 	// was asked for — simulating LANManager's ephemeral-port fallback when the
 	// requested port is already taken (e.g. by another AO instance). Left zero,
@@ -32,7 +31,6 @@ func (f *fakeLAN) Start(port int) (int, error) {
 	return port, nil
 }
 func (f *fakeLAN) StartLoopback(port int) (int, error) {
-	f.loopback = true
 	return f.Start(port)
 }
 func (f *fakeLAN) Stop(ctx context.Context) error { return nil }

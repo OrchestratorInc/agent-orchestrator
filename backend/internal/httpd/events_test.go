@@ -482,8 +482,7 @@ func testCDCEventWithType(seq int64, typ cdc.EventType) cdc.Event {
 // it is large enough to flush on its own.
 //
 // A periodic comment frame keeps the pipe moving and carries any buffered event
-// out with it. Comments are the SSE no-op: clients ignore them, and the cursor
-// is untouched.
+// out with it. Named heartbeats are observable to clients without changing the cursor.
 func TestEventsStreamHeartbeatsWhileIdle(t *testing.T) {
 	restore := eventsHeartbeatInterval
 	eventsHeartbeatInterval = 50 * time.Millisecond
@@ -519,11 +518,10 @@ func TestEventsStreamHeartbeatsWhileIdle(t *testing.T) {
 		}
 		seen += string(buf[:n])
 		for _, line := range strings.Split(seen, "\n") {
-			// An SSE comment: a frame beginning with a colon.
-			if strings.HasPrefix(line, ":") {
+			if line == "event: heartbeat" {
 				return
 			}
 		}
 	}
-	t.Fatalf("idle stream sent no comment frame in 4s (got %q); a buffering proxy has nothing to flush an event through", seen)
+	t.Fatalf("idle stream sent no heartbeat frame in 4s (got %q); a buffering proxy has nothing to flush an event through", seen)
 }

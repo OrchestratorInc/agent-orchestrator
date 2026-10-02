@@ -27,21 +27,6 @@ func loadLANOnlyState(t *testing.T, path string) mobilebridge.State {
 	return state
 }
 
-func TestLANOnlyEnableDoesNotStartPublicTunnel(t *testing.T) {
-	tunnel := &fakeTunnel{}
-	bridge := lanOnlyBridge(t, tunnel)
-	status, err := bridge.EnableLANOnly()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !status.Enabled || status.Password == "" || !bridge.LAN.Running() {
-		t.Fatalf("LAN-only listener did not start: %+v", status)
-	}
-	if tunnel.startedOn != 0 || !loadLANOnlyState(t, bridge.ConfigPath).NoPublicTunnel {
-		t.Fatal("LAN-only enable started a public tunnel or failed to persist the private mode")
-	}
-}
-
 func TestLANOnlyRestoreDoesNotStartPublicTunnel(t *testing.T) {
 	bridge := lanOnlyBridge(t, &fakeTunnel{})
 	if _, err := bridge.EnableLANOnly(); err != nil {

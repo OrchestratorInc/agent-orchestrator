@@ -52,7 +52,7 @@ export default function CloneRepositoryDialog({
 }) {
 	const { t } = useTranslation();
 	const [submitted, setSubmitted] = useState(false);
-	const [repositoryCheck, setRepositoryCheck] = useState<"idle" | "checking" | "valid" | "invalid">("idle");
+	const [repositoryCheck, setRepositoryCheck] = useState<"idle" | "checking" | "valid" | "invalid" | "unchecked">("idle");
 	const repositoryCheckRequest = useRef(0);
 	const destinationPickerRequest = useRef(0);
 	const shakeFrame = useRef<number | null>(null);
@@ -87,7 +87,7 @@ export default function CloneRepositoryDialog({
 	const destinationError = submitted && !hasDestination ? t("createProject.cloneDestinationRequired") : null;
 	const canContinue = Boolean(
 		repositoryName &&
-		repositoryCheck === "valid" &&
+		(repositoryCheck === "valid" || (remote && repositoryCheck === "unchecked")) &&
 		hasDestination &&
 		!projectExists &&
 		!disabled &&
@@ -152,9 +152,9 @@ export default function CloneRepositoryDialog({
 			setRepositoryCheck("idle");
 			return;
 		}
-		// The host, not this laptop, owns Git credentials and verifies access in clone/prepare.
+		// Host access is not checked until clone/prepare; do not label it validated.
 		if (remote) {
-			setRepositoryCheck("valid");
+			setRepositoryCheck("unchecked");
 			return;
 		}
 		setRepositoryCheck("checking");

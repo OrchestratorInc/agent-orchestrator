@@ -20,7 +20,7 @@ import { captureRendererEvent } from "../lib/telemetry";
 import { LOCAL_ECHO_ENABLED, withLineBufferedLocalInput } from "../lib/terminal-local-echo";
 import { createTerminalMux, muxUrlFromApiBase, type TerminalMux } from "../lib/terminal-mux";
 import { sessionIsActive, type WorkspaceSession } from "../types/workspace";
-import { workspaceQueryKey } from "./useWorkspaceQuery";
+import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
 /**
  * The slice of xterm's Terminal the attachment needs. Structural, so tests can
@@ -250,7 +250,7 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		// news for the session board. Refetching every workspace on `exit` would
 		// be pure churn — the shell terminal list owns that pane's fate instead.
 		if (optionsRef.current.shellTerminalHandleId) return;
-		void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+		void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(sessionRef.current?.hostId) });
 	}, [queryClient]);
 
 	const clearReplayTimers = useCallback(() => {

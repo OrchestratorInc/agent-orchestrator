@@ -19,7 +19,6 @@ import {
 	cacheAgentReadiness,
 	ensureAgentReadiness,
 	useAgentReadinessQuery,
-	type AgentReadiness,
 } from "../hooks/useAgentReadinessQuery";
 import { type FileAttachmentPayload, useFileAttachments } from "../hooks/useFileAttachments";
 import { useSettings } from "../hooks/useSettings";
@@ -83,7 +82,7 @@ function cancelTaskPreparation(token: string, hostId?: string): void {
 	try {
 		void (hostId ? clientForHost(hostId) : apiClient).DELETE("/api/v1/task-preparations/{token}", {
 			params: { path: { token } },
-		});
+		}).catch(() => { /* The host reclaims abandoned preparations after their TTL. */ });
 	} catch {
 		// A disconnected host will reclaim this preparation on its own TTL.
 	}
@@ -243,13 +242,7 @@ export function TaskComposer({
 					input.agent
 				) {
 					try {
-						if (hostId) {
-							const response = await clientForHost(hostId).POST("/api/v1/agents/readiness/ensure", { body: { agentIds: [input.agent], purpose: "launch" } });
-							if (!response.error && response.data) queryClient.setQueryData(["agent-readiness", hostId], response.data);
-						} else {
-							const completed = await ensureAgentReadiness([input.agent], "launch");
-							cacheAgentReadiness(queryClient, completed);
-						}
+						cacheAgentReadiness(queryClient, await ensureAgentReadiness([input.agent], "launch", hostId), hostId);
 					} catch {
 						// Preserve the launch error when opportunistic reconciliation fails.
 					}
@@ -341,27 +334,8 @@ export function TaskComposer({
 			cancelTaskPreparation(token, hostId);
 		};
 	}, [hostId, projectQuery.data?.id]);
-	const agentsQuery = useAgentReadinessQuery(!hostId);
-	const remoteAgentsQuery = useQuery({
-		queryKey: ["agent-readiness", hostId],
-		enabled: Boolean(hostId),
-		queryFn: async (): Promise<AgentReadiness> => {
-			const { data, error } = await clientForHost(hostId ?? "").POST("/api/v1/agents/readiness/ensure", { body: { purpose: "launch" } });
-			if (error) throw new Error(apiErrorMessage(error));
-			return data as AgentReadiness;
-		},
-	});
-	const { settings: localSettings } = useSettings();
-	const remoteSettingsQuery = useQuery({
-		queryKey: ["settings", hostId],
-		enabled: Boolean(hostId),
-		queryFn: async () => {
-			const { data, error } = await clientForHost(hostId ?? "").GET("/api/v1/settings");
-			if (error) throw new Error(apiErrorMessage(error));
-			return data;
-		},
-	});
-	const settings = hostId ? remoteSettingsQuery.data : localSettings;
+	const agentsQuery = useAgentReadinessQuery(true, hostId);
+	const { settings, error: settingsError } = useSettings(hostId);
 	// The composer preselects the agent and model a spawn would actually use
 	// instead of parking the controls on a "default" label the user has to
 	// remember. Both resolved values remain directly editable.
@@ -379,7 +353,7 @@ export function TaskComposer({
 	const projectWorkerAgent = projectConfig?.worker?.agent ?? "";
 	const globalDefaultAgent = projectQuery.data?.agent ?? "";
 	const configuredProjectAgent = projectWorkerAgent || globalDefaultAgent;
-	const agentCatalog = hostId ? remoteAgentsQuery.data : agentsQuery.data;
+	const agentCatalog = agentsQuery.data;
 	// Cloud projects support the control-plane agents listed in CLOUD_AGENT_PROVIDERS
 	// (the single source), with readiness derived from the user's provider connections.
 	const cloudConnectionsQuery = useProviderConnections();
@@ -540,11 +514,10 @@ export function TaskComposer({
 		(!isStandalone || selectedAgent !== "") &&
 		(!hostId || Boolean(agentCatalog?.agents.some((candidate) => candidate.id === selectedAgent && isLaunchableAgent(candidate)))) &&
 		(isCloudProject || isStandalone || projectQuery.data !== undefined) &&
-		(!hostId || (remoteAgentsQuery.isSuccess && remoteSettingsQuery.isSuccess));
+		(!hostId || (agentsQuery.isSuccess && settings !== undefined));
 	const remoteLoadError = !hostId ? undefined : !hostConnected ? t("remote.hostOffline") :
-		[projectQuery.error, remoteAgentsQuery.error, remoteSettingsQuery.error]
-			.find((cause): cause is Error => cause instanceof Error)?.message ??
-			(remoteAgentsQuery.isSuccess && !agentCatalog?.agents.some(isLaunchableAgent) ? t("remote.noReadyAgent") : undefined);
+		[projectQuery.error, agentsQuery.error].find((cause): cause is Error => cause instanceof Error)?.message ?? settingsError ??
+			(agentsQuery.isSuccess && !agentCatalog?.agents.some(isLaunchableAgent) ? t("remote.noReadyAgent") : undefined);
 	const refreshSelectedModels = useCallback(async () => {
 		const refreshed = await refreshAgentModels(selectedAgent, modelsProjectId, hostId);
 		queryClient.setQueryData(agentModelsQueryKey(selectedAgent, modelsProjectId, hostId), refreshed);
@@ -591,13 +564,7 @@ export function TaskComposer({
 		try {
 			if (!isCloudProject && selectedAgent) {
 				try {
-					if (hostId) {
-						const response = await clientForHost(hostId).POST("/api/v1/agents/readiness/ensure", { body: { agentIds: [selectedAgent], purpose: "launch" } });
-						if (!response.error && response.data) queryClient.setQueryData(["agent-readiness", hostId], response.data);
-					} else {
-						const completed = await ensureAgentReadiness([selectedAgent], "launch");
-						cacheAgentReadiness(queryClient, completed);
-					}
+					cacheAgentReadiness(queryClient, await ensureAgentReadiness([selectedAgent], "launch", hostId), hostId);
 				} catch {
 					// This check lacks the selected project's cwd and environment, so it
 					// is advisory. The project-aware launch path remains authoritative.
@@ -685,7 +652,7 @@ export function TaskComposer({
 				value: selectedAgent,
 				agents: isCloudProject ? cloudAgents : agentCatalog?.agents,
 				disabled:
-					isSubmitting || (!isCloudProject && (hostId ? remoteAgentsQuery.isFetching : agentsQuery.isFetching) && agentCatalog === undefined),
+				isSubmitting || (!isCloudProject && agentsQuery.isFetching && agentCatalog === undefined),
 				onChange: (value) => {
 					if (selectedAgent) {
 						agentDrafts[selectedAgent] = {

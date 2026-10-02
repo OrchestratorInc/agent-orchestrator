@@ -249,24 +249,12 @@ export function useBrowserAnnotationQueue({
 					}
 				}
 				let sendPayload = payload;
-				if (sourcePreviewUrlRef.current) {
+				if (hostIdRef.current && sourcePreviewUrlRef.current) {
+					let pageUrl = "";
 					try {
-						const viewed = new URL(payload.session.page.url);
-						if (/^ao-preview-[0-9a-f]{32}\.localhost$/.test(viewed.hostname)) {
-							let pageUrl = "";
-							try {
-								const expected = await aoBridge.remotes.previewUrl(hostIdRef.current ?? "", sendSessionId, sourcePreviewUrlRef.current);
-								if (viewed.origin === new URL(expected).origin) {
-									const source = new URL(sourcePreviewUrlRef.current);
-									source.pathname = viewed.pathname;
-									source.search = viewed.search;
-									source.hash = viewed.hash;
-									pageUrl = source.href;
-								}
-							} catch { /* A disconnected host cannot resolve a preview capability. */ }
-							sendPayload = { ...payload, session: { ...payload.session, page: { ...payload.session.page, url: pageUrl } } };
-						}
-					} catch { /* External page or stale target: keep its original URL. */ }
+						pageUrl = await aoBridge.remotes.resolvePreviewUrl(hostIdRef.current, sendSessionId, payload.session.page.url);
+					} catch { /* A disconnected host cannot resolve a preview capability. */ }
+					sendPayload = { ...payload, session: { ...payload.session, page: { ...payload.session.page, url: pageUrl } } };
 				}
 				const message = formatBrowserAnnotationMessage(sendPayload, { screenshotPaths });
 				const { error } = await client.POST("/api/v1/sessions/{sessionId}/send", {

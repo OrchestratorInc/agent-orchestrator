@@ -12,7 +12,6 @@ const {
 	setTransportHealthyMock,
 	connectedHostsMock,
 	baseUrlForHostMock,
-	isQuickTunnelHostMock,
 	subscribeConnectedHostsMock,
 	unsubscribeConnectedHostsMock,
 	remoteGetMock,
@@ -26,7 +25,6 @@ const {
 	setTransportHealthyMock: vi.fn(),
 	connectedHostsMock: vi.fn(() => [] as string[]),
 	baseUrlForHostMock: vi.fn((_hostId: string): string | undefined => undefined),
-	isQuickTunnelHostMock: vi.fn((_hostId: string): boolean => false),
 	subscribeConnectedHostsMock: vi.fn(),
 	unsubscribeConnectedHostsMock: vi.fn(),
 	remoteGetMock: vi.fn(),
@@ -47,7 +45,6 @@ vi.mock("./agent-switch-visibility", () => ({ agentSwitchVisibility: { setTransp
 vi.mock("./host-clients", () => ({
 	connectedHosts: connectedHostsMock,
 	baseUrlForHost: baseUrlForHostMock,
-	isQuickTunnelHost: isQuickTunnelHostMock,
 	subscribeConnectedHosts: subscribeConnectedHostsMock,
 	clientForSessionHost: () => ({ GET: remoteGetMock }),
 }));
@@ -110,7 +107,6 @@ beforeEach(() => {
 	setTransportHealthyMock.mockReset();
 	connectedHostsMock.mockReset().mockReturnValue([]);
 	baseUrlForHostMock.mockReset().mockReturnValue(undefined);
-	isQuickTunnelHostMock.mockReset().mockReturnValue(false);
 	subscribeConnectedHostsMock.mockReset().mockReturnValue(unsubscribeConnectedHostsMock);
 	unsubscribeConnectedHostsMock.mockReset();
 	remoteGetMock.mockReset().mockResolvedValue({ data: {
@@ -126,21 +122,24 @@ afterEach(() => {
 });
 
 describe("createEventTransport", () => {
-	it("polls only quick-tunnel hosts and stops when a host disconnects", async () => {
+	it("polls while probing every host, then stops after a delivered stream frame", async () => {
 		vi.useFakeTimers();
 		try {
 			connectedHostsMock.mockReturnValue(["tunnel", "direct"]);
 			baseUrlForHostMock.mockImplementation((hostId) => `http://127.0.0.1:4000/${hostId}`);
-			isQuickTunnelHostMock.mockImplementation((hostId) => hostId === "tunnel");
 			const client = fakeQueryClient();
 			const disconnect = createEventTransport(client).connect();
-			expect(cdcSources().map((source) => source.url)).not.toContain("http://127.0.0.1:4000/tunnel/api/v1/events");
+			expect(EventSourceStub.instances.map((source) => source.url)).toContain("http://127.0.0.1:4000/tunnel/api/v1/events?after=latest");
 			expect(EventSourceStub.instances.map((source) => source.url)).toContain("http://127.0.0.1:4000/direct/api/v1/events?after=latest");
 			vi.mocked(client.invalidateQueries).mockClear();
 			await vi.advanceTimersByTimeAsync(2_000);
 			expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "tunnel"] }, { cancelRefetch: false });
 			expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "tunnel"] }, { cancelRefetch: false });
 			expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-conversation", "tunnel"] }, { cancelRefetch: false });
+			expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "direct"] }, { cancelRefetch: false });
+			EventSourceStub.instances.find((source) => source.url.includes("/direct/"))!.emit("cursor", "0");
+			vi.mocked(client.invalidateQueries).mockClear();
+			await vi.advanceTimersByTimeAsync(2_000);
 			expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "direct"] }, { cancelRefetch: false });
 			connectedHostsMock.mockReturnValue(["direct"]);
 			(subscribeConnectedHostsMock.mock.calls[0][0] as () => void)();
@@ -160,6 +159,8 @@ describe("createEventTransport", () => {
 		const remoteB = EventSourceStub.instances.find((source) => source.url.includes("/box-b/"))!;
 		expect(remoteA.url).toBe("http://127.0.0.1:4000/box-a/api/v1/events?after=latest");
 		expect(remoteB.url).toBe("http://127.0.0.1:4000/box-b/api/v1/events?after=latest");
+		await Promise.resolve();
+		vi.mocked(client.invalidateQueries).mockClear();
 
 		remoteA.emit("session_updated", JSON.stringify({ sessionId: "same", payload: { conversationId: "remote-conversation" } }));
 		remoteA.emit("review_run_updated", JSON.stringify({ sessionId: "same", payload: { reviewId: "review-1", conversationId: "review-conversation" } }));
@@ -173,7 +174,7 @@ describe("createEventTransport", () => {
 		await vi.waitFor(() => expect(remoteGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation", {
 			params: { path: { sessionId: "same" }, query: { beforeSequence: undefined, limit: 200 } },
 		}));
-		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-conversation", "box-a"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-conversation", "box-a"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "box-b"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["project-config", "box-b"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-usage", "detail", "box-b"] }, { cancelRefetch: false });
@@ -181,7 +182,7 @@ describe("createEventTransport", () => {
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-b", "review-1"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-session-agent-switches", "box-b"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-interface-transition", "box-b"] }, { cancelRefetch: false });
-		remoteA.onopen?.();
+		remoteA.emit("cursor", "0");
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-conversation", "box-a"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-a"] }, { cancelRefetch: false });
 
@@ -232,7 +233,7 @@ describe("createEventTransport", () => {
 		disconnect();
 	});
 
-	it("rebinds a host stream when its reachable address changes", () => {
+	it("rebinds a host stream when its reachable address changes", async () => {
 		connectedHostsMock.mockReturnValue(["box-a"]);
 		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/old");
 		const client = fakeQueryClient();
@@ -245,11 +246,13 @@ describe("createEventTransport", () => {
 		const newSource = EventSourceStub.instances.find((source) => source.url.includes("/new/"))!;
 		expect(oldSource.closed).toBe(true);
 		expect(newSource.url).toBe("http://127.0.0.1:5000/new/api/v1/events?after=latest");
+		await Promise.resolve();
+		vi.mocked(client.invalidateQueries).mockClear();
 
-		oldSource.emit("session_updated", "{}");
-		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "box-a"] }, { cancelRefetch: false });
-		newSource.emit("session_updated", "{}");
-		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "box-a"] }, { cancelRefetch: false });
+		oldSource.emit("review_run_updated", JSON.stringify({ payload: { reviewId: "old" } }));
+		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-a", "old"] }, { cancelRefetch: false });
+		newSource.emit("review_run_updated", JSON.stringify({ payload: { reviewId: "new" } }));
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-a", "new"] }, { cancelRefetch: false });
 		disconnect();
 	});
 

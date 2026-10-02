@@ -43,6 +43,7 @@ let nextCursorA: string | undefined;
 let remoteSessionsReady = true;
 let remoteWorkspaceFailed = false;
 let remoteTerminatedA = false;
+let remoteErrorB = false;
 const page = (item: NotificationDTO): NotificationsPage => ({
 	notifications: [item], unreadCount: 1, unresolvedCount: 1,
 });
@@ -66,13 +67,15 @@ vi.mock("../hooks/useNotificationsQuery", () => ({
 	useClearNotificationMutation: () => ({ isPending: false, mutateAsync: mocks.clearLocal }),
 	useClearAllNotificationsMutation: () => ({ isPending: false, mutateAsync: mocks.clearAllLocal }),
 }));
-vi.mock("../hooks/useRemoteNotifications", () => ({
+vi.mock("../hooks/useRemoteNotifications", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useRemoteNotifications")>()),
+	connectRemoteNotificationStreams: () => () => undefined,
 	remoteNotificationsQueryKey: (hostId: string, status: string) => ["remote-notifications", hostId, status],
 	fetchRemoteNotificationsPage: (...args: unknown[]) => mocks.fetchOlder(...args),
 	useRemoteNotificationHosts: (status: NotificationListStatus) => ({
 		hosts: [
 			{ hostId: "host-a", label: "Host A", data: { ...remotePage(status === "unread" ? [...remoteA, ...unreadOnlyA] : remoteA), nextCursor: status === "all" ? nextCursorA : undefined }, isError: false, isLoading: false },
-			{ hostId: "host-b", label: "Host B", data: remotePage(remoteB), isError: false, isLoading: false },
+			{ hostId: "host-b", label: "Host B", data: remoteErrorB ? undefined : remotePage(remoteB), isError: remoteErrorB, isLoading: false },
 		],
 		totalUnreadCount: status === "unread" ? remoteA.length + unreadOnlyA.length + remoteB.length : 0,
 	}),
@@ -107,6 +110,7 @@ beforeEach(() => {
 	remoteSessionsReady = true;
 	remoteWorkspaceFailed = false;
 	remoteTerminatedA = false;
+	remoteErrorB = false;
 	mocks.markLocal.mockResolvedValue(1);
 	mocks.markRemote.mockResolvedValue({ data: { updatedCount: 1 } });
 	mocks.clearRemote.mockResolvedValue({ data: { notification: hostB }, response: { status: 200 } });
@@ -217,6 +221,18 @@ it("waits for Retry after a remote read failure instead of repeatedly sending it
 	await waitFor(() => expect(mocks.markRemote).toHaveBeenCalledTimes(3));
 });
 
+it("warns when one remote inbox fails without hiding healthy rows", async () => {
+	remoteErrorB = true;
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const invalidate = vi.spyOn(client, "invalidateQueries");
+	render(<QueryClientProvider client={client}><TooltipProvider><NotificationCenter /></TooltipProvider></QueryClientProvider>);
+	await userEvent.click(screen.getByRole("button", { name: "3 unread notifications" }));
+	expect(screen.getByText("A ping")).toBeInTheDocument();
+	expect(screen.getByText("Could not load notifications.")).toBeInTheDocument();
+	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+	expect(invalidate).toHaveBeenCalledWith({ queryKey: ["remote-notifications", "host-b", "all"] });
+});
+
 it("loads and acknowledges older notifications from the correct host", async () => {
 	nextCursorA = "older-a";
 	const older = { ...notification("Older A ping"), id: "older-notification", createdAt: "2026-09-29T10:00:00Z" };
@@ -305,7 +321,7 @@ it("shows only new remote OS notifications and opens their host-qualified sessio
 		sessionId: "new-session",
 		target: { kind: "session", sessionId: "new-session" },
 	};
-	remoteB = [hostB, newest];
+	remoteB = [newest];
 	queryClient.setQueryData(["remote-notifications", "host-b", "unread"], remotePage(remoteB));
 	view.rerender(runtime());
 	await waitFor(() => expect(shown).toHaveBeenCalledTimes(1));
@@ -313,6 +329,9 @@ it("shows only new remote OS notifications and opens their host-qualified sessio
 		id: "remote-notification:host-b:new-notification",
 		title: "Host B: New B ping",
 	}));
+	remoteB = [hostB];
+	view.rerender(runtime());
+	expect(shown).toHaveBeenCalledTimes(1);
 	queryClient.setQueryData(["remote-notifications", "host-b", "unread"], remotePage([]));
 	await act(async () => click?.("remote-notification:host-b:new-notification"));
 	expect(mocks.navigate).toHaveBeenCalledWith({

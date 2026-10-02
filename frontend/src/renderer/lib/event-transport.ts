@@ -16,7 +16,8 @@ import { agentSwitchVisibility } from "./agent-switch-visibility";
 import { codexAccountsQueryKey, writeCodexAccounts } from "../hooks/codex-accounts-state";
 import type { components } from "../../api/schema";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
-import { baseUrlForHost, connectedHosts, isQuickTunnelHost, subscribeConnectedHosts } from "./host-clients";
+import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
+import { probeRemoteSse } from "./remote-sse-probe";
 
 export type EventTransport = {
 	connect: () => () => void;
@@ -75,10 +76,8 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			let disposed = false;
 			const remoteSources = new Map<string, {
 				base: string;
-				source?: EventSource;
+				close?: () => void;
 				pollTimer?: ReturnType<typeof setInterval>;
-				retries: number;
-				retryTimer?: ReturnType<typeof setTimeout>;
 			}>();
 			const remoteConversationRefreshes = new Map<string, { dirty: boolean }>();
 			const refreshRemoteConversationOnce = (hostId: string, sessionId: string) => {
@@ -141,41 +140,19 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				if (disposed) return;
 				const base = baseUrlForHost(hostId);
 				if (!base) return;
-				const quickTunnel = isQuickTunnelHost(hostId);
-				let connection = remoteSources.get(hostId);
-				if (connection?.base !== base || (connection?.pollTimer !== undefined) !== quickTunnel) {
-					connection?.source?.close();
-					if (connection?.pollTimer !== undefined) clearInterval(connection.pollTimer);
-					if (connection?.retryTimer) clearTimeout(connection.retryTimer);
-					connection = { base, retries: 0 };
-					remoteSources.set(hostId, connection);
-				}
-				if (quickTunnel) {
-					if (connection.pollTimer === undefined) {
-						// Quick tunnels buffer SSE bodies; completed REST responses still arrive.
-						refreshRemote(hostId, true);
-						connection.pollTimer = setInterval(() => {
-							refreshRemote(hostId);
-							invalidate(["reviewer-conversation", hostId]);
-						}, 2_000);
-					}
-					return;
-				}
-				if (typeof EventSource === "undefined") return;
-				if (connection.source?.readyState !== EVENTSOURCE_CLOSED && connection.source) return;
-				connection.source?.close();
-				try {
-					const source = new EventSource(`${base.replace(/\/+$/, "")}/api/v1/events?after=latest`);
-					let opened = false;
-					connection.source = source;
-					source.onopen = () => {
-						if (disposed || remoteSources.get(hostId)?.source !== source) return;
-						opened = true;
-						connection.retries = 0;
-						refreshRemote(hostId, true);
-					};
-					const onEvent = (event: Event) => {
-						if (disposed || remoteSources.get(hostId)?.source !== source) return;
+				if (remoteSources.get(hostId)?.base === base) return;
+				const connection: { base: string; close?: () => void; pollTimer?: ReturnType<typeof setInterval> } = { base };
+				remoteSources.set(hostId, connection);
+				refreshRemote(hostId, true);
+				connection.pollTimer = setInterval(() => {
+					refreshRemote(hostId);
+					invalidate(["reviewer-conversation", hostId]);
+				}, 2_000);
+				connection.close = probeRemoteSse(
+					`${base.replace(/\/+$/, "")}/api/v1/events?after=latest`,
+					CDC_EVENT_TYPES,
+					(event) => {
+						if (disposed || remoteSources.get(hostId) !== connection) return;
 						refreshRemote(hostId);
 						if (!("data" in event)) return;
 						try {
@@ -184,38 +161,34 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 								refreshRemoteConversationOnce(hostId, decoded.sessionId);
 							}
 							if (typeof decoded.payload?.reviewId === "string") {
-							invalidate(["reviewer-conversation", hostId, decoded.payload.reviewId]);
+								invalidate(["reviewer-conversation", hostId, decoded.payload.reviewId]);
 							}
 						} catch {
 							// The host's project/session cache still refreshes after a malformed event.
 						}
-					};
-					source.onmessage = onEvent;
-					for (const type of CDC_EVENT_TYPES) source.addEventListener(type, onEvent);
-					source.onerror = () => {
-						if (disposed || remoteSources.get(hostId)?.source !== source) return;
-						if (opened) {
-							opened = false;
+					},
+					() => {
+						if (remoteSources.get(hostId) !== connection) return;
+						if (connection.pollTimer !== undefined) clearInterval(connection.pollTimer);
+						connection.pollTimer = undefined;
+						refreshRemote(hostId, true);
+					},
+					() => {
+						if (remoteSources.get(hostId) !== connection) return;
+						if (connection.pollTimer === undefined) connection.pollTimer = setInterval(() => {
 							refreshRemote(hostId);
-						}
-						if (source.readyState !== EVENTSOURCE_CLOSED || connection.retryTimer) return;
-						connection.retries += 1;
-						connection.retryTimer = setTimeout(() => {
-							connection.retryTimer = undefined;
-							connectRemote(hostId);
-						}, computeSseRetryDelayMs(connection.retries));
-					};
-				} catch {
-					connection.source = undefined;
-				}
+							invalidate(["reviewer-conversation", hostId]);
+						}, 2_000);
+						refreshRemote(hostId);
+					},
+				);
 			};
 			const syncRemoteSources = () => {
 				const active = new Set(connectedHosts());
 				for (const [hostId, connection] of remoteSources) {
-					if (active.has(hostId) && connection.base === baseUrlForHost(hostId) && (connection.pollTimer !== undefined) === isQuickTunnelHost(hostId)) continue;
-					connection.source?.close();
+					if (active.has(hostId) && connection.base === baseUrlForHost(hostId)) continue;
+					connection.close?.();
 					if (connection.pollTimer !== undefined) clearInterval(connection.pollTimer);
-					if (connection.retryTimer) clearTimeout(connection.retryTimer);
 					remoteSources.delete(hostId);
 				}
 				for (const hostId of active) connectRemote(hostId);
@@ -507,9 +480,8 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				source?.close();
 				accountSource?.close();
 				for (const connection of remoteSources.values()) {
-					connection.source?.close();
+					connection.close?.();
 					if (connection.pollTimer !== undefined) clearInterval(connection.pollTimer);
-					if (connection.retryTimer) clearTimeout(connection.retryTimer);
 				}
 				remoteSources.clear();
 				setEventsConnectionState("idle");
