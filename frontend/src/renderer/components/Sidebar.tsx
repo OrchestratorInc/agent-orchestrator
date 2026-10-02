@@ -1019,7 +1019,6 @@ export function Sidebar({
 						trailing={
 							<CreateProjectButton
 								existingProjectPaths={existingProjectPaths}
-								hideTrigger={workspaces.length === 0 && remoteHosts.length === 0}
 								onCloneProject={onCloneProject}
 								onCreateProject={onCreateProject}
 								onInitializeProject={onInitializeProject}
@@ -3202,19 +3201,17 @@ function SidebarSearchButton({ onOpen }: { onOpen: () => void }) {
 
 function CreateProjectButton({
 	existingProjectPaths,
-	hideTrigger = false,
 	onCloneProject,
 	onCreateProject,
 	onInitializeProject,
 	onOpenExistingProject,
 }: Pick<SidebarProps, "onCloneProject" | "onCreateProject" | "onInitializeProject"> & {
 	existingProjectPaths: readonly string[];
-	hideTrigger?: boolean;
 	onOpenExistingProject: (path: string) => void | Promise<void>;
 }) {
 	const { t } = useTranslation();
 	// Single CreateProjectFlow owner for the sidebar: the header "+" stays mounted
-	// (CSS-hidden when collapsed or on the empty start page) so it can own
+	// (CSS-hidden when collapsed) so it can own
 	// openSignal for ⌘N on every shell route. The collapsed rail button below
 	// reuses this flow via requestCreateProject().
 	const createProjectNonce = useUiStore((state) => state.createProjectNonce);
@@ -3238,10 +3235,7 @@ function CreateProjectButton({
 						<span className="inline-flex">
 							<button
 								aria-label={t("shell.newProject")}
-								className={cn(
-									"sidebar-icon-action grid size-icon-xl shrink-0 place-items-center rounded-sm !bg-transparent text-passive hover:!bg-transparent focus:!bg-transparent focus-visible:!bg-transparent active:!bg-transparent hover:text-foreground",
-									hideTrigger && "hidden",
-								)}
+								className="sidebar-icon-action grid size-icon-xl shrink-0 place-items-center rounded-sm !bg-transparent text-passive hover:!bg-transparent focus:!bg-transparent focus-visible:!bg-transparent active:!bg-transparent hover:text-foreground"
 								disabled={disabled}
 								onClick={choosePath}
 								type="button"

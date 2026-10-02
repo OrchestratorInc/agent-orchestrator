@@ -106,6 +106,8 @@ export function SessionInspectorRail({
 		edge: "left",
 		onExpand,
 		restoreMin: restoreMinWidth,
+		// Restore the preferred width after a narrow window or zoom level widens again.
+		reclampOnWindowResize: true,
 	});
 	const transition = prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING;
 	const hidden = !isOpen && settledClosed;

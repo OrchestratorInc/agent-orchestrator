@@ -66,9 +66,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		render: (_t, titleHidden) => (
 			<>
 				<BrowserProfilesSection titleHidden={titleHidden} />
-				<div className="border-t border-border/60 pt-5">
-					<BrowserDownloadsSection />
-				</div>
+				<BrowserDownloadsSection />
 			</>
 		),
 	},
