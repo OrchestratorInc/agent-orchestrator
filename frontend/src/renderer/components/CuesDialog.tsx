@@ -299,7 +299,7 @@ function ProjectCuesSettings({ projectId, onBusyChange }: CuesSettingsProps) {
 					]}
 					triggerClassName="w-fit self-start"
 					menuAlign="start"
-					menuClassName="border-foreground/25!"
+					menuClassName="border-foreground/12!"
 					onChange={(type) => setDraft((current) => ({ ...current, type }))}
 				/>
 			</div>
