@@ -1398,6 +1398,7 @@ func (c *Controller) sendLocked(
 		Origin:              normalizeOrigin(msg.Origin),
 		ClientMessageID:     msg.ClientMessageID,
 		DeliveryContentJSON: deliveryContent,
+		AuthoredByUser:      msg.AuthoredByUser,
 	}
 
 	var (

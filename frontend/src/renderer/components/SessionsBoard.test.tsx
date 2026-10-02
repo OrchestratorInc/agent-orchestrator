@@ -2,7 +2,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
+import {
+	type WorkspaceSession,
+	type WorkspaceSummary,
+} from "../types/workspace";
 import { toKanbanColumn } from "@aoagents/product-ui";
 import { appI18n } from "../i18n";
 
@@ -55,10 +58,18 @@ vi.mock("../hooks/useSessionUsageSummaries", () => ({
 vi.mock("../lib/api-client", () => ({
 	apiClient: { POST: (...args: unknown[]) => postMock(...args) },
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => () => undefined,
 }));
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
+		cloud: {
+			getSession: vi.fn().mockResolvedValue(null),
+			onSessionChanged: vi.fn(() => () => {}),
+			signIn: vi.fn().mockResolvedValue(undefined),
+			signOut: vi.fn().mockResolvedValue(undefined),
+		},
 		clipboard: {
 			writeText: vi.fn(),
 		},
@@ -115,6 +126,16 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
+	it.each(["cloud", "standalone", undefined] as const)("hides the cue runner for %s projects", (kind) => {
+		boardActionsInPanelMock.mockReturnValue(true);
+		workspaceQueryMock.mockReturnValue({
+			data: [{ ...workspaceWithSessions([]), kind }],
+			isError: false,
+		});
+		renderBoard("p1");
+		expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
+	});
+
 	it("uses the last human message time rather than generic session updatedAt", () => {
 		const presentation = toBoardSessionPresentation(
 			boardSession({
@@ -183,6 +204,7 @@ describe("SessionsBoard", () => {
 					id: "p1",
 					name: "solkit-ui",
 					path: "/tmp/solkit-ui",
+					kind: "single_repo",
 					sessions: [
 						{
 							id: "s1",
@@ -213,6 +235,7 @@ describe("SessionsBoard", () => {
 		expect(
 			within(screen.getByRole("button", { name: "New task" })).getByText("Task").hasAttribute("data-compact-label"),
 		).toBe(true);
+		expect(screen.getByRole("button", { name: "Run a cue" }).querySelector(".lucide-play")).not.toBeNull();
 	});
 
 	it.each([
@@ -740,12 +763,34 @@ describe("SessionsBoard", () => {
 		);
 		expect(within(noSignalCard).getByText("No signal").parentElement).toHaveAttribute(
 			"data-kanban-column",
-			"needs_review",
+			"building",
 		);
 		expect(within(draftCard).getByText("Draft PR").parentElement).toHaveAttribute(
 			"data-kanban-column",
 			"validating",
 		);
+	});
+
+	it("places a no-signal display status alongside idle even with a review column", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([
+				boardSession({
+					id: "no-signal-review",
+					title: "silent reviewer",
+					status: "review_pending",
+					kanbanColumn: "needs_review",
+					displayStatus: "No signal",
+				}),
+			])],
+			isError: false,
+		});
+
+		renderBoard("p1");
+		const card = screen.getByText("silent reviewer").closest('[data-testid="board-session-card"]') as HTMLElement;
+		expect(within(card).getByText("No signal").parentElement).toHaveAttribute("data-kanban-column", "building");
+		const building = screen.getAllByTestId("board-column").find((column) => column.dataset.column === "building");
+		expect(building).toBeDefined();
+		expect(within(building!).getByText("silent reviewer")).toBeInTheDocument();
 	});
 
 	it("keeps a PR-less exited session in the building lane with an Exited badge", () => {
@@ -1610,6 +1655,7 @@ function workspaceWithSessions(sessions: WorkspaceSession[]): WorkspaceSummary {
 		id: "p1",
 		name: "radic",
 		path: "/tmp/radic",
+		kind: "single_repo",
 		sessions,
 	};
 }

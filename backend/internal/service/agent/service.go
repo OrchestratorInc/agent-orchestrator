@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -66,28 +68,30 @@ type modelCatalogCall struct {
 // Service owns normalized harness readiness and the unchanged model catalog.
 // Consumers share coordinator checks instead of probing adapters directly.
 type Service struct {
-	agents          []agentregistry.HarnessAgent
-	readiness       *readinessCoordinator
-	cache           ports.AgentModelCatalogCache
-	discoverer      ports.AgentModelDiscoverer
-	projects        ProjectLookup
-	sessions        SessionUsageLookup
-	resolverMu      map[string]*sync.Mutex
-	modelCallMu     sync.Mutex
-	modelCalls      map[string]*modelCatalogCall
-	modelGeneration map[string]int64
-	discoverySlots  chan struct{}
-	ctx             context.Context
-	now             func() time.Time
-	codexAccounts   *codexAccountManager
-	codexSwitches   *codexAccountSwitchCoordinator
-	logger          *slog.Logger
+	agents            []agentregistry.HarnessAgent
+	readiness         *readinessCoordinator
+	cache             ports.AgentModelCatalogCache
+	discoverer        ports.AgentModelDiscoverer
+	modelDiscoveryDir string
+	projects          ProjectLookup
+	sessions          SessionUsageLookup
+	resolverMu        map[string]*sync.Mutex
+	modelCallMu       sync.Mutex
+	modelCalls        map[string]*modelCatalogCall
+	modelGeneration   map[string]int64
+	discoverySlots    chan struct{}
+	ctx               context.Context
+	now               func() time.Time
+	codexAccounts     *codexAccountManager
+	codexSwitches     *codexAccountSwitchCoordinator
+	logger            *slog.Logger
 }
 
 // Deps contains optional durable dependencies for the agent catalog service.
 type Deps struct {
 	Cache                  ports.AgentModelCatalogCache
 	Discoverer             ports.AgentModelDiscoverer
+	ModelDiscoveryDir      string
 	Projects               ProjectLookup
 	Sessions               SessionUsageLookup
 	Context                context.Context
@@ -125,6 +129,7 @@ func New() *Service {
 func NewWithDeps(deps Deps) *Service {
 	agents := agentregistry.Harnessed()
 	svc := newService(agents, deps.Cache, deps.Projects, deps.Discoverer)
+	svc.modelDiscoveryDir = deps.ModelDiscoveryDir
 	if deps.Logger != nil {
 		svc.logger = deps.Logger
 	}
@@ -398,7 +403,29 @@ func (s *Service) modelCatalogInputsChanged(ctx context.Context, agentID, projec
 	return s.discoverer.CatalogFingerprint(ctx, request) != cachedFingerprint
 }
 
+// credentialScopePrefix marks a model-catalog scope that is not a project but a
+// cloud credential kind. A cloud session has no local project, yet its picker
+// must show the models the pushed credential can run; encoding the credential
+// type into the scope caches each provider's catalog separately with no schema
+// change. '@' and ':' cannot appear in a real project ID (projectIDPattern), so
+// the project and credential namespaces never collide.
+const credentialScopePrefix = "@cred:"
+
+// credentialTypeFromScope returns the credential type a scope carries, if any.
+func credentialTypeFromScope(scope string) (string, bool) {
+	rest, ok := strings.CutPrefix(scope, credentialScopePrefix)
+	if !ok || strings.TrimSpace(rest) == "" {
+		return "", false
+	}
+	return rest, true
+}
+
 func (s *Service) modelCatalogScope(ctx context.Context, projectID string) (string, error) {
+	// A credential scope has no backing project; keep it verbatim so its catalog
+	// caches under its own key instead of collapsing to the device-global scope.
+	if _, ok := credentialTypeFromScope(projectID); ok {
+		return projectID, nil
+	}
 	if strings.TrimSpace(projectID) == "" || s.projects == nil {
 		return "", nil
 	}
@@ -414,15 +441,22 @@ func (s *Service) modelCatalogScope(ctx context.Context, projectID string) (stri
 
 func (s *Service) modelDiscoveryRequest(ctx context.Context, agentID, projectID, binary string) (ports.AgentModelDiscoveryRequest, error) {
 	request := ports.AgentModelDiscoveryRequest{AgentID: agentID, Binary: binary}
-	if strings.TrimSpace(projectID) == "" || s.projects == nil {
+	// Credential-scoped discovery reflects a cloud session's pushed credential,
+	// not a local project: leave WorkingDir/Env empty and let the adapter unlock
+	// that provider's models from the credential type alone.
+	if credentialType, ok := credentialTypeFromScope(projectID); ok {
+		request.CredentialType = credentialType
 		return request, nil
+	}
+	if strings.TrimSpace(projectID) == "" || s.projects == nil {
+		return s.globalModelDiscoveryRequest(request)
 	}
 	project, ok, err := s.projects.GetProject(ctx, projectID)
 	if err != nil {
 		return ports.AgentModelDiscoveryRequest{}, fmt.Errorf("resolve model discovery project %s: %w", projectID, err)
 	}
 	if !ok {
-		return request, nil
+		return s.globalModelDiscoveryRequest(request)
 	}
 	request.WorkingDir = project.Path
 	if len(project.Config.Env) > 0 {
@@ -431,6 +465,20 @@ func (s *Service) modelDiscoveryRequest(ctx context.Context, agentID, projectID,
 			request.Env[key] = value
 		}
 	}
+	return request, nil
+}
+
+func (s *Service) globalModelDiscoveryRequest(request ports.AgentModelDiscoveryRequest) (ports.AgentModelDiscoveryRequest, error) {
+	if s.modelDiscoveryDir == "" {
+		return request, nil
+	}
+	if !filepath.IsAbs(s.modelDiscoveryDir) {
+		return ports.AgentModelDiscoveryRequest{}, fmt.Errorf("model discovery directory must be absolute: %s", s.modelDiscoveryDir)
+	}
+	if err := os.MkdirAll(s.modelDiscoveryDir, 0o700); err != nil {
+		return ports.AgentModelDiscoveryRequest{}, fmt.Errorf("create model discovery directory: %w", err)
+	}
+	request.WorkingDir = s.modelDiscoveryDir
 	return request, nil
 }
 

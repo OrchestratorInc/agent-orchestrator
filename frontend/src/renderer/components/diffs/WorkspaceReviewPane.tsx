@@ -33,7 +33,7 @@ import { usePersistentGutterUtility } from "./usePersistentGutterUtility";
 const PATCH_BATCH_SIZE = 100;
 const parsedPatchCache = new Map<string, FileDiffMetadata[]>();
 const MAX_PARSED_GROUPS = 24;
-const workingScopeOrder = ["unstaged", "staged"] as const;
+const workingScopeOrder = ["unstaged", "staged", "untracked"] as const;
 const SOURCE_CONTROL = MENU_TRIGGER_CHROME;
 // Height of the custom per-file header row below (h-9).
 const FILE_HEADER_HEIGHT_PX = 36;
@@ -83,16 +83,15 @@ function parseGroupPatch(workspaceVersion: string | undefined, scope: WorkspaceD
 
 function sectionFiles(data: WorkspaceFilesResponse, scope: WorkspaceDiffScope): WorkspaceFileSummary[] {
 	if (scope === "combined") {
-		const untrackedPaths = new Set(data.sections.untracked.map((file) => file.path));
-		return data.files.filter((file) => file.status !== "unmodified" && !untrackedPaths.has(file.path));
+		return data.files.filter((file) => file.status !== "unmodified");
 	}
 	return data.sections[scope];
 }
 
 function initialReviewSelection(data: WorkspaceFilesResponse): { commitSha?: string; scope: WorkspaceDiffScope } {
-	const workingScope = workingScopeOrder.find((scope) => data.sections[scope].length > 0);
-	if (workingScope) return { scope: workingScope };
-	if (data.commits[0]) return { scope: "committed", commitSha: data.commits[0].sha };
+	if (sectionFiles(data, "combined").length === 0 && data.commits[0]) {
+		return { scope: "committed", commitSha: data.commits[0].sha };
+	}
 	return { scope: "combined" };
 }
 
@@ -199,21 +198,18 @@ export function WorkspaceReviewPane({
 		[data.sections],
 	);
 	const combinedWorkingCount = sectionFiles(data, "combined").length;
-	const showCombinedWorkingSource = visibleWorkingScopes.length === 0
-		&& data.sections.committed.length === 0
-		&& data.commits.length === 0
-		&& !data.compareBaseSha
-		&& !data.compareBaseRef
-		&& combinedWorkingCount > 0;
-	const workingSourceOptions: WorkspaceDiffScope[] = showCombinedWorkingSource ? ["combined"] : [...visibleWorkingScopes];
+	const workingSourceOptions = useMemo<WorkspaceDiffScope[]>(
+		() => combinedWorkingCount > 0 ? ["combined", ...visibleWorkingScopes] : visibleWorkingScopes,
+		[combinedWorkingCount, visibleWorkingScopes],
+	);
 	useEffect(() => {
 		if (scope === "committed" && selectedCommit) return;
-		if (scope === "combined" && showCombinedWorkingSource) return;
+		if (scope === "combined" && combinedWorkingCount > 0) return;
 		if (scope !== "committed" && scope !== "combined" && data.sections[scope].length > 0) return;
 		const next = initialReviewSelection(data);
 		setScope(next.scope);
 		setSelectedCommitSha(next.commitSha);
-	}, [data, initialSelection, scope, selectedCommit, showCombinedWorkingSource]);
+	}, [combinedWorkingCount, data, initialSelection, scope, selectedCommit]);
 
 	const allFiles = useMemo(
 		() => scope === "committed" && selectedCommit ? selectedCommit.files : sectionFiles(data, scope),
@@ -227,12 +223,18 @@ export function WorkspaceReviewPane({
 	);
 	const { viewed, toggle: toggleViewed } = useViewedFiles(sessionId, reviewSelectionKey, allFiles);
 
+	// Reset the collapse / deferred / batch state only when the review target
+	// itself changes (workspace version, selected commit/scope, session) — computed
+	// from the unfiltered allFiles. Keying on the filtered `files` instead would
+	// reset all of this on every file-filter keystroke, discarding the user's manual
+	// expand/collapse, loaded deferred diffs, and progressive batch progress.
 	useEffect(() => {
 		const savedViewed = readViewedRecords(viewedStorageKey(sessionId, reviewSelectionKey));
-		setCollapsedPaths(new Set(files.filter((file) => isDeferredByDefault(file) || isViewedRecord(file, savedViewed)).map((file) => file.path)));
+		setCollapsedPaths(new Set(allFiles.filter((file) => isDeferredByDefault(file) || isViewedRecord(file, savedViewed)).map((file) => file.path)));
 		setLoadedDeferredPaths(new Set());
 		setActiveBatchCount(4);
-	}, [data.workspaceVersion, files, reviewSelectionKey, sessionId]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- reset on review-target identity, not on allFiles' reference (which changes on every poll) or the filtered files (which changes per keystroke).
+	}, [data.workspaceVersion, reviewSelectionKey, sessionId]);
 
 	const requestedFiles = useMemo(
 		() => files.filter((file) => !isDeferredByDefault(file) || loadedDeferredPaths.has(file.path)),
@@ -475,15 +477,14 @@ export function WorkspaceReviewPane({
 	menuActionsRef.current = { selectCommit, selectScope };
 	const sourceMenu = useMemo<ReviewSourceMenu>(() => {
 		const label = (entry: WorkspaceDiffScope) => entry === "combined" ? t("files.reviewChanges") : t(`files.section.${entry}`);
-		const scopeEntries: WorkspaceDiffScope[] = showCombinedWorkingSource ? ["combined"] : [...visibleWorkingScopes];
 		return {
 			label: selectedCommit ? selectedCommit.sha.slice(0, 7) : label(scope),
 			scopes: showReviewScopeSwitcher
-				? scopeEntries.map((entry) => ({ key: entry, label: label(entry), selected: scope === entry, select: () => menuActionsRef.current.selectScope(entry) }))
+				? workingSourceOptions.map((entry) => ({ key: entry, label: label(entry), selected: scope === entry, select: () => menuActionsRef.current.selectScope(entry) }))
 				: [],
 			commits: data.commits.map((commit) => ({ sha: commit.sha, subject: commit.subject, timestamp: commit.timestamp, selected: scope === "committed" && selectedCommit?.sha === commit.sha, select: () => menuActionsRef.current.selectCommit(commit) })),
 		};
-	}, [data, scope, selectedCommit, showCombinedWorkingSource, showReviewScopeSwitcher, t, visibleWorkingScopes]);
+	}, [data, scope, selectedCommit, showReviewScopeSwitcher, t, workingSourceOptions]);
 	useEffect(() => {
 		onSourceMenuChange?.(sourceMenu);
 	}, [onSourceMenuChange, sourceMenu]);
