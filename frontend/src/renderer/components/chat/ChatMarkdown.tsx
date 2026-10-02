@@ -146,6 +146,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	text,
 	streaming = false,
 	muted = false,
+	className,
 }: {
 	text: string;
 	streaming?: boolean;
@@ -155,6 +156,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	 * being dimmed with opacity — which would wash out code and links too.
 	 */
 	muted?: boolean;
+	className?: string;
 }) {
 	return (
 		<StreamingProse.Provider value={streaming}>
@@ -162,6 +164,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 				className={cn(
 					"chat-md leading-[1.58]",
 					muted ? "text-[13px] text-muted-foreground" : "text-sm text-foreground",
+					className,
 				)}
 			>
 				<Markdown remarkPlugins={PLUGINS} components={COMPONENTS} urlTransform={chatUrlTransform}>

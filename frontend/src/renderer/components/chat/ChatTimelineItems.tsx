@@ -694,9 +694,7 @@ export function OriginMessage({ message }: { message: ConversationMessage }) {
 			{longReport && expanded ? (
 				<ChatMarkdown text={visibleText} muted />
 			) : (
-				<p className={cn("whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground", longReport && "line-clamp-3")}>
-					<SessionLinkedText text={preview} />
-				</p>
+				<ChatMarkdown text={preview} muted className="whitespace-pre-wrap text-sm leading-relaxed" />
 			)}
 			{longReport ? <AutomationExpandButton expanded={expanded} onClick={() => setExpanded((current) => !current)} /> : null}
 		</AutomationMessageFrame>
