@@ -325,7 +325,15 @@ done
 args=(remote-host enable)
 "$tunnel" && args+=(--tunnel-only)
 enable_output="$("$host_root/current/resources/daemon/ao" "${args[@]}")"
-printf '%s\n' "$enable_output"
+addresses=()
+password=""
+while IFS= read -r line; do
+	case "$line" in
+		"Address: "*) addresses+=("$line") ;;
+		"Password: "*) password="${line#Password: }" ;;
+		*) printf '%s\n' "$line" ;;
+	esac
+done <<< "$enable_output"
 install_cli_link
 prune_old_releases
 if "$tunnel" && [[ "$enable_output" != *"Address: https://"* ]]; then
@@ -345,11 +353,14 @@ if "$tunnel" && [[ "$enable_output" != *"Address: https://"* ]]; then
 		sleep 1
 	done
 	if [[ -n "$address" ]]; then
-		printf '%s\n' "$address"
+		addresses+=("$address")
 	else
 		printf '\nTunnel address is not ready. On this host, run: %s remote-host status\n' "$host_root/current/resources/daemon/ao"
 		printf '%s\n' 'Add the host on your laptop once status shows its HTTPS address.'
 		exit 1
 	fi
 fi
-printf '\nOn your laptop: Settings → Remote hosts → Add host. Enter the address and password above.\n'
+printf '\nPair this host\n\n'
+printf '%s\n' "${addresses[@]}"
+printf '\nPassword: %s\n\n' "$password"
+printf 'On your laptop: enable Developer mode, then Settings → Remote hosts → Add host.\n'

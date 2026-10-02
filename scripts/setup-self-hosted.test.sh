@@ -307,7 +307,8 @@ case "${1:-}" in
 		if [[ "$1" == tunnel-pairing ]]; then
 			[[ "$result" == 0 ]] || { cat "$tmp/out" >&2; exit 1; }
 			grep -q '^Address: https://example.trycloudflare.com:443$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
-			grep -q 'Enter the address and password above' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			awk '/^Address: https:\/\/example.trycloudflare.com:443$/ { address = NR } /^Password: test-secret$/ { password = NR } END { exit !(address && password > address + 1) }' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			grep -q 'enable Developer mode, then Settings' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 			TEST_SERVICE_PATH_CAPTURE="$tmp/service-path" "$tmp/host/run-daemon.sh"
 			[[ ":$(<"$tmp/service-path"):" == *":$tmp/host/current/resources/acp-runtime/node/bin:"* ]] || {
 				printf '%s\n' 'daemon service PATH omits bundled Node' >&2; exit 1;
@@ -315,7 +316,7 @@ case "${1:-}" in
 		else
 			[[ "$result" != 0 ]] || { cat "$tmp/out" >&2; exit 1; }
 			grep -q 'Tunnel address is not ready' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
-			! grep -q 'Enter the address and password above' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			! grep -q 'Pair this host' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 		fi
 		;;
 	*) printf 'Usage: %s {bad-tmux|no-systemd|inactive-systemd|prune|failed-restarts|failed-first-install|failed-readiness|failed-mac-bootstrap|failed-mac-readiness|failed-mac-first|relative-current|concurrent|interrupted|piped|tunnel-pairing|tunnel-unavailable}\n' "$0" >&2; exit 2 ;;
