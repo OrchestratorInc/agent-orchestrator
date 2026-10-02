@@ -47,6 +47,8 @@ type lifecycleStack struct {
 	activityDone  <-chan struct{}
 	scmDone       <-chan struct{}
 	trackerDone   <-chan struct{}
+	// mentionSpawnDone closes when the opt-in mention-spawn loop has stopped.
+	mentionSpawnDone <-chan struct{}
 	// projectSyncDone closes when the Projects v2 status-sync loop has stopped.
 	projectSyncDone <-chan struct{}
 	// chatBotDone closes when the chat command loop has stopped.
@@ -110,6 +112,9 @@ func (l *lifecycleStack) Stop() {
 	}
 	if l.scmDone != nil {
 		<-l.scmDone
+	}
+	if l.mentionSpawnDone != nil {
+		<-l.mentionSpawnDone
 	}
 	if l.chatBotDone != nil {
 		<-l.chatBotDone

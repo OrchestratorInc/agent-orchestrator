@@ -231,6 +231,17 @@ type SCMMentionObservation struct {
 	CreatedAt time.Time
 }
 
+// SCMRepoMention is a mention found by a repo-wide comment scan rather than a
+// per-PR timeline read: it names the PR it was left on, because the scan does
+// not start from a known PR.
+type SCMRepoMention struct {
+	// PRNumber is the pull request the comment was posted under.
+	PRNumber int
+	// PRURL is the canonical browser URL of that pull request.
+	PRURL   string
+	Mention SCMMentionObservation
+}
+
 // SCMReviewSummaryObservation is one submitted review with its provider summary URL.
 type SCMReviewSummaryObservation struct {
 	// ID is the provider's stable submitted-review identifier.

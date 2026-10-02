@@ -334,6 +334,7 @@ func Run() error {
 		lcStack.LCM.SetUsageFinalizer(usageCollector)
 	}
 	lcStack.scmDone = startSCMObserver(ctx, store, lcStack.LCM, chatNotifier, dutyEscalator, log)
+	lcStack.mentionSpawnDone = startMentionSpawn(ctx, store, sessionSvc, chatNotifier, log)
 	var prActions prsvc.ActionManager
 	if mergeProvider, mergeErr := newGitHubSCMProvider(log); mergeErr != nil {
 		logSCMProviderDisabled(log, mergeErr)

@@ -32,7 +32,10 @@ type restIssueComment struct {
 	ID      int64  `json:"id"`
 	Body    string `json:"body"`
 	HTMLURL string `json:"html_url"`
-	User    struct {
+	// IssueURL is the API URL of the issue or PR the comment belongs to; the
+	// repo-wide scan reads the number from it.
+	IssueURL string `json:"issue_url"`
+	User     struct {
 		Login string `json:"login"`
 		Type  string `json:"type"`
 	} `json:"user"`
@@ -81,23 +84,33 @@ func (p *Provider) fetchMentions(ctx context.Context, ref ports.SCMPRRef, now ti
 
 	out := make([]ports.SCMMentionObservation, 0, len(comments))
 	for _, c := range comments {
-		// Bot comments include AO's own replies and CI chatter; echoing those
-		// back to the agent would loop.
-		if strings.EqualFold(c.User.Type, "Bot") {
+		if !addressedToAgent(c, matcher) {
 			continue
 		}
-		if !matcher.MatchString(c.Body) {
-			continue
-		}
-		out = append(out, ports.SCMMentionObservation{
-			ID:        strconv.FormatInt(c.ID, 10),
-			Author:    c.User.Login,
-			Body:      c.Body,
-			URL:       c.HTMLURL,
-			CreatedAt: c.CreatedAt,
-		})
+		out = append(out, c.mention())
 	}
 	return out
+}
+
+// addressedToAgent is the one rule for "this comment is an instruction for
+// the agent", shared by the per-PR timeline read and the repo-wide scan.
+func addressedToAgent(c restIssueComment, matcher *regexp.Regexp) bool {
+	// Bot comments include AO's own replies and CI chatter; echoing those
+	// back to the agent would loop.
+	if strings.EqualFold(c.User.Type, "Bot") {
+		return false
+	}
+	return matcher.MatchString(c.Body)
+}
+
+func (c restIssueComment) mention() ports.SCMMentionObservation {
+	return ports.SCMMentionObservation{
+		ID:        strconv.FormatInt(c.ID, 10),
+		Author:    c.User.Login,
+		Body:      c.Body,
+		URL:       c.HTMLURL,
+		CreatedAt: c.CreatedAt,
+	}
 }
 
 // mentionTrigger returns the configured phrase, defaulting to "@ao".
