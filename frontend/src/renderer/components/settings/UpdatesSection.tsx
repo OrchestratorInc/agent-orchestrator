@@ -9,6 +9,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { useRequestUpdateInstall } from "../../hooks/useRequestUpdateInstall";
 import { useUpdateStatus, requestUpdateDownload } from "../../hooks/useUpdateStatus";
 import type { UpdateChannel, UpdateSettings, UpdateState, UpdateStatus } from "../../../main/update-settings";
+import { looksLikeTechnicalUpdateDump } from "../../../shared/update-telemetry";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
@@ -31,20 +32,6 @@ const MIN_MANUAL_CHECK_VISIBLE_MS = 1_000;
 // on screen to explain it. Releasing the button is always safe: the main process
 // serializes updater operations, so a redundant check queues rather than racing.
 const MAX_MANUAL_CHECK_MS = 90_000;
-
-// Last-resort guard: if an error message looks like a raw electron-updater dump
-// (HTML, headers, stack traces), hide it from the UI. The main process already
-// rewrites most cases; this catches anything that slips through.
-const RAW_DUMP_MAX_CHARS = 280;
-function isLikelyRawDump(msg: string): boolean {
-	if (msg.length > RAW_DUMP_MAX_CHARS) return true;
-	if (/\n\s*at\s+/.test(msg)) return true;
-	if (/Headers:\s*\{/i.test(msg)) return true;
-	if (/<html[\s>]/i.test(msg)) return true;
-	if (/app\.asar/i.test(msg)) return true;
-	if (/HttpError:\s*\d{3}/i.test(msg)) return true;
-	return false;
-}
 
 let updateRequestSequence = 0;
 
@@ -86,11 +73,11 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 
 	const finishManualCheck = (requestId: string, error?: unknown) => {
 		if (error) {
-			const msg = error instanceof Error ? error.message : String(error);
-			// Guard: raw electron-updater dumps (HTML bodies, headers, stacks)
-			// must never reach Settings. The main process rewrites most cases;
-			// this is the last line of defence for anything that slips through.
-			setManualCheckFailure(isLikelyRawDump(msg) ? t("settings.updates.updateFailed") : msg);
+			// A non-Error rejection carries no usable text, and the render-side
+			// guard below cannot recover the generic once it has been stringified
+			// (e.g. "[object Object]"), so fall back here. Error messages are
+			// guarded where they render, alongside status.message / checkError.
+			setManualCheckFailure(error instanceof Error ? error.message : t("settings.updates.updateFailed"));
 		}
 		clearManualCheckWatchdog();
 		if (manualCheckFinishTimerRef.current !== null) clearTimeout(manualCheckFinishTimerRef.current);
@@ -272,11 +259,30 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 	// Show the escape hatch whenever a feature build is running or pinned.
 	const featurePr = activeBuild?.pr ?? (developerMode ? null : (form.feature?.pr ?? null));
 
+	// Last-resort guard over everything Settings renders as updater error text,
+	// not just IPC rejections: the main process rewrites most dumps, but a raw
+	// one that slips through status.message or status.checkError must never reach
+	// the UI. Guarding here (rather than in finishManualCheck) also covers the
+	// pushed statuses, which updates:check never rejects with.
+	const guardUpdateText = (text: string | undefined): string | undefined =>
+		text !== undefined && looksLikeTechnicalUpdateDump(text) ? t("settings.updates.updateFailed") : text;
+	const effectiveStatus: UpdateStatus = manualCheckFailure
+		? { ...status, state: "error", message: manualCheckFailure }
+		: status;
+	// Sanitize before the render so status.message and status.checkError compare
+	// by what is actually shown: comparing the raw values would let two different
+	// dumps both rewrite to the same generic line and render twice.
+	const displayStatus: UpdateStatus = {
+		...effectiveStatus,
+		message: guardUpdateText(effectiveStatus.message),
+		checkError: guardUpdateText(effectiveStatus.checkError),
+	};
+
 	return (
 		<>
 			<SettingsSection title={t("settings.updates")} sectionId="updates" titleHidden={titleHidden} grouped>
 				<UpdateActions
-					status={manualCheckFailure ? { ...status, state: "error", message: manualCheckFailure } : status}
+					status={displayStatus}
 					manualCheckRequestId={manualCheckRequestId}
 					startManualCheck={startManualCheck}
 					finishManualCheck={finishManualCheck}
