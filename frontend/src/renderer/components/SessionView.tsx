@@ -369,6 +369,10 @@ function SessionInspectorRail({
 		edge: "left",
 		onExpand,
 		restoreMin: restoreMinWidth,
+		// A tab switch re-runs the restore against the live max; in a narrow window
+		// that is the 300px floor. Re-apply the preferred width when the window (or
+		// zoom) widens again so the rail does not stay pinned there.
+		reclampOnWindowResize: true,
 	});
 
 	const transition = prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING;
@@ -445,10 +449,15 @@ function SessionInspectorRail({
 // x-transform). Summary/Reviews/Files share a utility width, while Browser
 // automatically grows into a co-work canvas. Chat readability clamps either
 // profile before the conversation can become unusably narrow.
+// Startup steps: 0 creating the workspace, 1 connecting to the worker,
+// 2 preparing the repository and agent, 3 connecting the terminal. The
+// workspace exists once the sandbox reaches "bootstrapping" (the provider
+// reports it running and AO is starting its worker inside); "requested" and
+// "provisioning" are still creating it.
 function cloudStartupStage(observedState: string | undefined, workerConnected: boolean, terminalOnly = false): number {
 	return terminalOnly ? 3
 		: workerConnected && (observedState === "bootstrapping" || observedState === "running") ? 2
-		: observedState === "provisioning" || observedState === "bootstrapping" ? 1
+		: observedState === "bootstrapping" || observedState === "running" ? 1
 		: 0;
 }
 
@@ -472,8 +481,9 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			onEvent: (event) => {
 				const occurredAt = Date.parse(event.createdAt);
 				if (event.sessionId !== sessionId || !Number.isFinite(occurredAt) || occurredAt < replayCutoff.current) return;
-				const index = event.type === "sandbox.provisioning" ? 1
-					: event.type === "worker.connected" || event.type === "worker.ready" ? 2
+				// sandbox.provisioning only marks the start of workspace creation;
+				// the workspace's completion comes from the observed state above.
+				const index = event.type === "worker.connected" || event.type === "worker.ready" ? 2
 					: event.type === "agent.ready" ? 3
 					: undefined;
 				if (index !== undefined) setProgress((current) => index > current.index ? { index, since: event.createdAt } : current);
@@ -522,8 +532,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 						// contain agent.ready long before this workspace restart.
 						const occurredAt = Date.parse(event.createdAt);
 						if (!Number.isFinite(occurredAt) || occurredAt < replayCutoff.current) continue;
-						const index = event.type === "sandbox.provisioning" ? 1
-							: event.type === "worker.connected" || event.type === "worker.ready" ? 2
+						const index = event.type === "worker.connected" || event.type === "worker.ready" ? 2
 							: event.type === "agent.ready" ? 3
 							: undefined;
 						if (index !== undefined) latest = { index, since: event.createdAt };
@@ -545,7 +554,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 		};
 	}, [client, orgId, sessionId, terminalOnly]);
 	const steps = useMemo(() => [
-		t("terminal.sessionLoader.building"),
+		t("terminal.sessionLoader.workspace"),
 		t("terminal.sessionLoader.worker"),
 		t("terminal.sessionLoader.repositoryAgent"),
 		t("terminal.sessionLoader.terminal"),
@@ -567,7 +576,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			<MultiStepLoader
 				ariaLabel={t("terminal.sessionLoader.label")}
 				activeIndex={completed ? 3 : target.index}
-				percent={completed ? 100 : target.index === 3 ? 67 : undefined}
+				complete={completed}
 				steps={steps}
 			/>
 		</div>

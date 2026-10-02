@@ -1112,7 +1112,8 @@ describe("SessionView", () => {
 			orgId: "cloud-org",
 			sandboxProvider: "coder",
 			desiredState: "running",
-			observedState: "provisioning",
+			// The workspace exists and AO is starting its worker inside it.
+			observedState: "bootstrapping",
 		};
 
 		render(<SessionView sessionId="sess-2" />);
@@ -1129,12 +1130,11 @@ describe("SessionView", () => {
 		expect(loaderScreen.className).not.toMatch(/z-\[\d+\]/);
 		expect(loaderScreen.children).toHaveLength(1);
 		expect(loader).toHaveTextContent("Connecting to the worker");
-		expect(loader).toHaveTextContent("Building your session");
+		expect(loader).toHaveTextContent("Creating the workspace");
 		expect(loader).toHaveTextContent("Preparing your repository and agent");
 		expect(loader).toHaveTextContent("Connecting your terminal");
 		expect(within(loader).getByTestId("multi-step-loader-step").querySelector(".multi-step-loader__step")).toBeInTheDocument();
-		expect(within(loader).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "33");
-		expect(within(loader).getByTestId("multi-step-loader-percent")).toHaveTextContent("33%");
+		expect(within(loader).queryByRole("progressbar")).not.toBeInTheDocument();
 		expect(loader).not.toHaveTextContent("Coder");
 		expect(loader).not.toHaveClass("right-4", "top-4");
 		expect(document.querySelector("[data-cloud-lifecycle-stage]")).not.toBeInTheDocument();
@@ -1163,7 +1163,6 @@ describe("SessionView", () => {
 		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent"));
 		expect(listSessionEventsMock).toHaveBeenCalledWith("cloud-org", "sess-2", { after: 0, limit: 500 }, expect.any(Object));
 		expect(subscribeSessionEventsMock).toHaveBeenCalledWith(expect.objectContaining({ orgId: "cloud-org", sessionId: "sess-2", after: 0 }));
-		expect(screen.getByRole("progressbar", { name: "Session setup activity" })).toHaveAttribute("aria-valuenow", "67");
 	});
 
 	it("advances the active phrase when a later startup event arrives", async () => {
@@ -1178,13 +1177,13 @@ describe("SessionView", () => {
 		listSessionEventsMock
 			.mockResolvedValueOnce({ events: [], hasMore: false, nextAfter: 0 })
 			.mockResolvedValueOnce({
-				events: [{ type: "sandbox.provisioning", createdAt: new Date().toISOString(), sequence: 1 }],
+				events: [{ type: "worker.connected", createdAt: new Date().toISOString(), sequence: 1 }],
 				hasMore: false,
 				nextAfter: 1,
 			});
 		render(<SessionView sessionId="sess-2" />);
-		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Building your session");
-		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting to the worker"), { timeout: 3_000 });
+		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Creating the workspace");
+		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent"), { timeout: 3_000 });
 		expect(listSessionEventsMock).toHaveBeenLastCalledWith("cloud-org", "sess-2", { after: 0, limit: 500 }, expect.any(Object));
 	});
 
@@ -1221,9 +1220,14 @@ describe("SessionView", () => {
 			observedState: "provisioning",
 		};
 		const view = render(<SessionView sessionId="sess-2" />);
+		// Provisioning is still creating the workspace.
+		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Creating the workspace"));
+
+		// Bootstrapping: the workspace exists and its worker is starting.
+		session.cloud.observedState = "bootstrapping";
+		view.rerender(<SessionView sessionId="sess-2" />);
 		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting to the worker"));
 
-		session.cloud.observedState = "bootstrapping";
 		session.runtimeConnected = true;
 		view.rerender(<SessionView sessionId="sess-2" />);
 		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent"));
@@ -1271,7 +1275,7 @@ describe("SessionView", () => {
 		});
 
 		render(<SessionView sessionId="sess-2" />);
-		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Building your session");
+		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Creating the workspace");
 		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting your terminal"));
 	});
 
@@ -1282,14 +1286,14 @@ describe("SessionView", () => {
 		render(<SessionView sessionId="sess-2" />);
 		await waitFor(() => expect(subscribeSessionEventsMock).toHaveBeenCalled());
 		const onEvent = subscribeSessionEventsMock.mock.calls[0][0].onEvent;
-		for (const [type, sequence, phrase, percent] of [
-			["sandbox.provisioning", 1, "Connecting to the worker", "33"],
-			["worker.connected", 2, "Preparing your repository and agent", "67"],
-			["agent.ready", 3, "Connecting your terminal", "67"],
+		for (const [type, sequence, phrase] of [
+			// The start of workspace creation does not complete the workspace step.
+			["sandbox.provisioning", 1, "Creating the workspace"],
+			["worker.connected", 2, "Preparing your repository and agent"],
+			["agent.ready", 3, "Connecting your terminal"],
 		] as const) {
 			act(() => onEvent({ type, sequence, sessionId: "sess-2", createdAt: new Date().toISOString(), payload: {} }));
 			expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent(phrase);
-			expect(screen.getByRole("progressbar", { name: "Session setup activity" })).toHaveAttribute("aria-valuenow", percent);
 		}
 		expect(listSessionEventsMock).toHaveBeenCalledTimes(1);
 	});
@@ -1347,7 +1351,6 @@ describe("SessionView", () => {
 			type: "agent.ready", sessionId: "sess-2", sequence: 1, createdAt: new Date().toISOString(), payload: {},
 		}));
 		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting your terminal");
-		expect(screen.getByRole("progressbar", { name: "Session setup activity" })).toHaveAttribute("aria-valuenow", "67");
 	});
 
 	it("checks the final step when terminal content is ready, then reveals it", () => {
@@ -1363,7 +1366,6 @@ describe("SessionView", () => {
 			autoAttachSessionTerminal.current = true;
 			session.terminalGeneration = "ready";
 			view.rerender(<SessionView sessionId="sess-2" />);
-			expect(screen.getByRole("progressbar", { name: "Session setup activity" })).toHaveAttribute("aria-valuenow", "100");
 			expect(screen.getAllByTestId("multi-step-loader-check")).toHaveLength(4);
 			expect(screen.getByTestId("cloud-session-loader-screen")).toHaveClass("cloud-session-loader--complete");
 			act(() => vi.advanceTimersByTime(360));
@@ -3881,6 +3883,57 @@ describe("SessionView", () => {
 
 		fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
 		expect(inspectorWidthVariable()).toBe("500px");
+	});
+
+	it("grows each tab's width back when the window widens after a narrow tab switch", async () => {
+		// A 712px split caps every profile at 300px. A tab switch re-runs the restore
+		// against that cap; widening the window must bring the preferred width back
+		// instead of leaving the rail (and its top bar) pinned narrow.
+		let splitWidth = 712;
+		const clientWidth = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => splitWidth);
+		try {
+			render(<SessionView sessionId="sess-1" />);
+			fireEvent.click(screen.getByRole("tab", { name: "Browser" }));
+			await waitFor(() => expect(inspectorWidthVariable()).toBe("300px"));
+			fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
+			fireEvent.click(screen.getByRole("tab", { name: "Browser" }));
+			await waitFor(() => expect(inspectorWidthVariable()).toBe("300px"));
+
+			splitWidth = 2000;
+			act(() => {
+				window.dispatchEvent(new Event("resize"));
+			});
+			await waitFor(() => expect(inspectorWidthVariable()).toBe("900px"));
+
+			act(() => useUiStore.getState().setInspectorView("sess-1", "files"));
+			await waitFor(() => expect(inspectorWidthVariable()).toBe("500px"));
+			// Nothing about the narrow window was saved as a preference.
+			expect(window.localStorage.getItem("ao.inspector.widthPx")).toBeNull();
+			expect(window.localStorage.getItem("ao.workspace.browser.canvasWidthPx")).toBeNull();
+		} finally {
+			clientWidth.mockRestore();
+		}
+	});
+
+	it("brings Files back to its own floor when the window widens after a narrow switch", async () => {
+		window.localStorage.setItem("ao.inspector.widthPx", "400");
+		let splitWidth = 712;
+		const clientWidth = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => splitWidth);
+		try {
+			render(<SessionView sessionId="sess-1" />);
+			act(() => useUiStore.getState().setInspectorView("sess-1", "files"));
+			await waitFor(() => expect(inspectorWidthVariable()).toBe("300px"));
+
+			splitWidth = 2000;
+			act(() => {
+				window.dispatchEvent(new Event("resize"));
+			});
+			await waitFor(() => expect(inspectorWidthVariable()).toBe("460px"));
+			act(() => useUiStore.getState().setInspectorView("sess-1", "summary"));
+			await waitFor(() => expect(inspectorWidthVariable()).toBe("400px"));
+		} finally {
+			clientWidth.mockRestore();
+		}
 	});
 
 	it("shares the utility width with Files but keeps Files at least 460px wide", async () => {

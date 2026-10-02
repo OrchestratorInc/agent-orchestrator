@@ -25,7 +25,7 @@ export type GlobalSettingsSection =
 	| "general"
 	| "harness"
 	| "agents"
-	| "cloud"
+	| "coder11x"
 	| "mobile"
 	| "shortcuts"
 	| "browserProfiles"
@@ -40,6 +40,8 @@ export type SettingsModal =
 			scope: "global";
 			section?: GlobalSettingsSection;
 			focusAgentId?: string;
+			/** Which Harness page view (local or cloud logins) to open. */
+			harnessView?: "local" | "cloud";
 			/** Preserve the project form while global recovery settings is above it. */
 			returnTo?: Extract<SettingsModal, { scope: "project" }>;
 	}
@@ -154,7 +156,7 @@ export type UiState = {
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; preserveProject?: boolean }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; harnessView?: "local" | "cloud"; preserveProject?: boolean }) => void;
 	openProjectSettings: (projectId: string, options?: { section?: ProjectSettingsSection }) => void;
 	closeSettings: () => void;
 	/** Refresh resolvedTheme from OS without writing light/dark to storage. */
@@ -316,6 +318,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			scope: "global",
 			section,
 			...(options?.focusAgentId ? { focusAgentId: options.focusAgentId } : {}),
+			...(options?.harnessView ? { harnessView: options.harnessView } : {}),
 			...(options?.preserveProject && state.settingsModal?.scope === "project"
 				? { returnTo: state.settingsModal }
 				: options?.preserveProject && state.settingsModal?.scope === "global" && state.settingsModal.returnTo

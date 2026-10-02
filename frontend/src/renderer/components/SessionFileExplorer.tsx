@@ -184,10 +184,13 @@ export function SessionFileExplorer({
 		}
 		: null;
 	const sourceMenu = source.kind === "pull_request" ? prSourceMenu : reviewMenu;
-	// With no review scopes or commits (nothing changed) and no PR to switch to,
-	// the picker's only entry is the already-selected Workspace, so it is hidden
-	// until there is something to choose.
-	const showSourcePicker = sourceMenu !== null || source.kind !== "workspace" || sourceOptions.length > 1;
+	// Branch › lists only PRs (Workspace is not a branch; it gets its own button
+	// before the picker), so it appears only when there is a PR to switch to.
+	const showBranchMenu = sourceOptions.length > 1;
+	// The picker is hidden until it has something to choose: no review scopes or
+	// commits (nothing changed) and no PR listed, e.g. while an active PR's
+	// summary is still loading — the Workspace button stays the way back.
+	const showSourcePicker = sourceMenu !== null || showBranchMenu;
 	const currentSourceLabel = sourceOptions.find((option) => option.value === sourceValue)?.label;
 	const selectSource = (value: string) => {
 		setSourceNotice("");
@@ -239,12 +242,20 @@ export function SessionFileExplorer({
 				    flyouts (Branch = Workspace or a PR). */}
 				{/* -ml-2 cancels the trigger's own 8px inline padding so its label
 				    starts on the same 12px gutter as the context row's text below. */}
+				{/* While a PR is shown, Workspace sits before the picker as the way back;
+				    on the workspace itself the trigger already names it. It keys off the
+				    source alone, so it stays reachable while the PR list loads or fails. */}
+				{source.kind === "pull_request" ? (
+					<Button className="-ml-2 h-control-md shrink-0 text-xs" onClick={() => selectSource("workspace")} size="sm" type="button" variant="ghost">
+						{t("files.explorer.workspaceSource")}
+					</Button>
+				) : null}
 				{showSourcePicker ? (
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
 						<SettingsMenuTrigger
 							aria-label={t("files.explorer.source")}
-							className="-ml-2 h-control-md min-w-0 max-w-72 shrink text-xs"
+							className={cn(source.kind !== "pull_request" && "-ml-2", "h-control-md min-w-0 max-w-72 shrink text-xs")}
 							title={currentSourceLabel}
 						>
 							<span className="min-w-0 truncate">{currentSourceLabel}</span>
@@ -260,7 +271,7 @@ export function SessionFileExplorer({
 								</span>
 							</DropdownMenuItem>
 						))}
-						{sourceMenu && sourceMenu.scopes.length > 0 ? <DropdownMenuSeparator /> : null}
+						{sourceMenu && sourceMenu.scopes.length > 0 && (sourceMenu.commits.length > 0 || showBranchMenu) ? <DropdownMenuSeparator /> : null}
 						{sourceMenu && sourceMenu.commits.length > 0 ? (
 							<DropdownMenuSub>
 								<DropdownMenuSubTrigger className={cn(sourceMenu.commits.some((commit) => commit.selected) && "text-foreground")}>
@@ -281,10 +292,10 @@ export function SessionFileExplorer({
 								</DropdownMenuSubContent>
 							</DropdownMenuSub>
 						) : null}
-						<DropdownMenuSub>
+						{showBranchMenu ? <DropdownMenuSub>
 							<DropdownMenuSubTrigger>{t("files.branch")}</DropdownMenuSubTrigger>
 							<DropdownMenuSubContent className="w-max max-w-[min(28rem,calc(100vw_-_2rem))]">
-								{sourceOptions.map((option) => (
+								{sourceOptions.filter((option) => option.value !== "workspace").map((option) => (
 									<DropdownMenuItem className="gap-2" key={option.value} onSelect={() => selectSource(option.value)}>
 										<span className="min-w-0 flex-1 truncate">{option.label}</span>
 										<span className="flex size-4 shrink-0 items-center justify-center">
@@ -293,7 +304,7 @@ export function SessionFileExplorer({
 									</DropdownMenuItem>
 								))}
 							</DropdownMenuSubContent>
-						</DropdownMenuSub>
+						</DropdownMenuSub> : null}
 					</DropdownMenuContent>
 				</DropdownMenu>
 				) : null}
