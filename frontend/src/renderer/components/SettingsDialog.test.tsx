@@ -114,7 +114,7 @@ describe("SettingsDialog", () => {
 		renderSettingsDialog();
 
 		const cuesSection = await screen.findByRole("button", { name: "Cues" });
-		expect(cuesSection.querySelector(".lucide-disc-3")).not.toBeNull();
+		expect(cuesSection.querySelector(".lucide-play")).not.toBeNull();
 		await userEvent.click(cuesSection);
 
 		expect(screen.getByTestId("project-cues-settings")).toHaveTextContent("proj-1");
@@ -264,6 +264,23 @@ describe("SettingsDialog", () => {
 		fireEvent.keyDown(nestedItem, { key: "Escape" });
 		expect(useUiStore.getState().settingsModal).not.toBeNull();
 		nestedMenu.remove();
+
+		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
+	});
+
+	it("stays open when Escape cancels an inline edit inside it", async () => {
+		useUiStore.getState().openGlobalSettings("browserProfiles");
+		renderSettingsDialog();
+
+		const dialog = await screen.findByRole("dialog");
+		const inlineEdit = document.createElement("input");
+		inlineEdit.setAttribute("data-settings-inline-edit", "");
+		dialog.append(inlineEdit);
+		inlineEdit.focus();
+		fireEvent.keyDown(inlineEdit, { key: "Escape" });
+		expect(useUiStore.getState().settingsModal).not.toBeNull();
+		inlineEdit.remove();
 
 		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());

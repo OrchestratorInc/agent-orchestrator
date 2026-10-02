@@ -25,7 +25,7 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useCloudSandboxProviders } from "../hooks/useCloudSandboxProviders";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
-import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
+import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
 import {
 	buildRankedAgentOptions,
 	DEFAULT_AGENT_PRIORITY_RANK,
@@ -828,9 +828,10 @@ function TaskModelPicker({
 	}
 
 	const customModelEntry = catalog?.customModelEntry ?? (catalog?.allowCustom ? "direct" : "none");
-	const displayModels = (catalog?.models ?? []).map((item) =>
-		item.id === "auto" ? { ...item, label: t("settings.models.autoRouteLabel") } : item,
-	);
+	const displayModels = (catalog?.models ?? []).map((item) => {
+		if (item.id === "auto") return { ...item, label: t("settings.models.autoRouteLabel") };
+		return { ...item, label: agentModelDisplayLabel(agentId, item.label) };
+	});
 	const selectCatalogModel = (nextModel: string) => {
 		onModelChange(nextModel);
 	};

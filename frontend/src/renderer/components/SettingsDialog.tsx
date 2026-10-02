@@ -1,4 +1,4 @@
-import { Bot, Disc3, Loader2, MonitorCog, TriangleAlert, X, type LucideIcon } from "lucide-react";
+import { Bot, Loader2, MonitorCog, Play, TriangleAlert, X, type LucideIcon } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useRef, useState } from "react";
@@ -64,7 +64,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 	}> = [
 		{ id: "general", label: t("settings.project.general"), icon: MonitorCog },
 		{ id: "agents", label: t("settings.project.agents"), icon: Bot },
-		{ id: "cues", label: t("cues.title"), icon: Disc3 },
+		{ id: "cues", label: t("cues.title"), icon: Play },
 	];
 
 	const isProjectSettings = displaySettings?.scope === "project";
@@ -191,8 +191,14 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 					)}
 					onOpenAutoFocus={(event) => event.preventDefault()}
 					onEscapeKeyDown={(event) => {
-						if (contentRef.current?.contains(event.target as Node)) return;
 						const target = event.target instanceof Element ? event.target : null;
+						// An in-place edit (a profile rename) takes Escape to cancel itself,
+						// not to close Settings around it.
+						if (target?.closest("[data-settings-inline-edit]")) {
+							event.preventDefault();
+							return;
+						}
+						if (contentRef.current?.contains(event.target as Node)) return;
 						const activeElement = document.activeElement instanceof Element ? document.activeElement : null;
 						const nestedPopup = [target, activeElement].some((element) => element?.closest('[role="menu"], [role="listbox"], [data-radix-popper-content-wrapper]'));
 						if (nestedPopup) event.preventDefault();
