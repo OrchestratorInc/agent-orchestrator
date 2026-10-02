@@ -574,10 +574,8 @@ function SessionRow({
 						</div>
 					</div>
 				</td>
-				{/* Collapsed, the type is which agent runs the session; opened, each line has its own. */}
-				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs text-passive", cell.type)} data-testid="session-memory-type">
-					{session.provider ?? ""}
-				</td>
+				{/* A session has no type of its own; its process lines do. */}
+				<td className={cell.type} />
 				<ProcessCountCell count={reading.processes.length} isExpanded={isExpanded} />
 				<MemoryCell bytes={reading.rssBytes} maxBytes={maxBytes} tone={chip} />
 				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs tabular-nums text-settings-muted", cell.cpu)}>
@@ -615,9 +613,11 @@ function statusText(current: SessionStepReading | undefined, session: WorkspaceS
 
 function StatusLine({ current, session, working }: { current?: SessionStepReading; session: WorkspaceSession; working: boolean }) {
 	const { t } = useTranslation();
+	// Which agent runs the session, with its name rather than in the Type column.
 	return (
-		<div className="truncate text-xs text-settings-muted" data-testid="session-memory-status">
-			{statusText(current, session, working, t)}
+		<div className="truncate text-xs text-settings-muted">
+			{session.provider ? <span data-testid="session-memory-agent">{session.provider} · </span> : null}
+			<span data-testid="session-memory-status">{statusText(current, session, working, t)}</span>
 		</div>
 	);
 }

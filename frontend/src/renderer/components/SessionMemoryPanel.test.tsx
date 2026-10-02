@@ -296,7 +296,9 @@ describe("AppMemoryIndicator", () => {
 		expect(within(children[0]).getByTestId("session-memory-process-type")).toHaveTextContent("Agent");
 		expect(within(children[1]).getByTestId("session-memory-process-type")).toHaveTextContent("Command");
 		// Collapsed rows say which agent runs the session, and that the last row is AO.
-		expect(within(bigRow).getByTestId("session-memory-type")).toHaveTextContent("claude-code");
+		// The agent is named under the session's title, not in the Type column.
+		expect(within(bigRow).getByTestId("session-memory-agent")).toHaveTextContent("claude-code");
+		expect(within(bigRow).queryByTestId("session-memory-type")).not.toBeInTheDocument();
 		expect(within(own).getByTestId("session-memory-type")).toHaveTextContent("AO");
 		expect(children[1]).not.toHaveTextContent("go test");
 		// Clicking a process line copies nothing and opens nothing.
