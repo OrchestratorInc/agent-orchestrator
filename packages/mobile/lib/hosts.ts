@@ -104,6 +104,13 @@ export async function saveHost(host: Host): Promise<void> {
 	}
 }
 
+/** Rename a pairing without rewriting its credential or discovered endpoints. */
+export async function renameHost(id: string, name: string): Promise<void> {
+	const trimmed = name.trim();
+	if (!trimmed) throw new Error("Machine name cannot be empty");
+	await mutateStored((stored) => stored.map((host) => host.id === id ? { ...host, name: trimmed } : host));
+}
+
 /**
  * Replaces a machine's endpoint list, leaving its token alone.
  *

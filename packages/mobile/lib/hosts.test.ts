@@ -94,6 +94,13 @@ describe("host store", () => {
 		expect(got[0].name).toBe("after");
 	});
 
+	it("renames a machine without changing its endpoint or credential", async () => {
+		const { saveHost, renameHost, loadHosts } = await mod();
+		await saveHost({ id: "h_one", name: "old", platform: "linux", endpoints: [lan("host")], token: "secret", lastConnected: 1 });
+		await renameHost("h_one", " AzureLinux ");
+		expect((await loadHosts())[0]).toEqual(expect.objectContaining({ name: "AzureLinux", endpoints: [lan("host")], token: "secret" }));
+	});
+
 	// The connection token authorises terminal input, spawns and PR actions. It
 	// must never reach AsyncStorage, which is plaintext in the app sandbox.
 	it("keeps the token out of plaintext storage", async () => {

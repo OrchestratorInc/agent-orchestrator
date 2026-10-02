@@ -56,6 +56,15 @@ describe("adopting a manual connection", () => {
 		);
 	});
 
+	it("uses a chosen name and stores a hostname rather than a pasted URL", async () => {
+		const d = deps();
+		await adoptManualConnection({ ...cfg, host: "https://example.trycloudflare.com/", secure: true, httpPort: "443" }, d, " AzureLinux ");
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({
+			name: "AzureLinux",
+			endpoints: [{ kind: "tailscale", host: "example.trycloudflare.com", port: 443, secure: true }],
+		}));
+	});
+
 	// An older daemon has no identity probe. The machine is still worth storing
 	// — it just stays unverified until it reports an id, exactly as a migrated
 	// pairing does.

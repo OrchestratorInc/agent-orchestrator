@@ -32,6 +32,7 @@ export function ManualConnectSheet({ onConnected }: { onConnected: () => void })
 	const styles = useThemedStyles(makeStyles);
 	// This form adds a new machine. Never prefill another machine's address or bearer.
 	const [cfg, setCfg] = useState<ServerConfig>(DEFAULT_CONFIG);
+	const [machineName, setMachineName] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [failure, setFailure] = useState<ConnectionErrorCopy | null>(null);
 	const [showPassword, setShowPassword] = useState(false);
@@ -62,7 +63,7 @@ export function ManualConnectSheet({ onConnected }: { onConnected: () => void })
 				identity: async () => hostId,
 				saveHost,
 				setActiveHost,
-			});
+			}, machineName);
 			mobileTelemetry()?.capture(MOBILE_EVENTS.paired, { method: "manual" });
 			haptics.success();
 			onConnected();
@@ -83,6 +84,14 @@ export function ManualConnectSheet({ onConnected }: { onConnected: () => void })
 
 	const form = (
 		<>
+			<Field
+				label="MACHINE NAME (OPTIONAL)"
+				value={machineName}
+				onChangeText={setMachineName}
+				placeholder="AzureLinux"
+				maxLength={48}
+				returnKeyType="next"
+			/>
 			<Field
 				label="HOST"
 				value={cfg.host}

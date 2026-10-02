@@ -41,10 +41,7 @@ export function hostedProjectSections(hosts: readonly {
 				project: {
 					...row.project,
 					hostId: host.hostId,
-					hostName: host.name,
-					name: hosts.length > 1
-						? `${row.project.name} · ${host.name}${host.connection === "closed" ? " (offline)" : ""}`
-						: row.project.name,
+					hostName: `${host.name}${host.connection === "closed" ? " (offline)" : ""}`,
 				},
 			})));
 			sections.set(section.key, current);

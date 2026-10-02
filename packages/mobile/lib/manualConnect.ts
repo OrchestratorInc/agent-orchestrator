@@ -1,5 +1,5 @@
 import type { ServerConfig } from "./config";
-import type { Endpoint } from "./endpoints";
+import { normalizeServerHost, type Endpoint } from "./endpoints";
 import type { Host } from "./hosts";
 
 export type AdoptManualDeps = {
@@ -24,11 +24,13 @@ export type AdoptManualDeps = {
 export async function adoptManualConnection(
 	cfg: ServerConfig,
 	deps: AdoptManualDeps,
+	name?: string,
 ): Promise<string> {
 	const hostId = await deps.identity(cfg);
+	const hostname = normalizeServerHost(cfg.host);
 	await deps.saveHost({
 		id: hostId,
-		name: cfg.host,
+		name: name?.trim() || hostname,
 		platform: "",
 		endpoints: [manualEndpoint(cfg)],
 		token: cfg.password,
@@ -50,7 +52,7 @@ function manualEndpoint(cfg: ServerConfig): Endpoint {
 	const secure = cfg.secure === true;
 	return {
 		kind: secure ? "tailscale" : "lan",
-		host: cfg.host.trim(),
+		host: normalizeServerHost(cfg.host),
 		port: Number(cfg.httpPort) || 3011,
 		secure,
 	};
