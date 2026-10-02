@@ -8,7 +8,6 @@ import {
 	processCategories,
 	processKind,
 	processList,
-	rootPid,
 	stableResourceOrder,
 	type ChipTone,
 	type PressureState,
@@ -492,26 +491,6 @@ function GroupRow({ label }: { label: string }) {
 	);
 }
 
-/** The top of a row's process tree, copyable, to find the whole tree in btop
- * or Activity Monitor. */
-function RootPidCell({ pid }: { pid: number | undefined }) {
-	const { t } = useTranslation();
-	return (
-		<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs tabular-nums", cell.pid)}>
-			{pid !== undefined ? (
-				<CopyControl
-					copiedLabel={t("shell.memoryPidCopied", { pid })}
-					label={t("shell.memoryCopyPid", { pid })}
-					testId="session-memory-root-pid"
-					value={() => String(pid)}
-				>
-					<span>{pid}</span>
-				</CopyControl>
-			) : null}
-		</td>
-	);
-}
-
 /** How many processes a row holds, under its title. */
 function ProcessCount({ count }: { count: number }) {
 	const { t } = useTranslation();
@@ -592,7 +571,8 @@ function SessionRow({
 				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs text-passive", cell.type)} data-testid="session-memory-type">
 					{session.provider ?? ""}
 				</td>
-				<RootPidCell pid={rootPid(reading.processes)} />
+				{/* A session is not a process: no PID of its own. */}
+				<td className={cell.pid} />
 				<MemoryCell bytes={reading.rssBytes} maxBytes={maxBytes} tone={chip} />
 				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs tabular-nums text-settings-muted", cell.cpu)}>
 					{formatCPU(reading.cpuPercent)}
@@ -640,10 +620,9 @@ function StatusLine({ count, current, session, working }: { count: number; curre
 
 /**
  * One session as plain text: who it is, what it is doing,
- * what it costs the machine, and what it has been running. Per-process IDs
- * are deliberately left out — they mean nothing to whoever reads the report —
- * and so are tool arguments, which can carry paths and prompts. The session's
- * top PID is the exception: it finds the whole tree in btop.
+ * what it costs the machine, and what it has been running. Process IDs are
+ * deliberately left out — they mean nothing to whoever reads the report —
+ * and so are tool arguments, which can carry paths and prompts.
  */
 export function sessionReport(
 	session: WorkspaceSession,
@@ -668,8 +647,7 @@ export function sessionReport(
 	const cost = formatEstimatedCost(usage?.estimatedCost);
 	const tokens = usage?.processedTokens != null ? formatTokenCount(usage.processedTokens) : undefined;
 	if (cost || tokens) lines.push(`Usage    ${[cost, tokens].filter(Boolean).join(" · ")}`);
-	const top = rootPid(reading.processes);
-	lines.push(`Memory   ${formatMemory(reading.rssBytes)} · CPU ${formatCPU(reading.cpuPercent)}${top !== undefined ? ` · PID ${top}` : ""} · ${reading.sampledAt}`);
+	lines.push(`Memory   ${formatMemory(reading.rssBytes)} · CPU ${formatCPU(reading.cpuPercent)} · ${reading.sampledAt}`);
 
 	const tree = processTree(reading.processes);
 	if (tree.length > 0) {
@@ -792,7 +770,8 @@ function OwnRow({ isExpanded, maxBytes, onToggle, reading }: { isExpanded: boole
 				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs text-passive", cell.type)} data-testid="session-memory-type">
 					{t("shell.memoryCategory.ao")}
 				</td>
-				<RootPidCell pid={rootPid(reading.processes)} />
+				{/* A session is not a process: no PID of its own. */}
+				<td className={cell.pid} />
 				<MemoryCell bytes={reading.rssBytes} maxBytes={maxBytes} tone="neutral" />
 				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs tabular-nums text-settings-muted", cell.cpu)}>{formatCPU(reading.cpuPercent)}</td>
 			</tr>
@@ -846,13 +825,12 @@ export function processTree(processes: SessionMemoryReading["processes"]): { pro
 function ProcessRows({ processes, own = false }: { processes: SessionMemoryReading["processes"]; own?: boolean }) {
 	const { t } = useTranslation();
 	const { rows, other } = useMemo(() => processList(processes, { own }), [processes, own]);
-	const root = useMemo(() => rootPid(processes), [processes]);
 	const [showAll, setShowAll] = useState(false);
 	const toggle = () => setShowAll((current) => !current);
 	return (
 		<>
 			{[...rows, ...(showAll && other ? other.rows : [])].map((row) => (
-				<ProcessRow isRoot={row.pid === root} key={row.pid} row={row} />
+				<ProcessRow key={row.pid} row={row} />
 			))}
 			{other ? (
 				<tr
@@ -881,7 +859,7 @@ function ProcessRows({ processes, own = false }: { processes: SessionMemoryReadi
 	);
 }
 
-function ProcessRow({ isRoot, row }: { isRoot: boolean; row: ProcessListRow }) {
+function ProcessRow({ row }: { row: ProcessListRow }) {
 	const { t } = useTranslation();
 	return (
 		<tr className="text-xs" data-testid="session-memory-process-row">
@@ -892,21 +870,14 @@ function ProcessRow({ isRoot, row }: { isRoot: boolean; row: ProcessListRow }) {
 				<span title={t(`shell.memoryCategoryHint.${row.category}`)}>{t(`shell.memoryCategory.${row.category}`)}</span>
 			</td>
 			<td className={cn("whitespace-nowrap py-1 align-middle font-mono tabular-nums", cell.pid)}>
-				{/* The session row already shows this PID: the top of the tree. */}
-				{isRoot ? (
-					<span className="text-passive" data-testid="session-memory-pid-root" title={t("shell.memoryRootPidHint")}>
-						↑
-					</span>
-				) : (
-					<CopyControl
-						copiedLabel={t("shell.memoryPidCopied", { pid: row.pid })}
-						label={t("shell.memoryCopyPid", { pid: row.pid })}
-						testId="session-memory-pid"
-						value={() => String(row.pid)}
-					>
-						<span>{row.pid}</span>
-					</CopyControl>
-				)}
+				<CopyControl
+					copiedLabel={t("shell.memoryPidCopied", { pid: row.pid })}
+					label={t("shell.memoryCopyPid", { pid: row.pid })}
+					testId="session-memory-pid"
+					value={() => String(row.pid)}
+				>
+					<span>{row.pid}</span>
+				</CopyControl>
 			</td>
 			<td className={cn("whitespace-nowrap py-1 font-mono tabular-nums text-settings-muted", cell.memory)}>{formatMemory(row.bytes)}</td>
 			<td className={cn("whitespace-nowrap py-1 font-mono tabular-nums text-passive", cell.cpu)}>{row.cpu >= 1 ? formatCPU(row.cpu) : "·"}</td>

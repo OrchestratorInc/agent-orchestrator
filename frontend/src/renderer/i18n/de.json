@@ -2016,7 +2016,6 @@
 	"shell.memoryProcessCount_other": "{{count}} Prozesse",
 	"shell.memoryCopyPid": "PID {{pid}} kopieren",
 	"shell.memoryPidCopied": "PID {{pid}} kopiert",
-	"shell.memoryRootPidHint": "Dieselbe PID wie die Sitzung",
 	"shell.memoryProcessOther_one": "{{count}} weiterer Prozess",
 	"shell.memoryProcessOther_other": "{{count}} weitere Prozesse",
 	"shell.memoryProcessFewer": "Weniger anzeigen",

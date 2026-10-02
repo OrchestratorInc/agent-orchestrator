@@ -1403,7 +1403,6 @@
 	"shell.memoryProcessCount_other": "{{count}} 个进程",
 	"shell.memoryCopyPid": "复制 PID {{pid}}",
 	"shell.memoryPidCopied": "已复制 PID {{pid}}",
-	"shell.memoryRootPidHint": "与会话的 PID 相同",
 	"shell.memoryProcessOther_one": "其他 {{count}} 个进程",
 	"shell.memoryProcessOther_other": "其他 {{count}} 个进程",
 	"shell.memoryProcessFewer": "收起",

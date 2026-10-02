@@ -2046,7 +2046,6 @@
 	"shell.memoryProcessCount_other": "{{count}} processos",
 	"shell.memoryCopyPid": "Copiar PID {{pid}}",
 	"shell.memoryPidCopied": "PID {{pid}} copiado",
-	"shell.memoryRootPidHint": "O mesmo PID da sessão",
 	"shell.memoryProcessOther_one": "{{count}} outro processo",
 	"shell.memoryProcessOther_other": "{{count}} outros processos",
 	"shell.memoryProcessFewer": "Mostrar menos",

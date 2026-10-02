@@ -2016,7 +2016,6 @@
 	"shell.memoryProcessCount_other": "{{count}} プロセス",
 	"shell.memoryCopyPid": "PID {{pid}} をコピー",
 	"shell.memoryPidCopied": "PID {{pid}} をコピーしました",
-	"shell.memoryRootPidHint": "セッションの PID と同じ",
 	"shell.memoryProcessOther_one": "その他 {{count}} 個のプロセス",
 	"shell.memoryProcessOther_other": "その他 {{count}} 個のプロセス",
 	"shell.memoryProcessFewer": "表示を減らす",

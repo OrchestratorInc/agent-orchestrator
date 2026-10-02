@@ -1560,7 +1560,6 @@
 	"shell.memoryProcessCount_other": "{{count}} processes",
 	"shell.memoryCopyPid": "Copy PID {{pid}}",
 	"shell.memoryPidCopied": "Copied PID {{pid}}",
-	"shell.memoryRootPidHint": "Same as the session's PID",
 	"shell.memoryProcessOther_one": "{{count}} other process",
 	"shell.memoryProcessOther_other": "{{count}} other processes",
 	"shell.memoryProcessFewer": "Show fewer",

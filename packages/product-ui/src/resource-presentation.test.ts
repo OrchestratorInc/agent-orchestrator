@@ -8,7 +8,6 @@ import {
 	processCategories,
 	processKind,
 	processList,
-	rootPid,
 	stableResourceOrder,
 	type ResourceProcess,
 	type ResourceSessionFacts,
@@ -282,17 +281,5 @@ describe("ownProcessCategories", () => {
 				]),
 			),
 		).toEqual({ 1: "app", 2: "app", 3: "command", 4: "ao", 5: "command", 6: "command", 7: "app" });
-	});
-});
-
-describe("rootPid", () => {
-	it("finds the top of a session's tree", () => {
-		expect(rootPid([proc(1, 0, 29, "/path/ao chat-host s1"), proc(2, 1, 322, "/path/codex app-server"), proc(3, 2, 59, "node")])).toBe(1);
-		expect(rootPid([proc(1, 999, 30, "ao.exe"), proc(2, 1, 152, "codex.exe")])).toBe(1);
-		expect(rootPid([])).toBeUndefined();
-	});
-
-	it("picks the largest when several processes have no parent in the list", () => {
-		expect(rootPid([proc(1, 900, 30, "ao pty-host"), proc(2, 901, 80, "reviewer"), proc(3, 2, 5, "rg")])).toBe(2);
 	});
 });
