@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"time"
@@ -52,7 +53,14 @@ func (s *S3) Upload(ctx context.Context, key string, m Metadata) (UploadGrant, e
 	for k, v := range fields {
 		grant.Values[k] = v
 	}
-	return UploadGrant{URL: grant.URL, Fields: grant.Values, ExpiresAt: time.Now().Add(UploadTTL)}, nil
+	policy, err := base64.StdEncoding.DecodeString(grant.Values["policy"])
+	var deadline struct {
+		Expiration time.Time `json:"expiration"`
+	}
+	if err != nil || json.Unmarshal(policy, &deadline) != nil || deadline.Expiration.IsZero() {
+		return UploadGrant{}, errors.New("invalid S3 upload policy expiration")
+	}
+	return UploadGrant{URL: grant.URL, Fields: grant.Values, ExpiresAt: deadline.Expiration}, nil
 }
 func (s *S3) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})

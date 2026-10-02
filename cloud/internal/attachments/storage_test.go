@@ -174,6 +174,9 @@ func TestS3POSTPolicy(t *testing.T) {
 	if decoded.Expiration.Before(time.Now().Add(9*time.Minute)) || decoded.Expiration.After(time.Now().Add(11*time.Minute)) {
 		t.Fatal("upload expiry")
 	}
+	if !grant.ExpiresAt.Equal(decoded.Expiration) {
+		t.Fatalf("reported deadline differs from signed policy: grant=%v policy=%v", grant.ExpiresAt, decoded.Expiration)
+	}
 	text := string(policy)
 	for _, field := range []string{"content-length-range", `"key":"upload-id"`, `"Content-Type":"image/png"`, `"x-amz-checksum-sha256"`, `"x-amz-server-side-encryption":"AES256"`} {
 		if !strings.Contains(text, field) {

@@ -59,6 +59,8 @@ expire after 24 hours. The cleanup loop removes expired objects and temporary
 upload objects after the last upload grant expires. Referenced images survive
 archive and sandbox replacement. Storage lifecycle rules for `upload-*` keys
 provide an additional cleanup backstop. Never log signed URLs or image contents.
+Expired preparations cannot renew their grants. Grant issuance holds the metadata
+row lock and records the returned expiry before the grant reaches the client.
 
 A worker advertises `attachments.images.v1`. Older workers reject or hold image
 work instead of accepting text-only delivery. Workers restore the retained
@@ -83,6 +85,8 @@ policy construction, transactional links, isolation, image-only submissions,
 idempotency, worker downloads, restore, Git exclusions, native agent inputs,
 composer retries, ID-only durable drafts and terminal fencing. Account-scoped
 attachment caches clear on sign-out.
+Failed uploads keep their source File in shared renderer memory across composer
+remounts, including failures before prepare succeeds. Durable drafts omit bytes.
 
 `frontend/e2e/performance/cloud-images.html` is a browser verification fixture
 with real shared UI and mocked control-plane/storage responses. It is not a

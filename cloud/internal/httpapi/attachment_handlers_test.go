@@ -157,12 +157,17 @@ func TestAttachmentCompletionDoesNotWriteAfterMetadataDeletion(t *testing.T) {
 	}
 }
 
-func (s *attachmentTestStore) PrepareAttachment(_ context.Context, p domain.Principal, org, key string, input domain.PrepareAttachment) (domain.Attachment, error) {
+func (s *attachmentTestStore) PrepareAttachment(ctx context.Context, p domain.Principal, org, key string, input domain.PrepareAttachment, issueUpload func(context.Context, domain.Attachment) (time.Time, error)) (domain.Attachment, error) {
 	s.prepares++
 	if s.a.ID == "" {
 		s.a = domain.Attachment{Metadata: input.Metadata, OrgID: org, ProjectID: input.ProjectID, CreatorID: p.UserID}
 		s.a.ID = uuid.NewString()
 		s.a.Status = "pending"
+	}
+	if s.a.Status != "expired" {
+		if _, err := issueUpload(ctx, s.a); err != nil {
+			return s.a, err
+		}
 	}
 	return s.a, nil
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"time"
 )
 
 var ErrImageWorkerUpgrade = errors.New("worker must be upgraded for image attachments")
@@ -28,7 +29,7 @@ func (s *Store) withAttachmentAccess(ctx context.Context, p domain.Principal, or
 		return fn(tx)
 	})
 }
-func (s *Store) PrepareAttachment(ctx context.Context, p domain.Principal, org, key string, input domain.PrepareAttachment) (domain.Attachment, error) {
+func (s *Store) PrepareAttachment(ctx context.Context, p domain.Principal, org, key string, input domain.PrepareAttachment, issueUpload func(context.Context, domain.Attachment) (time.Time, error)) (domain.Attachment, error) {
 	if attachments.ValidateMetadata(input.Metadata) != nil || key == "" {
 		return domain.Attachment{}, ErrInvalid
 	}
@@ -45,16 +46,36 @@ func (s *Store) PrepareAttachment(ctx context.Context, p domain.Principal, org, 
 		}
 		err := scanAttachment(tx.QueryRow(ctx, `INSERT INTO ao_attachments (org_id,project_id,session_id,created_by_user_id,idempotency_key,filename,size,mime_type,sha256) VALUES ($1,$2,NULLIF($3,'')::uuid,$4,$5,$6,$7,$8,$9) ON CONFLICT (org_id,created_by_user_id,idempotency_key) DO NOTHING RETURNING `+attachmentColumns, org, input.ProjectID, input.SessionID, p.UserID, key, input.Filename, input.Size, input.MIMEType, input.SHA256), &a)
 		if errors.Is(err, pgx.ErrNoRows) {
-			err = scanAttachment(tx.QueryRow(ctx, `SELECT `+attachmentColumns+` FROM ao_attachments WHERE org_id=$1 AND created_by_user_id=$2 AND idempotency_key=$3`, org, p.UserID, key), &a)
+			err = scanAttachment(tx.QueryRow(ctx, `SELECT `+attachmentColumns+` FROM ao_attachments WHERE org_id=$1 AND created_by_user_id=$2 AND idempotency_key=$3 FOR UPDATE`, org, p.UserID, key), &a)
 			if err == nil && (a.ProjectID != input.ProjectID || a.SessionID != input.SessionID || a.Filename != input.Filename || a.Size != input.Size || a.MIMEType != input.MIMEType || a.SHA256 != input.SHA256) {
 				return ErrIdempotencyMismatch
 			}
 		}
 
-		if err == nil {
-			_, err = tx.Exec(ctx, `UPDATE ao_attachments SET upload_expires_at=now()+interval '10 minutes', upload_cleaned=false WHERE org_id=$1 AND id=$2`, org, a.ID)
+		if err != nil {
+			return normalizeConstraintError(err)
 		}
-		return normalizeConstraintError(err)
+		// Lock and check expiry before issuing another grant. Cleanup can mark a
+		// row expired during a retry, but must preserve any outstanding grants.
+		tag, err := tx.Exec(ctx, `UPDATE ao_attachments SET upload_expires_at=GREATEST(upload_expires_at,clock_timestamp()+interval '10 minutes'), upload_cleaned=false WHERE org_id=$1 AND id=$2 AND status<>'expired' AND (expires_at>clock_timestamp() OR preparation_expires_at>clock_timestamp() OR retained)`, org, a.ID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			a.Status = "expired"
+			return nil
+		}
+		if issueUpload != nil {
+			// Signing can finish later than the SQL reservation. Record the actual
+			// grant deadline while still holding the row lock, before returning it.
+			expires, err := issueUpload(ctx, a)
+			if err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, `UPDATE ao_attachments SET upload_expires_at=GREATEST(upload_expires_at,$3) WHERE org_id=$1 AND id=$2`, org, a.ID, expires)
+			return err
+		}
+		return nil
 	})
 	return a, err
 }
@@ -296,8 +317,9 @@ func (s *Store) RetainAttachments(ctx context.Context, p domain.Principal, org, 
 	})
 }
 
-// CleanupAttachments locks out new links before deleting expired bytes. Failed
-// storage deletions leave expired rows available for the next cleanup pass.
+// CleanupAttachments locks out new links before deleting expired bytes. Metadata
+// outlives every upload grant, which can otherwise recreate the temporary object.
+// Failed storage deletions leave expired rows available for the next cleanup pass.
 func (s *Store) CleanupAttachments(ctx context.Context, storage attachments.Storage) error {
 	type candidate struct{ ID, Org string }
 	var items []candidate
@@ -305,7 +327,7 @@ func (s *Store) CleanupAttachments(ctx context.Context, storage attachments.Stor
 		if _, err := tx.Exec(ctx, `UPDATE ao_attachments SET status='expired' WHERE NOT retained AND expires_at<=now() AND (preparation_expires_at IS NULL OR preparation_expires_at<=now()) AND status<>'expired'`); err != nil {
 			return err
 		}
-		rows, err := tx.Query(ctx, `SELECT id,org_id FROM ao_attachments WHERE status='expired' OR (status='ready' AND NOT upload_cleaned AND upload_expires_at<=now()) ORDER BY (status='expired') DESC,created_at LIMIT 100`)
+		rows, err := tx.Query(ctx, `SELECT id,org_id FROM ao_attachments WHERE upload_expires_at<=now() AND (status='expired' OR (status='ready' AND NOT upload_cleaned)) ORDER BY (status='expired') DESC,created_at LIMIT 100`)
 		if err != nil {
 			return err
 		}
@@ -324,7 +346,7 @@ func (s *Store) CleanupAttachments(ctx context.Context, storage attachments.Stor
 	for _, c := range items {
 		if err := s.withOrg(ctx, c.Org, func(tx pgx.Tx) error {
 			var expired, cleanUpload bool
-			err := tx.QueryRow(ctx, `SELECT status='expired',status='ready' AND NOT upload_cleaned AND upload_expires_at<=now() FROM ao_attachments WHERE org_id=$1 AND id=$2 FOR UPDATE`, c.Org, c.ID).Scan(&expired, &cleanUpload)
+			err := tx.QueryRow(ctx, `SELECT status='expired' AND NOT retained AND upload_expires_at<=now(),status='ready' AND NOT upload_cleaned AND upload_expires_at<=now() FROM ao_attachments WHERE org_id=$1 AND id=$2 FOR UPDATE`, c.Org, c.ID).Scan(&expired, &cleanUpload)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil
 			}

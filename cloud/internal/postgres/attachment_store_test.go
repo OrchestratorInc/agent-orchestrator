@@ -3,7 +3,14 @@ package postgres
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"image"
+	"image/png"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -24,7 +31,7 @@ func TestAttachmentsTaskChatSteerIsolationAndRetries(t *testing.T) {
 	}
 	makeAttachment := func(session, key string, size int64) domain.Attachment {
 		t.Helper()
-		a, err := store.PrepareAttachment(ctx, p, f.orgID, key, domain.PrepareAttachment{ProjectID: f.projectID, SessionID: session, Metadata: attachments.Metadata{Filename: "test.png", Size: size, MIMEType: "image/png", SHA256: strings.Repeat("a", 64)}})
+		a, err := store.PrepareAttachment(ctx, p, f.orgID, key, domain.PrepareAttachment{ProjectID: f.projectID, SessionID: session, Metadata: attachments.Metadata{Filename: "test.png", Size: size, MIMEType: "image/png", SHA256: strings.Repeat("a", 64)}}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -35,7 +42,7 @@ func TestAttachmentsTaskChatSteerIsolationAndRetries(t *testing.T) {
 	if a.ID != repeated.ID {
 		t.Fatal("upload retry duplicated attachment")
 	}
-	_, err = store.PrepareAttachment(ctx, p, f.orgID, "new-task", domain.PrepareAttachment{ProjectID: f.projectID, Metadata: attachments.Metadata{Filename: "other.png", Size: 100, MIMEType: "image/png", SHA256: strings.Repeat("a", 64)}})
+	_, err = store.PrepareAttachment(ctx, p, f.orgID, "new-task", domain.PrepareAttachment{ProjectID: f.projectID, Metadata: attachments.Metadata{Filename: "other.png", Size: 100, MIMEType: "image/png", SHA256: strings.Repeat("a", 64)}}, nil)
 	if !errors.Is(err, ErrIdempotencyMismatch) {
 		t.Fatal("upload mismatch", err)
 	}
@@ -129,7 +136,7 @@ func TestAttachmentsSubmissionLimitsAndTUIFastPath(t *testing.T) {
 	admin.Exec(ctx, `UPDATE ao_worker_connections SET capabilities='["attachments.images.v1"]' WHERE session_id=$1`, f.sessionID)
 	var ids []string
 	for i := 0; i < 9; i++ {
-		a, err := store.PrepareAttachment(ctx, p, f.orgID, uuid.NewString(), domain.PrepareAttachment{ProjectID: f.projectID, SessionID: f.sessionID, Metadata: attachments.Metadata{Filename: "large.png", Size: 10 << 20, MIMEType: "image/png", SHA256: strings.Repeat("b", 64)}})
+		a, err := store.PrepareAttachment(ctx, p, f.orgID, uuid.NewString(), domain.PrepareAttachment{ProjectID: f.projectID, SessionID: f.sessionID, Metadata: attachments.Metadata{Filename: "large.png", Size: 10 << 20, MIMEType: "image/png", SHA256: strings.Repeat("b", 64)}}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -175,7 +182,7 @@ func TestAttachmentCleanupRespectsReferencesAndLastGrant(t *testing.T) {
 	p := domain.Principal{UserID: f.userID, Provider: "local"}
 	admin.Exec(ctx, `UPDATE ao_worker_connections SET capabilities='["attachments.images.v1"]' WHERE session_id=$1`, f.sessionID)
 	create := func(key string) domain.Attachment {
-		a, err := store.PrepareAttachment(ctx, p, f.orgID, key, domain.PrepareAttachment{ProjectID: f.projectID, SessionID: f.sessionID, Metadata: attachments.Metadata{Filename: "image.png", Size: 100, MIMEType: "image/png", SHA256: strings.Repeat("a", 64)}})
+		a, err := store.PrepareAttachment(ctx, p, f.orgID, key, domain.PrepareAttachment{ProjectID: f.projectID, SessionID: f.sessionID, Metadata: attachments.Metadata{Filename: "image.png", Size: 100, MIMEType: "image/png", SHA256: strings.Repeat("a", 64)}}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -192,6 +199,9 @@ func TestAttachmentCleanupRespectsReferencesAndLastGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := admin.Exec(ctx, `UPDATE ao_attachments SET expires_at=now()-interval '1 hour',created_at=now()-interval '2 days' WHERE id=ANY($1::uuid[])`, []string{expired.ID, retained.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_attachments SET upload_expires_at=now()-interval '1 minute' WHERE id=$1`, expired.ID); err != nil {
 		t.Fatal(err)
 	}
 	storage := &cleanupStorage{}
@@ -225,6 +235,112 @@ func TestAttachmentCleanupRespectsReferencesAndLastGrant(t *testing.T) {
 	}
 }
 
+func TestAttachmentPrepareRejectsExpiredRenewal(t *testing.T) {
+	store, admin, f := openNotificationTestStore(t)
+	ctx := context.Background()
+	p := domain.Principal{UserID: f.userID, Provider: "local"}
+	input := domain.PrepareAttachment{ProjectID: f.projectID, Metadata: attachments.Metadata{Filename: "image.png", Size: 100, MIMEType: "image/png", SHA256: strings.Repeat("a", 64)}}
+	a, err := store.PrepareAttachment(ctx, p, f.orgID, "expired-renewal", input, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deadline time.Time
+	if err := admin.QueryRow(ctx, `UPDATE ao_attachments SET expires_at=now()-interval '1 hour' WHERE id=$1 RETURNING upload_expires_at`, a.ID).Scan(&deadline); err != nil {
+		t.Fatal(err)
+	}
+	issued := false
+	retry, err := store.PrepareAttachment(ctx, p, f.orgID, "expired-renewal", input, func(context.Context, domain.Attachment) (time.Time, error) {
+		issued = true
+		return time.Now().Add(attachments.UploadTTL), nil
+	})
+	if err != nil || retry.ID != a.ID || retry.Status != "expired" {
+		t.Fatalf("expired retry: attachment=%+v err=%v", retry, err)
+	}
+	if issued {
+		t.Fatal("issued upload grant for expired preparation")
+	}
+	var after time.Time
+	if err := admin.QueryRow(ctx, `SELECT upload_expires_at FROM ao_attachments WHERE id=$1`, a.ID).Scan(&after); err != nil || !after.Equal(deadline) {
+		t.Fatalf("expired retry renewed grant: before=%v after=%v err=%v", deadline, after, err)
+	}
+}
+
+func TestAttachmentCleanupKeepsMetadataWhileRenewedGrantIsLive(t *testing.T) {
+	store, admin, f := openNotificationTestStore(t)
+	ctx := context.Background()
+	p := domain.Principal{UserID: f.userID, Provider: "local"}
+	storage, err := attachments.NewFilesystem("test", t.TempDir(), bytes.Repeat([]byte{8}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	var pixels bytes.Buffer
+	if err := png.Encode(&pixels, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(pixels.Bytes())
+	input := domain.PrepareAttachment{ProjectID: f.projectID, Metadata: attachments.Metadata{Filename: "image.png", Size: int64(pixels.Len()), MIMEType: "image/png", SHA256: hex.EncodeToString(sum[:])}}
+	a, err := store.PrepareAttachment(ctx, p, f.orgID, "live-grant", input, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_attachments SET expires_at=now()+interval '1 minute',upload_expires_at=now()-interval '1 minute' WHERE id=$1`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	var grant attachments.UploadGrant
+	if _, err := store.PrepareAttachment(ctx, p, f.orgID, "live-grant", input, func(ctx context.Context, a domain.Attachment) (time.Time, error) {
+		var err error
+		grant, err = storage.Upload(ctx, "upload-"+a.ID, a.Metadata)
+		return grant.ExpiresAt, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var deadline time.Time
+	if err := admin.QueryRow(ctx, `SELECT upload_expires_at FROM ao_attachments WHERE id=$1`, a.ID).Scan(&deadline); err != nil || deadline.Before(grant.ExpiresAt.Truncate(time.Microsecond)) {
+		t.Fatalf("grant outlives recorded deadline: recorded=%v actual=%v err=%v", deadline, grant.ExpiresAt, err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_attachments SET expires_at=now()-interval '1 minute' WHERE id=$1`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CleanupAttachments(ctx, storage); err != nil {
+		t.Fatal(err)
+	}
+	var rows int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM ao_attachments WHERE id=$1 AND status='expired'`, a.ID).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("metadata removed while grant live: rows=%d err=%v", rows, err)
+	}
+	// A live grant can still create its upload key, so its metadata must survive.
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	part, err := w.CreateFormFile("file", "image.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	part.Write(pixels.Bytes())
+	w.Close()
+	request := httptest.NewRequest(http.MethodPost, grant.URL, &body)
+	request.Header.Set("Content-Type", w.FormDataContentType())
+	response := httptest.NewRecorder()
+	storage.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("live upload grant: status=%d body=%s", response.Code, response.Body.String())
+	}
+	// Advance the recorded grant boundary without waiting ten minutes in tests.
+	if _, err := admin.Exec(ctx, `UPDATE ao_attachments SET upload_expires_at=now()-interval '1 minute' WHERE id=$1`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CleanupAttachments(ctx, storage); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM ao_attachments WHERE id=$1`, a.ID).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("metadata not cleaned after grant expiry: rows=%d err=%v", rows, err)
+	}
+	if object, err := storage.Open(ctx, "upload-"+a.ID); err == nil {
+		object.Close()
+		t.Fatal("upload not cleaned after grant expiry")
+	}
+}
+
 func readyAttachment(store *Store, ctx context.Context, p domain.Principal, org, id string) error {
 	_, err := store.FinalizeAttachment(ctx, p, org, id, func(context.Context, domain.Attachment) error { return nil })
 	return err
@@ -242,7 +358,7 @@ func TestAttachmentForwardingUsesAuthorizedSourceReferences(t *testing.T) {
 	}
 	create := func(session string) domain.Attachment {
 		t.Helper()
-		a, err := store.PrepareAttachment(ctx, p, f.orgID, uuid.NewString(), domain.PrepareAttachment{ProjectID: f.projectID, SessionID: session, Metadata: attachments.Metadata{Filename: "image.png", Size: 100, MIMEType: "image/png", SHA256: strings.Repeat("a", 64)}})
+		a, err := store.PrepareAttachment(ctx, p, f.orgID, uuid.NewString(), domain.PrepareAttachment{ProjectID: f.projectID, SessionID: session, Metadata: attachments.Metadata{Filename: "image.png", Size: 100, MIMEType: "image/png", SHA256: strings.Repeat("a", 64)}}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -335,7 +451,7 @@ func TestAttachmentPreparationLeaseExpiresWithoutAcknowledgement(t *testing.T) {
 	if _, err := admin.Exec(ctx, `UPDATE ao_worker_connections SET capabilities='["attachments.images.v1"]' WHERE session_id=$1`, f.sessionID); err != nil {
 		t.Fatal(err)
 	}
-	a, err := store.PrepareAttachment(ctx, p, f.orgID, "terminal-image", domain.PrepareAttachment{ProjectID: f.projectID, SessionID: f.sessionID, Metadata: attachments.Metadata{Filename: "image.png", Size: 100, MIMEType: "image/png", SHA256: strings.Repeat("a", 64)}})
+	a, err := store.PrepareAttachment(ctx, p, f.orgID, "terminal-image", domain.PrepareAttachment{ProjectID: f.projectID, SessionID: f.sessionID, Metadata: attachments.Metadata{Filename: "image.png", Size: 100, MIMEType: "image/png", SHA256: strings.Repeat("a", 64)}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +461,7 @@ func TestAttachmentPreparationLeaseExpiresWithoutAcknowledgement(t *testing.T) {
 	if _, err := store.LeaseAttachments(ctx, p, f.orgID, f.sessionID, []string{a.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.Exec(ctx, `UPDATE ao_attachments SET expires_at=now()-interval '1 minute' WHERE id=$1`, a.ID); err != nil {
+	if _, err := admin.Exec(ctx, `UPDATE ao_attachments SET expires_at=now()-interval '1 minute',upload_expires_at=now()-interval '1 minute' WHERE id=$1`, a.ID); err != nil {
 		t.Fatal(err)
 	}
 	storage := &cleanupStorage{}
@@ -393,12 +509,12 @@ func TestAttachmentFinalizationAndCleanupInterleaving(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer storage.Close()
-	a, err := store.PrepareAttachment(ctx, p, f.orgID, "race-image", domain.PrepareAttachment{ProjectID: f.projectID, SessionID: f.sessionID, Metadata: attachments.Metadata{Filename: "image.png", Size: 100, MIMEType: "image/png", SHA256: strings.Repeat("a", 64)}})
+	a, err := store.PrepareAttachment(ctx, p, f.orgID, "race-image", domain.PrepareAttachment{ProjectID: f.projectID, SessionID: f.sessionID, Metadata: attachments.Metadata{Filename: "image.png", Size: 100, MIMEType: "image/png", SHA256: strings.Repeat("a", 64)}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Completion starts while valid and pauses before writing past the TTL.
-	if _, err := admin.Exec(ctx, `UPDATE ao_attachments SET expires_at=clock_timestamp()+interval '1 second' WHERE id=$1`, a.ID); err != nil {
+	if _, err := admin.Exec(ctx, `UPDATE ao_attachments SET expires_at=clock_timestamp()+interval '1 second',upload_expires_at=clock_timestamp()-interval '1 minute' WHERE id=$1`, a.ID); err != nil {
 		t.Fatal(err)
 	}
 	entered, release := make(chan struct{}), make(chan struct{})

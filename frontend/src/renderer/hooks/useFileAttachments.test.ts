@@ -1,6 +1,7 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { act } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { webcrypto } from "node:crypto";
 
 import {
 	capturePendingFileAttachmentsForSession,
@@ -15,6 +16,8 @@ import {
 	type FileAttachment,
 } from "./useFileAttachments";
 import { chatDraftScopeKey } from "../lib/chat-drafts";
+import { uploadCloudAttachments } from "../lib/cloud-attachments";
+import type { CloudCpClient } from "../lib/cloud-cp";
 
 const file = (name: string, bytes = 8, type = "text/plain") =>
 	new File([new Uint8Array(bytes).fill(1)], name, { type });
@@ -473,6 +476,54 @@ describe("useFileAttachments", () => {
 
 describe("Cloud attachment limits and retries", () => {
  const limits = { count: 8, fileBytes: 10 * mb, totalBytes: 25 * mb, imagesOnly: true };
+	afterEach(() => vi.unstubAllGlobals());
+	it("retries prepare failures after a composer remount without persisting the File", async () => {
+		vi.stubGlobal("crypto", webcrypto);
+		const fetch = vi.fn().mockResolvedValue({ ok: true });
+		vi.stubGlobal("fetch", fetch);
+		const attachmentId = "12345678-1234-1234-1234-123456789abc";
+		const prepareAttachment = vi.fn()
+			.mockRejectedValueOnce(new Error("prepare unavailable"))
+			.mockResolvedValue({
+				attachment: { id: attachmentId, status: "pending" },
+				upload: { url: "/upload", fields: {} },
+			});
+		const completeAttachment = vi.fn().mockResolvedValue({
+			attachment: { id: attachmentId, status: "ready" },
+		});
+		const client = { prepareAttachment, completeAttachment } as unknown as CloudCpClient;
+		const initialKey = "cloud:prepare-failure-remount";
+		const uploadFiles = (files: FileAttachment[]) =>
+			uploadCloudAttachments(client, "https://cloud.test", "org", "project", "session", files);
+		const selected = file("image.png", 8, "image/png");
+		selected.arrayBuffer = async () => new Uint8Array(8).fill(1).buffer;
+		const first = renderHook(() => useFileAttachments({ initialKey, uploadFiles, limits }));
+		await act(async () => { await first.result.current.addFiles([selected]); });
+		const id = first.result.current.attachments[0]?.id;
+		expect(first.result.current.error).toBe("prepare unavailable");
+		expect(first.result.current.attachments[0]?.pendingUpload).toBeUndefined();
+		expect(localStorage.getItem("ao.cloud-image-draft:" + initialKey)).toBeNull();
+		first.unmount();
+
+		const reopened = renderHook(() => useFileAttachments({ initialKey, uploadFiles, limits }));
+		expect(reopened.result.current.attachments).toHaveLength(1);
+		expect(reopened.result.current.attachments[0]?.file).toBe(selected);
+		await act(async () => { await reopened.result.current.toSettledPayload(); });
+		expect(prepareAttachment).toHaveBeenCalledTimes(2);
+		expect(prepareAttachment.mock.calls[1]?.[2]).toEqual({ idempotencyKey: id });
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(completeAttachment).toHaveBeenCalledTimes(1);
+		expect(reopened.result.current.attachments[0]).toMatchObject({
+			id, attachmentId, pendingUpload: false,
+		});
+		expect(reopened.result.current.attachments[0]?.file).toBeUndefined();
+		const draft = JSON.parse(localStorage.getItem("ao.cloud-image-draft:" + initialKey)!);
+		expect(draft[0]).not.toHaveProperty("file");
+		expect(draft[0]).not.toHaveProperty("data");
+		expect(draft[0]).not.toHaveProperty("dataUrl");
+		act(() => reopened.result.current.clear());
+		reopened.unmount();
+	});
  it("keeps Files out of base64 conversion and retries with the same selection", async () => {
   const uploadFiles = vi.fn().mockRejectedValueOnce(new Error("interrupted"))
    .mockImplementation(async (files: FileAttachment[]) => files.map(a => ({ ...a, file: undefined, attachmentId: "ready-id" })));

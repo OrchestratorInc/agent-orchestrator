@@ -10,16 +10,18 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/go-chi/chi/v5"
 	"net/http"
+	"time"
 )
 
 var (
 	errUploadIncomplete = errors.New("attachment upload incomplete")
 	errInvalidImage     = errors.New("invalid attachment image")
 	errFinalizeStorage  = errors.New("attachment finalization failed")
+	errPrepareStorage   = errors.New("attachment upload grant failed")
 )
 
 type AttachmentStore interface {
-	PrepareAttachment(context.Context, domain.Principal, string, string, domain.PrepareAttachment) (domain.Attachment, error)
+	PrepareAttachment(context.Context, domain.Principal, string, string, domain.PrepareAttachment, func(context.Context, domain.Attachment) (time.Time, error)) (domain.Attachment, error)
 	GetAttachment(context.Context, domain.Principal, string, string) (domain.Attachment, error)
 	FinalizeAttachment(context.Context, domain.Principal, string, string, func(context.Context, domain.Attachment) error) (domain.Attachment, error)
 	WorkerAttachments(context.Context, string, string, string, int64) ([]attachments.Metadata, error)
@@ -49,18 +51,25 @@ func (s *Server) prepareAttachment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, 422, "validation_error", "A project, raster image, size and SHA-256 checksum are required.")
 		return
 	}
-	a, err := store.PrepareAttachment(r.Context(), principalFrom(r), org, key, input)
+	var grant attachments.UploadGrant
+	a, err := store.PrepareAttachment(r.Context(), principalFrom(r), org, key, input, func(ctx context.Context, a domain.Attachment) (time.Time, error) {
+		var err error
+		grant, err = s.attachmentStorage.Upload(ctx, uploadKey(a.ID), a.Metadata)
+		if err != nil {
+			return time.Time{}, errPrepareStorage
+		}
+		return grant.ExpiresAt, nil
+	})
+	if errors.Is(err, errPrepareStorage) {
+		writeError(w, r, 503, "storage_unavailable", "The upload grant could not be created.")
+		return
+	}
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return
 	}
 	if a.Status == "expired" {
 		writeError(w, r, 410, "attachment_expired", "The unreferenced upload expired.")
-		return
-	}
-	grant, err := s.attachmentStorage.Upload(r.Context(), uploadKey(a.ID), a.Metadata)
-	if err != nil {
-		writeError(w, r, 503, "storage_unavailable", "The upload grant could not be created.")
 		return
 	}
 	writeJSON(w, 201, map[string]any{"attachment": a, "upload": grant})

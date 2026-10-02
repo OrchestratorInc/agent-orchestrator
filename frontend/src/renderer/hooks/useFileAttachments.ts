@@ -95,7 +95,9 @@ function sharedAttachmentDescriptors(attachments: FileAttachment[]): FileAttachm
 		name,
 		...(stagedPath ? { stagedPath } : {}),
 		...(attachmentId ? { attachmentId } : {}),
-		...(pendingUpload ? { pendingUpload, file } : {}),
+		...(pendingUpload ? { pendingUpload } : {}),
+		// Prepare can fail before it assigns an attachment ID or pending flag.
+		...(file && (!attachmentId || pendingUpload) ? { file } : {}),
 	}));
 }
 
