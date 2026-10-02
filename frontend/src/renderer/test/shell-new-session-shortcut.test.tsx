@@ -409,7 +409,7 @@ beforeEach(() => {
 
 describe("shell workspace startup", () => {
 	it("rechecks a connected host when its session queries fail", async () => {
-		useUiStore.setState({ remoteHosts: true });
+		useUiStore.setState({ developerMode: true, remoteHosts: true });
 		const view = await renderShell();
 		await waitFor(() => expect(shellMocks.listRemoteHosts).toHaveBeenCalledTimes(1));
 
@@ -433,7 +433,7 @@ describe("shell workspace startup", () => {
 	});
 
 	it("leaves a remote session only when removing its project on the same host", async () => {
-		useUiStore.setState({ remoteHosts: true });
+		useUiStore.setState({ developerMode: true, remoteHosts: true });
 		shellMocks.state.routeParams = { hostId: "box-a", sessionId: "same-session" };
 		shellMocks.state.remoteWorkspaces = [
 			{ hostId: "box-a", id: "project-a", sessions: [{ id: "same-session" }] },

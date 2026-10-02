@@ -37,6 +37,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 	const closeSettings = useUiStore((state) => state.closeSettings);
 	// Reads the daemon settings the dialog tree already queries; no extra fetch.
 	const { cloudEnabled } = useCloudGate();
+	const developerMode = useUiStore((state) => state.developerMode);
 
 	const displaySettings = settingsModal;
 	// The selected page includes several store/query subscribers. Mount it one
@@ -57,7 +58,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 	}, [deferSettingsBody, settingsModal]);
 	const isBodyReady = bodySettings === displaySettings;
 
-	const globalSections = visibleGlobalSettings({ cloudEnabled });
+	const globalSections = visibleGlobalSettings({ cloudEnabled, developerMode });
 	const remoteHostId = displaySettings?.scope === "project" ? displaySettings.hostId : undefined;
 
 	const projectSections: Array<{
@@ -82,7 +83,7 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 
 	const activeLabel = isProjectSettings
 		? (projectSections.find((s) => s.id === activeProjectSection)?.label ?? t("settings.project.general"))
-		: globalSettingsItem(activeSection, { cloudEnabled }).label(t);
+		: globalSettingsItem(activeSection, { cloudEnabled, developerMode }).label(t);
 
 	const closeSettingsDialog = () => {
 		if (cueBusy) return;
@@ -138,14 +139,14 @@ function SettingsDialogLayer({ settingsModal }: { settingsModal: SettingsModal }
 
 	useEffect(() => {
 		if (settingsModal?.scope === "global") {
-			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled }).id);
+			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode }).id);
 		}
 		if (settingsModal?.scope === "project") {
 			setActiveProjectSection(settingsModal.section ?? "general");
 			setProjectSaveState(initialProjectSaveState());
 			setCueBusy(false);
 		}
-	}, [cloudEnabled, settingsModal]);
+	}, [cloudEnabled, developerMode, settingsModal]);
 
 	useEffect(() => {
 		setFocusAgentId(settingsModal?.scope === "global" ? settingsModal.focusAgentId : undefined);

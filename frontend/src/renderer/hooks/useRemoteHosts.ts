@@ -5,6 +5,7 @@ import { useUiStore } from "../stores/ui-store";
 
 const HOSTS_CHANGED_EVENT = "ao:remote-hosts-changed";
 const OFFLINE_RETRY_MS = 15_000;
+const NO_HOSTS: RemoteHost[] = [];
 
 function isOfflineError(error: unknown): boolean {
 	return error instanceof Error && error.message.endsWith(" is offline");
@@ -23,7 +24,7 @@ export type RemoteHost = {
 };
 
 export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<void> } {
-	const enabled = useUiStore((state) => state.remoteHosts);
+	const enabled = useUiStore((state) => state.developerMode && state.remoteHosts);
 	const enabledRef = useRef(enabled);
 	enabledRef.current = enabled;
 	const [hosts, setHosts] = useState<RemoteHost[]>([]);
@@ -114,5 +115,5 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<
 		return () => window.removeEventListener(HOSTS_CHANGED_EVENT, onChanged);
 	}, [enabled, refresh]);
 
-	return { hosts, refresh };
+	return { hosts: enabled ? hosts : NO_HOSTS, refresh };
 }

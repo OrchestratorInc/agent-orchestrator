@@ -390,6 +390,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const interfaceContext = hostId ?? (session ? session.cloud ?? null : cloudOrgId && projectId ? { orgId: cloudOrgId } : undefined);
 	const interfaceUi = useSessionInterfaceSwitch(sessionId, session, interfaceContext);
 	const { draftBoundaries: chatDraftBoundaries, confirmUnsafeDraftLeave } = interfaceUi;
+	const developerMode = useUiStore((state) => state.developerMode);
 	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
 	const setRemoteHosts = useUiStore((state) => state.setRemoteHosts);
 	useBlocker({
@@ -398,7 +399,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		shouldBlockFn: async () => {
 			const decision = await confirmUnsafeDraftLeave();
 			if (decision.kind === "cancelled") {
-				if (hostId && !remoteHostsEnabled) setRemoteHosts(true);
+				if (hostId && developerMode && !remoteHostsEnabled) setRemoteHosts(true);
 				return true;
 			}
 			if (decision.kind === "confirmed") {

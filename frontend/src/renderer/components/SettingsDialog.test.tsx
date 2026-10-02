@@ -78,7 +78,7 @@ describe("SettingsDialog", () => {
 		postMock.mockReset().mockImplementation((path: string) => path === "/api/v1/agents/codex/accounts/ensure"
 			? Promise.resolve({ data: accountsResponse })
 			: Promise.resolve({ data: { operationId: "login-1", status: "cancelled" } }));
-		useUiStore.setState({ settingsModal: null });
+		useUiStore.setState({ developerMode: false, settingsModal: null });
 	});
 
 	function renderSettingsDialog() {
@@ -142,13 +142,22 @@ describe("SettingsDialog", () => {
 		));
 	});
 
-	it("shows Remote hosts even while the feature and Cloud are off", async () => {
-		useUiStore.setState({ remoteHosts: false });
+	it("shows Remote hosts with Developer mode on even while the connection switch is off", async () => {
+		useUiStore.setState({ developerMode: true, remoteHosts: false });
 		useUiStore.getState().openGlobalSettings("remoteHosts");
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("remoteHosts");
 		expect(screen.getByRole("button", { name: "Remote hosts" })).toHaveAttribute("aria-current", "page");
+	});
+
+	it("hides Remote hosts and redirects its settings page when Developer mode is off", async () => {
+		useUiStore.setState({ developerMode: false, remoteHosts: true });
+		useUiStore.getState().openGlobalSettings("remoteHosts");
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
+		expect(screen.queryByRole("button", { name: "Remote hosts" })).not.toBeInTheDocument();
 	});
 
 	it("keeps the settings surface above its blurred backdrop", async () => {

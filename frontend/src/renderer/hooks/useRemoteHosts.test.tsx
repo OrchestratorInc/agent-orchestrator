@@ -12,6 +12,7 @@ const remotes = vi.hoisted(() => ({
 vi.mock("../lib/bridge", () => ({ aoBridge: { remotes } }));
 
 import { baseUrlForHost, connectedHosts } from "../lib/host-clients";
+import { useConnectedHosts } from "./useHostConnection";
 import { requestRemoteHostsRefresh, useRemoteHosts } from "./useRemoteHosts";
 
 beforeEach(() => {
@@ -26,12 +27,12 @@ beforeEach(() => {
 		base: "http://127.0.0.1:4000",
 	}));
 	remotes.disconnect.mockReset().mockResolvedValue(undefined);
-	useUiStore.setState({ remoteHosts: false });
+	useUiStore.setState({ developerMode: true, remoteHosts: false });
 });
 
 afterEach(() => {
 	vi.useRealTimers();
-	useUiStore.setState({ remoteHosts: false });
+	useUiStore.setState({ developerMode: false, remoteHosts: false });
 });
 
 it("does not connect to saved boxes until Remote hosts is enabled", async () => {
@@ -39,6 +40,22 @@ it("does not connect to saved boxes until Remote hosts is enabled", async () => 
 	await waitFor(() => expect(result.current.hosts).toHaveLength(0));
 	expect(remotes.list).not.toHaveBeenCalled();
 	expect(remotes.connect).not.toHaveBeenCalled();
+});
+
+it("keeps remote hosts disconnected until Developer mode is enabled", async () => {
+	useUiStore.setState({ developerMode: false, remoteHosts: true });
+	const { result } = renderHook(() => useRemoteHosts());
+	const connections = renderHook(() => useConnectedHosts());
+	expect(result.current.hosts).toEqual([]);
+	expect(connections.result.current).toEqual([]);
+	expect(remotes.list).not.toHaveBeenCalled();
+	act(() => useUiStore.setState({ developerMode: true }));
+	await waitFor(() => expect(result.current.hosts).toHaveLength(2));
+	expect(connections.result.current).toEqual(["box-a", "box-b"]);
+	act(() => useUiStore.setState({ developerMode: false }));
+	await waitFor(() => expect(result.current.hosts).toEqual([]));
+	expect(connections.result.current).toEqual([]);
+	expect(connectedHosts()).toEqual([]);
 });
 
 it("connects both saved boxes and exposes their stable IDs", async () => {

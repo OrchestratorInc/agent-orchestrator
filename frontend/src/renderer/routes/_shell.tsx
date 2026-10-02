@@ -247,7 +247,7 @@ function ShellLayout() {
 	const [isKeyboardShortcutsOpen, setIsKeyboardShortcutsOpen] = useState(false);
 	const [isKeyboardShortcutsSettingsOpen, setIsKeyboardShortcutsSettingsOpen] = useState(false);
 	const routeParams = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
-	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
+	const remoteHostsEnabled = useUiStore((state) => state.developerMode && state.remoteHosts);
 	useEffect(() => {
 		if (!remoteHostsEnabled && routeParams.hostId) void navigate({ to: "/", replace: true });
 	}, [navigate, remoteHostsEnabled, routeParams.hostId]);

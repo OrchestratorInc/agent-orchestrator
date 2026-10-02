@@ -1,6 +1,6 @@
 import { Fragment, Suspense } from "react";
 import { useTranslation } from "react-i18next";
-import type { GlobalSettingsSection as GlobalSettingsPage } from "../stores/ui-store";
+import { type GlobalSettingsSection as GlobalSettingsPage, useUiStore } from "../stores/ui-store";
 import { globalSettingsItemsFor } from "./settings/settingsCatalog";
 
 export type GlobalSettingsSection = GlobalSettingsPage | "all";
@@ -19,8 +19,9 @@ export function GlobalSettingsForm({
 	section?: GlobalSettingsSection;
 }) {
 	const { t } = useTranslation();
+	const developerMode = useUiStore((state) => state.developerMode);
 	const all = section === "all";
-	const context = { cloudEnabled, focusAgentId, hostId, harnessView };
+	const context = { cloudEnabled, developerMode, focusAgentId, hostId, harnessView };
 	// One section per page means the dialog header already names it, so a
 	// leading in-page heading would just repeat that title.
 	const titleHidden = !all;
