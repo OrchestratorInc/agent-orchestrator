@@ -548,6 +548,7 @@ function SessionRow({
 	reading: SessionMemoryReading;
 	session: WorkspaceSession;
 }) {
+	const { t } = useTranslation();
 	const working = session.activity?.state === "active";
 	const recent = reading.activity?.recent ?? [];
 	const canExpand = reading.processes.length > 0 || recent.length > 0;
@@ -574,8 +575,10 @@ function SessionRow({
 						</div>
 					</div>
 				</td>
-				{/* A session has no type of its own; its process lines do. */}
-				<td className={cell.type} />
+				{/* A session's type is its role; its process lines carry their own. */}
+				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs text-passive", cell.type)} data-testid="session-memory-type">
+					{isOrchestratorSession(session) ? t("settings.models.orchestratorRole") : t("settings.models.workerRole")}
+				</td>
 				<ProcessCountCell count={reading.processes.length} isExpanded={isExpanded} />
 				<MemoryCell bytes={reading.rssBytes} maxBytes={maxBytes} tone={chip} />
 				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs tabular-nums text-settings-muted", cell.cpu)}>
