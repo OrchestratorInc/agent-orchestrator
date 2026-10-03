@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
@@ -113,7 +115,7 @@ func TestAsyncQuestionCanBeAnsweredAfterControllerReplacement(t *testing.T) {
 	}
 	replacement := newFakeConversation()
 	replacement.turnSeq = 100
-	svc := chatsvc.New(chatsvc.Options{Store: h.st, Reader: fullSnapshotReader(h.st), Sessions: h.st, Activity: h.activity, Drivers: fakeRegistry{driver: fakeDriver{conv: replacement}}})
+	svc := chatsvc.New(chatsvc.Options{Store: h.st, Reader: fullSnapshotReader(h.st), Sessions: h.st, Activity: h.activity, NewID: uuid.NewString, Drivers: fakeRegistry{driver: fakeDriver{conv: replacement}}})
 	ctrl, err := svc.Start(ctx, chatsvc.StartConfig{SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex, WorkspacePath: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)

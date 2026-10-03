@@ -97,6 +97,10 @@ func (c *conversation) handleInputRequest(ctx context.Context, req serverRequest
 	if turnID == "" {
 		turnID = c.activeTurn
 	}
+	if _, exists := c.pending[requestID]; exists {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("input request id %s is already pending", requestID)
+	}
 	c.pending[requestID] = parked
 	c.mu.Unlock()
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventInputRequested, ProviderTurnID: turnID, ProviderItemID: itemID, RequestID: requestID, Input: &input})
