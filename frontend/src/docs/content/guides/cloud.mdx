@@ -11,7 +11,7 @@ AO Cloud is the hosted service for running a project's worker in a remote worksp
 2. In **Settings → Cloud**, connect a supported provider. The Cloud worker picker offers Claude Code, Codex, Cursor, and OpenCode only when the corresponding Cloud connection is valid. A local agent installation or local CLI login does not supply a Cloud credential.
 3. Have access to the GitHub repository you want to work on. Cloud project creation uses a GitHub installation and repository grant, separate from the `gh` login used by local projects. Follow the **Connect GitHub** flow in project setup if the repository is missing.
 
-Cloud authorization is scoped to the signed-in account and its organizations. The desktop currently uses the first organization returned for that account, and it has no organization switcher. If the wrong organization appears, sign in with the account that has the intended access or contact the team that manages your Cloud access. If access expires, sign in again and retry the action. Do not paste provider keys or GitHub tokens into a task prompt.
+Cloud authorization is scoped to the signed-in account and its organizations. The desktop currently uses the first organization returned for that account, creates one if none exists, and has no organization switcher. If the wrong organization appears, sign in with the account that has the intended access or contact the team that manages your Cloud access. If access expires, sign in again and retry the action. Do not paste provider keys or GitHub tokens into a task prompt.
 
 ## Create a project and session
 
@@ -34,7 +34,7 @@ Cloud also has a configurable concurrent-sandbox limit. A provider can have a lo
 ## If access stops working
 
 - **Cloud option missing:** verify that the build and account have Cloud enabled. A local project remains available.
-- **Repository missing:** reconnect GitHub or check installation and repository grants for the selected organization.
+- **Repository missing:** reconnect GitHub or check installation and repository grants for the organization shown in the desktop.
 - **Agent unavailable:** reconnect its Cloud credential in **Settings → Cloud**. Local harness readiness is a separate check.
 - **Session stuck or disconnected:** reopen the session and check its state. A sleeping or replacing remote worker can need time to reconnect; retry a failed action only after checking whether it already completed.
 - **Provider or organization access changed:** sign in again with the account that has the intended organization access. The desktop uses the first organization returned for that account and has no organization switcher. Do not copy a local project into Cloud merely to work around an authorization error.
