@@ -95,6 +95,14 @@ import {
 
 type CenterFileOpenRequest = { commitSha?: string; editing: boolean; key: number; mode: FileViewMode; scope?: FileOpenOptions["scope"] };
 const EMPTY_AUXILIARY_TAB_ORDER: string[] = [];
+// Centre-file open requests take keys from this process-wide counter, not a
+// per-mount one: the display mode remembered for a request (ui-store) outlives a
+// SessionView remount, so a new request must never reuse a recorded key.
+let lastCenterFileRequestKey = 0;
+function nextCenterFileRequestKey(): number {
+	lastCenterFileRequestKey += 1;
+	return lastCenterFileRequestKey;
+}
 // The inspector tab labels respond to the tablist's remaining width. The
 // 239px tablist breakpoint plus the 76px pinned-action reserve and 10px leading
 // inset gives a 325px inspector breakpoint for the animation lock.
@@ -878,6 +886,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [setActiveShellTerminal, uiSessionId]);
 	const openCenterFile = useCallback((path: string, options?: FileOpenOptions) => {
 		setReviewerChatId(null);
+		const key = nextCenterFileRequestKey();
 		setCenterFileRequestsBySession((current) => {
 			const sessionRequests = current[uiSessionId] ?? {};
 			return {
@@ -887,7 +896,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					[path]: {
 						commitSha: options?.commitSha,
 						editing: options?.editing ?? false,
-						key: (sessionRequests[path]?.key ?? 0) + 1,
+						key,
 						mode: options?.mode ?? "file",
 						scope: options?.scope,
 					},
@@ -1243,6 +1252,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		},
 		[browserOnly, openCenterFile, fetchWorkspaceFiles, uiSessionId],
 	);
+
+	// A reveal is one-shot. Left in place, it would reopen the file (and take
+	// focus from the agent tab) every time the explorer re-ran it, which happens
+	// on each return to this session.
+	const handleRevealHandled = useCallback((key: number) => {
+		setFilePreviewRequestsBySession((current) => {
+			if (current[uiSessionId]?.key !== key) return current;
+			const { [uiSessionId]: _handled, ...rest } = current;
+			return rest;
+		});
+	}, [uiSessionId]);
 
 	const handleOpenFiles = useCallback(() => {
 		prepareFilesInspector();
@@ -1672,6 +1692,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 											onOpenFile={openCenterFile}
 											onSplitChange={setFilesSplit}
 											onToggleMaximized={handleToggleFilesPopOut}
+											onRevealHandled={handleRevealHandled}
 											revealRequest={filePreviewRequestsBySession[uiSessionId] ?? null}
 											sessionId={session.id}
 											split={filesSplit}

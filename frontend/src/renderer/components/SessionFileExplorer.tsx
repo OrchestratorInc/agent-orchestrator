@@ -61,6 +61,8 @@ type SessionFileExplorerProps = {
 	onSplitChange?: (split: boolean) => void;
 	onToggleMaximized?: (next: boolean) => void;
 	revealRequest?: { path: string; key: number } | null;
+	/** Called once a reveal request has opened its file, so the owner can drop it. */
+	onRevealHandled?: (key: number) => void;
 	split?: boolean;
 };
 
@@ -72,6 +74,7 @@ export function SessionFileExplorer({
 	onSplitChange,
 	onToggleMaximized,
 	revealRequest,
+	onRevealHandled,
 	split: controlledSplit,
 }: SessionFileExplorerProps) {
 	const { t } = useTranslation();
@@ -148,8 +151,12 @@ export function SessionFileExplorer({
 		if (!revealRequest) return;
 		setFilesChangedOnly(uiKey, false);
 		setSelectedPath(revealRequest.path);
-		if (!isMaximized) onOpenFile?.(revealRequest.path, { mode: "file" });
-	}, [isMaximized, onOpenFile, revealRequest, uiKey, setFilesChangedOnly]);
+		// Maximized, the file is shown in this view's own preview; the request
+		// stays pending so un-maximizing still opens it in the centre.
+		if (isMaximized) return;
+		onOpenFile?.(revealRequest.path, { mode: "file" });
+		onRevealHandled?.(revealRequest.key);
+	}, [isMaximized, onOpenFile, onRevealHandled, revealRequest, uiKey, setFilesChangedOnly]);
 
 	const handleSelectPath = (node: TreeNode) => {
 		setPreviewRequest(null);
