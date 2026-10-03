@@ -670,6 +670,15 @@ describe("Sidebar", () => {
 		expect(content).not.toContainElement(screen.getByText("Projects"));
 	});
 
+	it("navigates home when the Agent Orchestrator brand is clicked", async () => {
+		const user = userEvent.setup();
+		renderSidebar();
+
+		await user.click(screen.getByRole("button", { name: "Go to home" }));
+
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/" });
+	});
+
 	it("opens project settings instead of spawning when no orchestrator agent is configured", async () => {
 		const user = userEvent.setup();
 		renderSidebar({ workspaces: [{ ...workspace, orchestratorAgent: undefined }] });
@@ -3348,5 +3357,33 @@ describe("resolveNextNavigationAfterSessionKill", () => {
 	it("falls back to project board if workspace is undefined", () => {
 		const route = resolveNextNavigationAfterSessionKill(undefined, "s-1");
 		expect(route).toEqual({ target: "project" });
+	});
+});
+
+describe("project import menus", () => {
+	it.each(["dropdown", "context"])("offers project import through the %s menu without a persistent row", async (kind) => {
+		const user = userEvent.setup();
+		renderSidebar();
+		expect(screen.queryByRole("button", { name: "Import sessions" })).not.toBeInTheDocument();
+		if (kind === "dropdown") await user.click(screen.getByLabelText("Project actions for Project One"));
+		else fireEvent.contextMenu(screen.getByText("Project One"));
+		expect(await screen.findByRole("menuitem", { name: "Import sessions" })).toBeInTheDocument();
+	});
+
+	it.each(["remote", "cloud"])("does not offer local transcript import for a %s project", (kind) => {
+		if (kind === "remote") {
+			renderSidebar({
+				workspaces: [],
+				remoteHosts: [{ hostId: "box-a", label: "Host A", url: "http://box-a:3001", status: "connected" }],
+				remoteWorkspaces: [{ ...workspace, hostId: "box-a" }],
+			});
+			const row = document.querySelector("[data-remote-project-row]");
+			expect(row).not.toBeNull();
+			fireEvent.contextMenu(row!);
+		} else {
+			renderSidebar({ workspaces: [{ ...workspace, kind: "cloud" }] });
+			fireEvent.contextMenu(screen.getByText("Project One"));
+		}
+		expect(screen.queryByRole("menuitem", { name: "Import sessions" })).not.toBeInTheDocument();
 	});
 });

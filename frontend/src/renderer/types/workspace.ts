@@ -68,6 +68,7 @@ export type AgentSwitchSummary = {
 };
 
 export type WorkspaceSession = {
+	importedHistory?: boolean;
 	id: string;
 	/** Installation ID of the daemon that owns this session; absent for local and Cloud. */
 	hostId?: string;

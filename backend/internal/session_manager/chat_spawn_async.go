@@ -141,7 +141,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	releaseWorkspaceGate := m.acquireWorkspaceGate(in.cfg.ProjectID)
 	defer releaseWorkspaceGate()
 	if ws.Path == "" {
-		baseRefs := m.refreshDefaultBranchesBestEffort(ctx, in.project)
+		baseRefs := m.refreshDefaultBranchesBestEffort(ctx, in.project, in.cfg.ResumeNativeSession == nil)
 		m.logAsyncChatSpawnStage(id, "default_branch_refresh", stageStarted)
 		stageStarted = time.Now()
 		ws, workspaceProject, err = m.createSessionWorkspace(ctx, in.project, in.cfg, id, in.branch, baseRefs)

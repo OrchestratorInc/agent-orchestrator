@@ -678,6 +678,7 @@ type Session struct {
 	ClientRequestID                  string
 	ClientRequestHash                string
 	ClientRequestCommitted           bool
+	SourceBranch                     string
 }
 
 type SessionCleanupFact struct {

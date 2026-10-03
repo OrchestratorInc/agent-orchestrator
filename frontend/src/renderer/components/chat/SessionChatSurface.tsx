@@ -236,7 +236,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		(snapshot.controller?.state === "ready" || snapshot.controller?.state === "busy");
 	// Mode commits before the target controller starts. A cached ready snapshot
 	// can also outlive the source, so wait for the handoff's final snapshot refresh.
-	const controllerCatalogsEnabled = targetChatControllerReady && !controllerTransitioning && !newWorkDisabled;
+	const controllerCatalogsEnabled = targetChatControllerReady && !controllerTransitioning && !newWorkDisabled && !snapshot?.importedHistory;
 	// Agent-switch presentation for the chat surface progress track and input locks.
 	const switchMutation = useSwitchAgentState(uiSessionId);
 	const agentSwitches = useAgentSwitches(session.id, hostId).data ?? [];
@@ -349,7 +349,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot),
 		hostId,
 	);
-	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
+	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot) && !snapshot?.importedHistory, hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser, paths);
 	const openSessionLink = useSessionLinkNavigation(hostId);

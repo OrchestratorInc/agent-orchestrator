@@ -68,6 +68,12 @@ type SpawnConfig struct {
 	// explicitly blocked types (e.g., SVG for security reasons).
 	Attachments []SpawnAttachment
 
+	// ResumeNativeSession, when set, imports an existing provider conversation
+	// (a Claude Code CLI session or a Codex thread already on disk) into this
+	// new AO session instead of starting a fresh conversation. It forces Chat
+	// mode and binds the provider controller to the given native id so the
+	// prior transcript is replayed. Nil is an ordinary spawn.
+	ResumeNativeSession *ResumeNativeSession
 	// Async asks for a Chat spawn that answers as soon as the session row and
 	// its conversation exist, leaving the worktree and the agent controller to
 	// finish in the background. Only a caller with a UI to return to should set
@@ -79,6 +85,23 @@ type SpawnConfig struct {
 	// the desktop's New Task dialog is open. It is a hint: an absent or expired
 	// token falls back to ordinary workspace creation.
 	TaskPreparation domain.TaskPreparationToken
+}
+
+// ResumeNativeSession identifies a provider's own on-disk conversation to import
+// and resume. NativeSessionID is the provider id AO binds to (the Claude session
+// UUID, or the Codex root session_id). ConfigDir is the provider state root the
+// transcript lives under (e.g. ~/.claude or ~/.codex), used to point the
+// launched agent at the right home so it can find and replay that transcript.
+type ResumeNativeSession struct {
+	TranscriptPath  string
+	Provider        domain.AgentHarness
+	NativeSessionID string
+	ConfigDir       string
+	// SourceBranch is the branch the conversation ran on, recorded verbatim
+	// from its transcript. It is kept even when the session cannot be created
+	// on that branch, because it is the only link back to the conversation's
+	// pull request.
+	SourceBranch string
 }
 
 // SpawnAttachment is a single file attached to a spawn request. Data holds the

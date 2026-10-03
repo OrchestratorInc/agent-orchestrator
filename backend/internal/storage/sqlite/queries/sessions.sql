@@ -11,7 +11,7 @@ SELECT COUNT(*) > 0 FROM sessions WHERE id = ?;
 INSERT INTO sessions (
     id, project_id, num, issue_id, kind, harness, reviewer_harness, reviewer_agent_config, auto_review_enabled, display_name,
     activity_state, activity_last_at, first_signal_at, is_terminated,
-    branch, workspace_path, workspace_repo_path, diff_base_sha, diff_base_ref, runtime_handle_id,
+    branch, source_branch, workspace_path, workspace_repo_path, diff_base_sha, diff_base_ref, runtime_handle_id,
     runtime_launch_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
     latest_user_prompt, latest_user_prompt_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
@@ -23,7 +23,7 @@ INSERT INTO sessions (
     provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
     client_request_id, client_request_hash
 ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 );
 
 -- name: GetClientRequestSession :one
@@ -36,7 +36,7 @@ UPDATE sessions SET client_request_committed = 1 WHERE id = ? AND client_request
 UPDATE sessions SET
     issue_id = ?, kind = ?, harness = ?, reviewer_harness = ?, reviewer_agent_config = ?, auto_review_enabled = ?, display_name = ?,
     activity_state = ?, activity_last_at = ?, first_signal_at = ?, is_terminated = ?,
-    branch = ?, workspace_path = ?, workspace_repo_path = ?, diff_base_sha = ?, diff_base_ref = ?, runtime_handle_id = ?,
+    branch = ?, source_branch = ?, workspace_path = ?, workspace_repo_path = ?, diff_base_sha = ?, diff_base_ref = ?, runtime_handle_id = ?,
     runtime_launch_id = ?, agent_session_id = ?, agent_session_id_launch_id = ?, native_identity_observed_at = ?, prompt = ?,
     latest_user_prompt = ?, latest_user_prompt_at = ?, latest_assistant_update = ?, latest_assistant_update_at = ?,
     conversation_checkpoint_state = ?, conversation_checkpoint_generation = ?, conversation_checkpoint_native_id = ?,
@@ -177,7 +177,7 @@ WHERE id = sqlc.arg(id) AND session_mode = sqlc.arg(source_mode) AND is_terminat
 
 -- name: GetSession :one
 SELECT id, project_id, num, issue_id, kind, harness,
-    activity_state, activity_last_at, is_terminated, branch, workspace_path,
+    activity_state, activity_last_at, is_terminated, branch, source_branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
     created_at, updated_at, revision, display_name, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
@@ -193,7 +193,7 @@ FROM sessions WHERE id = ?;
 
 -- name: GetSessionByAutomationRunID :one
 SELECT id, project_id, num, issue_id, kind, harness,
-    activity_state, activity_last_at, is_terminated, branch, workspace_path,
+    activity_state, activity_last_at, is_terminated, branch, source_branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
     created_at, updated_at, revision, display_name, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
@@ -209,7 +209,7 @@ FROM sessions WHERE automation_run_id = ?;
 
 -- name: ListSessionsByProject :many
 SELECT id, project_id, num, issue_id, kind, harness,
-    activity_state, activity_last_at, is_terminated, branch, workspace_path,
+    activity_state, activity_last_at, is_terminated, branch, source_branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
     created_at, updated_at, revision, display_name, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
@@ -225,7 +225,7 @@ FROM sessions WHERE project_id IS ? ORDER BY num;
 
 -- name: ListAllSessions :many
 SELECT id, project_id, num, issue_id, kind, harness,
-    activity_state, activity_last_at, is_terminated, branch, workspace_path,
+    activity_state, activity_last_at, is_terminated, branch, source_branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
     created_at, updated_at, revision, display_name, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,

@@ -87,7 +87,7 @@ func (m *Manager) PrepareTaskWorkspace(ctx context.Context, project domain.Proje
 
 func (m *Manager) createTaskPreparation(ctx context.Context, prep *taskPreparation) {
 	releaseWorkspaceGate := m.acquireWorkspaceGate(domain.ProjectID(prep.project.ID))
-	baseRefs := m.refreshDefaultBranchesBestEffort(ctx, prep.project)
+	baseRefs := m.refreshDefaultBranchesBestEffort(ctx, prep.project, true)
 	ws, workspaceProject, err := m.createSessionWorkspace(ctx, prep.project, ports.SpawnConfig{
 		ProjectID:       domain.ProjectID(prep.project.ID),
 		Kind:            domain.KindWorker,

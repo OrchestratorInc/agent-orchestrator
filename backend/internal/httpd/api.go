@@ -41,7 +41,10 @@ type APIDeps struct {
 	Import             controllers.ImportService
 	Directories        controllers.DirectoryBrowserService
 	ShellTerminals     controllers.ShellTerminalService
-	Cues               controllers.CueService
+	// SessionImport discovers on-disk agent conversations and imports one as a
+	// resumable session. Nil keeps the routes registered but answering 501.
+	SessionImport controllers.SessionImportService
+	Cues          controllers.CueService
 	// Conversations is nil until a Chat driver is wired; the controller then
 	// answers 501 rather than panicking, matching the other optional surfaces.
 	Conversations controllers.ConversationService
@@ -172,6 +175,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			PreviewServer:            deps.PreviewServer,
 			Capabilities:             deps.SessionCapabilities,
 			ShellPreviewCapabilities: deps.ShellPreviewCapabilities,
+			Import:                   deps.SessionImport,
 		},
 		automations:   &controllers.AutomationsController{Svc: deps.Automations},
 		desktop:       &controllers.DesktopWorkspaceController{Svc: deps.DesktopWorkspaces},
