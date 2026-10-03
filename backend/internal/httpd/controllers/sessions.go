@@ -116,6 +116,7 @@ type SessionService interface {
 	WorkspaceWatchPaths(ctx context.Context, id domain.SessionID) ([]string, error)
 	GetWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
 	RefreshWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
+	ReconcileWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
 	GetWorkspaceHistory(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceHistory, error)
 	ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFiles, error)
 	GetWorkspaceFile(ctx context.Context, id domain.SessionID, path string, section sessionsvc.WorkspaceFileSection) (sessionsvc.WorkspaceFileDetail, error)
@@ -1008,6 +1009,13 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 	}
 	changes, err := workspacewatch.Watch(r.Context(), paths...)
 	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	// The watcher cannot report edits made before it existed. Reconcile both
+	// workspace caches after the watch is installed and before telling the client
+	// it can stop fallback polling.
+	if _, err := c.Svc.ReconcileWorkspaceManifest(r.Context(), sessionID(r)); err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}

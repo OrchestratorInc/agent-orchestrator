@@ -74,6 +74,7 @@ type fakeSessionService struct {
 	workspaceTree              sessionsvc.WorkspaceTree
 	workspaceTreePath          string
 	workspacePaths             []string
+	workspaceReconciles        int
 	spawnErr                   error
 	lastSpawn                  ports.SpawnConfig
 	orchestratorMode           domain.SessionMode
@@ -656,6 +657,11 @@ func (f *fakeSessionService) GetWorkspaceManifest(ctx context.Context, id domain
 }
 
 func (f *fakeSessionService) RefreshWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error) {
+	return f.GetWorkspaceManifest(ctx, id)
+}
+
+func (f *fakeSessionService) ReconcileWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error) {
+	f.workspaceReconciles++
 	return f.GetWorkspaceManifest(ctx, id)
 }
 
@@ -3307,6 +3313,9 @@ func TestSessionsAPI_StreamWorkspaceChanges(t *testing.T) {
 	}
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "text/event-stream") {
 		t.Fatalf("Content-Type = %q, want text/event-stream", contentType)
+	}
+	if svc.workspaceReconciles != 1 {
+		t.Fatalf("workspace reconciles before ready = %d, want 1", svc.workspaceReconciles)
 	}
 
 	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("changed\n"), 0o644); err != nil {

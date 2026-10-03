@@ -163,6 +163,16 @@ func (s *Service) GetWorkspaceManifest(ctx context.Context, id domain.SessionID)
 	return s.RefreshWorkspaceManifest(ctx, id)
 }
 
+// ReconcileWorkspaceManifest closes the gap between establishing a filesystem
+// watcher and its first event. Edits made while no watcher existed must bypass
+// both the manifest and lower Git-status caches before the stream announces it
+// is ready.
+func (s *Service) ReconcileWorkspaceManifest(ctx context.Context, id domain.SessionID) (WorkspaceManifest, error) {
+	s.workspaceCache.invalidateSession(id)
+	s.workspaceManifests.markStale(id)
+	return s.RefreshWorkspaceManifest(ctx, id)
+}
+
 // workspaceDiffManifest reuses the just-loaded snapshot for a version-fenced
 // patch batch. Dirty or expired snapshots are recomputed before validation.
 // Unversioned reads always refresh because they have no preceding manifest.

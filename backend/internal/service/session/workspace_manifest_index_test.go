@@ -123,6 +123,26 @@ func TestWorkspaceManifestRefreshesAfterUnwatchedEdits(t *testing.T) {
 	}
 }
 
+func TestWorkspaceManifestReconcilesUnwatchedEditBeforeCacheExpiry(t *testing.T) {
+	repo := newWorkspaceRepo(t)
+	st := newFakeStore()
+	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{WorkspacePath: repo}}
+	now := time.Unix(100, 0)
+	svc := NewWithDeps(Deps{Store: st, Clock: func() time.Time { return now }})
+	first, err := svc.GetWorkspaceManifest(t.Context(), "ao-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeWorkspaceFile(t, repo, "reconnected.txt", "created while unwatched\n")
+	fresh, err := svc.ReconcileWorkspaceManifest(t.Context(), "ao-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Stale || fresh.Refreshing || fresh.WorkspaceVersion == first.WorkspaceVersion || len(fresh.Files) == 0 {
+		t.Fatalf("reconnected manifest did not include unwatched edit inside cache lifetime: %+v", fresh)
+	}
+}
+
 func TestWorkspaceDiffBatchesReuseOnlyFreshManifest(t *testing.T) {
 	repo := newWorkspaceRepo(t)
 	writeWorkspaceFile(t, repo, "README.md", "hello\nchanged\n")
