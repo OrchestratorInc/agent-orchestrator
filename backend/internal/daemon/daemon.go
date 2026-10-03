@@ -66,6 +66,7 @@ import (
 	settingssvc "github.com/aoagents/agent-orchestrator/backend/internal/service/settings"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
+	turnfailuresvc "github.com/aoagents/agent-orchestrator/backend/internal/service/turnfailure"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
@@ -594,9 +595,13 @@ func Run() error {
 	})
 	chatSvc.SetReportCoordinator(reportCoordinator)
 	reportDeliveryDone := reportCoordinator.Start(ctx)
+	failureCoordinator := turnfailuresvc.New(store, reportSessions, log)
+	chatSvc.SetTurnFailureWake(failureCoordinator.Wake)
+	failureDeliveryDone := failureCoordinator.Start(ctx)
 	defer func() {
 		stop()
 		<-reportDeliveryDone
+		<-failureDeliveryDone
 	}()
 	lcStack.trackerDone = startTrackerIntake(ctx, cfg, store, sessionSvc, tracker, log)
 

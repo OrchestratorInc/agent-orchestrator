@@ -2615,6 +2615,58 @@ func TestACPDriverMapsCostRateLimitsAndAuthRecovery(t *testing.T) {
 	}
 }
 
+func TestACPDriverPreservesNestedGatewayTimeoutAsFailedTurn(t *testing.T) {
+	requestErr := &acpsdk.RequestError{
+		Code:    -32603,
+		Message: `Internal error: {"code":504,"message":"Upstream idle timeout exceeded","metadata":{"error_type":"timeout"}}`,
+		Data: map[string]any{
+			"ao.persistentEventId": "acp-host:test:6054",
+			"providerData":         map[string]any{"errorName": "UnknownError", "service": "session"},
+		},
+	}
+	agent := &fakeAgent{promptErr: requestErr}
+	driver := New(Config{
+		Harness:      domain.HarnessClaudeCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	_ = nextEvent(t, opened.Events())
+	ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		event := nextEvent(t, opened.Events())
+		if event.Kind != ports.ChatEventTurnCompleted {
+			continue
+		}
+		if event.TurnState != domain.TurnStateFailed {
+			t.Fatalf("turn state = %s", event.TurnState)
+		}
+		var got *acpsdk.RequestError
+		if !errors.As(event.Err, &got) || got.Code != -32603 || !strings.Contains(got.Message, "504") {
+			t.Fatalf("terminal error = %v", event.Err)
+		}
+		if event.ProviderEventID != "acp-host:test:6054" {
+			t.Fatalf("event ID = %q", event.ProviderEventID)
+		}
+		if errors.Is(event.Err, ports.ErrChatAuthRequired) {
+			t.Fatal("timeout was classified as authentication failure")
+		}
+		break
+	}
+}
+
 func TestACPDriverNormalizesClaudeRetryStatus(t *testing.T) {
 	agent := &fakeAgent{
 		promptBlock:   true,
