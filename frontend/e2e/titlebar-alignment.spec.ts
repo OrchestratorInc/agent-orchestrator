@@ -19,7 +19,7 @@ async function geometry(page: Page) {
 
 for (const mode of ["chat", "tui"] as const) {
 	for (const fullScreen of [false, true]) {
-		test(`${mode} navigation stays level when sidebar toggles, fullscreen=${fullScreen}`, async ({ page }) => {
+		test(`${mode} navigation stays level when sidebar toggles, fullscreen=${fullScreen} @T0`, async ({ page }) => {
 			await page.emulateMedia({ reducedMotion: "reduce" });
 			await installFakeAgent(page, {
 				platform: "MacIntel",
@@ -73,7 +73,7 @@ for (const mode of ["chat", "tui"] as const) {
 }
 
 for (const mode of ["chat", "tui"] as const) {
-	test(`${mode} title moves continuously left during sidebar collapse`, async ({ page }) => {
+	test(`${mode} title moves continuously left during sidebar collapse @T0`, async ({ page }) => {
 		await page.emulateMedia({ reducedMotion: "no-preference" });
 		await installFakeAgent(page, { platform: "MacIntel", workers: [{ id: "motion-worker", title: "Motion worker", mode }] });
 		await page.route("**/api/v1/sessions/motion-worker/conversation{,?*}", (route) => route.fulfill({ json: {
