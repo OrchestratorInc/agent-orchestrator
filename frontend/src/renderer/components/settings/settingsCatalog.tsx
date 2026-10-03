@@ -12,6 +12,7 @@ import { HarnessSettingsSection } from "./HarnessSettingsSection";
 import { KeyboardShortcutsContent } from "./KeyboardShortcutsContent";
 import { MobileDevicesSection } from "./MobileDevicesSection";
 import { ReportProblemContent } from "./ReportProblemContent";
+import { RemoteHostsSettings } from "./RemoteHostsSettings";
 import { SettingsSection } from "./SettingsSection";
 
 const UpdatesSection = lazy(async () => {
@@ -21,9 +22,11 @@ const UpdatesSection = lazy(async () => {
 
 type CatalogContext = {
 	cloudEnabled: boolean;
+	developerMode: boolean;
 	/** Signed-in user's email ends with @11x.ai — gates the bring-your-own-Coder page. */
 	is11x: boolean;
 	focusAgentId?: string;
+	hostId?: string;
 	harnessView?: "local" | "cloud";
 };
 
@@ -50,7 +53,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		id: "harness",
 		icon: Bot,
 		label: (t) => t("settings.harness"),
-		render: (_t, titleHidden, { focusAgentId, harnessView }) => <HarnessSettingsSection focusAgentId={focusAgentId} initialView={harnessView} titleHidden={titleHidden} />,
+		render: (_t, titleHidden, { focusAgentId, hostId, harnessView }) => <HarnessSettingsSection focusAgentId={focusAgentId} {...(hostId ? { hostId } : {})} {...(harnessView ? { initialView: harnessView } : {})} titleHidden={titleHidden} />,
 	},
 	{
 		id: "agents",
@@ -75,6 +78,13 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		label: (t) => t("settings.coder11x.navLabel"),
 		visible: ({ is11x }) => is11x,
 		render: (_t, titleHidden) => <Coder11xSection titleHidden={titleHidden} />,
+	},
+	{
+		id: "remoteHosts",
+		icon: Server,
+		label: (t) => t("settings.remoteHosts"),
+		visible: ({ developerMode }) => developerMode,
+		render: (_t, titleHidden) => <RemoteHostsSettings titleHidden={titleHidden} />,
 	},
 	{
 		id: "mobile",
