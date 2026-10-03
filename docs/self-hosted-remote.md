@@ -1,7 +1,7 @@
 # Self-hosted remote hosts (experimental)
 
-Sessions stay on the machine that started them. Desktop and mobile are clients;
-AO Cloud is separate.
+Sessions stay on the machine that started them. Desktop and mobile are clients.
+AO account sign-in is required for desktop remote hosts; Cloud sandbox execution is separate.
 
 ## Install on Ubuntu
 
@@ -53,8 +53,8 @@ gh auth status
 
 Pairing does not copy GitHub credentials from your laptop.
 
-1. On your laptop, run this PR's desktop build, or the updated desktop release
-   after merge. Open **Settings → General** and turn on **Developer mode**.
+1. On your laptop, open **Settings → General** and turn on **Developer mode**.
+   Sign in to AO Cloud from the sidebar or **Settings → Remote hosts**.
 2. Open **Settings → Remote hosts**, turn on **Connect to remote hosts**, then
    add a name, the exact `Address:` and `Password:` from the VM.
 3. Use **Projects +**, select the VM under **Machine**, and clone or import a
@@ -64,7 +64,8 @@ Pairing does not copy GitHub credentials from your laptop.
 If a quick-tunnel URL changes, edit the saved address in desktop Settings.
 
 On mobile, pair the VM in **Settings → Machines** with the same address and
-password.
+password. AO account sign-in is available under **Settings → Account** in a
+new native build, but does not yet replace or gate manual pairing.
 
 ## Status and other hosts
 
@@ -87,6 +88,9 @@ sessions.
 - AO's unauthenticated listener stays on `127.0.0.1`. The opt-in remote
   endpoint requires a password; `--lan` is plain HTTP, so use only a trusted
   LAN/VPN and never expose its port publicly.
+- AO sign-in gates the desktop client, not the VM's password endpoint. Existing
+  clients with the connection password can still connect; host-account binding
+  and cross-device discovery are not implemented yet.
 - Host-ID checks prevent connecting to the wrong host, but not an active
   network attacker or a copied AO data directory. Desktop passwords are stored
   in `~/.ao/remotes.json` (or `AO_DATA_DIR/remotes.json`) with owner-only access.

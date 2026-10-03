@@ -120,6 +120,10 @@ vi.mock("../lib/bridge", () => ({
 	},
 }));
 
+vi.mock("../lib/cloud-session", () => ({
+	useCloudSession: () => ({ status: "authenticated", session: { user: { id: "test-user" } } }),
+}));
+
 function renderForm(section: GlobalSettingsSection = "all", focusAgentId?: string, hostId?: string) {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	render(

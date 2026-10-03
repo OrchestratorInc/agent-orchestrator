@@ -118,6 +118,7 @@ import { DEFAULT_TERMINAL_SHELL, type TerminalShellPreference } from "./shared/u
 import { bundledTmuxBinaryPath, stableBundledTmuxBinaryPath } from "./shared/bundled-tmux";
 import {
 	handleCloudDeepLink,
+	getCloudSession,
 	installCloudIPC,
 	registerCloudProtocol,
 	showCloudSignInFailure,
@@ -2187,7 +2188,13 @@ const remoteRegistry = new RemoteRegistry((entry) => {
 	const devUrl = typeof MAIN_WINDOW_VITE_DEV_SERVER_URL === "undefined" ? undefined : MAIN_WINDOW_VITE_DEV_SERVER_URL;
 	return startRemoteProxy(entry, devUrl ? new URL(devUrl).origin : RENDERER_ORIGIN);
 });
-registerRemotesIpc(ipcMain, { file: remotesFilePath(), registry: remoteRegistry });
+registerRemotesIpc(ipcMain, {
+	file: remotesFilePath(),
+	registry: remoteRegistry,
+	requireAccount: async () => {
+		if (!await getCloudSession(cloudDataDir())) throw new Error("Sign in to AO Cloud to use remote hosts.");
+	},
+});
 
 ipcMain.handle("app:chooseDirectory", async (_event, input?: string | { title?: string; defaultPath?: string }) => {
 	const title = typeof input === "string"
@@ -2604,6 +2611,7 @@ function cloudDataDir(): string {
 }
 
 function notifyRenderersOfCloudSession(account: import("./shared/cloud-account").CloudAccount | null): void {
+	if (!account) void remoteRegistry.disconnectAll();
 	const contents = getShellWebContents();
 	if (!contents || contents.isDestroyed()) return;
 	contents.send("cloud:sessionChanged", account);

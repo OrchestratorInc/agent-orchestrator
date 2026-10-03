@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useUiStore } from "../../stores/ui-store";
 
 const saved = vi.hoisted(() => ({ entries: [] as Array<{ hostId: string; label: string; url: string }> }));
+const account = vi.hoisted(() => ({ status: "authenticated" as "authenticated" | "unauthenticated" }));
 const remotes = vi.hoisted(() => ({
 	list: vi.fn(async () => saved.entries),
 	add: vi.fn(async ({ label, url }: { label: string; url: string }) => {
@@ -18,16 +19,29 @@ const remotes = vi.hoisted(() => ({
 	}),
 }));
 vi.mock("../../lib/bridge", () => ({ aoBridge: { remotes } }));
+vi.mock("../../lib/cloud-session", () => ({ useCloudSession: () => ({ status: account.status, signIn: vi.fn() }) }));
+vi.mock("../../hooks/useCloudLocalAuth", () => ({ useCloudLocalAuth: () => ({ available: false }) }));
 
 import { RemoteHostsSettings } from "./RemoteHostsSettings";
 
 afterEach(() => {
+	account.status = "authenticated";
 	saved.entries = [];
 	useUiStore.setState({ remoteHosts: false });
 	remotes.connect.mockClear();
+	remotes.list.mockClear();
 	remotes.add.mockClear();
 	remotes.update.mockClear();
 	remotes.remove.mockClear();
+});
+
+it("does not expose saved hosts or pairing controls before account sign-in", () => {
+	account.status = "unauthenticated";
+	saved.entries = [{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }];
+	render(<RemoteHostsSettings />);
+	expect(screen.getByRole("button", { name: "Sign in to AO Cloud" })).toBeVisible();
+	expect(screen.queryByRole("button", { name: "Edit Box A" })).toBeNull();
+	expect(remotes.list).not.toHaveBeenCalled();
 });
 
 it("does not connect a newly paired host after Remote hosts is turned off", async () => {

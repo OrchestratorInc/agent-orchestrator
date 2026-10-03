@@ -170,6 +170,10 @@ vi.mock("../lib/host-clients", () => ({
 	subscribeConnectedHosts: () => () => undefined,
 }));
 
+vi.mock("../lib/cloud-session", () => ({
+	useCloudSession: () => ({ status: "authenticated", session: { user: { id: "test-user" } } }),
+}));
+
 vi.mock("../hooks/useDaemonStatus", () => ({
 	useDaemonStatus: () => shellMocks.state.daemonStatus,
 }));

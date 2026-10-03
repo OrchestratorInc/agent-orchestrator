@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { aoBridge } from "../lib/bridge";
 import { connectHost, connectedHosts, disconnectHost } from "../lib/host-clients";
+import { useCloudSession } from "../lib/cloud-session";
 import { useUiStore } from "../stores/ui-store";
 
 const HOSTS_CHANGED_EVENT = "ao:remote-hosts-changed";
@@ -24,7 +25,9 @@ export type RemoteHost = {
 };
 
 export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<void> } {
-	const enabled = useUiStore((state) => state.developerMode && state.remoteHosts);
+	const remoteHostsEnabled = useUiStore((state) => state.developerMode && state.remoteHosts);
+	const { status } = useCloudSession();
+	const enabled = remoteHostsEnabled && status === "authenticated";
 	const enabledRef = useRef(enabled);
 	enabledRef.current = enabled;
 	const [hosts, setHosts] = useState<RemoteHost[]>([]);
@@ -77,6 +80,7 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<
 			void refresh();
 			return;
 		}
+		refreshGeneration.current++;
 		setHosts([]);
 		retryableHosts.current.clear();
 		savedHostUrls.current.clear();

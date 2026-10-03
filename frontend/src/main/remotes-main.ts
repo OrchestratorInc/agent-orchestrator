@@ -22,6 +22,7 @@ type IpcMainLike = {
 export type RemotesIpcDeps = {
 	file: string;
 	registry: RemoteRegistry;
+	requireAccount: () => Promise<void>;
 	probe?: (entry: RemoteEntry) => Promise<RemoteHealth>;
 	identity?: (entry: Pick<RemoteEntry, "url">) => Promise<string>;
 };
@@ -33,7 +34,7 @@ export type RemotesIpcDeps = {
  */
 export function registerRemotesIpc(
 	ipcMain: IpcMainLike,
-	{ file, registry, probe = probeRemote, identity = readRemoteIdentity }: RemotesIpcDeps,
+	{ file, registry, requireAccount, probe = probeRemote, identity = readRemoteIdentity }: RemotesIpcDeps,
 ): void {
 	const disconnect = (url: string) => registry.disconnect(url);
 	const checkedProbe = async (entry: RemoteEntry): Promise<RemoteHealth> => {
@@ -57,8 +58,12 @@ export function registerRemotesIpc(
 		return result;
 	};
 
-	ipcMain.handle("remotes:list", async () => toHostViews(await readRemotes(file)));
+	ipcMain.handle("remotes:list", async () => {
+		await requireAccount();
+		return toHostViews(await readRemotes(file));
+	});
 	ipcMain.handle("remotes:add", async (_event, input: RemoteEntry) => ordered(async () => {
+		await requireAccount();
 		// Probe before saving: a host that never answered is worse than no host,
 		// because it looks configured.
 		let hostId: string;
@@ -78,21 +83,29 @@ export function registerRemotesIpc(
 		}
 		return health;
 	}));
-	ipcMain.handle("remotes:update", async (_event, url: string, changes: RemoteChanges) => ordered(() =>
-		updateSavedRemote(file, url, changes, disconnect, checkedProbe),
-	));
-	ipcMain.handle("remotes:remove", async (_event, url: string) => ordered(() =>
-		removeSavedRemote(file, url, disconnect),
-	));
+	ipcMain.handle("remotes:update", async (_event, url: string, changes: RemoteChanges) => ordered(async () => {
+		await requireAccount();
+		return updateSavedRemote(file, url, changes, disconnect, checkedProbe);
+	}));
+	ipcMain.handle("remotes:remove", async (_event, url: string) => ordered(async () => {
+		await requireAccount();
+		return removeSavedRemote(file, url, disconnect);
+	}));
 	ipcMain.handle("remotes:connect", async (_event, url: string, hostId?: string) => ordered(async () => {
+		await requireAccount();
 		const entry = await findRemote(file, url, hostId);
 		const health = await checkedProbe(entry);
 		if (health !== "online") throw new Error(`host ${url} is ${health}`);
+		await requireAccount();
 		return registry.connect(entry);
 	}));
 	ipcMain.handle("remotes:disconnect", async (_event, url: string) => ordered(() => disconnect(url)));
-	ipcMain.handle("remotes:previewUrl", async (_event, hostId: string, sessionId: string, sourceUrl: string) =>
-		registry.previewUrl(hostId, sessionId, sourceUrl));
-	ipcMain.handle("remotes:resolvePreviewUrl", async (_event, hostId: string, sessionId: string, viewedUrl: string) =>
-		registry.resolvePreviewUrl(hostId, sessionId, viewedUrl));
+	ipcMain.handle("remotes:previewUrl", async (_event, hostId: string, sessionId: string, sourceUrl: string) => {
+		await requireAccount();
+		return registry.previewUrl(hostId, sessionId, sourceUrl);
+	});
+	ipcMain.handle("remotes:resolvePreviewUrl", async (_event, hostId: string, sessionId: string, viewedUrl: string) => {
+		await requireAccount();
+		return registry.resolvePreviewUrl(hostId, sessionId, viewedUrl);
+	});
 }

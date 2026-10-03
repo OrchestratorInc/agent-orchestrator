@@ -605,6 +605,15 @@ describe("Sidebar", () => {
 		expect(screen.queryByLabelText("Signed in as user@example.com")).not.toBeInTheDocument();
 	});
 
+	it("shows AO sign-in for developer-mode remote hosts when Cloud execution is off", () => {
+		cloudGateState.cloudEnabled = false;
+		cloudSessionState.configured = true;
+		useUiStore.setState({ developerMode: true });
+		renderSidebar();
+
+		expect(screen.getAllByLabelText("Sign in to AO Cloud")).toHaveLength(2);
+	});
+
 	it("navigates home from the brand row", async () => {
 		const user = userEvent.setup();
 		mockParams.projectId = "proj-1";

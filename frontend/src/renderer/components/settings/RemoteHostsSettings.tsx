@@ -4,6 +4,9 @@ import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { disconnectHost } from "../../lib/host-clients";
 import { requestRemoteHostsRefresh } from "../../hooks/useRemoteHosts";
+import { useCloudLocalAuth } from "../../hooks/useCloudLocalAuth";
+import { useCloudSession } from "../../lib/cloud-session";
+import { useLocalSignInDialogStore } from "../../stores/local-signin-dialog-store";
 import { useUiStore } from "../../stores/ui-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { Button } from "../ui/button";
@@ -18,6 +21,9 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 	const { t } = useTranslation();
 	const enabled = useUiStore((state) => state.remoteHosts);
 	const setEnabled = useUiStore((state) => state.setRemoteHosts);
+	const { status, signIn } = useCloudSession();
+	const { available: localAuthAvailable } = useCloudLocalAuth();
+	const openLocalSignIn = useLocalSignInDialogStore((state) => state.openDialog);
 	const [saved, setSaved] = useState<SavedHost[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [loadError, setLoadError] = useState("");
@@ -45,10 +51,11 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 	};
 
 	useEffect(() => {
-		void load();
+		if (status === "authenticated") void load();
+		else setSaved([]);
 		// The bridge is fixed for the lifetime of this Settings page.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, []);
+	}, [status]);
 
 	const resetForm = () => {
 		setEditing(null);
@@ -107,6 +114,16 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			setRemoveBusy(false);
 		}
 	};
+
+	if (status !== "authenticated") return (
+		<SettingsSection title={t("settings.remoteHosts")} sectionId="remoteHosts" titleHidden={titleHidden} grouped>
+			<SettingsRow label={t("shell.signInToAOCloud")}>{status === "unauthenticated" ? (
+				<Button onClick={() => localAuthAvailable ? openLocalSignIn() : signIn()} size="sm" type="button">
+					{t("shell.signInToAOCloud")}
+				</Button>
+			) : null}</SettingsRow>
+		</SettingsSection>
+	);
 
 	return <>
 		<SettingsSection title={t("settings.remoteHosts")} sectionId="remoteHosts" titleHidden={titleHidden} grouped>
