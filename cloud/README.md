@@ -24,10 +24,11 @@ The optional authenticated Next.js Cloud web app lives in the separate
 `@aoagents/product-ui` sources for contracts, transport, status mapping, board
 layout, cards, and agent identity. Its current web flow supports organization
 switching, projects, durable sessions, search, chat history, live event streams,
-worker turns, and replica-safe workspace files. It also persists personal GitHub
-OAuth, installation confirmation, repository grants, PR/issue synchronization,
-and sharing behavior. The web app is not required for the public desktop or
-control-plane development loop. See
+worker turns, and replica-safe workspace files. It presents GitHub OAuth,
+installation, repository-grant, PR/issue synchronization, and sharing controls;
+the Go control plane stores the durable state. The desktop has its own Cloud
+settings and project flows but no organization switcher. The web app is not
+required for the public desktop or control-plane development loop. See
 [`docs/control-plane.md`](docs/control-plane.md) for durable-state and cluster
 behavior, [`docs/deployment.md`](docs/deployment.md) for staging and production
 deployments, and [`docs/cloudagent-v1-parity.md`](docs/cloudagent-v1-parity.md)
