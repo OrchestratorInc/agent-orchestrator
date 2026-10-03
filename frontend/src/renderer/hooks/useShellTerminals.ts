@@ -174,12 +174,6 @@ function createOptimisticShellTerminal(
 	};
 }
 
-function addOptimisticShell(queryClient: ReturnType<typeof useQueryClient>, queryKey: ReturnType<typeof shellTerminalsQueryKeyForHost>, shell: ShellTerminal) {
-	queryClient.setQueryData<ShellTerminal[]>(queryKey, (current) =>
-		current?.some((candidate) => candidate.handleId === shell.handleId) ? current : [...(current ?? []), shell],
-	);
-}
-
 /**
  * Opens a shell in the given project's root (or the daemon data dir when
  * omitted). When sessionId is set the shell is scoped to that session and only
@@ -246,10 +240,6 @@ export function useOpenShellTerminal(hostId?: HostId) {
 			if (!remote) markTerminalHandleFresh(data.shellTerminal.handleId);
 			return toShellTerminal(data.shellTerminal, hostId);
 		},
-		onMutate: ({ optimisticShell }) => {
-			setPendingShellTab(hostId, optimisticShell, true);
-			addOptimisticShell(queryClient, queryKey, optimisticShell);
-		},
 		onSuccess: (shell, { optimisticShell }) => {
 			setPendingShellTab(hostId, optimisticShell, false);
 			// Before the tab's target changes: the pending tab's terminal must be
@@ -296,7 +286,11 @@ export function useOpenShellTerminal(hostId?: HostId) {
 			queryClient.getQueryData<ShellTerminal[]>(queryKey) ?? [],
 			hostId,
 		);
-		addOptimisticShell(queryClient, queryKey, optimisticShell);
+		// The only place a pending tab is created: synchronously, so the click
+		// can select it, and registered so list refetches keep it until the
+		// create request settles.
+		setPendingShellTab(hostId, optimisticShell, true);
+		queryClient.setQueryData<ShellTerminal[]>(queryKey, (current) => [...(current ?? []), optimisticShell]);
 		mutation.mutate({ ...input, optimisticShell }, callbacks);
 		return optimisticShell;
 	};

@@ -349,10 +349,13 @@ describe("useOpenShellTerminal sized creation", () => {
 		const unregister = registerPendingShellCache({ adopt, discard: vi.fn() });
 		try {
 			const { result } = renderHook(() => useOpenShellTerminal(), { wrapper: wrapper(queryClient) });
-			const pending = measuredPendingShell();
+			let pending!: ShellTerminal;
+			act(() => {
+				pending = result.current.open({});
+			});
+			act(() => reportPendingShellGrid(pending.handleId, measuredGrid));
 
-			await act(async () => result.current.mutateAsync({ optimisticShell: pending }));
-
+			await waitFor(() => expect(result.current.isSuccess).toBe(true));
 			expect(adopt).toHaveBeenCalledWith(pending.handleId, shell);
 			// Adopted while the list still shows the pending tab, so the cache
 			// re-keys the terminal before any pane renders the created handle.
