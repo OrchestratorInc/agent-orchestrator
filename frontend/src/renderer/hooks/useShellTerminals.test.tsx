@@ -362,6 +362,31 @@ describe("useOpenShellTerminal sized creation", () => {
 		}
 	});
 
+	it("keeps a pending tab when a list refetch lands before its PTY exists", async () => {
+		// Closing another tab refetches the list while this one is still pending.
+		// The daemon cannot list a shell it has not created yet.
+		getMock.mockResolvedValue({ data: { shellTerminals: [] } });
+		const queryClient = new QueryClient({
+			defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+		});
+		queryClient.setQueryData(shellTerminalsQueryKey, []);
+		const { result } = renderHook(
+			() => ({ list: useShellTerminals(), open: useOpenShellTerminal() }),
+			{ wrapper: wrapper(queryClient) },
+		);
+		let pending!: ShellTerminal;
+		act(() => {
+			pending = result.current.open.open({});
+		});
+
+		await act(async () => queryClient.invalidateQueries({ queryKey: shellTerminalsQueryKey }));
+		await waitFor(() => expect(getMock).toHaveBeenCalled());
+
+		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([pending]);
+		act(() => failPendingShell(pending.handleId, new Error("test cleanup")));
+		await waitFor(() => expect(result.current.open.isError).toBe(true));
+	});
+
 	it("drops the pending tab without creating a PTY when its terminal cannot start", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { mutations: { retry: false }, queries: { retry: false } },

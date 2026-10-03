@@ -77,6 +77,21 @@ let previewShellSeq = 0;
 // their tab metadata for this Electron renderer lifetime; the terminal itself
 // is created when its ticketed control-plane WebSocket connects.
 let cloudShellTerminals: ShellTerminal[] = [];
+// Tabs whose PTY the daemon is still creating, per host. Another tab's open or
+// close settling refetches the list, and the daemon cannot list a shell it has
+// not created yet; without this a pending tab would vanish (and its session
+// fall back to the chat view) until its PTY exists.
+const pendingShellTabs = new Map<string, ShellTerminal[]>();
+
+function pendingTabsHostKey(hostId?: HostId): string {
+	return hostId && hostId !== LOCAL_HOST ? hostId : LOCAL_HOST;
+}
+
+function setPendingShellTab(hostId: HostId | undefined, shell: ShellTerminal, pending: boolean): void {
+	const key = pendingTabsHostKey(hostId);
+	const others = (pendingShellTabs.get(key) ?? []).filter((tab) => tab.handleId !== shell.handleId);
+	pendingShellTabs.set(key, pending ? [...others, shell] : others);
+}
 
 async function fetchShellTerminals(hostId?: HostId): Promise<ShellTerminal[]> {
 	const remote = Boolean(hostId && hostId !== LOCAL_HOST);
@@ -88,7 +103,11 @@ async function fetchShellTerminals(hostId?: HostId): Promise<ShellTerminal[]> {
 	}
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/shell-terminals");
 	if (error) throw error;
-	return [...(data?.shellTerminals ?? []).map((terminal) => toShellTerminal(terminal, hostId)), ...(remote ? [] : cloudShellTerminals)];
+	return [
+		...(data?.shellTerminals ?? []).map((terminal) => toShellTerminal(terminal, hostId)),
+		...(remote ? [] : cloudShellTerminals),
+		...(pendingShellTabs.get(pendingTabsHostKey(hostId)) ?? []),
+	];
 }
 
 // No refetchInterval: shell terminals only change when this client opens or
@@ -228,9 +247,11 @@ export function useOpenShellTerminal(hostId?: HostId) {
 			return toShellTerminal(data.shellTerminal, hostId);
 		},
 		onMutate: ({ optimisticShell }) => {
+			setPendingShellTab(hostId, optimisticShell, true);
 			addOptimisticShell(queryClient, queryKey, optimisticShell);
 		},
 		onSuccess: (shell, { optimisticShell }) => {
+			setPendingShellTab(hostId, optimisticShell, false);
 			// Before the tab's target changes: the pending tab's terminal must be
 			// re-keyed to the created handle first, or the cache would mount a
 			// second terminal for it instead of keeping the measured one.
@@ -247,6 +268,7 @@ export function useOpenShellTerminal(hostId?: HostId) {
 			if (!shell.cloud) void queryClient.invalidateQueries({ queryKey });
 		},
 		onError: (error, { optimisticShell }) => {
+			setPendingShellTab(hostId, optimisticShell, false);
 			discardPendingShell(optimisticShell.handleId);
 			queryClient.setQueryData<ShellTerminal[]>(queryKey, (current) =>
 				current?.filter((shell) => shell.handleId !== optimisticShell.handleId),
