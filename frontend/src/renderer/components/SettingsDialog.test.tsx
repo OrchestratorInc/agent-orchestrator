@@ -73,6 +73,12 @@ vi.mock("../hooks/useCloudGate", () => ({
 	useCloudGate: () => ({ cloudEnabled: false, localEnabled: true }),
 }));
 
+// The dialog reads the cloud session email to gate the 11x-only Coder page.
+// Signed out here, so that page is never visible.
+vi.mock("../lib/cloud-session", () => ({
+	useCloudSession: () => ({ status: "unauthenticated", session: null }),
+}));
+
 describe("SettingsDialog", () => {
 	beforeEach(() => {
 		postMock.mockReset().mockImplementation((path: string) => path === "/api/v1/agents/codex/accounts/ensure"
@@ -114,7 +120,7 @@ describe("SettingsDialog", () => {
 		renderSettingsDialog();
 
 		const cuesSection = await screen.findByRole("button", { name: "Cues" });
-		expect(cuesSection.querySelector(".lucide-disc-3")).not.toBeNull();
+		expect(cuesSection.querySelector(".lucide-play")).not.toBeNull();
 		await userEvent.click(cuesSection);
 
 		expect(screen.getByTestId("project-cues-settings")).toHaveTextContent("proj-1");
@@ -214,12 +220,12 @@ describe("SettingsDialog", () => {
 		expect(screen.queryByRole("button", { name: "Downloads" })).not.toBeInTheDocument();
 	});
 
-	it("falls back to General when Cloud is unavailable", async () => {
-		useUiStore.getState().openGlobalSettings("cloud");
+	it("falls back to General when the Coder page is unavailable", async () => {
+		useUiStore.getState().openGlobalSettings("coder11x");
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
-		expect(screen.queryByRole("button", { name: "Cloud" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Coder" })).not.toBeInTheDocument();
 	});
 
 	it("closes Settings without cancelling daemon-owned account login work", async () => {
@@ -264,6 +270,23 @@ describe("SettingsDialog", () => {
 		fireEvent.keyDown(nestedItem, { key: "Escape" });
 		expect(useUiStore.getState().settingsModal).not.toBeNull();
 		nestedMenu.remove();
+
+		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
+	});
+
+	it("stays open when Escape cancels an inline edit inside it", async () => {
+		useUiStore.getState().openGlobalSettings("browserProfiles");
+		renderSettingsDialog();
+
+		const dialog = await screen.findByRole("dialog");
+		const inlineEdit = document.createElement("input");
+		inlineEdit.setAttribute("data-settings-inline-edit", "");
+		dialog.append(inlineEdit);
+		inlineEdit.focus();
+		fireEvent.keyDown(inlineEdit, { key: "Escape" });
+		expect(useUiStore.getState().settingsModal).not.toBeNull();
+		inlineEdit.remove();
 
 		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());

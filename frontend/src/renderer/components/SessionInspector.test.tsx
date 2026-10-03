@@ -1305,7 +1305,7 @@ describe("SessionInspector completion controls", () => {
       screen.getByRole("button", { name: "Archive session" }),
     );
     expect(
-      screen.getByRole("dialog", { name: "Are you sure you want to archive do the thing?" }),
+      screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" }),
     ).toBeInTheDocument();
     await userEvent.click(
       within(screen.getByRole("dialog")).getByRole("button", {
