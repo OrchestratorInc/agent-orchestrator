@@ -664,6 +664,7 @@ type fakeAgent struct {
 	failLoadErr         error // the SDK coerces a plain error into -32603
 	loadCalls           int
 	resumeCalls         int
+	sessionLost         bool // setters answer claude-agent-acp's "Session not found" until resumed
 	promptParams        acpsdk.PromptRequest
 	promptNoPermission  bool
 	elicitation         *acpsdk.UnstableCreateElicitationRequest
@@ -909,6 +910,7 @@ func (a *fakeAgent) ResumeSession(_ context.Context, params acpsdk.ResumeSession
 	a.mu.Lock()
 	a.resumeParams = params
 	a.resumeCalls++
+	a.sessionLost = false
 	a.mu.Unlock()
 	return acpsdk.ResumeSessionResponse{}, nil
 }
@@ -946,6 +948,10 @@ func (a *fakeAgent) LoadSession(ctx context.Context, params acpsdk.LoadSessionRe
 func (a *fakeAgent) SetSessionConfigOption(_ context.Context, params acpsdk.SetSessionConfigOptionRequest) (acpsdk.SetSessionConfigOptionResponse, error) {
 	a.mu.Lock()
 	a.setCalls++
+	if a.sessionLost {
+		a.mu.Unlock()
+		return acpsdk.SetSessionConfigOptionResponse{}, errACPSessionNotFound()
+	}
 	if a.configErr != nil {
 		err := a.configErr
 		a.mu.Unlock()
@@ -973,6 +979,10 @@ func (a *fakeAgent) SetSessionConfigOption(_ context.Context, params acpsdk.SetS
 }
 func (a *fakeAgent) SetSessionMode(_ context.Context, params acpsdk.SetSessionModeRequest) (acpsdk.SetSessionModeResponse, error) {
 	a.mu.Lock()
+	if a.sessionLost {
+		a.mu.Unlock()
+		return acpsdk.SetSessionModeResponse{}, errACPSessionNotFound()
+	}
 	if required := a.modeRequiresOption; required.ID != "" && a.options[required.ID] != required.Value {
 		a.mu.Unlock()
 		return acpsdk.SetSessionModeResponse{}, acpsdk.NewInternalError(map[string]any{

@@ -130,6 +130,11 @@ type conversation struct {
 	onAuthRejected        func()
 	promptResponseFailure func(acpsdk.PromptResponse) error
 
+	// reattachRequest re-binds sessionID with session/resume when the agent
+	// process stays connected but has forgotten the session, as claude-agent-acp
+	// does after its Claude child dies. Nil when the agent cannot resume.
+	reattachRequest *acpsdk.ResumeSessionRequest
+
 	contextTokens     int64
 	contextWindow     int64
 	compactingTurnID  string
@@ -397,7 +402,11 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	if busy {
 		return ports.ChatTurnRef{}, errors.New("ACP conversation already has a turn in flight")
 	}
-	if err := c.applyTurnSettings(ctx, msg.Settings); err != nil {
+	err = c.applyTurnSettings(ctx, msg.Settings)
+	if isACPSessionNotFound(err) && c.reattachSession(ctx, err) {
+		err = c.applyTurnSettings(ctx, msg.Settings)
+	}
+	if err != nil {
 		return ports.ChatTurnRef{}, err
 	}
 	c.mu.Lock()
@@ -419,6 +428,33 @@ func (c *conversation) DiscardDeferredTurn(providerTurnID string) {
 		c.prepared = nil
 	}
 	c.mu.Unlock()
+}
+
+// reattachSession asks the agent to resume AO's stored session id on the live
+// connection after the agent reported it unknown. Nothing has been prompted yet,
+// so retrying the turn's settings afterwards cannot run any work twice. The
+// provider keeps its transcript on disk, so the conversation's context survives.
+func (c *conversation) reattachSession(ctx context.Context, cause error) bool {
+	c.mu.Lock()
+	request := c.reattachRequest
+	c.mu.Unlock()
+	if request == nil {
+		return false
+	}
+	sessionID := string(request.SessionId)
+	c.log.Warn("chat: ACP agent lost its session; reattaching",
+		"providerSessionID", sessionID, "error", cause)
+	resumeCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	defer cancel()
+	resp, err := c.conn.ResumeSession(resumeCtx, *request)
+	if err != nil {
+		c.log.Warn("chat: ACP session reattach failed", "providerSessionID", sessionID, "error", err)
+		return false
+	}
+	if len(resp.ConfigOptions) > 0 {
+		c.replaceConfigOptions(resp.ConfigOptions)
+	}
+	return true
 }
 
 func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.ChatTurnSettings) error {
