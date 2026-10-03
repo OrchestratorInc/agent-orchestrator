@@ -144,6 +144,7 @@ func capabilities() ports.ChatCapabilities {
 		// feature off while the call still works would take undo away for no reason.
 		ports.ChatCapabilityRollback: true,
 		ports.ChatCapabilityFork:     true,
+		ports.ChatCapabilityReadOnly: true,
 		ports.ChatCapabilityRename:   true,
 		ports.ChatCapabilitySkills:   true,
 		// config/mcpServer/reload plus the status inventory read after it, both
@@ -291,7 +292,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	}
 
 	conv, reconnected, err := d.connectSession(
-		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false,
+		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID,
 	)
 	if err != nil {
 		return nil, err
@@ -349,14 +350,64 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	return conv, nil
 }
 
-// Reconnect attaches to a surviving provider without launching a replacement.
-func (d *Driver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
-	cfg.ReconnectOnly = true
-	return d.Resume(ctx, cfg)
+// ForkIntoHost starts an inclusive native fork in an independent provider host.
+func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID, lastProviderTurnID string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+	if sourceProviderConversationID == "" || lastProviderTurnID == "" {
+		return nil, errors.New("source thread and completed turn are required")
+	}
+	if !filepath.IsAbs(cfg.WorkspacePath) {
+		return nil, fmt.Errorf("workspace path must be absolute, got %q", cfg.WorkspacePath)
+	}
+	conv, reconnected, err := d.connectSession(ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID)
+	if err != nil {
+		return nil, err
+	}
+	if reconnected {
+		_ = conv.Close()
+		return nil, errors.New("side provider host already owns a conversation")
+	}
+	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
+	conv.readOnly = cfg.ReadOnly
+	params := map[string]any{
+		"threadId":          sourceProviderConversationID,
+		"lastTurnId":        conv.nativeID(lastProviderTurnID),
+		"cwd":               cfg.WorkspacePath,
+		"approvalPolicy":    policy,
+		"approvalsReviewer": reviewer,
+		"sandbox":           sandbox,
+	}
+	if cfg.Model != "" {
+		params["model"] = cfg.Model
+	}
+	if cfg.Effort != "" {
+		params["config"] = map[string]any{"model_reasoning_effort": cfg.Effort}
+	}
+	if cfg.SystemPrompt != "" {
+		params["developerInstructions"] = cfg.SystemPrompt
+	}
+	openCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	defer cancel()
+	var resp struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+		Model           string `json:"model"`
+		ReasoningEffort string `json:"reasoningEffort"`
+	}
+	if err := conv.conn.request(openCtx, "thread/fork", params, &resp); err != nil {
+		_ = conv.Terminate()
+		return nil, fmt.Errorf("thread/fork in side host: %w", err)
+	}
+	if resp.Thread.ID == "" {
+		_ = conv.Terminate()
+		return nil, errors.New("thread/fork returned no thread id")
+	}
+	conv.start(resp.Thread.ID, resp.Model, resp.ReasoningEffort)
+	return conv, nil
 }
 
-// Resume reattaches to a stored Codex thread after a daemon or app-server
-// restart. A thread that is still running is rejoined rather than restarted.
+// Resume reattaches to a stored Codex thread after a daemon or app-server restart.
+// A thread that is still running is rejoined rather than restarted.
 func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
 	if !cfg.ProviderIDsScoped {
 		cfg.ProviderScopeID = ""
@@ -369,7 +420,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	}
 
 	conv, reconnected, err := d.connectSession(
-		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, cfg.ReconnectOnly,
+		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID,
 	)
 	if err != nil {
 		return nil, err
@@ -452,14 +503,10 @@ func (d *Driver) connectSession(
 	env map[string]string,
 	prepareEnv func(context.Context) (map[string]string, error),
 	providerScopeID string,
-	reconnectOnly bool,
 ) (*conversation, bool, error) {
 	// Injected driver tests intentionally retain the direct pipe launcher. The
 	// shipped driver uses spawnAppServer and therefore the persistent host.
 	if !d.persistent {
-		if reconnectOnly {
-			return nil, false, ports.ErrChatHostNotRunning
-		}
 		if prepareEnv != nil {
 			var err error
 			env, err = prepareEnv(ctx)
@@ -470,21 +517,16 @@ func (d *Driver) connectSession(
 		conv, err := d.connect(ctx, workdir, env, providerScopeID)
 		return conv, false, err
 	}
-	var bin string
-	if !reconnectOnly {
-		var err error
-		bin, err = d.plugin.ResolveBinary(ctx)
-		if err != nil {
-			return nil, false, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
-		}
+	bin, err := d.plugin.ResolveBinary(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 	}
 	hostConfig := persistenthost.Config{
-		SessionID:     string(sessionID),
-		ReconnectOnly: reconnectOnly,
-		DataDir:       dataDir,
-		Workdir:       workdir,
-		Env:           envSlice(env),
-		Argv:          []string{bin, "app-server"},
+		SessionID: string(sessionID),
+		DataDir:   dataDir,
+		Workdir:   workdir,
+		Env:       envSlice(env),
+		Argv:      []string{bin, "app-server"},
 	}
 	if prepareEnv != nil {
 		hostConfig.Prepare = func(prepareCtx context.Context) (persistenthost.PreparedProvider, error) {
@@ -499,9 +541,6 @@ func (d *Driver) connectSession(
 	}
 	transport, err := d.connectHost(ctx, hostConfig)
 	if err != nil {
-		if errors.Is(err, persistenthost.ErrNotRunning) {
-			return nil, false, ports.ErrChatHostNotRunning
-		}
 		if errors.Is(err, persistenthost.ErrOwnershipInconclusive) ||
 			errors.Is(err, persistenthost.ErrAttached) ||
 			errors.Is(err, persistenthost.ErrIncompatible) ||
@@ -562,6 +601,8 @@ func initializeConnection(ctx context.Context, connection *conn) error {
 // become stricter than the terminal path for the same setting.
 func approvalSettings(mode ports.PermissionMode) (policy, sandbox string) {
 	switch ports.NormalizePermissionMode(mode) {
+	case ports.PermissionModeReadOnly:
+		return "never", "read-only"
 	case ports.PermissionModeAcceptEdits, ports.PermissionModeAuto:
 		// on-request lets the provider decide when to ask; workspace-write keeps
 		// edits inside the worktree.
