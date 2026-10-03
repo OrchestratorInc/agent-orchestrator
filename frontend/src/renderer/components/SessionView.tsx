@@ -1407,7 +1407,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		return () => window.removeEventListener("keydown", handleKeyDown);
 	}, [handleToggleInspector, hasInspector]);
 
-	const inspectorMotionReadyRef = useRef(false);
+	const inspectorMotionReadyRef = useRef<string | null>(null);
 	const handleInspectorCloseAnimationComplete = useCallback(() => {
 		setInspectorSettledClosed(true);
 	}, []);
@@ -1417,12 +1417,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			stopTerminalLiveResize();
 			return;
 		}
-		if (!inspectorMotionReadyRef.current) {
+		if (inspectorMotionReadyRef.current !== uiSessionId) {
 			setInspectorSettledClosed(!isInspectorOpen);
+			stopTerminalLiveResize();
+			if (workspaceResizeTimerRef.current !== null) window.clearTimeout(workspaceResizeTimerRef.current);
+			workspaceResizeTimerRef.current = null;
+			sessionSplitRef.current?.removeAttribute("data-workspace-resizing");
+			browserEntryWidthFloorRef.current = null;
 		}
-	}, [hasInspector, isInspectorOpen, stopTerminalLiveResize]);
+	}, [hasInspector, isInspectorOpen, uiSessionId, stopTerminalLiveResize]);
 	useEffect(() => {
-		if (!hasInspector || !inspectorMotionReadyRef.current) return;
+		if (!hasInspector || inspectorMotionReadyRef.current !== uiSessionId) return;
 		if (isInspectorOpen) {
 			setInspectorSettledClosed(false);
 			const groupWidth = sessionSplitRef.current?.clientWidth || window.innerWidth;
@@ -1436,17 +1441,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		}
 		const groupWidth = sessionSplitRef.current?.clientWidth || window.innerWidth;
 		startTerminalLiveResize("expanded", topbarSecondaryLabelMode(groupWidth));
-	}, [hasInspector, isInspectorOpen, sizing, startTerminalLiveResize]);
+	}, [hasInspector, isInspectorOpen, uiSessionId, sizing, startTerminalLiveResize]);
 	useEffect(() => {
 		if (!hasInspector) {
-			inspectorMotionReadyRef.current = false;
+			inspectorMotionReadyRef.current = null;
 			return;
 		}
-		inspectorMotionReadyRef.current = true;
+		inspectorMotionReadyRef.current = uiSessionId;
 		return () => {
-			inspectorMotionReadyRef.current = false;
+			inspectorMotionReadyRef.current = null;
 		};
-	}, [hasInspector]);
+	}, [hasInspector, uiSessionId]);
 	// A Cloud tab may arrive before the paginated workspace cache contains its
 	// row. Keep the session surface (and its switch control) mounted while the
 	// direct control-plane lookup is in flight; only show "not found" after
@@ -1646,6 +1651,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				</div>
 				{hasInspector ? (
 					<SessionInspectorRail
+						sessionKey={uiSessionId}
 						showCollapsedHandle={!browserOnly}
 						isOpen={isInspectorOpen}
 						onCloseAnimationComplete={handleInspectorCloseAnimationComplete}
