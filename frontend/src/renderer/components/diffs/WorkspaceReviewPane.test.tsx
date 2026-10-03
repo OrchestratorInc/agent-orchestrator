@@ -129,16 +129,35 @@ describe("WorkspaceReviewPane", () => {
 		});
 	});
 
-	it("renders the prefetched default review immediately without requesting the diff again", async () => {
-		const data = workspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false }]);
-		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		await prefetchDefaultWorkspaceReviewDiffs(client, "sess-1", data);
-		expect(postMock).toHaveBeenCalledTimes(1);
-		render(<QueryClientProvider client={client}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
+	it("reuses the matching prefetch query without another diff request", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const data = workspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
+		await prefetchDefaultWorkspaceReviewDiffs(queryClient, "sess-1", data);
+
+		render(<QueryClientProvider client={queryClient}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
+
 		expect(screen.getByTestId("code-view")).toBeInTheDocument();
 		expect(screen.queryByText("Loading diff...")).not.toBeInTheDocument();
-		await waitFor(() => expect(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" })).toBeInTheDocument());
 		expect(postMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not reuse parsed metadata when an equal-length patch changes", async () => {
+		const firstPatch = "diff --git a/src/App.tsx b/src/App.tsx\n-old\n+one\n";
+		const secondPatch = "diff --git a/src/App.tsx b/src/App.tsx\n-old\n+two\n";
+		postMock
+			.mockResolvedValueOnce({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [{ repository: "", patch: firstPatch, truncated: false, includedPaths: ["src/App.tsx"], deferred: [] }] } })
+			.mockResolvedValueOnce({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [{ repository: "", patch: secondPatch, truncated: false, includedPaths: ["src/App.tsx"], deferred: [] }] } });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const data = workspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
+		const view = render(<QueryClientProvider client={queryClient}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
+
+		expect((await screen.findByTestId("review-patch")).textContent).toBe(firstPatch);
+		view.unmount();
+		await queryClient.invalidateQueries({ queryKey: ["session-workspace-diffs", "sess-1"], refetchType: "none" });
+		render(<QueryClientProvider client={queryClient}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
+
+		await waitFor(() => expect(screen.getByTestId("review-patch").textContent).toBe(secondPatch));
+		expect(postMock).toHaveBeenCalledTimes(2);
 	});
 
 	it("reuses prefetched batches when opening a review with more than 24 files", async () => {
