@@ -3,7 +3,7 @@ title: Multi-project
 description: Manage repositories, multi-repository workspaces, and Scratch sessions from one desktop.
 ---
 
-AO's daemon owns a durable project registry in SQLite. The desktop sidebar shows every registered project and its sessions; there is no single `agent-orchestrator.yaml` containing a `projects:` map.
+The desktop sidebar shows every registered project and its sessions. Add a repository as a separate project, or group a root and its child repositories in a workspace.
 
 ## Add projects
 
@@ -25,7 +25,7 @@ Register a parent directory containing direct child repositories as one workspac
 ao project add --path /absolute/path/to/product --as-workspace
 ```
 
-Existing Scratch projects use plain AO-managed directories. Projectless work can instead use `ao spawn --standalone --agent codex --name notes`. Standalone requires an explicit agent and rejects project, branch, issue, PR, and orchestrator options; Scratch also excludes Git branch/PR operations.
+Scratch projects use plain directories managed by AO. For work without a project, run `ao spawn --standalone --agent codex --name notes`. Standalone sessions need an explicit agent and cannot use project, branch, issue, PR, or orchestrator options. Scratch projects do not support Git branches or PRs either.
 
 ## Give each project its own roles
 
@@ -51,13 +51,15 @@ ao session ls --project api
 ao session ls --project api --json
 ```
 
-`ao status` reports daemon health rather than project sessions. It supports `--json`, not `--watch` or a project filter.
+To check daemon health, use [`ao status`](/cli#ao-status). It does not list sessions.
 
 ## Stop and clean up
 
 Kill one session with `ao session kill <session-id>`. Use `ao session cleanup --dry-run` before reclaiming eligible terminated-session workspaces. Dirty worktrees are preserved.
 
-`ao stop` stops the daemon and takes no project argument. Closing a view does not archive a session. Detached native terminal and supported Chat hosts can survive daemon replacement, subject to provider recovery. `exit-agent`/`resume-agent` stop and restart only the controller; kill/restore act on the session.
+`ao stop` stops the daemon and takes no project argument. Closing a view does not end a session. Use `exit-agent` and `resume-agent` to stop or restart its controller. Use `kill` and `restore` to end or relaunch the session.
+
+Some detached terminal and Chat processes can survive a daemon restart. Reconnecting depends on the provider. See [Dashboard](/dashboard) for session controls.
 
 ## Use mobile across projects
 

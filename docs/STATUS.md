@@ -198,7 +198,7 @@ surface (`npm run sqlc`, `npm run api`).
 - SessionView renders from the session's persisted mode: the existing terminal
   surface for TUI, or the durable Chat timeline/composer for Chat. Chat retains
   access to session-scoped worktree shells without creating an agent tmux pane.
-- Compatible sessions expose “Switch to chat UI” / “Switch to terminal UI”.
+- Compatible sessions expose "Switch to chat UI" / "Switch to terminal UI".
   The available direction, finish/stop policy, and recovery action depend on
   the harness and controller state. The dialog warns about drafts/queued turns;
   native history replay is separate from raw terminal scrollback reconstruction.
@@ -214,10 +214,11 @@ surface (`npm run sqlc`, `npm run api`).
   connection and port-rebind on daemon restart.
 - Chat history uses bounded pages and targeted CDC/SSE invalidation rather than
   polling and transferring the full lifetime of a conversation.
-- In-app notification center with click access, Unread/All filters, paginated
-  REST catch-up, live notification stream updates, separate PR/session target
-  actions, persistent read history, mark-read and clear-one/clear-all controls, and Electron app toasts
-  while the app is running.
+- In-app notification center with click access, paginated REST catch-up, live
+  notification stream updates, separate PR/session target actions, persistent
+  read history, and Electron app toasts while the app is running. The desktop
+  presents a newest-first feed. Opening the feed acknowledges loaded unread
+  items, and clear-one and clear-all controls remove notifications.
 
 ### Mobile (Expo + React Native)
 

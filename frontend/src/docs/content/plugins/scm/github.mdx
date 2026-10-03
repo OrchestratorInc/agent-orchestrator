@@ -24,7 +24,7 @@ A claim attaches ownership metadata and observation. It does not check out the p
 
 ## Observation and feedback
 
-The daemon polls active PRs with ETag guards and semantic diffing. New CI failures, human review feedback, and merge conflicts are reduced into durable facts and can nudge the owning agent. The desktop consumes concise summaries; raw CI logs and full review comment bodies are not part of the current summary API.
+AO checks active PRs for new CI failures, review feedback, and merge conflicts, then can notify the owning agent. The desktop shows concise summaries, not raw CI logs or full review comment bodies.
 
 ## Explicit actions
 

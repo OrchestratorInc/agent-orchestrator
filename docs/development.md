@@ -1,4 +1,4 @@
-# Development Guide
+# Development guide
 
 How to set up, build, run, and test Agent Orchestrator locally.
 
@@ -14,14 +14,14 @@ How to set up, build, run, and test Agent Orchestrator locally.
 Additional runtime dependencies for the daemon:
 
 - **git** (for worktree creation and agent integration)
-- **A running agent CLI** (Claude Code, Codex, Aider, etc.) - see
-  [the installation guide](https://docs.orchestrator.inc/installation)
+- **A running agent CLI** (Claude Code, Codex, Aider, etc.). See [the installation
+  guide](https://docs.orchestrator.inc/installation).
 
 For source terminal runs on macOS, install/configure tmux; packaged builds
 bundle it. New macOS/Linux sessions use detached native PTY hosts, while old
 handles and host-start fallback use tmux. `ao doctor` still checks tmux on both.
 
-## Project Layout
+## Project layout
 
 ```text
 agent-orchestrator/
@@ -67,7 +67,8 @@ git rebase origin/main
 
 ### Committing
 
-Keep commits atomic - one logical change per commit. Stage related changes and commit with a conventional message:
+Keep commits atomic. Use one logical change per commit. Stage related changes and
+commit with a conventional message:
 
 ```bash
 git add <files>
@@ -213,14 +214,14 @@ open issues/PRs for current mobile-specific setup notes.
 
 For CLI-only usage, open two terminals:
 
-**Terminal 1 -- start the daemon:**
+**Terminal 1: start the daemon.**
 
 ```bash
 cd backend
 go run ./cmd/ao daemon
 ```
 
-**Terminal 2 -- interact while the daemon is running:**
+**Terminal 2: interact while the daemon is running.**
 
 ```bash
 cd backend
@@ -232,8 +233,8 @@ go run ./cmd/ao --help
 
 ### Backend
 
-- Backend tests use `httptest.Server` and injected fakes - no real daemon
-  required.
+- Backend tests use `httptest.Server` and injected fakes. They do not require a
+  real daemon.
 - Run the narrowest relevant test suite first (e.g. `go test ./internal/cli/`),
   then the full suite.
 

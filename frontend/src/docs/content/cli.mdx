@@ -3,7 +3,7 @@ title: CLI reference
 description: Commands provided by the current Go CLI.
 ---
 
-The `ao` CLI is a thin client for the local AO desktop app and its loopback daemon. Product commands require the desktop app to be running. Run `ao <command> --help` for the exact flags supported by your installed version.
+The `ao` CLI sends commands to the local desktop app's daemon. Product commands require the desktop app to be running. Run `ao <command> --help` to see flags supported by your installed version.
 
 ## Command tree
 
@@ -32,13 +32,13 @@ ao
 └── version                        Print build information
 ```
 
-Internal commands such as `daemon`, `hooks`, `launch`, `agent-process`, and `pty-host` are intentionally omitted. `ao dev` is a developer launcher; see the repository development guide for source builds.
+This reference omits internal commands such as `daemon`, `hooks`, `launch`, `agent-process`, and `pty-host`. `ao dev` is a developer launcher; see the repository development guide for source builds.
 
 ## Desktop and daemon
 
 ### `ao start`
 
-Opens the installed Agent Orchestrator desktop app. If no app is installed, the legacy launcher can fetch the latest desktop release first. It does not supervise the daemon itself.
+Opens the installed desktop app. If the app is missing, the legacy launcher can download the latest release first. The desktop app starts and supervises the daemon.
 
 | Flag | Purpose |
 | --- | --- |
@@ -96,9 +96,9 @@ Agent adapters are compiled into AO. There is no plugin marketplace or `ao plugi
 | `ao project set-config <id>` | Update typed per-project configuration. |
 | `ao project rm <id>` | Remove a project registration. |
 
-Project configuration is persisted by the daemon in SQLite. `set-config` replaces the entire config, including when using focused flags; inspect and preserve existing fields. It supports common flags and `--config-json`; it does not edit `agent-orchestrator.yaml`. Use command help for the complete typed fields.
+`set-config` replaces the entire project config, even when you use a focused flag. Its JSON decoder ignores unknown keys, and it drops existing `effort` values; `ao project get --json` cannot show effort. See [Projects: update from the CLI](/configuration/projects#update-from-the-cli) for safe alternatives and details. This command does not edit the old `agent-orchestrator.yaml` file.
 
-Recurring tasks use `ao automation create|list|get|update|delete|runs`. Supply a project, name, prompt, and exactly one `--cron` or `--rrule` to create; `--timezone` accepts an IANA name. Pause with `ao automation update <id> --enabled=false`. See [schedule behavior](/configuration/lifecycle-automation#what-ao-handles).
+Use `ao automation create`, `list`, `get`, `update`, `delete`, and `runs` to manage recurring work. To create one, provide a project, name, prompt, and exactly one schedule: `--cron` or `--rrule`. Set `--timezone` to an IANA time-zone name such as `America/New_York`. Pause a definition with `ao automation update <id> --enabled=false`. See [schedule behavior](/configuration/lifecycle-automation#what-ao-handles).
 
 `ao cue create --project <id> --name <name>` requires exactly one `--command` or `--prompt`. `ao cue list --project <id>` lists definitions. Editing, deleting, and invoking Cues is available in the desktop; the CLI does not have a `cue run` command.
 
@@ -131,7 +131,7 @@ Important flags include:
 | `--no-takeover` | Refuse a PR already owned by another active session. |
 | `--skip-agent-check` | Skip only the CLI-side install/auth preflight. |
 
-Project resolution order is explicit `--project`, `AO_PROJECT_ID`, the project of `AO_SESSION_ID`, then the closest registered project containing the current directory. Before spawning, AO refreshes the selected agent's advisory readiness unless `--skip-agent-check` is set.
+AO chooses a project in this order: `--project`, `AO_PROJECT_ID`, the project for `AO_SESSION_ID`, then the closest registered project containing the current directory. Before spawning, AO refreshes the selected agent's readiness unless you use `--skip-agent-check`. Readiness is advisory.
 
 ### `ao session`
 
@@ -151,7 +151,7 @@ Project resolution order is explicit `--project`, `AO_PROJECT_ID`, the project o
 
 Most lookup commands accept `--project` to disambiguate a session ID.
 
-PR claiming records ownership and starts observation; it does not check out the PR branch. Prepare the appropriate branch/worktree separately. Desktop **Archive** corresponds to ending the session, whereas exit/resume acts on its controller. Closing a view alone does neither.
+Claiming a PR records ownership and starts observation. It does not check out the PR branch, so prepare the right branch or worktree separately. **Archive** ends the session. Exit and resume stop or start only its controller. Closing a view does neither.
 
 ### `ao send`
 
@@ -175,15 +175,17 @@ ao send --session <session-id> --steer --recover-only --client-message-id <handl
 
 Lists orchestrator sessions. Add `--json` for structured output.
 
-Inside a worker, `ao report "Progress summary"` reports to its existing orchestrator. Use `--help` for attention/completion and artifact/PR reporting flags. Needs-input reports notify immediately; stuck reports can interrupt or coalesce, while completion reports settle before delivery (currently five minutes) and ordinary checkpoints have a longer fallback (currently one hour). Reporting does not auto-create an orchestrator or replace claiming PR ownership.
+Inside a worker, `ao report "Progress summary"` sends a report to its existing orchestrator. Reporting requires `AO_SESSION_ID`; it does not create an orchestrator or claim a PR.
 
-For a structured report, choose one of `--checkpoint`, `--needs-input`, `--stuck`, or `--done` and include `--note`. Attach outputs with repeatable `--artifact`, `--pr-created`, or `--pr-reviewed`; PR/MR flags require full URLs. Free-form text cannot be combined with structured state or output flags.
+Needs-input reports are sent immediately. Stuck reports may interrupt or combine with other reports. Done reports wait five minutes before delivery; ordinary checkpoints can wait up to one hour.
+
+For a structured report, choose one state flag: `--checkpoint`, `--needs-input`, `--stuck`, or `--done`. Include `--note` with it. Attach outputs with `--artifact`, `--pr-created`, or `--pr-reviewed`; pull-request flags require full URLs. Do not combine free-form text with structured state or output flags.
 
 ```bash
 ao report --done --note "Focused tests passed" --artifact ./test-results.txt
 ```
 
-Reporting requires `AO_SESSION_ID` from the worker environment.
+`ao report` must run in a worker environment that provides `AO_SESSION_ID`.
 
 ## Pull requests and reviews
 
@@ -217,9 +219,15 @@ Selects what the desktop Browser panel displays for the session identified by `A
 
 Controls the live, session-isolated Electron browser owned by the desktop app. It also resolves its target from `AO_SESSION_ID`; the desktop app must be open.
 
-The command family includes status/open, accessibility snapshots and references, click/drag/fill/type/press/hover, highlight, scroll, select/check state, property reads, tabs and popups, DevTools, frames, dialogs, waits, screenshots, console/page errors, and bounded opt-in network metadata capture.
+Browser commands include status and open, page snapshots, click/drag/fill/type, scrolling, tabs and popups, DevTools, screenshots, console and page errors, and optional network metadata capture. Run `ao browser --help` for the full command list.
 
-References become stale after navigation, DOM replacement, frame changes, or tab changes. Take another snapshot when AO reports `STALE_REFERENCE`. `ao browser snapshot --delta` returns the full tree once, then only `unchanged` or the changes since the last snapshot the agent received; add `--full` to get the full tree again. `click` and `drag` accept `--human` for curved pointer movement on pages that ignore instant clicks, and `ao browser screenshot --annotate` numbers interactive elements in the image and lists their refs. `--human` actions and screenshots need the Browser panel visible on screen; a hidden or covered window stops painting and those commands time out. Network capture is off by default, metadata-only, bounded, and automatically expires.
+An element reference becomes stale when navigation or a frame or tab change replaces the page. Take a new snapshot when AO reports `STALE_REFERENCE`.
+
+The first `ao browser snapshot --delta` returns the full page tree. Later calls return only changes; add `--full` to request the full tree again. The `--annotate` option on screenshots labels interactive elements with references.
+
+`click` and `drag` accept `--human` for pages that ignore instant pointer movement. Keep the Browser panel visible when using `--human` or taking screenshots. Hidden or covered windows stop painting, so these commands time out.
+
+Network capture is off by default. When enabled, it records bounded metadata only, excludes request and response bodies and sensitive values, and expires automatically.
 
 ## Migration and shell integration
 

@@ -3,9 +3,9 @@ title: Dashboard
 description: Use the AO desktop app to supervise projects, sessions, pull requests, reviews, and previews.
 ---
 
-The Agent Orchestrator desktop app is the main control surface. It runs the local daemon, keeps projects and sessions visible, and lets you move between a worker's Chat or terminal, pull-request context, review runs, changed files, and browser preview.
+The AO desktop app is where you manage projects and sessions. Open a worker's Chat or terminal, review its pull request and changed files, and preview its web app.
 
-## The App Shell
+## The app shell
 
 | Area | What it contains |
 | --- | --- |
@@ -20,7 +20,7 @@ Open **Automations** from the sidebar to create recurring work, edit its prompt 
 
 Projectless standalone tasks do not need a Git project. Cloud sessions appear only when the build and account enable that integration; their execution and data live remotely.
 
-## Read Session State
+## Read session state
 
 AO does not persist a display-status label. It derives what you see from durable facts such as agent activity, termination, controller state, and current pull-request checks, reviews, and mergeability.
 
@@ -34,25 +34,31 @@ Common activity signals include:
 
 A failed or unknown runtime probe alone is not proof that a session is dead.
 
-## Work In Chat
+## Work in Chat
 
 Chat sessions show durable messages, provider activities, commands, plans, changed files, approvals, structured questions, usage, and compaction state. History loads in bounded pages so long-running sessions remain responsive.
 
 The composer sends a provider turn through the daemon. A Chat session can also open a session-scoped worktree shell without creating an agent TUI pane.
 
-Chat controls depend on the provider: choose a model, effort, and permissions where available, attach images, inspect skills and MCP tools, and use supported slash commands such as compaction. Session links and reported artifacts keep related work accessible. **Run a cue** reuses a project instruction or opens an exact shell command in a fresh terminal; see [Project Settings](#project-settings).
+Chat controls depend on the provider. Where supported, choose a model, reasoning effort, and permissions; attach images; inspect skills and Model Context Protocol (MCP) tools; and use slash commands such as compaction. Session links and reported artifacts keep related work together.
 
-## Work In Terminal UI
+**Run a cue** sends a saved project instruction or opens a shell command in a fresh terminal. See [Project settings](#project-settings).
 
-TUI sessions preserve the selected harness's native terminal experience through the daemon WebSocket mux. New macOS/Linux Terminal UI sessions use a detached native PTY host; existing tmux sessions and native-host startup fallback use tmux. Windows uses ConPTY.
+## Work in Terminal UI
+
+Terminal UI sessions keep the selected agent's native terminal experience available through AO. New macOS/Linux sessions use AO's native terminal host. Older sessions and fallback launches can use tmux. Windows uses ConPTY.
 
 Use the terminal for native prompts and interactive tools. Use AO's message controls for routine follow-ups so lifecycle reactions can apply the correct delivery policy.
 
-## Switch Interfaces
+## Switch interfaces
 
-Supported sessions show **Switch to chat UI** or **Switch to terminal UI**. The available action depends on the harness, direction, and controller state. AO keeps the same session and worktree and replaces one controller at a time. When offered, **Finish work, then switch** waits for accepted work; **Stop now and switch** interrupts it. Some terminal transitions require **Terminate and then switch**. Read the dialog before continuing: unsent drafts, attachments, or queued turns may need to be sent again. Native provider history can be recovered where supported; terminal screen output is not converted into Chat messages.
+Supported sessions show **Switch to chat UI** or **Switch to terminal UI**. Which action appears depends on the agent, the current interface, and whether it is working. AO keeps the same session and worktree and replaces one controller at a time.
 
-## Pull Requests And Reviews
+When offered, **Finish work, then switch** waits for accepted work. **Stop now and switch** interrupts it. Some terminal sessions require **Terminate and then switch**. Read the dialog before continuing because drafts, attachments, or queued turns may need to be sent again.
+
+Where supported, AO can resume the same provider conversation in Chat. It does not turn old terminal screen output into Chat messages.
+
+## Pull requests and reviews
 
 Once a session has a linked pull request, the inspector shows a concise summary:
 
@@ -63,9 +69,11 @@ Once a session has a linked pull request, the inspector shows a concise summary:
 
 AO can run configured reviewer agents, send review findings back to the worker, resolve review comments, and request a merge. Raw CI logs and full review bodies are not part of the concise desktop summary.
 
-Enable **Auto review** per session, or set the project default for newly created sessions. AO waits for an eligible PR head and an idle worker before starting a review; this does not enable automatic merge. In **Files**, choose workspace or PR changes and inspect commits where available. Inspecting local changes does not itself publish a repository review.
+Enable **Auto review** for one session, or set the project default for new sessions. AO starts a review only when the pull request is eligible and the worker is idle. This does not enable automatic merge.
 
-## Browser Preview
+In **Files**, choose workspace changes or pull-request changes. You can inspect commits where available. Looking at local changes does not publish a review to the repository.
+
+## Browser preview
 
 The Browser tab displays the preview target explicitly selected for the session with `ao preview`, `ao preview <url>`, or `ao preview start`. The default temporary browser profile is isolated per session. Named browser profiles persist cookies and storage and can be reused across sessions; sessions using the same named profile deliberately share that browser state.
 
@@ -77,25 +85,29 @@ In **Settings → Browser**, manage named profiles and downloads. Import can cop
 
 ## Notifications
 
-The notification center keeps durable alerts for sessions that need input, pull requests ready to merge, merged pull requests, and pull requests closed without merging. Open the bell to see one newest-first feed and follow an alert to its session or pull request. Opening the panel marks the unread items it has loaded as read; they remain in the feed. Use **Clear all** or the clear control on an item to remove alerts. Scroll to load older records. There are no separate Unread/All tabs or individual mark-read buttons. Electron also shows app toasts while AO is running.
+The notification center keeps alerts for sessions that need input, pull requests ready to merge, merged pull requests, and pull requests closed without merging. Open the bell to see the newest alerts first, then choose one to open its session or pull request.
+
+Opening the panel marks loaded unread alerts as read, but leaves them in the feed. Use **Clear all** or an alert's clear control to remove records. Scroll down to load older alerts. There are no separate Unread/All tabs or individual mark-read buttons. AO also shows desktop toasts while it is running.
 
 ## Connect Mobile
 
-In **Settings → Connect Mobile**, enable mobile access and wait for pairing to become ready before scanning the QR in the mobile app. AO advertises available LAN, Tailscale, or managed remote connector endpoints, while the primary desktop API stays on loopback. See [Connect Mobile](/configuration/remote-access) for transport and pairing requirements.
+In **Settings → Connect Mobile**, enable access and wait until pairing is ready before scanning the QR in the mobile app. AO advertises available LAN, Tailscale, or managed remote-connector addresses. The primary desktop API stays on the local computer. See [Connect Mobile](/configuration/remote-access) for pairing and transport details.
 
-Paired devices can receive push notifications when permissions and connectivity allow. Manage device mute/unpair controls in Connect Mobile; the daemon must be running and able to reach the push service. On supported macOS hosts, keep-awake can help maintain access.
+Paired phones can receive push notifications when they have permission and the daemon can reach the push service. Mute or unpair a device in Connect Mobile. On supported Macs, **Keep awake** can help keep the computer reachable.
 
-## Project Settings
+## Project settings
 
 Project settings configure worker and orchestrator roles without changing the registered repository identity. The desktop app writes through the daemon API; it does not directly edit the database or run session logic in the renderer.
 
-GitHub and GitLab supply SCM and issue data. **Cues** belong to a project: create, edit, or delete reusable agent instructions and shell commands in its Cues dialog. Agent Cues send to an eligible session or create a worker; blocked sessions cannot accept ordinary injected instructions. Command Cues execute directly in a fresh shell terminal through the local desktop and do not ask an agent to interpret the command.
+GitHub and GitLab provide pull-request and issue data. **Cues** belong to a project. Create a Cue to save an agent instruction or shell command. An agent Cue sends a prompt to an eligible session or starts a worker. A blocked session cannot accept an ordinary prompt. A command Cue runs the exact command in a fresh local terminal; it does not ask an agent to interpret it.
 
-Global settings have separate responsibilities: **General** selects the default session interface, **Harnesses** manages setup/readiness, **Agents → Codex** manages device accounts, and **Browser** manages profiles/downloads. Project settings hold role-specific model, effort, permission, and rules overrides.
+Use **General** to choose the default session interface. **Harnesses** shows setup and readiness. **Agents → Codex** manages device accounts. **Browser** manages profiles and downloads. Project settings hold role-specific model, effort, permission, and rules overrides.
 
-Closing a terminal or switching views does not archive its session. Detached native terminal and supported Chat hosts can survive daemon replacement; reconnecting still depends on the host and provider state. **Archive** ends the AO session; stopping only its agent leaves a session you can resume. See the [session commands](/cli#ao-session) for exit/resume versus kill/restore and conservative workspace cleanup.
+Closing a terminal or switching views does not archive a session. Some detached terminal and Chat processes can survive a daemon restart; reconnecting depends on the computer and provider state. **Archive** ends the AO session. Stopping only its agent leaves a session you can resume. See [session commands](/cli#ao-session) for resume, restore, and cleanup.
 
-## Next
+<span id="next" />
+
+## Next steps
 
 <Cards>
 	<Card title="Quickstart" href="/quickstart" description="Create and follow the first worker session." />

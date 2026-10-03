@@ -202,7 +202,7 @@ digest-pinned artifacts from the healthy staging service, requires each ECR
 scan to be complete with no high or critical findings, and refuses a requested
 release that is not currently running in staging. It verifies both services
 before changing production. New production task revisions are derived from the
-existing production definitions—not staging—so production-only secrets survive
+existing production definitions, not staging, so production-only secrets survive
 and staging variables, URLs, log groups, or secret ARNs cannot cross the
 environment boundary. It then:
 

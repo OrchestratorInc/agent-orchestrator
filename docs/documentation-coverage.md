@@ -1,22 +1,45 @@
 # Documentation coverage
 
-Reviewed 3 October 2026. Public desktop baseline: [v0.13.3](https://github.com/Untrivial-ai/agent-orchestrator/releases/tag/v0.13.3) (published 1 October 2026 UTC). Contributor docs are checked against the current checkout; `main` already contains changes after the stable tag. Cloud requires both a source check and a deployed-environment check because account entitlement and provider configuration are external.
+Reviewed 3 October 2026. The public desktop guide uses [v0.13.3](https://github.com/Untrivial-ai/agent-orchestrator/releases/tag/v0.13.3), published 1 October 2026 UTC. Source checks used PR #6166 at `2e6c3673133311bd5124097938858ae57f7803f2`. The follow-up changes edit documentation, not product behavior. Contributor guides describe that checkout. Cloud availability also depends on the deployed service and the signed-in account.
 
-| Area | User guide | Source checked | Hands-on status |
+## What was checked
+
+| Area | Documentation | Evidence | Remaining check |
 | --- | --- | --- | --- |
-| Desktop install, local projects, agent modes | Installation, Quickstart, Projects, agent catalog | Desktop renderer, CLI, daemon registry, stable release | Docs build and route checks; no fresh installer run in this review |
-| Local Automations, Cues, browser, reports, recovery | Lifecycle automation, Dashboard, Examples, CLI, Review loop | Renderer controls and CLI/daemon handlers | Code-backed; provider-specific behavior varies |
-| Notifications | Dashboard and notifier pages | `NotificationCenter.tsx` and daemon notification API | Single-feed behavior checked in source; no live toast acceptance |
-| Connect Mobile | Connect Mobile | Desktop settings and daemon mobile bridge | **Separate phone app source, physical iOS/Android pairing, and off-Wi-Fi reconnect not checked**; no credential-bearing screenshots captured |
-| Cloud sessions | Cloud sessions guide | Desktop Cloud gate/project/task UI and `cloud/` control plane | Production `/healthz` returned 200 on 3 October 2026; **authenticated production journey not run** |
-| Cloud development/deploy | Cloud development, `cloud/README.md`, deployment runbook | Root scripts and `cloud/scripts/deploy-staging.sh` | Read-only script review; no staging/production deployment |
-| Public links and translations | README, translated READMEs, docs site constants | Current public docs URL and official release/download pages | Link/build checks; marketing-site copy and Homebrew tap are separately owned |
+| Desktop installation | [Installation](../frontend/src/docs/content/installation.mdx) | Official release metadata, download URLs, current Homebrew recipe, and release checksums | Fresh installer and Homebrew install/upgrade were not run |
+| Local projects and configuration | [Projects](../frontend/src/docs/content/configuration/projects.mdx), [CLI](../frontend/src/docs/content/cli.mdx), and the embedded project command reference | CLI decoder, daemon request validation, project settings, and focused reproduction of unknown-key and effort loss | Product fixes remain open in #6169 and #5954 |
+| Agent capabilities and accounts | [Agent catalog](../frontend/src/docs/content/plugins/agents/index.mdx) and setup guides | Worker, Chat, and reviewer registries checked separately; Codex settings label checked against stable UI strings | Provider authentication and account switching were not exercised |
+| Local workflows | [Dashboard](../frontend/src/docs/content/dashboard.mdx), [Examples](../frontend/src/docs/content/examples.mdx), and [Review loop](../frontend/src/docs/content/guides/review-loop.mdx) | Renderer controls and CLI/daemon handlers for Automations, Cues, browser profiles, reports, recovery, and reviews | Provider-specific runtime behavior remains unverified |
+| Notifications | [Dashboard notifications](../frontend/src/docs/content/plugins/notifiers/dashboard.mdx) and [STATUS](STATUS.md) | `NotificationCenter.tsx` implements one feed with automatic acknowledgement of loaded unread items | Native toast delivery was not exercised |
+| Mobile | [Connect Mobile](../frontend/src/docs/content/configuration/remote-access.mdx) | Desktop Connect Mobile component, daemon bridge, and phone source under `packages/mobile/`, including onboarding and pairing screens | [Real-device acceptance and screenshots, #6178](https://github.com/Untrivial-ai/agent-orchestrator/issues/6178) |
+| Cloud sessions | [Cloud guide](../frontend/src/docs/content/guides/cloud.mdx) | Desktop auth, organization selection, project/task UI, Archive/Restore, and control-plane handlers | [Authenticated deployment walkthrough and account limits, #6179](https://github.com/Untrivial-ai/agent-orchestrator/issues/6179) |
+| Cloud development and deployment | [Cloud development](cloud-development.md), [Cloud README](../cloud/README.md), and [deployment runbook](../cloud/docs/deployment.md) | Repository ownership, local scripts, deployment argument handling, and provider lifecycle source | No staging or production deployment was performed |
+| Telemetry | [Product telemetry](telemetry.md), README, and public FAQ | PostHog sink's shared installation ID, GitHub username event/person fields, and enabled GeoIP setting | No production analytics account or stored event data was inspected |
+| Website and translated introductions | README, translated READMEs, and public links | Canonical docs host and capability catalog links; current landing-page copy | [Landing-page companion change, #6180](https://github.com/Untrivial-ai/agent-orchestrator/issues/6180) |
+| Human readability | All 47 public-manual MDX pages and repository prose in this refresh | Unslop review for clear steps, repeated sections, undefined terms, long paragraphs, and consistent headings | Runtime verification is separate from writing quality |
 
-Open verification before treating every flow as release-accepted:
+## Local verification
 
-- Pair a real iPhone and Android device on LAN and a secure remote path; record redacted screens that show no QR, password, host credential, or personal data. Check sleep/reconnect, push, removal, and version mismatch.
-- Walk through Cloud sign-in, GitHub grant, provider connection, project creation, remote session, Files, terminal, reviews, and delete on a permitted test account. Record the deployed release, organization gates, and any quota or provider limitation. A health check alone does not cover this.
-- Confirm marketing-site agent counts, download page, and Homebrew recipe in their owning repositories. The public manual links to the live catalog and download page, but this PR cannot change those external sources.
-- Product fixes remain separate from documentation: the CLI currently ignores unknown `--config-json` keys ([#6169](https://github.com/Untrivial-ai/agent-orchestrator/issues/6169)) and drops `effort` in its project-config mirror ([#5954](https://github.com/Untrivial-ai/agent-orchestrator/issues/5954)). The manual states both limits until the CLI contract changes.
+The follow-up passed the production docs build, including its TypeScript check. The export contains 50 HTML pages for 47 public content routes. All 1,497 internal links and anchors resolved, and every anchor from the prior PR export remains available. A separate check found no missing targets among 180 relative links in changed repository Markdown files.
 
-Do not interpret a checked source row as proof of a live device or authenticated service run. Update this file with the release and environment used when those tests are completed.
+The seven embedded skill-asset tests passed. `git diff --check` passed. The revised Projects guide rendered in the local browser preview, had no horizontal overflow at 390 pixels, and produced no captured browser console errors. Native product screenshots and the acceptance tests listed below remain open. `ao preview` could not run because this Codex chat has no `AO_SESSION_ID`; the docs preview used the in-app browser directly.
+
+## Homebrew verification
+
+The existing [AgentWrapper tap](https://github.com/AgentWrapper/homebrew-tap/blob/main/Casks/agent-orchestrator.rb) contains version `0.13.3`. Its arm64 and x64 SHA-256 values match the corresponding official release assets. The old GitHub release URL redirects to `Untrivial-ai/agent-orchestrator` and returned HTTP 200. A new tap name is not needed for this documentation change.
+
+The cask declares `auto_updates true`; AO's in-app updater remains the normal update path. The optional Homebrew commands follow the [Homebrew upgrade documentation](https://docs.brew.sh/Manpage). This review did not install, upgrade, or remove the user's app through Homebrew.
+
+## Open acceptance work
+
+| Follow-up | Status | Evidence needed to close it |
+| --- | --- | --- |
+| [#6178: Mobile walkthrough](https://github.com/Untrivial-ai/agent-orchestrator/issues/6178) | Open | Real iOS and Android pairing on LAN and secure remote access; off-Wi-Fi reconnect; sleep, push, removal, rotation, and version-mismatch checks; screenshots without credentials |
+| [#6179: Cloud walkthrough and limits](https://github.com/Untrivial-ai/agent-orchestrator/issues/6179) | Open | Authorized account journey through sign-in, repository/provider setup, task, files, terminal, review, Archive/Restore; deployed release and account-specific costs/limits |
+| [#6180: Landing-page coverage](https://github.com/Untrivial-ai/agent-orchestrator/issues/6180) | Open in the public repository for coordination | Companion change in the website's owning repository and a check of deployed copy and links |
+| [#6169: Unknown CLI configuration keys](https://github.com/Untrivial-ai/agent-orchestrator/issues/6169) | Open product fix | CLI rejects unsupported JSON keys before replacing configuration |
+| [#5954: CLI effort preservation](https://github.com/Untrivial-ai/agent-orchestrator/issues/5954) | Open product fix | CLI input and output preserve `agentConfig.effort` |
+
+A public Cloud health response was reported as HTTP 200 on 3 October 2026 in the PR's earlier verification. It does not prove an authenticated user journey. The isolated desktop can run locally, but native screen capture failed during this follow-up; product walkthrough screenshots remain pending. No pairing credential was generated or captured.
+
+Keep these rows open until their results are recorded. A source check, successful build, or readable guide cannot substitute for a real-device or authenticated-service test.

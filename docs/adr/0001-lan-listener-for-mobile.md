@@ -16,19 +16,19 @@ decision below is retained for context.
 
 The daemon binds `127.0.0.1` only. AGENTS.md carries a hard rule: _"The daemon is
 a loopback-only sidecar. Do not make the bind host configurable or expose it beyond
-`127.0.0.1`."_ That rule keeps the Loopback Listener safe **without authentication**
-— the OS guarantees nothing off-box can reach it.
+`127.0.0.1`."_ That rule keeps the Loopback Listener safe **without
+authentication**. The OS guarantees that nothing off-box can reach it.
 
 We want a physical phone to use the app over the local network. The only prior
 mechanism was a standalone Node proxy (`ao-phone-proxy.js`) run by hand, with
 IP trust-on-first-connect and no password. The user rejected the proxy approach and
 asked for an in-app "Connect Mobile" feature.
 
-Two forces collide: exposing anything to the LAN removes the loopback safety
-guarantee, and the target mobile app is **Expo/React Native**, where trusting a
-self-signed TLS cert (fingerprint pinning) requires native modules across three
-transports (`fetch`, the `/mux` WebSocket, and the xterm WebView) — a large, risky
-effort at odds with the desired scope.
+Two forces collide. Exposing anything to the LAN removes the loopback safety
+guarantee. The target mobile app is **Expo/React Native**, where trusting a
+self-signed TLS certificate through fingerprint pinning requires native modules
+across three transports (`fetch`, the `/mux` WebSocket, and the xterm WebView).
+That is a large, risky effort for the desired scope.
 
 ## Decision
 
@@ -41,13 +41,14 @@ to the Loopback Listener.
 Security posture:
 
 - **On-demand.** The LAN Listener does not exist until Connect Mobile is enabled;
-  disabling closes the socket. Default off — zero standing LAN surface.
+  disabling closes the socket. It is off by default, so there is no standing LAN
+  surface.
 - **Single rotating Connection Password**, 8-char alphanumeric, stored only as a
   hash, compared constant-time. Sent as `Authorization: Bearer <password>` on both
   REST and the RN WebSocket (RN's WebSocket header option). Rotating drops the
   current phone.
-- **Per-source Lockout** after 5 failed attempts (not global — a hostile device
-  must not be able to lock out the real phone).
+- **Per-source Lockout** after 5 failed attempts. It is not global, so a hostile
+  device cannot lock out the real phone.
 - **App API only** on the LAN Listener; daemon-control routes keep their existing
   loopback-only guard (`localControlRequest`) with no change.
 - The authenticated app API includes `GET /api/v1/fs/dirs` for remote folder

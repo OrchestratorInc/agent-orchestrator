@@ -10,10 +10,8 @@ Notifications are a daemon and desktop capability, not a configurable plugin slo
 - a pull request was merged;
 - a pull request closed without merging.
 
-The desktop notification center shows one newest-first feed with live updates and older records loaded as you scroll. Opening it marks loaded unread alerts as read; click an alert to open its session or pull request. Clear one item or the whole feed to remove records. While the Electron app is running, new records can also appear as native app toasts.
+In the desktop app, the notification center shows a newest-first feed and loads older alerts as you scroll. Opening it marks loaded unread alerts as read; click an alert to open its session or pull request. New alerts can also appear as desktop toasts while the app is running.
 
 Slack, Discord, generic webhook, Composio, OpenClaw, and standalone desktop notifier configuration from the legacy TypeScript release are not supported in the rewrite.
 
-See [notification center](/plugins/notifiers/dashboard) for the current behavior.
-
-Marking a notification read preserves history; clearing one or all removes it from the center. Paired mobile devices can receive push notifications when permission is granted and the daemon can reach the push service. Use Connect Mobile device controls to mute or unpair a device. This does not enable legacy Slack, Discord, or webhook notifier plugins.
+See [notification center](/plugins/notifiers/dashboard) for controls and mobile push details.

@@ -3,7 +3,14 @@ title: Agent adapters
 description: The terminal harnesses built into AO and the smaller set that also supports structured Chat.
 ---
 
-AO compiles agent adapters into the daemon. It uses your locally installed agent CLI and its existing authentication; it does not bundle provider credentials or install adapters from npm.
+To use an agent, install it and sign in on your machine, then check that AO can find it and start a session:
+
+```bash
+ao agent ls --refresh
+ao spawn --project my-app --name task --agent codex
+```
+
+AO uses the agent CLI and authentication you already installed. It does not bundle provider credentials or install adapters from npm.
 
 ## Shipped terminal harnesses
 
@@ -45,7 +52,7 @@ The current daemon registers the following capabilities. Availability still depe
 | `mimo-code` | Yes | — | — |
 | `deepseek-harness` | Yes | Yes | — |
 
-Run the catalog instead of relying on a static page when scripting:
+The table shows shipped capabilities, not whether an agent is ready on your machine. Run the catalog for current readiness or when scripting:
 
 ```bash
 ao agent ls --refresh
@@ -93,11 +100,12 @@ Chat registration does not imply interface handoff support. Use the switch actio
 ## Choosing and configuring a harness
 
 ```bash
-ao project set-config my-app --worker-agent codex
 ao spawn --project my-app --name auth-fix --agent claude-code --mode chat
 ```
 
-`--agent` and `--harness` are aliases. The `set-config` example replaces the full config; preserve existing fields before applying it. Project configuration may also specify model, effort, permission mode, environment, prompt rules, and separate worker/orchestrator defaults. The CLI's project-config mirror currently omits `effort`: `ao project get --json` cannot show it, and `ao project set-config` may drop an existing value. Use project settings in the desktop app or the daemon API to preserve or change effort until the CLI mirror is fixed. Use `ao project set-config --help` for the fields it supports.
+To make Codex the default worker, use `ao project set-config my-app --worker-agent codex`. It replaces the full config, even when you use a focused flag, so read the [full-config warning](/configuration/projects#update-from-the-cli) before running it.
+
+`--agent` and `--harness` are aliases. The CLI's project-config mirror also omits `effort`: `ao project get --json` cannot show it, and a CLI configuration replacement drops existing effort values. Use Project Settings in the desktop app or the daemon API to preserve or change effort. Use `ao project set-config --help` for supported fields.
 
 <Cards>
 	<Card title="Claude Code" description="Terminal UI and structured Chat." href="/plugins/agents/claude-code" />

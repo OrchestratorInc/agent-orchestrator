@@ -1,9 +1,9 @@
 # AO CLI
 
 The `ao` CLI is a thin Go/Cobra client for the local Agent Orchestrator daemon.
-It opens the desktop app, and discovers, inspects, and stops its daemon through the loopback HTTP
-surface and the `running.json` handshake. It must not open SQLite directly or
-call runtime, workspace, tracker, or agent adapters in-process.
+It opens the desktop app and discovers, inspects, or stops its daemon through the
+loopback HTTP surface and the `running.json` handshake. It must not open SQLite
+directly or call runtime, workspace, tracker, or agent adapters in-process.
 
 When using the CLI directly from a shell, make sure the daemon is running first
 with `ao start` or by opening the desktop app. Product commands such as

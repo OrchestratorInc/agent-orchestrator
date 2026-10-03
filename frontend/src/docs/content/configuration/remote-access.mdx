@@ -11,9 +11,9 @@ For a phone, the desktop app creates a separate listener through **Connect Mobil
 
 1. Install [AO Mobile from the App Store](https://apps.apple.com/app/ao-mobile/id6792552173) or [Google Play](https://play.google.com/store/apps/details?id=aoagents.dev). Open the desktop app and go to **Settings → Connect Mobile**.
 2. Put both devices on the same trusted network. In Connect Mobile, choose **Generate** to turn on the separate mobile connection. The app shows an address, password, and QR when a reachable endpoint is ready; a blurred or preparing QR cannot pair a phone.
-3. On the phone, choose its add/pair-computer action and scan the desktop QR. The current v2 link includes host identity and available endpoints so the phone can find the same desktop across transports. The credential is carried in the link fragment; treat the entire QR/link as a password.
+3. In the mobile app, tap **Pair Desktop** during onboarding, or tap **Scan pairing code** from an unpaired screen. The pairing screen says **Scan the QR code**. Scan the desktop QR. The current link includes host identity and available endpoints so the phone can find the same desktop across transports. The credential is carried in the link fragment; treat the entire QR/link as a password.
 4. If scanning fails, enter the address, port, and password shown on the desktop. The listener normally starts at port `3011` but can choose another free port. Use the displayed address, not `127.0.0.1`, which means the phone itself when entered there.
-5. Open the paired computer in the mobile app, choose a project and worker, then open its Chat or Terminal UI. An approval request needs your response in the session; the **Files** and review views show workspace and pull-request changes. If a control is absent, check the session interface and harness capability rather than assuming the phone created a second session.
+5. Open the paired computer in the mobile app, choose a project and worker, then open its Chat or Terminal UI. An approval request needs your response in the session. Pull request and review screens show repository and reviewer state. If a control is absent, check the session interface and harness capability rather than assuming the phone created a second session.
 
 Turning mobile access off closes the authenticated listener. Regenerating its password invalidates old pairing credentials. If the phone reports an incompatible pairing or identity contract, update both apps; current desktop pairing does not generate a legacy v1 fallback.
 
@@ -42,9 +42,9 @@ Do not share pairing screenshots or links. Use device mute/remove controls in Co
 
 The Expo/React Native app is a native control surface over the same daemon resources as desktop. New mobile sessions prefer Chat when a compatible installed harness is available; Terminal UI remains an explicit compatibility choice.
 
-Mobile supports structured Chat, Terminal UI, session creation, the same capability-gated Chat/TUI handoff, approvals and structured input, changed files, model/provider controls, compaction and rollback, voice dictation, attachments, and a session-scoped worktree shell.
+Mobile supports structured Chat, Terminal UI, session creation, the same capability-gated Chat/TUI handoff, approvals and structured input, model and agent controls, compaction and rollback when the session advertises those capabilities, voice dictation, attachments, a workspace shell, and generated previews.
 
-Mobile also exposes PR/workspace review and reviewer-run views. Push notifications need mobile permission, an unmuted paired device, and a running daemon with network access to its push service. Pairing alone does not guarantee push delivery. Supported macOS hosts can enable keep-awake in Connect Mobile; the host must remain awake and reachable for interactive access.
+Mobile also exposes pull request, workspace review, and reviewer-run views. Push notifications need mobile permission, an unmuted paired device, and a running daemon with network access to its push service. Pairing alone does not guarantee push delivery. Supported macOS hosts can enable keep-awake in Connect Mobile; the host must remain awake and reachable for interactive access.
 
 ## If the phone cannot connect
 
@@ -57,7 +57,7 @@ Mobile also exposes PR/workspace review and reviewer-run views. Push notificatio
 | Connection drops after sleep or app exit | Wake the desktop and reopen AO. On supported Macs, enable keep-awake if appropriate; the app and daemon still need to run. Reopen the session after the network returns. |
 | No push alerts | Allow phone notifications, check that the device is not muted, and confirm the daemon can reach its push service. Open the app directly for interactive work. |
 
-This walkthrough was checked against the desktop pairing UI and daemon mobile bridge source at the v0.13.3 desktop baseline on 3 October 2026. The separate phone app source and a physical iPhone or Android device were not available for this review; an authenticated remote connector was not exercised either. The final test for your network is a real phone pairing and an off-Wi-Fi reconnect; do not share a QR screenshot to troubleshoot it.
+This walkthrough was checked against the desktop pairing UI, daemon mobile bridge, and the mobile app source at the v0.13.3 desktop baseline on 3 October 2026. A physical iPhone or Android device, authenticated production account, and remote connector were not exercised. The final test for your network is a real phone pairing and an off-Wi-Fi reconnect; do not share a QR screenshot to troubleshoot it.
 
 <Callout type="info">
 	Chat and Terminal UI are two controllers for the same AO session. Switching does not create a new worktree, but a first switch from Terminal UI to Chat does not reconstruct old terminal screen output as structured messages.

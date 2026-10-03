@@ -7,9 +7,11 @@ This guide uses the GitHub tracker and your existing GitHub authentication. GitL
 
 ## Configure intake
 
-Tracker intake needs two separate opt-ins, and both default to off. The daemon must be started with `AO_TRACKER_INTAKE=on`, and the project must carry an assignee rule. The assignee rule keeps one project from draining its whole backlog. The daemon flag exists because intake starts one worker session per eligible issue with nothing bounding how many run at once, so the decision belongs to whoever runs the daemon rather than to each project.
+Intake needs two opt-ins, and both default to off: enable it on the daemon and configure a project with an assignee filter. Each matching issue can start a worker session, so use the filter to limit which issues AO handles.
 
-Configure the project:
+For the desktop app, add `AO_TRACKER_INTAKE=on` to the environment your login shell exports, such as `~/.zshrc`, then relaunch AO. The app passes that environment to its daemon. For a standalone daemon, set the variable in its launch environment and restart it.
+
+Then configure the project. `ao project set-config` replaces the full project config, so read the [full-config warning](/configuration/projects#update-from-the-cli) before using it.
 
 ```bash
 ao project set-config my-app \
@@ -20,11 +22,9 @@ ao project set-config my-app \
 
 The provider defaults to `github`. When the repository is omitted, AO can derive it from the project's Git remote. Use `ao project get my-app --json` to inspect the stored configuration.
 
-With `AO_TRACKER_INTAKE` unset, that configuration is still stored and validated, but no sessions are spawned. The daemon logs a warning at startup naming how many projects are in that state.
+If `AO_TRACKER_INTAKE` is unset, the project config is still stored and validated, but no sessions are spawned. The daemon logs a warning at startup naming how many projects have intake configured while the flag is off.
 
-On the desktop app you do not start the daemon yourself, so set the variable where your login shell will export it, for example in `~/.zshrc`, then relaunch the app. AO probes the login shell and passes its environment through to the daemon it spawns. Note that the warning above is only written at daemon startup, so enabling intake on a project while the app is already running produces no notice until the next launch.
-
-`set-config` replaces the full stored config even when using focused flags. Preserve existing roles, setup, and review settings when enabling intake. For a single GitLab issue, use `ao spawn --project my-app --name issue-42 --tracker-provider gitlab --issue 42`; intake itself is optional.
+For one GitLab issue without enabling intake, use `ao spawn --project my-app --name issue-42 --tracker-provider gitlab --issue 42`.
 
 ## Current boundary
 

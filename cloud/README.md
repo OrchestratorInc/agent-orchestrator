@@ -1,8 +1,9 @@
 # AO Cloud
 
-AO Cloud's control-plane service lives in this public repository. Desktop
-Cloud availability still depends on an enabled build, account access, and a
-reachable environment. See the [user guide](../frontend/src/docs/content/guides/cloud.mdx)
+AO Cloud is the hosted service for running AO workers in remote workspaces. Its
+control-plane service lives in this public repository. Desktop Cloud
+availability still depends on an enabled build, account access, and a reachable
+environment. See the [user guide](../frontend/src/docs/content/guides/cloud.mdx)
 and [Cloud development](../docs/cloud-development.md). The service contains:
 
 - the 28-table PostgreSQL founding schema;
@@ -18,13 +19,15 @@ and [Cloud development](../docs/cloud-development.md). The service contains:
   webhook processing; and
 - Dockerized local development plus an isolated hosted-staging launcher.
 
-The repository root also contains the authenticated Next.js Cloud UI. It uses
-the public `@aoagents/cloud-client` and `@aoagents/product-ui` sources for
-contracts, transport, status mapping, board layout, cards, and agent identity.
-It supports organization switching, projects, durable sessions, search, chat
-history, live event streams, worker turns, and replica-safe workspace files.
-The Cloud UI also persists personal GitHub OAuth, installation confirmation,
-repository grants, PR/issue synchronization, and sharing behavior. See
+The optional authenticated Next.js Cloud web app lives in the separate
+`private/ao-cloud` checkout. It uses the public `@aoagents/cloud-client` and
+`@aoagents/product-ui` sources for contracts, transport, status mapping, board
+layout, cards, and agent identity. Its current web flow supports organization
+switching, projects, durable sessions, search, chat history, live event streams,
+worker turns, and replica-safe workspace files. It also persists personal GitHub
+OAuth, installation confirmation, repository grants, PR/issue synchronization,
+and sharing behavior. The web app is not required for the public desktop or
+control-plane development loop. See
 [`docs/control-plane.md`](docs/control-plane.md) for durable-state and cluster
 behavior, [`docs/deployment.md`](docs/deployment.md) for staging and production
 deployments, and [`docs/cloudagent-v1-parity.md`](docs/cloudagent-v1-parity.md)
@@ -58,6 +61,22 @@ then writes the project to the current environment. Worker execution remains
 isolated to that environment, and each checkout obtains a fresh
 production-broker grant rather than treating the local project row as
 repository authority.
+
+## Costs and capacity
+
+This repository does not define customer pricing, billing, or account
+entitlements. The desktop does not include a billing page, and provider defaults
+in local configuration files are development settings rather than customer
+plans. Ask the team that granted Cloud access or the relevant organization admin
+for current pricing and limits.
+
+The service enforces a configurable concurrent-sandbox limit for each
+organization. The API reports an organization quota as
+`SANDBOX_QUOTA_EXCEEDED`. Provider capacity can be lower. Provider capacity
+errors are separate, and the service retries them in the background.
+Archive an unused session and wait for provider teardown before retrying. The
+deployment's configured limit and the provider's own account capacity are
+separate values.
 
 ## Hosted ingress
 
@@ -102,12 +121,12 @@ exposes the API on
 the stack running. Local auth is enabled; point the desktop app at it with
 `AO_CLOUD_OFFERING=on AO_CLOUD_CONTROL_PLANE_URL=http://127.0.0.1:8081 npm run dev`
 from `frontend/` and register a development email/password account in-app to
-sign in. The optional Next.js Cloud UI on `http://127.0.0.1:3000`
-requires the (uninitialized) `private/ao-cloud` submodule and is not needed for
-desktop-app testing; when run it receives only an HttpOnly session cookie. The
-Docker socket is mounted only into the control-plane container so it can create
-sibling workers; worker containers never receive the socket. Local Docker
-workers do not auto-pause.
+sign in. The optional Next.js web app from `private/ao-cloud` can run at
+`http://127.0.0.1:3000`; it requires that uninitialized submodule and is not
+needed for desktop-app testing. When run, it receives only an HttpOnly session
+cookie. The Docker socket is mounted only into the control-plane container so
+it can create sibling workers; worker containers never receive the socket.
+Local Docker workers do not auto-pause.
 
 Use `npm run cloud:local:down` to stop containers while retaining data and
 `npm run cloud:local:reset` to stop them and delete the local database

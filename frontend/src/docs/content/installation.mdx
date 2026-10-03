@@ -11,18 +11,33 @@ On your phone, install [AO Mobile for iPhone or iPad](https://apps.apple.com/app
 
 The desktop app is the canonical install path. It owns the local daemon, requires no global `ao` command, and checks for updates after launch and while it is running.
 
+### Optional macOS install with Homebrew
+
+The desktop download above is the recommended install. On macOS, you can also install the existing Homebrew cask:
+
+```bash
+brew install --cask agentwrapper/tap/agent-orchestrator
+```
+
+The desktop app normally updates itself. To refresh a Homebrew-managed install, update Homebrew and then upgrade the cask:
+
+```bash
+brew update
+brew upgrade --cask agentwrapper/tap/agent-orchestrator
+```
+
 ## Prerequisites
 
 | Tool | When you need it | Why |
 | --- | --- | --- |
 | Git | Repository projects | Creates and manages isolated worktrees and branches. |
 | GitHub CLI `gh` | GitHub projects | Uses your existing authentication for repository and pull-request operations. |
-| An agent harness | Agent sessions | Install a supported coding agent, such as Claude Code, Codex, Cursor, Aider, or OpenCode. See the [full harness catalog](/plugins/agents) for the current list and interface support. |
+| Coding agent (called a harness in AO) | Agent sessions | Install a supported tool such as Claude Code, Codex, Cursor, Aider, or OpenCode. See the [agent catalog](/plugins/agents) for the current list and interface support. |
 | tmux | macOS preflight and legacy/fallback terminal sessions | Desktop macOS/Linux packages include it. Source launches may need system tmux; see [Runtime](/plugins/runtimes). |
 
-AO uses installed provider binaries and sign-ins. **Settings → Harnesses** offers setup and readiness checks for supported harnesses; some need installation or authentication outside AO. Unreal Agent is a built-in Chat-only exception, with its own platform and permission limits. See the [catalog](/plugins/agents).
+AO uses the coding agents and sign-ins already installed on your computer. **Settings → Harnesses** offers setup and readiness checks for supported agents; some need to be installed or signed in outside AO. Unreal Agent is a built-in Chat-only exception with its own platform and permission limits. See the [agent catalog](/plugins/agents).
 
-## Set Up AO
+## Set up AO
 
 <Steps>
 <Step>
@@ -43,7 +58,9 @@ gh auth login
 gh auth status
 ```
 
-Use an account that can read the repository and perform the branch and pull-request actions you expect the agent to take. GitLab projects instead use a GitLab token or authenticated `glab`; see [source-control setup](/plugins/scm).
+Use an account that can read the repository and perform the branch and pull-request actions you expect the agent to take.
+
+For GitLab, sign in with a GitLab token or `glab`. See [source-control setup](/plugins/scm).
 
 </Step>
 <Step>
@@ -59,7 +76,7 @@ Chat support depends on the harness and installed version; see the [agent capabi
 
 ### Add a project
 
-In the desktop app, choose **Add project** and select an existing local git repository. AO registers the project without moving your original checkout. New worker sessions receive their own isolated worktrees.
+In the desktop app, choose **Add project** and select an existing local Git repository. AO registers it without moving your original checkout. Each worker session gets its own isolated worktree.
 
 </Step>
 </Steps>
@@ -91,11 +108,11 @@ New users should install the desktop app directly instead.
 </div>
 </details>
 
-## Where AO Stores Data
+## Where AO stores data
 
 All AO application state lives under `~/.ao` by default, including the daemon database, run file, managed worktrees, Electron browser data, and mobile pairing configuration. Advanced installations can override daemon paths with `AO_DATA_DIR` and `AO_RUN_FILE`.
 
-## Common Installation Problems
+## Common installation problems
 
 <Accordions>
 	<Accordion title="No agent is available">

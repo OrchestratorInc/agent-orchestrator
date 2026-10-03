@@ -36,12 +36,11 @@ Standalone workers support projectless work: `ao spawn --standalone --agent code
 ```bash
 ao project ls
 ao project get <project-id>
-ao project set-config <project-id> --worker-agent codex
 ```
 
-`set-config` replaces the stored project configuration. Prefer project settings in the desktop app for interactive edits, or first inspect `ao project get <project-id> --json` before replacing configuration in a script. `--config-json` accepts a JSON object string, not a filename.
+Use Project Settings in the desktop app for interactive changes. The CLI's `set-config` command replaces the entire project config, even when you use focused flags. Before using it, read [the CLI update warning](/configuration/projects#update-from-the-cli). The CLI ignores unknown JSON keys and drops existing effort values; use Project Settings or the daemon API to view or change effort.
 
-Current project configuration is typed. It covers the base branch, session prefix, environment variables, symlinks, setup commands, worker and orchestrator agents, agent options, project rules, reviewer agents, automatic review defaults, trusted canonical repository URLs, tracker intake, and container cleanup. The daemon rejects unknown fields in direct API requests. The CLI's `--config-json` decoder currently ignores unknown keys before sending the replacement, so check the result after any CLI update; a typo-only object can replace the configuration with an empty one.
+Project configuration has typed fields for the base branch, session prefix, environment variables, symlinks, setup commands, worker and orchestrator agents, agent options, project rules, reviewers, automatic review, trusted repository URLs, issue intake, and container cleanup. The daemon API rejects unknown fields. The CLI's `--config-json` decoder ignores unknown keys, so a typo can clear existing settings when the full config is replaced.
 
 See [Projects](/configuration/projects) for the current field reference.
 
@@ -68,7 +67,9 @@ Every session commits to one interface at a time:
 - **Chat** uses a structured, runtime-less provider controller with durable messages, activities, approvals, and usage.
 - **Terminal UI** runs the agent's native terminal interface through AO's terminal runtime.
 
-Choose the default for new sessions in **Settings → General**. Explicit session selection wins over that daemon default; the compatibility fallback is Terminal UI. Project `agentConfig.mode` controls provider execution mode, not Chat versus Terminal UI. You can also select it explicitly from the new-session flow or with `ao spawn --mode chat|tui`. Compatible Claude Code and Codex sessions can switch interfaces later without changing the AO session or worktree.
+Choose the default for new sessions in **Settings → General**. A choice made for a specific task takes precedence. If a requested interface is unavailable, AO uses Terminal UI as its compatibility fallback.
+
+Project `agentConfig.mode` selects a provider execution mode. It does not select Chat or Terminal UI. Choose the interface in the new-session flow or with `ao spawn --mode chat|tui`. Compatible Claude Code and Codex sessions can switch interfaces without changing the AO session or worktree.
 
 Manage recurring tasks in **Automations**, reusable project actions in **Cues**, installed provider readiness in **Settings → Harnesses**, and persistent profiles/imports in **Settings → Browser**. These features have their own settings/resources rather than legacy YAML keys.
 

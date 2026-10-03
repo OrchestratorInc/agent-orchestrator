@@ -48,7 +48,7 @@ Download the latest AO desktop app for your platform. AO checks for updates auto
 | Linux (Fedora/RHEL)   | [Download](https://github.com/Untrivial-ai/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.rpm)      |
 
 On macOS, if the app will not open and says the developer cannot be verified, right-click it and choose **Open**, then **Open** again.
-If that still does not open it, please [open an issue](https://github.com/Untrivial-ai/agent-orchestrator/issues/new?template=bug_report.yml) with Gatekeeper diagnostics — see the [installation guide](https://docs.orchestrator.inc/installation) for what to include.
+If that still does not open it, please [open an issue](https://github.com/Untrivial-ai/agent-orchestrator/issues/new?template=bug_report.yml) with Gatekeeper diagnostics. See the [installation guide](https://docs.orchestrator.inc/installation) for what to include.
 
 Open Agent Orchestrator and point it at the repository you want AO to manage. The desktop app runs the daemon for you, so no CLI is required. See the [installation guide](https://docs.orchestrator.inc/installation) for agent CLI setup and troubleshooting.
 
@@ -251,7 +251,7 @@ AO uses limited product usage and reliability metrics designed to exclude projec
 
 AO also shares the GitHub username signed in to its GitHub integration on session-start events, so we can see which developers are most active and reach out for feedback. AO only sends a personal (human) account, never an organization or a bot token, and sends nothing if no GitHub token is available. The handle is part of product telemetry and has no separate control; turning telemetry off stops it along with everything else.
 
-AO leaves PostHog's IP-based location derivation enabled, so coarse geography (country, and where available region and city) is available in aggregate to understand which areas AO is used in. AO never resolves or sends precise location and does not store your IP address; this is not tied to your GitHub handle, and turning telemetry off stops it with everything else. [Learn more about telemetry and privacy](docs/telemetry.md).
+AO leaves PostHog's IP-based location derivation enabled, so coarse geography (country, and where available region and city) is available in aggregate to understand which areas AO is used in. PostHog may associate that geography with other events from the same installation, including a session-start event carrying your GitHub handle. AO never resolves or sends precise location and does not store your IP address. Turning telemetry off stops it with everything else. [Learn more about telemetry and privacy](docs/telemetry.md).
 
 ## License
 
