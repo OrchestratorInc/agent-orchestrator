@@ -367,24 +367,20 @@ function isDeferredReviewFile(file: WorkspaceFileSummary) {
 	return file.size > 512 * 1024 || /^(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|go\.sum|cargo\.lock)$/.test(name);
 }
 
-function defaultReviewFiles(data: WorkspaceFilesResponse): { commitSha?: string; files: WorkspaceFileSummary[]; scope: WorkspaceDiffScope } {
+export function defaultWorkspaceReviewSelection(data: WorkspaceFilesResponse): { commitSha?: string; files: WorkspaceFileSummary[]; scope: WorkspaceDiffScope } {
 	// The Files tab count can be seeded from a files array alone. Prefetch only
 	// runs against a full workspace response.
 	const sections = data.sections;
 	if (!sections) return { scope: "combined", files: [] };
-	if (sections.unstaged.length > 0) return { scope: "unstaged", files: sections.unstaged };
-	if (sections.staged.length > 0) return { scope: "staged", files: sections.staged };
+	const files = (data.files ?? []).filter(isChangedWorkspaceFile);
+	if (files.length > 0) return { scope: "combined", files };
 	const commit = data.commits?.[0];
 	if (commit) return { scope: "committed", commitSha: commit.sha, files: commit.files ?? [] };
-	const untracked = new Set(sections.untracked.map((file) => file.path));
-	return {
-		scope: "combined",
-		files: (data.files ?? []).filter((file) => file.status !== "unmodified" && !untracked.has(file.path)),
-	};
+	return { scope: "combined", files };
 }
 
 export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClient, sessionId: string, data: WorkspaceFilesResponse, hostId?: string) {
-	const selection = defaultReviewFiles(data);
+	const selection = defaultWorkspaceReviewSelection(data);
 	const files = selection.files.filter((file) => !isDeferredReviewFile(file)).slice(0, REVIEW_PREFETCH_BATCH_SIZE * REVIEW_PREFETCH_BATCHES);
 	if (files.length === 0) return;
 	const token = `${data.workspaceVersion ?? ""}:${selection.scope}:${selection.commitSha ?? ""}:${files.map((file) => file.path).join("\n")}`;

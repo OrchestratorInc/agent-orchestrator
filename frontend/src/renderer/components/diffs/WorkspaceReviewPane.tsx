@@ -5,6 +5,7 @@ import { CodeView } from "@pierre/diffs/react";
 import { ChevronRight, ChevronsDownUp, ChevronsUpDown, FileCode2, GitCommitHorizontal, MessageSquarePlus, MoreVertical, Pencil } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
+	defaultWorkspaceReviewSelection,
 	fetchWorkspaceFileRevision,
 	sessionWorkspaceDiffsQueryOptions,
 	type WorkspaceDiffScope,
@@ -91,10 +92,8 @@ function sectionFiles(data: WorkspaceFilesResponse, scope: WorkspaceDiffScope): 
 }
 
 function initialReviewSelection(data: WorkspaceFilesResponse): { commitSha?: string; scope: WorkspaceDiffScope } {
-	if (sectionFiles(data, "combined").length === 0 && data.commits[0]) {
-		return { scope: "committed", commitSha: data.commits[0].sha };
-	}
-	return { scope: "combined" };
+	const { scope, commitSha } = defaultWorkspaceReviewSelection(data);
+	return { scope, commitSha };
 }
 
 function isDeferredByDefault(file: WorkspaceFileSummary) {

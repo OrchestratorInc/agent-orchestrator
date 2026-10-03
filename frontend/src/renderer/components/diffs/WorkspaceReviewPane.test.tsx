@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkspaceFilesResponse } from "../../hooks/useSessionWorkspaceFiles";
+import { prefetchDefaultWorkspaceReviewDiffs, type WorkspaceFilesResponse } from "../../hooks/useSessionWorkspaceFiles";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
 import { TooltipProvider } from "../ui/tooltip";
 import { WorkspaceReviewPane } from "./WorkspaceReviewPane";
@@ -126,6 +126,18 @@ describe("WorkspaceReviewPane", () => {
 				groups: [{ repository: "", patch: "diff --git a/src/App.tsx b/src/App.tsx\n", truncated: false, includedPaths: ["src/App.tsx"], deferred: [] }],
 			},
 		});
+	});
+
+	it("renders the prefetched default review immediately without requesting the diff again", async () => {
+		const data = workspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false }]);
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		await prefetchDefaultWorkspaceReviewDiffs(client, "sess-1", data);
+		expect(postMock).toHaveBeenCalledTimes(1);
+		render(<QueryClientProvider client={client}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
+		expect(screen.getByTestId("code-view")).toBeInTheDocument();
+		expect(screen.queryByText("Loading diff...")).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" })).toBeInTheDocument());
+		expect(postMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("requests grouped patches and renders a continuous review for a selected commit", async () => {
