@@ -33,7 +33,7 @@ description: Common questions about the current Agent Orchestrator desktop produ
 	</Accordion>
 
 	<Accordion title="Can I expose AO on a remote server?">
-		Do not expose the primary daemon listener. It is unauthenticated and fixed to `127.0.0.1`. Connect Mobile creates a separate authenticated path. Its direct LAN listener is plaintext for trusted networks; available secure Tailscale or managed connector endpoints support remote pairing. See [Connect Mobile](/configuration/remote-access).
+		Do not expose the primary daemon listener. It is unauthenticated and fixed to `127.0.0.1`. Connect Mobile creates a separate authenticated path. Its direct LAN listener is plaintext for trusted networks; an advertised managed HTTPS endpoint supports remote pairing. The current Tailscale pairing flow has additional limits, especially on iPhone. See [Connect Mobile](/configuration/remote-access).
 	</Accordion>
 
 	<Accordion title="What does AO cost?">

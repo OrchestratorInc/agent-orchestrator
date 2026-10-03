@@ -11,6 +11,11 @@ derives its comparison hash in memory, rather than persisting only a hash.
 See the [current access guide](../../frontend/src/docs/content/configuration/remote-access.mdx)
 and [identity-probe ADR](0003-unauthenticated-identity-probe.md). The historical
 decision below is retained for context.
+The current v2 Pairing QR carries the rotating bearer token, host identity, and all
+advertised endpoints in its URI fragment, so the QR or copied link is sensitive. The
+mobile app races those endpoints and supports multiple paired desktop records. The
+historical non-secret QR and out-of-band password wording below remains the original
+decision record.
 
 ## Context
 

@@ -3,7 +3,7 @@ title: GitHub issue intake
 description: Opt-in, assignee-scoped worker creation from GitHub issues.
 ---
 
-This guide uses the GitHub tracker and your existing GitHub authentication. GitLab is also supported; select the provider explicitly for issue spawning or intake and follow [GitLab authentication](/plugins/scm).
+This guide uses the GitHub tracker and your existing GitHub authentication. GitLab is also supported. Follow [GitLab authentication](/plugins/scm) and use the provider selection described below.
 
 ## Configure intake
 
@@ -20,7 +20,22 @@ ao project set-config my-app \
   --tracker-assignee alice
 ```
 
-The provider defaults to `github`. When the repository is omitted, AO can derive it from the project's Git remote. Use `ao project get my-app --json` to inspect the stored configuration.
+When `trackerIntake.provider` is omitted, AO infers the provider from the project's Git remote. GitHub hosts select `github`; other remote hosts select `gitlab`. An empty or unparseable remote falls back to `github`. When the repository is omitted, AO can also derive it from that remote.
+
+For an explicit GitLab intake configuration, set `trackerIntake.provider` to `gitlab` in the full configuration object through the daemon API. The CLI has no `--tracker-provider` flag on `project set-config`; that flag belongs to `spawn`. If you use `--config-json`, preserve all other project settings and heed the effort-loss warning above. The intake portion of the object is:
+
+```json
+{
+  "trackerIntake": {
+    "enabled": true,
+    "provider": "gitlab",
+    "repo": "group/project",
+    "assignee": "alice"
+  }
+}
+```
+
+This is a fragment to merge into the full configuration, not a replacement for it. Use `ao project get my-app --json` to inspect the stored configuration, keeping in mind that its output omits effort.
 
 If `AO_TRACKER_INTAKE` is unset, the project config is still stored and validated, but no sessions are spawned. The daemon logs a warning at startup naming how many projects have intake configured while the flag is off.
 
@@ -28,4 +43,4 @@ For one GitLab issue without enabling intake, use `ao spawn --project my-app --n
 
 ## Current boundary
 
-Matching issues may create sessions and provide issue context. The current intake path is read-only: it does not post comments, assign workflow states, or close issues after a session finishes. PR and CI observation belongs to AO's separate [GitHub SCM capability](/plugins/scm/github).
+Matching issues may create sessions and provide issue context. The current intake path is read-only: it does not post comments, assign workflow states, or close issues after a session finishes. PR and CI observation belongs to AO's separate [source-control capability](/plugins/scm).

@@ -192,21 +192,11 @@ AO 与你现有的编程智能体和源代码管理流程配合使用。智能�
 
 ## 报告 bug
 
-推荐的 bug 报告方式是让你的编程智能体遵循仓库中的 [bug-triage skill](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md)。它会指导智能体在当前代码上复现问题、收集诊断信息、跟踪相关代码路径、搜索重复 issue，并提交或更新一份详细的 GitHub issue。
+[提交 bug 报告](https://github.com/Untrivial-ai/agent-orchestrator/issues/new?template=bug_report.yml)时，请使用你自己的 GitHub 账号。用自己的话写几句话，说明你做了什么以及发生了什么问题即可。如果有的话，请补充预期结果、复现步骤、AO 版本和操作系统，或附上截图。这些信息很有帮助，但不是必需的。
 
-无论你使用本地编程智能体，还是 Discord 上的 AO Bot，都请附上截图并尽可能提供完整的相关信息。说明发生了什么、在何时何处发生、复现步骤、操作系统和 AO 版本，以及问题是每次都会出现还是偶尔出现。这样智能体才更有可能复现 bug，并提交一份具有可操作性的报告。
+本地编程智能体可以使用 [bug-triage skill](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md)帮助你整理报告和收集证据。Issue 正文只保留你的观察；智能体收集的日志、数据库摘录和调查笔记应放在清楚标注的附件中。请在使用自己的账号提交前检查草稿。不要要求 AO Bot 代你提交 issue，因为需要保留报告者归属。
 
-```text
-请阅读以下 skill 并遵循其中的说明：
-https://github.com/Untrivial-ai/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md
-请复现并分诊这个 bug，然后提交或更新 GitHub issue。上下文：<发生了什么、时间、位置、复现步骤、操作系统、AO 版本和出现频率>。截图：<附上所有可用截图>。
-```
-
-你也可以在 Discord 的 [bug-triaging 频道](https://discord.com/channels/1476302178913357958/1491735678156013588)中报告 bug。标记 `@AO Bot#8425`，描述发生了什么，并要求它使用 bug-triage skill。
-
-```text
-@AO Bot#8425 请使用 bug-triage skill 复现并分诊这个 bug，然后提交或更新 GitHub issue。上下文：<发生了什么、时间、位置、复现步骤、操作系统、AO 版本和出现频率>。截图：<附上所有可用截图>。
-```
+如果需要帮助描述问题，可以加入 [Discord bug-triaging 频道](https://discord.com/channels/1476302178913357958/1491735678156013588)。更多信息请参阅[贡献指南](../CONTRIBUTING.md#bugs-and-features)。
 
 ## 开发与贡献
 

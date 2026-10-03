@@ -942,8 +942,9 @@ The daemon runs two independent HTTP listeners sharing the same chi router:
    Loopback-gated shutdown, telemetry, mobile-control, and browser-control routes
    remain unavailable. Exactly `GET /api/v1/identity` is public for host and
    contract verification. Direct LAN transport is plaintext for trusted
-   networks. Managed cloudflared and Tailscale TLS endpoints wrap the
-   authenticated mobile path. The rotating password is persisted in a mode-`0600`
+   networks. A managed cloudflared HTTPS endpoint wraps the authenticated mobile
+   path. The current v2 offer advertises Tailscale addresses as plaintext;
+   Tailscale TLS setup and QR advertisement remain incomplete. The rotating password is persisted in a mode-`0600`
    file at `AO_DATA_DIR/mobile/config.json` (normally
    `~/.ao/data/mobile/config.json`); its comparison hash is in memory. See the
    [current access guide](../frontend/src/docs/content/configuration/remote-access.mdx)

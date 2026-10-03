@@ -56,7 +56,7 @@ Security properties:
 - The LAN listener is off by default and exists only while Connect Mobile is enabled.
 - It is protected by a rotating connection password.
 - Scanning the pairing QR fills the advertised host, port, connection password, and any secure transport mode automatically. Treat the QR as a bearer credential: do not share it or screenshots of it, and rotate the connection password if it is exposed.
-- Direct LAN traffic is plaintext and belongs on a trusted network. Available secure Tailscale or managed connector endpoints are described in [Connect Mobile](/configuration/remote-access).
+- Direct LAN traffic is plaintext and belongs on a trusted network. Managed HTTPS access and current Tailscale pairing limits are described in [Connect Mobile](/configuration/remote-access).
 - Daemon control, telemetry, and browser-control routes remain loopback-only.
 
 Mobile defaults new workers and orchestrators to Chat when the selected harness supports it. Terminal UI remains available as a compatibility choice.

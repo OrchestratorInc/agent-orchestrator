@@ -112,9 +112,9 @@ surface (`npm run sqlc`, `npm run api`).
   lazy/non-blocking auth, per-PR polling with ETag guards and semantic diffing,
   feeding PR facts into lifecycle, which sends agent nudges for CI failures,
   review feedback, and merge conflicts
-  ([#75](https://github.com/aoagents/agent-orchestrator/issues/75),
-  [#108](https://github.com/aoagents/agent-orchestrator/issues/108),
-  [#109](https://github.com/aoagents/agent-orchestrator/issues/109)).
+  ([#75](https://github.com/Untrivial-ai/agent-orchestrator/issues/75),
+  [#108](https://github.com/Untrivial-ai/agent-orchestrator/issues/108),
+  [#109](https://github.com/Untrivial-ai/agent-orchestrator/issues/109)).
 - User-opened standalone and session side shells reconnect across daemon and
   desktop restarts while their runtimes live. Explicit close, confirmed exit,
   and session/worktree teardown remain cleanup boundaries; new trusted command
@@ -280,9 +280,9 @@ surface (`npm run sqlc`, `npm run api`).
 - **Full raw PR/tracker fact surfacing**: the SCM observer writes facts and the
   desktop consumes concise PR summaries, but exposing the full raw `pr_*` /
   `tracker_*` CDC events to live consumers
-  ([#110](https://github.com/aoagents/agent-orchestrator/issues/110)) and in
-  `ao session get` ([#111](https://github.com/aoagents/agent-orchestrator/issues/111))
+  ([#110](https://github.com/Untrivial-ai/agent-orchestrator/issues/110)) and in
+  `ao session get` ([#111](https://github.com/Untrivial-ai/agent-orchestrator/issues/111))
   is still open.
 
 Tracking milestone:
-[`rewrite`](https://github.com/aoagents/agent-orchestrator/milestone/1).
+[`rewrite`](https://github.com/Untrivial-ai/agent-orchestrator/milestone/1).

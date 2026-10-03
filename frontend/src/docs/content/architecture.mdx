@@ -5,6 +5,10 @@ description: How the Go daemon, Electron app, storage, controllers, and adapters
 
 Agent Orchestrator is a local, single-user system built around a long-running Go daemon. The Electron/React desktop app, optional CLI, and Expo mobile app connect to it over HTTP, server-sent events (SSE), and terminal streams.
 
+<Callout type="info">
+	This page is a technical reference for contributors and users who want to understand AO internals. For everyday controls and workflows, start with the [Dashboard guide](/dashboard).
+</Callout>
+
 ## System overview
 
 ```text
@@ -74,7 +78,7 @@ The primary daemon listener binds `127.0.0.1:3001` and is unauthenticated. It se
 
 Connect Mobile starts a second listener only when you enable it. The listener is protected by a bearer password and serves the mobile app API and terminal connection. It does not serve shutdown, telemetry, mobile-control, or browser-control routes.
 
-Direct connections use plain HTTP and are intended for trusted networks. Available Tailscale TLS and managed connector endpoints secure this authenticated listener for remote access. Only `GET /api/v1/identity` is public; the phone uses it to verify the computer and app version before sending the password. See [Connect Mobile](/configuration/remote-access).
+Direct connections use plain HTTP and are intended for trusted networks. A managed connector can provide an HTTPS endpoint to this authenticated listener for remote access. Current Tailscale pairing has additional limits described in the access guide. Only `GET /api/v1/identity` is public; the phone uses it to verify the computer and app version before sending the password. See [Connect Mobile](/configuration/remote-access).
 
 ## Terminal and browser bridges
 

@@ -89,9 +89,12 @@ CNAMEs and AWS-managed TLS:
 - production: `https://api.aoagents.dev` →
   `ao-cloud-production-public`
 
-ACM certificates in `eu-north-1` terminate TLS. Both ECS services run two
-healthy replicas, `/healthz` reports deployment identity, and `/readyz` verifies
-database connectivity plus draining state. Production also exposes
+ACM certificates in `eu-north-1` terminate TLS. The current release scripts request
+one configured task for each service, and the deployment verifier requires exactly
+one desired/running task and one healthy ALB target. This documents the enforced
+configuration; inspect the live service before operating. `/healthz` reports
+deployment identity, and `/readyz` verifies database connectivity plus draining state.
+Production also exposes
 `/github/healthz`, which validates the configured credentials and App identity
 with GitHub and returns `503` when GitHub is disabled, misconfigured, or
 unavailable. It is diagnostic only and is not an ALB target-health dependency.

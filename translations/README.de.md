@@ -192,19 +192,11 @@ Lade die neueste AO-Desktop-App für deine Plattform herunter. AO sucht automati
 
 ## Einen Bug melden
 
-Am besten meldest du einen Bug, indem du deinen Coding-Agenten bittest, dem [Bug-Triage-Skill](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md) des Repositorys zu folgen. Er führt den Agenten durch die Reproduktion mit dem aktuellen Code, die Sammlung von Diagnosedaten, die Untersuchung des relevanten Codepfads, die Suche nach Duplikaten und das Erstellen oder Aktualisieren eines detaillierten GitHub-Issues.
+[Melde einen Bug](https://github.com/Untrivial-ai/agent-orchestrator/issues/new?template=bug_report.yml) über dein eigenes GitHub-Konto. Ein paar Sätze in deinen eigenen Worten darüber, was du getan hast und was schiefgelaufen ist, reichen aus. Falls vorhanden, ergänze deine Erwartung, Schritte zur Reproduktion, AO-Version und Betriebssystem sowie einen Screenshot. Diese Angaben helfen, sind aber keine Voraussetzung.
 
-Egal, ob du einen lokalen Coding-Agenten oder AO Bot auf Discord fragst: Hänge Screenshots an und teile so viel relevanten Kontext wie möglich. Beschreibe, was wann und wo passiert ist, nenne Schritte zur Reproduktion, dein Betriebssystem, deine AO-Version und ob das Problem immer oder nur gelegentlich auftritt. So hat der Agent die besten Chancen, den Bug zu reproduzieren und einen hilfreichen Bericht zu erstellen.
+Ein lokaler Coding-Agent kann dir mit dem [Bug-Triage-Skill](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md) helfen, den Bericht zu präzisieren und Belege zu sammeln. Beschränke den Inhalt der Issue auf deine Beobachtungen. Vom Agenten gesammelte Logs, Datenbankauszüge und Untersuchungsnotizen gehören in klar gekennzeichnete Anhänge. Prüfe jeden Entwurf, bevor du ihn über dein eigenes Konto einreichst. Bitte AO Bot nicht, Issues in deinem Namen einzureichen, damit die Zuordnung zum Melder erhalten bleibt.
 
-```text
-Lies und befolge https://github.com/Untrivial-ai/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md. Bitte reproduziere und triagiere diesen Bug und erstelle oder aktualisiere anschließend das GitHub-Issue. Kontext: <was ist wann und wo passiert, Schritte zur Reproduktion, Betriebssystem, AO-Version und Häufigkeit>. Screenshots: <Screenshots anhängen>.
-```
-
-Du kannst einen Bug auch im [Bug-Triaging-Kanal auf Discord](https://discord.com/channels/1476302178913357958/1491735678156013588) melden. Erwähne `@AO Bot#8425`, beschreibe das Problem und bitte ihn, den Bug-Triage-Skill zu verwenden.
-
-```text
-@AO Bot#8425 Bitte reproduziere und triagiere diesen Bug mit dem Bug-Triage-Skill und erstelle oder aktualisiere anschließend das GitHub-Issue. Kontext: <was ist wann und wo passiert, Schritte zur Reproduktion, Betriebssystem, AO-Version und Häufigkeit>. Screenshots: <Screenshots anhängen>.
-```
+Wenn du Hilfe beim Beschreiben eines Problems brauchst, nutze den [Bug-Triage-Kanal auf Discord](https://discord.com/channels/1476302178913357958/1491735678156013588). Weitere Hinweise findest du in den [Beitragsrichtlinien](../CONTRIBUTING.md#bugs-and-features).
 
 ## Entwickeln und mitwirken
 

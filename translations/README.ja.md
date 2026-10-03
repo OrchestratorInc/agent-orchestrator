@@ -192,19 +192,11 @@ Agent Orchestrator を開き、AO に管理させたいリポジトリを指定�
 
 ## バグを報告する
 
-推奨するバグ報告方法は、コーディングエージェントに、このリポジトリの [bug-triage skill](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md) に従うよう依頼することです。この skill は、現在のコードで問題を再現し、診断情報を収集し、関連するコードパスを追跡し、重複を確認したうえで、詳細な GitHub Issue を新規作成または更新するようエージェントを導きます。
+[バグ報告を開く](https://github.com/Untrivial-ai/agent-orchestrator/issues/new?template=bug_report.yml)ときは、自分の GitHub アカウントを使ってください。何をして何が起きたのかを、自分の言葉で数文書けば十分です。期待した結果、再現手順、AO のバージョンと OS、スクリーンショットがあれば追加してください。これらは役立ちますが、必須ではありません。
 
-ローカルのコーディングエージェントに依頼する場合も、Discord の AO Bot に依頼する場合も、スクリーンショットを添付し、できるだけ多くの関連情報を共有してください。何が、どこで、いつ起きたのか、再現手順、OS と AO のバージョン、常に発生するのか断続的なのかを含めます。こうした情報があれば、エージェントが問題を再現し、担当者が対応しやすい報告を作成できる可能性が高まります。
+ローカルのコーディングエージェントには、[bug-triage skill](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md) を使って報告内容の整理や証拠の収集を手伝ってもらえます。Issue 本文は自分の観察に絞り、エージェントが集めたログ、データベースの抜粋、調査メモは内容が分かる添付ファイルに分けてください。自分のアカウントから送信する前に下書きを確認してください。AO Bot に代理で Issue を登録させないでください。報告者を正しく紐づける必要があります。
 
-```text
-Read and follow https://github.com/Untrivial-ai/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md. Please reproduce and triage this bug, then file or update the GitHub issue. Context: <what happened, where, when, reproduction steps, OS, AO version, and frequency>. Screenshots: <attach any screenshots>.
-```
-
-[Discord の bug-triaging チャンネル](https://discord.com/channels/1476302178913357958/1491735678156013588)から報告することもできます。`@AO Bot#8425` をタグ付けし、何が起きたかを説明して、bug-triage skill を使うよう依頼してください。
-
-```text
-@AO Bot#8425 Please reproduce and triage this bug using the bug-triage skill, then file or update the GitHub issue. Context: <what happened, where, when, reproduction steps, OS, AO version, and frequency>. Screenshots: <attach any screenshots>.
-```
+問題の説明について助けが必要な場合は、[Discord の bug-triaging チャンネル](https://discord.com/channels/1476302178913357958/1491735678156013588)に参加してください。詳しくは[コントリビューションガイド](../CONTRIBUTING.md#bugs-and-features)を参照してください。
 
 ## 開発とコントリビューション
 

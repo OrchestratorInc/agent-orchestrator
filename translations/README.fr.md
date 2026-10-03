@@ -192,19 +192,11 @@ Ouvrez Agent Orchestrator et sélectionnez le dépôt qu'AO doit gérer. L'appli
 
 ## Signaler un bug
 
-La méthode recommandée pour signaler un bug consiste à demander à votre agent de développement de suivre la [skill de triage des bugs](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md) du dépôt. Elle guide l'agent pour reproduire le problème sur le code actuel, recueillir les diagnostics, remonter le chemin de code concerné, rechercher les doublons et créer ou mettre à jour une issue GitHub détaillée.
+[Ouvrez un rapport de bug](https://github.com/Untrivial-ai/agent-orchestrator/issues/new?template=bug_report.yml) depuis votre propre compte GitHub. Quelques phrases, avec vos propres mots, sur ce que vous avez fait et ce qui s'est mal passé suffisent. Ajoutez si possible ce que vous attendiez, les étapes pour reproduire le problème, votre version d'AO et votre système d'exploitation, ou une capture d'écran. Ces informations sont utiles, mais facultatives.
 
-Que vous sollicitiez un agent de développement local ou AO Bot sur Discord, joignez des captures d'écran et partagez autant d'informations pertinentes que possible. Indiquez ce qui s'est passé, où et quand, les étapes de reproduction, votre système d'exploitation, votre version d'AO et si le problème est systématique ou intermittent. L'agent aura ainsi les meilleures chances de reproduire le bug et de rédiger un rapport exploitable.
+Un agent de développement local peut vous aider à préciser le rapport et à recueillir des éléments avec la [skill de triage des bugs](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md). Limitez le contenu de l'issue à vos observations. Placez les journaux, extraits de base de données et notes d'enquête recueillis par l'agent dans des pièces jointes clairement identifiées. Relisez le brouillon avant de l'envoyer depuis votre propre compte. Ne demandez pas à AO Bot de créer une issue à votre place : l'auteur du signalement doit rester identifié.
 
-```text
-Lis et suis https://github.com/Untrivial-ai/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md. Reproduis ce bug et effectue son triage, puis crée ou mets à jour l'issue GitHub. Contexte : <ce qui s'est passé, où, quand, étapes de reproduction, système d'exploitation, version d'AO et fréquence>. Captures d'écran : <joindre les captures disponibles>.
-```
-
-Vous pouvez également signaler un bug dans le [canal de triage des bugs sur Discord](https://discord.com/channels/1476302178913357958/1491735678156013588). Mentionnez `@AO Bot#8425`, décrivez le problème et demandez-lui d'utiliser la skill de triage des bugs.
-
-```text
-@AO Bot#8425 Reproduis ce bug et effectue son triage avec la skill de triage des bugs, puis crée ou mets à jour l'issue GitHub. Contexte : <ce qui s'est passé, où, quand, étapes de reproduction, système d'exploitation, version d'AO et fréquence>. Captures d'écran : <joindre les captures disponibles>.
-```
+Pour obtenir de l'aide afin de décrire un problème, rejoignez le [canal de triage des bugs sur Discord](https://discord.com/channels/1476302178913357958/1491735678156013588). Consultez le [guide de contribution](../CONTRIBUTING.md#bugs-and-features) pour plus de détails.
 
 ## Développer et contribuer
 

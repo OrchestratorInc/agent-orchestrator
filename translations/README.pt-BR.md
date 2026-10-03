@@ -192,21 +192,11 @@ Abra o Agent Orchestrator e indique o repositório que você deseja que o AO ger
 
 ## Relatar um bug
 
-A forma recomendada de relatar um bug é pedir ao seu agente de programação que siga a [skill de triagem de bugs](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md) do repositório. Ela orienta o agente a reproduzir o problema no código atual, coletar diagnósticos, rastrear o caminho relevante no código, verificar duplicatas e abrir ou atualizar uma issue detalhada no GitHub.
+[Abra um relatório de bug](https://github.com/Untrivial-ai/agent-orchestrator/issues/new?template=bug_report.yml) usando sua própria conta do GitHub. Algumas frases, escritas com suas próprias palavras, sobre o que você fez e o que deu errado são suficientes. Se tiver, inclua o que esperava, as etapas para reproduzir, a versão do AO e seu sistema operacional, ou uma captura de tela. Essas informações ajudam, mas não são obrigatórias.
 
-Tanto ao pedir ajuda a um agente de programação local quanto ao AO Bot no Discord, anexe capturas de tela e compartilhe o máximo possível de contexto relevante. Inclua o que aconteceu, onde e quando aconteceu, as etapas para reproduzir, seu sistema operacional e a versão do AO, além de informar se o problema acontece sempre ou de forma intermitente. Isso dá ao agente a melhor chance de reproduzir o bug e registrar um relato acionável.
+Um agente de programação local pode ajudar você a esclarecer o relatório e reunir evidências usando a [skill de triagem de bugs](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md). Mantenha o texto da issue focado nas suas observações. Coloque logs, trechos do banco de dados e notas de investigação coletados pelo agente em anexos claramente identificados. Revise o rascunho antes de enviá-lo pela sua própria conta. Não peça ao AO Bot para abrir issues em seu nome; a atribuição do relato é importante.
 
-```text
-Leia esta skill e siga as instruções:
-https://github.com/Untrivial-ai/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md
-Reproduza e faça a triagem deste bug e, em seguida, abra ou atualize a issue no GitHub. Contexto: <o que aconteceu, onde, quando, etapas para reproduzir, sistema operacional, versão do AO e frequência>. Capturas de tela: <anexe as capturas disponíveis>.
-```
-
-Você também pode relatar um bug no [canal bug-triaging do Discord](https://discord.com/channels/1476302178913357958/1491735678156013588). Marque `@AO Bot#8425`, descreva o que aconteceu e peça que ele use a skill de triagem de bugs.
-
-```text
-@AO Bot#8425 Reproduza e faça a triagem deste bug usando a skill de triagem de bugs e, em seguida, abra ou atualize a issue no GitHub. Contexto: <o que aconteceu, onde, quando, etapas para reproduzir, sistema operacional, versão do AO e frequência>. Capturas de tela: <anexe as capturas disponíveis>.
-```
+Para obter ajuda ao descrever um problema, participe do [canal de triagem de bugs no Discord](https://discord.com/channels/1476302178913357958/1491735678156013588). Consulte o [guia de contribuição](../CONTRIBUTING.md#bugs-and-features) para mais detalhes.
 
 ## Desenvolver e contribuir
 

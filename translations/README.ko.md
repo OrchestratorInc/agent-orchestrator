@@ -192,19 +192,11 @@ Agent Orchestrator를 열고 AO가 관리할 저장소를 지정하세요. 데�
 
 ## 버그 신고
 
-버그를 신고할 때는 코딩 에이전트에게 이 저장소의 [bug-triage skill](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md)을 따르도록 요청하는 방법을 권장합니다. 이 skill은 에이전트가 현재 코드에서 문제를 재현하고, 진단 정보를 수집하고, 관련 코드 경로를 추적하고, 중복 이슈를 확인한 뒤, 상세한 GitHub 이슈를 생성하거나 업데이트하도록 안내합니다.
+[버그 신고를 열 때](https://github.com/Untrivial-ai/agent-orchestrator/issues/new?template=bug_report.yml)는 본인의 GitHub 계정을 사용하세요. 무엇을 했고 어떤 문제가 발생했는지 자신의 말로 몇 문장만 적으면 됩니다. 예상한 결과, 재현 단계, AO 버전과 운영체제, 스크린샷이 있다면 추가하세요. 도움이 되지만 필수는 아닙니다.
 
-로컬 코딩 에이전트나 Discord의 AO Bot 중 어느 쪽에 요청하더라도 스크린샷을 첨부하고 가능한 한 많은 관련 정보를 공유하세요. 무엇이, 어디에서, 언제 발생했는지, 재현 단계, OS 및 AO 버전, 문제가 항상 발생하는지 간헐적으로 발생하는지를 포함하세요. 이런 정보는 에이전트가 버그를 재현하고 담당자가 바로 조치할 수 있는 보고서를 제출할 가능성을 높입니다.
+로컬 코딩 에이전트는 [bug-triage skill](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md)을 사용해 신고 내용을 정리하고 증거를 수집하는 일을 도울 수 있습니다. 이슈 본문에는 본인의 관찰만 담고, 에이전트가 수집한 로그, 데이터베이스 발췌, 조사 메모는 내용을 알 수 있는 별도 첨부 파일로 제공하세요. 본인 계정으로 제출하기 전에 초안을 검토하세요. AO Bot에게 대신 이슈를 등록해 달라고 요청하지 마세요. 신고자 정보가 정확히 남아야 합니다.
 
-```text
-Read and follow https://github.com/Untrivial-ai/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md. Please reproduce and triage this bug, then file or update the GitHub issue. Context: <what happened, where, when, reproduction steps, OS, AO version, and frequency>. Screenshots: <attach any screenshots>.
-```
-
-[Discord의 bug-triaging 채널](https://discord.com/channels/1476302178913357958/1491735678156013588)에서도 버그를 신고할 수 있습니다. `@AO Bot#8425`를 태그하고, 어떤 일이 발생했는지 설명한 뒤 bug-triage skill을 사용하도록 요청하세요.
-
-```text
-@AO Bot#8425 Please reproduce and triage this bug using the bug-triage skill, then file or update the GitHub issue. Context: <what happened, where, when, reproduction steps, OS, AO version, and frequency>. Screenshots: <attach any screenshots>.
-```
+문제 설명에 도움이 필요하면 [Discord bug-triaging 채널](https://discord.com/channels/1476302178913357958/1491735678156013588)을 이용하세요. 자세한 내용은 [기여 가이드](../CONTRIBUTING.md#bugs-and-features)를 참고하세요.
 
 ## 개발 및 기여
 
