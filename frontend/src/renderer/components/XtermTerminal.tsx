@@ -1574,7 +1574,12 @@ export function XtermTerminal(props: XtermTerminalProps) {
 				// focus from dialogs or other legitimately focused controls.
 				window.setTimeout(() => {
 					const host = hostRef.current;
-					if (!host || callbacksRef.current.isVisible === false || !canAutoFocusTerminal(host)) return;
+					if (
+						!host ||
+						callbacksRef.current.isVisible === false ||
+						callbacksRef.current.focusRequested === false ||
+						!canAutoFocusTerminal(host)
+					) return;
 					focusTerminal();
 				}, 0);
 			},

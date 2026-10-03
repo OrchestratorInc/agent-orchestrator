@@ -615,6 +615,41 @@ describe("XtermTerminal", () => {
 		await waitFor(() => expect(state.lastTerminal!.focus).toHaveBeenCalled());
 	});
 
+	it("respects an explicit focus opt-out when the cache requests activation focus", () => {
+		vi.useFakeTimers();
+		try {
+			let terminal: AttachableTerminal | undefined;
+			render(<XtermTerminal focusRequested={false} theme="dark" onReady={(ready) => { terminal = ready; }} />);
+			state.lastTerminal!.focus.mockClear();
+
+			act(() => terminal!.requestActivationFocus());
+			act(() => vi.runOnlyPendingTimers());
+
+			expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("rechecks the focus opt-out before a queued activation focus runs", () => {
+		vi.useFakeTimers();
+		try {
+			let terminal: AttachableTerminal | undefined;
+			const onReady = (ready: AttachableTerminal) => { terminal = ready; };
+			const { rerender } = render(<XtermTerminal focusRequested theme="dark" onReady={onReady} />);
+			act(() => vi.runOnlyPendingTimers());
+			state.lastTerminal!.focus.mockClear();
+
+			act(() => terminal!.requestActivationFocus());
+			rerender(<XtermTerminal focusRequested={false} theme="dark" onReady={onReady} />);
+			act(() => vi.runOnlyPendingTimers());
+
+			expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("does not steal focus from a dialog when the cache requests activation focus", () => {
 		vi.useFakeTimers();
 		try {
