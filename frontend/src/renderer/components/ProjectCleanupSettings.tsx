@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { clearTerminateSessionState } from "../hooks/useTerminateSession";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { Button } from "./ui/button";
@@ -33,6 +34,7 @@ export function ProjectCleanupSettings({ projectId, onSaveState }: { projectId: 
 
 function CleanupEditor({ project, onSaveState, onSaved }: { project: Project; onSaveState?: (state: ProjectSettingsSaveState) => void; onSaved: () => void }) {
 	const { t } = useTranslation();
+	const client = useQueryClient();
 	const initial = project.config?.preRemove ?? [];
 	const [steps, setSteps] = useState<string[]>(() => initial.length ? [...initial] : [""]);
 	const [saved, setSaved] = useState(() => JSON.stringify(initial));
@@ -60,7 +62,12 @@ function CleanupEditor({ project, onSaveState, onSaved }: { project: Project; on
 			if (error) throw new Error(apiErrorMessage(error));
 			return data;
 		},
-		onSuccess: onSaved,
+		onSuccess: (result) => {
+			for (const sessionId of [...result.cleaned, ...result.alreadyGone]) {
+				clearTerminateSessionState(client, sessionId);
+			}
+			onSaved();
+		},
 	});
 	useEffect(() => {
 		onSaveState?.({
