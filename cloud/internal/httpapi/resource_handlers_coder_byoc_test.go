@@ -32,8 +32,15 @@ const (
 // connection.
 type stubCoderBYOCStore struct {
 	Store
-	captured domain.CreateSession
-	created  bool
+	captured                    domain.CreateSession
+	created                     bool
+	personalCredentialAvailable bool
+}
+
+func (s *stubCoderBYOCStore) UserAgentCredentialAvailable(
+	_ context.Context, _, _ string,
+) (bool, error) {
+	return s.personalCredentialAvailable, nil
 }
 
 func (s *stubCoderBYOCStore) GetProject(
@@ -51,8 +58,7 @@ func (s *stubCoderBYOCStore) ListProviderConnections(
 		Parameters: map[string]string{"region": "eu"},
 	})
 	return []domain.ProviderConnection{
-		// A valid coding-agent credential, so the handler's harness availability
-		// check passes.
+		// A legacy org-scoped coding-agent credential must not authorize launch.
 		{ID: "agent-1", Provider: "claude-code", Label: "default", ValidationState: "valid"},
 		{ID: byocConnID, Provider: sandbox.ProviderCoder, Label: "default", Config: orgCoder, ValidationState: "valid"},
 	}, nil
@@ -105,7 +111,7 @@ func byocCreateSessionRequest(t *testing.T) *http.Request {
 // and provisions against the org's deployment, not the env default.
 func TestCreateSessionBindsOrgCoderConnection(t *testing.T) {
 	t.Parallel()
-	store := &stubCoderBYOCStore{}
+	store := &stubCoderBYOCStore{personalCredentialAvailable: true}
 	srv := newBYOCServer(store)
 
 	rec := httptest.NewRecorder()
@@ -128,5 +134,16 @@ func TestCreateSessionBindsOrgCoderConnection(t *testing.T) {
 		profile.TemplateID != byocTemplate || profile.AgentName != byocAgentName ||
 		profile.DurableRoot != byocDurableDir || profile.Parameters["region"] != "eu" {
 		t.Fatalf("stamped profile did not use the org override: %+v", profile)
+	}
+}
+
+func TestCreateSessionRejectsOrgOnlyAgentCredential(t *testing.T) {
+	t.Parallel()
+	store := &stubCoderBYOCStore{}
+	srv := newBYOCServer(store)
+	rec := httptest.NewRecorder()
+	srv.createSession(rec, byocCreateSessionRequest(t))
+	if rec.Code != http.StatusUnprocessableEntity || store.created {
+		t.Fatalf("org-only launch: status=%d created=%v body=%s", rec.Code, store.created, rec.Body.String())
 	}
 }

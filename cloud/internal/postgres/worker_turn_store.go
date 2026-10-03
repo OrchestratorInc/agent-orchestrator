@@ -493,8 +493,8 @@ func (s *Store) FinishWorkerTurn(
 	return alreadyFinished, err
 }
 
-// WorkerAgentCredential returns only the valid default credential selected by
-// the current session's harness. The encrypted bytes stay opaque to the store.
+// WorkerAgentCredential returns the session creator's valid personal credential
+// for the selected harness. The encrypted bytes stay opaque to the store.
 func (s *Store) WorkerAgentCredential(
 	ctx context.Context,
 	orgID, sessionID, workerID string,
@@ -505,42 +505,6 @@ func (s *Store) WorkerAgentCredential(
 		if err := requireCurrentWorker(ctx, tx, orgID, sessionID, workerID, epoch); err != nil {
 			return err
 		}
-		err := tx.QueryRow(
-			ctx,
-			`SELECT connection.provider,
-				COALESCE(connection.config->>'credentialType', ''),
-				connection.encrypted_secret,
-				connection.secret_nonce
-			FROM ao_sessions session
-			JOIN ao_provider_connections connection
-				ON connection.org_id = session.org_id
-				AND connection.provider = session.harness
-				AND connection.label = $3
-				AND connection.validation_state = 'valid'
-			WHERE session.org_id = $1
-				AND session.id = $2
-				AND session.is_terminated = false`,
-			orgID,
-			sessionID,
-			defaultWorkerCredentialLabel,
-		).Scan(
-			&credential.Provider,
-			&credential.CredentialType,
-			&credential.EncryptedSecret,
-			&credential.Nonce,
-		)
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return err
-		}
-		// The org has no shared connection for this harness — fall back to
-		// the session creator's own personal connection, if they have one.
-		// This is what lets connecting a credential once make it usable
-		// across every org a person belongs to, not just the one they
-		// connected it in; it never overrides an org-level connection that
-		// exists, only fills in when there isn't one.
 		var harness string
 		var createdByUserID *string
 		if err := tx.QueryRow(
@@ -563,7 +527,7 @@ func (s *Store) WorkerAgentCredential(
 		); err != nil {
 			return err
 		}
-		err = tx.QueryRow(
+		err := tx.QueryRow(
 			ctx,
 			`SELECT connection.provider,
 				COALESCE(connection.config->>'credentialType', ''),
