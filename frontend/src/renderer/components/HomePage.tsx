@@ -1,7 +1,7 @@
 import type { ProjectSource } from "@aoagents/product-ui";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Bot, Cloud, Folder, Folders, FolderOpen, GitFork, Star } from "lucide-react";
+import { AlertTriangle, Cloud, Folder, Folders, FolderOpen, GitFork, MessageSquarePlus, Star } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
@@ -225,7 +225,7 @@ export function HomePage() {
 								onClick={() => requestSource("workspace")}
 							/>
 							<HomeActionCard
-								icon={<Bot strokeWidth={1.8} />}
+								icon={<MessageSquarePlus strokeWidth={1.8} />}
 								label={t("home.newStandaloneAgent")}
 								onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
 							/>
