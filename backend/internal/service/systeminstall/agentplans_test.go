@@ -3,6 +3,7 @@ package systeminstall
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -100,8 +101,8 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 27 {
-		t.Fatalf("got %d plans, want 27", len(plans))
+	if len(plans) != 33 {
+		t.Fatalf("got %d plans, want 33", len(plans))
 	}
 	seen := make(map[string]bool, len(plans))
 	for _, plan := range plans {
@@ -115,6 +116,64 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 		if plan.Available && (!plan.Automatic || plan.Command == "" || plan.Method == "") {
 			t.Fatalf("available plan %q is incomplete: %+v", plan.AgentID, plan)
 		}
+	}
+}
+
+func TestOpenCodeV2UsesOfficialRecipesAndWarnsAboutReplacingV1(t *testing.T) {
+	const replacement = "replaces the default OpenCode 1"
+	for _, tc := range []struct {
+		goos string
+		want map[string]string
+	}{
+		{goos: "darwin", want: map[string]string{
+			"homebrew":           "brew install anomalyco/tap/opencode-v2",
+			"npm":                "npm install -g @opencode/cli",
+			"official-installer": "https://opencode.ai/v2/install",
+		}},
+		{goos: "linux", want: map[string]string{
+			"npm":                "npm install -g @opencode/cli",
+			"official-installer": "https://opencode.ai/v2/install",
+		}},
+		{goos: "windows", want: map[string]string{
+			"npm": "npm install -g @opencode/cli",
+		}},
+	} {
+		t.Run(tc.goos, func(t *testing.T) {
+			s := newTestService(tc.goos, "brew", "npm", "bash")
+			s.installCapabilities = installCapabilitiesStub{prefix: "/Users/test/.npm", writable: true}
+			plans, err := s.AgentPlans(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got AgentPlan
+			for _, plan := range plans {
+				if plan.AgentID == "opencode-v2" {
+					got = plan
+					break
+				}
+			}
+			if got.AgentID == "" {
+				t.Fatal("OpenCode 2 install plan is missing")
+			}
+			if !strings.Contains(got.Notice, replacement) || got.DocumentationURL != "https://opencode.ai/v2/docs" {
+				t.Fatalf("OpenCode 2 plan metadata = %+v", got)
+			}
+			if len(got.Methods) != len(tc.want) {
+				t.Fatalf("OpenCode 2 methods = %+v, want %d official choices", got.Methods, len(tc.want))
+			}
+			for _, method := range got.Methods {
+				want, ok := tc.want[method.ID]
+				if !ok {
+					t.Fatalf("unexpected OpenCode 2 method %+v", method)
+				}
+				if !strings.Contains(method.Command, want) {
+					t.Errorf("%s command = %q, want %q", method.ID, method.Command, want)
+				}
+				if !strings.Contains(method.Notice, replacement) {
+					t.Errorf("%s notice = %q, want replacement warning", method.ID, method.Notice)
+				}
+			}
+		})
 	}
 }
 
@@ -142,6 +201,23 @@ func TestAgentPlanSelectsAvailableFallback(t *testing.T) {
 	}
 }
 
+func TestGeminiMacInstallUsesSupportedNPMRelease(t *testing.T) {
+	s := newTestService("darwin", "brew", "npm")
+	s.installCapabilities = installCapabilitiesStub{prefix: "/Users/test/.npm", writable: true}
+	planner, err := s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans := planner.agentMethodPlans(TargetGemini, AgentOperationInstall)
+	if len(plans) != 1 || plans[0].Method != "npm" || plans[0].Unsupported ||
+		strings.Join(plans[0].Command, " ") != "npm install -g @google/gemini-cli@latest" {
+		t.Fatalf("Gemini install plans = %+v, want supported npm release only", plans)
+	}
+	if _, err := planner.resolveAgentMethod(TargetGemini, "homebrew", AgentOperationInstall); err == nil {
+		t.Fatal("Homebrew method should not be offered while its Gemini CLI formula is below the required version")
+	}
+}
+
 func TestOfficialInstallerPlansAreAutomaticAndServerOwned(t *testing.T) {
 	tests := []struct {
 		goos        string
@@ -155,7 +231,9 @@ func TestOfficialInstallerPlansAreAutomaticAndServerOwned(t *testing.T) {
 		{"linux", TargetAider, []string{"sh"}, "https://aider.chat/install.sh", "sh"},
 		{"linux", TargetGrok, []string{"bash"}, "https://x.ai/cli/install.sh", "bash"},
 		{"linux", TargetKimi, []string{"bash"}, "https://code.kimi.com/kimi-code/install.sh", "bash"},
+		{"darwin", TargetGoose, []string{"bash"}, "https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh", "bash"},
 		{"linux", TargetGoose, []string{"bash"}, "https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh", "bash"},
+		{"windows", TargetGoose, []string{"pwsh.exe"}, "https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1", "pwsh.exe"},
 		{"linux", TargetDevin, []string{"bash"}, "https://cli.devin.ai/install.sh", "bash"},
 		{"windows", TargetKiro, []string{"powershell.exe"}, "https://cli.kiro.dev/install.ps1", "powershell.exe"},
 		{"linux", TargetMuse, []string{"bash"}, "https://dev.meta.ai/install.sh", "bash"},
@@ -209,6 +287,23 @@ func TestOfficialInstallersRejectUnsupportedOperatingSystems(t *testing.T) {
 		if !plan.Unsupported || plan.Script != nil {
 			t.Fatalf("%s plan = %+v, want manual unsupported plan", target, plan)
 		}
+	}
+}
+
+func TestGooseWindowsUsesPowerShellInstallerCommand(t *testing.T) {
+	plan := newTestService("windows", "pwsh.exe").planAgent(TargetGoose)
+	if plan.Unsupported || plan.Method != "official-installer" || plan.Script == nil {
+		t.Fatalf("Goose Windows plan = %+v, want available official installer", plan)
+	}
+	if plan.Script.URL != "https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1" {
+		t.Fatalf("Goose Windows installer URL = %q", plan.Script.URL)
+	}
+	wantInterpreter := "/usr/bin/pwsh.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File"
+	if got := strings.Join(plan.Script.Interpreter, " "); got != wantInterpreter {
+		t.Fatalf("Goose Windows installer interpreter = %q, want %q", got, wantInterpreter)
+	}
+	if !slices.Equal(plan.Script.Env, []string{"CONFIGURE=false"}) {
+		t.Fatalf("Goose Windows installer env = %v, want CONFIGURE=false", plan.Script.Env)
 	}
 }
 

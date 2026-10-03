@@ -31,20 +31,34 @@ import {
 	Fragment,
 	memo,
 	useContext,
+	useMemo,
 	useState,
+	type MouseEvent as ReactMouseEvent,
 	type ReactNode,
 } from "react";
-import Markdown, { type Components } from "react-markdown";
+import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { WrapText } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { isLoopbackHostname } from "../../lib/loopback";
 import { canonicalLanguage } from "../../lib/code-highlight";
 import { fenceOf } from "../../lib/markdown-fence";
-import { isWebLink, isWorkspaceFileLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
+import { findSessionLinks, isSessionLink, remarkSessionLinks } from "../../lib/session-links";
+import {
+	isPotentialWorkspaceFileLink,
+	isWebLink,
+	openLinkInSystemBrowser,
+	workspaceFilePath,
+} from "../../lib/external-link-policy";
 import { AppLink } from "../AppLink";
+import {
+	explicitWorkspaceFilePath,
+	findWorkspaceFilePath,
+} from "../../lib/workspace-file-path";
 import { HighlightedCode } from "./HighlightedCode";
 import { MermaidBlock } from "./MermaidBlock";
 import { CopyButton } from "./CopyButton";
+import { ChatImage, ChatImageGallery, ChatImageLinkScope, isImageOnlyParagraph } from "./ChatImage";
 import "./code-theme.css";
 
 // Activity titles live inside disclosure buttons: keep inline formatting, but
@@ -63,7 +77,7 @@ export const ActivityTitle = memo(function ActivityTitle({ text }: { text: strin
 });
 
 /** GitHub-flavoured markdown: tables, strikethrough, task lists, autolinks. */
-const PLUGINS = [remarkGfm];
+const PLUGINS = [remarkGfm, remarkSessionLinks];
 
 /**
  * Whether the prose is still arriving, for the fences inside it.
@@ -73,18 +87,58 @@ const PLUGINS = [remarkGfm];
  * and re-parse every message on every poll.
  */
 const StreamingProse = createContext(false);
-const OpenChatLink = createContext<{ open?: (url: string) => void; workspacePaths: string[] }>({ workspacePaths: [] });
+const InsideMarkdownLink = createContext(false);
+const REMOTE_PREVIEW_UNAVAILABLE = "This link points to the remote host. Preview is unavailable on this device.";
+const OpenChatLink = createContext<{
+	open?: (url: string) => void;
+	openFile?: (path: string) => void;
+	remoteHost?: boolean;
+	openSession?: (url: string) => void;
+	workspacePaths: string[];
+}>({ workspacePaths: [] });
+const EMPTY_WORKSPACE_PATHS: string[] = [];
 
 export function ChatLinkProvider({
 	onLinkOpen,
-	workspacePaths = [],
+	onFileOpen,
+	remoteHost,
+	onSessionLinkOpen,
+	workspacePaths = EMPTY_WORKSPACE_PATHS,
 	children,
 }: {
 	onLinkOpen?: (url: string) => void;
+	onFileOpen?: (path: string) => void;
+	remoteHost?: boolean;
+	onSessionLinkOpen?: (url: string) => void;
 	workspacePaths?: string[];
 	children: ReactNode;
 }) {
-	return <OpenChatLink.Provider value={{ open: onLinkOpen, workspacePaths }}>{children}</OpenChatLink.Provider>;
+	const value = useMemo(
+		() => ({ open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, workspacePaths }),
+		[onLinkOpen, onFileOpen, onSessionLinkOpen, remoteHost, workspacePaths],
+	);
+	return <OpenChatLink.Provider value={value}>{children}</OpenChatLink.Provider>;
+}
+
+function isHostLocalWebLink(href: string): boolean {
+	try {
+		// react-markdown percent-encodes IPv6 brackets in href/src attributes.
+		const url = new URL(href.replace(/%5B|%5D/gi, (bracket) => decodeURIComponent(bracket)));
+		if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+		const host = url.hostname.replace(/\.$/, "");
+		return isLoopbackHostname(host) || /^127\.(?:\d{1,3}\.){2}\d{1,3}$/.test(host) || host === "0.0.0.0" || host === "[::]";
+	} catch {
+		return false;
+	}
+}
+
+function chatUrlTransform(url: string, key: string): string | undefined {
+	// react-markdown correctly strips unknown schemes, but a Windows absolute
+	// path resembles one (C:). Preserve only hrefs that look like local paths;
+	// the click still goes through the workspace-confined preview endpoint.
+	if (isSessionLink(url)) return url;
+	if (key === "href" && isPotentialWorkspaceFileLink(url)) return url;
+	return defaultUrlTransform(url);
 }
 
 export const ChatMarkdown = memo(function ChatMarkdown({
@@ -109,7 +163,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 					muted ? "text-[13px] text-muted-foreground" : "text-sm text-foreground",
 				)}
 			>
-				<Markdown remarkPlugins={PLUGINS} components={COMPONENTS}>
+				<Markdown remarkPlugins={PLUGINS} components={COMPONENTS} urlTransform={chatUrlTransform}>
 					{text}
 				</Markdown>
 			</div>
@@ -187,6 +241,7 @@ const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "graphem
 
 function compactEmoji(children: ReactNode): ReactNode {
 	if (typeof children === "string") {
+		if (!EMOJI_GRAPHEME.test(children)) return children;
 		let last = 0;
 		const parts: ReactNode[] = [];
 		for (const { segment, index } of GRAPHEME_SEGMENTER.segment(children)) {
@@ -210,14 +265,37 @@ function compactEmoji(children: ReactNode): ReactNode {
 }
 
 function MarkdownLink({ href, children }: { href?: string; children?: ReactNode }) {
-	const { open: onLinkOpen, workspacePaths } = useContext(OpenChatLink);
+	const { open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, workspacePaths } = useContext(OpenChatLink);
+	const filePath = href && onFileOpen
+		? workspaceFilePath(href, workspacePaths) ?? findWorkspaceFilePath(href, workspacePaths) ?? explicitWorkspaceFilePath(href)
+		: undefined;
+	const sessionLink = Boolean(href && isSessionLink(href));
+	const openInFiles = filePath && !/\.html?$/i.test(filePath) ? filePath : undefined;
+	if (remoteHost && href && (isHostLocalWebLink(href) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
+		return <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>
+			{children}<span className="sr-only"> (remote preview unavailable)</span>
+		</span>;
+	}
+	const browserLink = href ? !sessionLink && (isWebLink(href) || (!remoteHost && (!!filePath || isPotentialWorkspaceFileLink(href)))) : false;
 	return (
 		<AppLink
 			href={href}
 			onBrowserOpen={onLinkOpen}
-			inAppLink={href ? (url) => isWebLink(url) || isWorkspaceFileLink(url, workspacePaths) : undefined}
+			inAppLink={href ? () => browserLink : undefined}
+			filePath={filePath}
+			onFileOpen={onFileOpen}
 			onClick={(event) => {
-				if (href && !isWebLink(href) && !isWorkspaceFileLink(href, workspacePaths)) {
+				if (href && sessionLink) {
+					event.preventDefault();
+					onSessionLinkOpen?.(href);
+					return;
+				}
+				if (openInFiles && onFileOpen) {
+					event.preventDefault();
+					onFileOpen(openInFiles);
+					return;
+				}
+				if (href && !browserLink) {
 					event.preventDefault();
 					void openLinkInSystemBrowser(href);
 				}
@@ -226,10 +304,39 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 			rel="noreferrer noopener"
 			className="text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"
 		>
-			{children}
+			<ChatImageLinkScope>
+				<InsideMarkdownLink.Provider value>{children}</InsideMarkdownLink.Provider>
+			</ChatImageLinkScope>
 		</AppLink>
 	);
 }
+
+function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
+	const { remoteHost } = useContext(OpenChatLink);
+	if (remoteHost && typeof src === "string" && isHostLocalWebLink(src)) {
+		return <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>{alt || src}</span>;
+	}
+	return <ChatImage src={src} alt={alt} />;
+}
+
+/** Linkify canonical session URLs without interpreting any surrounding text as Markdown. */
+export const SessionLinkedText = memo(function SessionLinkedText({ text }: { text: string }) {
+	const links = findSessionLinks(text);
+	if (links.length === 0) return text;
+	const content: ReactNode[] = [];
+	let cursor = 0;
+	for (const link of links) {
+		if (link.start > cursor) content.push(text.slice(cursor, link.start));
+		content.push(
+			<MarkdownLink key={`${link.start}:${link.text}`} href={link.text}>
+				{link.text}
+			</MarkdownLink>,
+		);
+		cursor = link.end;
+	}
+	if (cursor < text.length) content.push(text.slice(cursor));
+	return <>{content}</>;
+});
 
 /**
  * A mermaid fence with the streaming state it was rendered under.
@@ -240,8 +347,40 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
  */
 function MermaidFence({ code }: { code: string }) {
 	const streaming = useContext(StreamingProse);
-	const { open: onLinkOpen } = useContext(OpenChatLink);
-	return <MermaidBlock code={code} streaming={streaming} onLinkOpen={onLinkOpen} />;
+	const { open: onLinkOpen, remoteHost } = useContext(OpenChatLink);
+	const blockHostLocalLink = (event: ReactMouseEvent<HTMLDivElement>) => {
+		const href = (event.target as Element).closest?.("a[href]")?.getAttribute("href");
+		if (!href || !isHostLocalWebLink(href)) return;
+		event.preventDefault();
+		event.stopPropagation();
+	};
+	const diagram = <MermaidBlock code={code} streaming={streaming} onLinkOpen={onLinkOpen} />;
+	return remoteHost
+		? <div onClickCapture={blockHostLocalLink} onAuxClickCapture={blockHostLocalLink} onContextMenuCapture={blockHostLocalLink}>{diagram}</div>
+		: diagram;
+}
+
+function InlineCode({ children }: { children?: ReactNode }) {
+	const { openFile: onFileOpen, workspacePaths } = useContext(OpenChatLink);
+	const insideLink = useContext(InsideMarkdownLink);
+	const text = typeof children === "string" ? children : undefined;
+	const filePath = text && onFileOpen ? findWorkspaceFilePath(text, workspacePaths) : undefined;
+	const code = (
+		<code className="rounded bg-surface px-[5px] py-[2px] font-mono text-[11.5px] text-markdown-code">
+			{children}
+		</code>
+	);
+	if (!filePath || !onFileOpen || insideLink) return code;
+	return (
+		<button
+			type="button"
+			onClick={() => onFileOpen(filePath)}
+			aria-label={`Open ${filePath} in Files`}
+			className="inline rounded text-left transition-colors hover:bg-interactive-hover"
+		>
+			{code}
+		</button>
+	);
 }
 
 const COMPONENTS: Components = {
@@ -268,7 +407,13 @@ const COMPONENTS: Components = {
 		</h6>
 	),
 
-	p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0">{compactEmoji(children)}</p>,
+	// A paragraph of nothing but images is a set of pictures, not prose.
+	p: ({ children, node }) =>
+		isImageOnlyParagraph(node) ? (
+			<ChatImageGallery>{children}</ChatImageGallery>
+		) : (
+			<p className="my-2 first:mt-0 last:mb-0">{compactEmoji(children)}</p>
+		),
 
 	ul: ({ children }) => <ul className="my-2 ml-4 list-disc space-y-1 first:mt-0">{children}</ul>,
 	ol: ({ children }) => (
@@ -306,11 +451,7 @@ const COMPONENTS: Components = {
 		return <CodeBlock code={fence.code} language={fence.language} />;
 	},
 	// Only inline code reaches here; `pre` above takes every fence.
-	code: ({ children }) => (
-		<code className="rounded bg-surface px-[5px] py-[2px] font-mono text-[11.5px] text-markdown-code">
-			{children}
-		</code>
-	),
+	code: InlineCode,
 
 	// Wide tables scroll inside their own container so the conversation column
 	// never scrolls sideways.
@@ -343,7 +484,5 @@ const COMPONENTS: Components = {
 	// and right-click offers the system browser and copying the address.
 	a: MarkdownLink,
 
-	img: ({ src, alt }) => (
-		<img src={typeof src === "string" ? src : undefined} alt={alt ?? ""} className="my-2 max-w-full rounded-md border border-border" />
-	),
+	img: MarkdownImage,
 };

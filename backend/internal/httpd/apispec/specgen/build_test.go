@@ -40,14 +40,25 @@ func TestBuild_CodexSwitchContractIsRedactedAndOnlyMountedRoutesAreDocumented(t 
 
 	phase := doc.Components.Schemas["CodexAccountSwitchResponse"].Properties["phase"]
 	want := []string{
-		"requested", "stopping_sessions", "sessions_stopped", "checkpointing_source", "activating_target",
-		"verifying_target", "restarting_sessions", "rollback_required", "recovery_required", "completed", "failed",
+		"requested", "checkpointing_source", "activating_target",
+		"recovery_required", "completed", "failed",
 	}
 	if !slices.Equal(phase.Enum, want) {
 		t.Fatalf("CodexAccountSwitchResponse.phase enum = %v, want %v", phase.Enum, want)
 	}
-	if _, ok := doc.Paths["/api/v1/agents/codex/account-switches/{switchId}"]; ok {
-		t.Fatal("stale switch GET path remains in generated contract")
+	for _, obsolete := range []string{"sessions"} {
+		if _, ok := doc.Components.Schemas["CodexAccountSwitchResponse"].Properties[obsolete]; ok {
+			t.Fatalf("obsolete %q remains in CodexAccountSwitchResponse", obsolete)
+		}
+		if _, ok := doc.Components.Schemas["StartCodexAccountSwitchRequest"].Properties[obsolete]; ok {
+			t.Fatalf("obsolete %q remains in StartCodexAccountSwitchRequest", obsolete)
+		}
+	}
+	if _, ok := doc.Components.Schemas["CodexAccountSwitchSessionResponse"]; ok {
+		t.Fatal("obsolete CodexAccountSwitchSessionResponse schema remains")
+	}
+	if _, ok := doc.Paths["/api/v1/agents/codex/account-switches/{switchId}"]; !ok {
+		t.Fatal("durable switch GET path is missing from generated contract")
 	}
 	if _, ok := doc.Paths["/api/v1/agents/codex/account-switches/{switchId}/cancel"]; ok {
 		t.Fatal("stale switch cancel path remains in generated contract")
@@ -120,6 +131,76 @@ func TestBuild_DelegateAgentEnumIncludesPrimeAgent(t *testing.T) {
 	agents := doc.Components.Schemas["DelegateTaskRequest"].Properties["agent"].Enum
 	if !slices.Contains(agents, "prime-agent") {
 		t.Fatalf("DelegateTaskRequest agent enum = %v, want prime-agent", agents)
+	}
+}
+
+func TestBuild_OpenCodeV2HarnessContracts(t *testing.T) {
+	doc := buildSchemas(t)
+	for schema, field := range map[string]string{
+		"SpawnSessionRequest": "harness",
+		"DelegateTaskRequest": "agent",
+	} {
+		values := doc.Components.Schemas[schema].Properties[field].Enum
+		if !slices.Contains(values, "opencode-v2") {
+			t.Errorf("%s.%s enum = %v, missing opencode-v2", schema, field, values)
+		}
+		if !slices.Contains(values, "opencode") {
+			t.Errorf("%s.%s enum = %v, missing existing opencode", schema, field, values)
+		}
+	}
+	for schema, field := range map[string]string{
+		"ControllersSessionView":    "reviewerHarness",
+		"SetSessionReviewerRequest": "harness",
+		"TriggerReviewRequest":      "harness",
+	} {
+		values := doc.Components.Schemas[schema].Properties[field].Enum
+		if !slices.Contains(values, "opencode-v2") {
+			t.Errorf("%s.%s enum = %v, missing opencode-v2", schema, field, values)
+		}
+		if !slices.Contains(values, "opencode") {
+			t.Errorf("%s.%s enum = %v, missing existing opencode reviewer", schema, field, values)
+		}
+	}
+}
+
+func TestBuild_OpenCodeV2InstallContracts(t *testing.T) {
+	got, err := specgen.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	var doc struct {
+		Paths map[string]struct {
+			Post struct {
+				Parameters []struct {
+					Name   string            `yaml:"name"`
+					Schema openAPISchemaNode `yaml:"schema"`
+				} `yaml:"parameters"`
+			} `yaml:"post"`
+		} `yaml:"paths"`
+		Components struct {
+			Schemas map[string]openAPISchemaNode `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("parse generated OpenAPI: %v", err)
+	}
+	var targets []string
+	for _, parameter := range doc.Paths["/api/v1/system/install/{target}"].Post.Parameters {
+		if parameter.Name == "target" {
+			targets = parameter.Schema.Enum
+		}
+	}
+	if !slices.Contains(targets, "opencode-v2") {
+		t.Fatalf("InstallTargetParam target enum = %v, missing opencode-v2", targets)
+	}
+	for schema := range map[string]bool{
+		"AgentInstallPlan":   true,
+		"AgentInstallMethod": true,
+		"InstallJob":         true,
+	} {
+		if _, ok := doc.Components.Schemas[schema].Properties["notice"]; !ok {
+			t.Errorf("%s is missing the install replacement notice", schema)
+		}
 	}
 }
 
@@ -234,6 +315,17 @@ func TestBuild_OMPIsPubliclySpawnable(t *testing.T) {
 	harnesses := doc.Components.Schemas["SpawnSessionRequest"].Properties["harness"].Enum
 	if !slices.Contains(harnesses, "omp") {
 		t.Fatalf("SpawnSessionRequest harness enum = %v, want omp", harnesses)
+	}
+}
+
+func TestBuild_FXPublicHarnessContracts(t *testing.T) {
+	doc := buildSchemas(t)
+	for schema, field := range map[string]string{
+		"SpawnSessionRequest": "harness", "DelegateTaskRequest": "agent", "InstallJob": "target",
+	} {
+		if values := doc.Components.Schemas[schema].Properties[field].Enum; !slices.Contains(values, "fx") {
+			t.Errorf("%s.%s enum = %v, want fx", schema, field, values)
+		}
 	}
 }
 

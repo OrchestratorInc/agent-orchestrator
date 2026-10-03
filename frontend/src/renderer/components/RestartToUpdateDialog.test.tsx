@@ -6,15 +6,16 @@ import { useUiStore } from "../stores/ui-store";
 import { TooltipProvider } from "./ui/tooltip";
 import type { UpdateStatus } from "../../main/update-settings";
 
-const { updInstall, updGetStatus, updOnStatus, workspaceData } = vi.hoisted(() => ({
+const { updInstall, updRelaunch, updGetStatus, updOnStatus, workspaceData } = vi.hoisted(() => ({
 	updInstall: vi.fn(),
+	updRelaunch: vi.fn(),
 	updGetStatus: vi.fn(),
 	updOnStatus: vi.fn(),
 	workspaceData: { current: [] as unknown[] },
 }));
 
 vi.mock("../lib/bridge", () => ({
-	aoBridge: { updates: { getStatus: updGetStatus, install: updInstall, onStatus: updOnStatus } },
+	aoBridge: { updates: { getStatus: updGetStatus, install: updInstall, relaunch: updRelaunch, onStatus: updOnStatus } },
 }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => ({ data: workspaceData.current }),
@@ -42,7 +43,7 @@ function renderDialog(status: UpdateStatus) {
 }
 
 beforeEach(() => {
-	for (const m of [updInstall, updGetStatus, updOnStatus]) m.mockReset();
+	for (const m of [updInstall, updRelaunch, updGetStatus, updOnStatus]) m.mockReset();
 	updOnStatus.mockReturnValue(() => undefined);
 	workspaceData.current = [];
 	useUiStore.setState({ updateInstallPromptOpen: false });
@@ -64,8 +65,104 @@ it("shows what the build changes", async () => {
 		releaseNotes: "Fixed the re-stage loop\nRebuilt the Updates page",
 	});
 	expect(await screen.findByText(/Fixed the re-stage loop/)).toBeVisible();
-	expect(screen.getByText("Nightly 0.12.11 · Sep 2")).toBeVisible();
+	const expected = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(
+		new Date(Date.UTC(2026, 8, 2, 17, 13)),
+	);
+	expect(screen.getByText(`Nightly 0.12.11 · ${expected}`)).toBeVisible();
 	expect(screen.queryByText(/Leave AO closed until it reopens/)).toBeNull();
+});
+
+it("shows stable notes without contributor handles and retains linked PR numbers", async () => {
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	renderDialog({
+		state: "downloaded",
+		version: "0.13.1",
+		releaseNotes: [
+			"### Added",
+			"",
+			"- Add useful workflows by @person in [#123](https://github.com/Untrivial-ai/agent-orchestrator/pull/123)",
+			"",
+			"**Full Changelog**: https://github.com/Untrivial-ai/agent-orchestrator/compare/v0.13.0...v0.13.1",
+		].join("\n"),
+	});
+
+	expect(await screen.findByText(/Add useful workflows/)).toBeVisible();
+	expect(screen.queryByText(/@person|v0\.13\.0\.\.\.v0\.13\.1|View changelog/)).toBeNull();
+	expect(screen.getByRole("link", { name: "#123" })).toHaveAttribute(
+		"href",
+		"https://github.com/Untrivial-ai/agent-orchestrator/pull/123",
+	);
+});
+
+it("renders complete nightly changes without contributor handles or formatting syntax", async () => {
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	const commitUrl = "https://github.com/Untrivial-ai/agent-orchestrator/commit/5994692db97410cb36e8c6725fc7789905d04dae";
+	renderDialog({
+		state: "downloaded",
+		version: "0.13.2-nightly.202609271025",
+		releaseNotes: [
+			"**Changes in this nightly**",
+			"",
+			"- Add durable scheduled automations by @Vaibhaav-Tiwari in [#4459](https://github.com/Untrivial-ai/agent-orchestrator/pull/4459)",
+			"- Remove Last updated line from model picker by @nikhilachale in [#5930](https://github.com/Untrivial-ai/agent-orchestrator/pull/5930)",
+			"- Pass terminal theme hints to every agent by @AgentWrapper in [#5934](https://github.com/Untrivial-ai/agent-orchestrator/pull/5934)",
+			"- Revert: simplify pull request summary cards (#4383) by @AgentWrapper in [#5943](https://github.com/Untrivial-ai/agent-orchestrator/pull/5943)",
+			"",
+			"**Build details**",
+			"",
+			`- Commit: [5994692](${commitUrl})`,
+			"- Built: `2026-09-27 10:25 UTC`",
+			"",
+			"> Nightly builds contain the newest changes for testing and may be unstable.",
+		].join("\n"),
+	});
+
+	expect(await screen.findByText("Changes in this nightly")).toBeVisible();
+	expect(screen.getByText("Changes in this nightly").closest("strong")).not.toBeNull();
+	expect(screen.getByText("Build details").closest("strong")).not.toBeNull();
+	expect(screen.getByText("2026-09-27 10:25 UTC").closest("code")).not.toBeNull();
+	expect(screen.getByRole("link", { name: "#4459" })).toHaveAttribute(
+		"href",
+		"https://github.com/Untrivial-ai/agent-orchestrator/pull/4459",
+	);
+	expect(screen.getByRole("link", { name: "#5943" })).toHaveAttribute(
+		"href",
+		"https://github.com/Untrivial-ai/agent-orchestrator/pull/5943",
+	);
+	expect(screen.getByRole("link", { name: "5994692" })).toHaveAttribute("href", commitUrl);
+	expect(screen.getByText(/may be unstable/).closest("blockquote")).not.toBeNull();
+	expect(screen.queryByText(/@Vaibhaav-Tiwari|@nikhilachale|@AgentWrapper/)).toBeNull();
+	expect(screen.queryByText(/\*\*Changes in this nightly\*\*|\[5994692\]|^>/)).toBeNull();
+});
+
+it("renders unrelated release-note links as plain text", async () => {
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	renderDialog({
+		state: "downloaded",
+		version: "0.13.2-nightly.202609271025",
+		releaseNotes: "See [external notes](https://example.com/release) before updating.",
+	});
+
+	expect(await screen.findByText((_, element) => (
+		element?.tagName === "P" && element.textContent === "See external notes before updating."
+	))).toBeVisible();
+	expect(screen.queryByRole("link", { name: "external notes" })).toBeNull();
+});
+
+it("links the generated nightly comparison without allowing arbitrary compare URLs", async () => {
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	const comparisonUrl = "https://github.com/Untrivial-ai/agent-orchestrator/compare/v0.13.1...v0.13.2-nightly.202609271025";
+	renderDialog({
+		state: "downloaded",
+		version: "0.13.2-nightly.202609271025",
+		releaseNotes: [
+			`- 2 more linked changes are included in the [full comparison](${comparisonUrl}).`,
+			"- Do not trust [another comparison](https://github.com/another/repo/compare/v1.0.0...v1.1.0).",
+		].join("\n"),
+	});
+
+	expect(await screen.findByRole("link", { name: "full comparison" })).toHaveAttribute("href", comparisonUrl);
+	expect(screen.queryByRole("link", { name: "another comparison" })).toBeNull();
 });
 
 it("renders the nightly build date from the UTC instant", async () => {
@@ -179,27 +276,41 @@ it("keeps notes and session risks visible, blocks duplicate submits and dismissa
 	expect(screen.queryByTestId("restart-to-update-dialog")).toBeNull();
 });
 
-it("shows an inline failure and allows retry", async () => {
+it("shows an inline failure and retries by relaunching AO", async () => {
 	const install = deferredInstall();
+	updRelaunch.mockResolvedValue(undefined);
 	useUiStore.setState({ updateInstallPromptOpen: true });
 	renderDialog({ state: "downloaded", version: "1.2.3", releaseNotes: "Safer updates" });
 	await screen.findByText("Safer updates");
 	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
-	await act(async () => install.reject(new Error("Error invoking remote method 'updates:install': Error: macOS preparation timed out. Close AO and reopen it before trying again.")));
+	await act(async () => install.reject(new Error("Error invoking remote method 'updates:install': Error: Couldn't finish preparing the update. Retry to try again.")));
 	expect(screen.getByRole("alert")).toHaveTextContent("AO could not prepare the update. Please try again.");
-	expect(screen.getByRole("alert")).toHaveTextContent("macOS preparation timed out. Close AO and reopen it before trying again.");
+	expect(screen.getByRole("alert")).toHaveTextContent("Couldn't finish preparing the update. Retry to try again.");
 	expect(screen.getByRole("alert")).not.toHaveTextContent("Error invoking remote method");
 	expect(screen.getByText("Safer updates")).toBeVisible();
 	expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
 	expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
 	expect(screen.queryByRole("progressbar")).toBeNull();
-	const retry = deferredInstall();
+	// The primary action becomes Retry, and retry restarts AO rather than
+	// re-invoking install() against a Squirrel that cannot be reset in-process.
+	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+	expect(updRelaunch).toHaveBeenCalledTimes(1);
+	expect(updInstall).toHaveBeenCalledTimes(1);
+});
+
+it("hides the install-on-quit line once preparation fails", async () => {
+	const install = deferredInstall();
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	renderDialog({ state: "downloaded", version: "1.2.3", releaseNotes: "Safer updates" });
+	await screen.findByText("Safer updates");
+	// Shown while nothing has failed: install-on-quit is still armed.
+	expect(screen.getByText(/installs on its own the next time you quit/)).toBeVisible();
 	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
-	expect(updInstall).toHaveBeenCalledTimes(2);
-	expect(screen.queryByRole("alert")).toBeNull();
-	expect(screen.queryByText(/Close AO and reopen it/)).toBeNull();
-	await act(async () => retry.resolve());
-	expect(useUiStore.getState().updateInstallPromptOpen).toBe(false);
+	await act(async () => install.reject(new Error("Couldn't finish preparing the update. AO stayed open, so nothing changed. Retry to try again.")));
+	// The main process turned off install-on-quit on failure, so the promise is
+	// gone rather than contradicting the error.
+	expect(screen.getByRole("alert")).toBeVisible();
+	expect(screen.queryByText(/installs on its own the next time you quit/)).toBeNull();
 });
 
 it("allows cancelling after preparation fails", async () => {

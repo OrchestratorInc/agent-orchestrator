@@ -1,6 +1,7 @@
 import { authHeaders, httpBase, normalizeServerHost, type ServerConfig } from "./config";
 import { cachedInstallId, getInstallId } from "./installId";
 import { captureMobileApiError, httpCategory } from "./sentry";
+import { UnreachableError } from "./connectionError";
 import type { AttentionLevel } from "./theme";
 
 // ---- Types (subset of AO's DashboardSession we use on the phone) ------------
@@ -23,6 +24,7 @@ export type DashboardPR = {
 	ciStatus?: "pending" | "passing" | "failing" | "none";
 	reviewDecision?: "approved" | "changes_requested" | "pending" | "none";
 	mergeability?: {
+		state?: "unknown" | "mergeable" | "conflicting" | "blocked" | "unstable";
 		mergeable?: boolean;
 		ciPassing?: boolean;
 		approved?: boolean;
@@ -32,17 +34,43 @@ export type DashboardPR = {
 	unresolvedThreads?: number;
 };
 
+/**
+ * Where the daemon placed a session in its delivery lifecycle, derived
+ * server-side from durable facts and independently of `status`.
+ *
+ * Mirrors the desktop contract (backend/pkg/contract/kanban.go, surfaced to the
+ * renderer as KANBAN_COLUMNS). The daemon has always sent this; mobile simply
+ * discarded it and re-derived its own grouping, which is how the two boards
+ * came to disagree about the same session.
+ */
+export const KANBAN_COLUMNS = ["building", "validating", "needs_review", "ready", "archive"] as const;
+export type KanbanColumn = (typeof KANBAN_COLUMNS)[number];
+
+export function isKanbanColumn(value: string | null | undefined): value is KanbanColumn {
+	return !!value && (KANBAN_COLUMNS as readonly string[]).includes(value);
+}
+
 export type DashboardSession = {
 	id: string;
 	projectId: string;
 	/** Opaque daemon runtime handle used only for terminal mux operations. */
 	terminalHandleId?: string;
 	status: string | null;
+	/** The daemon's own board placement. Absent on a daemon too old to send it. */
+	kanbanColumn?: KanbanColumn | null;
+	/**
+	 * The daemon's phrase for what is happening inside that column — richer than
+	 * `status` ("Awaiting PR", "Fixing CI failures"), and already localized on the
+	 * wire so clients print it without a mapping table.
+	 */
+	displayStatus?: string | null;
 	attentionLevel?: AttentionLevel | string | null;
 	activity?: string | null;
 	// Which agent CLI drives this session (claude-code, codex, …). Parsed off the
 	// wire but discarded until the orchestrator tab needed it for brand marks.
 	harness?: string | null;
+	reviewerHarness?: string | null;
+	reviewerConfig?: ReviewerAgentConfig;
 	/** Controller currently committed for this AO session. */
 	mode: SessionMode;
 	branch: string | null;
@@ -65,8 +93,16 @@ export type DashboardSession = {
 	// finished status: a merged session whose agent is still running belongs on
 	// the board, only a terminated one belongs in the archive.
 	isTerminated?: boolean;
+	provisionState?: "provisioning" | "ready" | "failed";
+	provisionError?: string;
 	isPinned?: boolean;
 	pinnedAt?: string | null;
+	/** Automatically review each new pull-request head. */
+	autoReviewEnabled?: boolean;
+	/** Automatically deliver completed review feedback to the worker. */
+	autoInjectReview?: boolean;
+	/** Automatically deliver failing CI checks to the worker. */
+	autoInjectCI?: boolean;
 };
 
 export type OrchestratorLink = {
@@ -99,6 +135,7 @@ export type ProjectDetail = ProjectInfo & {
 	config?: {
 		agentConfig?: { model?: string };
 		worker?: { agent?: string; agentConfig?: { model?: string } };
+		reviewers?: { harness?: string }[];
 	};
 };
 
@@ -137,28 +174,39 @@ type WirePR = {
 	state?: string; // draft | open | merged | closed
 	ci?: string; // unknown | pending | passing | failing
 	review?: string; // none | approved | changes_requested | review_required
-	mergeability?: string; // unknown | mergeable | conflicting | blocked | unstable
+	mergeability?: "unknown" | "mergeable" | "conflicting" | "blocked" | "unstable";
 	reviewComments?: boolean;
 };
 
 type WireSession = {
 	id: string;
-	projectId: string;
+	// Absent for a standalone agent session: the daemon marks the field
+	// omitempty and a standalone session has no project to name.
+	projectId?: string;
 	terminalHandleId?: string;
 	issueId?: string;
 	kind?: string; // worker | orchestrator
 	harness?: string;
+	reviewerHarness?: string;
+	reviewerConfig?: ReviewerAgentConfig;
 	mode?: SessionMode;
 	displayName?: string;
 	activity?: unknown;
 	isTerminated?: boolean;
+	provisionState?: "provisioning" | "ready" | "failed";
+	provisionError?: string;
 	status?: string | null;
+	kanbanColumn?: string | null;
+	displayStatus?: string | null;
 	branch?: string;
 	createdAt?: string;
 	updatedAt?: string;
 	previewUrl?: string;
 	isPinned?: boolean;
 	pinnedAt?: string | null;
+	autoReviewEnabled?: boolean;
+	autoInjectReview?: boolean;
+	autoInjectCI?: boolean;
 	prs?: WirePR[];
 };
 
@@ -182,6 +230,7 @@ function mapProjectKind(kind?: string): ProjectInfo["kind"] {
 
 function mapPR(pr: WirePR): DashboardPR {
 	const ci = pr.ci === "passing" || pr.ci === "failing" || pr.ci === "pending" ? pr.ci : "none";
+	const mergeability = pr.mergeability ?? "unknown";
 	const review =
 		pr.review === "approved"
 			? "approved"
@@ -198,7 +247,7 @@ function mapPR(pr: WirePR): DashboardPR {
 		isDraft: pr.state === "draft",
 		ciStatus: ci,
 		reviewDecision: review,
-		mergeability: { mergeable: pr.mergeability === "mergeable" },
+		mergeability: { state: mergeability, mergeable: mergeability === "mergeable" },
 		unresolvedThreads: pr.reviewComments ? 1 : 0,
 	};
 }
@@ -221,11 +270,17 @@ function mapSession(s: WireSession): DashboardSession {
 	const prs = (s.prs ?? []).map(mapPR);
 	return {
 		id: s.id,
-		projectId: s.projectId,
+		// "" rather than undefined: every consumer treats the id as a string, and
+		// `shortLabel(undefined)` threw inside render and took the whole board down.
+		projectId: s.projectId ?? "",
 		terminalHandleId: s.terminalHandleId,
 		status: s.status ?? null,
+		kanbanColumn: isKanbanColumn(s.kanbanColumn) ? s.kanbanColumn : null,
+		displayStatus: s.displayStatus?.trim() || null,
 		activity: activityString(s.activity),
 		harness: s.harness ?? null,
+		reviewerHarness: s.reviewerHarness ?? null,
+		reviewerConfig: s.reviewerConfig,
 		mode: s.mode === "chat" ? "chat" : "tui",
 		branch: s.branch ?? null,
 		issueId: s.issueId ?? null,
@@ -239,15 +294,20 @@ function mapSession(s: WireSession): DashboardSession {
 		prs,
 		previewUrl: s.previewUrl ?? null,
 		isTerminated: !!s.isTerminated,
+		provisionState: s.provisionState,
+		provisionError: s.provisionError,
 		isPinned: !!s.isPinned,
 		pinnedAt: s.pinnedAt ?? null,
+		autoReviewEnabled: !!s.autoReviewEnabled,
+		autoInjectReview: s.autoInjectReview ?? true,
+		autoInjectCI: s.autoInjectCI ?? true,
 	};
 }
 
 function mapOrchestrator(s: WireSession, projectName: string): OrchestratorLink {
 	return {
 		id: s.id,
-		projectId: s.projectId,
+		projectId: s.projectId ?? "",
 		terminalHandleId: s.terminalHandleId,
 		projectName,
 		status: s.status ?? null,
@@ -264,6 +324,9 @@ function mapOrchestrator(s: WireSession, projectName: string): OrchestratorLink 
 // ---- Low-level fetch with friendly errors ----------------------------------
 
 const REQUEST_TIMEOUT_MS = 12000;
+const DISCONNECT_REQUEST_TIMEOUT_MS = 2000;
+// The daemon gives attachment uploads 10 minutes; allow time for its response.
+export const ATTACHMENT_REQUEST_TIMEOUT_MS = 11 * 60_000;
 
 // The server answered, but with an error status. Distinct from the errors fetch
 // itself throws (DNS/refused/timeout), which mean the server was never reached —
@@ -281,6 +344,9 @@ export class ApiError extends Error {
 		// Correlates a client-visible failure with daemon logs. The daemon's error
 		// envelope guarantees this field, so mobile must not discard it.
 		readonly requestId?: string,
+		// The daemon's human-readable message alone, without the status prefix.
+		// Screens render this (via userFacingError), never `message`.
+		readonly detail?: string,
 	) {
 		super(message);
 		this.name = "ApiError";
@@ -310,11 +376,11 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		if ((e as { name?: string })?.name === "AbortError") {
 			// Timed out reaching the host (commonly a sleeping Tailscale peer).
 			captureMobileApiError(path, "timeout");
-			throw new Error("Request timed out - is the server reachable?", { cause: e });
+			throw new UnreachableError("timeout", { cause: e });
 		}
 		// fetch threw without reaching the server: DNS/refused/offline.
 		captureMobileApiError(path, "offline");
-		throw e;
+		throw new UnreachableError("offline", { cause: e });
 	} finally {
 		clearTimeout(timer);
 	}
@@ -339,6 +405,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 			`${res.status} ${res.statusText}${detail ? ` - ${detail}` : ""}`,
 			code,
 			requestId,
+			detail || undefined,
 		);
 	}
 	return res;
@@ -405,13 +472,16 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string): Promi
 	// is actually running.
 	const bestByProject = new Map<string, WireSession>();
 	for (const s of rawOrchestrators) {
+		// An orchestrator belongs to a project by definition; one without is not
+		// something this screen can show or restart.
+		if (!s.projectId) continue;
 		const cur = bestByProject.get(s.projectId);
 		// Keep a live orchestrator once found; otherwise take the later entry
 		// (the daemon lists them oldest to newest).
 		if (!cur || cur.isTerminated) bestByProject.set(s.projectId, s);
 	}
 	const orchestrators = [...bestByProject.values()].map((s) =>
-		mapOrchestrator(s, nameOf.get(s.projectId) ?? s.projectId),
+		mapOrchestrator(s, nameOf.get(s.projectId ?? "") ?? s.projectId ?? ""),
 	);
 
 	return { sessions, orchestrators, orchestratorId: null, stats: {}, projects };
@@ -425,14 +495,21 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string): Promi
 // "no preview". We build the URL from our own base (httpBase honors the TLS
 // toggle) rather than the daemon's `previewUrl`, which hardcodes http:// + its
 // request host and would break over a TLS tunnel (e.g. tailscale serve).
+/**
+ * The daemon's preview-files route for a workspace path, each segment escaped.
+ * Shared by the preview button and chat attachment images so the route shape
+ * lives in one place.
+ */
+export function previewFilePath(sessionId: string, path: string): string {
+	return `${API}/sessions/${encodeURIComponent(sessionId)}/preview/files/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
 export async function getPreview(cfg: ServerConfig, id: string, preferredURL?: string): Promise<{ entry: string; url: string; authenticated: boolean } | null> {
 	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/preview`);
 	const data = await res.json();
 	const entry = typeof data?.entry === "string" ? data.entry.trim() : "";
 	if (entry) {
-		// Mirror the daemon's files route: /preview/files/<entry>, each segment escaped.
-		const escaped = entry.split("/").map(encodeURIComponent).join("/");
-		const url = `${httpBase(cfg)}${API}/sessions/${encodeURIComponent(id)}/preview/files/${escaped}`;
+		const url = `${httpBase(cfg)}${previewFilePath(id, entry)}`;
 		return { entry, url, authenticated: true };
 	}
 	const external = mobileReachablePreviewURL(preferredURL, cfg.host);
@@ -461,7 +538,7 @@ export function mobileReachablePreviewURL(raw: string | undefined, aoHost: strin
 export type AgentInfo = {
 	id: string;
 	label: string;
-	authStatus?: "authorized" | "unauthorized" | "unknown";
+	authStatus?: "authorized" | "unauthorized" | "unknown" | "configured";
 };
 
 export type AgentCatalog = {
@@ -536,7 +613,7 @@ export async function refreshAgentModels(cfg: ServerConfig, agent: string, proje
 // its dispatcher can deliver OS push notifications. Keyed daemon-side by install ID.
 export async function registerPushDevice(
 	cfg: ServerConfig,
-	device: { token: string; platform?: string; deviceName?: string },
+	device: { token: string; platform?: string; deviceName?: string; hostName?: string },
 ): Promise<void> {
 	const installId = await getInstallId();
 	await req(cfg, `${API}/push/devices`, {
@@ -576,7 +653,7 @@ export async function unregisterPushDevice(cfg: ServerConfig, token: string): Pr
 // Prefers the install id and falls back to the token so the call still works
 // from a build that predates install ids.
 export async function unpairFromDaemon(cfg: ServerConfig, id: string): Promise<void> {
-	await req(cfg, `${API}/push/pairings/${encodeURIComponent(id)}`, { method: "DELETE" });
+	await req(cfg, `${API}/push/pairings/${encodeURIComponent(id)}`, { method: "DELETE" }, DISCONNECT_REQUEST_TIMEOUT_MS);
 }
 
 // Mark a notification read (best-effort on notification tap) so unread counts
@@ -588,9 +665,24 @@ export async function markNotificationRead(cfg: ServerConfig, id: string): Promi
 	});
 }
 
+export async function clearNotification(cfg: ServerConfig, id: string): Promise<void> {
+	try {
+		await req(cfg, `${API}/notifications/${encodeURIComponent(id)}`, { method: "DELETE" });
+	} catch (cause) {
+		// Another client may have cleared the same row already.
+		if (!(cause instanceof ApiError) || cause.status !== 404 || cause.code !== "NOTIFICATION_NOT_FOUND") throw cause;
+	}
+}
+
 // ---- Notification history ---------------------------------------------------
 
-export type NotificationType = "needs_input" | "ready_to_merge" | "pr_merged" | "pr_closed_unmerged";
+export type NotificationType =
+	| "needs_input"
+	| "ready_to_merge"
+	| "pr_merged"
+	| "pr_closed_unmerged"
+	| "review_completed"
+	| "review_changes_requested";
 
 export type NotificationRecord = {
 	id: string;
@@ -647,7 +739,32 @@ export async function markAllNotificationsRead(cfg: ServerConfig): Promise<void>
 
 export type PRFailingCheck = { name: string; status?: string; conclusion?: string; url?: string };
 export type PRConflictFile = { path: string; url?: string };
-export type PRUnresolvedReviewer = { reviewerId: string; count: number; reviewUrl?: string; isBot?: boolean };
+export type PRReviewCommentLink = {
+	url?: string;
+	reviewId?: string;
+	file?: string;
+	line?: number;
+	body?: string;
+	autoInjectReview: boolean;
+};
+
+export type PRUnresolvedReviewer = {
+	reviewerId: string;
+	count: number;
+	links: PRReviewCommentLink[];
+	reviewUrl?: string;
+	isBot?: boolean;
+};
+
+export type PRReviewEntry = {
+	reviewerId: string;
+	verdict: "none" | "approved" | "changes_requested" | "review_required";
+	body?: string;
+	reviewUrl?: string;
+	submittedAt: string;
+	isBot?: boolean;
+	autoInjectReview: boolean;
+};
 
 export type SessionPRSummary = {
 	url: string;
@@ -657,6 +774,8 @@ export type SessionPRSummary = {
 	state: "draft" | "open" | "merged" | "closed";
 	repo: string;
 	author: string;
+	/** The head commit the merge is fenced to, so a newer push is never merged unseen. */
+	headSha?: string;
 	sourceBranch: string;
 	targetBranch: string;
 	additions: number;
@@ -667,6 +786,8 @@ export type SessionPRSummary = {
 		decision: "none" | "approved" | "changes_requested" | "review_required";
 		hasUnresolvedHumanComments: boolean;
 		unresolvedBy: PRUnresolvedReviewer[];
+		resolvedBy?: PRUnresolvedReviewer[];
+		reviews?: PRReviewEntry[];
 	};
 	mergeability: {
 		state: "unknown" | "mergeable" | "conflicting" | "blocked" | "unstable";
@@ -677,16 +798,208 @@ export type SessionPRSummary = {
 	updatedAt?: string;
 };
 
+/** Squash-merges a session PR the way desktop does, fenced to the head commit on screen. */
+export async function mergeSessionPR(cfg: ServerConfig, pr: Pick<SessionPRSummary, "number" | "url" | "headSha">): Promise<void> {
+	if (!pr.headSha) throw new Error(`PR #${pr.number} has no head commit yet; refresh and try again.`);
+	await req(cfg, `${API}/prs/${encodeURIComponent(String(pr.number))}/merge`, {
+		method: "POST",
+		body: JSON.stringify({ prUrl: pr.url, expectedHeadSha: pr.headSha }),
+	});
+}
+
 export async function getSessionPR(cfg: ServerConfig, sessionId: string): Promise<SessionPRSummary[]> {
 	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/pr`);
 	const data = await res.json();
 	return Array.isArray(data?.prs) ? data.prs : [];
 }
 
+// ---- AO review detail ------------------------------------------------------
+
+export type ReviewRun = {
+	id: string;
+	reviewId: string;
+	sessionId: string;
+	batchId: string;
+	harness: string;
+	triggerSource: "manual" | "auto";
+	prUrl: string;
+	targetSha: string;
+	status: "running" | "complete" | "delivered" | "failed" | "cancelled";
+	verdict: "" | "approved" | "changes_requested";
+	body: string;
+	githubReviewId: string;
+	createdAt: string;
+	deliveredAt?: string | null;
+	autoInjectReview: boolean;
+};
+
+export type PRReviewState = {
+	prUrl: string;
+	prNumber: number;
+	title: string;
+	targetSha: string;
+	status: "needs_review" | "running" | "up_to_date" | "changes_requested" | "ineligible";
+	latestRun?: ReviewRun;
+	previousRun?: ReviewRun;
+};
+
+export type ReviewerSurface = {
+	mode: "chat" | "tui";
+	reviewId: string;
+	harness: string;
+	handleId?: string;
+	controllerError?: string;
+};
+
+export type SessionReviews = {
+	reviewerHandleId: string;
+	reviewerHarness?: string;
+	reviewerActivityState?: "active" | "idle" | "waiting_input" | "blocked" | "exited";
+	reviewerSurface?: ReviewerSurface;
+	reviews: PRReviewState[];
+	runs: ReviewRun[];
+};
+
+export type ReviewerAgentConfig = {
+	effort?: string;
+	mode?: string;
+	model?: string;
+	permissions?: string;
+};
+
+export async function getSessionReviews(cfg: ServerConfig, sessionId: string): Promise<SessionReviews> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/reviews`);
+	const data = await res.json();
+	return {
+		reviewerHandleId: typeof data?.reviewerHandleId === "string" ? data.reviewerHandleId : "",
+		reviewerHarness: typeof data?.reviewerHarness === "string" ? data.reviewerHarness : undefined,
+		reviewerActivityState: data?.reviewerActivityState,
+		reviewerSurface: data?.reviewerSurface,
+		reviews: Array.isArray(data?.reviews) ? data.reviews : [],
+		runs: Array.isArray(data?.runs) ? data.runs : [],
+	};
+}
+
+export async function triggerSessionReview(cfg: ServerConfig, sessionId: string): Promise<SessionReviews & { created: boolean }> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/reviews/trigger`, { method: "POST" });
+	const data = await res.json();
+	return { ...mapSessionReviews(data), created: data?.created === true };
+}
+
+export async function cancelSessionReview(cfg: ServerConfig, sessionId: string): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/reviews/cancel`, { method: "POST" });
+}
+
+export async function restoreSessionReviewer(cfg: ServerConfig, sessionId: string): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/reviews/restore`, { method: "POST" });
+}
+
+export async function killSessionReviewer(cfg: ServerConfig, sessionId: string): Promise<SessionReviews> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/reviews/kill`, { method: "POST" });
+	return mapSessionReviews(await res.json());
+}
+
+export async function switchSessionReviewer(
+	cfg: ServerConfig,
+	sessionId: string,
+	harness?: string,
+	agentConfig?: ReviewerAgentConfig,
+): Promise<SessionReviews> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/reviews/switch`, {
+		method: "POST",
+		body: JSON.stringify({
+			...(harness ? { harness } : {}),
+			...(agentConfig ? { agentConfig } : {}),
+		}),
+	});
+	return mapSessionReviews(await res.json());
+}
+
+function mapSessionReviews(data: any): SessionReviews {
+	return {
+		reviewerHandleId: typeof data?.reviewerHandleId === "string" ? data.reviewerHandleId : "",
+		reviewerHarness: typeof data?.reviewerHarness === "string" ? data.reviewerHarness : undefined,
+		reviewerActivityState: data?.reviewerActivityState,
+		reviewerSurface: data?.reviewerSurface,
+		reviews: Array.isArray(data?.reviews) ? data.reviews : [],
+		runs: Array.isArray(data?.runs) ? data.runs : [],
+	};
+}
+
+export async function requestSessionRereview(
+	cfg: ServerConfig,
+	sessionId: string,
+	pullRequestUrl: string,
+	reviewerId: string,
+): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/reviews/rerequest`, {
+		method: "POST",
+		body: JSON.stringify({ pullRequestUrl, reviewerId }),
+	});
+}
+
+export async function resolveSessionReviewComment(
+	cfg: ServerConfig,
+	sessionId: string,
+	pullRequestUrl: string,
+	commentUrl: string,
+): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/reviews/comments/resolve`, {
+		method: "POST",
+		body: JSON.stringify({ pullRequestUrl, commentUrl }),
+	});
+}
+
 // ---- Writes / actions -------------------------------------------------------
 
 export async function killSession(cfg: ServerConfig, id: string): Promise<void> {
 	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/kill`, { method: "POST" });
+}
+
+/** Rename the worker shown on the board without changing its conversation history. */
+export async function renameSession(cfg: ServerConfig, id: string, displayName: string): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}`, {
+		method: "PATCH",
+		body: JSON.stringify({ displayName }),
+	});
+}
+
+export async function pinSession(cfg: ServerConfig, id: string): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/pin`, { method: "POST" });
+}
+
+export async function unpinSession(cfg: ServerConfig, id: string): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/pin`, { method: "DELETE" });
+}
+
+/** Automatically launch a review whenever this session's PR head changes. */
+export async function setSessionAutoReview(cfg: ServerConfig, id: string, enabled: boolean): Promise<DashboardSession> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/auto-review`, {
+		method: "PUT",
+		body: JSON.stringify({ enabled }),
+	});
+	const data = await res.json();
+	return mapSession(data?.session ?? data);
+}
+
+/** Automatically send completed AO and GitHub review feedback to the worker. */
+export async function setSessionAutoInjectReview(cfg: ServerConfig, id: string, autoInjectReview: boolean): Promise<DashboardSession> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/auto-inject-review`, {
+		method: "PATCH",
+		body: JSON.stringify({ autoInjectReview }),
+	});
+	const data = await res.json();
+	return mapSession(data?.session ?? data);
+}
+
+/** Automatically send failing CI checks to the worker. */
+export async function setSessionAutoInjectCI(cfg: ServerConfig, id: string, autoInjectCI: boolean): Promise<DashboardSession> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/auto-inject-ci`, {
+		method: "PATCH",
+		body: JSON.stringify({ autoInjectCI }),
+	});
+	const data = await res.json();
+	return mapSession(data?.session ?? data);
 }
 
 export async function restoreSession(cfg: ServerConfig, id: string): Promise<void> {
@@ -707,10 +1020,11 @@ export async function sendMessage(cfg: ServerConfig, id: string, message: string
 
 export async function spawnSession(
 	cfg: ServerConfig,
-	opts: { projectId: string; prompt?: string; issueId?: string; harness?: string; mode?: SessionMode },
+	opts: { projectId: string; prompt?: string; issueId?: string; harness?: string; mode?: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string },
 ): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/sessions`, {
 		method: "POST",
+		headers: opts.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 		body: JSON.stringify({
 			projectId: opts.projectId,
 			prompt: opts.prompt,
@@ -723,11 +1037,18 @@ export async function spawnSession(
 			// the phone depend on a desktop preference it cannot see.
 			mode: opts.mode ?? "chat",
 			kind: "worker",
+			attachments: opts.attachments?.length ? opts.attachments : undefined,
+			clientRequestId: opts.clientRequestId,
 		}),
-	});
+	}, opts.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
 	const data = await res.json();
 	return mapSession(data?.session ?? data);
 }
+
+export type SpawnAttachmentInput = {
+	mimeType: string;
+	data: string;
+};
 
 export async function getSession(cfg: ServerConfig, id: string): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}`);
@@ -737,20 +1058,23 @@ export async function getSession(cfg: ServerConfig, id: string): Promise<Dashboa
 
 export async function delegateTask(
 	cfg: ServerConfig,
-	opts: { projectId: string; brief: string; agent?: string; model?: string; mode: SessionMode },
+	opts: { projectId: string; brief: string; agent?: string; model?: string; mode: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string },
 ): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/orchestrators/delegate`, {
 		method: "POST",
+		headers: opts.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 		body: JSON.stringify({
 			projectId: opts.projectId,
 			brief: opts.brief,
 			agent: opts.agent || undefined,
 			model: opts.model || undefined,
 			mode: opts.mode,
+			attachments: opts.attachments?.length ? opts.attachments : undefined,
+			clientRequestId: opts.clientRequestId,
 		}),
-	});
+	}, opts.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
 	const data = await res.json();
-	if (!data?.workerId) throw new Error("The daemon did not return the new worker session");
+	if (!data?.workerId) throw new Error("Your machine didn't return the new worker. Refresh the board to check whether it started.");
 	return getSession(cfg, data.workerId);
 }
 

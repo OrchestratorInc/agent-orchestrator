@@ -29,6 +29,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/aoagents/agent-orchestrator/cloud/internal/notificationoutbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/skillassets"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/workerexec"
@@ -60,6 +61,7 @@ var workerCapabilities = []string{
 	"workspace.files",
 	"terminal.workspace",
 	"terminal.agent",
+	"notification.events",
 }
 
 func main() {
@@ -142,10 +144,11 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("create workspace directory: %w", err)
 	}
 	for key, value := range map[string]string{
-		"AO_CLOUD_PUBLIC_URL": publicURL,
-		"AO_SESSION_ID":       bootstrap.SessionID,
-		"AO_SESSION_BRANCH":   bootstrap.Launch.Branch,
-		"AO_DATA_DIR":         dataDir,
+		"AO_CLOUD_PUBLIC_URL":   publicURL,
+		"AO_SESSION_ID":         bootstrap.SessionID,
+		"AO_SESSION_BRANCH":     bootstrap.Launch.Branch,
+		"AO_DATA_DIR":           dataDir,
+		"AO_CLOUD_WORKER_EPOCH": strconv.FormatInt(bootstrap.Epoch, 10),
 	} {
 		if err := os.Setenv(key, value); err != nil {
 			return fmt.Errorf("set worker tooling environment %s: %w", key, err)
@@ -164,14 +167,77 @@ func run(logger *slog.Logger) error {
 	} else if err := client.setToken(renewed); err != nil {
 		return err
 	}
+	var agentCommandFactory workertransport.AgentCommandFactory
 	pullRequestSocketPath := filepath.Join(dataDir, "ao-pull-request.sock")
 	reviewSocketPath := filepath.Join(dataDir, "ao-review.sock")
+	checkpointSocketPath := filepath.Join(dataDir, "ao-checkpoint.sock")
+	committedInterface := strings.TrimSpace(bootstrap.Launch.Interface)
+	if committedInterface == "" {
+		committedInterface = workertransport.InterfaceTUI
+	}
+	var chatRunner workertransport.ChatRunner
+	if err := verifyHarnessAvailable(bootstrap.Launch.Harness); err != nil {
+		// Workspace files and shell terminals use the same worker transport as the
+		// coding agent. Keep that transport alive when a rootfs is missing the
+		// selected harness instead of making the whole sandbox unreachable.
+		logger.Warn("coding-agent harness unavailable; continuing with workspace transport", "error", err)
+	} else {
+		b := workerexec.HarnessBuilder{DataDir: dataDir}
+		agentCommandFactory = func(buildCtx context.Context, nativeConversationID string) (workerexec.Command, error) {
+			credential, err := client.Credential(buildCtx)
+			if err != nil {
+				return workerexec.Command{}, fmt.Errorf("load coding-agent credential: %w", err)
+			}
+			launch := bootstrap.Launch
+			launch.AgentSessionID = strings.TrimSpace(nativeConversationID)
+			command, err := b.BuildInteractive(launch, credential, workspace)
+			credential.Secret = ""
+			if err != nil {
+				return workerexec.Command{}, fmt.Errorf("build interactive coding-agent command: %w", err)
+			}
+			command.Env["AO_CLOUD_WORKER_API_URL"] = client.baseURL
+			command.Env["AO_CLOUD_WORKER_TOKEN_FILE"] = client.tokenFile
+			command.Env["AO_SESSION_ID"] = bootstrap.SessionID
+			command.Env["AO_PROJECT_ID"] = bootstrap.Launch.ProjectID
+			command.Env["AO_SESSION_KIND"] = bootstrap.Launch.Kind
+			command.Env["AO_CHECKPOINT_SOCKET"] = checkpointSocketPath
+			command.Env["AO_PULL_REQUEST_SOCKET"] = pullRequestSocketPath
+			command.Env["AO_PULL_REQUEST_HELP"] = "curl --unix-socket $AO_PULL_REQUEST_SOCKET " +
+				`-X POST http://localhost/pull-request -H 'Content-Type: application/json' ` +
+				`-d '{"branch":"<pushed branch name>","title":"<PR title>","body":"<PR body>"}' ` +
+				"to push the current branch and open a pull request against the repository's default branch."
+			command.Env["AO_REVIEW_SOCKET"] = reviewSocketPath
+			command.Env["AO_REVIEW_HELP"] = "curl --unix-socket $AO_REVIEW_SOCKET " +
+				`-X POST http://localhost/review -H 'Content-Type: application/json' ` +
+				`-d '{"reviewRunId":"<review run id from the prompt>","verdict":"approved|changes_requested","body":"<your findings>"}' ` +
+				"to submit an AO-triggered review verdict."
+			return command, nil
+		}
+		chatRunner = &workerexec.Supervisor{
+			Control: client, Builder: b, Runner: workerexec.OSRunner{},
+			UseProviderProtocol: true,
+			// Use the supervisor's 100 ms default. A one-second worker-command
+			// poll makes every phase of a TUI <-> Chat handoff visibly laggy,
+			// particularly on remote Linux sandboxes.
+			Workspace: workspace, Logger: logger,
+		}
+	}
+
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	started := make(chan error, 1)
+	chatWorkspaceReady := make(chan struct{})
+	compareBase := ""
+	if defaultBranch := strings.TrimSpace(bootstrap.Launch.DefaultBranch); defaultBranch != "" {
+		compareBase = "origin/" + defaultBranch
+	}
 	transportSupervisor := workertransport.Supervisor{
-		Control: client, Workspace: workspace, Logger: logger,
-		Started: started,
+		Control: client, Workspace: workspace, DataDir: dataDir, Harness: bootstrap.Launch.Harness, CompareBase: compareBase, Logger: logger,
+		AgentCommandFactory: agentCommandFactory,
+		Started:             started, ChatRunner: chatRunner,
+		ChatWorkspaceReady: chatWorkspaceReady,
+		InitialInterface:   committedInterface,
+		AgentSessionID:     bootstrap.Launch.AgentSessionID,
 	}
 	// Real-time terminal streaming (duplex predictive echo) rides the same
 	// worker transport; wire it before Run when the sandbox opts in. Preserved
@@ -184,7 +250,8 @@ func run(logger *slog.Logger) error {
 	// perceived connection path independent from clone latency without letting
 	// a prompt run in an empty workspace.
 	transportSupervisor.HoldAgentInputUntilWorkspaceReady()
-	results := make(chan error, 5)
+	results := make(chan error, 6)
+	backgroundWorkers := 5
 	go func() { results <- client.heartbeatLoop(runCtx, logger) }()
 	go func() { results <- transportSupervisor.Run(runCtx) }()
 	go func() {
@@ -196,13 +263,28 @@ func run(logger *slog.Logger) error {
 	go func() {
 		results <- runReviewBridge(runCtx, reviewSocketPath, client, logger)
 	}()
+	if outbox, err := notificationoutbox.Open(filepath.Join(dataDir, "notification-outbox.db")); err != nil {
+		logger.Warn("open notification outbox", "error", err)
+	} else {
+		backgroundWorkers++
+		go func() {
+			defer outbox.Close()
+			results <- (&notificationoutbox.Flusher{
+				Outbox: outbox, WorkerEpoch: bootstrap.Epoch, Logger: logger,
+				Deliver: func(deliveryCtx context.Context, event notificationoutbox.Event) error {
+					if err := transportSupervisor.DeliverNotification(deliveryCtx, event); err == nil {
+						return nil
+					}
+					return client.publishNotification(deliveryCtx, event)
+				},
+			}).Run(runCtx)
+		}()
+	}
 	if err := <-started; err != nil {
 		cancel()
-		<-results
-		<-results
-		<-results
-		<-results
-		<-results
+		for index := 0; index < backgroundWorkers; index++ {
+			<-results
+		}
 		return fmt.Errorf("start workspace transport: %w", err)
 	}
 	if err := client.publishEvent(ctx, "worker.ready", map[string]any{
@@ -213,6 +295,12 @@ func run(logger *slog.Logger) error {
 	}); err != nil {
 		logger.Warn("publish worker.ready failed", "error", err)
 	}
+	// rehydrateDone gates the coding agent on delete/restore rehydration: the
+	// preserved uncommitted work must be applied and the transcript written
+	// before the agent is built, so --resume finds the conversation and the
+	// workspace holds the restored files. It is closed once (checkout success or
+	// failure) so the agent never hangs.
+	rehydrateDone := make(chan struct{})
 	go func() {
 		if err := prepareWorkspace(
 			runCtx, logger, client, bootstrap, workspace, dataDir, publicURL,
@@ -220,24 +308,38 @@ func run(logger *slog.Logger) error {
 			if runCtx.Err() == nil {
 				logger.Error("background workspace startup failed", "error", err)
 			}
+			close(rehydrateDone)
 			return
 		}
+		// Restore a previously deleted session's state before the agent launches.
+		// A fresh session finds nothing captured and this returns quickly.
+		rehydrateSession(runCtx, logger, client, bootstrap, workspace, dataDir)
+		close(rehydrateDone)
+		close(chatWorkspaceReady)
 		transportSupervisor.MarkWorkspaceReady()
+		// Serve durable-restore checkpointing now that the checkout and the git
+		// credential helper are in place. The capture is triggered by the agent's
+		// turn-completion (Stop) hook via this unix socket, not a timer. Bound to
+		// runCtx: it stops on shutdown.
+		cp := newCheckpointer(client, bootstrap, workspace, dataDir, logger)
+		if err := runCheckpointBridge(runCtx, checkpointSocketPath, cp.checkpoint, logger); err != nil &&
+			runCtx.Err() == nil {
+			logger.Warn("checkpoint bridge stopped", "error", err)
+		}
 	}()
 	go func() {
 		if err := startInteractiveAgent(
 			runCtx, logger, client, bootstrap, workspace, dataDir,
-			pullRequestSocketPath, reviewSocketPath, &transportSupervisor,
+			pullRequestSocketPath, reviewSocketPath, checkpointSocketPath, &transportSupervisor, rehydrateDone,
 		); err != nil && runCtx.Err() == nil {
 			logger.Error("background coding-agent startup failed", "error", err)
 		}
 	}()
 	first := <-results
 	cancel()
-	<-results
-	<-results
-	<-results
-	<-results
+	for index := 1; index < backgroundWorkers; index++ {
+		<-results
+	}
 	if ctx.Err() != nil {
 		logger.Info("worker shutting down")
 		return nil
@@ -282,8 +384,50 @@ func prepareWorkspace(
 		); err != nil {
 			return fmt.Errorf("configure repository tooling: %w", err)
 		}
+		// Multi-repo dev kit: clone any additional repositories alongside the
+		// primary checkout. Non-fatal by design — an extra repo that cannot be
+		// cloned (e.g. it is outside the session credential's GitHub App
+		// installation) must never stop the session from starting on its primary
+		// repo. Extra repos reuse the session's checkout-grant token, so they work
+		// for repositories the installation can access; arbitrary private
+		// third-party repos need per-repo grants (a follow-up).
+		cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap.Launch.ExtraRepos, workspace, dataDir)
+	}
+	if err := worker.EnsureWorkspaceReviewBase(
+		ctx, worker.ExecGitRunner{}, workspace, bootstrap.Launch.DefaultBranch,
+	); err != nil {
+		return fmt.Errorf("record workspace review base: %w", err)
 	}
 	return nil
+}
+
+// cloneExtraRepos clones each additional dev-kit repository as a sibling of the
+// primary checkout, so the agent (whose working directory is the primary repo)
+// can reach it at ../<name>. It is best-effort: every failure is logged and
+// skipped so the session always starts on its primary repo. The launcher
+// (workerexec) computes the same paths via worker.ExtraRepoPath and lists them
+// in the agent's system prompt.
+func cloneExtraRepos(ctx context.Context, logger *slog.Logger, token string, repos []worker.RepoRef, workspace, dataDir string) {
+	if len(repos) == 0 {
+		return
+	}
+	parent := filepath.Dir(workspace)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		logger.Warn("multi-repo: cannot create extra-repos directory", "error", err)
+		return
+	}
+	for _, repo := range repos {
+		dest := worker.ExtraRepoPath(workspace, repo.URL)
+		// Clone via worker.CloneExtraRepo, which uses the primary checkout's
+		// askpass mechanism: the token stays in the command's environment and
+		// never enters the URL, argv, or the repo's .git/config, and the repo is
+		// wired to the session credential helper for the agent's own git ops.
+		if err := worker.CloneExtraRepo(ctx, worker.ExecGitRunner{}, parent, dest, repo.URL, repo.Branch, token, dataDir); err != nil {
+			logger.Warn("multi-repo: extra repo clone failed (non-fatal)", "repo", repo.URL, "error", err)
+			continue
+		}
+		logger.Info("multi-repo: cloned extra repo", "repo", repo.URL, "path", dest)
+	}
 }
 
 func startInteractiveAgent(
@@ -291,44 +435,40 @@ func startInteractiveAgent(
 	logger *slog.Logger,
 	client *client,
 	bootstrap worker.BootstrapResponse,
-	workspace, dataDir, pullRequestSocketPath, reviewSocketPath string,
+	workspace, dataDir, pullRequestSocketPath, reviewSocketPath, checkpointSocketPath string,
 	transportSupervisor *workertransport.Supervisor,
+	rehydrateDone <-chan struct{},
 ) error {
+	// Wait until the checkout has completed and any delete/restore rehydration
+	// has run: the transcript must be on disk before the command is built, so
+	// BuildInteractive detects the restored conversation and launches --resume.
+	select {
+	case <-ctx.Done():
+		return nil
+	case <-rehydrateDone:
+	}
 	if err := verifyHarnessAvailable(bootstrap.Launch.Harness); err != nil {
 		logger.Warn("coding-agent harness unavailable", "error", err)
 		return nil
 	}
-	credential, err := client.Credential(ctx)
-	if err != nil {
-		return fmt.Errorf("load coding-agent credential: %w", err)
+	if strings.TrimSpace(bootstrap.Launch.Interface) == workertransport.InterfaceChat {
+		return nil // The headless controller owns this worker until a TUI handoff.
 	}
-	agentCommand, err := (workerexec.HarnessBuilder{DataDir: dataDir}).BuildInteractive(
-		bootstrap.Launch, credential, workspace,
-	)
+	if transportSupervisor.AgentCommandFactory == nil {
+		return errors.New("coding-agent command factory is unavailable")
+	}
+	agentCommand, err := transportSupervisor.AgentCommandFactory(ctx, bootstrap.Launch.AgentSessionID)
 	if err != nil {
 		return fmt.Errorf("build interactive coding-agent command: %w", err)
 	}
-	agentCommand.Env["AO_CLOUD_WORKER_API_URL"] = client.baseURL
-	agentCommand.Env["AO_CLOUD_WORKER_TOKEN_FILE"] = client.tokenFile
-	agentCommand.Env["AO_SESSION_ID"] = bootstrap.SessionID
-	agentCommand.Env["AO_PROJECT_ID"] = bootstrap.Launch.ProjectID
-	agentCommand.Env["AO_SESSION_KIND"] = bootstrap.Launch.Kind
-	agentCommand.Env["AO_PULL_REQUEST_SOCKET"] = pullRequestSocketPath
-	agentCommand.Env["AO_PULL_REQUEST_HELP"] = "curl --unix-socket $AO_PULL_REQUEST_SOCKET " +
-		`-X POST http://localhost/pull-request -H 'Content-Type: application/json' ` +
-		`-d '{"branch":"<pushed branch name>","title":"<PR title>","body":"<PR body>"}' ` +
-		"to push the current branch and open a pull request against the repository's default branch."
-	agentCommand.Env["AO_REVIEW_SOCKET"] = reviewSocketPath
-	agentCommand.Env["AO_REVIEW_HELP"] = "curl --unix-socket $AO_REVIEW_SOCKET " +
-		`-X POST http://localhost/review -H 'Content-Type: application/json' ` +
-		`-d '{"reviewRunId":"<review run id from the prompt>","verdict":"approved|changes_requested","body":"<your findings>"}' ` +
-		"to submit an AO-triggered review verdict."
 	agentTerminal, err := client.ensureAgentTerminal(ctx)
 	if err != nil {
-		agentCommand.Cleanup()
+		if agentCommand.Cleanup != nil {
+			agentCommand.Cleanup()
+		}
 		return fmt.Errorf("initialize agent terminal: %w", err)
 	}
-	if err := transportSupervisor.StartAgent(ctx, agentCommand, agentTerminal.TerminalID); err != nil {
+	if err := transportSupervisor.StartAgent(ctx, agentCommand, agentTerminal); err != nil {
 		return fmt.Errorf("start interactive coding-agent terminal: %w", err)
 	}
 	if err := client.publishEvent(ctx, "agent.ready", map[string]any{
@@ -524,6 +664,41 @@ func (c *client) ClaimTurn(ctx context.Context) (*worker.Turn, error) {
 	return response.Turn, nil
 }
 
+func (c *client) CreateChatApproval(ctx context.Context, request worker.ChatApproval) error {
+	return c.do(ctx, "/worker/turns/"+url.PathEscape(request.TurnID)+"/approvals", request, nil)
+}
+
+func (c *client) PublishTurnCapabilities(ctx context.Context, turnID string, attempt int, steering bool) error {
+	return c.do(ctx, "/worker/turns/"+url.PathEscape(turnID)+"/capabilities", map[string]any{
+		"attempt": attempt, "steering": steering,
+	}, nil)
+}
+
+func (c *client) ChatApprovalDecision(ctx context.Context, turnID string, attempt int, requestID string) (string, error) {
+	var response struct {
+		Decision string `json:"decision"`
+	}
+	path := "/worker/turns/" + url.PathEscape(turnID) + "/approvals/" + url.PathEscape(requestID) + "?attempt=" + strconv.Itoa(attempt)
+	if err := c.doMethod(ctx, http.MethodGet, path, nil, &response); err != nil {
+		return "", err
+	}
+	return response.Decision, nil
+}
+
+func (c *client) AgentSessionID(ctx context.Context) (string, error) {
+	var response struct {
+		AgentSessionID string `json:"agentSessionId"`
+	}
+	if err := c.doMethod(ctx, http.MethodGet, "/worker/session", nil, &response); err != nil {
+		return "", err
+	}
+	return response.AgentSessionID, nil
+}
+
+func (c *client) EnsureAgentTerminal(ctx context.Context) (worker.AgentTerminalResponse, error) {
+	return c.ensureAgentTerminal(ctx)
+}
+
 func (c *client) Credential(ctx context.Context) (worker.CredentialResponse, error) {
 	var response worker.CredentialResponse
 	err := c.doMethod(ctx, http.MethodGet, "/worker/credential", nil, &response)
@@ -596,15 +771,12 @@ func anonymousCheckoutEnabled() bool {
 }
 
 func verifyHarnessAvailable(harness string) error {
-	var binary string
-	switch harness {
-	case "claude-code":
-		binary = "claude"
-	case "codex":
-		binary = "codex"
-	case "cursor":
-		binary = "cursor-agent"
-	default:
+	// Derive the expected binary from the harness registry (the same source
+	// BuildInteractive launches from) so every registered harness is gated
+	// consistently. A hardcoded switch here silently skipped opencode, leaving its
+	// sessions with no agent terminal (no TUI).
+	binary, ok := workerexec.SupportedHarness(harness)
+	if !ok {
 		return fmt.Errorf("unsupported coding-agent harness %q", harness)
 	}
 	if _, err := exec.LookPath(binary); err != nil {
@@ -615,6 +787,10 @@ func verifyHarnessAvailable(harness string) error {
 
 func (c *client) PublishOutput(ctx context.Context, output worker.OutputEvent) error {
 	return c.publishEvent(ctx, "chat.assistant_delta", output)
+}
+
+func (c *client) PublishActivity(ctx context.Context, activity worker.ActivityEvent) error {
+	return c.publishEvent(ctx, "agent.activity", activity)
 }
 
 func (c *client) ClaimTransport(ctx context.Context) (*worker.TransportRequest, error) {
@@ -665,12 +841,13 @@ func (c *client) FailTransport(
 func (c *client) PublishTerminalOutput(
 	ctx context.Context,
 	terminalID string,
+	id int64,
 	data []byte,
 ) error {
 	return c.do(
 		ctx,
 		"/worker/terminals/"+url.PathEscape(terminalID)+"/output",
-		worker.TerminalOutputRequest{Data: data},
+		worker.TerminalOutputRequest{ID: id, Data: data},
 		nil,
 	)
 }
@@ -715,11 +892,15 @@ func (c *client) PublishTerminalExit(
 	ctx context.Context,
 	terminalID string,
 	exitCode int,
+	interfaceHandoff bool,
 ) error {
 	return c.do(
 		ctx,
 		"/worker/terminals/"+url.PathEscape(terminalID)+"/exit",
-		worker.TerminalExitRequest{ExitCode: exitCode},
+		worker.TerminalExitRequest{
+			ExitCode:         exitCode,
+			InterfaceHandoff: interfaceHandoff,
+		},
 		nil,
 	)
 }
@@ -768,6 +949,19 @@ func (c *client) FailTurn(
 
 func (c *client) publishEvent(ctx context.Context, eventType string, payload any) error {
 	return c.do(ctx, "/worker/events", worker.EventRequest{Type: eventType, Payload: payload}, nil)
+}
+
+func (c *client) publishNotification(ctx context.Context, event notificationoutbox.Event) error {
+	var response worker.NotificationEventResponse
+	if err := c.do(ctx, "/worker/notification-events", worker.NotificationEventRequest{
+		EventID: event.EventID, Type: event.EventType, OccurredAt: event.OccurredAt, Payload: event.Payload,
+	}, &response); err != nil {
+		return err
+	}
+	if !response.Accepted || response.EventID != event.EventID {
+		return errors.New("control plane returned an invalid notification acknowledgement")
+	}
+	return nil
 }
 
 func (c *client) do(ctx context.Context, path string, body any, out any) error {

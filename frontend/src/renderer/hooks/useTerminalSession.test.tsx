@@ -109,7 +109,6 @@ function createFakeTerminal(): FakeTerminal {
 		cols: 80,
 		rows: 24,
 		activeBufferType: "normal",
-		bufferType: () => terminal.activeBufferType,
 		autoCompleteWrites: true,
 		lines: [],
 		pendingWriteCallbacks: [],
@@ -127,6 +126,7 @@ function createFakeTerminal(): FakeTerminal {
 			terminal.latestOutputRequests += 1;
 		},
 		prepareForActivation: async () => undefined,
+		requestActivationFocus: () => undefined,
 		notifyCursorColorScheme: () => undefined,
 		sendUserInput: (data, source = "shortcut") => {
 			let accepted = false;
@@ -242,7 +242,6 @@ describe("useTerminalSession", () => {
 			["handle-1", "echo pasted\r"],
 		]);
 		terminal.emitResize(120, 40);
-		act(() => void vi.advanceTimersByTime(100));
 		expect(muxes[0].resizes).toContainEqual(["handle-1", 120, 40]);
 	});
 
@@ -305,8 +304,8 @@ describe("useTerminalSession", () => {
 		act(() => muxes[0].emitOpened("handle-1"));
 		const initialResizes = muxes[0].resizes.length;
 
-		// Queue resize work while visible, then park the terminal before the
-		// debounce fires. Hiding must cancel the pending publication.
+		// A visible grid change publishes immediately. Parking then ignores later
+		// fits, including ones already measured while the pane was on screen.
 		terminal.emitResize(120, 40);
 		view.rerender({ daemonReady: true, isVisible: false });
 		terminal.typeKeys("hidden input");
@@ -316,7 +315,7 @@ describe("useTerminalSession", () => {
 		act(() => void vi.advanceTimersByTime(500));
 
 		expect(muxes[0].inputs).toEqual([]);
-		expect(muxes[0].resizes).toHaveLength(initialResizes);
+		expect(muxes[0].resizes.slice(initialResizes)).toEqual([["handle-1", 120, 40]]);
 		expect(terminal.lines).toContain("output while hidden");
 		expect(muxes).toHaveLength(1);
 
@@ -324,9 +323,11 @@ describe("useTerminalSession", () => {
 		view.rerender({ daemonReady: true, isVisible: true });
 		terminal.typeKeys("visible\r");
 		terminal.emitResize(150, 55);
-		act(() => void vi.advanceTimersByTime(100));
 		expect(muxes[0].inputs).toEqual([["handle-1", "visible\r"]]);
-		expect(muxes[0].resizes.slice(initialResizes)).toEqual([["handle-1", 150, 55]]);
+		expect(muxes[0].resizes.slice(initialResizes)).toEqual([
+			["handle-1", 120, 40],
+			["handle-1", 150, 55],
+		]);
 	});
 
 	it("publishes a locally refitted parked grid when the terminal becomes visible", () => {
@@ -345,25 +346,30 @@ describe("useTerminalSession", () => {
 		expect(muxes[0].resizes.slice(initialResizes)).toEqual([["handle-1", 132, 47]]);
 	});
 
-	it("collapses a drag's burst into one resize and does not re-send the settled grid", () => {
+	it("publishes each grid in a drag as it happens and does not re-send the settled grid", () => {
 		const { terminal, muxes } = setup();
 		const initialResizes = muxes[0].resizes.length;
 		terminal.emitResize(100, 30);
 		terminal.emitResize(110, 34);
 		terminal.emitResize(120, 40);
-		act(() => void vi.advanceTimersByTime(100));
-		expect(muxes[0].resizes.slice(initialResizes)).toEqual([["handle-1", 120, 40]]);
-		act(() => void vi.advanceTimersByTime(250));
-		expect(muxes[0].resizes.slice(initialResizes)).toEqual([["handle-1", 120, 40]]);
+		expect(muxes[0].resizes.slice(initialResizes)).toEqual([
+			["handle-1", 100, 30],
+			["handle-1", 110, 34],
+			["handle-1", 120, 40],
+		]);
+		terminal.emitResize(120, 40);
+		expect(muxes[0].resizes.slice(initialResizes)).toEqual([
+			["handle-1", 100, 30],
+			["handle-1", 110, 34],
+			["handle-1", 120, 40],
+		]);
 	});
 
 	it("deduplicates the same visible grid across independent synchronization paths", () => {
 		const { terminal, muxes } = setup();
 		const initialResizes = muxes[0].resizes.length;
 		terminal.emitResize(120, 40);
-		act(() => void vi.advanceTimersByTime(100));
 		terminal.emitResize(120, 40);
-		act(() => void vi.advanceTimersByTime(100));
 
 		expect(muxes[0].resizes.slice(initialResizes)).toEqual([["handle-1", 120, 40]]);
 	});
@@ -381,9 +387,7 @@ describe("useTerminalSession", () => {
 		const { terminal, muxes } = setup();
 		const initialResizes = muxes[0].resizes.length;
 		terminal.emitResize(100, 30);
-		act(() => void vi.advanceTimersByTime(100));
 		terminal.emitResize(120, 40);
-		act(() => void vi.advanceTimersByTime(100 + 250));
 		expect(muxes[0].resizes.slice(initialResizes)).toEqual([
 			["handle-1", 100, 30],
 			["handle-1", 120, 40],
@@ -593,9 +597,8 @@ describe("useTerminalSession", () => {
 			const initial = muxes[0].resizes.length;
 			act(() => muxes[0].emitOpened("handle-1"));
 
-			// The resize debounce (100ms) outlasts the quiet window (60ms), so the
-			// deferral only engages when the replay is genuinely still streaming
-			// when the resize settles — the long-replay case this protects.
+			// A resize during a long replay publishes once. Flushing the replay must
+			// not send that grid again.
 			terminal.emitResize(120, 40);
 			for (let elapsed = 0; elapsed < 150; elapsed += 30) {
 				act(() => muxes[0].emitData("handle-1", "x"));
@@ -661,7 +664,6 @@ describe("useTerminalSession", () => {
 
 			// The user keeps dragging: B must supersede A as the final grid.
 			terminal.emitResize(100, 30);
-			act(() => void vi.advanceTimersByTime(100)); // B settles
 			act(() => void vi.advanceTimersByTime(300)); // replay flushes
 
 			// A's stale 120x40 must never be sent again — landing it after B would
@@ -986,6 +988,41 @@ describe("useTerminalSession", () => {
 		expect(view.result.current.state).toBe("attached");
 	});
 
+	it("has no client open timeout for a cloud pane: a slow open never storms", () => {
+		// A cloud pane opens its socket directly; readiness is server-driven (the
+		// CP holds it in "starting" until the terminal opens). There is NO client
+		// open timeout — the 3s/30s band-aids only ever tore a healthy slow open
+		// down mid-attach and rebuilt the mux, a self-sustaining storm. So however
+		// long the CP takes, the pane keeps its single mux and stays "connecting".
+		const cloudSession: WorkspaceSession = { ...session, cloud: { orgId: "org-1" } };
+		const { view, muxes } = setup({ attachedSession: cloudSession });
+		expect(view.result.current.state).toBe("connecting");
+		// Far past any old timeout: no teardown, no rebuild, no storm.
+		act(() => void vi.advanceTimersByTime(120_000));
+		expect(muxes).toHaveLength(1);
+		expect(muxes[0].disposed).toBe(false);
+		expect(view.result.current.state).toBe("connecting");
+		// The server finally acks: one clean attach, no rebuild.
+		act(() => muxes[0].emitOpened("handle-1"));
+		expect(view.result.current.state).toBe("attached");
+		expect(muxes).toHaveLength(1);
+	});
+
+	it("recovers a stalled cloud pane only when the socket closes (server-driven)", () => {
+		// With no client timer, a stalled cloud pane is recovered by the transport,
+		// not a clock: the CP closes the socket at its own ready deadline, which
+		// reaches onConnectionChange("closed") and schedules exactly one flat
+		// reattach. No client-side timeout ever fires to rebuild the mux.
+		const cloudSession: WorkspaceSession = { ...session, cloud: { orgId: "org-1" } };
+		const { view, muxes } = setup({ attachedSession: cloudSession });
+		act(() => void vi.advanceTimersByTime(120_000));
+		expect(muxes).toHaveLength(1); // no client teardown while the socket lives
+		act(() => muxes[0].emitConnection("closed")); // CP ready deadline closes it
+		act(() => void vi.advanceTimersByTime(1_000)); // flat cloud reconnect
+		expect(muxes).toHaveLength(2); // exactly one rebuild, not a storm
+		expect(view.result.current.state).not.toBe("attached");
+	});
+
 	it("backs off between failed reconnect attempts", () => {
 		const { muxes } = setup();
 		act(() => muxes[0].emitConnection("closed"));
@@ -1021,34 +1058,45 @@ describe("useTerminalSession", () => {
 		expect(muxes).toHaveLength(1);
 	});
 
-	describe("predictive local echo (cloud sessions)", () => {
+	describe("line-buffered local input (cloud sessions)", () => {
 		const cloudSession: WorkspaceSession = { ...session, cloud: { orgId: "org-1" } };
 
-		it("renders a predicted keystroke immediately and strips the server echo", () => {
+		it("renders typing immediately and sends the complete line on Enter", () => {
 			const { terminal, muxes } = setup({ attachedSession: cloudSession });
 			act(() => muxes[0].emitConnection("open"));
 			act(() => muxes[0].emitOpened("handle-1"));
-			terminal.typeKeys("a");
-			// The prediction landed locally before any server round trip…
-			expect(terminal.lines).toEqual(["a"]);
-			// …while the wire got the raw keystroke.
-			expect(muxes[0].inputs).toEqual([["handle-1", "a"]]);
+			act(() => terminal.typeKeys("a"));
+			act(() => terminal.typeKeys("b"));
+			// The draft landed locally before any server round trip…
+			expect(terminal.lines).toEqual(["\x1b[Ka", "b"]);
+			// …while nothing was streamed character by character.
+			expect(muxes[0].inputs).toEqual([]);
+			act(() => terminal.typeKeys("\r"));
+			expect(muxes[0].inputs).toEqual([
+				["handle-1", "ab"],
+				["handle-1", "\r"],
+			]);
 			// The authoritative echo of what is already on screen renders nothing.
-			act(() => muxes[0].emitData("handle-1", "a"));
-			expect(terminal.lines).toEqual(["a"]);
+			act(() => muxes[0].emitData("handle-1", "ab"));
+			expect(terminal.lines).toEqual(["\x1b[Ka", "b"]);
 			// Output beyond the echo flows through verbatim.
 			act(() => muxes[0].emitData("handle-1", "$ "));
-			expect(terminal.lines).toEqual(["a", "$ "]);
+			expect(terminal.lines).toEqual(["\x1b[Ka", "b", "$ "]);
 		});
 
-		it("never predicts while the pane is on the alternate buffer", () => {
+		it("buffers input inside alternate-buffer agent TUIs", () => {
 			const { terminal, muxes } = setup({ attachedSession: cloudSession });
 			terminal.activeBufferType = "alternate";
 			act(() => muxes[0].emitConnection("open"));
 			act(() => muxes[0].emitOpened("handle-1"));
-			terminal.typeKeys("a");
-			expect(terminal.lines).toEqual([]);
-			expect(muxes[0].inputs).toEqual([["handle-1", "a"]]);
+			act(() => terminal.typeKeys("a"));
+			expect(terminal.lines).toEqual(["\x1b[Ka"]);
+			expect(muxes[0].inputs).toEqual([]);
+			act(() => terminal.typeKeys("\r"));
+			expect(muxes[0].inputs).toEqual([
+				["handle-1", "a"],
+				["handle-1", "\r"],
+			]);
 		});
 
 		it("does not locally echo keystrokes on local sessions", () => {

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -228,8 +229,11 @@ func TestStartCompletesHandshakeAndOpensThread(t *testing.T) {
 	conv, err := d.Start(context.Background(), ports.ChatStartConfig{
 		SessionID:     "ao-1",
 		WorkspacePath: "/tmp/ws",
+		Model:         "gpt-test",
+		Effort:        "high",
 		Permissions:   ports.PermissionModeDefault,
 		SystemPrompt:  "standing rules",
+		Ephemeral:     true,
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -245,10 +249,13 @@ func TestStartCompletesHandshakeAndOpensThread(t *testing.T) {
 
 	start := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/start" })
 	var params struct {
-		Cwd                   string `json:"cwd"`
-		ApprovalPolicy        string `json:"approvalPolicy"`
-		Sandbox               string `json:"sandbox"`
-		DeveloperInstructions string `json:"developerInstructions"`
+		Cwd                   string            `json:"cwd"`
+		ApprovalPolicy        string            `json:"approvalPolicy"`
+		Sandbox               string            `json:"sandbox"`
+		DeveloperInstructions string            `json:"developerInstructions"`
+		Model                 string            `json:"model"`
+		Config                map[string]string `json:"config"`
+		Ephemeral             bool              `json:"ephemeral"`
 	}
 	if err := json.Unmarshal(start.Params, &params); err != nil {
 		t.Fatalf("thread/start params: %v", err)
@@ -258,6 +265,19 @@ func TestStartCompletesHandshakeAndOpensThread(t *testing.T) {
 	}
 	if params.DeveloperInstructions != "standing rules" {
 		t.Errorf("developerInstructions = %q", params.DeveloperInstructions)
+	}
+	if params.Model != "gpt-test" || params.Config["model_reasoning_effort"] != "high" {
+		t.Errorf("model tuning = %#v", params)
+	}
+	if !params.Ephemeral {
+		t.Error("thread/start did not mark the background conversation ephemeral")
+	}
+	var rawParams map[string]json.RawMessage
+	if err := json.Unmarshal(start.Params, &rawParams); err != nil {
+		t.Fatalf("thread/start raw params: %v", err)
+	}
+	if _, ok := rawParams["reasoningEffort"]; ok {
+		t.Fatal("thread/start sent unsupported top-level reasoningEffort")
 	}
 	// Default permissions must match what AO already gives a Codex TUI session.
 	if params.ApprovalPolicy != "never" || params.Sandbox != "danger-full-access" {
@@ -605,6 +625,81 @@ func TestNotificationsBecomeNeutralEvents(t *testing.T) {
 	}
 }
 
+func TestReloadMCPServersReturnsCompletePagedInventory(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.respondTo(codexproto.MethodConfigMcpServerReload, `{}`)
+	srv.respondSequence(codexproto.MethodMcpServerStatusList,
+		`{"data":[{"name":"github","authStatus":"notLoggedIn","serverInfo":{"name":"github","version":"1"},"resourceTemplates":[],"resources":[],"tools":{}},{"name":"failed","authStatus":"unknown","resourceTemplates":[],"resources":[],"tools":{}}],"nextCursor":"page-2"}`,
+		`{"data":[{"name":"playwright","authStatus":"notLoggedIn","serverInfo":{"name":"playwright","version":"1"},"resourceTemplates":[],"resources":[],"tools":{}}]}`,
+	)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	result, err := conv.(ports.ChatMCPReloader).ReloadMCPServers(context.Background())
+	if err != nil {
+		t.Fatalf("ReloadMCPServers: %v", err)
+	}
+	if !result.Authoritative {
+		t.Fatal("successful complete inventory was not authoritative")
+	}
+	if len(result.Servers) != 2 || result.Servers[0].Name != "github" || result.Servers[1].Name != "playwright" {
+		t.Fatalf("servers = %+v, want both pages in order", result.Servers)
+	}
+
+	srv.mu.Lock()
+	var requests []frame
+	for _, request := range srv.seen {
+		if request.Method == codexproto.MethodMcpServerStatusList {
+			requests = append(requests, request)
+		}
+	}
+	srv.mu.Unlock()
+	if len(requests) != 2 {
+		t.Fatalf("inventory requests = %d, want 2", len(requests))
+	}
+	var first, second codexproto.ListMcpServerStatusParams
+	if err := json.Unmarshal(requests[0].Params, &first); err != nil {
+		t.Fatalf("decode first inventory params: %v", err)
+	}
+	if err := json.Unmarshal(requests[1].Params, &second); err != nil {
+		t.Fatalf("decode second inventory params: %v", err)
+	}
+	if first.Detail == nil || *first.Detail != codexproto.McpServerStatusDetailToolsAndAuthOnly {
+		t.Fatalf("detail = %v, want toolsAndAuthOnly", first.Detail)
+	}
+	if first.ThreadID == nil || *first.ThreadID != "thread-1" {
+		t.Fatalf("threadId = %v, want thread-1", first.ThreadID)
+	}
+	if first.Cursor != nil {
+		t.Fatalf("first cursor = %v, want absent", first.Cursor)
+	}
+	if second.Cursor == nil || *second.Cursor != "page-2" {
+		t.Fatalf("second cursor = %v, want page-2", second.Cursor)
+	}
+}
+
+func TestReloadMCPServersMarksFailedInventoryUnavailable(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.respondTo(codexproto.MethodConfigMcpServerReload, `{}`)
+	srv.replyError(codexproto.MethodMcpServerStatusList, -32602, "inventory unavailable")
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	result, err := conv.(ports.ChatMCPReloader).ReloadMCPServers(context.Background())
+	if err != nil {
+		t.Fatalf("ReloadMCPServers: %v", err)
+	}
+	if result.Authoritative || len(result.Servers) != 0 {
+		t.Fatalf("result = %+v, want unavailable inventory", result)
+	}
+}
+
 // app-server multiplexes child-agent thread notifications over the root
 // connection. The adapter's fallback target must remain the root turn; otherwise
 // an interrupt without an explicit id can stop a child and leave the requested
@@ -707,6 +802,13 @@ func TestResumeReappliesWorkspaceAndStandingInstructions(t *testing.T) {
 	}
 	if params.Config["model_reasoning_effort"] != "high" {
 		t.Fatalf("thread resume effort config = %q, want high", params.Config["model_reasoning_effort"])
+	}
+	var rawParams map[string]json.RawMessage
+	if err := json.Unmarshal(resume.Params, &rawParams); err != nil {
+		t.Fatalf("thread/resume raw params: %v", err)
+	}
+	if _, ok := rawParams["reasoningEffort"]; ok {
+		t.Fatal("thread/resume sent unsupported top-level reasoningEffort")
 	}
 	if params.DeveloperInstructions != "current AO standing instructions" {
 		t.Fatalf("developerInstructions = %q", params.DeveloperInstructions)
@@ -971,20 +1073,30 @@ func TestProbeReportsMissingBinary(t *testing.T) {
 // Chat must not be quietly stricter than the terminal path for the same setting.
 func TestApprovalSettingsMirrorTUIPosture(t *testing.T) {
 	for _, tc := range []struct {
+		readOnly                  bool
 		mode                      ports.PermissionMode
 		policy, sandbox, reviewer string
 	}{
-		{ports.PermissionModeDefault, "never", "danger-full-access", "user"},
-		{ports.PermissionModeBypassPermissions, "never", "danger-full-access", "user"},
-		{ports.PermissionModeAcceptEdits, "on-request", "workspace-write", "user"},
-		{ports.PermissionModeAuto, "on-request", "workspace-write", "auto_review"},
-		{ports.PermissionMode("nonsense"), "never", "danger-full-access", "user"},
+		{false, ports.PermissionModeDefault, "never", "danger-full-access", "user"},
+		{false, ports.PermissionModeBypassPermissions, "never", "danger-full-access", "user"},
+		{false, ports.PermissionModeAcceptEdits, "on-request", "workspace-write", "user"},
+		{false, ports.PermissionModeAuto, "on-request", "workspace-write", "auto_review"},
+		{false, ports.PermissionMode("nonsense"), "never", "danger-full-access", "user"},
+		{true, ports.PermissionModeAuto, "never", "read-only", "user"},
 	} {
-		policy, sandbox := approvalSettings(tc.mode)
-		reviewer := approvalReviewer(tc.mode)
+		policy, sandbox, reviewer := launchApprovalSettings(tc.mode, tc.readOnly)
 		if policy != tc.policy || sandbox != tc.sandbox || reviewer != tc.reviewer {
-			t.Errorf("approval settings(%q) = %q/%q/%q, want %q/%q/%q", tc.mode, policy, sandbox, reviewer, tc.policy, tc.sandbox, tc.reviewer)
+			t.Errorf("approval settings(%q, readOnly=%t) = %q/%q/%q, want %q/%q/%q", tc.mode, tc.readOnly, policy, sandbox, reviewer, tc.policy, tc.sandbox, tc.reviewer)
 		}
+	}
+}
+
+func TestReadOnlyTurnCannotOverrideSandbox(t *testing.T) {
+	params := map[string]any{}
+	applyTurnSettings(params, ports.ChatTurnSettings{Approval: ports.PermissionModeAuto}, true)
+	if params["approvalPolicy"] != "never" || params["approvalsReviewer"] != "user" ||
+		!reflect.DeepEqual(params["sandboxPolicy"], map[string]any{"type": "readOnly"}) {
+		t.Fatalf("read-only turn settings = %#v", params)
 	}
 }
 
@@ -1045,9 +1157,7 @@ func TestTurnSettingsUseTheTurnLevelWireShapes(t *testing.T) {
 	if _, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{
 		Text: "go",
 		Settings: ports.ChatTurnSettings{
-			Model:    "gpt-5.6-terra",
-			Effort:   "high",
-			Approval: ports.PermissionModeAcceptEdits,
+			Model: "gpt-5.6-terra", Effort: "high", Approval: ports.PermissionModeAcceptEdits,
 		},
 	}); err != nil {
 		t.Fatalf("SendTurn: %v", err)

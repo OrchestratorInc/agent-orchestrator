@@ -143,7 +143,7 @@ for (const animated of [false, true]) {
 		await page.goto(`/#/projects/${projectId}/sessions/${sessionA}`);
 		await expect(page.getByRole("combobox", { name: "Message the agent" })).toBeVisible();
 		await openProjectMenu(page);
-		await page.getByRole("menuitem", { name: /New session/ }).click();
+		await page.getByRole("menuitem", { name: /New task/ }).click();
 		await expect(page.getByRole("dialog")).toBeVisible();
 		await expectPromptTakesTyping(page);
 	});
@@ -155,7 +155,7 @@ for (const animated of [false, true]) {
 		await page.goto(`/#/projects/${projectId}/sessions/${sessionA}`);
 		await expect(page.getByRole("combobox", { name: "Message the agent" })).toBeVisible();
 		await openProjectMenu(page);
-		await page.getByRole("menuitem", { name: /New session/ }).click();
+		await page.getByRole("menuitem", { name: /New task/ }).click();
 		await expect(page.getByRole("dialog")).toBeVisible();
 		await page.keyboard.press("Escape");
 		await expect(page.getByRole("dialog")).toBeHidden();
@@ -174,7 +174,7 @@ test("renderer: New task from the sidebar project context menu focuses the compo
 		.getByRole("button", { name: new RegExp(`Project actions for ${projectId}`) })
 		.first()
 		.click({ button: "right", force: true });
-	await page.getByRole("menuitem", { name: /New session/ }).click();
+	await page.getByRole("menuitem", { name: /New task/ }).click();
 	await expect(page.getByRole("dialog")).toBeVisible();
 	await expectPromptTakesTyping(page);
 });
@@ -200,6 +200,24 @@ test("renderer: opening another session focuses its chat composer @T0", async ({
 	await expect.poll(async () => (await activeElementInfo(page)).label).toBe("Message the agent");
 	await page.keyboard.type("typed after switching");
 	await expect(composer).toHaveText("typed after switching");
+});
+
+test("renderer: hovering a Chat session fetches its conversation before opening it @T0", async ({ page }) => {
+	await setup(page);
+	let requests = 0;
+	await page.route(`http://127.0.0.1:8080/api/v1/sessions/${sessionB}/conversation*`, async (route) => {
+		requests++;
+		await route.fulfill({ json: conversation(sessionB) });
+	});
+	await page.goto(`/#/projects/${projectId}/sessions/${sessionA}`);
+	await expect(page.getByText(`Existing conversation in ${sessionA}`)).toBeVisible();
+
+	const row = page.getByRole("button", { name: /Open Session B/ }).first();
+	await row.hover();
+	await expect.poll(() => requests).toBe(1);
+	await row.click();
+	await expect(page.getByText(`Existing conversation in ${sessionB}`)).toBeVisible();
+	expect(requests).toBe(1);
 });
 
 async function setupSwitchAgentSession(page: Page) {
@@ -290,7 +308,7 @@ test("renderer: a context-menu dialog returns focus to where the menu opened fro
 
 	const openedFrom = `Project actions for ${projectId}`;
 	await page.getByRole("button", { name: new RegExp(openedFrom) }).first().click({ button: "right", force: true });
-	await page.getByRole("menuitem", { name: /New session/ }).click();
+	await page.getByRole("menuitem", { name: /New task/ }).click();
 	await expect(page.getByRole("dialog")).toBeVisible();
 	await page.keyboard.press("Escape");
 	await expect(page.getByRole("dialog")).toBeHidden();

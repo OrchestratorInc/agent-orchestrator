@@ -8,6 +8,13 @@ import { SettingsDialog } from "./SettingsDialog";
 
 const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
 
+const accountsResponse = {
+	accountRevision: 0,
+	accounts: [],
+	capabilities: {},
+	deviceReconciliation: { status: "verified", activeAccountVerified: false, reasonCode: "verified", retryable: false },
+};
+
 vi.mock("../lib/api-client", () => ({
 	apiClient: { POST: postMock },
 	apiErrorCode: (error: { code?: string }) => error?.code,
@@ -21,21 +28,43 @@ vi.mock("./ProjectSettingsForm", () => ({
 	}: {
 		onSaveState?: (state: ProjectSettingsSaveState) => void;
 	}) => (
-		<button
-			type="button"
-			onClick={() =>
-				onSaveState?.({
-					phase: "pending",
-				})
-			}
-		>
-			Start pending save
-		</button>
+		<>
+			<button
+				type="button"
+				onClick={() =>
+					onSaveState?.({
+						phase: "pending",
+					})
+				}
+			>
+				Start pending save
+			</button>
+			<button
+				type="button"
+				onClick={() =>
+					onSaveState?.({
+						phase: "failed",
+						error: "Display name must be 100 characters or fewer",
+					})
+				}
+			>
+				Trigger failed save
+			</button>
+			<button type="button" onClick={() => onSaveState?.({ phase: "saved" })}>
+				Complete save
+			</button>
+		</>
 	),
 }));
 
 vi.mock("./GlobalSettingsForm", () => ({
-	GlobalSettingsForm: ({ section }: { section: string }) => <div data-testid="global-settings-section">{section}</div>,
+	GlobalSettingsForm: ({ focusAgentId, hostId, section }: { focusAgentId?: string; hostId?: string; section: string }) => (
+		<div data-focus-agent={focusAgentId} data-host={hostId} data-testid="global-settings-section">{section}</div>
+	),
+}));
+
+vi.mock("./CuesDialog", () => ({
+	CuesSettings: ({ projectId }: { projectId: string }) => <div data-testid="project-cues-settings">{projectId}</div>,
 }));
 
 // The dialog reads the cloud gate to decide whether the Cloud nav page exists;
@@ -44,10 +73,18 @@ vi.mock("../hooks/useCloudGate", () => ({
 	useCloudGate: () => ({ cloudEnabled: false, localEnabled: true }),
 }));
 
+// The dialog reads the cloud session email to gate the 11x-only Coder page.
+// Signed out here, so that page is never visible.
+vi.mock("../lib/cloud-session", () => ({
+	useCloudSession: () => ({ status: "unauthenticated", session: null }),
+}));
+
 describe("SettingsDialog", () => {
 	beforeEach(() => {
-		postMock.mockReset().mockResolvedValue({ data: { operationId: "login-1", status: "cancelled" } });
-		useUiStore.setState({ settingsModal: null });
+		postMock.mockReset().mockImplementation((path: string) => path === "/api/v1/agents/codex/accounts/ensure"
+			? Promise.resolve({ data: accountsResponse })
+			: Promise.resolve({ data: { operationId: "login-1", status: "cancelled" } }));
+		useUiStore.setState({ developerMode: false, settingsModal: null });
 	});
 
 	function renderSettingsDialog() {
@@ -61,10 +98,42 @@ describe("SettingsDialog", () => {
 
 		await userEvent.click(await screen.findByRole("button", { name: "Start pending save" }));
 		const closeButton = screen.getByRole("button", { name: "Close settings" });
-		expect(closeButton).toBeDisabled();
+		await userEvent.click(closeButton);
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
 
 		await userEvent.keyboard("{Escape}");
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
+		await userEvent.click(screen.getByRole("button", { name: "Complete save" }));
+		expect(useUiStore.getState().settingsModal).toBeNull();
+	});
+
+	it("renders visible error message when project settings save fails", async () => {
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderSettingsDialog();
+
+		await userEvent.click(await screen.findByRole("button", { name: "Trigger failed save" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Display name must be 100 characters or fewer");
+	});
+
+	it("keeps cue management in project settings without the project save action", async () => {
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderSettingsDialog();
+
+		const cuesSection = await screen.findByRole("button", { name: "Cues" });
+		expect(cuesSection.querySelector(".lucide-play")).not.toBeNull();
+		await userEvent.click(cuesSection);
+
+		expect(screen.getByTestId("project-cues-settings")).toHaveTextContent("proj-1");
+		expect(cuesSection).toHaveAttribute("aria-current", "page");
+		expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
+	});
+
+	it("opens project settings on the cues page when the caller asks for it", async () => {
+		useUiStore.getState().openProjectSettings("proj-1", { section: "cues" });
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("project-cues-settings")).toHaveTextContent("proj-1");
+		expect(screen.getByRole("button", { name: "Cues" })).toHaveAttribute("aria-current", "page");
 	});
 
 	it("opens the requested global settings page", async () => {
@@ -73,6 +142,91 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("mobile");
 		expect(screen.getByRole("button", { name: "Mobile" })).toHaveAttribute("aria-current", "page");
+		await vi.waitFor(() => expect(postMock).toHaveBeenCalledWith(
+			"/api/v1/agents/codex/accounts/ensure",
+			{ body: { accountIds: [], includeUsage: true, forceAuthentication: true, forceDeviceReconciliation: true } },
+		));
+	});
+
+	it("shows Remote hosts with Developer mode on even while the connection switch is off", async () => {
+		useUiStore.setState({ developerMode: true, remoteHosts: false });
+		useUiStore.getState().openGlobalSettings("remoteHosts");
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("remoteHosts");
+		expect(screen.getByRole("button", { name: "Remote hosts" })).toHaveAttribute("aria-current", "page");
+	});
+
+	it("hides Remote hosts and redirects its settings page when Developer mode is off", async () => {
+		useUiStore.setState({ developerMode: false, remoteHosts: true });
+		useUiStore.getState().openGlobalSettings("remoteHosts");
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
+		expect(screen.queryByRole("button", { name: "Remote hosts" })).not.toBeInTheDocument();
+	});
+
+	it("keeps the settings surface above its blurred backdrop", async () => {
+		useUiStore.getState().openGlobalSettings("mobile");
+		renderSettingsDialog();
+
+		const overlay = screen.getByTestId("settings-dialog-overlay");
+		const dialog = await screen.findByRole("dialog");
+		expect(overlay).toHaveClass("dialog-overlay");
+		// Keep the scrim below Settings so Chromium never composites its backdrop
+		// blur over the dialog at fractional display scaling. Settings itself stays
+		// on z-overlay: later-portaled confirms and menus can still paint above it.
+		expect(overlay).toHaveClass("z-[calc(var(--z-overlay)-1)]");
+		expect(dialog).toHaveClass("z-overlay");
+		expect(dialog).not.toHaveClass("z-[calc(var(--z-overlay)+1)]");
+	});
+
+	it("keeps the backdrop blur on the layer below settings", async () => {
+		useUiStore.getState().openGlobalSettings("mobile");
+		renderSettingsDialog();
+
+		const overlay = screen.getByTestId("settings-dialog-overlay");
+		expect(overlay).toHaveClass("dialog-overlay");
+		expect(overlay.style.backdropFilter).toBe("");
+	});
+
+	it("opens Harness and forwards its agent focus target without redirecting to Codex Accounts", async () => {
+		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "claude-code" });
+		renderSettingsDialog();
+
+		const form = await screen.findByTestId("global-settings-section");
+		expect(form).toHaveTextContent("harness");
+		expect(form).toHaveAttribute("data-focus-agent", "claude-code");
+		expect(screen.getByRole("button", { name: "Harness" })).toHaveAttribute("aria-current", "page");
+		expect(screen.getByRole("button", { name: "Subscriptions" })).not.toHaveAttribute("aria-current", "page");
+	});
+
+	it("forwards the remote host from a Manage agents action to Harness", async () => {
+		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "codex", hostId: "box-a" });
+		renderSettingsDialog();
+		const form = await screen.findByTestId("global-settings-section");
+		expect(form).toHaveAttribute("data-focus-agent", "codex");
+		expect(form).toHaveAttribute("data-host", "box-a");
+	});
+
+	it("does not replay the Harness focus target after navigating away during the same modal opening", async () => {
+		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "claude-code" });
+		renderSettingsDialog();
+		expect(await screen.findByTestId("global-settings-section")).toHaveAttribute("data-focus-agent", "claude-code");
+
+		await userEvent.click(screen.getByRole("button", { name: "General" }));
+		await userEvent.click(screen.getByRole("button", { name: "Harness" }));
+
+		expect(screen.getByTestId("global-settings-section")).not.toHaveAttribute("data-focus-agent");
+	});
+
+	it("refreshes accounts once when global Settings opens, not when its pages change", async () => {
+		useUiStore.getState().openGlobalSettings();
+		renderSettingsDialog();
+
+		await vi.waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		await userEvent.click(screen.getByRole("button", { name: "Harness" }));
+		expect(postMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("mounts dialog chrome before the selected settings form", async () => {
@@ -92,12 +246,12 @@ describe("SettingsDialog", () => {
 		expect(screen.queryByRole("button", { name: "Downloads" })).not.toBeInTheDocument();
 	});
 
-	it("falls back to General when Cloud is unavailable", async () => {
-		useUiStore.getState().openGlobalSettings("cloud");
+	it("falls back to General when the Coder page is unavailable", async () => {
+		useUiStore.getState().openGlobalSettings("coder11x");
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
-		expect(screen.queryByRole("button", { name: "Cloud" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Coder" })).not.toBeInTheDocument();
 	});
 
 	it("closes Settings without cancelling daemon-owned account login work", async () => {
@@ -109,7 +263,7 @@ describe("SettingsDialog", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
 
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
-		expect(postMock).not.toHaveBeenCalled();
+		expect(postMock.mock.calls.map(([path]) => path)).toEqual(["/api/v1/agents/codex/accounts/ensure"]);
 	});
 
 	it("traps focus and closes from Escape or the backdrop", async () => {
@@ -118,7 +272,7 @@ describe("SettingsDialog", () => {
 
 		const dialog = await screen.findByRole("dialog");
 		expect(dialog).toHaveAttribute("aria-modal", "true");
-		await vi.waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement));
+		await vi.waitFor(() => expect(screen.getByRole("button", { name: "Close settings" })).toHaveFocus());
 		await userEvent.keyboard("{Escape}");
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 
@@ -132,10 +286,45 @@ describe("SettingsDialog", () => {
 		renderSettingsDialog();
 
 		await screen.findByRole("dialog");
-		fireEvent.keyDown(document.body, { key: "Escape" });
+		const nestedMenu = document.createElement("div");
+		nestedMenu.setAttribute("role", "menu");
+		const nestedItem = document.createElement("button");
+		nestedItem.setAttribute("role", "menuitem");
+		nestedMenu.append(nestedItem);
+		document.body.append(nestedMenu);
+		nestedItem.focus();
+		fireEvent.keyDown(nestedItem, { key: "Escape" });
 		expect(useUiStore.getState().settingsModal).not.toBeNull();
+		nestedMenu.remove();
 
 		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
+	});
+
+	it("stays open when Escape cancels an inline edit inside it", async () => {
+		useUiStore.getState().openGlobalSettings("browserProfiles");
+		renderSettingsDialog();
+
+		const dialog = await screen.findByRole("dialog");
+		const inlineEdit = document.createElement("input");
+		inlineEdit.setAttribute("data-settings-inline-edit", "");
+		dialog.append(inlineEdit);
+		inlineEdit.focus();
+		fireEvent.keyDown(inlineEdit, { key: "Escape" });
+		expect(useUiStore.getState().settingsModal).not.toBeNull();
+		inlineEdit.remove();
+
+		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
+	});
+
+	it("closes from Escape when a Harness focus target has not moved focus inside", async () => {
+		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "stale-agent" });
+		renderSettingsDialog();
+
+		await screen.findByRole("dialog");
+		document.body.focus();
+		fireEvent.keyDown(document.body, { key: "Escape" });
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 	});
 });

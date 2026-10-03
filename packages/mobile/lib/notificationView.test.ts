@@ -1,13 +1,36 @@
 import { describe, expect, it } from "vitest";
-import { notificationTarget, notificationVisual, relativeTime } from "./notificationView";
+import { notificationAction, notificationRowsForHost, notificationSections, notificationTarget, notificationVisual, relativeTime } from "./notificationView";
 import { darkTheme } from "./theme";
 
 describe("notificationVisual", () => {
 	it("gives every known type its own label", () => {
-		const labels = ["needs_input", "ready_to_merge", "pr_merged", "pr_closed_unmerged"].map(
+		const labels = ["needs_input", "ready_to_merge", "pr_merged", "pr_closed_unmerged", "review_completed", "review_changes_requested"].map(
 			(t) => notificationVisual(darkTheme, t).label,
 		);
-		expect(new Set(labels).size).toBe(4);
+		expect(new Set(labels).size).toBe(6);
+	});
+
+	// The renderer draws these with GitHub's own vocabulary, and merged has its own
+	// hue rather than an action colour: it is settled, not still open — and it is
+	// no longer the grey it shared with a session that had merely switched off.
+	it("marks a merged PR the way the palette and the renderer both say", () => {
+		const merged = notificationVisual(darkTheme, "pr_merged");
+		expect(merged.icon).toBe("git-merge");
+		expect(merged.color).toBe(darkTheme.purple);
+		expect(merged.color).not.toBe(darkTheme.textSecondary);
+		expect(merged.color).not.toBe(darkTheme.accent);
+	});
+
+	it("uses pull-request glyphs for pull-request outcomes", () => {
+		expect(notificationVisual(darkTheme, "ready_to_merge").icon).toBe("git-pull-request-arrow");
+		expect(notificationVisual(darkTheme, "pr_closed_unmerged").icon).toBe("git-pull-request-closed");
+	});
+
+	it("gives every known type a distinct semantic icon", () => {
+		const icons = ["needs_input", "ready_to_merge", "pr_merged", "pr_closed_unmerged"].map(
+			(type) => notificationVisual(darkTheme, type).icon,
+		);
+		expect(new Set(icons).size).toBe(4);
 	});
 
 	it("falls back to a usable label for an unknown type", () => {
@@ -20,26 +43,76 @@ describe("notificationTarget", () => {
 	// Must agree with PushManager's tap routing: the same notification opened
 	// from history and from the tray has to land in the same place.
 	it("opens the session for a needs_input notification", () => {
-		expect(notificationTarget({ type: "needs_input", sessionId: "abc" })).toBe("/session/abc");
+		expect(notificationTarget({ type: "needs_input", sessionId: "abc", hostId: "host-a" }, "host-a"))
+			.toBe("/session/abc?hostId=host-a");
+		expect(notificationTarget({ type: "needs_input", sessionId: "abc", hostId: "host-a" }, new Set(["host-a", "host-b"])))
+			.toBe("/session/abc?hostId=host-a");
+	});
+
+	it("sends legacy and other-machine pushes to the board", () => {
+		expect(notificationTarget({ type: "needs_input", sessionId: "abc" }, "host-b")).toBe("/");
+		expect(notificationTarget({ type: "needs_input", sessionId: "abc", hostId: "host-a" }, "host-b")).toBe("/");
+		expect(notificationTarget({ type: "ready_to_merge", hostId: "host-a" }, "host-b")).toBe("/");
+		expect(notificationTarget({ type: "needs_input", sessionId: "abc", hostId: "forgotten" }, new Set(["host-a", "host-b"]))).toBe("/");
 	});
 
 	it("falls back to the PRs tab when there is no session to open", () => {
-		expect(notificationTarget({ type: "needs_input", sessionId: "" })).toBe("/prs");
-		expect(notificationTarget({ type: "needs_input" })).toBe("/prs");
+		expect(notificationTarget({ type: "needs_input", sessionId: "", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
+		expect(notificationTarget({ type: "needs_input", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
 	});
 
 	it("sends PR notifications to the PRs tab", () => {
-		expect(notificationTarget({ type: "ready_to_merge", sessionId: "abc" })).toBe("/prs");
-		expect(notificationTarget({ type: "pr_merged", sessionId: "abc" })).toBe("/prs");
+		expect(notificationTarget({ type: "ready_to_merge", sessionId: "abc", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
+		expect(notificationTarget({ type: "pr_merged", sessionId: "abc", hostId: "host-a" }, new Set(["host-a", "host-b"]))).toBe("/prs?hostId=host-a");
+	});
+
+	it("opens the matching review result when the payload identifies its pull request", () => {
+		expect(notificationTarget({ type: "review_completed", sessionId: "session 1", prUrl: "https://github.com/acme/repo/pull/42", hostId: "host-a" }, "host-a"))
+			.toBe("/review/session%201?prUrl=https%3A%2F%2Fgithub.com%2Facme%2Frepo%2Fpull%2F42&hostId=host-a");
+		expect(notificationTarget({ type: "review_changes_requested", sessionId: "s1", prUrl: "https://github.com/acme/repo/pull/43", hostId: "host-b" }, new Set(["host-a", "host-b"])))
+			.toBe("/review/s1?prUrl=https%3A%2F%2Fgithub.com%2Facme%2Frepo%2Fpull%2F43&hostId=host-b");
+		expect(notificationTarget({ type: "review_completed", sessionId: "s1", prUrl: "https://github.com/acme/repo/pull/42", hostId: "forgotten" }, new Set(["host-a", "host-b"]))).toBe("/");
+	});
+
+	it("falls back to the PR list when a review result payload is incomplete", () => {
+		expect(notificationTarget({ type: "review_completed", sessionId: "s1", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
+		expect(notificationTarget({ type: "review_changes_requested", prUrl: "https://github.com/acme/repo/pull/43", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
+		expect(notificationTarget({ type: "review_completed", sessionId: "s1", prUrl: "https://github.com/acme/repo/pull/43" }, "host-a")).toBe("/");
 	});
 
 	// A tray payload carries no guarantee of a type field, and PushManager passes
 	// "" when it is missing. An unknown or absent type must still land somewhere
 	// rather than routing to "/session/undefined".
 	it("sends an unknown or missing type to the PRs tab", () => {
-		expect(notificationTarget({ type: "" })).toBe("/prs");
-		expect(notificationTarget({ type: "", sessionId: "abc" })).toBe("/prs");
-		expect(notificationTarget({ type: "something_new", sessionId: "abc" })).toBe("/prs");
+		expect(notificationTarget({ type: "", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
+		expect(notificationTarget({ type: "", sessionId: "abc", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
+		expect(notificationTarget({ type: "something_new", sessionId: "abc", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
+	});
+});
+
+describe("notificationSections", () => {
+	it("hides old machine notifications even when the new machine reuses the ID", () => {
+		const fromA = [{ id: "same-id", title: "Alice's worker" }];
+		expect(notificationRowsForHost(fromA, "host-a", "host-b")).toEqual([]);
+		expect(notificationRowsForHost(fromA, "host-a", "host-a")).toEqual(fromA);
+	});
+	it("puts unread notifications in the attention section before earlier history", () => {
+		const read = { id: "read", status: "read" };
+		const unread = { id: "unread", status: "unread" };
+
+		expect(notificationSections([read, unread])).toEqual([
+			{ key: "attention", title: "Needs attention", data: [unread] },
+			{ key: "earlier", data: [read] },
+		]);
+	});
+
+	it("omits empty sections", () => {
+		const read = { id: "read", status: "read" };
+
+		expect(notificationSections([read])).toEqual([
+			{ key: "earlier", data: [read] },
+		]);
+		expect(notificationSections([])).toEqual([]);
 	});
 });
 
@@ -69,5 +142,55 @@ describe("relativeTime", () => {
 
 	it("returns nothing for an unparseable timestamp", () => {
 		expect(relativeTime("not-a-date", now)).toBe("");
+	});
+});
+
+describe("notificationAction", () => {
+	const ready = { terminated: false, sessionsReady: true };
+
+	it("opens the session behind a live notification", () => {
+		expect(notificationAction({ type: "needs_input", sessionId: "s1" }, ready)).toEqual({ kind: "open", sessionId: "s1" });
+		expect(notificationAction({ type: "ready_to_merge", sessionId: "s1" }, ready)).toEqual({ kind: "open", sessionId: "s1" });
+	});
+
+	// The renderer's rule: a paused agent is the only thing a terminated
+	// needs_input row can act on, so it offers restore rather than navigating to
+	// a session with nothing to show.
+	it("offers restore instead of opening a terminated session that wants input", () => {
+		expect(notificationAction({ type: "needs_input", sessionId: "s1" }, { terminated: true, sessionsReady: true }))
+			.toEqual({ kind: "restore", sessionId: "s1" });
+	});
+
+	// ...but a finished PR is still worth reading, so termination does not gate it.
+	it("still opens a terminated session behind a PR outcome", () => {
+		for (const type of ["ready_to_merge", "pr_merged", "pr_closed_unmerged"]) {
+			expect(notificationAction({ type, sessionId: "s1" }, { terminated: true, sessionsReady: true }))
+				.toEqual({ kind: "open", sessionId: "s1" });
+		}
+	});
+
+	it("waits rather than guessing before the board has loaded", () => {
+		expect(notificationAction({ type: "needs_input", sessionId: "s1" }, { terminated: false, sessionsReady: false }))
+			.toEqual({ kind: "none" });
+	});
+
+	it("sends a session-less PR notification to the PR list", () => {
+		expect(notificationAction({ type: "ready_to_merge" }, ready)).toEqual({ kind: "prs" });
+		expect(notificationAction({ type: "needs_input" }, ready)).toEqual({ kind: "none" });
+	});
+
+	it("opens review results directly without waiting for the session board", () => {
+		const notification = { type: "review_completed", sessionId: "s1", prUrl: "https://github.com/acme/repo/pull/42" };
+		expect(notificationAction(notification, { terminated: false, sessionsReady: false })).toEqual({
+			kind: "review",
+			sessionId: "s1",
+			prUrl: notification.prUrl,
+		});
+	});
+
+	it("sends incomplete review result notifications to the PR list", () => {
+		expect(notificationAction({ type: "review_completed", sessionId: "s1" }, ready)).toEqual({ kind: "prs" });
+		expect(notificationAction({ type: "review_changes_requested", prUrl: "https://github.com/acme/repo/pull/42" }, ready))
+			.toEqual({ kind: "prs" });
 	});
 });

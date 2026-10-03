@@ -34,6 +34,26 @@ func TestSpawnHelpListsPrimeAgentHarness(t *testing.T) {
 	}
 }
 
+func TestSpawnHelpListsFXHarness(t *testing.T) {
+	out, _, err := executeCLI(t, Deps{}, "spawn", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, ", fx,") {
+		t.Fatalf("spawn help does not list fx:\n%s", out)
+	}
+}
+
+func TestSpawnHelpListsOpenCodeV2Harness(t *testing.T) {
+	out, _, err := executeCLI(t, Deps{}, "spawn", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "opencode, opencode-v2") {
+		t.Fatalf("spawn help does not list OpenCode 1 and 2 distinctly:\n%s", out)
+	}
+}
+
 // TestSpawnCommand_MissingProjectContext asserts `ao spawn` gives a project
 // setup hint when neither --project, AO_PROJECT_ID, nor cwd can resolve one.
 func TestSpawnCommand_MissingProjectContext(t *testing.T) {
@@ -266,11 +286,11 @@ func TestSpawnCommand_RequiresName(t *testing.T) {
 }
 
 // TestSpawnCommand_RejectsOverlongName asserts `ao spawn` rejects a --name
-// longer than 20 characters without contacting the daemon.
+// longer than 100 characters without contacting the daemon.
 func TestSpawnCommand_RejectsOverlongName(t *testing.T) {
-	_, _, err := executeCLI(t, Deps{}, "spawn", "--project", "demo", "--name", strings.Repeat("x", 21))
-	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), "20 characters or fewer") {
-		t.Fatalf("err=%v exit=%d, want 20 characters or fewer", err, ExitCode(err))
+	_, _, err := executeCLI(t, Deps{}, "spawn", "--project", "demo", "--name", strings.Repeat("x", 101))
+	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), "100 characters or fewer") {
+		t.Fatalf("err=%v exit=%d, want 100 characters or fewer", err, ExitCode(err))
 	}
 }
 
@@ -399,7 +419,7 @@ func TestSpawnResolvesProjectFromAOSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn failed: %v stderr=%s", err, errOut)
 	}
-	if req.ProjectID != "demo" || req.Harness != "codex" {
+	if req.ProjectID != "demo" || req.Harness != "codex" || req.ParentSessionID != "demo-1" {
 		t.Fatalf("spawn request = %#v", req)
 	}
 	want := []string{"GET /api/v1/sessions/demo-1", "GET /api/v1/projects/demo", "POST /api/v1/agents/readiness/ensure", "POST /api/v1/sessions"}
@@ -894,6 +914,35 @@ func TestSpawnSkipAgentCheckBypassesOnlyPreflight(t *testing.T) {
 	}
 	if req.ProjectID != "demo" || req.Harness != "unsupported" {
 		t.Fatalf("spawn request = %#v", req)
+	}
+	want := []string{"GET /api/v1/projects/demo", "POST /api/v1/sessions"}
+	if !reflect.DeepEqual(requests, want) {
+		t.Fatalf("requests=%#v want %#v", requests, want)
+	}
+}
+
+func TestSpawnInvalidHarnessPreservesDaemonErrorEnvelope(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var requests []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		appendPrimaryRequest(&requests, r)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":"bad_request","message":"Unknown agent harness","code":"UNKNOWN_HARNESS","requestId":"req-harness"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "unknown", "--skip-agent-check", "--name", "worker")
+	if err == nil || ExitCode(err) != 1 || !strings.Contains(err.Error(), "Unknown agent harness (UNKNOWN_HARNESS) [request req-harness]") {
+		t.Fatalf("err=%v exit=%d, want preserved daemon error envelope", err, ExitCode(err))
 	}
 	want := []string{"GET /api/v1/projects/demo", "POST /api/v1/sessions"}
 	if !reflect.DeepEqual(requests, want) {

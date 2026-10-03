@@ -34,6 +34,15 @@ type fakeStore struct {
 	resolvedCommentIDs []string
 }
 
+type fakeNotificationSink struct {
+	intents []ports.NotificationIntent
+}
+
+func (f *fakeNotificationSink) Notify(_ context.Context, intent ports.NotificationIntent) error {
+	f.intents = append(f.intents, intent)
+	return nil
+}
+
 func (f *fakeStore) GetReviewByID(_ context.Context, id string) (domain.Review, bool, error) {
 	if f.reviewOK && f.review.ID == id {
 		return f.review, true, nil
@@ -450,6 +459,45 @@ func TestSubmitSnapshotsDisabledPolicyAndNeverDeliversOnRetry(t *testing.T) {
 	}
 }
 
+func TestSubmitEmitsIdempotentReviewResultNotification(t *testing.T) {
+	st := &fakeStore{
+		ok:  true,
+		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", PRURL: "https://github.com/acme/app/pull/42", Status: domain.ReviewRunRunning},
+		prs: []domain.PullRequest{{URL: "https://github.com/acme/app/pull/42", Number: 42, Title: "Fix checkout"}},
+	}
+	sink := &fakeNotificationSink{}
+	svc := New(nil, st, WithNotificationSink(sink))
+
+	for range 2 {
+		if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "looks good", "987"); err != nil {
+			t.Fatalf("Submit: %v", err)
+		}
+	}
+	if len(sink.intents) != 2 {
+		t.Fatalf("notification attempts = %d, want 2 so durable source-key dedupe can recover retries", len(sink.intents))
+	}
+	for _, intent := range sink.intents {
+		if intent.Type != domain.NotificationReviewCompleted || intent.SourceKey != "review_run:run-1" || intent.PRNumber != 42 || intent.PRTitle != "Fix checkout" {
+			t.Fatalf("notification intent = %+v", intent)
+		}
+	}
+}
+
+func TestSubmitEmitsChangesRequestedNotification(t *testing.T) {
+	st := &fakeStore{ok: true, run: domain.ReviewRun{
+		ID: "run-2", SessionID: "mer-1", PRURL: "https://github.com/acme/app/pull/43", Status: domain.ReviewRunRunning,
+	}}
+	sink := &fakeNotificationSink{}
+	svc := New(nil, st, WithNotificationSink(sink))
+
+	if _, err := svc.Submit(context.Background(), "mer-1", "run-2", domain.VerdictChangesRequested, "fix it", ""); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(sink.intents) != 1 || sink.intents[0].Type != domain.NotificationReviewChangesRequested {
+		t.Fatalf("notification intents = %+v", sink.intents)
+	}
+}
+
 func TestSubmitBatchRunDoesNotWaitForOtherRunningRuns(t *testing.T) {
 	now := time.Unix(100, 0).UTC()
 	st := &fakeStore{
@@ -518,6 +566,58 @@ func TestSubmitManySendsCombinedChangesRequested(t *testing.T) {
 	if runs[0].Status != domain.ReviewRunDelivered || runs[0].DeliveredAt == nil || !runs[0].DeliveredAt.Equal(now) ||
 		runs[1].Status != domain.ReviewRunDelivered || runs[1].DeliveredAt == nil || !runs[1].DeliveredAt.Equal(now) {
 		t.Fatalf("submitted runs not stamped delivered: %+v", runs)
+	}
+}
+
+func TestSubmitManySkipsSupersededRunAndDeliversSiblings(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	st := &fakeStore{
+		ok: true,
+		batchRuns: []domain.ReviewRun{
+			{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
+			// A newer-commit trigger superseded run-2 while the reviewer was still
+			// working on the original batch.
+			{ID: "run-2", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr2", TargetSHA: "sha2", Status: domain.ReviewRunFailed},
+		},
+		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}, {URL: "pr2", HeadSHA: "sha2-new"}},
+	}
+	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
+	svc := New(nil, st, WithLifecycleReducer(reducer), WithClock(func() time.Time { return now }))
+
+	runs, err := svc.SubmitMany(context.Background(), "mer-1", []SubmittedReview{
+		{RunID: "run-1", Verdict: domain.VerdictChangesRequested, Body: "fix pr1"},
+		{RunID: "run-2", Verdict: domain.VerdictChangesRequested, Body: "fix pr2"},
+	})
+	if err != nil {
+		t.Fatalf("SubmitMany must deliver valid siblings when one run was superseded: %v", err)
+	}
+	if len(runs) != 1 || runs[0].ID != "run-1" || runs[0].Status != domain.ReviewRunDelivered {
+		t.Fatalf("want only run-1 delivered, got %+v", runs)
+	}
+	if reducer.batchCalls != 1 || len(reducer.gotBatch) != 1 || reducer.gotBatch[0].RunID != "run-1" {
+		t.Fatalf("want run-1 delivered independently; batchCalls=%d got=%+v", reducer.batchCalls, reducer.gotBatch)
+	}
+}
+
+func TestSubmitManyRejectsOnlySupersededRuns(t *testing.T) {
+	st := &fakeStore{
+		ok: true,
+		batchRuns: []domain.ReviewRun{{
+			ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunCancelled,
+		}},
+	}
+	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
+	svc := New(nil, st, WithLifecycleReducer(reducer))
+
+	if _, err := svc.SubmitMany(context.Background(), "mer-1", []SubmittedReview{{
+		RunID: "run-1", Verdict: domain.VerdictApproved,
+	}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
+	} else if !strings.Contains(err.Error(), "superseded: run-1") {
+		t.Fatalf("err = %v, want rejected run id", err)
+	}
+	if reducer.batchCalls != 0 {
+		t.Fatalf("only superseded runs must not trigger delivery: batchCalls=%d", reducer.batchCalls)
 	}
 }
 

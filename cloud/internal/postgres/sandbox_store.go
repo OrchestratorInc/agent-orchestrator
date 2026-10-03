@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -826,11 +827,13 @@ func (s *Store) WorkerLaunchSpec(
 ) (domain.WorkerLaunch, error) {
 	launch := domain.WorkerLaunch{OrgID: orgID}
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var interfaceValue string
 		err := tx.QueryRow(
 			ctx,
-			`SELECT session.id, session.project_id, session.kind, session.harness,
+			`SELECT session.id, session.project_id, project.display_name, project.config,
+				session.kind, session.harness,
 				session.display_name, session.branch, session.prompt,
-				session.agent_session_id, session.mode, session.denied_commands,
+				session.agent_session_id, session.mode, session.model, session.denied_commands, session.interface,
 				COALESCE(session.parent_session_id::text, ''),
 				project.repository_url, project.default_branch
 			FROM ao_sessions session
@@ -841,6 +844,8 @@ func (s *Store) WorkerLaunchSpec(
 		).Scan(
 			&launch.SessionID,
 			&launch.ProjectID,
+			&launch.ProjectName,
+			&launch.ProjectConfig,
 			&launch.Kind,
 			&launch.Harness,
 			&launch.DisplayName,
@@ -848,7 +853,9 @@ func (s *Store) WorkerLaunchSpec(
 			&launch.Prompt,
 			&launch.AgentSessionID,
 			&launch.Mode,
+			&launch.Model,
 			&launch.DeniedCommands,
+			&interfaceValue,
 			&launch.ParentSessionID,
 			&launch.RepositoryURL,
 			&launch.DefaultBranch,
@@ -859,6 +866,7 @@ func (s *Store) WorkerLaunchSpec(
 		if err != nil {
 			return fmt.Errorf("load worker launch spec: %w", err)
 		}
+		launch.Interface = domain.SessionInterface(interfaceValue).Normalized()
 		return nil
 	})
 	if err != nil {
@@ -993,17 +1001,21 @@ func (s *Store) SetWorkerActivity(
 			return ErrStaleWorker
 		}
 		var currentState, blockedToolName, blockedToolUseID string
+		var sessionInterface domain.SessionInterface
 		if err := tx.QueryRow(ctx,
 			`SELECT activity_state, activity_blocked_tool_name,
-				activity_blocked_tool_use_id
+				activity_blocked_tool_use_id, interface
 			FROM ao_sessions
 			WHERE org_id = $1 AND id = $2 AND is_terminated = false
 			FOR UPDATE`,
 			orgID, sessionID,
-		).Scan(&currentState, &blockedToolName, &blockedToolUseID); errors.Is(err, pgx.ErrNoRows) {
+		).Scan(&currentState, &blockedToolName, &blockedToolUseID, &sessionInterface); errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		} else if err != nil {
 			return fmt.Errorf("load worker activity: %w", err)
+		}
+		if !shouldApplyWorkerActivity(sessionInterface, activity) {
+			return nil
 		}
 		if activity.State == "" {
 			tag, err := tx.Exec(ctx,
@@ -1060,6 +1072,19 @@ func (s *Store) SetWorkerActivity(
 	})
 }
 
+func shouldApplyWorkerActivity(sessionInterface domain.SessionInterface, activity worker.ActivityEvent) bool {
+	if sessionInterface.Normalized() == domain.SessionInterfaceTUI {
+		return true
+	}
+	if activity.State == "" && strings.TrimSpace(activity.AgentSessionID) != "" {
+		return true
+	}
+	// A terminal hook can arrive after Chat has taken ownership. Its stop
+	// acknowledgement may settle activity, but late active work belongs to
+	// the old controller and must not make Chat appear to be working.
+	return activity.SourceInterface == "tui" && activity.State == "idle"
+}
+
 func matchingBlockedTool(
 	activity worker.ActivityEvent,
 	blockedToolName, blockedToolUseID string,
@@ -1109,6 +1134,27 @@ func upsertWorkerConnection(
 		epoch,
 	); err != nil {
 		return fmt.Errorf("fail worker requests from superseded epochs: %w", err)
+	}
+	// Close terminals bound to the retired epochs. The terminal-output stream
+	// (writeTerminalOutput) already re-reads terminal state every tick and
+	// returns as soon as it sees 'closed', so making the row truthful HERE, at
+	// the instant a replacement worker supersedes the old epoch, is what lets a
+	// silently-dead terminal close and the client re-attach against the live
+	// epoch. Without this the row stayed 'open' for the full session TTL (~30m)
+	// even though nothing was behind it, and only a keystroke or a slow
+	// keepalive timeout ever noticed. Detection stays driven off the existing
+	// output loop's state read instead of a separate liveness poll.
+	if _, err := tx.Exec(
+		ctx,
+		`UPDATE ao_terminal_sessions
+		SET state = 'closed', closed_at = now(), updated_at = now()
+		WHERE org_id = $1 AND session_id = $2 AND worker_epoch < $3
+		  AND state IN ('opening', 'open')`,
+		orgID,
+		sessionID,
+		epoch,
+	); err != nil {
+		return fmt.Errorf("close terminals from superseded epochs: %w", err)
 	}
 	tag, err := tx.Exec(
 		ctx,

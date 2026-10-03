@@ -1,21 +1,20 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
-import { apiClient, getApiBaseUrl } from "../lib/api-client";
+import { getApiBaseUrl } from "../lib/api-client";
+import { clientForSessionHost } from "../lib/host-clients";
+import { sessionUiKey } from "../lib/hosts";
 import { attachmentURL } from "../components/chat/messageAttachments";
-import { isWorkspaceFileLink } from "../lib/external-link-policy";
+import { isPotentialWorkspaceFileLink, isWebLink, workspaceFilePath } from "../lib/external-link-policy";
 import { useUiStore } from "../stores/ui-store";
 import { sessionIsActive, type WorkspaceSession } from "../types/workspace";
-import { workspaceQueryKey } from "./useWorkspaceQuery";
+import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
 function workspaceFilePreviewURL(uri: string, sessionId: string, workspacePaths: string[]): string | undefined {
-	const path = uri.trim().split(/[?#]/, 1)[0].replace(/^\.\//, "");
-	const workspacePath = workspacePaths.find((candidate) =>
-		path === candidate || (path.startsWith("/") && path.endsWith(`/${candidate}`)),
-	);
+	const workspacePath = workspaceFilePath(uri, workspacePaths);
 	return workspacePath ? attachmentURL(getApiBaseUrl(), sessionId, workspacePath) : undefined;
 }
 
-/** Open an HTTP(S) link in the active worker session's AO Browser panel. */
+/** Open a supported link in the active session's AO Browser panel. */
 export function useSessionBrowserLink(
 	session?: WorkspaceSession,
 	openInBrowser?: (uri: string) => Promise<void>,
@@ -25,30 +24,28 @@ export function useSessionBrowserLink(
 	const setInspectorView = useUiStore((state) => state.setInspectorView);
 	const setInspectorOpen = useUiStore((state) => state.setInspectorOpen);
 	const active = session ? sessionIsActive(session) : false;
+	const hostId = session?.hostId;
 
 	return useCallback(
 		(uri: string) => {
-			if (!session?.id || session.kind !== "worker" || !active) return;
-			const isLocalWorkspaceFile = isWorkspaceFileLink(uri, workspacePaths);
-			try {
-				const url = new URL(uri);
-				if (url.protocol !== "http:" && url.protocol !== "https:") return;
-			} catch {
-				if (!isLocalWorkspaceFile) return;
-			}
+			if (!session?.id || !active) return;
+			const workspacePath = workspaceFilePath(uri, workspacePaths);
+			const webLink = isWebLink(uri);
+			if (!webLink && !workspacePath && !isPotentialWorkspaceFileLink(uri)) return;
 			const sessionId = session.id;
-			setInspectorView(sessionId, "browser");
-			setInspectorOpen(sessionId, true);
+			const uiKey = sessionUiKey(sessionId, hostId);
+			setInspectorView(uiKey, "browser");
+			setInspectorOpen(uiKey, true);
 			// Local workspace paths must go through the daemon preview resolver first.
 			// Passing an absolute worktree path directly to BrowserView opens an empty
 			// tab because Chromium cannot navigate to the filesystem path.
-			if (openInBrowser && !isLocalWorkspaceFile) {
+			if (!hostId && openInBrowser && webLink) {
 				void openInBrowser(uri).catch((error) => {
 					console.warn("Unable to open link in Browser tab", error);
 				});
 				return;
 			}
-			if (openInBrowser && isLocalWorkspaceFile) {
+			if (!hostId && openInBrowser && workspacePath) {
 				const previewURL = workspaceFilePreviewURL(uri, sessionId, workspacePaths);
 				if (previewURL) {
 					void openInBrowser(previewURL).catch((error) => {
@@ -59,20 +56,20 @@ export function useSessionBrowserLink(
 			}
 			void (async () => {
 				try {
-					const { error } = await apiClient.POST("/api/v1/sessions/{sessionId}/preview", {
+					const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/preview", {
 						params: { path: { sessionId } },
-						body: { url: uri },
+						body: webLink ? { url: uri } : { url: uri, requireWorkspaceFile: true },
 					});
 					if (error) {
 						console.warn("Unable to open link in Browser preview", error);
 						return;
 					}
-					await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+					await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				} catch (error) {
 					console.warn("Unable to open link in Browser preview", error);
 				}
 			})();
 		},
-		[active, openInBrowser, queryClient, session?.id, session?.kind, setInspectorOpen, setInspectorView, workspacePaths],
+		[active, hostId, openInBrowser, queryClient, session?.id, session?.kind, setInspectorOpen, setInspectorView, workspacePaths],
 	);
 }

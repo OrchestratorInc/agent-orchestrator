@@ -1,5 +1,5 @@
 import { fetch as expoFetch } from "expo/fetch";
-import { ApiError, apiRequest } from "../api";
+import { ApiError, ATTACHMENT_REQUEST_TIMEOUT_MS, apiRequest } from "../api";
 import { authHeaders, httpBase, type ServerConfig } from "../config";
 import type {
 	ActivityDetail,
@@ -135,6 +135,23 @@ export async function getConversationPage(
 	return toSnapshot((await res.json()) as WireSnapshot);
 }
 
+export async function getReviewerConversationPage(
+	cfg: ServerConfig,
+	reviewId: string,
+	beforeSequence?: number,
+): Promise<ConversationPage> {
+	const limit = beforeSequence === undefined ? CHAT_INITIAL_PAGE_SIZE : CHAT_HISTORY_PAGE_SIZE;
+	const query = new URLSearchParams({ limit: String(limit) });
+	if (beforeSequence !== undefined) query.set("beforeSequence", String(beforeSequence));
+	const res = await apiRequest(cfg, `${reviewConversationPath(reviewId)}?${query.toString()}`);
+	const snapshot = toSnapshot((await res.json()) as WireSnapshot);
+	return {
+		...snapshot,
+		capabilities: snapshot.capabilities?.filter((capability) =>
+			capability !== "steer" && capability !== "rollback" && capability !== "config_options"),
+	};
+}
+
 export async function sendConversationMessage(
 	cfg: ServerConfig,
 	sessionId: string,
@@ -142,9 +159,32 @@ export async function sendConversationMessage(
 ): Promise<SendMessageResult> {
 	const res = await apiRequest(cfg, conversationPath(sessionId, "/messages"), {
 		method: "POST",
+		headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
+		body: JSON.stringify(input),
+	}, input.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
+	return (await res.json()) as SendMessageResult;
+}
+
+export async function sendReviewerConversationMessage(
+	cfg: ServerConfig,
+	reviewId: string,
+	input: SendMessageInput,
+): Promise<SendMessageResult> {
+	const res = await apiRequest(cfg, reviewConversationPath(reviewId, "/messages"), {
+		method: "POST",
 		body: JSON.stringify(input),
 	});
 	return (await res.json()) as SendMessageResult;
+}
+
+/** Check an uncertain attachment send without re-sending a partial payload. */
+export async function recoverSentConversationMessage(cfg: ServerConfig, sessionId: string, clientMessageId: string): Promise<void> {
+	const res = await apiRequest(cfg, conversationPath(sessionId, "/steer-or-send"), {
+		method: "POST",
+		body: JSON.stringify({ clientMessageId, recoverOnly: true }),
+	});
+	const result = (await res.json()) as { outcome: "sent" | "steered" };
+	if (result.outcome !== "sent") throw new Error("Could not confirm this message was delivered. Check history, then discard and reattach the files before sending again.");
 }
 
 export async function steerConversation(cfg: ServerConfig, sessionId: string, text: string, clientMessageId: string) {
@@ -157,6 +197,18 @@ export async function steerConversation(cfg: ServerConfig, sessionId: string, te
 
 export async function interruptConversation(cfg: ServerConfig, sessionId: string): Promise<void> {
 	await apiRequest(cfg, conversationPath(sessionId, "/interrupt"), { method: "POST" });
+}
+
+export async function interruptReviewerConversation(cfg: ServerConfig, reviewId: string): Promise<void> {
+	await apiRequest(cfg, reviewConversationPath(reviewId, "/interrupt"), { method: "POST" });
+}
+
+export async function cancelQueuedConversationTurn(cfg: ServerConfig, sessionId: string, turnId: string): Promise<void> {
+	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/cancel`), { method: "POST" });
+}
+
+export async function promoteQueuedConversationTurn(cfg: ServerConfig, sessionId: string, turnId: string): Promise<void> {
+	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/steer`), { method: "POST" });
 }
 
 export async function compactConversation(cfg: ServerConfig, sessionId: string): Promise<void> {
@@ -175,6 +227,18 @@ export async function resolveApproval(
 	});
 }
 
+export async function resolveReviewerApproval(
+	cfg: ServerConfig,
+	reviewId: string,
+	requestId: string,
+	decisionId: string,
+): Promise<void> {
+	await apiRequest(cfg, reviewConversationPath(reviewId, `/approvals/${encodeURIComponent(requestId)}/resolve`), {
+		method: "POST",
+		body: JSON.stringify({ decisionId }),
+	});
+}
+
 export async function resolveInput(
 	cfg: ServerConfig,
 	sessionId: string,
@@ -183,6 +247,19 @@ export async function resolveInput(
 	content?: Record<string, unknown>,
 ): Promise<void> {
 	await apiRequest(cfg, conversationPath(sessionId, `/inputs/${encodeURIComponent(requestId)}/resolve`), {
+		method: "POST",
+		body: JSON.stringify({ action, content }),
+	});
+}
+
+export async function resolveReviewerInput(
+	cfg: ServerConfig,
+	reviewId: string,
+	requestId: string,
+	action: "accept" | "decline" | "cancel",
+	content?: Record<string, unknown>,
+): Promise<void> {
+	await apiRequest(cfg, reviewConversationPath(reviewId, `/inputs/${encodeURIComponent(requestId)}/resolve`), {
 		method: "POST",
 		body: JSON.stringify({ action, content }),
 	});
@@ -248,7 +325,7 @@ export async function stageConversationAttachments(
 	const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/attachments`, {
 		method: "POST",
 		body: JSON.stringify({ attachments }),
-	}, 60_000);
+	}, ATTACHMENT_REQUEST_TIMEOUT_MS);
 	const body = (await res.json()) as { paths?: string[] };
 	return body.paths ?? [];
 }
@@ -333,7 +410,7 @@ export async function streamGlobalConversationEvents(
 		signal,
 	});
 	if (!res.ok) throw await streamError(res);
-	if (!res.body) throw new Error("The mobile network stack did not provide an event stream");
+	if (!res.body) throw new Error("Couldn't open live updates from your machine.");
 	const advertisedAfterHeader = res.headers.get("X-AO-Event-After");
 	const advertisedAfter = advertisedAfterHeader === null ? Number.NaN : Number(advertisedAfterHeader);
 	const effectiveAfter = Number.isSafeInteger(advertisedAfter) && advertisedAfter >= 0
@@ -393,6 +470,10 @@ function conversationPath(sessionId: string, suffix = ""): string {
 	return `${API}/sessions/${encodeURIComponent(sessionId)}/conversation${suffix}`;
 }
 
+function reviewConversationPath(reviewId: string, suffix = ""): string {
+	return `${API}/reviews/${encodeURIComponent(reviewId)}/conversation${suffix}`;
+}
+
 function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 	const messages = (wire.messages ?? []).map((message) => ({ ...message, kind: "message" as const }));
 	const activities = (wire.activities ?? []).map((activity): ConversationActivity => {
@@ -433,13 +514,16 @@ function readDecisions(detail: ActivityDetail): DecisionOption[] | undefined {
 async function streamError(res: Response): Promise<ApiError> {
 	let message = `${res.status} ${res.statusText}`;
 	let code: string | undefined;
+	let detail: string | undefined;
+	let requestId: string | undefined;
 	try {
-		const body = (await res.json()) as { message?: string; error?: string; code?: string };
-		const detail = body.message ?? body.error;
+		const body = (await res.json()) as { message?: string; error?: string; code?: string; requestId?: string };
+		detail = body.message ?? body.error;
 		if (detail) message += ` - ${detail}`;
 		code = body.code;
+		requestId = typeof body.requestId === "string" ? body.requestId : undefined;
 	} catch {
 		// A proxy may answer HTML; the status remains enough to classify it.
 	}
-	return new ApiError(res.status, message, code);
+	return new ApiError(res.status, message, code, requestId, detail || undefined);
 }

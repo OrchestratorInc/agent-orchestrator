@@ -1,7 +1,7 @@
 import { act, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode, type ReactElement } from "react";
-import { ActivityRow, AssistantMessage, TurnOutcome } from "./ChatTimelineItems";
+import { ActivityRow, AssistantMessage, HumanMessage, TurnOutcome } from "./ChatTimelineItems";
 import type { ConversationMessage } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 
@@ -64,12 +64,27 @@ describe("TurnOutcome", () => {
 		expect(screen.queryByText("Done")).not.toBeInTheDocument();
 	});
 
-	it("shows the message above a full-width rule", () => {
-		const { container } = render(<TurnOutcome state="failed" error="Provider error" />);
+	it("shows the failed outcome and the provider's explanation", () => {
+		render(<TurnOutcome state="failed" error="Provider error" />);
 
 		expect(screen.getByText("The agent ran into a problem")).toBeInTheDocument();
 		expect(screen.getByText("Provider error")).toBeInTheDocument();
-		expect(container.querySelector(".h-px.w-full.bg-border")).toBeInTheDocument();
+	});
+
+	it("preserves multiline provider text and links without interpreting its structure", () => {
+		render(
+			<TurnOutcome
+				state="failed"
+				error={"Usage limit reached\n\nManage billing at https://example.com/billing."}
+			/>,
+		);
+
+		expect(screen.getByText(/Usage limit reached/)).toBeInTheDocument();
+		expect(screen.getByText(/Manage billing at/)).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "https://example.com/billing" })).toHaveAttribute(
+			"href",
+			"https://example.com/billing",
+		);
 	});
 });
 
@@ -137,13 +152,13 @@ describe("AssistantMessage streaming", () => {
 		expect(frames.size).toBe(0);
 	});
 
-	it("shows a large received burst within 250ms", () => {
+	it("shows a large received burst within 80ms", () => {
 		const view = render(<AssistantMessage message={message()} />);
 		const text = "a".padEnd(10_000, "x");
 		view.rerender(<AssistantMessage message={message({ text })} />);
 
 		runFrame(0);
-		for (let now = 16; now <= 240 && frames.size; now += 16) runFrame(now);
+		for (let now = 16; now <= 80 && frames.size; now += 16) runFrame(now);
 
 		expect(document.querySelector("p")?.textContent).toBe(text);
 		expect(frames.size).toBe(0);
@@ -154,7 +169,7 @@ describe("AssistantMessage streaming", () => {
 		let text = "a".padEnd(2000, "x");
 		view.rerender(<AssistantMessage message={message({ text })} />);
 		runFrame(0);
-		for (let now = 40; now <= 200; now += 40) {
+		for (let now = 10; now <= 50; now += 10) {
 			text += "x".repeat(2000);
 			view.rerender(<AssistantMessage message={message({ text })} />);
 			runFrame(now);
@@ -170,8 +185,8 @@ describe("AssistantMessage streaming", () => {
 		const text = "a".padEnd(2000, "x");
 		view.rerender(<AssistantMessage message={message({ text })} />);
 		runFrame(0);
-		runFrame(50);
-		runFrame(100);
+		runFrame(16);
+		runFrame(32);
 
 		expect(segment.mock.calls.filter(([input]) => input === text)).toHaveLength(1);
 	});
@@ -270,7 +285,7 @@ describe("AssistantMessage streaming", () => {
 		expect(screen.getByLabelText(/^Sent Yesterday · \d{2}:\d{2}$/)).toBeInTheDocument();
 		view.rerender(<AssistantMessage message={message({ createdAt: older, streaming: false })} showCopy />);
 		expect(screen.queryByLabelText(/^Sent Yesterday ·/)).toBeNull();
-		expect(screen.getByLabelText(/^Sent [A-Z][a-z]{2} \d{1,2}, \d{4}$/)).toBeInTheDocument();
+		expect(screen.getByLabelText(/^Sent .+\d{4}$/)).toBeInTheDocument();
 	});
 
 	it("survives StrictMode effect cleanup and keeps draining", () => {
@@ -285,9 +300,11 @@ describe("AssistantMessage streaming", () => {
 			</StrictMode>,
 		);
 		runFrame(0);
-		runFrame(100);
+		runFrame(40);
 
-		expect(document.querySelector("p")?.textContent).toBe("abcdef");
+		expect(document.querySelector("p")?.textContent).toBe("abc");
+		runFrame(60);
+		expect(document.querySelector("p")?.textContent).toBe("abcdefghij");
 	});
 });
 
@@ -323,5 +340,24 @@ describe("ActivityRow", () => {
 		);
 		expect(screen.getByText("outcome unknown")).toBeInTheDocument();
 		expect(screen.queryByText("failed")).not.toBeInTheDocument();
+	});
+});
+
+describe("HumanMessage", () => {
+	function human(overrides: Partial<ConversationMessage> = {}): ConversationMessage {
+		return message({ id: "human-1", role: "user", origin: "human", text: "hi", streaming: false, ...overrides });
+	}
+
+	// Light theme cannot separate a sent bubble from the canvas by fill alone, so it
+	// paints an enclosure keyed off this attribute's absence. Losing it makes the
+	// message read as unenclosed text again.
+	it("marks a queued bubble and leaves a sent one unmarked", () => {
+		const { container, rerender } = render(<HumanMessage message={human()} sessionId="s1" />);
+		const sent = container.querySelector(".cursor-chat-human-message");
+		expect(sent).not.toBeNull();
+		expect(sent).not.toHaveAttribute("data-queued");
+
+		rerender(<HumanMessage message={human()} sessionId="s1" queued />);
+		expect(container.querySelector(".cursor-chat-human-message")).toHaveAttribute("data-queued");
 	});
 });

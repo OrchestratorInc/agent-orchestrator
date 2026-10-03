@@ -1,8 +1,8 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatConfigOption } from "../../types/conversation";
-import { TurnSettingsBar } from "./TurnSettingsBar";
+import { hasProviderPermissionMode, TurnSettingsBar } from "./TurnSettingsBar";
 
 const OPTIONS: ChatConfigOption[] = [
 	{
@@ -52,7 +52,395 @@ const OPTIONS: ChatConfigOption[] = [
 	},
 ];
 
+describe.each(["native", "ACP submenu", "ACP standalone"] as const)("%s model search", (path) => {
+	function setup(count = 100) {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		const onComposerClick = vi.fn();
+		const models = Array.from({ length: count }, (_, index) => ({
+			id: `provider-${index % 2}/model-${index}`,
+			displayName: `Model ${index}`,
+			default: index === 0,
+			efforts: ["high"],
+		}));
+		const modelOption: ChatConfigOption = {
+			id: "model",
+			name: "Model",
+			category: "model",
+			type: "select",
+			currentValue: models[0].id,
+			choices: models.map((model, index) => ({
+				value: model.id,
+				name: model.displayName,
+				group: `provider-${index % 2}`,
+				groupName: `Provider ${index % 2}`,
+			})),
+		};
+		render(
+			<div onClick={onComposerClick}>
+				<TurnSettingsBar
+					models={path === "native" ? models : []}
+					settings={{ model: models[0].id, reasoningEffort: "high", approvalMode: "accept-edits" }}
+					onChange={path === "native" ? onChange : undefined}
+					configOptions={path === "native" ? undefined : path === "ACP submenu" ? [modelOption, OPTIONS[1]] : [modelOption]}
+					onChangeConfigOption={path === "native" ? undefined : onChange}
+				/>
+			</div>,
+		);
+		const open = async () => {
+			await user.click(screen.getByRole("button", {
+				name: path === "ACP standalone" ? "Model" : "Model and reasoning effort for the next turn",
+			}));
+			if (path !== "ACP standalone") await user.keyboard("{ArrowDown}{ArrowRight}");
+		};
+		return { user, onChange, onComposerClick, open };
+	}
+
+	it.each([9, 10])("shows search only for catalogs with at least 10 models (%i)", async (count) => {
+		const { open } = setup(count);
+		await open();
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(count);
+		if (count === 10) {
+			expect(screen.getByRole("searchbox", { name: "Search models" })).toBeInTheDocument();
+			expect(screen.getByText("Showing 10 of 10 matching models", { exact: true })).toBeInTheDocument();
+		} else {
+			expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		}
+	});
+
+	it("searches the full catalog by model name and preserves selection semantics", async () => {
+		const { user, onChange, onComposerClick, open } = setup();
+		await open();
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(100);
+		expect(screen.getByRole("menuitemradio", { name: "Model 0" })).toHaveAttribute("aria-checked", "true");
+		const search = screen.getByRole("searchbox", { name: "Search models" });
+		onComposerClick.mockClear();
+		await user.type(search, "  MODEL 99  ");
+		expect(search).toHaveFocus();
+		expect(onComposerClick).not.toHaveBeenCalled();
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(1);
+		await user.click(screen.getByRole("menuitemradio", { name: "Model 99" }));
+		if (path === "native") {
+			expect(onChange).toHaveBeenCalledWith({ model: "provider-1/model-99", reasoningEffort: undefined, approvalMode: "accept-edits" });
+		} else {
+			expect(onChange).toHaveBeenCalledWith("model", { value: "provider-1/model-99" });
+		}
+		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		await open();
+		expect(screen.getByRole("searchbox")).toHaveValue("");
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(100);
+	});
+
+	it("matches model names and supports keyboard selection", async () => {
+		const { user, onChange, open } = setup();
+		await open();
+		if (path === "ACP standalone") {
+			await user.keyboard("{Escape}{Enter}");
+		}
+		const search = screen.getByRole("searchbox", { name: "Search models" });
+		expect(search).toHaveFocus();
+		await user.keyboard("Model 99");
+		expect(search).toHaveValue("Model 99");
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(1);
+		await user.keyboard("{ArrowDown}");
+		expect(screen.getByRole("menuitemradio", { name: "Model 99" })).toHaveFocus();
+		await user.keyboard("{Enter}");
+		expect(onChange).toHaveBeenCalledOnce();
+	});
+
+	it.each(["ArrowUp", "Shift+Tab"])("returns to the query with %s so it can be refined", async (key) => {
+		const { user, open } = setup();
+		await open();
+		const search = screen.getByRole("searchbox", { name: "Search models" });
+		await user.type(search, "Model");
+		const results = screen.getAllByRole("menuitemradio");
+		await user.keyboard("{ArrowDown}{ArrowDown}");
+		expect(results[1]).toHaveFocus();
+		if (key === "ArrowUp") {
+			await user.keyboard("{ArrowUp}");
+			expect(results[0]).toHaveFocus();
+			await user.keyboard("{ArrowUp}");
+		} else {
+			await user.tab({ shift: true });
+		}
+		expect(search).toHaveFocus();
+		expect(search).toHaveValue("Model");
+		await user.keyboard(" 99");
+		expect(search).toHaveValue("Model 99");
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(1);
+		await user.keyboard("{ArrowDown}");
+		expect(screen.getByRole("menuitemradio", { name: "Model 99" })).toHaveFocus();
+	});
+
+	it("narrows the query when typing on a focused result instead of jumping rows", async () => {
+		const { user, open } = setup();
+		await open();
+		const search = screen.getByRole("searchbox", { name: "Search models" });
+		await user.type(search, "Model 9");
+		await user.keyboard("{ArrowDown}");
+		expect(screen.getAllByRole("menuitemradio")[0]).toHaveFocus();
+		await user.keyboard("9");
+		expect(search).toHaveFocus();
+		expect(search).toHaveValue("Model 99");
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(1);
+	});
+
+	it("routes Backspace from a focused result back to the search query", async () => {
+		const { user, open } = setup();
+		await open();
+		const search = screen.getByRole("searchbox", { name: "Search models" });
+		await user.type(search, "Model 99");
+		await user.keyboard("{ArrowDown}{Backspace}");
+		expect(search).toHaveFocus();
+		expect(search).toHaveValue("Model 9");
+	});
+
+	it("keeps Space as the select key on a focused result", async () => {
+		const { user, onChange, open } = setup();
+		await open();
+		const search = screen.getByRole("searchbox", { name: "Search models" });
+		await user.type(search, "Model 99");
+		await user.keyboard("{ArrowDown}");
+		expect(screen.getByRole("menuitemradio", { name: "Model 99" })).toHaveFocus();
+		await user.keyboard(" ");
+		expect(onChange).toHaveBeenCalledOnce();
+		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+	});
+
+	it.each(["ArrowUp", "ArrowDown"])("keeps %s available for input-method candidate selection", async (key) => {
+		const { user, onChange, open } = setup();
+		await open();
+		const search = screen.getByRole("searchbox", { name: "Search models" });
+		await user.click(search);
+		fireEvent.compositionStart(search);
+		expect(fireEvent.keyDown(search, { key, isComposing: true })).toBe(true);
+		expect(search).toHaveFocus();
+		expect(onChange).not.toHaveBeenCalled();
+		fireEvent.compositionEnd(search);
+		await user.keyboard("{ArrowDown}");
+		expect(screen.getByRole("menuitemradio", { name: "Model 0" })).toHaveFocus();
+	});
+
+	it("filters models and restores all models after clearing or dismissing search", async () => {
+		const { user, open } = setup();
+		await open();
+		const search = screen.getByRole("searchbox", { name: "Search models" });
+		await user.type(search, "Model 99");
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(1);
+		expect(screen.queryByRole("menuitemradio", { name: "Model 0" })).not.toBeInTheDocument();
+		if (path !== "native") expect(screen.getByText("Provider 1")).toBeInTheDocument();
+		await user.clear(search);
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(100);
+		await user.type(search, "zzzz-no-such-model");
+		expect(screen.getByText("No matching models.")).toBeInTheDocument();
+		expect(screen.queryByRole("menuitemradio")).not.toBeInTheDocument();
+		await user.keyboard("{Escape}");
+		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		await open();
+		expect(screen.getByRole("searchbox")).toHaveValue("");
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(100);
+	});
+});
+
+it.each(["native", "ACP config"] as const)(
+	"omits the repeated Claude prefix from %s chat model labels",
+	async (source) => {
+		const user = userEvent.setup();
+		const models = [
+			{ id: "claude-sonnet-4-5", displayName: "Claude Sonnet 4.5", default: true },
+			{ id: "claude-opus-4-7", displayName: "Claude Opus 4.7", default: false },
+		];
+		const configOption: ChatConfigOption = {
+			id: "model",
+			name: "Model",
+			category: "model",
+			type: "select",
+			currentValue: models[0].id,
+			choices: models.map((model) => ({ value: model.id, name: model.displayName })),
+		};
+		render(
+			<TurnSettingsBar
+				harness="claude-code"
+				models={source === "native" ? models : []}
+				settings={{ model: models[0].id }}
+				onChange={source === "native" ? vi.fn() : undefined}
+				configOptions={source === "ACP config" ? [configOption] : undefined}
+				onChangeConfigOption={source === "ACP config" ? vi.fn() : undefined}
+			/>,
+		);
+
+		const picker = screen.getByRole("button", {
+			name: source === "native" ? "Model and reasoning effort for the next turn" : "Model",
+		});
+		expect(picker).toHaveTextContent("Sonnet 4.5");
+		expect(picker).not.toHaveTextContent("Claude");
+		await user.click(picker);
+		if (source === "native") await user.keyboard("{ArrowDown}{ArrowRight}");
+		expect(screen.getByRole("menuitemradio", { name: "Sonnet 4.5" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: "Opus 4.7" })).toBeInTheDocument();
+		expect(screen.queryByText(/^Claude /)).not.toBeInTheDocument();
+	},
+);
+
 describe("ACP session config options", () => {
+	it("hides a mode with only an implicit default choice", () => {
+		const mode: ChatConfigOption = {
+			id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "default",
+			choices: [{ value: "default", name: "Default", description: "The default mode." }],
+		};
+		expect(hasProviderPermissionMode([mode])).toBe(false);
+		render(<TurnSettingsBar models={[]} settings={{}} configOptions={[mode]} onChangeConfigOption={vi.fn()} />);
+		expect(screen.queryByText("Default")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Mode" })).not.toBeInTheDocument();
+	});
+
+	it("keeps a mapped permission default selectable under its meaningful label", async () => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		render(<TurnSettingsBar models={[]} settings={{ approvalMode: "auto" }} onChangeConfigOption={onChange}
+			configOptions={[{
+				id: "mode", name: "Permission mode", category: "mode", type: "select", currentValue: "auto",
+				choices: [
+					{ value: "default", name: "Default", permissionMode: "default" },
+					{ value: "auto", name: "Auto", permissionMode: "auto" },
+				],
+			}]} />);
+		await user.click(screen.getByRole("button", { name: "Permission mode" }));
+		await user.click(screen.getByRole("menuitemradio", { name: "Use agent permissions" }));
+		expect(onChange).toHaveBeenCalledWith("mode", { value: "default" });
+	});
+
+	it("keeps an opaque agent setting available after choosing a concrete value", async () => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		const option: ChatConfigOption = {
+			id: "profile", name: "Profile", type: "select", currentValue: "default",
+			choices: [
+				{ value: "default", name: "Default" },
+				{ value: "fast", name: "Fast" },
+			],
+		};
+		const view = render(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange} configOptions={[option]} />);
+		await user.click(screen.getByRole("button", { name: "Profile" }));
+		expect(screen.getByRole("menuitemradio", { name: "Use agent setting", checked: true })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitemradio", { name: "Default" })).not.toBeInTheDocument();
+		await user.click(screen.getByRole("menuitemradio", { name: "Fast" }));
+		expect(onChange).toHaveBeenCalledWith("profile", { value: "fast" });
+		view.rerender(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange}
+			configOptions={[{ ...option, currentValue: "fast" }]} />);
+		await user.click(screen.getByRole("button", { name: "Profile" }));
+		await user.click(screen.getByRole("menuitemradio", { name: "Use agent setting" }));
+		expect(onChange).toHaveBeenLastCalledWith("profile", { value: "default" });
+	});
+
+	it("keeps an unreported effort selectable without claiming a concrete level", async () => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		const option: ChatConfigOption = {
+			id: "effort", name: "Effort", category: "thought_level", type: "select", currentValue: "default",
+			choices: [
+				{ value: "default", name: "Default" },
+				{ value: "low", name: "Low" },
+				{ value: "high", name: "High" },
+			],
+		};
+		const view = render(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange} configOptions={[option]} />);
+
+		const picker = screen.getByRole("button", { name: "Effort" });
+		expect(picker).toHaveTextContent("Use agent effort");
+		await user.click(picker);
+		expect(screen.queryByRole("menuitemradio", { name: "Default" })).not.toBeInTheDocument();
+		await user.click(screen.getByRole("menuitemradio", { name: "High" }));
+		expect(onChange).toHaveBeenCalledWith("effort", { value: "high" });
+		view.rerender(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange}
+			configOptions={[{ ...option, currentValue: "high" }]} />);
+		await user.click(screen.getByRole("button", { name: "Effort" }));
+		await user.click(screen.getByRole("menuitemradio", { name: "Use agent effort" }));
+		expect(onChange).toHaveBeenLastCalledWith("effort", { value: "default" });
+	});
+
+	it("shows the concrete recommended model selected without a duplicate default option", async () => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		const option: ChatConfigOption = {
+			id: "model",
+			name: "Model",
+			category: "model",
+			type: "select",
+			currentValue: "default",
+			choices: [
+				{ value: "default", name: "Default (recommended)", description: "Opus" },
+				{ value: "opus", name: "Opus" },
+				{ value: "sonnet", name: "Sonnet" },
+			],
+		};
+		const view = render(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange} configOptions={[option]} />);
+
+		const picker = screen.getByRole("button", { name: "Model" });
+		expect(picker).toHaveTextContent("Opus");
+		await user.click(picker);
+		expect(screen.queryByRole("menuitemradio", { name: /Default/i })).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: "Opus", checked: true })).toBeInTheDocument();
+		await user.click(screen.getByRole("menuitemradio", { name: "Sonnet" }));
+		expect(onChange).toHaveBeenCalledWith("model", { value: "sonnet" });
+		view.rerender(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange}
+			configOptions={[{ ...option, currentValue: "sonnet" }]} />);
+		await user.click(screen.getByRole("button", { name: "Model" }));
+		await user.click(screen.getByRole("menuitemradio", { name: "Opus" }));
+		expect(onChange).toHaveBeenLastCalledWith("model", { value: "default" });
+	});
+
+	it("lets an explicitly pinned recommended model return to agent control", async () => {
+		const onChange = vi.fn();
+		render(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange} configOptions={[{
+			id: "model", name: "Model", category: "model", type: "select", currentValue: "opus",
+			choices: [
+				{ value: "default", name: "Default (recommended)", description: "Opus" },
+				{ value: "opus", name: "Opus" },
+				{ value: "sonnet", name: "Sonnet" },
+			],
+		}]} />);
+		await userEvent.click(screen.getByRole("button", { name: "Model" }));
+		expect(screen.getByRole("menuitemradio", { name: "Opus", checked: true })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Use agent model (Opus)" }));
+		expect(onChange).toHaveBeenCalledWith("model", { value: "default" });
+	});
+
+	it("searches visible model names without matching hidden choice values", async () => {
+		const user = userEvent.setup();
+		const choices = [
+			{ value: "chatgpt/claude-opus-4-8", name: "Claude Opus 4.8" },
+			{ value: "chatgpt/claude-sonnet-4", name: "Claude Sonnet 4" },
+			...Array.from({ length: 8 }, (_, index) => ({
+				value: `chatgpt/gpt-5.${index + 3}`,
+				name: `GPT-5.${index + 3}`,
+			})),
+		].map((choice) => ({ ...choice, group: "chatgpt", groupName: "ChatGPT" }));
+		render(
+			<TurnSettingsBar
+				models={[]}
+				settings={{}}
+				configOptions={[{
+					id: "model",
+					name: "Model",
+					category: "model",
+					type: "select",
+					currentValue: choices[0].value,
+					choices,
+				}]}
+				onChangeConfigOption={vi.fn()}
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Model" }));
+		await user.type(screen.getByRole("searchbox", { name: "Search models" }), "cl");
+
+		expect(screen.getByRole("menuitemradio", { name: "Claude Opus 4.8" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: "Claude Sonnet 4" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitemradio", { name: "GPT-5.3" })).not.toBeInTheDocument();
+		expect(screen.getByText("Showing 2 of 2 matching models", { exact: true })).toBeInTheDocument();
+	});
+
 	it.each(["ao-plan-project-1", "agents/plan-reviewer", "my_plan_agent"])(
 		"does not treat custom agent %s as native Plan Mode",
 		async (custom) => {
@@ -341,6 +729,41 @@ describe("ACP session config options", () => {
 		expect(onChange).toHaveBeenCalledWith({ approvalMode: "auto" });
 	});
 
+	it("keeps Cloud model and effort choices without a per-turn permission picker", () => {
+		render(
+			<TurnSettingsBar
+				harness="codex"
+				models={[{ id: "codex-test", displayName: "Codex Test", default: true, efforts: ["low", "high"] }]}
+				settings={{}}
+				onChange={vi.fn()}
+				showApprovalMode={false}
+			/>,
+		);
+		expect(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" })).toHaveTextContent("Codex Test");
+		expect(screen.queryByRole("button", { name: "Approval policy for the next turn" })).not.toBeInTheDocument();
+	});
+
+	it("shows the Cloud mode picker for a provider with no model catalog", async () => {
+		const onChange = vi.fn();
+		render(
+			<TurnSettingsBar
+				harness="cursor"
+				models={[]}
+				settings={{}}
+				showApprovalMode={false}
+				configOptions={[{
+					id: "mode", category: "mode", name: "Permission mode", type: "select",
+					currentValue: "trusted",
+					choices: [{ value: "standard", name: "Standard" }, { value: "trusted", name: "Full access" }],
+				}]}
+				onChangeConfigOption={onChange}
+			/>,
+		);
+		await userEvent.click(screen.getByRole("button", { name: "Permission mode" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Standard" }));
+		expect(onChange).toHaveBeenCalledWith("mode", { value: "standard" });
+	});
+
 	it("keeps Codex native model+effort in one trigger when the provider has no catalog", () => {
 		render(
 			<TurnSettingsBar
@@ -406,6 +829,16 @@ describe("ACP session config options", () => {
 });
 
 describe("remember project permissions", () => {
+	it("limits Codex approval choices to the Cloud session's permission ceiling", async () => {
+		const user = userEvent.setup();
+		render(<TurnSettingsBar models={[]} harness="codex" settings={{ approvalMode: "accept-edits" }}
+			approvalModes={["accept-edits", "auto"]} onChange={vi.fn()} />);
+		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+		expect(screen.getByRole("menuitemradio", { name: "Ask for approval" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: "Approve for me" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitemradio", { name: "Full access" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitemradio", { name: "Bypass permissions" })).not.toBeInTheDocument();
+	});
 	it("keeps choosing a session policy separate from remembering the confirmed policy", async () => {
 		const user = userEvent.setup();
 		const onChange = vi.fn();
@@ -447,7 +880,7 @@ describe("remember project permissions", () => {
 		const props = { models: [], settings: {}, onChange: vi.fn(), onRememberPermissions: vi.fn() };
 		const { rerender } = render(<TurnSettingsBar {...props} rememberPermissionsPending />);
 		expect(screen.getByRole("button", { name: "Approval policy for the next turn" })).toBeDisabled();
-		expect(screen.getByRole("status")).toHaveTextContent("Saving project default");
+		expect(screen.getByRole("status")).toHaveTextContent("Saving project permissions");
 		rerender(<TurnSettingsBar {...props} rememberPermissionsError="Could not save project default" />);
 		expect(screen.getByRole("alert")).toHaveTextContent("Could not save project default");
 		expect(screen.getByRole("button", { name: "Approval policy for the next turn" })).toBeEnabled();
@@ -623,7 +1056,7 @@ describe("Cursor Ask and Agent chat modes", () => {
 		await user.click(approvals);
 		expect(screen.queryByRole("menuitemradio", { name: "Ask" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitemradio", { name: "Agent" })).not.toBeInTheDocument();
-		expect(screen.getByRole("menuitemradio", { name: "Default approvals" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: "Use agent permissions" })).toBeInTheDocument();
 		expect(screen.getByRole("menuitemradio", { name: "Accept edits" })).toBeInTheDocument();
 		expect(screen.getByRole("menuitemradio", { name: "Auto-approve" })).toBeInTheDocument();
 		expect(screen.getByRole("menuitemradio", { name: "Bypass permissions" })).toBeInTheDocument();
@@ -916,5 +1349,149 @@ describe("Cursor's live Agent/Plan/Ask mode catalog", () => {
 		expect(screen.getAllByRole("button", { name: "Model mode for the next turn" })).toHaveLength(1);
 		expect(screen.queryByRole("button", { name: "Mode" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("switch", { name: "Plan Mode" })).not.toBeInTheDocument();
+	});
+});
+
+describe("OpenCode's live permission tiers", () => {
+	// What the daemon publishes for OpenCode: AO's tiers (relabelled from the
+	// injected agents) alongside OpenCode's own build and plan agents.
+	const OPENCODE_MODES: ChatConfigOption = {
+		id: "mode",
+		name: "Session Mode",
+		category: "mode",
+		type: "select",
+		currentValue: "ao-default",
+		choices: [
+			{ value: "ao-default", name: "Use agent permissions", permissionMode: "default" },
+			{ value: "ao-accept-edits", name: "Accept edits", permissionMode: "accept-edits" },
+			{ value: "ao-auto", name: "Auto-approve", permissionMode: "auto" },
+			{ value: "ao-bypass", name: "Bypass permissions", permissionMode: "bypass-permissions" },
+			{ value: "build", name: "build" },
+			{ value: "plan", name: "plan" },
+		],
+	};
+
+	it("returns from Plan Mode to the approval mode, not the bare agent mode", async () => {
+		const user = userEvent.setup();
+		const onChangeConfigOption = vi.fn();
+		render(
+			<TurnSettingsBar
+				harness="opencode"
+				models={[]}
+				settings={{ approvalMode: "auto" }}
+				configOptions={[{ ...OPENCODE_MODES, currentValue: "plan" }]}
+				onChangeConfigOption={onChangeConfigOption}
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Model mode for the next turn" }));
+		await user.click(screen.getByRole("switch", { name: "Plan Mode" }));
+		expect(onChangeConfigOption).toHaveBeenCalledWith("mode", { value: "ao-auto" });
+	});
+
+	it("splits the catalog into a plan toggle and an approvals picker", async () => {
+		const user = userEvent.setup();
+		const onChangeConfigOption = vi.fn();
+		render(
+			<TurnSettingsBar
+				harness="opencode"
+				models={[]}
+				settings={{}}
+				configOptions={[OPENCODE_MODES]}
+				onChangeConfigOption={onChangeConfigOption}
+			/>,
+		);
+
+		expect(hasProviderPermissionMode([OPENCODE_MODES])).toBe(true);
+		const approvals = screen.getByRole("button", { name: "Session Mode" });
+		expect(approvals).toHaveTextContent("Use agent permissions");
+		await user.click(approvals);
+		expect(screen.getByRole("menuitemradio", { name: "Use agent permissions", checked: true })).toBeInTheDocument();
+		await user.click(screen.getByRole("menuitemradio", { name: "Bypass permissions" }));
+		expect(onChangeConfigOption).toHaveBeenCalledWith("mode", { value: "ao-bypass" });
+
+		// build is OpenCode's agent mode, so the toggle must not invent a second one.
+		await user.click(screen.getByRole("button", { name: "Model mode for the next turn" }));
+		expect(screen.getByRole("switch", { name: "Plan Mode" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitemradio", { name: "Agent Mode" })).not.toBeInTheDocument();
+	});
+
+	it("can switch back to the agent's permission policy", async () => {
+		const user = userEvent.setup();
+		const onChangeConfigOption = vi.fn();
+		render(<TurnSettingsBar harness="opencode" models={[]} settings={{ approvalMode: "accept-edits" }}
+			configOptions={[{ ...OPENCODE_MODES, currentValue: "ao-accept-edits" }]}
+			onChangeConfigOption={onChangeConfigOption} />);
+		await user.click(screen.getByRole("button", { name: "Session Mode" }));
+		await user.click(screen.getByRole("menuitemradio", { name: "Use agent permissions" }));
+		expect(onChangeConfigOption).toHaveBeenCalledWith("mode", { value: "ao-default" });
+	});
+});
+
+it("keeps Claude's concrete Manual mode even though its wire value is default", async () => {
+	const user = userEvent.setup();
+	const onChangeConfigOption = vi.fn();
+	render(<TurnSettingsBar
+		harness="claude-code"
+		models={[]}
+		settings={{ approvalMode: "default" }}
+		configOptions={[{
+			id: "mode",
+			name: "Permission mode",
+			category: "mode",
+			type: "select",
+			currentValue: "default",
+			choices: [
+				{ value: "default", name: "Manual", permissionMode: "default", description: "Standard behavior, prompts for dangerous operations" },
+				{ value: "auto", name: "Auto", permissionMode: "auto" },
+			],
+		}]}
+		onChangeConfigOption={onChangeConfigOption}
+	/>);
+	const picker = screen.getByRole("button", { name: "Permission mode" });
+	expect(picker).toHaveTextContent("Manual");
+	await user.click(picker);
+	expect(screen.getByRole("menuitemradio", { name: "Manual" })).toHaveAttribute("aria-checked", "true");
+	await user.click(screen.getByRole("menuitemradio", { name: "Manual" }));
+	expect(onChangeConfigOption).toHaveBeenCalledWith("mode", { value: "default" });
+});
+
+describe("OpenCode-style execution modes", () => {
+	const OPENCODE_MODES: ChatConfigOption = {
+		id: "mode",
+		name: "Mode",
+		category: "mode",
+		type: "select",
+		currentValue: "build",
+		choices: [
+			{ value: "build", name: "build" },
+			{ value: "plan", name: "plan" },
+		],
+	};
+
+	it("does not treat build/plan as the provider's approval catalog", () => {
+		expect(hasProviderPermissionMode([OPENCODE_MODES])).toBe(false);
+		expect(hasProviderPermissionMode(OPTIONS)).toBe(true);
+	});
+
+	it("keeps AO's approval picker beside the plan toggle", async () => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		render(
+			<TurnSettingsBar
+				harness="opencode"
+				models={[]}
+			settings={{ approvalMode: "accept-edits" }}
+				configOptions={[OPENCODE_MODES]}
+				onChange={onChange}
+				onChangeConfigOption={vi.fn()}
+			/>,
+		);
+
+		const approvals = screen.getByRole("button", { name: "Approval policy for the next turn" });
+		expect(approvals).toHaveTextContent("Accept edits");
+		await user.click(approvals);
+		await user.click(screen.getByRole("menuitemradio", { name: "Use agent permissions" }));
+		expect(onChange).toHaveBeenCalledWith({ approvalMode: "default" });
 	});
 });

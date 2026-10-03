@@ -34,7 +34,7 @@ func (s *Server) workerEnsureAgentTerminal(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, worker.AgentTerminalResponse{
-		TerminalID: terminal.ID,
+		TerminalID: terminal.ID, NextOutputSequence: terminal.NextOutputSequence,
 	})
 }
 
@@ -153,10 +153,21 @@ func (s *Server) workerTerminalOutput(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Terminal output must contain at most 16 KiB.")
 		return
 	}
-	sequence, err := s.store.AppendTerminalOutput(
-		r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID,
-		terminalID, claims.Epoch, input.Data,
+	var (
+		sequence int64
+		err      error
 	)
+	if input.ID > 0 {
+		sequence, err = s.store.AppendTerminalOutputAt(
+			r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID,
+			terminalID, claims.Epoch, input.ID, input.Data,
+		)
+	} else {
+		sequence, err = s.store.AppendTerminalOutput(
+			r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID,
+			terminalID, claims.Epoch, input.Data,
+		)
+	}
 	if err != nil {
 		s.writeWorkerTransportError(w, r, err)
 		return
@@ -182,7 +193,7 @@ func (s *Server) workerTerminalExit(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.store.MarkTerminalExited(
 		r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID,
-		terminalID, claims.Epoch, input.ExitCode,
+		terminalID, claims.Epoch, input.ExitCode, input.InterfaceHandoff,
 	); err != nil {
 		s.writeWorkerTransportError(w, r, err)
 		return

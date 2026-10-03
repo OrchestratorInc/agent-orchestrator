@@ -18,9 +18,17 @@ const mocks = vi.hoisted(() => ({
   encryptionAvailable: true,
   selectedStorageBackend: "gnome_libsecret",
   getAuthorizationUrlWithPKCE: vi.fn(),
+  ipcHandle: vi.fn(),
   notifyRenderers: vi.fn(),
   openExternal: vi.fn(),
   showMessageBox: vi.fn(),
+  providerAuthenticate: vi.fn(),
+}));
+
+// The browser login itself is exercised in provider-auth-flow tests; here it
+// just returns a captured credential.
+vi.mock("./provider-auth-flow", () => ({
+  providerAuthFlow: () => ({ authenticate: mocks.providerAuthenticate }),
 }));
 
 vi.mock("@workos-inc/node", () => ({
@@ -41,7 +49,7 @@ vi.mock("electron", () => ({
     isPackaged: true,
   },
   dialog: { showMessageBox: mocks.showMessageBox },
-  ipcMain: { handle: vi.fn() },
+  ipcMain: { handle: mocks.ipcHandle },
   safeStorage: {
     decryptString: mocks.decryptString,
     encryptString: mocks.encryptString,
@@ -103,7 +111,7 @@ describe("native WorkOS authentication", () => {
         provider: "authkit",
         prompt: "login",
         maxAge: 0,
-        redirectUri: "ao-app://callback",
+        redirectUri: "https://api.aoagents.dev/app/auth/return",
       }),
     );
 
@@ -123,6 +131,57 @@ describe("native WorkOS authentication", () => {
     expect(session).not.toHaveProperty("refreshToken");
     await expect(getCloudSession(dataDir)).resolves.toMatchObject({
       user: { email: "person@example.com" },
+    });
+  });
+
+  it("requires an AO Cloud session before starting provider login", async () => {
+    const handler = mocks.ipcHandle.mock.calls.find(
+      ([channel]) => channel === "cloud:connectProviderAuth",
+    )?.[1] as ((event: unknown, input: unknown) => Promise<void>) | undefined;
+    expect(handler).toBeTypeOf("function");
+    await expect(
+      handler?.({}, {
+        baseUrl: "https://cloud.example",
+        provider: "codex",
+      }),
+    ).rejects.toThrow("Sign in to AO Cloud before connecting a provider.");
+  });
+
+  describe("Claude browser login local fallback token", () => {
+    const tokenFile = () => path.join(dataDir, "harnesses", "claude-code", "oauth-token");
+    const connect = async () => {
+      const handler = mocks.ipcHandle.mock.calls.find(
+        ([channel]) => channel === "cloud:connectProviderAuth",
+      )?.[1] as (event: unknown, input: unknown) => Promise<void>;
+      return handler({}, { baseUrl: "https://cloud.example", provider: "claude-code", persistLocalClaudeToken: true });
+    };
+
+    beforeEach(async () => {
+      await beginCloudSignIn(dataDir);
+      await handleCloudDeepLink("ao-app://callback?code=code_123&state=state_123", dataDir);
+      mocks.providerAuthenticate.mockResolvedValue({
+        provider: "claude-code",
+        credentialType: "oauth_token",
+        secret: "sk-ant-oat01-test-token",
+      });
+    });
+
+    it("keeps the local token once the cloud credential is saved", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+      await connect();
+      await expect(readFile(tokenFile(), "utf8")).resolves.toBe("sk-ant-oat01-test-token");
+    });
+
+    it("does not leave a local token behind when the cloud save fails", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 500 }));
+      await expect(connect()).rejects.toThrow("AO Cloud could not save the provider credential.");
+      await expect(readFile(tokenFile(), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("does not leave a local token behind when the cloud is unreachable", async () => {
+      vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("fetch failed"));
+      await expect(connect()).rejects.toThrow("fetch failed");
+      await expect(readFile(tokenFile(), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 

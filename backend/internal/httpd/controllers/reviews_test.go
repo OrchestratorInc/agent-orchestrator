@@ -45,6 +45,8 @@ type fakeReviewService struct {
 	resolveErr        error
 }
 
+func (*fakeReviewService) RecoverChatReviewers(context.Context) error { return nil }
+
 func (f *fakeReviewService) Trigger(
 	_ context.Context,
 	_ domain.SessionID,
@@ -162,6 +164,20 @@ func TestReviewsTrigger_MissingReviewerBinaryReturns422WithCause(t *testing.T) {
 	mustJSON(t, body, &got)
 	if !strings.Contains(got.Message, "claude") || !strings.Contains(got.Message, ports.ErrAgentBinaryNotFound.Error()) {
 		t.Fatalf("message = %q, want reviewer binary cause", got.Message)
+	}
+}
+
+func TestReviewsTrigger_UnauthenticatedReviewerReturns409(t *testing.T) {
+	srv := newReviewTestServer(t, &fakeReviewService{triggerErr: fmt.Errorf("reviewer harness %q: %w", "claude-code", ports.ErrChatAuthRequired)})
+
+	body, status, headers := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/trigger", "")
+	assertJSON(t, headers)
+	assertErrorCode(t, body, status, http.StatusConflict, "REVIEWER_AUTH_REQUIRED")
+
+	var got errorBody
+	mustJSON(t, body, &got)
+	if got.Message != "The reviewer agent is installed but not authenticated" {
+		t.Fatalf("message = %q", got.Message)
 	}
 }
 

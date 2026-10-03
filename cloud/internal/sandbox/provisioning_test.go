@@ -143,6 +143,73 @@ func TestSessionPlanForProviderOverridesDefault(t *testing.T) {
 	}
 }
 
+func TestSessionPlanForProviderWithCoderOptions(t *testing.T) {
+	t.Parallel()
+	const (
+		defaultTemplate = "2a2e262c-b31c-4202-946d-a19ad45d1fd2"
+		chosenTemplate  = "2a2e262c-b31c-4202-946d-a19ad45d1fd3"
+	)
+	defaults := ProvisioningDefaults{
+		Provider: ProviderCoder,
+		Coder: CoderConfig{
+			BaseURL: "https://coder.example.com", Owner: "owner", TemplateID: defaultTemplate,
+			AgentName: "dev", DurableRoot: "/persistent/ao", WorkerTokenTTL: time.Minute,
+		},
+	}
+
+	// nil options => default template, no size/startup params (unchanged behavior).
+	plan, err := defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := DecodeCoderSessionProfile(plan.ResourceProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.TemplateID != defaultTemplate {
+		t.Fatalf("default template = %q, want %q", profile.TemplateID, defaultTemplate)
+	}
+	if _, ok := profile.Parameters["size"]; ok {
+		t.Fatalf("default plan should carry no size parameter: %+v", profile.Parameters)
+	}
+
+	// A chosen template with size + startup overrides the template and layers the
+	// rich parameters on.
+	plan, err = defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, &CoderSessionOptions{
+		TemplateID: chosenTemplate, Size: "large", StartupScript: "make dev",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err = DecodeCoderSessionProfile(plan.ResourceProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.TemplateID != chosenTemplate {
+		t.Fatalf("chosen template = %q, want %q", profile.TemplateID, chosenTemplate)
+	}
+	if profile.Parameters["size"] != "large" || profile.Parameters["startup_script"] != "make dev" {
+		t.Fatalf("chosen plan parameters = %+v", profile.Parameters)
+	}
+
+	// Size without a chosen template is ignored: the default template does not
+	// declare it, so we must not send it (Coder would reject the build).
+	plan, err = defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, &CoderSessionOptions{Size: "large"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err = DecodeCoderSessionProfile(plan.ResourceProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.TemplateID != defaultTemplate {
+		t.Fatalf("size-only options must keep the default template, got %q", profile.TemplateID)
+	}
+	if _, ok := profile.Parameters["size"]; ok {
+		t.Fatalf("size without a chosen template must be ignored: %+v", profile.Parameters)
+	}
+}
+
 func TestDecodeCoderSessionProfileRejectsIncompleteContract(t *testing.T) {
 	t.Parallel()
 	profiles := []json.RawMessage{
@@ -159,5 +226,55 @@ func TestDecodeCoderSessionProfileRejectsIncompleteContract(t *testing.T) {
 		if _, err := DecodeCoderSessionProfile(raw); err == nil {
 			t.Errorf("profile %d unexpectedly decoded: %s", index, raw)
 		}
+	}
+}
+
+// A per-organization override replaces the deployment-default Coder connection's
+// non-secret fields in the stamped session profile, while a nil override leaves
+// the deployment default untouched.
+func TestSessionPlanForProviderWithCoderOverride(t *testing.T) {
+	t.Parallel()
+	const (
+		deployTemplate = "2a2e262c-b31c-4202-946d-a19ad45d1fd2"
+		orgTemplate    = "3b3f373d-c42d-5313-a57e-b2abe56e2fe3"
+	)
+	defaults := ProvisioningDefaults{
+		Provider: ProviderCoder,
+		Release:  "test",
+		Coder: CoderConfig{
+			BaseURL: "https://coder.example.com", Owner: "deploy-owner", TemplateID: deployTemplate,
+			AgentName: "deploy-dev", DurableRoot: "/persistent/ao", WorkerTokenTTL: time.Minute,
+		},
+	}
+
+	plan, err := defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, nil, &CoderDeploymentOverride{
+		BaseURL: "https://org-coder.example.com", Owner: "org-owner", TemplateID: orgTemplate,
+		AgentName: "org-dev", Parameters: map[string]string{"region": "eu"}, DurableRoot: "/srv/org",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := DecodeCoderSessionProfile(plan.ResourceProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.BaseURL != "https://org-coder.example.com" || profile.Owner != "org-owner" ||
+		profile.TemplateID != orgTemplate || profile.AgentName != "org-dev" ||
+		profile.DurableRoot != "/srv/org" || profile.Parameters["region"] != "eu" {
+		t.Fatalf("override not applied: %+v", profile)
+	}
+
+	// A nil override keeps the deployment default.
+	plan, err = defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err = DecodeCoderSessionProfile(plan.ResourceProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.BaseURL != "https://coder.example.com" || profile.Owner != "deploy-owner" ||
+		profile.TemplateID != deployTemplate {
+		t.Fatalf("nil override disturbed the deployment default: %+v", profile)
 	}
 }

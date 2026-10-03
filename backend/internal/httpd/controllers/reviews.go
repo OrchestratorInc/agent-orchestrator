@@ -11,6 +11,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reviewcore "github.com/aoagents/agent-orchestrator/backend/internal/review"
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
 )
@@ -27,7 +28,8 @@ type ListReviewsResponse struct {
 	// carries the current and previous run per PR, which cannot answer "what did
 	// the other reviewer say" once a third pass has run — so the client cannot
 	// show one summary across reviewers without this.
-	Runs []domain.ReviewRun `json:"runs"`
+	Runs            []domain.ReviewRun      `json:"runs"`
+	ReviewerSurface *domain.ReviewerSurface `json:"reviewerSurface,omitempty"`
 }
 
 // ReviewRunResponse is the body of submit (200). It carries the run plus the
@@ -44,6 +46,7 @@ type TriggerReviewResponse struct {
 	ReviewerHandleID string                     `json:"reviewerHandleId"`
 	Reviews          []reviewcore.PRReviewState `json:"reviews"`
 	Runs             []domain.ReviewRun         `json:"runs"`
+	ReviewerSurface  *domain.ReviewerSurface    `json:"reviewerSurface,omitempty"`
 	// Created is true when a new review pass was started (HTTP 201) and false
 	// when an existing run for the same commit was reused (HTTP 200).
 	Created bool `json:"created" description:"True when a new review pass was started; false when an existing run for the same commit was reused."`
@@ -211,6 +214,7 @@ func (c *ReviewsController) trigger(w http.ResponseWriter, r *http.Request) {
 		Reviews:          reviews,
 		Runs:             runs,
 		Created:          res.Created,
+		ReviewerSurface:  reviewerSurfacePayload(res.ReviewerSurface),
 	})
 }
 
@@ -357,7 +361,15 @@ func reviewsResponse(res reviewcore.SessionReviews, reviews []reviewcore.PRRevie
 		ReviewerActivityState: string(res.ReviewerActivityState),
 		Reviews:               reviews,
 		Runs:                  runs,
+		ReviewerSurface:       reviewerSurfacePayload(res.ReviewerSurface),
 	}
+}
+
+func reviewerSurfacePayload(surface domain.ReviewerSurface) *domain.ReviewerSurface {
+	if surface.ReviewID == "" {
+		return nil
+	}
+	return &surface
 }
 
 func (c *ReviewsController) submit(w http.ResponseWriter, r *http.Request) {
@@ -408,6 +420,8 @@ func writeReviewError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "REVIEW_NOT_FOUND", err.Error(), nil)
 	case errors.Is(err, reviewsvc.ErrAgentBinaryNotFound):
 		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "REVIEWER_BINARY_NOT_FOUND", err.Error(), nil)
+	case errors.Is(err, ports.ErrChatAuthRequired):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEWER_AUTH_REQUIRED", "The reviewer agent is installed but not authenticated", nil)
 	default:
 		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "REVIEW_OPERATION_FAILED", "Review operation failed", nil)
 	}

@@ -48,7 +48,7 @@ export function TerminalSwitchAgentButton({
 	if (
 		session.kind !== "worker" ||
 		session.isTerminated ||
-		!canSwitchAgentHarness(session.provider) ||
+		!canSwitchAgentHarness(session.provider, session.mode) ||
 		(!controlPresentation && !sessionIsActive(session))
 	) {
 		return null;
@@ -60,7 +60,7 @@ export function TerminalSwitchAgentButton({
 	const handleOpenChange = (nextOpen: boolean) => {
 		onOpenChange?.(nextOpen);
 		if (!nextOpen && switchError) {
-			clearSwitchAgentState(queryClient, session.id);
+			clearSwitchAgentState(queryClient, session.id, session.hostId);
 		}
 	};
 

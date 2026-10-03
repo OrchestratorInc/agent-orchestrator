@@ -1,6 +1,9 @@
 package worker
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // BootstrapRequest is what a worker sends to redeem its one-time ticket.
 type BootstrapRequest struct {
@@ -19,13 +22,30 @@ type LaunchContext struct {
 	Branch         string `json:"branch"`
 	Prompt         string `json:"prompt,omitempty"`
 	AgentSessionID string `json:"agentSessionId,omitempty"`
+	Interface      string `json:"interface"`
 	// ParentSessionID is the orchestrator that spawned this session; empty for
 	// top-level sessions.
-	ParentSessionID string   `json:"parentSessionId,omitempty"`
-	Mode            string   `json:"mode"`
-	DeniedCommands  []string `json:"deniedCommands"`
-	RepositoryURL   string   `json:"repositoryUrl"`
-	DefaultBranch   string   `json:"defaultBranch"`
+	ParentSessionID string `json:"parentSessionId,omitempty"`
+	Mode            string `json:"mode"`
+	// Model is the coding-agent model the worker launches the harness with;
+	// empty uses the harness default.
+	Model          string   `json:"model,omitempty"`
+	DeniedCommands []string `json:"deniedCommands"`
+	RepositoryURL  string   `json:"repositoryUrl"`
+	DefaultBranch  string   `json:"defaultBranch"`
+	// ExtraRepos are additional repositories the worker clones alongside the
+	// primary repo (multi-repo dev kit). Empty for a single-repo session.
+	ExtraRepos []RepoRef `json:"extraRepos,omitempty"`
+	// SystemPrompt carries control-plane-authored project context and rules. It
+	// remains separate from Prompt, which is the user's visible task input.
+	SystemPrompt string `json:"systemPrompt"`
+}
+
+// RepoRef is one additional repository the worker clones beside the primary
+// repo, optionally at a specific branch.
+type RepoRef struct {
+	URL    string `json:"url"`
+	Branch string `json:"branch,omitempty"`
 }
 
 // BootstrapResponse is the control plane's answer to a valid bootstrap ticket.
@@ -121,17 +141,56 @@ type EventRequest struct {
 	Payload any    `json:"payload,omitempty"`
 }
 
+type NotificationEventRequest struct {
+	EventID    string          `json:"eventId"`
+	Type       string          `json:"type"`
+	OccurredAt time.Time       `json:"occurredAt"`
+	Payload    json.RawMessage `json:"payload"`
+}
+
+type NotificationEventResponse struct {
+	Accepted  bool   `json:"accepted"`
+	EventID   string `json:"eventId"`
+	Duplicate bool   `json:"duplicate"`
+}
+
 type ClaimTurnRequest struct{}
 
 type Turn struct {
 	ID              string   `json:"id"`
 	Prompt          string   `json:"prompt"`
+	Model           string   `json:"model,omitempty"`
+	ReasoningEffort string   `json:"reasoningEffort,omitempty"`
 	Mode            string   `json:"mode"`
+	ApprovalMode    string   `json:"approvalMode,omitempty"`
 	DeniedCommands  []string `json:"deniedCommands"`
 	Harness         string   `json:"harness"`
 	Attempt         int      `json:"attempt"`
 	CancelRequested bool     `json:"cancelRequested"`
 	AgentSessionID  string   `json:"agentSessionId,omitempty"`
+}
+
+type ChatModel struct {
+	ID            string   `json:"id"`
+	DisplayName   string   `json:"displayName"`
+	Description   string   `json:"description,omitempty"`
+	Default       bool     `json:"default"`
+	Efforts       []string `json:"efforts,omitempty"`
+	DefaultEffort string   `json:"defaultEffort,omitempty"`
+}
+
+type ChatModelsResponse struct {
+	Models []ChatModel `json:"models"`
+}
+
+type ChatApproval struct {
+	RequestID   string          `json:"requestId"`
+	TurnID      string          `json:"turnId"`
+	Attempt     int             `json:"attempt"`
+	WorkerEpoch int64           `json:"workerEpoch,omitempty"`
+	Summary     string          `json:"summary"`
+	ToolKind    string          `json:"toolKind,omitempty"`
+	Decisions   json.RawMessage `json:"decisions"`
 }
 
 type ClaimTurnResponse struct {
@@ -210,6 +269,14 @@ type WorkspaceReadRequest struct {
 	Path string `json:"path"`
 }
 
+// WorkspaceDiffFileRequest asks the worker for one file's current text and
+// its bounded unified patch against HEAD. It is deliberately distinct from
+// WorkspaceReadRequest so providers that have not implemented diff-file
+// support never receive a request they could mistake for an ordinary read.
+type WorkspaceDiffFileRequest struct {
+	Path string `json:"path"`
+}
+
 type WorkspaceWriteRequest struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
@@ -259,34 +326,61 @@ type WorkspaceFile struct {
 	Size    int64  `json:"size"`
 }
 
+// WorkspaceDiffFile is the Docker worker's per-file review model. It mirrors
+// the local daemon's useful file-review facts without exposing host paths or
+// provider implementation details.
+type WorkspaceDiffFile struct {
+	Path             string `json:"path"`
+	Status           string `json:"status"`
+	Additions        int    `json:"additions"`
+	Deletions        int    `json:"deletions"`
+	Size             int64  `json:"size"`
+	Binary           bool   `json:"binary"`
+	Deleted          bool   `json:"deleted"`
+	Content          string `json:"content"`
+	ContentTruncated bool   `json:"contentTruncated"`
+	Diff             string `json:"diff"`
+	DiffTruncated    bool   `json:"diffTruncated"`
+}
+
 type TerminalCommand struct {
-	TerminalID string `json:"terminalId"`
-	Kind       string `json:"kind,omitempty"`
-	Data       []byte `json:"data,omitempty"`
-	Columns    uint16 `json:"columns,omitempty"`
-	Rows       uint16 `json:"rows,omitempty"`
+	TerminalID         string `json:"terminalId"`
+	NextOutputSequence int64  `json:"nextOutputSequence,omitempty"`
+	Kind               string `json:"kind,omitempty"`
+	Data               []byte `json:"data,omitempty"`
+	Columns            uint16 `json:"columns,omitempty"`
+	Rows               uint16 `json:"rows,omitempty"`
 }
 
 // TerminalStreamFrame is one message on the persistent duplex terminal
 // stream between a worker and the control plane. "output" carries PTY bytes
-// up (acked with the persisted row sequence); "input" pushes user keystrokes
-// down; "error" tells the worker to fall back to the polled transport.
+// up with the terminal-local, gap-free ID used for durable replay; "input"
+// pushes user keystrokes down; "error" tells the worker to fall back to the
+// polled transport.
 type TerminalStreamFrame struct {
-	Type     string `json:"type"`
-	Data     []byte `json:"data,omitempty"`
-	ID       int64  `json:"id,omitempty"`
-	Sequence int64  `json:"sequence,omitempty"`
-	Code     string `json:"code,omitempty"`
+	Type       string          `json:"type"`
+	Data       []byte          `json:"data,omitempty"`
+	ID         int64           `json:"id,omitempty"`
+	Sequence   int64           `json:"sequence,omitempty"`
+	Code       string          `json:"code,omitempty"`
+	EventID    string          `json:"eventId,omitempty"`
+	EventType  string          `json:"eventType,omitempty"`
+	OccurredAt time.Time       `json:"occurredAt,omitempty"`
+	Payload    json.RawMessage `json:"payload,omitempty"`
+	Duplicate  bool            `json:"duplicate,omitempty"`
 }
 
 type TerminalOutputRequest struct {
+	ID   int64  `json:"id,omitempty"`
 	Data []byte `json:"data"`
 }
 
 type TerminalExitRequest struct {
-	ExitCode int `json:"exitCode"`
+	ExitCode         int  `json:"exitCode"`
+	InterfaceHandoff bool `json:"interfaceHandoff,omitempty"`
 }
 
 type AgentTerminalResponse struct {
-	TerminalID string `json:"terminalId"`
+	TerminalID         string `json:"terminalId"`
+	NextOutputSequence int64  `json:"nextOutputSequence"`
 }

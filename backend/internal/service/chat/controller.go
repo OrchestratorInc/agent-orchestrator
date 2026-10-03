@@ -30,19 +30,31 @@ import (
 )
 
 const (
-	nativeHistorySettlePoll  = 100 * time.Millisecond
-	nativeHistorySettleLimit = 45 * time.Second
-	branchHandoffReportLimit = 5 * time.Second
-	retryClientMessagePrefix = "retry-attempt/"
+	nativeHistorySettlePoll    = 100 * time.Millisecond
+	nativeHistorySettlePollMax = 2 * time.Second
+	nativeHistorySettleLimit   = 45 * time.Second
+	branchHandoffReportLimit   = 5 * time.Second
+	retryClientMessagePrefix   = "retry-attempt/"
 )
+
+// nativeHistoryLoadAttemptLimit bounds one provider re-observation inside the
+// settle budget. An ACP refresh is a full session/load; without this bound a
+// single stalled load consumes the whole nativeHistorySettleLimit before the
+// loop can classify anything. A variable so tests can shorten it.
+var nativeHistoryLoadAttemptLimit = 30 * time.Second
+
+var errNativeHistoryLoadAttemptTimeout = errors.New("native history load attempt exceeded its time limit")
 
 // Store is the durable conversation surface the controller needs. Implemented by
 // the SQLite store.
 type Store interface {
 	CreateConversation(ctx context.Context, id string, scope domain.ConversationScope, project domain.ProjectID, session domain.SessionID, now time.Time) (domain.ConversationRecord, error)
+	CreateReviewConversation(ctx context.Context, id, reviewID string, project domain.ProjectID, session domain.SessionID, now time.Time) (domain.ConversationRecord, error)
+	OpenNativeConversation(ctx context.Context, id string, scope domain.ConversationScope, project domain.ProjectID, session domain.SessionID, now time.Time) (domain.ConversationRecord, error)
 	CreateProjectConversationWithContextReset(ctx context.Context, id string, project domain.ProjectID, session domain.SessionID, reset domain.ConversationActivity, now time.Time) (domain.ConversationRecord, error)
 	ConversationForSession(ctx context.Context, session domain.SessionID) (domain.ConversationRecord, error)
 	ClaimChatControllerGeneration(ctx context.Context, session domain.SessionID, generation string) error
+	ClaimReviewChatController(ctx context.Context, reviewID, providerID, generation string, now time.Time) (bool, error)
 	ConversationBranch(ctx context.Context, conversationID, branchID string) (domain.ConversationBranch, error)
 	ConversationEditAnchor(ctx context.Context, conversationID, replacedTurnID string) (domain.ConversationEditAnchor, error)
 	RepairIncompleteConversationEdit(ctx context.Context, sessionID domain.SessionID, conversationID string, now time.Time) (domain.ConversationBranch, bool, error)
@@ -51,14 +63,20 @@ type Store interface {
 	UpdateConversationBranchReplacement(ctx context.Context, branchID, replacementTurnID string) error
 
 	AdoptProviderTurn(ctx context.Context, conversationID string, session domain.SessionID, generation, turnID, providerTurnID string, now time.Time) error
+	AdoptReviewProviderTurn(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation, turnID, providerTurnID string, now time.Time) error
 	AppendImportedUserMessage(ctx context.Context, conversationID, providerTurnID string, msg domain.ConversationMessage, now time.Time) error
 
 	AppendUserMessage(ctx context.Context, conversationID string, session domain.SessionID, generation string, msg domain.ConversationMessage, turnID string, now time.Time) (bool, error)
+	AppendReviewUserMessage(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation string, msg domain.ConversationMessage, turnID string, now time.Time) (bool, error)
+	ConversationMessageByClientID(ctx context.Context, conversationID, clientMessageID string) (domain.ConversationMessage, bool, error)
 	AppendRetryUserMessage(ctx context.Context, conversationID string, session domain.SessionID, generation string, msg domain.ConversationMessage, turnID, retryOfTurnID string, now time.Time) (bool, error)
+	AppendReviewRetryUserMessage(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation string, msg domain.ConversationMessage, turnID, retryOfTurnID string, now time.Time) (bool, error)
+	MarkTurnDispatching(ctx context.Context, turnID string) error
 	BindTurnToProvider(ctx context.Context, turnID, providerTurnID string, now time.Time) error
 	SettleTurn(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, now time.Time) error
 	SettleTurnByID(ctx context.Context, turnID string, state domain.TurnState, errMessage string, now time.Time) error
 	SettleOrphanedTurns(ctx context.Context, session domain.SessionID, now time.Time) error
+	SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error
 	CleanupOwnedControllerWork(ctx context.Context, session domain.SessionID, conversationID, generation string, now time.Time) (bool, error)
 	ListVisibleRunningTurnProviderIDs(ctx context.Context, conversationID string) ([]string, error)
 
@@ -170,6 +188,7 @@ func interfaceHandoff(policy domain.SessionInterfaceTransitionPolicy) controller
 // Controller drives one Chat session.
 type Controller struct {
 	sessionID    domain.SessionID
+	reviewID     string
 	conversation domain.ConversationRecord
 	generation   string
 	harness      domain.AgentHarness
@@ -241,8 +260,14 @@ type Controller struct {
 	usage domain.ConversationUsage
 	// mcpServers is keyed by name; mcpServerOrder preserves first-seen order so the
 	// list a client renders does not reshuffle on every turn.
-	mcpServers     map[string]domain.ConversationMCPServer
-	mcpServerOrder []string
+	mcpServers            map[string]domain.ConversationMCPServer
+	mcpServerOrder        []string
+	mcpServerRevision     uint64
+	mcpServerSeenRevision map[string]uint64
+	// mcpPersistMu orders durable MCP replacements with individual notification
+	// writes. Reload runs outside the event pump, so c.mu alone cannot prevent an
+	// older notification write from landing after an authoritative replacement.
+	mcpPersistMu sync.Mutex
 
 	stopped  chan struct{}
 	once     sync.Once
@@ -287,6 +312,7 @@ var ErrRetryUnsupported = errors.New("current agent cannot retry this prompt con
 
 func newController(
 	sessionID domain.SessionID,
+	owner domain.ConversationOwner,
 	conversation domain.ConversationRecord,
 	generation string,
 	harness domain.AgentHarness,
@@ -301,6 +327,7 @@ func newController(
 ) *Controller {
 	c := &Controller{
 		sessionID:              sessionID,
+		reviewID:               reviewOwnerID(owner),
 		conversation:           conversation,
 		generation:             generation,
 		harness:                harness,
@@ -315,6 +342,7 @@ func newController(
 		state:                  ports.ChatControllerReady,
 		settings:               conversation.Settings,
 		mcpServers:             map[string]domain.ConversationMCPServer{},
+		mcpServerSeenRevision:  map[string]uint64{},
 		stopped:                make(chan struct{}),
 	}
 	// Seeded from the durable row so a reconnect merges onto what is already known
@@ -336,6 +364,20 @@ func newController(
 		c.mcpServers[server.Name] = server
 	}
 	return c
+}
+
+func reviewOwnerID(owner domain.ConversationOwner) string {
+	if owner.Kind == domain.ConversationOwnerReview {
+		return owner.ID
+	}
+	return ""
+}
+
+func (c *Controller) owner() domain.ConversationOwner {
+	if c.reviewID != "" {
+		return domain.ReviewConversationOwner(c.reviewID)
+	}
+	return domain.SessionConversationOwner(c.sessionID)
 }
 
 // restoreLiveTurnOwnership rebuilds the volatile busy gate from durable facts
@@ -389,17 +431,20 @@ type nativeHistoryHighWater struct {
 // completed while Chat was not attached; the AO high-water mark covers an
 // immediate round trip before a resumed TUI has emitted another hook.
 type nativeHistoryCheckpoint struct {
-	nativeBoundary        *ports.NativeCheckpointBoundary
-	latestUserPrompt      string
-	latestAssistantUpdate string
-	completedUserPrompt   bool
-	providerTurnID        string
-	userMismatch          ports.ChatHistoryMismatchDimension
-	assistantMismatch     ports.ChatHistoryMismatchDimension
-	hardMismatches        []ports.ChatHistoryMismatchDimension
-	aoHighWater           nativeHistoryHighWater
-	aoHighWaterPeers      []nativeHistoryHighWater
-	replayIndex           *nativeHistoryTurnIndex
+	latestUserPromptAt      time.Time
+	latestAssistantUpdateAt time.Time
+	requireNewerTurn        bool
+	nativeBoundary          *ports.NativeCheckpointBoundary
+	latestUserPrompt        string
+	latestAssistantUpdate   string
+	completedUserPrompt     bool
+	providerTurnID          string
+	userMismatch            ports.ChatHistoryMismatchDimension
+	assistantMismatch       ports.ChatHistoryMismatchDimension
+	hardMismatches          []ports.ChatHistoryMismatchDimension
+	aoHighWater             nativeHistoryHighWater
+	aoHighWaterPeers        []nativeHistoryHighWater
+	replayIndex             *nativeHistoryTurnIndex
 }
 
 // dropUnsettledHookFacts retires legacy checkpoint text that AO recorded on a
@@ -557,8 +602,39 @@ func (p *nativeHistoryCheckpoint) captureAOHighWater(
 	if latest == nil {
 		return
 	}
+	p.retireSupersededLegacyFacts(sessionID, turnsByID, messages, latest)
 	p.aoHighWater = evidence(latest)
 	p.replayIndex = indexNativeHistoryTurns(turns, messages, activities)
+}
+
+func (p *nativeHistoryCheckpoint) retireSupersededLegacyFacts(sessionID domain.SessionID, turns map[string]*domain.ConversationTurn, messages []domain.ConversationMessage, latest *domain.ConversationTurn) {
+	retire := func(text *string, observedAt time.Time, role domain.MessageRole, trust ports.ChatHistoryMismatchDimension) {
+		if *text == "" || observedAt.IsZero() || (trust != ports.ChatHistoryMismatchUntrustedUserText && trust != ports.ChatHistoryMismatchUntrustedAssistantText) {
+			return
+		}
+		var newest *domain.ConversationTurn
+		for _, message := range messages {
+			turn := turns[message.TurnID]
+			if turn == nil || turn.HandledBySessionID != sessionID || turn.RolledBackAt != nil || message.Streaming || message.Role != role || !nativeHistoryTextMatches(*text, message.Text) {
+				continue
+			}
+			if newest == nil || turn.RequestedAt.After(newest.RequestedAt) {
+				newest = turn
+			}
+		}
+		if newest == nil || newest.State != domain.TurnStateCompleted {
+			return
+		}
+		if latest.CompletedAt != nil && observedAt.After(*latest.CompletedAt) {
+			p.requireNewerTurn = true
+			return
+		}
+		if observedAt.Before(latest.RequestedAt) && newest.RequestedAt.Before(latest.RequestedAt) {
+			*text = ""
+		}
+	}
+	retire(&p.latestUserPrompt, p.latestUserPromptAt, domain.MessageRoleUser, p.userMismatch)
+	retire(&p.latestAssistantUpdate, p.latestAssistantUpdateAt, domain.MessageRoleAssistant, p.assistantMismatch)
 }
 
 func (p nativeHistoryCheckpoint) mismatches(
@@ -581,6 +657,7 @@ func (p nativeHistoryCheckpoint) mismatches(
 	type replayTurnText struct {
 		user      ports.ChatEvent
 		assistant ports.ChatEvent
+		nativeID  string
 	}
 	turnText := make(map[string]replayTurnText)
 	latestCompletedTurnID := ""
@@ -593,6 +670,10 @@ func (p nativeHistoryCheckpoint) mismatches(
 			continue
 		}
 		text := turnText[event.ProviderTurnID]
+		text.nativeID = event.NativeTurnID
+		if text.nativeID == "" {
+			text.nativeID = event.ProviderTurnID
+		}
 		switch event.Kind {
 		case ports.ChatEventUserMessageCompleted:
 			text.user = event
@@ -611,7 +692,7 @@ func (p nativeHistoryCheckpoint) mismatches(
 	checkpointMatched := p.latestUserPrompt == "" && p.latestAssistantUpdate == "" && p.providerTurnID == ""
 	if p.completedUserPrompt && p.providerTurnID != "" {
 		for turnID := range completedTurns {
-			if coordinationTurns[turnID] || (p.providerTurnID != "" && p.providerTurnID != turnID) {
+			if coordinationTurns[turnID] || p.providerTurnID != turnText[turnID].nativeID {
 				continue
 			}
 			text := turnText[turnID]
@@ -626,7 +707,7 @@ func (p nativeHistoryCheckpoint) mismatches(
 		checkpointMatched =
 			(p.latestUserPrompt == "" || nativeHistoryTextMatches(p.latestUserPrompt, latestText.user.Text)) &&
 				(p.latestAssistantUpdate == "" || nativeHistoryTextMatches(p.latestAssistantUpdate, latestText.assistant.Text)) &&
-				(p.providerTurnID == "" || p.providerTurnID == latestCompletedTurnID)
+				(p.providerTurnID == "" || p.providerTurnID == latestText.nativeID)
 	}
 	mismatches := append([]ports.ChatHistoryMismatchDimension(nil), p.hardMismatches...)
 	if boundary := p.nativeBoundary; boundary != nil {
@@ -703,6 +784,23 @@ func (p nativeHistoryCheckpoint) mismatches(
 	if len(boundaries) > 0 {
 		return append(mismatches, ports.ChatHistoryMismatchAOHighWater)
 	}
+	if p.requireNewerTurn {
+		pastHighWater, newer := false, false
+		for _, event := range events {
+			if event.Kind != ports.ChatEventTurnCompleted {
+				continue
+			}
+			candidate := mappedTurns[event.ProviderTurnID]
+			if candidate != nil && candidate.providerTurnID == highWater.providerTurnID {
+				pastHighWater = true
+			} else if pastHighWater && (event.TurnState == domain.TurnStateCompleted || event.TurnState == domain.TurnStateRecovered) {
+				newer = true
+			}
+		}
+		if !newer {
+			mismatches = append(mismatches, ports.ChatHistoryMismatchAOHighWater)
+		}
+	}
 	return mismatches
 }
 
@@ -716,7 +814,7 @@ func nativeHistoryTextMatches(checkpoint, replayed string) bool {
 	return domain.NativeCheckpointTextMatches(checkpoint, replayed)
 }
 
-// readNativeHistory loads and reconciles the settled provider thread without
+// readNativeHistory loads and validates the settled provider thread without
 // mutating AO's timeline. A pending provider boundary uses this split phase so
 // the caller can project the events inside the same transaction that publishes
 // the boundary and controller generation.
@@ -748,7 +846,7 @@ func (c *Controller) readNativeHistory(
 	refresher, refreshable := reader.(ports.ChatHistoryRefresher)
 	sawUnsettled := false
 	var lastUnsettled error
-	for {
+	for refresh := 0; ; refresh++ {
 		if err == nil && required {
 			if mismatches := checkpoint.mismatches(
 				events, existingTurns, existingMessages, existingActivities,
@@ -761,6 +859,13 @@ func (c *Controller) readNativeHistory(
 		}
 		if errors.Is(err, ports.ErrChatHistoryUnavailable) && !required {
 			return nil, nil
+		}
+		if errors.Is(err, ports.ErrChatHistoryLoadFailed) {
+			// The provider failed the replay or one attempt hit its bound while
+			// the settle budget was still live. Another identical load cannot
+			// settle anything, and this must not read as the settle wait's own
+			// deadline even though the bounded attempt carries a context error.
+			return nil, fmt.Errorf("read native conversation history: %w", err)
 		}
 		if sawUnsettled && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 			return nil, fmt.Errorf("wait for settled native conversation history: %w: %w",
@@ -775,7 +880,7 @@ func (c *Controller) readNativeHistory(
 			return nil, fmt.Errorf("native conversation history snapshot is incomplete and cannot be refreshed: %w", err)
 		}
 
-		timer := time.NewTimer(nativeHistorySettlePoll)
+		timer := time.NewTimer(nativeHistorySettleDelay(refresh))
 		select {
 		case <-historyCtx.Done():
 			timer.Stop()
@@ -783,17 +888,53 @@ func (c *Controller) readNativeHistory(
 				lastUnsettled, historyCtx.Err())
 		case <-timer.C:
 		}
-		events, err = refresher.RefreshHistory(historyCtx)
+		events, err = refreshNativeHistoryAttempt(historyCtx, refresher)
 	}
-	events = reconcileNativeHistory(
-		events, existingTurns, existingMessages, existingActivities,
-	)
 	for _, event := range events {
 		if event.ProviderEventID == "" {
 			return nil, fmt.Errorf("native history event %s has no stable identity", event.Kind)
 		}
 	}
 	return events, nil
+}
+
+// refreshNativeHistoryAttempt runs one provider re-observation under its own
+// deadline, a child of the settle context so parent cancellation still wins.
+// Only a timeout the attempt bound caused, while the settle budget is still
+// live, is reported as a load failure; the parent's own expiry keeps its
+// context error so the caller's settle-wait reporting is unchanged.
+func refreshNativeHistoryAttempt(
+	parent context.Context,
+	refresher ports.ChatHistoryRefresher,
+) ([]ports.ChatEvent, error) {
+	attemptCtx, cancel := context.WithTimeoutCause(
+		parent, nativeHistoryLoadAttemptLimit, errNativeHistoryLoadAttemptTimeout)
+	defer cancel()
+	events, err := refresher.RefreshHistory(attemptCtx)
+	if err != nil && parent.Err() == nil &&
+		errors.Is(context.Cause(attemptCtx), errNativeHistoryLoadAttemptTimeout) {
+		return nil, fmt.Errorf("%w: %w after %v: %w",
+			ports.ErrChatHistoryLoadFailed, errNativeHistoryLoadAttemptTimeout,
+			nativeHistoryLoadAttemptLimit, err)
+	}
+	return events, err
+}
+
+// nativeHistorySettleDelay is the pause before the refresh-th provider
+// re-observation. Each refresh is a full ACP session/load transcript replay,
+// so the poll backs off exponentially from nativeHistorySettlePoll to
+// nativeHistorySettlePollMax instead of hammering the provider every 100ms
+// for the whole nativeHistorySettleLimit budget. The first retry stays fast
+// because a turn that is about to settle usually does so within a beat.
+func nativeHistorySettleDelay(refresh int) time.Duration {
+	delay := nativeHistorySettlePoll
+	for i := 0; i < refresh && delay < nativeHistorySettlePollMax; i++ {
+		delay *= 2
+	}
+	if delay > nativeHistorySettlePollMax {
+		delay = nativeHistorySettlePollMax
+	}
+	return delay
 }
 
 // projectNativeHistory durably imports a previously reconciled snapshot.
@@ -1228,6 +1369,21 @@ func (c *Controller) Capabilities() ports.ChatCapabilities {
 func (c *Controller) Send(ctx context.Context, msg ports.ChatUserMessage) (domain.ConversationTurn, error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
+	return c.sendLocked(ctx, msg, true)
+}
+
+func (c *Controller) sendLocked(
+	ctx context.Context,
+	msg ports.ChatUserMessage,
+	queueWhenBusy bool,
+) (domain.ConversationTurn, error) {
+	if msg.ClientPayloadHash == "" {
+		var err error
+		msg.ClientPayloadHash, err = clientPayloadHash(msg)
+		if err != nil {
+			return domain.ConversationTurn{}, err
+		}
+	}
 	c.mu.Lock()
 	handoff := c.handoff != controllerHandoffNone
 	c.mu.Unlock()
@@ -1250,11 +1406,20 @@ func (c *Controller) Send(ctx context.Context, msg ports.ChatUserMessage) (domai
 		Text:                msg.Text,
 		Origin:              normalizeOrigin(msg.Origin),
 		ClientMessageID:     msg.ClientMessageID,
+		ClientPayloadHash:   msg.ClientPayloadHash,
 		DeliveryContentJSON: deliveryContent,
+		AuthoredByUser:      msg.AuthoredByUser,
 	}
 
-	created, err := c.store.AppendUserMessage(
-		ctx, c.conversation.ID, c.sessionID, c.generation, record, turnID, now)
+	var (
+		created bool
+		err     error
+	)
+	if c.reviewID == "" {
+		created, err = c.store.AppendUserMessage(ctx, c.conversation.ID, c.sessionID, c.generation, record, turnID, now)
+	} else {
+		created, err = c.store.AppendReviewUserMessage(ctx, c.conversation.ID, c.sessionID, c.reviewID, c.generation, record, turnID, now)
+	}
 	if err != nil {
 		return domain.ConversationTurn{}, fmt.Errorf("record user message: %w", err)
 	}
@@ -1266,13 +1431,14 @@ func (c *Controller) Send(ctx context.Context, msg ports.ChatUserMessage) (domai
 		return domain.ConversationTurn{}, nil
 	}
 
-	if c.busy() {
+	if queueWhenBusy && c.busy() {
 		// AppendUserMessage wrote it as queued, which is exactly where it belongs
 		// until the running turn ends. drain picks it up from there.
 		return domain.ConversationTurn{
 			ID:                 turnID,
 			ConversationID:     c.conversation.ID,
 			HandledBySessionID: c.sessionID,
+			HandledByReviewID:  c.reviewID,
 			State:              domain.TurnStateQueued,
 			RequestedAt:        now,
 		}, nil
@@ -1355,14 +1521,19 @@ func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.Conve
 	now := c.now()
 	newTurnID := c.newID()
 	key := retryClientMessagePrefix + newTurnID
-	created, err := c.store.AppendRetryUserMessage(ctx, c.conversation.ID, c.sessionID, c.generation,
-		domain.ConversationMessage{
-			ID:                  c.newID(),
-			Text:                prompt.Text,
-			Origin:              prompt.Origin,
-			ClientMessageID:     key,
-			DeliveryContentJSON: prompt.DeliveryContentJSON,
-		}, newTurnID, turnID, now)
+	retryMessage := domain.ConversationMessage{
+		ID:                  c.newID(),
+		Text:                prompt.Text,
+		Origin:              prompt.Origin,
+		ClientMessageID:     key,
+		DeliveryContentJSON: prompt.DeliveryContentJSON,
+	}
+	var created bool
+	if c.reviewID == "" {
+		created, err = c.store.AppendRetryUserMessage(ctx, c.conversation.ID, c.sessionID, c.generation, retryMessage, newTurnID, turnID, now)
+	} else {
+		created, err = c.store.AppendReviewRetryUserMessage(ctx, c.conversation.ID, c.sessionID, c.reviewID, c.generation, retryMessage, newTurnID, turnID, now)
+	}
 	if err != nil {
 		return domain.ConversationTurn{}, fmt.Errorf("record retried message: %w", err)
 	}
@@ -1512,6 +1683,16 @@ func (c *Controller) dispatch(
 	// setting that only applied when the user pressed send would silently stop
 	// applying exactly when they were not watching.
 	msg.Settings = c.turnSettings()
+	deferred, hasDeferredStart := c.conv.(ports.ChatDeferredTurnStarter)
+	// A provider can accept this turn and then lose its SQLite binding to ENOSPC.
+	// Move it out of the durable queue before crossing that boundary, or a live
+	// reconnect can drain the same prompt after the provider completes it. ACP's
+	// deferred start crosses the provider boundary only after binding succeeds.
+	if !hasDeferredStart {
+		if err := c.store.MarkTurnDispatching(ctx, turnID); err != nil {
+			return domain.ConversationTurn{}, fmt.Errorf("mark turn dispatching: %w", err)
+		}
+	}
 
 	c.mu.Lock()
 	c.dispatchingTurnID = turnID
@@ -1550,7 +1731,7 @@ func (c *Controller) dispatch(
 			c.dispatchingTurnID = ""
 		}
 		c.mu.Unlock()
-		if deferred, ok := c.conv.(ports.ChatDeferredTurnStarter); ok {
+		if hasDeferredStart {
 			deferred.DiscardDeferredTurn(ref.ProviderTurnID)
 		}
 		return domain.ConversationTurn{}, fmt.Errorf("bind turn: %w", err)
@@ -1570,7 +1751,7 @@ func (c *Controller) dispatch(
 	// driver prepares the request in SendTurn and starts it here. The durable
 	// provider-id binding above must exist before the first streamed update can be
 	// projected. Eager drivers do not implement this optional interface.
-	if deferred, ok := c.conv.(ports.ChatDeferredTurnStarter); ok {
+	if hasDeferredStart {
 		if err := deferred.StartDeferredTurn(ref.ProviderTurnID); err != nil {
 			c.mu.Lock()
 			c.pendingTurnID = ""
@@ -1598,10 +1779,10 @@ func (c *Controller) dispatch(
 // Runs on the projection goroutine, so it observes turn completion in order with
 // everything else the provider said. One message per call: the turn it starts
 // makes the controller busy again, and the next completion drains the next.
-func (c *Controller) drain(ctx context.Context) {
+func (c *Controller) drain(ctx context.Context) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
-	c.drainLocked(ctx, true)
+	return c.drainLocked(ctx, true)
 }
 
 // drainLocked is drain with the dispatch lock already held. Turn completion
@@ -1610,7 +1791,7 @@ func (c *Controller) drain(ctx context.Context) {
 //
 // allowDispatch gates sending the next queued turn. A pending Stop cutoff forces
 // it true so messages typed after Stop still send.
-func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) {
+func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) error {
 	c.mu.Lock()
 	cutoff := c.cancelQueuedAt
 	c.cancelQueuedAt = time.Time{}
@@ -1620,7 +1801,7 @@ func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) {
 
 	if busy {
 		// Something already claimed the agent, so this drain has nothing to do.
-		return
+		return nil
 	}
 
 	if !cutoff.IsZero() {
@@ -1628,24 +1809,24 @@ func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) {
 		// cancelled; anything typed afterwards is still theirs to send.
 		if err := c.store.CancelQueuedTurns(ctx, c.conversation.ID, cutoff, c.now()); err != nil {
 			c.log.Error("failed to cancel queued turns", "session", c.sessionID, "error", err)
-			return
+			return err
 		}
 		allowDispatch = true
 	}
 	if handoff != controllerHandoffNone && handoff != controllerHandoffInterfaceDrain {
-		return
+		return nil
 	}
 	if !allowDispatch {
-		return
+		return nil
 	}
 
 	queued, err := c.store.NextQueuedTurn(ctx, c.conversation.ID)
 	if errors.Is(err, domain.ErrNoQueuedTurn) {
-		return
+		return nil
 	}
 	if err != nil {
 		c.log.Error("failed to read queued turn", "session", c.sessionID, "error", err)
-		return
+		return err
 	}
 
 	var content []ports.ChatContent
@@ -1655,7 +1836,7 @@ func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) {
 				"queued chat content is corrupt", c.now())
 			c.log.Error("failed to decode queued chat content",
 				"session", c.sessionID, "turn", queued.TurnID, "error", err)
-			return
+			return err
 		}
 	}
 	if _, err := c.dispatch(ctx, queued.TurnID, ports.ChatUserMessage{
@@ -1670,7 +1851,9 @@ func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) {
 		// discard messages the user can otherwise still see waiting.
 		c.log.Error("failed to dispatch queued turn",
 			"session", c.sessionID, "turn", queued.TurnID, "error", err)
+		return err
 	}
+	return nil
 }
 
 // ArmHandoff is the linearization point for an interface transition. It closes
@@ -1755,7 +1938,10 @@ func (c *Controller) BeginHandoff(
 		// A queued row can exist in the narrow gap after a completion was
 		// projected and before its drain ran. Claim it now so drain mode cannot
 		// report quiescent while accepted work is still waiting.
-		c.drain(ctx)
+		if err := c.drain(ctx); err != nil {
+			c.AbortHandoff()
+			return fmt.Errorf("drain queued turns before handoff: %w", err)
+		}
 	}
 
 	ticker := time.NewTicker(50 * time.Millisecond)
@@ -1780,7 +1966,11 @@ func (c *Controller) BeginHandoff(
 				c.AbortHandoff()
 				return fmt.Errorf("check queued turns before handoff: %w", err)
 			case policy == domain.SessionInterfaceTransitionDrain:
-				c.drainLocked(ctx, true)
+				if err := c.drainLocked(ctx, true); err != nil {
+					c.sendMu.Unlock()
+					c.AbortHandoff()
+					return fmt.Errorf("drain queued turns during handoff: %w", err)
+				}
 			}
 		}
 		c.sendMu.Unlock()
@@ -1835,7 +2025,9 @@ func (c *Controller) AbortHandoff() {
 		close(branchHandoffDone)
 	}
 	if resumeDispatch {
-		go c.drain(context.WithoutCancel(context.Background()))
+		go func() {
+			_ = c.drain(context.Background()) // drain logs failures; no caller waits on abort.
+		}()
 	}
 }
 
@@ -2130,8 +2322,7 @@ func (c *Controller) reconcileDurableTurnsLocked(
 	c.reportActivity(ctx, domain.ActivityIdle, "chat.interrupt.reconciled", now)
 	// drainLocked consumes cancelQueuedAt, cancels only the pre-Stop queue, and
 	// immediately dispatches the oldest surviving post-Stop prompt.
-	c.drainLocked(ctx, true)
-	return nil
+	return c.drainLocked(ctx, true)
 }
 
 // awaitAcknowledgedTurn returns the turn to interrupt once the provider has
@@ -2551,9 +2742,14 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 				// from its own history. Adopting it is what keeps every item it emits
 				// correlated, and without that the activities arrive with no turn and the
 				// timeline quietly stops grouping them.
-				if err := c.store.AdoptProviderTurn(ctx, c.conversation.ID, c.sessionID,
-					c.generation, c.newID(), event.ProviderTurnID, now); err != nil {
-					return fmt.Errorf("adopt provider-started turn %s: %w", event.ProviderTurnID, err)
+				var adoptErr error
+				if c.reviewID == "" {
+					adoptErr = c.store.AdoptProviderTurn(ctx, c.conversation.ID, c.sessionID, c.generation, c.newID(), event.ProviderTurnID, now)
+				} else {
+					adoptErr = c.store.AdoptReviewProviderTurn(ctx, c.conversation.ID, c.sessionID, c.reviewID, c.generation, c.newID(), event.ProviderTurnID, now)
+				}
+				if adoptErr != nil {
+					return fmt.Errorf("adopt provider-started turn %s: %w", event.ProviderTurnID, adoptErr)
 				}
 			}
 		}
@@ -2578,14 +2774,18 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		if event.Err != nil {
 			message = event.Err.Error()
 		}
-		state := event.TurnState
-		if state == "" {
-			// A completion with no status is not evidence of success.
-			state = domain.TurnStateFailed
-		}
+		state := settledTurnState(event)
 		if err := c.store.SettleTurn(
 			ctx, c.conversation.ID, event.ProviderTurnID, state, message, now); err != nil {
 			return err
+		}
+		if errors.Is(event.Err, ports.ErrChatAuthRequired) {
+			if err := c.recordAccount(ctx, ports.ChatAccount{
+				ReauthRequired: true,
+				ReauthReason:   message,
+			}, now); err != nil {
+				return err
+			}
 		}
 		return nil
 
@@ -2902,6 +3102,14 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		if event.Err != nil {
 			message = event.Err.Error()
 		}
+		if errors.Is(event.Err, ports.ErrChatAuthRequired) {
+			if err := c.recordAccount(ctx, ports.ChatAccount{
+				ReauthRequired: true,
+				ReauthReason:   message,
+			}, now); err != nil {
+				return err
+			}
+		}
 		detail, _ := json.Marshal(map[string]string{"error": message})
 		return c.store.UpsertActivity(ctx, c.conversation.ID, event.ProviderTurnID,
 			domain.ConversationActivity{
@@ -2930,13 +3138,23 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 			c.reportActivity(ctx, domain.ActivityActive, "chat.turn.started", now)
 		}
 	case ports.ChatEventTurnCompleted:
+		reauthRequired := errors.Is(event.Err, ports.ErrChatAuthRequired)
+		if reauthRequired && c.onAccountChanged != nil {
+			c.onAccountChanged(c.sessionID, c.generation, c.harness)
+		}
 		if !primaryTurn {
 			return
 		}
-		c.reportActivity(ctx, domain.ActivityIdle, "chat.turn.completed", now)
+		activityState := domain.ActivityIdle
+		activityEvent := "chat.turn.completed"
+		if reauthRequired {
+			activityState = domain.ActivityWaitingInput
+			activityEvent = "chat.account.reauth"
+		}
+		c.reportActivity(ctx, activityState, activityEvent, now)
 		// Only a completed turn releases queued work; a failed or recovered one holds
 		// the queue so it cannot cascade through the same outage (issue #4861).
-		c.drainLocked(ctx, event.TurnState == domain.TurnStateCompleted)
+		_ = c.drainLocked(ctx, settledTurnState(event) == domain.TurnStateCompleted) // drain logs failures.
 	case ports.ChatEventApprovalRequested:
 		c.reportActivity(ctx, domain.ActivityWaitingInput, "chat.approval.requested", now)
 	case ports.ChatEventApprovalResolved:
@@ -2950,7 +3168,13 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		// cleanup committed. Otherwise a rollback can say "stopped" in memory while
 		// SQLite still contains live work.
 		c.mu.Lock()
-		c.state = event.ControllerState
+		// ACP initialization queues a generic ready notification before live
+		// reconnect restores ownership of a durable running turn. That stale
+		// notification must not release the reconstructed busy state: only the
+		// matching committed turn completion may release pendingTurnID.
+		if event.ControllerState != ports.ChatControllerReady || c.pendingTurnID == "" {
+			c.state = event.ControllerState
+		}
 		suppressStoppedActivity := c.suppressStoppedActivity
 		c.mu.Unlock()
 		if event.ControllerState == ports.ChatControllerStopped && !suppressStoppedActivity {
@@ -2960,7 +3184,27 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		if event.Account != nil && event.Account.ReauthRequired {
 			c.reportActivity(ctx, domain.ActivityWaitingInput, "chat.account.reauth", now)
 		}
+	case ports.ChatEventError:
+		if errors.Is(event.Err, ports.ErrChatAuthRequired) {
+			c.reportActivity(ctx, domain.ActivityWaitingInput, "chat.account.reauth", now)
+			if c.onAccountChanged != nil {
+				c.onAccountChanged(c.sessionID, c.generation, c.harness)
+			}
+		}
 	}
+}
+
+// settledTurnState resolves the only ambiguous terminal combination once. An
+// attached error is authoritative failure unless the provider explicitly says
+// the user interrupted the turn; an absent state is never evidence of success.
+func settledTurnState(event ports.ChatEvent) domain.TurnState {
+	if event.TurnState == domain.TurnStateInterrupted {
+		return domain.TurnStateInterrupted
+	}
+	if event.Err != nil || event.TurnState == "" {
+		return domain.TurnStateFailed
+	}
+	return event.TurnState
 }
 
 func (c *Controller) reportInteractionResolved(ctx context.Context, event string, now time.Time) {
@@ -2998,6 +3242,11 @@ func (c *Controller) applyThreadTitle(ctx context.Context, title string, now tim
 	if normalized == "" {
 		return nil
 	}
+	if c.reviewID != "" {
+		// A reviewer title belongs only to its durable conversation. Applying it
+		// through the worker-session CAS would rename the reviewed task.
+		return nil
+	}
 	applied, err := c.store.ApplyProviderTitle(
 		ctx, c.conversation.ID, c.sessionID, normalized, now)
 	if err != nil {
@@ -3027,22 +3276,15 @@ func (c *Controller) applyAccount(
 	update ports.ChatAccount,
 	now time.Time,
 ) error {
-	c.mu.Lock()
-	if update.AuthMode != "" {
-		c.account.AuthMode = update.AuthMode
+	if update.ReauthRecovered {
+		c.mu.Lock()
+		reauthPending := c.account.ReauthRequiredAt != nil
+		c.mu.Unlock()
+		if !reauthPending {
+			return nil
+		}
 	}
-	if update.PlanLabel != "" {
-		c.account.PlanLabel = update.PlanLabel
-	}
-	if update.ReauthRequired {
-		at := now
-		c.account.ReauthRequiredAt = &at
-		c.account.ReauthReason = update.ReauthReason
-	}
-	account := c.account
-	c.mu.Unlock()
-
-	if err := c.store.RecordAccount(ctx, c.conversation.ID, account, now); err != nil {
+	if err := c.recordAccount(ctx, update, now); err != nil {
 		return err
 	}
 	if !update.ReauthRequired {
@@ -3063,6 +3305,36 @@ func (c *Controller) applyAccount(
 			// instead of filling the timeline with the same notice.
 			ProviderItemID: "ao-reauth-" + firstNonEmpty(update.ReauthReason, "unknown"),
 		}, now)
+}
+
+// recordAccount updates the latest account projection without creating a
+// timeline row. A terminal provider failure already occupies the turn's outcome;
+// recording recovery state here lets persistent UI explain what to do next
+// without duplicating the same provider prose as another event.
+func (c *Controller) recordAccount(
+	ctx context.Context,
+	update ports.ChatAccount,
+	now time.Time,
+) error {
+	c.mu.Lock()
+	if update.AuthMode != "" {
+		c.account.AuthMode = update.AuthMode
+	}
+	if update.PlanLabel != "" {
+		c.account.PlanLabel = update.PlanLabel
+	}
+	if update.ReauthRequired {
+		at := now
+		c.account.ReauthRequiredAt = &at
+		c.account.ReauthReason = update.ReauthReason
+	} else if update.ReauthRecovered {
+		c.account.ReauthRequiredAt = nil
+		c.account.ReauthReason = ""
+	}
+	account := c.account
+	c.mu.Unlock()
+
+	return c.store.RecordAccount(ctx, c.conversation.ID, account, now)
 }
 
 // applyThreadState folds a thread report into what AO already knows.
@@ -3109,6 +3381,9 @@ func (c *Controller) applyThreadState(
 // every turn, so this is a merge by name. First-seen order is preserved so the list
 // a client renders does not reshuffle between polls.
 func (c *Controller) applyMCPServers(ctx context.Context, updates []ports.ChatMCPServer) error {
+	c.mcpPersistMu.Lock()
+	defer c.mcpPersistMu.Unlock()
+
 	c.mu.Lock()
 	for _, update := range updates {
 		if update.Name == "" {
@@ -3123,16 +3398,23 @@ func (c *Controller) applyMCPServers(ctx context.Context, updates []ports.ChatMC
 			Error:         update.Error,
 			FailureReason: update.FailureReason,
 		}
+		c.mcpServerRevision++
+		c.mcpServerSeenRevision[update.Name] = c.mcpServerRevision
 	}
+	servers := c.mcpServersLocked()
+	c.mu.Unlock()
+
+	return c.store.RecordMCPServers(ctx, c.conversation.ID, servers)
+}
+
+func (c *Controller) mcpServersLocked() []domain.ConversationMCPServer {
 	servers := make([]domain.ConversationMCPServer, 0, len(c.mcpServerOrder))
 	for _, name := range c.mcpServerOrder {
 		if server, ok := c.mcpServers[name]; ok {
 			servers = append(servers, server)
 		}
 	}
-	c.mu.Unlock()
-
-	return c.store.RecordMCPServers(ctx, c.conversation.ID, servers)
+	return servers
 }
 
 // ErrMCPReloadUnsupported reports a driver whose provider cannot restart its tool
@@ -3162,38 +3444,74 @@ func (c *Controller) ReloadMCPServers(ctx context.Context) ([]domain.Conversatio
 		return nil, ErrTurnRunning
 	}
 
-	servers, err := reloader.ReloadMCPServers(ctx)
+	c.mu.Lock()
+	reloadRevision := c.mcpServerRevision
+	c.mu.Unlock()
+
+	result, err := reloader.ReloadMCPServers(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if len(servers) == 0 {
-		// The reload succeeded and the provider did not enumerate. Its own startup
-		// notifications are the authoritative report and are already on their way, so
-		// the current list is the honest answer rather than an empty one.
+	if !result.Authoritative {
+		// Reload succeeded, but its inventory read did not. Preserve what is known:
+		// an empty unavailable result cannot distinguish no configured servers from a
+		// provider that could not enumerate them.
 		c.mu.Lock()
-		current := make([]domain.ConversationMCPServer, 0, len(c.mcpServerOrder))
-		for _, name := range c.mcpServerOrder {
-			if server, found := c.mcpServers[name]; found {
-				current = append(current, server)
-			}
-		}
+		current := c.mcpServersLocked()
 		c.mu.Unlock()
 		return current, nil
 	}
 
-	if err := c.applyMCPServers(ctx, servers); err != nil {
-		return nil, err
-	}
-
+	// Startup notifications are individual deltas, while this inventory is a full
+	// replacement. Keep only notifications observed after reload began, then overlay
+	// positively initialized inventory entries as ready. Holding mcpPersistMu through
+	// the write keeps a notification that raced the reload from persisting stale state
+	// after this replacement.
+	c.mcpPersistMu.Lock()
+	defer c.mcpPersistMu.Unlock()
 	c.mu.Lock()
-	merged := make([]domain.ConversationMCPServer, 0, len(c.mcpServerOrder))
+	fresh := make(map[string]domain.ConversationMCPServer)
+	freshOrder := make([]string, 0, len(c.mcpServerOrder))
 	for _, name := range c.mcpServerOrder {
-		if server, found := c.mcpServers[name]; found {
-			merged = append(merged, server)
+		if c.mcpServerSeenRevision[name] > reloadRevision {
+			fresh[name] = c.mcpServers[name]
+			freshOrder = append(freshOrder, name)
 		}
 	}
+	for _, server := range result.Servers {
+		if server.Name == "" {
+			continue
+		}
+		current, seen := fresh[server.Name]
+		if seen && current.Status != "ready" {
+			// The status list is a snapshot, while this non-ready state came from
+			// a startup notification observed after the reload began. Keep the
+			// newer failure/transition instead of promoting it back to ready.
+			continue
+		}
+		if !seen {
+			freshOrder = append(freshOrder, server.Name)
+		}
+		fresh[server.Name] = domain.ConversationMCPServer{
+			Name:          server.Name,
+			Status:        server.Status,
+			Error:         server.Error,
+			FailureReason: server.FailureReason,
+		}
+	}
+	c.mcpServers = fresh
+	c.mcpServerOrder = freshOrder
+	c.mcpServerSeenRevision = make(map[string]uint64, len(fresh))
+	for name := range fresh {
+		c.mcpServerSeenRevision[name] = c.mcpServerRevision
+	}
+	reconciled := c.mcpServersLocked()
 	c.mu.Unlock()
-	return merged, nil
+
+	if err := c.store.RecordMCPServers(ctx, c.conversation.ID, reconciled); err != nil {
+		return nil, err
+	}
+	return reconciled, nil
 }
 
 func (c *Controller) handoffActive() bool {
@@ -3360,7 +3678,7 @@ func (c *Controller) reportActivity(
 	event string,
 	now time.Time,
 ) {
-	if c.activity == nil {
+	if c.activity == nil || c.reviewID != "" {
 		return
 	}
 	if err := c.activity.ApplyActivitySignal(ctx, c.sessionID, ports.ActivitySignal{

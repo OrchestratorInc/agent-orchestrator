@@ -122,17 +122,21 @@ type WorkerLaunch struct {
 	OrgID          string
 	SessionID      string
 	ProjectID      string
+	ProjectName    string
+	ProjectConfig  json.RawMessage
 	Kind           string
 	Harness        string
 	DisplayName    string
 	Branch         string
 	Prompt         string
 	AgentSessionID string
+	Interface      SessionInterface
 	// ParentSessionID is the orchestrator that spawned this session, empty for
 	// top-level sessions. It gates the worker:report scope and the report
 	// guidance in the worker prompt.
 	ParentSessionID string
 	Mode            string
+	Model           string
 	DeniedCommands  []string
 	RepositoryURL   string
 	DefaultBranch   string

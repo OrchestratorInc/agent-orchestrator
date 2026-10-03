@@ -1,0 +1,265 @@
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+
+function source(relativePath: string): string {
+	return readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), "utf8");
+}
+
+describe("Android native compatibility boundaries", () => {
+	it("renders the Android drawer as one React Native tree", () => {
+		const path = fileURLToPath(new URL("./sidebar-navigation-shell.android.tsx", import.meta.url));
+		expect(existsSync(path)).toBe(true);
+		const android = existsSync(path) ? source("./sidebar-navigation-shell.android.tsx") : "";
+		expect(android).toContain("PanResponder");
+		// The closed drawer's swipe responder starts below the safe-area-adjusted
+		// header. A fixed top offset overlaps the menu button on tall cutouts.
+		expect(android).toContain("edgeGestureTarget");
+		expect(android).toContain("top: insets.top + 64");
+		// Keep the smooth native animation, but commit the closed state only after
+		// it settles so Fabric measures the header button at its final position.
+		// The visible scrim must disappear as soon as closing starts, independently
+		// of that delayed interaction state, or it flashes over the settled screen.
+		expect(android).toContain("useNativeDriver: true");
+		expect(android).toContain("const [scrimVisible, setScrimVisible] = useState(retainedDrawerOpen);");
+		expect(android).toMatch(/setScrimVisible\(nextOpen\);[\s\S]*if \(nextOpen\) setOpen\(true\);[\s\S]*if \(!finished\) return;[\s\S]*if \(!nextOpen\) setOpen\(false\);/);
+		expect(android).toMatch(/open \? \([\s\S]*scrimVisible \? \([\s\S]*styles\.dismissLayer[\s\S]*styles\.dismissBlocker/);
+		expect(android).toContain("(open ? panResponder.panHandlers : {})");
+		// A gesture can reverse an in-flight spring, but it must continue from the
+		// drawer's live position rather than snapping to an open/closed endpoint.
+		expect(android).toContain("settling: drawerSettling.current");
+		expect(android).toContain("progress.stopAnimation((value) => {");
+		expect(android).toContain("gestureStartProgress.current = value");
+		expect(android).toContain("startProgress: gestureStartProgress.current");
+		expect(android).toContain("retainedDrawerOpen");
+		expect(android).not.toContain("DrawerLayoutAndroid");
+		expect(android).not.toContain("@expo/ui");
+		expect(android).not.toContain("RNHostView");
+		expect(android).toContain('pointerEvents={open ? "auto" : "none"}');
+		expect(android).toContain('importantForAccessibility={open ? "yes" : "no-hide-descendants"}');
+	});
+
+	it("uses Android-native pressable icon controls rather than Unicode Expo buttons", () => {
+		for (const file of [
+			"./native-header-button.android.tsx",
+			"./sidebar-settings-button.android.tsx",
+			"./sidebar-spawn-button.android.tsx",
+		]) {
+			const path = fileURLToPath(new URL(file, import.meta.url));
+			expect(existsSync(path)).toBe(true);
+			const android = existsSync(path) ? source(file) : "";
+			expect(android).toContain("Pressable");
+			expect(android).toContain("Feather");
+			expect(android).not.toContain("@expo/ui");
+		}
+		const headerButton = source("./native-header-button.android.tsx");
+		expect(headerButton).toContain(
+			"hitSlop={{ top: space.sm, right: space.md, bottom: space.sm, left: space.xl }}",
+		);
+		// Fabric can omit Pressable.onPress when a native transform settles between
+		// touch-down and touch-up. Recover only a stationary, uncancelled touch, and
+		// wait long enough for the normal onPress path to win first.
+		expect(headerButton).toContain("onTouchStart");
+		expect(headerButton).toContain("onTouchMove");
+		expect(headerButton).toContain("onTouchEnd");
+		expect(headerButton).toContain("onTouchCancel");
+		expect(headerButton).toContain("pressHandledSequence");
+		expect(headerButton).toContain("PRESS_FALLBACK_DELAY_MS");
+		expect(headerButton).toMatch(/setTimeout\(\(\) => \{[\s\S]*pressHandledSequence\.current === sequence[\s\S]*movement > TAP_SLOP[\s\S]*onPress\(\);/);
+	});
+
+	it("keeps SwiftUI and percentage native widths out of the cross-platform Spawn route", () => {
+		const spawn = source("../app/spawn.tsx");
+		expect(spawn).not.toContain("@expo/ui/swift-ui");
+		expect(spawn).not.toContain("NativeTextInput");
+		expect(spawn).toContain("SpawnPromptInput");
+
+		const path = fileURLToPath(new URL("./spawn-prompt-input.android.tsx", import.meta.url));
+		expect(existsSync(path)).toBe(true);
+		const android = existsSync(path) ? source("./spawn-prompt-input.android.tsx") : "";
+		expect(android).toContain("TextInput");
+		expect(android).not.toContain("autoFocus");
+		expect(android).not.toContain('width: "100%"');
+		expect(spawn).toContain('@expo/ui/community/bottom-sheet');
+		expect(spawn).toContain("BottomSheetView");
+		expect(spawn).toContain("enablePanDownToClose");
+		expect(spawn).not.toContain("KeyboardAvoidingView");
+		// The controls stick to the keyboard instead, which is the only approach
+		// that moves in step with it inside a native form sheet.
+		expect(spawn).toContain("KeyboardStickyView");
+		expect(spawn).not.toContain("androidGrabber");
+		// Only iOS's prompt flexes to fill the sheet; Android's sheet sizes to its
+		// content, so a flexing child there would have nothing to fill.
+		expect(spawn).toContain('Platform.OS === "ios" && styles.promptHostFill');
+		expect(spawn).toContain("const PROMPT_MIN_HEIGHT = 112;");
+		expect(spawn).toContain('promptHost: { width: "100%", height: PROMPT_MIN_HEIGHT }');
+		expect(source("../app/_layout.tsx")).toContain('presentation: Platform.OS === "ios" ? "formSheet" : "transparentModal"');
+	});
+
+	// Spawn is itself a bottom sheet on Android, so its choices open inside it.
+	// They used to be a second sheet over the first: two grabbers, and only the
+	// top one answered a swipe down.
+	it("shows Spawn's choices inside Spawn's own sheet", () => {
+		const android = source("./spawn-composer-controls.android.tsx");
+		expect(android).toContain("OptionList");
+		expect(android).not.toMatch(/\bModal\b/);
+		expect(android).not.toContain("@expo/ui/community/bottom-sheet");
+		expect(android).not.toContain("Picker");
+		expect(android).not.toContain("@expo/ui");
+		expect(android).toContain("AgentLogo");
+	});
+
+	it("uses a rounded native Android attachment chooser instead of the square popup menu", () => {
+		const path = fileURLToPath(new URL("./chat/ChatAttachmentMenu.android.tsx", import.meta.url));
+		expect(existsSync(path)).toBe(true);
+		const android = existsSync(path) ? source("./chat/ChatAttachmentMenu.android.tsx") : "";
+		expect(android).toContain('@expo/ui/community/bottom-sheet');
+		expect(android).toContain("enablePanDownToClose");
+		expect(android).toContain("borderRadius: radius.pill");
+		expect(android).not.toContain("MenuView");
+	});
+
+	it("uses React Native Android inputs for worker search and elicitation", () => {
+		for (const file of ["./worker-dock.android.tsx", "./chat/elicitation-native-controls.android.tsx"]) {
+			const path = fileURLToPath(new URL(file, import.meta.url));
+			expect(existsSync(path)).toBe(true);
+			const android = existsSync(path) ? source(file) : "";
+			expect(android).toContain("TextInput");
+			expect(android).not.toContain("@expo/ui");
+			expect(android).not.toContain('width: "100%"');
+		}
+		expect(source("./worker-dock.android.tsx")).toContain('testID="worker-search-close"');
+	});
+
+	it("keeps the Android worker actions at opposite edges and hosts their native sheet", () => {
+		const dock = source("./worker-dock.android.tsx");
+		expect(dock).toContain("styles.flexSpacer");
+		expect(dock).toMatch(/flexSpacer:\s*\{\s*flex:\s*1\s*\}/);
+		expect(dock).toContain('row: { flex: 1, height: 52, flexDirection: "row"');
+
+		const controls = source("./worker-controls-sheet.android.tsx");
+		expect(controls).toContain("BottomSheet");
+		expect(controls).toContain('@expo/ui/community/bottom-sheet');
+	});
+
+	it("uses a draggable native Android worker-controls sheet", () => {
+		const controls = source("./worker-controls-sheet.android.tsx");
+		expect(controls).toContain('@expo/ui/community/bottom-sheet');
+		expect(controls).toContain("BottomSheetView");
+		expect(controls).toContain("enablePanDownToClose");
+		expect(controls).not.toMatch(/\bModal\b/);
+		expect(controls).not.toContain("styles.grabber");
+		expect(controls).toContain('snapPoints={["55%", "85%"]}');
+		expect(controls).toContain("enableDynamicSizing={false}");
+		expect(controls).toMatch(/projectList:\s*\{[^}]*flex:\s*1/s);
+	});
+
+	it("keeps the iOS worker-controls host full width", () => {
+		const controls = source("./worker-controls-sheet.tsx");
+		expect(controls).toContain('@expo/ui/community/bottom-sheet');
+		expect(controls).toContain('snapPoints={["55%", "85%"]}');
+		expect(controls).not.toContain("<Host");
+	});
+
+	it("makes the entire iOS Spawn prompt a native text-input hit target", () => {
+		const ios = source("./spawn-prompt-input.ios.tsx");
+		// A SwiftUI TextField keeps an intrinsic one-line hit target even when its
+		// Host is tall. React Native's native TextInput owns the full frame, so every
+		// visible point in the prompt area focuses the editor.
+		expect(ios).toContain('import { StyleSheet, TextInput } from "react-native"');
+		expect(ios).not.toContain('@expo/ui');
+		expect(ios).toContain("height = 112");
+		expect(ios).toMatch(/paddingHorizontal:\s*space\.lg/);
+		expect(ios).toMatch(/paddingTop:\s*space\.huge/);
+		expect(ios).toMatch(/paddingBottom:\s*space\.md/);
+		expect(ios).toContain('textAlignVertical="top"');
+		expect(ios).toContain("scrollEnabled");
+		expect(ios).toMatch(/style=\{\[styles\.input,\s*\{\s*height,/);
+	});
+
+	it("gives the iOS Spawn prompt modest top breathing room", () => {
+		const spawn = source("../app/spawn.tsx");
+		expect(spawn).toContain('Platform.OS === "ios" && styles.iosContent');
+		expect(spawn).toContain("iosContent: { paddingTop: space.xxxl }");
+	});
+
+	it("waits for the Android destination route before closing the drawer", () => {
+		const drawer = source("./sidebar-navigation-shell.android.tsx");
+		expect(drawer).toContain("pendingClosePath");
+		expect(drawer).toContain("sidebarNavigationSettled");
+		expect(drawer).toMatch(/pendingClosePath[\s\S]*router\.replace\(destination\.href\)/);
+	});
+
+	it("uses compact app-native choice rows instead of the unstable Compose picker", () => {
+		const path = fileURLToPath(new URL("./chat/ChatSettingsModal.android.tsx", import.meta.url));
+		expect(existsSync(path)).toBe(true);
+		const android = existsSync(path) ? source("./chat/ChatSettingsModal.android.tsx") : "";
+		expect(android).toContain("ChoicePage");
+		expect(android).toContain("SettingRow");
+		expect(android).not.toContain("Picker");
+		// The turn-settings route is already a native form sheet, so a choice list
+		// opens as a page within it rather than a sheet on top.
+		expect(android).not.toContain('@expo/ui/community/bottom-sheet');
+		expect(android).not.toMatch(/\bModal\b/);
+		expect(android).toContain('numberOfLines={1}');
+		expect(android).not.toContain('description ? <Text numberOfLines={1} style={styles.rowDescription}');
+		expect(android).toContain('<View style={styles.choiceCopy}>');
+		expect(android).toMatch(/choiceCopy:\s*\{\s*flex:\s*1,\s*minWidth:\s*0/);
+		expect(android).toMatch(/choiceRow:\s*\{[^}]*alignItems:\s*"flex-start"/s);
+		expect(android).not.toContain('width: "100%"');
+	});
+
+	it("dismisses the Android keyboard before presenting chat sheets", () => {
+		const screen = source("./chat/ChatSessionScreen.tsx");
+		expect(screen).toContain("dismissKeyboardBeforeSheet");
+		expect(screen).toMatch(/openTurnSettings[\s\S]*await dismissKeyboardBeforeSheet/);
+		expect(screen).toMatch(/menuOpen[\s\S]*dismissKeyboardBeforeSheet/);
+	});
+
+	it("pins conversation actions to one Android detent on first open", () => {
+		const layout = source("../app/_layout.tsx");
+		expect(layout).toContain('name === "sheets/conversation-actions" && Platform.OS === "android"');
+		expect(layout).toContain("sheetAllowedDetents: [0.6]");
+	});
+
+	it("keeps Android review actions at the 60% detent with a visible native drag handle", () => {
+		const layout = source("../app/_layout.tsx");
+		const actions = source("../app/sheets/review-actions.tsx");
+		expect(layout).toContain('{ name: "sheets/review-actions", detents: [0.6, 0.95] }');
+		expect(layout).toContain("sheetInitialDetentIndex: 0");
+		expect(layout).toContain("sheetGrabberVisible: true");
+		expect(actions).toMatch(/<ScrollView[^>]*nestedScrollEnabled/);
+	});
+
+	it("does not register the built-in Android sound as a missing custom asset", () => {
+		expect(source("./push.ts")).not.toContain('sound: "default"');
+	});
+
+	it("presents Settings from the root stack above the preserved drawer", () => {
+		const rootSettingsPath = fileURLToPath(new URL("../app/settings.tsx", import.meta.url));
+		const nestedSettingsPath = fileURLToPath(new URL("../app/(tabs)/settings.tsx", import.meta.url));
+		expect(existsSync(rootSettingsPath)).toBe(true);
+		expect(existsSync(nestedSettingsPath)).toBe(false);
+		const rootLayout = source("../app/_layout.tsx");
+		expect(rootLayout).toMatch(/name="settings"[\s\S]*presentation:\s*"formSheet"/);
+	});
+
+	it("renders conversation actions in a single native list with its conversation header", () => {
+		const actions = source("./chat/ConversationActionsSheet.tsx");
+		const registry = source("./chat/chatSheetRegistry.ts");
+		expect(actions).toContain("<FlatList");
+		expect(actions).toMatch(/ListHeaderComponent=\{<SheetHeader[\s\S]*?\/>}/);
+		expect(actions).not.toContain("<ScrollView");
+		expect(registry).toContain("sessionTitle: string");
+		expect(actions).toContain('title={snapshot.title || "Untitled conversation"}');
+		expect(actions).toContain('subtitle={`Session · ${entry.sessionTitle}`}');
+		expect(actions).toContain("backgroundColor: t.bgBase");
+		expect(actions).toContain("backgroundColor: t.bgElevated");
+		expect(actions).not.toMatch(/<ScrollView[\s\S]*<View style=\{styles\.header\}>/);
+	});
+
+	it("keeps Android conversation-menu drags with the list instead of dismissing its sheet", () => {
+		const actions = source("./chat/ConversationActionsSheet.tsx");
+		expect(actions).toMatch(/<FlatList[\s\S]*nestedScrollEnabled/);
+	});
+});

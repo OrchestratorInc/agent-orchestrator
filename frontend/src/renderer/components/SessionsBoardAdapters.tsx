@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
@@ -13,11 +13,9 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Check, Copy, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "lucide-react";
+import { Archive, Check, Copy, GitBranch, LoaderCircle, RotateCcw } from "lucide-react";
 import type { MessageKey } from "../i18n";
 import { aoBridge } from "../lib/bridge";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
-import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { formatTimeCompact } from "../lib/format-time";
 import { formatEstimatedCost } from "../lib/format-cost";
 import { formatTokenCount } from "../lib/format-token-count";
@@ -26,6 +24,7 @@ import {
 	agentSwitchStatusVisual,
 	deriveSessionAgentSwitchPresentation,
 } from "../lib/agent-switch-presentation";
+import { agentLabel } from "../lib/agent-options";
 import type { WorkspaceSession } from "../types/workspace";
 import { canonicalTrackerIssueId } from "../types/workspace";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
@@ -37,7 +36,7 @@ import {
 import { cn } from "../lib/utils";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
-import { SessionTerminationPopover } from "./SessionTerminationPopover";
+import { SessionArchiveDialog } from "./SessionArchiveDialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export function toBoardSessionPresentation(
@@ -46,6 +45,15 @@ export function toBoardSessionPresentation(
 ): BoardSessionPresentation {
 	const switchPresentation = deriveSessionAgentSwitchPresentation(session);
 	const switchVisual = switchPresentation ? agentSwitchStatusVisual(switchPresentation) : undefined;
+	const provisioningStatus =
+		session.provisionState === "provisioning"
+			? {
+					className: "text-status-working",
+					indicatorClassName: "bg-status-working animate-status-pulse",
+					label: `Starting ${agentLabel(session.provider)}…`,
+					tone: "var(--color-status-working)",
+				}
+			: undefined;
 	return {
 		activity: session.activity,
 		branch: session.branch,
@@ -53,18 +61,18 @@ export function toBoardSessionPresentation(
 		isTerminated: session.isTerminated,
 		kanbanColumn: session.kanbanColumn,
 		displayStatus: session.displayStatus,
-		statusReadiness: session.statusReadiness,
 		provider: session.provider,
 		status: session.status,
 		statusPresentation:
-			t && switchPresentation && switchVisual
+			provisioningStatus ??
+			(t && switchPresentation && switchVisual
 				? {
 						className: switchVisual.className,
 						indicatorClassName: `${switchVisual.indicatorClassName}${switchVisual.breathe ? " animate-status-pulse" : ""}`,
 						label: t(switchPresentation.compactLabelKey, switchPresentation.values),
 						tone: switchVisual.tone,
 					}
-				: undefined,
+				: undefined),
 		title: session.title,
 		trackerIssueId: canonicalTrackerIssueId(session.issueId),
 		updatedAt: session.updatedAt,
@@ -85,7 +93,7 @@ export function BoardSessionCardAdapter({
 	usage,
 }: {
 	onOpen: () => void;
-	onTerminate: () => void;
+	onTerminate?: () => void;
 	session: WorkspaceSession;
 	usage?: SessionUsageSummary;
 }) {
@@ -100,6 +108,7 @@ export function BoardSessionCardAdapter({
 }
 
 export function ArchivedSessionCardAdapter({
+	hideTerminatedStatus = false,
 	isRestoreDisabled,
 	isRestoring,
 	restoreAction,
@@ -107,6 +116,7 @@ export function ArchivedSessionCardAdapter({
 	session,
 	usage,
 }: {
+	hideTerminatedStatus?: boolean;
 	isRestoreDisabled: boolean;
 	isRestoring: boolean;
 	restoreAction: (event: MouseEvent<HTMLButtonElement>) => void;
@@ -117,6 +127,7 @@ export function ArchivedSessionCardAdapter({
 	const branch = session.branch ?? "";
 	return (
 		<DesktopSessionCard
+			hideTerminatedStatus={hideTerminatedStatus}
 			action={
 				<ArchiveRestoreButton
 					isDisabled={isRestoreDisabled}
@@ -138,6 +149,7 @@ function DesktopSessionCard({
 	action,
 	branchAction,
 	footer,
+	hideTerminatedStatus = false,
 	interactive = true,
 	onOpen,
 	onTerminate,
@@ -147,6 +159,7 @@ function DesktopSessionCard({
 	action?: ReactNode;
 	branchAction?: ReactNode;
 	footer?: ReactNode;
+	hideTerminatedStatus?: boolean;
 	interactive?: boolean;
 	onOpen?: () => void;
 	onTerminate?: () => void;
@@ -155,18 +168,12 @@ function DesktopSessionCard({
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	const retryStatus = useMutation({
-		mutationFn: async () => {
-			const { error } = await apiClient.POST("/api/v1/sessions/{sessionId}/resume-agent", {
-				params: { path: { sessionId: session.id } },
-			});
-			if (error) throw new Error(apiErrorMessage(error, t("session.statusUnavailable")));
-		},
-		onSettled: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
-	});
 	const [confirmOpen, setConfirmOpen] = useState(false);
-	const summaries = sessionPRDisplaySummaries(session, useSessionScmSummary(session.id).data);
-	const termination = useTerminateSessionState(session.id);
+	const summaries = sessionPRDisplaySummaries(
+		session,
+		useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
+	);
+	const termination = useTerminateSessionState(session.id, session.hostId);
 	const showTerminate = interactive && session.isTerminated !== true && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
 	const usagePresentation = toUsagePresentation(usage, t);
@@ -176,7 +183,7 @@ function DesktopSessionCard({
 		<Tooltip>
 			<TooltipTrigger asChild>
 				<span className="inline-flex">
-					<SessionTerminationPopover
+					<SessionArchiveDialog
 						onConfirm={() => {
 							setConfirmOpen(false);
 							onTerminate();
@@ -188,18 +195,20 @@ function DesktopSessionCard({
 							<button
 								aria-label={
 									termination.isPending
-										? t("shell.killingNamedAria", { title: session.title })
-										: t("shell.terminateNamed", { title: session.title })
+										? t("shell.archivingNamedAria", { title: session.title })
+										: t("shell.archiveNamed", { title: session.title })
 								}
 								className={cn(
-									"inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-[color,background-color,opacity] hover:bg-error/10 hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+									"inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-[color,background-color,opacity] hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
 									keepTerminateVisible || termination.isPending
 										? "opacity-100"
 										: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",
 								)}
 								onClick={(event) => {
 									event.stopPropagation();
-									clearTerminateSessionState(queryClient, session.id);
+									clearTerminateSessionState(queryClient, session.id, session.hostId);
+									// Always open the confirm; the modal owns its own dismissal.
+									setConfirmOpen(true);
 								}}
 								disabled={termination.isPending}
 								type="button"
@@ -207,7 +216,7 @@ function DesktopSessionCard({
 								{termination.isPending ? (
 									<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
 								) : (
-									<Trash2 className="size-icon-sm" aria-hidden="true" />
+									<Archive className="size-icon-sm" aria-hidden="true" />
 								)}
 							</button>
 						}
@@ -215,7 +224,7 @@ function DesktopSessionCard({
 				</span>
 			</TooltipTrigger>
 			<TooltipContent side="bottom">
-				{termination.isPending ? t("shell.killingSession") : t("shell.terminateSession")}
+				{termination.isPending ? t("shell.archivingSession") : t("shell.archiveSession")}
 			</TooltipContent>
 		</Tooltip>
 	) : undefined;
@@ -225,26 +234,9 @@ function DesktopSessionCard({
 			action={action}
 			branchAction={branchAction}
 			branchIcon={<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />}
-			error={termination.error ?? retryStatus.error?.message ?? undefined}
+			error={termination.error ?? undefined}
 			externalLink={ProductExternalLink}
-			footer={
-				<>
-					{footer}
-					{interactive && session.statusReadiness === "unavailable" && (
-						<button
-							type="button"
-							disabled={retryStatus.isPending}
-							className="px-3 py-2 text-xs text-secondary hover:text-primary disabled:opacity-50"
-							onClick={(event) => {
-								event.stopPropagation();
-								retryStatus.mutate();
-							}}
-						>
-							{retryStatus.isPending ? t("session.statusChecking") : t("session.retryStatus")}
-						</button>
-					)}
-				</>
-			}
+			footer={footer}
 			interactive={interactive}
 			labels={{
 				formatTime: formatTimeCompact,
@@ -270,7 +262,11 @@ function DesktopSessionCard({
 				url: prBrowserUrl(pr),
 			}))}
 			renderAvatar={(provider) => <AgentAvatar provider={provider} />}
-			session={toBoardSessionPresentation(session, t)}
+			session={
+				hideTerminatedStatus
+					? hideTerminatedCardStatus(toBoardSessionPresentation(session, t))
+					: toBoardSessionPresentation(session, t)
+			}
 			translate={translate}
 			renderUsage={(usage) => (
 				<Tooltip>
@@ -283,6 +279,23 @@ function DesktopSessionCard({
 			usage={usagePresentation}
 		/>
 	);
+}
+
+function hideTerminatedCardStatus(session: BoardSessionPresentation): BoardSessionPresentation {
+	const terminated =
+		session.displayStatus === "Terminated" ||
+		(session.status === "terminated" && !session.displayStatus);
+	if (!terminated) return session;
+	return {
+		...session,
+		displayStatus: undefined,
+		statusPresentation: {
+			className: "hidden",
+			indicatorClassName: "hidden",
+			label: "",
+			tone: "transparent",
+		},
+	};
 }
 
 function pullRequestLabels(t: TFunction): BoardPullRequestLabels {

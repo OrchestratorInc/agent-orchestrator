@@ -153,6 +153,8 @@ export function GeneralSettingsSection({
 	const soundNotificationsSaveError = useSoundNotificationsStore((state) => state.saveError);
 	const developerMode = useUiStore((state) => state.developerMode);
 	const setDeveloperMode = useUiStore((state) => state.setDeveloperMode);
+	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
+	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
 
 	const themeOptions = [
 		{ value: "light", label: t("settings.theme.light") },
@@ -213,6 +215,13 @@ export function GeneralSettingsSection({
 			<SettingsSection title={t("settings.sessions")} grouped>
 				<SessionInterfaceRow />
 				{isWindowsPlatform() ? <TerminalShellRows /> : null}
+				<SettingsRow label={t("settings.terminalCopyOnSelect")}>
+					<Switch
+						aria-label={t("settings.terminalCopyOnSelect")}
+						checked={terminalCopyOnSelect}
+						onCheckedChange={setTerminalCopyOnSelect}
+					/>
+				</SettingsRow>
 				<SettingsRow label={t("settings.soundNotifications")}>
 					<Switch
 						aria-label={t("settings.soundNotifications")}

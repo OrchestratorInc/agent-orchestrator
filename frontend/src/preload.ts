@@ -21,6 +21,9 @@ import {
 	type TrayOpenSessionTarget,
 } from "./shared/tray";
 import type { DaemonStatus } from "./shared/daemon-status";
+import type { RemoteHostView } from "./main/remotes-ipc";
+import type { ConnectedHostView } from "./main/remote-registry";
+import type { RemoteHealth } from "./main/remote-request";
 import type {
 	EditorHandoffState,
 	OpenSessionTargetInput,
@@ -53,8 +56,12 @@ import {
 	type AgentSwitchVisibilitySignalBody,
 } from "./shared/agent-switch-observability";
 import type {
+	BrowserAnnotationActionInput,
 	BrowserAnnotationCancelPayload,
+	BrowserAnnotationCompleteInput,
+	BrowserAnnotationDiscardInput,
 	BrowserAnnotationModeInput,
+	BrowserAnnotationStatePayload,
 	BrowserAnnotationSubmitPayload,
 } from "./shared/browser-annotations";
 import type {
@@ -67,6 +74,7 @@ import type {
 import type {
 	BrowserHistorySuggestion,
 	BrowserImportDiscovery,
+	BrowserImportDiscoveryRequest,
 	BrowserImportProgress,
 	BrowserImportRequest,
 	BrowserImportResult,
@@ -93,9 +101,12 @@ if (typeof document !== "undefined") {
 
 export type BrowserBoundsInput = {
 	viewId: string;
+	revision: number;
 	rect: BrowserRect;
 	visible: boolean;
 };
+
+export type BrowserBoundsApplied = BrowserBoundsInput;
 
 export type BrowserNavigateInput = {
 	viewId: string;
@@ -377,6 +388,13 @@ const api = {
 		nativeCompositionEnabled: true,
 		ensure: (sessionId: string) => ipcRenderer.invoke("browser:ensure", sessionId) as Promise<BrowserNavState>,
 		setBounds: (input: BrowserBoundsInput) => ipcRenderer.send("browser:setBounds", input),
+		onBoundsApplied: (listener: (result: BrowserBoundsApplied) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, result: BrowserBoundsApplied) => listener(result);
+			ipcRenderer.on("browser:boundsApplied", wrapped);
+			return () => {
+				ipcRenderer.off("browser:boundsApplied", wrapped);
+			};
+		},
 		setOverlayOpen: (open: boolean) => ipcRenderer.send("browser:overlay", open),
 		navigate: (input: BrowserNavigateInput) =>
 			ipcRenderer.invoke("browser:navigate", input) as Promise<BrowserNavState>,
@@ -437,6 +455,12 @@ const api = {
 		destroy: (viewId: string) => ipcRenderer.send("browser:destroy", viewId),
 		setAnnotationMode: (input: BrowserAnnotationModeInput) =>
 			ipcRenderer.invoke("browser:annotation:setMode", input) as Promise<void>,
+		completeAnnotation: (input: BrowserAnnotationCompleteInput) =>
+			ipcRenderer.invoke("browser:annotation:complete", input) as Promise<void>,
+		discardAnnotations: (input: BrowserAnnotationDiscardInput) =>
+			ipcRenderer.invoke("browser:annotation:discard", input) as Promise<void>,
+		annotationAction: (input: BrowserAnnotationActionInput) =>
+			ipcRenderer.invoke("browser:annotation:action", input) as Promise<void>,
 		onNavState: (listener: (state: BrowserNavState) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, state: BrowserNavState) => listener(state);
 			ipcRenderer.on("browser:navState", wrapped);
@@ -502,6 +526,13 @@ const api = {
 				ipcRenderer.off("browser:annotation:canceled", wrapped);
 			};
 		},
+		onAnnotationState: (listener: (payload: BrowserAnnotationStatePayload) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, payload: BrowserAnnotationStatePayload) => listener(payload);
+			ipcRenderer.on("browser:annotation:state", wrapped);
+			return () => {
+				ipcRenderer.off("browser:annotation:state", wrapped);
+			};
+		},
 	},
 	browserProfiles: {
 		list: () => ipcRenderer.invoke("browserProfiles:list") as Promise<BrowserProfileListState>,
@@ -510,8 +541,10 @@ const api = {
 			ipcRenderer.invoke("browserProfiles:rename", input) as Promise<BrowserProfile>,
 		clear: (id: string) => ipcRenderer.invoke("browserProfiles:clear", { id }) as Promise<void>,
 		delete: (id: string) => ipcRenderer.invoke("browserProfiles:delete", { id }) as Promise<void>,
-		discoverImportSources: () =>
-			ipcRenderer.invoke("browserProfiles:import:discover") as Promise<BrowserImportDiscovery>,
+		discoverImportSources: (input?: BrowserImportDiscoveryRequest) =>
+			(input === undefined
+				? ipcRenderer.invoke("browserProfiles:import:discover")
+				: ipcRenderer.invoke("browserProfiles:import:discover", input)) as Promise<BrowserImportDiscovery>,
 		import: (input: BrowserImportRequest) =>
 			ipcRenderer.invoke("browserProfiles:import:start", input) as Promise<BrowserImportResult>,
 		onImportProgress: (listener: (progress: BrowserImportProgress) => void) => {
@@ -523,7 +556,7 @@ const api = {
 		},
 	},
 	notifications: {
-		show: (notification: { id: string; title: string; body?: string; type?: string }) =>
+		show: (notification: { id: string; title: string; body?: string; type?: string; watched?: boolean }) =>
 			ipcRenderer.invoke("notifications:show", notification) as Promise<void>,
 		setBadge: (count: number) => ipcRenderer.invoke("notifications:setBadge", count) as Promise<void>,
 		devBounce: () => ipcRenderer.invoke("notifications:devBounce") as Promise<void>,
@@ -534,6 +567,14 @@ const api = {
 				ipcRenderer.off("notifications:click", wrapped);
 			};
 		},
+		onPlaySound: (listener: () => void) => {
+			const wrapped = () => listener();
+			ipcRenderer.on("notifications:playSound", wrapped);
+			return () => {
+				ipcRenderer.off("notifications:playSound", wrapped);
+			};
+		},
+		reportSoundFailure: () => ipcRenderer.send("notifications:soundFailed"),
 	},
 	tray: {
 		setAttentionState: (state: TrayAttentionState) => ipcRenderer.send(TRAY_SET_ATTENTION_STATE_CHANNEL, state),
@@ -554,6 +595,8 @@ const api = {
 	updateSettings: {
 		get: () => ipcRenderer.invoke("updateSettings:get") as Promise<UpdateSettings>,
 		set: (settings: UpdateSettings) => ipcRenderer.invoke("updateSettings:set", settings) as Promise<void>,
+		setMacDifferentialUpdates: (enabled: boolean) =>
+			ipcRenderer.invoke("updateSettings:setMacDifferentialUpdates", enabled) as Promise<void>,
 	},
 	uiSettings: {
 		get: () => ipcRenderer.invoke("uiSettings:get") as Promise<UiSettings>,
@@ -574,6 +617,7 @@ const api = {
 		// True only when this boot is a genuine post-update relaunch; lets the
 		// startup loader swap "Connecting" copy for "Updating / Restarting".
 		isPostUpdateRelaunch: () => ipcRenderer.invoke("updates:isPostUpdateRelaunch") as Promise<boolean>,
+		relaunch: () => ipcRenderer.invoke("updates:relaunch") as Promise<void>,
 		onStatus: (listener: (status: UpdateStatus) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, status: UpdateStatus) => listener(status);
 			ipcRenderer.on("updates:status", wrapped);
@@ -595,10 +639,37 @@ const api = {
 		list: () => ipcRenderer.invoke("featureBuilds:list") as Promise<FeatureBuild[]>,
 		getActive: () => ipcRenderer.invoke("featureBuilds:getActive") as Promise<{ pr: number } | null>,
 	},
+	// Saved AO daemons, shared with the CLI's ~/.ao/remotes.json. Everything the
+	// renderer receives back is password-free (see main/remotes-ipc.ts); the
+	// plaintext password only travels renderer -> main on add or credential edit.
+	remotes: {
+		list: () => ipcRenderer.invoke("remotes:list") as Promise<RemoteHostView[]>,
+		add: (input: { label: string; url: string; password: string }) =>
+			ipcRenderer.invoke("remotes:add", input) as Promise<RemoteHealth>,
+		// An edit carries only what changed: an omitted password keeps the saved
+		// one, so a rotated credential is fixed without the renderer ever holding
+		// the old one.
+		update: (url: string, changes: { label?: string; url?: string; password?: string }) =>
+			ipcRenderer.invoke("remotes:update", url, changes) as Promise<RemoteHealth>,
+		remove: (url: string) => ipcRenderer.invoke("remotes:remove", url) as Promise<void>,
+		connect: (url: string, hostId?: string) => ipcRenderer.invoke("remotes:connect", url, hostId) as Promise<ConnectedHostView>,
+		disconnect: (url: string) => ipcRenderer.invoke("remotes:disconnect", url) as Promise<void>,
+		previewUrl: (hostId: string, sessionId: string, sourceUrl: string) =>
+			ipcRenderer.invoke("remotes:previewUrl", hostId, sessionId, sourceUrl) as Promise<string>,
+		resolvePreviewUrl: (hostId: string, sessionId: string, viewedUrl: string) =>
+			ipcRenderer.invoke("remotes:resolvePreviewUrl", hostId, sessionId, viewedUrl) as Promise<string>,
+	},
 	cloud: {
 		getSession: () => ipcRenderer.invoke("cloud:getSession") as Promise<CloudAccount | null>,
 		signIn: () => ipcRenderer.invoke("cloud:signIn") as Promise<void>,
 		signOut: () => ipcRenderer.invoke("cloud:signOut") as Promise<void>,
+		cancelProviderAuth: () => ipcRenderer.invoke("cloud:cancelProviderAuth") as Promise<void>,
+		connectProviderAuth: (input: { baseUrl: string; provider: string; persistLocalClaudeToken?: boolean }) =>
+			ipcRenderer.invoke("cloud:connectProviderAuth", input) as Promise<
+				| string
+				| { secret: string; refreshToken?: string; expiresIn?: number; refreshTokenExpiresIn?: number }
+				| void
+			>,
 		// Dev-only local (email/password) sign-in against a loopback Docker CP.
 		// Whether the surface is offered is decided in main (unpackaged/dev +
 		// loopback); the renderer only mirrors it for UI visibility.
