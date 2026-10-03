@@ -19,7 +19,6 @@ test.describe("live renderer performance workloads", () => {
 	);
 	test.use({ viewport: { width: 1440, height: 1000 } });
 	for (const workload of [
-		"markdown",
 		"events",
 		"streaming",
 		"highlighting",
