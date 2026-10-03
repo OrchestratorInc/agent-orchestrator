@@ -369,6 +369,7 @@ function CloudPausedStatus() {
 }
 
 export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: SessionViewProps) {
+
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const uiSessionId = sessionUiKey(sessionId, hostId);
@@ -1264,9 +1265,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		!fileTabs.activePath;
 	useEffect(() => {
 		if (!chatViewActive) return;
+		setChatWakeError(null);
+		setChatWakeRetrying(false);
 		const viewId = crypto.randomUUID();
 		let left = false;
 		let refreshed = false;
+		let retrying = false;
 		let pending = Promise.resolve();
 		const setViewActive = (active: boolean) => {
 			pending = pending.catch(() => {}).then(async () => {
@@ -1275,6 +1279,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					body: { viewId, active },
 				});
 				if (error) throw error;
+				if (active && !left) {
+					// A successful renewal proves that a transient request failure
+					// cleared. It does not retry a failed provider resume for this view.
+					setChatWakeError((current) => current?.sessionId === sessionId && current.kind === "request" ? null : current);
+				}
 				if (active && !left && !refreshed) {
 					refreshed = true;
 					void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId) });
@@ -1283,14 +1292,48 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			});
 			return pending;
 		};
-		const refreshAfterWakeError = () => {
+		const refreshAfterWakeError = (error: unknown) => {
 			if (left) return;
+			const code = apiErrorCode(error);
+			setChatWakeError({
+				sessionId,
+				kind: code === "CHAT_RESUME_FAILED" ? "resume" : "request",
+				message: code === "CHAT_RESUME_FAILED"
+					? "Couldn’t reopen this chat. Check the agent provider. Your conversation is saved."
+					: code === "SESSION_NOT_FOUND"
+						? "This chat no longer exists. Refresh the session list."
+						: "Couldn’t connect to this chat. Check the connection, then try again.",
+				retryable: code !== "SESSION_NOT_FOUND",
+			});
 			void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId) });
 		};
+		retryChatWakeRef.current = async () => {
+			if (left || retrying) return;
+			retrying = true;
+			setChatWakeRetrying(true);
+			try {
+				// Renewal of a failed view deliberately does not retry native resume.
+				// Release it first so this activation is a new view registration.
+				await setViewActive(false);
+				if (left) return;
+				await setViewActive(true);
+				if (left) return;
+				setChatWakeError(null);
+				void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId) });
+			} catch (error) {
+				refreshAfterWakeError(error);
+			} finally {
+				retrying = false;
+				if (!left) setChatWakeRetrying(false);
+			}
+		};
 		void setViewActive(true).catch(refreshAfterWakeError);
-		const renewal = window.setInterval(() => { void setViewActive(true).catch(refreshAfterWakeError); }, 10_000);
+		const renewal = window.setInterval(() => {
+			if (!retrying) void setViewActive(true).catch(refreshAfterWakeError);
+		}, 10_000);
 		return () => {
 			left = true;
+			retryChatWakeRef.current = null;
 			window.clearInterval(renewal);
 			void setViewActive(false).catch(() => {});
 		};
@@ -1741,6 +1784,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									controllerTransitioning={interfaceUi.controllerTransitioning || quietResume}
 									newWorkDisabled={interfaceUi.newWorkDisabled}
 									onConversationWorkChange={interfaceUi.onConversationWorkChange}
+
 									onOpenShell={addShellTerminal}
 									openingShell={openShellTerminal.isPending}
 									shellError={
