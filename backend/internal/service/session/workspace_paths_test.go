@@ -126,3 +126,30 @@ func TestWorkspaceFileRevisionLiveReadAvoidsGitAndChecksRevision(t *testing.T) {
 		t.Fatal("live path escaped workspace through symlink")
 	}
 }
+
+func TestWorkspaceFileRevisionLiveReadResolvesRegisteredChildRoot(t *testing.T) {
+	root := newWorkspaceRepo(t)
+	child := workspaceChildRepo(t, root, "alpha", "package alpha\n")
+	writeWorkspaceFile(t, child, "live.txt", "child live contents\n")
+	st := newFakeStore()
+	st.projects["ws"] = domain.ProjectRecord{ID: "ws", Kind: domain.ProjectKindWorkspace}
+	st.sessions["ws-1"] = domain.SessionRecord{ID: "ws-1", ProjectID: "ws", Metadata: domain.SessionMetadata{WorkspacePath: root}}
+	st.worktrees["ws-1"] = []domain.SessionWorktreeRecord{{SessionID: "ws-1", RepoName: "alpha", WorktreePath: child}}
+	svc := &Service{store: st}
+	trace := filepath.Join(t.TempDir(), "git.log")
+	t.Setenv("GIT_TRACE", trace)
+	got, err := svc.GetWorkspaceFileRevision(t.Context(), "ws-1", "alpha/live.txt", WorkspaceDiffCombined, WorkspaceBlobAfter, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != "alpha/live.txt" || got.Content != "child live contents\n" {
+		t.Fatalf("registered child read = %+v", got)
+	}
+	data, err := os.ReadFile(trace)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(data) > 0 {
+		t.Fatalf("child live read unexpectedly ran Git: %s", data)
+	}
+}
