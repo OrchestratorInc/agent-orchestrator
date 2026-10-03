@@ -91,8 +91,11 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 	const key = sessionUiKey(sessionId, hostId);
 	const queryPrefix = (name: string) => hostId ? [name, hostId, sessionId] : [name, sessionId];
 	const invalidate = () => {
-		if (stream.debounce) clearTimeout(stream.debounce);
+		// Bound the wait from the first event: continuous agent writes must not
+		// keep postponing refresh until the workspace becomes quiet.
+		if (stream.debounce) return;
 		stream.debounce = setTimeout(() => {
+			stream.debounce = undefined;
 			for (const name of ["workspace-file-paths", "session-workspace-files", "session-workspace-file", "session-workspace-file-revision", "session-workspace-diffs", "session-workspace-search", "session-workspace-tree"]) {
 				void queryClient.invalidateQueries({ queryKey: queryPrefix(hostId && name === "workspace-file-paths" ? "remote-workspace-file-paths" : name) });
 			}

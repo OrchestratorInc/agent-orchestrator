@@ -14,6 +14,7 @@ import {
 	type FilesSource,
 } from "../hooks/useSessionWorkspaceFiles";
 import { usePierreFileHighlightReady } from "../hooks/usePierreFileHighlight";
+import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import { rememberedFileDisplayMode, useUiStore, type FileDisplayMode } from "../stores/ui-store";
@@ -100,14 +101,28 @@ export function FileContentPane({
 	const [draft, setDraft] = useState("");
 	const [saving, setSaving] = useState(false);
 	const [saveError, setSaveError] = useState("");
-	const sourceHighlightReady = usePierreFileHighlightReady(path);
+	// Warm syntax highlighting without withholding readable file contents.
+	usePierreFileHighlightReady(path);
+	useEffect(() => {
+		if (!path || source.kind !== "workspace" || commitSha) return;
+		return subscribeWorkspaceFileChanges(sessionId, queryClient, hostId);
+	}, [path, source.kind, commitSha, sessionId, queryClient, hostId]);
 	// A background refetch mid-selection would re-render the pane out from under
 	// an active native text selection.
 	const [selectionOrMenuActive, setSelectionOrMenuActive] = useState(false);
 	const query = useQuery({
 		...sessionSourceFileQueryOptions(sessionId, source, path ?? "", t("files.error.loadWorkspaceFile"), scope, commitSha, previousPath, hostId),
+		refetchOnWindowFocus: true,
 		enabled: Boolean(path) && !selectionOrMenuActive,
 	});
+	const canReadLiveText = Boolean(path) && mode === "file" && !editing && !initialEditing && !selectionOrMenuActive && source.kind === "workspace" && !commitSha && (scope === "combined" || scope === "unstaged" || scope === "untracked");
+	const liveText = useQuery({
+		...sessionSourceFileRevisionQueryOptions({ path: path ?? "", scope, sessionId, hostId, side: "after", source }),
+		enabled: canReadLiveText,
+		staleTime: 5_000,
+		refetchOnWindowFocus: true,
+	});
+
 	const hasUnsavedChanges = Boolean(editing && query.data && draft !== query.data.content);
 	useEffect(() => {
 		setMode(restoredMode());
@@ -148,6 +163,7 @@ export function FileContentPane({
 					"session-workspace-search",
 					"session-workspace-file-revision",
 					"session-workspace-diffs",
+					"files-review-end-of-file",
 				].includes(String(queryKey[0])),
 			});
 			setEditing(false);
@@ -178,6 +194,25 @@ export function FileContentPane({
 	if (!path) {
 		return <PanelMessage>{t("files.explorer.selectFile")}</PanelMessage>;
 	}
+	// File navigation can paint live text independently of repository status.
+	// Editing, annotations and comparison controls wait for their real metadata.
+	if (canReadLiveText && !query.data && liveText.data?.exists && !liveText.data.binary && !liveText.data.truncated && mode === "file") {
+		const revision = liveText.data;
+		const preview: WorkspaceFileDetail = {
+			sessionId, path, content: revision.content, size: revision.size, binary: false, deleted: false,
+			contentTruncated: false, diff: "", diffTruncated: false, status: "unmodified", additions: 0, deletions: 0,
+			fileFingerprint: revision.revision,
+		};
+		return <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+			<div className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1 text-xs" title={path}>
+				<WorkspaceEntryIcon className="size-icon-base" kind="file" name={path.split("/").pop() ?? path} />
+				<span className="truncate">{path}</span>
+			</div>
+			<ReadOnlyFileView annotation={{ ...annotation, begin: () => {} }} detail={preview} sessionId={sessionId} hostId={hostId} scope={scope} />
+			{query.error ? <PanelMessage action={<RetryButton onClick={() => void refetch()} />}>{query.error.message}</PanelMessage> : null}
+		</div>;
+	}
+
 	if (query.isPending) {
 		return <PanelMessage>{t("files.loadingDiff")}</PanelMessage>;
 	}
@@ -200,15 +235,17 @@ export function FileContentPane({
 	const renderedAvailable = canRenderMarkdown(path, detail);
 	const hasDisplayModeChoice = detail.status !== "unmodified" || renderedAvailable;
 	const fileName = path.split("/").pop() || path;
-	const editable = detail.editable && Boolean(detail.fileFingerprint);
+	const newerLiveText = canReadLiveText && liveText.data?.exists && !liveText.data.binary && !liveText.data.truncated && liveText.dataUpdatedAt >= query.dataUpdatedAt && liveText.data.content !== detail.content;
+	const displayDetail = newerLiveText ? { ...detail, content: liveText.data!.content, size: liveText.data!.size, fileFingerprint: liveText.data!.revision } : detail;
+	const editable = !newerLiveText && detail.editable && Boolean(detail.fileFingerprint);
 	const effectiveMode =
 		(detail.status === "unmodified" && mode === "diff") || (mode === "rendered" && !renderedAvailable)
 			? "file"
 			: mode;
-	const fileView = sourceHighlightReady ? (
+	const fileView = (
 		<CompleteFileView
-			annotation={annotation}
-			detail={detail}
+			annotation={newerLiveText ? { ...annotation, begin: () => {} } : annotation}
+			detail={displayDetail}
 			editing={editing && effectiveMode === "file"}
 			onEditChange={setDraft}
 			scope={scope}
@@ -217,7 +254,7 @@ export function FileContentPane({
 			hostId={hostId}
 			source={source}
 		/>
-	) : <PanelMessage>{t("files.loading")}</PanelMessage>;
+	);
 	const beginEditing = () => {
 		setMode("file");
 		annotation.cancel();
@@ -310,6 +347,7 @@ export function FileContentPane({
 							<TooltipTrigger asChild>
 								<Button
 									aria-label={t("files.addFeedback")}
+									disabled={Boolean(newerLiveText)}
 									className="text-muted-foreground hover:text-foreground"
 									onClick={() => annotation.begin({ path: detail.path, previousPath: detail.previousPath, side: "file", scope, surface: "focused", workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint })}
 									size="icon-sm"
@@ -400,13 +438,14 @@ export function FileContentPane({
 
 function CompleteFileView({ annotation, commitSha, detail, editing, onEditChange, scope, sessionId, hostId, source }: { annotation: FileAnnotationModel; commitSha?: string; detail: WorkspaceFileDetail; editing: boolean; onEditChange: (content: string) => void; scope: WorkspaceDiffScope; sessionId: string; hostId?: string; source: FilesSource }) {
 	const { t } = useTranslation();
+	const needsRevision = detail.deleted || detail.contentTruncated;
 	const revision = useQuery({
 		...sessionSourceFileRevisionQueryOptions({ commitSha, path: detail.path, scope, sessionId, hostId, side: detail.deleted ? "before" : "after", source, workspaceVersion: detail.workspaceVersion }),
-		enabled: detail.deleted || detail.contentTruncated,
+		enabled: needsRevision,
 	});
-	if (revision.isPending && revision.isFetching) return <PanelMessage>{t("files.loading")}</PanelMessage>;
-	if (revision.error) return <PanelMessage>{revision.error.message}</PanelMessage>;
-	if (revision.data) {
+	if (needsRevision && revision.isPending && revision.isFetching) return <PanelMessage>{t("files.loading")}</PanelMessage>;
+	if (needsRevision && revision.error) return <PanelMessage>{revision.error.message}</PanelMessage>;
+	if (needsRevision && revision.data) {
 		if (!revision.data.exists) return <PanelMessage>{t("files.error.loadFile")}</PanelMessage>;
 		return (
 			<ReadOnlyFileView

@@ -50,6 +50,7 @@ type fakeSessionService struct {
 	cleanupResult              []domain.SessionID
 	cleanupSkipped             []sessionsvc.CleanupSkipped
 	workspaceFiles             sessionsvc.WorkspaceFiles
+	workspaceListHook          func(context.Context) error
 	workspaceFile              sessionsvc.WorkspaceFileDetail
 	workspaceFileSection       sessionsvc.WorkspaceFileSection
 	workspaceFileCommitSHA     string
@@ -616,7 +617,12 @@ func (f *fakeSessionService) StageAttachments(
 	return f.stagedPaths, nil
 }
 
-func (f *fakeSessionService) ListWorkspaceFiles(_ context.Context, id domain.SessionID) (sessionsvc.WorkspaceFiles, error) {
+func (f *fakeSessionService) ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFiles, error) {
+	if f.workspaceListHook != nil {
+		if err := f.workspaceListHook(ctx); err != nil {
+			return sessionsvc.WorkspaceFiles{}, err
+		}
+	}
 	if f.workspaceErr != nil {
 		return sessionsvc.WorkspaceFiles{}, f.workspaceErr
 	}
@@ -3210,6 +3216,10 @@ func TestSessionsAPI_GetWorkspaceFileBlobRequiresPath(t *testing.T) {
 func TestSessionsAPI_StreamWorkspaceChanges(t *testing.T) {
 	workspace := t.TempDir()
 	svc := newFakeSessionService()
+	// A slow Git scan must not delay the invalidation edge. The old stream
+	// handler waited here before announcing the edit.
+	svc.workspaceListHook = func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
+
 	session := svc.sessions["ao-1"]
 	session.Metadata.WorkspacePath = workspace
 	svc.sessions["ao-1"] = session

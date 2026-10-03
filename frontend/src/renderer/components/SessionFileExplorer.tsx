@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -15,13 +15,14 @@ import {
 } from "lucide-react";
 import {
 	sessionSourceFilesQueryOptions,
+	sessionSourceFileQueryOptions,
 	type FilesSource,
 	useWorkspaceFileConnectionState,
 	workspaceFilesRefetchInterval,
 } from "../hooks/useSessionWorkspaceFiles";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
-import { buildChangedOnlyTree, type TreeNode } from "../hooks/useSessionWorkspaceTree";
+import { buildChangedOnlyTree, sessionWorkspaceTreeQueryOptions, type TreeNode } from "../hooks/useSessionWorkspaceTree";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
@@ -157,6 +158,27 @@ export function SessionFileExplorer({
 		onOpenFile?.(revealRequest.path, { mode: "file" });
 		onRevealHandled?.(revealRequest.key);
 	}, [isMaximized, onOpenFile, onRevealHandled, revealRequest, uiKey, setFilesChangedOnly]);
+
+	// Give the hovered/focused row a short head start, without issuing a
+	// request for every row the pointer crosses or competing with a busy read.
+	const prefetchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	const prefetchBusy = useRef(false);
+	useEffect(() => () => {
+		if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
+	}, [uiKey, querySource, prCommit?.sha]);
+	const prefetchPath = useCallback((node: TreeNode) => {
+		if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
+		prefetchTimer.current = setTimeout(() => {
+			prefetchTimer.current = undefined;
+			if (prefetchBusy.current) return;
+			if (node.type === "dir" && querySource.kind !== "workspace") return;
+			prefetchBusy.current = true;
+			const request = node.type === "dir"
+				? queryClient.prefetchQuery({ ...sessionWorkspaceTreeQueryOptions(sessionId, node.path, undefined, hostId), staleTime: 5_000 })
+				: queryClient.prefetchQuery({ ...sessionSourceFileQueryOptions(sessionId, querySource, node.path, undefined, "combined", prCommit?.sha, sourceFiles?.find((file) => file.path === node.path)?.previousPath, hostId), staleTime: 5_000 });
+			void request.finally(() => { prefetchBusy.current = false; });
+		}, 100);
+	}, [queryClient, sessionId, hostId, querySource, prCommit?.sha, sourceFiles]);
 
 	const handleSelectPath = (node: TreeNode) => {
 		setPreviewRequest(null);
@@ -473,6 +495,7 @@ export function SessionFileExplorer({
 									changedOnlyData={changedOnlyData}
 									filterText={filter}
 									onSelectPath={handleSelectPath}
+					onPrefetchPath={prefetchPath}
 									selectedPath={treeSelectedPath}
 									sessionId={sessionId}
 								/>
@@ -489,6 +512,7 @@ export function SessionFileExplorer({
 					changedOnlyData={changedOnlyData}
 					filterText={filter}
 					onSelectPath={handleSelectPath}
+					onPrefetchPath={prefetchPath}
 					selectedPath={treeSelectedPath}
 					sessionId={sessionId}
 				/>

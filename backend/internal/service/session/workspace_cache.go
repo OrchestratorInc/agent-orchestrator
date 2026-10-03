@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -36,12 +37,18 @@ type workspaceCacheEntry struct {
 	changes workspaceChangeSet
 }
 
+type workspacePathsEntry struct {
+	at    time.Time
+	paths []string
+}
+
 type workspaceCache struct {
 	mu      sync.Mutex
 	ttl     time.Duration
 	now     func() time.Time
 	entries map[workspaceCacheKey]workspaceCacheEntry
 	loads   map[workspaceCacheKey]*workspaceCacheEntry
+	paths   map[workspaceCacheKey]*workspacePathsEntry
 }
 
 func newWorkspaceCache(ttl time.Duration, now func() time.Time) *workspaceCache {
@@ -52,6 +59,7 @@ func newWorkspaceCache(ttl time.Duration, now func() time.Time) *workspaceCache 
 		ttl: ttl, now: now,
 		entries: make(map[workspaceCacheKey]workspaceCacheEntry),
 		loads:   make(map[workspaceCacheKey]*workspaceCacheEntry),
+		paths:   make(map[workspaceCacheKey]*workspacePathsEntry),
 	}
 }
 
@@ -127,4 +135,66 @@ func (c *workspaceCache) invalidateSession(id domain.SessionID) {
 			delete(c.loads, key)
 		}
 	}
+	for key := range c.paths {
+		if key.session == id {
+			delete(c.paths, key)
+		}
+	}
+}
+
+// workspacePaths shares the inventory between directory expansions and the
+// compatible all-files endpoint. Content/status still comes from fresh reads.
+// Invalidation removes the publication token, including during a Git read.
+func (s *Service) workspacePaths(ctx context.Context, id domain.SessionID, root string) ([]string, error) {
+	c := s.workspaceCache
+	if c == nil {
+		return gitLsFilesParts(ctx, root)
+	}
+	key := workspaceCacheKey{session: id, root: root}
+	get := func() ([]string, bool) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		entry := c.paths[key]
+		if entry != nil && !entry.at.IsZero() && c.now().Sub(entry.at) <= c.ttl {
+			return entry.paths, true
+		}
+		return nil, false
+	}
+	if paths, ok := get(); ok {
+		return paths, nil
+	}
+	v, err, _ := s.workspaceGroup.Do(key.String()+"\x00paths", func() (any, error) {
+		if paths, ok := get(); ok {
+			return paths, nil
+		}
+		entry := new(workspacePathsEntry)
+		c.mu.Lock()
+		// Bound inventories independently of the short cache TTL.
+		if len(c.paths) >= 128 {
+			var oldest workspaceCacheKey
+			for candidate, value := range c.paths {
+				if oldest.root == "" || value.at.Before(c.paths[oldest].at) {
+					oldest = candidate
+				}
+			}
+			delete(c.paths, oldest)
+		}
+		c.paths[key] = entry
+		c.mu.Unlock()
+		paths, loadErr := gitLsFilesParts(ctx, root)
+		c.mu.Lock()
+		if c.paths[key] == entry {
+			if loadErr != nil {
+				delete(c.paths, key)
+			} else {
+				entry.paths, entry.at = paths, c.now()
+			}
+		}
+		c.mu.Unlock()
+		return paths, loadErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]string), nil
 }

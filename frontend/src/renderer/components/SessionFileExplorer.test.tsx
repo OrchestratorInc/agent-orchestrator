@@ -7,6 +7,7 @@ import { SessionFileExplorer } from "./SessionFileExplorer";
 import { FilesTopbarHostContext } from "./files-topbar-host";
 import { TooltipProvider } from "./ui/tooltip";
 import { useUiStore } from "../stores/ui-store";
+import { sessionSourceFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { sessionUiKey } from "../lib/hosts";
 import type { TreeNode } from "../hooks/useSessionWorkspaceTree";
@@ -49,12 +50,14 @@ vi.mock("./FileTree", () => ({
 		forceChangedOnly = false,
 		filterText,
 		onSelectPath,
+		onPrefetchPath,
 	}: {
 		changedOnly: boolean;
 		changedOnlyData: TreeNode[];
 		forceChangedOnly?: boolean;
 		filterText: string;
 		onSelectPath: (node: { path: string; type: "file" }) => void;
+		onPrefetchPath?: (node: TreeNode) => void;
 	}) => {
 		const [expanded, setExpanded] = useState(false);
 		const filePaths = (nodes: TreeNode[]): string[] => nodes.flatMap((node) => node.children ? filePaths(node.children) : [node.path]);
@@ -64,7 +67,7 @@ vi.mock("./FileTree", () => ({
 			<span data-testid="tree-filter">{filterText}</span>
 			<button onClick={() => setExpanded((current) => !current)} type="button">expand src</button>
 			{expanded ? <span>src directory expanded</span> : null}
-			<button onClick={() => onSelectPath({ path: "src/App.tsx", type: "file" })} type="button">
+			<button onPointerEnter={() => onPrefetchPath?.({ name: "App.tsx", path: "src/App.tsx", type: "file" })} onClick={() => onSelectPath({ path: "src/App.tsx", type: "file" })} type="button">
 				select src/App.tsx
 			</button>
 		</div>;
@@ -118,6 +121,20 @@ describe("SessionFileExplorer", () => {
 		postMock.mockReset();
 		hostAGetMock.mockReset();
 		hostBGetMock.mockReset();
+	});
+
+	it("warms the exact file query on hover so opening it needs no second request", async () => {
+		useUiStore.getState().setFilesChangedOnly("hover-session", false);
+		const detail = { sessionId: "hover-session", path: "src/App.tsx", content: "ready before click" };
+		const previous = getMock.getMockImplementation()!;
+		getMock.mockImplementation((path: string, options: unknown) => path.endsWith("/workspace/file") ? Promise.resolve({ data: detail }) : previous(path, options));
+		const { client } = renderWithQuery(<SessionFileExplorer sessionId="hover-session" />);
+		fireEvent.pointerEnter(screen.getByRole("button", { name: "select src/App.tsx" }));
+		await waitFor(() => expect(client.getQueryData(["session-workspace-file", "hover-session", "combined", "", "src/App.tsx"])).toEqual(detail));
+		const fileCalls = () => getMock.mock.calls.filter(([path]) => path.endsWith("/workspace/file"));
+		expect(fileCalls()).toHaveLength(1);
+		await client.fetchQuery(sessionSourceFileQueryOptions("hover-session", { kind: "workspace" }, "src/App.tsx"));
+		expect(fileCalls()).toHaveLength(1);
 	});
 
 	it("keeps same-id remote file state on A and B separate while opening center tabs", async () => {

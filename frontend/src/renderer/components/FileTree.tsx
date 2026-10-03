@@ -1,5 +1,5 @@
 import { createContext, forwardRef, useCallback, useContext, useEffect, useRef, useState, type HTMLAttributes, type RefObject } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Tree, type NodeApi, type NodeRendererProps, type RowRendererProps, type TreeApi } from "react-arborist";
 import { ChevronRight } from "lucide-react";
@@ -12,6 +12,7 @@ import {
 	type TreeNode,
 	type WorkspaceTreeEntry,
 } from "../hooks/useSessionWorkspaceTree";
+import { sessionUiKey } from "../lib/hosts";
 import { sessionWorkspaceSearchQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 
 const ROW_HEIGHT = 30;
@@ -31,28 +32,14 @@ function entryToNode(entry: WorkspaceTreeEntry): TreeNode {
 	return { name: entry.name, path: entry.path, type: "file", status: entry.status, binary: entry.binary };
 }
 
-// Replaces the children of the directory at `dir` (root = "") wherever it
-// lives in the current lazy tree, leaving every other branch untouched.
-function withChildrenAt(nodes: TreeNode[], dir: string, children: TreeNode[]): TreeNode[] {
-	if (dir === "") return children;
-	return nodes.map((node) => {
-		if (node.type !== "dir") return node;
-		if (node.path === dir) return { ...node, children };
-		if (dir === node.path || dir.startsWith(`${node.path}/`)) {
-			return { ...node, children: withChildrenAt(node.children ?? [], dir, children) };
-		}
-		return node;
-	});
-}
-
-function mergeRootEntries(current: TreeNode[], entries: WorkspaceTreeEntry[]): TreeNode[] {
-	const currentByPath = new Map(current.map((node) => [node.path, node]));
+// Observe directory queries rather than copying them into local state, so
+// workspace invalidation updates expanded folders without closing them.
+function treeFromDirectories(entries: WorkspaceTreeEntry[], directories: Map<string, WorkspaceTreeEntry[]>): TreeNode[] {
 	return entries.map((entry) => {
-		const next = entryToNode(entry);
-		const previous = currentByPath.get(next.path);
-		return next.type === "dir" && previous?.type === "dir"
-			? { ...next, children: previous.children }
-			: next;
+		const node = entryToNode(entry);
+		return node.type === "dir"
+			? { ...node, children: treeFromDirectories(directories.get(node.path) ?? [], directories) }
+			: node;
 	});
 }
 
@@ -81,6 +68,7 @@ export function FileTree({
 	changedOnlyData,
 	selectedPath,
 	onSelectPath,
+	onPrefetchPath,
 	flushTop = false,
 }: {
 	/** Start the first row at the top edge (the Files split view's divider). */
@@ -92,57 +80,56 @@ export function FileTree({
 	changedOnlyData: TreeNode[];
 	selectedPath: string | null;
 	onSelectPath: (node: TreeNode) => void;
+	onPrefetchPath?: (node: TreeNode) => void;
 }) {
 	const { t } = useTranslation();
-	const queryClient = useQueryClient();
 	const treeApiRef = useRef<TreeApi<TreeNode> | null>(null);
-	const loadedDirsRef = useRef<Set<string>>(new Set());
-	const [lazyData, setLazyData] = useState<TreeNode[]>([]);
+	const uiKey = sessionUiKey(sessionId, hostId);
+	const [directories, setDirectories] = useState({ key: uiKey, requested: [] as string[], open: new Set<string>() });
 	const [containerRef, size] = useContainerSize();
 	const normalizedFilter = filterText.trim();
+	const [search, setSearch] = useState({ key: uiKey, value: normalizedFilter });
+	useEffect(() => {
+		const timer = setTimeout(() => setSearch({ key: uiKey, value: normalizedFilter }), 125);
+		return () => clearTimeout(timer);
+	}, [normalizedFilter, uiKey]);
+	const searchFilter = normalizedFilter === "" ? "" : search.key === uiKey ? search.value : normalizedFilter;
 
 	const rootQuery = useQuery({ ...sessionWorkspaceTreeQueryOptions(sessionId, "", "Unable to load workspace tree", hostId), enabled: !changedOnly && normalizedFilter.length === 0 });
 	const searchQuery = useQuery({
-		...sessionWorkspaceSearchQueryOptions(sessionId, normalizedFilter, t("files.error.searchWorkspace"), hostId),
-		enabled: !changedOnly && normalizedFilter.length > 0,
+		...sessionWorkspaceSearchQueryOptions(sessionId, searchFilter, t("files.error.searchWorkspace"), hostId),
+		enabled: !changedOnly && searchFilter.length > 0,
 	});
 
-	useEffect(() => {
-		setLazyData([]);
-		loadedDirsRef.current = new Set();
-	}, [sessionId, hostId]);
-
-	useEffect(() => {
-		if (changedOnly || !rootQuery.data) return;
-		loadedDirsRef.current.add("");
-		setLazyData((current) => mergeRootEntries(current, rootQuery.data.entries));
-	}, [changedOnly, rootQuery.data]);
-
-	const loadChildren = useCallback(
-		async (dir: string) => {
-			if (loadedDirsRef.current.has(dir)) return;
-			loadedDirsRef.current.add(dir);
-			try {
-				const result = await queryClient.fetchQuery(
-					sessionWorkspaceTreeQueryOptions(sessionId, dir, t("files.error.loadWorkspaceTree"), hostId),
-				);
-				setLazyData((current) => withChildrenAt(current, dir, result.entries.map(entryToNode)));
-			} catch {
-				// Allow the next expand attempt to retry instead of leaving the
-				// folder permanently stuck as "loaded but empty".
-				loadedDirsRef.current.delete(dir);
-			}
-		},
-		[queryClient, sessionId, hostId, t],
-	);
+	const requested = directories.key === uiKey ? directories.requested : [];
+	const directoryQueries = useQueries({
+		queries: requested.map((dir) => ({
+			...sessionWorkspaceTreeQueryOptions(sessionId, dir, t("files.error.loadWorkspaceTree"), hostId),
+			enabled: !changedOnly && normalizedFilter.length === 0 && directories.open.has(dir),
+		})),
+	});
+	const directoryEntries = new Map<string, WorkspaceTreeEntry[]>();
+	requested.forEach((dir, index) => {
+		const entries = directoryQueries[index]?.data?.entries;
+		if (entries) directoryEntries.set(dir, entries);
+	});
+	const lazyData = treeFromDirectories(rootQuery.data?.entries ?? [], directoryEntries);
 
 	const handleToggle = useCallback(
 		(id: string) => {
 			if (changedOnly) return;
 			const node = treeApiRef.current?.get(id);
-			if (node?.isOpen && node.data.type === "dir") void loadChildren(node.data.path);
+			if (node?.data.type !== "dir") return;
+			const open = node.isOpen;
+			setDirectories((previous) => {
+				const current = previous.key === uiKey ? previous : { key: uiKey, requested: [], open: new Set<string>() };
+				const nextOpen = new Set(current.open);
+				if (open) nextOpen.add(id);
+				else nextOpen.delete(id);
+				return { key: uiKey, open: nextOpen, requested: current.requested.includes(id) ? current.requested : [...current.requested, id] };
+			});
 		},
-		[changedOnly, loadChildren],
+		[changedOnly, uiKey],
 	);
 
 	const handleActivate = useCallback(
@@ -168,6 +155,7 @@ export function FileTree({
 			) : null}
 			{isEmpty ? <p className="p-3 text-xs text-muted-foreground">{t("files.explorer.empty")}</p> : null}
 			{size.width > 0 && size.height > 0 ? (
+				<PrefetchContext.Provider value={onPrefetchPath}>
 				<FlatTreeContext.Provider value={!data.some((node) => node.type === "dir")}>
 					<Tree<TreeNode>
 						data={data}
@@ -195,6 +183,7 @@ export function FileTree({
 						{FileTreeRow}
 					</Tree>
 				</FlatTreeContext.Provider>
+				</PrefetchContext.Provider>
 			) : null}
 		</div>
 	);
@@ -225,10 +214,12 @@ function FileTreeRowContainer<T>({ node, attrs, innerRef, children }: RowRendere
 // A tree with no folders anywhere (e.g. a flat list of changed files) has no
 // chevrons to line file icons up with, so rows drop the empty chevron slot.
 const FlatTreeContext = createContext(false);
+const PrefetchContext = createContext<((node: TreeNode) => void) | undefined>(undefined);
 
 function FileTreeRow({ node, style, dragHandle }: NodeRendererProps<TreeNode>) {
 	const { t } = useTranslation();
 	const flat = useContext(FlatTreeContext);
+	const prefetch = useContext(PrefetchContext);
 	const entry = node.data;
 	const isDir = entry.type === "dir";
 	return (
@@ -238,6 +229,8 @@ function FileTreeRow({ node, style, dragHandle }: NodeRendererProps<TreeNode>) {
 				node.isSelected ? "bg-interactive-active" : "hover:bg-interactive-hover",
 			)}
 			onClick={() => (isDir ? node.toggle() : node.activate())}
+			onPointerEnter={() => prefetch?.(entry)}
+			onFocus={() => prefetch?.(entry)}
 			ref={dragHandle}
 			// react-arborist writes the indent as an inline paddingLeft, which
 			// overrides px-2; add the row inset back so the chevron never sits

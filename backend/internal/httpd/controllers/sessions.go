@@ -1007,9 +1007,8 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 				WorkspaceVersion string `json:"workspaceVersion,omitempty"`
 				Overflow         bool   `json:"overflow"`
 			}{Overflow: true}
-			if files, listErr := c.Svc.ListWorkspaceFiles(r.Context(), sessionID(r)); listErr == nil {
-				payload.WorkspaceVersion = files.WorkspaceVersion
-			}
+			// Publish the invalidation immediately. Reading the complete Git model
+			// here delayed every live update and duplicated the client's refresh.
 			data, _ := json.Marshal(payload)
 			if _, err := fmt.Fprintf(w, "event: workspace_changed\ndata: %s\n\n", data); err != nil {
 				return
