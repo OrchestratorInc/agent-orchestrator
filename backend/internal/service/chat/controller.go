@@ -2114,24 +2114,26 @@ func (c *Controller) ResolveInput(
 			if response.Action == ports.ChatInputActionAccept {
 				messageID := "input-answer:" + requestID
 				for _, message := range rows.Messages {
-					if message.ClientMessageID == messageID {
-						for _, turn := range rows.Turns {
-							if turn.ID == message.TurnID && (turn.State == domain.TurnStateFailed || turn.State == domain.TurnStateInterrupted) {
-								retryID, found, lookupErr := c.store.RetryTurnIDForSource(ctx, c.conversation.ID, turn.ID)
-								if lookupErr != nil {
-									return lookupErr
-								}
-								if !found {
-									return fmt.Errorf("%w: answer delivery %s failed; retry its message", ErrRetryDeliveryUncertain, turn.ID)
-								}
-								retry, lookupErr := c.store.TurnByID(ctx, retryID)
-								if lookupErr != nil {
-									return lookupErr
-								}
-								if retry.State == domain.TurnStateFailed || retry.State == domain.TurnStateInterrupted {
-									return fmt.Errorf("%w: answer retry %s failed", ErrRetryDeliveryUncertain, retry.ID)
-								}
-							}
+					if message.ClientMessageID != messageID {
+						continue
+					}
+					for _, turn := range rows.Turns {
+						if turn.ID != message.TurnID || (turn.State != domain.TurnStateFailed && turn.State != domain.TurnStateInterrupted) {
+							continue
+						}
+						retryID, found, lookupErr := c.store.RetryTurnIDForSource(ctx, c.conversation.ID, turn.ID)
+						if lookupErr != nil {
+							return lookupErr
+						}
+						if !found {
+							return fmt.Errorf("%w: answer delivery %s failed; retry its message", ErrRetryDeliveryUncertain, turn.ID)
+						}
+						retry, lookupErr := c.store.TurnByID(ctx, retryID)
+						if lookupErr != nil {
+							return lookupErr
+						}
+						if retry.State == domain.TurnStateFailed || retry.State == domain.TurnStateInterrupted {
+							return fmt.Errorf("%w: answer retry %s failed", ErrRetryDeliveryUncertain, retry.ID)
 						}
 					}
 				}
