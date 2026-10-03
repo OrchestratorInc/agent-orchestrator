@@ -49,6 +49,8 @@ type lifecycleStack struct {
 	LCM            *lifecycle.Manager
 	runtimeReaper  *reaper.Reaper
 	reaperDone     <-chan struct{}
+	reaperReady    chan struct{}
+	releaseOnce    sync.Once
 	activityDone   <-chan struct{}
 	autoReviewDone <-chan struct{}
 	scmDone        <-chan struct{}
@@ -70,7 +72,8 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		lifecycle.WithStartupSignalGate(startupSignalGatesInput(agents)),
 		lifecycle.WithUrgentNudgeGate(urgentNudgeWaitingInputSafe(agents)),
 	)
-	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger})
+	reaperReady := make(chan struct{})
+	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger, Ready: reaperReady})
 	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger})
 	herdrServer, err := herdr.Start(ctx, dataDir, lcm, logger)
 	if err != nil {
@@ -82,6 +85,7 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		LCM:           lcm,
 		runtimeReaper: rp,
 		reaperDone:    rp.Start(ctx),
+		reaperReady:   reaperReady,
 		activityDone:  activityPoller.Start(ctx),
 		herdr:         herdrServer,
 	}
@@ -130,6 +134,13 @@ func urgentNudgeWaitingInputSafe(agents ports.AgentResolver) func(domain.AgentHa
 // so exits missed while AO was stopped are folded before the API starts serving.
 func (l *lifecycleStack) ReconcileRuntime(ctx context.Context) error {
 	return l.runtimeReaper.Tick(ctx)
+}
+
+// ReleaseReaper starts the periodic reaper loop. The daemon calls it once boot
+// reconciliation has finished, so a session whose runtime died across the
+// restart is relaunched or preserved before the reaper may terminate it.
+func (l *lifecycleStack) ReleaseReaper() {
+	l.releaseOnce.Do(func() { close(l.reaperReady) })
 }
 
 // activeTurnSteering resolves the per-harness active-turn steering capability

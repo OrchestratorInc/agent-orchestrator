@@ -977,6 +977,9 @@ func Run() error {
 		startupReconcileDone = done
 		go func() {
 			defer close(done)
+			// Release the periodic reaper only after boot recovery, even when a
+			// pass fails, so it never races reconciliation for a restarted session.
+			defer lcStack.ReleaseReaper()
 			if reconcileErr := reconcilePersistentChatHosts(ctx, cfg.DataDir, store); reconcileErr != nil {
 				log.Error("persistent chat host reconciliation on boot failed", "err", reconcileErr)
 			}
