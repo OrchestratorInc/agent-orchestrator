@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -196,5 +197,9 @@ func (s *Service) workspacePaths(ctx context.Context, id domain.SessionID, root 
 	if err != nil {
 		return nil, err
 	}
-	return v.([]string), nil
+	paths, ok := v.([]string)
+	if !ok {
+		return nil, fmt.Errorf("workspacePaths: unexpected singleflight result type %T", v)
+	}
+	return paths, nil
 }
