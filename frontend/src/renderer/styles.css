@@ -1083,14 +1083,14 @@ button.settings-row-bar {
 .composer-run-controls {
 	display: grid;
 	min-width: 0;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	grid-template-columns: minmax(max-content, 1fr) minmax(0, 1fr);
 	align-items: center;
 	column-gap: var(--space-2);
 }
 
 .composer-run-controls-with-effort {
-	/* Capability-driven Agent / Model / Effort sizing: 2 / 2 / 1. */
-	grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) minmax(5.5rem, 1fr);
+	/* Agent and model share free room; effort keeps enough width for its selected label. */
+	grid-template-columns: minmax(max-content, 1fr) minmax(0, 1fr) minmax(max-content, 0.5fr);
 }
 
 .composer-toolbar-slot {
