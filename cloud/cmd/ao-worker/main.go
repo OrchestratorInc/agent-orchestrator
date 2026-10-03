@@ -391,14 +391,14 @@ func run(logger *slog.Logger) error {
 
 func interactiveLaunchSettings(launch worker.LaunchContext, dataDir, nativeConversationID, selectedModel, selectedEffort string) (worker.LaunchContext, error) {
 	launch.AgentSessionID = strings.TrimSpace(nativeConversationID)
-	if launch.Harness != "codex" {
-		return launch, nil
-	}
 	if selectedModel != "" || selectedEffort != "" {
 		if selectedModel != "" {
 			launch.Model = selectedModel
 		}
 		launch.ReasoningEffort = selectedEffort
+		return launch, nil
+	}
+	if launch.Harness != "codex" {
 		return launch, nil
 	}
 	if launch.AgentSessionID == "" {

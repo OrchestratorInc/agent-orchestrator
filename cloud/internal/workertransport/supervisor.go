@@ -500,8 +500,41 @@ func (s *Supervisor) handle(
 			response, err = fetchBrowser(ctx, input)
 		}
 	case "chat.models":
-		if s.Harness != "codex" {
+		if s.Harness != "codex" && s.Harness != "claude-code" {
 			err = errors.New("model catalog is unavailable for this provider")
+		} else if s.Harness == "claude-code" {
+			nativeID := s.nativeConversationID(ctx, interfacePayload{})
+			s.mu.Lock()
+			command := s.AgentCommand
+			selectedModel, selectedEffort, selectionAt := s.SelectedModel, s.SelectedEffort, s.SelectionAt
+			s.mu.Unlock()
+			if command.Path == "" && s.AgentCommandFactory != nil {
+				command, err = s.AgentCommandFactory(ctx, nativeID, selectedModel, selectedEffort)
+				if err == nil && command.Cleanup != nil {
+					defer command.Cleanup()
+				}
+			}
+			var models []worker.ChatModel
+			var nativeModel, nativeEffort string
+			if err == nil {
+				models, nativeModel, nativeEffort, err = workerexec.DiscoverClaudeModels(ctx, command, nativeID)
+			}
+			if err == nil {
+				model, effort, settingsErr := workerexec.ClaudeConversationSettingsAfter(s.DataDir, nativeID, selectionAt)
+				if settingsErr != nil {
+					err = settingsErr
+				} else {
+					if claudeCatalogHasModel(models, model) {
+						nativeModel = model
+						if effort != "" {
+							nativeEffort = effort
+						}
+					} else if claudeCatalogHasModel(models, selectedModel) {
+						nativeModel, nativeEffort = selectedModel, selectedEffort
+					}
+					response = worker.ChatModelsResponse{Models: models, Model: nativeModel, ReasoningEffort: nativeEffort}
+				}
+			}
 		} else {
 			var models []worker.ChatModel
 			models, err = workerexec.DiscoverCodexModels(ctx, "codex", s.Workspace)
@@ -915,6 +948,18 @@ func decodePayload(payload any, target any) error {
 		return err
 	}
 	return json.Unmarshal(raw, target)
+}
+
+func claudeCatalogHasModel(models []worker.ChatModel, id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, model := range models {
+		if model.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func transportError(err error) (string, string) {

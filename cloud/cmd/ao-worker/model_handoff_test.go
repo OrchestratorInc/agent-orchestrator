@@ -52,3 +52,12 @@ func TestInteractiveLaunchSettingsKeepsPendingSelectionAcrossWorkerRestart(t *te
 		t.Fatalf("restarted launch = %+v, %v", result, err)
 	}
 }
+
+func TestInteractiveLaunchSettingsAppliesClaudeChatSelection(t *testing.T) {
+	launch, err := interactiveLaunchSettings(worker.LaunchContext{
+		Harness: "claude-code", Model: "original-model", ReasoningEffort: "medium",
+	}, t.TempDir(), "native-claude", "chat-model", "high")
+	if err != nil || launch.AgentSessionID != "native-claude" || launch.Model != "chat-model" || launch.ReasoningEffort != "high" {
+		t.Fatalf("Claude handoff launch = %+v, %v", launch, err)
+	}
+}

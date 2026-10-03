@@ -136,19 +136,27 @@ describe("CloudSessionChatSurface", () => {
 		expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings).toMatchObject({ model: "new-chat-model", reasoningEffort: "xhigh" });
 	});
 
-	it("hides model controls for Cloud harnesses without a provider catalog", async () => {
+	it.each(["worker", "orchestrator"] as const)("shows Claude models for a %s and restores its native selection", async (kind) => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
-		cloudMocks.listChatModels.mockClear();
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({
+			models: [{ id: "claude-sonnet", displayName: "Claude Sonnet", default: true, efforts: ["medium", "high"] }],
+			model: "claude-sonnet", reasoningEffort: "high",
+		});
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		render(
 			<QueryClientProvider client={queryClient}>
-				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1" } }} />
+				<CloudSessionChatSurface session={{ ...session, kind, provider: "claude-code", cloud: { orgId: "org-1" } }} />
 			</QueryClientProvider>,
 		);
-		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.harness).toBe("claude-code"));
-		expect(cloudMocks.chatProps.mock.lastCall?.[0].models).toEqual([]);
-		expect(cloudMocks.chatProps.mock.lastCall?.[0].showApprovalMode).toBe(false);
-		expect(cloudMocks.listChatModels).not.toHaveBeenCalled();
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].models).toEqual([
+			{ id: "claude-sonnet", displayName: "Claude Sonnet", default: true, efforts: ["medium", "high"] },
+		]));
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings).toMatchObject({ model: "claude-sonnet", reasoningEffort: "high" }));
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("continue", [], `claude-${kind}`);
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
+			text: "continue", model: "claude-sonnet", reasoningEffort: "high",
+		}, { idempotencyKey: `claude-${kind}` });
 	});
 
 	it.each([

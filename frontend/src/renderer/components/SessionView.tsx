@@ -1606,7 +1606,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 				});
 			}
 			try {
-				const selected = chatToTerminal && session?.cloud && session.provider === "codex"
+				const selected = chatToTerminal && session?.cloud && (session.provider === "codex" || session.provider === "claude-code")
 					? readCloudTurnSettings(`cloud-chat-settings:${session.cloud.orgId}:${session.id}:${session.provider}`)
 					: undefined;
 				const response = await interfaceSwitch.start({

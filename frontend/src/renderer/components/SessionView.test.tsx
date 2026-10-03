@@ -1647,11 +1647,11 @@ describe("SessionView", () => {
 		expect(screen.getByRole("menuitem", { name: action })).toBeInTheDocument();
 	});
 
-	it("passes a pending Cloud Codex model and effort into Chat-to-terminal handoff", async () => {
+	it.each(["codex", "claude-code"] as const)("passes a pending Cloud %s model and effort into Chat-to-terminal handoff", async (provider) => {
 		interfaceTransitionState.status = { supported: true, targetMode: "tui" };
 		const session = workerSession("sess-1");
 		session.cloud = { orgId: "org-1" };
-		session.provider = "codex";
+		session.provider = provider;
 		session.mode = "chat";
 		session.status = "idle";
 		session.activity = { state: "idle", lastActivityAt: "2026-08-06T00:00:00Z" };

@@ -299,7 +299,7 @@ func TestBuildInteractiveRestoresClaudeConversationFromDurableConfig(t *testing.
 	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
 	command, err := (HarnessBuilder{DataDir: t.TempDir()}).BuildInteractive(worker.LaunchContext{
 		SessionID: "session-1", Harness: "claude-code", AgentSessionID: identity,
-		Mode: "standard",
+		Mode: "standard", Model: "claude-sonnet", ReasoningEffort: "high",
 	}, worker.CredentialResponse{
 		Provider: "claude-code", CredentialType: "api_key", Secret: "secret",
 	}, t.TempDir())
@@ -308,6 +308,9 @@ func TestBuildInteractiveRestoresClaudeConversationFromDurableConfig(t *testing.
 	}
 	if !containsAdjacent(command.Args, "--resume", identity) {
 		t.Fatalf("restore args missing from %#v", command.Args)
+	}
+	if !containsAdjacent(command.Args, "--model", "claude-sonnet") || !containsAdjacent(command.Args, "--effort", "high") {
+		t.Fatalf("selected Claude model and effort missing from %#v", command.Args)
 	}
 	if slices.Contains(command.Args, "--session-id") {
 		t.Fatalf("fresh-launch identity present in restore command %#v", command.Args)

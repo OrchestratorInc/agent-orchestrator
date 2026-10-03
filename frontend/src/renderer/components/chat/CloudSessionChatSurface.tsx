@@ -347,7 +347,7 @@ export function CloudSessionChatSurface({
 	};
 	const modelsQuery = useQuery({
 		queryKey: ["cloud-chat-models", cloud?.orgId ?? "", session.id],
-		enabled: Boolean(cloud && ready && session.provider === "codex"),
+		enabled: Boolean(cloud && ready && (session.provider === "codex" || session.provider === "claude-code")),
 		// The TUI may change its native model while Chat is unmounted.
 		staleTime: 0,
 		refetchOnMount: "always",
