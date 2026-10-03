@@ -1744,17 +1744,14 @@ func workspaceChangeMaps(ctx context.Context, root, base string) (workspaceChang
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
-		diffStatuses, diffPrevious, err = workspaceDiffStatuses(gctx, root, base)
+		diffStatuses, diffPrevious, counts, err = workspaceDiffStats(gctx, root, base)
 		return err
 	})
 	g.Go(func() (err error) {
 		statusStatuses, statusPrevious, err = workspaceStatuses(gctx, root)
 		return err
 	})
-	g.Go(func() (err error) {
-		counts, err = workspaceNumstat(gctx, root, base)
-		return err
-	})
+
 	if err := g.Wait(); err != nil {
 		return workspaceChangeSet{}, err
 	}
@@ -1821,11 +1818,7 @@ func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSec
 	var ahead, behind *int
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		statuses, previous, err := workspaceDiffNameStatus(gctx, root, "--cached")
-		if err != nil {
-			return err
-		}
-		counts, err := workspaceDiffNumstat(gctx, root, "--cached")
+		statuses, previous, counts, err := workspaceDiffStats(gctx, root, "--cached")
 		if err != nil {
 			return err
 		}
@@ -1833,11 +1826,7 @@ func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSec
 		return nil
 	})
 	g.Go(func() error {
-		statuses, previous, err := workspaceDiffNameStatus(gctx, root)
-		if err != nil {
-			return err
-		}
-		counts, err := workspaceDiffNumstat(gctx, root)
+		statuses, previous, counts, err := workspaceDiffStats(gctx, root)
 		if err != nil {
 			return err
 		}
@@ -1854,11 +1843,7 @@ func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSec
 	})
 	if base = strings.TrimSpace(base); base != "" && base != "HEAD" {
 		g.Go(func() error {
-			statuses, previous, err := workspaceDiffNameStatus(gctx, root, base, "HEAD")
-			if err != nil {
-				return err
-			}
-			counts, err := workspaceDiffNumstat(gctx, root, base, "HEAD")
+			statuses, previous, counts, err := workspaceDiffStats(gctx, root, base, "HEAD")
 			if err != nil {
 				return err
 			}
@@ -2134,8 +2119,40 @@ func classifyWorkspaceStatus(xy string) WorkspaceFileStatus {
 	}
 }
 
-func workspaceDiffStatuses(ctx context.Context, root, base string) (map[string]WorkspaceFileStatus, map[string]string, error) {
-	return workspaceDiffNameStatus(ctx, root, base)
+// workspaceDiffStats obtains status, rename sources and line counts in one
+// Git traversal. Separate name-status and numstat calls each rescan the worktree.
+func workspaceDiffStats(ctx context.Context, root string, revArgs ...string) (map[string]WorkspaceFileStatus, map[string]string, map[string][2]int, error) {
+	args := append([]string{"diff", "--raw", "--numstat", "--find-renames", "-z"}, revArgs...)
+	args = append(args, "--")
+	out, err := gitWorkspaceOutput(ctx, root, args...)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	parts := splitNUL(out)
+	statuses := map[string]WorkspaceFileStatus{}
+	previous := map[string]string{}
+	index := 0
+	for index < len(parts) && strings.HasPrefix(parts[index], ":") {
+		fields := strings.Fields(parts[index])
+		if len(fields) != 5 || index+1 >= len(parts) {
+			return nil, nil, nil, fmt.Errorf("invalid Git raw diff record")
+		}
+		code := fields[4]
+		oldPath := filepath.ToSlash(parts[index+1])
+		newPath := oldPath
+		index += 2
+		status := classifyNameStatus(code)
+		if status == WorkspaceFileRenamed {
+			if index >= len(parts) {
+				return nil, nil, nil, fmt.Errorf("invalid Git rename record")
+			}
+			newPath = filepath.ToSlash(parts[index])
+			index++
+			previous[newPath] = oldPath
+		}
+		statuses[newPath] = status
+	}
+	return statuses, previous, parseNumstatOutput(strings.Join(parts[index:], "\x00")), nil
 }
 
 // workspaceDiffNameStatus runs `git diff --name-status` with the given
@@ -2221,10 +2238,6 @@ func classifyNameStatus(status string) WorkspaceFileStatus {
 	default:
 		return WorkspaceFileModified
 	}
-}
-
-func workspaceNumstat(ctx context.Context, root, base string) (map[string][2]int, error) {
-	return workspaceDiffNumstat(ctx, root, base)
 }
 
 // workspaceDiffNumstat runs `git diff --numstat` with the given revision
