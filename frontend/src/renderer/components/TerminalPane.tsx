@@ -1076,6 +1076,9 @@ function AttachedTerminal({
 	// Read at attach time without re-attaching on every park/activate.
 	const isVisibleRef = useRef(isVisible);
 	isVisibleRef.current = isVisible;
+	// The grid this terminal reported while its shell was pending. The PTY is
+	// created at exactly this grid, so attaching needs no second fit.
+	const measuredGridRef = useRef<{ cols: number; rows: number } | null>(null);
 	const { attach, state, error, replaySettled, hasAttached, syncVisibleSize } = useTerminalSession(attachSession, {
 		coverInitialReplay: terminalTarget?.kind !== "reviewer",
 		// Cloud workers can acknowledge a terminal before the coding agent emits
@@ -1213,7 +1216,9 @@ function AttachedTerminal({
 		void terminal.prepareForActivation().then(() => {
 			if (!current) return;
 			const grid = terminal.measureGrid();
-			if (grid) reportPendingShellGrid(pendingShellHandleId, grid);
+			if (!grid) return;
+			measuredGridRef.current = grid;
+			reportPendingShellGrid(pendingShellHandleId, grid);
 		});
 		return () => {
 			current = false;
@@ -1230,8 +1235,14 @@ function AttachedTerminal({
 		// before attaching so the daemon receives only the authoritative size.
 		// A parked terminal (a shell handed its PTY after the user moved to
 		// another tab) keeps the grid it measured instead: a parked slot fits to
-		// a sliver, and the PTY's first output would land at that width.
-		const settled = isVisibleRef.current ? terminal.prepareForActivation() : Promise.resolve();
+		// a sliver, and the PTY's first output would land at that width. A shell
+		// created at the grid this terminal just measured and still shows is
+		// already fitted, so it attaches without waiting on another fit.
+		const measured = measuredGridRef.current;
+		measuredGridRef.current = null;
+		const alreadyFitted = measured !== null && measured.cols === terminal.cols && measured.rows === terminal.rows;
+		const settled =
+			isVisibleRef.current && !alreadyFitted ? terminal.prepareForActivation() : Promise.resolve();
 		void settled.then(() => {
 			if (!current) return;
 			detach = attach(terminal);

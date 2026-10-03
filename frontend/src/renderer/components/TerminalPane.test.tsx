@@ -563,6 +563,54 @@ describe("TerminalPane empty states", () => {
 		}
 	});
 
+	it("attaches a shell created at its measured grid without a second fit", async () => {
+		// The mocked xterm draws at 80×24; measuring that same grid means the PTY
+		// is created at exactly the size the terminal already shows.
+		measureGridMock.mockReturnValue({ cols: 80, rows: 24 });
+		const pending = {
+			handleId: "pending-shell:fitted",
+			sessionId: worker.id,
+			workingDir: "",
+			title: "Terminal 1",
+			createdAt: "2026-08-31T00:00:00Z",
+			optimistic: true,
+		} satisfies ShellTerminal;
+		const created = {
+			handleId: "shellterm-fitted",
+			sessionId: worker.id,
+			workingDir: "/repos/my-app",
+			title: "Terminal 1",
+			createdAt: "2026-08-31T00:00:01Z",
+		} satisfies ShellTerminal;
+		const target = (shell: ShellTerminal): TerminalTarget => ({
+			generation: shell.createdAt,
+			kind: "shell",
+			handleId: shell.handleId,
+			sessionId: worker.id,
+			title: shell.title,
+		});
+		const view = renderCachedPane({
+			session: worker,
+			sessions: [worker],
+			shellTerminals: [pending],
+			terminalTarget: target(pending),
+		});
+		try {
+			await expect(pendingShellGrid(pending.handleId)).resolves.toEqual({ cols: 80, rows: 24 });
+			// From here on a fit never settles: attaching must not wait on one.
+			prepareForActivationMock.mockImplementation(() => new Promise<void>(() => undefined));
+			act(() => {
+				adoptPendingShell(pending.handleId, created);
+				view.queryClient.setQueryData(shellTerminalsQueryKey, [created]);
+			});
+			view.show(worker, target(created));
+
+			await waitFor(() => expect(attachMock).toHaveBeenCalledTimes(1));
+		} finally {
+			view.restore();
+		}
+	});
+
 	it("attaches a shell handed its PTY while parked without refitting the parked slot", async () => {
 		const pending = {
 			handleId: "pending-shell:parked",
