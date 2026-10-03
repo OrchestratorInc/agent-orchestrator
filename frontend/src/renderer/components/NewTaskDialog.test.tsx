@@ -226,8 +226,9 @@ describe("NewTaskDialog", () => {
 		await user.click(screen.getByRole("button", { name: "Start task" }));
 
 		await waitFor(() => expect(requestBody).not.toThrow());
-		expect(postMock).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", {
-			body: {
+		expect(postMock).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.objectContaining({
+			body: expect.objectContaining({
+				clientRequestId: expect.any(String),
 				projectId: "proj-1",
 				brief,
 				// The dialog preselects the project's worker agent, so the delegate
@@ -235,8 +236,8 @@ describe("NewTaskDialog", () => {
 				agent: "claude-code",
 				model: "placeholder-model",
 				taskPreparation: "prep-token",
-			},
-		});
+			}),
+		}));
 		expect(requestBody()).not.toHaveProperty("issueId");
 		expect(requestBody()).not.toHaveProperty("branch");
 		expect(requestBody()).not.toHaveProperty("harness");
@@ -293,15 +294,14 @@ describe("NewTaskDialog", () => {
 		expect(requestBody().agent).toBe("cursor");
 	});
 
-	it("hides agents with unknown auth and offers agent management without changing the selection", async () => {
+	it("offers agents with unknown auth without changing the selection", async () => {
 		renderDialog();
 		const user = userEvent.setup();
 		await waitForAgentCatalog();
 
 		await user.click(screen.getByRole("button", { name: "Agent" }));
 		const options = await screen.findAllByRole("menuitem");
-		expect(options.map((option) => option.textContent)).toEqual(["Claude Code", "Cursor", "Manage agents…"]);
-		expect(screen.queryByRole("menuitem", { name: /Kiro/ })).not.toBeInTheDocument();
+		expect(options.map((option) => option.textContent)).toEqual(["Claude Code", "Cursor", "KiroAuth unknown", "Manage agents…"]);
 		await user.keyboard("{Escape}");
 
 		await user.type(screen.getByLabelText("Task"), "B");

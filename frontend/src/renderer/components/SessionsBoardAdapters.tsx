@@ -102,7 +102,7 @@ export function BoardSessionCardAdapter({
 	usage,
 }: {
 	onOpen: () => void;
-	onTerminate: () => void;
+	onTerminate?: () => void;
 	session: WorkspaceSession;
 	usage?: SessionUsageSummary;
 }) {
@@ -180,9 +180,9 @@ function DesktopSessionCard({
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const summaries = sessionPRDisplaySummaries(
 		session,
-		useSessionScmSummary(session.id, true, session.cloud?.orgId, session.autoInjectCI === true).data?.prs,
+		useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
 	);
-	const termination = useTerminateSessionState(session.id);
+	const termination = useTerminateSessionState(session.id, session.hostId);
 	const showTerminate = interactive && session.isTerminated !== true && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
 	const usagePresentation = toUsagePresentation(usage, t);
@@ -215,7 +215,7 @@ function DesktopSessionCard({
 								)}
 								onClick={(event) => {
 									event.stopPropagation();
-									clearTerminateSessionState(queryClient, session.id);
+									clearTerminateSessionState(queryClient, session.id, session.hostId);
 									// Always open the confirm; the modal owns its own dismissal.
 									setConfirmOpen(true);
 								}}
