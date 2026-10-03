@@ -62,7 +62,11 @@ func accountTunnelAddress(bridge *controllers.BridgeService) (string, string) {
 
 func publishRemoteHostAddress(ctx context.Context, client *http.Client, controlPlaneURL, hostID, address, hash string) error {
 	base, err := url.Parse(controlPlaneURL)
-	if err != nil || (base.Scheme != "https" && !(base.Scheme == "http" && (base.Hostname() == "localhost" || base.Hostname() == "127.0.0.1"))) {
+	if err != nil {
+		return fmt.Errorf("invalid control-plane URL")
+	}
+	localHTTP := base.Scheme == "http" && (base.Hostname() == "localhost" || base.Hostname() == "127.0.0.1")
+	if base.Scheme != "https" && !localHTTP {
 		return fmt.Errorf("invalid control-plane URL")
 	}
 	body, _ := json.Marshal(map[string]string{"url": address})
