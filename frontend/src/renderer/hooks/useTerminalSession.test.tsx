@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
 import type { MuxConnectionState, TerminalMux } from "../lib/terminal-mux";
 import type { WorkspaceSession } from "../types/workspace";
 import { useTerminalSession, type AttachableTerminal } from "./useTerminalSession";
@@ -416,6 +417,18 @@ describe("useTerminalSession", () => {
 			expect(view.result.current.replaySettled).toBe(true);
 			act(() => muxes[0].emitData("handle-1", "review output"));
 			expect(terminal.lines).toEqual(["review output"]);
+			expect(view.result.current.replaySettled).toBe(true);
+		});
+
+		it("streams a freshly created terminal's first output without the replay gate", () => {
+			// A shell this renderer just created has no history: its first bytes
+			// are the prompt, which should appear as soon as it arrives.
+			markTerminalHandleFresh("handle-1");
+			const { view, terminal, muxes } = setup();
+			expect(view.result.current.replaySettled).toBe(true);
+			act(() => muxes[0].emitOpened("handle-1"));
+			act(() => muxes[0].emitData("handle-1", "user@host ~ % "));
+			expect(terminal.lines).toEqual(["user@host ~ % "]);
 			expect(view.result.current.replaySettled).toBe(true);
 		});
 

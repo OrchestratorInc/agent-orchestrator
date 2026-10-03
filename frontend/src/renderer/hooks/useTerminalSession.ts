@@ -780,7 +780,11 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		// wait for `opened`: the daemon fires onOpen from setPTY and only then
 		// starts copyOut (attachment.go), so `attached` arrives before the first
 		// replay byte and would uncover a pane that has not drawn yet.
-		const coverInitialReplay = optionsRef.current.coverInitialReplay !== false;
+		// A handle this renderer just created has no history to replay: its first
+		// bytes are the program starting up (a new shell's prompt). Covering them
+		// only holds a blank pane through the quiet window and reveal fit, so they
+		// stream straight into xterm instead.
+		const coverInitialReplay = optionsRef.current.coverInitialReplay !== false && initialWriteSource !== "live";
 		r.replayBuffering = coverInitialReplay;
 		r.replayChunks = [];
 		r.replayBytes = 0;
