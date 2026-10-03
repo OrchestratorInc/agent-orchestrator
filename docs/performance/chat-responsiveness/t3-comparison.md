@@ -131,5 +131,16 @@ measured first step; transport and transcript scaling remain open.
 - `ao preview` was attempted and refused because this T3 thread has no
   `AO_SESSION_ID`; the collaborative browser supplied the renderer inspection.
 
-Validation used the local Node 22 runtime, not the CI-pinned Node 24 environment.
-No PR, remote CI, packaged AO/T3 comparison, or release validation was performed.
+The measurements and first validation pass used Node 22. PR preparation reran
+the frontend workflow commands with Node 24.21.0: 377 Vitest files passed,
+5,993 tests passed and 6 were skipped; both TypeScript checks passed. Cloud
+client generation/drift, typechecks, 26 tests and package build passed; product
+UI typechecks, 134 tests and package build passed. The docs build, macOS helper
+builds for both architectures, and native state tests also passed.
+
+Node 24 renderer smoke passed 65/66 checks; the same baseline-reproducible
+composer selection failure remains. Pinned Gitleaks v7.4.0 was built from source
+and found no leaks in the PR commit scan. The local workflow wrapper stopped
+before dispatch on missing `VITE_WORKOS_CLIENT_ID`; Docker is also unavailable.
+Linux runner validation is therefore delegated to the PR's hosted CI checks.
+No packaged AO/T3 comparison or release validation was performed.
