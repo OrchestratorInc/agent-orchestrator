@@ -1604,6 +1604,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/context-pressure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Report a harness context-fullness reading for a session */
+        post: operations["setSessionContextPressure"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/conversation": {
         parameters: {
             query?: never;
@@ -3418,6 +3435,7 @@ export interface components {
             autoReviewEnabled: boolean;
             branch?: string;
             chatProviderPreserved: boolean;
+            contextPressure?: components["schemas"]["DomainContextPressure"];
             /** Format: date-time */
             createdAt: string;
             displayName?: string;
@@ -3825,6 +3843,12 @@ export interface components {
             /** Format: date-time */
             lastActivityAt: string;
             state: string;
+        };
+        DomainContextPressure: {
+            contextUsedPercent: number;
+            /** Format: date-time */
+            observedAt: string;
+            source: string;
         };
         DomainReviewerConfig: {
             agentConfig?: components["schemas"]["AgentConfig"];
@@ -4768,6 +4792,21 @@ export interface components {
             ok: boolean;
             sessionId: string;
             state: string;
+        };
+        SetContextPressureRequest: {
+            /** @description Percent of the agent's context window currently occupied. */
+            contextUsedPercent: number;
+            /**
+             * Format: date-time
+             * @description When the harness reported the figure. Defaults to receipt time.
+             */
+            observedAt?: string;
+            /** @description Which harness mechanism produced the reading (e.g. claude-code-statusline). */
+            source?: string;
+        };
+        SetContextPressureResponse: {
+            ok: boolean;
+            sessionId: string;
         };
         SetConversationConfigOptionRequest: {
             enabled?: null | boolean;
@@ -11045,6 +11084,60 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setSessionContextPressure: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetContextPressureRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetContextPressureResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

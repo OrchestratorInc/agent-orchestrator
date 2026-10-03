@@ -44,24 +44,31 @@ type sessionRenameRequest struct {
 }
 
 type sessionDTO struct {
-	ID           string          `json:"id"`
-	ProjectID    string          `json:"projectId"`
-	IssueID      string          `json:"issueId,omitempty"`
-	Kind         string          `json:"kind"`
-	Harness      string          `json:"harness,omitempty"`
-	DisplayName  string          `json:"displayName,omitempty"`
-	Activity     sessionActivity `json:"activity"`
-	IsTerminated bool            `json:"isTerminated"`
-	CreatedAt    time.Time       `json:"createdAt"`
-	UpdatedAt    time.Time       `json:"updatedAt"`
-	Status       string          `json:"status"`
-	Branch       string          `json:"branch,omitempty"`
-	PRs          []sessionPRDTO  `json:"prs"`
+	ID              string                  `json:"id"`
+	ProjectID       string                  `json:"projectId"`
+	IssueID         string                  `json:"issueId,omitempty"`
+	Kind            string                  `json:"kind"`
+	Harness         string                  `json:"harness,omitempty"`
+	DisplayName     string                  `json:"displayName,omitempty"`
+	Activity        sessionActivity         `json:"activity"`
+	IsTerminated    bool                    `json:"isTerminated"`
+	CreatedAt       time.Time               `json:"createdAt"`
+	UpdatedAt       time.Time               `json:"updatedAt"`
+	Status          string                  `json:"status"`
+	Branch          string                  `json:"branch,omitempty"`
+	PRs             []sessionPRDTO          `json:"prs"`
+	ContextPressure *sessionContextPressure `json:"contextPressure,omitempty"`
 }
 
 type sessionActivity struct {
 	State          string    `json:"state"`
 	LastActivityAt time.Time `json:"lastActivityAt"`
+}
+
+type sessionContextPressure struct {
+	ContextUsedPercent int       `json:"contextUsedPercent"`
+	Source             string    `json:"source"`
+	ObservedAt         time.Time `json:"observedAt"`
 }
 
 type sessionListResponse struct {
@@ -924,12 +931,12 @@ func writeSessionList(cmd *cobra.Command, sessions []sessionDTO, summaries map[s
 				if _, err := fmt.Fprintf(table, "%s:\n", currentProject); err != nil {
 					return err
 				}
-				if _, err := fmt.Fprintln(table, "  SESSION\tROLE\tBRANCH\tPR\tCI\tREVIEW\tTHREADS\tACTIVITY\tAGE"); err != nil {
+				if _, err := fmt.Fprintln(table, "  SESSION\tROLE\tBRANCH\tPR\tCI\tREVIEW\tTHREADS\tACTIVITY\tCTX\tAGE"); err != nil {
 					return err
 				}
 			}
 			pr, ci, review, threads := sessionPRColumns(sess, summaries[sess.ID])
-			if _, err := fmt.Fprintf(table, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sess.ID, sessionRole(sess), emptyDash(sess.Branch), pr, ci, review, threads, emptyDash(sess.Activity.State), sessionAge(now, sess.Activity.LastActivityAt)); err != nil {
+			if _, err := fmt.Fprintf(table, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sess.ID, sessionRole(sess), emptyDash(sess.Branch), pr, ci, review, threads, emptyDash(sess.Activity.State), sessionContextColumn(sess), sessionAge(now, sess.Activity.LastActivityAt)); err != nil {
 				return err
 			}
 		}
@@ -947,6 +954,15 @@ func writeSessionList(cmd *cobra.Command, sessions []sessionDTO, summaries map[s
 		return err
 	}
 	return nil
+}
+
+// sessionContextColumn renders context fullness, or "-" when the harness
+// reported none.
+func sessionContextColumn(sess sessionDTO) string {
+	if sess.ContextPressure == nil {
+		return "-"
+	}
+	return fmt.Sprintf("%d%%", sess.ContextPressure.ContextUsedPercent)
 }
 
 func sessionPRColumns(sess sessionDTO, summaries []sessionPRSummaryDTO) (prNumbers, ci, review, threads string) {
@@ -1018,6 +1034,15 @@ func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 	}
 	if !sess.UpdatedAt.IsZero() {
 		if _, err := fmt.Fprintf(out, "updated: %s\n", sess.UpdatedAt.Format(time.RFC3339)); err != nil {
+			return err
+		}
+	}
+	if p := sess.ContextPressure; p != nil {
+		detail := "source: " + p.Source
+		if !p.ObservedAt.IsZero() {
+			detail += ", observed " + p.ObservedAt.Format(time.RFC3339)
+		}
+		if _, err := fmt.Fprintf(out, "context: %d%% used (%s)\n", p.ContextUsedPercent, detail); err != nil {
 			return err
 		}
 	}

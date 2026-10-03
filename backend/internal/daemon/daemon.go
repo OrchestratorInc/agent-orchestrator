@@ -41,6 +41,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/notify"
 	agentswitchobs "github.com/aoagents/agent-orchestrator/backend/internal/observe/agentswitch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/contextpressure"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	usagepipeline "github.com/aoagents/agent-orchestrator/backend/internal/observe/usage"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -560,6 +561,16 @@ func Run() error {
 		return fmt.Errorf("wire session service: %w", err)
 	}
 	sessionSvc.SetChatProviderPreserver(chatSvc.PreservesProviderOnRestart)
+	contextPressureStore := contextpressure.NewStore()
+	// Context pressure can come from either interface. A live Chat controller
+	// holds the newest figure for a Chat session; terminal sessions have no
+	// controller, so their harness posts readings into the store instead.
+	sessionSvc.SetContextPressureSource(func(id domain.SessionID) *domain.ContextPressure {
+		if reading := chatSvc.ContextPressureFor(id); reading != nil {
+			return reading
+		}
+		return contextPressureStore.Get(id)
+	})
 	sessMgr = wiredSessMgr
 	if tunable, ok := sessMgr.(interface {
 		SetModelCatalog(interface {
@@ -889,6 +900,7 @@ func Run() error {
 		CDC:                store,
 		Events:             cdcPipe.Broadcaster,
 		Activity:           lcStack.LCM,
+		ContextPressure:    contextPressureStore,
 		UsageHooks:         usageCollector,
 		UsageSummary:       usagesvc.NewSummaryReader(store),
 		Telemetry:          telemetrySink,

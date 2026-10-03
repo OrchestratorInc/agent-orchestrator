@@ -1273,6 +1273,25 @@ type SetActivityRequest struct {
 	Usage                        *UsageHookMetadata                  `json:"usage,omitempty" description:"Provider transcript metadata used by the local usage pipeline."`
 }
 
+// SetContextPressureRequest is the body of
+// POST /api/v1/sessions/{sessionId}/context-pressure.
+//
+// Deliberately separate from SetActivityRequest: context pressure is
+// best-effort telemetry from a different reporter (a harness statusline, not an
+// activity hook), and a failure to read or deliver it must never interfere with
+// recording activity_state.
+type SetContextPressureRequest struct {
+	ContextUsedPercent int       `json:"contextUsedPercent" minimum:"0" maximum:"100" description:"Percent of the agent's context window currently occupied."`
+	Source             string    `json:"source,omitempty" maxLength:"64" description:"Which harness mechanism produced the reading (e.g. claude-code-statusline)."`
+	ObservedAt         time.Time `json:"observedAt,omitempty" description:"When the harness reported the figure. Defaults to receipt time."`
+}
+
+// SetContextPressureResponse acknowledges a stored reading.
+type SetContextPressureResponse struct {
+	OK        bool             `json:"ok"`
+	SessionID domain.SessionID `json:"sessionId"`
+}
+
 // UsageHookMetadata is the transcript metadata carried by supported Claude
 // Code and Codex hooks. It contains paths and identifiers only, never prompt or
 // response content.

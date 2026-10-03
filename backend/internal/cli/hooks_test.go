@@ -1967,3 +1967,139 @@ func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
 		})
 	}
 }
+
+// contextPressureServer captures posts to the context-pressure route.
+func contextPressureServer(t *testing.T, status int) (*httptest.Server, *activityCapture) {
+	t.Helper()
+	capture := &activityCapture{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/context-pressure") {
+			http.NotFound(w, r)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		capture.body = string(body)
+		capture.path = r.URL.Path
+		capture.hits++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, `{"ok":true,"sessionId":"ao-9"}`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, capture
+}
+
+func TestHooks_StatuslineReportsContextPressureAndRendersLine(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-9")
+	cfg := setConfigEnv(t)
+	srv, capture := contextPressureServer(t, http.StatusOK)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, Deps{
+		In: strings.NewReader(`{
+			"model":{"display_name":"Sonnet"},
+			"context_window":{"used_percentage":73.6,"remaining_percentage":26.4}
+		}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "statusline")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+
+	if capture.hits != 1 || !strings.HasSuffix(capture.path, "/sessions/ao-9/context-pressure") {
+		t.Fatalf("posted %d time(s) to %q", capture.hits, capture.path)
+	}
+	var req setContextPressureRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	// 73.6 must floor to 73: a rounded-up 74 would claim more pressure than
+	// the harness reported.
+	if req.ContextUsedPercent != 73 || req.Source != "claude-code-statusline" {
+		t.Fatalf("request = %+v", req)
+	}
+	if req.ObservedAt.IsZero() {
+		t.Error("observedAt was not set")
+	}
+	// Whatever this prints IS the user's status line.
+	if !strings.Contains(out, "Sonnet") || !strings.Contains(out, "73% context") {
+		t.Fatalf("status line = %q", out)
+	}
+}
+
+func TestHooks_StatuslineSurvivesUnusablePayloadAndDeadDaemon(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		stdin   string
+		wantOut string
+	}{
+		{name: "no context block", stdin: `{"model":{"display_name":"Sonnet"}}`, wantOut: "Sonnet"},
+		{name: "empty payload", stdin: `{}`, wantOut: ""},
+		{name: "not json", stdin: `not json at all`, wantOut: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-9")
+			cfg := setConfigEnv(t)
+			srv, capture := contextPressureServer(t, http.StatusOK)
+			writeRunFileFor(t, cfg, srv)
+
+			out, _, err := executeCLI(t, Deps{
+				In:           strings.NewReader(tc.stdin),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", "claude-code", "statusline")
+			// A statusline that exits non-zero shows an error where the agent
+			// draws its status, so every path must exit 0.
+			if err != nil {
+				t.Fatalf("statusline failed: %v", err)
+			}
+			if capture.hits != 0 {
+				t.Fatalf("posted a reading it could not read: %s", capture.body)
+			}
+			if tc.wantOut == "" {
+				if strings.TrimSpace(out) != "" {
+					t.Fatalf("printed %q, want nothing", out)
+				}
+			} else if !strings.Contains(out, tc.wantOut) {
+				t.Fatalf("status line = %q, want %q", out, tc.wantOut)
+			}
+		})
+	}
+}
+
+func TestHooks_StatuslineStillRendersWhenTheDaemonRejectsTheReading(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-9")
+	cfg := setConfigEnv(t)
+	srv, _ := contextPressureServer(t, http.StatusInternalServerError)
+	writeRunFileFor(t, cfg, srv)
+
+	out, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"model":{"display_name":"Sonnet"},"context_window":{"used_percentage":91}}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "statusline")
+	if err != nil {
+		t.Fatalf("a failed report broke the statusline: %v", err)
+	}
+	if !strings.Contains(out, "91% context") {
+		t.Fatalf("status line = %q", out)
+	}
+}
+
+func TestHooks_StatuslineIgnoresNonAOSessions(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "")
+	cfg := setConfigEnv(t)
+	srv, capture := contextPressureServer(t, http.StatusOK)
+	writeRunFileFor(t, cfg, srv)
+
+	if _, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"context_window":{"used_percentage":91}}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "statusline"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capture.hits != 0 {
+		t.Fatalf("reported pressure for a session AO does not own: %s", capture.body)
+	}
+}

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 type sessionRequestLog struct {
@@ -100,6 +103,8 @@ func sessionCommandServer(t *testing.T) (*httptest.Server, *sessionRequestLog) {
 				return
 			}
 			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-1","displayName":`+jsonQuote(req.DisplayName)+`}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/sessions/demo-pressure":
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-pressure","projectId":"demo","kind":"worker","status":"working","activity":{"state":"active","lastActivityAt":"2026-06-02T12:00:00Z"},"isTerminated":false,"createdAt":"2026-06-02T11:00:00Z","updatedAt":"2026-06-02T12:00:00Z","contextPressure":{"contextUsedPercent":73,"source":"chat-controller","observedAt":"2026-06-02T12:00:00Z"}}}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -419,6 +424,91 @@ func TestSessionGet_JSONOutputDecodes(t *testing.T) {
 	}
 	if got.Session.ID != "demo-1" || got.Session.ProjectID != "demo" || got.Session.Status != "working" {
 		t.Fatalf("unexpected session JSON: %#v", got.Session)
+	}
+}
+
+func TestSessionGet_ShowsContextPressureWhenReported(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, _ := sessionCommandServer(t)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "session", "get", "demo-pressure", "-p", "demo")
+	if err != nil {
+		t.Fatalf("session get failed: %v\nstderr=%s", err, errOut)
+	}
+	want := "context: 73% used (source: chat-controller, observed 2026-06-02T12:00:00Z)"
+	if !strings.Contains(out, want) {
+		t.Fatalf("output missing %q:\n%s", want, out)
+	}
+}
+
+func TestSessionGet_OmitsContextPressureWhenUnknown(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, _ := sessionCommandServer(t)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "session", "get", "demo-1", "-p", "demo")
+	if err != nil {
+		t.Fatalf("session get failed: %v\nstderr=%s", err, errOut)
+	}
+	if strings.Contains(out, "context:") {
+		t.Fatalf("unknown pressure must not print a context line:\n%s", out)
+	}
+}
+
+func TestSessionGet_JSONIncludesContextPressure(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, _ := sessionCommandServer(t)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "session", "get", "demo-pressure", "--project", "demo", "--json")
+	if err != nil {
+		t.Fatalf("session get --json failed: %v\nstderr=%s", err, errOut)
+	}
+	var got sessionResponse
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("output is not decodable: %v\noutput=%s", err, out)
+	}
+	if got.Session.ContextPressure == nil || got.Session.ContextPressure.ContextUsedPercent != 73 {
+		t.Fatalf("contextPressure = %#v, want 73%% used", got.Session.ContextPressure)
+	}
+}
+
+func TestSessionList_RendersContextColumn(t *testing.T) {
+	now := time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC)
+	sessions := []sessionDTO{
+		{ID: "with-ctx", ProjectID: "demo", Kind: "worker", Status: "working",
+			Activity:        sessionActivity{State: "active", LastActivityAt: now},
+			ContextPressure: &sessionContextPressure{ContextUsedPercent: 92, Source: "chat-controller", ObservedAt: now}},
+		{ID: "no-ctx", ProjectID: "demo", Kind: "worker", Status: "working",
+			Activity: sessionActivity{State: "active", LastActivityAt: now}},
+	}
+
+	var output bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&output)
+	if err := writeSessionList(cmd, sessions, nil, 0, 0, now); err != nil {
+		t.Fatal(err)
+	}
+
+	text := output.String()
+	if !strings.Contains(text, "CTX") {
+		t.Fatalf("header is missing the CTX column:\n%s", text)
+	}
+	for _, want := range []string{"with-ctx", "92%", "no-ctx"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("output missing %q:\n%s", want, text)
+		}
+	}
+	// A session with no reading must render the dash placeholder, never "0%".
+	if strings.Contains(text, "0%") {
+		t.Fatalf("unknown pressure rendered as a real zero:\n%s", text)
 	}
 }
 

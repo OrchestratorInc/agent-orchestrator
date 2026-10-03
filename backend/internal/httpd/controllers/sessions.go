@@ -142,6 +142,13 @@ type ActivityRecorder interface {
 	ApplyActivitySignal(ctx context.Context, id domain.SessionID, s ports.ActivitySignal) error
 }
 
+// ContextPressureRecorder stores a harness's latest context-fullness reading.
+// Kept separate from ActivityRecorder so this best-effort telemetry shares no
+// code path with activity recording and cannot delay or fail it.
+type ContextPressureRecorder interface {
+	Record(id domain.SessionID, percent int, source string, observedAt time.Time)
+}
+
 // ManagedPreviewServer is the deterministic server lifecycle attached to a
 // worker. It is separate from static file rendering and browser automation.
 type ManagedPreviewServer interface {
@@ -165,12 +172,13 @@ type UsageHookRecorder interface {
 // SessionsController owns the session routes. Nil keeps routes registered but
 // returns OpenAPI-backed 501s.
 type SessionsController struct {
-	Svc           SessionService
-	Activity      ActivityRecorder
-	Usage         UsageHookRecorder
-	Attachments   *attachmentstore.Store
-	PreviewServer ManagedPreviewServer
-	Capabilities  SessionCapabilityValidator
+	Svc             SessionService
+	Activity        ActivityRecorder
+	Usage           UsageHookRecorder
+	ContextPressure ContextPressureRecorder
+	Attachments     *attachmentstore.Store
+	PreviewServer   ManagedPreviewServer
+	Capabilities    SessionCapabilityValidator
 }
 
 // Register mounts the session routes on the supplied router.
@@ -221,6 +229,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/rollback", c.rollback)
 	r.Post("/sessions/{sessionId}/send", c.send)
 	r.Post("/sessions/{sessionId}/activity", c.activity)
+	r.Post("/sessions/{sessionId}/context-pressure", c.setContextPressure)
 	r.Post("/sessions/{sessionId}/pin", c.pin)
 	r.Delete("/sessions/{sessionId}/pin", c.unpin)
 	r.Get("/orchestrators", c.listOrchestrators)
@@ -1726,6 +1735,29 @@ func sanitizedOptionalString(value *string) *string {
 // (via `ao hooks <agent> <event>`). It funnels through the single
 // lifecycle.Manager so the reaper and hooks never race on the session's
 // activity/termination columns.
+// setContextPressure stores a harness-reported context-fullness reading. It is
+// intentionally permissive: the reading is best-effort telemetry, so a reporter
+// that cannot be trusted to send a sane percentage is clamped by the store
+// rather than rejected, and nothing here can affect the session's activity
+// state or lifecycle.
+func (c *SessionsController) setContextPressure(w http.ResponseWriter, r *http.Request) {
+	if c.ContextPressure == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/context-pressure")
+		return
+	}
+	var in SetContextPressureRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	source := capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.Source)))
+	if source == "" {
+		source = "unknown"
+	}
+	c.ContextPressure.Record(sessionID(r), in.ContextUsedPercent, source, in.ObservedAt)
+	envelope.WriteJSON(w, http.StatusOK, SetContextPressureResponse{OK: true, SessionID: sessionID(r)})
+}
+
 func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 	if c.Activity == nil && c.Usage == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/activity")

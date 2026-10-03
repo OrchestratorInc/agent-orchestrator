@@ -46,11 +46,20 @@ type doctorReport struct {
 }
 
 const (
-	doctorSectionCore           = "Core"
-	doctorSectionTools          = "Tools"
-	doctorSectionAgents         = "Agent harnesses"
-	doctorSectionGitHub         = "GitHub"
-	doctorSectionGitLab         = "GitLab"
+	doctorSectionCore     = "Core"
+	doctorSectionTools    = "Tools"
+	doctorSectionAgents   = "Agent harnesses"
+	doctorSectionSessions = "Sessions"
+	doctorSectionGitHub   = "GitHub"
+	doctorSectionGitLab   = "GitLab"
+	// contextPressureWarnPercent is the fullness at or above which a worker is
+	// close enough to its context limit that nudging it is likely to waste the
+	// remainder. Below it, a high reading is normal mid-task.
+	contextPressureWarnPercent = 90
+	// contextPressureMaxAge bounds how old a reading may be and still describe
+	// the session now. A harness only reports while it is working, so an older
+	// reading says what the context was, not what it is.
+	contextPressureMaxAge       = 15 * time.Minute
 	minGitVersion               = "2.25.0"
 	githubDoctorUserAgent       = "ao-agent-orchestrator/doctor"
 	gitlabDoctorUserAgent       = "ao-agent-orchestrator/doctor"
@@ -217,7 +226,56 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 		}))
 	}
 	checks = append(checks, c.checkCodexLaunchFlags(ctx), c.checkGitHubToken(ctx), c.checkGitLabToken(ctx))
+	if check, ok := c.checkContextPressure(ctx, time.Now()); ok {
+		checks = append(checks, check)
+	}
 	return checks
+}
+
+// checkContextPressure warns when a live worker is near its context limit, so
+// the operator reaps and respawns it instead of nudging a worker that has no
+// budget left to act on the nudge. ok is false when there is nothing to report:
+// no reachable daemon, or no session carrying a reading. Harness-agnostic —
+// it fires on whatever the reading says, whoever reported it.
+func (c *commandContext) checkContextPressure(ctx context.Context, now time.Time) (doctorCheck, bool) {
+	var res sessionListResponse
+	if err := c.getJSON(ctx, "sessions", &res); err != nil {
+		// A daemon that is down or too old to serve the field is already
+		// reported by the daemon check; do not add a second failure for it.
+		return doctorCheck{}, false
+	}
+
+	reported, stale := 0, 0
+	var hot []string
+	for _, sess := range res.Sessions {
+		if sess.IsTerminated || sess.ContextPressure == nil {
+			continue
+		}
+		if age := now.Sub(sess.ContextPressure.ObservedAt); age > contextPressureMaxAge || sess.ContextPressure.ObservedAt.IsZero() {
+			stale++
+			continue
+		}
+		reported++
+		if sess.ContextPressure.ContextUsedPercent >= contextPressureWarnPercent {
+			hot = append(hot, fmt.Sprintf("%s (%d%%)", sess.ID, sess.ContextPressure.ContextUsedPercent))
+		}
+	}
+
+	if reported == 0 && stale == 0 {
+		return doctorCheck{}, false
+	}
+	if len(hot) > 0 {
+		return doctorCheck{
+			Level: doctorWarn, Section: doctorSectionSessions, Name: "context-pressure",
+			Message: fmt.Sprintf("%s at or above %d%% context used; prefer `ao session kill` + `ao spawn` over another nudge",
+				strings.Join(hot, ", "), contextPressureWarnPercent),
+		}, true
+	}
+	msg := fmt.Sprintf("%d session(s) reporting context pressure, all below %d%%", reported, contextPressureWarnPercent)
+	if stale > 0 {
+		msg += fmt.Sprintf("; %d stale reading(s) ignored", stale)
+	}
+	return doctorCheck{Level: doctorPass, Section: doctorSectionSessions, Name: "context-pressure", Message: msg}, true
 }
 
 // checkStore inspects the SQLite store WITHOUT opening or migrating it. The

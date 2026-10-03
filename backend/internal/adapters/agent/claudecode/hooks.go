@@ -69,11 +69,18 @@ func claudeSettingsPath(workspacePath string) string {
 
 // GetAgentHooks installs AO's Claude Code hooks, preserving user-defined hooks and unrelated settings.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
-	return claudeHooks.Install(ctx, cfg.WorkspacePath)
+	if err := claudeHooks.Install(ctx, cfg.WorkspacePath); err != nil {
+		return err
+	}
+	// Best-effort: the statusline only carries context-pressure telemetry, so a
+	// workspace that cannot take it still gets a fully working session.
+	_, _ = InstallStatusLine(cfg.WorkspacePath)
+	return nil
 }
 
 // UninstallHooks removes AO's Claude Code hooks, leaving user-defined hooks untouched.
 func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error {
+	_ = UninstallStatusLine(workspacePath)
 	return claudeHooks.Uninstall(ctx, workspacePath)
 }
 

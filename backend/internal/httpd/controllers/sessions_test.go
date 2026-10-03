@@ -3653,3 +3653,84 @@ func TestSessionsAPI_ClaimPRErrors(t *testing.T) {
 		})
 	}
 }
+
+// fakeContextPressureRecorder captures what the route hands the store.
+type fakeContextPressureRecorder struct {
+	id         domain.SessionID
+	percent    int
+	source     string
+	observedAt time.Time
+	calls      int
+}
+
+func (f *fakeContextPressureRecorder) Record(id domain.SessionID, percent int, source string, observedAt time.Time) {
+	f.id, f.percent, f.source, f.observedAt = id, percent, source, observedAt
+	f.calls++
+}
+
+func newContextPressureTestServer(t *testing.T, rec *fakeContextPressureRecorder) *httptest.Server {
+	t.Helper()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	deps := httpd.APIDeps{Sessions: &fakeSessionService{}}
+	if rec != nil {
+		deps.ContextPressure = rec
+	}
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, deps, httpd.ControlDeps{}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestSetContextPressureRecordsTheReading(t *testing.T) {
+	rec := &fakeContextPressureRecorder{}
+	srv := newContextPressureTestServer(t, rec)
+
+	body, status, headers := doRequest(t, srv, "POST", "/api/v1/sessions/s-1/context-pressure",
+		`{"contextUsedPercent":91,"source":"claude-code-statusline","observedAt":"2026-06-02T12:00:00Z"}`)
+	assertJSON(t, headers)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	if rec.calls != 1 || rec.id != "s-1" || rec.percent != 91 || rec.source != "claude-code-statusline" {
+		t.Fatalf("recorded %+v", rec)
+	}
+	if !rec.observedAt.Equal(time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("observedAt = %v", rec.observedAt)
+	}
+}
+
+func TestSetContextPressureLabelsAnUnnamedSource(t *testing.T) {
+	rec := &fakeContextPressureRecorder{}
+	srv := newContextPressureTestServer(t, rec)
+
+	if _, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/s-1/context-pressure",
+		`{"contextUsedPercent":10}`); status != http.StatusOK {
+		t.Fatalf("status=%d", status)
+	}
+	// The read model always states where a reading came from, so an unnamed
+	// reporter is labelled rather than stored blank.
+	if rec.source != "unknown" {
+		t.Fatalf("source = %q, want unknown", rec.source)
+	}
+}
+
+func TestSetContextPressureRejectsInvalidJSON(t *testing.T) {
+	rec := &fakeContextPressureRecorder{}
+	srv := newContextPressureTestServer(t, rec)
+
+	_, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/s-1/context-pressure", `{not json`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400", status)
+	}
+	if rec.calls != 0 {
+		t.Fatal("recorded a reading from an unparsable body")
+	}
+}
+
+func TestSetContextPressureIsNotImplementedWithoutARecorder(t *testing.T) {
+	srv := newContextPressureTestServer(t, nil)
+
+	_, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/s-1/context-pressure", `{"contextUsedPercent":10}`)
+	if status != http.StatusNotImplemented {
+		t.Fatalf("status=%d, want 501", status)
+	}
+}

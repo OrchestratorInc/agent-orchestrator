@@ -30,6 +30,7 @@ type APIDeps struct {
 	Automations        controllers.AutomationService
 	DesktopWorkspaces  controllers.DesktopWorkspaceService
 	Activity           controllers.ActivityRecorder
+	ContextPressure    controllers.ContextPressureRecorder
 	UsageHooks         controllers.UsageHookRecorder
 	UsageSummary       controllers.UsageSummaryService
 	PRs                prsvc.ActionManager
@@ -164,12 +165,13 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			Mgr: deps.Projects,
 		},
 		sessions: &controllers.SessionsController{
-			Svc:           deps.Sessions,
-			Activity:      deps.Activity,
-			Usage:         deps.UsageHooks,
-			Attachments:   attachmentstore.New(cfg.DataDir),
-			PreviewServer: deps.PreviewServer,
-			Capabilities:  deps.SessionCapabilities,
+			Svc:             deps.Sessions,
+			Activity:        deps.Activity,
+			ContextPressure: deps.ContextPressure,
+			Usage:           deps.UsageHooks,
+			Attachments:     attachmentstore.New(cfg.DataDir),
+			PreviewServer:   deps.PreviewServer,
+			Capabilities:    deps.SessionCapabilities,
 		},
 		automations:   &controllers.AutomationsController{Svc: deps.Automations},
 		desktop:       &controllers.DesktopWorkspaceController{Svc: deps.DesktopWorkspaces},
