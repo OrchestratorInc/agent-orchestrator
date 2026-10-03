@@ -272,10 +272,6 @@ export function SessionFileExplorer({
 			setFilesSource(uiKey, WORKSPACE_SOURCE);
 			return;
 		}
-		if (value === ARTIFACT_SOURCE_VALUE) {
-			setFilesSource(uiKey, ARTIFACT_SOURCE);
-			return;
-		}
 		const pr = prSummaries.find((candidate) => candidate.url === value);
 		if (pr) setFilesSource(uiKey, { kind: "pull_request", number: pr.number, url: pr.url, label: `PR #${pr.number} · ${pr.sourceBranch || pr.title}` });
 	};
