@@ -222,15 +222,7 @@ export function ShellTopbar({
 				data-testid="workspace-topbar-actions"
 			>
 				{!boardActionsInPanel && isProjectBoardRoute ? (
-					<>
-						<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={project?.kind === CLOUD_PROJECT_KIND} style={noDragStyle} />
-						{supportsLocalCues ? <span className="inline-flex" style={noDragStyle}>
-							<CueRunMenu
-								projectId={projectId!}
-								disabled={isProjectRestarting || isProvisioning}
-							/>
-						</span> : null}
-					</>
+					<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={project?.kind === CLOUD_PROJECT_KIND} style={noDragStyle} />
 				) : null}
 				{isSessionRoute ? (
 					<>
@@ -299,9 +291,7 @@ export function ShellTopbar({
 								style={noDragStyle}
 							/>
 						) : null}
-						{/* Cues run from the topbar, not the composer: with a session in
-						    scope they dispatch into it, where the board's project-level
-						    runner (above) spawns a worker instead. */}
+						{/* Cues run from the topbar into the selected session. */}
 						{session && supportsLocalCues ? (
 							<span className="inline-flex" style={noDragStyle}>
 								<CueRunMenu

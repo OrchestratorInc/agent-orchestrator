@@ -10,7 +10,6 @@ import {
 import { AlertTriangle, LayoutDashboard, RotateCw } from "lucide-react";
 import {
 	CLOUD_PROJECT_KIND,
-	toProjectKind,
 	type WorkspaceSession,
 	newestActiveOrchestrator,
 	orchestratorHealth,
@@ -54,7 +53,6 @@ import {
 	BoardSessionCardAdapter,
 	sessionsBoardLabels,
 } from "./SessionsBoardAdapters";
-import { CueRunMenu } from "./chat/CueRunMenu";
 
 type SessionsBoardProps = {
 	/** When set, the board shows only this project's sessions. */
@@ -197,12 +195,6 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const actions = projectId && (!hostId || connected) ? (
 		<>
 			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />
-			{!hostId && workspace && toProjectKind(workspace.kind) ? <span className="inline-flex">
-				<CueRunMenu
-					projectId={projectId}
-					disabled={isProjectRestarting || isProvisioning}
-				/>
-			</span> : null}
 			{boardOwnsNotificationCenter ? (
 				<>
 					<NotificationCenter />
