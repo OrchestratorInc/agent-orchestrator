@@ -21,6 +21,19 @@ type TokenResponse = {
 };
 
 let accessToken: string | null = null;
+let accessTokenExpiresAt = 0;
+let refreshing: Promise<string | null> | null = null;
+
+function tokenExpiry(token: string): number {
+	try {
+		const part = token.split(".")[1];
+		if (part && typeof atob === "function") {
+			const payload = JSON.parse(atob(part.replace(/-/g, "+").replace(/_/g, "/"))) as { exp?: number };
+			if (typeof payload.exp === "number") return payload.exp * 1000;
+		}
+	} catch { /* An opaque development token uses the short cache window. */ }
+	return Date.now() + 5 * 60_000;
+}
 
 function randomHex(): string {
 	return Array.from(Crypto.getRandomBytes(32), (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -42,6 +55,7 @@ async function saveAccount(result: TokenResponse): Promise<Account> {
 	if (!id || !email || !result.refresh_token || !result.access_token) throw new Error("AO sign-in returned an incomplete session.");
 	await SecureStore.setItemAsync(STORE_KEY, JSON.stringify({ id, email, refreshToken: result.refresh_token } satisfies StoredAccount));
 	accessToken = result.access_token;
+	accessTokenExpiresAt = tokenExpiry(result.access_token);
 	return { id, email };
 }
 
@@ -82,18 +96,30 @@ export async function signInToAccount(): Promise<Account | null> {
 export async function signOutOfAccount(): Promise<void> {
 	await SecureStore.deleteItemAsync(STORE_KEY);
 	accessToken = null;
+	accessTokenExpiresAt = 0;
 }
 
 /** Account APIs use this token; it must never be sent to an AO daemon. */
 export async function getAccountAccessToken(): Promise<string | null> {
-	if (accessToken) return accessToken;
+	if (accessToken && Date.now() < accessTokenExpiresAt - 60_000) return accessToken;
+	if (refreshing) return refreshing;
+	refreshing = refreshAccountToken();
+	try { return await refreshing; } finally { refreshing = null; }
+}
+
+async function refreshAccountToken(): Promise<string | null> {
 	const raw = await SecureStore.getItemAsync(STORE_KEY);
 	if (!raw) return null;
 	let stored: StoredAccount;
 	try { stored = JSON.parse(raw) as StoredAccount; } catch { return null; }
 	if (!stored.refreshToken) return null;
 	try {
-		await saveAccount(await authenticate({ grant_type: "refresh_token", refresh_token: stored.refreshToken }));
+		const result = await authenticate({ grant_type: "refresh_token", refresh_token: stored.refreshToken });
+		// A sign-out or a new sign-in during the request must not resurrect the
+		// previous account's rotating credentials.
+		const current = await SecureStore.getItemAsync(STORE_KEY);
+		if (!current || (JSON.parse(current) as StoredAccount).refreshToken !== stored.refreshToken) return null;
+		await saveAccount(result);
 		return accessToken;
 	} catch (error) {
 		if (error instanceof Error && error.message.startsWith("Session expired")) await signOutOfAccount();

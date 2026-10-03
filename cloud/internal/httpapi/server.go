@@ -370,10 +370,14 @@ func New(options Options) *Server {
 		router.Post("/api/cloud/v1/control/github/scratch-projects", server.createEnvironmentScratchProject)
 	}
 	router.Route("/api/cloud/v1", func(router chi.Router) {
+		router.Post("/remote-hosts/{hostId}/address", server.updateRemoteHostAddress)
 		router.Post("/auth/local/register", server.registerLocal)
 		router.Post("/auth/local/login", server.loginLocal)
 		router.With(server.authenticate).Post("/auth/local/logout", server.logoutLocal)
 		router.With(server.authenticate).Get("/me", server.me)
+		router.With(server.authenticate).Get("/me/hosts", server.listRemoteHosts)
+		router.With(server.authenticate).Put("/me/hosts/{hostId}", server.putRemoteHost)
+		router.With(server.authenticate).Delete("/me/hosts/{hostId}", server.deleteRemoteHost)
 		router.With(server.authenticate).Post("/orgs", server.createOrganization)
 		router.With(server.authenticate).Get("/invitations", server.listMyInvitations)
 		router.With(server.authenticate).Get("/me/providers", server.listUserProviderConnections)

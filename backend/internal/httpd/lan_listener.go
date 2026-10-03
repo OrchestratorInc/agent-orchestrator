@@ -167,6 +167,26 @@ func (m *LANManager) SetPasswordHash(hash string) {
 	}
 }
 
+// SetAccountTokenHash rotates the separate account credential without changing
+// the password used for direct/mobile pairing.
+func (m *LANManager) SetAccountTokenHash(hash string) {
+	m.transitionMu.Lock()
+	defer m.transitionMu.Unlock()
+	if m.state.accountHash() == hash {
+		return
+	}
+	m.state.setAccountHash(hash)
+	m.lock.resetAll()
+	m.mu.Lock()
+	ln := m.ln
+	m.mu.Unlock()
+	if ln != nil {
+		_ = ln.closeConnections()
+	}
+}
+
+func (m *LANManager) AccountTokenHash() string { return m.state.accountHash() }
+
 // PasswordHash returns the current connection password hash. Used to snapshot the
 // prior hash before an enable/regenerate so a failed persist can be rolled back.
 // Satisfies controllers.LANController.

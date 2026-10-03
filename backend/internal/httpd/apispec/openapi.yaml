@@ -3523,6 +3523,25 @@ paths:
       summary: Unpair this phone from the daemon, removing it from the roster
       tags:
       - push
+  /api/v1/remote-host/account-token:
+    post:
+      operationId: issueRemoteHostAccountToken
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersRemoteHostAccountTokenResponse'
+          description: OK
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+      summary: Issue a host-scoped account credential using the pairing password
+      tags:
+      - mobile
   /api/v1/reports:
     get:
       operationId: listReports
@@ -10298,6 +10317,16 @@ components:
       - enabled
       - active
       - hasBattery
+      type: object
+    ControllersRemoteHostAccountTokenResponse:
+      properties:
+        hostId:
+          type: string
+        token:
+          type: string
+      required:
+      - hostId
+      - token
       type: object
     ControllersRequestRereviewRequest:
       properties:

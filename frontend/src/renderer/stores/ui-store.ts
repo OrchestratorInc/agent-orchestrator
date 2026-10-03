@@ -230,7 +230,9 @@ function initialDeveloperMode() {
 }
 
 function initialRemoteHosts() {
-	return getLocalStorage()?.getItem(remoteHostsStorageKey) === "true";
+	// Developer mode remains the feature gate. Once enabled, signed-in devices
+	// should discover account hosts without an extra per-device setup switch.
+	return getLocalStorage()?.getItem(remoteHostsStorageKey) !== "false";
 }
 
 function initialTerminalCopyOnSelect() {

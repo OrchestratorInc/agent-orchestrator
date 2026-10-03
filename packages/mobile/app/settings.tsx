@@ -10,6 +10,7 @@ import { Children, useCallback, useEffect, useRef, useState, type ReactNode } fr
 import { ActivityIndicator, Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { ApiError, pingServer } from "../lib/api";
 import { loadAccount, signInToAccount, signOutOfAccount, type Account } from "../lib/account";
+import { clearAccountHosts, ignoreAccountHost, syncAccountHosts } from "../lib/accountHosts";
 import { formatVersionLine, type BuildInfo } from "../lib/appInfo";
 import { bugReportClipboard, bugReportOpenUrl, bugReportUrl } from "../lib/bugReport";
 import { isConfigured, type ServerConfig } from "../lib/config";
@@ -142,17 +143,28 @@ export default function SettingsScreen() {
 					</SettingsCard>
 				</SettingsSection>
 
-				<SettingsSection title="Account" footer="Machine pairing is still managed separately.">
+				<SettingsSection title="Account" footer="Paired machines sync across signed-in devices.">
 					<SettingsCard>
 						<CardRow icon="user" label={account ? "AO Cloud" : "Sign in to AO Cloud"} value={account?.email} loading={accountLoading || accountBusy} onPress={account ? undefined : () => {
 							setAccountBusy(true);
-							void signInToAccount().then((value) => { if (value) setAccount(value); }).catch((error: unknown) => {
+							void signInToAccount().then(async (value) => {
+								if (!value) return;
+								setAccount(value);
+								await syncAccountHosts(value);
+								setPairedHosts(await loadHosts());
+								await reloadConfig();
+							}).catch((error: unknown) => {
 								Alert.alert("Could not sign in", error instanceof Error ? error.message : "Try again.");
 							}).finally(() => setAccountBusy(false));
 						}} />
 						{account ? <CardRow icon="log-out" label="Sign out" onPress={() => {
 							setAccountBusy(true);
-							void signOutOfAccount().then(() => setAccount(null)).catch(() => Alert.alert("Could not sign out", "Try again.")).finally(() => setAccountBusy(false));
+							void signOutOfAccount().then(async () => {
+								await clearAccountHosts();
+								setAccount(null);
+								setPairedHosts(await loadHosts());
+								await reloadConfig();
+							}).catch(() => Alert.alert("Could not sign out", "Try again.")).finally(() => setAccountBusy(false));
 						}} disabled={accountBusy} /> : null}
 					</SettingsCard>
 				</SettingsSection>
@@ -188,6 +200,14 @@ export default function SettingsScreen() {
 					machineName={selectedHost?.name}
 					onForget={async () => {
 						let failed = false;
+						if (account && selectedHostId) {
+							try { await ignoreAccountHost(account.id, selectedHostId); }
+							catch { failed = true; }
+						}
+						if (failed) {
+							Alert.alert("Couldn't disconnect", "This machine could not be hidden from account sync. Try again.");
+							return;
+						}
 						try { await forgetServer(); } catch { failed = true; }
 						try { await reloadConfig(); } catch {}
 						let remaining: PairedHost[];

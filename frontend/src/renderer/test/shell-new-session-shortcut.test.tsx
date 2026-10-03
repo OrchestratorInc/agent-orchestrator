@@ -166,13 +166,16 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 
 vi.mock("../lib/host-clients", () => ({
 	clientForHost: () => ({ DELETE: shellMocks.remoteDelete }),
+	connectHost: vi.fn(),
 	connectedHosts: () => [],
+	disconnectHost: vi.fn(),
 	subscribeConnectedHosts: () => () => undefined,
 }));
 
 vi.mock("../lib/cloud-session", () => ({
 	useCloudSession: () => ({ status: "authenticated", session: { user: { id: "test-user" } } }),
 }));
+vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }) }));
 
 vi.mock("../hooks/useDaemonStatus", () => ({
 	useDaemonStatus: () => shellMocks.state.daemonStatus,

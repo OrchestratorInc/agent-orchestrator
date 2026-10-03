@@ -213,4 +213,32 @@ describe("registerRemotesIpc", () => {
 		await ipc.invoke("remotes:remove", "http://192.0.2.1:1");
 		expect(closed).toHaveBeenCalledOnce();
 	});
+
+	it("imports only the signed-in account's hosts and prunes removed imports", async () => {
+		const file = await tempFile();
+		await writeFile(file, JSON.stringify({ remotes: [
+			{ hostId: "h_manual", label: "Manual", url: "https://manual.example", password: "password", accountUserId: "user-a" },
+			{ hostId: "h_other", label: "Other", url: "https://other.example", password: "password", accountUserId: "user-b" },
+		] }));
+		let account = "user-a";
+		const ipc = fakeIpc();
+		registerRemotesIpc(ipc.ipcMain, {
+			file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }),
+			requireAccount: signedIn, getAccountId: async () => account,
+		});
+		await ipc.invoke("remotes:importAccountHost", "user-a", { hostId: "h_cloud", label: "Cloud", url: "https://cloud.example", password: "a".repeat(64) });
+		await expect(ipc.invoke("remotes:list")).resolves.toEqual([
+			{ hostId: "h_manual", label: "Manual", url: "https://manual.example" },
+			{ hostId: "h_cloud", label: "Cloud", url: "https://cloud.example" },
+		]);
+		await ipc.invoke("remotes:pruneAccountHosts", "user-a", []);
+		await expect(ipc.invoke("remotes:list")).resolves.toEqual([
+			{ hostId: "h_manual", label: "Manual", url: "https://manual.example" },
+		]);
+		account = "user-b";
+		await expect(ipc.invoke("remotes:importAccountHost", "user-a", { hostId: "h_leak", label: "Leak", url: "https://leak.example", password: "a".repeat(64) })).rejects.toThrow(/Invalid account/);
+		await expect(ipc.invoke("remotes:list")).resolves.toEqual([
+			{ hostId: "h_other", label: "Other", url: "https://other.example" },
+		]);
+	});
 });

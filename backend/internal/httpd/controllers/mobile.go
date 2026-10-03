@@ -2,9 +2,12 @@ package controllers
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +33,32 @@ type mobileBridge interface {
 // (status/enable/disable/regenerate) over the loopback API, delegating to a
 // mobileBridge and stamping the unencrypted-LAN warning onto every response.
 type MobileController struct{ Bridge mobileBridge }
+
+// RemoteHostAccountTokenResponse carries a separate credential to register
+// under an AO account. It is returned only to a caller with the pairing
+// password; the Cloud account never receives that password.
+type RemoteHostAccountTokenResponse struct {
+	HostID string `json:"hostId"`
+	Token  string `json:"token"`
+}
+
+func (c *MobileController) IssueAccountToken(w http.ResponseWriter, r *http.Request) {
+	issuer, ok := c.Bridge.(interface {
+		IssueAccountToken(string) (RemoteHostAccountTokenResponse, error)
+	})
+	if !ok {
+		envelope.WriteAPIError(w, r, http.StatusNotImplemented, "not_implemented", "REMOTE_HOST_ACCOUNT_TOKEN", "account pairing is unavailable", nil)
+		return
+	}
+	password := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	result, err := issuer.IssueAccountToken(password)
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "REMOTE_HOST_ACCOUNT_TOKEN", "connection password required", nil)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	envelope.WriteJSON(w, http.StatusOK, result)
+}
 
 // withWarning stamps the constant unencrypted-LAN warning onto any bridge
 // response. The warning is not bridge-specific state — it's always present —
@@ -557,12 +586,16 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel, loop
 	// Preserve the persisted SecurePairing and KeepAwake flags while selecting
 	// whether this enable is allowed to start a managed public tunnel.
 	retired := prevSt.RetiredPasswordHash
+	accountTokenHash := prevSt.AccountTokenHash
 	if prevSt.Password != "" && prevSt.Password != pw {
 		// ponytail: retain only one revoked password across daemon restarts;
 		// keep more history only if multi-rotation stale clients are observed.
 		retired = mobilebridge.HashPassword(prevSt.Password)
+		// Password rotation is the user's credential-revocation action. A
+		// previously synced account token must not bypass it.
+		accountTokenHash = ""
 	}
-	nextSt := mobilebridge.State{Enabled: true, Password: pw, LastPort: port, RetiredPasswordHash: retired, SecurePairing: prevSt.SecurePairing, ServeCleanupPending: prevSt.ServeCleanupPending, KeepAwake: prevSt.KeepAwake, NoPublicTunnel: noPublicTunnel, LoopbackOnly: loopbackOnly}
+	nextSt := mobilebridge.State{Enabled: true, Password: pw, LastPort: port, RetiredPasswordHash: retired, AccountTokenHash: accountTokenHash, SecurePairing: prevSt.SecurePairing, ServeCleanupPending: prevSt.ServeCleanupPending, KeepAwake: prevSt.KeepAwake, NoPublicTunnel: noPublicTunnel, LoopbackOnly: loopbackOnly}
 	if err := mobilebridge.Save(b.ConfigPath, nextSt); err != nil {
 		// Persist failed after the listener came up. A running listener still
 		// serves the old hash; a fresh enable must tear the listener back down.
@@ -576,6 +609,11 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel, loop
 	}
 	if wasRunning {
 		b.LAN.SetPasswordHash(nextHash)
+	}
+	if accountTokenHash != prevSt.AccountTokenHash {
+		if setter, ok := b.LAN.(interface{ SetAccountTokenHash(string) }); ok {
+			setter.SetAccountTokenHash(accountTokenHash)
+		}
 	}
 	// Re-point the proxy at the port Start actually bound. This runs on every
 	// listener start driven through this method — enable and password rotation
@@ -627,10 +665,21 @@ func (b *BridgeService) RestoreOnBoot(state mobilebridge.State) error {
 	defer b.transitionMu.Unlock()
 
 	prevHash := b.LAN.PasswordHash()
+	accountSetter, hasAccountSetter := b.LAN.(interface {
+		SetAccountTokenHash(string)
+		AccountTokenHash() string
+	})
+	previousAccountHash := ""
+	if hasAccountSetter {
+		previousAccountHash = accountSetter.AccountTokenHash()
+	}
 	if state.RetiredPasswordHash != "" {
 		b.LAN.SetPasswordHash(state.RetiredPasswordHash)
 	}
 	b.LAN.SetPasswordHash(mobilebridge.HashPassword(state.Password))
+	if setter, ok := b.LAN.(interface{ SetAccountTokenHash(string) }); ok {
+		setter.SetAccountTokenHash(state.AccountTokenHash)
+	}
 	start := b.LAN.Start
 	if state.LoopbackOnly {
 		start = b.LAN.StartLoopback
@@ -638,10 +687,43 @@ func (b *BridgeService) RestoreOnBoot(state mobilebridge.State) error {
 	port, err := start(state.LastPort)
 	if err != nil {
 		b.LAN.SetPasswordHash(prevHash)
+		if hasAccountSetter {
+			accountSetter.SetAccountTokenHash(previousAccountHash)
+		}
 		return err
 	}
 	b.startConnectorsLocked(port, state)
 	return nil
+}
+
+// IssueAccountToken replaces this host's account credential. Requiring the
+// original pairing password prevents a previously synced token from re-linking
+// the host to another account.
+func (b *BridgeService) IssueAccountToken(password string) (RemoteHostAccountTokenResponse, error) {
+	b.transitionMu.Lock()
+	defer b.transitionMu.Unlock()
+	state, err := mobilebridge.Load(b.ConfigPath)
+	if err != nil {
+		return RemoteHostAccountTokenResponse{}, err
+	}
+	if !state.Enabled || !mobilebridge.PasswordMatches(mobilebridge.HashPassword(state.Password), password) {
+		return RemoteHostAccountTokenResponse{}, errors.New("connection password required")
+	}
+	setter, ok := b.LAN.(interface{ SetAccountTokenHash(string) })
+	if !ok {
+		return RemoteHostAccountTokenResponse{}, errors.New("account pairing is unavailable")
+	}
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return RemoteHostAccountTokenResponse{}, err
+	}
+	token := hex.EncodeToString(secret)
+	state.AccountTokenHash = mobilebridge.HashPassword(token)
+	if err := mobilebridge.Save(b.ConfigPath, state); err != nil {
+		return RemoteHostAccountTokenResponse{}, err
+	}
+	setter.SetAccountTokenHash(state.AccountTokenHash)
+	return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: token}, nil
 }
 
 // Enable generates a fresh password and starts the LAN listener. If it is

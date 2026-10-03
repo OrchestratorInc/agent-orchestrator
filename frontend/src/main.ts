@@ -2194,6 +2194,7 @@ registerRemotesIpc(ipcMain, {
 	requireAccount: async () => {
 		if (!await getCloudSession(cloudDataDir())) throw new Error("Sign in to AO Cloud to use remote hosts.");
 	},
+	getAccountId: async () => (await getCloudSession(cloudDataDir()))?.user.id ?? "",
 });
 
 ipcMain.handle("app:chooseDirectory", async (_event, input?: string | { title?: string; defaultPath?: string }) => {

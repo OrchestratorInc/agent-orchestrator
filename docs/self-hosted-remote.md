@@ -14,10 +14,10 @@ ssh -i /path/to/private-key USER@HOST_ADDRESS
 Run **one** command on the VM. Both install AO, prerequisites, a persistent
 user service, and a Cloudflare quick tunnel, then print the connection details.
 
-**Testing this PR** (builds from its branch):
+**Testing the account-discovery PR** (builds from its branch):
 
 ```bash
-bash -c 'set -o pipefail; sudo apt-get update && sudo apt-get install -y curl && curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/codex/remote-hosts-integrated/scripts/bootstrap-self-hosted.sh | bash -s -- --source-ref codex/remote-hosts-integrated'
+bash -c 'set -o pipefail; sudo apt-get update && sudo apt-get install -y curl && curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/codex/remote-host-account-gate/scripts/bootstrap-self-hosted.sh | bash -s -- --source-ref codex/remote-host-account-gate'
 ```
 
 **After merge and release** (installs the published binary):
@@ -53,19 +53,20 @@ gh auth status
 
 Pairing does not copy GitHub credentials from your laptop.
 
-1. On your laptop, open **Settings → General** and turn on **Developer mode**.
-   Sign in to AO Cloud from the sidebar or **Settings → Remote hosts**.
-2. Open **Settings → Remote hosts**, turn on **Connect to remote hosts**, then
-   add a name, the exact `Address:` and `Password:` from the VM.
-3. Use **Projects +**, select the VM under **Machine**, and clone or import a
-   project. In **Settings → Harness**, select the VM to install/sign in to an
-   agent there.
+1. On one laptop, turn on **Developer mode** in **Settings → General** and sign
+   in to AO Cloud. In **Settings → Remote hosts**, add the VM's name, exact
+   `Address:` and `Password:`. Alternatively, sign in on mobile under
+   **Settings → Account** and pair it once under **Settings → Machines**.
+2. Sign in to the same AO account on your other laptops and phones. Hosts,
+   projects, and sessions load automatically; enable **Developer mode** on each
+   desktop client. A running client may take up to 30 seconds to find a newly
+   linked host.
+3. Use **Projects +** to clone or import a project on the VM. In desktop
+   **Settings → Harness**, select the VM to install/sign in to an agent there.
 
-If a quick-tunnel URL changes, edit the saved address in desktop Settings.
-
-On mobile, pair the VM in **Settings → Machines** with the same address and
-password. AO account sign-in is available under **Settings → Account** in a
-new native build, but does not yet replace or gate manual pairing.
+The host publishes a changed quick-tunnel address to AO Cloud automatically.
+Desktop connections saved before account linking are not claimed for whichever
+account signs in next; re-pair one time under **Settings → Remote hosts**.
 
 ## Status and other hosts
 
@@ -88,9 +89,15 @@ sessions.
 - AO's unauthenticated listener stays on `127.0.0.1`. The opt-in remote
   endpoint requires a password; `--lan` is plain HTTP, so use only a trusted
   LAN/VPN and never expose its port publicly.
-- AO sign-in gates the desktop client, not the VM's password endpoint. Existing
-  clients with the connection password can still connect; host-account binding
-  and cross-device discovery are not implemented yet.
+- AO sign-in gates desktop discovery, not the VM's direct pairing endpoint.
+  Pairing on one device issues a separate 256-bit host credential that AO Cloud
+  stores encrypted and shares only with the signed-in account's devices. The
+  original VM password is not uploaded. AO Cloud and signed-in devices can use
+  the scoped credential to reach the VM; removing a saved host from an account
+  does not invalidate a credential already imported on another device until it
+  syncs. Pairing the VM to another account rotates the scoped credential.
+  Regenerating the VM connection password revokes the scoped credential, so
+  re-pair the host with the account afterward.
 - Host-ID checks prevent connecting to the wrong host, but not an active
   network attacker or a copied AO data directory. Desktop passwords are stored
   in `~/.ao/remotes.json` (or `AO_DATA_DIR/remotes.json`) with owner-only access.
