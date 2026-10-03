@@ -530,8 +530,6 @@ func TestHibernateChatFinalGateRejectsUnfinishedWork(t *testing.T) {
 		add   func(*testing.T, *harness, *hibernationConversation)
 	}{
 		{name: "no turn"},
-		{name: "failed", state: domain.TurnStateFailed},
-		{name: "interrupted", state: domain.TurnStateInterrupted},
 		{name: "queued", state: domain.TurnStateCompleted, add: func(t *testing.T, h *harness, _ *hibernationConversation) {
 			t.Helper()
 			created, err := h.st.AppendUserMessage(context.Background(), h.ctrl.ConversationID(), testSession, h.ctrl.Generation(),
@@ -577,6 +575,26 @@ func TestHibernateChatFinalGateRejectsUnfinishedWork(t *testing.T) {
 			rec, found, err := h.st.GetSession(context.Background(), testSession)
 			if err != nil || !found || rec.HibernatedAt != nil {
 				t.Fatalf("session marker after rejected hibernation = %+v, %v, %v", rec.HibernatedAt, found, err)
+			}
+		})
+	}
+}
+
+func TestHibernateChatSettledTurn(t *testing.T) {
+	for _, state := range []domain.TurnState{
+		domain.TurnStateFailed,
+		domain.TurnStateInterrupted,
+		domain.TurnStateRecovered,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			h, conv := settledHibernationHarness(t, state)
+			hibernated, err := h.svc.HibernateChat(context.Background(), testSession)
+			if err != nil || !hibernated || conv.calls.Load() != 1 {
+				t.Fatalf("HibernateChat = %v, %v; provider calls = %d", hibernated, err, conv.calls.Load())
+			}
+			rec, found, err := h.st.GetSession(context.Background(), testSession)
+			if err != nil || !found || rec.HibernatedAt == nil {
+				t.Fatalf("session marker after hibernation = %+v, %v, %v", rec.HibernatedAt, found, err)
 			}
 		})
 	}

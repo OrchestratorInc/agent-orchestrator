@@ -214,7 +214,7 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 		controller.sendMu.Unlock()
 		return false, fmt.Errorf("check latest chat turn: %w", err)
 	}
-	if !latestPrimaryTurnCompleted(rows, id) {
+	if !latestPrimaryTurnSettled(rows, id) {
 		controller.sendMu.Unlock()
 		return false, nil
 	}
@@ -319,10 +319,9 @@ func (s *Service) clearHibernation(ctx context.Context, id domain.SessionID) err
 	return errors.New("chat hibernation marker changed concurrently")
 }
 
-// The most recent user prompt must belong to this controller, have a durable
-// successful completion. An idle status following a failed or interrupted turn
-// is deliberately insufficient.
-func latestPrimaryTurnCompleted(rows ConversationRows, id domain.SessionID) bool {
+// The most recent user prompt must belong to this controller and have a durable
+// terminal outcome. Queued and running work is checked separately above.
+func latestPrimaryTurnSettled(rows ConversationRows, id domain.SessionID) bool {
 	turns := make(map[string]domain.ConversationTurn, len(rows.Turns))
 	for _, turn := range rows.Turns {
 		turns[turn.ID] = turn
@@ -333,8 +332,7 @@ func latestPrimaryTurnCompleted(rows ConversationRows, id domain.SessionID) bool
 			continue
 		}
 		turn, ok := turns[message.TurnID]
-		return ok && turn.HandledBySessionID == id && turn.State == domain.TurnStateCompleted &&
-			turn.CompletedAt != nil
+		return ok && turn.HandledBySessionID == id && turn.CompletedAt != nil && turn.State.Terminal()
 	}
 	return false
 }
