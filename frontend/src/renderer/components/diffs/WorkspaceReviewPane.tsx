@@ -48,6 +48,25 @@ const REVIEW_CODE_VIEW_THEME = { dark: "github-dark", light: "github-light" } as
 // row stays and still loads on click.
 const MAX_END_OF_FILE_PREFETCHES = 40;
 const END_OF_FILE_PREFETCH_MAX_BYTES = 128 * 1024;
+// Speculative before/after reads share one slot, leaving browser connections
+// available for visible patches and user-selected files. Consuming the query
+// signal cancels obsolete queued and active hydration when the target changes.
+let fullContextPrefetchTail: Promise<void> = Promise.resolve();
+function prefetchFullContext<T>(load: () => Promise<T>, signal: AbortSignal): Promise<T> {
+	const previous = fullContextPrefetchTail;
+	let release = () => {};
+	fullContextPrefetchTail = new Promise<void>((resolve) => { release = resolve; });
+	return previous.then(() => {
+		if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+		let onAbort = () => {};
+		const cancelled = new Promise<T>((_resolve, reject) => {
+			onAbort = () => reject(new DOMException("Aborted", "AbortError"));
+		});
+		signal.addEventListener("abort", onAbort, { once: true });
+		return Promise.race([load(), cancelled]).finally(() => signal.removeEventListener("abort", onAbort));
+	}).finally(release);
+}
+
 export type ReviewSourceMenu = {
 	/** Short description of the current review source, shown on the trigger. */
 	label: string;
@@ -318,14 +337,14 @@ export function WorkspaceReviewPane({
 	const summaryById = useMemo(() => new Map(files.map((file) => [`${reviewSelectionKey}:${file.path}`, file])), [files, reviewSelectionKey]);
 
 	const loadDiffFiles = useCallback(
-		async (metadata: FileDiffMetadata) => {
+		async (metadata: FileDiffMetadata, signal?: AbortSignal) => {
 			// Pierre may hand this callback a normalized metadata object rather than
 			// the exact object stored in our parse cache, so resolve by stable path.
 			const file = files.find((candidate) => candidate.path === metadata.name);
 			if (!file) throw new Error(t("files.error.loadFile"));
 			const [before, after] = await Promise.all([
-				fetchWorkspaceFileRevision({ commitSha: selectedCommit?.sha, sessionId, path: file.path, scope, side: "before", workspaceVersion: data.workspaceVersion, hostId }),
-				fetchWorkspaceFileRevision({ commitSha: selectedCommit?.sha, sessionId, path: file.path, scope, side: "after", workspaceVersion: data.workspaceVersion, hostId }),
+				fetchWorkspaceFileRevision({ commitSha: selectedCommit?.sha, sessionId, path: file.path, scope, side: "before", workspaceVersion: data.workspaceVersion, hostId, signal }),
+				fetchWorkspaceFileRevision({ commitSha: selectedCommit?.sha, sessionId, path: file.path, scope, side: "after", workspaceVersion: data.workspaceVersion, hostId, signal }),
 			]);
 			if (before.binary || after.binary || before.truncated || after.truncated) throw new Error(t("files.error.loadFile"));
 			const newFile = { name: file.path, contents: after.content, cacheKey: after.revision };
@@ -347,9 +366,9 @@ export function WorkspaceReviewPane({
 			return {
 				queryKey: hostId ? ["files-review-end-of-file", hostId, sessionId, scope, selectedCommit?.sha ?? "", file.path, file.fileFingerprint ?? "", metadata ? patchIdentity(metadata) : ""] as const
 					: ["files-review-end-of-file", sessionId, scope, selectedCommit?.sha ?? "", file.path, file.fileFingerprint ?? "", metadata ? patchIdentity(metadata) : ""] as const,
-				queryFn: () => {
+				queryFn: ({ signal }) => {
 					if (!metadata) throw new Error(t("files.error.loadFile"));
-					return loadDiffFiles(metadata);
+					return prefetchFullContext(() => loadDiffFiles(metadata, signal), signal);
 				},
 				enabled: metadata != null,
 				retry: false,
