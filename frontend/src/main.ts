@@ -156,6 +156,7 @@ import { sameBrowserRuntimeIdentity, type BrowserRuntimeIdentity } from "./main/
 import { connectSupervisor, type SupervisorLinkHandle } from "./main/supervisor-link";
 import { connectBrowserRuntime, type BrowserRuntimeLinkHandle } from "./main/browser-runtime-link";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
+import { planDaemonAutoRestart, daemonExitWasUngraceful } from "./main/daemon-auto-restart";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import {
@@ -298,6 +299,11 @@ let pendingFolderPath: string | null = null;
 let daemonProcess: ChildProcess | null = null;
 let daemonStoppingProcess: ChildProcess | null = null;
 let daemonRestartAfterExitProcess: ChildProcess | null = null;
+// Auto-restart state for an app-owned daemon that exits unexpectedly while the
+// app is still running: the sliding window of recent unexpected exits, and the
+// pending respawn timer.
+let daemonAutoRestartExits: number[] = [];
+let daemonAutoRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let daemonStartPromise: Promise<DaemonStatus> | null = null;
 let daemonStartEpoch = 0;
 let daemonStatus: DaemonStatus = { state: "stopped" };
@@ -1885,6 +1891,15 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 			exitCode: code,
 			signal,
 		});
+		// The daemon died on its own while the app is still running. Respawn it
+		// (bounded, with backoff) so sessions recover without the user having to
+		// click "Restart daemon". A deliberate stop is excluded above, and a
+		// graceful exit (which removes the run-file and returns 0) is left stopped
+		// so auto-restart never fights `ao stop`.
+		const rfp = runFilePath();
+		if (daemonExitWasUngraceful({ runFilePresent: rfp !== null && existsSync(rfp), code, signal })) {
+			scheduleDaemonAutoRestart();
+		}
 	});
 
 	return daemonStatus;
@@ -1903,12 +1918,37 @@ function killDaemon(child: ChildProcess): void {
 	}
 }
 
+// Cancel a pending auto-restart and forget the recent-exit window. Called when
+// the user (or the app) deliberately changes daemon state, so a stale respawn
+// cannot race an explicit stop/restart or fire during shutdown.
+function cancelDaemonAutoRestart(): void {
+	if (daemonAutoRestartTimer !== null) {
+		clearTimeout(daemonAutoRestartTimer);
+		daemonAutoRestartTimer = null;
+	}
+	daemonAutoRestartExits = [];
+}
+
+function scheduleDaemonAutoRestart(): void {
+	if (browserQuitRequested || daemonAutoRestartTimer !== null) return;
+	const { plan, recentExits } = planDaemonAutoRestart(daemonAutoRestartExits, Date.now());
+	daemonAutoRestartExits = recentExits;
+	if (plan.action === "give_up") return;
+	daemonAutoRestartTimer = setTimeout(() => {
+		daemonAutoRestartTimer = null;
+		// A manual start/stop or app quit may have landed while we waited.
+		if (daemonProcess || browserQuitRequested) return;
+		void startDaemonForRestart();
+	}, plan.delayMs);
+}
+
 function stopDaemon(): DaemonStatus {
 	daemonStartEpoch += 1;
 	daemonStartPromise = null;
 	// An explicit stop (or a newer restart request) cancels any deferred restart
 	// left waiting for a previously slow child to exit.
 	daemonRestartAfterExitProcess = null;
+	cancelDaemonAutoRestart();
 	if (!daemonProcess) {
 		setDaemonStatus({ state: "stopped" });
 		return daemonStatus;
@@ -1945,6 +1985,8 @@ async function startDaemonForRestart(): Promise<DaemonStatus> {
 }
 
 async function restartDaemon(): Promise<DaemonStatus> {
+	// A manual restart supersedes any pending automatic respawn.
+	cancelDaemonAutoRestart();
 	const child = daemonProcess;
 	if (!child) return startDaemonForRestart();
 
@@ -2935,6 +2977,9 @@ app.on("before-quit", (event) => {
 		return;
 	}
 	browserQuitRequested = true;
+	// Never respawn the daemon while the app is shutting down; the daemon's own
+	// link-EOF self-stop (or the orphan-cleanup kill below) handles teardown.
+	cancelDaemonAutoRestart();
 	disposeBrowserRuntimeLink();
 	trayLifecycle.dispose();
 	trayController = null;
