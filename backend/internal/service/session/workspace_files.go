@@ -2330,7 +2330,7 @@ func parseNumstatOutput(out string) map[string][2]int {
 	counts := map[string][2]int{}
 	parts := splitNUL(out)
 	for i := 0; i < len(parts); {
-		fields := strings.Split(parts[i], "\t")
+		fields := strings.SplitN(parts[i], "\t", 3)
 		i++
 		if len(fields) < 3 {
 			continue

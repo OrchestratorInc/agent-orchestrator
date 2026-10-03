@@ -32,6 +32,9 @@ func TestWorkspaceDiffStatsMatchesSeparateGitReads(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if len(revisions) > 0 && counts[odd] != [2]int{2, 1} {
+				t.Fatalf("tab/newline path lost its line counts: %v", counts)
+			}
 			wantCounts, err := workspaceDiffNumstat(t.Context(), root, revisions...)
 			if err != nil {
 				t.Fatal(err)
