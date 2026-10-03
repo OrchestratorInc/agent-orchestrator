@@ -122,7 +122,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { OrchestratorIcon } from "./icons";
 import { Badge } from "./ui/badge";
-import aoLogo from "../../../assets/icon.png";
+import aoLogo from "../../../assets/ao-mascot.png";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { useKeybindingsStore } from "../stores/keybindings-store";
