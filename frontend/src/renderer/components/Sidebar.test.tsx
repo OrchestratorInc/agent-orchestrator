@@ -60,6 +60,7 @@ const {
 	resumeOrchestratorMock,
 	updateStatusMock,
 	commandPaletteEnabled,
+	projectRowRenderMock,
 } = vi.hoisted(
 	() => ({
 		cloudGateState: { cloudEnabled: true, localEnabled: true, client: "" },
@@ -84,8 +85,20 @@ const {
 		downloadUpdateMock: vi.fn(),
 		checkUpdateMock: vi.fn(),
 		commandPaletteEnabled: { current: true },
+		projectRowRenderMock: vi.fn(),
 	}),
 );
+
+vi.mock("../hooks/useCanResumeAgent", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useCanResumeAgent")>();
+	return {
+		...actual,
+		useCanResumeAgent: (...args: Parameters<typeof actual.useCanResumeAgent>) => {
+			projectRowRenderMock();
+			return actual.useCanResumeAgent(...args);
+		},
+	};
+});
 
 vi.mock("@dnd-kit/core", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@dnd-kit/core")>();
@@ -501,6 +514,37 @@ afterEach(() => {
 });
 
 describe("Sidebar", () => {
+	it("renders only the project whose streamed session changed", () => {
+		const initial = [
+			{ ...workspace, sessions: [session] },
+			{ ...workspace, id: "proj-2", name: "Project Two", sessions: [] },
+			{ ...workspace, id: "proj-3", name: "Project Three", sessions: [] },
+		];
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const handlers = {
+			onCloneProject: vi.fn(),
+			onCreateProject: vi.fn(),
+			onInitializeProject: vi.fn(),
+			onRemoveProject: vi.fn(),
+		};
+		const tree = (workspaces: WorkspaceSummary[]) => (
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<SidebarProvider defaultOpen>
+						<Sidebar {...handlers} workspaces={workspaces} />
+					</SidebarProvider>
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+		const view = render(tree(initial));
+		projectRowRenderMock.mockClear();
+
+		view.rerender(tree(initial.map((project): WorkspaceSummary =>
+			project.id === "proj-1" ? { ...project, sessions: [{ ...session, status: "idle" }] } : project,
+		)));
+
+		expect(projectRowRenderMock).toHaveBeenCalledTimes(1);
+	});
 	it("shows the cloud sign-in entry point while signed out", () => {
 		cloudSessionState.configured = true;
 		renderSidebar();

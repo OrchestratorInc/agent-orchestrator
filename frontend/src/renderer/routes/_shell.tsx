@@ -648,8 +648,9 @@ function ShellLayout() {
 
 	const removeProject = useCallback(
 		async (projectId: string) => {
+			const currentWorkspaces = workspacesRef.current;
 			const isLastWorkspace =
-              workspaces.length === 1 && workspaces[0]?.id === projectId;
+				currentWorkspaces.length === 1 && currentWorkspaces[0]?.id === projectId;
 			void addRendererExceptionStep("Project removal requested", {
 				source: "project-remove",
 				operation: "project_remove",
@@ -660,7 +661,7 @@ function ShellLayout() {
 			// their delete to the CP (which archives the project and all its
 			// sessions) instead of the local project endpoint.
 			const isCloudProject =
-				workspaces.find((item) => item.id === projectId)?.kind === CLOUD_PROJECT_KIND;
+				currentWorkspaces.find((item) => item.id === projectId)?.kind === CLOUD_PROJECT_KIND;
 			if (isCloudProject) {
 				if (!cloudOrg?.id) {
 					const failure = new Error("The cloud control plane is not ready. Sign in and try again.") as Error & {
@@ -719,7 +720,7 @@ function ShellLayout() {
               void navigate({ to: "/" });
 }
 		},
-		[cloudClient, cloudOrg?.id, navigate, queryClient, updateWorkspaces, workspaces],
+		[cloudClient, cloudOrg?.id, navigate, queryClient, updateWorkspaces],
 	);
 
 	const restartOrchestrator = useCallback(

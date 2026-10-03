@@ -133,6 +133,7 @@ import { ResizeHandle } from "./ResizeHandle";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { isMacPlatform } from "../lib/platform";
 import { useCloudSession } from "../lib/cloud-session";
+import { useStableList } from "../lib/stable-list";
 
 // macOS paints framed chrome: the fixed TitlebarNav cluster carries the
 // sidebar toggle + history arrows above this surface. Windows hangs the sidebar
@@ -718,10 +719,7 @@ export function Sidebar({
 		toggleShowAll: toggleShowAllProjects,
 	} = useShowMoreCap(projectWorkspaces, SIDEBAR_INITIAL_SECTION_LIMIT, selection.activeProjectId, isCollapsed);
 	const projectContentOpen = workspaces.length > 0 && !workspaceError && (projectsOpen || isCollapsed);
-	const projectIds = useMemo(
-		() => projectWorkspaces.map((workspace) => workspace.id),
-		[projectWorkspaces],
-	);
+	const projectIds = useStableList(projectWorkspaces.map((workspace) => workspace.id), String, Object.is);
 	const projectDragClickGuard = usePostDragClickGuard();
 	const [draggingProjectId, setDraggingProjectId] = useState<string | null>(null);
 	// Keep the active id and drop target in refs so dragover can decide without a
