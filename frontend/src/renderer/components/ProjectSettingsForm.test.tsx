@@ -521,8 +521,10 @@ describe("ProjectSettingsForm", () => {
 		});
 		renderSettings("proj-1", undefined, "agents");
 		const picker = await screen.findByRole("button", { name: "Worker model" });
-		expect(picker).toHaveTextContent("Claude Opus · Effort not reported");
+		expect(picker).toHaveTextContent("Opus · Effort not reported");
+		expect(picker).not.toHaveTextContent("Claude");
 		await userEvent.click(picker);
+		expect(screen.getByRole("menuitem", { name: "Opus" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: /Reasoning effort/ }));
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 		submitSettings();
@@ -1061,7 +1063,7 @@ describe("ProjectSettingsForm", () => {
 		renderSettings("proj-1", undefined, "agents");
 
 		expect(await screen.findAllByText("model refresh unavailable")).toHaveLength(3);
-		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent("Model not reported");
+		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent("Select model");
 	});
 
 	it("shows cached models immediately and deduplicates background revalidation", async () => {
@@ -1105,7 +1107,7 @@ describe("ProjectSettingsForm", () => {
 
 		renderSettings("proj-1", undefined, "agents");
 
-		expect(await screen.findByRole("button", { name: "Worker model" })).toHaveTextContent("Model not reported");
+		expect(await screen.findByRole("button", { name: "Worker model" })).toHaveTextContent("Select model");
 		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
 		expect(postMock).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", {
 			params: {
