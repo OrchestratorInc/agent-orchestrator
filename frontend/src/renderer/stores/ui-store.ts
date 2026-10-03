@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { aoBridge } from "../lib/bridge";
+import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
 import type { FilesSource } from "../hooks/useSessionWorkspaceFiles";
@@ -25,7 +26,8 @@ export type GlobalSettingsSection =
 	| "general"
 	| "harness"
 	| "agents"
-	| "cloud"
+	| "remoteHosts"
+	| "coder11x"
 	| "mobile"
 	| "shortcuts"
 	| "browserProfiles"
@@ -40,6 +42,7 @@ export type SettingsModal =
 			scope: "global";
 			section?: GlobalSettingsSection;
 			focusAgentId?: string;
+			hostId?: string;
 			/** Which Harness page view (local or cloud logins) to open. */
 			harnessView?: "local" | "cloud";
 			/** Preserve the project form while global recovery settings is above it. */
@@ -48,6 +51,7 @@ export type SettingsModal =
 	| {
 			scope: "project";
 			projectId: string;
+			hostId?: string;
 			/** Page to open on, so callers can deep-link a project setting. */
 			section?: ProjectSettingsSection;
 	};
@@ -120,7 +124,7 @@ export type UiState = {
 	// bumps on every request so a repeat press (even for the same project) still
 	// re-fires; the always-mounted GlobalNewTaskDialog consumes it. Selection
 	// still lives in the URL — this is a one-shot action, not persisted state.
-	newTaskRequest: { projectId: string; nonce: number } | null;
+	newTaskRequest: { projectId: string; hostId?: string; nonce: number } | null;
 	// Bumps to ask the sidebar's create-project flow to open (the ⌘N fallback
 	// when no project is in scope).
 	createProjectNonce: number;
@@ -156,8 +160,8 @@ export type UiState = {
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; harnessView?: "local" | "cloud"; preserveProject?: boolean }) => void;
-	openProjectSettings: (projectId: string, options?: { section?: ProjectSettingsSection }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; preserveProject?: boolean }) => void;
+	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection }) => void;
 	closeSettings: () => void;
 	/** Refresh resolvedTheme from OS without writing light/dark to storage. */
 	syncSystemTheme: () => void;
@@ -178,14 +182,14 @@ export type UiState = {
 	setFilesChangedOnly: (sessionId: string, changedOnly: boolean) => void;
 	setFilesSource: (sessionId: string, source: FilesSource) => void;
 	setCommandPaletteOpen: (open: boolean) => void;
-	setProjectRestarting: (projectId: string, restarting: boolean) => void;
-	setProjectProvisioning: (projectId: string, provisioning: boolean) => void;
+	setProjectRestarting: (projectId: string, restarting: boolean, hostId?: string) => void;
+	setProjectProvisioning: (projectId: string, provisioning: boolean, hostId?: string) => void;
 	setOrchestratorReplacementError: (projectId: string, failure: OrchestratorReplacementFailure | null) => void;
-	setOrchestratorStartupError: (projectId: string, message: string | null) => void;
+	setOrchestratorStartupError: (projectId: string, message: string | null, hostId?: string) => void;
 	showGlobalToast: (title: string, body?: string, style?: GlobalToast["tone"] | GlobalToast["placement"] | GlobalToastOptions) => void;
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
-	requestNewTask: (projectId: string) => void;
+	requestNewTask: (projectId: string, hostId?: string) => void;
 	requestCreateProject: () => void;
 	requestCreateProjectFromPath: (path: string) => void;
 	requestNewShellTerminal: () => void;
@@ -318,6 +322,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			scope: "global",
 			section,
 			...(options?.focusAgentId ? { focusAgentId: options.focusAgentId } : {}),
+			...(options?.hostId && options.hostId !== "local" ? { hostId: options.hostId } : {}),
 			...(options?.harnessView ? { harnessView: options.harnessView } : {}),
 			...(options?.preserveProject && state.settingsModal?.scope === "project"
 				? { returnTo: state.settingsModal }
@@ -330,7 +335,8 @@ export const useUiStore = create<UiState>((set, get) => ({
 		settingsModal: {
 			scope: "project",
 			projectId,
-			...(options?.section ? { section: options.section } : {}),
+			...(typeof options === "string" && options !== "local" ? { hostId: options } : {}),
+			...(typeof options === "object" && options?.section ? { section: options.section } : {}),
 		},
 	}),
 	closeSettings: () => set((state) => ({
@@ -451,23 +457,25 @@ export const useUiStore = create<UiState>((set, get) => ({
 			};
 		}),
 	setCommandPaletteOpen: (isCommandPaletteOpen) => set({ isCommandPaletteOpen }),
-	setProjectRestarting: (projectId, restarting) =>
+	setProjectRestarting: (projectId, restarting, hostId) =>
 		set((state) => {
 			const restartingProjectIds = new Set(state.restartingProjectIds);
+			const key = sessionUiKey(projectId, hostId);
 			if (restarting) {
-				restartingProjectIds.add(projectId);
+				restartingProjectIds.add(key);
 			} else {
-				restartingProjectIds.delete(projectId);
+				restartingProjectIds.delete(key);
 			}
 			return { restartingProjectIds };
 		}),
-	setProjectProvisioning: (projectId, provisioning) =>
+	setProjectProvisioning: (projectId, provisioning, hostId) =>
 		set((state) => {
 			const provisioningProjectIds = new Set(state.provisioningProjectIds);
+			const key = sessionUiKey(projectId, hostId);
 			if (provisioning) {
-				provisioningProjectIds.add(projectId);
+				provisioningProjectIds.add(key);
 			} else {
-				provisioningProjectIds.delete(projectId);
+				provisioningProjectIds.delete(key);
 			}
 			return { provisioningProjectIds };
 		}),
@@ -481,13 +489,14 @@ export const useUiStore = create<UiState>((set, get) => ({
 			}
 			return { orchestratorReplacementErrors };
 		}),
-	setOrchestratorStartupError: (projectId, message) =>
+	setOrchestratorStartupError: (projectId, message, hostId) =>
 		set((state) => {
 			const orchestratorStartupErrors = { ...state.orchestratorStartupErrors };
+			const key = sessionUiKey(projectId, hostId);
 			if (message) {
-				orchestratorStartupErrors[projectId] = message;
+				orchestratorStartupErrors[key] = message;
 			} else {
-				delete orchestratorStartupErrors[projectId];
+				delete orchestratorStartupErrors[key];
 			}
 			return { orchestratorStartupErrors };
 		}),
@@ -509,11 +518,11 @@ export const useUiStore = create<UiState>((set, get) => ({
 			globalToast: state.globalToast?.nonce === nonce ? null : state.globalToast,
 		})),
 	clearGlobalToast: () => set({ globalToast: null, globalToasts: [], globalToastSequence: 0 }),
-	requestNewTask: (projectId) => {
+	requestNewTask: (projectId, hostId) => {
 		// Central gate: every New Task entry point (buttons, sidebar menus,
 		// shortcuts) funnels through here, so a project whose orchestrator is
 		// still provisioning cannot start tasks before it exists.
-		if (get().provisioningProjectIds.has(projectId)) {
+		if (get().provisioningProjectIds.has(sessionUiKey(projectId, hostId))) {
 			get().showGlobalToast(
 				"Project is still being set up",
 				"The orchestrator is starting. Try again in a moment.",
@@ -521,7 +530,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			);
 			return;
 		}
-		set((state) => ({ newTaskRequest: { projectId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
+		set((state) => ({ newTaskRequest: { projectId, hostId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
 	},
 	requestCreateProject: () => set((state) => ({ createProjectNonce: state.createProjectNonce + 1 })),
 	requestCreateProjectFromPath: (path) =>

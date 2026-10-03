@@ -59,7 +59,8 @@ import {
 	UserRound,
 	X,
 } from "lucide-react";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiErrorMessage } from "../lib/api-client";
+import { clientForSessionHost } from "../lib/host-clients";
 import { useBrowserView, type BrowserViewModel } from "../hooks/useBrowserView";
 import { useCloudBrowserView } from "../hooks/useCloudBrowserView";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
@@ -176,9 +177,13 @@ export type BrowserAnnotationQueueModel = {
 
 export function useBrowserAnnotationQueue({
 	sessionId,
+	hostId,
+	sourcePreviewUrl,
 	navUrl,
 }: {
 	sessionId?: string;
+	hostId?: string;
+	sourcePreviewUrl?: string;
 	navUrl?: string;
 }): BrowserAnnotationQueueModel {
 	const [state, setState] = useState<{ status: AnnotationStatus; error: string; queuedCount: number }>({
@@ -190,6 +195,8 @@ export function useBrowserAnnotationQueue({
 	const stagedScreenshotPathsRef = useRef(new Map<BrowserAnnotationSubmitPayload, string[]>());
 	const annotationSendingRef = useRef(false);
 	const sessionIdRef = useRef(sessionId ?? "");
+	const hostIdRef = useRef(hostId);
+	const sourcePreviewUrlRef = useRef(sourcePreviewUrl);
 	const generationRef = useRef(0);
 	const sentTimerRef = useRef<number | null>(null);
 
@@ -215,6 +222,7 @@ export function useBrowserAnnotationQueue({
 		annotationSendingRef.current = true;
 		const sendGeneration = generationRef.current;
 		const sendSessionId = sessionIdRef.current;
+		const client = clientForSessionHost(hostIdRef.current);
 		setState({ status: "sending", error: "", queuedCount: annotationQueueRef.current.length });
 
 		void (async () => {
@@ -228,7 +236,7 @@ export function useBrowserAnnotationQueue({
 						...(payload.snapshot ? [payload.snapshot] : []),
 					];
 					if (attachments.length > 0) {
-						const staged = await apiClient.POST("/api/v1/sessions/{sessionId}/attachments", {
+						const staged = await client.POST("/api/v1/sessions/{sessionId}/attachments", {
 							params: { path: { sessionId: sendSessionId } },
 							body: { attachments },
 						});
@@ -242,8 +250,16 @@ export function useBrowserAnnotationQueue({
 						screenshotPaths = [];
 					}
 				}
-				const message = formatBrowserAnnotationMessage(payload, { screenshotPaths });
-				const { error } = await apiClient.POST("/api/v1/sessions/{sessionId}/send", {
+				let sendPayload = payload;
+				if (hostIdRef.current && sourcePreviewUrlRef.current) {
+					let pageUrl = "";
+					try {
+						pageUrl = await aoBridge.remotes.resolvePreviewUrl(hostIdRef.current, sendSessionId, payload.session.page.url);
+					} catch { /* A disconnected host cannot resolve a preview capability. */ }
+					sendPayload = { ...payload, session: { ...payload.session, page: { ...payload.session.page, url: pageUrl } } };
+				}
+				const message = formatBrowserAnnotationMessage(sendPayload, { screenshotPaths });
+				const { error } = await client.POST("/api/v1/sessions/{sessionId}/send", {
 					params: { path: { sessionId: sendSessionId } },
 					body: { message, userAuthored: true },
 				});
@@ -294,8 +310,10 @@ export function useBrowserAnnotationQueue({
 
 	useEffect(() => {
 		sessionIdRef.current = sessionId ?? "";
+		hostIdRef.current = hostId;
+		sourcePreviewUrlRef.current = sourcePreviewUrl;
 		resetQueue();
-	}, [resetQueue, sessionId]);
+	}, [hostId, resetQueue, sessionId, sourcePreviewUrl]);
 
 	useEffect(() => {
 		if (navUrl) return;

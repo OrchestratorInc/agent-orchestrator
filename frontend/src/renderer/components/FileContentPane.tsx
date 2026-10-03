@@ -58,6 +58,7 @@ export function FileContentPane({
 	path,
 	previousPath,
 	sessionId,
+	hostId,
 	split,
 	scope = "combined",
 	source = DEFAULT_FILES_SOURCE,
@@ -71,6 +72,7 @@ export function FileContentPane({
 	path: string | null;
 	previousPath?: string;
 	sessionId: string;
+	hostId?: string;
 	split: boolean;
 	scope?: WorkspaceDiffScope;
 	source?: FilesSource;
@@ -92,7 +94,7 @@ export function FileContentPane({
 	// an active native text selection.
 	const [selectionOrMenuActive, setSelectionOrMenuActive] = useState(false);
 	const query = useQuery({
-		...sessionSourceFileQueryOptions(sessionId, source, path ?? "", t("files.error.loadWorkspaceFile"), scope, commitSha, previousPath),
+		...sessionSourceFileQueryOptions(sessionId, source, path ?? "", t("files.error.loadWorkspaceFile"), scope, commitSha, previousPath, hostId),
 		enabled: Boolean(path) && !selectionOrMenuActive,
 	});
 	const hasUnsavedChanges = Boolean(editing && query.data && draft !== query.data.content);
@@ -101,7 +103,7 @@ export function FileContentPane({
 		setEditing(initialEditing);
 		setDraft("");
 		setSaveError("");
-	}, [commitSha, initialEditing, initialMode, initialRequestKey, path, scope, source]);
+	}, [commitSha, hostId, initialEditing, initialMode, initialRequestKey, path, scope, source]);
 	useEffect(() => {
 		if (initialEditing && query.data) setDraft(query.data.content);
 	}, [initialEditing, initialRequestKey, path, query.data]);
@@ -120,10 +122,12 @@ export function FileContentPane({
 				expectedFileFingerprint: detail.fileFingerprint,
 				path,
 				sessionId,
+				hostId,
 			});
-			queryClient.setQueryData(sessionWorkspaceFileQueryKey(sessionId, path, scope, commitSha), saved);
+			queryClient.setQueryData(sessionWorkspaceFileQueryKey(sessionId, path, scope, commitSha, hostId), saved);
 			await queryClient.invalidateQueries({
-				predicate: ({ queryKey }) => [
+				predicate: ({ queryKey }) => queryKey[1] === (hostId ?? sessionId)
+					&& (!hostId || queryKey[2] === sessionId) && [
 					"session-workspace-files",
 					"session-workspace-tree",
 					"session-workspace-search",
@@ -138,7 +142,7 @@ export function FileContentPane({
 		} finally {
 			setSaving(false);
 		}
-	}, [commitSha, draft, path, query.data, queryClient, saving, scope, sessionId, t]);
+	}, [commitSha, draft, path, query.data, queryClient, saving, scope, sessionId, hostId, t]);
 	useEffect(() => {
 		if (!editing) return;
 		const onSaveShortcut = (event: KeyboardEvent) => {
@@ -195,6 +199,7 @@ export function FileContentPane({
 			scope={scope}
 			sessionId={sessionId}
 			commitSha={commitSha}
+			hostId={hostId}
 			source={source}
 		/>
 	) : <PanelMessage>{t("files.loading")}</PanelMessage>;
@@ -323,12 +328,13 @@ export function FileContentPane({
 				detailLoadedAt={query.dataUpdatedAt}
 				emptyFallback={
 					!detail.binary && !detail.contentTruncated && !detail.deleted && detail.content ? (
-						<ReadOnlyFileView annotation={annotation} detail={detail} scope={scope} sessionId={sessionId} />
+						<ReadOnlyFileView annotation={annotation} detail={detail} hostId={hostId} scope={scope} sessionId={sessionId} />
 					) : undefined
 				}
 				filePath={path}
 				onActiveSelectionChange={setSelectionOrMenuActive}
 				sessionId={sessionId}
+				hostId={hostId}
 				split={split && canSplitCompare(detail.status)}
 				wrap
 			/>
@@ -347,6 +353,7 @@ export function FileContentPane({
 						sessionId={sessionId}
 						split={split && canSplitCompare(detail.status)}
 						commitSha={commitSha}
+						hostId={hostId}
 						source={source}
 						// Files panel preview: the compact toolbar already shows the name
 						// and counts, and its filler gutters sit on the canvas.
@@ -354,7 +361,7 @@ export function FileContentPane({
 						hideFileHeader
 					/>
 				) : effectiveMode === "rendered" && renderedAvailable ? (
-					<MarkdownFileView content={detail.content} filePath={path} sessionId={sessionId} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
+					<MarkdownFileView content={detail.content} filePath={path} hostId={hostId} sessionId={sessionId} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
 				) : (
 					fileView
 				)}
@@ -368,7 +375,7 @@ export function FileContentPane({
 			{toolbarNode}
 			<EditProvider createEditor={createReviewEditor}>
 			{effectiveMode === "rendered" && renderedAvailable ? (
-				<MarkdownFileView content={detail.content} filePath={path} sessionId={sessionId} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
+				<MarkdownFileView content={detail.content} filePath={path} hostId={hostId} sessionId={sessionId} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
 			) : fileView}
 			</EditProvider>
 			{saveError ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError}</p> : null}
@@ -376,10 +383,10 @@ export function FileContentPane({
 	);
 }
 
-function CompleteFileView({ annotation, commitSha, detail, editing, onEditChange, scope, sessionId, source }: { annotation: FileAnnotationModel; commitSha?: string; detail: WorkspaceFileDetail; editing: boolean; onEditChange: (content: string) => void; scope: WorkspaceDiffScope; sessionId: string; source: FilesSource }) {
+function CompleteFileView({ annotation, commitSha, detail, editing, onEditChange, scope, sessionId, hostId, source }: { annotation: FileAnnotationModel; commitSha?: string; detail: WorkspaceFileDetail; editing: boolean; onEditChange: (content: string) => void; scope: WorkspaceDiffScope; sessionId: string; hostId?: string; source: FilesSource }) {
 	const { t } = useTranslation();
 	const revision = useQuery({
-		...sessionSourceFileRevisionQueryOptions({ commitSha, path: detail.path, scope, sessionId, side: detail.deleted ? "before" : "after", source, workspaceVersion: detail.workspaceVersion }),
+		...sessionSourceFileRevisionQueryOptions({ commitSha, path: detail.path, scope, sessionId, hostId, side: detail.deleted ? "before" : "after", source, workspaceVersion: detail.workspaceVersion }),
 		enabled: detail.deleted || detail.contentTruncated,
 	});
 	if (revision.isPending && revision.isFetching) return <PanelMessage>{t("files.loading")}</PanelMessage>;
@@ -400,10 +407,11 @@ function CompleteFileView({ annotation, commitSha, detail, editing, onEditChange
 				editing={editing}
 				onEditChange={onEditChange}
 				sessionId={sessionId}
+				hostId={hostId}
 				side={detail.deleted ? "before" : "after"}
 				scope={scope}
 			/>
 		);
 	}
-	return <ReadOnlyFileView annotation={annotation} detail={detail} editing={editing} onEditChange={onEditChange} scope={scope} sessionId={sessionId} />;
+	return <ReadOnlyFileView annotation={annotation} detail={detail} editing={editing} onEditChange={onEditChange} scope={scope} sessionId={sessionId} hostId={hostId} />;
 }
