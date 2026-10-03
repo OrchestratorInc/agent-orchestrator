@@ -15,7 +15,6 @@ import { useUiStore } from "../stores/ui-store";
 import {
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
-	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
 import { CreateProjectFlow } from "./CreateProjectFlow";
@@ -37,7 +36,9 @@ import { Badge } from "./ui/badge";
  *   flat `hover:bg-interactive-hover` wash.
  * - Section titles share {@link HOME_SECTION_TITLE_CLASS}. With no projects the
  *   heading is Get started and Recent projects stays hidden; otherwise keep
- *   Jump back paired with Recent projects.
+ *   Jump back paired with Recent projects. The Scratchpad (standalone agents)
+ *   is not a project: it never appears in Recent projects or counts toward
+ *   the heading — the grid's standalone action and the sidebar own it.
  */
 const GITHUB_REPOSITORY_URL = "https://github.com/Untrivial-ai/agent-orchestrator";
 const RECENT_PROJECT_LIMIT = 3;
@@ -73,25 +74,6 @@ function sortProjectsByActivity(projects: WorkspaceSummary[]): WorkspaceSummary[
 	return projects
 		.slice()
 		.sort((left, right) => latestProjectTimestamp(right).localeCompare(latestProjectTimestamp(left)));
-}
-
-function standaloneSessionTimestamp(session: WorkspaceSession): number {
-	for (const value of [session.lastUserMessageAt, session.updatedAt, session.createdAt]) {
-		const parsed = value ? Date.parse(value) : Number.NaN;
-		if (!Number.isNaN(parsed)) return parsed;
-	}
-	return 0;
-}
-
-function mostRecentStandaloneSession(sessions: WorkspaceSession[]): WorkspaceSession | undefined {
-	const candidates = sessions.filter((session) => session.isTerminated !== true && session.status !== "terminated");
-	return (candidates.length > 0 ? candidates : sessions).reduce<WorkspaceSession | undefined>((latest, session) => {
-		if (!latest) return session;
-		const sessionTime = standaloneSessionTimestamp(session);
-		const latestTime = standaloneSessionTimestamp(latest);
-		if (sessionTime !== latestTime) return sessionTime > latestTime ? session : latest;
-		return session.id > latest.id ? session : latest;
-	}, undefined);
 }
 
 function ProjectRow({ project, onClick, emptyTimeLabel, justNowLabel }: { project: WorkspaceSummary; onClick: () => void; emptyTimeLabel: string; justNowLabel: string }) {
@@ -168,7 +150,14 @@ export function HomePage() {
 	const workspaceQuery = useWorkspaceQuery();
 	const [sourceSignal, setSourceSignal] = useState<{ source: ProjectSource | "cloud"; nonce: number } | null>(null);
 	const projects = workspaceQuery.data ?? [];
-	const recentProjects = useMemo(() => sortProjectsByActivity(projects).slice(0, RECENT_PROJECT_LIMIT), [projects]);
+	const recentProjects = useMemo(
+		() =>
+			sortProjectsByActivity(projects.filter((project) => project.kind !== STANDALONE_PROJECT_KIND)).slice(
+				0,
+				RECENT_PROJECT_LIMIT,
+			),
+		[projects],
+	);
 
 	const isDaemonReady = usesPreviewWorkspaceData || daemonStatus.state === "ready";
 	const daemonHasFailed = Boolean(daemonStatus.code);
@@ -207,7 +196,7 @@ export function HomePage() {
 				<div className="space-y-6">
 					<section className="space-y-3 px-3">
 						<div className="flex items-baseline justify-between gap-4">
-							<h1 className={HOME_SECTION_TITLE_CLASS}>{projects.length === 0 ? t("home.getStarted") : t("home.jumpBack")}</h1>
+							<h1 className={HOME_SECTION_TITLE_CLASS}>{recentProjects.length === 0 ? t("home.getStarted") : t("home.jumpBack")}</h1>
 							{/* Quiet text link — not TopbarButton / accent. Dashed underline only on hover. */}
 							<button
 								className="inline-flex shrink-0 items-center gap-1.5 border-b border-dashed border-transparent pb-px text-sm text-muted-foreground hover:border-current hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
@@ -260,16 +249,7 @@ export function HomePage() {
 									<ProjectRow
 										key={project.id}
 										project={project}
-										onClick={() => {
-											if (project.kind === STANDALONE_PROJECT_KIND) {
-												const session = mostRecentStandaloneSession(project.sessions);
-												session
-													? void navigate({ to: "/sessions/$sessionId", params: { sessionId: session.id } })
-													: requestNewTask(STANDALONE_WORKSPACE_ID);
-												return;
-											}
-											openProject(project.id);
-										}}
+										onClick={() => openProject(project.id)}
 										emptyTimeLabel={t("home.never")}
 										justNowLabel={t("time.justNow")}
 									/>
