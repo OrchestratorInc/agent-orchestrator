@@ -159,6 +159,10 @@ const prSummary = (
   };
 };
 
+function seedPRSummaries(client: QueryClient, prs: SessionPRSummary[]) {
+  client.setQueryData(sessionScmSummaryQueryKey("sess-1"), { prs, linkedPrs: [] });
+}
+
 function renderWithQuery(
   children: ReactNode,
   workspaces?: WorkspaceSummary[],
@@ -310,6 +314,13 @@ describe("SessionInspector tabs", () => {
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     expect(screen.getByText("Browser")).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Summary" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Session inspector" }).querySelector(".session-inspector__body--browser")).toBeInTheDocument();
+  });
+
+  it("keeps the same Browser-only inspector for a remote orchestrator", () => {
+    renderWithQuery(<SessionInspector browserOnly hostId="box-a" session={session([], { kind: "orchestrator", hostId: "box-a" })} />);
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "Session inspector" }).querySelector(".session-inspector__body--browser")).toBeInTheDocument();
   });
@@ -508,6 +519,57 @@ describe("SessionInspector PR section", () => {
         .closest("[data-testid='inspector-section']") as HTMLElement,
     );
 
+  it("shows a reported external PR from one SCM request without tracked actions", async () => {
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) =>
+      path === "/api/v1/sessions/{sessionId}/pr"
+        ? { data: { prs: [], linkedPrs: [{
+          url: "https://gitlab.com/release/notes/-/merge_requests/9",
+          provider: "gitlab",
+          host: "gitlab.com",
+          repo: "release/notes",
+          number: 9,
+        }] } }
+        : respond(path),
+    );
+    renderWithQuery(<SessionInspector session={session([])} />, undefined, (client) => {
+      client.setQueryData(["project", "ws-1"], { repo: "https://gitlab.com/my-app/backend", config: {} });
+    });
+
+    await screen.findByRole("link", { name: /gitlab.com\/release\/notes MR #9/ });
+
+    const section = prSection("Pull request");
+    expect(section.getByRole("link", { name: /gitlab.com\/release\/notes MR #9/ })).toHaveAttribute("href", "https://gitlab.com/release/notes/-/merge_requests/9");
+    expect(section.getByText("Reported by worker")).toBeInTheDocument();
+    expect(section.getByText("External repository")).toBeInTheDocument();
+    expect(section.getByRole("button", { name: /Linked for reference.*AO does not track checks/ })).toBeInTheDocument();
+    expect(section.getByRole("button", { name: "Copy link" })).toBeInTheDocument();
+    expect(section.queryByRole("button", { name: /^Merge PR #/ })).not.toBeInTheDocument();
+    expect(section.queryByText("No pull request opened yet.")).not.toBeInTheDocument();
+    expect(getMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}/pr")).toHaveLength(1);
+  });
+
+  it("does not label a reported PR from the project repository as external", async () => {
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) =>
+      path === "/api/v1/sessions/{sessionId}/pr"
+        ? { data: { prs: [], linkedPrs: [{
+          url: "https://github.com/acme/repo/pull/9",
+          provider: "github",
+          host: "github.com",
+          repo: "acme/repo",
+          number: 9,
+        }] } }
+        : respond(path),
+    );
+    renderWithQuery(<SessionInspector session={session([])} />, undefined, (client) => {
+      client.setQueryData(["project", "ws-1"], { repo: "git@github.com:acme/repo.git", config: {} });
+    });
+
+    await screen.findByRole("link", { name: /github.com\/acme\/repo PR #9/ });
+    expect(prSection("Pull request").queryByText("External repository")).not.toBeInTheDocument();
+  });
+
   it("renders one card per PR, ordered actionable-first, when a session owns a stack", () => {
     renderWithQuery(
       <SessionInspector
@@ -528,7 +590,7 @@ describe("SessionInspector PR section", () => {
       <SessionInspector session={session([pr(7, "open")])} />,
       undefined,
       (client) => {
-        client.setQueryData(sessionScmSummaryQueryKey("sess-1"), [
+        seedPRSummaries(client, [
           prSummary(7, "open", {
             review: {
               decision: "approved",
@@ -579,7 +641,7 @@ describe("SessionInspector PR section", () => {
       <SessionInspector session={session([pr(7, "open")])} />,
       undefined,
       (client) => {
-        client.setQueryData(sessionScmSummaryQueryKey("sess-1"), [readyPR]);
+        seedPRSummaries(client, [readyPR]);
       },
     );
 
@@ -620,7 +682,7 @@ describe("SessionInspector PR section", () => {
             defaultSessionMode: "tui", chatHarnesses: [], client: "", localEnabled: true,
             cloudOffering: true, cloudEnabled: true, cloudControlPlaneUrl: "https://staging-api.aoagents.dev",
           });
-          client.setQueryData(["cloud-session-scm-summary", "https://staging-api.aoagents.dev", "cloud-org-1", "sess-1"], [readyPR]);
+          client.setQueryData(["cloud-session-scm-summary", "https://staging-api.aoagents.dev", "cloud-org-1", "sess-1"], { prs: [readyPR], linkedPrs: [] });
         },
       );
       fireEvent.click(screen.getByRole("button", { name: "Merge PR #7" }));
@@ -657,7 +719,7 @@ describe("SessionInspector PR section", () => {
         <SessionInspector session={session([pr(7, "open")])} />,
         undefined,
         (client) => {
-          client.setQueryData(sessionScmSummaryQueryKey("sess-1"), [
+          seedPRSummaries(client, [
             prSummary(7, "open", {
               ci: { autoInjectCI: true, state: "passing", failingChecks: [] },
               review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] },
@@ -675,7 +737,7 @@ describe("SessionInspector PR section", () => {
       <SessionInspector session={session([pr(7, "open")])} />,
       undefined,
       (client) => {
-        client.setQueryData(sessionScmSummaryQueryKey("sess-1"), [
+        seedPRSummaries(client, [
           prSummary(7, "open", {
             headSha: "",
             ci: { autoInjectCI: true, state: "passing", failingChecks: [] },
@@ -693,7 +755,7 @@ describe("SessionInspector PR section", () => {
       <SessionInspector session={session([pr(7, "open", { review: "none" })])} />,
       undefined,
       (client) => {
-        client.setQueryData(sessionScmSummaryQueryKey("sess-1"), [prSummary(7, "open")]);
+        seedPRSummaries(client, [prSummary(7, "open")]);
       },
     );
 
@@ -709,7 +771,7 @@ describe("SessionInspector PR section", () => {
         <SessionInspector session={session([pr(7, "open")])} />,
         undefined,
         (client) => {
-          client.setQueryData(sessionScmSummaryQueryKey("sess-1"), [
+          seedPRSummaries(client, [
             prSummary(7, "open", {
               review: { decision, hasUnresolvedHumanComments: false, unresolvedBy: [] },
             }),
@@ -725,7 +787,7 @@ describe("SessionInspector PR section", () => {
       <SessionInspector session={session([pr(7, "open")])} />,
       undefined,
       (client) => {
-        client.setQueryData(sessionScmSummaryQueryKey("sess-1"), [
+        seedPRSummaries(client, [
           prSummary(7, "open", {
             review: { decision: "none", hasUnresolvedHumanComments: true, unresolvedBy: [] },
           }),
@@ -890,7 +952,7 @@ describe("SessionInspector PR section", () => {
       <SessionInspector session={session([pr(7, "open")])} />,
       undefined,
       (client) => {
-        client.setQueryData(sessionScmSummaryQueryKey("sess-1"), [failingPR]);
+        seedPRSummaries(client, [failingPR]);
       },
     );
 
@@ -1250,7 +1312,7 @@ describe("SessionInspector completion controls", () => {
       screen.getByRole("button", { name: "Archive session" }),
     );
     expect(
-      screen.getByRole("dialog", { name: "Are you sure you want to archive do the thing?" }),
+      screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" }),
     ).toBeInTheDocument();
     await userEvent.click(
       within(screen.getByRole("dialog")).getByRole("button", {
@@ -1578,6 +1640,7 @@ describe("SessionInspector Activity section", () => {
   it.each([
     ["ci_failed", "CI Failed"],
     ["changes_requested", "Changes Requested"],
+    ["commented", "Commented"],
   ] as const)(
     "renders %s as an SCM state in the current Activity row",
     (status, label) => {
@@ -1596,6 +1659,45 @@ describe("SessionInspector Activity section", () => {
       expect(within(activityRow).getByText(label)).toBeInTheDocument();
     },
   );
+
+  it("keeps an unresolved, non-blocking review comment visible as Commented feedback while the agent is working (#5765)", () => {
+    renderWithQuery(
+      <SessionInspector
+        session={session(
+          [pr(5765, "open", { review: "review_required", reviewComments: true })],
+          {
+            status: "working",
+            activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" },
+          },
+        )}
+      />,
+    );
+
+    const activityRow = activitySection()
+      .getByText("Working")
+      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
+    expect(within(activityRow).getByText("Commented")).toBeInTheDocument();
+    expect(within(activityRow).queryByText("Changes Requested")).not.toBeInTheDocument();
+  });
+
+  it("does not show Commented for a stale unresolved comment on a merged PR", () => {
+    renderWithQuery(
+      <SessionInspector
+        session={session(
+          [pr(5765, "merged", { review: "review_required", reviewComments: true })],
+          {
+            status: "idle",
+            activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
+          },
+        )}
+      />,
+    );
+
+    const activityRow = activitySection()
+      .getByText("Idle")
+      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
+    expect(within(activityRow).queryByText("Commented")).not.toBeInTheDocument();
+  });
 
   it("ignores stale failing CI from a merged PR when the open PR is passing", () => {
     renderWithQuery(
@@ -1902,8 +2004,7 @@ describe("SessionInspector Activity section", () => {
         )}
       />,
       undefined,
-      (client) =>
-        client.setQueryData(sessionScmSummaryQueryKey("sess-1"), summaries),
+      (client) => seedPRSummaries(client, summaries),
     );
 
     const section = screen

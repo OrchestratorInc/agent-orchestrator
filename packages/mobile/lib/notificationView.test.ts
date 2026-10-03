@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { notificationAction, notificationSections, notificationTarget, notificationVisual, relativeTime } from "./notificationView";
+import { notificationAction, notificationRowsForHost, notificationSections, notificationTarget, notificationVisual, relativeTime } from "./notificationView";
 import { darkTheme } from "./theme";
 
 describe("notificationVisual", () => {
 	it("gives every known type its own label", () => {
-		const labels = ["needs_input", "ready_to_merge", "pr_merged", "pr_closed_unmerged"].map(
+		const labels = ["needs_input", "ready_to_merge", "pr_merged", "pr_closed_unmerged", "review_completed", "review_changes_requested"].map(
 			(t) => notificationVisual(darkTheme, t).label,
 		);
-		expect(new Set(labels).size).toBe(4);
+		expect(new Set(labels).size).toBe(6);
 	});
 
 	// The renderer draws these with GitHub's own vocabulary, and merged has its own
@@ -43,30 +43,59 @@ describe("notificationTarget", () => {
 	// Must agree with PushManager's tap routing: the same notification opened
 	// from history and from the tray has to land in the same place.
 	it("opens the session for a needs_input notification", () => {
-		expect(notificationTarget({ type: "needs_input", sessionId: "abc" })).toBe("/session/abc");
+		expect(notificationTarget({ type: "needs_input", sessionId: "abc", hostId: "host-a" }, "host-a"))
+			.toBe("/session/abc?hostId=host-a");
+		expect(notificationTarget({ type: "needs_input", sessionId: "abc", hostId: "host-a" }, new Set(["host-a", "host-b"])))
+			.toBe("/session/abc?hostId=host-a");
+	});
+
+	it("sends legacy and other-machine pushes to the board", () => {
+		expect(notificationTarget({ type: "needs_input", sessionId: "abc" }, "host-b")).toBe("/");
+		expect(notificationTarget({ type: "needs_input", sessionId: "abc", hostId: "host-a" }, "host-b")).toBe("/");
+		expect(notificationTarget({ type: "ready_to_merge", hostId: "host-a" }, "host-b")).toBe("/");
+		expect(notificationTarget({ type: "needs_input", sessionId: "abc", hostId: "forgotten" }, new Set(["host-a", "host-b"]))).toBe("/");
 	});
 
 	it("falls back to the PRs tab when there is no session to open", () => {
-		expect(notificationTarget({ type: "needs_input", sessionId: "" })).toBe("/prs");
-		expect(notificationTarget({ type: "needs_input" })).toBe("/prs");
+		expect(notificationTarget({ type: "needs_input", sessionId: "", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
+		expect(notificationTarget({ type: "needs_input", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
 	});
 
 	it("sends PR notifications to the PRs tab", () => {
-		expect(notificationTarget({ type: "ready_to_merge", sessionId: "abc" })).toBe("/prs");
-		expect(notificationTarget({ type: "pr_merged", sessionId: "abc" })).toBe("/prs");
+		expect(notificationTarget({ type: "ready_to_merge", sessionId: "abc", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
+		expect(notificationTarget({ type: "pr_merged", sessionId: "abc", hostId: "host-a" }, new Set(["host-a", "host-b"]))).toBe("/prs?hostId=host-a");
+	});
+
+	it("opens the matching review result when the payload identifies its pull request", () => {
+		expect(notificationTarget({ type: "review_completed", sessionId: "session 1", prUrl: "https://github.com/acme/repo/pull/42", hostId: "host-a" }, "host-a"))
+			.toBe("/review/session%201?prUrl=https%3A%2F%2Fgithub.com%2Facme%2Frepo%2Fpull%2F42&hostId=host-a");
+		expect(notificationTarget({ type: "review_changes_requested", sessionId: "s1", prUrl: "https://github.com/acme/repo/pull/43", hostId: "host-b" }, new Set(["host-a", "host-b"])))
+			.toBe("/review/s1?prUrl=https%3A%2F%2Fgithub.com%2Facme%2Frepo%2Fpull%2F43&hostId=host-b");
+		expect(notificationTarget({ type: "review_completed", sessionId: "s1", prUrl: "https://github.com/acme/repo/pull/42", hostId: "forgotten" }, new Set(["host-a", "host-b"]))).toBe("/");
+	});
+
+	it("falls back to the PR list when a review result payload is incomplete", () => {
+		expect(notificationTarget({ type: "review_completed", sessionId: "s1", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
+		expect(notificationTarget({ type: "review_changes_requested", prUrl: "https://github.com/acme/repo/pull/43", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
+		expect(notificationTarget({ type: "review_completed", sessionId: "s1", prUrl: "https://github.com/acme/repo/pull/43" }, "host-a")).toBe("/");
 	});
 
 	// A tray payload carries no guarantee of a type field, and PushManager passes
 	// "" when it is missing. An unknown or absent type must still land somewhere
 	// rather than routing to "/session/undefined".
 	it("sends an unknown or missing type to the PRs tab", () => {
-		expect(notificationTarget({ type: "" })).toBe("/prs");
-		expect(notificationTarget({ type: "", sessionId: "abc" })).toBe("/prs");
-		expect(notificationTarget({ type: "something_new", sessionId: "abc" })).toBe("/prs");
+		expect(notificationTarget({ type: "", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
+		expect(notificationTarget({ type: "", sessionId: "abc", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
+		expect(notificationTarget({ type: "something_new", sessionId: "abc", hostId: "host-a" }, "host-a")).toBe("/prs?hostId=host-a");
 	});
 });
 
 describe("notificationSections", () => {
+	it("hides old machine notifications even when the new machine reuses the ID", () => {
+		const fromA = [{ id: "same-id", title: "Alice's worker" }];
+		expect(notificationRowsForHost(fromA, "host-a", "host-b")).toEqual([]);
+		expect(notificationRowsForHost(fromA, "host-a", "host-a")).toEqual(fromA);
+	});
 	it("puts unread notifications in the attention section before earlier history", () => {
 		const read = { id: "read", status: "read" };
 		const unread = { id: "unread", status: "unread" };
@@ -148,5 +177,20 @@ describe("notificationAction", () => {
 	it("sends a session-less PR notification to the PR list", () => {
 		expect(notificationAction({ type: "ready_to_merge" }, ready)).toEqual({ kind: "prs" });
 		expect(notificationAction({ type: "needs_input" }, ready)).toEqual({ kind: "none" });
+	});
+
+	it("opens review results directly without waiting for the session board", () => {
+		const notification = { type: "review_completed", sessionId: "s1", prUrl: "https://github.com/acme/repo/pull/42" };
+		expect(notificationAction(notification, { terminated: false, sessionsReady: false })).toEqual({
+			kind: "review",
+			sessionId: "s1",
+			prUrl: notification.prUrl,
+		});
+	});
+
+	it("sends incomplete review result notifications to the PR list", () => {
+		expect(notificationAction({ type: "review_completed", sessionId: "s1" }, ready)).toEqual({ kind: "prs" });
+		expect(notificationAction({ type: "review_changes_requested", prUrl: "https://github.com/acme/repo/pull/42" }, ready))
+			.toEqual({ kind: "prs" });
 	});
 });
