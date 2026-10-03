@@ -351,6 +351,10 @@ export function conversationQueryOptions(sessionId: string, hostId?: string) {
 	});
 }
 
+function selectConversationPages(data: InfiniteData<ConversationSnapshot>) {
+	return mergeConversationPages(data.pages);
+}
+
 export function useConversation(sessionId: string | undefined, hostId?: string): ConversationQueryResult {
 	const queryClient = useQueryClient();
 	const refreshError = useQuery({
@@ -362,7 +366,7 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 	const query = useInfiniteQuery({
 		...conversationQueryOptions(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId),
-		select: (data) => mergeConversationPages(data.pages),
+		select: selectConversationPages,
 	});
 	useEffect(() => {
 		if (!hostId || !sessionId) return;
@@ -1633,6 +1637,7 @@ function applyQueuedTurnOrderToPages(
 export function mergeConversationPages(pages: ConversationSnapshot[]): ConversationSnapshot | undefined {
 	const live = pages[0];
 	if (!live) return undefined;
+	if (pages.length === 1) return live;
 
 	const items = new Map<string, ConversationItem>();
 	const turns = new Map<string, ConversationSnapshot["turns"][number]>();

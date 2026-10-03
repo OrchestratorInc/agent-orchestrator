@@ -31,6 +31,7 @@ import {
 	Fragment,
 	memo,
 	useContext,
+	useMemo,
 	useState,
 	type MouseEvent as ReactMouseEvent,
 	type ReactNode,
@@ -42,6 +43,7 @@ import { cn } from "../../lib/utils";
 import { isLoopbackHostname } from "../../lib/loopback";
 import { canonicalLanguage } from "../../lib/code-highlight";
 import { fenceOf } from "../../lib/markdown-fence";
+import { createIncrementalMarkdownPlugin } from "../../lib/markdown-incremental";
 import { findSessionLinks, isSessionLink, remarkSessionLinks } from "../../lib/session-links";
 import {
 	isPotentialWorkspaceFileLink,
@@ -95,13 +97,14 @@ const OpenChatLink = createContext<{
 	openSession?: (url: string) => void;
 	workspacePaths: string[];
 }>({ workspacePaths: [] });
+const EMPTY_WORKSPACE_PATHS: string[] = [];
 
 export function ChatLinkProvider({
 	onLinkOpen,
 	onFileOpen,
 	remoteHost,
 	onSessionLinkOpen,
-	workspacePaths = [],
+	workspacePaths = EMPTY_WORKSPACE_PATHS,
 	children,
 }: {
 	onLinkOpen?: (url: string) => void;
@@ -111,7 +114,11 @@ export function ChatLinkProvider({
 	workspacePaths?: string[];
 	children: ReactNode;
 }) {
-	return <OpenChatLink.Provider value={{ open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, workspacePaths }}>{children}</OpenChatLink.Provider>;
+	const value = useMemo(
+		() => ({ open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, workspacePaths }),
+		[onLinkOpen, onFileOpen, onSessionLinkOpen, remoteHost, workspacePaths],
+	);
+	return <OpenChatLink.Provider value={value}>{children}</OpenChatLink.Provider>;
 }
 
 function isHostLocalWebLink(href: string): boolean {
@@ -149,6 +156,13 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	 */
 	muted?: boolean;
 }) {
+	// Keep a per-message parser cache while text arrives. The full document still
+	// passes through GFM and session-link transforms; only parsing a closed prefix
+	// is skipped. Settling a message restores the ordinary parser.
+	const remarkPlugins = useMemo(
+		() => streaming ? [...PLUGINS, createIncrementalMarkdownPlugin()] : PLUGINS,
+		[streaming],
+	);
 	return (
 		<StreamingProse.Provider value={streaming}>
 			<div
@@ -157,7 +171,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 					muted ? "text-[13px] text-muted-foreground" : "text-sm text-foreground",
 				)}
 			>
-				<Markdown remarkPlugins={PLUGINS} components={COMPONENTS} urlTransform={chatUrlTransform}>
+				<Markdown remarkPlugins={remarkPlugins} components={COMPONENTS} urlTransform={chatUrlTransform}>
 					{text}
 				</Markdown>
 			</div>
@@ -235,6 +249,7 @@ const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "graphem
 
 function compactEmoji(children: ReactNode): ReactNode {
 	if (typeof children === "string") {
+		if (!EMOJI_GRAPHEME.test(children)) return children;
 		let last = 0;
 		const parts: ReactNode[] = [];
 		for (const { segment, index } of GRAPHEME_SEGMENTER.segment(children)) {

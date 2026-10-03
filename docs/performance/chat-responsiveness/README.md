@@ -1,5 +1,8 @@
 # Chat responsiveness
 
+For the later source comparison with T3 Code and additional measured renderer
+changes, see [AO and T3 Code chat performance](t3-comparison.md).
+
 This change reduces AO's event-delivery and renderer overhead. It does not change provider inference, session lifecycle, daemon/API contracts, durable messages, approvals, model selection, or the chat layout.
 
 ## What was detected and changed
