@@ -106,6 +106,16 @@ Use `env`, `symlinks`, and `postCreate` for repeatable workspace setup. A failin
 
 Use `agentRules` or `agentRulesFile` for worker instructions and `orchestratorRules` for supervision instructions. If both worker fields are set, AO combines the inline rules and file contents.
 
+For example, these fields link local setup files, install dependencies, and load worker rules. This is a configuration fragment; keep any other existing fields when applying it:
+
+```json
+{
+  "symlinks": [".env"],
+  "postCreate": ["npm ci"],
+  "agentRulesFile": "AGENTS.md"
+}
+```
+
 For a reusable manual action, use a project **Cue**. An agent Cue sends a prompt to an eligible session or starts a worker. A command Cue runs the exact command in a fresh local terminal.
 
 ## Reviewer agents
@@ -113,6 +123,15 @@ For a reusable manual action, use a project **Cue**. An agent Cue sends a prompt
 <span id="choose-a-reviewer" />
 
 Choose reviewers separately in Project Settings. The [agent catalog](/plugins/agents) lists reviewer support and its limits. If you do not choose one, AO uses Claude Code, Codex, OpenCode, Muse, or Kimchi when the worker uses one of those harnesses. Other workers default to Claude Code. Select another reviewer harness explicitly.
+
+These configuration fields choose a reviewer and enable automatic review for new workers. The JSON is a fragment, so keep other fields when using the API:
+
+```json
+{
+  "reviewers": [{ "harness": "codex" }],
+  "autoReview": true
+}
+```
 
 `autoReview` sets the default for new workers. Existing sessions have their own toggle. Automatic review waits for an eligible PR head and an idle worker. It does not merge the pull request.
 
@@ -132,6 +151,12 @@ ao project get <project-id> --json
 The `--config-json` flag takes a JSON string, not a filename. The CLI silently ignores unknown keys, so a typo can replace the configuration with an empty object. The daemon API rejects unknown fields.
 
 The CLI's project-config mirror also has an `effort` limitation: `ao project get --json` cannot show the configured effort, and `set-config` drops existing effort values. Use Project Settings in the desktop app or the daemon API to view or change effort. For other full-config CLI updates, include every field you want to keep and inspect the result afterward.
+
+For example, this command replaces the entire configuration with one worker choice; it does not keep setup, rules, reviewers, or effort:
+
+```bash
+ao project set-config <project-id> --config-json '{"worker":{"agent":"codex"}}'
+```
 
 For interactive edits, use Project Settings. For a complete CLI reference, use `ao project set-config --help`. The current fields are listed in [Configuration fields](#configuration-fields).
 
