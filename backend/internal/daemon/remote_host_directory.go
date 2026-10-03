@@ -77,7 +77,7 @@ func publishRemoteHostAddress(ctx context.Context, client *http.Client, controlP
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("control plane returned %d", response.StatusCode)
 	}

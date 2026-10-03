@@ -185,6 +185,7 @@ func (m *LANManager) SetAccountTokenHash(hash string) {
 	}
 }
 
+// AccountTokenHash returns the currently accepted account credential digest.
 func (m *LANManager) AccountTokenHash() string { return m.state.accountHash() }
 
 // PasswordHash returns the current connection password hash. Used to snapshot the

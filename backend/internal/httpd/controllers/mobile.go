@@ -42,6 +42,8 @@ type RemoteHostAccountTokenResponse struct {
 	Token  string `json:"token"`
 }
 
+// IssueAccountToken returns a credential for account discovery after the caller
+// proves knowledge of the host's original connection password.
 func (c *MobileController) IssueAccountToken(w http.ResponseWriter, r *http.Request) {
 	issuer, ok := c.Bridge.(interface {
 		IssueAccountToken(string) (RemoteHostAccountTokenResponse, error)

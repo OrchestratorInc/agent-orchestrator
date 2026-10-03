@@ -294,6 +294,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				remotes: {
 					list: async () => [],
+					importAccountHost: async () => undefined,
+					pruneAccountHosts: async () => undefined,
+					issueAccountToken: async () => "",
 					add: async () => "offline" as const,
 					update: async () => "offline" as const,
 					remove: async () => undefined,
@@ -863,6 +866,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				remotes: {
 					list: async () => [],
+					importAccountHost: async () => undefined,
+					pruneAccountHosts: async () => undefined,
+					issueAccountToken: async () => "",
 					add: async () => "offline" as const,
 					update: async () => "offline" as const,
 					remove: async () => undefined,
