@@ -15,6 +15,7 @@ import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { setChatDraftBoundary } from "../lib/chat-draft-boundary";
 import { chatDraftScopeKey } from "../lib/chat-drafts";
 import { useFileAttachments, type FileAttachment } from "../hooks/useFileAttachments";
+import { adoptPendingShell } from "../lib/pending-shell-terminals";
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const openShellTerminalMock = vi.hoisted(() => vi.fn());
@@ -1549,6 +1550,42 @@ describe("SessionView", () => {
 		view.rerender(<SessionView sessionId="sess-1" />);
 		expect(screen.getByTestId("auxiliary-tab-order-tui-sess-1")).toHaveTextContent(
 			"sh-a|file:src/panel.tsx",
+		);
+	});
+
+	it("keeps a new shell tab in place when its PTY is created", () => {
+		workerSession("sess-1").mode = "chat";
+		const pendingShell = (id: string, title: string) => ({
+			handleId: `pending-shell:${id}`,
+			projectId: "proj-1",
+			sessionId: "sess-1",
+			title,
+			workingDir: "",
+			createdAt: "2026-08-31T00:00:00Z",
+			optimistic: true as const,
+		});
+		shellTerminalsState.data = [pendingShell("first", "Terminal 1"), pendingShell("second", "Terminal 2")];
+		const view = render(<SessionView sessionId="sess-1" />);
+		expect(screen.getByTestId("auxiliary-tab-order-sess-1")).toHaveTextContent(
+			"pending-shell:first|pending-shell:second",
+		);
+
+		const created = {
+			handleId: "sh-first",
+			projectId: "proj-1",
+			sessionId: "sess-1",
+			title: "Terminal 1",
+			workingDir: "/p",
+			createdAt: "2026-08-31T00:00:01Z",
+		};
+		adoptPendingShell("pending-shell:first", created);
+		shellTerminalsState.data = [created, pendingShell("second", "Terminal 2")];
+		view.rerender(<SessionView sessionId="sess-1" />);
+
+		// Not re-appended after the still-pending tab, which made tabs opened in
+		// quick succession bounce around the strip as each PTY was created.
+		expect(screen.getByTestId("auxiliary-tab-order-sess-1")).toHaveTextContent(
+			"sh-first|pending-shell:second",
 		);
 	});
 

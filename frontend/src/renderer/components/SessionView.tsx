@@ -64,6 +64,7 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
 import { clearSwitchAgentState } from "../hooks/useSwitchAgent";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
+import { createdShellHandle } from "../lib/pending-shell-terminals";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useHostConnection } from "../hooks/useHostConnection";
 import { sessionReviewsQueryKey } from "../lib/session-reviews";
@@ -664,7 +665,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			...openShellKeys,
 		];
 		const availableKeys = new Set(available);
-		const resolved = auxiliaryTabOrder.filter((key) => availableKeys.has(key));
+		// A new shell tab is ordered under its pending handle until its PTY
+		// exists; keep it in place under the created handle instead of treating
+		// it as a newly opened tab and moving it to the end.
+		const resolved = [...new Set(auxiliaryTabOrder.map(createdShellHandle))].filter((key) => availableKeys.has(key));
 		for (const key of available) {
 			if (!resolved.includes(key)) resolved.push(key);
 		}
@@ -673,11 +677,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useEffect(() => {
 		setAuxiliaryTabOrderBySession((current) => {
 			const currentOrder = current[uiSessionId] ?? [];
-			const newKeys = resolvedAuxiliaryTabOrder.filter((key) => !currentOrder.includes(key));
-			if (newKeys.length === 0) {
+			const createdOrder = [...new Set(currentOrder.map(createdShellHandle))];
+			const newKeys = resolvedAuxiliaryTabOrder.filter((key) => !createdOrder.includes(key));
+			if (newKeys.length === 0 && createdOrder.length === currentOrder.length && createdOrder.every((key, index) => key === currentOrder[index])) {
 				return current;
 			}
-			return { ...current, [uiSessionId]: [...currentOrder, ...newKeys] };
+			return { ...current, [uiSessionId]: [...createdOrder, ...newKeys] };
 		});
 	}, [resolvedAuxiliaryTabOrder, uiSessionId]);
 	const openShellTerminal = useOpenShellTerminal(hostId);

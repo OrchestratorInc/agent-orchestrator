@@ -34,6 +34,9 @@ export type CreatedShell = {
 };
 
 const pendingGrids = new Map<string, PendingGrid>();
+// Pending handle -> created handle. Lets state keyed by a tab's pending handle
+// (such as a user-arranged tab order) follow the tab once its PTY exists.
+const createdHandles = new Map<string, string>();
 let cache: PendingShellCache | null = null;
 
 export function isPendingShellHandle(handleId: string): boolean {
@@ -55,9 +58,15 @@ export function failPendingShell(pendingHandleId: string, error: Error): void {
 	pendingGridEntry(pendingHandleId).reject(error);
 }
 
+/** The handle a pending shell was created under, or the handle itself. */
+export function createdShellHandle(handleId: string): string {
+	return createdHandles.get(handleId) ?? handleId;
+}
+
 /** Announces the created shell so the cache can re-key the pending terminal. */
 export function adoptPendingShell(pendingHandleId: string, shell: CreatedShell): void {
 	pendingGrids.delete(pendingHandleId);
+	createdHandles.set(pendingHandleId, shell.handleId);
 	cache?.adopt(pendingHandleId, shell);
 }
 
