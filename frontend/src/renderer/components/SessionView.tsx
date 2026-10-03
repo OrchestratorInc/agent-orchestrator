@@ -1745,6 +1745,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 				<TooltipTrigger asChild>
 					<TopbarButton
 						aria-label={t("shortcut.new-shell-terminal")}
+						data-terminal-focus-handoff="true"
 						onClick={addShellTerminal}
 						type="button"
 						variant="icon"

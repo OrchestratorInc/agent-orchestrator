@@ -310,10 +310,13 @@ function canAutoFocusTerminal(host: HTMLElement): boolean {
 	return (
 		activeElement.matches("button[aria-current='page']") ||
 		activeElement.matches("button[data-terminal-focus-handoff='true']") ||
-		// Any control in the terminal topbar — tab buttons, the new-tab action,
-		// a tab's close button — is an intentional terminal focus handoff.
-		(activeElement.matches("button") &&
-			activeElement.closest('[data-testid="session-workspace-topbar"]') !== null)
+		(activeElement.matches("button[role='tab']") &&
+			activeElement.closest('[data-testid="session-workspace-topbar"]') !== null) ||
+		// Shell-tab close/rename affordances carry the marker on the button
+		// itself (ShellTerminalTab). Match the button directly — not via
+		// closest() — because the session tab's ⋮ trigger sits inside a
+		// wrapper div[data-terminal-tab-action] that must stay excluded.
+		activeElement.matches("button[data-terminal-tab-action='true']")
 	);
 }
 
