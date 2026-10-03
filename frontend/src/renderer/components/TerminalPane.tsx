@@ -1073,6 +1073,9 @@ function AttachedTerminal({
 			: undefined;
 	const shellTerminalHandleId =
 		terminalTarget?.kind === "shell" && !pendingShellHandleId ? terminalTarget.handleId : undefined;
+	// Read at attach time without re-attaching on every park/activate.
+	const isVisibleRef = useRef(isVisible);
+	isVisibleRef.current = isVisible;
 	const { attach, state, error, replaySettled, hasAttached, syncVisibleSize } = useTerminalSession(attachSession, {
 		coverInitialReplay: terminalTarget?.kind !== "reviewer",
 		// Cloud workers can acknowledge a terminal before the coding agent emits
@@ -1225,7 +1228,11 @@ function AttachedTerminal({
 		// before FitAddon has measured its real slot makes full-screen worker TUIs
 		// redraw once at 80×24 and again at the actual grid. Settle that first fit
 		// before attaching so the daemon receives only the authoritative size.
-		void terminal.prepareForActivation().then(() => {
+		// A parked terminal (a shell handed its PTY after the user moved to
+		// another tab) keeps the grid it measured instead: a parked slot fits to
+		// a sliver, and the PTY's first output would land at that width.
+		const settled = isVisibleRef.current ? terminal.prepareForActivation() : Promise.resolve();
+		void settled.then(() => {
 			if (!current) return;
 			detach = attach(terminal);
 		});

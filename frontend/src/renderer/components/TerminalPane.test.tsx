@@ -563,6 +563,64 @@ describe("TerminalPane empty states", () => {
 		}
 	});
 
+	it("attaches a shell handed its PTY while parked without refitting the parked slot", async () => {
+		const pending = {
+			handleId: "pending-shell:parked",
+			sessionId: worker.id,
+			workingDir: "",
+			title: "Terminal 1",
+			createdAt: "2026-08-31T00:00:00Z",
+			optimistic: true,
+		} satisfies ShellTerminal;
+		const other = {
+			handleId: "shellterm-other",
+			sessionId: worker.id,
+			workingDir: "/repos/my-app",
+			title: "Terminal 2",
+			createdAt: "2026-08-31T00:00:02Z",
+		} satisfies ShellTerminal;
+		const created = {
+			handleId: "shellterm-parked",
+			sessionId: worker.id,
+			workingDir: "/repos/my-app",
+			title: "Terminal 1",
+			createdAt: "2026-08-31T00:00:01Z",
+		} satisfies ShellTerminal;
+		const target = (shell: ShellTerminal): TerminalTarget => ({
+			generation: shell.createdAt,
+			kind: "shell",
+			handleId: shell.handleId,
+			sessionId: worker.id,
+			title: shell.title,
+		});
+		const view = renderCachedPane({
+			session: worker,
+			sessions: [worker],
+			shellTerminals: [pending, other],
+			terminalTarget: target(pending),
+		});
+		try {
+			await expect(pendingShellGrid(pending.handleId)).resolves.toEqual({ cols: 93, rows: 27 });
+			// The user moves to another tab before the PTY exists.
+			view.show(worker, target(other));
+			await act(async () => undefined);
+			attachMock.mockClear();
+			prepareForActivationMock.mockClear();
+
+			act(() => {
+				adoptPendingShell(pending.handleId, created);
+				view.queryClient.setQueryData(shellTerminalsQueryKey, [created, other]);
+			});
+
+			// A parked slot fits to a sliver; the parked terminal must attach at the
+			// grid it measured instead of running activation's fit first.
+			await waitFor(() => expect(attachMock).toHaveBeenCalledTimes(1));
+			expect(prepareForActivationMock).not.toHaveBeenCalled();
+		} finally {
+			view.restore();
+		}
+	});
+
 	it("disposes the pending terminal when its PTY could not be created", async () => {
 		const pending = {
 			handleId: "pending-shell:discard",
