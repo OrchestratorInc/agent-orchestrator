@@ -34,6 +34,10 @@ function renderWithLinkHandler(
 	);
 }
 
+function renderWithSessionLinkHandler(text: string, onSessionLinkOpen: (url: string) => void) {
+	return render(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen}><ChatMarkdown text={text} /></ChatLinkProvider>);
+}
+
 describe("ChatMarkdown", () => {
 	it("renders headings as headings rather than literal hashes", () => {
 		render(<ChatMarkdown text={"## Findings\n\nTwo files changed."} />);
@@ -206,6 +210,86 @@ describe("ChatMarkdown", () => {
 		openExternal.mockRestore();
 	});
 
+	it.each([
+		"http://localhost:5173",
+		"http://127.0.0.1:5173",
+		"http://[::1]:5173",
+		"http://0.0.0.0:5173",
+		"http://127.0.0.2:5173",
+	])("does not open a remote host-local preview on the client: %s", (href) => {
+		const onLinkOpen = vi.fn();
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		render(<ChatLinkProvider onLinkOpen={onLinkOpen} remoteHost><ChatMarkdown text={`[preview](${href})`} /></ChatLinkProvider>);
+
+		const preview = screen.getByText("preview");
+		expect(preview.closest("a")).toBeNull();
+		expect(preview.closest("[title]")).toHaveAttribute("title", expect.stringContaining("remote host"));
+		fireEvent.click(preview);
+		fireEvent.click(preview, { altKey: true });
+		fireEvent.contextMenu(preview);
+		expect(onLinkOpen).not.toHaveBeenCalled();
+		expect(openExternal).not.toHaveBeenCalled();
+		openExternal.mockRestore();
+	});
+
+	it("renders remote workspace paths as text while keeping external links working", async () => {
+		const onLinkOpen = vi.fn();
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		render(<ChatLinkProvider onLinkOpen={onLinkOpen} remoteHost>
+			<ChatMarkdown text="[report](reports/new-report.html) and [issue](https://example.com/i/1)" />
+		</ChatLinkProvider>);
+
+		const report = screen.getByText("report");
+		expect(report.closest("a")).toBeNull();
+		expect(report.closest("[title]")).toHaveAttribute("title", expect.stringContaining("remote host"));
+		fireEvent.click(report);
+		fireEvent.click(report, { metaKey: true });
+		fireEvent.contextMenu(report);
+		await userEvent.click(screen.getByRole("link", { name: "issue" }));
+		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith("https://example.com/i/1");
+		expect(openExternal).not.toHaveBeenCalled();
+		openExternal.mockRestore();
+	});
+
+	it("opens remote source links in Files without opening the client browser", async () => {
+		const onFileOpen = vi.fn();
+		const onLinkOpen = vi.fn();
+		render(<ChatLinkProvider onFileOpen={onFileOpen} onLinkOpen={onLinkOpen} remoteHost workspacePaths={["src/App.tsx", "reports/index.html"]}>
+			<ChatMarkdown text="[source](src/App.tsx) and [new](src/new.ts#L8) and [preview](reports/index.html)" />
+		</ChatLinkProvider>);
+
+		await userEvent.click(screen.getByRole("link", { name: "source" }));
+		await userEvent.click(screen.getByRole("link", { name: "new" }));
+		expect(onFileOpen).toHaveBeenNthCalledWith(1, "src/App.tsx");
+		expect(onFileOpen).toHaveBeenNthCalledWith(2, "src/new.ts");
+		expect(screen.getByText("preview").closest("a")).toBeNull();
+		expect(onLinkOpen).not.toHaveBeenCalled();
+	});
+
+	it("blocks remote host-local links inside Mermaid diagrams", async () => {
+		vi.mocked(renderMermaidDiagram).mockResolvedValueOnce('<svg xmlns="http://www.w3.org/2000/svg"><a href="http://localhost:5173"><text>preview</text></a></svg>');
+		const onLinkOpen = vi.fn();
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		render(<ChatLinkProvider onLinkOpen={onLinkOpen} remoteHost>
+			<ChatMarkdown text={'```mermaid\ngraph LR\n  A-->B\n```'} />
+		</ChatLinkProvider>);
+
+		const preview = await screen.findByText("preview");
+		fireEvent.click(preview);
+		fireEvent.click(preview, { altKey: true });
+		fireEvent(preview, new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
+		fireEvent.contextMenu(preview);
+		expect(onLinkOpen).not.toHaveBeenCalled();
+		expect(openExternal).not.toHaveBeenCalled();
+		openExternal.mockRestore();
+	});
+
+	it("does not load a remote host-local markdown image from the client", () => {
+		render(<ChatLinkProvider remoteHost><ChatMarkdown text="![remote screenshot](http://localhost:5173/screenshot.png)" /></ChatLinkProvider>);
+		expect(screen.queryByRole("img", { name: "remote screenshot" })).not.toBeInTheDocument();
+		expect(screen.getByText("remote screenshot")).toHaveAttribute("title", expect.stringContaining("remote host"));
+	});
+
 	it("routes workspace file clicks to the AO Browser handler", async () => {
 		const user = userEvent.setup();
 		const onLinkOpen = vi.fn();
@@ -248,6 +332,30 @@ describe("ChatMarkdown", () => {
 
 		expect(onFileOpen).toHaveBeenCalledWith("reports/final.html");
 		expect(onLinkOpen).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		"ao://sessions/project/session",
+		"[Open session](ao://sessions/project/session)",
+	])("renders and activates a canonical session link: %s", async (text) => {
+		const onSessionLinkOpen = vi.fn();
+		renderWithSessionLinkHandler(text, onSessionLinkOpen);
+		const link = screen.getByRole("link");
+		expect(link).toHaveAttribute("href", "ao://sessions/project/session");
+		await userEvent.setup().click(link);
+		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
+	});
+
+	it("does not auto-activate a session link while streaming", () => {
+		const onSessionLinkOpen = vi.fn();
+		render(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen}><ChatMarkdown streaming text="ao://sessions/project/session" /></ChatLinkProvider>);
+		expect(screen.getByRole("link")).toBeInTheDocument();
+		expect(onSessionLinkOpen).not.toHaveBeenCalled();
+	});
+
+	it("leaves malformed session-like text inert", () => {
+		renderWithSessionLinkHandler("ao://sessions/project/session/kill", vi.fn());
+		expect(screen.queryByRole("link")).not.toBeInTheDocument();
 	});
 
 	it("opens a web link in the system browser on Option/Alt-click", () => {
@@ -491,6 +599,26 @@ describe("ChatMarkdown image sources", () => {
 		expect(url.pathname).toBe("/api/v1/sessions/session-1/workspace/file/blob");
 		expect(url.searchParams.get("path")).toBe("docs/screen shot.png");
 		expect(url.searchParams.get("side")).toBe("after");
+	});
+
+	it("loads a remote conversation image through that host's proxy", () => {
+		render(
+			<ChatImageSourceProvider sessionId="session-1" assetBaseUrl="http://127.0.0.1:4000/token-a">
+				<ChatMarkdown text="![remote](docs/shot.png)" />
+			</ChatImageSourceProvider>,
+		);
+		expect(screen.getByRole("img", { name: "remote" }).getAttribute("src")).toMatch(
+			/^http:\/\/127\.0\.0\.1:4000\/token-a\/api\/v1\/sessions\/session-1\/workspace\/file\/blob\?/,
+		);
+	});
+
+	it("does not resolve an offline remote image against the laptop daemon", () => {
+		render(
+			<ChatImageSourceProvider sessionId="session-1" remoteHost>
+				<ChatMarkdown text="![remote](docs/shot.png)" />
+			</ChatImageSourceProvider>,
+		);
+		expect(screen.queryByRole("img", { name: "remote" })).not.toBeInTheDocument();
 	});
 
 	it("keeps absolute image sources unchanged", () => {

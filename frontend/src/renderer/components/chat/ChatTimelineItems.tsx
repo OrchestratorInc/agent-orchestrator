@@ -61,7 +61,7 @@ import { cn } from "../../lib/utils";
 import { caretNotation, stripAnsi } from "../../lib/ansi";
 import { getApiBaseUrl } from "../../lib/api-client";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
-import { ActivityTitle, ChatMarkdown } from "./ChatMarkdown";
+import { ActivityTitle, ChatMarkdown, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
 import { HumanMessageEditor } from "./HumanMessageEditor";
@@ -403,7 +403,7 @@ function StagedAttachmentItems({
 }: {
 	paths: string[];
 	sessionId: string;
-	apiBaseUrl: string;
+	apiBaseUrl: string | null;
 	ariaLabel: string;
 	className?: string;
 }) {
@@ -412,7 +412,7 @@ function StagedAttachmentItems({
 		<ul aria-label={ariaLabel} className={cn("flex max-w-full flex-wrap gap-2", className)}>
 			{paths.map((path) => {
 				const name = attachmentName(path);
-				return IMAGE_ATTACHMENT_PATH.test(path) ? (
+				return IMAGE_ATTACHMENT_PATH.test(path) && apiBaseUrl !== null ? (
 					<li
 						key={path}
 						className="max-w-full overflow-hidden rounded-md border border-border bg-background"
@@ -513,7 +513,7 @@ export function HumanMessage({
 	/** The staged paths are relative to this session's workspace. */
 	sessionId: string;
 	/** The live daemon origin; passed by the timeline so daemon restarts refresh images. */
-	apiBaseUrl?: string;
+	apiBaseUrl?: string | null;
 	/** Typed while the agent was busy, and not sent yet. */
 	queued?: boolean;
 	/** True only for a human message added after the timeline first mounted. */
@@ -574,7 +574,11 @@ export function HumanMessage({
 							: "bg-raised text-foreground",
 					)}
 				>
-					{body ? <p className="break-words whitespace-pre-wrap text-pretty">{body}</p> : null}
+					{body ? (
+						<p className="break-words whitespace-pre-wrap text-pretty">
+							<SessionLinkedText text={body} />
+						</p>
+					) : null}
 					<StagedAttachmentItems
 						paths={attachments}
 						sessionId={sessionId}
@@ -665,8 +669,8 @@ export function OriginMessage({ message }: { message: ConversationMessage }) {
 			{longReport && expanded ? (
 				<ChatMarkdown text={message.text} muted />
 			) : (
-				<p className={cn("text-sm leading-relaxed text-muted-foreground", longReport && "line-clamp-3")}>
-					{preview}
+				<p className={cn("whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground", longReport && "line-clamp-3")}>
+					<SessionLinkedText text={preview} />
 				</p>
 			)}
 			{longReport ? (
@@ -2162,7 +2166,7 @@ export function SteerMessage({
 }: {
 	activity: ConversationActivity;
 	sessionId: string;
-	apiBaseUrl?: string;
+	apiBaseUrl?: string | null;
 }) {
 	const text = activity.detail?.text ?? activity.summary;
 	const { body, attachments } = stagedAttachmentParts(text);
@@ -2625,7 +2629,7 @@ export function TurnChangedFiles({
 									<TooltipTrigger asChild>
 										<button
 											type="button"
-											onClick={() => onOpenFile(openPath)}
+											onClick={() => onOpenFile(tooltipPath)}
 											aria-label={`Open ${openPath} in Files`}
 											className={rowClass}
 										>

@@ -21,7 +21,7 @@ const { locationMock, navigateMock, onKilledMock, paramsMock, postMock, spawnMoc
 	locationMock: { pathname: "/" },
 	navigateMock: vi.fn(),
 	onKilledMock: vi.fn(),
-	paramsMock: { projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
+	paramsMock: { hostId: undefined as string | undefined, projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
 	postMock: vi.fn(),
 	spawnMock: vi.fn(),
 	useWorkspaceQueryMock: vi.fn(),
@@ -56,6 +56,8 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 		};
 	},
 	workspaceQueryKey: ["workspaces"],
+	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
+	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 }));
 
 vi.mock("../lib/api-client", () => ({
@@ -77,6 +79,10 @@ vi.mock("../lib/api-client", () => ({
 vi.mock("../lib/spawn-orchestrator", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/spawn-orchestrator")>(),
 	spawnOrchestrator: spawnMock,
+}));
+vi.mock("../hooks/useHostConnection", async (importOriginal) => ({
+	...await importOriginal<typeof import("../hooks/useHostConnection")>(),
+	useConnectedHosts: () => ["box-a"],
 }));
 vi.mock("../lib/telemetry", () => ({
 	addRendererExceptionStep: vi.fn(),
@@ -207,7 +213,7 @@ function renderKill(session: WorkspaceSession = worker, orchestratorId?: string)
 }
 
 async function clickKillDialogConfirm() {
-	const dialog = await screen.findByRole("dialog", { name: "Are you sure you want to archive do the thing?" });
+	const dialog = await screen.findByRole("dialog", { name: "Are you sure you want to archive this session?" });
 	await userEvent.click(within(dialog).getByRole("button", { name: "Confirm, archive session" }));
 }
 
@@ -217,11 +223,12 @@ beforeEach(() => {
 	onKilledMock.mockReset();
 	paramsMock.projectId = undefined;
 	paramsMock.sessionId = undefined;
+	paramsMock.hostId = undefined;
 	postMock.mockReset();
 	postMock.mockResolvedValue({ data: { ok: true, sessionId: "sess-1" }, error: undefined });
 	useWorkspaceQueryMock.mockReset();
 	useWorkspaceQueryMock.mockReturnValue({ data: [], isError: false, isLoading: false, isSuccess: true });
-	useUiStore.setState({ inspectorSessions: {}, settingsModal: null });
+	useUiStore.setState({ inspectorSessions: {}, settingsModal: null, newTaskRequest: null });
 });
 
 describe("ShellTopbar route identity", () => {
@@ -310,6 +317,19 @@ describe("ShellTopbar status pill", () => {
 		expect(localActions.contains(screen.getByRole("button", { name: "Switch to chat UI" }))).toBe(true);
 		expect(localActions.contains(screen.getByRole("button", { name: "Archive session" }))).toBe(true);
 		expect(localActions.contains(screen.getByRole("button", { name: "Open orchestrator" }))).toBe(false);
+	});
+
+	it("uses the same embedded actions for a remote session, routed to its host", async () => {
+		paramsMock.hostId = "box-a";
+		const view = renderTopbarSessions([{ ...worker, hostId: "box-a" }, { ...orchestrator, hostId: "box-a" }], worker.id, true);
+		expect(screen.getByRole("button", { name: "Archive session" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /open in.*editor/i })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Open orchestrator" }));
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/host/$hostId/project/$projectId/session/$sessionId", params: { hostId: "box-a", projectId: "proj-1", sessionId: "orch-1" } });
+		view.unmount();
+		renderTopbarSessions([{ ...orchestrator, hostId: "box-a" }], orchestrator.id, true);
+		await userEvent.click(screen.getByRole("button", { name: "New task" }));
+		expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: "proj-1", hostId: "box-a" });
 	});
 
 	it("marks embedded session actions compact when requested", () => {
@@ -677,9 +697,9 @@ describe("TopbarArchiveButton", () => {
 		expect(archiveButton.querySelector("svg")).toHaveClass("lucide-archive");
 		await userEvent.click(archiveButton);
 		expect(postMock).not.toHaveBeenCalled();
-		const confirmation = screen.getByRole("dialog", { name: "Are you sure you want to archive do the thing?" });
+		const confirmation = screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" });
 		expect(confirmation).toHaveClass("left-[50%]", "top-[50%]", "bg-popover", "p-0");
-		expect(confirmation).toHaveTextContent("You can always restore do the thing from the Archive section later.");
+		expect(confirmation).toHaveTextContent("You can always restore it from the Archive section later.");
 		expect(within(confirmation).getByRole("button", { name: "No" })).toBeInTheDocument();
 		expect(within(confirmation).getByRole("button", { name: "Confirm, archive session" })).toHaveTextContent("Confirm");
 
