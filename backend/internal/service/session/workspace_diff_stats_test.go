@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -11,6 +12,9 @@ import (
 func TestWorkspaceDiffStatsMatchesSeparateGitReads(t *testing.T) {
 	root := newWorkspaceRepo(t)
 	odd := "odd\tname\nfile.txt"
+	if runtime.GOOS == "windows" {
+		odd = "odd name.txt" // Win32 filenames cannot contain control characters.
+	}
 	writeWorkspaceFile(t, root, odd, "old\n")
 	writeWorkspaceFile(t, root, "binary.dat", "old\x00data")
 	runGit(t, root, "add", ".")
