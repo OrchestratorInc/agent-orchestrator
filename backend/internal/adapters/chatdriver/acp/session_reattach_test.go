@@ -27,7 +27,13 @@ func newSessionLossDriver(agent *fakeAgent) *Driver {
 		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
 		Probe:        func(context.Context) error { return nil },
 		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
-		SessionMode:  func(ports.PermissionMode) string { return "auto" },
+		// Like Claude, the default permission mode needs no session/set_mode.
+		SessionMode: func(permission ports.PermissionMode) string {
+			if ports.NormalizePermissionMode(permission) == ports.PermissionModeAuto {
+				return "auto"
+			}
+			return ""
+		},
 		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
 			if settings.Model == "" {
 				return nil
@@ -79,6 +85,50 @@ func TestACPSendTurnReattachesSessionTheAgentForgot(t *testing.T) {
 	}
 	if agent.options["model"] != "sonnet" || agent.mode != "auto" {
 		t.Fatalf("settings after reattach: model=%q mode=%q", agent.options["model"], agent.mode)
+	}
+}
+
+// A turn with no settings to apply (default permissions, no model override)
+// first reaches the agent through session/prompt. Losing the session there must
+// recover the same way instead of failing every later turn.
+func TestACPPromptReattachesSessionTheAgentForgot(t *testing.T) {
+	agent := &fakeAgent{promptNoPermission: true}
+	driver := newSessionLossDriver(agent)
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conv.Close()
+
+	agent.mu.Lock()
+	agent.sessionLost = true
+	agent.mu.Unlock()
+
+	ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "hello"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	for {
+		event := nextEvent(t, conv.Events())
+		if event.Kind != ports.ChatEventTurnCompleted {
+			continue
+		}
+		if event.TurnState != domain.TurnStateCompleted {
+			t.Fatalf("turn settled %q after the agent lost its session: %+v", event.TurnState, event)
+		}
+		break
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.resumeCalls != 1 || agent.resumeParams.SessionId != "claude-session-1" {
+		t.Fatalf("session/resume calls=%d params=%#v, want one resume of the original session",
+			agent.resumeCalls, agent.resumeParams)
+	}
+	if text := agent.promptParams.Prompt[0].Text; text == nil || text.Text != "hello" {
+		t.Fatalf("resent prompt = %#v, want the original turn", agent.promptParams.Prompt)
 	}
 }
 

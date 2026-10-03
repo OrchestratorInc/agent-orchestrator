@@ -620,11 +620,18 @@ func (c *conversation) runTurn(ctx context.Context, sessionID string, turn prepa
 	if messageID == "" {
 		messageID = uuid.NewString()
 	}
-	resp, err := c.conn.Prompt(ctx, acpsdk.PromptRequest{
+	request := acpsdk.PromptRequest{
 		SessionId: acpsdk.SessionId(sessionID),
 		MessageId: &messageID,
 		Prompt:    turn.prompt,
-	})
+	}
+	resp, err := c.conn.Prompt(ctx, request)
+	// A turn with no settings to apply reaches the agent here first. An agent
+	// that no longer knows the session rejected the prompt without running it,
+	// so reattaching and resending it once cannot run the turn twice.
+	if isACPSessionNotFound(err) && c.reattachSession(ctx, err) {
+		resp, err = c.conn.Prompt(ctx, request)
+	}
 
 	c.finishPrompt(turn.id, resp, err)
 }

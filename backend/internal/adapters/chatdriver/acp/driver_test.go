@@ -1007,7 +1007,11 @@ func (a *fakeAgent) Prompt(ctx context.Context, params acpsdk.PromptRequest) (ac
 	promptBlock := a.promptBlock
 	promptStarted := a.promptStarted
 	customPrompt := a.customPrompt
+	sessionLost := a.sessionLost
 	a.mu.Unlock()
+	if sessionLost {
+		return acpsdk.PromptResponse{}, errACPSessionNotFound()
+	}
 	if customPrompt != nil {
 		return customPrompt(ctx, params)
 	}
