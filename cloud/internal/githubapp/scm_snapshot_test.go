@@ -44,9 +44,9 @@ func TestMapRESTMergeability(t *testing.T) {
 	}
 }
 
-// A private PR snapshot reads commit and branch fields as well as PR/check
-// fields. The installation token must retain Contents access for that query.
-func TestPrivatePullRequestSnapshotUsesContentsReadToken(t *testing.T) {
+// A private PR snapshot reads commit and branch fields and the combined check
+// rollup. Status-only CI requires Commit statuses access even without check runs.
+func TestPrivatePullRequestSnapshotUsesContentsAndStatusesReadToken(t *testing.T) {
 	var granted map[string]string
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -69,13 +69,16 @@ func TestPrivatePullRequestSnapshotUsesContentsReadToken(t *testing.T) {
 			if r.Header.Get("Authorization") != "Bearer private-pr-token" {
 				t.Errorf("GraphQL used unexpected token")
 			}
-			if granted["contents"] != "read" {
+			if granted["contents"] != "read" || granted["statuses"] != "read" {
 				_ = json.NewEncoder(w).Encode(map[string]any{"errors": []map[string]string{{"message": "Resource not accessible by integration"}}})
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
 				"number": 1, "url": "https://github.com/owner/private/pull/1", "state": "OPEN",
 				"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "headRefOid": "head123",
+				"commits": map[string]any{"nodes": []map[string]any{{"commit": map[string]any{"statusCheckRollup": map[string]any{
+					"state": "SUCCESS", "contexts": map[string]any{"nodes": []map[string]any{{"__typename": "StatusContext", "context": "CodeRabbit", "state": "SUCCESS"}}},
+				}}}}},
 			}}}})
 		default:
 			t.Errorf("unexpected GitHub request %s %s", r.Method, r.URL.Path)
@@ -96,8 +99,11 @@ func TestPrivatePullRequestSnapshotUsesContentsReadToken(t *testing.T) {
 	if snapshot.Observation.Mergeability != contract.MergeMergeable {
 		t.Fatalf("mergeability = %q, want mergeable", snapshot.Observation.Mergeability)
 	}
-	if granted["pull_requests"] != "read" || granted["checks"] != "read" {
-		t.Fatalf("PR/check permissions = %v, want read", granted)
+	if snapshot.Observation.CIState != contract.CIPassing {
+		t.Fatalf("CI state = %q, want passing for status-only CI", snapshot.Observation.CIState)
+	}
+	if granted["pull_requests"] != "read" || granted["checks"] != "read" || granted["statuses"] != "read" {
+		t.Fatalf("PR/check/status permissions = %v, want read", granted)
 	}
 }
 

@@ -970,9 +970,9 @@ func (c *Client) repositoryWriteTokenForRepos(
 }
 
 // statusReadToken mints a short-lived installation token scoped to one
-// repository with read access to contents, pull requests and checks. The
-// snapshot GraphQL query traverses commit and branch fields in private repos,
-// so PR/check permissions alone cannot read the whole response.
+// repository with read access to contents, pull requests, checks and commit
+// statuses. The snapshot GraphQL query traverses commit and branch fields in
+// private repos, including status-only CI such as CodeRabbit.
 func (c *Client) statusReadToken(
 	ctx context.Context,
 	installationID, repositoryID int64,
@@ -986,6 +986,7 @@ func (c *Client) statusReadToken(
 			"contents":      "read",
 			"pull_requests": "read",
 			"checks":        "read",
+			"statuses":      "read",
 		},
 	})
 	if err != nil {
