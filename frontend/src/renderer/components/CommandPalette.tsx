@@ -698,6 +698,7 @@ export function CommandPalette() {
 					openSignal={createProjectFlowOpenSignal}
 					onCloneProject={cloneProject}
 					onCreateProject={createProject}
+					onCreateStandaloneAgent={() => useUiStore.getState().requestNewTask(STANDALONE_WORKSPACE_ID)}
 					onInitializeProject={initializeProjectRepository}
 					onOpenExistingProject={openExistingProject}
 					existingProjectPaths={workspaces.map((workspace) => workspace.path)}
