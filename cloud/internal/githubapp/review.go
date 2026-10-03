@@ -116,39 +116,20 @@ func (s *Service) SubmitReview(
 	}
 	installationID, repositoryID, err := s.store.GitHubInstallationForRepository(ctx, orgID, run.PullRequestRepository)
 	if err != nil {
-		return s.failReview(ctx, orgID, sessionID, reviewRunID, err)
+		return domain.ReviewRun{}, err
 	}
 	access, err := s.client.repositoryWriteToken(ctx, installationID, repositoryID)
 	if err != nil {
-		return s.failReview(ctx, orgID, sessionID, reviewRunID, err)
+		return domain.ReviewRun{}, err
 	}
-	providerReviewID, err := s.client.CreatePullRequestReview(
-		ctx, access.Token, owner, repo, run.PullRequestNumber, body,
-	)
-	if err != nil {
-		return s.failReview(ctx, orgID, sessionID, reviewRunID, err)
-	}
-	delivered, err := s.store.CompleteAndDeliverReviewRun(
-		ctx, orgID, reviewRunID, sessionID,
-		domain.SubmitReviewResult{Verdict: result.Verdict, Body: body},
-		formatProviderReviewID(providerReviewID),
-	)
+	delivered, err := submitReviewOnce(ctx, s.store, s.client,
+		orgID, sessionID, reviewRunID, access.Token, owner, repo, run.PullRequestNumber,
+		domain.SubmitReviewResult{Verdict: result.Verdict, Body: body})
 	if err != nil {
 		return domain.ReviewRun{}, err
 	}
 	s.closeReviewTerminal(ctx, orgID, sessionID, reviewRunID)
 	return delivered, nil
-}
-
-func (s *Service) failReview(
-	ctx context.Context, orgID, sessionID, reviewRunID string, cause error,
-) (domain.ReviewRun, error) {
-	failed, failErr := s.store.FailReviewRun(ctx, orgID, reviewRunID, sessionID, cause.Error())
-	s.closeReviewTerminal(ctx, orgID, sessionID, reviewRunID)
-	if failErr == nil {
-		return failed, cause
-	}
-	return domain.ReviewRun{}, cause
 }
 
 func (s *Service) closeReviewTerminal(ctx context.Context, orgID, sessionID, reviewRunID string) {

@@ -92,7 +92,7 @@ func TestAgentTerminalInputMarksSessionActive(t *testing.T) {
 }
 
 func TestHarnessRequestMigrationAllowsInspectAndInstall(t *testing.T) {
-	contents, err := migrationFiles.ReadFile("migrations/00046_harness_worker_requests.sql")
+	contents, err := migrationFiles.ReadFile("migrations/00048_worker_request_kind_union.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

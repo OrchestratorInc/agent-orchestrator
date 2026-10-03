@@ -67,6 +67,14 @@ func (s *patRecordStore) ReviewRunPullRequest(context.Context, string, string) (
 	return s.reviewRun, nil
 }
 
+func (s *patRecordStore) BeginReviewPublication(context.Context, string, string, string, domain.SubmitReviewResult) (bool, error) {
+	return true, nil
+}
+
+func (s *patRecordStore) MarkReviewPublicationUncertain(context.Context, string, string, string, string) error {
+	return nil
+}
+
 func (s *patRecordStore) CompleteAndDeliverReviewRun(
 	_ context.Context, _, reviewRunID, _ string, _ domain.SubmitReviewResult, _ string,
 ) (domain.ReviewRun, error) {

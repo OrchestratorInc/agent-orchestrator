@@ -1343,7 +1343,8 @@ func (s *Store) MarkTerminalExited(
 			`WITH failed_runs AS (
 				UPDATE ao_review_runs
 				SET status = 'failed', last_error = $3, completed_at = now()
-				WHERE org_id = $1 AND review_terminal_id = $2 AND status = 'running'
+				WHERE org_id = $1 AND review_terminal_id = $2
+					AND status = 'running' AND publish_state = 'pending'
 				RETURNING pull_request_id, target_sha
 			)
 			UPDATE ao_pull_requests pull_request

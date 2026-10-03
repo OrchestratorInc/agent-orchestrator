@@ -28,11 +28,12 @@ type PATWriteStore interface {
 		input domain.PullRequest,
 	) (domain.PullRequest, error)
 	ReviewRunPullRequest(context.Context, string, string) (domain.ReviewRunPullRequest, error)
+	BeginReviewPublication(context.Context, string, string, string, domain.SubmitReviewResult) (bool, error)
+	MarkReviewPublicationUncertain(context.Context, string, string, string, string) error
 	CompleteAndDeliverReviewRun(
 		context.Context, string, string, string,
 		domain.SubmitReviewResult, string,
 	) (domain.ReviewRun, error)
-	FailReviewRun(context.Context, string, string, string, string) (domain.ReviewRun, error)
 	CloseReviewTerminal(context.Context, string, string, string) error
 }
 
@@ -184,35 +185,14 @@ func (p *PATWriteService) SubmitReview(
 	if !ok || owner == "" || repo == "" {
 		return domain.ReviewRun{}, postgres.ErrInvalid
 	}
-	providerReviewID, err := p.client.CreatePullRequestReview(
-		ctx, token, owner, repo, run.PullRequestNumber, body,
-	)
-	if err != nil {
-		return p.failReview(ctx, orgID, sessionID, reviewRunID, err)
-	}
-	delivered, err := p.store.CompleteAndDeliverReviewRun(
-		ctx, orgID, reviewRunID, sessionID,
-		domain.SubmitReviewResult{Verdict: result.Verdict, Body: body},
-		formatProviderReviewID(providerReviewID),
-	)
+	delivered, err := submitReviewOnce(ctx, p.store, p.client,
+		orgID, sessionID, reviewRunID, token, owner, repo, run.PullRequestNumber,
+		domain.SubmitReviewResult{Verdict: result.Verdict, Body: body})
 	if err != nil {
 		return domain.ReviewRun{}, err
 	}
 	_ = p.store.CloseReviewTerminal(ctx, orgID, sessionID, reviewRunID)
 	return delivered, nil
-}
-
-func (p *PATWriteService) failReview(
-	ctx context.Context,
-	orgID, sessionID, reviewRunID string,
-	cause error,
-) (domain.ReviewRun, error) {
-	failed, failErr := p.store.FailReviewRun(ctx, orgID, reviewRunID, sessionID, cause.Error())
-	_ = p.store.CloseReviewTerminal(ctx, orgID, sessionID, reviewRunID)
-	if failErr != nil {
-		return domain.ReviewRun{}, cause
-	}
-	return failed, cause
 }
 
 // ownerRepoFromCloneURL parses "https://github.com/owner/repo(.git)" into owner

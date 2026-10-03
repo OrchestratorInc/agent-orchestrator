@@ -72,12 +72,24 @@ func (s *Store) CreateReviewRun(
 				`SELECT `+reviewRunColumns+`
 				FROM ao_review_runs
 				WHERE org_id = $1 AND pull_request_id = $2 AND target_sha = $3
-				  AND `+reviewRunConflictPredicate(triggerSource)+`
+				  AND status = 'running'
 				ORDER BY created_at DESC
 				LIMIT 1`,
 				orgID, pullRequestID, targetSHA,
 			)
 			run, scanErr = scanReviewRun(row)
+			if errors.Is(scanErr, ErrNotFound) && triggerSource == "auto" {
+				row = tx.QueryRow(ctx,
+					`SELECT `+reviewRunColumns+`
+					FROM ao_review_runs
+					WHERE org_id = $1 AND pull_request_id = $2 AND target_sha = $3
+					  AND trigger_source = 'auto'
+					ORDER BY created_at DESC
+					LIMIT 1`,
+					orgID, pullRequestID, targetSHA,
+				)
+				run, scanErr = scanReviewRun(row)
+			}
 			created = false
 			return scanErr
 		}
@@ -98,13 +110,6 @@ func (s *Store) CreateReviewRun(
 		return domain.ReviewRun{}, false, normalizeConstraintError(err)
 	}
 	return run, created, nil
-}
-
-func reviewRunConflictPredicate(triggerSource string) string {
-	if triggerSource == "auto" {
-		return "trigger_source = 'auto'"
-	}
-	return "status = 'running'"
 }
 
 // OpenReviewTerminal starts a dedicated review process in the session sandbox.
@@ -375,6 +380,63 @@ func (s *Store) CancelReviewRuns(
 	return runs, nil
 }
 
+// BeginReviewPublication atomically claims the only GitHub POST attempt for a
+// run. A retry with the same verdict and body reconciles instead of posting.
+func (s *Store) BeginReviewPublication(
+	ctx context.Context, orgID, reviewRunID, reviewSessionID string, result domain.SubmitReviewResult,
+) (claimed bool, err error) {
+	err = s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var id string
+		err := tx.QueryRow(ctx, `
+			UPDATE ao_review_runs
+			SET publish_state = 'publishing', publish_verdict = $4, publish_body = $5,
+				publish_started_at = now()
+			WHERE org_id = $1 AND id = $2 AND review_session_id = $3
+				AND status = 'running' AND publish_state = 'pending'
+			RETURNING id`, orgID, reviewRunID, reviewSessionID, string(result.Verdict), result.Body).Scan(&id)
+		if err == nil {
+			claimed = true
+			return nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		var status, state, verdict, body string
+		if err := tx.QueryRow(ctx, `
+			SELECT status, publish_state, publish_verdict, publish_body
+			FROM ao_review_runs
+			WHERE org_id = $1 AND id = $2 AND review_session_id = $3
+			FOR UPDATE`, orgID, reviewRunID, reviewSessionID).Scan(&status, &state, &verdict, &body); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if status != "running" || (state != "publishing" && state != "uncertain") ||
+			verdict != string(result.Verdict) || body != result.Body {
+			return ErrInvalid
+		}
+		return nil
+	})
+	return claimed, normalizeConstraintError(err)
+}
+
+// MarkReviewPublicationUncertain leaves the run available for reconciliation.
+// It never clears the publication claim, because a GitHub POST may have landed.
+func (s *Store) MarkReviewPublicationUncertain(
+	ctx context.Context, orgID, reviewRunID, reviewSessionID, message string,
+) error {
+	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			UPDATE ao_review_runs
+			SET publish_state = 'uncertain', last_error = $4
+			WHERE org_id = $1 AND id = $2 AND review_session_id = $3
+				AND status = 'running' AND publish_state = 'publishing'`,
+			orgID, reviewRunID, reviewSessionID, message)
+		return err
+	})
+}
+
 // CompleteAndDeliverReviewRun records a delivered verdict from the owning session.
 func (s *Store) CompleteAndDeliverReviewRun(
 	ctx context.Context,
@@ -387,7 +449,7 @@ func (s *Store) CompleteAndDeliverReviewRun(
 		row := tx.QueryRow(
 			ctx,
 			`UPDATE ao_review_runs
-			SET status = 'delivered', verdict = $4, body = $5, provider_review_id = $6,
+			SET status = 'delivered', publish_state = 'published', verdict = $4, body = $5, provider_review_id = $6,
 				completed_at = now(), delivered_at = now()
 			WHERE org_id = $1 AND id = $2 AND review_session_id = $3 AND status = 'running'
 			RETURNING `+reviewRunColumns,
@@ -437,7 +499,8 @@ func (s *Store) FailReviewRun(
 func failReviewRunTx(ctx context.Context, tx pgx.Tx, orgID, reviewRunID, reviewSessionID, lastError string) (domain.ReviewRun, error) {
 	run, err := scanReviewRun(tx.QueryRow(ctx,
 		`UPDATE ao_review_runs SET status = 'failed', last_error = $4, completed_at = now()
-		WHERE org_id = $1 AND id = $2 AND review_session_id = $3 AND status = 'running'
+		WHERE org_id = $1 AND id = $2 AND review_session_id = $3
+			AND status = 'running' AND publish_state = 'pending'
 		RETURNING `+reviewRunColumns,
 		orgID, reviewRunID, reviewSessionID, lastError))
 	if err != nil {

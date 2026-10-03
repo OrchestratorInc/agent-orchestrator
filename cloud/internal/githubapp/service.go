@@ -71,6 +71,8 @@ type Store interface {
 	OpenReviewTerminal(ctx context.Context, orgID, sessionID, reviewRunID, prompt, harness string) (string, error)
 	CloseReviewTerminal(ctx context.Context, orgID, sessionID, reviewRunID string) error
 	ReviewRunPullRequest(ctx context.Context, orgID, reviewRunID string) (domain.ReviewRunPullRequest, error)
+	BeginReviewPublication(context.Context, string, string, string, domain.SubmitReviewResult) (bool, error)
+	MarkReviewPublicationUncertain(context.Context, string, string, string, string) error
 	CompleteAndDeliverReviewRun(
 		ctx context.Context,
 		orgID, reviewRunID, reviewSessionID string,

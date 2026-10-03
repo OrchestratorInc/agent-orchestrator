@@ -139,6 +139,9 @@ func (b HarnessBuilder) BuildInteractive(
 			// CLAUDE_CONFIG_DIR alone does not exclude project/local settings.
 			providerArgs = []string{"--setting-sources", "user"}
 		}
+		if launch.AgentConfig.Effort != "" {
+			providerArgs = append(providerArgs, "--effort", launch.AgentConfig.Effort)
+		}
 	case "codex":
 		if launch.Kind != "reviewer" {
 			providerArgs = codexActivityHookArgs(hookHelperPath(b.DataDir))
@@ -172,7 +175,6 @@ func (b HarnessBuilder) BuildInteractive(
 			Binary:           binary,
 			SessionID:        launch.SessionID,
 			Model:            launch.Model,
-			Effort:           launch.AgentConfig.Effort,
 			Metadata:         map[string]string{agentruntime.MetadataKeyAgentSessionID: identity},
 			WorkspacePath:    workspace,
 			SystemPrompt:     systemPrompt,
@@ -189,7 +191,6 @@ func (b HarnessBuilder) BuildInteractive(
 			Binary:           binary,
 			SessionID:        launch.SessionID,
 			Model:            launch.Model,
-			Effort:           launch.AgentConfig.Effort,
 			WorkspacePath:    workspace,
 			Prompt:           launch.Prompt,
 			SystemPrompt:     systemPrompt,
