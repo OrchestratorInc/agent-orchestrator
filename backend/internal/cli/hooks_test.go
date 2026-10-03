@@ -525,6 +525,65 @@ func TestHooks_StopReportsIdle(t *testing.T) {
 	}
 }
 
+func TestHooks_ClaudeStopCarriesRunningSubagents(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-3")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	payload := `{"session_id":"native-main","background_tasks":[{"id":"child-1","type":"subagent","status":"running"},{"id":"shell-1","type":"bash","status":"running"}]}`
+	_, _, err := executeCLI(t, Deps{
+		In: strings.NewReader(payload), ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "stop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.State != "idle" || req.RunningSubagentIDs == nil || len(*req.RunningSubagentIDs) != 1 || (*req.RunningSubagentIDs)[0] != "child-1" {
+		t.Fatalf("Stop request = %+v", req)
+	}
+	_, _, err = executeCLI(t, Deps{
+		In:           strings.NewReader(`{"session_id":"native-main","background_tasks":[]}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "stop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.RunningSubagentIDs == nil || len(*req.RunningSubagentIDs) != 0 {
+		t.Fatalf("empty background snapshot lost: %+v", req)
+	}
+}
+
+func TestHooks_ClaudeSubagentIdentityDoesNotBecomeMainConversation(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-3")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	for _, event := range []string{"subagent-start", "pre-tool-use", "subagent-stop"} {
+		_, _, err := executeCLI(t, Deps{
+			In:           strings.NewReader(`{"session_id":"native-main","agent_id":"child-1","tool_name":"Bash","last_assistant_message":"child answer"}`),
+			ProcessAlive: func(int) bool { return true },
+		}, "hooks", "claude-code", event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var req setActivityAPIRequest
+		if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+			t.Fatal(err)
+		}
+		if req.SubagentID != "child-1" || req.AgentSessionID != "native-main" || req.LatestAssistantUpdate != "" {
+			t.Fatalf("%s request = %+v", event, req)
+		}
+	}
+}
+
 func TestHooks_StopReportsOnlyMainAssistantCheckpoint(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-3")

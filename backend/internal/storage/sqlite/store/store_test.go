@@ -57,6 +57,26 @@ func TestSessionCreateAllowsFakeHarness(t *testing.T) {
 	}
 }
 
+func TestClaudeSubagentFactsPersistWithActivityProjection(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec := sampleRecord("mer")
+	rec.Metadata.RuntimeLaunchID = "launch-1"
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created.Metadata.ClaudeActivityFacts = `{"launchId":"launch-1","parentState":"idle","children":{"child-1":{"running":true,"at":1}}}`
+	if applied, err := s.UpdateSessionFromActivitySignal(ctx, created, created.Revision); err != nil || !applied {
+		t.Fatalf("project facts: applied=%v err=%v", applied, err)
+	}
+	got, found, err := s.GetSession(ctx, created.ID)
+	if err != nil || !found || got.Metadata.ClaudeActivityFacts != created.Metadata.ClaudeActivityFacts {
+		t.Fatalf("persisted facts=%q found=%v err=%v", got.Metadata.ClaudeActivityFacts, found, err)
+	}
+}
+
 func TestClientRequestSessionBindsOneWorkerAndPreparedPromotionCannotStealKey(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

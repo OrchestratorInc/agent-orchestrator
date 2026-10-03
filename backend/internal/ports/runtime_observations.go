@@ -47,11 +47,13 @@ type ActivitySignal struct {
 	ExpectedRevision *int64
 	// ExpectedHarness fences native reports to their provider. Empty preserves
 	// the existing generic hook contract; socket reporters always set it.
-	ExpectedHarness domain.AgentHarness
-	Event           string
-	ToolName        string
-	ToolUseID       string
-	AgentSessionID  string
+	ExpectedHarness    domain.AgentHarness
+	Event              string
+	ToolName           string
+	ToolUseID          string
+	SubagentID         string
+	RunningSubagentIDs *[]string
+	AgentSessionID     string
 	// LatestUserPrompt and LatestAssistantUpdate are provider hook facts used
 	// to build a deterministic handoff. Lifecycle accepts them only from their
 	// main-turn event boundaries (UserPromptSubmit and Stop) under the current

@@ -117,6 +117,9 @@ type SessionMetadata struct {
 	// active native agent session when its provider exposes one. Retained
 	// provider-specific paths also live on AgentNativeSession records.
 	NativeTranscriptPath string `json:"nativeTranscriptPath,omitempty"`
+	// ClaudeActivityFacts records parent-turn and subagent hook facts for the
+	// current runtime launch. It is internal native evidence, not display status.
+	ClaudeActivityFacts string `json:"-"`
 	// ProviderConversationID is the opaque handle a Chat driver needs to resume
 	// this session's provider conversation after a restart (a Codex thread id
 	// today). Normally empty for TUI sessions. It remains a distinct field from

@@ -521,9 +521,10 @@ const maxActivitySignalProjectionRetries = 3
 func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, s ports.ActivitySignal) error {
 	// Subagent answers, including prompt suggestions, are not root-conversation
 	// facts. Their usage is collected independently from lifecycle metadata.
-	if s.Event == "subagent-stop" {
+	if s.Event == "subagent-stop" && s.SubagentID == "" {
 		return nil
 	}
+	s.SubagentID = strings.TrimSpace(s.SubagentID)
 	s.AgentSessionID = strings.TrimSpace(s.AgentSessionID)
 	s.LatestUserPrompt = strings.TrimSpace(s.LatestUserPrompt)
 	s.LatestAssistantUpdate = strings.TrimSpace(s.LatestAssistantUpdate)
@@ -577,7 +578,7 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 			}
 		}
 	}
-	if !s.Valid && s.AgentSessionID == "" && s.LatestUserPrompt == "" && s.LatestAssistantUpdate == "" && s.TranscriptPath == "" {
+	if !s.Valid && s.SubagentID == "" && s.AgentSessionID == "" && s.LatestUserPrompt == "" && s.LatestAssistantUpdate == "" && s.TranscriptPath == "" {
 		return nil
 	}
 	if s.LaunchID != "" {
@@ -850,10 +851,15 @@ retryProjection:
 	// An explicit prompt submission is proof that an agent was relaunched in the
 	// preserved shell. Other same-generation callbacks may have been delayed
 	// behind the process-exit report and cannot resurrect an exited workload.
-	if rec.Activity.State == domain.ActivityExited && s.Valid && s.State != domain.ActivityExited &&
+	if rec.Activity.State == domain.ActivityExited && (s.Valid || s.SubagentID != "") && s.State != domain.ActivityExited &&
 		(s.State != domain.ActivityActive || s.Event != "user-prompt-submit") && !currentChatController {
 		m.mu.Unlock()
 		return nil
+	}
+	s, claudeFacts, err := reduceClaudeSubagentActivity(rec, s, now)
+	if err != nil {
+		m.mu.Unlock()
+		return err
 	}
 	// Event-tagged signals fold through the session's tool-flight state first:
 	// they may be suppressed (state write skipped) by the blocked-precedence
@@ -874,7 +880,8 @@ retryProjection:
 		(s.AgentSessionID != "" && s.Timestamp.After(rec.Metadata.NativeIdentityObservedAt)) ||
 		(s.AgentSessionID != "" && rec.Metadata.AgentSessionIDLaunchID != s.LaunchID) ||
 		(s.TranscriptPath != "" && rec.Metadata.NativeTranscriptPath != s.TranscriptPath) ||
-		checkpointChanged
+		checkpointChanged || claudeFacts != rec.Metadata.ClaudeActivityFacts
+	checkpoint.ClaudeActivityFacts = claudeFacts
 	toolFlightBeforeProjection := cloneToolFlight(m.flights[id])
 	if s.Valid {
 		s = m.applyToolPrecedenceLocked(id, rec.Activity.State, s)
