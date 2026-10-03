@@ -26,6 +26,10 @@ const (
 	AgentAuthenticationUnknown AgentAuthenticationState = "unknown"
 	// AgentAuthenticationNotApplicable means the harness requires no auth check.
 	AgentAuthenticationNotApplicable AgentAuthenticationState = "not_applicable"
+	// AgentAuthenticationConfigured means a credential is present locally but
+	// nothing has proven it valid. It is deliberately not a ready state: a
+	// revoked key looks identical to a working one on disk.
+	AgentAuthenticationConfigured AgentAuthenticationState = "configured"
 )
 
 // AgentEffectiveReadiness is derived from installation and authentication.
@@ -70,22 +74,24 @@ func (p AgentReadinessPurpose) Valid() bool {
 
 // Stable, safe reason codes exposed through the daemon API.
 const (
-	AgentReadinessReasonNotChecked              = "not_checked"
-	AgentReadinessReasonChecking                = "checking"
-	AgentReadinessReasonInstalled               = "installed"
-	AgentReadinessReasonNotInstalled            = "not_installed"
-	AgentReadinessReasonInstallIdentityPending  = "install_identity_pending"
-	AgentReadinessReasonInstallCheckUnsupported = "install_check_unsupported"
-	AgentReadinessReasonInstallCheckTimeout     = "install_check_timeout"
-	AgentReadinessReasonInstallCheckFailed      = "install_check_failed"
-	AgentReadinessReasonAuthorized              = "authorized"
-	AgentReadinessReasonUnauthorized            = "unauthorized"
-	AgentReadinessReasonAuthNotApplicable       = "auth_not_applicable"
-	AgentReadinessReasonAuthCheckUnsupported    = "auth_check_unsupported"
-	AgentReadinessReasonAuthCheckInconclusive   = "auth_check_inconclusive"
-	AgentReadinessReasonAuthCheckTimeout        = "auth_check_timeout"
-	AgentReadinessReasonAuthCheckFailed         = "auth_check_failed"
-	AgentReadinessReasonAuthSkippedNotInstalled = "auth_skipped_not_installed"
+	AgentReadinessReasonNotChecked                 = "not_checked"
+	AgentReadinessReasonChecking                   = "checking"
+	AgentReadinessReasonInstalled                  = "installed"
+	AgentReadinessReasonNotInstalled               = "not_installed"
+	AgentReadinessReasonInstallIdentityPending     = "install_identity_pending"
+	AgentReadinessReasonInstallIncompatibleVersion = "install_incompatible_version"
+	AgentReadinessReasonInstallCheckUnsupported    = "install_check_unsupported"
+	AgentReadinessReasonInstallCheckTimeout        = "install_check_timeout"
+	AgentReadinessReasonInstallCheckFailed         = "install_check_failed"
+	AgentReadinessReasonAuthorized                 = "authorized"
+	AgentReadinessReasonAuthConfigured             = "auth_configured_unverified"
+	AgentReadinessReasonUnauthorized               = "unauthorized"
+	AgentReadinessReasonAuthNotApplicable          = "auth_not_applicable"
+	AgentReadinessReasonAuthCheckUnsupported       = "auth_check_unsupported"
+	AgentReadinessReasonAuthCheckInconclusive      = "auth_check_inconclusive"
+	AgentReadinessReasonAuthCheckTimeout           = "auth_check_timeout"
+	AgentReadinessReasonAuthCheckFailed            = "auth_check_failed"
+	AgentReadinessReasonAuthSkippedNotInstalled    = "auth_skipped_not_installed"
 )
 
 // AgentInstallationObservation records the latest normalized installation check.
@@ -100,7 +106,7 @@ type AgentInstallationObservation struct {
 
 // AgentAuthenticationObservation records the latest normalized authentication check.
 type AgentAuthenticationObservation struct {
-	State       AgentAuthenticationState `json:"state" enum:"authorized,unauthorized,unknown,not_applicable"`
+	State       AgentAuthenticationState `json:"state" enum:"authorized,unauthorized,unknown,not_applicable,configured"`
 	Freshness   AgentReadinessFreshness  `json:"freshness" enum:"fresh,stale,checking"`
 	CheckedAt   *time.Time               `json:"checkedAt" format:"date-time"`
 	AttemptedAt *time.Time               `json:"attemptedAt" format:"date-time"`
@@ -134,6 +140,9 @@ func EffectiveAgentReadiness(installation AgentInstallationState, authentication
 		case AgentAuthenticationUnauthorized:
 			return AgentReadinessNotReady
 		default:
+			// Configured and unknown both land here. A credential AO could not
+			// verify must not read as ready, and must not block a launch
+			// either — unknown does both.
 			return AgentReadinessUnknown
 		}
 	default:

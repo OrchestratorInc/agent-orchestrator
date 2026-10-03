@@ -940,6 +940,17 @@ func (s *Store) appendUserMessage(
 ) (created bool, err error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	if generation == "" && reviewID == "" {
+		// A Send may have read "provisioning" just before Kill or Ready.
+		// Session writes share writeMu, so this check and the append are atomic.
+		record, readErr := s.qw.GetSession(ctx, session)
+		if readErr != nil {
+			return false, fmt.Errorf("check queued session %s: %w", session, readErr)
+		}
+		if record.IsTerminated || !record.ProvisionState.IsProvisioning() {
+			return false, domain.ErrSessionNotProvisioning
+		}
+	}
 
 	if retryOfTurnID != "" {
 		_, lookupErr := s.qr.SelectConversationRetryTurnIDBySource(ctx,
@@ -960,7 +971,16 @@ func (s *Store) appendUserMessage(
 				ClientMessageID: msg.ClientMessageID,
 			})
 		if lookupErr == nil {
-			_ = existing
+			// Older rows have no intake fingerprint. Compare their current
+			// persisted payload exactly; never guess through AO-added context.
+			if existing.ClientPayloadHash.Valid {
+				if msg.ClientPayloadHash == "" || existing.ClientPayloadHash.String != msg.ClientPayloadHash {
+					return false, domain.ErrClientMessageConflict
+				}
+			} else if existing.Text != msg.Text || existing.Origin != msg.Origin ||
+				existing.DeliveryContentJson != msg.DeliveryContentJSON {
+				return false, domain.ErrClientMessageConflict
+			}
 			return false, nil
 		}
 		if !errors.Is(lookupErr, sql.ErrNoRows) {
@@ -995,13 +1015,14 @@ func (s *Store) appendUserMessage(
 			Text:                msg.Text,
 			ProviderItemID:      "",
 			ClientMessageID:     msg.ClientMessageID,
+			ClientPayloadHash:   sql.NullString{String: msg.ClientPayloadHash, Valid: msg.ClientPayloadHash != ""},
 			DeliveryContentJson: msg.DeliveryContentJSON,
 			CreatedAt:           now,
 			UpdatedAt:           now,
 		}); err != nil {
 			return err
 		}
-		if msg.Origin == domain.MessageOriginHuman {
+		if msg.Origin == domain.MessageOriginHuman || msg.AuthoredByUser {
 			if _, err := q.RecordSessionHumanMessage(ctx, gen.RecordSessionHumanMessageParams{
 				ID:                 session,
 				LatestUserPrompt:   msg.Text,
@@ -1141,6 +1162,20 @@ func (s *Store) AppendImportedUserMessage(
 		UpdatedAt:           now,
 	}); err != nil {
 		return fmt.Errorf("insert imported user message for turn %s: %w", providerTurnID, err)
+	}
+	return nil
+}
+
+// MarkTurnDispatching removes a turn from automatic queue replay before any
+// provider call. If the later provider-ID binding fails, delivery is uncertain
+// but the prompt cannot be sent a second time by a reconnected controller.
+func (s *Store) MarkTurnDispatching(ctx context.Context, turnID string) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	if err := q.MarkConversationTurnStarted(ctx, gen.MarkConversationTurnStartedParams{
+		ID: turnID,
+	}); err != nil {
+		return fmt.Errorf("mark turn %s dispatching: %w", turnID, err)
 	}
 	return nil
 }
@@ -1318,6 +1353,30 @@ func (s *Store) SettleOrphanedTurns(ctx context.Context, session domain.SessionI
 			HandledBySessionID: session,
 		}); err != nil {
 		return fmt.Errorf("settle orphaned turns for %s: %w", session, err)
+	}
+	return nil
+}
+
+// SettleUnboundRunningTurn closes an ambiguous dispatch after live reconnect.
+// Recheck under the writer lock so a bound or queued turn is never settled.
+func (s *Store) SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	turn, err := q.SelectConversationTurnByID(ctx, turnID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("select unbound running turn %s: %w", turnID, err)
+	}
+	if turn.ConversationID != conversationID || turn.HandledBySessionID != session || turn.State != domain.TurnStateRunning || turn.ProviderTurnID != "" || turn.RolledBackAt.Valid {
+		return nil
+	}
+	if err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
+		State: domain.TurnStateFailed, ErrorMessage: "provider delivery unconfirmed after reconnect",
+		CompletedAt: sql.NullTime{Time: now, Valid: true}, ID: turnID,
+	}); err != nil {
+		return fmt.Errorf("settle unbound running turn %s: %w", turnID, err)
 	}
 	return nil
 }
@@ -3324,6 +3383,7 @@ func messageToDomain(row gen.ConversationMessage) domain.ConversationMessage {
 		Streaming:           row.Streaming != 0,
 		ProviderItemID:      row.ProviderItemID,
 		ClientMessageID:     row.ClientMessageID,
+		ClientPayloadHash:   row.ClientPayloadHash.String,
 		DeliveryContentJSON: row.DeliveryContentJson,
 		CreatedAt:           row.CreatedAt,
 		UpdatedAt:           row.UpdatedAt,

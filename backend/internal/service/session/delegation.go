@@ -27,14 +27,17 @@ const (
 // may be empty to open an idle worker that the user can instruct later. Empty
 // RequestedAgent means the spawn uses the project's worker-agent default.
 type DelegateTaskInput struct {
-	ProjectID      domain.ProjectID
-	Brief          string
-	RequestedAgent domain.AgentHarness
-	Model          string
-	Effort         *string
-	ApprovalMode   domain.PermissionMode
-	RequestedMode  domain.SessionMode
-	Attachments    []ports.SpawnAttachment
+	ProjectID         domain.ProjectID
+	Brief             string
+	RequestedAgent    domain.AgentHarness
+	Model             string
+	Effort            *string
+	ApprovalMode      domain.PermissionMode
+	RequestedMode     domain.SessionMode
+	Attachments       []ports.SpawnAttachment
+	TaskPreparation   domain.TaskPreparationToken
+	ClientRequestID   string
+	ClientRequestHash string
 }
 
 // DelegateTaskOutcome identifies the spawned worker. OrchestratorID remains
@@ -44,10 +47,31 @@ type DelegateTaskOutcome struct {
 	WorkerID       domain.SessionID
 }
 
+// PrepareTask starts the reversible worktree-only half of task creation.
+func (s *Service) PrepareTask(ctx context.Context, projectID domain.ProjectID) (string, error) {
+	project, err := s.requireProject(ctx, projectID)
+	if err != nil {
+		return "", err
+	}
+	token, err := s.manager.PrepareTaskWorkspace(ctx, project)
+	return string(token), err
+}
+
+// CancelTaskPreparation releases an unclaimed speculative worktree. Unknown or
+// already-claimed tokens are intentionally idempotent.
+func (s *Service) CancelTaskPreparation(ctx context.Context, token string) error {
+	return s.manager.CancelTaskPreparation(ctx, domain.TaskPreparationToken(token))
+}
+
 // DelegateTask spawns the worker directly, matching `ao spawn`, with a
 // provisional display name derived from the task brief. AO then best-effort
 // refines that title through a short-lived call to the worker's resolved harness.
 func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (DelegateTaskOutcome, error) {
+	if rec, found, err := s.replayClientRequest(ctx, in.ClientRequestID, in.ClientRequestHash); err != nil {
+		return DelegateTaskOutcome{}, err
+	} else if found {
+		return DelegateTaskOutcome{WorkerID: rec.ID}, nil
+	}
 	if _, err := s.requireProject(ctx, in.ProjectID); err != nil {
 		return DelegateTaskOutcome{}, err
 	}
@@ -64,11 +88,13 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 
 	effort, effortOverride := optionalTuningValue(in.Effort)
 	worker, _, _, err := s.manager.Spawn(ctx, ports.SpawnConfig{
-		ProjectID:   in.ProjectID,
-		Kind:        domain.KindWorker,
-		Harness:     in.RequestedAgent,
-		Prompt:      prompt,
-		DisplayName: delegatedTaskDisplayName(in.Brief),
+		ClientRequestID:   in.ClientRequestID,
+		ClientRequestHash: in.ClientRequestHash,
+		ProjectID:         in.ProjectID,
+		Kind:              domain.KindWorker,
+		Harness:           in.RequestedAgent,
+		Prompt:            prompt,
+		DisplayName:       delegatedTaskDisplayName(in.Brief),
 		AgentConfig: ports.AgentConfig{
 			Model:       strings.TrimSpace(in.Model),
 			Effort:      effort,
@@ -77,6 +103,11 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 		EffortOverride: effortOverride,
 		RequestedMode:  in.RequestedMode,
 		Attachments:    in.Attachments,
+		// This is the desktop's new-task path: there is a UI waiting to navigate
+		// to the session. A Chat worker answers as soon as it is addressable and
+		// finishes starting in the background.
+		Async:           true,
+		TaskPreparation: in.TaskPreparation,
 	})
 	if err != nil {
 		return DelegateTaskOutcome{}, toSpawnAPIError(err)
@@ -85,7 +116,7 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 	// The worker spawn is the commit point. Background title
 	// generation must never hold the new-task response open. A promptless worker
 	// stays idle with its provisional title until the user supplies instructions.
-	if prompt != "" {
+	if prompt != "" && !worker.ClientRequestCommitted {
 		s.refineDelegatedTaskTitleInBackground(worker.ID, in)
 	}
 	return DelegateTaskOutcome{WorkerID: worker.ID}, nil

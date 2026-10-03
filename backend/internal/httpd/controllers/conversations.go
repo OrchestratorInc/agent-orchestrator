@@ -21,9 +21,13 @@ import (
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
-// maxConversationBody bounds a chat message. Large context belongs in files the
-// agent reads from the worktree, not in a request body.
-const maxConversationBody = maxSpawnBodyBytes
+// Native chat images are sent to the provider and retained in conversation
+// history. Workspace file attachments use separate, larger spawn limits.
+const (
+	maxConversationImageBytes  = 10 << 20
+	maxConversationImagesBytes = 25 << 20
+	maxConversationBody        = maxConversationImagesBytes*4/3 + (2 << 20)
+)
 
 // ConversationService is the controller-facing Chat contract.
 type ConversationService interface {
@@ -751,7 +755,7 @@ func conversationContent(req SendConversationMessageRequest) ([]ports.ChatConten
 			Data:     attachment.Data,
 		})
 	}
-	if _, err := decodeSpawnAttachments(spawnInputs); err != nil {
+	if _, err := decodeAttachments(spawnInputs, maxConversationImageBytes, maxConversationImagesBytes); err != nil {
 		return nil, err
 	}
 	content := make([]ports.ChatContent, 0, len(req.Attachments)+len(req.Resources))
@@ -902,7 +906,7 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 			"SESSION_MODE_MISMATCH",
 			"this session was created in Terminal UI mode and has no chat conversation", nil)
 
-	case errors.Is(err, chatsvc.ErrNoController):
+	case errors.Is(err, chatsvc.ErrNoController), errors.Is(err, chatsvc.ErrNotProvisioning):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_CONTROLLER_NOT_READY",
 			"the agent controller for this session is not running", nil)
@@ -934,6 +938,10 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, domain.ErrNoConversationTurn):
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found",
 			"CHAT_TURN_NOT_FOUND", "that turn is not in this session's conversation", nil)
+
+	case errors.Is(err, domain.ErrClientMessageConflict):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_MESSAGE_IDEMPOTENCY_CONFLICT", "clientMessageId belongs to a different message", nil)
 
 	case errors.Is(err, chatsvc.ErrTurnRunning):
 		// Retryable, unlike every other refusal here: the same request works once

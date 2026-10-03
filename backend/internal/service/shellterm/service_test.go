@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 )
 
 const testAppRunID = "app-run-current"
@@ -28,23 +29,29 @@ func testLogger() *slog.Logger {
 // fakeShellRuntime records every runtime call so tests can assert on what was
 // spawned and what was torn down.
 type fakeShellRuntime struct {
-	created   []ports.RuntimeConfig
-	destroyed []string
-	sentCh    chan sentInput
+	created     []ports.RuntimeConfig
+	destroyed   []string
+	interrupted []string
+	sentCh      chan sentInput
 
-	createErr   error
-	destroyErr  error
-	sendErr     error
-	output      string
-	outputMu    sync.RWMutex
-	outputErr   error
-	outputReady <-chan struct{}
+	createErr    error
+	onCreate     func(ports.RuntimeConfig)
+	createCtxErr bool
+	destroyErr   error
+	sendErr      error
+	output       string
+	outputMu     sync.RWMutex
+	outputErr    error
+	outputReady  <-chan struct{}
 	// aliveByHandle answers IsAlive; a handle absent from the map is dead.
 	aliveByHandle map[string]bool
 	aliveErr      error
 	handlePrefix  string
 	childExited   bool
 	childProbeErr error
+	childProbeCh  chan struct{}
+	cueReady      bool
+	cueReadyGate  <-chan struct{}
 }
 
 type sentInput struct {
@@ -56,11 +63,26 @@ func newFakeShellRuntime() *fakeShellRuntime {
 	return &fakeShellRuntime{aliveByHandle: map[string]bool{}, sentCh: make(chan sentInput, 1)}
 }
 
-func (f *fakeShellRuntime) Create(_ context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
+func (f *fakeShellRuntime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
+	if f.onCreate != nil {
+		f.onCreate(cfg)
+	}
+	if f.createCtxErr && ctx.Err() != nil {
+		return ports.RuntimeHandle{}, ctx.Err()
+	}
 	if f.createErr != nil {
 		return ports.RuntimeHandle{}, f.createErr
 	}
 	f.created = append(f.created, cfg)
+	if f.cueReady && cfg.Env["AO_CUE_READY_FILE"] != "" {
+		_ = os.WriteFile(cfg.Env["AO_CUE_READY_FILE"], []byte("ready"), 0o600)
+	}
+	if f.cueReadyGate != nil && cfg.Env["AO_CUE_READY_FILE"] != "" {
+		go func() {
+			<-f.cueReadyGate
+			_ = os.WriteFile(cfg.Env["AO_CUE_READY_FILE"], []byte("ready"), 0o600)
+		}()
+	}
 	handleID := f.handlePrefix + string(cfg.SessionID)
 	f.aliveByHandle[handleID] = true
 	return ports.RuntimeHandle{ID: handleID}, nil
@@ -76,6 +98,12 @@ func (f *fakeShellRuntime) Destroy(_ context.Context, handle ports.RuntimeHandle
 		delete(f.aliveByHandle, handle.ID)
 	}
 	return f.destroyErr
+}
+
+func (f *fakeShellRuntime) Interrupt(_ context.Context, handle ports.RuntimeHandle) error {
+	f.interrupted = append(f.interrupted, handle.ID)
+	f.childExited = true
+	return nil
 }
 
 func (f *fakeShellRuntime) SendInput(_ context.Context, handle ports.RuntimeHandle, input string) error {
@@ -115,6 +143,12 @@ func (f *fakeShellRuntime) IsAlive(_ context.Context, handle ports.RuntimeHandle
 }
 
 func (f *fakeShellRuntime) IsChildAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
+	if f.childProbeCh != nil {
+		select {
+		case f.childProbeCh <- struct{}{}:
+		default:
+		}
+	}
 	if f.childProbeErr != nil {
 		return false, f.childProbeErr
 	}
@@ -233,6 +267,8 @@ func (f *fakeProjectRootLocator) ProjectRoot(_ context.Context, id domain.Projec
 type fakeSessionWorkspace struct {
 	workspacePath string
 	projectID     domain.ProjectID
+	activity      domain.ActivityState
+	terminated    bool
 }
 
 type fakeSessionWorkspaceLocator struct {
@@ -249,6 +285,17 @@ func (f *fakeSessionWorkspaceLocator) SessionWorkspace(_ context.Context, id dom
 		return "", "", apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
 	return ws.workspacePath, ws.projectID, nil
+}
+
+func (f *fakeSessionWorkspaceLocator) CueCommandSessionTarget(_ context.Context, id domain.SessionID) (CueCommandSessionTarget, error) {
+	if f.err != nil {
+		return CueCommandSessionTarget{}, f.err
+	}
+	ws, ok := f.sessions[id]
+	if !ok {
+		return CueCommandSessionTarget{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	return CueCommandSessionTarget{ProjectID: ws.projectID, WorkspacePath: ws.workspacePath, Activity: ws.activity, IsTerminated: ws.terminated}, nil
 }
 
 // newTestService wires a service with deterministic ids so assertions can name
@@ -702,6 +749,9 @@ func TestOpenShellTerminalFallsBackToDataDirWhenNoProjectGiven(t *testing.T) {
 	if term.ProjectID != "" {
 		t.Errorf("project id = %q, want empty", term.ProjectID)
 	}
+	if rt.created[0].Env["AO_PREVIEW_CAPABILITY"] != "" {
+		t.Fatal("standalone shell received a session preview capability")
+	}
 }
 
 func TestOpenCommandTerminalUsesTrustedProcessConfiguration(t *testing.T) {
@@ -777,6 +827,7 @@ func TestOpenShellTerminalReturnsNotFoundForUnknownProject(t *testing.T) {
 }
 
 func TestOpenShellTerminalScopesToSession(t *testing.T) {
+	t.Setenv("AO_BROWSER_CAPABILITY", "ambient-worker-token")
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
 	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
@@ -794,6 +845,113 @@ func TestOpenShellTerminalScopesToSession(t *testing.T) {
 	}
 	if len(st.records) != 1 || st.records[0].SessionID != "portfolio-3" {
 		t.Fatalf("session id not persisted on the record: %+v", st.records)
+	}
+	if got := rt.created[0].Env["AO_SESSION_ID"]; got != "portfolio-3" {
+		t.Errorf("shell AO_SESSION_ID = %q, want portfolio-3", got)
+	}
+	token := rt.created[0].Env["AO_PREVIEW_CAPABILITY"]
+	if !browser.NewAuthority().Valid("portfolio-3", token, st.records[0].PreviewCapabilityVerifier) {
+		t.Fatal("shell preview bearer does not match its durable verifier")
+	}
+	if got := rt.created[0].Env["AO_BROWSER_CAPABILITY"]; got != "" {
+		t.Fatalf("shell inherited worker browser capability %q", got)
+	}
+}
+
+func TestShellPreviewCapabilityIsScopedDurableAndRevoked(t *testing.T) {
+	ctx := context.Background()
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	sessions := &fakeSessionWorkspaceLocator{sessions: map[domain.SessionID]fakeSessionWorkspace{
+		"portfolio-3": {projectID: "portfolio"},
+		"portfolio-4": {projectID: "portfolio"},
+	}}
+	svc := newTestServiceWithSessions(rt, st, projects, sessions)
+	var token string
+	rt.onCreate = func(cfg ports.RuntimeConfig) {
+		token = cfg.Env["AO_PREVIEW_CAPABILITY"]
+		valid, err := svc.ValidPreviewCapability(ctx, "portfolio-3", token)
+		if err != nil || !valid {
+			t.Errorf("capability before shell row insert = %v, %v", valid, err)
+		}
+	}
+	term, err := svc.OpenShellTerminal(ctx, OpenShellTerminalInput{SessionID: "portfolio-3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		id     domain.SessionID
+		bearer string
+		want   bool
+	}{
+		{"portfolio-3", token, true},
+		{"portfolio-4", token, false},
+		{"portfolio-3", "wrong-token", false},
+	} {
+		valid, err := svc.ValidPreviewCapability(ctx, tc.id, tc.bearer)
+		if err != nil || valid != tc.want {
+			t.Fatalf("validate %s = %v, %v; want %v", tc.id, valid, err, tc.want)
+		}
+	}
+	restarted := NewService(rt, st, projects, sessions, "/data/dir", "next-run", testLogger())
+	valid, err := restarted.ValidPreviewCapability(ctx, "portfolio-3", token)
+	if err != nil || !valid {
+		t.Fatalf("capability after daemon replacement = %v, %v", valid, err)
+	}
+	rt.childExited = true // Detached host retains its row and scrollback.
+	valid, err = restarted.ValidPreviewCapability(ctx, "portfolio-3", token)
+	if err != nil || valid {
+		t.Fatalf("exited shell still authorized preview: %v, %v", valid, err)
+	}
+	rt.childExited = false
+	rt.childProbeErr = errors.New("probe unavailable")
+	valid, err = restarted.ValidPreviewCapability(ctx, "portfolio-3", token)
+	if err == nil || valid {
+		t.Fatalf("unknown shell liveness authorized preview: %v, %v", valid, err)
+	}
+	rt.childProbeErr = nil
+	if err := svc.CloseShellTerminal(ctx, term.HandleID); err != nil {
+		t.Fatal(err)
+	}
+	valid, err = restarted.ValidPreviewCapability(ctx, "portfolio-3", token)
+	if err != nil || valid {
+		t.Fatalf("capability after shell close = %v, %v", valid, err)
+	}
+	rt.onCreate = nil
+	if _, err := svc.OpenShellTerminal(ctx, OpenShellTerminalInput{SessionID: "portfolio-3"}); err != nil {
+		t.Fatal(err)
+	}
+	token = rt.created[len(rt.created)-1].Env["AO_PREVIEW_CAPABILITY"]
+	release, err := svc.BeginSessionTeardown(ctx, "portfolio-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	valid, err = restarted.ValidPreviewCapability(ctx, "portfolio-3", token)
+	if err != nil || valid {
+		t.Fatalf("capability after session teardown = %v, %v", valid, err)
+	}
+}
+
+func TestFailedShellLaunchRevokesPendingPreviewCapability(t *testing.T) {
+	ctx := context.Background()
+	rt := newFakeShellRuntime()
+	rt.createErr = errors.New("PTY unavailable")
+	st := &fakeShellTerminalStore{}
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	sessions := &fakeSessionWorkspaceLocator{sessions: map[domain.SessionID]fakeSessionWorkspace{
+		"portfolio-3": {projectID: "portfolio"},
+	}}
+	svc := newTestServiceWithSessions(rt, st, projects, sessions)
+	var token string
+	rt.onCreate = func(cfg ports.RuntimeConfig) { token = cfg.Env["AO_PREVIEW_CAPABILITY"] }
+	if _, err := svc.OpenShellTerminal(ctx, OpenShellTerminalInput{SessionID: "portfolio-3"}); err == nil {
+		t.Fatal("shell launch unexpectedly succeeded")
+	}
+	valid, err := svc.ValidPreviewCapability(ctx, "portfolio-3", token)
+	if err != nil || valid {
+		t.Fatalf("failed launch left a valid pending capability: %v, %v", valid, err)
 	}
 }
 

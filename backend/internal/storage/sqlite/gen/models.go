@@ -157,6 +157,38 @@ type AppSetting struct {
 	CloudOffering      bool
 }
 
+type Automation struct {
+	ID          domain.AutomationID
+	ProjectID   domain.ProjectID
+	DisplayName string
+	Prompt      string
+	Kind        domain.SessionKind
+	Harness     domain.AgentHarness
+	RruleText   string
+	Timezone    string
+	Enabled     bool
+	NextRunAt   time.Time
+	LastRunAt   sql.NullTime
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+type AutomationRun struct {
+	ID             domain.AutomationRunID
+	AutomationID   domain.AutomationID
+	ScheduledFor   time.Time
+	SessionID      *domain.SessionID
+	Status         domain.AutomationRunStatus
+	AttemptCount   int64
+	ClaimedAt      sql.NullTime
+	LeaseExpiresAt sql.NullTime
+	StartedAt      sql.NullTime
+	FinishedAt     sql.NullTime
+	ErrorMessage   sql.NullString
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
 type ChangeLog struct {
 	Seq       int64
 	ProjectID *domain.ProjectID
@@ -293,6 +325,7 @@ type ConversationMessage struct {
 	UpdatedAt           time.Time
 	DeliveryContentJson string
 	BranchID            string
+	ClientPayloadHash   sql.NullString
 }
 
 type ConversationProviderEvent struct {
@@ -348,6 +381,18 @@ type ConversationTurn struct {
 	HandledByReviewID    sql.NullString
 }
 
+type Cue struct {
+	ID          domain.CueID
+	ProjectID   domain.ProjectID
+	Name        string
+	Description string
+	Type        domain.CueType
+	Command     string
+	Prompt      string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 type ModelUsageEvent struct {
 	ID                    int64
 	BindingID             int64
@@ -383,6 +428,7 @@ type Notification struct {
 	CreatedAt   time.Time
 	ResolvedAt  sql.NullTime
 	DismissedAt sql.NullTime
+	SourceKey   string
 }
 
 type PR struct {
@@ -624,6 +670,14 @@ type Session struct {
 	LatestAssistantUpdateAt          sql.NullTime
 	NativeIdentityObservedAt         sql.NullTime
 	Effort                           string
+	ProvisionState                   domain.SessionProvisionState
+	ProvisionError                   string
+	IsTaskPreparation                bool
+	AutomationRunID                  *domain.AutomationRunID
+	AutomationLaunchCompleted        bool
+	ClientRequestID                  string
+	ClientRequestHash                string
+	ClientRequestCommitted           bool
 }
 
 type SessionCleanupFact struct {
@@ -672,17 +726,19 @@ type SessionWorktree struct {
 	PreservedRef string
 	State        string
 	BaseRef      string
+	CreationSha  string
 }
 
 type ShellTerminal struct {
-	HandleID   string
-	ProjectID  *domain.ProjectID
-	WorkingDir string
-	Title      string
-	AppRunID   string
-	CreatedAt  time.Time
-	SessionID  sql.NullString
-	Transient  bool
+	HandleID                  string
+	ProjectID                 *domain.ProjectID
+	WorkingDir                string
+	Title                     string
+	AppRunID                  string
+	CreatedAt                 time.Time
+	SessionID                 sql.NullString
+	Transient                 bool
+	PreviewCapabilityVerifier string
 }
 
 type TelemetryEvent struct {

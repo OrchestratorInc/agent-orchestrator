@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -11,9 +12,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -72,12 +75,16 @@ type projectResponse struct {
 }
 
 type createSessionRequest struct {
-	ProjectID                   string   `json:"projectId"`
-	Kind                        string   `json:"kind"`
-	Harness                     string   `json:"harness"`
-	DisplayName                 string   `json:"displayName"`
-	Prompt                      string   `json:"prompt"`
-	Mode                        string   `json:"mode,omitempty"`
+	ProjectID   string `json:"projectId"`
+	Kind        string `json:"kind"`
+	Harness     string `json:"harness"`
+	DisplayName string `json:"displayName"`
+	Prompt      string `json:"prompt"`
+	Mode        string `json:"mode,omitempty"`
+	// Model is the coding-agent model the session launches with (harness-native
+	// id, e.g. "anthropic/claude-opus-4-8" for opencode). Optional: empty uses
+	// the harness default.
+	Model                       string   `json:"model,omitempty"`
 	DeniedCommands              []string `json:"deniedCommands,omitempty"`
 	SandboxProviderConnectionID string   `json:"sandboxProviderConnectionId,omitempty"`
 	// Provider selects which configured sandbox provider runs this session. It
@@ -92,24 +99,30 @@ type createSessionRepo struct {
 }
 
 type sessionResponse struct {
-	ID               string   `json:"id"`
-	OrgID            string   `json:"orgId"`
-	ProjectID        string   `json:"projectId"`
-	Kind             string   `json:"kind"`
-	Harness          string   `json:"harness"`
-	DisplayName      string   `json:"displayName"`
-	Branch           string   `json:"branch"`
-	Mode             string   `json:"mode"`
-	DeniedCommands   []string `json:"deniedCommands"`
-	ActivityState    string   `json:"activityState"`
-	Status           string   `json:"status"`
-	RuntimeConnected bool     `json:"runtimeConnected"`
-	SandboxProvider  string   `json:"sandboxProvider,omitempty"`
-	DesiredState     string   `json:"desiredState,omitempty"`
-	ObservedState    string   `json:"observedState,omitempty"`
-	RuntimeState     string   `json:"runtimeState,omitempty"`
-	RuntimeError     string   `json:"runtimeError,omitempty"`
-	IsTerminated     bool     `json:"isTerminated"`
+	ID                 string                   `json:"id"`
+	OrgID              string                   `json:"orgId"`
+	ProjectID          string                   `json:"projectId"`
+	Kind               string                   `json:"kind"`
+	Harness            string                   `json:"harness"`
+	DisplayName        string                   `json:"displayName"`
+	Branch             string                   `json:"branch"`
+	Mode               string                   `json:"mode"`
+	Model              string                   `json:"model,omitempty"`
+	DeniedCommands     []string                 `json:"deniedCommands"`
+	InterfaceMode      string                   `json:"interfaceMode"`
+	ActivityState      string                   `json:"activityState"`
+	Status             string                   `json:"status"`
+	RuntimeConnected   bool                     `json:"runtimeConnected"`
+	SandboxProvider    string                   `json:"sandboxProvider,omitempty"`
+	DesiredState       string                   `json:"desiredState,omitempty"`
+	ObservedState      string                   `json:"observedState,omitempty"`
+	RuntimeState       string                   `json:"runtimeState,omitempty"`
+	RuntimeError       string                   `json:"runtimeError,omitempty"`
+	IsTerminated       bool                     `json:"isTerminated"`
+	AutoInjectCI       bool                     `json:"autoInjectCI"`
+	AutoInjectReview   bool                     `json:"autoInjectReview"`
+	TerminateOnPRMerge bool                     `json:"terminateOnPrMerge"`
+	PRs                []sessionPRFactsResponse `json:"prs"`
 	// WorkerEpoch advances on every fresh worker connection (resume, restore,
 	// re-provision). Clients key their terminal on it so a resumed session
 	// re-attaches to the live agent instead of the dead epoch's terminal.
@@ -127,12 +140,13 @@ type pageInfo struct {
 // children listing: enough for a human row (number, url, lifecycle) and for an
 // orchestrator to route CI/review feedback without a second lookup.
 type sessionPRFactsResponse struct {
-	URL          string `json:"url"`
-	Number       int    `json:"number"`
-	State        string `json:"state"`
-	CI           string `json:"ci"`
-	Review       string `json:"review"`
-	Mergeability string `json:"mergeability"`
+	URL           string                            `json:"url"`
+	Number        int                               `json:"number"`
+	State         string                            `json:"state"`
+	CI            string                            `json:"ci"`
+	Review        string                            `json:"review"`
+	Mergeability  string                            `json:"mergeability"`
+	FailingChecks []pullRequestFailingCheckResponse `json:"failingChecks,omitempty"`
 	// The control plane does not track unresolved review comments yet; the
 	// field exists so the renderer's shared PullRequestFacts shape maps 1:1.
 	ReviewComments bool      `json:"reviewComments"`
@@ -155,28 +169,39 @@ func toSessionChildResponse(
 	facts []contract.PRFacts,
 	prs []domain.PullRequest,
 ) sessionChildResponse {
-	rendered := make([]sessionPRFactsResponse, 0, len(prs))
-	for _, pr := range prs {
-		state := string(pr.State)
-		if pr.Draft && pr.State == contract.PRStateOpen {
-			state = "draft"
-		}
-		rendered = append(rendered, sessionPRFactsResponse{
-			URL:          pr.URL,
-			Number:       pr.Number,
-			State:        state,
-			CI:           string(pr.CIState),
-			Review:       string(pr.ReviewState),
-			Mergeability: string(pr.Mergeability),
-			SourceBranch: pr.SourceBranch,
-			TargetBranch: pr.TargetBranch,
-			UpdatedAt:    pr.UpdatedAt,
-		})
-	}
 	return sessionChildResponse{
 		sessionResponse: toSessionResponse(session, facts),
-		PRs:             rendered,
+		PRs:             toSessionPRFactsResponses(prs, facts),
 	}
+}
+
+// writeProjectStoreError renders a project-creation store error, turning the
+// active-repository uniqueness conflict into a clear, specific message that
+// names the repository instead of the generic "resource conflicts" 409. Every
+// other error class is delegated to the shared store-error mapper unchanged.
+func (s *Server) writeProjectStoreError(w http.ResponseWriter, r *http.Request, err error) {
+	var repoConflict *postgres.ProjectRepositoryConflictError
+	if errors.As(err, &repoConflict) {
+		writeError(
+			w, r, http.StatusConflict, "project_repository_exists",
+			projectRepositoryConflictMessage(repoConflict.RepositoryURL),
+		)
+		return
+	}
+	s.writeStoreError(w, r, err)
+}
+
+// projectRepositoryConflictMessage explains that the workspace already has a
+// project for this repository, naming the repository (owner/name) when the URL
+// is known so the user can find and reuse or delete the existing project.
+func projectRepositoryConflictMessage(repositoryURL string) string {
+	if owner, repo, ok := parseGitHubRepo(repositoryURL); ok {
+		return fmt.Sprintf(
+			"You already have a project for %s/%s in this workspace. Open that project, or delete it before creating another for the same repository.",
+			owner, repo,
+		)
+	}
+	return "You already have a project for this repository in this workspace. Open that project, or delete it before creating another for the same repository."
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
@@ -281,7 +306,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		},
 	)
 	if err != nil {
-		s.writeStoreError(w, r, err)
+		s.writeProjectStoreError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"project": toProjectResponse(project)})
@@ -509,6 +534,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		effectiveProvider = s.sandboxProvider
 	}
 	var coderOpts *sandbox.CoderSessionOptions
+	var coderOverride *sandbox.CoderDeploymentOverride
 	if effectiveProvider == sandbox.ProviderCoder {
 		project, projectErr := s.store.GetProject(r.Context(), principalFrom(r), orgID, request.ProjectID)
 		if projectErr != nil {
@@ -522,11 +548,47 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 				StartupScript: cfg.StartupScript,
 			}
 		}
+		// A bring-your-own-Coder organization points its coder sessions at its own
+		// Coder deployment. When one is configured, bind the session to that
+		// connection (so the row carries provider_connection_id and the resolver
+		// decrypts the org's token) and stamp the org's non-secret coder fields
+		// into the plan in place of the deployment default. With no org connection
+		// the deployment default is kept — existing deployment-level coder is
+		// untouched.
+		if pcStore, ok := s.store.(providerConnectionStore); ok {
+			connections, connErr := pcStore.ListProviderConnections(r.Context(), principalFrom(r), orgID)
+			if connErr != nil {
+				s.writeStoreError(w, r, connErr)
+				return
+			}
+			for _, connection := range connections {
+				if connection.Provider != sandbox.ProviderCoder ||
+					connection.Label != defaultAgentConnectionLabel {
+					continue
+				}
+				cfg, decodeErr := domain.DecodeOrgCoderConfig(connection.Config)
+				if decodeErr != nil {
+					s.logger.Error("decode organization coder config", "error", decodeErr, "request_id", requestID(r))
+					writeError(w, r, http.StatusInternalServerError, "internal_error", "The organization's Coder configuration is invalid.")
+					return
+				}
+				request.SandboxProviderConnectionID = connection.ID
+				coderOverride = &sandbox.CoderDeploymentOverride{
+					BaseURL:     cfg.BaseURL,
+					Owner:       cfg.Owner,
+					TemplateID:  cfg.TemplateID,
+					AgentName:   cfg.AgentName,
+					Parameters:  cfg.Parameters,
+					DurableRoot: cfg.DurableRoot,
+				}
+				break
+			}
+		}
 	}
 	// The plan is resolved once, here, and stamped onto the sandbox row. The
 	// reconciler reads it back from the row rather than from configuration, so
 	// a later config change cannot disturb a session already in flight.
-	plan, err := s.provisioning.SessionPlanForProviderWithCoder(request.Harness, request.Provider, coderOpts)
+	plan, err := s.provisioning.SessionPlanForProviderWithCoder(request.Harness, request.Provider, coderOpts, coderOverride)
 	if err != nil {
 		s.logger.Error("resolve sandbox provisioning plan", "error", err, "request_id", requestID(r))
 		writeError(
@@ -548,6 +610,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			DisplayName:         request.DisplayName,
 			Prompt:              request.Prompt,
 			Mode:                request.Mode,
+			Model:               request.Model,
 			DeniedCommands:      request.DeniedCommands,
 			Provider:            plan.Provider,
 			SandboxConnectionID: request.SandboxProviderConnectionID,
@@ -606,9 +669,16 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	pullRequests, err := s.store.PullRequestsBySessions(r.Context(), orgID, sessionIDs)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
 	items := make([]sessionResponse, 0, len(sessions))
 	for _, session := range sessions {
-		items = append(items, toSessionResponse(session, prFacts[session.ID]))
+		response := toSessionResponse(session, prFacts[session.ID])
+		response.PRs = toSessionPRFactsResponses(pullRequests[session.ID], prFacts[session.ID])
+		items = append(items, response)
 	}
 	page := pageInfo{HasMore: hasMore}
 	if hasMore && len(sessions) > 0 {
@@ -720,7 +790,97 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"session": toSessionResponse(session, prFacts[sessionID])})
+	pullRequests, err := s.store.PullRequestsBySessions(r.Context(), orgID, []string{sessionID})
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	response := toSessionResponse(session, prFacts[sessionID])
+	response.PRs = toSessionPRFactsResponses(pullRequests[sessionID], prFacts[sessionID])
+	writeJSON(w, http.StatusOK, map[string]any{"session": response})
+}
+
+func (s *Server) setCloudSessionAutoInjectCI(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgId")
+	sessionID := chi.URLParam(r, "sessionId")
+	if requireUUID(orgID, "orgId") != nil || requireUUID(sessionID, "sessionId") != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId and sessionId must be UUIDs.")
+		return
+	}
+	var input struct {
+		AutoInjectCI *bool `json:"autoInjectCI"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil || input.AutoInjectCI == nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "autoInjectCI must be a boolean.")
+		return
+	}
+	session, err := s.store.SetCloudSessionAutoInjectCI(r.Context(), principalFrom(r), orgID, sessionID, *input.AutoInjectCI)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	prFacts, err := s.store.PRFactsBySession(r.Context(), orgID, []string{sessionID})
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	pullRequests, err := s.store.PullRequestsBySessions(r.Context(), orgID, []string{sessionID})
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	response := toSessionResponse(session, prFacts[sessionID])
+	response.PRs = toSessionPRFactsResponses(pullRequests[sessionID], prFacts[sessionID])
+	writeJSON(w, http.StatusOK, map[string]any{"session": response})
+}
+
+func (s *Server) setCloudSessionAutoInjectReview(w http.ResponseWriter, r *http.Request) {
+	s.setCloudSessionBooleanPolicy(w, r, "autoInjectReview", func(ctx context.Context, principal domain.Principal, orgID, sessionID string, enabled bool) (domain.Session, error) {
+		return s.store.SetCloudSessionAutoInjectReview(ctx, principal, orgID, sessionID, enabled)
+	})
+}
+
+func (s *Server) setCloudSessionMergePolicy(w http.ResponseWriter, r *http.Request) {
+	s.setCloudSessionBooleanPolicy(w, r, "terminateOnPrMerge", func(ctx context.Context, principal domain.Principal, orgID, sessionID string, enabled bool) (domain.Session, error) {
+		return s.store.SetCloudSessionTerminateOnPRMerge(ctx, principal, orgID, sessionID, enabled)
+	})
+}
+
+func (s *Server) setCloudSessionBooleanPolicy(
+	w http.ResponseWriter,
+	r *http.Request,
+	field string,
+	update func(context.Context, domain.Principal, string, string, bool) (domain.Session, error),
+) {
+	orgID := chi.URLParam(r, "orgId")
+	sessionID := chi.URLParam(r, "sessionId")
+	if requireUUID(orgID, "orgId") != nil || requireUUID(sessionID, "sessionId") != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId and sessionId must be UUIDs.")
+		return
+	}
+	input := map[string]*bool{}
+	if err := decodeJSON(w, r, &input); err != nil || input[field] == nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", field+" must be a boolean.")
+		return
+	}
+	session, err := update(r.Context(), principalFrom(r), orgID, sessionID, *input[field])
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	prFacts, err := s.store.PRFactsBySession(r.Context(), orgID, []string{sessionID})
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	pullRequests, err := s.store.PullRequestsBySessions(r.Context(), orgID, []string{sessionID})
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	response := toSessionResponse(session, prFacts[sessionID])
+	response.PRs = toSessionPRFactsResponses(pullRequests[sessionID], prFacts[sessionID])
+	writeJSON(w, http.StatusOK, map[string]any{"session": response})
 }
 
 // deleteSession records the intent to tear a session's sandbox down. It does
@@ -940,7 +1100,12 @@ func validSessionInput(request createSessionRequest) bool {
 		(request.Kind != "worker" && request.Kind != "orchestrator") ||
 		(request.Mode != "read-only" && request.Mode != "standard" && request.Mode != "trusted") ||
 		len(request.Harness) < 1 || len(request.Harness) > 120 ||
-		len(request.DisplayName) < 1 || len(request.DisplayName) > 80 ||
+		// Count runes, not bytes: the renderer derives this name from the task
+		// brief with a 100-CHARACTER slice, so a byte cap would reject a valid
+		// multibyte name. 100 matches that slice (was 80, which #5125 outgrew when
+		// it raised the renderer slice to 100 and left cloud task creation failing
+		// with "Session ... is invalid" for any brief over 80 chars).
+		len(request.DisplayName) < 1 || utf8.RuneCountInString(request.DisplayName) > 100 ||
 		len(request.Prompt) > 65536 ||
 		len(request.DeniedCommands) > 128 {
 		return false
@@ -979,28 +1144,56 @@ func toProjectResponse(project domain.Project) projectResponse {
 // pass nil only for a session that provably has none yet (just created).
 func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionResponse {
 	return sessionResponse{
-		ID:               session.ID,
-		OrgID:            session.OrgID,
-		ProjectID:        session.ProjectID,
-		Kind:             session.Kind,
-		Harness:          session.Harness,
-		DisplayName:      session.DisplayName,
-		Branch:           session.Branch,
-		Mode:             session.Mode,
-		DeniedCommands:   nonNilStrings(session.DeniedCommands),
-		ActivityState:    string(session.ActivityState),
-		Status:           string(session.Status(time.Now().UTC(), prs)),
-		RuntimeConnected: session.RuntimeConnected,
-		SandboxProvider:  session.SandboxProvider,
-		DesiredState:     session.DesiredState,
-		ObservedState:    session.ObservedState,
-		RuntimeState:     session.RuntimeState,
-		RuntimeError:     session.RuntimeError,
-		IsTerminated:     session.IsTerminated,
-		WorkerEpoch:      session.WorkerEpoch,
-		CreatedAt:        session.CreatedAt,
-		UpdatedAt:        session.UpdatedAt,
+		ID:                 session.ID,
+		OrgID:              session.OrgID,
+		ProjectID:          session.ProjectID,
+		Kind:               session.Kind,
+		Harness:            session.Harness,
+		DisplayName:        session.DisplayName,
+		Branch:             session.Branch,
+		Mode:               session.Mode,
+		Model:              session.Model,
+		DeniedCommands:     nonNilStrings(session.DeniedCommands),
+		InterfaceMode:      string(session.Interface.Normalized()),
+		ActivityState:      string(session.ActivityState),
+		Status:             string(session.Status(time.Now().UTC(), prs)),
+		RuntimeConnected:   session.RuntimeConnected,
+		SandboxProvider:    session.SandboxProvider,
+		DesiredState:       session.DesiredState,
+		ObservedState:      session.ObservedState,
+		RuntimeState:       session.RuntimeState,
+		RuntimeError:       session.RuntimeError,
+		IsTerminated:       session.IsTerminated,
+		AutoInjectCI:       session.AutoInjectCI,
+		AutoInjectReview:   session.AutoInjectReview,
+		TerminateOnPRMerge: session.TerminateOnPRMerge,
+		WorkerEpoch:        session.WorkerEpoch,
+		CreatedAt:          session.CreatedAt,
+		UpdatedAt:          session.UpdatedAt,
+		PRs:                []sessionPRFactsResponse{},
 	}
+}
+
+func toSessionPRFactsResponses(prs []domain.PullRequest, facts []contract.PRFacts) []sessionPRFactsResponse {
+	reviewCommentsByURL := make(map[string]bool, len(facts))
+	for _, fact := range facts {
+		reviewCommentsByURL[fact.URL] = fact.ReviewComments
+	}
+	items := make([]sessionPRFactsResponse, 0, len(prs))
+	for _, pr := range prs {
+		state := string(pr.State)
+		if pr.Draft && state == "open" {
+			state = "draft"
+		}
+		items = append(items, sessionPRFactsResponse{
+			URL: pr.URL, Number: pr.Number, State: state, CI: string(pr.CIState),
+			Review: string(pr.ReviewState), Mergeability: string(pr.Mergeability),
+			FailingChecks:  pullRequestFailingChecks(pr.Checks),
+			ReviewComments: reviewCommentsByURL[pr.URL],
+			SourceBranch:   pr.SourceBranch, TargetBranch: pr.TargetBranch, UpdatedAt: pr.UpdatedAt,
+		})
+	}
+	return items
 }
 
 func decimalID(id *int64) string {
