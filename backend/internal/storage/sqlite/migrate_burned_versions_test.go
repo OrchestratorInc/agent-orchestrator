@@ -173,6 +173,10 @@ var shippedMigrations = map[int64]string{
 	167: "0167_allow_opencode_v2_harness.sql",
 	168: "0168_cues.sql",
 	169: "0169_reported_pr_cdc.sql",
+	170: "0170_review_result_notifications.sql",
+	171: "0171_shell_preview_capability.sql",
+	172: "0172_client_task_requests.sql",
+	173: "0173_chat_client_payload_hash.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
