@@ -1091,8 +1091,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const cloudSession = Boolean(session?.cloud);
 	const localBrowserView = useBrowserView({
 		sessionId: uiSessionId,
-		origin: hostId && session && !cloudSession ? { hostId, sessionId, proxyBase: remoteBase ?? "" } : undefined,
-		disabled: !session || cloudSession,
+		origin: hostId && !cloudSession ? { hostId, sessionId, proxyBase: remoteBase ?? "" } : undefined,
+		disabled: (!session && !hostId) || cloudSession,
 		active: browserSlotVisible && !cloudSession,
 		poppedOut: browserPoppedOut,
 		terminated,
