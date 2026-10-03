@@ -340,13 +340,6 @@ func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh
 			return ports.AgentModelCatalog{}, err
 		}
 		if ok {
-			// Claude provider model IDs are credential-scoped. Check its local
-			// discovery inputs before serving a cache hit so switching provider or
-			// credentials cannot briefly expose IDs from the previous provider.
-			// The check is local; provider discovery remains cache-first.
-			if agentID == "claude-code" && s.modelCatalogInputsChanged(ctx, agentID, projectID, cached.BinaryVersion) {
-				return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadCached)
-			}
 			cached.Catalog = applyCustomModelEntryPolicy(cached.Catalog, s.discoverer.Manual(agentID))
 			due := catalogNeedsRevalidation(catalogLastSuccess(cached.Catalog), s.now())
 			needsRecovery := cached.RefreshState == "refreshing"
@@ -354,12 +347,6 @@ func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh
 			cached.Catalog.RefreshRecommended = !retriesExhausted && (due || needsRecovery || cached.RefreshState == "error" || cached.RefreshState == "queued")
 			if !retriesExhausted && (due || needsRecovery) && (cached.RetryAt.IsZero() || !s.now().Before(cached.RetryAt)) {
 				go func() { _, _ = s.RevalidateModels(s.ctx, agentID, projectID) }()
-			} else if retriesExhausted {
-				go s.revalidateChangedInputs(agentID, projectID, cached.BinaryVersion)
-			} else if !due {
-				time.AfterFunc(10*time.Millisecond, func() {
-					s.revalidateChangedInputs(agentID, projectID, cached.BinaryVersion)
-				})
 			}
 			return cached.Catalog, nil
 		}
@@ -369,38 +356,6 @@ func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh
 		mode = modelLoadRefresh
 	}
 	return s.coalesceModelLoad(ctx, agentID, projectID, mode)
-}
-
-func (s *Service) revalidateChangedInputs(agentID, projectID, cachedFingerprint string) {
-	if s.ctx.Err() != nil {
-		return
-	}
-	if s.modelCatalogInputsChanged(s.ctx, agentID, projectID, cachedFingerprint) {
-		_, _ = s.RevalidateModels(s.ctx, agentID, projectID)
-	}
-}
-
-func (s *Service) modelCatalogInputsChanged(ctx context.Context, agentID, projectID, cachedFingerprint string) bool {
-	item, ok := s.agent(agentID)
-	if !ok {
-		return false
-	}
-	var binary string
-	if resolver, ok := item.Agent.(ports.AgentBinaryResolver); ok {
-		lock := s.resolverMu[agentID]
-		lock.Lock()
-		resolved, err := resolver.ResolveBinary(ctx)
-		lock.Unlock()
-		if err != nil {
-			return false
-		}
-		binary = resolved
-	}
-	request, err := s.modelDiscoveryRequest(ctx, agentID, projectID, binary)
-	if err != nil {
-		return false
-	}
-	return s.discoverer.CatalogFingerprint(ctx, request) != cachedFingerprint
 }
 
 // credentialScopePrefix marks a model-catalog scope that is not a project but a

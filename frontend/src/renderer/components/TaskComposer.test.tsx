@@ -492,7 +492,7 @@ describe("TaskComposer", () => {
 		expect(h.ensureReadiness).not.toHaveBeenCalled();
 	});
 
-	it("submits a gateway-backed Claude project when refreshed global readiness is unauthorized", async () => {
+	it("submits a gateway-backed Claude project without waiting for global readiness", async () => {
 		h.get.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) {
 				return { data: { agent: "claude-code", selectionMode: "text", models: [], allowCustom: true } };
@@ -507,8 +507,7 @@ describe("TaskComposer", () => {
 				},
 			};
 		});
-		const unauthorized = agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" });
-		h.ensureTargetedReadiness.mockResolvedValueOnce({ agents: [unauthorized] });
+		h.ensureTargetedReadiness.mockImplementation(() => new Promise(() => {}));
 		h.post.mockResolvedValueOnce({ data: { workerId: "worker-1" } });
 		const onCreated = vi.fn();
 
@@ -521,7 +520,7 @@ describe("TaskComposer", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Start task" }));
 
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("worker-1"));
-		expect(h.ensureTargetedReadiness).toHaveBeenCalledWith(["claude-code"], "launch");
+		expect(h.ensureTargetedReadiness).not.toHaveBeenCalled();
 	});
 
 	it("keeps submission enabled for a gateway-backed Claude project when cached global readiness is unauthorized", async () => {
@@ -543,9 +542,6 @@ describe("TaskComposer", () => {
 		h.agentCatalog = {
 			agents: [agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" })],
 		};
-		h.ensureTargetedReadiness.mockResolvedValueOnce({
-			agents: [agentReadiness("claude-code", "Claude Code", { authentication: "authorized" })],
-		});
 		h.post.mockResolvedValueOnce({ data: { workerId: "worker-1" } });
 
 		render(
@@ -558,8 +554,8 @@ describe("TaskComposer", () => {
 		expect(submit).toBeEnabled();
 		fireEvent.click(submit);
 
-		await waitFor(() => expect(h.ensureTargetedReadiness).toHaveBeenCalledWith(["claude-code"], "launch"));
 		await waitFor(() => expect(h.post).toHaveBeenCalled());
+		expect(h.ensureTargetedReadiness).not.toHaveBeenCalled();
 	});
 
 	it("waits for project context before allowing a local task to start", async () => {
@@ -610,13 +606,11 @@ describe("TaskComposer", () => {
 		const stale = agentReadiness("codex", "Codex", { freshness: "stale" });
 		const completed = agentReadiness("codex", "Codex", { installation: "not_installed" });
 		let finishReadiness!: (value: { agents: ReturnType<typeof agentReadiness>[] }) => void;
-		h.ensureTargetedReadiness
-			.mockResolvedValueOnce({ agents: [stale] })
-			.mockReturnValueOnce(
+		h.ensureTargetedReadiness.mockReturnValueOnce(
 			new Promise((resolve) => {
 				finishReadiness = resolve;
 			}),
-			);
+		);
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		queryClient.setQueryData(agentReadinessQueryKey, { agents: [stale] });
 
@@ -628,7 +622,7 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "codex"));
 		fireEvent.click(screen.getByRole("button", { name: "Start task" }));
 
-		await waitFor(() => expect(h.ensureTargetedReadiness).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(h.ensureTargetedReadiness).toHaveBeenCalledTimes(1));
 		expect(h.ensureTargetedReadiness).toHaveBeenLastCalledWith(["codex"], "launch");
 		expect(screen.queryByText("Codex is not ready")).not.toBeInTheDocument();
 

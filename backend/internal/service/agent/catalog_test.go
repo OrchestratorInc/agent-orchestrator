@@ -496,12 +496,8 @@ func TestModelDiscoveryRetryBackoffStopsAfterBound(t *testing.T) {
 	if cached.RefreshRecommended {
 		t.Fatal("cached read recommended another refresh after retries were exhausted")
 	}
-	deadline := time.Now().Add(100 * time.Millisecond)
-	for discoverer.fingerprintRequests.Load() == fingerprintRequests && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if discoverer.fingerprintRequests.Load() == fingerprintRequests {
-		t.Fatal("cached read did not check whether exhausted discovery inputs changed")
+	if got := discoverer.fingerprintRequests.Load(); got != fingerprintRequests {
+		t.Fatalf("fingerprint probes = %d after exhausted cached read, want %d", got, fingerprintRequests)
 	}
 	if calls := discoverer.discoverCalls.Load(); calls != exhaustedCalls {
 		t.Fatalf("discoveries = %d after exhausted cached read, want %d", calls, exhaustedCalls)
@@ -1395,7 +1391,7 @@ func TestModelsCachesDiscoveredCatalogGlobally(t *testing.T) {
 	}
 }
 
-func TestModelsReusesCacheWhileBinaryVersionMatches(t *testing.T) {
+func TestModelsReusesFreshCacheWithoutResolvingBinary(t *testing.T) {
 	cache := &fakeModelCache{}
 	agent := &blockingSubsequentResolverAgent{
 		started: make(chan struct{}),
@@ -1442,8 +1438,8 @@ func TestModelsReusesCacheWhileBinaryVersionMatches(t *testing.T) {
 	}
 	select {
 	case <-agent.started:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for background cache revalidation")
+		t.Fatal("fresh cached read unexpectedly resolved the agent binary")
+	case <-time.After(50 * time.Millisecond):
 	}
 	if discoverer.discoverCalls.Load() != 1 {
 		t.Fatalf("discovery calls=%d, want cached result", discoverer.discoverCalls.Load())
@@ -1453,7 +1449,7 @@ func TestModelsReusesCacheWhileBinaryVersionMatches(t *testing.T) {
 	}
 }
 
-func TestModelsRediscoversWhenBinaryVersionChanges(t *testing.T) {
+func TestModelsRediscoversAfterAgentInstallationInvalidation(t *testing.T) {
 	cache := &fakeModelCache{}
 	discoverer := &fakeModelDiscoverer{version: "v1", catalog: ports.AgentModelCatalog{
 		SelectionMode: ports.ModelSelectionCatalog,
@@ -1478,8 +1474,12 @@ func TestModelsRediscoversWhenBinaryVersionChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got.Models) != 1 || got.Models[0].ID != "model-one" {
-		t.Fatalf("cache-first catalog=%#v, want model-one while v2 validates", got)
+		t.Fatalf("cache-first catalog=%#v, want saved model-one", got)
 	}
+	if calls := discoverer.discoverCalls.Load(); calls != 1 {
+		t.Fatalf("discoveries after fresh cached read = %d, want 1", calls)
+	}
+	svc.InvalidateAgentInstallation("codex")
 	deadline := time.Now().Add(time.Second)
 	for {
 		record, ok, cacheErr := cache.GetAgentModelCatalog(context.Background(), "codex", "")
@@ -1490,7 +1490,7 @@ func TestModelsRediscoversWhenBinaryVersionChanges(t *testing.T) {
 			break
 		}
 		if !time.Now().Before(deadline) {
-			t.Fatal("timed out waiting for asynchronously refreshed v2 catalog")
+			t.Fatal("timed out waiting for v2 catalog after installation invalidation")
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -1499,7 +1499,7 @@ func TestModelsRediscoversWhenBinaryVersionChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.BinaryVersion != "v2" || len(got.Models) != 1 || got.Models[0].ID != "model-two" {
-		t.Fatalf("catalog=%#v, want asynchronously refreshed v2 catalog", got)
+		t.Fatalf("catalog=%#v, want refreshed v2 catalog", got)
 	}
 }
 
@@ -1890,10 +1890,12 @@ func TestClaudeModelsRevalidationKeepsMatchingProviderCacheOnFailure(t *testing.
 	}
 }
 
-func TestClaudeModelsRejectProviderCacheWhenCredentialFingerprintChanges(t *testing.T) {
+func TestClaudeModelsServesCacheThenReplacesItWhenAuthenticationInvalidated(t *testing.T) {
+	now := time.Now()
 	cached := ports.AgentModelCatalog{
 		AgentID: "claude-code", SelectionMode: ports.ModelSelectionCatalog,
 		Models: []ports.AgentModelInfo{{ID: "us.anthropic.claude-opus-v1"}}, Source: "provider",
+		ValidatedAt: now, LastSuccessAt: &now,
 	}
 	data, err := json.Marshal(cached)
 	if err != nil {
@@ -1902,6 +1904,7 @@ func TestClaudeModelsRejectProviderCacheWhenCredentialFingerprintChanges(t *test
 	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{
 		"claude-code\x00": {
 			AgentID: "claude-code", BinaryVersion: "credential-a", CatalogJSON: string(data),
+			LastSuccessAt: now,
 		},
 	}}
 	discoverer := &fakeModelDiscoverer{
@@ -1918,8 +1921,46 @@ func TestClaudeModelsRejectProviderCacheWhenCredentialFingerprintChanges(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Models) != 2 || got.Models[0].ID != "sonnet" || got.Models[1].ID != "opus" || got.Source != "catalog" || !got.Stale {
-		t.Fatalf("catalog = %#v, want current-credential fallback", got)
+	if len(got.Models) != 1 || got.Models[0].ID != "us.anthropic.claude-opus-v1" {
+		t.Fatalf("initial catalog = %#v, want the cached model before revalidation", got)
+	}
+	svc.InvalidateAgentAuthentication("claude-code")
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		record, ok, err := cache.GetAgentModelCatalog(context.Background(), "claude-code", "")
+		if err != nil || !ok {
+			t.Fatalf("updated catalog = found %v, error %v", ok, err)
+		}
+		var updated ports.AgentModelCatalog
+		if err := json.Unmarshal([]byte(record.CatalogJSON), &updated); err != nil {
+			t.Fatal(err)
+		}
+		if len(updated.Models) == 2 && updated.Models[0].ID == "sonnet" && updated.Models[1].ID == "opus" && updated.Source == "catalog" && updated.Stale {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("cached provider catalog was not replaced after credential change")
+}
+
+func TestClaudeCachedModelsDoNotProbeOnFreshRead(t *testing.T) {
+	now := time.Now()
+	record := cachedModelRecord(t, "claude-code", "", now, false)
+	record.LastSuccessAt = now
+	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{
+		"claude-code\x00": record,
+	}}
+	discoverer := &fakeModelDiscoverer{version: "same-fingerprint"}
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, cache, nil, discoverer)
+	for range 2 {
+		got, err := svc.Models(context.Background(), "claude-code", "", false)
+		if err != nil || len(got.Models) != 1 || got.Models[0].ID != "cached-model" {
+			t.Fatalf("cached catalog = %#v, error %v", got, err)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := discoverer.fingerprintRequests.Load(); got != 0 {
+		t.Fatalf("fingerprint probes after fresh cached reads = %d, want none", got)
 	}
 }
 

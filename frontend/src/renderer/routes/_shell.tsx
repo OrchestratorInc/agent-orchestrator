@@ -44,6 +44,7 @@ import { applyDocumentTheme, applyDocumentThemeStyle } from "../lib/theme";
 import { aoBridge } from "../lib/bridge";
 import { handleModifierLinkClick } from "../lib/external-link-policy";
 import { recordProjectOpened } from "../lib/project-history";
+import { readTaskComposerPreferences } from "../lib/task-composer-preferences";
 import { cn } from "../lib/utils";
 import {
 	isLinuxPlatform,
@@ -310,6 +311,10 @@ function ShellLayout() {
 	// first time they actually open the dialog.
 	useEffect(() => {
 		if (!scopedProjectId) return;
+		const rememberedAgent = readTaskComposerPreferences(scopedProjectId)?.lastAgent;
+		if (rememberedAgent) {
+			void queryClient.prefetchQuery(agentModelsQueryOptions(rememberedAgent, scopedProjectId));
+		}
 		const projectQueryKey = ["project", scopedProjectId];
 		void queryClient
 			.prefetchQuery({

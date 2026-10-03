@@ -138,6 +138,7 @@ type AgentBinaryPresenceResolver interface {
 // the resulting snapshots in memory.
 type AgentReadinessProvider interface {
 	EnsureAgentReadiness(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error)
+	CachedAgentReadiness(agentID string) (domain.AgentReadinessSnapshot, bool)
 	InvalidateAgentInstallation(agentID string)
 	InvalidateAgentAuthentication(agentID string)
 	RecheckAgent(agentID string)
