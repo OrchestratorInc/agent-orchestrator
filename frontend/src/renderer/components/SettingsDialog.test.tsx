@@ -58,8 +58,8 @@ vi.mock("./ProjectSettingsForm", () => ({
 }));
 
 vi.mock("./GlobalSettingsForm", () => ({
-	GlobalSettingsForm: ({ focusAgentId, section }: { focusAgentId?: string; section: string }) => (
-		<div data-focus-agent={focusAgentId} data-testid="global-settings-section">{section}</div>
+	GlobalSettingsForm: ({ focusAgentId, hostId, section }: { focusAgentId?: string; hostId?: string; section: string }) => (
+		<div data-focus-agent={focusAgentId} data-host={hostId} data-testid="global-settings-section">{section}</div>
 	),
 }));
 
@@ -84,7 +84,7 @@ describe("SettingsDialog", () => {
 		postMock.mockReset().mockImplementation((path: string) => path === "/api/v1/agents/codex/accounts/ensure"
 			? Promise.resolve({ data: accountsResponse })
 			: Promise.resolve({ data: { operationId: "login-1", status: "cancelled" } }));
-		useUiStore.setState({ settingsModal: null });
+		useUiStore.setState({ developerMode: false, settingsModal: null });
 	});
 
 	function renderSettingsDialog() {
@@ -148,6 +148,24 @@ describe("SettingsDialog", () => {
 		));
 	});
 
+	it("shows Remote hosts with Developer mode on even while the connection switch is off", async () => {
+		useUiStore.setState({ developerMode: true, remoteHosts: false });
+		useUiStore.getState().openGlobalSettings("remoteHosts");
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("remoteHosts");
+		expect(screen.getByRole("button", { name: "Remote hosts" })).toHaveAttribute("aria-current", "page");
+	});
+
+	it("hides Remote hosts and redirects its settings page when Developer mode is off", async () => {
+		useUiStore.setState({ developerMode: false, remoteHosts: true });
+		useUiStore.getState().openGlobalSettings("remoteHosts");
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
+		expect(screen.queryByRole("button", { name: "Remote hosts" })).not.toBeInTheDocument();
+	});
+
 	it("keeps the settings surface above its blurred backdrop", async () => {
 		useUiStore.getState().openGlobalSettings("mobile");
 		renderSettingsDialog();
@@ -181,6 +199,14 @@ describe("SettingsDialog", () => {
 		expect(form).toHaveAttribute("data-focus-agent", "claude-code");
 		expect(screen.getByRole("button", { name: "Harness" })).toHaveAttribute("aria-current", "page");
 		expect(screen.getByRole("button", { name: "Subscriptions" })).not.toHaveAttribute("aria-current", "page");
+	});
+
+	it("forwards the remote host from a Manage agents action to Harness", async () => {
+		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "codex", hostId: "box-a" });
+		renderSettingsDialog();
+		const form = await screen.findByTestId("global-settings-section");
+		expect(form).toHaveAttribute("data-focus-agent", "codex");
+		expect(form).toHaveAttribute("data-host", "box-a");
 	});
 
 	it("does not replay the Harness focus target after navigating away during the same modal opening", async () => {

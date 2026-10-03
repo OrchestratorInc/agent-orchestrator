@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, type ReactNode } from "react";
+import { StrictMode, useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render as rtlRender, renderHook, screen, waitFor, within } from "@testing-library/react";
@@ -9,7 +9,7 @@ import { useFilesTopbarHost } from "./files-topbar-host";
 import { SessionTopbarProvider } from "./SessionTopbarPortal";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
-import { inspectorIsOpen, useUiStore, type InspectorView } from "../stores/ui-store";
+import { inspectorIsOpen, rememberedFileDisplayMode, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { setChatDraftBoundary } from "../lib/chat-draft-boundary";
@@ -63,7 +63,9 @@ const chatSurfaceWorkState = vi.hoisted(() => ({
 const cloudSessionQueryState = vi.hoisted(() => ({
 	data: undefined as WorkspaceSession | undefined,
 	isLoading: false,
+	isError: false,
 }));
+const cloudSessionLookup = vi.hoisted(() => vi.fn());
 const cloudGateState = vi.hoisted(() => ({ cloudEnabled: true }));
 const workspaceSessionLookup = vi.hoisted(() => vi.fn());
 
@@ -499,21 +501,30 @@ vi.mock("./SessionFileExplorer", () => ({
 		isMaximized,
 		onOpenFile,
 		onSplitChange,
+		onRevealHandled,
 		onToggleMaximized,
 		revealRequest,
 		split,
 	}: {
 		isMaximized?: boolean;
 		onOpenFile?: (path: string, options?: { editing?: boolean; mode?: "diff" | "file" | "rendered" }) => void;
+		onRevealHandled?: (key: number) => void;
 		onSplitChange?: (split: boolean) => void;
 		onToggleMaximized?: (next: boolean) => void;
 		revealRequest?: { path: string; key: number } | null;
 		split?: boolean;
 	}) => {
 		const topbarHost = useFilesTopbarHost();
+		// Like the real explorer, the revealed path is kept as local selection,
+		// so it outlives the one-shot request once the owner drops it.
+		const [selectedPath, setSelectedPath] = useState<string | null>(null);
 		useEffect(() => {
-			if (!isMaximized && revealRequest) onOpenFile?.(revealRequest.path, { mode: "file" });
-		}, [isMaximized, onOpenFile, revealRequest]);
+			if (!revealRequest) return;
+			setSelectedPath(revealRequest.path);
+			if (isMaximized) return;
+			onOpenFile?.(revealRequest.path, { mode: "file" });
+			onRevealHandled?.(revealRequest.key);
+		}, [isMaximized, onOpenFile, onRevealHandled, revealRequest]);
 		return <div>
 			{topbarHost ? createPortal(<input aria-label="files filter" />, topbarHost) : null}
 			<button type="button" onClick={() => onToggleMaximized?.(!isMaximized)}>
@@ -525,7 +536,7 @@ vi.mock("./SessionFileExplorer", () => ({
 			{!isMaximized && onOpenFile ? (
 				<>
 					<span>file tree</span>
-					{revealRequest ? <span>{`selected ${revealRequest.path}`}</span> : null}
+					{selectedPath ? <span>{`selected ${selectedPath}`}</span> : null}
 					<button type="button" onClick={() => onOpenFile("src/App.tsx", { mode: "file" })}>
 						select src/App.tsx
 					</button>
@@ -541,7 +552,7 @@ vi.mock("./SessionFileExplorer", () => ({
 	},
 }));
 vi.mock("./SessionFileWorkspace", () => ({
-	SessionFileWorkspace: ({ annotation, initialEditing, initialMode, path, scope, split }: {
+	SessionFileWorkspace: ({ annotation, initialEditing, initialMode, initialRequestKey, path, scope, split }: {
 		annotation: {
 			begin: (target: { path: string; scope: string; side: string; surface: string }) => void;
 			draft: string;
@@ -550,11 +561,12 @@ vi.mock("./SessionFileWorkspace", () => ({
 		};
 		initialEditing?: boolean;
 		initialMode?: string;
+		initialRequestKey?: number;
 		path: string;
 		scope?: string;
 		split: boolean;
 	}) => (
-		<div data-editing={String(Boolean(initialEditing))} data-mode={initialMode} data-split={String(split)} data-testid="session-file-workspace">
+		<div data-editing={String(Boolean(initialEditing))} data-mode={initialMode} data-request-key={initialRequestKey} data-split={String(split)} data-testid="session-file-workspace">
 			{path}
 			<button onClick={() => annotation.begin({ path, scope: scope ?? "combined", side: "file", surface: "focused" })} type="button">header feedback</button>
 			{annotation.target ? <input aria-label="feedback draft" onChange={(event) => annotation.setDraft(event.target.value)} value={annotation.draft} /> : null}
@@ -670,15 +682,19 @@ vi.mock("../lib/shell-context", () => ({
 	useShell: () => ({ daemonStatus: { state: "ready" } }),
 }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
+	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 	toCloudWorkspaceSession: vi.fn(),
-	useCloudSessionQuery: () => cloudSessionQueryState,
+	useCloudSessionQuery: (orgId: string | undefined, sessionId: string, enabled: boolean) => {
+		cloudSessionLookup(orgId, sessionId, enabled);
+		return cloudSessionQueryState;
+	},
 	cloudSessionsQueryKey: ["cloud-sessions"],
 	useWorkspaceQuery: () => ({
 		data: workspaceQueryState.data,
 		isLoading: workspaceQueryState.isLoading,
 	}),
-	useWorkspaceSession: (sessionId: string, localLookupEnabled?: boolean) => {
-		workspaceSessionLookup(sessionId, localLookupEnabled);
+	useWorkspaceSession: (sessionId: string, hostId?: string, localLookupEnabled?: boolean) => {
+		workspaceSessionLookup(sessionId, hostId, localLookupEnabled);
 		return ({
 		data: workspaceQueryState.data
 			?.flatMap((workspace) => workspace.sessions)
@@ -854,6 +870,7 @@ describe("SessionView", () => {
 		interfaceTransitionState.status = undefined;
 		cloudSessionQueryState.data = undefined;
 		cloudSessionQueryState.isLoading = false;
+		cloudSessionQueryState.isError = false;
 		settingsState.chatHarnesses = undefined;
 		chatSurfaceWorkState.controllerBusy = false;
 		chatSurfaceWorkState.hasRunningTurn = false;
@@ -886,7 +903,53 @@ describe("SessionView", () => {
 
 		expect(screen.queryByText("session not found")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Switch to chat UI" })).not.toBeInTheDocument();
-		expect(workspaceSessionLookup).toHaveBeenCalledWith("cloud-session", false);
+		expect(workspaceSessionLookup).toHaveBeenCalledWith("cloud-session", undefined, false);
+	});
+
+	it("uses the project route to distinguish local and Cloud sessions with the same ID", () => {
+		const cloudSession: WorkspaceSession = {
+			...workerSession("sess-1"),
+			workspaceId: "cloud-project",
+			workspaceName: "Cloud project",
+			title: "Cloud twin",
+			mode: "chat",
+			cloud: { orgId: "cloud-org" },
+		};
+		workspaceQueryState.data = [
+			...workspaces,
+			{ id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [cloudSession] },
+		];
+		cloudSessionLookup.mockClear();
+
+		const cloudView = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+		expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+		expect(screen.queryByTestId("terminal-center")).not.toBeInTheDocument();
+		expect(workspaceSessionLookup).toHaveBeenCalledWith("sess-1", undefined, false);
+		cloudView.unmount();
+
+		const localView = render(<SessionView cloudOrgId="cloud-org" projectId="proj-1" sessionId="sess-1" />);
+		expect(screen.getByTestId("terminal-center")).toBeInTheDocument();
+		expect(screen.queryByTestId("cloud-chat-surface")).not.toBeInTheDocument();
+		expect(cloudSessionLookup).toHaveBeenLastCalledWith("cloud-org", "sess-1", false);
+		localView.unmount();
+
+		render(<SessionView cloudOrgId="cloud-org" sessionId="sess-1" />);
+		expect(screen.getByTestId("terminal-center")).toBeInTheDocument();
+		expect(screen.queryByTestId("cloud-chat-surface")).not.toBeInTheDocument();
+		expect(cloudSessionLookup).toHaveBeenLastCalledWith("cloud-org", "sess-1", false);
+	});
+
+	it("keeps an unscoped local session available when Cloud is offline", () => {
+		cloudSessionQueryState.isError = true;
+		render(<SessionView cloudOrgId="cloud-org" sessionId="sess-1" />);
+		expect(screen.getByTestId("terminal-center")).toBeInTheDocument();
+		expect(cloudSessionLookup).toHaveBeenLastCalledWith("cloud-org", "sess-1", false);
+	});
+
+	it("does not use another project's cached session as a local route fallback", () => {
+		render(<SessionView projectId="proj-1" sessionId="sess-cross-project" />);
+		expect(screen.getByText(/Session not found/)).toBeInTheDocument();
+		expect(screen.queryByTestId("terminal-center")).not.toBeInTheDocument();
 	});
 	// Regression: shell terminals are an app-wide list, so without a per-session
 	// filter a shell opened in another session would show up as a tab in this
@@ -1464,6 +1527,101 @@ describe("SessionView", () => {
 		fireEvent.click(screen.getByRole("button", { name: "select chat tab" }));
 		expect(screen.getByText("chat surface")).toBeInTheDocument();
 		expect(screen.queryByTestId("terminal-target")).not.toBeInTheDocument();
+	});
+
+	it("keeps a tree-opened file tab's request across session navigation", async () => {
+		workerSession("sess-1").mode = "chat";
+		workerSession("sess-2").mode = "chat";
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+		const view = render(<SessionView sessionId="sess-1" />);
+
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(screen.getByRole("button", { name: "select src/App.tsx" }));
+		const requestKey = (await screen.findByTestId("session-file-workspace")).getAttribute("data-request-key");
+		expect(requestKey).toBeTruthy();
+
+		view.rerender(<SessionView sessionId="sess-2" />);
+		view.rerender(<SessionView sessionId="sess-1" />);
+
+		expect(await screen.findByTestId("session-file-workspace")).toHaveAttribute("data-request-key", requestKey);
+	});
+
+	// #5997 review: SessionView remounts on a route round-trip (session -> board ->
+	// session), so a new open request must never reuse a key the store
+	// remembered a display mode for; otherwise an explicit "open diff" (or Edit)
+	// is hijacked into the remembered Rich preview.
+	it("never lets a remembered display mode capture a new request after a remount", async () => {
+		workerSession("sess-1").mode = "chat";
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+		const first = render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(screen.getByRole("button", { name: "select src/App.tsx" }));
+		const firstKey = Number((await screen.findByTestId("session-file-workspace")).getAttribute("data-request-key"));
+		// The pane records the Rich preview picked for that request.
+		act(() => useUiStore.getState().setFileDisplayMode("sess-1", "src/App.tsx", "rendered", firstKey));
+		first.unmount();
+
+		render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(screen.getByRole("button", { name: "open diff src/App.tsx in center" }));
+		const pane = await screen.findByTestId("session-file-workspace");
+		expect(pane).toHaveAttribute("data-mode", "diff");
+		const secondKey = Number(pane.getAttribute("data-request-key"));
+		expect(rememberedFileDisplayMode(useUiStore.getState(), "sess-1", "src/App.tsx", secondKey)).toBeUndefined();
+	});
+
+	it("opens Edit as an editor, not a remembered Rich preview, after a remount", async () => {
+		workerSession("sess-1").mode = "chat";
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+		const first = render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(screen.getByRole("button", { name: "select src/App.tsx" }));
+		const firstKey = Number((await screen.findByTestId("session-file-workspace")).getAttribute("data-request-key"));
+		act(() => useUiStore.getState().setFileDisplayMode("sess-1", "src/App.tsx", "rendered", firstKey));
+		first.unmount();
+
+		render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(screen.getByRole("button", { name: "edit src/App.tsx in center" }));
+		const pane = await screen.findByTestId("session-file-workspace");
+		expect(pane).toHaveAttribute("data-mode", "file");
+		expect(pane).toHaveAttribute("data-editing", "true");
+		expect(rememberedFileDisplayMode(useUiStore.getState(), "sess-1", "src/App.tsx", Number(pane.getAttribute("data-request-key")))).toBeUndefined();
+	});
+
+	// #5984 follow-up from the issue author: a file revealed from a link must
+	// not reopen, or take focus back from the agent, on every return.
+	it("does not reopen a revealed file the user closed after switching sessions", async () => {
+		workerSession("sess-1").mode = "chat";
+		workerSession("sess-2").mode = "chat";
+		const view = render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "view review file" }));
+		await screen.findByTestId("session-file-workspace");
+		fireEvent.click(screen.getByRole("button", { name: "Close panel.tsx" }));
+		await waitFor(() => expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument());
+
+		view.rerender(<SessionView sessionId="sess-2" />);
+		view.rerender(<SessionView sessionId="sess-1" />);
+
+		await act(async () => {});
+		expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
+	});
+
+	it("keeps the agent tab selected after switching sessions when a revealed file is open", async () => {
+		workerSession("sess-1").mode = "tui";
+		workerSession("sess-2").mode = "tui";
+		const view = render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "view review file" }));
+		await screen.findByTestId("session-file-workspace");
+		fireEvent.click(screen.getByRole("button", { name: "select agent tab" }));
+		await waitFor(() => expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument());
+
+		view.rerender(<SessionView sessionId="sess-2" />);
+		view.rerender(<SessionView sessionId="sess-1" />);
+
+		await act(async () => {});
+		expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Close panel.tsx" })).toBeInTheDocument();
 	});
 
 	it("preserves mixed tab order across session navigation and interface changes", async () => {
@@ -3751,20 +3909,29 @@ describe("SessionView", () => {
 		expect(inspectorWidthVariable()).toBe("340px");
 	});
 
-	it("resizes the inspector panel and terminal gap together synchronously while dragging", () => {
+	it("resizes the inspector panel and terminal gap together once per frame while dragging", () => {
 		render(<SessionView sessionId="sess-1" />);
 		const handle = screen.getByTestId("inspector-resize-handle");
 		expect(document.documentElement.style.getPropertyValue("--ao-inspector-w")).toBe("");
-
-		fireEvent.pointerDown(handle, { clientX: 100 });
-		fireEvent.pointerMove(window, { clientX: 200 });
-		// Sync apply during drag (no rAF) so the grip can follow the painted border 1:1.
-		expect(inspectorWidthVariable()).toBe("400px");
-		expect(inspectorPanelWidthVariable()).toBe("400px");
-
-		fireEvent.pointerUp(window);
-		expect(inspectorWidthVariable()).toBe("400px");
-		expect(inspectorPanelWidthVariable()).toBe("400px");
+		const frames: FrameRequestCallback[] = [];
+		const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+			frames.push(callback); return frames.length;
+		});
+		try {
+			const initialWidth = inspectorWidthVariable();
+			fireEvent.pointerDown(handle, { clientX: 100 });
+			fireEvent.pointerMove(window, { clientX: 180 });
+			fireEvent.pointerMove(window, { clientX: 200 });
+			expect(inspectorWidthVariable()).toBe(initialWidth);
+			expect(inspectorPanelWidthVariable()).toBe(initialWidth);
+			expect(frames).toHaveLength(1);
+			act(() => frames.shift()!(performance.now()));
+			expect(inspectorWidthVariable()).toBe("400px");
+			expect(inspectorPanelWidthVariable()).toBe("400px");
+			fireEvent.pointerUp(window);
+			expect(inspectorWidthVariable()).toBe("400px");
+			expect(inspectorPanelWidthVariable()).toBe("400px");
+		} finally { raf.mockRestore(); }
 	});
 
 	it("grows Browser into a co-work canvas while utility surfaces (Files included) stay consistent", async () => {
@@ -3916,6 +4083,29 @@ describe("SessionView", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Close inspector panel" }));
 		await waitFor(() => expect(useUiStore.getState().isSidebarOpen).toBe(true));
 	});
+
+	it.each([[false, true], [true, false]])(
+		"restores the inspector immediately when navigating from %s to %s",
+		(from, to) => {
+			act(() => {
+				useUiStore.getState().setInspectorOpen("sess-1", from);
+				useUiStore.getState().setInspectorOpen("sess-2", to);
+			});
+			const { rerender } = render(<SessionView sessionId="sess-1" />);
+			rerender(<SessionView sessionId="sess-2" />);
+
+			const pane = screen.getByTestId("panel-inspector");
+			expect(pane).toHaveAttribute("data-state", to ? "expanded" : "collapsed");
+			if (to) expect(pane).not.toHaveAttribute("hidden");
+			else {
+				expect(pane).toHaveAttribute("hidden");
+				expect(pane).toHaveAttribute("inert");
+			}
+			expect(screen.getByTestId("panel-group")).not.toHaveAttribute("data-workspace-resizing");
+			expect(inspectorOpen("sess-1")).toBe(from);
+			expect(inspectorOpen("sess-2")).toBe(to);
+		},
+	);
 
 	it("mounts the inspector in sync when navigating from an orchestrator session", () => {
 		const { rerender } = render(<SessionView sessionId="sess-orch" />);

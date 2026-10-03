@@ -51,7 +51,7 @@ interface UseResizableOptions {
  * - On pointerdown, seed the drag from the painted box when it disagrees with
  *   the var (CSS max-width can hold paint below the custom property). Nothing is
  *   written or persisted until the width actually changes.
- * - Drag applies synchronously so ResizeHandle can follow the painted border 1:1.
+ * - Drag applies once per frame; ResizeHandle follows the painted border before paint.
  * - Dragging never auto-collapses: clamp at `min`; collapse stays on explicit UI.
  */
 export function useResizable({
@@ -90,7 +90,9 @@ export function useResizable({
 			widthRef.current = clamped;
 			const targets = cssTargets();
 			for (const target of targets) {
-				target.style.setProperty(cssVar, `${clamped}px`);
+				if (target.style.getPropertyValue(cssVar) !== `${clamped}px`) {
+					target.style.setProperty(cssVar, `${clamped}px`);
+			}
 				appliedTargetsRef.current.add(target);
 			}
 		},
@@ -195,13 +197,14 @@ export function useResizable({
 			const onEnd = (e: PointerEvent) => {
 				if (e.pointerId === pointerId) finish();
 			};
-			// Sync apply during drag so the grip (following the painted border) stays 1:1.
+			// Keep only the newest pointer position for the next paint.
 			// Collapse stays on explicit controls — `apply` clamps at `min`.
 			const onMove = (e: PointerEvent) => {
+				if (e.pointerId !== pointerId) return;
 				const next = Math.min(maxValue(), Math.max(minValue(), startWidth + sign * (e.clientX - startX)));
 				if (!changed && Math.abs(next - startWidth) < 0.5) return;
 				changed = true;
-				apply(next);
+				applyOnFrame(next);
 			};
 			window.addEventListener("pointermove", onMove);
 			window.addEventListener("pointerup", onEnd);
@@ -209,7 +212,7 @@ export function useResizable({
 			window.addEventListener("blur", finish);
 			activeDragCleanupRef.current = finish;
 		},
-		[apply, cssTargets, edge, flushPending, maxValue, minValue, storageKey],
+		[apply, applyOnFrame, cssTargets, edge, flushPending, maxValue, minValue, storageKey],
 	);
 
 	const onCollapsedPointerDown = useCallback(
@@ -241,6 +244,7 @@ export function useResizable({
 				if (e.pointerId === pointerId) finish();
 			};
 			const onMove = (e: PointerEvent) => {
+				if (e.pointerId !== pointerId) return;
 				const delta = sign * (e.clientX - startX);
 				if (delta < expandDragThreshold) return;
 				if (!expanded) {

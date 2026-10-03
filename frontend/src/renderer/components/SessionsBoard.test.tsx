@@ -40,8 +40,11 @@ vi.mock("@tanstack/react-router", () => ({
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"],
+	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
+	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 	cloudSessionsQueryKey: ["cloud-sessions"],
 	useWorkspaceQuery: workspaceQueryMock,
+	useRemoteProjectQuery: () => ({ data: undefined, isError: false, isSuccess: false }),
 	useWorkspaceScope: (projectId?: string) => {
 		const query = workspaceQueryMock();
 		return {
@@ -126,7 +129,7 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
-	it.each(["cloud", "standalone", undefined] as const)("hides the cue runner for %s projects", (kind) => {
+	it.each(["single_repo", "multi_repo", "cloud", "standalone", undefined] as const)("hides the cue runner for %s projects", (kind) => {
 		boardActionsInPanelMock.mockReturnValue(true);
 		workspaceQueryMock.mockReturnValue({
 			data: [{ ...workspaceWithSessions([]), kind }],
@@ -235,7 +238,7 @@ describe("SessionsBoard", () => {
 		expect(
 			within(screen.getByRole("button", { name: "New task" })).getByText("Task").hasAttribute("data-compact-label"),
 		).toBe(true);
-		expect(screen.getByRole("button", { name: "Run a cue" }).querySelector(".lucide-play")).not.toBeNull();
+		expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
 	});
 
 	it.each([
@@ -428,7 +431,7 @@ describe("SessionsBoard", () => {
 		const tokensOnlyCard = screen.getByText("tokens worker").closest('[data-testid="board-session-card"]') as HTMLElement;
 		expect(within(tokensOnlyCard).getByText("800", { selector: "span" })).toHaveAttribute("aria-hidden", "true");
 		expect(within(tokensOnlyCard).getByText("800 tokens")).toHaveClass("sr-only");
-		expect(usageQueryMock).toHaveBeenCalledWith("p1");
+		expect(usageQueryMock).toHaveBeenCalledWith("p1", undefined);
 
 		const archive = await expandArchive();
 		expect(within(archive).getByText("$0.02")).toHaveAttribute("aria-hidden", "true");
