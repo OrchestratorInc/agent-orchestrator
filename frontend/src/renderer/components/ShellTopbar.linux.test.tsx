@@ -27,6 +27,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 		return { ...result, data: result.data ?? {} };
 	},
 	workspaceQueryKey: ["workspaces"],
+	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 }));
 
 vi.mock("../lib/platform", async (importOriginal) => {

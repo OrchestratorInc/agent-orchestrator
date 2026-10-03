@@ -27,6 +27,7 @@ import { SettingsMenuTrigger } from "../settings/SettingsMenuTrigger";
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { formatTimeTerse } from "../../lib/format-time";
+import { sessionUiKey } from "../../lib/hosts";
 import { AO_PIERRE_FILES_REVIEW_CSS, AO_PIERRE_SURFACE_CSS } from "./pierreTheme";
 import { REVIEW_CONTEXT_LINES, diffContentVersion, endsAtLastHunk, hydratedCopy, patchIdentity, stableFileDiff } from "./trailingContext";
 import { usePersistentGutterUtility } from "./usePersistentGutterUtility";
@@ -157,6 +158,7 @@ export function WorkspaceReviewPane({
 	canOpenInCenter = true,
 	onSourceMenuChange,
 	sessionId,
+	hostId,
 	split,
 }: {
 	annotation: FileAnnotationModel;
@@ -176,6 +178,7 @@ export function WorkspaceReviewPane({
 	 */
 	canOpenInCenter?: boolean;
 	sessionId: string;
+	hostId?: string;
 	split: boolean;
 }) {
 	const { t } = useTranslation();
@@ -226,7 +229,8 @@ export function WorkspaceReviewPane({
 		() => (normalizedFilter ? allFiles.filter((file) => `${file.path} ${file.previousPath ?? ""}`.toLowerCase().includes(normalizedFilter)) : allFiles),
 		[allFiles, normalizedFilter],
 	);
-	const { viewed, toggle: toggleViewed } = useViewedFiles(sessionId, reviewSelectionKey, allFiles);
+	const viewedSessionKey = sessionUiKey(sessionId, hostId);
+	const { viewed, toggle: toggleViewed } = useViewedFiles(viewedSessionKey, reviewSelectionKey, allFiles);
 
 	// Reset the collapse / deferred / batch state only when the review target
 	// itself changes (workspace version, selected commit/scope, session) — computed
@@ -234,12 +238,12 @@ export function WorkspaceReviewPane({
 	// reset all of this on every file-filter keystroke, discarding the user's manual
 	// expand/collapse, loaded deferred diffs, and progressive batch progress.
 	useEffect(() => {
-		const savedViewed = readViewedRecords(viewedStorageKey(sessionId, reviewSelectionKey));
+		const savedViewed = readViewedRecords(viewedStorageKey(viewedSessionKey, reviewSelectionKey));
 		setCollapsedPaths(new Set(allFiles.filter((file) => isDeferredByDefault(file) || isViewedRecord(file, savedViewed)).map((file) => file.path)));
 		setLoadedDeferredPaths(new Set());
 		setActiveBatchCount(4);
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- reset on review-target identity, not on allFiles' reference (which changes on every poll) or the filtered files (which changes per keystroke).
-	}, [data.workspaceVersion, reviewSelectionKey, sessionId]);
+	}, [data.workspaceVersion, reviewSelectionKey, viewedSessionKey]);
 
 	const requestedFiles = useMemo(
 		() => files.filter((file) => !isDeferredByDefault(file) || loadedDeferredPaths.has(file.path)),
@@ -255,6 +259,7 @@ export function WorkspaceReviewPane({
 				paths,
 				scope,
 				sessionId,
+				hostId,
 				workspaceVersion: data.workspaceVersion,
 				commitSha: selectedCommit?.sha,
 			}),
@@ -319,15 +324,15 @@ export function WorkspaceReviewPane({
 			const file = files.find((candidate) => candidate.path === metadata.name);
 			if (!file) throw new Error(t("files.error.loadFile"));
 			const [before, after] = await Promise.all([
-				fetchWorkspaceFileRevision({ commitSha: selectedCommit?.sha, sessionId, path: file.path, scope, side: "before", workspaceVersion: data.workspaceVersion }),
-				fetchWorkspaceFileRevision({ commitSha: selectedCommit?.sha, sessionId, path: file.path, scope, side: "after", workspaceVersion: data.workspaceVersion }),
+				fetchWorkspaceFileRevision({ commitSha: selectedCommit?.sha, sessionId, path: file.path, scope, side: "before", workspaceVersion: data.workspaceVersion, hostId }),
+				fetchWorkspaceFileRevision({ commitSha: selectedCommit?.sha, sessionId, path: file.path, scope, side: "after", workspaceVersion: data.workspaceVersion, hostId }),
 			]);
 			if (before.binary || after.binary || before.truncated || after.truncated) throw new Error(t("files.error.loadFile"));
 			const newFile = { name: file.path, contents: after.content, cacheKey: after.revision };
 			if (metadata.type === "rename-pure") return { oldFile: null, newFile };
 			return { oldFile: { name: file.previousPath || file.path, contents: before.content, cacheKey: before.revision }, newFile };
 		},
-		[data.workspaceVersion, files, scope, selectedCommit?.sha, sessionId, t],
+		[data.workspaceVersion, files, scope, selectedCommit?.sha, sessionId, hostId, t],
 	);
 
 	// Keyed by patch content (not workspace version), so a refresh that leaves a
@@ -340,7 +345,8 @@ export function WorkspaceReviewPane({
 		queries: endOfFileFiles.map((file) => {
 			const metadata = metadataByPath.get(file.path);
 			return {
-				queryKey: ["files-review-end-of-file", sessionId, scope, selectedCommit?.sha ?? "", file.path, file.fileFingerprint ?? "", metadata ? patchIdentity(metadata) : ""] as const,
+				queryKey: hostId ? ["files-review-end-of-file", hostId, sessionId, scope, selectedCommit?.sha ?? "", file.path, file.fileFingerprint ?? "", metadata ? patchIdentity(metadata) : ""] as const
+					: ["files-review-end-of-file", sessionId, scope, selectedCommit?.sha ?? "", file.path, file.fileFingerprint ?? "", metadata ? patchIdentity(metadata) : ""] as const,
 				queryFn: () => {
 					if (!metadata) throw new Error(t("files.error.loadFile"));
 					return loadDiffFiles(metadata);
@@ -661,14 +667,16 @@ export function WorkspaceReviewPane({
 												    room; the row's own gap still separates it from the stats. */}
 												<div className="ml-auto flex shrink-0 items-center gap-1 pl-2 @max-[25rem]/review:pl-0" onClick={(event) => event.stopPropagation()}>
 													<div className="flex items-center gap-1 @max-[25rem]/review:hidden">
-														{file.editable && file.fileFingerprint ? (
+														{onOpenFile && file.editable && file.fileFingerprint ? (
 															<HeaderActionTooltip label={t("files.editFile")}>
-																<Button aria-label={t("files.editFile")} className="size-6 text-muted-foreground hover:text-foreground" onClick={() => onOpenFile?.(file.path, { editing: true, mode: "file", scope })} size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-sm" /></Button>
+																<Button aria-label={t("files.editFile")} className="size-6 text-muted-foreground hover:text-foreground" onClick={() => onOpenFile(file.path, { editing: true, mode: "file", scope })} size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-sm" /></Button>
 															</HeaderActionTooltip>
 														) : null}
-														<HeaderActionTooltip label={renderedAvailable ? t("files.openRichPreview") : t("files.openFullFileGeneric")}>
-															<Button aria-label={renderedAvailable ? t("files.openRichPreview") : t("files.openFullFileGeneric")} className="size-6 text-muted-foreground hover:text-foreground" onClick={() => onOpenFile?.(file.path, { ...fileOpenContext, mode: renderedAvailable ? "rendered" : "file" })} size="icon-sm" type="button" variant="ghost"><FileCode2 aria-hidden="true" className="size-icon-sm" /></Button>
-														</HeaderActionTooltip>
+														{onOpenFile ? (
+															<HeaderActionTooltip label={renderedAvailable ? t("files.openRichPreview") : t("files.openFullFileGeneric")}>
+																<Button aria-label={renderedAvailable ? t("files.openRichPreview") : t("files.openFullFileGeneric")} className="size-6 text-muted-foreground hover:text-foreground" onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: renderedAvailable ? "rendered" : "file" })} size="icon-sm" type="button" variant="ghost"><FileCode2 aria-hidden="true" className="size-icon-sm" /></Button>
+															</HeaderActionTooltip>
+														) : null}
 														{onOpenFile && canOpenInCenter ? (
 															<HeaderActionTooltip label={t("files.openDiffInCenter")}>
 																<Button aria-label={t("files.openDiffInCenter")} className="size-6 text-muted-foreground hover:text-foreground" onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "diff" })} size="icon-sm" type="button" variant="ghost"><VscodeGoToFileIcon aria-hidden="true" className="size-icon-sm" /></Button>
@@ -691,16 +699,18 @@ export function WorkspaceReviewPane({
 																fileMenuHandoffRef.current = false;
 															}}
 														>
-															{file.editable && file.fileFingerprint ? (
+															{onOpenFile && file.editable && file.fileFingerprint ? (
 																<DropdownMenuItem className="gap-2" onSelect={() => { fileMenuHandoffRef.current = true; onOpenFile?.(file.path, { editing: true, mode: "file", scope }); }}>
 																	<Pencil aria-hidden="true" className="size-icon-sm text-passive" />
 																	{t("files.editFile")}
 																</DropdownMenuItem>
 															) : null}
-															<DropdownMenuItem className="gap-2" onSelect={() => { fileMenuHandoffRef.current = true; onOpenFile?.(file.path, { ...fileOpenContext, mode: renderedAvailable ? "rendered" : "file" }); }}>
-																<FileCode2 aria-hidden="true" className="size-icon-sm text-passive" />
-																{renderedAvailable ? t("files.openRichPreview") : t("files.openFullFileGeneric")}
-															</DropdownMenuItem>
+															{onOpenFile ? (
+																<DropdownMenuItem className="gap-2" onSelect={() => { fileMenuHandoffRef.current = true; onOpenFile(file.path, { ...fileOpenContext, mode: renderedAvailable ? "rendered" : "file" }); }}>
+																	<FileCode2 aria-hidden="true" className="size-icon-sm text-passive" />
+																	{renderedAvailable ? t("files.openRichPreview") : t("files.openFullFileGeneric")}
+																</DropdownMenuItem>
+															) : null}
 															{onOpenFile && canOpenInCenter ? (
 																<DropdownMenuItem className="gap-2" onSelect={() => { fileMenuHandoffRef.current = true; onOpenFile(file.path, { ...fileOpenContext, mode: "diff" }); }}>
 																	<VscodeGoToFileIcon aria-hidden="true" className="size-icon-sm text-passive" />
@@ -763,7 +773,7 @@ export function WorkspaceReviewPane({
 						<div className="min-w-0 flex-1"><p className="truncate text-xs">{file.path}</p><p className="text-caption text-muted-foreground">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : serverDeferredReason ? t("files.diffUnavailableReason", { reason: serverDeferredReason }) : pending ? t("files.loadingDiff") : t("files.diffUnavailable")}</p></div>
 						{deferred ? <Button onClick={() => setLoadedDeferredPaths((current) => new Set(current).add(file.path))} size="sm" type="button" variant="outline">{t("files.loadDiff")}</Button> : null}
 						{unavailable ? <RetryButton onClick={retryAll} /> : null}
-						<Button onClick={() => onOpenFile?.(file.path, { ...fileOpenContext, mode: "file" })} size="sm" type="button" variant="outline">{t("files.fileView")}</Button>
+						{onOpenFile ? <Button onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="sm" type="button" variant="outline">{t("files.fileView")}</Button> : null}
 					</div>
 					);
 				})}

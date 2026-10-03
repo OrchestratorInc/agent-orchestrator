@@ -24,6 +24,7 @@ in [gemini-cli.md](gemini-cli.md).
 | [cli/README.md](cli/README.md)                         | CLI commands and daemon control surface.                                                                              |
 | [cloud-development.md](cloud-development.md)           | Current public Cloud sources, local stack, tests, and hosted-environment boundaries. |
 | [cloud-refactor.md](cloud-refactor.md)                 | Historical split design for shared Cloud contracts and UI; not the current setup guide. |
+| [self-hosted-remote.md](self-hosted-remote.md)         | Experimental multi-host setup, client workflow, security boundary, and current limits.                                  |
 | [development.md](development.md)                       | Prerequisites, build steps, running tests, and troubleshooting for local development.                                 |
 | [harnesses/unreal-agent.md](harnesses/unreal-agent.md) | Built-in Unreal Agent Chat setup, provider environment, persistence, and current limits.                              |
 | [harnesses/mimo-code.md](harnesses/mimo-code.md)       | MiMo Code TUI setup, permissions, activity hooks, exact restore, and current limits.                                 |

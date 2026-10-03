@@ -221,8 +221,8 @@ describe("useResizable", () => {
 
 		press(result, 100);
 		pointer("pointermove", 60);
-		expect(widthVar()).toBe("240px");
 		pointer("pointerup", 60);
+		expect(widthVar()).toBe("240px");
 		expect(window.localStorage.getItem("test-resizable-w")).toBe("240");
 
 		resizeWindow(1200);

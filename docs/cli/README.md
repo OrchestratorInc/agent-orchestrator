@@ -6,7 +6,7 @@ loopback HTTP surface and the `running.json` handshake. It must not open SQLite
 directly or call runtime, workspace, tracker, or agent adapters in-process.
 
 When using the CLI directly from a shell, make sure the daemon is running first
-with `ao start` or by opening the desktop app. Product commands such as
+by opening the desktop app or running `ao daemon` under a service manager. Product commands such as
 `ao agent ls` and `ao spawn` call the loopback daemon and will fail with a
 "daemon is not running" error if no `running.json` points at a live process. From
 a source checkout, build and run the local binary explicitly, for example:
@@ -32,7 +32,23 @@ Every product command resolves to a daemon HTTP route. Run `ao <command>
 | `ao doctor` / `--json`        | Check config, data directory, DB-file presence, daemon state, `git`, and (on Darwin/Linux) `tmux`; on Windows conpty is built in. |
 | `ao completion <shell>`       | Generate completions for `bash`, `zsh`, `fish`, or `powershell`.                                                                  |
 | `ao version` / `ao --version` | Print build metadata.                                                                                                             |
-| `ao daemon`                   | Hidden internal entrypoint used by the desktop supervisor and source-development tools.                                                                             |
+| `ao daemon`                   | Run the daemon in the foreground (normally supervised by the desktop app or an OS service manager).                               |
+| `ao remote-host status/enable/disable` | Inspect or toggle this machine's authenticated remote listener through the local daemon. |
+
+For a self-hosted machine, use the [host setup command](../self-hosted-remote.md)
+to install the daemon with its Claude Chat runtime and start the OS user
+service. It calls `ao remote-host enable` and prints the host ID, address, and
+pairing password for **Settings → Remote hosts** on another desktop. With
+`cloudflared` installed, setup `--tunnel` calls `ao remote-host enable
+--tunnel-only`: its authenticated listener binds only to loopback. Direct
+`ao remote-host enable --tunnel` keeps both LAN and Cloudflare access for users
+who deliberately want both. Check `ao remote-host status` when the HTTPS
+address is ready.
+Running `enable` again prints the current details without rotating the
+password. `status` shows the password from the host's local shell. The LAN
+listener uses plain HTTP; do not publish its port directly to the internet.
+Cloudflare terminates tunnel TLS and can see its traffic; quick-tunnel
+addresses change on restart.
 
 ### Product commands
 

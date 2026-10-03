@@ -63,7 +63,9 @@ const chatSurfaceWorkState = vi.hoisted(() => ({
 const cloudSessionQueryState = vi.hoisted(() => ({
 	data: undefined as WorkspaceSession | undefined,
 	isLoading: false,
+	isError: false,
 }));
+const cloudSessionLookup = vi.hoisted(() => vi.fn());
 const cloudGateState = vi.hoisted(() => ({ cloudEnabled: true }));
 const workspaceSessionLookup = vi.hoisted(() => vi.fn());
 
@@ -666,15 +668,19 @@ vi.mock("../lib/shell-context", () => ({
 	useShell: () => ({ daemonStatus: { state: "ready" } }),
 }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
+	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 	toCloudWorkspaceSession: vi.fn(),
-	useCloudSessionQuery: () => cloudSessionQueryState,
+	useCloudSessionQuery: (orgId: string | undefined, sessionId: string, enabled: boolean) => {
+		cloudSessionLookup(orgId, sessionId, enabled);
+		return cloudSessionQueryState;
+	},
 	cloudSessionsQueryKey: ["cloud-sessions"],
 	useWorkspaceQuery: () => ({
 		data: workspaceQueryState.data,
 		isLoading: workspaceQueryState.isLoading,
 	}),
-	useWorkspaceSession: (sessionId: string, localLookupEnabled?: boolean) => {
-		workspaceSessionLookup(sessionId, localLookupEnabled);
+	useWorkspaceSession: (sessionId: string, hostId?: string, localLookupEnabled?: boolean) => {
+		workspaceSessionLookup(sessionId, hostId, localLookupEnabled);
 		return ({
 		data: workspaceQueryState.data
 			?.flatMap((workspace) => workspace.sessions)
@@ -850,6 +856,7 @@ describe("SessionView", () => {
 		interfaceTransitionState.status = undefined;
 		cloudSessionQueryState.data = undefined;
 		cloudSessionQueryState.isLoading = false;
+		cloudSessionQueryState.isError = false;
 		settingsState.chatHarnesses = undefined;
 		chatSurfaceWorkState.controllerBusy = false;
 		chatSurfaceWorkState.hasRunningTurn = false;
@@ -882,7 +889,53 @@ describe("SessionView", () => {
 
 		expect(screen.queryByText("session not found")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Switch to chat UI" })).not.toBeInTheDocument();
-		expect(workspaceSessionLookup).toHaveBeenCalledWith("cloud-session", false);
+		expect(workspaceSessionLookup).toHaveBeenCalledWith("cloud-session", undefined, false);
+	});
+
+	it("uses the project route to distinguish local and Cloud sessions with the same ID", () => {
+		const cloudSession: WorkspaceSession = {
+			...workerSession("sess-1"),
+			workspaceId: "cloud-project",
+			workspaceName: "Cloud project",
+			title: "Cloud twin",
+			mode: "chat",
+			cloud: { orgId: "cloud-org" },
+		};
+		workspaceQueryState.data = [
+			...workspaces,
+			{ id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [cloudSession] },
+		];
+		cloudSessionLookup.mockClear();
+
+		const cloudView = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+		expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+		expect(screen.queryByTestId("terminal-center")).not.toBeInTheDocument();
+		expect(workspaceSessionLookup).toHaveBeenCalledWith("sess-1", undefined, false);
+		cloudView.unmount();
+
+		const localView = render(<SessionView cloudOrgId="cloud-org" projectId="proj-1" sessionId="sess-1" />);
+		expect(screen.getByTestId("terminal-center")).toBeInTheDocument();
+		expect(screen.queryByTestId("cloud-chat-surface")).not.toBeInTheDocument();
+		expect(cloudSessionLookup).toHaveBeenLastCalledWith("cloud-org", "sess-1", false);
+		localView.unmount();
+
+		render(<SessionView cloudOrgId="cloud-org" sessionId="sess-1" />);
+		expect(screen.getByTestId("terminal-center")).toBeInTheDocument();
+		expect(screen.queryByTestId("cloud-chat-surface")).not.toBeInTheDocument();
+		expect(cloudSessionLookup).toHaveBeenLastCalledWith("cloud-org", "sess-1", false);
+	});
+
+	it("keeps an unscoped local session available when Cloud is offline", () => {
+		cloudSessionQueryState.isError = true;
+		render(<SessionView cloudOrgId="cloud-org" sessionId="sess-1" />);
+		expect(screen.getByTestId("terminal-center")).toBeInTheDocument();
+		expect(cloudSessionLookup).toHaveBeenLastCalledWith("cloud-org", "sess-1", false);
+	});
+
+	it("does not use another project's cached session as a local route fallback", () => {
+		render(<SessionView projectId="proj-1" sessionId="sess-cross-project" />);
+		expect(screen.getByText(/Session not found/)).toBeInTheDocument();
+		expect(screen.queryByTestId("terminal-center")).not.toBeInTheDocument();
 	});
 	// Regression: shell terminals are an app-wide list, so without a per-session
 	// filter a shell opened in another session would show up as a tab in this
@@ -3729,20 +3782,29 @@ describe("SessionView", () => {
 		expect(inspectorWidthVariable()).toBe("340px");
 	});
 
-	it("resizes the inspector panel and terminal gap together synchronously while dragging", () => {
+	it("resizes the inspector panel and terminal gap together once per frame while dragging", () => {
 		render(<SessionView sessionId="sess-1" />);
 		const handle = screen.getByTestId("inspector-resize-handle");
 		expect(document.documentElement.style.getPropertyValue("--ao-inspector-w")).toBe("");
-
-		fireEvent.pointerDown(handle, { clientX: 100 });
-		fireEvent.pointerMove(window, { clientX: 200 });
-		// Sync apply during drag (no rAF) so the grip can follow the painted border 1:1.
-		expect(inspectorWidthVariable()).toBe("400px");
-		expect(inspectorPanelWidthVariable()).toBe("400px");
-
-		fireEvent.pointerUp(window);
-		expect(inspectorWidthVariable()).toBe("400px");
-		expect(inspectorPanelWidthVariable()).toBe("400px");
+		const frames: FrameRequestCallback[] = [];
+		const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+			frames.push(callback); return frames.length;
+		});
+		try {
+			const initialWidth = inspectorWidthVariable();
+			fireEvent.pointerDown(handle, { clientX: 100 });
+			fireEvent.pointerMove(window, { clientX: 180 });
+			fireEvent.pointerMove(window, { clientX: 200 });
+			expect(inspectorWidthVariable()).toBe(initialWidth);
+			expect(inspectorPanelWidthVariable()).toBe(initialWidth);
+			expect(frames).toHaveLength(1);
+			act(() => frames.shift()!(performance.now()));
+			expect(inspectorWidthVariable()).toBe("400px");
+			expect(inspectorPanelWidthVariable()).toBe("400px");
+			fireEvent.pointerUp(window);
+			expect(inspectorWidthVariable()).toBe("400px");
+			expect(inspectorPanelWidthVariable()).toBe("400px");
+		} finally { raf.mockRestore(); }
 	});
 
 	it("grows Browser into a co-work canvas while utility surfaces (Files included) stay consistent", async () => {

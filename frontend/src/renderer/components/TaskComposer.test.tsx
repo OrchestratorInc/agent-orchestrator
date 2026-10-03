@@ -8,6 +8,10 @@ const h = vi.hoisted(() => ({
 	delete: vi.fn(),
 	get: vi.fn(),
 	post: vi.fn(),
+	remoteGet: vi.fn(),
+	remotePost: vi.fn(),
+	remoteDelete: vi.fn(),
+	connectedHostIds: ["box-a"],
 	capture: vi.fn(),
 	ensureReadiness: vi.fn(),
 	ensureTargetedReadiness: vi.fn(),
@@ -23,7 +27,7 @@ vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
 	return {
 		...actual,
 		ensureAgentReadiness: h.ensureTargetedReadiness,
-		useAgentReadinessQuery: () => ({ data: h.agentCatalog, isFetching: false }),
+		useAgentReadinessQuery: () => ({ data: h.agentCatalog, isFetching: false, isSuccess: h.agentCatalog !== undefined }),
 		useEnsureAgentReadiness: h.ensureReadiness,
 	};
 });
@@ -68,6 +72,12 @@ vi.mock("../lib/api-client", () => ({
 	apiErrorMessage: (error: { message?: string }, fallback = "err") => error?.message ?? fallback,
 }));
 
+vi.mock("../lib/host-clients", () => ({
+	clientForHost: () => ({ GET: h.remoteGet, POST: h.remotePost, DELETE: h.remoteDelete }),
+	connectedHosts: () => h.connectedHostIds,
+	subscribeConnectedHosts: () => () => undefined,
+}));
+
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: h.capture }));
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
@@ -94,6 +104,7 @@ import { TaskComposer } from "./TaskComposer";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 import { useSandboxProviderStore } from "../stores/sandbox-provider-store";
+import { useUiStore } from "../stores/ui-store";
 
 function Wrap({ children, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }) }: {
 	children: ReactNode;
@@ -110,6 +121,7 @@ async function waitForTaskReady() {
 }
 
 beforeEach(() => {
+	useUiStore.setState({ developerMode: true, remoteHosts: true });
 	h.get.mockImplementation(async (path: string) => {
 		if (path.includes("/models")) {
 			return {
@@ -127,9 +139,14 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	useUiStore.setState({ developerMode: false, remoteHosts: false });
 	h.delete.mockReset();
 	h.get.mockReset();
 	h.post.mockReset();
+	h.remoteGet.mockReset();
+	h.remotePost.mockReset();
+	h.remotePost.mockResolvedValue({ data: {} });
+	h.remoteDelete.mockReset();
 	h.capture.mockReset();
 	h.ensureReadiness.mockReset();
 	h.ensureTargetedReadiness.mockReset();
@@ -145,6 +162,104 @@ afterEach(() => {
 });
 
 describe("TaskComposer", () => {
+	it("does not launch a remote project task without a ready agent", async () => {
+		h.agentCatalog = { agents: [] };
+		h.remoteGet.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: [] } }
+			: { data: { status: "ok", project: { id: "project-a", config: {} } } });
+		h.remotePost.mockImplementation(async (path: string) => path === "/api/v1/agents/readiness/ensure"
+			? { data: { agents: [] } }
+			: { data: {} });
+		render(<Wrap><TaskComposer hostId="box-a" projectId="project-a" onCreated={vi.fn()} /></Wrap>);
+		await screen.findByText("No agent is ready on this host. Configure one there first.");
+		expect(startTask()).toBeDisabled();
+		expect(h.remotePost.mock.calls.some(([path]) => path === "/api/v1/orchestrators/delegate")).toBe(false);
+	});
+
+	it("does not start a remote task with the project's uninstalled default agent", async () => {
+		h.agentCatalog = { agents: [
+			agentReadiness("claude-code", "Claude Code", { installation: "not_installed" }),
+			agentReadiness("opencode", "OpenCode", { authentication: "unknown" }),
+		] };
+		h.remoteGet.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: ["opencode"] } }
+			: { data: { status: "ok", project: { id: "project-a", config: { worker: { agent: "claude-code" } } } } });
+		h.remotePost.mockImplementation(async (path: string) => path === "/api/v1/agents/readiness/ensure"
+			? { data: { agents: [
+				agentReadiness("claude-code", "Claude Code", { installation: "not_installed" }),
+				agentReadiness("opencode", "OpenCode", { authentication: "unknown" }),
+			] } }
+			: { data: {} });
+		render(<Wrap><TaskComposer hostId="box-a" projectId="project-a" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "claude-code"));
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toBeEnabled());
+		expect(startTask()).toBeDisabled();
+		expect(screen.queryByText("No agent is ready on this host. Configure one there first.")).not.toBeInTheDocument();
+	});
+
+	it("creates a remote project task through its host, not the local daemon", async () => {
+		h.agentCatalog = { agents: [agentReadiness("opencode", "OpenCode", { authentication: "unknown" })] };
+		const onCreated = vi.fn();
+		h.remoteGet.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) return { data: { agent: "opencode", selectionMode: "text", models: [], allowCustom: true } };
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["opencode"] } };
+			return { data: { status: "ok", project: { id: "project-a", config: { worker: { agent: "opencode" } } } } };
+		});
+		h.remotePost.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents/readiness/ensure") return { data: { agents: [agentReadiness("opencode", "OpenCode", { authentication: "unknown" })] } };
+			if (path === "/api/v1/projects/{id}/tasks/prepare") return { data: { taskPreparation: "" } };
+			if (path === "/api/v1/orchestrators/delegate") return { data: { workerId: "remote-task" } };
+			return { data: {} };
+		});
+		render(<Wrap><TaskComposer hostId="box-a" projectId="project-a" onCreated={onCreated} /></Wrap>);
+		await waitFor(() => expect(startTask()).toBeEnabled());
+		expect(screen.queryByText("No agent is ready on this host. Configure one there first.")).not.toBeInTheDocument();
+		fireEvent.change(task(), { target: { value: "Fix the issue" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("remote-task"));
+		expect(h.remotePost).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.objectContaining({
+			body: expect.objectContaining({ projectId: "project-a", brief: "Fix the issue" }),
+		}));
+		expect(h.post.mock.calls.some(([path]) => path === "/api/v1/orchestrators/delegate")).toBe(false);
+	});
+
+	it("reuses a task request id after an uncertain response and changes it with the draft", async () => {
+		h.agentCatalog = { agents: [agentReadiness("opencode", "OpenCode")] };
+		h.remoteGet.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) return { data: { agent: "opencode", selectionMode: "text", models: [], allowCustom: true } };
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["opencode"] } };
+			return {
+				data: {
+					status: "ok",
+					project: { id: "project-a", config: { worker: { agent: "opencode" } } },
+				},
+			};
+		});
+		h.remotePost.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents/readiness/ensure") return { data: { agents: [agentReadiness("opencode", "OpenCode")] } };
+			if (path === "/api/v1/projects/{id}/tasks/prepare") return { data: { taskPreparation: "" } };
+			if (path === "/api/v1/orchestrators/delegate") return { error: { code: "SPAWN_TIMEOUT", message: "response lost" } };
+			return { data: {} };
+		});
+		render(<Wrap><TaskComposer hostId="box-a" projectId="project-a" onCreated={vi.fn()} /></Wrap>);
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "Fix it" } });
+		fireEvent.click(startTask());
+		await screen.findByText("response lost");
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.remotePost.mock.calls.filter(([path]) => path === "/api/v1/orchestrators/delegate")).toHaveLength(2));
+		const requests = h.remotePost.mock.calls.filter(([path]) => path === "/api/v1/orchestrators/delegate");
+		const firstID = requests[0][1].body.clientRequestId;
+		expect(firstID).toBeTruthy();
+		expect(requests[1][1].body.clientRequestId).toBe(firstID);
+		await screen.findByText("response lost");
+		fireEvent.change(task(), { target: { value: "Fix something else" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.remotePost.mock.calls.filter(([path]) => path === "/api/v1/orchestrators/delegate")).toHaveLength(3));
+		const changed = h.remotePost.mock.calls.filter(([path]) => path === "/api/v1/orchestrators/delegate")[2][1].body.clientRequestId;
+		expect(changed).not.toBe(firstID);
+	});
+
 	it("preselects the highest-ranked ready agent for a standalone task", async () => {
 		h.agentCatalog = {
 			agents: [
@@ -521,7 +636,7 @@ describe("TaskComposer", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Start task" }));
 
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("worker-1"));
-		expect(h.ensureTargetedReadiness).toHaveBeenCalledWith(["claude-code"], "launch");
+		expect(h.ensureTargetedReadiness).toHaveBeenCalledWith(["claude-code"], "launch", undefined);
 	});
 
 	it("keeps submission enabled for a gateway-backed Claude project when cached global readiness is unauthorized", async () => {
@@ -558,7 +673,7 @@ describe("TaskComposer", () => {
 		expect(submit).toBeEnabled();
 		fireEvent.click(submit);
 
-		await waitFor(() => expect(h.ensureTargetedReadiness).toHaveBeenCalledWith(["claude-code"], "launch"));
+		await waitFor(() => expect(h.ensureTargetedReadiness).toHaveBeenCalledWith(["claude-code"], "launch", undefined));
 		await waitFor(() => expect(h.post).toHaveBeenCalled());
 	});
 
@@ -629,7 +744,7 @@ describe("TaskComposer", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Start task" }));
 
 		await waitFor(() => expect(h.ensureTargetedReadiness).toHaveBeenCalledTimes(2));
-		expect(h.ensureTargetedReadiness).toHaveBeenLastCalledWith(["codex"], "launch");
+		expect(h.ensureTargetedReadiness).toHaveBeenLastCalledWith(["codex"], "launch", undefined);
 		expect(screen.queryByText("Codex is not ready")).not.toBeInTheDocument();
 
 		await act(async () => finishReadiness({ agents: [completed] }));
