@@ -111,6 +111,35 @@ describe("prefetchDefaultWorkspaceReviewDiffs", () => {
 		expect(postMock.mock.calls[0]?.[1]?.body).toMatchObject({ scope: "committed", commitSha: "commit-1", paths: ["README.md"] });
 	});
 
+	it("warms matching 24-file batches and refills an evicted later batch", async () => {
+		const client = new QueryClient();
+		const sessionId = "sess-prefetch-batches";
+		const files = Array.from({ length: 57 }, (_, index) => file(`file-${index}.ts`));
+		await prefetchDefaultWorkspaceReviewDiffs(client, sessionId, workspace(files));
+		expect(postMock.mock.calls.map((call) => call[1].body.paths.length)).toEqual([24, 24, 9]);
+		client.removeQueries({ queryKey: sessionWorkspaceDiffsQueryKey(sessionId, "combined", files.slice(24, 48).map((file) => file.path), 3, false, "workspace-1"), exact: true });
+		await prefetchDefaultWorkspaceReviewDiffs(client, sessionId, workspace(files));
+		expect(postMock).toHaveBeenCalledTimes(4);
+		expect(postMock.mock.calls[3]?.[1]?.body.paths).toEqual(files.slice(24, 48).map((file) => file.path));
+	});
+
+	it("refetches invalidated diffs and full contents even when the summary version and patch stay the same", async () => {
+		const client = new QueryClient();
+		const sessionId = "sess-prefetch-invalidated";
+		const data = workspace([file("README.md")]);
+		await prefetchDefaultWorkspaceReviewDiffs(client, sessionId, data);
+		await client.invalidateQueries({ queryKey: ["session-workspace-diffs", sessionId], refetchType: "none" });
+		await client.invalidateQueries({ queryKey: ["files-review-end-of-file", sessionId], refetchType: "none" });
+		getMock.mockImplementation(async (_path: string, init: { params: { query: { side: string } } }) => ({ data: {
+			binary: false, truncated: false, content: "updated unchanged context", revision: `updated-${init.params.query.side}`,
+		} }));
+		await prefetchDefaultWorkspaceReviewDiffs(client, sessionId, data);
+		expect(postMock).toHaveBeenCalledTimes(2);
+		expect(getMock).toHaveBeenCalledTimes(4);
+		const cached = client.getQueryCache().findAll({ queryKey: ["files-review-end-of-file", sessionId] });
+		expect(cached[0]?.state.data).toMatchObject({ newFile: { contents: "updated unchanged context" } });
+	});
+
 	it("skips lockfiles the review pane defers", async () => {
 		const queryClient = new QueryClient();
 		await prefetchDefaultWorkspaceReviewDiffs(queryClient, "sess-prefetch-lock", workspace([file("package-lock.json", { size: 600_000 })]));
