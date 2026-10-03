@@ -521,10 +521,10 @@ const maxActivitySignalProjectionRetries = 3
 func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, s ports.ActivitySignal) error {
 	// Subagent answers, including prompt suggestions, are not root-conversation
 	// facts. Their usage is collected independently from lifecycle metadata.
+	s.SubagentID = strings.TrimSpace(s.SubagentID)
 	if s.Event == "subagent-stop" && s.SubagentID == "" {
 		return nil
 	}
-	s.SubagentID = strings.TrimSpace(s.SubagentID)
 	s.AgentSessionID = strings.TrimSpace(s.AgentSessionID)
 	s.LatestUserPrompt = strings.TrimSpace(s.LatestUserPrompt)
 	s.LatestAssistantUpdate = strings.TrimSpace(s.LatestAssistantUpdate)
@@ -533,6 +533,15 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 	s.ControllerGeneration = strings.TrimSpace(s.ControllerGeneration)
 	s.ProviderTurnID = strings.TrimSpace(s.ProviderTurnID)
 	s.SubmissionID = strings.TrimSpace(s.SubmissionID)
+	if s.SubagentID != "" {
+		// Child hook identity and transcript are not the root conversation's
+		// resumable identity or history checkpoint.
+		s.AgentSessionID = ""
+		s.TranscriptPath = ""
+		s.LatestUserPrompt = ""
+		s.LatestAssistantUpdate = ""
+		s.ProviderTurnID = ""
+	}
 	if !s.ConversationCheckpointOrigin.Valid() {
 		s.ConversationCheckpointOrigin = domain.ConversationCheckpointOriginUnknown
 	}

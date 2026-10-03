@@ -2,6 +2,8 @@ package lifecycle
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -82,9 +84,12 @@ func TestClaudeSubagentActivityWaitsForEveryChildAndPreservesPermissionBlock(t *
 	apply(4, "stop", "", domain.ActivityIdle, "", &children, domain.ActivityActive)
 	apply(5, "pre-tool-use", "child-1", domain.ActivityActive, "tool-1", nil, domain.ActivityActive)
 	apply(6, "permission-request", "child-1", domain.ActivityBlocked, "", nil, domain.ActivityBlocked)
-	apply(7, "subagent-stop", "child-2", "", "", nil, domain.ActivityBlocked)
+	// Claude's permission notification has no child id. It must not turn the
+	// parent into a blocked turn after the child's correlated tool completes.
+	apply(7, "notification", "", domain.ActivityBlocked, "", nil, domain.ActivityBlocked)
 	apply(8, "post-tool-use", "child-1", domain.ActivityActive, "tool-1", nil, domain.ActivityActive)
-	apply(9, "subagent-stop", "child-1", "", "", nil, domain.ActivityIdle)
+	apply(9, "subagent-stop", "child-2", "", "", nil, domain.ActivityActive)
+	apply(10, "subagent-stop", "child-1", "", "", nil, domain.ActivityIdle)
 }
 
 func TestClaudeSubagentActivityDropsPreviousLaunch(t *testing.T) {
@@ -153,5 +158,204 @@ func TestClaudeStopSnapshotCoversChildWithoutStartHook(t *testing.T) {
 		if got := store.sessions["ao-1"].Activity.State; got != want {
 			t.Fatalf("after %s: activity=%q, want %q", sig.Event, got, want)
 		}
+	}
+}
+
+func TestClaudeActivityFactsPruneStoppedChildrenAfterSnapshot(t *testing.T) {
+	store := newFakeStore()
+	start := time.Date(2026, 10, 3, 18, 4, 40, 0, time.UTC)
+	store.sessions["ao-1"] = domain.SessionRecord{
+		ID: "ao-1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: start},
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch-1"},
+	}
+	m := New(store, nil)
+	for i := range 20 {
+		id := fmt.Sprintf("child-%d", i)
+		for _, sig := range []ports.ActivitySignal{
+			{Event: "subagent-start", SubagentID: id, Timestamp: start.Add(time.Duration(2*i+1) * time.Second)},
+			{Event: "subagent-stop", SubagentID: id, Timestamp: start.Add(time.Duration(2*i+2) * time.Second)},
+		} {
+			sig.LaunchID = "launch-1"
+			if err := m.ApplyActivitySignal(context.Background(), "ao-1", sig); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	empty := []string{}
+	if err := m.ApplyActivitySignal(context.Background(), "ao-1", ports.ActivitySignal{
+		Valid: true, State: domain.ActivityIdle, Event: "stop", RunningSubagentIDs: &empty,
+		LaunchID: "launch-1", Timestamp: start.Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var facts claudeActivityFacts
+	if err := json.Unmarshal([]byte(store.sessions["ao-1"].Metadata.ClaudeActivityFacts), &facts); err != nil {
+		t.Fatal(err)
+	}
+	if len(facts.Children) != 0 {
+		t.Fatalf("empty snapshot retained %d stopped children", len(facts.Children))
+	}
+}
+
+func TestClaudeDelayedStartAfterSnapshotIsSuppressed(t *testing.T) {
+	start := time.Date(2026, 10, 3, 18, 4, 40, 0, time.UTC)
+	encoded, err := json.Marshal(claudeActivityFacts{
+		LaunchID: "launch-1", ParentState: domain.ActivityIdle,
+		SnapshotAt: start.Add(20 * time.Second).UnixNano(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := domain.SessionRecord{
+		Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+		Metadata: domain.SessionMetadata{ClaudeActivityFacts: string(encoded)},
+	}
+	for _, event := range []string{"subagent-start", "subagent-stop"} {
+		sig, facts, err := reduceClaudeSubagentActivity(rec, ports.ActivitySignal{
+			Event: event, SubagentID: "late-child", LaunchID: "launch-1",
+			Timestamp: start.Add(10 * time.Second),
+		}, start.Add(time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sig.Valid || facts != rec.Metadata.ClaudeActivityFacts {
+			t.Fatalf("delayed %s was not suppressed: signal=%+v facts=%s", event, sig, facts)
+		}
+	}
+}
+
+func TestClaudeCorruptActivityFactsRecoverOnNextStop(t *testing.T) {
+	rec := domain.SessionRecord{
+		Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive},
+		Metadata: domain.SessionMetadata{ClaudeActivityFacts: "{broken"},
+	}
+	empty := []string{}
+	sig, facts, err := reduceClaudeSubagentActivity(rec, ports.ActivitySignal{
+		Valid: true, State: domain.ActivityIdle, Event: "stop", LaunchID: "launch-1",
+		RunningSubagentIDs: &empty,
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sig.Valid || sig.State != domain.ActivityIdle || !json.Valid([]byte(facts)) {
+		t.Fatalf("corrupt facts did not recover: signal=%+v facts=%s", sig, facts)
+	}
+}
+
+func TestClaudeTerminalIdleDoesNotRewriteRunningChild(t *testing.T) {
+	store := newFakeStore()
+	start := time.Date(2026, 10, 3, 18, 4, 40, 0, time.UTC)
+	store.sessions["ao-1"] = domain.SessionRecord{
+		ID: "ao-1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: start},
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch-1"},
+	}
+	m := New(store, nil)
+	for _, sig := range []ports.ActivitySignal{
+		{Event: "subagent-start", SubagentID: "child-1", Timestamp: start.Add(time.Second)},
+		{Valid: true, State: domain.ActivityIdle, Event: "stop", Timestamp: start.Add(2 * time.Second),
+			RunningSubagentIDs: &[]string{"child-1"}},
+	} {
+		sig.LaunchID = "launch-1"
+		if err := m.ApplyActivitySignal(context.Background(), "ao-1", sig); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := store.sessions["ao-1"]
+	if err := m.ApplyActivitySignal(context.Background(), "ao-1", ports.ActivitySignal{
+		Valid: true, State: domain.ActivityIdle, Event: "terminal-idle",
+		LaunchID: "launch-1", Timestamp: start.Add(3 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after := store.sessions["ao-1"]
+	if after.Revision != before.Revision || after.Activity != before.Activity ||
+		after.Metadata.ClaudeActivityFacts != before.Metadata.ClaudeActivityFacts {
+		t.Fatalf("terminal idle rewrote a running child: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestClaudeSubagentStopSnapshotClearsSiblingWithLostStopHook(t *testing.T) {
+	store := newFakeStore()
+	start := time.Date(2026, 10, 3, 18, 4, 40, 0, time.UTC)
+	store.sessions["ao-1"] = domain.SessionRecord{
+		ID: "ao-1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: start},
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch-1"},
+	}
+	m := New(store, nil)
+	for _, sig := range []ports.ActivitySignal{
+		{Event: "subagent-start", SubagentID: "child-1", Timestamp: start.Add(time.Second)},
+		{Event: "subagent-start", SubagentID: "child-2", Timestamp: start.Add(2 * time.Second)},
+		{Valid: true, State: domain.ActivityIdle, Event: "stop", Timestamp: start.Add(3 * time.Second),
+			RunningSubagentIDs: &[]string{"child-1", "child-2"}},
+		// child-1's stop hook is lost. Claude's parent-scoped snapshot on
+		// child-2's stop proves neither child remains in flight.
+		{Event: "subagent-stop", SubagentID: "child-2", Timestamp: start.Add(4 * time.Second),
+			RunningSubagentIDs: &[]string{}},
+	} {
+		sig.LaunchID = "launch-1"
+		if err := m.ApplyActivitySignal(context.Background(), "ao-1", sig); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := store.sessions["ao-1"].Activity.State; got != domain.ActivityIdle {
+		t.Fatalf("empty SubagentStop snapshot left a lost sibling active: %q", got)
+	}
+}
+
+func TestClaudeDuplicateSubagentStopStillAppliesNewerSnapshot(t *testing.T) {
+	store := newFakeStore()
+	start := time.Date(2026, 10, 3, 18, 4, 40, 0, time.UTC)
+	store.sessions["ao-1"] = domain.SessionRecord{
+		ID: "ao-1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: start},
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch-1"},
+	}
+	m := New(store, nil)
+	for _, sig := range []ports.ActivitySignal{
+		{Event: "subagent-start", SubagentID: "child-1", Timestamp: start.Add(time.Second)},
+		{Event: "subagent-start", SubagentID: "child-2", Timestamp: start.Add(2 * time.Second)},
+		{Valid: true, State: domain.ActivityIdle, Event: "stop", Timestamp: start.Add(3 * time.Second),
+			RunningSubagentIDs: &[]string{"child-1", "child-2"}},
+		{Event: "subagent-stop", SubagentID: "child-2", Timestamp: start.Add(4 * time.Second)},
+		// This duplicate stop carries a newer snapshot. Child-1's stop hook
+		// was lost, and the registry now proves it is no longer running.
+		{Event: "subagent-stop", SubagentID: "child-2", Timestamp: start.Add(5 * time.Second),
+			RunningSubagentIDs: &[]string{}},
+	} {
+		sig.LaunchID = "launch-1"
+		if err := m.ApplyActivitySignal(context.Background(), "ao-1", sig); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := store.sessions["ao-1"].Activity.State; got != domain.ActivityIdle {
+		t.Fatalf("newer snapshot on duplicate stop left sibling active: %q", got)
+	}
+}
+
+func TestClaudeStopWithoutSnapshotDoesNotProveChildFinished(t *testing.T) {
+	store := newFakeStore()
+	start := time.Date(2026, 10, 3, 18, 4, 40, 0, time.UTC)
+	store.sessions["ao-1"] = domain.SessionRecord{
+		ID: "ao-1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: start},
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch-1"},
+	}
+	m := New(store, nil)
+	for _, sig := range []ports.ActivitySignal{
+		{Event: "subagent-start", SubagentID: "child-1", Timestamp: start.Add(time.Second)},
+		{Valid: true, State: domain.ActivityIdle, Event: "stop", Timestamp: start.Add(2 * time.Second)},
+	} {
+		sig.LaunchID = "launch-1"
+		if err := m.ApplyActivitySignal(context.Background(), "ao-1", sig); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := store.sessions["ao-1"].Activity.State; got != domain.ActivityActive {
+		t.Fatalf("missing task registry falsely ended child: %q", got)
 	}
 }

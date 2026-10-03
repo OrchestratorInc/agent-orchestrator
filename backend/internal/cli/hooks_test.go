@@ -552,11 +552,40 @@ func TestHooks_ClaudeStopCarriesRunningSubagents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	req = setActivityAPIRequest{}
 	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
 		t.Fatal(err)
 	}
 	if req.RunningSubagentIDs == nil || len(*req.RunningSubagentIDs) != 0 {
 		t.Fatalf("empty background snapshot lost: %+v", req)
+	}
+	_, _, err = executeCLI(t, Deps{
+		In:           strings.NewReader(`{"session_id":"native-main"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "stop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = setActivityAPIRequest{}
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.RunningSubagentIDs != nil {
+		t.Fatalf("unavailable task registry became an empty snapshot: %+v", req)
+	}
+	_, _, err = executeCLI(t, Deps{
+		In:           strings.NewReader(`{"session_id":"native-main","agent_id":"child-1","background_tasks":[{"id":"child-2","type":"subagent"}]}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "subagent-stop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = setActivityAPIRequest{}
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.SubagentID != "child-1" || req.RunningSubagentIDs == nil || len(*req.RunningSubagentIDs) != 1 || (*req.RunningSubagentIDs)[0] != "child-2" {
+		t.Fatalf("SubagentStop parent snapshot = %+v", req)
 	}
 }
 

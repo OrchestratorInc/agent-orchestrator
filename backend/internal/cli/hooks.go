@@ -119,8 +119,8 @@ func activityMeta(payload []byte) (toolName, toolUseID string) {
 }
 
 // claudeSubagentFacts keeps native child identity separate from the resumable
-// main session id. A non-nil empty slice is an observed Stop with no running
-// children; nil means this Claude version supplied no background snapshot.
+// main session id. A non-nil empty slice proves no children remain; nil means
+// Claude could not supply a task-registry snapshot and must not clear children.
 func claudeSubagentFacts(event string, payload []byte) (string, *[]string) {
 	var p struct {
 		AgentID         string          `json:"agent_id"`
@@ -130,7 +130,7 @@ func claudeSubagentFacts(event string, payload []byte) (string, *[]string) {
 		return "", nil
 	}
 	id := validSubagentID(p.AgentID)
-	if event != "stop" || id != "" || len(p.BackgroundTasks) == 0 || p.BackgroundTasks[0] != '[' {
+	if (event != "stop" && event != "subagent-stop") || len(p.BackgroundTasks) == 0 || p.BackgroundTasks[0] != '[' {
 		return id, nil
 	}
 	var tasks []struct {
