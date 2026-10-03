@@ -168,11 +168,7 @@ func workspaceGitSections(ctx context.Context, root, base string) (WorkspaceFile
 	var sections WorkspaceFileSections
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		statuses, previous, err := workspaceDiffNameStatus(gctx, root, "--cached")
-		if err != nil {
-			return err
-		}
-		counts, err := workspaceDiffNumstat(gctx, root, "--cached")
+		statuses, previous, counts, err := workspaceDiffStats(gctx, root, "--cached")
 		if err != nil {
 			return err
 		}
@@ -180,11 +176,7 @@ func workspaceGitSections(ctx context.Context, root, base string) (WorkspaceFile
 		return nil
 	})
 	g.Go(func() error {
-		statuses, previous, err := workspaceDiffNameStatus(gctx, root)
-		if err != nil {
-			return err
-		}
-		counts, err := workspaceDiffNumstat(gctx, root)
+		statuses, previous, counts, err := workspaceDiffStats(gctx, root)
 		if err != nil {
 			return err
 		}
@@ -201,11 +193,7 @@ func workspaceGitSections(ctx context.Context, root, base string) (WorkspaceFile
 	})
 	if base = strings.TrimSpace(base); base != "" && base != "HEAD" {
 		g.Go(func() error {
-			statuses, previous, err := workspaceDiffNameStatus(gctx, root, base, "HEAD")
-			if err != nil {
-				return err
-			}
-			counts, err := workspaceDiffNumstat(gctx, root, base, "HEAD")
+			statuses, previous, counts, err := workspaceDiffStats(gctx, root, base, "HEAD")
 			if err != nil {
 				return err
 			}
