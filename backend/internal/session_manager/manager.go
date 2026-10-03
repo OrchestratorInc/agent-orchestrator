@@ -249,6 +249,7 @@ type lifecycleRecorder interface {
 	ActivateChatAgentSwitchTarget(ctx context.Context, activation domain.AgentSwitchChatTargetActivation) (bool, error)
 	ApplyActivitySignal(ctx context.Context, id domain.SessionID, signal ports.ActivitySignal) error
 	MarkTerminated(ctx context.Context, id domain.SessionID) error
+	HoldExitedForRecovery(id domain.SessionID, launchID string)
 }
 
 // ShellTerminalCloser gates a session's scoped shell terminals around every
@@ -3331,7 +3332,15 @@ func (m *Manager) preserveFailedReconcileRelaunch(ctx context.Context, before do
 		if m.relaunchCommitted(before, current) {
 			return true, nil
 		}
-		if current.IsTerminated || current.Activity.State == domain.ActivityExited {
+		if current.IsTerminated {
+			return false, nil
+		}
+		// Hold before recording exited: the runtime reaper must not terminate the
+		// session for the dead runtime reconciliation just failed to replace.
+		if domain.NormalizeSessionMode(current.Mode) != domain.SessionModeChat {
+			m.lcm.HoldExitedForRecovery(before.ID, current.Metadata.RuntimeLaunchID)
+		}
+		if current.Activity.State == domain.ActivityExited {
 			return false, nil
 		}
 
