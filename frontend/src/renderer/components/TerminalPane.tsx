@@ -1209,19 +1209,36 @@ function AttachedTerminal({
 	}, [canRestoreSession, isRestoring, restoreSessionById, session?.hostId, session?.id, t]);
 
 	// Report the pending shell's grid once xterm has measured its visible slot.
-	// A parked pane cannot be measured; it reports when it is next shown.
+	// A parked pane cannot be measured; it reports when it is next shown. A
+	// visible slot can still be briefly unmeasurable (zero geometry mid-layout,
+	// font metrics not ready); keep checking each frame until it can be, then
+	// fit to it and report, or the shell would never be created.
 	useEffect(() => {
 		if (!terminal || !pendingShellHandleId || !isVisible) return;
 		let current = true;
-		void terminal.prepareForActivation().then(() => {
+		let frame: number | null = null;
+		const fitAndReport = () => {
+			void terminal.prepareForActivation().then(() => {
+				if (!current) return;
+				const grid = terminal.measureGrid();
+				if (!grid) {
+					frame = requestAnimationFrame(waitForGeometry);
+					return;
+				}
+				measuredGridRef.current = grid;
+				reportPendingShellGrid(pendingShellHandleId, grid);
+			});
+		};
+		const waitForGeometry = () => {
+			frame = null;
 			if (!current) return;
-			const grid = terminal.measureGrid();
-			if (!grid) return;
-			measuredGridRef.current = grid;
-			reportPendingShellGrid(pendingShellHandleId, grid);
-		});
+			if (terminal.measureGrid()) fitAndReport();
+			else frame = requestAnimationFrame(waitForGeometry);
+		};
+		fitAndReport();
 		return () => {
 			current = false;
+			if (frame !== null) cancelAnimationFrame(frame);
 		};
 	}, [terminal, pendingShellHandleId, isVisible]);
 

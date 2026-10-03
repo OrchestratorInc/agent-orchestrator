@@ -512,6 +512,38 @@ describe("TerminalPane empty states", () => {
 		}
 	});
 
+	it("keeps measuring a pending shell whose slot is briefly unmeasurable", async () => {
+		// Zero geometry mid-layout (or unready font metrics) right after mount must
+		// not leave the shell uncreated: a later frame measures the real grid.
+		measureGridMock.mockReturnValueOnce(null).mockReturnValueOnce(null).mockReturnValue({ cols: 93, rows: 27 });
+		const shell = {
+			handleId: "pending-shell:unmeasurable",
+			sessionId: worker.id,
+			workingDir: "",
+			title: "Terminal 1",
+			createdAt: "2026-08-31T00:00:00Z",
+			optimistic: true,
+		} satisfies ShellTerminal;
+		const view = renderCachedPane({
+			session: worker,
+			sessions: [worker],
+			shellTerminals: [shell],
+			terminalTarget: {
+				generation: shell.createdAt,
+				kind: "shell",
+				handleId: shell.handleId,
+				sessionId: worker.id,
+				title: shell.title,
+			},
+		});
+		try {
+			await expect(pendingShellGrid(shell.handleId)).resolves.toEqual({ cols: 93, rows: 27 });
+			expect(measureGridMock.mock.calls.length).toBeGreaterThan(2);
+		} finally {
+			view.restore();
+		}
+	});
+
 	it("keeps the measured xterm when the pending shell's PTY is created", async () => {
 		const pending = {
 			handleId: "pending-shell:adopt",

@@ -387,6 +387,45 @@ describe("useOpenShellTerminal sized creation", () => {
 		await waitFor(() => expect(result.current.open.isError).toBe(true));
 	});
 
+	it("drops the pending row when a refetch already listed the created shell", async () => {
+		// Another tab's close refetches after the daemon created this shell but
+		// before this create response arrives: the list briefly holds both rows.
+		const created = { ...shells[0] };
+		let finishCreate!: (result: { data: { shellTerminal: ShellTerminal } }) => void;
+		postMock.mockReturnValue(new Promise((resolve) => (finishCreate = resolve)));
+		// The racing refetch lists the created shell; the refetch after the create
+		// stays in flight, so the list shows exactly what the create's success left.
+		let phase: "before" | "race" | "after" = "before";
+		getMock.mockImplementation(() =>
+			phase === "after"
+				? new Promise(() => undefined)
+				: Promise.resolve({ data: { shellTerminals: phase === "race" ? [created] : [] } }),
+		);
+		const queryClient = new QueryClient({
+			defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+		});
+		queryClient.setQueryData(shellTerminalsQueryKey, []);
+		const { result } = renderHook(
+			() => ({ list: useShellTerminals(), open: useOpenShellTerminal() }),
+			{ wrapper: wrapper(queryClient) },
+		);
+		let pending!: ShellTerminal;
+		act(() => {
+			pending = result.current.open.open({});
+		});
+		act(() => reportPendingShellGrid(pending.handleId, measuredGrid));
+		await waitFor(() => expect(postMock).toHaveBeenCalled());
+
+		phase = "race";
+		await act(async () => queryClient.invalidateQueries({ queryKey: shellTerminalsQueryKey }));
+		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([created, pending]);
+
+		phase = "after";
+		await act(async () => finishCreate({ data: { shellTerminal: created } }));
+		await waitFor(() => expect(result.current.open.isSuccess).toBe(true));
+		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([created]);
+	});
+
 	it("drops the pending tab without creating a PTY when its terminal cannot start", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { mutations: { retry: false }, queries: { retry: false } },

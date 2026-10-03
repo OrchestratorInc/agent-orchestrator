@@ -259,8 +259,12 @@ export function useOpenShellTerminal(hostId?: HostId) {
 			// Replace, rather than append to, the tab that was visible while the POST
 			// ran. This preserves selection and prevents a duplicate tab flash.
 			queryClient.setQueryData<ShellTerminal[]>(queryKey, (current) => {
-				if (current?.some((candidate) => candidate.handleId === shell.handleId)) return current;
 				const optimisticHandleId = optimisticShell.handleId;
+				// A refetch that landed after the daemon created the shell but before
+				// this response already lists it next to its pending row.
+				if (current?.some((candidate) => candidate.handleId === shell.handleId)) {
+					return current.filter((candidate) => candidate.handleId !== optimisticHandleId);
+				}
 				const index = current?.findIndex((candidate) => candidate.handleId === optimisticHandleId) ?? -1;
 				if (index < 0) return [...(current ?? []), shell];
 				return current?.map((candidate, candidateIndex) => (candidateIndex === index ? shell : candidate)) ?? [shell];
