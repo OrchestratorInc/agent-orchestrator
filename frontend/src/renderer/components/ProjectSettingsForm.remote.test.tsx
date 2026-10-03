@@ -46,6 +46,8 @@ vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
 vi.mock("../lib/orchestrator-replacement-telemetry", () => ({ captureOrchestratorReplacementFailure: vi.fn() }));
 vi.mock("../stores/ui-store", () => ({
 	useUiStore: (selector: (state: Record<string, unknown>) => unknown) => selector({
+		developerMode: true,
+		remoteHosts: true,
 		setOrchestratorReplacementError: vi.fn(),
 		openGlobalSettings: vi.fn(),
 	}),

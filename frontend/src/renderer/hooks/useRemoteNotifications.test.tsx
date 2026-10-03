@@ -1,12 +1,13 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
 const remotes = vi.hoisted(() => ({ connect: vi.fn(), disconnect: vi.fn(async () => undefined) }));
 vi.mock("../lib/bridge", () => ({ aoBridge: { remotes } }));
 
 import { connectHost, connectedHosts, disconnectHost } from "../lib/host-clients";
+import { useUiStore } from "../stores/ui-store";
 import { remoteNotificationsQueryKey, useRemoteNotificationHosts } from "./useRemoteNotifications";
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -19,7 +20,10 @@ async function connect(hostId: string, port: number) {
 	await connectHost(url);
 }
 
+beforeEach(() => useUiStore.setState({ developerMode: true, remoteHosts: true }));
+
 afterEach(async () => {
+	useUiStore.setState({ developerMode: false, remoteHosts: false });
 	for (const hostId of connectedHosts()) await disconnectHost(hostId);
 	remotes.connect.mockReset();
 	vi.unstubAllGlobals();

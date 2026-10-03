@@ -104,6 +104,7 @@ import { TaskComposer } from "./TaskComposer";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 import { useSandboxProviderStore } from "../stores/sandbox-provider-store";
+import { useUiStore } from "../stores/ui-store";
 
 function Wrap({ children, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }) }: {
 	children: ReactNode;
@@ -120,6 +121,7 @@ async function waitForTaskReady() {
 }
 
 beforeEach(() => {
+	useUiStore.setState({ developerMode: true, remoteHosts: true });
 	h.get.mockImplementation(async (path: string) => {
 		if (path.includes("/models")) {
 			return {
@@ -137,11 +139,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	useUiStore.setState({ developerMode: false, remoteHosts: false });
 	h.delete.mockReset();
 	h.get.mockReset();
 	h.post.mockReset();
 	h.remoteGet.mockReset();
 	h.remotePost.mockReset();
+	h.remotePost.mockResolvedValue({ data: {} });
 	h.remoteDelete.mockReset();
 	h.capture.mockReset();
 	h.ensureReadiness.mockReset();

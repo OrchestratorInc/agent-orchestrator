@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
 const { localGet, remoteConnect } = vi.hoisted(() => ({ localGet: vi.fn(), remoteConnect: vi.fn() }));
@@ -12,13 +12,17 @@ vi.mock("./useCloudCp", () => ({ useCloudCp: () => ({ ready: false, baseUrl: "",
 vi.mock("./useCloudOrg", () => ({ useCloudOrg: () => ({ org: undefined, ready: false }) }));
 
 import { connectHost, connectedHosts, disconnectHost } from "../lib/host-clients";
+import { useUiStore } from "../stores/ui-store";
 import { remoteWorkspaceQueryKey, useRemoteWorkspaces, useWorkspaceQuery, useWorkspaceSession } from "./useWorkspaceQuery";
 
 function wrapper({ children }: { children: ReactNode }) {
 	return <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>{children}</QueryClientProvider>;
 }
 
+beforeEach(() => useUiStore.setState({ developerMode: true, remoteHosts: true }));
+
 afterEach(async () => {
+	useUiStore.setState({ developerMode: false, remoteHosts: false });
 	for (const hostId of connectedHosts()) await disconnectHost(hostId);
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();

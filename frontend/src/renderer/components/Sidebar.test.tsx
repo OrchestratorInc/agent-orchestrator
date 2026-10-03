@@ -2421,20 +2421,16 @@ describe("Sidebar", () => {
 		).toBe(`${SIDEBAR_MIN_WIDTH}px`);
 	});
 
-	it("persists the clamped width on pointer-up (sync apply during drag)", async () => {
+	it("persists the latest clamped width on pointer-up before the queued frame", () => {
 		renderSidebar();
-
 		const resizeHandle = screen.getByTestId("resize-handle");
-
+		const gap = document.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')!;
+		const initialWidth = gap.style.getPropertyValue("--ao-sidebar-w");
 		fireEvent.pointerDown(resizeHandle, { clientX: SIDEBAR_DEFAULT_WIDTH });
 		fireEvent.pointerMove(window, { clientX: SIDEBAR_MIN_WIDTH + 5 });
-		expect(
-			document
-				.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')
-				?.style.getPropertyValue("--ao-sidebar-w"),
-		).toBe(`${SIDEBAR_MIN_WIDTH + 5}px`);
-
+		expect(gap.style.getPropertyValue("--ao-sidebar-w")).toBe(initialWidth);
 		fireEvent.pointerUp(window);
+		expect(gap.style.getPropertyValue("--ao-sidebar-w")).toBe(`${SIDEBAR_MIN_WIDTH + 5}px`);
 		expect(window.localStorage.getItem("ao-sidebar-w")).toBe(String(SIDEBAR_MIN_WIDTH + 5));
 	});
 

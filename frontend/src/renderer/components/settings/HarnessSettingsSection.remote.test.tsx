@@ -1,13 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { agentReadinessQueryKey, agentReadinessQueryKeyForHost, type AgentReadiness } from "../../hooks/useAgentReadinessQuery";
 import { shellTerminalsQueryKeyForHost, type ShellTerminal } from "../../hooks/useShellTerminals";
 import { appI18n } from "../../i18n";
 import { apiClient } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { connectHost, disconnectHost } from "../../lib/host-clients";
+import { useUiStore } from "../../stores/ui-store";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
 
 const terminal = vi.hoisted(() => ({ createMux: undefined as undefined | (() => { dispose: () => void }), target: undefined as unknown }));
@@ -38,7 +39,10 @@ const readiness = (installed: string[], authorized = false) => ({
 	})),
 });
 
+beforeEach(() => useUiStore.setState({ developerMode: true, remoteHosts: true }));
+
 afterEach(async () => {
+	useUiStore.setState({ developerMode: false, remoteHosts: false });
 	await disconnectHost("box-a");
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
