@@ -323,6 +323,9 @@ export function CommandPalette() {
 	const navigateToTarget = useCallback(
 		(target: NavigateTarget) => {
 			switch (target.to) {
+				case "/":
+					void navigate({ to: target.to });
+					break;
 				case "/settings":
 					// Modal — do not route to /settings (that legacy path redirects home).
 					useUiStore.getState().openGlobalSettings();

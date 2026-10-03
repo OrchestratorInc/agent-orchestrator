@@ -117,14 +117,15 @@ describe("shell index route", () => {
 		expect(routeMocks.createProjectFlowProps?.sourceSignal?.source).toBe("clone");
 	});
 
-	it("opens cloud project creation when Developer Mode and Cloud are enabled", () => {
+	it("adds cloud project creation beside standalone when Developer Mode and Cloud are enabled", () => {
 		useUiStore.setState({ developerMode: true });
 		routeMocks.cloudEnabled = true;
 		render(<HomePage />);
 
 		fireEvent.click(screen.getByRole("button", { name: "New cloud project" }));
 		expect(routeMocks.createProjectFlowProps?.sourceSignal?.source).toBe("cloud");
-		expect(screen.queryByRole("button", { name: "New standalone agent" })).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "New standalone agent" }));
+		expect(useUiStore.getState().newTaskRequest?.projectId).toBe(STANDALONE_WORKSPACE_ID);
 	});
 
 	it.each([
@@ -173,7 +174,7 @@ describe("shell index route", () => {
 
 		expect(screen.getByText("Jump back right in")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "New cloud project" })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "New standalone agent" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "New standalone agent" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Connect mobile" })).not.toBeInTheDocument();
 		expect(routeMocks.navigate).not.toHaveBeenCalled();
 	});

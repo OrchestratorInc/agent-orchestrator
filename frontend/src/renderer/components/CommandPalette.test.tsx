@@ -626,6 +626,17 @@ describe("CommandPalette actions", () => {
 		expect(useUiStore.getState().isCommandPaletteOpen).toBe(true);
 	});
 
+	it("navigates home from search and closes", async () => {
+		ctx.params = { projectId: "proj-1" };
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search projects/i);
+		fireEvent.change(input, { target: { value: "home" } });
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/" });
+		await waitFor(() => expect(paletteInput()).toBeNull());
+	});
+
 	it("toggles the theme and closes", async () => {
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));

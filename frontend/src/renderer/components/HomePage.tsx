@@ -29,8 +29,9 @@ import { Badge } from "./ui/badge";
  * - One centered column (`max-w-[640px]`); no upward translate hack.
  * - "Star us" is a quiet text link with dashed underline on hover — NOT a
  *   TopbarButton / accent pill / bordered card.
- * - Primary actions are a 2×2 grid; Cloud replaces the standalone-agent action
- *   in the fourth cell when Developer Mode and Cloud are enabled.
+ * - Primary actions are a 2×2 grid that always includes the standalone-agent
+ *   action. With Developer Mode and Cloud enabled, a full-width Cloud action
+ *   sits beneath the grid rather than displacing standalone.
  *   Connect Mobile is settings-only — not here.
  * - Recent rows use shared {@link NavRowHighlight} (same as sidebar), not a
  *   flat `hover:bg-interactive-hover` wash.
@@ -218,7 +219,6 @@ export function HomePage() {
 							</button>
 						</div>
 
-						{/* Cloud replaces the standalone action in the same grid cell when enabled. */}
 						<div className="grid grid-cols-2 gap-3">
 							<HomeActionCard
 								icon={<GitFork strokeWidth={1.8} />}
@@ -235,19 +235,20 @@ export function HomePage() {
 								label={t("createProject.addWorkspace")}
 								onClick={() => requestSource("workspace")}
 							/>
+							<HomeActionCard
+								icon={<Bot strokeWidth={1.8} />}
+								label={t("home.newStandaloneAgent")}
+								onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
+							/>
 							{developerMode && cloudEnabled ? (
-								<HomeActionCard
-									icon={<Cloud strokeWidth={1.8} />}
-									label={t("createProject.cloudTitle")}
-									onClick={() => requestSource("cloud")}
-								/>
-							) : (
-								<HomeActionCard
-									icon={<Bot strokeWidth={1.8} />}
-									label={t("home.newStandaloneAgent")}
-									onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
-								/>
-							)}
+								<div className="col-span-2">
+									<HomeActionCard
+										icon={<Cloud strokeWidth={1.8} />}
+										label={t("createProject.cloudTitle")}
+										onClick={() => requestSource("cloud")}
+									/>
+								</div>
+							) : null}
 						</div>
 					</section>
 
