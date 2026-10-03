@@ -31,7 +31,7 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 	const supportsSize = supportedParams.includes("size");
 	const supportsStartup = supportedParams.includes("startup_script");
 	const templateOptions = [
-		{ id: "", name: t("coder.template.default", { defaultValue: "Default" }), description: t("coder.template.defaultHint", { defaultValue: "The workspace configured for your org." }), parameters: [] as string[] },
+		{ id: "", name: t("coder.template.default", { defaultValue: "Organization workspace" }), description: t("coder.template.defaultHint", { defaultValue: "The workspace configured for your org." }), parameters: [] as string[] },
 		...templates.map((tpl) => ({
 			id: tpl.id,
 			name: tpl.displayName || tpl.name,
@@ -48,7 +48,7 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 						<span className="font-medium text-foreground">{t("coder.template.label", { defaultValue: "Template" })}</span>
 						<SearchablePicker
 							ariaLabel={t("coder.template.label", { defaultValue: "Template" })}
-							placeholder={t("coder.template.default", { defaultValue: "Default" })}
+							placeholder={t("coder.template.default", { defaultValue: "Organization workspace" })}
 							searchPlaceholder={t("coder.template.search", { defaultValue: "Search templates" })}
 							value={templateId}
 							onChange={(id) => {
@@ -119,6 +119,8 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 }
 
 // These cards are placed directly below the project's primary repository.
+// Not shown in the cloud project form for now; kept so it can
+// be re-enabled without rebuilding it.
 export function AdditionalRepositoriesPicker({ repos = [] }: { repos?: { label: string; url: string; private?: boolean }[] }) {
 	const { t } = useTranslation();
 	const extraRepos = useCoderSessionOptionsStore((s) => s.extraRepos);
@@ -174,13 +176,6 @@ export function AdditionalRepositoriesPicker({ repos = [] }: { repos?: { label: 
 												aria-label={t("coder.repos.url", { defaultValue: "Repository" })}
 											/>
 										)}
-										<Input
-											value={repo.branch ?? ""}
-											onChange={(e) => updateRepo(index, { branch: e.target.value })}
-											placeholder={t("coder.repos.branch", { defaultValue: "branch" })}
-											className="w-32 shrink-0"
-											aria-label={t("coder.repos.branch", { defaultValue: "branch" })}
-										/>
 										<Button
 											type="button"
 											variant="ghost"

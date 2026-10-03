@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,17 +18,19 @@ vi.mock("./NewTaskDialog", () => ({
 	NewTaskDialog: ({
 		open,
 		projectId,
+		hostId,
 		onCreated,
 		onOpenChange,
 	}: {
 		open: boolean;
 		projectId?: string;
+		hostId?: string;
 		onCreated: (id: string) => void;
 		onOpenChange: (open: boolean) => void;
 	}) => {
 		const [draft, setDraft] = useState("");
 		return open ? (
-			<div data-testid="new-task-dialog" data-project={projectId}>
+			<div data-testid="new-task-dialog" data-project={projectId} data-host={hostId}>
 				<label>
 					task
 					<input aria-label="task" value={draft} onChange={(event) => setDraft(event.currentTarget.value)} />
@@ -89,6 +91,33 @@ describe("GlobalNewTaskDialog", () => {
 		});
 	});
 
+	it("keeps the host when creating a task for a remote project", async () => {
+		const user = userEvent.setup();
+		const queryClient = renderDialog();
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		act(() => useUiStore.getState().requestNewTask("proj-7", "box-a"));
+		const dialog = await screen.findByTestId("new-task-dialog");
+		expect(dialog).toHaveAttribute("data-host", "box-a");
+		await user.click(screen.getByRole("button", { name: "create" }));
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "box-a"] });
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/host/$hostId/project/$projectId/session/$sessionId",
+			params: { hostId: "box-a", projectId: "proj-7", sessionId: "sess-9" },
+		});
+	});
+
+	it("routes a remote standalone task back to its host", async () => {
+		const user = userEvent.setup();
+		renderDialog();
+		act(() => useUiStore.getState().requestNewTask("__standalone__", "box-b"));
+		expect(await screen.findByTestId("new-task-dialog")).toHaveAttribute("data-host", "box-b");
+		await user.click(screen.getByRole("button", { name: "create" }));
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/host/$hostId/session/$sessionId",
+			params: { hostId: "box-b", sessionId: "sess-9" },
+		});
+	});
+
 	it("actually closes and re-opens for a fresh request to the same project", async () => {
 		const user = userEvent.setup();
 		renderDialog();
@@ -105,6 +134,18 @@ describe("GlobalNewTaskDialog", () => {
 			useUiStore.getState().requestNewTask("proj-7");
 		});
 		expect(await screen.findByTestId("new-task-dialog")).toHaveAttribute("data-project", "proj-7");
+	});
+
+	it("does not replay a consumed request after the shell remounts", async () => {
+		renderDialog();
+		act(() => {
+			useUiStore.getState().requestNewTask("proj-7");
+		});
+		await screen.findByTestId("new-task-dialog");
+
+		cleanup();
+		renderDialog();
+		expect(screen.queryByTestId("new-task-dialog")).not.toBeInTheDocument();
 	});
 
 	it("does not retarget or replay a request received while the dialog is open", async () => {

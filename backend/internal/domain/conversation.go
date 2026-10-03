@@ -631,6 +631,10 @@ type ConversationMessage struct {
 	Role     MessageRole   `json:"role"`
 	Origin   MessageOrigin `json:"origin"`
 	Text     string        `json:"text"`
+	// AuthoredByUser is an intake-only fact used to project user activity when
+	// AO delivered the message as automation. It is not part of the persisted
+	// delivery origin or the conversation API representation.
+	AuthoredByUser bool `json:"-"`
 	// Streaming is true while more deltas are expected.
 	Streaming bool `json:"streaming"`
 	// ProviderItemID deduplicates provider observations of the same message.
@@ -638,6 +642,7 @@ type ConversationMessage struct {
 	// ClientMessageID is the caller-supplied idempotency key for user messages.
 	// A retry carrying the same key must not create a second provider turn.
 	ClientMessageID     string    `json:"clientMessageId,omitempty"`
+	ClientPayloadHash   string    `json:"-"`
 	DeliveryContentJSON string    `json:"-"`
 	CreatedAt           time.Time `json:"createdAt"`
 	UpdatedAt           time.Time `json:"updatedAt"`
@@ -702,10 +707,16 @@ var ErrNoConversation = errors.New("session has no conversation")
 // queue is the normal case, not an error.
 var ErrNoQueuedTurn = errors.New("no queued turn")
 
+// ErrSessionNotProvisioning rejects a pre-controller turn after startup ended.
+var ErrSessionNotProvisioning = errors.New("session is not provisioning")
+
 // ErrNoConversationTurn reports a turn id that is not in the conversation it was
 // named against. It lives here rather than in the storage layer so a controller and
 // an HTTP handler can both recognize it without importing SQLite.
 var ErrNoConversationTurn = errors.New("conversation turn not found")
+
+// ErrClientMessageConflict refuses reuse of a delivery ID for different content.
+var ErrClientMessageConflict = errors.New("client message id belongs to a different message")
 
 // ErrNoConversationBranch reports a branch id outside the named conversation.
 var ErrNoConversationBranch = errors.New("conversation branch not found")

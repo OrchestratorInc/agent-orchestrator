@@ -82,6 +82,10 @@ surface (`npm run sqlc`, `npm run api`).
   binary/auth/environment resolution and does not bundle provider CLIs; Unreal
   Agent is the library-backed exception. Cursor
   is Chat-only until its ACP and TUI conversation ids are proven to share identity.
+- MiMo Code 0.1.14+ is available as a TUI worker/orchestrator harness with
+  model selection, native-session restore, workspace activity hooks, and
+  truthful configured-credential readiness. Chat and reviewer support are not
+  claimed.
 - Project CRUD plus per-project config (`PUT /projects/{id}/config`).
 - PR action engine wired into the API: `POST /prs/{id}/merge` and
   `/prs/{id}/resolve-comments`.
@@ -119,8 +123,10 @@ surface (`npm run sqlc`, `npm run api`).
   sessions, per-client `tmux attach` for Linux and persisted legacy macOS
   handles, and a ConPTY loopback host on Windows.
 - Lifecycle reducer plus reaper (`internal/observe/reaper`).
-- Agent adapter platform under `internal/adapters/agent/` (25 adapters) with a
+- Agent adapter platform under `internal/adapters/agent/` (28 public harnesses) with a
   registry and `ao hooks` activity dispatch.
+- Experimental fx adapter: Terminal UI only (no Chat), with restore, agent
+  switching, and Settings installation.
 - Daemon-owned in-memory agent readiness coordination with normalized
   installation/authentication observations, purpose-specific freshness,
   single-flight checks, bounded warm-up/retries, launch-time validation, and

@@ -17,13 +17,11 @@ import (
 type fakeImportService struct {
 	discover    []sessionimport.ImportableSession
 	discoverErr error
-	lastOpts    sessionimport.DiscoverOptions
 	lastProject domain.ProjectID
 	imported    map[string]bool
 }
 
-func (f *fakeImportService) Discover(_ context.Context, opts sessionimport.DiscoverOptions, projectID domain.ProjectID) ([]sessionimport.ImportableSession, error) {
-	f.lastOpts = opts
+func (f *fakeImportService) Discover(_ context.Context, projectID domain.ProjectID) ([]sessionimport.ImportableSession, error) {
 	f.lastProject = projectID
 	return f.discover, f.discoverErr
 }
@@ -65,9 +63,8 @@ func TestListImportable(t *testing.T) {
 	if !resp.Sessions[1].AlreadyImported {
 		t.Errorf("second session should be flagged already imported")
 	}
-	// Discovery always uses the approved 15-day window.
-	if svc.lastOpts.Since.IsZero() {
-		t.Errorf("expected a fixed activity window")
+	if svc.lastProject != "proj" {
+		t.Errorf("project filter: got %q", svc.lastProject)
 	}
 }
 

@@ -15,7 +15,7 @@ import (
 
 func TestDiscoveryRequiresProject(t *testing.T) {
 	svc := New(&fakeSessions{}, &fakeStore{}, &fakeProjects{})
-	if _, err := svc.Discover(context.Background(), sessionimport.DiscoverOptions{}, ""); err == nil {
+	if _, err := svc.Discover(context.Background(), ""); err == nil {
 		t.Fatal("global discovery must be rejected; a registered project is required")
 	}
 }

@@ -8,7 +8,7 @@ import (
 )
 
 func TestMigratePreviewSourceBranchPreservesMainMigrations(t *testing.T) {
-	for _, previewVersion := range []int64{126, 129, 140} {
+	for _, previewVersion := range []int64{126, 129, 140, 156} {
 		t.Run(fmt.Sprint(previewVersion), func(t *testing.T) {
 			db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
 			if err != nil {
@@ -68,6 +68,33 @@ func TestMigratePreviewSourceBranchPreservesMainMigrations(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMigratePreviewImportVersions156And157(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	upTo(t, db, 155)
+	if _, err := db.Exec(`
+ALTER TABLE sessions ADD COLUMN source_branch TEXT NOT NULL DEFAULT '';
+CREATE INDEX idx_sessions_source_branch ON sessions(source_branch) WHERE source_branch <> '';
+CREATE INDEX sessions_import_conversation ON sessions(harness, provider_conversation_id) WHERE is_terminated = 0;
+CREATE INDEX sessions_import_agent ON sessions(harness, agent_session_id) WHERE is_terminated = 0;
+INSERT INTO goose_db_version(version_id,is_applied) VALUES(156,1),(157,1);
+`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range []string{"source_branch", "provision_state", "is_task_preparation"} {
+		var present int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name=?`, column).Scan(&present); err != nil || present != 1 {
+			t.Fatalf("column %s: present=%d err=%v", column, present, err)
+		}
 	}
 }
 

@@ -84,7 +84,7 @@ const MinimumTokens int64 = 15_000
 
 // Discover requires a registered project and limits both discovery and direct
 // imports to recent conversations with enough recorded provider usage.
-func (s *Service) Discover(ctx context.Context, _ sessionimport.DiscoverOptions, projectID domain.ProjectID) ([]sessionimport.ImportableSession, error) {
+func (s *Service) Discover(ctx context.Context, projectID domain.ProjectID) ([]sessionimport.ImportableSession, error) {
 	opts, err := s.projectOptions(ctx, projectID)
 	if err != nil {
 		return nil, err

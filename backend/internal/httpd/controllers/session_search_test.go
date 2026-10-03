@@ -18,7 +18,7 @@ type searchAPIFake struct {
 	queries int
 }
 
-func (f *searchAPIFake) Discover(context.Context, sessionimport.DiscoverOptions, domain.ProjectID) ([]sessionimport.ImportableSession, error) {
+func (f *searchAPIFake) Discover(context.Context, domain.ProjectID) ([]sessionimport.ImportableSession, error) {
 	return nil, nil
 }
 func (f *searchAPIFake) Import(context.Context, domain.AgentHarness, string, domain.ProjectID) (domain.Session, bool, error) {

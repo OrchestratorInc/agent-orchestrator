@@ -14,14 +14,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimportsvc"
 )
 
-const defaultImportableWindowDays = sessionimportsvc.DiscoveryWindowDays
-
 // SessionImportService discovers on-disk agent conversations and imports one as
 // a resumable AO session. It is provider-agnostic; the provider is carried on
 // each record. Import returns the AO session and whether it already existed (an
 // idempotent re-import returns the existing session with alreadyImported=true).
 type SessionImportService interface {
-	Discover(ctx context.Context, opts sessionimport.DiscoverOptions, projectID domain.ProjectID) ([]sessionimport.ImportableSession, error)
+	Discover(ctx context.Context, projectID domain.ProjectID) ([]sessionimport.ImportableSession, error)
 	Import(ctx context.Context, provider domain.AgentHarness, nativeSessionID string, projectID domain.ProjectID) (session domain.Session, alreadyImported bool, err error)
 }
 
@@ -74,8 +72,7 @@ func (c *SessionsController) listImportable(w http.ResponseWriter, r *http.Reque
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_QUERY", "projectId is required", nil)
 		return
 	}
-	opts := sessionimport.DiscoverOptions{Since: time.Now().AddDate(0, 0, -defaultImportableWindowDays), MinTokens: sessionimportsvc.MinimumTokens}
-	sessions, err := c.Import.Discover(r.Context(), opts, projectID)
+	sessions, err := c.Import.Discover(r.Context(), projectID)
 	if err != nil {
 		if errors.Is(err, sessionimportsvc.ErrImportProjectUnresolved) {
 			envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable_entity", "IMPORT_PROJECT_UNRESOLVED", "choose a registered project before importing its conversations", nil)

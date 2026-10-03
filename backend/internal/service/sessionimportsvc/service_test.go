@@ -291,7 +291,7 @@ func TestDiscoverScopedToProject(t *testing.T) {
 
 	// A project lists only its own history, and the nested project's
 	// conversation belongs to the nested project rather than its parent.
-	scoped, err := svc.Discover(context.Background(), sessionimport.DiscoverOptions{}, "root")
+	scoped, err := svc.Discover(context.Background(), "root")
 	if err != nil {
 		t.Fatalf("discover scoped: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestDiscoverScopedToProject(t *testing.T) {
 		t.Fatalf("want only the root project's conversation, got %+v", scoped)
 	}
 
-	nested, err := svc.Discover(context.Background(), sessionimport.DiscoverOptions{}, "nested")
+	nested, err := svc.Discover(context.Background(), "nested")
 	if err != nil {
 		t.Fatalf("discover nested: %v", err)
 	}
@@ -354,7 +354,7 @@ func TestScopedDiscoveryNarrowsTheScan(t *testing.T) {
 	projects := &fakeProjects{list: []projectsvc.Summary{{ID: "proj", Path: "/Users/dev/code"}}}
 	svc := New(&fakeSessions{}, &fakeStore{}, projects, src)
 
-	got, err := svc.Discover(context.Background(), sessionimport.DiscoverOptions{}, "proj")
+	got, err := svc.Discover(context.Background(), "proj")
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
@@ -402,7 +402,7 @@ func TestDiscoveryKeepsSameIDInOtherHarnessImportable(t *testing.T) {
 		sources = append(sources, &fakeSource{provider: provider, sessions: []sessionimport.ImportableSession{{Provider: provider, NativeSessionID: "shared", CWD: "/project", TokenCount: MinimumTokens, LastActivity: time.Now()}}})
 	}
 	svc := New(&fakeSessions{}, store, &fakeProjects{list: []projectsvc.Summary{{ID: "p", Path: "/project"}}}, sources...)
-	got, err := svc.Discover(context.Background(), sessionimport.DiscoverOptions{}, "p")
+	got, err := svc.Discover(context.Background(), "p")
 	if err != nil || len(got) != 2 {
 		t.Fatalf("discovery: %+v %v", got, err)
 	}

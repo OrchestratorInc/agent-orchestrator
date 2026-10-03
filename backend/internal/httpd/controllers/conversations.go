@@ -906,7 +906,7 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 			"SESSION_MODE_MISMATCH",
 			"this session was created in Terminal UI mode and has no chat conversation", nil)
 
-	case errors.Is(err, chatsvc.ErrNoController):
+	case errors.Is(err, chatsvc.ErrNoController), errors.Is(err, chatsvc.ErrNotProvisioning):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_CONTROLLER_NOT_READY",
 			"the agent controller for this session is not running", nil)
@@ -938,6 +938,10 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, domain.ErrNoConversationTurn):
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found",
 			"CHAT_TURN_NOT_FOUND", "that turn is not in this session's conversation", nil)
+
+	case errors.Is(err, domain.ErrClientMessageConflict):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_MESSAGE_IDEMPOTENCY_CONFLICT", "clientMessageId belongs to a different message", nil)
 
 	case errors.Is(err, chatsvc.ErrTurnRunning):
 		// Retryable, unlike every other refusal here: the same request works once

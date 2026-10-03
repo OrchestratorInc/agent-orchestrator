@@ -3,10 +3,10 @@ package sqlite
 import "database/sql"
 
 // prepareSessionSourceBranchMigration preserves preview databases that applied
-// source_branch as version 126, 129, 140, or 141 and import identity indexes as
-// version 142. Main now owns those versions. Record source_branch at 156, release
-// the reused import-index ledger entry so main's checkpoint migrations replay,
-// and let the idempotent index migration run at 157.
+// source_branch as version 126, 129, 140, 141, or 156 and import identity
+// indexes as version 142 or 157. Main now owns those versions. Record
+// source_branch at 174, release reused ledger entries so main's migrations
+// replay, and let the idempotent index migration run at 175.
 // A preview also briefly used version 140 for this column before main shipped
 // standalone sessions at 140. Release that ledger entry when project_id is
 // still NOT NULL so the real standalone migration can run.
@@ -57,11 +57,28 @@ func prepareSessionSourceBranchMigration(db *sql.DB) error {
 		}
 	}
 	var applied int
-	if err := tx.QueryRow(`SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id=156 ORDER BY id DESC LIMIT 1),0)`).Scan(&applied); err != nil {
+	if err := tx.QueryRow(`SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id=174 ORDER BY id DESC LIMIT 1),0)`).Scan(&applied); err != nil {
 		return err
 	}
 	if applied != 0 {
 		return tx.Commit()
+	}
+	var provisionColumn, preparationColumn int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='provision_state'`).Scan(&provisionColumn); err != nil {
+		return err
+	}
+	if provisionColumn == 0 {
+		if _, err := tx.Exec(`DELETE FROM goose_db_version WHERE version_id=156`); err != nil {
+			return err
+		}
+	}
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='is_task_preparation'`).Scan(&preparationColumn); err != nil {
+		return err
+	}
+	if preparationColumn == 0 && importIndexes == 2 {
+		if _, err := tx.Exec(`DELETE FROM goose_db_version WHERE version_id=157`); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_sessions_source_branch ON sessions(source_branch) WHERE source_branch <> ''`); err != nil {
 		return err
@@ -87,7 +104,7 @@ func prepareSessionSourceBranchMigration(db *sql.DB) error {
 			return err
 		}
 	}
-	if _, err := tx.Exec(`INSERT INTO goose_db_version(version_id,is_applied) VALUES(156,1)`); err != nil {
+	if _, err := tx.Exec(`INSERT INTO goose_db_version(version_id,is_applied) VALUES(174,1)`); err != nil {
 		return err
 	}
 	return tx.Commit()

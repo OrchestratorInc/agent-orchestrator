@@ -902,6 +902,22 @@ func TestInterfaceTransitionStatusHidesSwitchWhenChatUnsupported(t *testing.T) {
 	}
 }
 
+func TestInterfaceTransitionStatusHidesChatWhenDriverUnavailable(t *testing.T) {
+	manager, _, _, chat, _ := newTransitionManager(t, domain.SessionModeTUI)
+	chat.preflightErr = ports.ErrChatDriverUnavailable
+
+	status, err := manager.InterfaceTransitionStatus(context.Background(), "session-1")
+	if err != nil {
+		t.Fatalf("InterfaceTransitionStatus: %v", err)
+	}
+	if status.Supported {
+		t.Fatal("status offered Chat when its driver cannot launch")
+	}
+	if status.ReasonCode != "TARGET_UNAVAILABLE" {
+		t.Fatalf("reasonCode = %q, want TARGET_UNAVAILABLE", status.ReasonCode)
+	}
+}
+
 func TestInterfaceTransitionStatusAllowsSwitchToTUIWhenChatUnsupported(t *testing.T) {
 	manager, _, _, chat, _ := newTransitionManager(t, domain.SessionModeChat)
 	chat.supportsChat = false
@@ -3451,4 +3467,12 @@ func TestInterfaceTransitionStatusReportsUnverifiedWhenInspectionFails(t *testin
 	); err == nil || !strings.Contains(err.Error(), "transcript root unreadable") {
 		t.Fatalf("StartInterfaceTransition error = %v, want inspection failure", err)
 	}
+}
+
+func (c *transitionChat) QueueChatPrompt(_ context.Context, _ domain.SessionID, _ string) (string, error) {
+	return "", nil
+}
+
+func (c *transitionChat) DrainChatQueue(_ context.Context, _ domain.SessionID) error {
+	return nil
 }

@@ -1,4 +1,4 @@
-import { Host } from "@expo/ui";
+import { Host, RNHostView } from "@expo/ui";
 import { Asset } from "expo-asset";
 import { Button, Group, HStack, Image, Menu, Spacer, Text, VStack } from "@expo/ui/swift-ui";
 import {
@@ -11,10 +11,13 @@ import {
 	font,
 	frame,
 	labelStyle,
+	layoutPriority,
+	lineLimit,
 	opacity,
 	padding,
 	resizable,
 	tint,
+	truncationMode,
 } from "@expo/ui/swift-ui/modifiers";
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text as RNText, View } from "react-native";
@@ -25,6 +28,17 @@ import { haptics } from "./haptics";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { iconSize, press, space, type } from "./tokens";
+import { MicKey } from "./voice/MicKey";
+
+// The paperclip's frame, so the rail's two icon buttons match.
+const MIC_KEY_SIZE = 38;
+// Keep the project trigger compact and left-anchored. A max-width frame makes
+// the native Menu fill the host, which centers its popup over the whole sheet.
+const PROJECT_MENU_WIDTH = 224;
+// Reserve the harness slot so a different agent name cannot move the model
+// selector sideways. The model still uses the remaining width of the rail,
+// but common harness names should not truncate while "Automatic" has slack.
+const HARNESS_MENU_WIDTH = 124;
 
 export function SpawnComposerControls({
 	projects,
@@ -38,6 +52,7 @@ export function SpawnComposerControls({
 	modelLabel,
 	onSelectModel,
 	onAttach,
+	voice,
 	onSpawn,
 	busy,
 	disabled,
@@ -56,11 +71,11 @@ export function SpawnComposerControls({
 					label={
 						<HStack spacing={7}>
 							<Image systemName="folder" size={iconSize.sm} />
-							<Text modifiers={[font({ size: 14, weight: "medium" })]}>{projectLabel}</Text>
+							<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>{projectLabel}</Text>
 							<Image systemName="chevron.up.chevron.down" size={iconSize.xs} />
 						</HStack>
 					}
-					modifiers={[buttonStyle("plain"), tint(t.textSecondary), padding({ horizontal: 4 }), accessibilityIdentifier("spawn-project")]}
+					modifiers={[buttonStyle("plain"), tint(t.textSecondary), padding({ horizontal: 4 }), frame({ width: PROJECT_MENU_WIDTH, alignment: "leading" }), accessibilityIdentifier("spawn-project")]}
 				>
 					{projects.map((project) => (
 						<Button
@@ -98,11 +113,11 @@ export function SpawnComposerControls({
 						label={
 							<HStack spacing={6}>
 								<HarnessImage uri={logoUris[harness]} harness={harness} />
-								<Text modifiers={[font({ size: 14, weight: "medium" })]}>{harnessLabel}</Text>
+								<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>{harnessLabel}</Text>
 								<Image systemName="chevron.down" size={iconSize.xs} />
 							</HStack>
 						}
-						modifiers={[buttonStyle("plain"), tint(t.textPrimary), accessibilityIdentifier("spawn-harness")]}
+						modifiers={[buttonStyle("plain"), frame({ width: HARNESS_MENU_WIDTH }), tint(t.textPrimary), accessibilityIdentifier("spawn-harness")]}
 					>
 						{agents.map((agent) => (
 							<Button key={agent.id} onPress={() => { haptics.select(); onSelectHarness(agent.id); }}>
@@ -119,7 +134,7 @@ export function SpawnComposerControls({
 					<Menu
 						label={
 							<HStack spacing={5} modifiers={[frame({ maxWidth: 1000, alignment: "leading" })]}>
-								<Text modifiers={[font({ size: 14, weight: "medium" })]}>{modelLabel}</Text>
+								<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>{modelLabel}</Text>
 								<Spacer />
 								<Image systemName="chevron.down" size={iconSize.xs} />
 							</HStack>
@@ -127,6 +142,7 @@ export function SpawnComposerControls({
 						modifiers={[
 							buttonStyle("plain"),
 							frame({ maxWidth: 1000, alignment: "leading" }),
+							layoutPriority(1),
 							tint(t.textSecondary),
 							opacity(models.length || modelSelection === "__auto__" ? 1 : 0.45),
 							accessibilityIdentifier("spawn-model"),
@@ -146,6 +162,24 @@ export function SpawnComposerControls({
 							/>
 						))}
 					</Menu>
+
+					{/* Hold-to-talk needs press-in and press-out, which a SwiftUI
+					    Button doesn't expose, so the mic is the React Native key
+					    hosted inside the rail. Plain, like the paperclip: the rail's
+					    glass is the material, and a second disc would compete with it. */}
+					<RNHostView matchContents>
+						<View style={styles.micSlot}>
+							<MicKey
+								variant="plain"
+								size={MIC_KEY_SIZE}
+								glyphSize={iconSize.md}
+								state={voice.state}
+								mode={voice.mode}
+								onPressIn={voice.onPressIn}
+								onPressOut={voice.onPressOut}
+							/>
+						</View>
+					</RNHostView>
 				</HStack>
 
 				</VStack>
@@ -175,6 +209,7 @@ export function SpawnComposerControls({
 const styles = StyleSheet.create({
 	stack: { width: "100%", height: 150, gap: space.hair },
 	controlsHost: { width: "100%", height: 104 },
+	micSlot: { width: MIC_KEY_SIZE, height: MIC_KEY_SIZE, alignItems: "center", justifyContent: "center" },
 	spawnButton: {
 		height: 44,
 		borderRadius: 16,
@@ -193,7 +228,7 @@ const MARK_SIZE = 20;
 const CHIP_INSET = Math.round(MARK_SIZE * 0.16);
 const CHIP_RADIUS = Math.round(MARK_SIZE * 0.28);
 
-function HarnessImage({ uri, harness }: { uri?: string; harness: string }) {
+export function HarnessImage({ uri, harness }: { uri?: string; harness: string }) {
 	if (!uri) return <Image systemName="terminal" size={iconSize.sm} />;
 	const mark = [resizable(), aspectRatio({ contentMode: "fit" }), frame({ width: MARK_SIZE - CHIP_INSET * 2, height: MARK_SIZE - CHIP_INSET * 2 })];
 	const chip = chipColorFor(harness);
@@ -209,7 +244,7 @@ function HarnessImage({ uri, harness }: { uri?: string; harness: string }) {
 		: <Image uiImage={uri} modifiers={[resizable(), aspectRatio({ contentMode: "fit" }), frame({ width: MARK_SIZE, height: MARK_SIZE })]} />;
 }
 
-function useHarnessLogoUris(agents: readonly SpawnComposerOption[]) {
+export function useHarnessLogoUris(agents: readonly SpawnComposerOption[]) {
 	const ids = useMemo(() => agents.map((agent) => agent.id), [agents]);
 	const [uris, setUris] = useState<Record<string, string>>({});
 	useEffect(() => {
