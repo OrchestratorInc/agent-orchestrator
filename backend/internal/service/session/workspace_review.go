@@ -231,7 +231,7 @@ func (s *Service) GetWorkspaceDiffs(ctx context.Context, id domain.SessionID, in
 	if input.ContextLines < 0 || input.ContextLines > 20 {
 		return WorkspaceDiffs{}, apierr.Invalid("INVALID_WORKSPACE_DIFF_CONTEXT", "contextLines must be between 0 and 20", nil)
 	}
-	current, err := s.RefreshWorkspaceManifest(ctx, id)
+	current, err := s.workspaceDiffManifest(ctx, id, input.WorkspaceVersion)
 	if err != nil {
 		return WorkspaceDiffs{}, err
 	}
@@ -437,7 +437,7 @@ func (s *Service) getWorkspaceFileRevision(ctx context.Context, id domain.Sessio
 	if err != nil {
 		return WorkspaceFileRevision{}, err
 	}
-	current, err := s.RefreshWorkspaceManifest(ctx, id)
+	current, err := s.workspaceDiffManifest(ctx, id, workspaceVersion)
 	if err != nil {
 		return WorkspaceFileRevision{}, err
 	}

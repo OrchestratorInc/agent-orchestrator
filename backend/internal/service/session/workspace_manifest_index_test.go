@@ -2,7 +2,11 @@ package session
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -95,5 +99,64 @@ func TestWorkspaceManifestIndexRejectsSnapshotInvalidatedDuringRefresh(t *testin
 	got, ok := index.get("ao-1")
 	if !ok || !got.Stale || got.Refreshing {
 		t.Fatalf("published snapshot = %+v, %v; want usable stale snapshot", got, ok)
+	}
+}
+
+func TestWorkspaceManifestRefreshesAfterUnwatchedEdits(t *testing.T) {
+	repo := newWorkspaceRepo(t)
+	st := newFakeStore()
+	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{WorkspacePath: repo}}
+	now := time.Unix(100, 0)
+	svc := NewWithDeps(Deps{Store: st, Clock: func() time.Time { return now }})
+	first, err := svc.GetWorkspaceManifest(t.Context(), "ao-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeWorkspaceFile(t, repo, "README.md", "hello\nan unwatched edit\n")
+	now = now.Add(workspaceCacheTTL + time.Nanosecond)
+	fresh, err := svc.GetWorkspaceManifest(t.Context(), "ao-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Stale || fresh.Refreshing || fresh.WorkspaceVersion == first.WorkspaceVersion || len(fresh.Files) == 0 {
+		t.Fatalf("expired manifest did not refresh unwatched edit: %+v", fresh)
+	}
+}
+
+func TestWorkspaceDiffBatchesReuseOnlyFreshManifest(t *testing.T) {
+	repo := newWorkspaceRepo(t)
+	writeWorkspaceFile(t, repo, "README.md", "hello\nchanged\n")
+	st := newFakeStore()
+	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{WorkspacePath: repo}}
+	now := time.Unix(100, 0)
+	svc := NewWithDeps(Deps{Store: st, Clock: func() time.Time { return now }})
+	first, err := svc.GetWorkspaceManifest(t.Context(), "ao-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace := filepath.Join(t.TempDir(), "git.log")
+	t.Setenv("GIT_TRACE", trace)
+	input := WorkspaceDiffInput{Paths: []string{"README.md"}, WorkspaceVersion: first.WorkspaceVersion}
+	for range 3 {
+		if _, err := svc.GetWorkspaceDiffs(t.Context(), "ao-1", input); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "--name-status") || strings.Contains(string(data), "--numstat") || strings.Contains(string(data), " status ") {
+		t.Fatalf("warm batches recomputed manifest: %s", data)
+	}
+	writeWorkspaceFile(t, repo, "README.md", "hello\nchanged\nagain\n")
+	now = now.Add(workspaceCacheTTL + time.Nanosecond)
+	if _, err := svc.GetWorkspaceDiffs(t.Context(), "ao-1", input); err == nil {
+		t.Fatal("expired manifest accepted stale workspace version")
+	}
+	svc.runBackground = func(func()) {}
+	svc.InvalidateWorkspaceCache("ao-1")
+	if _, err := svc.GetWorkspaceDiffs(t.Context(), "ao-1", input); err == nil {
+		t.Fatal("invalidated manifest accepted stale workspace version")
 	}
 }

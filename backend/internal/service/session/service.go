@@ -270,6 +270,7 @@ func NewWithDeps(d Deps) *Service {
 	}
 	s.workspaceCache = newWorkspaceCache(workspaceCacheTTL, s.clock)
 	s.workspaceManifests = newWorkspaceManifestIndex()
+	s.workspaceManifests.now = s.clock
 	return s
 }
 

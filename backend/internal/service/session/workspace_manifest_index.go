@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 type workspaceManifestIndexEntry struct {
 	manifest    WorkspaceManifest
+	computedAt  time.Time
 	hasManifest bool
 	stale       bool
 	refreshing  bool
@@ -23,12 +25,13 @@ type workspaceManifestIndex struct {
 	mu      sync.Mutex
 	entries map[domain.SessionID]workspaceManifestIndexEntry
 	clock   uint64
+	now     func() time.Time
 }
 
 const maxWorkspaceManifestEntries = 128
 
 func newWorkspaceManifestIndex() *workspaceManifestIndex {
-	return &workspaceManifestIndex{entries: make(map[domain.SessionID]workspaceManifestIndexEntry)}
+	return &workspaceManifestIndex{entries: make(map[domain.SessionID]workspaceManifestIndexEntry), now: time.Now}
 }
 
 func (i *workspaceManifestIndex) get(id domain.SessionID) (WorkspaceManifest, bool) {
@@ -38,7 +41,7 @@ func (i *workspaceManifestIndex) get(id domain.SessionID) (WorkspaceManifest, bo
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	entry, ok := i.entries[id]
-	if !ok || !entry.hasManifest {
+	if !ok || !entry.hasManifest || i.now().Sub(entry.computedAt) > workspaceCacheTTL {
 		return WorkspaceManifest{}, false
 	}
 	i.clock++
@@ -97,6 +100,7 @@ func (i *workspaceManifestIndex) publish(id domain.SessionID, manifest Workspace
 	manifest.Refreshing = false
 	i.clock++
 	entry.manifest = manifest
+	entry.computedAt = i.now()
 	entry.hasManifest = true
 	entry.stale = !fresh
 	entry.refreshing = false
@@ -155,6 +159,18 @@ func (s *Service) GetWorkspaceManifest(ctx context.Context, id domain.SessionID)
 			manifest.Refreshing = true
 		}
 		return manifest, nil
+	}
+	return s.RefreshWorkspaceManifest(ctx, id)
+}
+
+// workspaceDiffManifest reuses the just-loaded snapshot for a version-fenced
+// patch batch. Dirty or expired snapshots are recomputed before validation.
+// Unversioned reads always refresh because they have no preceding manifest.
+func (s *Service) workspaceDiffManifest(ctx context.Context, id domain.SessionID, version string) (WorkspaceManifest, error) {
+	if version != "" {
+		if manifest, ok := s.workspaceManifests.get(id); ok && !manifest.Stale && !manifest.Refreshing && manifest.WorkspaceVersion == version {
+			return manifest, nil
+		}
 	}
 	return s.RefreshWorkspaceManifest(ctx, id)
 }
