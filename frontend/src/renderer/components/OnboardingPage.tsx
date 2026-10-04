@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, CircleDashed, Loader2 } from "lucide-react";
+import { CircleDashed, Loader2 } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -28,7 +28,7 @@ import codexLogo from "../assets/agents/codex.svg";
 import cursorLogo from "../assets/agents/cursor.svg";
 import opencodeLogo from "../assets/agents/opencode.svg";
 
-type Step = "welcome" | "github" | "project" | "agent-setup" | "agents" | "guide";
+type Step = "welcome" | "github" | "project" | "agent-setup" | "agents";
 
 type StepDetails = {
 	title: MessageKey;
@@ -41,11 +41,11 @@ type AgentSetupEntry = "required" | "optional";
 // Cloud onboarding is intentionally disabled until the product has an explicit
 // entitlement signal. Keep the standalone cloud step available for that later
 // decision, but do not route any onboarding user through it today.
-const STEPS: Step[] = ["welcome", "github", "project", "agent-setup", "agents", "guide"];
+const STEPS: Step[] = ["welcome", "github", "project", "agent-setup", "agents"];
 
 /** Project setup is one stage of the flow: pick a project, conditionally set
  * up a harness, then choose the agent used for both roles. */
-const STAGES: Step[][] = [["welcome"], ["github"], ["project", "agent-setup", "agents"], ["guide"]];
+const STAGES: Step[][] = [["welcome"], ["github"], ["project", "agent-setup", "agents"]];
 
 const STEP_DETAILS: Record<Step, StepDetails> = {
 	welcome: {
@@ -72,11 +72,6 @@ const STEP_DETAILS: Record<Step, StepDetails> = {
 		title: "onboarding.step.agents.title",
 		subtitle: "onboarding.step.agents.subtitle",
 		nextLabel: "onboarding.step.agents.next",
-	},
-	guide: {
-		title: "onboarding.step.guide.title",
-		subtitle: "onboarding.step.guide.subtitle",
-		nextLabel: "onboarding.step.guide.next",
 	},
 };
 
@@ -220,7 +215,7 @@ export function OnboardingPage() {
 			path: onboardingFinishRequest.path,
 		});
 		setSelectedAgent(onboardingFinishRequest.orchestratorAgent || onboardingFinishRequest.workerAgent);
-		setStep("guide");
+		setStep("agents");
 	}, [onboardingFinishError, onboardingFinishRequest]);
 
 	const goToStep = useCallback((index: number) => {
@@ -228,7 +223,7 @@ export function OnboardingPage() {
 	}, []);
 
 	const next = useCallback(() => {
-		if (step === "guide") {
+		if (step === "agents") {
 			if (!preparedProject || !selectedAgent) return;
 			// Completion is recorded by the handoff itself, once the project is
 			// actually registered. Marking it here stranded anyone whose project
@@ -288,7 +283,6 @@ export function OnboardingPage() {
 	const isProjectStep = step === "project";
 	const isAgentSetupStep = step === "agent-setup";
 	const isAgentStep = step === "agents";
-	const isGuideStep = step === "guide";
 	const isSetupStep = step === "github";
 	const isListStep = isProjectStep || isSetupStep;
 	// The single product overview opens on the product mark; setup pages want the space.
@@ -348,7 +342,7 @@ export function OnboardingPage() {
 							? "flex items-center justify-center overflow-y-auto"
 							: isAgentSetupStep
 								? "flex items-center justify-center overflow-y-auto"
-								: isAgentStep || isGuideStep
+								: isAgentStep
 								? "grid grid-cols-[minmax(360px,1.1fr)_minmax(300px,0.9fr)] items-center gap-10 max-[1040px]:grid-cols-[minmax(340px,1.15fr)_minmax(240px,0.85fr)] max-[1040px]:gap-6"
 								: "grid grid-cols-[minmax(280px,0.72fr)_minmax(520px,1.35fr)] items-center gap-14 max-[1040px]:grid-cols-[minmax(270px,0.75fr)_minmax(0,1.25fr)] max-[1040px]:gap-8",
 					)}
@@ -357,7 +351,7 @@ export function OnboardingPage() {
 						key={step}
 						className={cn(
 							"grid h-[360px] grid-rows-[180px_180px]",
-							(isAgentSetupStep || isAgentStep || isGuideStep) && "h-[480px] grid-rows-[210px_minmax(0,1fr)]",
+							(isAgentSetupStep || isAgentStep) && "h-[480px] grid-rows-[210px_minmax(0,1fr)]",
 							isAgentSetupStep && "w-full max-w-[680px]",
 							// Setup steps size to content so a missing prerequisite adds a
 							// block instead of overflowing the fixed wizard height.
@@ -365,12 +359,12 @@ export function OnboardingPage() {
 						)}
 						aria-labelledby={`onboarding-title-${step}`}
 					>
-						<div className={cn("flex flex-col justify-end pb-7", (isAgentSetupStep || isAgentStep || isGuideStep) && "justify-center pb-5", isAgentSetupStep && "items-center text-center")}>
+						<div className={cn("flex flex-col justify-end pb-7", (isAgentSetupStep || isAgentStep) && "justify-center pb-5", isAgentSetupStep && "items-center text-center")}>
 							{isFeatureStep ? <img src={aoLogo} alt="" aria-hidden="true" className="mb-5 h-30 w-35 object-contain" /> : null}
 							<h1
 								id={`onboarding-title-${step}`}
 								className={cn(
-									isAgentSetupStep || isAgentStep || isGuideStep ? "max-w-[500px]" : "max-w-[410px]",
+									isAgentSetupStep || isAgentStep ? "max-w-[500px]" : "max-w-[410px]",
 									"text-[clamp(2rem,3.2vw,3.15rem)] font-normal leading-[1.02] tracking-[-0.045em] text-balance",
 									isListStep && "mx-auto",
 									isProjectStep && "max-w-none whitespace-nowrap",
@@ -378,7 +372,7 @@ export function OnboardingPage() {
 							>
 								{t(details.title)}
 							</h1>
-							<p className={cn("mt-5 max-w-[350px] text-[15px] leading-6 text-muted-foreground text-pretty", (isAgentSetupStep || isAgentStep || isGuideStep) && "max-w-[430px]", isListStep && "mx-auto")}>
+							<p className={cn("mt-5 max-w-[350px] text-[15px] leading-6 text-muted-foreground text-pretty", (isAgentSetupStep || isAgentStep) && "max-w-[430px]", isListStep && "mx-auto")}>
 								{t(details.subtitle)}
 							</p>
 						</div>
@@ -438,40 +432,35 @@ export function OnboardingPage() {
 									/>
 								</div>
 							)}
-							{isGuideStep &&
-								(onboardingFinishError ? (
-									<div className="w-full max-w-[500px] text-left" role="alert">
-										<p className="text-sm font-medium text-foreground">{t("onboarding.finishFailedTitle")}</p>
-										<p className="mt-1 text-caption leading-snug text-muted-foreground">{onboardingFinishError.message || t("onboarding.finishFailedBody")}</p>
-										<div className="mt-3 flex flex-wrap items-center gap-2">
-											<button
-												type="button"
-												onClick={() => {
-													clearOnboardingFinishError();
-													void navigate({ to: "/" });
-												}}
-												className="inline-flex h-9 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-											>
-												{t("onboarding.finishRetry")}
-											</button>
-											<button
-												type="button"
-												onClick={clearOnboardingFinishError}
-												className="inline-flex h-9 items-center rounded-md border border-border px-3 text-sm text-muted-foreground hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-											>
-												{t("onboarding.finishChangeSetup")}
-											</button>
-										</div>
+							{isAgentStep && onboardingFinishError ? (
+								<div className="w-full max-w-[500px] text-left" role="alert">
+									<p className="text-sm font-medium text-foreground">{t("onboarding.finishFailedTitle")}</p>
+									<p className="mt-1 text-caption leading-snug text-muted-foreground">{onboardingFinishError.message || t("onboarding.finishFailedBody")}</p>
+									<div className="mt-3 flex flex-wrap items-center gap-2">
+										<button
+											type="button"
+											onClick={() => {
+												clearOnboardingFinishError();
+												void navigate({ to: "/" });
+											}}
+											className="inline-flex h-9 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+										>
+											{t("onboarding.finishRetry")}
+										</button>
+										<button
+											type="button"
+											onClick={clearOnboardingFinishError}
+											className="inline-flex h-9 items-center rounded-md border border-border px-3 text-sm text-muted-foreground hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+										>
+											{t("onboarding.finishChangeSetup")}
+										</button>
 									</div>
-								) : (
-									<div className="w-full max-w-[500px]">
-										<OnboardingGuide />
-									</div>
-								))}
+								</div>
+							) : null}
 						</div>
 					</section>
 
-					{isAgentStep || isGuideStep ? (
+					{isAgentStep ? (
 						harnessSetup.authWorkflow ? (
 							// The login terminal takes the illustration's place rather than
 							// floating over the step, so the primary action stays reachable
@@ -534,28 +523,6 @@ type OnboardingAgent = {
 	name: string;
 	indicator: "auth" | "checking" | "none";
 };
-
-function OnboardingGuide() {
-	const { t } = useTranslation();
-	return (
-		<div className="w-full max-w-[500px] text-left">
-			<p className="mb-2 text-xs font-medium text-muted-foreground">{t("onboarding.guidePromptLabel")}</p>
-			{/* A still of the chat composer rather than a quoted block: the prompt
-			    sits where the user will type it, on the composer's own surface and
-			    radius, so it is recognisable when they reach the real one. Inert
-			    on purpose — it is a picture of the control, not the control. */}
-			<div aria-hidden="true" className="cursor-chat-composer flex flex-col gap-2.5 border px-3 pb-2.5 pt-3">
-				<p className="text-[13px] leading-5 text-foreground">{t("onboarding.guidePrompt")}</p>
-				<div className="flex items-center justify-end">
-					<span className="grid size-7 shrink-0 place-items-center rounded-full bg-foreground text-background">
-						<ArrowUp className="size-3.5" aria-hidden="true" />
-					</span>
-				</div>
-			</div>
-			<p className="mt-4 text-xs leading-5 text-muted-foreground">{t("onboarding.guideExplainer")}</p>
-		</div>
-	);
-}
 
 export function AgentRolePicker({
 	label,

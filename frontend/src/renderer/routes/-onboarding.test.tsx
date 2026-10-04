@@ -8,13 +8,15 @@ const mocks = vi.hoisted(() => ({
 	navigate: vi.fn(),
 	requestFinish: vi.fn(),
 	githubWorkflowActive: false,
+	finishRequest: null as null | { nonce: number; path: string; orchestratorAgent: string; workerAgent: string },
+	finishError: null as null | { nonce: number; message: string },
 	agents: {} as { data: Catalog | undefined; isFetching: boolean; isLoading: boolean },
 }));
 
 vi.mock("@tanstack/react-router", async (original) => ({ ...(await original<typeof import("@tanstack/react-router")>()), useNavigate: () => mocks.navigate }));
 vi.mock("../stores/ui-store", () => ({
 	useResolvedTheme: () => "dark" as const,
-	useUiStore: (select: (state: unknown) => unknown) => select({ requestOnboardingFinish: mocks.requestFinish, clearOnboardingFinishError: vi.fn(), onboardingFinishRequest: null, onboardingFinishError: null }),
+	useUiStore: (select: (state: unknown) => unknown) => select({ requestOnboardingFinish: mocks.requestFinish, clearOnboardingFinishError: vi.fn(), onboardingFinishRequest: mocks.finishRequest, onboardingFinishError: mocks.finishError }),
 }));
 vi.mock("../hooks/useAgentsQuery", () => ({ refreshAgentsIfStale: vi.fn().mockResolvedValue(undefined), useAgentsQuery: () => mocks.agents }));
 vi.mock("../components/OnboardingProjectSetup", () => ({
@@ -83,6 +85,8 @@ beforeEach(() => {
 	mocks.navigate.mockReset();
 	mocks.requestFinish.mockReset();
 	mocks.githubWorkflowActive = false;
+	mocks.finishRequest = null;
+	mocks.finishError = null;
 	mocks.agents = { data: { authorized: [{ id: "claude-code", label: "Claude Code" }, { id: "codex", label: "Codex" }], installed: [{ id: "claude-code", label: "Claude Code" }, { id: "codex", label: "Codex" }], supported: [{ id: "claude-code", label: "Claude Code" }, { id: "codex", label: "Codex" }] }, isFetching: false, isLoading: false };
 });
 
@@ -98,18 +102,31 @@ describe("onboarding route", () => {
 		expect(screen.getByText(/keep this window open/i)).toBeInTheDocument();
 	});
 
-	it("applies one selected harness to both project roles", async () => {
+	it("finishes directly from agent selection and applies the agent to both project roles", async () => {
 		const user = userEvent.setup();
 		await renderOnboarding();
 		await reachAgents(user);
-		const next = screen.getByRole("button", { name: "See how it works" });
+		expect(screen.getByText("Choose one coding agent for now. You can select separate orchestrator and worker agents later in project settings")).toBeInTheDocument();
+		const next = screen.getByRole("button", { name: "Finish setup" });
 		expect(next).toBeDisabled();
 		await choose(user, "Agent", "Codex");
 		expect(next).toBeEnabled();
 		await user.click(next);
-		await screen.findByRole("heading", { name: "Give your orchestrator a goal" });
-		await user.click(screen.getByRole("button", { name: "Continue to orchestrator" }));
+		expect(screen.queryByRole("heading", { name: "Give your orchestrator a goal" })).not.toBeInTheDocument();
 		expect(mocks.requestFinish).toHaveBeenCalledWith({ path: "/tmp/acme/project", orchestratorAgent: "codex", workerAgent: "codex" });
+		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/" });
+	});
+
+	it("restores a failed handoff on agent selection so setup can be retried", async () => {
+		mocks.finishRequest = { nonce: 1, path: "/tmp/acme/project", orchestratorAgent: "codex", workerAgent: "codex" };
+		mocks.finishError = { nonce: 1, message: "Project could not be registered" };
+		const user = userEvent.setup();
+		await renderOnboarding();
+		expect(await screen.findByRole("heading", { name: "Pick your agent" })).toBeInTheDocument();
+		expect(screen.getByRole("combobox", { name: "Agent" })).toHaveTextContent("Codex");
+		expect(screen.getByRole("alert")).toHaveTextContent("Project could not be registered");
+		await user.click(screen.getByRole("button", { name: "Finish setup" }));
+		expect(mocks.requestFinish).toHaveBeenCalledWith(expect.objectContaining({ path: "/tmp/acme/project", orchestratorAgent: "codex", workerAgent: "codex" }));
 		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/" });
 	});
 
