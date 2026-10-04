@@ -3322,7 +3322,7 @@ func (c *Controller) recordAccount(
 	if previous != nil {
 		account = *previous
 	}
-	if update.AuthMode != "" {
+	if update.AuthMode != "" && account.AuthMode != update.AuthMode {
 		account.AuthChangedAt = &now
 		if account.AuthMode != "" && account.AuthMode != update.AuthMode {
 			account.AuthVerifiedAt = nil

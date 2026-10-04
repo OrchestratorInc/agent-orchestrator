@@ -441,8 +441,8 @@ The daemon projects provider credential rejections into `conversations.account_j
 with explicit `authenticationState` (`unknown`, `required`, or `authenticated`).
 `reauthRequiredAt`/`reauthReason` describe an outstanding demand; the last failure
 and archived provider events remain after recovery. Partial account/plan reports
-never imply usable credentials. An auth-mode report establishes an account-change
-barrier for turns already in flight.
+never imply usable credentials. A changed auth mode establishes an account-change
+barrier for turns already in flight; repeated reports of the same mode preserve it.
 
 Recovery requires an authoritative completed provider turn with no error, in the
 active provider branch and owning controller generation, started and completed
