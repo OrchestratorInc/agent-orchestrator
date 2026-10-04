@@ -911,7 +911,7 @@ export function Sidebar({
 							"group-data-[collapsible=icon]:size-control-board group-data-[collapsible=icon]:rounded-lg",
 						)}
 					>
-						<img src={aoLogo} alt="" aria-hidden="true" className="h-5.5 w-5.5 -translate-y-0.5 object-contain" />
+						<img src={aoLogo} alt="" aria-hidden="true" className="h-5.5 w-5.5 -translate-y-px object-contain" />
 					</span>
 					<span
 						className="sidebar-expanded-chrome min-w-0 flex-1 truncate text-sm font-bold leading-tight tracking-tight-lg text-foreground group-data-[collapsible=icon]:hidden"
