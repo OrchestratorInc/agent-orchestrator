@@ -79,6 +79,12 @@ type SpawnConfig struct {
 	// the desktop's New Task dialog is open. It is a hint: an absent or expired
 	// token falls back to ordinary workspace creation.
 	TaskPreparation domain.TaskPreparationToken
+
+	// CouncilGroupID, when set, tags this spawn as one member of a council
+	// cohort — the same brief fanned out across several harnesses/models so their
+	// results can be compared side by side. Members share the id; ordinary spawns
+	// leave it empty. See ports/council.go and Service.SpawnCouncil.
+	CouncilGroupID string
 }
 
 // SpawnAttachment is a single file attached to a spawn request. Data holds the

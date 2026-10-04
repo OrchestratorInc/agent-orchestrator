@@ -248,6 +248,28 @@ func (f *fakeSessionService) Spawn(_ context.Context, cfg ports.SpawnConfig) (do
 	return s, len(cfg.Prompt), 0, nil
 }
 
+func (f *fakeSessionService) SpawnCouncil(ctx context.Context, in ports.CouncilInput) (ports.CouncilResult, error) {
+	result := ports.CouncilResult{GroupID: "council_test", Members: make([]ports.CouncilMemberResult, 0, len(in.Members))}
+	for _, member := range in.Members {
+		sess, _, _, err := f.Spawn(ctx, ports.SpawnConfig{
+			ProjectID:      in.ProjectID,
+			Kind:           domain.KindWorker,
+			Harness:        member.Harness,
+			RequestedMode:  in.RequestedMode,
+			Prompt:         in.Prompt,
+			DisplayName:    in.DisplayName,
+			CouncilGroupID: result.GroupID,
+			AgentConfig:    ports.AgentConfig{Model: member.Model, Effort: member.Effort, Permissions: in.ApprovalMode},
+		})
+		if err == nil {
+			sess.Metadata.CouncilGroupID = result.GroupID
+			f.sessions[sess.ID] = sess
+		}
+		result.Members = append(result.Members, ports.CouncilMemberResult{Harness: member.Harness, Model: member.Model, Session: sess, Err: err})
+	}
+	return result, nil
+}
+
 func (f *fakeSessionService) SpawnOrchestrator(ctx context.Context, projectID domain.ProjectID, clean bool, requestedMode domain.SessionMode, approval domain.PermissionMode) (domain.Session, error) {
 	f.orchestratorMode = requestedMode
 	f.orchestratorApproval = approval

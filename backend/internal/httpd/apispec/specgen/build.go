@@ -246,6 +246,10 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersListSessionsResponse":                     "ListSessionsResponse",
 	"ControllersSpawnSessionRequest":                      "SpawnSessionRequest",
 	"ControllersSpawnSessionResponse":                     "SpawnSessionResponse",
+	"ControllersSpawnCouncilRequest":                      "SpawnCouncilRequest",
+	"ControllersSpawnCouncilResponse":                     "SpawnCouncilResponse",
+	"ControllersSpawnCouncilMember":                       "SpawnCouncilMember",
+	"ControllersSpawnCouncilMemberResult":                 "SpawnCouncilMemberResult",
 	"ControllersSessionResponse":                          "SessionResponse",
 	"ControllersSessionPreviewResponse":                   "SessionPreviewResponse",
 	"ControllersSetSessionPreviewRequest":                 "SetSessionPreviewRequest",
@@ -2164,6 +2168,17 @@ func sessionOperations() []operation {
 			reqBody: controllers.SpawnSessionRequest{},
 			resps: []respUnit{
 				{http.StatusCreated, controllers.SpawnSessionResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/council", id: "spawnCouncil", tag: "sessions",
+			summary: "Fan one brief out to several models (council)",
+			reqBody: controllers.SpawnCouncilRequest{},
+			resps: []respUnit{
+				{http.StatusCreated, controllers.SpawnCouncilResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},

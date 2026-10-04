@@ -30,6 +30,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -87,6 +88,7 @@ var (
 type SessionService interface {
 	List(ctx context.Context, filter sessionsvc.ListFilter) ([]domain.Session, error)
 	Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error)
+	SpawnCouncil(ctx context.Context, in ports.CouncilInput) (ports.CouncilResult, error)
 	SpawnOrchestrator(ctx context.Context, projectID domain.ProjectID, clean bool, requestedMode domain.SessionMode, approval domain.PermissionMode) (domain.Session, error)
 	Get(ctx context.Context, id domain.SessionID) (domain.Session, error)
 	Restore(ctx context.Context, id domain.SessionID) (sessionsvc.RestoreOutcome, error)
@@ -193,6 +195,7 @@ type SessionsController struct {
 func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/sessions", c.list)
 	r.Post("/sessions", c.spawn)
+	r.Post("/sessions/council", c.council)
 	r.Post("/sessions/cleanup", c.cleanup)
 	r.Get("/sessions/{sessionId}", c.get)
 	r.Get("/sessions/{sessionId}/preview", c.preview)
@@ -340,6 +343,96 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	envelope.WriteJSON(w, http.StatusCreated, SpawnSessionResponse{Session: sessionView(sess), PromptBytes: promptBytes, SystemPromptBytes: systemPromptBytes})
+}
+
+// council fans one brief out to several harnesses/models at once, creating one
+// worker session per member linked by a shared council group id so the desktop
+// can compare their results side by side. The fan-out is best-effort: the
+// response reports each member's session or its spawn error, so a partial
+// council still returns the members that started.
+func (c *SessionsController) council(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/council")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxSpawnBodyBytes)
+	var in SpawnCouncilRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	mode, err := domain.ParseSessionMode(string(in.Mode))
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "SESSION_MODE_INVALID", err.Error(), nil)
+		return
+	}
+	if !in.ApprovalMode.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_APPROVAL_MODE", "approvalMode is invalid", nil)
+		return
+	}
+	if len(in.Prompt) > maxPromptLen {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROMPT_TOO_LONG", "Prompt must be 16 KiB or fewer", nil)
+		return
+	}
+	displayName := strings.TrimSpace(in.DisplayName)
+	if utf8.RuneCountInString(displayName) > maxDisplayNameLen {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "DISPLAY_NAME_TOO_LONG", fmt.Sprintf("displayName must be %d characters or fewer", maxDisplayNameLen), nil)
+		return
+	}
+	if len(in.Members) == 0 {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "COUNCIL_MEMBERS_REQUIRED", "A council requires at least one member", nil)
+		return
+	}
+	attachments, attachErr := decodeSpawnAttachments(in.Attachments)
+	if attachErr != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", attachErr.code, attachErr.message, nil)
+		return
+	}
+	members := make([]ports.CouncilMember, 0, len(in.Members))
+	for _, member := range in.Members {
+		effort := strings.TrimSpace(member.Effort)
+		members = append(members, ports.CouncilMember{
+			Harness:        member.Harness,
+			Model:          strings.TrimSpace(member.Model),
+			Effort:         effort,
+			EffortOverride: effort != "",
+		})
+	}
+	result, err := c.Svc.SpawnCouncil(r.Context(), ports.CouncilInput{
+		ProjectID:     in.ProjectID,
+		RequestedMode: mode,
+		ApprovalMode:  in.ApprovalMode,
+		Prompt:        in.Prompt,
+		DisplayName:   displayName,
+		Members:       members,
+		Attachments:   attachments,
+	})
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	resp := SpawnCouncilResponse{GroupID: result.GroupID, Members: make([]SpawnCouncilMemberResult, 0, len(result.Members))}
+	for _, member := range result.Members {
+		item := SpawnCouncilMemberResult{Harness: member.Harness, Model: member.Model}
+		if member.Err != nil {
+			item.ErrorCode, item.ErrorMessage = councilMemberErrorFields(member.Err)
+		} else {
+			view := sessionView(member.Session)
+			item.Session = &view
+		}
+		resp.Members = append(resp.Members, item)
+	}
+	envelope.WriteJSON(w, http.StatusCreated, resp)
+}
+
+// councilMemberErrorFields extracts a client-facing code/message from a member
+// spawn error, falling back to a generic code for non-API errors.
+func councilMemberErrorFields(err error) (string, string) {
+	var apiErr *apierr.Error
+	if errors.As(err, &apiErr) {
+		return apiErr.Code, apiErr.Message
+	}
+	return "SPAWN_FAILED", err.Error()
 }
 
 // attachmentError carries a client-facing API error code + message for a
@@ -2360,6 +2453,7 @@ func sessionView(s domain.Session) SessionView {
 		PreviewURL:         s.Metadata.PreviewURL,
 		PreviewRevision:    s.Metadata.PreviewRevision,
 		Model:              s.Metadata.Model,
+		CouncilGroupID:     s.Metadata.CouncilGroupID,
 		LastUserMessageAt: func() *time.Time {
 			if s.Metadata.LatestUserPromptAt.IsZero() {
 				return nil

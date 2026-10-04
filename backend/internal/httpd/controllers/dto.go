@@ -355,6 +355,11 @@ type SessionView struct {
 	// Model is the agent model this session resolved to at spawn time. Empty
 	// means the agent's default model. Pulled from the json:"-" domain Metadata.
 	Model string `json:"model,omitempty"`
+	// CouncilGroupID links this session to the other members of a council cohort
+	// (one brief fanned out across several harnesses/models) so clients can group
+	// them for side-by-side comparison. Empty for ordinary sessions. Pulled from
+	// the json:"-" domain Metadata.
+	CouncilGroupID string `json:"councilGroupId,omitempty"`
 	// LastUserMessageAt is the latest real user-authored task direction time.
 	// Lifecycle and internal automation updates do not advance it.
 	LastUserMessageAt *time.Time       `json:"lastUserMessageAt,omitempty"`
@@ -431,6 +436,55 @@ type SpawnSessionResponse struct {
 	Session           SessionView `json:"session"`
 	PromptBytes       int         `json:"promptBytes"`
 	SystemPromptBytes int         `json:"systemPromptBytes"`
+}
+
+// SpawnCouncilMember is one harness/model entry in a council fan-out.
+type SpawnCouncilMember struct {
+	Harness domain.AgentHarness `json:"harness" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,mimo-code,deepseek-harness"`
+	// Model is an optional per-member agent model override. Empty keeps the
+	// resolved project/role default for that harness.
+	Model string `json:"model,omitempty" maxLength:"256"`
+	// Effort is the optional reasoning level for the selected model.
+	Effort string `json:"effort,omitempty" maxLength:"32"`
+}
+
+// SpawnCouncilRequest fans one brief out to several harnesses/models at once.
+// Every member becomes its own worker session, and all of them share a council
+// group id so the desktop can present the cohort for side-by-side comparison.
+type SpawnCouncilRequest struct {
+	// ProjectID is omitted for a standalone council of projectless workers.
+	ProjectID domain.ProjectID `json:"projectId,omitempty"`
+	// Mode picks the conversation controller for every member, same semantics as
+	// SpawnSessionRequest.Mode.
+	Mode domain.SessionMode `json:"mode,omitempty" enum:"chat,tui"`
+	// ApprovalMode overrides the project/default policy for every member.
+	ApprovalMode domain.PermissionMode `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
+	// Prompt is the shared brief handed to every member.
+	Prompt string `json:"prompt,omitempty" maxLength:"16384"`
+	// DisplayName is the base sidebar label; each member appends its harness.
+	DisplayName string `json:"displayName,omitempty" maxLength:"100"`
+	// Members lists the harnesses/models to run the brief with (2-8 entries).
+	Members []SpawnCouncilMember `json:"members"`
+	// Attachments are written into every member's worktree, same as a single spawn.
+	Attachments []AttachmentInput `json:"attachments,omitempty"`
+}
+
+// SpawnCouncilMemberResult is the outcome of one member spawn. Session is set on
+// success; errorCode/errorMessage are set when that member failed to start. The
+// fan-out is best-effort, so a response may mix succeeded and failed members.
+type SpawnCouncilMemberResult struct {
+	Harness      domain.AgentHarness `json:"harness"`
+	Model        string              `json:"model,omitempty"`
+	Session      *SessionView        `json:"session,omitempty"`
+	ErrorCode    string              `json:"errorCode,omitempty"`
+	ErrorMessage string              `json:"errorMessage,omitempty"`
+}
+
+// SpawnCouncilResponse returns the shared council group id and one result per
+// requested member, in request order.
+type SpawnCouncilResponse struct {
+	GroupID string                     `json:"groupId"`
+	Members []SpawnCouncilMemberResult `json:"members"`
 }
 
 // SwitchAgentRequest is the body of POST /api/v1/sessions/{sessionId}/switch-agent.

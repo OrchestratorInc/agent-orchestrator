@@ -2739,6 +2739,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/council": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fan one brief out to several models (council) */
+        post: operations["spawnCouncil"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings": {
         parameters: {
             query?: never;
@@ -3508,6 +3525,7 @@ export interface components {
             autoReviewEnabled: boolean;
             branch?: string;
             chatProviderPreserved: boolean;
+            councilGroupId?: string;
             /** Format: date-time */
             createdAt: string;
             displayName?: string;
@@ -4968,6 +4986,34 @@ export interface components {
             sessionId?: string;
             title: string;
             workingDir: string;
+        };
+        SpawnCouncilMember: {
+            effort?: string;
+            /** @enum {string} */
+            harness: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "mimo-code" | "deepseek-harness";
+            model?: string;
+        };
+        SpawnCouncilMemberResult: {
+            errorCode?: string;
+            errorMessage?: string;
+            harness: string;
+            model?: string;
+            session?: components["schemas"]["ControllersSessionView"];
+        };
+        SpawnCouncilRequest: {
+            /** @enum {string} */
+            approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+            attachments?: components["schemas"]["AttachmentInput"][];
+            displayName?: string;
+            members: components["schemas"]["SpawnCouncilMember"][];
+            /** @enum {string} */
+            mode?: "chat" | "tui";
+            projectId?: string;
+            prompt?: string;
+        };
+        SpawnCouncilResponse: {
+            groupId: string;
+            members: components["schemas"]["SpawnCouncilMemberResult"][];
         };
         SpawnOrchestratorRequest: {
             /** @enum {string} */
@@ -15939,6 +15985,57 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    spawnCouncil: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpawnCouncilRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpawnCouncilResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -137,6 +137,11 @@ type SessionMetadata struct {
 	// even when PreviewURL is unchanged. The desktop browser panel keys
 	// navigation on it so a repeated `ao preview <same-url>` still refreshes.
 	PreviewRevision int64 `json:"previewRevision,omitempty"`
+	// CouncilGroupID links sessions spawned together from one council brief — the
+	// same task fanned out across several harnesses/models — so clients can
+	// present them as one cohort for side-by-side comparison. Empty for ordinary
+	// sessions.
+	CouncilGroupID string `json:"councilGroupId,omitempty"`
 	// Model is the agent model this session resolved to at spawn time, including
 	// any per-spawn --model override. Empty means the agent's default model.
 	Model string `json:"model,omitempty"`

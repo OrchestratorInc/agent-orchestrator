@@ -8437,6 +8437,43 @@ paths:
       summary: Clean up terminated session workspaces
       tags:
       - sessions
+  /api/v1/sessions/council:
+    post:
+      operationId: spawnCouncil
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpawnCouncilRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpawnCouncilResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Fan one brief out to several models (council)
+      tags:
+      - sessions
   /api/v1/settings:
     get:
       operationId: getSettings
@@ -10454,6 +10491,8 @@ components:
           type: string
         chatProviderPreserved:
           type: boolean
+        councilGroupId:
+          type: string
         createdAt:
           format: date-time
           type: string
@@ -14353,6 +14392,113 @@ components:
       - workingDir
       - title
       - createdAt
+      type: object
+    SpawnCouncilMember:
+      properties:
+        effort:
+          maxLength: 32
+          type: string
+        harness:
+          enum:
+          - claude-code
+          - codex
+          - aider
+          - opencode
+          - opencode-v2
+          - grok
+          - droid
+          - amp
+          - agy
+          - crush
+          - cursor
+          - qwen
+          - gemini
+          - copilot
+          - goose
+          - auggie
+          - continue
+          - devin
+          - cline
+          - kimi
+          - muse
+          - kiro
+          - kilocode
+          - vibe
+          - pi
+          - kimchi
+          - omp
+          - fx
+          - prime-agent
+          - autohand
+          - unreal-agent
+          - mimo-code
+          - deepseek-harness
+          type: string
+        model:
+          maxLength: 256
+          type: string
+      required:
+      - harness
+      type: object
+    SpawnCouncilMemberResult:
+      properties:
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        harness:
+          type: string
+        model:
+          type: string
+        session:
+          $ref: '#/components/schemas/ControllersSessionView'
+      required:
+      - harness
+      type: object
+    SpawnCouncilRequest:
+      properties:
+        approvalMode:
+          enum:
+          - default
+          - accept-edits
+          - auto
+          - bypass-permissions
+          type: string
+        attachments:
+          items:
+            $ref: '#/components/schemas/AttachmentInput'
+          type: array
+        displayName:
+          maxLength: 100
+          type: string
+        members:
+          items:
+            $ref: '#/components/schemas/SpawnCouncilMember'
+          type: array
+        mode:
+          enum:
+          - chat
+          - tui
+          type: string
+        projectId:
+          type: string
+        prompt:
+          maxLength: 16384
+          type: string
+      required:
+      - members
+      type: object
+    SpawnCouncilResponse:
+      properties:
+        groupId:
+          type: string
+        members:
+          items:
+            $ref: '#/components/schemas/SpawnCouncilMemberResult'
+          type: array
+      required:
+      - groupId
+      - members
       type: object
     SpawnOrchestratorRequest:
       properties:
