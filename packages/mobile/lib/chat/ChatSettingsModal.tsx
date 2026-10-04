@@ -35,8 +35,10 @@ export function ChatSettingsSheet({
 	refreshing?: boolean;
 	error?: string;
 	onRefresh(): void;
-	onSettings(settings: TurnSettings): void;
-	onOption(id: string, value: { value: string } | { enabled: boolean }): void;
+	// Promises because the Android sheet's effort slider waits for the answer;
+	// typecheck resolves the route's import to this file, so the types live here too.
+	onSettings(settings: TurnSettings): Promise<void>;
+	onOption(id: string, value: { value: string } | { enabled: boolean }): Promise<void>;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);

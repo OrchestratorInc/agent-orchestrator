@@ -30,8 +30,9 @@ type Props = {
 	refreshing?: boolean;
 	error?: string;
 	onRefresh(): void;
-	onSettings(settings: TurnSettings): void;
-	onOption(id: string, value: { value: string } | { enabled: boolean }): void;
+	/** Settles once the route has taken the answer or the error; the effort slider waits for it. */
+	onSettings(settings: TurnSettings): Promise<void>;
+	onOption(id: string, value: { value: string } | { enabled: boolean }): Promise<void>;
 };
 
 export function ChatSettingsSheet({ snapshot, models, options, disabled, refreshing, error, onRefresh, onSettings, onOption }: Props) {
@@ -93,10 +94,9 @@ export function ChatSettingsSheet({ snapshot, models, options, disabled, refresh
 					if (modelOption) onOption(modelOption.id, { value: model });
 					else onSettings({ ...snapshot.settings, model, reasoningEffort: undefined });
 				})} /> : null}
-				{effortChoices.length ? <EffortSlider choices={effortChoices} selected={selectedEffort} unplaced={effortValue} disabled={disabled} onChange={(reasoningEffort) => {
-					if (effortOption) onOption(effortOption.id, { value: reasoningEffort });
-					else onSettings({ ...snapshot.settings, reasoningEffort });
-				}} /> : null}
+				{effortChoices.length ? <EffortSlider choices={effortChoices} selected={selectedEffort} unplaced={effortValue} disabled={disabled} onChange={(reasoningEffort) => effortOption
+					? onOption(effortOption.id, { value: reasoningEffort })
+					: onSettings({ ...snapshot.settings, reasoningEffort })} /> : null}
 			</SettingsGroup> : null}
 
 			{permissionChoices.length ? <SettingsGroup title="PERMISSIONS">
@@ -154,7 +154,10 @@ function ToggleRow({ label, description, value, disabled, onChange }: { label: s
 	return <View style={[styles.row, disabled && styles.disabled]}><Feather name="zap" size={17} color={t.textSecondary} /><View style={styles.rowCopy}><Text style={styles.rowLabel}>{label}</Text>{description ? <Text numberOfLines={2} style={styles.rowDescription}>{description}</Text> : null}</View><Host style={styles.switchHost} colorScheme={scheme} seedColor={t.accent}><NativeSwitch value={value} disabled={disabled} onValueChange={(next) => { haptics.select(); onChange(next); }} /></Host></View>;
 }
 
-export function EffortSlider({ choices, selected, unplaced, disabled, onChange }: { choices: Choice[]; selected: string; unplaced: string; disabled?: boolean; onChange(value: string): void }) {
+/** A level the user moved to that the sheet has not confirmed; `write` tells a late answer from the current one. */
+type EffortDraft = { index: number; write: number };
+
+export function EffortSlider({ choices, selected, unplaced, disabled, onChange }: { choices: Choice[]; selected: string; unplaced: string; disabled?: boolean; onChange(value: string): Promise<void> }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { scheme } = useThemeState();
@@ -163,7 +166,13 @@ export function EffortSlider({ choices, selected, unplaced, disabled, onChange }
 	// level used to save that level about 180 ms after the sheet opened, a
 	// change nobody made.
 	const selectedIndex = effortSliderIndex(choices, selected);
-	const [index, setIndex] = useState(selectedIndex);
+	// The slider shows the confirmed selection, except for a move that is still
+	// waiting to be sent or answered. A rejected write leaves `selected` where it
+	// was, so dropping the draft when the write settles is what puts the slider
+	// back on the saved level.
+	const [draft, setDraft] = useState<EffortDraft | null>(null);
+	const index = draft?.index ?? selectedIndex;
+	const writes = useRef(0);
 	const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const onChangeRef = useRef(onChange);
 	const clearPending = useCallback(() => {
@@ -173,32 +182,56 @@ export function EffortSlider({ choices, selected, unplaced, disabled, onChange }
 
 	useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
 	useEffect(() => {
-		setIndex(selectedIndex);
+		setDraft(null);
 		clearPending();
 	}, [clearPending, selected, selectedIndex]);
+	// A move not sent yet is dropped when the sheet disables the slider (a
+	// refresh), so it must not stay on screen. A write already sent keeps its
+	// draft until it settles.
 	useEffect(() => {
-		if (disabled) clearPending();
+		if (!disabled || timer.current === null) return;
+		clearPending();
+		setDraft(null);
 	}, [clearPending, disabled]);
 	useEffect(() => clearPending, [clearPending]);
+	// Where the user left the native thumb, while that may differ from the level
+	// shown. @expo/ui's Compose slider ignores a new value while a finger is on it
+	// and does not read it again when the drag ends (SliderView.kt), so a write
+	// rejected under a held finger would leave the thumb on the rejected level.
+	// When a draft is dropped for another level, the native slider is rebuilt.
+	const thumb = useRef<number | null>(null);
+	const [nativeKey, setNativeKey] = useState(0);
+	useEffect(() => {
+		if (draft !== null || thumb.current === null) return;
+		if (thumb.current !== Math.max(0, index)) setNativeKey((key) => key + 1);
+		thumb.current = null;
+	}, [draft, index]);
 	// Only a slider move arms the timer. A failed write rerenders the sheet with
-	// the old selected value, but must not silently retry the same write.
+	// the old selected value, but must not silently retry the same write. A
+	// disabled Slider drops onValueChange, so a move never arrives while disabled.
 	const move = (value: number) => {
 		const nextIndex = Math.round(value);
-		setIndex(nextIndex);
 		clearPending();
-		if (disabled) return;
 		const next = effortSliderWrite(choices, selected, nextIndex);
-		if (!next) return;
+		if (!next) {
+			thumb.current = null;
+			setDraft(null);
+			return;
+		}
+		const write = ++writes.current;
+		thumb.current = nextIndex;
+		setDraft({ index: nextIndex, write });
 		timer.current = setTimeout(() => {
 			timer.current = null;
 			haptics.select();
-			onChangeRef.current(next);
+			const settle = () => setDraft((current) => current?.write === write ? null : current);
+			onChangeRef.current(next).then(settle, settle);
 		}, 180);
 	};
 
 	return <View style={[styles.effort, disabled && styles.disabled]}>
-		<View style={styles.effortHeader}><Feather name="activity" size={17} color={t.textSecondary} /><View style={styles.rowCopy}><Text style={styles.rowLabel}>Reasoning effort</Text><Text style={styles.rowDescription}>More effort can improve harder tasks</Text></View><Text style={styles.effortValue}>{index < 0 ? unplaced : choices[index]?.label}</Text></View>
-		<Host style={styles.sliderHost} colorScheme={scheme} seedColor={t.accent}><Slider value={Math.max(0, index)} min={0} max={Math.max(0, choices.length - 1)} step={1} disabled={disabled} onValueChange={move} testID="turn-settings-effort" /></Host>
+		<View style={styles.effortHeader}><Feather name="activity" size={17} color={t.textSecondary} /><View style={styles.rowCopy}><Text style={styles.rowLabel}>Reasoning effort</Text><Text style={styles.rowDescription}>More effort can improve harder tasks</Text></View><Text style={styles.effortValue} testID="turn-settings-effort-value">{index < 0 ? unplaced : choices[index]?.label}</Text></View>
+		<Host key={nativeKey} style={styles.sliderHost} colorScheme={scheme} seedColor={t.accent}><Slider value={Math.max(0, index)} min={0} max={Math.max(0, choices.length - 1)} step={1} disabled={disabled} onValueChange={move} testID="turn-settings-effort" /></Host>
 		<View style={styles.effortLabels}>{choices.map((choice, choiceIndex) => <Text key={choice.value} style={[styles.effortLabel, choiceIndex === index && { color: t.accent }]}>{choice.tick ?? choice.label}</Text>)}</View>
 	</View>;
 }
