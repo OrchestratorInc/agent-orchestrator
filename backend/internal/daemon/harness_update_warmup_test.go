@@ -65,15 +65,17 @@ func TestHarnessUpdateWarmupStopsIfDaemonExitsBeforeReadinessCompletes(t *testin
 	ctx, cancel := context.WithCancel(context.Background())
 	ready := make(chan struct{})
 	done := make(chan struct{})
+	readinessCalled := make(chan struct{}, 1)
+	checkCalled := make(chan struct{}, 1)
 	go func() {
 		defer close(done)
 		warmInstalledHarnessUpdates(ctx, ready,
 			func(context.Context) (agentsvc.Readiness, error) {
-				t.Fatal("readiness must not be read after shutdown")
+				readinessCalled <- struct{}{}
 				return agentsvc.Readiness{}, nil
 			},
 			func(context.Context, systeminstall.Target) (systeminstall.UpdateAdvisory, error) {
-				t.Fatal("update check must not start after shutdown")
+				checkCalled <- struct{}{}
 				return systeminstall.UpdateAdvisory{}, nil
 			},
 			slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -83,5 +85,15 @@ func TestHarnessUpdateWarmupStopsIfDaemonExitsBeforeReadinessCompletes(t *testin
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("update warm-up did not stop on shutdown")
+	}
+	select {
+	case <-readinessCalled:
+		t.Fatal("readiness was read after shutdown")
+	default:
+	}
+	select {
+	case <-checkCalled:
+		t.Fatal("update check started after shutdown")
+	default:
 	}
 }
