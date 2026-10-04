@@ -576,6 +576,8 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		// Durability across app launches is a separate persistence policy.
 		ExitOnCommandCompletion: true,
 		StartOnAttach:           cfg.startOnAttach,
+		// Only agent terminals are probed for their rendered screen.
+		LazyStyledOutput: true,
 	})
 	if err != nil {
 		if cfg.cleanupWorkingDirOnError {

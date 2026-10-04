@@ -318,6 +318,33 @@ func newTestServiceWithSessions(rt *fakeShellRuntime, st *fakeShellTerminalStore
 	return svc
 }
 
+// Only agent terminals are probed for their rendered screen; shell and command
+// terminals let the runtime skip rendering every byte until something asks.
+func TestShellAndCommandTerminalsAskForLazyStyledOutput(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "pi v0.80.2"
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	svc := newTestService(rt, &fakeShellTerminalStore{}, projects)
+	svc.dataDir = t.TempDir()
+
+	if _, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{ProjectID: "portfolio"}); err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv: []string{"pi"}, Title: "Log in to Pi", InitialInput: "/login", InitialInputReadyStates: readyStates("pi v"),
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+	if len(rt.created) != 2 {
+		t.Fatalf("runtime creates = %d, want 2", len(rt.created))
+	}
+	for i, cfg := range rt.created {
+		if !cfg.LazyStyledOutput {
+			t.Errorf("create %d did not ask for lazy styled output", i)
+		}
+	}
+}
+
 func TestOpenCommandTerminalStartsTrustedCommandInDedicatedAuthWorkspace(t *testing.T) {
 	rt := newFakeShellRuntime()
 	rt.output = "pi v0.80.2"
