@@ -116,7 +116,7 @@ func (s *Service) workspaceTreeChildrenCached(
 		return err
 	})
 	g.Go(func() (err error) {
-		lsParts, err = gitLsFilesParts(gctx, root)
+		lsParts, err = s.workspacePaths(gctx, id, root)
 		return err
 	})
 	if err := g.Wait(); err != nil {
@@ -136,7 +136,8 @@ func buildWorkspaceTreeEntries(root, prefix string, excludePrefixes []string, di
 	if dir != "" {
 		dirPrefix = dir + "/"
 	}
-	entries := make([]WorkspaceTreeEntry, 0, len(paths))
+	// One directory usually has far fewer children than the repository.
+	entries := make([]WorkspaceTreeEntry, 0, min(len(paths), 64))
 	dirIndex := map[string]int{}
 	for _, rel := range paths {
 		if workspacePathExcluded(rel, excludePrefixes) {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { preparePresortedFileTreeInput, type GitStatus, type GitStatusEntry } from "@pierre/trees";
 import { FileTree as PierreFileTree, useFileTree } from "@pierre/trees/react";
@@ -9,6 +9,7 @@ import {
 	type TreeNode,
 	type WorkspaceTreeEntry,
 } from "../hooks/useSessionWorkspaceTree";
+import { sessionUiKey } from "../lib/hosts";
 import { sessionWorkspaceSearchQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
 
@@ -21,28 +22,14 @@ function entryToNode(entry: WorkspaceTreeEntry): TreeNode {
 	return { name: entry.name, path: entry.path, type: "file", status: entry.status, binary: entry.binary };
 }
 
-// Replaces the children of the directory at `dir` (root = "") wherever it
-// lives in the current lazy tree, leaving every other branch untouched.
-function withChildrenAt(nodes: TreeNode[], dir: string, children: TreeNode[]): TreeNode[] {
-	if (dir === "") return children;
-	return nodes.map((node) => {
-		if (node.type !== "dir") return node;
-		if (node.path === dir) return { ...node, children };
-		if (dir === node.path || dir.startsWith(`${node.path}/`)) {
-			return { ...node, children: withChildrenAt(node.children ?? [], dir, children) };
-		}
-		return node;
-	});
-}
-
-function mergeRootEntries(current: TreeNode[], entries: WorkspaceTreeEntry[]): TreeNode[] {
-	const currentByPath = new Map(current.map((node) => [node.path, node]));
+// Observe directory queries rather than copying them into local state, so
+// workspace invalidation updates expanded folders without closing them.
+function treeFromDirectories(entries: WorkspaceTreeEntry[], directories: Map<string, WorkspaceTreeEntry[]>): TreeNode[] {
 	return entries.map((entry) => {
-		const next = entryToNode(entry);
-		const previous = currentByPath.get(next.path);
-		return next.type === "dir" && previous?.type === "dir"
-			? { ...next, children: previous.children }
-			: next;
+		const node = entryToNode(entry);
+		return node.type === "dir"
+			? { ...node, children: treeFromDirectories(directories.get(node.path) ?? [], directories) }
+			: node;
 	});
 }
 
@@ -54,6 +41,7 @@ export function FileTree({
 	changedOnlyData,
 	selectedPath,
 	onSelectPath,
+	onPrefetchPath,
 	flushTop = false,
 }: {
 	/** Start the first row at the top edge (the Files split view's divider). */
@@ -65,6 +53,7 @@ export function FileTree({
 	changedOnlyData: TreeNode[];
 	selectedPath: string | null;
 	onSelectPath: (node: TreeNode) => void;
+	onPrefetchPath?: (node: TreeNode) => void;
 }) {
 	if (changedOnly) {
 		return (
@@ -73,6 +62,7 @@ export function FileTree({
 				filterText={filterText}
 				flushTop={flushTop}
 				onSelectPath={onSelectPath}
+				onPrefetchPath={onPrefetchPath}
 				selectedPath={selectedPath}
 				sessionId={sessionId}
 			/>
@@ -85,6 +75,7 @@ export function FileTree({
 			flushTop={flushTop}
 			hostId={hostId}
 			onSelectPath={onSelectPath}
+			onPrefetchPath={onPrefetchPath}
 			selectedPath={selectedPath}
 			sessionId={sessionId}
 		/>
@@ -97,6 +88,7 @@ function WorkspaceFileTree({
 	sessionId,
 	selectedPath,
 	onSelectPath,
+	onPrefetchPath,
 	flushTop,
 }: {
 	filterText: string;
@@ -104,51 +96,49 @@ function WorkspaceFileTree({
 	sessionId: string;
 	selectedPath: string | null;
 	onSelectPath: (node: TreeNode) => void;
+	onPrefetchPath?: (node: TreeNode) => void;
 	flushTop: boolean;
 }) {
 	const { t } = useTranslation();
-	const queryClient = useQueryClient();
-	const loadedDirsRef = useRef<Set<string>>(new Set());
-	const [lazyData, setLazyData] = useState<TreeNode[]>([]);
+	const uiKey = sessionUiKey(sessionId, hostId);
+	const [directories, setDirectories] = useState({ key: uiKey, requested: [] as string[], open: new Set<string>() });
 	const normalizedFilter = filterText.trim();
+	const [search, setSearch] = useState({ key: uiKey, value: normalizedFilter });
+	useEffect(() => {
+		const timer = setTimeout(() => setSearch({ key: uiKey, value: normalizedFilter }), 125);
+		return () => clearTimeout(timer);
+	}, [normalizedFilter, uiKey]);
+	const searchFilter = normalizedFilter === "" ? "" : search.key === uiKey ? search.value : normalizedFilter;
 
-	const rootQuery = useQuery({
-		...sessionWorkspaceTreeQueryOptions(sessionId, "", "Unable to load workspace tree", hostId),
-		enabled: normalizedFilter.length === 0,
-	});
+	const rootQuery = useQuery({ ...sessionWorkspaceTreeQueryOptions(sessionId, "", "Unable to load workspace tree", hostId), enabled: normalizedFilter.length === 0 });
 	const searchQuery = useQuery({
-		...sessionWorkspaceSearchQueryOptions(sessionId, normalizedFilter, t("files.error.searchWorkspace"), hostId),
-		enabled: normalizedFilter.length > 0,
+		...sessionWorkspaceSearchQueryOptions(sessionId, searchFilter, t("files.error.searchWorkspace"), hostId),
+		enabled: searchFilter.length > 0,
 	});
 
-	useEffect(() => {
-		setLazyData([]);
-		loadedDirsRef.current = new Set();
-	}, [sessionId, hostId]);
+	const requested = directories.key === uiKey ? directories.requested : [];
+	const directoryQueries = useQueries({
+		queries: requested.map((dir) => ({
+			...sessionWorkspaceTreeQueryOptions(sessionId, dir, t("files.error.loadWorkspaceTree"), hostId),
+			enabled: normalizedFilter.length === 0 && directories.open.has(dir),
+		})),
+	});
+	const directoryEntries = new Map<string, WorkspaceTreeEntry[]>();
+	requested.forEach((dir, index) => {
+		const entries = directoryQueries[index]?.data?.entries;
+		if (entries) directoryEntries.set(dir, entries);
+	});
+	const lazyData = treeFromDirectories(rootQuery.data?.entries ?? [], directoryEntries);
 
-	useEffect(() => {
-		if (!rootQuery.data) return;
-		loadedDirsRef.current.add("");
-		setLazyData((current) => mergeRootEntries(current, rootQuery.data.entries));
-	}, [rootQuery.data]);
-
-	const loadChildren = useCallback(
-		async (dir: string) => {
-			if (loadedDirsRef.current.has(dir)) return;
-			loadedDirsRef.current.add(dir);
-			try {
-				const result = await queryClient.fetchQuery(
-					sessionWorkspaceTreeQueryOptions(sessionId, dir, t("files.error.loadWorkspaceTree"), hostId),
-				);
-				setLazyData((current) => withChildrenAt(current, dir, result.entries.map(entryToNode)));
-			} catch {
-				// Allow the next expand attempt to retry instead of leaving the
-				// folder permanently stuck as "loaded but empty".
-				loadedDirsRef.current.delete(dir);
-			}
-		},
-		[queryClient, sessionId, hostId, t],
-	);
+	const loadChildren = useCallback((dir: string, open: boolean) => {
+		setDirectories((previous) => {
+			const current = previous.key === uiKey ? previous : { key: uiKey, requested: [], open: new Set<string>() };
+			if (current.open.has(dir) === open && current.requested.includes(dir)) return previous;
+			const nextOpen = new Set(current.open);
+			if (open) nextOpen.add(dir); else nextOpen.delete(dir);
+			return { key: uiKey, open: nextOpen, requested: current.requested.includes(dir) ? current.requested : [...current.requested, dir] };
+		});
+	}, [uiKey]);
 
 	const searchData = buildWorkspaceFileTree(searchQuery.data?.results ?? []);
 	const data = normalizedFilter ? searchData : lazyData;
@@ -172,6 +162,7 @@ function WorkspaceFileTree({
 					flushTop={flushTop}
 					id={`workspace-files-${sessionId}`}
 					onDirectoryExpanded={normalizedFilter ? undefined : loadChildren}
+					onPrefetchPath={onPrefetchPath}
 					onSelectPath={onSelectPath}
 					selectedPath={selectedPath}
 				/>
@@ -212,12 +203,25 @@ function pierrePath(entry: TreeNode): string {
 	return entry.type === "dir" ? `${entry.path}/` : entry.path;
 }
 
+function useTreePrefetch(entries: Map<string, TreeNode>, onPrefetchPath?: (node: TreeNode) => void) {
+	const lastPath = useRef<string | null>(null);
+	return (event: React.SyntheticEvent) => {
+		const row = event.nativeEvent.composedPath().find((target) => target instanceof HTMLElement && target.hasAttribute("data-item-path")) as HTMLElement | undefined;
+		const path = row?.getAttribute("data-item-path")?.replace(/\/$/, "");
+		if (!path || path === lastPath.current) return;
+		lastPath.current = path;
+		const entry = entries.get(path);
+		if (entry) onPrefetchPath?.(entry);
+	};
+}
+
 function PierreTreeSurface({
 	data,
 	expandAll,
 	flushTop,
 	id,
 	onDirectoryExpanded,
+	onPrefetchPath,
 	onSelectPath,
 	selectedPath,
 }: {
@@ -225,13 +229,15 @@ function PierreTreeSurface({
 	expandAll: boolean;
 	flushTop: boolean;
 	id: string;
-	onDirectoryExpanded?: (path: string) => void;
+	onDirectoryExpanded?: (path: string, open: boolean) => void;
+	onPrefetchPath?: (node: TreeNode) => void;
 	onSelectPath: (node: TreeNode) => void;
 	selectedPath: string | null;
 }) {
 	const { t } = useTranslation();
 	const entries = useMemo(() => flattenTreeNodes(data), [data]);
 	const entriesByPath = useMemo(() => new Map(entries.map((entry) => [entry.path, entry])), [entries]);
+	const prefetch = useTreePrefetch(entriesByPath, onPrefetchPath);
 	const entriesByPathRef = useRef(entriesByPath);
 	entriesByPathRef.current = entriesByPath;
 	const onSelectPathRef = useRef(onSelectPath);
@@ -281,8 +287,8 @@ function PierreTreeSurface({
 			if (!load) return;
 			for (const entry of entriesByPathRef.current.values()) {
 				const item = model.getItem(pierrePath(entry));
-				if (entry.type === "dir" && item && "isExpanded" in item && item.isExpanded()) {
-					load(entry.path);
+				if (entry.type === "dir" && item && "isExpanded" in item) {
+					load(entry.path, item.isExpanded());
 				}
 			}
 		};
@@ -301,6 +307,8 @@ function PierreTreeSurface({
 
 	return (
 		<PierreFileTree
+			onPointerMove={prefetch}
+			onFocusCapture={prefetch}
 			aria-label={t("files.explorer.tree")}
 			className="min-h-0 flex-1"
 			data-testid="workspace-file-tree"
@@ -325,6 +333,7 @@ function PierreTreeSurface({
  * stable model instead of rebuilding a React node for every visible file.
  */
 function ChangedFileTree({
+	onPrefetchPath,
 	data,
 	filterText,
 	flushTop,
@@ -332,6 +341,7 @@ function ChangedFileTree({
 	selectedPath,
 	sessionId,
 }: {
+	onPrefetchPath?: (node: TreeNode) => void;
 	data: TreeNode[];
 	filterText: string;
 	flushTop: boolean;
@@ -351,6 +361,7 @@ function ChangedFileTree({
 			: allFiles;
 	}, [data, filterText]);
 	const filesByPath = useMemo(() => new Map(files.map((file) => [file.path, file])), [files]);
+	const prefetch = useTreePrefetch(filesByPath, onPrefetchPath);
 	const filesByPathRef = useRef(filesByPath);
 	filesByPathRef.current = filesByPath;
 	const paths = useMemo(() => files.map((file) => file.path), [files]);
@@ -408,6 +419,8 @@ function ChangedFileTree({
 	return (
 		<div className="flex h-full min-h-0 min-w-0 flex-col bg-background px-2">
 			<PierreFileTree
+			onPointerMove={prefetch}
+			onFocusCapture={prefetch}
 				aria-label={t("files.explorer.tree")}
 				className="min-h-0 flex-1"
 				data-testid="changed-file-tree"

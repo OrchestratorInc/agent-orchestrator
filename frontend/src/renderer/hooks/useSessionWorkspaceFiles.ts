@@ -128,6 +128,7 @@ export function sessionWorkspaceFileQueryOptions(sessionId: string, path: string
 	return {
 		queryKey: sessionWorkspaceFileQueryKey(sessionId, path, scope, commitSha, hostId),
 		queryFn: () => fetchSessionWorkspaceFile(sessionId, path, scope, errorMessage, commitSha, hostId),
+		staleTime: 5_000,
 	};
 }
 
@@ -194,6 +195,7 @@ export async function fetchWorkspaceFileRevision({
 	workspaceVersion,
 	commitSha,
 	hostId,
+	signal,
 }: {
 	errorMessage?: string;
 	expectedRevision?: string;
@@ -204,8 +206,10 @@ export async function fetchWorkspaceFileRevision({
 	workspaceVersion?: string;
 	commitSha?: string;
 	hostId?: string;
+	signal?: AbortSignal;
 }): Promise<WorkspaceFileRevision> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/file/revision", {
+		signal,
 		params: { path: { sessionId }, query: { path, scope, side, workspaceVersion, expectedRevision, commitSha } },
 	});
 	if (error) throw new Error(apiErrorMessage(error, errorMessage));
@@ -298,9 +302,10 @@ export async function updateSessionWorkspaceFile({
 export function sessionWorkspaceSearchQueryOptions(sessionId: string, query: string, errorMessage = "Unable to search workspace files", hostId?: string) {
 	return {
 		queryKey: hostId ? ["session-workspace-search", hostId, sessionId, query] as const : ["session-workspace-search", sessionId, query] as const,
-		queryFn: async (): Promise<WorkspaceFileSearchResponse> => {
+		queryFn: async ({ signal }: { signal: AbortSignal }): Promise<WorkspaceFileSearchResponse> => {
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/search", {
 				params: { path: { sessionId }, query: { query, limit: 100 } },
+				signal,
 			});
 			if (error) throw new Error(apiErrorMessage(error, errorMessage));
 			if (!data) throw new Error(errorMessage);

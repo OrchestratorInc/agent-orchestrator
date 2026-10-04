@@ -50,6 +50,7 @@ type fakeSessionService struct {
 	cleanupResult              []domain.SessionID
 	cleanupSkipped             []sessionsvc.CleanupSkipped
 	workspaceFiles             sessionsvc.WorkspaceFiles
+	workspaceListHook          func(context.Context) error
 	workspaceFile              sessionsvc.WorkspaceFileDetail
 	workspaceFileSection       sessionsvc.WorkspaceFileSection
 	workspaceFileCommitSHA     string
@@ -617,7 +618,12 @@ func (f *fakeSessionService) StageAttachments(
 	return f.stagedPaths, nil
 }
 
-func (f *fakeSessionService) ListWorkspaceFiles(_ context.Context, id domain.SessionID) (sessionsvc.WorkspaceFiles, error) {
+func (f *fakeSessionService) ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFiles, error) {
+	if f.workspaceListHook != nil {
+		if err := f.workspaceListHook(ctx); err != nil {
+			return sessionsvc.WorkspaceFiles{}, err
+		}
+	}
 	if f.workspaceErr != nil {
 		return sessionsvc.WorkspaceFiles{}, f.workspaceErr
 	}
@@ -3291,6 +3297,18 @@ func TestSessionsAPI_GetWorkspaceFileBlobRequiresPath(t *testing.T) {
 func TestSessionsAPI_StreamWorkspaceChanges(t *testing.T) {
 	workspace := t.TempDir()
 	svc := newFakeSessionService()
+	// Permit the startup reconciliation, then block refresh work to verify
+	// that the invalidation edge is sent before scanning the changed workspace.
+	scans := 0
+	svc.workspaceListHook = func(ctx context.Context) error {
+		scans++
+		if scans == 1 {
+			return nil
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
 	session := svc.sessions["ao-1"]
 	session.Metadata.WorkspacePath = workspace
 	svc.sessions["ao-1"] = session

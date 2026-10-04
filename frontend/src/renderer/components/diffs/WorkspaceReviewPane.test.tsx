@@ -241,6 +241,42 @@ describe("WorkspaceReviewPane", () => {
 		}
 	});
 
+	it("limits automatic full-context reads to one pair and cancels obsolete hydration", async () => {
+		postMock.mockResolvedValue({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [
+			{ repository: "", patch: "README.md ends-at-eof", includedPaths: ["README.md"], deferred: [] },
+			{ repository: "", patch: "src/App.tsx ends-at-eof", includedPaths: ["src/App.tsx"], deferred: [] },
+		] } });
+		let release = () => {};
+		const ready = new Promise<void>((resolve) => { release = resolve; });
+		getMock.mockImplementation(async (_url: string, init: { signal: AbortSignal; params: { query: { path: string; side: string } } }) => {
+			await ready;
+			return { data: { binary: false, content: "contents", revision: `rev-${init.params.query.side}`, truncated: false } };
+		});
+		const data = workspace(["README.md", "src/App.tsx"].map((path) => ({ path, status: "modified", additions: 1, deletions: 0, size: 20, binary: false })));
+		const view = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		expect(getMock.mock.calls.every((call) => call[1].params.query.path === "README.md")).toBe(true);
+		release();
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(4));
+		expect(getMock.mock.calls.slice(2).every((call) => call[1].params.query.path === "src/App.tsx")).toBe(true);
+		view.unmount();
+	});
+
+	it("does not start queued context reads after the review is closed", async () => {
+		postMock.mockResolvedValue({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [
+			{ repository: "", patch: "README.md ends-at-eof", includedPaths: ["README.md"], deferred: [] },
+			{ repository: "", patch: "src/App.tsx ends-at-eof", includedPaths: ["src/App.tsx"], deferred: [] },
+		] } });
+		const signals: AbortSignal[] = [];
+		getMock.mockImplementation((_url: string, init: { signal: AbortSignal }) => { signals.push(init.signal); return new Promise(() => {}); });
+		const data = workspace(["README.md", "src/App.tsx"].map((path) => ({ path, status: "modified", additions: 1, deletions: 0, size: 20, binary: false })));
+		const view = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		view.unmount();
+		await waitFor(() => expect(signals.every((signal) => signal.aborted)).toBe(true));
+		expect(getMock).toHaveBeenCalledTimes(2);
+	});
+
 	it("shows the patch while a file that ends at its last change loads its contents", async () => {
 		postMock.mockResolvedValue({
 			data: {
