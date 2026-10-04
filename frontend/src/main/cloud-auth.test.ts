@@ -111,7 +111,7 @@ describe("native WorkOS authentication", () => {
         provider: "authkit",
         prompt: "login",
         maxAge: 0,
-        redirectUri: "ao-app://callback",
+        redirectUri: "https://api.aoagents.dev/app/auth/return",
       }),
     );
 
