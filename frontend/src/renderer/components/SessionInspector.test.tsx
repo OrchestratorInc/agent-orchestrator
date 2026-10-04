@@ -208,7 +208,7 @@ function commonGetsResponder(
         error: undefined,
       };
     }
-    if (path === "/api/v1/sessions/{sessionId}/workspace/files") {
+    if (path === "/api/v1/sessions/{sessionId}/workspace/manifest") {
       return {
         data: { sessionId: "sess-1", files: [], truncated: false },
         error: undefined,
@@ -318,6 +318,13 @@ describe("SessionInspector tabs", () => {
     expect(screen.getByRole("complementary", { name: "Session inspector" }).querySelector(".session-inspector__body--browser")).toBeInTheDocument();
   });
 
+  it("keeps the same Browser-only inspector for a remote orchestrator", () => {
+    renderWithQuery(<SessionInspector browserOnly hostId="box-a" session={session([], { kind: "orchestrator", hostId: "box-a" })} />);
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Session inspector" }).querySelector(".session-inspector__body--browser")).toBeInTheDocument();
+  });
+
   it("gives the Browser viewport the full inspector body without the default content gutter", async () => {
     renderWithQuery(<SessionInspector session={session([])} />);
 
@@ -394,7 +401,7 @@ describe("SessionInspector tabs", () => {
     expect(within(filesTab).getByTestId("files-viewer-icon")).toBeInTheDocument();
     await waitFor(() =>
       expect(getMock).toHaveBeenCalledWith(
-        "/api/v1/sessions/{sessionId}/workspace/files",
+        "/api/v1/sessions/{sessionId}/workspace/manifest",
         {
           params: { path: { sessionId: "sess-1" } },
         },
@@ -421,7 +428,7 @@ describe("SessionInspector tabs", () => {
 
     expect(
       getMock.mock.calls.some(
-        ([path]) => path === "/api/v1/sessions/{sessionId}/workspace/files",
+        ([path]) => path === "/api/v1/sessions/{sessionId}/workspace/manifest",
       ),
     ).toBe(false);
   });
@@ -1305,7 +1312,7 @@ describe("SessionInspector completion controls", () => {
       screen.getByRole("button", { name: "Archive session" }),
     );
     expect(
-      screen.getByRole("dialog", { name: "Are you sure you want to archive do the thing?" }),
+      screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" }),
     ).toBeInTheDocument();
     await userEvent.click(
       within(screen.getByRole("dialog")).getByRole("button", {
@@ -1633,6 +1640,7 @@ describe("SessionInspector Activity section", () => {
   it.each([
     ["ci_failed", "CI Failed"],
     ["changes_requested", "Changes Requested"],
+    ["commented", "Commented"],
   ] as const)(
     "renders %s as an SCM state in the current Activity row",
     (status, label) => {
@@ -1651,6 +1659,45 @@ describe("SessionInspector Activity section", () => {
       expect(within(activityRow).getByText(label)).toBeInTheDocument();
     },
   );
+
+  it("keeps an unresolved, non-blocking review comment visible as Commented feedback while the agent is working (#5765)", () => {
+    renderWithQuery(
+      <SessionInspector
+        session={session(
+          [pr(5765, "open", { review: "review_required", reviewComments: true })],
+          {
+            status: "working",
+            activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" },
+          },
+        )}
+      />,
+    );
+
+    const activityRow = activitySection()
+      .getByText("Working")
+      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
+    expect(within(activityRow).getByText("Commented")).toBeInTheDocument();
+    expect(within(activityRow).queryByText("Changes Requested")).not.toBeInTheDocument();
+  });
+
+  it("does not show Commented for a stale unresolved comment on a merged PR", () => {
+    renderWithQuery(
+      <SessionInspector
+        session={session(
+          [pr(5765, "merged", { review: "review_required", reviewComments: true })],
+          {
+            status: "idle",
+            activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
+          },
+        )}
+      />,
+    );
+
+    const activityRow = activitySection()
+      .getByText("Idle")
+      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
+    expect(within(activityRow).queryByText("Commented")).not.toBeInTheDocument();
+  });
 
   it("ignores stale failing CI from a merged PR when the open PR is passing", () => {
     renderWithQuery(
@@ -2178,7 +2225,7 @@ describe("SessionInspector summary reviews", () => {
         const agents = ["claude-code", "codex", "opencode"].map((id) => agentReadiness(id));
         return { data: { agents } };
       }
-      if (path === "/api/v1/sessions/{sessionId}/workspace/files") {
+      if (path === "/api/v1/sessions/{sessionId}/workspace/manifest") {
         return {
           data: { sessionId: "sess-1", files: [], truncated: false },
           error: undefined,

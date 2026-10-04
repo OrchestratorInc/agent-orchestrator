@@ -53,8 +53,20 @@ vi.mock("../lib/api-client", () => ({
 	apiClient: {
 		POST: apiMocks.POST,
 	},
+	apiErrorCode: (error: unknown) =>
+		typeof error === "object" && error !== null && "code" in error ? error.code : undefined,
 	apiErrorMessage: apiMocks.apiErrorMessage,
 }));
+
+const hostMocks = vi.hoisted(() => ({
+	aGet: vi.fn(), aPost: vi.fn(), bGet: vi.fn(), bPost: vi.fn(),
+}));
+vi.mock("../lib/host-clients", () => {
+	const client = (hostId: string) => hostId === "host-a"
+		? { GET: hostMocks.aGet, POST: hostMocks.aPost }
+		: { GET: hostMocks.bGet, POST: hostMocks.bPost };
+	return { clientForHost: client, clientForSessionHost: client };
+});
 
 const githubDaemonMocks = vi.hoisted(() => ({
 	getGitHubStatus: vi.fn().mockResolvedValue({ connected: false }),
@@ -319,6 +331,8 @@ beforeEach(() => {
 	bridgeMocks.connectProviderAuth.mockReset().mockRejectedValue(new Error("No browser auth flow for github in tests"));
 	bridgeMocks.openExternal.mockReset().mockResolvedValue(undefined);
 	apiMocks.POST.mockReset();
+	hostMocks.aGet.mockReset(); hostMocks.aPost.mockReset();
+	hostMocks.bGet.mockReset(); hostMocks.bPost.mockReset();
 	apiMocks.apiErrorMessage.mockClear();
 	cloudMocks.cloudEnabled = false;
 	cloudMocks.coderAvailable = false;
@@ -357,6 +371,92 @@ beforeEach(() => {
 	cloudMocks.signIn.mockReset();
 	window.localStorage.clear();
 	useUiStore.setState({ globalToast: null, globalToasts: [] });
+});
+
+describe("CreateProjectFlow remote host", () => {
+	it("switches the shared picker back to this computer", async () => {
+		const user = userEvent.setup();
+		const onSelectHost = vi.fn();
+		renderChooseFlow({
+			initialOpen: true,
+			hostId: "host-a",
+			hostLabel: "Host A",
+			remoteHosts: [{ hostId: "host-a", label: "Host A", url: "https://a.test", status: "connected" }],
+			onSelectHost,
+		});
+		await user.click(screen.getByRole("combobox", { name: "Machine" }));
+		await user.click(screen.getByRole("option", { name: "This computer" }));
+		expect(onSelectHost).toHaveBeenCalledWith(undefined);
+	});
+
+	it("shows safe Git clone guidance from a failed host clone", async () => {
+		const user = userEvent.setup();
+		hostMocks.aPost.mockResolvedValueOnce({
+			error: {
+				code: "GIT_CLONE_FAILED",
+				message: "fatal: Authentication failed for https://user:secret@github.com/acme/private.git",
+			},
+		});
+		renderChooseFlow({ hostId: "host-a", hostLabel: "Host A", connected: true });
+
+		await openSource(user, "Clone from Git");
+		fireEvent.click(await screen.findByText("Continue clone"));
+
+		await waitFor(() => expect(useUiStore.getState().globalToast?.body).toBe(
+			"Could not clone this repository. Check the URL, your Git credentials, and your network connection.",
+		));
+		expect(useUiStore.getState().globalToast?.body).not.toContain("secret");
+	});
+
+	it("uses the shared source picker, host folder picker, and agent sheet without dismissing between steps", async () => {
+		const user = userEvent.setup();
+		const onDismiss = vi.fn();
+		const onCreateProject = vi.fn().mockResolvedValue(undefined);
+		hostMocks.aGet.mockResolvedValue({ data: { path: "/srv/todo-app", parent: "/srv", entries: [], truncated: false } });
+		hostMocks.aPost.mockResolvedValue({ data: projectValidation("/srv/todo-app") });
+		render(<QueryClientProvider client={new QueryClient()}><CreateProjectFlow
+			mode="choose" initialOpen hostId="host-a" hostLabel="Host A" connected
+			onCreateProject={onCreateProject} onInitializeProject={noop.onInitializeProject} onDismiss={onDismiss}
+		/></QueryClientProvider>);
+		await user.click(screen.getByRole("button", { name: "Import an existing project" }));
+		expect(await screen.findByRole("dialog", { name: "Choose a folder on Host A" })).toBeInTheDocument();
+		await user.click(await screen.findByRole("button", { name: "Use this folder" }));
+		await waitFor(() => expect(hostMocks.aPost).toHaveBeenCalledWith("/api/v1/imports/validate", {
+			body: { importKind: "project", path: "/srv/todo-app" },
+		}));
+		expect(await screen.findByTestId("agent-sheet")).toHaveAttribute("data-path", "/srv/todo-app");
+		expect(onDismiss).not.toHaveBeenCalled();
+		await user.click(screen.getByRole("button", { name: "Submit agents" }));
+		await waitFor(() => expect(onCreateProject).toHaveBeenCalledWith({
+			path: "/srv/todo-app", asWorkspace: false, workerAgent: "codex", orchestratorAgent: "codex",
+		}));
+		expect(apiMocks.POST).not.toHaveBeenCalled();
+		expect(bridgeMocks.chooseDirectory).not.toHaveBeenCalled();
+	});
+
+	it("prepares a clone on the selected host and passes its token to project registration", async () => {
+		const user = userEvent.setup();
+		const onCreateProject = vi.fn().mockResolvedValue(undefined);
+		hostMocks.bPost.mockImplementation(async (path: string) => path === "/api/v1/projects/clone/prepare"
+			? { data: { path: "/repo/empty-repository", preparationId: "prepared-b" } }
+			: { data: projectValidation("/repo/empty-repository") });
+		render(<QueryClientProvider client={new QueryClient()}><CreateProjectFlow
+			mode="choose" initialOpen hostId="host-b" hostLabel="Host B" connected
+			onCreateProject={onCreateProject} onInitializeProject={noop.onInitializeProject}
+		/></QueryClientProvider>);
+		expect(screen.getByText("Use a project already on Host B")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Clone from Git" }));
+		await user.click(await screen.findByRole("button", { name: "Continue clone" }));
+		expect(await screen.findByTestId("agent-sheet")).toHaveAttribute("data-path", "/repo/empty-repository");
+		await user.click(screen.getByRole("button", { name: "Submit agents" }));
+		await waitFor(() => expect(onCreateProject).toHaveBeenCalledWith({
+			path: "/repo/empty-repository", clonePreparationId: "prepared-b", workerAgent: "codex", orchestratorAgent: "codex",
+		}));
+		expect(hostMocks.bPost).toHaveBeenCalledWith("/api/v1/projects/clone/prepare", {
+			body: { remoteUrl: "file:///source/empty-repository.git", destinationParent: "/repo" },
+		});
+		expect(apiMocks.POST).not.toHaveBeenCalled();
+	});
 });
 
 describe("CreateProjectFlow droppedPath", () => {

@@ -939,6 +939,10 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found",
 			"CHAT_TURN_NOT_FOUND", "that turn is not in this session's conversation", nil)
 
+	case errors.Is(err, domain.ErrClientMessageConflict):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_MESSAGE_IDEMPOTENCY_CONFLICT", "clientMessageId belongs to a different message", nil)
+
 	case errors.Is(err, chatsvc.ErrTurnRunning):
 		// Retryable, unlike every other refusal here: the same request works once
 		// the agent finishes. Rolling back mid-turn is refused rather than raced,
@@ -1261,11 +1265,23 @@ func accountPayload(account *domain.ConversationAccount) *ConversationAccountPay
 	if account == nil {
 		return nil
 	}
+	state := account.AuthenticationState
+	if state == "" {
+		state = "unknown"
+		if account.ReauthRequiredAt != nil {
+			state = "required"
+		}
+	}
 	return &ConversationAccountPayload{
-		AuthMode:         account.AuthMode,
-		PlanLabel:        account.PlanLabel,
-		ReauthRequiredAt: optionalTimestamp(account.ReauthRequiredAt),
-		ReauthReason:     account.ReauthReason,
+		AuthenticationState:   state,
+		AuthVerifiedAt:        optionalTimestamp(account.AuthVerifiedAt),
+		LastAuthFailureAt:     optionalTimestamp(account.LastAuthFailureAt),
+		LastAuthFailureReason: account.LastAuthFailureReason,
+		AuthFailureID:         account.AuthFailureID,
+		AuthMode:              account.AuthMode,
+		PlanLabel:             account.PlanLabel,
+		ReauthRequiredAt:      optionalTimestamp(account.ReauthRequiredAt),
+		ReauthReason:          account.ReauthReason,
 	}
 }
 

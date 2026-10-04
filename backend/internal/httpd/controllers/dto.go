@@ -369,6 +369,7 @@ type ListSessionsResponse struct {
 
 // SpawnSessionRequest is the body of POST /api/v1/sessions.
 type SpawnSessionRequest struct {
+	ClientRequestID string `json:"clientRequestId,omitempty" maxLength:"128"`
 	// ProjectID is omitted for a standalone worker session.
 	ProjectID domain.ProjectID `json:"projectId,omitempty"`
 	IssueID   domain.IssueID   `json:"issueId,omitempty"`
@@ -523,6 +524,35 @@ type ListWorkspaceFilesResponse struct {
 	// upstream, detached HEAD).
 	Ahead  *int `json:"ahead,omitempty"`
 	Behind *int `json:"behind,omitempty"`
+}
+
+// WorkspaceManifestResponse is the compact, latency-sensitive response used
+// for the initial Changes paint. Complete repository inventory and commit
+// history remain on their dedicated/legacy routes.
+type WorkspaceManifestResponse struct {
+	SessionID        domain.SessionID                `json:"sessionId"`
+	WorkspaceVersion string                          `json:"workspaceVersion"`
+	CompareBaseSHA   string                          `json:"compareBaseSha,omitempty"`
+	CompareBaseRef   string                          `json:"compareBaseRef,omitempty"`
+	CompareMode      sessionsvc.WorkspaceCompareMode `json:"compareMode,omitempty" enum:"base,head_fallback"`
+	Files            []WorkspaceFileSummary          `json:"files"`
+	Sections         WorkspaceFileSections           `json:"sections"`
+	Summary          WorkspaceSummary                `json:"summary"`
+	Truncated        bool                            `json:"truncated"`
+	Stale            bool                            `json:"stale"`
+	Refreshing       bool                            `json:"refreshing"`
+	Degraded         bool                            `json:"degraded"`
+	DegradedCode     string                          `json:"degradedCode,omitempty"`
+}
+
+// WorkspaceHistoryResponse is lazy commit/upstream metadata for the review
+// header. It is intentionally separate from the first-paint manifest.
+type WorkspaceHistoryResponse struct {
+	SessionID        domain.SessionID         `json:"sessionId"`
+	Commits          []WorkspaceCommitSummary `json:"commits"`
+	CommitsTruncated bool                     `json:"commitsTruncated,omitempty"`
+	Ahead            *int                     `json:"ahead,omitempty"`
+	Behind           *int                     `json:"behind,omitempty"`
 }
 
 // ListPRFilesResponse is the exact base...head changed-file set for one PR.
@@ -764,6 +794,12 @@ type BrowserCapabilityHeader struct {
 	Capability string `header:"X-AO-Browser-Capability" description:"Opaque browser capability injected into the owning AO worker."`
 }
 
+// PreviewCapabilityHeader lets a session-scoped user shell manage only its
+// own preview server, without granting browser automation access.
+type PreviewCapabilityHeader struct {
+	Capability string `header:"X-AO-Preview-Capability" description:"Opaque preview-only capability injected into a session-scoped user shell."`
+}
+
 // BrowserStatusResponse reports whether the desktop-owned browser transport is
 // ready. A connected runtime can create the session target while its panel is
 // hidden; panel visibility is intentionally not part of this state.
@@ -977,10 +1013,11 @@ type SendSessionMessageResponse struct {
 // DelegateTaskRequest is the body of POST /api/v1/orchestrators/delegate.
 // An omitted agent tells the orchestrator to use the project's worker default.
 type DelegateTaskRequest struct {
-	ProjectID domain.ProjectID    `json:"projectId"`
-	Brief     string              `json:"brief" maxLength:"16384"`
-	Agent     domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,mimo-code,deepseek-harness,fake"`
-	Model     string              `json:"model,omitempty" maxLength:"256"`
+	ClientRequestID string              `json:"clientRequestId,omitempty" maxLength:"128"`
+	ProjectID       domain.ProjectID    `json:"projectId"`
+	Brief           string              `json:"brief" maxLength:"16384"`
+	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,mimo-code,deepseek-harness,fake"`
+	Model           string              `json:"model,omitempty" maxLength:"256"`
 	// Effort is an explicit, provider-advertised model tuning override. Nil
 	// inherits the project default; an empty string selects the provider default.
 	Effort *string `json:"effort,omitempty" maxLength:"64"`
@@ -1871,9 +1908,11 @@ type ShellTerminalHandleIDParam struct {
 
 // OpenShellTerminalRequest is the body of POST /api/v1/shell-terminals.
 type OpenShellTerminalRequest struct {
-	ProjectID string `json:"projectId,omitempty" description:"Project whose root the shell starts in. Omitted opens the shell in the daemon data dir."`
-	SessionID string `json:"sessionId,omitempty" description:"Agent session the shell is scoped to, so it appears only in that session's tab strip. Omitted makes it a standalone shell."`
-	Shell     string `json:"shell,omitempty" description:"Windows shell selector: auto, git-bash, pwsh, powershell, cmd, or a custom executable path. Ignored on macOS and Linux."`
+	ProjectID     string `json:"projectId,omitempty" description:"Project whose root the shell starts in. Omitted opens the shell in the daemon data dir."`
+	SessionID     string `json:"sessionId,omitempty" description:"Agent session the shell is scoped to, so it appears only in that session's tab strip. Omitted makes it a standalone shell."`
+	Shell         string `json:"shell,omitempty" description:"Windows shell selector: auto, git-bash, pwsh, powershell, cmd, or a custom executable path. Ignored on macOS and Linux."`
+	StartOnAttach bool   `json:"startOnAttach,omitempty" description:"Start the shell when the requesting client attaches with its terminal grid instead of immediately, so the shell starts at the size that client shows. Only for clients that attach as a sized viewer; omitted starts the shell immediately at the default grid."`
+	Title         string `json:"title,omitempty" description:"Tab title for the new shell, for a client that already shows its tab. Trimmed; omitted or empty numbers it after the existing shells (Terminal N)."`
 }
 
 // UpdateShellTerminalRequest is the body of PATCH /api/v1/shell-terminals/{handleId}.
@@ -2093,6 +2132,8 @@ type LinkPreviewResponse struct {
 // regenerate responses (empty otherwise) — it is never persisted in plaintext.
 type MobileStatusResponse struct {
 	Enabled bool `json:"enabled"`
+	// LoopbackOnly means direct LAN/Tailscale addresses are not listening.
+	LoopbackOnly bool `json:"loopbackOnly"`
 	// Endpoints is every way the phone can reach this daemon, in the client's
 	// preference order. The phone races them; Host/TailscaleHost below are the
 	// head of each kind, kept for the existing renderer.
@@ -2180,6 +2221,7 @@ type RegisterPushDeviceRequest struct {
 	Token      string `json:"token,omitempty" description:"Expo push token, e.g. ExponentPushToken[...]. Optional: omitted when the phone has no push token yet."`
 	Platform   string `json:"platform,omitempty" enum:"ios,android" description:"Device platform."`
 	DeviceName string `json:"deviceName,omitempty" description:"Human-friendly device label."`
+	HostName   string `json:"hostName,omitempty" description:"This phone's label for the host; used in OS push notification titles."`
 }
 
 // PushDeviceResponse is the stored view of a registered push device.
@@ -2699,11 +2741,15 @@ type ConversationModelReroutePayload struct {
 // ConversationAccountPayload is what the provider says about the account behind a
 // conversation.
 type ConversationAccountPayload struct {
-	AuthMode  string `json:"authMode,omitempty"`
-	PlanLabel string `json:"planLabel,omitempty"`
+	AuthenticationState   string  `json:"authenticationState,omitempty" enum:"unknown,required,authenticated"`
+	AuthVerifiedAt        *string `json:"authVerifiedAt,omitempty"`
+	LastAuthFailureAt     *string `json:"lastAuthFailureAt,omitempty"`
+	LastAuthFailureReason string  `json:"lastAuthFailureReason,omitempty"`
+	AuthFailureID         string  `json:"authFailureId,omitempty"`
+	AuthMode              string  `json:"authMode,omitempty"`
+	PlanLabel             string  `json:"planLabel,omitempty"`
 	// ReauthRequiredAt is when the provider last asked for credentials the daemon
-	// does not hold. Present means the session has stopped working for a reason no
-	// retry will fix and the user has to sign in again.
+	// does not hold. Present means a demand has not yet been superseded by verified success.
 	ReauthRequiredAt *string `json:"reauthRequiredAt,omitempty"`
 	ReauthReason     string  `json:"reauthReason,omitempty"`
 }
