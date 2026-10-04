@@ -12,6 +12,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionInspector } from "./SessionInspector";
 import { TooltipProvider } from "./ui/tooltip";
+import { editorHandoffQueryKey } from "../hooks/useEditorHandoff";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { settingsQueryKey } from "../hooks/useSettings";
@@ -181,6 +182,14 @@ function renderWithQuery(
     ),
     queryClient: client,
   };
+}
+
+function seedAvailableEditorHandoff(client: QueryClient) {
+  client.setQueryData(editorHandoffQueryKey("sess-1"), {
+    targets: [],
+    preferredEditorId: "cursor",
+    workspaceAvailable: true,
+  });
 }
 
 function commonGetsResponder(
@@ -1445,7 +1454,7 @@ describe("SessionInspector Activity section", () => {
     );
 
     await userEvent.click(
-      activitySection().getByRole("button", { name: "Resume agent" }),
+      await activitySection().findByRole("button", { name: "Resume agent" }),
     );
 
     await waitFor(() =>
@@ -1458,6 +1467,21 @@ describe("SessionInspector Activity section", () => {
     );
   });
 
+  it("keeps agent resume available while the workspace probe is pending", () => {
+    vi.spyOn(window.ao!.editorHandoff, "getState").mockReturnValueOnce(new Promise(() => {}));
+
+    renderWithQuery(
+      <SessionInspector
+        session={session([], {
+          status: "exited",
+          activity: { state: "exited", lastActivityAt: "2026-06-15T10:00:00Z" },
+        })}
+      />,
+    );
+
+    expect(activitySection().getByRole("button", { name: "Resume agent" })).toBeInTheDocument();
+  });
+
   it("does not offer agent resume for a live or terminated session", () => {
     const live = renderWithQuery(
       <SessionInspector
@@ -1466,6 +1490,8 @@ describe("SessionInspector Activity section", () => {
           activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
         })}
       />,
+      undefined,
+      seedAvailableEditorHandoff,
     );
 
     expect(
@@ -1484,10 +1510,67 @@ describe("SessionInspector Activity section", () => {
           activity: { state: "exited", lastActivityAt: "2026-06-15T10:00:00Z" },
         })}
       />,
+      undefined,
+      seedAvailableEditorHandoff,
     );
     expect(
       screen.queryByRole("button", { name: "Resume agent" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("does not offer agent resume when the session worktree is unavailable", async () => {
+    vi.spyOn(window.ao!.editorHandoff, "getState").mockResolvedValueOnce({
+      targets: [],
+      preferredEditorId: "cursor",
+      workspaceAvailable: false,
+      unavailableCode: "SESSION_WORKSPACE_NOT_FOUND",
+      unavailableReason: "Session workspace is not available.",
+    });
+
+    const { queryClient } = renderWithQuery(
+      <SessionInspector
+        session={session([], {
+          status: "exited",
+          activity: { state: "exited", lastActivityAt: "2026-06-15T10:00:00Z" },
+        })}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(queryClient.getQueryData(editorHandoffQueryKey("sess-1"))).toMatchObject({
+        workspaceAvailable: false,
+        unavailableCode: "SESSION_WORKSPACE_NOT_FOUND",
+      }),
+    );
+    expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+  });
+
+  it("offers agent resume for a failed provision even when the worktree probe is unavailable", async () => {
+    vi.spyOn(window.ao!.editorHandoff, "getState").mockResolvedValueOnce({
+      targets: [],
+      preferredEditorId: "cursor",
+      workspaceAvailable: false,
+      unavailableCode: "SESSION_WORKSPACE_NOT_FOUND",
+      unavailableReason: "Session workspace is not available.",
+    });
+
+    const { queryClient } = renderWithQuery(
+      <SessionInspector
+        session={session([], {
+          status: "exited",
+          provisionState: "failed",
+          activity: { state: "exited", lastActivityAt: "2026-06-15T10:00:00Z" },
+        })}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(queryClient.getQueryData(editorHandoffQueryKey("sess-1"))).toMatchObject({
+        workspaceAvailable: false,
+        unavailableCode: "SESSION_WORKSPACE_NOT_FOUND",
+      }),
+    );
+    expect(activitySection().getByRole("button", { name: "Resume agent" })).toBeInTheDocument();
   });
 
   it("does not offer agent resume while an agent switch owns the exited source", () => {
@@ -1505,6 +1588,8 @@ describe("SessionInspector Activity section", () => {
           },
         })}
       />,
+      undefined,
+      seedAvailableEditorHandoff,
     );
 
     expect(
@@ -1522,6 +1607,7 @@ describe("SessionInspector Activity section", () => {
       />,
       undefined,
       (client) => {
+        seedAvailableEditorHandoff(client);
         client.setQueryData(
           sessionInterfaceTransitionQueryKey("sess-1"),
           sessionInterfaceTransitionStatus("sess-1"),
@@ -1552,7 +1638,7 @@ describe("SessionInspector Activity section", () => {
     );
 
     await userEvent.click(
-      activitySection().getByRole("button", { name: "Resume agent" }),
+      await activitySection().findByRole("button", { name: "Resume agent" }),
     );
 
     expect(

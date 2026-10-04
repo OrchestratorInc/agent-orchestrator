@@ -33,7 +33,7 @@ import {
 import { useAgentSwitchProviderCatalogs } from "../../hooks/useAgentSwitchProviderCatalogs";
 import { useRememberProjectPermissions } from "../../hooks/useRememberProjectPermissions";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
-import { useEditorHandoffState } from "../../hooks/useEditorHandoff";
+import { isWorkspaceDefinitelyUnavailable, useEditorHandoffState } from "../../hooks/useEditorHandoff";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
 import { sessionUiKey } from "../../lib/hosts";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
@@ -210,9 +210,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		sessionCreatedAt: session.createdAt,
 		sessionTerminated: session.isTerminated,
 	});
-	const workspaceUnavailable =
-		!hostId && workspaceHandoff.data?.workspaceAvailable === false &&
-		workspaceHandoff.data.unavailableCode === "SESSION_WORKSPACE_NOT_FOUND";
+	const workspaceUnavailable = !hostId && isWorkspaceDefinitelyUnavailable(workspaceHandoff.data);
 	const {
 		snapshot: queriedSnapshot,
 		isLoading,
