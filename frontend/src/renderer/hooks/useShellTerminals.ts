@@ -83,6 +83,15 @@ const cancelledPendingShells = new Set<string>();
 // daemon has destroyed them.
 const discardingShells = new Set<string>();
 
+// The shell each pending tab became, so UI that recorded a pending tab (its
+// place in a reordered strip) can carry that over to the shell.
+const adoptedShellHandles = new Map<string, string>();
+
+/** The shell handle a pending tab's handle became, once its create returned. */
+export function adoptedShellHandle(handleId: string): string | undefined {
+	return adoptedShellHandles.get(handleId);
+}
+
 const isPendingShellHandle = (handleId: string) => handleId.startsWith(PENDING_SHELL_PREFIX);
 const hostKey = (hostId?: HostId) => (hostId && hostId !== LOCAL_HOST ? hostId : LOCAL_HOST);
 
@@ -291,6 +300,7 @@ export function useOpenShellTerminal(hostId?: HostId) {
 			const optimisticHandleId = context?.optimisticHandleId;
 			if (optimisticHandleId) settlePendingShell(optimisticHandleId);
 			if (!shell) return;
+			if (optimisticHandleId) adoptedShellHandles.set(optimisticHandleId, shell.handleId);
 			// Replace, rather than append to, the tab that was visible while the POST
 			// ran. This preserves selection and prevents a duplicate tab flash.
 			queryClient.setQueryData<ShellTerminal[]>(queryKey, (current) => {
@@ -379,6 +389,9 @@ export function useCloseShellTerminal(hostId?: HostId) {
 		onMutate: async (handleId) => {
 			if (isPendingShellHandle(handleId) && pendingShells.delete(handleId)) {
 				cancelledPendingShells.add(handleId);
+			}
+			for (const [pending, adopted] of adoptedShellHandles) {
+				if (adopted === handleId) adoptedShellHandles.delete(pending);
 			}
 			const previous = queryClient.getQueryData<ShellTerminal[]>(queryKey);
 			const isCloud = Boolean(previous?.find((shell) => shell.handleId === handleId)?.cloud);

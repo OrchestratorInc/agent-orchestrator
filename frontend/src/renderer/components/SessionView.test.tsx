@@ -18,6 +18,7 @@ import { useFileAttachments, type FileAttachment } from "../hooks/useFileAttachm
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const openShellTerminalMock = vi.hoisted(() => vi.fn());
+const adoptedShellHandles = vi.hoisted(() => new Map<string, string>());
 const closeShellTerminalMock = vi.hoisted(() => vi.fn());
 const cloudCpClientMock = vi.hoisted(() => ({
 	resumeSession: vi.fn(async () => ({ session: {} })),
@@ -702,11 +703,46 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 // Standalone shell terminals are orthogonal to the split under test, and their
 // real hooks would need a QueryClientProvider this suite deliberately omits.
 vi.mock("../hooks/useShellTerminals", () => ({
+	adoptedShellHandle: (handleId: string) => adoptedShellHandles.get(handleId),
 	useShellTerminals: () => ({ data: shellTerminalsState.data, isLoading: false }),
 	useOpenShellTerminal: () => ({ open: openShellTerminalMock, isPending: false }),
 	useCloseShellTerminal: () => ({ mutate: closeShellTerminalMock }),
 	useRenameShellTerminal: () => ({ mutate: vi.fn() }),
 }));
+
+type TestShell = (typeof shellTerminalsState.data)[number];
+
+// Mirrors useOpenShellTerminal().open(): each call shows a pending tab at once
+// and reports the shell it became only when finish() resolves its create.
+function mockShellCreation() {
+	const opens: { pending: TestShell; onSuccess?: (shell: TestShell) => void }[] = [];
+	openShellTerminalMock.mockImplementation(
+		(input: { projectId?: string; sessionId?: string }, options?: { onSuccess?: (shell: TestShell) => void }) => {
+			const pending = {
+				handleId: `pending-shell:${opens.length + 1}`,
+				projectId: input.projectId,
+				sessionId: input.sessionId,
+				workingDir: "",
+				title: `Terminal ${opens.length + 1}`,
+				createdAt: "2026-08-31T00:00:00Z",
+				optimistic: true as const,
+			};
+			opens.push({ pending, onSuccess: options?.onSuccess });
+			shellTerminalsState.data = [...shellTerminalsState.data, pending];
+			return pending;
+		},
+	);
+	return (index: number, shell: TestShell) => {
+		const { pending, onSuccess } = opens[index]!;
+		act(() => {
+			shellTerminalsState.data = shellTerminalsState.data.map((candidate) =>
+				candidate.handleId === pending.handleId ? shell : candidate,
+			);
+			adoptedShellHandles.set(pending.handleId, shell.handleId);
+			onSuccess?.(shell);
+		});
+	};
+}
 
 function workerSession(sessionId: string): WorkspaceSession {
 	const session = workspaces[0].sessions.find((item) => item.id === sessionId);
@@ -832,6 +868,7 @@ describe("SessionView", () => {
 		shellTerminalsState.data = [];
 		navigateMock.mockReset();
 		openShellTerminalMock.mockReset();
+		adoptedShellHandles.clear();
 		openShellTerminalMock.mockImplementation((input: { projectId?: string; sessionId?: string }) => ({
 			handleId: "pending-shell:test",
 			projectId: input.projectId,
@@ -1426,10 +1463,7 @@ describe("SessionView", () => {
 			workingDir: "/p",
 			createdAt: "2026-08-31T00:00:00Z",
 		};
-		openShellTerminalMock.mockImplementation((_input, options) => {
-			shellTerminalsState.data = [shell];
-			options.onSuccess(shell);
-		});
+		const finishCreate = mockShellCreation();
 		render(<SessionView sessionId="sess-1" />);
 
 		fireEvent.click(screen.getByRole("button", { name: "view review file" }));
@@ -1438,7 +1472,36 @@ describe("SessionView", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: "New terminal" }));
 		expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
+		expect(screen.getByTestId("terminal-target")).toHaveTextContent("pending-shell:1");
+		finishCreate(0, shell);
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("sh-after-file");
+	});
+
+	it("keeps the selection and tab order when shells opened in quick succession are created", () => {
+		const finishCreate = mockShellCreation();
+		const shell = (n: number) => ({
+			handleId: `sh-${n}`,
+			projectId: "proj-1",
+			sessionId: "sess-1",
+			title: `Terminal ${n}`,
+			workingDir: "/p",
+			createdAt: `2026-08-31T00:00:0${n}Z`,
+		});
+		const view = render(<SessionView sessionId="sess-1" />);
+
+		fireEvent.click(screen.getByRole("button", { name: "New terminal" }));
+		fireEvent.click(screen.getByRole("button", { name: "New terminal" }));
+		expect(screen.getByTestId("terminal-target")).toHaveTextContent("pending-shell:2");
+
+		// The first shell arrives while the second tab is selected.
+		finishCreate(0, shell(1));
+		view.rerender(<SessionView sessionId="sess-1" />);
+		expect(screen.getByTestId("terminal-target")).toHaveTextContent("pending-shell:2");
+		expect(screen.getByTestId("auxiliary-tab-order-tui-sess-1")).toHaveTextContent("sh-1|pending-shell:2");
+
+		finishCreate(1, shell(2));
+		expect(screen.getByTestId("terminal-target")).toHaveTextContent("sh-2");
+		expect(screen.getByTestId("auxiliary-tab-order-tui-sess-1")).toHaveTextContent("sh-1|sh-2");
 	});
 
 	it("reveals a command cue terminal over an open file", async () => {
@@ -1504,11 +1567,7 @@ describe("SessionView", () => {
 			workingDir: "/p",
 			createdAt: "2026-08-04T00:00:00Z",
 		};
-		openShellTerminalMock.mockImplementation((_input, options) => {
-			shellTerminalsState.data = [shell];
-			options.onSuccess(shell);
-			return shell;
-		});
+		const finishCreate = mockShellCreation();
 
 		render(<SessionView sessionId="sess-1" />);
 		expect(screen.getByText("chat surface")).toBeInTheDocument();
@@ -1516,6 +1575,7 @@ describe("SessionView", () => {
 		// Opening a shell from chat keeps the chat surface mounted: the shell is
 		// a tab in its header and renders as the surface's active pane.
 		fireEvent.click(screen.getByRole("button", { name: "open shell from chat" }));
+		finishCreate(0, shell);
 		expect(screen.getByText("chat surface")).toBeInTheDocument();
 		expect(screen.getByTestId("shell-tabs")).toHaveTextContent("chat shell");
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("shell");

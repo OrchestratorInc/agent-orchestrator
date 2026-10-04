@@ -732,6 +732,27 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 		expect(shellMocks.openShellTerminal).toHaveBeenCalledTimes(1);
 	});
 
+	it("selects a created shell only while its pending tab is still selected", async () => {
+		shellMocks.state.routeParams = { sessionId: "sess-1" };
+		await renderShell();
+
+		pressNewShellTerminal();
+		const [, callbacks] = shellMocks.openShellTerminal.mock.calls[0] as unknown as [
+			unknown,
+			{ onSuccess: (shell: { handleId: string }) => void },
+		];
+		expect(useUiStore.getState().activeShellTerminalHandleId).toBe("pending-shell:test");
+
+		// The user moved on to another tab before this shell was created.
+		act(() => useUiStore.getState().setActiveShellTerminal("ptyhost-v1:shellterm-other"));
+		act(() => callbacks.onSuccess({ handleId: "ptyhost-v1:shellterm-created" }));
+		expect(useUiStore.getState().activeShellTerminalHandleId).toBe("ptyhost-v1:shellterm-other");
+
+		act(() => useUiStore.getState().setActiveShellTerminal("pending-shell:test"));
+		act(() => callbacks.onSuccess({ handleId: "ptyhost-v1:shellterm-created" }));
+		expect(useUiStore.getState().activeShellTerminalHandleId).toBe("ptyhost-v1:shellterm-created");
+	});
+
 	// Regression (#4772): ⌘T on the project board must not yank users into /terminals.
 	it("ignores the shortcut on the project board", async () => {
 		shellMocks.state.routeParams = { projectId: "proj-1" };

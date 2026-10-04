@@ -1017,8 +1017,12 @@ function ShellLayout() {
 		const shell = openShellTerminal.open(
 			{ projectId: scopedProjectId, sessionId: routeParams.sessionId, cloud: scopedSession?.cloud },
 			{
+				// Only while the pending tab is still the active one: the user may
+				// have opened or selected another tab in the meantime.
 				onSuccess: (openedShell) => {
-					setActiveShellTerminal(openedShell.handleId);
+					if (useUiStore.getState().activeShellTerminalHandleId === shell.handleId) {
+						setActiveShellTerminal(openedShell.handleId);
+					}
 				},
 			},
 		);

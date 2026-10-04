@@ -42,6 +42,7 @@ import { MultiStepLoader } from "./ui/multi-step-loader";
 import { useBrowserView } from "../hooks/useBrowserView";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import {
+	adoptedShellHandle,
 	useCloseShellTerminal,
 	useOpenShellTerminal,
 	useRenameShellTerminal,
@@ -673,7 +674,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			...openShellKeys,
 		];
 		const availableKeys = new Set(available);
-		const resolved = auxiliaryTabOrder.filter((key) => availableKeys.has(key));
+		// A pending shell tab keeps its place once it becomes its shell.
+		const resolved = [
+			...new Set(auxiliaryTabOrder.map((key) => adoptedShellHandle(key) ?? key)),
+		].filter((key) => availableKeys.has(key));
 		for (const key of available) {
 			if (!resolved.includes(key)) resolved.push(key);
 		}
@@ -681,9 +685,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [auxiliaryTabOrder, fileTabs.openPaths, reviewerChat, reviewerTerminal, shellTerminals]);
 	useEffect(() => {
 		setAuxiliaryTabOrderBySession((current) => {
-			const currentOrder = current[uiSessionId] ?? [];
+			const storedOrder = current[uiSessionId] ?? [];
+			const currentOrder = [...new Set(storedOrder.map((key) => adoptedShellHandle(key) ?? key))];
 			const newKeys = resolvedAuxiliaryTabOrder.filter((key) => !currentOrder.includes(key));
-			if (newKeys.length === 0) {
+			if (newKeys.length === 0 && currentOrder.length === storedOrder.length
+				&& currentOrder.every((key, index) => key === storedOrder[index])) {
 				return current;
 			}
 			return { ...current, [uiSessionId]: [...currentOrder, ...newKeys] };
@@ -708,19 +714,23 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const shell = openShellTerminal.open(
 			{ projectId: session?.workspaceId, sessionId, cloud: session?.cloud },
 			{
+				// Only what still points at the pending tab moves to its shell: the
+				// user may have opened or selected another tab in the meantime.
 				onSuccess: (openedShell) => {
-					setActiveShellTerminal(openedShell.handleId);
-					setFileTabsBySession((current) => ({
-						...current,
-						[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
-					}));
-					setTerminalTarget({
-						generation: openedShell.createdAt,
-						kind: "shell",
-						handleId: openedShell.handleId,
-						sessionId,
-						title: openedShell.title,
-					});
+					if (useUiStore.getState().activeShellTerminalHandleId === shell.handleId) {
+						setActiveShellTerminal(openedShell.handleId);
+					}
+					setTerminalTarget((current) =>
+						current.kind === "shell" && current.handleId === shell.handleId
+							? {
+									generation: openedShell.createdAt,
+									kind: "shell",
+									handleId: openedShell.handleId,
+									sessionId,
+									title: openedShell.title,
+								}
+							: current,
+					);
 				},
 			},
 		);
@@ -737,7 +747,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			sessionId,
 			title: shell.title,
 		});
-	}, [openShellTerminal, sessionId, session?.cloud, session?.workspaceId, setActiveShellTerminal, uiSessionId]);
+	}, [
+		openShellTerminal,
+		sessionId,
+		session?.cloud,
+		session?.workspaceId,
+		setActiveShellTerminal,
+		uiSessionId,
+	]);
 
 	const activateAuxiliaryTab = useCallback(
 		(key?: string) => {

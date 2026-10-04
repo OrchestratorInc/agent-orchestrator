@@ -43,6 +43,7 @@ vi.mock("../stores/terminal-shell-store", () => ({
 }));
 
 import {
+	adoptedShellHandle,
 	type ShellTerminal,
 	shellTerminalsQueryKey,
 	shellTerminalsQueryKeyForHost,
@@ -406,13 +407,16 @@ describe("tabs opened while their shell is being created", () => {
 		const onFirst = vi.fn();
 		const onSecond = vi.fn();
 
+		let pendingFirst!: ShellTerminal;
 		act(() => {
-			result.current.open({}, { onSuccess: onFirst });
+			pendingFirst = result.current.open({}, { onSuccess: onFirst });
 			result.current.open({}, { onSuccess: onSecond });
 		});
 
 		await waitFor(() => expect(onSecond).toHaveBeenCalledWith(second));
 		expect(onFirst).toHaveBeenCalledWith(first);
+		// UI that recorded the pending tab can find the shell it became.
+		expect(adoptedShellHandle(pendingFirst.handleId)).toBe(first.handleId);
 	});
 
 	it("destroys the shell of a tab closed before its create request returned", async () => {
