@@ -117,7 +117,10 @@ func (s *Service) UpdateAdvisory(ctx context.Context, target Target) (UpdateAdvi
 		return advisory, nil
 	}
 	parsedLatest := versionPattern.FindStringSubmatch(latest)
-	if parsedLatest == nil || parsedLatest[0] != latest {
+	if len(parsedLatest) != 5 {
+		return advisory, nil
+	}
+	if parsedLatest[0] != latest {
 		return advisory, nil
 	}
 	advisory.LatestVersion = latest
