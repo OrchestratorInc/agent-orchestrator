@@ -122,7 +122,7 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	}
 	planner, err := s.newRequestPlanner(ctx)
 	if err != nil {
-		return advisory, nil
+		return advisory, nil //nolint:nilerr // Unavailable package metadata leaves advisory status unknown.
 	}
 	var source Plan
 	for _, plan := range planner.agentMethodPlans(target, AgentOperationInstall) {
@@ -136,7 +136,7 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	}
 	verified, err := s.verifier.Verify(ctx, target)
 	if err != nil {
-		return advisory, nil
+		return advisory, nil //nolint:nilerr // An unverified binary cannot establish update availability.
 	}
 	packageName := strings.TrimSuffix(source.Package, "@latest")
 	if s.ownsInstallation == nil {
@@ -144,7 +144,7 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	}
 	owned, err := s.ownsInstallation(ctx, verified.ResolvedPath, job.Method, packageName, source.PackageCask)
 	if err != nil || !owned {
-		return advisory, nil
+		return advisory, nil //nolint:nilerr // Unproven package ownership leaves advisory status unknown.
 	}
 	current := versionPattern.FindStringSubmatch(verified.Output)
 	if current == nil {
@@ -154,7 +154,7 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	advisory.Source = job.Method
 	latest, err := s.latestVersion(ctx, job.Method, packageName, source.PackageCask)
 	if err != nil {
-		return advisory, nil
+		return advisory, nil //nolint:nilerr // A failed latest-version lookup is not an update verdict.
 	}
 	parsedLatest := versionPattern.FindStringSubmatch(latest)
 	if len(parsedLatest) != 5 {
