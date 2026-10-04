@@ -53,6 +53,116 @@ func TestClaudeSubagentActivityKeepsSessionWorkingUntilLastChildStops(t *testing
 	apply(15, "subagent-start", "unlisted-child", "", nil, domain.ActivityIdle)
 }
 
+func TestCodexSubagentActivityKeepsSessionWorkingUntilLastChildStops(t *testing.T) {
+	store := newFakeStore()
+	start := time.Date(2026, 10, 4, 11, 15, 40, 0, time.UTC)
+	store.sessions["ao-1"] = domain.SessionRecord{
+		ID: "ao-1", Harness: domain.HarnessCodex, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: start},
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch-1"},
+	}
+	m := New(store, nil)
+	apply := func(second int, event, child string, state domain.ActivityState, want domain.ActivityState) {
+		t.Helper()
+		if err := m.ApplyActivitySignal(context.Background(), "ao-1", ports.ActivitySignal{
+			Valid: state != "", State: state, Event: event, SubagentID: child,
+			LaunchID: "launch-1", AgentSessionID: "native-root",
+			Timestamp: start.Add(time.Duration(second) * time.Second),
+		}); err != nil {
+			t.Fatalf("%s: %v", event, err)
+		}
+		if got := store.sessions["ao-1"].Activity.State; got != want {
+			t.Fatalf("after %s for %q: activity=%q, want %q", event, child, got, want)
+		}
+	}
+	apply(1, "user-prompt-submit", "", domain.ActivityActive, domain.ActivityActive)
+	apply(2, "subagent-start", "child-1", "", domain.ActivityActive)
+	apply(3, "subagent-start", "child-2", "", domain.ActivityActive)
+	apply(4, "stop", "", domain.ActivityIdle, domain.ActivityActive)
+	apply(5, "terminal-idle", "", domain.ActivityIdle, domain.ActivityActive)
+	m = New(store, nil)
+	apply(6, "subagent-stop", "child-1", "", domain.ActivityActive)
+	apply(7, "subagent-stop", "child-2", "", domain.ActivityIdle)
+	apply(8, "user-prompt-submit", "child-2", domain.ActivityActive, domain.ActivityActive)
+	apply(9, "subagent-stop", "child-2", "", domain.ActivityIdle)
+	apply(3, "subagent-start", "child-2", "", domain.ActivityIdle)
+	if got := store.sessions["ao-1"].Metadata.AgentSessionID; got != "native-root" {
+		t.Fatalf("child hook changed root session ID to %q", got)
+	}
+}
+
+func TestCodexSpawnToolResultBridgesDelayedChildStart(t *testing.T) {
+	store := newFakeStore()
+	start := time.Date(2026, 10, 4, 13, 1, 0, 0, time.UTC)
+	store.sessions["ao-1"] = domain.SessionRecord{
+		ID: "ao-1", Harness: domain.HarnessCodex, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: start},
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch-1"},
+	}
+	m := New(store, nil)
+	apply := func(second int, event, id string, state, want domain.ActivityState) {
+		t.Helper()
+		if err := m.ApplyActivitySignal(context.Background(), "ao-1", ports.ActivitySignal{
+			Valid: state != "", State: state, Event: event, SubagentID: id,
+			LaunchID: "launch-1", AgentSessionID: "native-root",
+			Timestamp: start.Add(time.Duration(second) * time.Second),
+		}); err != nil {
+			t.Fatalf("%s: %v", event, err)
+		}
+		if got := store.sessions["ao-1"].Activity.State; got != want {
+			t.Fatalf("after %s for %q: activity=%q, want %q", event, id, got, want)
+		}
+	}
+	apply(1, "user-prompt-submit", "", domain.ActivityActive, domain.ActivityActive)
+	apply(2, "subagent-spawn", "call-1", "", domain.ActivityActive)
+	apply(3, "subagent-spawn", "call-2", "", domain.ActivityActive)
+	apply(4, "stop", "", domain.ActivityIdle, domain.ActivityActive)
+	apply(5, "terminal-idle", "", domain.ActivityIdle, domain.ActivityActive)
+	m = New(store, nil)
+	apply(6, "subagent-start", "child-1", "", domain.ActivityActive)
+	apply(7, "subagent-stop", "child-1", "", domain.ActivityActive)
+	apply(8, "subagent-start", "child-2", "", domain.ActivityActive)
+	apply(9, "subagent-stop", "child-2", "", domain.ActivityIdle)
+	// A child stop still clears the provisional spawn if its start hook was lost.
+	apply(10, "user-prompt-submit", "", domain.ActivityActive, domain.ActivityActive)
+	apply(11, "subagent-spawn", "call-3", "", domain.ActivityActive)
+	apply(12, "stop", "", domain.ActivityIdle, domain.ActivityActive)
+	apply(13, "subagent-stop", "child-3", "", domain.ActivityIdle)
+	var facts subagentActivityFacts
+	if err := json.Unmarshal([]byte(store.sessions["ao-1"].Metadata.CodexActivityFacts), &facts); err != nil {
+		t.Fatal(err)
+	}
+	if len(facts.PendingSpawns) != 0 {
+		t.Fatalf("unreconciled spawns: %+v", facts.PendingSpawns)
+	}
+}
+
+func TestCodexSubagentActivityResetsOnNewLaunch(t *testing.T) {
+	store := newFakeStore()
+	store.sessions["ao-1"] = domain.SessionRecord{
+		ID: "ao-1", Harness: domain.HarnessCodex, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive},
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch-1"},
+	}
+	m := New(store, nil)
+	if err := m.ApplyActivitySignal(context.Background(), "ao-1", ports.ActivitySignal{
+		Event: "subagent-start", SubagentID: "old-child", LaunchID: "launch-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec := store.sessions["ao-1"]
+	rec.Metadata.RuntimeLaunchID = "launch-2"
+	store.sessions["ao-1"] = rec
+	if err := m.ApplyActivitySignal(context.Background(), "ao-1", ports.ActivitySignal{
+		Valid: true, State: domain.ActivityIdle, Event: "stop", LaunchID: "launch-2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.sessions["ao-1"].Activity.State; got != domain.ActivityIdle {
+		t.Fatalf("new launch inherited old child: %q", got)
+	}
+}
+
 func TestClaudeSubagentActivityWaitsForEveryChildAndPreservesPermissionBlock(t *testing.T) {
 	store := newFakeStore()
 	start := time.Date(2026, 10, 3, 18, 4, 40, 0, time.UTC)
@@ -189,7 +299,7 @@ func TestClaudeActivityFactsPruneStoppedChildrenAfterSnapshot(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	var facts claudeActivityFacts
+	var facts subagentActivityFacts
 	if err := json.Unmarshal([]byte(store.sessions["ao-1"].Metadata.ClaudeActivityFacts), &facts); err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +310,7 @@ func TestClaudeActivityFactsPruneStoppedChildrenAfterSnapshot(t *testing.T) {
 
 func TestClaudeDelayedStartAfterSnapshotIsSuppressed(t *testing.T) {
 	start := time.Date(2026, 10, 3, 18, 4, 40, 0, time.UTC)
-	encoded, err := json.Marshal(claudeActivityFacts{
+	encoded, err := json.Marshal(subagentActivityFacts{
 		LaunchID: "launch-1", ParentState: domain.ActivityIdle,
 		SnapshotAt: start.Add(20 * time.Second).UnixNano(),
 	})
@@ -213,7 +323,7 @@ func TestClaudeDelayedStartAfterSnapshotIsSuppressed(t *testing.T) {
 		Metadata: domain.SessionMetadata{ClaudeActivityFacts: string(encoded)},
 	}
 	for _, event := range []string{"subagent-start", "subagent-stop"} {
-		sig, facts, err := reduceClaudeSubagentActivity(rec, ports.ActivitySignal{
+		sig, facts, err := reduceSubagentActivity(rec, ports.ActivitySignal{
 			Event: event, SubagentID: "late-child", LaunchID: "launch-1",
 			Timestamp: start.Add(10 * time.Second),
 		}, start.Add(time.Minute))
@@ -233,7 +343,7 @@ func TestClaudeCorruptActivityFactsRecoverOnNextStop(t *testing.T) {
 		Metadata: domain.SessionMetadata{ClaudeActivityFacts: "{broken"},
 	}
 	empty := []string{}
-	sig, facts, err := reduceClaudeSubagentActivity(rec, ports.ActivitySignal{
+	sig, facts, err := reduceSubagentActivity(rec, ports.ActivitySignal{
 		Valid: true, State: domain.ActivityIdle, Event: "stop", LaunchID: "launch-1",
 		RunningSubagentIDs: &empty,
 	}, time.Now().UTC())

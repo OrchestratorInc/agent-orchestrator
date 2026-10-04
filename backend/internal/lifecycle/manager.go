@@ -865,10 +865,19 @@ retryProjection:
 		m.mu.Unlock()
 		return nil
 	}
-	s, claudeFacts, err := reduceClaudeSubagentActivity(rec, s, now)
+	s, subagentFacts, err := reduceSubagentActivity(rec, s, now)
 	if err != nil {
 		m.mu.Unlock()
 		return err
+	}
+	storedSubagentFacts := ""
+	switch rec.Harness {
+	case domain.HarnessClaudeCode:
+		storedSubagentFacts = rec.Metadata.ClaudeActivityFacts
+		checkpoint.ClaudeActivityFacts = subagentFacts
+	case domain.HarnessCodex:
+		storedSubagentFacts = rec.Metadata.CodexActivityFacts
+		checkpoint.CodexActivityFacts = subagentFacts
 	}
 	// Event-tagged signals fold through the session's tool-flight state first:
 	// they may be suppressed (state write skipped) by the blocked-precedence
@@ -889,8 +898,7 @@ retryProjection:
 		(s.AgentSessionID != "" && s.Timestamp.After(rec.Metadata.NativeIdentityObservedAt)) ||
 		(s.AgentSessionID != "" && rec.Metadata.AgentSessionIDLaunchID != s.LaunchID) ||
 		(s.TranscriptPath != "" && rec.Metadata.NativeTranscriptPath != s.TranscriptPath) ||
-		checkpointChanged || claudeFacts != rec.Metadata.ClaudeActivityFacts
-	checkpoint.ClaudeActivityFacts = claudeFacts
+		checkpointChanged || subagentFacts != storedSubagentFacts
 	toolFlightBeforeProjection := cloneToolFlight(m.flights[id])
 	if s.Valid {
 		s = m.applyToolPrecedenceLocked(id, rec.Activity.State, s)

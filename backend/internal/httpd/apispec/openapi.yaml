@@ -14085,7 +14085,7 @@ components:
           - exited
           type: string
         subagentId:
-          description: Native Claude subagent id for this hook event.
+          description: Native child agent id for this hook event.
           type: string
         submissionId:
           description: AO prompt-hook context correlation UUID, when supported.

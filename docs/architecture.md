@@ -52,6 +52,7 @@ flowchart LR
 
 The only persistent session state is:
 
+- Claude and Codex TUI hook facts: the current parent turn and native subagent IDs are retained per runtime launch so activity stays active while a background subagent works. Codex also retains a successful spawn tool call until its delayed child-start hook supplies the native ID.
 - `activity_state`: What the agent last reported (`active`, `idle`,
   `waiting_input`, `blocked`, `exited`). `waiting_input` is an agent at an
   empty prompt awaiting its next instruction. `blocked` is an agent stopped on

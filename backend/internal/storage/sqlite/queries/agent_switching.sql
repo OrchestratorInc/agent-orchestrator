@@ -283,6 +283,7 @@ UPDATE sessions SET
     native_checkpoint_evidence = sqlc.arg(native_checkpoint_evidence),
     native_transcript_path = sqlc.arg(native_transcript_path),
     claude_activity_facts = sqlc.arg(claude_activity_facts),
+    codex_activity_facts = sqlc.arg(codex_activity_facts),
     updated_at = sqlc.arg(updated_at)
 WHERE sessions.id = sqlc.arg(id)
   AND sessions.revision = sqlc.arg(expected_revision)

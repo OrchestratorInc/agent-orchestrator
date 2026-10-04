@@ -47,11 +47,13 @@ type ActivitySignal struct {
 	ExpectedRevision *int64
 	// ExpectedHarness fences native reports to their provider. Empty preserves
 	// the existing generic hook contract; socket reporters always set it.
-	ExpectedHarness    domain.AgentHarness
-	Event              string
-	ToolName           string
-	ToolUseID          string
-	SubagentID         string
+	ExpectedHarness domain.AgentHarness
+	Event           string
+	ToolName        string
+	ToolUseID       string
+	SubagentID      string
+	// RunningSubagentIDs is Claude's authoritative parent task snapshot.
+	// Codex provides child start/stop events instead and leaves this nil.
 	RunningSubagentIDs *[]string
 	AgentSessionID     string
 	// LatestUserPrompt and LatestAssistantUpdate are provider hook facts used

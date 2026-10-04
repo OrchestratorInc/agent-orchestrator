@@ -4859,7 +4859,7 @@ export interface components {
              * @enum {string}
              */
             state?: "active" | "idle" | "waiting_input" | "blocked" | "exited";
-            /** @description Native Claude subagent id for this hook event. */
+            /** @description Native child agent id for this hook event. */
             subagentId?: string;
             /** @description AO prompt-hook context correlation UUID, when supported. */
             submissionId?: string;

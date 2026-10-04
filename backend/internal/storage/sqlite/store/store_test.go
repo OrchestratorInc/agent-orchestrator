@@ -57,7 +57,7 @@ func TestSessionCreateAllowsFakeHarness(t *testing.T) {
 	}
 }
 
-func TestClaudeSubagentFactsPersistWithActivityProjection(t *testing.T) {
+func TestSubagentFactsPersistWithActivityProjection(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	seedProject(t, s, "mer")
@@ -68,12 +68,16 @@ func TestClaudeSubagentFactsPersistWithActivityProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	created.Metadata.ClaudeActivityFacts = `{"launchId":"launch-1","parentState":"idle","children":{"child-1":{"running":true,"at":1}}}`
+	created.Metadata.CodexActivityFacts = `{"launchId":"launch-2","parentState":"idle","children":{"child-2":{"running":true,"at":2}}}`
 	if applied, err := s.UpdateSessionFromActivitySignal(ctx, created, created.Revision); err != nil || !applied {
 		t.Fatalf("project facts: applied=%v err=%v", applied, err)
 	}
 	got, found, err := s.GetSession(ctx, created.ID)
 	if err != nil || !found || got.Metadata.ClaudeActivityFacts != created.Metadata.ClaudeActivityFacts {
 		t.Fatalf("persisted facts=%q found=%v err=%v", got.Metadata.ClaudeActivityFacts, found, err)
+	}
+	if got.Metadata.CodexActivityFacts != created.Metadata.CodexActivityFacts {
+		t.Fatalf("Codex facts=%q, want %q", got.Metadata.CodexActivityFacts, created.Metadata.CodexActivityFacts)
 	}
 }
 
