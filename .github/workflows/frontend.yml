@@ -11,6 +11,9 @@ on:
     paths:
       - "frontend/**"
       - ".github/workflows/**"
+      - ".github/actions/setup-desktop-node/**"
+      - ".node-version"
+      - ".npm-version"
       - "contracts/cloud/**"
       - "packages/cloud-client/**"
       - "packages/product-ui/**"
@@ -28,9 +31,7 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
+      - uses: ./.github/actions/setup-desktop-node
       - name: Test native helper build configuration
         run: node --test scripts/build-update-helper.node-test.mjs
       - name: Test repair installer packaging and guards
@@ -55,10 +56,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: ./.github/actions/setup-desktop-node
         with:
-          node-version: 24
-          cache: npm
           cache-dependency-path: |
             frontend/package-lock.json
             frontend/src/docs/package-lock.json
@@ -76,6 +75,12 @@ jobs:
             fi
             echo "npm ci failed; retrying Electron dependency download ($attempt/3)"
           done
+
+      - name: Verify shared desktop toolchain contract
+        run: node --test scripts/desktop-toolchain.node-test.mjs
+
+      - name: Reject the historical incomplete release lockfile
+        run: node scripts/lockfile-install-regression.mjs
 
       - name: Install Cloud client dependencies
         run: npm ci
@@ -144,10 +149,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: ./.github/actions/setup-desktop-node
         with:
-          node-version: 24
-          cache: npm
           cache-dependency-path: frontend/package-lock.json
 
       - run: npm ci

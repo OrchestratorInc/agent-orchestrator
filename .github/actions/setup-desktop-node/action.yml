@@ -1,0 +1,22 @@
+name: Desktop Node and npm
+description: Use the same exact toolchain for desktop checks and unsigned artifacts
+inputs:
+  cache-dependency-path:
+    description: Lockfiles used for the npm download cache
+    default: frontend/package-lock.json
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version-file: .node-version
+        cache: npm
+        cache-dependency-path: ${{ inputs.cache-dependency-path }}
+    - name: Pin npm and verify toolchain
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        set -euo pipefail
+        npm_version="$(tr -d '\r\n' < .npm-version)"
+        npm install --global "npm@$npm_version"
+        node frontend/scripts/verify-desktop-toolchain.mjs
