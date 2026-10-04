@@ -1007,17 +1007,6 @@ func TestClaudeCatalogFingerprintUsesOnlyResolvedSettings(t *testing.T) {
 	}
 }
 
-func TestCatalogFingerprintKeepsTheExecutableOnlyValueForConfiglessAgents(t *testing.T) {
-	dir := t.TempDir()
-	writeClaudeSettings(t, dir, "opus")
-	// codex reads no configuration, so its fingerprint must stay byte-identical
-	// to the executable fingerprint earlier daemons cached under.
-	got := CatalogFingerprint(context.Background(), "codex", "codex", dir, nil)
-	if want := BinaryVersion(context.Background(), "codex"); got != want {
-		t.Fatalf("fingerprint = %q, want the executable fingerprint %q", got, want)
-	}
-}
-
 // TestACPOnlyHarnessReportsDiscoveryFailure guards the difference between the
 // two ACP harnesses. Cline keeps configured provider selections, so an ACP
 // failure falls back to those. DeepSeek Harness has no second source, and the
@@ -1067,5 +1056,119 @@ func TestCatalogFingerprintTracksTheDeepSeekProfile(t *testing.T) {
 	}
 	if second := CatalogFingerprint(context.Background(), "deepseek-harness", "", "", env); second == first {
 		t.Fatalf("fingerprint unchanged (%q) after the profile's model route changed", second)
+	}
+}
+
+func TestCatalogFingerprintIgnoresUnrelatedProjectConfig(t *testing.T) {
+	dir := t.TempDir()
+	writeClaudeSettings(t, dir, "opus")
+	got := CatalogFingerprint(context.Background(), "muse", "muse", dir, nil)
+	if want := CatalogFingerprint(context.Background(), "muse", "muse", "", nil); got != want {
+		t.Fatalf("fingerprint = %q, want the executable fingerprint %q", got, want)
+	}
+}
+
+// TestACPOnlyHarnessReportsDiscoveryFailure guards the difference between the
+// two ACP harnesses. Cline keeps configured provider selections, so an ACP
+// failure falls back to those. DeepSeek Harness has no second source, and the
+// generic path answers with an empty catalog and no error — which the caller
+// stores as a successful discovery, parking the picker until the next calendar
+// day and skipping the retry ladder. The error has to survive instead.
+
+func TestCodexCatalogFingerprintTracksCredentialAndConfigInputs(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	env := map[string]string{"CODEX_HOME": home, "OPENAI_API_KEY": "", "OPENAI_BASE_URL": "", "CODEX_API_KEY": ""}
+	fingerprint := func() string { return CatalogFingerprint(context.Background(), "codex", "", project, env) }
+	before := fingerprint()
+	for _, item := range []struct{ name, body string }{
+		{"auth.json", `{"tokens":{"account_id":"account-a","access_token":"secret-a"}}`},
+		{"auth.json", `{"tokens":{"account_id":"account-b","access_token":"secret-b"}}`},
+		{"config.toml", "model_provider = \"gateway\"\n[model_providers.gateway]\nenv_key = \"TEST_CATALOG_KEY\"\nbase_url = \"https://gateway.example\"\n"},
+	} {
+		if err := os.WriteFile(filepath.Join(home, item.name), []byte(item.body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		after := fingerprint()
+		if before == after || strings.Contains(after, "secret-") {
+			t.Fatalf("fingerprint did not safely change after %s", item.name)
+		}
+		before = after
+	}
+	env["TEST_CATALOG_KEY"] = "test-key"
+	if fingerprint() == before {
+		t.Fatal("configured provider env key change was ignored")
+	}
+	before = fingerprint()
+	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".codex", "config.toml"), []byte("model = \"project-model\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if fingerprint() == before {
+		t.Fatal("project config change was ignored")
+	}
+	before = fingerprint()
+	if err := os.Remove(filepath.Join(home, "auth.json")); err != nil {
+		t.Fatal(err)
+	}
+	if fingerprint() == before {
+		t.Fatal("credential removal was ignored")
+	}
+	before = fingerprint()
+	env["CODEX_HOME"] = t.TempDir()
+	if fingerprint() == before {
+		t.Fatal("config home change was ignored")
+	}
+}
+
+func TestCatalogEnvironmentFingerprintTracksLaunchCredentials(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "ambient-key")
+	base := map[string]string{"OPENAI_API_KEY": "project-key", "UNRELATED_SETTING": "one"}
+	first := catalogEnvironmentFingerprint(base)
+	t.Setenv("OPENAI_API_KEY", "shadowed-key")
+	if got := catalogEnvironmentFingerprint(base); got != first {
+		t.Fatal("shadowed process key changed the catalog scope")
+	}
+	base["UNRELATED_SETTING"] = "two"
+	if got := catalogEnvironmentFingerprint(base); got != first {
+		t.Fatal("unrelated launch setting changed the catalog scope")
+	}
+	base["OPENAI_API_KEY"] = "different-key"
+	if got := catalogEnvironmentFingerprint(base); got == first || strings.Contains(got, "key") {
+		t.Fatalf("credential change not safely fingerprinted: %q", got)
+	}
+}
+
+func TestClaudeNativeExtrasChangeCatalogFingerprint(t *testing.T) {
+	for _, key := range []string{"ANTHROPIC_CUSTOM_MODEL_OPTION", "CLAUDE_MODEL_CONFIG"} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv(key, "one")
+			before := CatalogFingerprint(context.Background(), "claude-code", "", "", nil)
+			t.Setenv(key, "two")
+			if CatalogFingerprint(context.Background(), "claude-code", "", "", nil) == before {
+				t.Fatal("process change not observed")
+			}
+			if CatalogFingerprint(context.Background(), "claude-code", "", "", map[string]string{key: "one"}) != before {
+				t.Fatal("explicit override not applied")
+			}
+		})
+	}
+}
+
+func TestClaudeColdDiscoveryCarriesConclusiveIdentity(t *testing.T) {
+	for _, conclusive := range []bool{false, true} {
+		d := Discoverer{ClaudeIdentity: func(context.Context, ports.AgentModelDiscoveryRequest) (string, bool) {
+			return "account-scope", conclusive
+		}}
+		catalog, err := d.Discover(context.Background(), claudeRequest(t))
+		want := ""
+		if conclusive {
+			want = "account-scope"
+		}
+		if err != nil || catalog.InputFingerprint != want {
+			t.Fatalf("conclusive=%t, fingerprint=%q, error=%v", conclusive, catalog.InputFingerprint, err)
+		}
 	}
 }

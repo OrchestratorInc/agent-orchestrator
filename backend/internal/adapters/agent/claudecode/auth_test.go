@@ -798,3 +798,209 @@ func TestProviderModelsDoesNotClaimConfiguredFoundryDeployments(t *testing.T) {
 		t.Fatalf("models/error = %+v/%v, want unsupported Foundry discovery", models, err)
 	}
 }
+
+func TestProviderCatalogFingerprintDoesNotRunCLIOrKeychain(t *testing.T) {
+	clearClaudeCredentialEnv(t)
+	binDir := t.TempDir()
+	marker := filepath.Join(binDir, "keychain-called")
+	t.Setenv("CATALOG_KEYCHAIN_MARKER", marker)
+	t.Setenv("PATH", binDir)
+	if err := os.WriteFile(filepath.Join(binDir, "security"), []byte("#!/bin/sh\n: > \"$CATALOG_KEYCHAIN_MARKER\"\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	previous := claudeModelAuthReport
+	t.Cleanup(func() { claudeModelAuthReport = previous })
+	calls := 0
+	claudeModelAuthReport = func(context.Context, string, string, map[string]string) (claudeAuthReport, bool) {
+		calls++
+		return claudeAuthReport{APIProvider: "anthropic"}, true
+	}
+	got := ProviderCatalogFingerprint(context.Background(), "claude", "", nil)
+	if calls != 0 {
+		t.Fatalf("auth status ran %d times during local fingerprinting", calls)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("fingerprinting invoked the keychain helper: %v", err)
+	}
+	if len(got) != 16 {
+		t.Fatalf("fingerprint = %q, want an opaque 16-character digest", got)
+	}
+}
+
+func TestProviderCatalogFingerprintTracksLocalCredentialAndProviderChanges(t *testing.T) {
+	clearClaudeCredentialEnv(t)
+	ctx := context.Background()
+	before := ProviderCatalogFingerprint(ctx, "claude", "", nil)
+	for _, env := range []map[string]string{
+		{"ANTHROPIC_API_KEY": "secret-key"},
+		{"CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret"},
+		{"ANTHROPIC_BASE_URL": "https://gateway.example"},
+		{"CLAUDE_CODE_USE_BEDROCK": "1"},
+		{"CLAUDE_CODE_USE_VERTEX": "1"},
+	} {
+		if got := ProviderCatalogFingerprint(ctx, "claude", "", env); got == before {
+			t.Fatalf("environment change %v did not change catalog identity", env)
+		}
+	}
+	dir := os.Getenv("CLAUDE_CONFIG_DIR")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, ".credentials.json")
+	write := func(content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`{"claudeAiOauth":{"accessToken":"first-secret"}}`)
+	first := ProviderCatalogFingerprint(ctx, "claude", "", nil)
+	write(`{"claudeAiOauth":{"accessToken":"second-secret"}}`)
+	second := ProviderCatalogFingerprint(ctx, "claude", "", nil)
+	if first == before || second == first {
+		t.Fatal("credential-file creation or change did not change catalog identity")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := ProviderCatalogFingerprint(ctx, "claude", "", nil); got != before {
+		t.Fatal("credential-file removal did not restore the previous identity")
+	}
+}
+
+func TestProviderCatalogFingerprintTracksAccountWithoutUnrelatedStateChurn(t *testing.T) {
+	for _, override := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default-home", true: "config-override"}[override], func(t *testing.T) {
+			clearClaudeCredentialEnv(t)
+			dir := os.Getenv("HOME")
+			if override {
+				dir = os.Getenv("CLAUDE_CONFIG_DIR")
+			} else {
+				t.Setenv("CLAUDE_CONFIG_DIR", "")
+			}
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, ".claude.json")
+			fingerprint := func(content string) string {
+				t.Helper()
+				if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return ProviderCatalogFingerprint(context.Background(), "claude", "", nil)
+			}
+			first := fingerprint(`{"oauthAccount":{"accountUuid":"account-1","organizationUuid":"org-1"},"theme":"dark"}`)
+			unrelated := fingerprint(`{"oauthAccount":{"organizationUuid":"org-1","accountUuid":"account-1"},"theme":"light","projects":{"/repo":{"hasTrustDialogAccepted":true}}}`)
+			second := fingerprint(`{"oauthAccount":{"accountUuid":"account-2","organizationUuid":"org-1"}}`)
+			if first != unrelated {
+				t.Fatal("unrelated state changed catalog identity")
+			}
+			if first == second {
+				t.Fatal("account switch did not change catalog identity")
+			}
+			if second == fingerprint(`{"oauthAccount":{"accountUuid":"account-2","organizationUuid":"org-2"}}`) {
+				t.Fatal("organization switch did not change catalog identity")
+			}
+			if second == fingerprint(`{}`) {
+				t.Fatal("account removal did not change catalog identity")
+			}
+		})
+	}
+}
+
+func TestProviderCatalogFingerprintHonorsRelativeConfigDirAndBoundsFiles(t *testing.T) {
+	clearClaudeCredentialEnv(t)
+	cwd := t.TempDir()
+	dir := filepath.Join(cwd, "config")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, ".credentials.json")
+	env := map[string]string{"CLAUDE_CONFIG_DIR": "config"}
+	before := ProviderCatalogFingerprint(context.Background(), "claude", cwd, env)
+	if err := os.WriteFile(path, []byte(`{"accessToken":"local-token"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := ProviderCatalogFingerprint(context.Background(), "claude", cwd, env); got == before {
+		t.Fatal("relative launch configuration did not resolve against working directory")
+	}
+	if err := os.WriteFile(path, make([]byte, (1<<20)+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := ProviderCatalogFingerprint(context.Background(), "claude", cwd, env); got != before {
+		t.Fatal("oversized credential file was included in the fingerprint")
+	}
+}
+
+func TestProviderCatalogIdentityFingerprintDetectsKeychainOnlyChanges(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Claude uses the keychain only on macOS")
+	}
+	clearClaudeCredentialEnv(t)
+	binDir := t.TempDir()
+	secretPath := filepath.Join(binDir, "credential")
+	t.Setenv("CATALOG_KEYCHAIN_SECRET_FILE", secretPath)
+	t.Setenv("PATH", binDir)
+	if err := os.WriteFile(filepath.Join(binDir, "security"), []byte("#!/bin/sh\n/bin/cat \"$CATALOG_KEYCHAIN_SECRET_FILE\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	previous := claudeModelAuthReport
+	t.Cleanup(func() { claudeModelAuthReport = previous })
+	claudeModelAuthReport = func(context.Context, string, string, map[string]string) (claudeAuthReport, bool) {
+		return claudeAuthReport{APIProvider: "firstParty"}, true
+	}
+	local := ProviderCatalogFingerprint(context.Background(), "claude", "", nil)
+	identity := func(secret string) string {
+		t.Helper()
+		if err := os.WriteFile(secretPath, []byte(secret), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := ProviderCatalogIdentityFingerprint(context.Background(), "claude", "", nil)
+		if !ok || len(got) != 16 {
+			t.Fatalf("identity = %q, conclusive = %t", got, ok)
+		}
+		return got
+	}
+	first := identity("keychain-first")
+	second := identity("keychain-second")
+	if first == second {
+		t.Fatal("keychain-only credential mutation did not change effective identity")
+	}
+	if got := ProviderCatalogFingerprint(context.Background(), "claude", "", nil); got != local {
+		t.Fatal("the local fingerprint read keychain-only state")
+	}
+}
+
+func TestProviderCatalogIdentityFingerprintDoesNotTreatUnknownAsChange(t *testing.T) {
+	clearClaudeCredentialEnv(t)
+	t.Setenv("PATH", t.TempDir())
+	previous := claudeModelAuthReport
+	t.Cleanup(func() { claudeModelAuthReport = previous })
+	for _, tc := range []struct {
+		name     string
+		provider string
+		cliOK    bool
+		key      string
+		cancel   bool
+	}{
+		{name: "missing credential", provider: "firstParty", cliOK: true},
+		{name: "unsupported provider", provider: "future-provider", cliOK: true, key: "key"},
+		{name: "failed CLI", key: "key"},
+		{name: "canceled", provider: "firstParty", cliOK: true, key: "key", cancel: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			claudeModelAuthReport = func(context.Context, string, string, map[string]string) (claudeAuthReport, bool) {
+				return claudeAuthReport{APIProvider: tc.provider}, tc.cliOK
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.cancel {
+				cancel()
+			}
+			got, ok := ProviderCatalogIdentityFingerprint(ctx, "claude", "", map[string]string{"ANTHROPIC_API_KEY": tc.key})
+			if ok || got != "" {
+				t.Fatalf("inconclusive identity = %q, conclusive = %t", got, ok)
+			}
+		})
+	}
+}

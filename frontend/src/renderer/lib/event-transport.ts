@@ -17,6 +17,7 @@ import { codexAccountsQueryKey, writeCodexAccounts } from "../hooks/codex-accoun
 import type { components } from "../../api/schema";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
 import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
+import { MODEL_CATALOG_VALIDATION_INTERVAL_MS } from "../hooks/useAgentModelsQuery";
 import { probeRemoteSse } from "./remote-sse-probe";
 
 export type EventTransport = {
@@ -78,6 +79,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				base: string;
 				close?: () => void;
 				pollTimer?: ReturnType<typeof setInterval>;
+				modelPollTimer?: ReturnType<typeof setInterval>;
 			}>();
 			const remoteConversationRefreshes = new Map<string, { dirty: boolean }>();
 			const refreshRemoteConversationOnce = (hostId: string, sessionId: string) => {
@@ -134,16 +136,19 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				invalidate(["remote-session-agent-switches", hostId]);
 				invalidate(["session-interface-transition", hostId]);
 				invalidate(["agent-readiness", hostId]);
-				invalidate(["agent-models", hostId]);
+				if (reconnect) invalidate(["agent-models", hostId]);
 			};
 			const connectRemote = (hostId: string) => {
 				if (disposed) return;
 				const base = baseUrlForHost(hostId);
 				if (!base) return;
 				if (remoteSources.get(hostId)?.base === base) return;
-				const connection: { base: string; close?: () => void; pollTimer?: ReturnType<typeof setInterval> } = { base };
+				const connection: { base: string; close?: () => void; pollTimer?: ReturnType<typeof setInterval>; modelPollTimer?: ReturnType<typeof setInterval> } = { base };
 				remoteSources.set(hostId, connection);
 				refreshRemote(hostId, true);
+				connection.modelPollTimer = setInterval(() => {
+					if (connection.pollTimer !== undefined) invalidate(["agent-models", hostId]);
+				}, MODEL_CATALOG_VALIDATION_INTERVAL_MS);
 				connection.pollTimer = setInterval(() => {
 					refreshRemote(hostId);
 					invalidate(["reviewer-conversation", hostId]);
@@ -156,7 +161,10 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						refreshRemote(hostId);
 						if (!("data" in event)) return;
 						try {
-							const decoded = JSON.parse(String((event as MessageEvent).data)) as { sessionId?: unknown; payload?: { conversationId?: unknown; reviewId?: unknown } };
+							const decoded = JSON.parse(String((event as MessageEvent).data)) as { sessionId?: unknown; payload?: { conversationId?: unknown; reviewId?: unknown; kind?: unknown; agentId?: unknown; projectId?: unknown } };
+							if (decoded.payload?.kind === "model_catalog" && typeof decoded.payload.agentId === "string" && typeof decoded.payload.projectId === "string") {
+								invalidate(["agent-models", hostId, decoded.payload.agentId, decoded.payload.projectId]);
+							}
 							if (typeof decoded.sessionId === "string" && typeof decoded.payload?.conversationId === "string" && typeof decoded.payload.reviewId !== "string") {
 								refreshRemoteConversationOnce(hostId, decoded.sessionId);
 							}
@@ -179,7 +187,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							refreshRemote(hostId);
 							invalidate(["reviewer-conversation", hostId]);
 						}, 2_000);
-						refreshRemote(hostId);
+						refreshRemote(hostId, true);
 					},
 				);
 			};
@@ -188,6 +196,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				for (const [hostId, connection] of remoteSources) {
 					if (active.has(hostId) && connection.base === baseUrlForHost(hostId)) continue;
 					connection.close?.();
+					if (connection.modelPollTimer !== undefined) clearInterval(connection.modelPollTimer);
 					if (connection.pollTimer !== undefined) clearInterval(connection.pollTimer);
 					remoteSources.delete(hostId);
 				}
@@ -481,6 +490,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				accountSource?.close();
 				for (const connection of remoteSources.values()) {
 					connection.close?.();
+					if (connection.modelPollTimer !== undefined) clearInterval(connection.modelPollTimer);
 					if (connection.pollTimer !== undefined) clearInterval(connection.pollTimer);
 				}
 				remoteSources.clear();

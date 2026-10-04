@@ -514,6 +514,9 @@ func Run() error {
 		ClaudeFingerprint: func(fingerprintCtx context.Context, request ports.AgentModelDiscoveryRequest) string {
 			return claudecodeagent.ProviderCatalogFingerprint(fingerprintCtx, request.Binary, request.WorkingDir, request.Env)
 		},
+		ClaudeIdentity: func(identityCtx context.Context, request ports.AgentModelDiscoveryRequest) (string, bool) {
+			return claudecodeagent.ProviderCatalogIdentityFingerprint(identityCtx, request.Binary, request.WorkingDir, request.Env)
+		},
 	}
 	// Build the multi-tracker dispatching to both GitHub and GitLab once,
 	// shared between the session service and the intake observer below.

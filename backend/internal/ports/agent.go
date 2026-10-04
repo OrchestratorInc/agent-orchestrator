@@ -313,6 +313,13 @@ type AgentModelDiscoverer interface {
 	Manual(agentID string) AgentModelCatalog
 }
 
+// AgentModelCatalogIdentityFingerprinter observes credentials whose identity
+// cannot be checked locally. It runs only in background validation. A false
+// result is inconclusive and must not invalidate a last-good catalog.
+type AgentModelCatalogIdentityFingerprinter interface {
+	CatalogIdentityFingerprint(ctx context.Context, request AgentModelDiscoveryRequest) (string, bool)
+}
+
 // AgentExitDetectionMode describes how AO learns that an agent CLI process
 // ended while its terminal runtime remains alive.
 type AgentExitDetectionMode string

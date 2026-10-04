@@ -1,0 +1,41 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
+const { get, post, remotePost } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), remotePost: vi.fn() }));
+vi.mock("../lib/api-client", () => ({ apiClient: { GET: get, POST: post }, apiErrorMessage: String }));
+vi.mock("../lib/host-clients", () => ({ clientForHost: () => ({ POST: remotePost }) }));
+import { agentModelsQueryOptions, agentModelsRevalidationQueryOptions, type AgentModelCatalog } from "./useAgentModelsQuery";
+const catalog = { models: [{ id: "model-a" }], validatedAt: "2026-10-04", refreshRecommended: true } as AgentModelCatalog;
+afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
+describe("shared model queries", () => {
+	it("retains inactive fresh catalogs beyond five minutes without fetching again", async () => {
+		vi.useFakeTimers();
+		get.mockResolvedValue({ data: catalog });
+		const client = new QueryClient();
+		const options = agentModelsQueryOptions("codex", "project-a");
+		await client.fetchQuery(options);
+		await vi.advanceTimersByTimeAsync(360_000);
+		expect(await client.fetchQuery(options)).toEqual(catalog);
+		expect(get).toHaveBeenCalledOnce();
+		await vi.advanceTimersByTimeAsync(300_000);
+		await client.fetchQuery(options);
+		expect(get).toHaveBeenCalledTimes(2);
+		await vi.advanceTimersByTimeAsync(23 * 60 * 60 * 1_000);
+		expect(client.getQueryData(options.queryKey)).toEqual(catalog);
+		await vi.advanceTimersByTimeAsync(60 * 60 * 1_000);
+		expect(client.getQueryData(options.queryKey)).toBeUndefined();
+		client.clear();
+	});
+	it("deduplicates validation and isolates host and project scopes", async () => {
+		post.mockResolvedValue({ data: catalog });
+		remotePost.mockResolvedValue({ data: catalog });
+		const client = new QueryClient();
+		await Promise.all([client.fetchQuery(agentModelsRevalidationQueryOptions("codex", "project-a", catalog)), client.fetchQuery(agentModelsRevalidationQueryOptions("codex", "project-a", catalog))]);
+		expect(post).toHaveBeenCalledOnce();
+		await client.fetchQuery(agentModelsRevalidationQueryOptions("codex", "project-b", catalog));
+		expect(post).toHaveBeenCalledTimes(2);
+		await client.fetchQuery(agentModelsRevalidationQueryOptions("codex", "project-a", catalog, "remote-a"));
+		expect(remotePost).toHaveBeenCalledOnce();
+		expect(remotePost).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", { params: { path: { agent: "codex" }, query: { projectId: "project-a", revalidate: true } } });
+		client.clear();
+	});
+});

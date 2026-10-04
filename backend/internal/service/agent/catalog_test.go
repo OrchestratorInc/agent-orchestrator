@@ -253,9 +253,6 @@ func TestStartupPrefetchCreatesOneGlobalCatalogPerInstalledAgentWithoutAuthentic
 }
 
 func TestStartupPrefetchDoesNotConsumeDiscoveryTimeoutWhileQueued(t *testing.T) {
-	previousTimeout := modelCatalogLoadTimeout
-	modelCatalogLoadTimeout = 35 * time.Millisecond
-	t.Cleanup(func() { modelCatalogLoadTimeout = previousTimeout })
 	discoverer := successfulModelDiscoverer()
 	discoverer.delay = 20 * time.Millisecond
 	projects := &fakeProjectLookup{records: map[string]domain.ProjectRecord{
@@ -266,6 +263,8 @@ func TestStartupPrefetchDoesNotConsumeDiscoveryTimeoutWhileQueued(t *testing.T) 
 		harnessAuthAgent("codex", "Codex", ports.AgentAuthStatusAuthorized, nil),
 		harnessAuthAgent("gemini", "Gemini", ports.AgentAuthStatusAuthorized, nil),
 	}, &fakeModelCache{}, projects, discoverer)
+
+	svc.modelLoadTimeout = 35 * time.Millisecond
 
 	svc.prefetchModelCatalogs(context.Background(), false)
 	if got := discoverer.successfulCalls.Load(); got != 2 {
@@ -570,9 +569,6 @@ func TestModelDiscoveryStopsOnServiceShutdown(t *testing.T) {
 }
 
 func TestRefreshTimeoutPersistsFailureInsteadOfLeavingRefreshing(t *testing.T) {
-	previousTimeout := modelCatalogLoadTimeout
-	modelCatalogLoadTimeout = 10 * time.Millisecond
-	t.Cleanup(func() { modelCatalogLoadTimeout = previousTimeout })
 	serviceCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	now := time.Now().UTC()
@@ -582,6 +578,7 @@ func TestRefreshTimeoutPersistsFailureInsteadOfLeavingRefreshing(t *testing.T) {
 	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{"codex\x00": record}}
 	discoverer := &cancelAwareModelDiscoverer{started: make(chan struct{})}
 	svc := newService([]agentregistry.HarnessAgent{harnessAgent("codex", "Codex", nil)}, cache, nil, discoverer)
+	svc.modelLoadTimeout = 10 * time.Millisecond
 	svc.ctx = serviceCtx
 
 	if _, err := svc.Models(context.Background(), "codex", "project-a", true); err != nil {
@@ -683,7 +680,11 @@ func (f *fakeModelCache) UpsertAgentModelCatalog(_ context.Context, record ports
 	if f.records == nil {
 		f.records = map[string]ports.CachedAgentModelCatalog{}
 	}
-	f.records[record.AgentID+"\x00"+record.ProjectID] = record
+	key := record.AgentID + "\x00" + record.ProjectID
+	if current, ok := f.records[key]; ok && current.Generation > record.Generation {
+		return nil
+	}
+	f.records[key] = record
 	f.puts++
 	return nil
 }
@@ -1442,8 +1443,14 @@ func TestModelsReusesCacheWhileBinaryVersionMatches(t *testing.T) {
 	}
 	select {
 	case <-agent.started:
+		t.Fatal("compatible warm read started binary resolution")
+	case <-time.After(25 * time.Millisecond):
+	}
+	go svc.checkModelCatalogInputs(ctx)
+	select {
+	case <-agent.started:
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for background cache revalidation")
+		t.Fatal("periodic input check did not resolve the binary")
 	}
 	if discoverer.discoverCalls.Load() != 1 {
 		t.Fatalf("discovery calls=%d, want cached result", discoverer.discoverCalls.Load())
@@ -1477,8 +1484,8 @@ func TestModelsRediscoversWhenBinaryVersionChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Models) != 1 || got.Models[0].ID != "model-one" {
-		t.Fatalf("cache-first catalog=%#v, want model-one while v2 validates", got)
+	if len(got.Models) != 1 || got.Models[0].ID != "model-two" {
+		t.Fatalf("catalog=%#v, want the current inputs without exposing v1 choices", got)
 	}
 	deadline := time.Now().Add(time.Second)
 	for {

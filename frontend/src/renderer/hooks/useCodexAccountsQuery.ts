@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
-import { codexAccountsQueryKey, mergeCodexAccounts, writeCodexAccounts } from "./codex-accounts-state";
+import { codexAccountsQueryKey, writeCodexAccounts } from "./codex-accounts-state";
 
 export { codexAccountsQueryKey } from "./codex-accounts-state";
 
@@ -106,7 +106,7 @@ export const codexAccountsQueryOptions = {
 	queryKey: codexAccountsQueryKey,
 	queryFn: async ({ client }: { client: QueryClient }) => {
 		const incoming = await fetchCodexAccounts();
-		return mergeCodexAccounts(client.getQueryData<CodexAccountsResponse>(codexAccountsQueryKey), incoming, "replace");
+		return writeCodexAccounts(client, incoming, "replace");
 	},
 	retry: 1,
 	staleTime: Number.POSITIVE_INFINITY,

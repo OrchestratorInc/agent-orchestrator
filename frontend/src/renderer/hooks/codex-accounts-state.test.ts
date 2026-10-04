@@ -1,8 +1,9 @@
+import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import type { CodexAccountsResponse } from "./useCodexAccountsQuery";
 import { catalogFor } from "../i18n/messages";
 import type { AppLocale } from "../i18n/locales";
-import { codexAccountCanSwitch, codexAccountReasonCodes, codexAccountReasonKey, codexAuthenticationDisplay, codexSwitchDisplay, mergeCodexAccounts } from "./codex-accounts-state";
+import { codexAccountCanSwitch, codexAccountReasonCodes, codexAccountReasonKey, codexAuthenticationDisplay, codexSwitchDisplay, mergeCodexAccounts, writeCodexAccounts } from "./codex-accounts-state";
 import type { CodexAccountSwitch } from "./useCodexAccountsQuery";
 
 const account = (id: string, createdAt: string, active = false) => ({ id, createdAt, active });
@@ -171,4 +172,32 @@ it("maps every account reason to complete native locale copy with a safe unknown
 		}
 	}
 	expect(codexAccountReasonKey("provider-private-message")).toBe("settings.codexAccounts.reason.unknown");
+});
+
+
+describe("account changes and model catalogs", () => {
+	it("clears local Codex catalogs and pending validation on a verified account switch", () => {
+		const client = new QueryClient();
+		client.setQueryData(["codex-accounts"], response([], "account-a"));
+		client.setQueryData(["agent-models", "codex", "project-a"], { models: [{ id: "old-model" }] });
+		client.setQueryData(["agent-model-revalidation", "", "codex", "project-a", "date"], { models: [{ id: "old-model" }] });
+		client.setQueryData(["agent-models", "codex", "codex", "project-a"], { models: [{ id: "remote-model" }] });
+		client.setQueryData(["agent-models", "claude-code", "project-a"], { models: [{ id: "claude-model" }] });
+		writeCodexAccounts(client, response([], "account-b"));
+		expect(client.getQueryData(["agent-models", "codex", "project-a"])).toBeUndefined();
+		expect(client.getQueryData(["agent-model-revalidation", "", "codex", "project-a", "date"])).toBeUndefined();
+		expect(client.getQueryData(["agent-models", "codex", "codex", "project-a"])).toEqual({ models: [{ id: "remote-model" }] });
+		expect(client.getQueryData(["agent-models", "claude-code", "project-a"])).toEqual({ models: [{ id: "claude-model" }] });
+		client.clear();
+	});
+	it("retains catalogs for same-account updates and ignores stale account snapshots", () => {
+		const client = new QueryClient();
+		client.setQueryData(["codex-accounts"], response([], "account-a"));
+		const models = { models: [{ id: "same-model" }] };
+		client.setQueryData(["agent-models", "codex", "project-a"], models);
+		writeCodexAccounts(client, response([], "account-a"));
+		writeCodexAccounts(client, { ...response([], "account-b"), accountRevision: 6 });
+		expect(client.getQueryData(["agent-models", "codex", "project-a"])).toEqual(models);
+		client.clear();
+	});
 });
