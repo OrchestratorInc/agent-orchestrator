@@ -17,6 +17,10 @@ type hibernationStore interface {
 	SetSessionHibernated(context.Context, domain.SessionID, int64, *time.Time) (bool, error)
 }
 
+type hibernationTurnReader interface {
+	LatestVisibleUserTurnSettled(context.Context, string, domain.SessionID) (bool, error)
+}
+
 // SetWakeCallback connects a cold Chat session to Session Manager's native
 // resume path. It is installed after both services have been constructed.
 func (s *Service) SetWakeCallback(wake func(context.Context, domain.SessionID) error) {
@@ -66,8 +70,7 @@ func (s *Service) SetChatView(ctx context.Context, id domain.SessionID, viewID s
 		return nil
 	}
 	if rec.ProvisionState.WithDefault() != domain.SessionProvisionReady ||
-		rec.Metadata.ProviderConversationID == "" ||
-		(rec.HibernatedAt == nil && s.HasLiveChatController(id)) {
+		rec.HibernatedAt == nil || rec.Metadata.ProviderConversationID == "" {
 		return nil
 	}
 	err = s.wakeHibernated(ctx, id)
@@ -139,7 +142,7 @@ func (s *Service) liveViewLeasesLocked(id domain.SessionID) map[string]time.Time
 // HibernateChat stops a quiescent provider without ending its AO session. A
 // false result means the final locked eligibility check found useful work.
 func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool, error) {
-	// Skip snapshot and queue reads while the feature is off. Recheck before
+	// Skip eligibility and queue reads while the feature is off. Recheck before
 	// stopping the provider in case the setting changes during those reads.
 	if s.hibernationEnabled == nil || !s.hibernationEnabled() {
 		return false, nil
@@ -147,6 +150,10 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 	marker, ok := s.sessions.(hibernationStore)
 	if !ok {
 		return false, errors.New("chat hibernation store is unavailable")
+	}
+	turns, ok := s.sessions.(hibernationTurnReader)
+	if !ok {
+		return false, errors.New("chat hibernation turn reader is unavailable")
 	}
 	owner := domain.SessionConversationOwner(id)
 	gate := s.controllerGate(owner)
@@ -171,10 +178,6 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 	if !ok {
 		return false, nil
 	}
-	if s.reader == nil {
-		return false, errors.New("chat hibernation snapshot reader is unavailable")
-	}
-
 	// Send and provider lifecycle projection use the same dispatch lock. Fence
 	// intake only after verifying the durable queue and latest primary turn.
 	controller.sendMu.Lock()
@@ -209,16 +212,16 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 		controller.sendMu.Unlock()
 		return false, nil
 	}
-	rows, err := s.reader.LoadConversationSnapshot(ctx, controller.conversation.ID)
+	settled, err := turns.LatestVisibleUserTurnSettled(ctx, controller.conversation.ID, id)
 	if err != nil {
 		controller.sendMu.Unlock()
 		return false, fmt.Errorf("check latest chat turn: %w", err)
 	}
-	if !latestPrimaryTurnSettled(rows, id) {
+	if !settled {
 		controller.sendMu.Unlock()
 		return false, nil
 	}
-	// Activity from outside Chat can change while the snapshot is loaded. Recheck
+	// Activity from outside Chat can change while eligibility is read. Recheck
 	// before the provider is stopped; the post-stop CAS is only a crash fence.
 	fresh, err := s.requireChatSession(ctx, id)
 	if err != nil {
@@ -317,24 +320,6 @@ func (s *Service) clearHibernation(ctx context.Context, id domain.SessionID) err
 		}
 	}
 	return errors.New("chat hibernation marker changed concurrently")
-}
-
-// The most recent user prompt must belong to this controller and have a durable
-// terminal outcome. Queued and running work is checked separately above.
-func latestPrimaryTurnSettled(rows ConversationRows, id domain.SessionID) bool {
-	turns := make(map[string]domain.ConversationTurn, len(rows.Turns))
-	for _, turn := range rows.Turns {
-		turns[turn.ID] = turn
-	}
-	for i := len(rows.Messages) - 1; i >= 0; i-- {
-		message := rows.Messages[i]
-		if message.Role != domain.MessageRoleUser {
-			continue
-		}
-		turn, ok := turns[message.TurnID]
-		return ok && turn.HandledBySessionID == id && turn.CompletedAt != nil && turn.State.Terminal()
-	}
-	return false
 }
 
 // Provider catalog reads are passive: opening a chat must not wake it. Hold

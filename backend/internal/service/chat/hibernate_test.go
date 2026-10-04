@@ -17,11 +17,24 @@ import (
 
 type hibernationConversation struct {
 	*fakeConversation
-	calls      atomic.Int32
-	started    chan struct{}
-	release    <-chan struct{}
-	onSnapshot func()
-	keepOpen   bool
+	calls             atomic.Int32
+	started           chan struct{}
+	release           <-chan struct{}
+	onEligibilityRead func()
+	keepOpen          bool
+}
+
+type hibernationSessionStore struct {
+	*store.Store
+	conversation *hibernationConversation
+}
+
+func (s *hibernationSessionStore) LatestVisibleUserTurnSettled(ctx context.Context, conversationID string, sessionID domain.SessionID) (bool, error) {
+	settled, err := s.Store.LatestVisibleUserTurnSettled(ctx, conversationID, sessionID)
+	if err == nil && s.conversation.onEligibilityRead != nil {
+		s.conversation.onEligibilityRead()
+	}
+	return settled, err
 }
 
 func (c *hibernationConversation) Hibernate() error {
@@ -54,15 +67,8 @@ func settledHibernationHarness(t *testing.T, state domain.TurnState, gate ...fun
 	st := openStore(t)
 	h := &harness{st: st, conv: conv.fakeConversation, activity: &recordingActivity{}, clock: time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC)}
 	var nextID atomic.Int32
-	reader := fullSnapshotReader(st)
 	h.svc = chatsvc.New(chatsvc.Options{
-		Store: st, Reader: chatsvc.SnapshotReaderFunc(func(ctx context.Context, id string) (chatsvc.ConversationRows, error) {
-			rows, err := reader.LoadConversationSnapshot(ctx, id)
-			if err == nil && conv.onSnapshot != nil {
-				conv.onSnapshot()
-			}
-			return rows, err
-		}), Sessions: st,
+		Store: st, Reader: fullSnapshotReader(st), Sessions: &hibernationSessionStore{Store: st, conversation: conv},
 		Drivers:  fakeRegistry{driver: fakeDriver{conv: conv}},
 		Activity: h.activity, Log: slog.New(slog.DiscardHandler), Now: h.now,
 		NewID:              func() string { return fmt.Sprintf("hibernate-%d", nextID.Add(1)) },
@@ -102,32 +108,32 @@ func settledHibernationHarness(t *testing.T, state domain.TurnState, gate ...fun
 func TestHibernationGateKeepsCompletedIdleProviderWarmUntilEnabled(t *testing.T) {
 	var enabled atomic.Bool
 	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted, enabled.Load)
-	var snapshotReads atomic.Int32
-	conv.onSnapshot = func() { snapshotReads.Add(1) }
+	var eligibilityReads atomic.Int32
+	conv.onEligibilityRead = func() { eligibilityReads.Add(1) }
 	ctx := context.Background()
 	if stopped, err := h.svc.HibernateChat(ctx, testSession); err != nil || stopped || conv.calls.Load() != 0 || !h.svc.HasLiveChatController(testSession) {
 		t.Fatalf("disabled hibernation: stopped=%v err=%v calls=%d live=%v", stopped, err, conv.calls.Load(), h.svc.HasLiveChatController(testSession))
 	}
-	if got := snapshotReads.Load(); got != 0 {
-		t.Fatalf("disabled hibernation read %d conversation snapshots, want 0", got)
+	if got := eligibilityReads.Load(); got != 0 {
+		t.Fatalf("disabled hibernation read %d turn outcomes, want 0", got)
 	}
 	enabled.Store(true)
 	if stopped, err := h.svc.HibernateChat(ctx, testSession); err != nil || !stopped || conv.calls.Load() != 1 {
 		t.Fatalf("enabled hibernation: stopped=%v err=%v calls=%d", stopped, err, conv.calls.Load())
 	}
-	if got := snapshotReads.Load(); got != 1 {
-		t.Fatalf("enabled hibernation read %d conversation snapshots, want 1", got)
+	if got := eligibilityReads.Load(); got != 1 {
+		t.Fatalf("enabled hibernation read %d turn outcomes, want 1", got)
 	}
 }
 
-func TestHibernationGateRechecksAfterSnapshot(t *testing.T) {
+func TestHibernationGateRechecksAfterEligibilityRead(t *testing.T) {
 	var enabled atomic.Bool
 	enabled.Store(true)
 	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted, enabled.Load)
-	conv.onSnapshot = func() { enabled.Store(false) }
+	conv.onEligibilityRead = func() { enabled.Store(false) }
 	stopped, err := h.svc.HibernateChat(context.Background(), testSession)
 	if err != nil || stopped || conv.calls.Load() != 0 || !h.svc.HasLiveChatController(testSession) {
-		t.Fatalf("hibernation disabled during snapshot: stopped=%v err=%v calls=%d live=%v", stopped, err, conv.calls.Load(), h.svc.HasLiveChatController(testSession))
+		t.Fatalf("hibernation disabled during eligibility read: stopped=%v err=%v calls=%d live=%v", stopped, err, conv.calls.Load(), h.svc.HasLiveChatController(testSession))
 	}
 }
 
@@ -222,6 +228,25 @@ func TestChatViewRenewalDoesNotRetryFailedWake(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("wake calls after reopen = %d, want 2", calls.Load())
+	}
+}
+
+func TestOpeningViewDoesNotResumeExplicitlyStoppedAgent(t *testing.T) {
+	h, _ := settledHibernationHarness(t, domain.TurnStateCompleted)
+	ctx := context.Background()
+	if err := h.svc.Stop(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	var wakeCalls atomic.Int32
+	h.svc.SetWakeCallback(func(context.Context, domain.SessionID) error {
+		wakeCalls.Add(1)
+		return nil
+	})
+	if err := h.svc.SetChatView(ctx, testSession, "viewer-1", true); err != nil {
+		t.Fatal(err)
+	}
+	if got := wakeCalls.Load(); got != 0 {
+		t.Fatalf("opening an exited agent triggered %d native wakes", got)
 	}
 }
 
@@ -478,7 +503,7 @@ func TestHibernateChatWaitsForAcceptedRenameProjection(t *testing.T) {
 
 func TestHibernateChatRechecksActivityBeforeStoppingProvider(t *testing.T) {
 	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted)
-	conv.onSnapshot = func() {
+	conv.onEligibilityRead = func() {
 		rec, found, err := h.st.GetSession(context.Background(), testSession)
 		if err != nil || !found {
 			t.Fatalf("get concurrent activity = %v, %v", found, err)
