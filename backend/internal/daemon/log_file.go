@@ -17,20 +17,20 @@ const (
 	maxDaemonLogBytes int64 = 16 << 20
 )
 
-// rotatingLogFile appends to path and, when the next write would exceed max,
+// rotatingLogFile appends to path and, when the next write would exceed maxBytes,
 // moves the current file to path.1 and starts a fresh one. Keeping one
 // previous file preserves the lines leading up to a failure even when a
 // rotation lands right after it.
 type rotatingLogFile struct {
-	mu   sync.Mutex
-	path string
-	max  int64
-	file *os.File
-	size int64
+	mu       sync.Mutex
+	path     string
+	maxBytes int64
+	file     *os.File
+	size     int64
 }
 
-func openRotatingLogFile(path string, max int64) (*rotatingLogFile, error) {
-	l := &rotatingLogFile{path: path, max: max}
+func openRotatingLogFile(path string, maxBytes int64) (*rotatingLogFile, error) {
+	l := &rotatingLogFile{path: path, maxBytes: maxBytes}
 	if err := l.open(false); err != nil {
 		return nil, err
 	}
@@ -58,7 +58,7 @@ func (l *rotatingLogFile) open(truncate bool) error {
 func (l *rotatingLogFile) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.file != nil && l.size > 0 && l.size+int64(len(p)) > l.max {
+	if l.file != nil && l.size > 0 && l.size+int64(len(p)) > l.maxBytes {
 		_ = l.file.Close()
 		l.file = nil
 		// A rename can fail when another process still holds the file open on
