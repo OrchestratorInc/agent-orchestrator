@@ -7,6 +7,9 @@ import { computeSseRetryDelayMs } from "./sse-backoff";
 
 const INVALIDATE_DEBOUNCE_MS = 150;
 const EVENTSOURCE_CLOSED = 2;
+const CONTENT_QUERY_NAMES = ["session-workspace-history", "session-workspace-file", "session-workspace-file-revision", "session-workspace-diffs", "files-review-end-of-file"] as const;
+const INVENTORY_QUERY_NAMES = ["workspace-file-paths", "session-workspace-files", "session-workspace-search", "session-workspace-tree"] as const;
+const ALL_QUERY_NAMES = [...CONTENT_QUERY_NAMES, ...INVENTORY_QUERY_NAMES] as const;
 
 export type WorkspaceFileConnectionState = "connecting" | "connected" | "degraded";
 type ConnectionPhase = "idle" | "connecting" | "open" | "waiting";
@@ -23,11 +26,13 @@ type WorkspaceStream = {
 	 * so would inflate the backoff exponent past what we actually retried.
 	 */
 	retries: number;
+	lastVersion?: string;
 	source?: EventSource;
 	poll?: ReturnType<typeof setInterval>;
 	stopRemote?: () => void;
 	sourceBaseUrl?: string;
 	debounce?: ReturnType<typeof setTimeout>;
+	pendingInvalidations: Set<string>;
 	retry?: ReturnType<typeof setTimeout>;
 	disconnectBaseUrl: () => void;
 	ensureConnected: () => void;
@@ -90,17 +95,21 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 	const stream = {} as WorkspaceStream;
 	const key = sessionUiKey(sessionId, hostId);
 	const queryPrefix = (name: string) => hostId ? [name, hostId, sessionId] : [name, sessionId];
-	const invalidate = () => {
+	const scheduleInvalidation = (names: readonly string[]) => {
+		for (const name of names) stream.pendingInvalidations.add(name);
 		// Bound the wait from the first event: continuous agent writes must not
-		// keep postponing refresh until the workspace becomes quiet.
+		// postpone visible content refresh until the workspace becomes quiet.
 		if (stream.debounce) return;
 		stream.debounce = setTimeout(() => {
 			stream.debounce = undefined;
-			for (const name of ["workspace-file-paths", "session-workspace-files", "session-workspace-file", "session-workspace-file-revision", "session-workspace-diffs", "session-workspace-search", "session-workspace-tree"]) {
+			const pending = [...stream.pendingInvalidations];
+			stream.pendingInvalidations.clear();
+			for (const name of pending) {
 				void queryClient.invalidateQueries({ queryKey: queryPrefix(hostId && name === "workspace-file-paths" ? "remote-workspace-file-paths" : name) });
 			}
 		}, INVALIDATE_DEBOUNCE_MS);
 	};
+	const invalidate = () => scheduleInvalidation(ALL_QUERY_NAMES);
 	const scheduleRetry = (generation: number) => {
 		if (stream.disposed || stream.retry) return;
 		stream.phase = "waiting";
@@ -140,6 +149,7 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 	stream.generation = 0;
 	stream.failures = 0;
 	stream.retries = 0;
+	stream.pendingInvalidations = new Set();
 	setWorkspaceFileConnectionState(key, "connecting");
 	stream.ensureConnected = () => {
 		if (stream.disposed) return;
@@ -210,8 +220,26 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 				stream.failures += 1;
 				setWorkspaceFileConnectionState(key, stream.failures >= 3 ? "degraded" : "connecting");
 			};
-			source.addEventListener("workspace_changed", () => {
-				if (!stream.disposed && generation === stream.generation && stream.source === source) invalidate();
+			source.addEventListener("workspace_changed", (event) => {
+				if (stream.disposed || generation !== stream.generation || stream.source !== source) return;
+				let payload: { kind?: string; workspaceVersion?: string } = {};
+				try {
+					payload = JSON.parse((event as MessageEvent<string>).data || "{}") as typeof payload;
+				} catch {
+					// Older daemons emitted an untyped invalidation edge. Preserve that
+					// compatibility path instead of dropping the refresh.
+				}
+				// File contents and parsed diffs can change without changing the
+				// metadata-derived manifest version. Never deduplicate these queries.
+				scheduleInvalidation(CONTENT_QUERY_NAMES);
+				if (payload.kind === "dirty") return;
+				if (payload.kind === "version" && payload.workspaceVersion) {
+					if (stream.lastVersion === payload.workspaceVersion) return;
+					stream.lastVersion = payload.workspaceVersion;
+					const cached = queryClient.getQueryData<{ workspaceVersion?: string }>(queryPrefix("session-workspace-files"));
+					if (cached?.workspaceVersion === payload.workspaceVersion) return;
+				}
+				scheduleInvalidation(INVENTORY_QUERY_NAMES);
 			});
 		} catch {
 			stream.source = undefined;
@@ -222,6 +250,7 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 	stream.dispose = () => {
 		stream.disposed = true;
 		if (stream.debounce) clearTimeout(stream.debounce);
+		stream.pendingInvalidations.clear();
 		stream.disconnectBaseUrl();
 		resetConnection();
 	};

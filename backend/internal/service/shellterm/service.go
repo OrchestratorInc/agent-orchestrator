@@ -254,6 +254,11 @@ func (s *Service) acquireSessionGate(ctx context.Context, id domain.SessionID) (
 // teardown (and the gate) releases — at which point resolveShellTerminalWorkingDir's
 // existence check sees the worktree is gone and falls back to the project root.
 func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInput) (ShellTerminal, error) {
+	title := strings.TrimSpace(in.Title)
+	if utf8.RuneCountInString(title) > maxShellTerminalTitleLen {
+		return ShellTerminal{}, apierr.Invalid("SHELL_TERMINAL_TITLE_TOO_LONG",
+			fmt.Sprintf("A shell terminal title must be at most %d characters", maxShellTerminalTitleLen), nil)
+	}
 	if in.SessionID != "" {
 		if s.sessions == nil {
 			return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SESSION_LOOKUP", "Session lookup is unavailable")
@@ -278,9 +283,12 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 	if err != nil {
 		return ShellTerminal{}, err
 	}
-	openTerminals, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
-	if err != nil {
-		return ShellTerminal{}, fmt.Errorf("open shell terminal: list existing terminals: %w", err)
+	if title == "" {
+		openTerminals, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
+		if err != nil {
+			return ShellTerminal{}, fmt.Errorf("open shell terminal: list existing terminals: %w", err)
+		}
+		title = nextShellTerminalTitle(openTerminals)
 	}
 	argv, usedFallback := resolveUserLoginShell(in.Shell)
 	if usedFallback {
@@ -321,8 +329,9 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 	}
 	return s.openTerminal(ctx, openTerminalConfig{
 		argv: argv, env: env, projectID: projectID, sessionID: in.SessionID,
-		workingDir: workingDir, title: nextShellTerminalTitle(openTerminals),
+		workingDir: workingDir, title: title,
 		previewVerifier: verifier,
+		startOnAttach:   in.StartOnAttach,
 	})
 }
 
@@ -536,6 +545,7 @@ type openTerminalConfig struct {
 	transient                bool
 	cleanupWorkingDirOnError bool
 	previewVerifier          string
+	startOnAttach            bool
 }
 
 // openTerminal creates and persists a terminal, rolling the runtime back on
@@ -550,6 +560,10 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		}
 	}
 
+	// Stamped before the runtime spawns: concurrent opens finish spawning in
+	// any order, and the list is ordered by creation, so tabs opened in quick
+	// succession must keep the order they were opened in.
+	createdAt := s.now().UTC()
 	// SessionID is the runtime adapters' name for "what to call this PTY"; it
 	// is not a session row and no sessions record is ever created. The
 	// shellterm- prefix keeps the two namespaces disjoint.
@@ -561,6 +575,7 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		// A user shell's exit is final, just like a trusted command's exit.
 		// Durability across app launches is a separate persistence policy.
 		ExitOnCommandCompletion: true,
+		StartOnAttach:           cfg.startOnAttach,
 	})
 	if err != nil {
 		if cfg.cleanupWorkingDirOnError {
@@ -580,7 +595,7 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		Title:                     cfg.title,
 		AppRunID:                  s.appRunID,
 		Transient:                 cfg.transient,
-		CreatedAt:                 s.now().UTC(),
+		CreatedAt:                 createdAt,
 		PreviewCapabilityVerifier: cfg.previewVerifier,
 	}
 	if err := s.store.InsertShellTerminal(ctx, rec); err != nil {

@@ -42,6 +42,7 @@ import { MultiStepLoader } from "./ui/multi-step-loader";
 import { useBrowserView } from "../hooks/useBrowserView";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import {
+	adoptedShellHandle,
 	useCloseShellTerminal,
 	useOpenShellTerminal,
 	useRenameShellTerminal,
@@ -70,6 +71,7 @@ import { sessionReviewsQueryKey } from "../lib/session-reviews";
 import { sessionUiKey } from "../lib/hosts";
 import { sessionWorkspaceFilesQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { matchWorkspaceFilePath } from "../lib/workspace-file-path";
+import { markFileViewerPerformance } from "../lib/file-viewer-performance";
 import { aoBridge } from "../lib/bridge";
 import {
 	chatDraftDialogCopy,
@@ -672,7 +674,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			...openShellKeys,
 		];
 		const availableKeys = new Set(available);
-		const resolved = auxiliaryTabOrder.filter((key) => availableKeys.has(key));
+		// A pending shell tab keeps its place once it becomes its shell.
+		const resolved = [
+			...new Set(auxiliaryTabOrder.map((key) => adoptedShellHandle(key) ?? key)),
+		].filter((key) => availableKeys.has(key));
 		for (const key of available) {
 			if (!resolved.includes(key)) resolved.push(key);
 		}
@@ -680,9 +685,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [auxiliaryTabOrder, fileTabs.openPaths, reviewerChat, reviewerTerminal, shellTerminals]);
 	useEffect(() => {
 		setAuxiliaryTabOrderBySession((current) => {
-			const currentOrder = current[uiSessionId] ?? [];
+			const storedOrder = current[uiSessionId] ?? [];
+			const currentOrder = [...new Set(storedOrder.map((key) => adoptedShellHandle(key) ?? key))];
 			const newKeys = resolvedAuxiliaryTabOrder.filter((key) => !currentOrder.includes(key));
-			if (newKeys.length === 0) {
+			if (newKeys.length === 0 && currentOrder.length === storedOrder.length
+				&& currentOrder.every((key, index) => key === storedOrder[index])) {
 				return current;
 			}
 			return { ...current, [uiSessionId]: [...currentOrder, ...newKeys] };
@@ -704,25 +711,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// session's worktree (the project id is only the fallback when the session's
 	// workspace can no longer be resolved).
 	const addShellTerminal = useCallback(() => {
-		const shell = openShellTerminal.open(
-			{ projectId: session?.workspaceId, sessionId, cloud: session?.cloud },
-			{
-				onSuccess: (openedShell) => {
-					setActiveShellTerminal(openedShell.handleId);
-					setFileTabsBySession((current) => ({
-						...current,
-						[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
-					}));
-					setTerminalTarget({
-						generation: openedShell.createdAt,
-						kind: "shell",
-						handleId: openedShell.handleId,
-						sessionId,
-						title: openedShell.title,
-					});
-				},
-			},
-		);
+		const shell = openShellTerminal.open({ projectId: session?.workspaceId, sessionId, cloud: session?.cloud });
 		if (!shell) return;
 		setFileTabsBySession((current) => ({
 			...current,
@@ -736,7 +725,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			sessionId,
 			title: shell.title,
 		});
-	}, [openShellTerminal, sessionId, session?.cloud, session?.workspaceId, setActiveShellTerminal, uiSessionId]);
+	}, [
+		openShellTerminal,
+		sessionId,
+		session?.cloud,
+		session?.workspaceId,
+		setActiveShellTerminal,
+		uiSessionId,
+	]);
 
 	const activateAuxiliaryTab = useCallback(
 		(key?: string) => {
@@ -954,6 +950,21 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			!fileTabs.activePath && !reviewerChatId) return;
 		selectShellTerminal(shell.handleId);
 	}, [activeShellTerminalHandleId, fileTabs.activePath, reviewerChatId, selectShellTerminal, shellTerminals, terminalTarget]);
+	// A tab selected while it was pending follows it to the shell it became.
+	// Only what still points at the pending tab moves: the user may have
+	// selected another tab in the meantime.
+	useEffect(() => {
+		const adoptedActive = activeShellTerminalHandleId ? adoptedShellHandle(activeShellTerminalHandleId) : undefined;
+		if (adoptedActive) {
+			setActiveShellTerminal(adoptedActive);
+			return;
+		}
+		if (terminalTarget.kind !== "shell") return;
+		const adoptedTarget = adoptedShellHandle(terminalTarget.handleId);
+		if (adoptedTarget && shellTerminals.some((shell) => shell.handleId === adoptedTarget)) {
+			selectShellTerminal(adoptedTarget);
+		}
+	}, [activeShellTerminalHandleId, selectShellTerminal, setActiveShellTerminal, shellTerminals, terminalTarget]);
 
 	// If the pane is pointed at a shell that is not in THIS session's strip — e.g.
 	// after navigating to a different session whose globally-active shell belongs
@@ -1266,6 +1277,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [uiSessionId]);
 
 	const handleOpenFiles = useCallback(() => {
+		markFileViewerPerformance("files-click");
 		prepareFilesInspector();
 		void fetchWorkspaceFiles();
 	}, [fetchWorkspaceFiles, prepareFilesInspector]);
