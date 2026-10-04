@@ -49,7 +49,7 @@ export class BrowserLiveClient {
 			socket.onopen = () => this.handlers.onStatus("open");
 			socket.onerror = () => {
 				this.reportedError = true;
-				this.handlers.onStatus("error", "The browser stream could not connect.");
+				this.handlers.onStatus("error");
 			};
 			socket.onclose = () => {
 				this.socket = null;

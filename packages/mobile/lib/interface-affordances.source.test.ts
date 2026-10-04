@@ -71,6 +71,11 @@ describe("Interface affordances", () => {
 			expect(browser).not.toContain('placeholder="Enter a URL"');
 		});
 
+		it("shows desktop sharing guidance when the browser handshake fails", () => {
+			expect(source("./browserLive.ts")).toContain('this.handlers.onStatus("error");');
+			expect(browser).toContain('error || "On the desktop, turn on browser sharing in Connect Mobile, then try again."');
+		});
+
 		it("uses a navigation route instead of a second terminal overlay", () => {
 			expect(terminal).toContain('pathname: "/preview/[id]"');
 			expect(terminal).not.toContain("browserOpen");

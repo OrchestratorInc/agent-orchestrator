@@ -35,6 +35,38 @@ describe("browser live transport", () => {
 		expect([...new Uint8Array(frame.jpeg)]).toEqual([0xff, 0xd8, 0xff]);
 	});
 
+	it("leaves handshake errors without generic copy so the sharing hint is shown", () => {
+		class FakeWebSocket {
+			static instance: FakeWebSocket;
+			binaryType = "";
+			onopen: (() => void) | null = null;
+			onerror: (() => void) | null = null;
+			onclose: (() => void) | null = null;
+			onmessage: ((event: { data: unknown }) => void) | null = null;
+
+			constructor() {
+				FakeWebSocket.instance = this;
+			}
+
+			close() {}
+		}
+		vi.stubGlobal("WebSocket", FakeWebSocket);
+		const statuses: Array<{ status: string; message?: string }> = [];
+		const client = new BrowserLiveClient(
+			{ host: "192.168.1.5", httpPort: "3011", muxPort: "3012", password: "secret" },
+			"worker/a",
+			{
+				onStatus: (status, message) => statuses.push({ status, message }),
+				onState: () => {},
+				onFrame: () => {},
+			},
+		);
+
+		client.connect();
+		FakeWebSocket.instance.onerror?.();
+		expect(statuses.at(-1)).toEqual({ status: "error", message: undefined });
+	});
+
 	it("restores an open stream when a valid frame follows a recoverable host error", async () => {
 		class FakeWebSocket {
 			static readonly OPEN = 1;
