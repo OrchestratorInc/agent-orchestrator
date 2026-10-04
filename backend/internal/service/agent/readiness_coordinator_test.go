@@ -1007,6 +1007,49 @@ func TestReadinessCoordinatorWarmFinishesPresenceBeforeAuthentication(t *testing
 	close(authRelease)
 }
 
+func TestReadinessCoordinatorWarmSignalsAfterInstallationAndAuthentication(t *testing.T) {
+	t.Parallel()
+	installStarted := make(chan struct{})
+	installRelease := make(chan struct{})
+	authStarted := make(chan struct{})
+	authRelease := make(chan struct{})
+	agent := &readinessTestAgent{
+		resolve: func(context.Context) (string, error) {
+			close(installStarted)
+			<-installRelease
+			return "/bin/codex", nil
+		},
+		auth: func(context.Context) (ports.AgentAuthStatus, error) {
+			close(authStarted)
+			<-authRelease
+			return ports.AgentAuthStatusAuthorized, nil
+		},
+	}
+	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+		Agents: []agentregistry.HarnessAgent{readinessHarness("codex", "Codex", agent)},
+	})
+	done := coordinator.Warm()
+	<-installStarted
+	select {
+	case <-done:
+		t.Fatal("warm completed before installation check")
+	default:
+	}
+	close(installRelease)
+	<-authStarted
+	select {
+	case <-done:
+		t.Fatal("warm completed before authentication check")
+	default:
+	}
+	close(authRelease)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("warm completion was not signaled")
+	}
+}
+
 func TestReadinessCoordinatorRejectsInvalidPurposeAndUnknownAgent(t *testing.T) {
 	t.Parallel()
 	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{

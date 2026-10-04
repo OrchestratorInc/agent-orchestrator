@@ -41,6 +41,12 @@ type UpdateAdvisory struct {
 
 var versionPattern = regexp.MustCompile(`\bv?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?\b`)
 
+type updateAdvisoryCall struct {
+	done     chan struct{}
+	advisory UpdateAdvisory
+	err      error
+}
+
 // UpdateAdvisory probes the adapter-selected binary and checks the package
 // source recorded by a successful AO install. Unattributed installations and
 // failed probes remain unknown; they never masquerade as up-to-date.
@@ -54,29 +60,63 @@ func (s *Service) UpdateAdvisory(ctx context.Context, target Target) (UpdateAdvi
 	now := time.Now().UTC()
 	s.mu.Lock()
 	cached, found := s.updateAdvisories[target]
-	s.mu.Unlock()
 	if found {
 		ttl := time.Hour
 		if cached.Status == UpdateStatusUnknown {
 			ttl = 5 * time.Minute
 		}
 		if now.Sub(cached.CheckedAt) < ttl {
+			s.mu.Unlock()
 			return cached, nil
 		}
 	}
-	advisory := UpdateAdvisory{AgentID: string(target), Status: UpdateStatusUnknown, CheckedAt: now}
+	call := s.updateAdvisoryCalls[target]
+	if call == nil {
+		if s.stopping {
+			s.mu.Unlock()
+			return UpdateAdvisory{}, context.Canceled
+		}
+		call = &updateAdvisoryCall{done: make(chan struct{})}
+		if s.updateAdvisoryCalls == nil {
+			s.updateAdvisoryCalls = make(map[Target]*updateAdvisoryCall)
+		}
+		s.updateAdvisoryCalls[target] = call
+		s.workers.Add(1)
+		go s.runUpdateAdvisory(target, call)
+	}
+	s.mu.Unlock()
+	select {
+	case <-call.done:
+		return call.advisory, call.err
+	case <-ctx.Done():
+		return UpdateAdvisory{}, ctx.Err()
+	}
+}
+
+func (s *Service) runUpdateAdvisory(target Target, call *updateAdvisoryCall) {
+	defer s.workers.Done()
+	advisory, err := s.computeUpdateAdvisory(s.backgroundContext, target)
+	s.mu.Lock()
+	call.advisory, call.err = advisory, err
+	if s.updateAdvisoryCalls[target] == call {
+		delete(s.updateAdvisoryCalls, target)
+		if err == nil && s.backgroundContext.Err() == nil {
+			if s.updateAdvisories == nil {
+				s.updateAdvisories = make(map[Target]UpdateAdvisory)
+			}
+			s.updateAdvisories[target] = advisory
+		}
+	}
+	close(call.done)
+	s.mu.Unlock()
+}
+
+func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (UpdateAdvisory, error) {
+	advisory := UpdateAdvisory{AgentID: string(target), Status: UpdateStatusUnknown, CheckedAt: time.Now().UTC()}
 	job, err := s.Status(ctx, target)
 	if err != nil {
 		return advisory, err
 	}
-	defer func() {
-		s.mu.Lock()
-		if s.updateAdvisories == nil {
-			s.updateAdvisories = make(map[Target]UpdateAdvisory)
-		}
-		s.updateAdvisories[target] = advisory
-		s.mu.Unlock()
-	}()
 	if job.Status != StatusSucceeded || (job.Method != "npm" && job.Method != "homebrew") || s.verifier == nil {
 		return advisory, nil
 	}

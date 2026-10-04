@@ -972,7 +972,8 @@ func Run() error {
 		// lazily Ensure on demand. Kick it here, after the listener is live, so its
 		// bounded subprocess probes no longer contend with the synchronous
 		// migration and fencing reconcile that gate the port bind.
-		agentSvc.WarmReadiness()
+		readinessDone := agentSvc.WarmReadiness()
+		go warmInstalledHarnessUpdates(ctx, readinessDone, agentSvc.CachedReadiness, systemInstall.UpdateAdvisory, log)
 		done := make(chan struct{})
 		startupReconcileDone = done
 		go func() {

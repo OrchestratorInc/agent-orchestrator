@@ -339,11 +339,12 @@ type Service struct {
 	// a real multi-minute wait.
 	installTimeout time.Duration
 	// persistenceTimeout bounds worker-owned transition and terminal writes.
-	persistenceTimeout time.Duration
-	onSucceeded        func(Target)
-	latestVersion      func(context.Context, string, string, bool) (string, error)
-	ownsInstallation   func(context.Context, string, string, string, bool) (bool, error)
-	updateAdvisories   map[Target]UpdateAdvisory
+	persistenceTimeout  time.Duration
+	onSucceeded         func(Target)
+	latestVersion       func(context.Context, string, string, bool) (string, error)
+	ownsInstallation    func(context.Context, string, string, string, bool) (bool, error)
+	updateAdvisories    map[Target]UpdateAdvisory
+	updateAdvisoryCalls map[Target]*updateAdvisoryCall
 }
 
 // requestPlanner carries one immutable capability snapshot through all recipe
@@ -406,6 +407,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		latestVersion:       latestAvailableVersion(commands),
 		ownsInstallation:    packageOwnsBinary(commands),
 		updateAdvisories:    make(map[Target]UpdateAdvisory),
+		updateAdvisoryCalls: make(map[Target]*updateAdvisoryCall),
 	}
 }
 
@@ -1062,6 +1064,7 @@ func (s *Service) finishAgentJob(job *Job, status Status, output, errorMessage, 
 	job.FinishedAt = &now
 	job.UpdatedAt = &now
 	delete(s.updateAdvisories, job.Target)
+	delete(s.updateAdvisoryCalls, job.Target)
 	snapshot := *job
 	callback := s.onSucceeded
 	target := job.Target

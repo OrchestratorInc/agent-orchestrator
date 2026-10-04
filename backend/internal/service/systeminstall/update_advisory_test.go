@@ -6,7 +6,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestUpdateAdvisoryComparesKnownNPMInstallationAndCachesResult(t *testing.T) {
@@ -17,11 +19,11 @@ func TestUpdateAdvisoryComparesKnownNPMInstallationAndCachesResult(t *testing.T)
 	})
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
 	calls := 0
+	var gotMethod, gotPackage string
+	var gotCask bool
 	s.latestVersion = func(_ context.Context, method, pkg string, cask bool) (string, error) {
 		calls++
-		if method != "npm" || pkg != "@openai/codex" || cask {
-			t.Fatalf("lookup = %s %s cask=%t", method, pkg, cask)
-		}
+		gotMethod, gotPackage, gotCask = method, pkg, cask
 		return "1.3.0", nil
 	}
 	for range 2 {
@@ -35,6 +37,65 @@ func TestUpdateAdvisoryComparesKnownNPMInstallationAndCachesResult(t *testing.T)
 	}
 	if calls != 1 {
 		t.Fatalf("latest lookup calls = %d, want cached 1", calls)
+	}
+	if gotMethod != "npm" || gotPackage != "@openai/codex" || gotCask {
+		t.Fatalf("lookup = %s %s cask=%t", gotMethod, gotPackage, gotCask)
+	}
+}
+
+func TestUpdateAdvisoryPageRequestCanCancelWhileStartupJoinsSameCheck(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	s.jobs[TargetCodex] = &Job{Target: TargetCodex, Status: StatusSucceeded, Method: "npm"}
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/opt/bin/codex", Output: "codex 1.2.3"}, nil
+	})
+	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var lookups atomic.Int32
+	s.latestVersion = func(context.Context, string, string, bool) (string, error) {
+		if lookups.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return "1.3.0", nil
+	}
+	pageCtx, cancelPage := context.WithCancel(context.Background())
+	pageDone := make(chan error, 1)
+	go func() {
+		_, err := s.UpdateAdvisory(pageCtx, TargetCodex)
+		pageDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("page update check did not start")
+	}
+	cancelPage()
+	if err := <-pageDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled page request error = %v, want context.Canceled", err)
+	}
+	startupDone := make(chan UpdateAdvisory, 1)
+	go func() {
+		advisory, _ := s.UpdateAdvisory(context.Background(), TargetCodex)
+		startupDone <- advisory
+	}()
+	select {
+	case <-startupDone:
+		t.Fatal("startup call returned before shared version lookup completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if count := lookups.Load(); count != 1 {
+		t.Fatalf("latest lookup calls = %d, want one shared call", count)
+	}
+	close(release)
+	select {
+	case advisory := <-startupDone:
+		if advisory.Status != UpdateStatusBehindLatest {
+			t.Fatalf("startup advisory = %+v", advisory)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("startup call did not finish")
 	}
 }
 
@@ -75,10 +136,10 @@ func TestUpdateAdvisoryCurrentAndHomebrewPackage(t *testing.T) {
 	s.jobs[TargetCodex] = &Job{Target: TargetCodex, Status: StatusSucceeded, Method: "homebrew"}
 	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) { return VerifyResult{Output: "codex 1.3.0"}, nil })
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
+	var gotMethod, gotPackage string
+	var gotCask bool
 	s.latestVersion = func(_ context.Context, method, pkg string, cask bool) (string, error) {
-		if method != "homebrew" || pkg != "codex" || !cask {
-			t.Fatalf("lookup = %s %s cask=%t", method, pkg, cask)
-		}
+		gotMethod, gotPackage, gotCask = method, pkg, cask
 		return "1.3.0", nil
 	}
 	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
@@ -87,6 +148,9 @@ func TestUpdateAdvisoryCurrentAndHomebrewPackage(t *testing.T) {
 	}
 	if advisory.Status != UpdateStatusCurrent {
 		t.Fatalf("advisory = %+v", advisory)
+	}
+	if gotMethod != "homebrew" || gotPackage != "codex" || !gotCask {
+		t.Fatalf("lookup = %s %s cask=%t", gotMethod, gotPackage, gotCask)
 	}
 }
 
@@ -97,9 +161,10 @@ func TestUpdateAdvisoryRequiresVerifiedPackageOwnership(t *testing.T) {
 		return VerifyResult{ResolvedPath: "/other/codex", Output: "codex 1.2.3"}, nil
 	})
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return false, nil }
+	var latestCalled atomic.Bool
 	s.latestVersion = func(context.Context, string, string, bool) (string, error) {
-		t.Fatal("latest must not be queried without ownership")
-		return "", nil
+		latestCalled.Store(true)
+		return "1.3.0", nil
 	}
 	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
 	if err != nil {
@@ -107,6 +172,9 @@ func TestUpdateAdvisoryRequiresVerifiedPackageOwnership(t *testing.T) {
 	}
 	if advisory.Status != UpdateStatusUnknown {
 		t.Fatalf("advisory = %+v", advisory)
+	}
+	if latestCalled.Load() {
+		t.Fatal("latest was queried without package ownership")
 	}
 }
 

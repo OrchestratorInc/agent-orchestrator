@@ -110,8 +110,9 @@ func (s *Service) RecheckAgent(agentID string) {
 	}()
 }
 
-// WarmReadiness starts the coordinator's bounded asynchronous warm-up.
-func (s *Service) WarmReadiness() { s.readiness.Warm() }
+// WarmReadiness starts the coordinator's bounded asynchronous warm-up and
+// signals after its installation and authentication passes finish.
+func (s *Service) WarmReadiness() <-chan struct{} { return s.readiness.Warm() }
 
 func (s *Service) withReadinessUsage(ctx context.Context, snapshots []domain.AgentReadinessSnapshot) (Readiness, error) {
 	if s.sessions == nil {
