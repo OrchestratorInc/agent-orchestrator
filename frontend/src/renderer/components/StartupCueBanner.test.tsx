@@ -3,9 +3,9 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { StartupCueBanner } from "./StartupCueBanner";
 import type { components } from "../../api/schema";
 
-const { toast } = vi.hoisted(() => ({ toast: vi.fn() }));
-vi.mock("../stores/ui-store", () => ({ useUiStore: { getState: () => ({ showGlobalToast: toast }) } }));
-beforeEach(() => toast.mockReset());
+const { toast, dismiss } = vi.hoisted(() => ({ toast: vi.fn(), dismiss: vi.fn() }));
+vi.mock("../stores/ui-store", () => ({ useUiStore: { getState: () => ({ showGlobalToast: toast, dismissGlobalToast: dismiss, globalToasts: [] }) } }));
+beforeEach(() => { toast.mockReset(); dismiss.mockReset(); localStorage.clear(); });
 afterEach(cleanup);
 const run: components["schemas"]["StartupCueRun"] = {
 	cueId: "cue", name: "Dependencies", command: "npm install", shell: "sh", timeoutSeconds: 600,
@@ -30,4 +30,15 @@ test("failed setup clears its loader and retains output while allowing the sessi
 	expect(toast).toHaveBeenCalledExactlyOnceWith("Startup cue failed; session continued", "Exited with code 1", {
 		tone: "error", dedupeKey: `startup-cue:session:${run.startedAt}`,
 	});
+});
+
+test("dismissal survives remount and suppresses the toast", () => {
+	const failed = { ...run, state: "failed" as const, error: "Exited with code 1", output: "dependency missing" };
+	const view = render(<StartupCueBanner sessionId="session" run={failed} />);
+	fireEvent.click(screen.getByRole("button", { name: "Dismiss startup cue error" }));
+	expect(screen.queryByRole("alert")).toBeNull();
+	view.unmount();
+	render(<StartupCueBanner sessionId="session" run={failed} />);
+	expect(screen.queryByRole("alert")).toBeNull();
+	expect(toast).toHaveBeenCalledOnce();
 });
