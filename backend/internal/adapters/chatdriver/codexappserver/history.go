@@ -133,7 +133,7 @@ func (c *conversation) ReadHistory(ctx context.Context) ([]ports.ChatEvent, erro
 	// message, regardless of where search items appear within its turns.
 	for _, turn := range resp.Thread.Turns {
 		for _, item := range turn.Items {
-			citations.observeItem(turn.ID, item)
+			citations.observeItem(c.threadID, turn.ID, item)
 		}
 	}
 	for _, turn := range resp.Thread.Turns {
@@ -188,7 +188,7 @@ func (c *conversation) ReadHistory(ctx context.Context) ([]ports.ChatEvent, erro
 				return nil, fmt.Errorf("encode history item %s: %w", itemID, err)
 			}
 			for eventIndex, event := range normalizeItem(params, true) {
-				event, _ = citations.formatEvent(event)
+				event, _ = citations.formatEvent(c.threadID, event)
 				event.ProviderEventID = historyEventID(
 					c.threadID, turn.ID, "item", eventItemID, string(event.Kind), fmt.Sprint(eventIndex))
 				events = append(events, event)

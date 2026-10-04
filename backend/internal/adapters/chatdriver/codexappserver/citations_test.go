@@ -21,9 +21,61 @@ func testSearchItem() codexproto.ThreadItem {
 	}
 }
 
+func searchItemWithURL(url string) codexproto.ThreadItem {
+	return codexproto.ThreadItem{
+		Type: itemWebSearch,
+		Results: []json.RawMessage{
+			json.RawMessage(`{"ref_id":"same-source","title":"Source","url":"` + url + `"}`),
+		},
+	}
+}
+
+func TestCitationFormatterSeparatesNativeThreads(t *testing.T) {
+	f := newCitationFormatter()
+	rootParams, _ := json.Marshal(struct {
+		ThreadID string                `json:"threadId"`
+		TurnID   string                `json:"turnId"`
+		Item     codexproto.ThreadItem `json:"item"`
+	}{"root-thread", "same-turn", searchItemWithURL("https://example.com/root")})
+	childParams, _ := json.Marshal(struct {
+		ThreadID string                `json:"threadId"`
+		TurnID   string                `json:"turnId"`
+		Item     codexproto.ThreadItem `json:"item"`
+	}{"child-thread", "same-turn", searchItemWithURL("https://example.com/child")})
+	f.observeNotification(notification{Method: codexproto.MethodItemCompleted, Params: rootParams}, "")
+	f.observeNotification(notification{Method: codexproto.MethodItemCompleted, Params: childParams}, "")
+	marker := citationStart + "cite" + citationField + "same-source" + citationStop
+	if got := f.markdown("Root "+marker, "root-thread", "same-turn"); !strings.Contains(got, "https://example.com/root") {
+		t.Fatalf("root source crossed threads: %q", got)
+	}
+	if got := f.markdown("Child "+marker, "child-thread", "same-turn"); !strings.Contains(got, "https://example.com/child") {
+		t.Fatalf("child source crossed threads: %q", got)
+	}
+
+	start := citationStart + "cite" + citationField + "same-source"
+	if ev, visible := f.formatEvent("root-thread", ports.ChatEvent{
+		Kind: ports.ChatEventMessageDelta, ProviderTurnID: "same-turn", ProviderItemID: "same-item", Delta: "Root " + start,
+	}); !visible || ev.Delta != "Root " {
+		t.Fatalf("root pending delta = %q, visible %t", ev.Delta, visible)
+	}
+	if ev, visible := f.formatEvent("child-thread", ports.ChatEvent{
+		Kind: ports.ChatEventMessageDelta, ProviderTurnID: "same-turn", ProviderItemID: "same-item", Delta: "Child " + start,
+	}); !visible || ev.Delta != "Child " {
+		t.Fatalf("child pending delta = %q, visible %t", ev.Delta, visible)
+	}
+	f.formatEvent("root-thread", ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "same-turn",
+	})
+	if ev, visible := f.formatEvent("child-thread", ports.ChatEvent{
+		Kind: ports.ChatEventMessageDelta, ProviderTurnID: "same-turn", ProviderItemID: "same-item", Delta: citationStop,
+	}); !visible || ev.Delta != "[1](<https://example.com/child>)" {
+		t.Fatalf("child pending state was lost: %q, visible %t", ev.Delta, visible)
+	}
+}
+
 func TestCitationFormatterStreamsNativeMarkersAsLinks(t *testing.T) {
 	f := newCitationFormatter()
-	f.observeItem("turn-1", testSearchItem())
+	f.observeItem("thread-1", "turn-1", testSearchItem())
 	parts := []string{
 		"The claim. " + citationStart + "ci",
 		"te" + citationField + "turn0search0",
@@ -31,7 +83,7 @@ func TestCitationFormatterStreamsNativeMarkersAsLinks(t *testing.T) {
 	}
 	var streamed strings.Builder
 	for _, part := range parts {
-		ev, visible := f.formatEvent(ports.ChatEvent{
+		ev, visible := f.formatEvent("thread-1", ports.ChatEvent{
 			Kind: ports.ChatEventMessageDelta, ProviderTurnID: "turn-1",
 			ProviderItemID: "answer-1", Delta: part,
 		})
@@ -46,7 +98,7 @@ func TestCitationFormatterStreamsNativeMarkersAsLinks(t *testing.T) {
 	if got := streamed.String(); got != want {
 		t.Fatalf("streamed = %q, want %q", got, want)
 	}
-	completed, _ := f.formatEvent(ports.ChatEvent{
+	completed, _ := f.formatEvent("thread-1", ports.ChatEvent{
 		Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "turn-1",
 		ProviderItemID: "answer-1", Text: strings.Join(parts, ""),
 	})
@@ -57,22 +109,22 @@ func TestCitationFormatterStreamsNativeMarkersAsLinks(t *testing.T) {
 
 func TestCitationFormatterPreservesCodeExamplesAndUnknownSources(t *testing.T) {
 	f := newCitationFormatter()
-	f.observeItem("turn-1", testSearchItem())
+	f.observeItem("thread-1", "turn-1", testSearchItem())
 	marker := citationStart + "cite" + citationField + "turn0search0" + citationStop
 	unknown := citationStart + "cite" + citationField + "turn9search0" + citationStop
 	malformed := citationStart + "cite" + citationField + "bad!" + citationStop
 	raw := "Inline `" + marker + "` stays.\n\n```text\n" + marker + "\n```\n\nKnown " + marker + " unknown " + unknown + " malformed " + malformed
-	got := f.markdown(raw, "turn-1")
+	got := f.markdown(raw, "thread-1", "turn-1")
 	if strings.Count(got, marker) != 2 {
 		t.Fatalf("code examples changed: %q", got)
 	}
 	if !strings.Contains(got, "Known [1](<https://example.com/first>) unknown [Source unavailable] malformed [Source unavailable]") {
 		t.Fatalf("prose citations not normalized: %q", got)
 	}
-	if trailing := f.markdown("Broken "+citationStart+"cite"+citationField+"turn0search0", "turn-1"); trailing != "Broken [Source unavailable]" {
+	if trailing := f.markdown("Broken "+citationStart+"cite"+citationField+"turn0search0", "thread-1", "turn-1"); trailing != "Broken [Source unavailable]" {
 		t.Fatalf("incomplete citation = %q", trailing)
 	}
-	streamed, visible := f.formatEvent(ports.ChatEvent{
+	streamed, visible := f.formatEvent("thread-1", ports.ChatEvent{
 		Kind: ports.ChatEventMessageDelta, ProviderTurnID: "turn-1", ProviderItemID: "bad-answer", Delta: "Broken " + malformed,
 	})
 	if !visible || streamed.Delta != "Broken " {
@@ -83,7 +135,7 @@ func TestCitationFormatterPreservesCodeExamplesAndUnknownSources(t *testing.T) {
 func TestCitationFormatterLeavesOrdinaryMarkdownAlone(t *testing.T) {
 	f := newCitationFormatter()
 	raw := "See [source](https://example.com)."
-	if got := f.markdown(raw, "turn-1"); got != raw {
+	if got := f.markdown(raw, "thread-1", "turn-1"); got != raw {
 		t.Fatalf("ordinary Markdown changed: %q", got)
 	}
 }

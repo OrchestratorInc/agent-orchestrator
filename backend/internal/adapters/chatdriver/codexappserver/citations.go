@@ -25,12 +25,24 @@ var (
 	citationLocator = regexp.MustCompile(`^L\d+(?:-L\d+)?$`)
 )
 
-// citationFormatter is confined to one native conversation. Codex owns the
+// citationFormatter keeps native thread state separate even though Codex
+// multiplexes child-thread notifications over one connection. Codex owns the
 // marker grammar and reference IDs; the events it emits contain ordinary
 // Markdown, which every Chat provider and renderer already understands.
 type citationFormatter struct {
-	sources  map[string]map[string]citation.Source
-	messages map[string]*citationMessage
+	sources  map[citationTurnKey]map[string]citation.Source
+	messages map[citationMessageKey]*citationMessage
+}
+
+type citationTurnKey struct {
+	threadID string
+	turnID   string
+}
+
+type citationMessageKey struct {
+	threadID string
+	turnID   string
+	itemID   string
 }
 
 type citationMessage struct {
@@ -41,30 +53,36 @@ type citationMessage struct {
 
 func newCitationFormatter() *citationFormatter {
 	return &citationFormatter{
-		sources:  make(map[string]map[string]citation.Source),
-		messages: make(map[string]*citationMessage),
+		sources:  make(map[citationTurnKey]map[string]citation.Source),
+		messages: make(map[citationMessageKey]*citationMessage),
 	}
 }
 
-func (f *citationFormatter) observeNotification(n notification) {
+func (f *citationFormatter) observeNotification(n notification, defaultThreadID string) {
 	if n.Method != codexproto.MethodItemCompleted {
 		return
 	}
 	var p struct {
-		TurnID string                `json:"turnId"`
-		Item   codexproto.ThreadItem `json:"item"`
+		ThreadID string                `json:"threadId"`
+		TurnID   string                `json:"turnId"`
+		Item     codexproto.ThreadItem `json:"item"`
 	}
 	if json.Unmarshal(n.Params, &p) == nil {
-		f.observeItem(p.TurnID, p.Item)
+		threadID := p.ThreadID
+		if threadID == "" {
+			threadID = defaultThreadID
+		}
+		f.observeItem(threadID, p.TurnID, p.Item)
 	}
 }
 
-func (f *citationFormatter) observeItem(turnID string, item codexproto.ThreadItem) {
+func (f *citationFormatter) observeItem(threadID, turnID string, item codexproto.ThreadItem) {
 	if item.Type != itemWebSearch || len(item.Results) == 0 {
 		return
 	}
-	if f.sources[turnID] == nil {
-		f.sources[turnID] = make(map[string]citation.Source)
+	key := citationTurnKey{threadID: threadID, turnID: turnID}
+	if f.sources[key] == nil {
+		f.sources[key] = make(map[string]citation.Source)
 	}
 	for _, raw := range item.Results {
 		var result struct {
@@ -75,11 +93,11 @@ func (f *citationFormatter) observeItem(turnID string, item codexproto.ThreadIte
 		if json.Unmarshal(raw, &result) != nil || !citationID.MatchString(result.ID) {
 			continue
 		}
-		if previous, exists := f.sources[turnID][result.ID]; exists && previous.URL != result.URL {
-			f.sources[turnID][result.ID] = citation.Source{ID: result.ID}
+		if previous, exists := f.sources[key][result.ID]; exists && previous.URL != result.URL {
+			f.sources[key][result.ID] = citation.Source{ID: result.ID}
 			continue
 		}
-		f.sources[turnID][result.ID] = citation.Source{
+		f.sources[key][result.ID] = citation.Source{
 			ID: result.ID, Title: result.Title, URL: result.URL,
 		}
 	}
@@ -88,8 +106,12 @@ func (f *citationFormatter) observeItem(turnID string, item codexproto.ThreadIte
 // formatEvent keeps streamed output append-only. A marker split across deltas,
 // or one whose source has not arrived yet, stays buffered until it can be shown
 // as a link. The settled event always replaces the stream with the full answer.
-func (f *citationFormatter) formatEvent(ev ports.ChatEvent) (ports.ChatEvent, bool) {
-	key := ev.ProviderTurnID + "\x00" + ev.ProviderItemID
+func (f *citationFormatter) formatEvent(threadID string, ev ports.ChatEvent) (ports.ChatEvent, bool) {
+	key := citationMessageKey{
+		threadID: threadID,
+		turnID:   ev.ProviderTurnID,
+		itemID:   ev.ProviderItemID,
+	}
 	switch ev.Kind {
 	case ports.ChatEventMessageDelta:
 		message := f.messages[key]
@@ -102,7 +124,7 @@ func (f *citationFormatter) formatEvent(ev ports.ChatEvent) (ports.ChatEvent, bo
 			message.rendered += ev.Delta
 			return ev, true
 		}
-		rendered, pending := f.markdownWithPending(message.raw, ev.ProviderTurnID, false)
+		rendered, pending := f.markdownWithPending(message.raw, threadID, ev.ProviderTurnID, false)
 		if !strings.HasPrefix(rendered, message.rendered) {
 			// A late source or an unfinished Markdown construct changed an already
 			// emitted prefix. Completion will settle the authoritative full text.
@@ -114,12 +136,11 @@ func (f *citationFormatter) formatEvent(ev ports.ChatEvent) (ports.ChatEvent, bo
 		return ev, ev.Delta != ""
 	case ports.ChatEventMessageCompleted:
 		delete(f.messages, key)
-		ev.Text = f.markdown(ev.Text, ev.ProviderTurnID)
+		ev.Text = f.markdown(ev.Text, threadID, ev.ProviderTurnID)
 	case ports.ChatEventTurnCompleted:
 		// A failed or cancelled turn may never complete its last message.
-		prefix := ev.ProviderTurnID + "\x00"
 		for key := range f.messages {
-			if strings.HasPrefix(key, prefix) {
+			if key.threadID == threadID && key.turnID == ev.ProviderTurnID {
 				delete(f.messages, key)
 			}
 		}
@@ -127,12 +148,12 @@ func (f *citationFormatter) formatEvent(ev ports.ChatEvent) (ports.ChatEvent, bo
 	return ev, true
 }
 
-func (f *citationFormatter) markdown(raw, turnID string) string {
-	rendered, _ := f.markdownWithPending(raw, turnID, true)
+func (f *citationFormatter) markdown(raw, threadID, turnID string) string {
+	rendered, _ := f.markdownWithPending(raw, threadID, turnID, true)
 	return rendered
 }
 
-func (f *citationFormatter) markdownWithPending(raw, turnID string, complete bool) (string, bool) {
+func (f *citationFormatter) markdownWithPending(raw, threadID, turnID string, complete bool) (string, bool) {
 	if !strings.Contains(raw, citationStart) {
 		return raw, false
 	}
@@ -179,7 +200,7 @@ func (f *citationFormatter) markdownWithPending(raw, turnID string, complete boo
 		}
 		ref := citation.Reference{Start: start, End: end}
 		for _, id := range ids {
-			source := f.source(turnID, id)
+			source := f.source(threadID, turnID, id)
 			if source.URL == "" && !complete {
 				limit = start
 				break
@@ -213,12 +234,13 @@ func citationIDs(body string) []string {
 	return ids
 }
 
-func (f *citationFormatter) source(turnID, id string) citation.Source {
-	if source, ok := f.sources[turnID][id]; ok {
+func (f *citationFormatter) source(threadID, turnID, id string) citation.Source {
+	key := citationTurnKey{threadID: threadID, turnID: turnID}
+	if source, ok := f.sources[key][id]; ok {
 		return source
 	}
-	// A later answer can cite an earlier search. Use it only when its native ID
-	// has exactly one destination across the conversation.
+	// A later answer can cite an earlier search. Keep the fallback only when the
+	// native ID has one destination across all multiplexed threads.
 	var found citation.Source
 	for _, sources := range f.sources {
 		if source, ok := sources[id]; ok {

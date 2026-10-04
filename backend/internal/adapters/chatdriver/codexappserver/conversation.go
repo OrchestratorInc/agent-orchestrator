@@ -164,7 +164,6 @@ func (c *conversation) pump() {
 	citations := newCitationFormatter()
 
 	for n := range c.conn.notifs() {
-		citations.observeNotification(n)
 		// Before normalizing, because a token-usage report is the only place the
 		// context position is stated and a compaction event that arrives in the same
 		// batch has to be able to read it.
@@ -175,22 +174,23 @@ func (c *conversation) pump() {
 			ThreadID string `json:"threadId"`
 		}
 		_ = json.Unmarshal(n.Params, &scope)
+		citations.observeNotification(n, c.threadID)
 
 		// The clock is passed in rather than read inside: a rate-limit reset arrives
 		// as an absolute instant and has to become a remaining duration, and a
 		// normalizer that reads the clock itself cannot be tested deterministically.
 		for _, ev := range normalizeNotification(n, time.Now()) {
-			var visible bool
-			ev, visible = citations.formatEvent(ev)
-			if !visible {
-				continue
-			}
 			threadID := ev.ProviderConversationID
 			if threadID == "" {
 				threadID = scope.ThreadID
 			}
 			if threadID == "" {
 				threadID = c.threadID
+			}
+			var visible bool
+			ev, visible = citations.formatEvent(threadID, ev)
+			if !visible {
+				continue
 			}
 			key := threadID + ":" + ev.ProviderTurnID
 			if ev.Kind == ports.ChatEventError {
