@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
@@ -107,6 +108,17 @@ type Service struct {
 	terminals      TerminalOpener
 	dataDir        string
 	selfExecutable func() (string, error)
+
+	// Optional daemon-side login-completion detection. When wired through
+	// EnableLoginCompletionRefresh, a finished native sign-in refreshes the
+	// harness readiness without a client polling. See logincompletion.go.
+	monitorCtx   context.Context
+	loginWatcher LoginCompletion
+	refresher    ReadinessRefresher
+	pollInterval time.Duration
+	initialGrace time.Duration
+	maxLifetime  time.Duration
+	after        func(time.Duration) <-chan time.Time
 }
 
 // New creates an authentication-plan service.
@@ -187,6 +199,10 @@ func (s *Service) Start(ctx context.Context, agentID string) (StartResult, error
 	if err != nil {
 		return StartResult{}, err
 	}
+	// Watch the login command in the daemon so a finished sign-in refreshes this
+	// harness's readiness even if no client is polling it. No-op unless
+	// EnableLoginCompletionRefresh wired the dependencies.
+	s.startLoginCompletionWatch(plan.AgentID, terminal.HandleID)
 	return StartResult{
 		AgentID:       plan.AgentID,
 		Action:        plan.Action,

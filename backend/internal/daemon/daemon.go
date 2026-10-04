@@ -646,6 +646,11 @@ func Run() error {
 	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, log)
 	systemChecks.SetGitHubAuthTerminalOpener(shellTermSvc)
 	agentAuthSvc := agentauth.NewWithAgentResolver(hostCommands, agentSvc, shellTermSvc, cfg.DataDir)
+	// Detect when a harness login terminal's command exits and refresh that
+	// harness's readiness in the daemon, so a finished sign-in becomes usable for
+	// every harness without the Settings panel (or any client) driving the
+	// re-check — the same courtesy the Codex account login already gets.
+	agentAuthSvc.EnableLoginCompletionRefresh(ctx, shellTermSvc, agentSvc)
 	agentSvc.SetCodexAccountLoginTerminalOpener(shellTermSvc)
 	// Late-bound so Kill/Cleanup close a session's scoped shells before its
 	// worktree is torn down (shellTermSvc cannot exist before sessMgr does; see
