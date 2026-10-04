@@ -48,10 +48,10 @@ func (m *Manager) checkSessionHealth(ctx context.Context, rec domain.SessionReco
 		return m.recordAgentExited(ctx, rec)
 	}
 	alive, err := m.runtime.IsAlive(ctx, handle)
-	if err != nil && !errors.Is(err, ports.ErrRuntimeUnavailable) {
+	if err != nil {
 		return fmt.Errorf("check session %s: %w", rec.ID, err)
 	}
-	if err == nil && alive {
+	if alive {
 		return nil
 	}
 	return m.recordAgentExited(ctx, rec)

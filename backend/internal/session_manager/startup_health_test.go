@@ -74,6 +74,25 @@ func TestStartupHealthInconclusiveChatProbePreservesSession(t *testing.T) {
 	}
 }
 
+func TestStartupHealthUnavailableRuntimeProbePreservesSession(t *testing.T) {
+	m, st, rt, ws := newLifecycleManager()
+	rt.aliveErr = ports.ErrRuntimeUnavailable
+	rec := domain.SessionRecord{
+		ID: "mer-tui", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/tui", Branch: "ao/tui/root", RuntimeHandleID: "tmux-1"},
+		Activity: domain.Activity{State: domain.ActivityActive},
+	}
+	st.sessions[rec.ID] = rec
+
+	err := m.checkSessionHealth(context.Background(), rec)
+	if !errors.Is(err, ports.ErrRuntimeUnavailable) {
+		t.Fatalf("error=%v, want runtime unavailable", err)
+	}
+	if st.sessions[rec.ID].Activity.State != domain.ActivityActive || rt.created != 0 || len(ws.restoreConfigs) != 0 {
+		t.Fatal("unavailable runtime probe changed activity or launched resources")
+	}
+}
+
 func TestStartupSwitchRecoveryDoesNotLaunchStoppedSource(t *testing.T) {
 	for _, mode := range []domain.SessionMode{domain.SessionModeTUI, domain.SessionModeChat} {
 		t.Run(string(mode), func(t *testing.T) {
