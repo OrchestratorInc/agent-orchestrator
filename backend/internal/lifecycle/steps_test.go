@@ -64,3 +64,43 @@ func TestStepsRingKeepsOnlyTheNewest(t *testing.T) {
 		t.Fatalf("ring = %d entries, first %q", len(steps), steps[0].ToolUseID)
 	}
 }
+
+func TestStepsClearedWhenRuntimeEnds(t *testing.T) {
+	ctx := context.Background()
+	openStep := func(t *testing.T, m *Manager) {
+		t.Helper()
+		if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{Valid: true, State: domain.ActivityActive, Event: "pre-tool-use", ToolName: "Bash", ToolUseID: "t1"}); err != nil {
+			t.Fatal(err)
+		}
+		if len(m.Steps("mer-1")) != 1 {
+			t.Fatal("pre-tool-use did not record a step")
+		}
+	}
+
+	t.Run("terminated", func(t *testing.T) {
+		m, st, _ := newManager()
+		st.sessions["mer-1"] = working("mer-1")
+		openStep(t, m)
+		if err := m.MarkTerminated(ctx, "mer-1"); err != nil {
+			t.Fatal(err)
+		}
+		if steps := m.Steps("mer-1"); len(steps) != 0 {
+			t.Fatalf("terminated session kept steps %+v", steps)
+		}
+	})
+
+	t.Run("controller switch", func(t *testing.T) {
+		m, st, _ := newManager()
+		rec := working("mer-1")
+		rec.Mode = domain.SessionModeTUI
+		rec.Metadata.AgentSessionID = "native-1"
+		st.sessions["mer-1"] = rec
+		openStep(t, m)
+		if changed, err := m.CommitControllerEpoch(ctx, "mer-1", domain.SessionModeTUI, domain.SessionModeChat, "native-1", false); err != nil || !changed {
+			t.Fatalf("CommitControllerEpoch: changed=%v err=%v", changed, err)
+		}
+		if steps := m.Steps("mer-1"); len(steps) != 0 {
+			t.Fatalf("old runtime's open step survived the switch: %+v", steps)
+		}
+	})
+}

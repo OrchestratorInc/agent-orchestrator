@@ -566,11 +566,13 @@ func Run() error {
 			return persistenthost.HostPID(cfg.DataDir, string(id))
 		},
 		// The desktop shell spawns an app-owned daemon, so its parent is
-		// the Electron main process and that tree is the rest of AO.
+		// the Electron main process and that tree is the rest of AO. Once
+		// Electron dies the daemon is reparented to init, whose tree is the
+		// whole host, so PID 1 is never a root.
 		AppRootPIDs: func() []int {
 			roots := []int{os.Getpid()}
-			if os.Getenv("AO_OWNER") == "app" {
-				roots = append(roots, os.Getppid())
+			if p := os.Getppid(); p > 1 && os.Getenv("AO_OWNER") == "app" {
+				roots = append(roots, p)
 			}
 			// The tmux server behind AO's sessions detaches and reparents to
 			// init, so it is a descendant of neither of the above.

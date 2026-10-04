@@ -4,6 +4,7 @@ package procmem
 
 import (
 	"context"
+	"fmt"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -52,7 +53,9 @@ func Snapshot(ctx context.Context, run Runner) (*Table, error) {
 	}
 	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
-		return nil, ErrUnsupported
+		// Not ErrUnsupported: that verdict is permanent for the run, and this
+		// call can fail transiently under handle pressure.
+		return nil, fmt.Errorf("procmem: CreateToolhelp32Snapshot: %w", err)
 	}
 	defer func() { _ = windows.CloseHandle(snap) }()
 

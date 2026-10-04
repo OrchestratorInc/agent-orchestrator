@@ -497,6 +497,7 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 		// (later observations return early on cur.IsTerminated). Runs under
 		// m.mu — mutate holds it across this callback.
 		delete(m.flights, id)
+		delete(m.steps, id)
 		terminated = true
 		return next, true
 	})
@@ -1694,6 +1695,9 @@ func (m *Manager) changeControllerEpoch(
 	next.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}
 	next.UpdatedAt = now
 	delete(m.flights, id)
+	// The old runtime's open step never gets its post-hook; left in place it
+	// would show as the new controller's current tool.
+	delete(m.steps, id)
 	resolutions := needsInputResolutions(previous, next, now)
 	waitingEvents := m.waitingInputEvents(
 		next, previous.Activity.State, previous.Activity.LastActivityAt, now,
@@ -1802,6 +1806,7 @@ func (m *Manager) MarkTerminated(ctx context.Context, id domain.SessionID) error
 				cur.IsTerminated = true
 				cur.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: now}
 				delete(m.flights, id) // runs under m.mu (mutate holds it)
+				delete(m.steps, id)
 				outcome = terminationApplied
 				return cur, true
 			}
