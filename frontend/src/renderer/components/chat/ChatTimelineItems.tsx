@@ -120,7 +120,9 @@ const STREAM_BASE_CHARACTERS_PER_SECOND = 58;
 const STREAM_TARGET_BACKLOG_CHARACTERS = 72;
 const STREAM_MAX_CHARACTERS_PER_SECOND = 720;
 const STREAM_MAX_FRAME_DELTA_MS = 100;
-const STREAM_MAX_DISPLAY_LAG_MS = 200;
+// Snapshot delivery already coalesces provider output. Smooth short gaps without
+// adding another perceptible playback delay on top of the transport cadence.
+const STREAM_MAX_DISPLAY_LAG_MS = 50;
 const STREAM_GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function streamGraphemes(text: string): string[] {

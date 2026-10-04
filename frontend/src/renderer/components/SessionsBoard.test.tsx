@@ -129,7 +129,7 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
-	it.each(["cloud", "standalone", undefined] as const)("hides the cue runner for %s projects", (kind) => {
+	it.each(["single_repo", "multi_repo", "cloud", "standalone", undefined] as const)("hides the cue runner for %s projects", (kind) => {
 		boardActionsInPanelMock.mockReturnValue(true);
 		workspaceQueryMock.mockReturnValue({
 			data: [{ ...workspaceWithSessions([]), kind }],
@@ -238,7 +238,7 @@ describe("SessionsBoard", () => {
 		expect(
 			within(screen.getByRole("button", { name: "New task" })).getByText("Task").hasAttribute("data-compact-label"),
 		).toBe(true);
-		expect(screen.getByRole("button", { name: "Run a cue" }).querySelector(".lucide-play")).not.toBeNull();
+		expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
 	});
 
 	it.each([

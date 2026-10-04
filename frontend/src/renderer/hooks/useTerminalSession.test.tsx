@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
 import type { MuxConnectionState, TerminalMux } from "../lib/terminal-mux";
 import type { WorkspaceSession } from "../types/workspace";
 import { useTerminalSession, type AttachableTerminal } from "./useTerminalSession";
@@ -125,7 +126,9 @@ function createFakeTerminal(): FakeTerminal {
 		showLatestOutput: () => {
 			terminal.latestOutputRequests += 1;
 		},
+		hasMeasuredGrid: true,
 		prepareForActivation: async () => undefined,
+		requestActivationFocus: () => undefined,
 		notifyCursorColorScheme: () => undefined,
 		sendUserInput: (data, source = "shortcut") => {
 			let accepted = false;
@@ -163,6 +166,7 @@ function setup({
 	attachedSession = session as WorkspaceSession | undefined,
 	isVisible = true,
 	inputDisabled = false,
+	hasMeasuredGrid = true,
 } = {}) {
 	const muxes: FakeMux[] = [];
 	const createMux = () => {
@@ -193,6 +197,7 @@ function setup({
 		{ initialProps, wrapper },
 	);
 	const terminal = createFakeTerminal();
+	terminal.hasMeasuredGrid = hasMeasuredGrid;
 	let detach: () => void = () => undefined;
 	act(() => {
 		detach = view.result.current.attach(terminal);
@@ -345,6 +350,18 @@ describe("useTerminalSession", () => {
 		expect(muxes[0].resizes.slice(initialResizes)).toEqual([["handle-1", 132, 47]]);
 	});
 
+	// A tab opened and immediately covered by the next one attaches before it
+	// has measured its slot. Claiming xterm's default grid would start the shell
+	// at the wrong width; its first measurement sizes it instead.
+	it("claims no size until the terminal has measured its slot", () => {
+		const { view, muxes } = setup({ hasMeasuredGrid: false });
+		expect(muxes[0].opens).toEqual([["handle-1", 0, 0]]);
+		act(() => muxes[0].emitOpened("handle-1"));
+
+		act(() => view.result.current.syncVisibleSize(80, 24));
+		expect(muxes[0].resizes).toEqual([["handle-1", 80, 24]]);
+	});
+
 	it("publishes each grid in a drag as it happens and does not re-send the settled grid", () => {
 		const { terminal, muxes } = setup();
 		const initialResizes = muxes[0].resizes.length;
@@ -415,6 +432,18 @@ describe("useTerminalSession", () => {
 			expect(view.result.current.replaySettled).toBe(true);
 			act(() => muxes[0].emitData("handle-1", "review output"));
 			expect(terminal.lines).toEqual(["review output"]);
+			expect(view.result.current.replaySettled).toBe(true);
+		});
+
+		it("streams a freshly created terminal's first output without the replay gate", () => {
+			// A shell this renderer just created has no history: its first bytes
+			// are the prompt, which should appear as soon as it arrives.
+			markTerminalHandleFresh("handle-1");
+			const { view, terminal, muxes } = setup();
+			expect(view.result.current.replaySettled).toBe(true);
+			act(() => muxes[0].emitOpened("handle-1"));
+			act(() => muxes[0].emitData("handle-1", "user@host ~ % "));
+			expect(terminal.lines).toEqual(["user@host ~ % "]);
 			expect(view.result.current.replaySettled).toBe(true);
 		});
 

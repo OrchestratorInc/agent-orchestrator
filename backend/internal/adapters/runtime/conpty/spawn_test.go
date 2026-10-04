@@ -69,7 +69,7 @@ func TestStartedHostKillFailureRetainsPartialCreateEvidence(t *testing.T) {
 		t.Fatalf("started-host cleanup = (%d, %v), want retained pid and joined startup/kill errors", pid, spawnErr)
 	}
 
-	runtime := New(Options{Spawner: func(context.Context, string, string, []string, map[string]string) (string, int, error) {
+	runtime := New(Options{Spawner: func(context.Context, string, string, []string, map[string]string, bool) (string, int, error) {
 		return "", pid, spawnErr
 	}})
 	_, err := runtime.Create(context.Background(), ports.RuntimeConfig{
@@ -145,7 +145,7 @@ func TestStartedHostKillFailureRetainsPartialCreateEvidence(t *testing.T) {
 func TestCreateReservationFailureDoesNotSpawnOrClaimRuntimeEffect(t *testing.T) {
 	isolateRegistry(t)
 	spawnCalls := 0
-	runtime := New(Options{Spawner: func(context.Context, string, string, []string, map[string]string) (string, int, error) {
+	runtime := New(Options{Spawner: func(context.Context, string, string, []string, map[string]string, bool) (string, int, error) {
 		spawnCalls++
 		return "127.0.0.1:1", livePID(), nil
 	}})
@@ -168,7 +168,7 @@ func TestCreateReservationFailureDoesNotSpawnOrClaimRuntimeEffect(t *testing.T) 
 func TestDefinitiveSpawnFailureRetainsCleanupAuthorityUntilUnregisterSucceeds(t *testing.T) {
 	isolateRegistry(t)
 	spawnErr := errors.New("pty-host failed before starting")
-	runtime := New(Options{Spawner: func(context.Context, string, string, []string, map[string]string) (string, int, error) {
+	runtime := New(Options{Spawner: func(context.Context, string, string, []string, map[string]string, bool) (string, int, error) {
 		return "", 0, spawnErr
 	}})
 	unregisterErr := errors.New("reservation cleanup denied")
@@ -225,7 +225,7 @@ func TestDefinitiveSpawnFailureRetainsCleanupAuthorityUntilUnregisterSucceeds(t 
 func TestPostStartRegistryUpdateFailureLeavesDurableUnknownReservation(t *testing.T) {
 	isolateRegistry(t)
 	startupErr := errors.New("READY response lost")
-	runtime := New(Options{Spawner: func(context.Context, string, string, []string, map[string]string) (string, int, error) {
+	runtime := New(Options{Spawner: func(context.Context, string, string, []string, map[string]string, bool) (string, int, error) {
 		return "", livePID(), startupErr
 	}})
 	registerCalls := 0
@@ -320,5 +320,24 @@ func TestInteractiveTerminalEnvPreservesExplicitNoColor(t *testing.T) {
 				t.Fatalf("explicit NO_COLOR not preserved: %#v", env)
 			}
 		})
+	}
+}
+
+func TestCreatePassesStartOnAttachToSpawner(t *testing.T) {
+	isolateRegistry(t)
+	spawnErr := errors.New("stop after capturing the flag")
+	var got bool
+	runtime := New(Options{Spawner: func(_ context.Context, _, _ string, _ []string, _ map[string]string, startOnAttach bool) (string, int, error) {
+		got = startOnAttach
+		return "", 0, spawnErr
+	}})
+	_, err := runtime.Create(context.Background(), ports.RuntimeConfig{
+		SessionID: "shellterm-deferred", WorkspacePath: t.TempDir(), Argv: []string{"/bin/zsh"}, StartOnAttach: true,
+	})
+	if !errors.Is(err, spawnErr) {
+		t.Fatalf("Create error = %v, want spawner error", err)
+	}
+	if !got {
+		t.Fatal("spawner was not asked to defer the start")
 	}
 }

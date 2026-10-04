@@ -261,8 +261,7 @@ vi.mock("@xterm/xterm", () => ({
 vi.mock("@xterm/addon-fit", () => ({
 	FitAddon: class FakeFitAddon {
 		proposeDimensions() {
-			state.fit();
-			return undefined;
+			return state.fit();
 		}
 	},
 }));
@@ -373,6 +372,40 @@ describe("XtermTerminal", () => {
 		window.ao!.terminal.onFontSizeShortcut = () => () => undefined;
 	});
 
+	// FitAddon proposes its 2-column minimum for a host with no layout box (a
+	// tab parked before it was laid out). Adopting it would start the shell at
+	// 2 columns.
+	it("never adopts a fitted grid from a host with no layout box", async () => {
+		state.fit.mockReturnValue({ cols: 2, rows: 5 });
+		let terminal!: AttachableTerminal;
+		render(<XtermTerminal theme="dark" onReady={(ready) => { terminal = ready; }} />);
+
+		act(() => { window.dispatchEvent(new Event("resize")); });
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 60)); });
+
+		expect(state.lastTerminal!.resize).not.toHaveBeenCalledWith(2, 5);
+		expect(terminal.hasMeasuredGrid).toBe(false);
+	});
+
+	it("publishes its first measured grid even when it equals xterm's default", async () => {
+		const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+		const height = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+		try {
+			let terminal!: AttachableTerminal;
+			const onVisibleSize = vi.fn();
+			render(<XtermTerminal theme="dark" onVisibleSize={onVisibleSize} onReady={(ready) => { terminal = ready; }} />);
+			const { cols, rows } = state.lastTerminal!;
+			state.fit.mockReturnValue({ cols, rows });
+
+			await waitFor(() => expect(onVisibleSize).toHaveBeenCalledWith(cols, rows));
+			expect(terminal.hasMeasuredGrid).toBe(true);
+			expect(state.lastTerminal!.resize).not.toHaveBeenCalled();
+		} finally {
+			width.mockRestore();
+			height.mockRestore();
+		}
+	});
+
 	it("coalesces live terminal resize observer deliveries into the next frame", () => {
 		const callbacks: ResizeObserverCallback[] = [];
 		const frames: FrameRequestCallback[] = [];
@@ -394,6 +427,8 @@ describe("XtermTerminal", () => {
 			writable: true,
 			value: CapturingResizeObserver,
 		});
+		const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+		const height = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
 		try {
 			render(
 				<div data-terminal-live-resize="true">
@@ -411,6 +446,8 @@ describe("XtermTerminal", () => {
 			act(() => frames.shift()?.(performance.now()));
 			expect(state.fit).toHaveBeenCalledTimes(1);
 		} finally {
+			width.mockRestore();
+			height.mockRestore();
 			requestAnimationFrameSpy.mockRestore();
 			Object.defineProperty(window, "ResizeObserver", {
 				configurable: true,
@@ -641,6 +678,121 @@ describe("XtermTerminal", () => {
 		rerender(<XtermTerminal focusRequested isVisible theme="dark" />);
 
 		await waitFor(() => expect(state.lastTerminal!.focus).toHaveBeenCalled());
+	});
+
+	it("restores focus when the cache requests activation focus", async () => {
+		let terminal: AttachableTerminal | undefined;
+		render(<XtermTerminal theme="dark" onReady={(ready) => { terminal = ready; }} />);
+		state.lastTerminal!.focus.mockClear();
+
+		act(() => terminal!.requestActivationFocus());
+
+		await waitFor(() => expect(state.lastTerminal!.focus).toHaveBeenCalled());
+	});
+
+	it("respects an explicit focus opt-out when the cache requests activation focus", () => {
+		vi.useFakeTimers();
+		try {
+			let terminal: AttachableTerminal | undefined;
+			render(<XtermTerminal focusRequested={false} theme="dark" onReady={(ready) => { terminal = ready; }} />);
+			state.lastTerminal!.focus.mockClear();
+
+			act(() => terminal!.requestActivationFocus());
+			act(() => vi.runOnlyPendingTimers());
+
+			expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("rechecks the focus opt-out before a queued activation focus runs", () => {
+		vi.useFakeTimers();
+		try {
+			let terminal: AttachableTerminal | undefined;
+			const onReady = (ready: AttachableTerminal) => { terminal = ready; };
+			const { rerender } = render(<XtermTerminal focusRequested theme="dark" onReady={onReady} />);
+			act(() => vi.runOnlyPendingTimers());
+			state.lastTerminal!.focus.mockClear();
+
+			act(() => terminal!.requestActivationFocus());
+			rerender(<XtermTerminal focusRequested={false} theme="dark" onReady={onReady} />);
+			act(() => vi.runOnlyPendingTimers());
+
+			expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not steal focus from a dialog when the cache requests activation focus", () => {
+		vi.useFakeTimers();
+		try {
+			let terminal: AttachableTerminal | undefined;
+			render(<XtermTerminal theme="dark" onReady={(ready) => { terminal = ready; }} />);
+			state.lastTerminal!.focus.mockClear();
+			const dialog = document.createElement("div");
+			dialog.setAttribute("role", "dialog");
+			dialog.dataset.state = "open";
+			const dialogInput = document.createElement("input");
+			dialog.appendChild(dialogInput);
+			document.body.appendChild(dialog);
+			dialogInput.focus();
+
+			act(() => terminal!.requestActivationFocus());
+			act(() => vi.runAllTimers());
+
+			expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+			dialog.remove();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("allows a tab close button marked as a tab action to hand focus to the terminal", async () => {
+		const { rerender } = render(<XtermTerminal theme="dark" />);
+		const topbar = document.createElement("div");
+		topbar.dataset.testid = "session-workspace-topbar";
+		const close = document.createElement("button");
+		close.setAttribute("data-terminal-tab-action", "true");
+		topbar.appendChild(close);
+		document.body.appendChild(topbar);
+		close.focus();
+		state.lastTerminal!.focus.mockClear();
+
+		rerender(<XtermTerminal focusRequested theme="dark" />);
+
+		await waitFor(() => expect(state.lastTerminal!.focus).toHaveBeenCalled());
+		topbar.remove();
+	});
+
+	it("does not steal focus from other topbar buttons like the session-actions trigger", async () => {
+		const frames: FrameRequestCallback[] = [];
+		const requestAnimationFrameSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+			frames.push(callback);
+			return frames.length;
+		});
+		try {
+			const { rerender } = render(<XtermTerminal theme="dark" />);
+			const topbar = document.createElement("div");
+			topbar.dataset.testid = "session-workspace-topbar";
+			// ⋮ trigger and embedded shell chrome are plain buttons in the
+			// topbar with no opt-in marker — they must keep focus.
+			const actionsTrigger = document.createElement("button");
+			actionsTrigger.setAttribute("data-session-actions-trigger", "");
+			topbar.appendChild(actionsTrigger);
+			document.body.appendChild(topbar);
+			actionsTrigger.focus();
+			state.lastTerminal!.focus.mockClear();
+
+			rerender(<XtermTerminal focusRequested theme="dark" />);
+			act(() => frames.splice(0).forEach((callback) => callback(performance.now())));
+
+			expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+			topbar.remove();
+		} finally {
+			requestAnimationFrameSpy.mockRestore();
+		}
 	});
 
 	it("updates the live terminal palette when the named color theme changes", () => {

@@ -301,7 +301,7 @@ describe("NewTaskDialog", () => {
 
 		await user.click(screen.getByRole("button", { name: "Agent" }));
 		const options = await screen.findAllByRole("menuitem");
-		expect(options.map((option) => option.textContent)).toEqual(["Claude Code", "Cursor", "KiroAuth unknown", "Manage agents…"]);
+		expect(options.map((option) => option.textContent)).toEqual(["Claude Code", "Cursor", "KiroAuth unknown", "Manage agents"]);
 		await user.keyboard("{Escape}");
 
 		await user.type(screen.getByLabelText("Task"), "B");

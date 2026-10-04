@@ -31,6 +31,7 @@ import {
 	Fragment,
 	memo,
 	useContext,
+	useMemo,
 	useState,
 	type MouseEvent as ReactMouseEvent,
 	type ReactNode,
@@ -95,13 +96,14 @@ const OpenChatLink = createContext<{
 	openSession?: (url: string) => void;
 	workspacePaths: string[];
 }>({ workspacePaths: [] });
+const EMPTY_WORKSPACE_PATHS: string[] = [];
 
 export function ChatLinkProvider({
 	onLinkOpen,
 	onFileOpen,
 	remoteHost,
 	onSessionLinkOpen,
-	workspacePaths = [],
+	workspacePaths = EMPTY_WORKSPACE_PATHS,
 	children,
 }: {
 	onLinkOpen?: (url: string) => void;
@@ -111,7 +113,11 @@ export function ChatLinkProvider({
 	workspacePaths?: string[];
 	children: ReactNode;
 }) {
-	return <OpenChatLink.Provider value={{ open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, workspacePaths }}>{children}</OpenChatLink.Provider>;
+	const value = useMemo(
+		() => ({ open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, workspacePaths }),
+		[onLinkOpen, onFileOpen, onSessionLinkOpen, remoteHost, workspacePaths],
+	);
+	return <OpenChatLink.Provider value={value}>{children}</OpenChatLink.Provider>;
 }
 
 function isHostLocalWebLink(href: string): boolean {
@@ -235,6 +241,7 @@ const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "graphem
 
 function compactEmoji(children: ReactNode): ReactNode {
 	if (typeof children === "string") {
+		if (!EMOJI_GRAPHEME.test(children)) return children;
 		let last = 0;
 		const parts: ReactNode[] = [];
 		for (const { segment, index } of GRAPHEME_SEGMENTER.segment(children)) {

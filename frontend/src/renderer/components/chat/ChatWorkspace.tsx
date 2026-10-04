@@ -1420,7 +1420,7 @@ function ChatWorkspaceContent({
 				>
 					{/* Keep sign-in guidance available without repeating the error from chat. */}
 					{snapshot.account ? (
-						<ReauthBanner account={snapshot.account} harness={snapshot.harness} reasonInTimeline={reauthErrorInChat} />
+						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} reasonInTimeline={reauthErrorInChat} />
 					) : null}
 					<ControllerBanner
 						controller={snapshot.controller}
@@ -1775,7 +1775,7 @@ function ChatHeader({
 				<div
 					className={cn(
 						"flex min-w-0 shrink items-stretch",
-						!isSidebarOpen && isMac && "session-topbar-titlebar-clearance-mac",
+						isMac && "session-topbar-titlebar-clearance-mac",
 						!isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
 					)}
 					data-testid="session-terminal-region"

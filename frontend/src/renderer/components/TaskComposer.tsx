@@ -770,11 +770,13 @@ function formatEffortLabel(value: string): string {
 // Both local and cloud list only harnesses that can run, plus a way to manage
 // them: local logins, or cloud connections for cloud projects.
 function DesktopAgentControl({ hostId, manageView, ...control }: TaskComposerAgentControl & { hostId?: string; manageView: "local" | "cloud" }) {
+	const { t } = useTranslation();
 	return (
 		<RequiredAgentField
 			{...control}
 			hostId={hostId}
 			manageView={manageView}
+			managementLabel={(manageView === "cloud" ? t("agentSelector.manageCloud") : t("agentSelector.manage")).replace(/[.…]+$/u, "")}
 			variant="chip"
 			triggerClassName="composer-toolbar-option w-full justify-between"
 		/>

@@ -114,6 +114,10 @@ type SessionService interface {
 	ClaimPR(ctx context.Context, id domain.SessionID, ref string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error)
 	StageAttachments(ctx context.Context, id domain.SessionID, attachments []ports.SpawnAttachment) ([]string, error)
 	WorkspaceWatchPaths(ctx context.Context, id domain.SessionID) ([]string, error)
+	GetWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
+	RefreshWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
+	ReconcileWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
+	GetWorkspaceHistory(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceHistory, error)
 	ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFiles, error)
 	GetWorkspaceFile(ctx context.Context, id domain.SessionID, path string, section sessionsvc.WorkspaceFileSection) (sessionsvc.WorkspaceFileDetail, error)
 	GetWorkspaceFileAtCommit(ctx context.Context, id domain.SessionID, path, commitSHA string) (sessionsvc.WorkspaceFileDetail, error)
@@ -202,6 +206,8 @@ func (c *SessionsController) Register(r chi.Router) {
 		r.Method(method, "/sessions/{sessionId}/preview/app/*", http.HandlerFunc(c.previewApp))
 	}
 	r.Post("/sessions/{sessionId}/attachments", c.stageAttachments)
+	r.Get("/sessions/{sessionId}/workspace/manifest", c.getWorkspaceManifest)
+	r.Get("/sessions/{sessionId}/workspace/history", c.getWorkspaceHistory)
 	r.Get("/sessions/{sessionId}/workspace/files", c.listWorkspaceFiles)
 	r.Get("/sessions/{sessionId}/workspace/file", c.getWorkspaceFile)
 	r.Put("/sessions/{sessionId}/workspace/file", c.updateWorkspaceFile)
@@ -690,6 +696,32 @@ func (c *SessionsController) listWorkspaceFiles(w http.ResponseWriter, r *http.R
 	envelope.WriteJSON(w, http.StatusOK, workspaceFilesResponse(files))
 }
 
+func (c *SessionsController) getWorkspaceManifest(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/manifest")
+		return
+	}
+	manifest, err := c.Svc.GetWorkspaceManifest(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, workspaceManifestResponse(manifest))
+}
+
+func (c *SessionsController) getWorkspaceHistory(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/history")
+		return
+	}
+	history, err := c.Svc.GetWorkspaceHistory(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, workspaceHistoryResponse(history))
+}
+
 func (c *SessionsController) getWorkspaceFile(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/file")
@@ -980,6 +1012,13 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 		envelope.WriteError(w, r, err)
 		return
 	}
+	// The watcher cannot report edits made before it existed. Reconcile both
+	// workspace caches after the watch is installed and before telling the client
+	// it can stop fallback polling.
+	if _, err := c.Svc.ReconcileWorkspaceManifest(r.Context(), sessionID(r)); err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
 
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream; charset=utf-8")
@@ -1004,13 +1043,24 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 			}
 			c.Svc.InvalidateWorkspaceCache(sessionID(r))
 			payload := struct {
+				Kind             string `json:"kind"`
 				WorkspaceVersion string `json:"workspaceVersion,omitempty"`
+				Refreshing       bool   `json:"refreshing"`
 				Overflow         bool   `json:"overflow"`
-			}{Overflow: true}
-			if files, listErr := c.Svc.ListWorkspaceFiles(r.Context(), sessionID(r)); listErr == nil {
-				payload.WorkspaceVersion = files.WorkspaceVersion
-			}
+			}{Kind: "dirty", Refreshing: true, Overflow: true}
 			data, _ := json.Marshal(payload)
+			if _, err := fmt.Fprintf(w, "event: workspace_changed\ndata: %s\n\n", data); err != nil {
+				return
+			}
+			flusher.Flush()
+			manifest, refreshErr := c.Svc.RefreshWorkspaceManifest(r.Context(), sessionID(r))
+			if refreshErr != nil {
+				continue
+			}
+			payload.Kind = "version"
+			payload.WorkspaceVersion = manifest.WorkspaceVersion
+			payload.Refreshing = false
+			data, _ = json.Marshal(payload)
 			if _, err := fmt.Fprintf(w, "event: workspace_changed\ndata: %s\n\n", data); err != nil {
 				return
 			}
@@ -2392,6 +2442,31 @@ func workspaceFilesResponse(files sessionsvc.WorkspaceFiles) ListWorkspaceFilesR
 		DegradedCode:     files.DegradedCode,
 		Ahead:            files.Ahead,
 		Behind:           files.Behind,
+	}
+}
+
+func workspaceManifestResponse(manifest sessionsvc.WorkspaceManifest) WorkspaceManifestResponse {
+	return WorkspaceManifestResponse{
+		SessionID:        manifest.SessionID,
+		WorkspaceVersion: manifest.WorkspaceVersion,
+		CompareBaseSHA:   manifest.CompareBaseSHA,
+		CompareBaseRef:   manifest.CompareBaseRef,
+		CompareMode:      manifest.CompareMode,
+		Files:            workspaceFileSummariesResponse(manifest.Files),
+		Sections:         workspaceFileSectionsResponse(manifest.Sections),
+		Summary:          WorkspaceSummary(manifest.Summary),
+		Truncated:        manifest.Truncated,
+		Stale:            manifest.Stale,
+		Refreshing:       manifest.Refreshing,
+		Degraded:         manifest.Degraded,
+		DegradedCode:     manifest.DegradedCode,
+	}
+}
+
+func workspaceHistoryResponse(history sessionsvc.WorkspaceHistory) WorkspaceHistoryResponse {
+	return WorkspaceHistoryResponse{
+		SessionID: history.SessionID, Commits: workspaceCommitsResponse(history.Commits),
+		CommitsTruncated: history.CommitsTruncated, Ahead: history.Ahead, Behind: history.Behind,
 	}
 }
 
