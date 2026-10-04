@@ -6,7 +6,10 @@ import { ResumeAgentControl } from "./ResumeAgentControl";
 
 vi.mock("../hooks/useCanResumeAgent", () => ({ useCanResumeAgent: () => true }));
 
-const session = { id: "sess-1", workspaceId: "proj-1", status: "exited", prs: [] } as WorkspaceSession;
+const session = {
+	id: "sess-1", workspaceId: "proj-1", workspaceName: "Project", title: "Session",
+	provider: "codex", status: "working", updatedAt: "2026-10-04T00:00:00Z", prs: [],
+} satisfies WorkspaceSession;
 
 function renderControl(hostId?: string) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -28,6 +31,7 @@ describe("ResumeAgentControl workspace probes", () => {
 	it("hides resume when the local workspace is definitively missing", async () => {
 		const getState = vi.spyOn(window.ao!.editorHandoff, "getState").mockResolvedValue({
 			targets: [],
+			preferredEditorId: "cursor",
 			workspaceAvailable: false,
 			unavailableCode: "SESSION_WORKSPACE_NOT_FOUND",
 		});
