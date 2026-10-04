@@ -104,7 +104,7 @@ import {
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
-import { ChatComposer, type StoredComposerAttachment } from "./ChatComposer";
+import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
@@ -683,7 +683,7 @@ function ChatWorkspaceContent({
 		const composer = surfaceRef.current?.querySelector<HTMLElement>(
 			'[aria-label="Message the agent"]',
 		);
-		if (composer?.getAttribute("aria-disabled") !== "true") composer?.focus();
+		if (composer?.getAttribute("aria-disabled") !== "true") composerFocusRef.current?.focus();
 	}, []);
 	// Selection is durable UI state; availability only controls whether the tab is
 	// offered. Keeping these separate preserves a selected reviewer while an active
@@ -937,6 +937,7 @@ function ChatWorkspaceContent({
 	// the agent knows, so it is never one click.
 	const [confirming, setConfirming] = useState<string | undefined>(undefined);
 	const surfaceRef = useRef<HTMLElement | null>(null);
+	const composerFocusRef = useRef<ChatComposerHandle>(null);
 	const lastWheelZoomAtRef = useRef(0);
 	const wheelZoomRemainderRef = useRef(0);
 	const [terminalFontSize, setTerminalFontSize] = useState(initialTerminalFontSize);
@@ -1486,6 +1487,7 @@ function ChatWorkspaceContent({
 							>
 								{discarded > 0 ? <RolledBackNotice count={discarded} /> : null}
 								<ChatComposer
+									focusRef={composerFocusRef}
 									key={`${draftScopeKey}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
 									queuedDock={composerQueuedDock}
 									approval={composerApproval}
