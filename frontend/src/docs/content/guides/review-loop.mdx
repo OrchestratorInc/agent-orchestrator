@@ -32,9 +32,9 @@ ao review ls <worker-session-id>
 ao review cancel <worker-session-id>
 ```
 
-Reviewer runs are separate from worker sessions. Their verdict and body are recorded against the worker and can be delivered back to it through the review API.
+Reviewer runs are separate from worker sessions. Their verdict and body are recorded against the worker.
 
-In the inspector, choose the reviewer harness (and offered model/mode), start the run, then open its Chat or terminal surface. Read the result before sending findings to the worker. A reviewer harness can have different permissions from the worker; an experimental reviewer is not automatically sandboxed. If the trigger is unavailable, check the linked PR, reviewer readiness, and the reason shown by the UI. `ao review ls` shows the run state; `ao review cancel` stops a run that should not continue.
+In the inspector, choose the reviewer harness (and offered model/mode), start the run, then open its Chat or terminal surface. Read the result, then use **Send to worker agent** in the review actions to send its findings to the worker. A reviewer harness can have different permissions from the worker; an experimental reviewer is not automatically sandboxed. If the trigger is unavailable, check the linked PR, reviewer readiness, and the reason shown by the UI. `ao review ls` shows the run state; `ao review cancel` stops a run that should not continue.
 
 Enable automatic review per session, or use the project `autoReview` default for future workers. It starts only for an eligible PR head while the worker is idle. In **Files**, inspect workspace or PR changes and available commits; local inspection does not automatically publish a review. The mobile review and reviewer views expose the corresponding session results.
 

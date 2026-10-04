@@ -41,7 +41,7 @@ ao doctor --json
 		Install the harness, run it once to authenticate, and restart AO. The desktop daemon inherits a login-shell environment and reuses each provider's installed binary and authentication.
 	</Accordion>
 	<Accordion title="Chat preflight fails">
-		Confirm the selected harness supports native Chat and its binary is authenticated. Chat support depends on the harness and installed version; see the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui). Check **Settings → Harnesses** and provider version/permission requirements. Choose Terminal UI when the harness lacks Chat support or preflight cannot connect.
+		Confirm the selected harness supports native Chat and its binary is authenticated. Chat support depends on the harness and installed version; see the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui). Check **Settings → Harness** and provider version/permission requirements. Choose Terminal UI when the harness lacks Chat support or preflight cannot connect.
 	</Accordion>
 	<Accordion title="A TUI session will not start on macOS or Linux">
 		New macOS/Linux sessions use detached native PTY hosts. Packaged builds bundle tmux for old sessions/fallback; macOS still validates it. For source runs check configured/system tmux and the native-host launch error. Windows uses ConPTY. See [Runtime](/plugins/runtimes).

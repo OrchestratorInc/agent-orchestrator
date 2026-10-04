@@ -35,7 +35,7 @@ brew upgrade --cask agentwrapper/tap/agent-orchestrator
 | External coding agent (called a harness in AO) | Agent sessions that use an installed CLI | Install a supported tool such as Claude Code, Codex, Cursor, Aider, or OpenCode. See the [agent catalog](/plugins/agents) for the current list and interface support. Unreal Agent is built into AO for Chat on macOS and Linux. |
 | tmux | macOS preflight and legacy/fallback terminal sessions | Desktop macOS/Linux packages include it. Source launches may need system tmux; see [Runtime](/plugins/runtimes). |
 
-AO uses the coding agents and sign-ins already installed on your computer. **Settings → Harnesses** offers setup and readiness checks for supported agents; some need to be installed or signed in outside AO. Unreal Agent is a built-in Chat-only exception with its own platform and permission limits. See the [agent catalog](/plugins/agents).
+AO uses the coding agents and sign-ins already installed on your computer. **Settings → Harness** offers setup and readiness checks for supported agents; some need to be installed or signed in outside AO. Unreal Agent is a built-in Chat-only exception with its own platform and permission limits. See the [agent catalog](/plugins/agents).
 
 ## Set up AO
 
@@ -51,7 +51,7 @@ Choose the download for your platform above, install it, and open **Agent Orches
 
 ### Authenticate GitHub
 
-For a GitHub repository, sign in with the GitHub CLI:
+For a GitHub repository, [install GitHub CLI](https://cli.github.com/) if needed, then sign in:
 
 ```bash
 gh auth login
