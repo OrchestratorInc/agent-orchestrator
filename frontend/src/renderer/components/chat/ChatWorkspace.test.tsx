@@ -600,7 +600,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(onSessionRenamed).toHaveBeenCalledOnce();
 	});
 
-	it("clears the fixed titlebar nav when the sidebar is collapsed, like the terminal session", () => {
+	it("keeps titlebar clearance attached throughout sidebar expansion and collapse", () => {
 		useUiStore.setState({ isSidebarOpen: false });
 		const { rerender } = render(<ChatWorkspace snapshot={chatFixture} />);
 
@@ -611,7 +611,7 @@ describe("ChatWorkspace timeline", () => {
 		useUiStore.setState({ isSidebarOpen: true });
 		rerender(<ChatWorkspace snapshot={chatFixture} />);
 
-		expect(screen.getByTestId("session-terminal-region")).not.toHaveClass(
+		expect(screen.getByTestId("session-terminal-region")).toHaveClass(
 			"session-topbar-titlebar-clearance-mac",
 		);
 	});
@@ -1275,6 +1275,29 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
 		expect(screen.getByTestId("chat-conversation-panel")).not.toHaveAttribute("inert");
+	});
+
+	it("waits for controller and provisioning readiness before enabling permission changes", () => {
+		const onChooseSettings = vi.fn();
+		const snapshot = { ...chatFixtureSettled, controller: { state: "connecting" as const } };
+		const renderChat = (controller: "connecting" | "ready", provisionState: "provisioning" | "ready") => (
+			<ChatWorkspace
+				snapshot={{ ...snapshot, controller: { state: controller } }}
+				session={{ ...chatSession, provisionState }}
+				onChooseSettings={onChooseSettings}
+			/>
+		);
+		const view = render(renderChat("connecting", "provisioning"));
+		const approval = () => screen.getByRole("button", { name: "Approval policy for the next turn" });
+		expect(approval()).toBeDisabled();
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toBeEnabled();
+
+		view.rerender(renderChat("ready", "provisioning"));
+		expect(approval()).toBeDisabled();
+
+		view.rerender(renderChat("ready", "ready"));
+		expect(approval()).toBeEnabled();
+		expect(onChooseSettings).not.toHaveBeenCalled();
 	});
 
 	it("offers retry for a failed start without reporting a crash", async () => {

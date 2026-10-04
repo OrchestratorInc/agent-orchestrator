@@ -526,6 +526,35 @@ type ListWorkspaceFilesResponse struct {
 	Behind *int `json:"behind,omitempty"`
 }
 
+// WorkspaceManifestResponse is the compact, latency-sensitive response used
+// for the initial Changes paint. Complete repository inventory and commit
+// history remain on their dedicated/legacy routes.
+type WorkspaceManifestResponse struct {
+	SessionID        domain.SessionID                `json:"sessionId"`
+	WorkspaceVersion string                          `json:"workspaceVersion"`
+	CompareBaseSHA   string                          `json:"compareBaseSha,omitempty"`
+	CompareBaseRef   string                          `json:"compareBaseRef,omitempty"`
+	CompareMode      sessionsvc.WorkspaceCompareMode `json:"compareMode,omitempty" enum:"base,head_fallback"`
+	Files            []WorkspaceFileSummary          `json:"files"`
+	Sections         WorkspaceFileSections           `json:"sections"`
+	Summary          WorkspaceSummary                `json:"summary"`
+	Truncated        bool                            `json:"truncated"`
+	Stale            bool                            `json:"stale"`
+	Refreshing       bool                            `json:"refreshing"`
+	Degraded         bool                            `json:"degraded"`
+	DegradedCode     string                          `json:"degradedCode,omitempty"`
+}
+
+// WorkspaceHistoryResponse is lazy commit/upstream metadata for the review
+// header. It is intentionally separate from the first-paint manifest.
+type WorkspaceHistoryResponse struct {
+	SessionID        domain.SessionID         `json:"sessionId"`
+	Commits          []WorkspaceCommitSummary `json:"commits"`
+	CommitsTruncated bool                     `json:"commitsTruncated,omitempty"`
+	Ahead            *int                     `json:"ahead,omitempty"`
+	Behind           *int                     `json:"behind,omitempty"`
+}
+
 // ListPRFilesResponse is the exact base...head changed-file set for one PR.
 type ListPRFilesResponse struct {
 	SessionID domain.SessionID       `json:"sessionId"`
@@ -1879,9 +1908,11 @@ type ShellTerminalHandleIDParam struct {
 
 // OpenShellTerminalRequest is the body of POST /api/v1/shell-terminals.
 type OpenShellTerminalRequest struct {
-	ProjectID string `json:"projectId,omitempty" description:"Project whose root the shell starts in. Omitted opens the shell in the daemon data dir."`
-	SessionID string `json:"sessionId,omitempty" description:"Agent session the shell is scoped to, so it appears only in that session's tab strip. Omitted makes it a standalone shell."`
-	Shell     string `json:"shell,omitempty" description:"Windows shell selector: auto, git-bash, pwsh, powershell, cmd, or a custom executable path. Ignored on macOS and Linux."`
+	ProjectID     string `json:"projectId,omitempty" description:"Project whose root the shell starts in. Omitted opens the shell in the daemon data dir."`
+	SessionID     string `json:"sessionId,omitempty" description:"Agent session the shell is scoped to, so it appears only in that session's tab strip. Omitted makes it a standalone shell."`
+	Shell         string `json:"shell,omitempty" description:"Windows shell selector: auto, git-bash, pwsh, powershell, cmd, or a custom executable path. Ignored on macOS and Linux."`
+	StartOnAttach bool   `json:"startOnAttach,omitempty" description:"Start the shell when the requesting client attaches with its terminal grid instead of immediately, so the shell starts at the size that client shows. Only for clients that attach as a sized viewer; omitted starts the shell immediately at the default grid."`
+	Title         string `json:"title,omitempty" description:"Tab title for the new shell, for a client that already shows its tab. Trimmed; omitted or empty numbers it after the existing shells (Terminal N)."`
 }
 
 // UpdateShellTerminalRequest is the body of PATCH /api/v1/shell-terminals/{handleId}.
@@ -2714,11 +2745,15 @@ type ConversationModelReroutePayload struct {
 // ConversationAccountPayload is what the provider says about the account behind a
 // conversation.
 type ConversationAccountPayload struct {
-	AuthMode  string `json:"authMode,omitempty"`
-	PlanLabel string `json:"planLabel,omitempty"`
+	AuthenticationState   string  `json:"authenticationState,omitempty" enum:"unknown,required,authenticated"`
+	AuthVerifiedAt        *string `json:"authVerifiedAt,omitempty"`
+	LastAuthFailureAt     *string `json:"lastAuthFailureAt,omitempty"`
+	LastAuthFailureReason string  `json:"lastAuthFailureReason,omitempty"`
+	AuthFailureID         string  `json:"authFailureId,omitempty"`
+	AuthMode              string  `json:"authMode,omitempty"`
+	PlanLabel             string  `json:"planLabel,omitempty"`
 	// ReauthRequiredAt is when the provider last asked for credentials the daemon
-	// does not hold. Present means the session has stopped working for a reason no
-	// retry will fix and the user has to sign in again.
+	// does not hold. Present means a demand has not yet been superseded by verified success.
 	ReauthRequiredAt *string `json:"reauthRequiredAt,omitempty"`
 	ReauthReason     string  `json:"reauthReason,omitempty"`
 }

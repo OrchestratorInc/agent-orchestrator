@@ -185,6 +185,7 @@ export function AgentModelCombobox({
 	// With no identified model, nothing is selected and the menu just lists models.
 	const currentLabel = (triggerLabel ?? selected?.label ?? explicitModel) || emptyLabel || t("settings.models.selectModel");
 	const scrollRef = useRef<HTMLDivElement>(null);
+	const searchInputRef = useRef<HTMLInputElement>(null);
 	const effortTriggerRef = useRef<HTMLDivElement>(null);
 	const [canScrollDown, setCanScrollDown] = useState(false);
 	const updateScrollCue = useCallback(() => {
@@ -215,7 +216,6 @@ export function AgentModelCombobox({
 		const openEffort = Boolean(tuning && item.model.efforts?.some((effort) => effort && effort.toLowerCase() !== "default"));
 		if (openEffort) event.preventDefault();
 		selectModel(item.id);
-		setSearch("");
 		setEffortMenuOpen(openEffort);
 		setAwaitingEffort(openEffort);
 		if (!openEffort) setMenuOpen(false);
@@ -236,8 +236,9 @@ export function AgentModelCombobox({
 			open={menuOpen}
 			onOpenChange={(open) => {
 				setMenuOpen(open);
-				if (!open) {
+				if (open) {
 					setSearch("");
+				} else {
 					setRefreshFailed(false);
 					setEffortMenuOpen(false);
 					setAwaitingEffort(false);
@@ -270,10 +271,26 @@ export function AgentModelCombobox({
 			<DropdownMenuContent
 				align={menuAlign}
 				onCloseAutoFocus={onCloseAutoFocus}
+				onKeyDownCapture={(event) => {
+					if (!showSearch || !menuOpen || event.target === searchInputRef.current) return;
+					if (event.target instanceof HTMLElement && (event.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName))) return;
+
+					if (event.key === "Backspace") {
+						event.preventDefault();
+						event.stopPropagation();
+						searchInputRef.current?.focus();
+						setSearch((current) => Array.from(current).slice(0, -1).join(""));
+					} else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+						event.preventDefault();
+						event.stopPropagation();
+						searchInputRef.current?.focus();
+						setSearch((current) => current + event.key);
+					}
+				}}
 				className="settings-menu-surface max-h-select-menu-max! w-[min(22rem,calc(100vw-2rem))] overflow-hidden! rounded-(--radius-settings-panel) border-settings-menu bg-settings-menu"
 			>
 				{(showSearch || showManualRefresh) && (
-					<div className="flex shrink-0 items-center gap-1 p-1" onKeyDown={(event) => event.stopPropagation()}>
+					<div className="flex shrink-0 items-center gap-1">
 						{showSearch && (
 							<div className="relative min-w-0 flex-1">
 								<Search
@@ -281,10 +298,24 @@ export function AgentModelCombobox({
 									aria-hidden="true"
 								/>
 								<input
+									ref={searchInputRef}
 									type="search"
 									aria-label={t("settings.models.searchAria", { label: ariaLabel.toLocaleLowerCase() })}
 									value={search}
 									onChange={(event) => setSearch(event.target.value)}
+									onKeyDown={(event) => {
+										if (event.key === "ArrowDown") {
+											event.preventDefault();
+											event.stopPropagation();
+											scrollRef.current?.querySelector<HTMLElement>("[role='menuitem']")?.focus();
+										} else if (event.key === "Enter") {
+											event.preventDefault();
+											event.stopPropagation();
+											scrollRef.current?.querySelector<HTMLElement>("[role='menuitem']")?.click();
+										} else if (event.key !== "Escape") {
+											event.stopPropagation();
+										}
+									}}
 									placeholder={t(
 										hasMultipleProviders
 											? "settings.models.searchModelsOrProvidersPlaceholder"
@@ -419,7 +450,7 @@ export function AgentModelCombobox({
 								</div>
 							</>
 						)}
-						{showSearch && (
+						{showSearch && !compact && (
 							<p className="px-2 py-1.5 text-xs text-settings-muted" aria-live="polite">
 								{t("settings.models.matchingCount", {
 									visible: visibleModels.length.toLocaleString(),

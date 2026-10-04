@@ -33,6 +33,13 @@ export type AttachableTerminal = {
 	cols: number;
 	rows: number;
 	/**
+	 * False until cols/rows come from measuring the terminal's laid-out slot.
+	 * Before that they are xterm's constructor default, which must never be
+	 * claimed as the PTY's size: a shell started at it lays out its first prompt
+	 * for the wrong width.
+	 */
+	hasMeasuredGrid: boolean;
+	/**
 	 * `done` fires once this exact chunk has been parsed into the buffer (xterm's
 	 * own write callback). The attachment uses it to reveal the pane at the
 	 * replay's final scroll position instead of guessing with a timer.
@@ -415,6 +422,52 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 				: baseMux;
 		r.mux = mux;
 
+		// Live output: one xterm.write in flight at a time. A burst arrives as many
+		// WebSocket messages, and writing each separately costs a parse/render
+		// cycle per message. Output arriving while xterm parses the previous write
+		// is joined and written as one batch when that write completes, so batches
+		// grow with load while an isolated chunk (a keystroke's echo) is written
+		// immediately. The backlog lives here, bounded by the daemon's
+		// back-pressure, rather than in xterm's own write queue.
+		let liveChunks: Uint8Array[] = [];
+		let liveBytes = 0;
+		let liveWriteInFlight = false;
+		const takeLiveBatch = (): Uint8Array | null => {
+			if (liveChunks.length === 0) return null;
+			let batch = liveChunks[0]!;
+			if (liveChunks.length > 1) {
+				batch = new Uint8Array(liveBytes);
+				let offset = 0;
+				for (const chunk of liveChunks) {
+					batch.set(chunk, offset);
+					offset += chunk.length;
+				}
+			}
+			liveChunks = [];
+			liveBytes = 0;
+			return batch;
+		};
+		const writeLiveBatch = () => {
+			const batch = takeLiveBatch();
+			if (!batch) return;
+			liveWriteInFlight = true;
+			terminal.write(batch, () => {
+				liveWriteInFlight = false;
+				if (isCurrentAttachment(generation, handle, mux)) writeLiveBatch();
+			});
+		};
+		const writeLiveOutput = (bytes: Uint8Array) => {
+			liveChunks.push(bytes);
+			liveBytes += bytes.length;
+			if (!liveWriteInFlight) writeLiveBatch();
+		};
+		// Hand any held output to xterm now, in order, ahead of a teardown or a
+		// write that must follow it.
+		const drainLiveOutput = () => {
+			const batch = takeLiveBatch();
+			if (batch) terminal.write(batch);
+		};
+
 		let pendingReplayWrites = 0;
 		let replayRevealDeadlineReached = false;
 		const postReplayWriteQueue: Uint8Array[] = [];
@@ -631,12 +684,14 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 						clearTimeout(r.replayTailQuietTimer);
 						r.replayTailQuietTimer = null;
 					}
+					drainLiveOutput();
 					postReplayWriteQueue.push(bytes);
 					drainPostReplayWrites();
 					return;
 				}
-				terminal.write(bytes);
+				writeLiveOutput(bytes);
 			}),
+			drainLiveOutput,
 			mux.onOpened(handle, () => {
 				if (!isCurrentAttachment(generation, handle, mux)) return;
 				clearOpenTimer(generation);
@@ -780,7 +835,11 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		// wait for `opened`: the daemon fires onOpen from setPTY and only then
 		// starts copyOut (attachment.go), so `attached` arrives before the first
 		// replay byte and would uncover a pane that has not drawn yet.
-		const coverInitialReplay = optionsRef.current.coverInitialReplay !== false;
+		// A handle this renderer just created has no history to replay: its first
+		// bytes are the program starting up (a new shell's prompt). Covering them
+		// only holds a blank pane through the quiet window and reveal fit, so they
+		// stream straight into xterm instead.
+		const coverInitialReplay = optionsRef.current.coverInitialReplay !== false && initialWriteSource !== "live";
 		r.replayBuffering = coverInitialReplay;
 		r.replayChunks = [];
 		r.replayBytes = 0;
@@ -802,10 +861,12 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		// stream, but its stale off-screen grid must not resize the shared PTY.
 		// Zero dimensions mean "attach without claiming a size"; the first
 		// visible fit emits the authoritative grid after activation.
-		const visible = optionsRef.current.isVisible !== false;
-		r.needsVisibleSizeSync = !visible;
-		const openCols = visible ? terminal.cols : 0;
-		const openRows = visible ? terminal.rows : 0;
+		// The same applies before the terminal has measured its slot: the first
+		// measurement publishes the grid instead (see onVisibleSize).
+		const claimsSize = optionsRef.current.isVisible !== false && terminal.hasMeasuredGrid;
+		r.needsVisibleSizeSync = !claimsSize;
+		const openCols = claimsSize ? terminal.cols : 0;
+		const openRows = claimsSize ? terminal.rows : 0;
 		mux.open(handle, openCols, openRows);
 		r.lastPublishedGrid =
 			openCols > 0 && openRows > 0 ? { cols: openCols, rows: openRows } : null;

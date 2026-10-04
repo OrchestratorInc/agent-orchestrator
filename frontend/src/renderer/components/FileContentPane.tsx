@@ -16,6 +16,7 @@ import {
 import { usePierreFileHighlightReady } from "../hooks/usePierreFileHighlight";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
+import { markFileViewerPerformance } from "../lib/file-viewer-performance";
 import { rememberedFileDisplayMode, useUiStore, type FileDisplayMode } from "../stores/ui-store";
 import { statusLabel, statusTone } from "../lib/workspace-file-status";
 import {
@@ -39,7 +40,7 @@ import { MarkdownFileView } from "./markdown/MarkdownFileView";
 const EDIT_ACTION_CLASS = "h-6 gap-1 px-2 text-xs";
 
 export type FileViewMode = FileDisplayMode;
-export type FileOpenOptions = { commitSha?: string; editing?: boolean; mode?: FileViewMode; scope?: WorkspaceDiffScope };
+export type FileOpenOptions = { commitSha?: string; editing?: boolean; line?: number; mode?: FileViewMode; scope?: WorkspaceDiffScope };
 
 const DEFAULT_FILES_SOURCE: FilesSource = { kind: "workspace" };
 
@@ -53,10 +54,13 @@ function canRenderMarkdown(path: string, detail: WorkspaceFileDetail): boolean {
 export function FileContentPane({
 	annotation,
 	initialEditing = false,
+	initialLine,
 	initialMode = "diff",
 	initialRequestKey = 0,
 	commitSha,
 	onDirtyChange,
+	onInitialLineConsumed,
+	onContentReady,
 	path,
 	previousPath,
 	rememberDisplayMode = false,
@@ -68,10 +72,13 @@ export function FileContentPane({
 }: {
 	annotation: FileAnnotationModel;
 	initialEditing?: boolean;
+	initialLine?: number;
 	initialMode?: FileViewMode;
 	initialRequestKey?: number;
 	commitSha?: string;
 	onDirtyChange?: (dirty: boolean) => void;
+	onInitialLineConsumed?: (requestKey: number) => void;
+	onContentReady?: () => void;
 	path: string | null;
 	previousPath?: string;
 	/** Restore the display mode picked in the toolbar when this pane remounts (centre file tabs). */
@@ -110,6 +117,17 @@ export function FileContentPane({
 	});
 	const hasUnsavedChanges = Boolean(editing && query.data && draft !== query.data.content);
 	useEffect(() => {
+		if (path) markFileViewerPerformance("file-selected");
+	}, [path]);
+	useEffect(() => {
+		if (!query.data) return;
+		markFileViewerPerformance("file-header-painted");
+		markFileViewerPerformance("file-content-painted");
+	}, [query.data]);
+	useEffect(() => {
+		if (query.data && sourceHighlightReady) onContentReady?.();
+	}, [onContentReady, query.data, sourceHighlightReady]);
+	useEffect(() => {
 		setMode(restoredMode());
 		setEditing(initialEditing);
 		setDraft("");
@@ -144,6 +162,7 @@ export function FileContentPane({
 				predicate: ({ queryKey }) => queryKey[1] === (hostId ?? sessionId)
 					&& (!hostId || queryKey[2] === sessionId) && [
 					"session-workspace-files",
+					"session-workspace-history",
 					"session-workspace-tree",
 					"session-workspace-search",
 					"session-workspace-file-revision",
@@ -210,7 +229,10 @@ export function FileContentPane({
 			annotation={annotation}
 			detail={detail}
 			editing={editing && effectiveMode === "file"}
+			revealLine={initialLine ? { line: initialLine, requestKey: initialRequestKey } : undefined}
 			onEditChange={setDraft}
+			onContentReady={onContentReady}
+			onRevealLineConsumed={onInitialLineConsumed}
 			scope={scope}
 			sessionId={sessionId}
 			commitSha={commitSha}
@@ -398,7 +420,7 @@ export function FileContentPane({
 	);
 }
 
-function CompleteFileView({ annotation, commitSha, detail, editing, onEditChange, scope, sessionId, hostId, source }: { annotation: FileAnnotationModel; commitSha?: string; detail: WorkspaceFileDetail; editing: boolean; onEditChange: (content: string) => void; scope: WorkspaceDiffScope; sessionId: string; hostId?: string; source: FilesSource }) {
+function CompleteFileView({ annotation, commitSha, detail, editing, onContentReady, onEditChange, onRevealLineConsumed, revealLine, scope, sessionId, hostId, source }: { annotation: FileAnnotationModel; commitSha?: string; detail: WorkspaceFileDetail; editing: boolean; onContentReady?: () => void; onEditChange: (content: string) => void; onRevealLineConsumed?: (requestKey: number) => void; revealLine?: { line: number; requestKey: number }; scope: WorkspaceDiffScope; sessionId: string; hostId?: string; source: FilesSource }) {
 	const { t } = useTranslation();
 	const revision = useQuery({
 		...sessionSourceFileRevisionQueryOptions({ commitSha, path: detail.path, scope, sessionId, hostId, side: detail.deleted ? "before" : "after", source, workspaceVersion: detail.workspaceVersion }),
@@ -420,7 +442,10 @@ function CompleteFileView({ annotation, commitSha, detail, editing, onEditChange
 					size: revision.data.size,
 				}}
 				editing={editing}
+				onContentReady={onContentReady}
 				onEditChange={onEditChange}
+				onRevealLineConsumed={onRevealLineConsumed}
+				revealLine={revealLine}
 				sessionId={sessionId}
 				hostId={hostId}
 				side={detail.deleted ? "before" : "after"}
@@ -428,5 +453,5 @@ function CompleteFileView({ annotation, commitSha, detail, editing, onEditChange
 			/>
 		);
 	}
-	return <ReadOnlyFileView annotation={annotation} detail={detail} editing={editing} onEditChange={onEditChange} scope={scope} sessionId={sessionId} hostId={hostId} />;
+	return <ReadOnlyFileView annotation={annotation} detail={detail} editing={editing} onContentReady={onContentReady} onEditChange={onEditChange} onRevealLineConsumed={onRevealLineConsumed} revealLine={revealLine} scope={scope} sessionId={sessionId} hostId={hostId} />;
 }

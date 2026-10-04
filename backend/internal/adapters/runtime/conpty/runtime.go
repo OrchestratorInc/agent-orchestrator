@@ -171,7 +171,8 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 		return ports.RuntimeHandle{}, conptyCreateFailure(fmt.Errorf("conpty: reserve pty-host ownership for %q: %w", id, err))
 	}
 
-	addr, pid, err := r.spawner(ctx, id, cfg.WorkspacePath, cfg.Argv, cfg.Env)
+	addr, pid, err := r.spawner(ctx, id, cfg.WorkspacePath, cfg.Argv, cfg.Env,
+		HostOptions{StartOnAttach: cfg.StartOnAttach, LazySurface: cfg.LazyStyledOutput})
 	if err != nil {
 		cause := fmt.Errorf("conpty: spawn pty-host for %q: %w", id, err)
 		handle := ports.RuntimeHandle{ID: id}
