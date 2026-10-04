@@ -1277,6 +1277,29 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByTestId("chat-conversation-panel")).not.toHaveAttribute("inert");
 	});
 
+	it("waits for controller and provisioning readiness before enabling permission changes", () => {
+		const onChooseSettings = vi.fn();
+		const snapshot = { ...chatFixtureSettled, controller: { state: "connecting" as const } };
+		const renderChat = (controller: "connecting" | "ready", provisionState: "provisioning" | "ready") => (
+			<ChatWorkspace
+				snapshot={{ ...snapshot, controller: { state: controller } }}
+				session={{ ...chatSession, provisionState }}
+				onChooseSettings={onChooseSettings}
+			/>
+		);
+		const view = render(renderChat("connecting", "provisioning"));
+		const approval = () => screen.getByRole("button", { name: "Approval policy for the next turn" });
+		expect(approval()).toBeDisabled();
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toBeEnabled();
+
+		view.rerender(renderChat("ready", "provisioning"));
+		expect(approval()).toBeDisabled();
+
+		view.rerender(renderChat("ready", "ready"));
+		expect(approval()).toBeEnabled();
+		expect(onChooseSettings).not.toHaveBeenCalled();
+	});
+
 	it("offers retry for a failed start without reporting a crash", async () => {
 		const user = userEvent.setup();
 		const resume = vi.fn();
