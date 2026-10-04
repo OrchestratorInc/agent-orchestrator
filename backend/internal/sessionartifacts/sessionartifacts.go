@@ -33,6 +33,10 @@ func Dir(dataDir string, id domain.SessionID) string {
 // lifecycle mutex.
 const MaxFiles = 1000
 
+// MaxVisited bounds every entry List visits (directories and non-regular
+// files included), so a tree of empty directories cannot stall a read.
+const MaxVisited = 10000
+
 // List walks a session's artifact directory and returns up to MaxFiles of its
 // regular files, sorted by path. Unreadable entries are skipped rather than
 // failing the walk.
@@ -46,6 +50,7 @@ func List(dir string) ([]domain.SessionArtifactFile, error) {
 		return nil, err
 	}
 	files := make([]domain.SessionArtifactFile, 0)
+	visited := 0
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if path == root {
@@ -56,7 +61,8 @@ func List(dir string) ([]domain.SessionArtifactFile, error) {
 			}
 			return nil
 		}
-		if len(files) >= MaxFiles {
+		visited++
+		if len(files) >= MaxFiles || visited > MaxVisited {
 			return filepath.SkipAll
 		}
 		if d.Type()&os.ModeSymlink != 0 {

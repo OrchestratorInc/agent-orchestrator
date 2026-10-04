@@ -45,23 +45,22 @@ func TestSeedRecordPreservesAutomationRunIdentity(t *testing.T) {
 }
 
 type fakeStore struct {
-	sessions         map[domain.SessionID]domain.SessionRecord
-	pr               map[domain.SessionID]domain.PRFacts
-	projects         map[string]domain.ProjectRecord
-	conversations    map[domain.SessionID]domain.ConversationRecord
-	workspaceRepo    map[string][]domain.WorkspaceRepoRecord
-	num              int
-	deleteErr        error
-	upsertWTErr      error
-	listAllErr       error
-	getProjectErr    error
-	getSessionErr    error
-	updateSessionErr error
-	deletePrepErr    error
-
+	sessions                           map[domain.SessionID]domain.SessionRecord
+	pr                                 map[domain.SessionID]domain.PRFacts
+	projects                           map[string]domain.ProjectRecord
+	conversations                      map[domain.SessionID]domain.ConversationRecord
+	workspaceRepo                      map[string][]domain.WorkspaceRepoRecord
+	num                                int
+	deleteErr                          error
+	upsertWTErr                        error
+	listAllErr                         error
+	getProjectErr                      error
+	getSessionErr                      error
+	updateSessionErr                   error
+	deletePrepErr                      error
+	updateBrowserCapabilityVerifierErr error
 	createClientRequestErr             error
 	promoteTaskErr                     error
-	updateBrowserCapabilityVerifierErr error
 	// agentSwitchStore is wired only by agent-switch tests so fakeLCM can model
 	// Lifecycle Manager's atomic ownership-boundary commands.
 	agentSwitchStore any

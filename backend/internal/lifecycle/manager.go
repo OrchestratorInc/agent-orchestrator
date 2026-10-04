@@ -234,6 +234,10 @@ func WithUrgentNudgeGate(pred func(domain.AgentHarness) bool) Option {
 // It also owns agent nudges caused by PR observations, including merge-conflict, CI-failure, and review-feedback prompts.
 type Manager struct {
 	store sessionStore
+	// reconcileMu serializes ReconcileSessionOutputType calls so an older scan
+	// can never persist over a newer one. It is separate from mu, so a slow
+	// artifact walk never blocks lifecycle mutations.
+	reconcileMu sync.Mutex
 	// guard is the shared pane-write primitive every reaction nudge goes
 	// through (see sessionguard). Nil when no messenger was wired: reaction
 	// nudges become no-ops but the reducer still runs.

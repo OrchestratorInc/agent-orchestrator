@@ -358,14 +358,14 @@ function normalizeReviewerId(value: string | undefined): string {
 
 const SummaryView = memo(function SummaryView({
 	canOpenReviews,
-	hostId,
 	onOpenArtifact,
+	hostId,
 	onOpenReviews,
 	session,
 }: {
 	canOpenReviews: boolean;
-	hostId?: string;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
+	hostId?: string;
 	onOpenReviews: () => void;
 	session: WorkspaceSession;
 }) {
@@ -393,11 +393,11 @@ const SummaryView = memo(function SummaryView({
 	const showUsageError = developerMode && usageQuery.isError;
 	const prSummaries = sessionPRDisplaySummaries(session, query.data?.prs);
 	const prCount = prSummaries.length + linkedPRs.length;
-	const prSectionTitle = prCount > 1 ? t("inspector.pullRequests", { count: prCount }) : t("inspector.pullRequest");
 	const hasPRs = prCount > 0;
 	const artifacts = sessionArtifacts(session);
 	const hasArtifacts = artifacts.length > 0;
 	const showPRSection = hasPRs || session.outputType === "pr" || session.outputType === "pr_artifact";
+	const prSectionTitle = prCount > 1 ? t("inspector.pullRequests", { count: prCount }) : t("inspector.pullRequest");
 	const artifactSectionTitle = artifacts.length > 1
 		? t("inspector.artifacts", { count: artifacts.length })
 		: t("inspector.artifact");
@@ -434,26 +434,28 @@ const SummaryView = memo(function SummaryView({
 			artifactTitle={hasArtifacts ? artifactSectionTitle : undefined}
 			completion={<SessionControls hostId={hostId} session={session} />}
 			pullRequestCards={
-				<div className="flex flex-col gap-1.5">
-					{hasPRs ? (
-						<>
-							{prSummaries.map((pr) => (
-								<PRSummaryCard
-									canOpenReviews={canOpenReviews}
-									key={pr.url || pr.htmlUrl || pr.number}
-									onOpenReviews={onOpenReviews}
-									pr={pr}
-									hostId={hostId}
-									sessionId={session.id}
-									cloudOrgId={session.cloud?.orgId}
-								/>
-							))}
-							{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectQuery.data)} key={pr.url} pr={pr} />)}
-						</>
-					) : (
-						<p className={inspectorEmptyClass}>{t("inspector.noPROpened")}</p>
-					)}
-				</div>
+				showPRSection ? (
+					<div className="flex flex-col gap-1.5">
+						{hasPRs ? (
+							<>
+								{prSummaries.map((pr) => (
+									<PRSummaryCard
+										canOpenReviews={canOpenReviews}
+										key={pr.url || pr.htmlUrl || pr.number}
+										onOpenReviews={onOpenReviews}
+										pr={pr}
+										hostId={hostId}
+										sessionId={session.id}
+										cloudOrgId={session.cloud?.orgId}
+									/>
+								))}
+								{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectQuery.data)} key={pr.url} pr={pr} />)}
+							</>
+						) : (
+							<p className={inspectorEmptyClass}>{t("inspector.noPROpened")}</p>
+						)}
+					</div>
+				) : undefined
 			}
 			pullRequestTitle={showPRSection ? prSectionTitle : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
@@ -1445,18 +1447,19 @@ function PRSummaryCard({
  * artifact directory the same way whether the session is running or
  * terminated, so a completed session's HTML output must stay openable.
  */
-function useOpenArtifactPreview(sessionId: string | undefined) {
+function useOpenArtifactPreview(sessionId: string | undefined, hostId?: string) {
 	const queryClient = useQueryClient();
 	const setInspectorView = useUiStore((state) => state.setInspectorView);
 	const setInspectorOpen = useUiStore((state) => state.setInspectorOpen);
 	return useCallback(
 		(url: string) => {
 			if (!sessionId) return;
-			setInspectorView(sessionId, "browser");
-			setInspectorOpen(sessionId, true);
+			const uiKey = sessionUiKey(sessionId, hostId);
+			setInspectorView(uiKey, "browser");
+			setInspectorOpen(uiKey, true);
 			void (async () => {
 				try {
-					const { error } = await apiClient.POST("/api/v1/sessions/{sessionId}/preview", {
+					const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/preview", {
 						params: { path: { sessionId } },
 						body: { url },
 					});
@@ -1464,13 +1467,13 @@ function useOpenArtifactPreview(sessionId: string | undefined) {
 						console.warn("Unable to open artifact preview in Browser tab", error);
 						return;
 					}
-					await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+					await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				} catch (error) {
 					console.warn("Unable to open artifact preview in Browser tab", error);
 				}
 			})();
 		},
-		[queryClient, sessionId, setInspectorOpen, setInspectorView],
+		[hostId, queryClient, sessionId, setInspectorOpen, setInspectorView],
 	);
 }
 
@@ -1489,7 +1492,7 @@ function ArtifactSummaryCard({
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 	session: WorkspaceSession;
 }) {
-	const openArtifactPreview = useOpenArtifactPreview(session.id);
+	const openArtifactPreview = useOpenArtifactPreview(session.id, session.hostId);
 	const handleOpen = () => {
 		if (artifact.kind === "html" && artifact.previewUrl) {
 			openArtifactPreview(artifact.previewUrl);

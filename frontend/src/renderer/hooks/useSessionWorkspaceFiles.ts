@@ -222,7 +222,7 @@ function decodeArtifactText(bytes: Uint8Array, truncated: boolean): { binary: bo
 
 export function sessionArtifactFileQueryOptions(sessionId: string, path: string, rawUrl: string | undefined, errorMessage = "Unable to load artifact"): UseQueryOptions<WorkspaceFileDetail> {
 	return {
-		queryKey: ["session-artifact-file", sessionId, path],
+		queryKey: ["session-artifact-file", rawUrl ?? "", sessionId, path],
 		queryFn: () => fetchSessionArtifactFile(sessionId, path, rawUrl, errorMessage),
 	};
 }
@@ -237,10 +237,9 @@ export function sessionWorkspaceFileQueryOptions(sessionId: string, path: string
 }
 
 export function sessionSourceFileQueryOptions(sessionId: string, source: FilesSource, path: string, errorMessage = "Unable to load file", scope: WorkspaceDiffScope = "combined", commitSha?: string, previousPath = "", hostId?: string): UseQueryOptions<WorkspaceFileDetail> {
+	if (source.kind === "workspace") return sessionWorkspaceFileQueryOptions(sessionId, path, errorMessage, scope, commitSha, hostId);
 	if (source.kind === "artifact") return sessionArtifactFileQueryOptions(sessionId, path, source.rawUrl, errorMessage);
-	return source.kind === "workspace"
-		? sessionWorkspaceFileQueryOptions(sessionId, path, errorMessage, scope, commitSha, hostId)
-		: { queryKey: hostId ? ["session-source-file", hostId, sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", path] : ["session-source-file", sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", path], queryFn: () => fetchSessionPRFile(sessionId, source.number, source.url, path, previousPath, errorMessage, commitSha, hostId) };
+	return { queryKey: hostId ? ["session-source-file", hostId, sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", path] : ["session-source-file", sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", path], queryFn: () => fetchSessionPRFile(sessionId, source.number, source.url, path, previousPath, errorMessage, commitSha, hostId) };
 }
 
 export const sessionWorkspaceDiffsQueryKey = (
@@ -455,7 +454,7 @@ export function sessionWorkspaceHistoryQueryOptions(sessionId: string, errorMess
 export function sessionSourceFilesQueryOptions(sessionId: string, source: FilesSource, errorMessage = "Unable to load files", hostId?: string): UseQueryOptions<WorkspaceFilesResponse> {
 	if (source.kind === "workspace") return sessionWorkspaceFilesQueryOptions(sessionId, errorMessage, hostId);
 	if (source.kind === "pull_request") {
-		return { queryKey: ["session-source-files", sessionId, "pull_request", source.url, source.snapshot ?? ""], queryFn: () => fetchSessionPRFiles(sessionId, source.number, source.url, errorMessage, hostId) };
+		return { queryKey: hostId ? ["session-source-files", hostId, sessionId, "pull_request", source.url, source.snapshot ?? ""] : ["session-source-files", sessionId, "pull_request", source.url, source.snapshot ?? ""], queryFn: () => fetchSessionPRFiles(sessionId, source.number, source.url, errorMessage, hostId) };
 	}
 	// Artifact directory listings come from the session summary artifactFiles
 	// contract. The queryFn still needs to exist and type-check even though the

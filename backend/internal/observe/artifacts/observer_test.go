@@ -27,12 +27,12 @@ func (f *fakeSink) ReconcileSessionOutputType(_ context.Context, id domain.Sessi
 	return f.err
 }
 
-func TestPoll_SkipsTerminatedAndAlreadyArtifactSessions(t *testing.T) {
+func TestPoll_SkipsTerminatedButRescansArtifactSessionsForRemovals(t *testing.T) {
 	sessions := fakeSessions{rows: []domain.SessionRecord{
 		{ID: "live"},
 		{ID: "pr-only", OutputType: domain.SessionOutputPR}, // still polled: may later gain artifact output too.
 		{ID: "terminated", IsTerminated: true},
-		{ID: "already-artifact", OutputType: domain.SessionOutputArtifact},
+		{ID: "already-artifact", OutputType: domain.SessionOutputArtifact}, // rescanned: its last file may have been deleted.
 		{ID: "already-pr-and-artifact", OutputType: domain.SessionOutputPRAndArtifact},
 	}}
 	sink := &fakeSink{}
@@ -41,8 +41,14 @@ func TestPoll_SkipsTerminatedAndAlreadyArtifactSessions(t *testing.T) {
 	if err := o.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(sink.reconciled) != 2 || sink.reconciled[0] != "live" || sink.reconciled[1] != "pr-only" {
-		t.Fatalf("reconciled = %v, want [live pr-only]", sink.reconciled)
+	want := []domain.SessionID{"live", "pr-only", "already-artifact", "already-pr-and-artifact"}
+	if len(sink.reconciled) != len(want) {
+		t.Fatalf("reconciled = %v, want %v", sink.reconciled, want)
+	}
+	for i := range want {
+		if sink.reconciled[i] != want[i] {
+			t.Fatalf("reconciled = %v, want %v", sink.reconciled, want)
+		}
 	}
 }
 
