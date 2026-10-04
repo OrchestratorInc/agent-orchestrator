@@ -58,6 +58,7 @@ export function AgentModelCombobox({
 	models,
 	allowCustom,
 	customModelEntry,
+	selectionMode,
 	agentLabel,
 	onRefresh,
 	onLoadAdditional,
@@ -85,6 +86,7 @@ export function AgentModelCombobox({
 	models: AgentModel[];
 	allowCustom?: boolean;
 	customModelEntry?: AgentModelCatalog["customModelEntry"];
+	selectionMode?: AgentModelCatalog["selectionMode"];
 	agentLabel?: string;
 	onRefresh?: () => void | Promise<void>;
 	onLoadAdditional?: () => Promise<void>;
@@ -153,7 +155,6 @@ export function AgentModelCombobox({
 	const defaultEffort = providerEffort && effortOptions.includes(providerEffort) ? providerEffort : "";
 	const currentEffortLabel = effortDisplayLabel(explicitEffort || "", effortOptions.map((value) => ({ value })), t("settings.models.useAgentEffort"), defaultEffort);
 	const [search, setSearch] = useState("");
-	const [customInputOpen, setCustomInputOpen] = useState(false);
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [effortMenuOpen, setEffortMenuOpen] = useState(false);
 	const [refreshFailed, setRefreshFailed] = useState(false);
@@ -163,7 +164,7 @@ export function AgentModelCombobox({
 	const defaultModel = concreteModels.find((model) => model.isDefault)?.id || "";
 	const effectiveModel = explicitModel || defaultModel;
 	const selected = searchIndex.byID.get(normalizeSearch(effectiveModel));
-	const showSearch = customInputOpen || modelRows(searchIndex.models).length >= MODEL_SEARCH_THRESHOLD;
+	const showSearch = (selectionMode === "text" && allowDirectCustom) || modelRows(searchIndex.models).length >= MODEL_SEARCH_THRESHOLD;
 	const hasMultipleProviders = useMemo(
 		() =>
 			new Set(
@@ -218,9 +219,6 @@ export function AgentModelCombobox({
 		observer.observe(element);
 		return () => observer.disconnect();
 	}, [groups.length, menuOpen, normalizedSearch, showCustomSearchAction, updateScrollCue, visibleModels.length]);
-	useLayoutEffect(() => {
-		if (customInputOpen && menuOpen) searchInputRef.current?.focus();
-	}, [customInputOpen, menuOpen]);
 	const onCloseAutoFocus = useSuppressStrayFocusRing(menuOpen);
 	const selectModel = (modelID: string) => {
 		if (recentScope) {
@@ -267,7 +265,6 @@ export function AgentModelCombobox({
 				setMenuOpen(open);
 				if (open) {
 					setSearch("");
-					setCustomInputOpen(false);
 					setAdditionalOpen(false);
 				} else {
 					setRefreshFailed(false);
@@ -465,11 +462,6 @@ export function AgentModelCombobox({
 							</DropdownMenuItem>
 						)}
 						{additionalFailed && <p role="alert" className="px-2 py-1.5 text-xs text-warning">{t("settings.models.moreFailed", { defaultValue: "Could not load additional models." })}</p>}
-						{allowDirectCustom && !customInputOpen && (
-							<DropdownMenuItem onSelect={(event) => { event.preventDefault(); setCustomInputOpen(true); }} className={modelItemClass(false)}>
-								{t("settings.models.useModelID", { defaultValue: "Use model ID…" })}
-							</DropdownMenuItem>
-						)}
 						{showCustomSearchAction && (
 							<DropdownMenuItem onSelect={() => onCustom(customSearchValue)} className={modelItemClass(false)}>
 								{t("settings.models.useCustom", { model: customSearchValue })}

@@ -1125,7 +1125,6 @@
 	"settings.models.searchPlaceholder": "モデルを検索…",
 	"settings.models.searchModelsOrProvidersPlaceholder": "モデルまたはプロバイダーを検索…",
 	"settings.models.typeToNarrow": " — 入力して絞り込む",
-	"settings.models.useModelID": "モデルIDを使用…",
 	"settings.models.moreModels": "その他のモデル",
 	"settings.models.loadingMore": "その他のモデルを読み込み中…",
 	"settings.models.hideMore": "追加のモデルを非表示",

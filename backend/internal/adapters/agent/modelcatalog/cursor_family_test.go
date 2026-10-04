@@ -49,6 +49,10 @@ func TestCursorCurrentDefaultAnnotation(t *testing.T) {
 
 func TestCursorInstalledAdditionalFamilies(t *testing.T) {
 	for _, tc := range []struct{ stem, first, second, firstLabel, secondLabel, label string }{
+		{"gpt-5.4-mini", "gpt-5.4-mini-none", "gpt-5.4-mini-xhigh", "GPT-5.4 Mini None", "GPT-5.4 Mini Extra High", "GPT-5.4 Mini"},
+		{"gpt-5.4-nano", "gpt-5.4-nano-low", "gpt-5.4-nano-high", "GPT-5.4 Nano Low", "GPT-5.4 Nano High", "GPT-5.4 Nano"},
+		{"kimi-k3", "kimi-k3-low", "kimi-k3-max", "Kimi K3 Low", "Kimi K3", "Kimi K3"},
+		{"glm-5.2", "glm-5.2-high", "glm-5.2-max", "GLM 5.2", "GLM 5.2 Max", "GLM 5.2"},
 		{"cursor-grok-4.5", "cursor-grok-4.5-high", "cursor-grok-4.5-high-fast", "Grok 4.5", "Grok 4.5 Fast", "Grok 4.5"},
 		{"cursor-grok-4.6", "cursor-grok-4.6-low", "cursor-grok-4.6-medium", "Grok 4.6 Low", "Grok 4.6 Medium", "Grok 4.6"},
 		{"muse-spark-1.3", "muse-spark-1.3-minimal", "muse-spark-1.3-xhigh", "Muse Spark 1.3 1M Minimal", "Muse Spark 1.3 1M Extra High", "Muse Spark 1.3 1M"},

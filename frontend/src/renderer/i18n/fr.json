@@ -1145,7 +1145,6 @@
 	"settings.models.searchPlaceholder": "Rechercher des modèles…",
 	"settings.models.searchModelsOrProvidersPlaceholder": "Rechercher des modèles ou des fournisseurs…",
 	"settings.models.typeToNarrow": " — saisissez pour affiner",
-	"settings.models.useModelID": "Utiliser un identifiant de modèle…",
 	"settings.models.moreModels": "Plus de modèles",
 	"settings.models.loadingMore": "Chargement de modèles supplémentaires…",
 	"settings.models.hideMore": "Masquer les modèles supplémentaires",

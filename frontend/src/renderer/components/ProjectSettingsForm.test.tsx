@@ -135,7 +135,6 @@ async function chooseOption(trigger: HTMLElement, optionName: string) {
 
 async function chooseCustomModel(label: string, model: string) {
 	await userEvent.click(screen.getByRole("button", { name: label }));
-	await userEvent.click(screen.getByRole("menuitem", { name: "Use model ID…" }));
 	await userEvent.type(screen.getByRole("searchbox", { name: `Search ${label.toLowerCase()}` }), model);
 	await userEvent.click(screen.getByRole("menuitem", { name: `Use “${model}” as a custom model` }));
 }

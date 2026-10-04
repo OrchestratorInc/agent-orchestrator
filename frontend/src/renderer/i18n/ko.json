@@ -1125,7 +1125,6 @@
 	"settings.models.searchPlaceholder": "모델 검색…",
 	"settings.models.searchModelsOrProvidersPlaceholder": "모델 또는 제공업체 검색…",
 	"settings.models.typeToNarrow": " — 입력하여 범위 좁히기",
-	"settings.models.useModelID": "모델 ID 사용…",
 	"settings.models.moreModels": "더 많은 모델",
 	"settings.models.loadingMore": "추가 모델을 불러오는 중…",
 	"settings.models.hideMore": "추가 모델 숨기기",

@@ -117,6 +117,7 @@ export function AgentModelPicker({
 			onLoadAdditional={() => expandAgentModels(queryClient, agentId, projectId, hostId)}
 			allowCustom={catalog?.allowCustom}
 			customModelEntry={customModelEntry}
+			selectionMode={catalog?.selectionMode}
 			agentLabel={agentLabel}
 			onRefresh={refreshCatalog}
 			refreshing={catalogLoading || catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}

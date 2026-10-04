@@ -230,7 +230,7 @@ describe("AgentModelCombobox", () => {
 
 		// The first 50 catalog models. The custom-model action appears
 		// only after the user types a value that does not match the catalog.
-		expect(screen.getAllByRole("menuitem").filter((item) => item.textContent !== "Use model ID…")).toHaveLength(50);
+		expect(screen.getAllByRole("menuitem")).toHaveLength(50);
 		expect(screen.getByText("Showing 49 of 1,397 matching models — type to narrow")).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: /Model 1000/ })).not.toBeInTheDocument();
 	});
@@ -267,16 +267,22 @@ describe("AgentModelCombobox", () => {
 		expect(onCustom).toHaveBeenCalledWith("private/model-id");
 	});
 
-	it("reveals a focused custom model input for short catalogs", async () => {
-		const { onCustom } = renderCombobox([{ id: "native", label: "Native" }]);
+	it("keeps short catalogs free of custom model actions and search", async () => {
+		const { onCustom } = renderCombobox([{ id: "native", label: "Native" }], { compact: true });
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
-		await userEvent.click(screen.getByRole("menuitem", { name: "Use model ID…" }));
-		const input = screen.getByRole("searchbox");
-		expect(input).toHaveFocus();
-		await userEvent.type(input, "private/model-id");
-		await userEvent.keyboard("{Enter}");
+		expect(screen.queryByRole("menuitem", { name: "Use model ID…" })).not.toBeInTheDocument();
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Default", "Native"]);
+		expect(onCustom).not.toHaveBeenCalled();
+	});
+
+	it("preserves direct entry for manual text-mode catalogs", async () => {
+		const { onCustom } = renderCombobox([], { selectionMode: "text" });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		await userEvent.type(screen.getByRole("searchbox"), "private/model-id");
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use “private/model-id” as a custom model" }));
 		expect(onCustom).toHaveBeenCalledWith("private/model-id");
+		expect(screen.queryByRole("menuitem", { name: "Use model ID…" })).not.toBeInTheDocument();
 	});
 
 	it("groups variants before the row limit and retains exact labels and IDs", async () => {
@@ -458,7 +464,7 @@ describe("AgentModelCombobox", () => {
 		);
 		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent("saved-model");
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-		expect(screen.getAllByRole("menuitem").filter((item) => item.textContent !== "Use model ID…").map((item) => item.textContent)).toEqual(["Default", "New model", "saved-model"]);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Default", "New model", "saved-model"]);
 		await userEvent.click(screen.getByRole("menuitem", { name: "Default" }));
 		expect(view.onChange).toHaveBeenCalledWith("");
 	});
@@ -477,7 +483,7 @@ describe("AgentModelCombobox", () => {
 			value: "saved-model", customModelEntry, showFollowAgentAction: false,
 		});
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-		expect(screen.getAllByRole("menuitem").filter((item) => item.textContent !== "Use model ID…").map((item) => item.textContent)).toEqual(["Official model", "saved-model"]);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Official model", "saved-model"]);
 		expect(screen.queryByRole("menuitem", { name: "Use model ID…" })).not.toBeInTheDocument();
 	});
 
@@ -486,7 +492,7 @@ describe("AgentModelCombobox", () => {
 			value: "custom", customModelEntry: "direct", showFollowAgentAction: false,
 		});
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-		expect(screen.getAllByRole("menuitem").filter((item) => item.textContent !== "Use model ID…").map((item) => item.textContent)).toEqual(["Official model", "Custom model"]);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Official model", "Custom model"]);
 	});
 
 	it("does not expose free text for fixed model catalogs", async () => {
@@ -516,7 +522,7 @@ describe("AgentModelCombobox", () => {
 		const { onChange } = renderCombobox(models, { compact, recentScope: "harness", value: "official/older", showFollowAgentAction: false });
 		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent("Older official");
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-		expect(screen.getAllByRole("menuitem").filter((item) => item.textContent !== "Use model ID…").map((item) => item.textContent)).toEqual([
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
 			"Newest official", "Provider default", "Older official", "Configured extra",
 		]);
 		expect(screen.queryByText("Pinned models")).not.toBeInTheDocument();
@@ -531,7 +537,7 @@ describe("AgentModelCombobox", () => {
 			{ id: "a/old", label: "A older", provider: "A" },
 		], { showFollowAgentAction: false });
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-		expect(screen.getAllByRole("menuitem").filter((item) => item.textContent !== "Use model ID…").map((item) => item.textContent)).toEqual(["A newest", "B newest", "A older"]);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["A newest", "B newest", "A older"]);
 		expect(screen.getAllByText("A")).toHaveLength(2);
 		expect(screen.getByText("B")).toBeInTheDocument();
 	});

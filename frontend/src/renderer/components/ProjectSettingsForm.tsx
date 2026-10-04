@@ -901,6 +901,7 @@ function AgentModelField({
 						onLoadAdditional={() => expandAgentModels(queryClient, agentId, projectId, hostId)}
 						allowCustom={catalog?.allowCustom}
 						customModelEntry={customModelEntry}
+						selectionMode={catalog?.selectionMode}
 						agentLabel={agentId}
 						onRefresh={refreshCatalog}
 						refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}

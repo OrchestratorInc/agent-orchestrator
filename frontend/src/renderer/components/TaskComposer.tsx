@@ -832,6 +832,7 @@ function TaskModelPicker({
 			onLoadAdditional={onLoadAdditional}
 			allowCustom={catalog?.allowCustom}
 			customModelEntry={customModelEntry}
+			selectionMode={catalog?.selectionMode}
 			agentLabel={agentLabel}
 			onRefresh={onRefresh}
 			refreshing={loading || catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}

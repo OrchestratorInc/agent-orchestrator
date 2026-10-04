@@ -976,7 +976,7 @@ func parseGrokModels(output []byte) ([]ports.AgentModelInfo, error) {
 var cursorDefaultAnnotation = regexp.MustCompile(`(?i)\((?:current, )?default(?:, current)?\)`)
 var cursorSelectionAnnotation = regexp.MustCompile(`(?i) \((?:current|default|current, default|default, current)\)`)
 var cursorVariantSuffix = regexp.MustCompile(`(?:-(?:extra-high|none|minimal|low|medium|high|xhigh|max|fast|thinking))+$`)
-var cursorFamilyStem = regexp.MustCompile(`^(?:gpt-[0-9]+(?:[.-][0-9]+)*(?:-codex|-sol|-luna|-terra)?|claude-(?:opus|sonnet|haiku|fable)-[0-9]+(?:[.-][0-9]+)*|claude-[0-9]+(?:[.-][0-9]+)*-(?:opus|sonnet|haiku)|gemini-[0-9]+(?:[.-][0-9]+)*(?:-(?:pro|flash|flash-lite))?|(?:cursor-)?grok-[0-9]+(?:[.-][0-9]+)*(?:-code)?|muse-spark-[0-9]+(?:[.-][0-9]+)*|composer-[0-9]+(?:[.-][0-9]+)*)$`)
+var cursorFamilyStem = regexp.MustCompile(`^(?:gpt-[0-9]+(?:[.-][0-9]+)*(?:-codex|-sol|-luna|-terra|-mini|-nano)?|claude-(?:opus|sonnet|haiku|fable)-[0-9]+(?:[.-][0-9]+)*|claude-[0-9]+(?:[.-][0-9]+)*-(?:opus|sonnet|haiku)|gemini-[0-9]+(?:[.-][0-9]+)*(?:-(?:pro|flash|flash-lite))?|(?:cursor-)?grok-[0-9]+(?:[.-][0-9]+)*(?:-code)?|kimi-k[0-9]+(?:[.-][0-9]+)*|glm-[0-9]+(?:[.-][0-9]+)*|muse-spark-[0-9]+(?:[.-][0-9]+)*|composer-[0-9]+(?:[.-][0-9]+)*)$`)
 var cursorVariantLabel = regexp.MustCompile(`(?i)(?: (?:extra high|none|minimal|low|medium|high|xhigh|max|fast|thinking))+( (?:\(NO ZDR\)))?$`)
 
 func cursorFamilyDisplayLabel(label string) string {

@@ -200,7 +200,7 @@ describe("SwitchAgentDialog", () => {
 			allowCustom: true,
 			customModelEntry: "direct",
 			fetchedAt: "2026-06-10T00:00:00Z",
-			models: [{ id: "gpt-5.4", label: "GPT-5.4", isDefault: true }],
+			models: [{ id: "gpt-5.4", label: "GPT-5.4", isDefault: true }, ...Array.from({ length: 7 }, (_, index) => ({ id: `model-${index}`, label: `Model ${index}` }))],
 			selectionMode: "catalog",
 			source: "test",
 			stale: false,
@@ -209,7 +209,6 @@ describe("SwitchAgentDialog", () => {
 		const dialog = screen.getByRole("dialog", { name: "Switch agent" });
 		const model = within(dialog).getByRole("button", { name: "Model" });
 		await userEvent.click(model);
-		await userEvent.click(screen.getByRole("menuitem", { name: "Use model ID…" }));
 		await userEvent.type(screen.getByRole("searchbox", { name: "Search model" }), "private/model-id");
 		await userEvent.click(
 			screen.getByRole("menuitem", { name: "Use “private/model-id” as a custom model" }),

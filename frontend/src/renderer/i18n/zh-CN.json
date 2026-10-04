@@ -1107,7 +1107,6 @@
 	"settings.models.searchPlaceholder": "搜索模型…",
 	"settings.models.searchModelsOrProvidersPlaceholder": "搜索模型或提供商…",
 	"settings.models.typeToNarrow": " — 输入内容以缩小范围",
-	"settings.models.useModelID": "使用模型 ID…",
 	"settings.models.moreModels": "更多模型",
 	"settings.models.loadingMore": "正在加载更多模型…",
 	"settings.models.hideMore": "隐藏其他模型",

@@ -959,14 +959,13 @@ describe("TaskComposer", () => {
 			catalog: {
 				agent: "codex",
 				selectionMode: "catalog",
-				models: [{ id: "gpt-5", label: "GPT-5", isDefault: true }],
+				models: [{ id: "gpt-5", label: "GPT-5", isDefault: true }, ...Array.from({ length: 7 }, (_, index) => ({ id: `model-${index}`, label: `Model ${index}` }))],
 				customModelEntry: "direct",
 				allowCustom: true,
 			},
 			controls: async () => {
 				const model = await readyModelPicker();
 				await userEvent.click(model);
-				await userEvent.click(screen.getByRole("menuitem", { name: "Use model ID…" }));
 				await userEvent.type(screen.getByRole("searchbox", { name: "Search model" }), "private/model-id");
 				await userEvent.click(
 					screen.getByRole("menuitem", { name: "Use “private/model-id” as a custom model" }),
@@ -1780,7 +1779,6 @@ describe("TaskComposer", () => {
 		const model = await readyModelPicker();
 		await userEvent.click(model);
 		expect(screen.queryByRole("menuitem", { name: "Default" })).not.toBeInTheDocument();
-		await userEvent.click(screen.getByRole("menuitem", { name: "Use model ID…" }));
 		await userEvent.type(screen.getByRole("searchbox", { name: "Search model" }), "gpt-5.1");
 		await userEvent.click(screen.getByRole("menuitem", { name: "Use “gpt-5.1” as a custom model" }));
 		fireEvent.change(task(), { target: { value: "Use the selected model" } });

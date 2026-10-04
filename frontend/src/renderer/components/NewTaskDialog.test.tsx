@@ -208,6 +208,10 @@ describe("NewTaskDialog", () => {
 	});
 
 	it("starts the original task naming the preselected project-default agent and optional model", async () => {
+		const defaultGet = getMock.getMockImplementation()!;
+		getMock.mockImplementation((path: string) => path === "/api/v1/agents/{agent}/models"
+			? Promise.resolve({ data: { ...directModelCatalog, models: Array.from({ length: 8 }, (_, index) => ({ id: `model-${index}`, label: `Model ${index}` })) }, error: undefined })
+			: defaultGet(path));
 		const { onCreated, onOpenChange } = renderDialog();
 		const user = userEvent.setup();
 		const brief = "  Restore the fallback renderer after WebGL init fails.  ";
@@ -221,7 +225,6 @@ describe("NewTaskDialog", () => {
 
 		await user.type(screen.getByLabelText("Task"), brief);
 		await user.click(await screen.findByRole("button", { name: "Model" }));
-		await user.click(screen.getByRole("menuitem", { name: "Use model ID…" }));
 		await user.type(screen.getByRole("searchbox", { name: "Search model" }), "placeholder-model");
 		await user.click(screen.getByRole("menuitem", { name: "Use “placeholder-model” as a custom model" }));
 		await user.click(screen.getByRole("button", { name: "Start task" }));
