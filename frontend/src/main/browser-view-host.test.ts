@@ -553,6 +553,39 @@ describe("browser shortcut routing", () => {
 		expect(webContents.focus).toHaveBeenCalled();
 	});
 
+	it("flushes Chromium's delay for find queries shorter than four characters", async () => {
+		const { invoke, webContents } = setupHost();
+		const state = await invoke("browser:ensure", "sess-1");
+		await invoke("browser:navigate", { viewId: state.viewId, url: "https://example.test/" });
+		webContents.findInPage.mockClear();
+
+		await invoke("browser:find", {
+			viewId: state.viewId,
+			query: "api",
+			forward: true,
+			newSession: true,
+		});
+		expect(webContents.findInPage).toHaveBeenNthCalledWith(1, "api", {
+			forward: true,
+			findNext: true,
+			matchCase: false,
+		});
+		expect(webContents.findInPage).toHaveBeenNthCalledWith(2, "api", {
+			forward: true,
+			findNext: false,
+			matchCase: false,
+		});
+
+		webContents.findInPage.mockClear();
+		await invoke("browser:find", {
+			viewId: state.viewId,
+			query: "apis",
+			forward: true,
+			newSession: true,
+		});
+		expect(webContents.findInPage).toHaveBeenCalledOnce();
+	});
+
 	it("opens, focuses, and closes browser tabs without dispatching terminal shortcuts", async () => {
 		const { emitBeforeInput, invoke, shellSend, webContents } = setupHost();
 		const state = await invoke("browser:ensure", "sess-1");
