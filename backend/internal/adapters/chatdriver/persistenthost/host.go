@@ -77,6 +77,8 @@ var (
 	// client could not prove that it is safe to replace. Callers must preserve the
 	// durable session rather than treating the failed attachment as provider death.
 	ErrOwnershipInconclusive = errors.New("chat host ownership is inconclusive")
+	// ErrNotRunning means a reconnect-only probe found no surviving host.
+	ErrNotRunning = errors.New("chat host is not running")
 )
 
 // Descriptor is the private connection record published by a running host.
@@ -93,6 +95,7 @@ type Descriptor struct {
 
 // Config identifies one provider process and its AO session ownership.
 type Config struct {
+	ReconnectOnly        bool
 	SessionID            string
 	DataDir              string
 	Workdir              string
@@ -331,6 +334,9 @@ func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 		// A malformed or unreadable ownership record is not proof that no host
 		// exists. Fail closed instead of launching a competing process.
 		return nil, fmt.Errorf("%w: %w", ErrOwnershipInconclusive, err)
+	}
+	if cfg.ReconnectOnly {
+		return nil, ErrNotRunning
 	}
 	if !filepath.IsAbs(cfg.Workdir) {
 		return nil, errors.New("chat host start requires an absolute workdir")
