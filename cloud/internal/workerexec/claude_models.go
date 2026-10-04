@@ -112,6 +112,13 @@ func claudeModelsFromOptions(options []acp.SessionConfigOption) ([]worker.ChatMo
 			if name == "" {
 				name = value
 			}
+			if value == "default" {
+				// Claude ACP describes which concrete model its implicit choice resolves to.
+				name = "Use agent model"
+				if choice.Description != nil && strings.TrimSpace(*choice.Description) != "" {
+					name = strings.TrimSpace(*choice.Description)
+				}
+			}
 			model := worker.ChatModel{ID: value, DisplayName: name, Default: value == currentModel}
 			if choice.Description != nil {
 				model.Description = *choice.Description

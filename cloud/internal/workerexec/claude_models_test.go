@@ -23,3 +23,17 @@ func TestClaudeModelsFromACPOptions(t *testing.T) {
 		t.Fatalf("catalog = %+v, current = %q/%q", models, current, effort)
 	}
 }
+
+func TestClaudeDefaultModelUsesProviderResolvedName(t *testing.T) {
+	resolved := "Claude Opus"
+	choices := acp.SessionConfigSelectOptionsUngrouped{
+		{Value: "default", Name: "Default (recommended)", Description: &resolved},
+		{Value: "opus", Name: "Claude Opus"},
+	}
+	models, current, _ := claudeModelsFromOptions([]acp.SessionConfigOption{
+		{Select: &acp.SessionConfigOptionSelect{Id: "model", CurrentValue: "default", Options: acp.SessionConfigSelectOptions{Ungrouped: &choices}}},
+	})
+	if current != "default" || models[0].DisplayName != "Claude Opus" {
+		t.Fatalf("catalog = %+v, current = %q", models, current)
+	}
+}

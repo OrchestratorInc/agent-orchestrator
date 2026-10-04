@@ -38,7 +38,7 @@ func validateSendMessageRequest(request sendMessageRequest) error {
 		return errors.New("The model selection is invalid.")
 	}
 	switch request.ReasoningEffort {
-	case "", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
+	case "", "default", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
 	default:
 		return errors.New("The reasoning effort selection is invalid.")
 	}
