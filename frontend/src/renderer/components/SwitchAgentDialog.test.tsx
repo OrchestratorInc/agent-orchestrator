@@ -209,6 +209,7 @@ describe("SwitchAgentDialog", () => {
 		const dialog = screen.getByRole("dialog", { name: "Switch agent" });
 		const model = within(dialog).getByRole("button", { name: "Model" });
 		await userEvent.click(model);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use model ID…" }));
 		await userEvent.type(screen.getByRole("searchbox", { name: "Search model" }), "private/model-id");
 		await userEvent.click(
 			screen.getByRole("menuitem", { name: "Use “private/model-id” as a custom model" }),
