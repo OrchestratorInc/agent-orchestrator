@@ -317,7 +317,9 @@ func TestACPReplayLoadLargeHistoryThroughSDK(t *testing.T) {
 	conv.conn = acpsdk.NewClientSideConnection(client, clientW, agentR)
 	t.Cleanup(func() { _ = clientR.Close(); _ = clientW.Close(); _ = agentR.Close(); _ = agentW.Close() })
 	loader := newRefreshableConversation(conv, acpsdk.LoadSessionRequest{SessionId: "session-1", Cwd: t.TempDir(), McpServers: []acpsdk.McpServer{}})
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// Two full 20 MiB SDK loads plus normalization are expensive under the race
+	// detector, especially when other suites share the runner.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	conv.beginHistoryReplay("session-1")
 	// Hold the normalization mutex until the SDK response barrier returns.
