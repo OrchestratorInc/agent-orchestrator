@@ -549,7 +549,7 @@ export const ChatComposer = memo(function ChatComposer({
 		? visibleClientMessageIds
 			? visibleClientMessageIds.has(durableDelivery.clientMessageId)
 				? ""
-				: durableDelivery.requestText
+				: persistedDraft?.composer.text ?? durableDelivery.requestText
 			: persistedDraft?.composer.text ?? durableDelivery.requestText
 		: (draftSeed?.text ?? persistedText);
 	const draftPersistenceError =
@@ -784,7 +784,7 @@ export const ChatComposer = memo(function ChatComposer({
 			? visibleDeliveryIds
 				? visibleDeliveryIds.has(durableDelivery.clientMessageId)
 					? ""
-					: durableDelivery.requestText
+					: committedDraft?.composer.text ?? durableDelivery.requestText
 				: committedDraft?.composer.text ?? durableDelivery.requestText
 			: draftSeed?.text ??
 				(committedDraft ? committedDraft.composer.text : draftSeedText);

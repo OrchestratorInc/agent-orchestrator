@@ -563,6 +563,26 @@ describe("send keys", () => {
 		}
 	});
 
+	it("restores the typed attachment draft without an echo and retries the exact transport payload", async () => {
+		const sessionId = "composer-restored-attachment-without-echo";
+		const requestText = "inspect these notes\n\nAttached files (read these files in the workspace):\n- .ao/attachments/notes.txt";
+		prepareChatComposerDelivery(sessionId, {
+			kind: "send",
+			composerText: "inspect these notes",
+			attachments: [{ id: "restored-notes", path: ".ao/attachments/notes.txt", name: "notes.txt", mimeType: "text/plain", bytes: 5 }],
+			requestText,
+			clientMessageId: "restored-attachment-without-echo",
+		});
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		render(<ChatComposer onSend={onSend} draftSessionId={sessionId} visibleClientMessageIds={new Set()} />);
+		const field = screen.getByLabelText("Message the agent");
+		await waitFor(() => expect(composerWireText(field)).toBe("inspect these notes"));
+		expect(await screen.findByLabelText("Remove notes.txt")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith(requestText, undefined, "restored-attachment-without-echo"));
+		await waitFor(() => expect(composerWireText(field)).toBe(""));
+	});
+
 	it("keeps a restored delivery recoverable without blocking navigation", async () => {
 		const sessionId = "composer-restored-delivery-boundary";
 		prepareChatComposerDelivery(sessionId, {
