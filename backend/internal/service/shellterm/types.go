@@ -41,6 +41,11 @@ type OpenShellTerminalInput struct {
 	ProjectID domain.ProjectID `json:"projectId,omitempty"`
 	SessionID domain.SessionID `json:"sessionId,omitempty"`
 	Shell     string           `json:"shell,omitempty"`
+	// StartOnAttach starts the shell when the requesting client attaches with
+	// its grid instead of immediately, so its first prompt is laid out for the
+	// width that client shows. Only a client that attaches as a sized viewer
+	// may ask for it: a viewer that never reports a grid would never start it.
+	StartOnAttach bool `json:"startOnAttach,omitempty"`
 }
 
 // InitialInputReadyState describes a terminal state that is ready to receive

@@ -202,7 +202,10 @@ export function useOpenShellTerminal(hostId?: HostId) {
 				cloudShellTerminals = [...cloudShellTerminals, shell];
 				return shell;
 			}
-			const body: OpenShellTerminalInput = {};
+			// This renderer attaches every shell it opens with its measured grid, so
+			// the daemon starts the shell then: its first prompt is laid out for the
+			// width this tab shows instead of a guessed default.
+			const body: components["schemas"]["OpenShellTerminalRequest"] = { startOnAttach: true };
 			if (projectId) body.projectId = projectId;
 			if (sessionId) body.sessionId = sessionId;
 			if (remote && shell) body.shell = shell;

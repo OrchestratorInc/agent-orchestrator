@@ -129,6 +129,28 @@ func TestShellTerminalsAPI_OpenAcceptsEmptyBody(t *testing.T) {
 	}
 }
 
+// The desktop renderer attaches with its measured grid, so it asks the daemon
+// to start the shell then; older and secondary clients omit it.
+func TestShellTerminalsAPI_OpenPassesStartOnAttachThrough(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{`{"projectId":"portfolio","startOnAttach":true}`, true},
+		{`{"projectId":"portfolio"}`, false},
+	} {
+		svc := &fakeShellTerminalService{opened: sampleShellTerminal()}
+		srv := newShellTerminalTestServer(t, svc)
+		body, status, _ := doRequest(t, srv, "POST", "/api/v1/shell-terminals", tc.body)
+		if status != http.StatusCreated {
+			t.Fatalf("%s: status = %d, want 201; body=%s", tc.body, status, body)
+		}
+		if svc.gotOpenInput.StartOnAttach != tc.want {
+			t.Errorf("%s: StartOnAttach = %v, want %v", tc.body, svc.gotOpenInput.StartOnAttach, tc.want)
+		}
+	}
+}
+
 func TestShellTerminalsAPI_OpenRejectsMalformedBody(t *testing.T) {
 	srv := newShellTerminalTestServer(t, &fakeShellTerminalService{opened: sampleShellTerminal()})
 

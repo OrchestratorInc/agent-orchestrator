@@ -141,7 +141,7 @@ describe("host-scoped shell terminals", () => {
 		]));
 
 		expect(remoteA.POST).toHaveBeenCalledWith("/api/v1/shell-terminals", {
-			body: { projectId: "project-a", sessionId: "same-session" },
+			body: { startOnAttach: true, projectId: "project-a", sessionId: "same-session" },
 		});
 		expect(postMock).not.toHaveBeenCalled();
 		expect(shellStoreMock.load).not.toHaveBeenCalled();
@@ -211,7 +211,7 @@ describe("useOpenShellTerminal", () => {
 
 		expect(shellStoreMock.load).toHaveBeenCalledOnce();
 		expect(postMock).toHaveBeenCalledWith("/api/v1/shell-terminals", {
-			body: { projectId: "project-1", shell: "git-bash" },
+			body: { startOnAttach: true, projectId: "project-1", shell: "git-bash" },
 		});
 	});
 
@@ -225,7 +225,7 @@ describe("useOpenShellTerminal", () => {
 		await act(async () => result.current.mutateAsync({ shell: "C:\\Tools\\bash.exe" }));
 
 		expect(postMock).toHaveBeenCalledWith("/api/v1/shell-terminals", {
-			body: { shell: "C:\\Tools\\bash.exe" },
+			body: { startOnAttach: true, shell: "C:\\Tools\\bash.exe" },
 		});
 	});
 
@@ -236,7 +236,7 @@ describe("useOpenShellTerminal", () => {
 
 		await act(async () => result.current.mutateAsync({}));
 
-		expect(postMock).toHaveBeenCalledWith("/api/v1/shell-terminals", { body: {} });
+		expect(postMock).toHaveBeenCalledWith("/api/v1/shell-terminals", { body: { startOnAttach: true } });
 		expect(shellStoreMock.load).not.toHaveBeenCalled();
 	});
 
