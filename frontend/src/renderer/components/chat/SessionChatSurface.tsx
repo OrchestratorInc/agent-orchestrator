@@ -8,7 +8,8 @@
  */
 
 import { AlertTriangle, CheckCircle2, Loader2, X } from "lucide-react";
-import { memo, useEffect, useRef, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
 	findActiveAgentSwitch,
@@ -20,6 +21,7 @@ import { useObservedAgentSwitchLifecycle } from "../../hooks/useObservedAgentSwi
 import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } from "../../hooks/useAgentSwitchVisibility";
 import { useSwitchAgentState } from "../../hooks/useSwitchAgent";
 import {
+	conversationQueryKey,
 	useConversation,
 	useConversationCommands,
 	useConversationConfigOptions,
@@ -31,6 +33,7 @@ import {
 import { useAgentSwitchProviderCatalogs } from "../../hooks/useAgentSwitchProviderCatalogs";
 import { useRememberProjectPermissions } from "../../hooks/useRememberProjectPermissions";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
+import { useEditorHandoffState } from "../../hooks/useEditorHandoff";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
 import { sessionUiKey } from "../../lib/hosts";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
@@ -178,6 +181,38 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onConversationWorkChange?: (state: ConversationWorkState) => void;
 }) {
 	const uiSessionId = sessionUiKey(session.id, hostId);
+	const queryClient = useQueryClient();
+	const previousStatusReadiness = useRef(session.statusReadiness);
+	const [recoverySnapshotPending, setRecoverySnapshotPending] = useState(
+		session.statusReadiness === "checking",
+	);
+	useEffect(() => {
+		const previous = previousStatusReadiness.current;
+		previousStatusReadiness.current = session.statusReadiness;
+		if (previous === "checking" && session.statusReadiness !== "checking") {
+			setRecoverySnapshotPending(true);
+			// The first conversation snapshot can race daemon startup recovery and
+			// capture the empty controller registry. Read it again after verification
+			// settles so a successfully reattached controller is reflected immediately.
+			void queryClient
+				.invalidateQueries({ queryKey: conversationQueryKey(session.id, hostId) })
+				.then(
+					() => setRecoverySnapshotPending(false),
+					() => setRecoverySnapshotPending(false),
+				);
+		}
+	}, [queryClient, session.id, session.statusReadiness, hostId]);
+
+	// ShellTopbar already resolves this state for the editor action. Read the
+	// same cached query here so the stopped-controller banner never offers a
+	// resume or shell action when this session's worktree is gone.
+	const workspaceHandoff = useEditorHandoffState(hostId ? "" : session.id, {
+		sessionCreatedAt: session.createdAt,
+		sessionTerminated: session.isTerminated,
+	});
+	const workspaceUnavailable =
+		!hostId && workspaceHandoff.data?.workspaceAvailable === false &&
+		workspaceHandoff.data.unavailableCode === "SESSION_WORKSPACE_NOT_FOUND";
 	const {
 		snapshot: queriedSnapshot,
 		isLoading,
@@ -193,6 +228,16 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
 	const commands = useConversationCommands(session.id, hostId);
+	useEffect(() => {
+		if (
+			workspaceHandoff.data?.workspaceAvailable === true ||
+			(snapshot !== undefined && snapshot.controller.state !== "stopped")
+		) {
+			// Some embedded/test command adapters predate this recovery helper. A
+			// missing reset must not take down the entire Chat surface.
+			commands.resetResumeError?.();
+		}
+	}, [commands.resetResumeError, commands.resumeWorkspaceUnavailable, snapshot?.controller.state, workspaceHandoff.data?.workspaceAvailable]);
 	const projectPermissions = useRememberProjectPermissions(session.workspaceId, snapshot?.harness, hostId);
 	const {
 		acknowledgeAcceptedTurn,
@@ -216,15 +261,17 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	}, [acceptedLocalTurnObserved, acknowledgeAcceptedTurn, pendingAcceptedTurnId]);
 	useEffect(() => {
 		if (!snapshot) return;
-		const durableHumanTurnIds = new Set(
+		const durableClientMessageIds = new Set(
 			snapshot.items.flatMap((item) =>
-				item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId
-					? [item.turnId]
+				item.kind === "message" && item.role === "user" && item.origin === "human" && item.clientMessageId
+					? [item.clientMessageId]
 					: [],
 			),
 		);
 		for (const echo of localEchos) {
-			if (echo.turnId && durableHumanTurnIds.has(echo.turnId)) acknowledgeLocalEcho?.(echo.turnId);
+			if (durableClientMessageIds.has(echo.clientMessageId)) {
+				acknowledgeLocalEcho?.(echo.clientMessageId);
+			}
 		}
 	}, [acknowledgeLocalEcho, localEchos, snapshot]);
 	useEffect(() => {
@@ -498,6 +545,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				assetBaseUrl={assetBaseUrl}
 				remoteHostId={hostId}
 				snapshot={renderSnapshot}
+				controllerRecoveryChecking={
+					session.statusReadiness === "checking" || recoverySnapshotPending
+				}
 				agentInputDisabled={switchLocksChat || handoffDialogOpen}
 				newWorkDisabled={newWorkDisabled}
 				onLinkOpen={openLinkInBrowser}
@@ -545,6 +595,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				}}
 				resumingAgent={commands.resumingAgent}
 				resumeError={commands.resumeError}
+				resumeWorkspaceUnavailable={commands.resumeWorkspaceUnavailable || workspaceUnavailable}
 				onOpenShell={onOpenShell}
 				openingShell={openingShell}
 				shellError={shellError}
@@ -558,6 +609,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				configOptions={configOptions.options}
 				onChooseConfigOption={configOptions.setOption}
 				configOptionPending={configOptions.pending || commands.choosingSettings}
+				configOptionPendingOptionId={configOptions.pendingOptionId}
 				configOptionError={configOptions.error}
 				onCompact={commands.compact}
 				compacting={commands.compacting}
@@ -578,6 +630,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				filePaths={paths}
 				filePathsTruncated={truncated}
 				localEchos={localEchos}
+				onAbandonLocalEcho={commands.abandonLocalEcho}
 				onStageAttachments={stageAttachments}
 				nativeImages={can(renderSnapshot, "images")}
 				// Gated on what the daemon advertises, so the control is never drawn for a
@@ -599,17 +652,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				promoteQueuedTurnPendingTurnId={commands.promoteQueuedTurnPendingTurnId}
 				cancelQueuedTurnPendingTurnId={commands.cancelQueuedTurnPendingTurnId}
 				editQueuedTurnPendingTurnId={commands.editQueuedTurnPendingTurnId}
-				onReloadMcpServers={
-					!can(renderSnapshot, "mcp_reload") || commands.mcpReloadUnsupported
-						? undefined
-						: () => {
-								// The rejection is already held by the mutation and rendered from
-								// `mcpReloadError`; rethrowing it would only add a console error.
-								void commands.reloadMcpServers().catch(() => {});
-							}
-				}
-				reloadingMcpServers={commands.reloadingMcpServers}
-				mcpReloadError={commands.mcpReloadError}
 			/>
 			{shownSwitchPresentation ? (
 				<ChatAgentSwitchStatus
