@@ -1683,7 +1683,12 @@ function CloudProjectCard({
 						const { items, page: info } = await client.listProjects(org.id, { limit: 100, cursor });
 						const match =
 							items.find((candidate) => candidate.githubRepositoryId === repoId) ??
-							items.find((candidate) => candidate.repositoryUrl.toLowerCase().includes(repoFullName));
+							// Fallback for legacy projects stored without a repository id: match
+							// the full `owner/name` path segment (not a loose substring, which
+							// would let `acme/repo` match a sibling `acme/repo-two`).
+							items.find((candidate) =>
+								candidate.repositoryUrl.toLowerCase().replace(/\.git$/, "").endsWith(`/${repoFullName}`),
+							);
 						existingId = match?.id;
 						if (!info.hasMore || info.nextCursor === undefined || info.nextCursor === cursor) break;
 						cursor = info.nextCursor;

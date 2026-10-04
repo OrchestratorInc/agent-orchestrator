@@ -1908,6 +1908,93 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(screen.queryByText(/conflicts with an existing record/i)).not.toBeInTheDocument();
 	});
 
+	it("resolves the conflicting project by exact repo path, not a substring of a sibling", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		cloudMocks.listGitHubInstallations.mockResolvedValue({
+			installations: [
+				{
+					id: "inst-1",
+					githubInstallationId: "100",
+					accountLogin: "acme",
+					accountType: "Organization",
+					status: "active",
+					repositorySelection: "all",
+					syncStatus: "ready",
+					createdAt: "",
+					updatedAt: "",
+				},
+			],
+		});
+		cloudMocks.listGitHubRepositories.mockResolvedValue({
+			items: [
+				{
+					githubRepositoryId: "555",
+					name: "private-repo",
+					fullName: "acme/private-repo",
+					htmlUrl: "https://github.com/acme/private-repo",
+					defaultBranch: "main",
+					visibility: "private",
+					isPrivate: true,
+					isArchived: false,
+					access: "write",
+					grantedAt: "",
+				},
+			],
+			page: { hasMore: false },
+		});
+		cloudMocks.createGitHubProject.mockRejectedValue(
+			new CloudCpError("a project already exists for this repository in this organization", {
+				status: 409,
+				code: "project_repository_exists",
+			}),
+		);
+		// Legacy projects (no stored githubRepositoryId) must be matched by their
+		// exact owner/name path. A sibling whose name is a superstring is listed
+		// first to prove the match is not a loose substring.
+		cloudMocks.listProjects.mockResolvedValue({
+			items: [
+				{
+					id: "cp-sibling",
+					orgId: "org-1",
+					displayName: "private-repo-two",
+					repositoryUrl: "https://github.com/acme/private-repo-two",
+					defaultBranch: "main",
+					config: {},
+					createdAt: "",
+					updatedAt: "",
+				},
+				{
+					id: "cp-existing",
+					orgId: "org-1",
+					displayName: "private-repo",
+					repositoryUrl: "https://github.com/acme/private-repo.git",
+					defaultBranch: "main",
+					config: {},
+					createdAt: "",
+					updatedAt: "",
+				},
+			],
+			page: { hasMore: false },
+		});
+		const user = userEvent.setup();
+		const openProject = vi.fn();
+		render(
+			<ShellProvider value={{ openProject } as unknown as ShellContextValue}>
+				<CreateProjectFlow embedded mode="choose" {...noop} />
+			</ShellProvider>,
+			{ wrapper: CloudTestProviders },
+		);
+
+		await user.click(screen.getByRole("button", { name: "New cloud project" }));
+		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
+		await user.click(await screen.findByRole("option", { name: /acme\/private-repo/ }));
+		await user.click(await screen.findByRole("button", { name: "Create" }));
+
+		await waitFor(() => expect(openProject).toHaveBeenCalledWith("cp-existing"));
+		expect(openProject).not.toHaveBeenCalledWith("cp-sibling");
+	});
+
 	it("offers GitHub reconnection after repositories are connected", async () => {
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.sessionStatus = "authenticated";
