@@ -8,6 +8,14 @@ export type BrowserLiveFrame = {
 
 export type BrowserFrameRect = { left: number; top: number; width: number; height: number };
 
+/**
+ * Electron mouse-wheel deltas use the same sign as a direct-manipulation drag:
+ * positive Y scrolls up, moving content down with a downward finger gesture.
+ */
+export function browserWheelDeltaFromDrag(deltaX: number, deltaY: number): { deltaX: number; deltaY: number } {
+	return { deltaX, deltaY };
+}
+
 export function browserLiveURL(config: { secure?: boolean; host: string; httpPort: string }, sessionID: string): string {
 	const scheme = config.secure ? "wss" : "ws";
 	const host = config.host.trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").replace(/\/+$/, "");

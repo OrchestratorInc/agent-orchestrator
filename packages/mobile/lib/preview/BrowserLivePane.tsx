@@ -9,7 +9,7 @@ import {
 	View,
 } from "react-native";
 import { BrowserLiveClient } from "../browserLive";
-import { browserJPEGDataURI, containBrowserFrame, type BrowserFrameRect } from "../browserLiveProtocol";
+import { browserJPEGDataURI, browserWheelDeltaFromDrag, containBrowserFrame, type BrowserFrameRect } from "../browserLiveProtocol";
 import { Feather } from "../icons";
 import { useApp } from "../store";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
@@ -101,7 +101,7 @@ export function BrowserLivePane({ sessionID }: { sessionID: string }) {
 			const deltaY = gesture.dy - drag.current.lastDY;
 			drag.current.lastDX = gesture.dx;
 			drag.current.lastDY = gesture.dy;
-			client.current?.send({ type: "input", payload: { kind: "wheel", deltaX: -deltaX, deltaY: -deltaY } });
+			client.current?.send({ type: "input", payload: { kind: "wheel", ...browserWheelDeltaFromDrag(deltaX, deltaY) } });
 		},
 		onPanResponderRelease: () => {
 			if (!drag.current.moved) tap(drag.current.x, drag.current.y);

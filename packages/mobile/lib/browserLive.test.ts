@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrowserLiveClient } from "./browserLive";
-import { browserJPEGDataURI, browserLiveURL, containBrowserFrame, decodeBrowserFrame } from "./browserLiveProtocol";
+import { browserJPEGDataURI, browserLiveURL, browserWheelDeltaFromDrag, containBrowserFrame, decodeBrowserFrame } from "./browserLiveProtocol";
 
 vi.mock("./config", () => ({
 	authHeaders: (config: { password: string }) => ({ Authorization: `Bearer ${config.password}` }),
@@ -85,6 +85,11 @@ describe("browser live transport", () => {
 			width: 390,
 			height: 219.375,
 		});
+	});
+
+	it("preserves drag signs for Electron wheel input so content follows the finger", () => {
+		expect(browserWheelDeltaFromDrag(12, -30)).toEqual({ deltaX: 12, deltaY: -30 });
+		expect(browserWheelDeltaFromDrag(-8, 24)).toEqual({ deltaX: -8, deltaY: 24 });
 	});
 
 	it("encodes JPEG bytes as a React Native image data URI", () => {
