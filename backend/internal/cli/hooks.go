@@ -186,7 +186,7 @@ func codexSpawnToolUseID(payload []byte) string {
 		ToolResponse string `json:"tool_response"`
 	}
 	if json.Unmarshal(normalizeHookPayload(payload), &p) != nil ||
-		p.ToolName != "collaborationspawn_agent" || p.AgentID != "" {
+		!isCodexSpawnToolName(p.ToolName) || p.AgentID != "" {
 		return ""
 	}
 	id := validSubagentID(p.ToolUseID)
@@ -200,6 +200,10 @@ func codexSpawnToolUseID(payload []byte) string {
 		return ""
 	}
 	return id
+}
+
+func isCodexSpawnToolName(name string) bool {
+	return name == "spawn_agent" || name == "collaborationspawn_agent"
 }
 
 // normalizeHookPayload strips a leading UTF-8 BOM so payloads re-encoded by a

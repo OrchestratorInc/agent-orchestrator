@@ -644,7 +644,7 @@ func TestHooks_CodexSpawnToolResultCarriesProvisionalChild(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
 	writeRunFileFor(t, cfg, srv)
-	payload := `{"session_id":"native-root","tool_name":"collaborationspawn_agent","tool_use_id":"call-1","tool_response":"{\"task_name\":\"/root/worker\"}"}`
+	payload := `{"session_id":"native-root","tool_name":"spawn_agent","tool_use_id":"call-1","tool_response":"{\"task_name\":\"/root/worker\"}"}`
 	_, _, err := executeCLI(t, Deps{
 		In:           strings.NewReader(payload),
 		ProcessAlive: func(int) bool { return true },
@@ -660,6 +660,8 @@ func TestHooks_CodexSpawnToolResultCarriesProvisionalChild(t *testing.T) {
 		t.Fatalf("spawn request = %+v", req)
 	}
 	for _, payload := range []string{
+		`{"tool_name":"spawn_agent","tool_use_id":"call-1","tool_response":"failed"}`,
+		`{"tool_name":"spawn_agent","tool_use_id":"call-1","tool_response":"{\"task_name\":\"/root/worker\"}","agent_id":"child-1"}`,
 		`{"tool_name":"collaborationspawn_agent","tool_use_id":"call-1","tool_response":"failed"}`,
 		`{"tool_name":"collaborationspawn_agent","tool_use_id":"call-1","tool_response":"{\"task_name\":\"/root/worker\"}","agent_id":"child-1"}`,
 		`{"tool_name":"exec_command","tool_use_id":"call-1","tool_response":"{\"task_name\":\"/root/worker\"}"}`,

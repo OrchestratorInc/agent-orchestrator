@@ -3,10 +3,22 @@ package lifecycle
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+)
+
+const (
+	// Hook facts are refreshed by child lifecycle/tool events. If no such event
+	// arrives for this long, a terminal-idle signal can safely recover the
+	// parent from a lost child stop/start hook.
+	subagentFactTTL = 5 * time.Minute
+	// Keep delayed-event tombstones useful without allowing Codex's unbounded
+	// child history to grow the session row forever.
+	maxSubagentChildTombstones = 128
+	maxSubagentPendingSpawns   = 128
 )
 
 // These are native hook facts, not a second display status. A stopped child id
@@ -21,6 +33,7 @@ type subagentActivityFacts struct {
 	NativeSessionID string                       `json:"nativeSessionId,omitempty"`
 	ParentState     domain.ActivityState         `json:"parentState"`
 	ParentAt        int64                        `json:"parentAt"`
+	LastChildAt     int64                        `json:"lastChildAt,omitempty"`
 	SnapshotAt      int64                        `json:"snapshotAt,omitempty"`
 	Children        map[string]subagentChildFact `json:"children,omitempty"`
 	PendingSpawns   map[string]int64             `json:"pendingSpawns,omitempty"`
@@ -67,9 +80,11 @@ func reduceSubagentActivity(
 		facts.Children = make(map[string]subagentChildFact)
 	}
 	at := timeOr(s.Timestamp, now).UnixNano()
+	pruneSubagentFacts(&facts, at)
 	newerSnapshot := rec.Harness == domain.HarnessClaudeCode && (s.Event == "stop" || s.Event == "subagent-stop") &&
 		s.RunningSubagentIDs != nil && at > facts.SnapshotAt
 	if s.Event == "terminal-idle" {
+		expireRunningChildren(&facts, at)
 		if len(facts.PendingSpawns) > 0 {
 			s.Valid = false
 			return s, stored, nil
@@ -84,6 +99,9 @@ func reduceSubagentActivity(
 		}
 	}
 	if s.SubagentID != "" {
+		if at > facts.LastChildAt {
+			facts.LastChildAt = at
+		}
 		if rec.Harness == domain.HarnessCodex && s.Event == "subagent-spawn" {
 			if facts.PendingSpawns == nil {
 				facts.PendingSpawns = make(map[string]int64)
@@ -137,7 +155,7 @@ func reduceSubagentActivity(
 				break
 			}
 		}
-		if s.Event != "notification" || !childRunning {
+		if s.Event != "notification" || (!childRunning && facts.ParentAt >= facts.LastChildAt) {
 			facts.ParentState = s.State
 			facts.ParentAt = at
 		}
@@ -147,6 +165,9 @@ func reduceSubagentActivity(
 		running := make(map[string]bool, len(*s.RunningSubagentIDs))
 		for _, id := range *s.RunningSubagentIDs {
 			running[id] = true
+			if at > facts.LastChildAt {
+				facts.LastChildAt = at
+			}
 			child, known := facts.Children[id]
 			if !known || (child.Running && at > child.At) {
 				facts.Children[id] = subagentChildFact{Running: true, At: at}
@@ -165,6 +186,7 @@ func reduceSubagentActivity(
 			}
 		}
 	}
+	pruneSubagentFacts(&facts, at)
 	state := facts.ParentState
 	if state != domain.ActivityExited && !state.NeedsInput() {
 		if len(facts.PendingSpawns) > 0 {
@@ -180,7 +202,9 @@ func reduceSubagentActivity(
 	// A child permission hook must still enter blocked, even while its parent
 	// is active. Correlated tool posts retain their raw active signal so the
 	// existing precedence rule can release an approved dialog.
-	if s.State.NeedsInput() {
+	childRunning := hasRunningChild(facts.Children)
+	if s.State.NeedsInput() &&
+		(s.SubagentID != "" || s.Event != "notification" || childRunning || facts.ParentAt >= facts.LastChildAt) {
 		state = s.State
 	}
 	if s.SubagentID != "" && isToolUseEvent(s.Event) {
@@ -197,6 +221,67 @@ func reduceSubagentActivity(
 		return s, "", fmt.Errorf("encode subagent activity facts: %w", err)
 	}
 	return s, string(encoded), nil
+}
+
+func hasRunningChild(children map[string]subagentChildFact) bool {
+	for _, child := range children {
+		if child.Running {
+			return true
+		}
+	}
+	return false
+}
+
+func expireRunningChildren(facts *subagentActivityFacts, at int64) {
+	ttl := subagentFactTTL.Nanoseconds()
+	for id, child := range facts.Children {
+		if !child.Running || (child.At > 0 && (at < child.At || at-child.At < ttl)) {
+			continue
+		}
+		facts.Children[id] = subagentChildFact{At: at}
+	}
+}
+
+func pruneSubagentFacts(facts *subagentActivityFacts, at int64) {
+	ttl := subagentFactTTL.Nanoseconds()
+	for id, spawnedAt := range facts.PendingSpawns {
+		if spawnedAt <= 0 || (at >= spawnedAt && at-spawnedAt >= ttl) {
+			delete(facts.PendingSpawns, id)
+		}
+	}
+	if len(facts.PendingSpawns) > maxSubagentPendingSpawns {
+		ids := make([]string, 0, len(facts.PendingSpawns))
+		for id := range facts.PendingSpawns {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool {
+			return facts.PendingSpawns[ids[i]] < facts.PendingSpawns[ids[j]]
+		})
+		for _, id := range ids[:len(ids)-maxSubagentPendingSpawns] {
+			delete(facts.PendingSpawns, id)
+		}
+	}
+
+	tombstones := make([]string, 0, len(facts.Children))
+	for id, child := range facts.Children {
+		if child.Running {
+			continue
+		}
+		if child.At <= 0 || (at >= child.At && at-child.At >= ttl) {
+			delete(facts.Children, id)
+			continue
+		}
+		tombstones = append(tombstones, id)
+	}
+	if len(tombstones) <= maxSubagentChildTombstones {
+		return
+	}
+	sort.Slice(tombstones, func(i, j int) bool {
+		return facts.Children[tombstones[i]].At < facts.Children[tombstones[j]].At
+	})
+	for _, id := range tombstones[:len(tombstones)-maxSubagentChildTombstones] {
+		delete(facts.Children, id)
+	}
 }
 
 // A successful Codex spawn tool result can precede the child's start hook.

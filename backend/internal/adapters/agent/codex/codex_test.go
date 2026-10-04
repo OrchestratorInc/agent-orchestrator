@@ -194,7 +194,7 @@ func sessionHookFlags(t *testing.T) []string {
 		"-c", `hooks.SessionStart=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"session-start") + `,timeout=5}]}]`,
 		"-c", `hooks.UserPromptSubmit=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"user-prompt-submit") + `,timeout=5}]}]`,
 		"-c", `hooks.PermissionRequest=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"permission-request") + `,timeout=5}]}]`,
-		"-c", `hooks.PostToolUse=[{matcher="collaborationspawn_agent",hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"post-tool-use") + `,timeout=5}]}]`,
+		"-c", `hooks.PostToolUse=[{matcher="^(spawn_agent|collaborationspawn_agent)$",hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"post-tool-use") + `,timeout=5}]}]`,
 		"-c", `hooks.SubagentStart=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"subagent-start") + `,timeout=5}]}]`,
 		"-c", `hooks.SubagentStop=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"subagent-stop") + `,timeout=5}]}]`,
 		"-c", `hooks.Stop=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"stop") + `,timeout=5}]}]`,

@@ -73,7 +73,10 @@ var codexManagedHooks = []codexHookSpec{
 	{Event: "SessionStart", Command: codexHookCommandPrefix + "session-start"},
 	{Event: "UserPromptSubmit", Command: codexHookCommandPrefix + "user-prompt-submit"},
 	{Event: "PermissionRequest", Command: codexHookCommandPrefix + "permission-request"},
-	{Event: "PostToolUse", Command: codexHookCommandPrefix + "post-tool-use", Matcher: "collaborationspawn_agent"},
+	// Current Codex emits the canonical `spawn_agent` tool name. Keep the
+	// historical collaboration alias while older installed Codex builds drain
+	// their sessions, so both payloads reach the parser.
+	{Event: "PostToolUse", Command: codexHookCommandPrefix + "post-tool-use", Matcher: "^(spawn_agent|collaborationspawn_agent)$"},
 	{Event: "SubagentStart", Command: codexHookCommandPrefix + "subagent-start"},
 	{Event: "SubagentStop", Command: codexHookCommandPrefix + "subagent-stop"},
 	{Event: "Stop", Command: codexHookCommandPrefix + "stop"},
