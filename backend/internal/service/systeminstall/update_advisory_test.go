@@ -152,12 +152,16 @@ func TestLatestAvailableVersionParsesHomebrewMetadata(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			lookup := latestAvailableVersion(commandRunnerFunc(func(_ context.Context, argv []string, stdout, _ io.Writer) error {
-				if argv[0] != "brew" || argv[len(argv)-1] != "codex" { t.Fatalf("argv=%v", argv) }
+				if argv[0] != "brew" || argv[len(argv)-1] != "codex" {
+					t.Fatalf("argv=%v", argv)
+				}
 				_, err := io.WriteString(stdout, tt.json)
 				return err
 			}))
 			version, err := lookup(context.Background(), "homebrew", "codex", tt.cask)
-			if err != nil || version != "1.3.0" { t.Fatalf("version=%q err=%v", version, err) }
+			if err != nil || version != "1.3.0" {
+				t.Fatalf("version=%q err=%v", version, err)
+			}
 		})
 	}
 }
