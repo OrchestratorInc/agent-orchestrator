@@ -521,7 +521,9 @@ func TestBroadcastDropsAClientThatStopsReading(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		for i := 0; i < hostClientWriteBuffer*2; i++ {
+		// A blocked writer can hold a full batch as well as a full queue.
+		// The extra frame forces broadcast to exercise the stall timeout.
+		for i := 0; i < hostClientWriteBuffer*2+1; i++ {
 			frame, _ := EncodeMessage(MsgTerminalData, []byte("x"))
 			h.broadcast(frame)
 		}
