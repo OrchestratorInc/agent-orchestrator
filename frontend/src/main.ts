@@ -1485,6 +1485,7 @@ function establishBrowserStreamLink(): void {
 	browserStreamLink = connectBrowserStream(address, {
 		token: browserRuntimeToken,
 		onControl: handleBrowserStreamControl,
+		onDisconnect: () => browserViewHost?.stopAllLiveStreams(),
 		log: (message) => console.log(`AO: ${message}`),
 	});
 	browserStreamLinkIdentity = identity;

@@ -39,6 +39,42 @@ function decodeFrame(packet: Buffer): { streamId: number; sequence: bigint } | n
 }
 
 describe("browser stream link", () => {
+	it("runs disconnect cleanup before reconnecting after an authenticated link drops", async () => {
+		vi.useFakeTimers();
+		try {
+			const sockets: FakeSocket[] = [];
+			let releaseCleanup!: () => void;
+			const cleanup = new Promise<void>((resolve) => { releaseCleanup = resolve; });
+			const onDisconnect = vi.fn(() => cleanup);
+			const handle = connectBrowserStream("ignored", {
+				token: "secret",
+				onControl: vi.fn(),
+				onDisconnect,
+				createConnection: () => {
+					const socket = new FakeSocket();
+					sockets.push(socket);
+					return socket as unknown as net.Socket;
+				},
+			});
+			sockets[0]!.emit("connect");
+
+			sockets[0]!.emit("close");
+			expect(onDisconnect).toHaveBeenCalledOnce();
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(sockets).toHaveLength(1);
+
+			releaseCleanup();
+			await Promise.resolve();
+			await vi.advanceTimersByTimeAsync(200);
+			expect(sockets).toHaveLength(2);
+			sockets[1]!.emit("connect");
+			handle.dispose();
+			expect(onDisconnect).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("keeps only the newest frame per stream while socket writes are blocked", () => {
 		const socket = new FakeSocket();
 		// The hello and first frame are accepted; the first frame also signals

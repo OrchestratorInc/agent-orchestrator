@@ -39,6 +39,7 @@ export interface BrowserStreamLinkHandle {
 type BrowserStreamLinkOptions = {
 	token: string;
 	onControl: (control: BrowserStreamControl) => void | Promise<void>;
+	onDisconnect?: () => void | Promise<void>;
 	log?: (message: string) => void;
 	createConnection?: (address: string | net.TcpNetConnectOpts) => net.Socket;
 };
@@ -83,6 +84,24 @@ export function connectBrowserStream(
 			target.removeAllListeners();
 			target.destroy();
 		}
+	};
+
+	const disconnect = (): Promise<void> => {
+		const wasConnected = connected;
+		destroy();
+		if (!wasConnected || !options.onDisconnect) return Promise.resolve();
+		try {
+			return Promise.resolve(options.onDisconnect()).catch((error) => {
+				log(`browser-stream-link: disconnect cleanup failed: ${String(error)}`);
+			});
+		} catch (error) {
+			log(`browser-stream-link: disconnect cleanup failed: ${String(error)}`);
+			return Promise.resolve();
+		}
+	};
+
+	const disconnectAndRetry = () => {
+		void disconnect().finally(scheduleRetry);
 	};
 
 	const writePacket = (packet: Buffer): WriteResult => {
@@ -160,8 +179,7 @@ export function connectBrowserStream(
 			const length = buffered.readUInt32BE(0);
 			if (length < 1 || length > MAX_PACKET_BYTES) {
 				log(`browser-stream-link: invalid packet length ${length}`);
-				destroy();
-				scheduleRetry();
+				disconnectAndRetry();
 				return;
 			}
 			if (buffered.byteLength < 4 + length) return;
@@ -173,8 +191,7 @@ export function connectBrowserStream(
 			} catch {
 				// A malformed private-host command tears down the link rather than
 				// allowing the parser to drift onto attacker-controlled boundaries.
-				destroy();
-				scheduleRetry();
+				disconnectAndRetry();
 				return;
 			}
 		}
@@ -199,8 +216,8 @@ export function connectBrowserStream(
 		});
 		target.on("error", (error) => log(`browser-stream-link: ${String(error)}`));
 		target.on("close", () => {
-			if (socket === target) destroy();
-			scheduleRetry();
+			if (socket !== target) return;
+			disconnectAndRetry();
 		});
 	};
 
@@ -213,7 +230,7 @@ export function connectBrowserStream(
 			disposed = true;
 			if (retry) clearTimeout(retry);
 			retry = null;
-			destroy();
+			void disconnect();
 		},
 	};
 }

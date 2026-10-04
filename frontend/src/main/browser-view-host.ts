@@ -485,6 +485,7 @@ export type BrowserViewHost = {
   refreshLastFocusedPanelSurface: () => void;
 	startLiveStream: (sessionId: string, streamId: number, sink: BrowserLiveSink) => Promise<BrowserLiveState>;
 	stopLiveStream: (sessionId: string) => Promise<void>;
+	stopAllLiveStreams: () => Promise<void>;
 	handleRemoteInput: (sessionId: string, input: BrowserRemoteInput) => Promise<void>;
 	handleRemoteNavigation: (sessionId: string, input: BrowserRemoteNavigation) => Promise<void>;
 	handleRemoteTab: (sessionId: string, input: BrowserRemoteTabAction) => Promise<void>;
@@ -3314,13 +3315,34 @@ export function createBrowserViewHost(
 		}
 	}
 
+	function detachLiveStream(session: BrowserSessionEntry): Promise<void> | undefined {
+		if (!session.live) return undefined;
+		const live = session.live;
+		session.live = undefined;
+		live.tabId = undefined;
+		const screencast = live.screencast;
+		live.screencast = undefined;
+		if (!session.visible) applySessionBounds(session, activeEntry(session));
+		return screencast?.stop();
+	}
+
 	async function stopLiveStream(sessionId: string): Promise<void> {
 		const viewId = viewIdsBySessionId.get(sessionId);
 		const session = viewId ? entries.get(viewId) : undefined;
-		if (!session?.live) return;
-		await stopLiveCapture(session);
-		session.live = undefined;
-		if (!session.visible) applySessionBounds(session, activeEntry(session));
+		if (!session) return;
+		await detachLiveStream(session);
+	}
+
+	function stopAllLiveStreams(): Promise<void> {
+		// Detach every sink synchronously before awaiting CDP. A replacement link
+		// can connect immediately, but it must never observe stale ownership from
+		// the link that just disappeared.
+		const stops: Promise<void>[] = [];
+		for (const session of entries.values()) {
+			const stop = detachLiveStream(session);
+			if (stop) stops.push(stop);
+		}
+		return Promise.all(stops).then(() => undefined);
 	}
 
 	function assertRemoteWritable(session: BrowserSessionEntry): void {
@@ -4075,6 +4097,7 @@ export function createBrowserViewHost(
     },
 		startLiveStream,
 		stopLiveStream,
+		stopAllLiveStreams,
 		handleRemoteInput,
 		handleRemoteNavigation,
 		handleRemoteTab,

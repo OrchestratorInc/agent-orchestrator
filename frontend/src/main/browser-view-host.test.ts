@@ -407,6 +407,29 @@ function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").Agent
 	};
 }
 
+describe("browser live stream", () => {
+	it("stops and detaches live capture when the private stream link drops", async () => {
+		const { debuggerSendCommand, host } = setupHost();
+		await host.startLiveStream("sess-1", 7, {
+			frame: vi.fn(),
+			state: vi.fn(),
+			error: vi.fn(),
+		});
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Page.startScreencast", expect.any(Object));
+
+		await host.stopAllLiveStreams();
+
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Page.stopScreencast");
+		await expect(host.handleRemoteInput("sess-1", {
+			kind: "pointer",
+			phase: "down",
+			x: 0.5,
+			y: 0.5,
+			button: "left",
+		})).rejects.toMatchObject({ code: "BROWSER_REMOTE_NOT_VIEWED" });
+	});
+});
+
 describe("browser screenshots", () => {
 	it("copies the active page capture to the system clipboard", async () => {
 		const { invoke, webContents, writeImage } = setupHost();
