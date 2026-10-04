@@ -8,24 +8,44 @@ import {
 } from "./daemon-auto-restart";
 
 describe("daemonExitWasUngraceful", () => {
-	it("treats a left-behind run-file as a crash even on a clean exit code", () => {
-		expect(daemonExitWasUngraceful({ runFilePresent: true, code: 0, signal: null })).toBe(true);
+	it("treats our own left-behind run-file as a crash", () => {
+		expect(
+			daemonExitWasUngraceful({ runFilePresent: true, runFilePid: 42, childPid: 42, code: 1, signal: null }),
+		).toBe(true);
 	});
 
-	it("treats a clean exit that removed the run-file as graceful (ao stop)", () => {
-		expect(daemonExitWasUngraceful({ runFilePresent: false, code: 0, signal: null })).toBe(false);
+	it("does not blame a successor's run-file (different PID) on our exit", () => {
+		expect(
+			daemonExitWasUngraceful({ runFilePresent: true, runFilePid: 99, childPid: 42, code: 0, signal: null }),
+		).toBe(false);
 	});
 
-	it("treats a non-zero exit as ungraceful", () => {
-		expect(daemonExitWasUngraceful({ runFilePresent: false, code: 1, signal: null })).toBe(true);
+	// Regression: `ao stop` with the desktop app attached outlives the 10s drain
+	// deadline (the app holds the /events SSE stream), so the daemon force-closes
+	// and exits non-zero AFTER removing the run-file. That is a deliberate stop,
+	// not a crash — the removed marker must not be respawned.
+	it("treats a clean exit that removed the run-file as a stop even when it exited non-zero", () => {
+		expect(
+			daemonExitWasUngraceful({ runFilePresent: false, runFilePid: null, childPid: 42, code: 1, signal: null }),
+		).toBe(false);
 	});
 
-	it("treats a terminating signal as ungraceful", () => {
-		expect(daemonExitWasUngraceful({ runFilePresent: false, code: null, signal: "SIGKILL" })).toBe(true);
+	it("treats a missing run-file plus a terminating signal as a crash", () => {
+		expect(
+			daemonExitWasUngraceful({ runFilePresent: false, runFilePid: null, childPid: 42, code: null, signal: "SIGKILL" }),
+		).toBe(true);
 	});
 
-	it("treats an unknown exit with no signal and no run-file as graceful", () => {
-		expect(daemonExitWasUngraceful({ runFilePresent: false, code: null, signal: null })).toBe(false);
+	it("does not attribute an unparseable run-file to our crash on a clean exit", () => {
+		expect(
+			daemonExitWasUngraceful({ runFilePresent: true, runFilePid: null, childPid: 42, code: 0, signal: null }),
+		).toBe(false);
+	});
+
+	it("treats an unknown child PID with no signal as a deliberate stop", () => {
+		expect(
+			daemonExitWasUngraceful({ runFilePresent: true, runFilePid: 42, childPid: null, code: 1, signal: null }),
+		).toBe(false);
 	});
 });
 

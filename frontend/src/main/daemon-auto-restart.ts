@@ -22,19 +22,29 @@ export type DaemonAutoRestartPlan =
 export type DaemonExitFacts = {
 	/** Whether the liveness run-file is still on disk after the child exited. */
 	runFilePresent: boolean;
+	/** PID named by the run-file, or null when it is absent or unparseable. */
+	runFilePid: number | null;
+	/** PID of the child that just exited, or null when unknown. */
+	childPid: number | null;
 	code: number | null;
 	signal: string | null;
 };
 
 /**
  * Whether an unexpected daemon exit should be treated as ungraceful — and so
- * respawned. A graceful shutdown removes the run-file and exits 0; a crash,
- * force-kill, or panic instead leaves the run-file behind, exits non-zero, or
- * dies from a signal, and any one of those is enough. This keeps auto-restart
- * from immediately undoing a deliberate `ao stop`.
+ * respawned. The liveness run-file is the commit marker: a graceful shutdown
+ * removes it, a crash leaves it behind. But the surviving file must belong to
+ * *our* dead child — a file naming a different PID is a successor daemon (e.g. a
+ * manual `ao start` during the backoff), not our crash, and must be left alone.
+ * When no file is attributable, only a terminating signal proves a crash; a
+ * non-zero exit code alone is not enough, because a requested `ao stop` that
+ * outlives its drain deadline exits non-zero while still stopping cleanly.
  */
 export function daemonExitWasUngraceful(facts: DaemonExitFacts): boolean {
-	return facts.runFilePresent || facts.signal !== null || (facts.code !== null && facts.code !== 0);
+	if (facts.runFilePresent && facts.runFilePid !== null && facts.childPid !== null) {
+		return facts.runFilePid === facts.childPid;
+	}
+	return facts.signal !== null;
 }
 
 /**
