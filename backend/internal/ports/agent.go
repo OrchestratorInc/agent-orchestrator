@@ -37,6 +37,9 @@ var ErrAgentBinaryIdentityUnknown = errors.New("agent: binary identity unknown")
 // keep the last catalog and retry once the agent reports a login.
 var ErrAgentModelDiscoverySignInRequired = errors.New("agent: sign-in required to list models")
 
+// ErrAgentModelDiscoveryIdentityChanged rejects catalogs assembled across account changes.
+var ErrAgentModelDiscoveryIdentityChanged = errors.New("agent: model discovery identity changed")
+
 // AgentAuthStatus describes the result of a short local auth probe for an
 // installed agent. It is advisory only: credentials, quota, selected model
 // availability, or CLI state can still fail at session spawn/model-call time.
@@ -207,10 +210,13 @@ const (
 
 // AgentModelInfo is one model or mode that an adapter reports as selectable.
 type AgentModelInfo struct {
-	ID        string `json:"id"`
-	Label     string `json:"label"`
-	Provider  string `json:"provider,omitempty"`
-	IsDefault bool   `json:"isDefault,omitempty"`
+	IsAdditional bool   `json:"isAdditional,omitempty"`
+	ID           string `json:"id"`
+	Label        string `json:"label"`
+	Provider     string `json:"provider,omitempty"`
+	IsDefault    bool   `json:"isDefault,omitempty"`
+	FamilyID     string `json:"familyId,omitempty"`
+	FamilyLabel  string `json:"familyLabel,omitempty"`
 	// Efforts are the reasoning levels this specific model accepts, in the
 	// provider's own ascending order. Empty means the model takes no effort
 	// setting, which is a real answer rather than a missing one — Sonnet 4.5
@@ -222,10 +228,12 @@ type AgentModelInfo struct {
 
 // AgentModelCatalog is AO's normalized model-picker response.
 type AgentModelCatalog struct {
-	AgentID          string               `json:"agentId"`
-	SelectionMode    ModelSelectionMode   `json:"selectionMode" enum:"catalog,text,mode"`
-	Models           []AgentModelInfo     `json:"models"`
-	CustomModelEntry CustomModelEntryMode `json:"customModelEntry" enum:"none,direct,configured"`
+	AdditionalModelsAvailable bool                 `json:"additionalModelsAvailable,omitempty"`
+	AdditionalModelsLoaded    bool                 `json:"additionalModelsLoaded,omitempty"`
+	AgentID                   string               `json:"agentId"`
+	SelectionMode             ModelSelectionMode   `json:"selectionMode" enum:"catalog,text,mode"`
+	Models                    []AgentModelInfo     `json:"models"`
+	CustomModelEntry          CustomModelEntryMode `json:"customModelEntry" enum:"none,direct,configured"`
 	// AllowCustom is retained for compatibility and is true only for direct entry.
 	AllowCustom bool   `json:"allowCustom"`
 	Source      string `json:"source"`
@@ -288,10 +296,11 @@ type AgentModelCatalogScopeCache interface {
 // AgentModelDiscoveryRequest describes one bounded, adapter-defined model
 // discovery attempt. Args remain owned by the concrete discovery adapter.
 type AgentModelDiscoveryRequest struct {
-	AgentID    string
-	Binary     string
-	WorkingDir string
-	Env        map[string]string
+	IncludeAdditional bool
+	AgentID           string
+	Binary            string
+	WorkingDir        string
+	Env               map[string]string
 	// CredentialType names a cloud credential kind (e.g. "anthropic_api_key")
 	// when discovery must reflect the models a *cloud* session's pushed
 	// credential can run rather than the local machine's own auth. Adapters that

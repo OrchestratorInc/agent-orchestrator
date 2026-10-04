@@ -239,6 +239,8 @@ func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscov
 			base.Source = reported.Source
 			base.InputFingerprint = reported.InputFingerprint
 			base.FetchedAt = reported.FetchedAt
+			base.AdditionalModelsAvailable = reported.AdditionalModelsAvailable
+			base.AdditionalModelsLoaded = reported.AdditionalModelsLoaded
 			if hasConfigDiscoverySource(request.AgentID) {
 				if configured, configErr := discoverConfigCatalog(request.AgentID, request.WorkingDir, request.Env); configErr == nil {
 					base.Models = appendConfiguredModels(base.Models, configured.Models)
@@ -802,7 +804,7 @@ func BinaryVersion(ctx context.Context, binary string) string {
 // resolved executable plus the configuration and credentials its discovery
 // reads. Only the digest is returned or persisted.
 func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string, env map[string]string) string {
-	binaryVersion := "native-catalog-order-v2:" + BinaryVersion(ctx, binary)
+	binaryVersion := "model-catalog-picker-v3:" + BinaryVersion(ctx, binary)
 	config := discoveryConfigInputs(ctx, agentID, workingDir, env)
 	if agentID != "claude-code" {
 		if launch := catalogEnvironmentFingerprint(env); launch != "" {
@@ -968,11 +970,44 @@ func parseAgyModels(output []byte) ([]ports.AgentModelInfo, error) {
 }
 
 func parseGrokModels(output []byte) ([]ports.AgentModelInfo, error) {
-	return parseSectionModels(string(output), "Available models:", "")
+	return parseSectionModels(string(output), "Available models:", "", false)
 }
 
+var cursorDefaultAnnotation = regexp.MustCompile(`(?i)\((?:current, )?default(?:, current)?\)`)
+var cursorSelectionAnnotation = regexp.MustCompile(`(?i) \((?:current|default|current, default|default, current)\)`)
+var cursorVariantSuffix = regexp.MustCompile(`(?:-(?:extra-high|none|minimal|low|medium|high|xhigh|max|fast|thinking))+$`)
+var cursorFamilyStem = regexp.MustCompile(`^(?:gpt-[0-9]+(?:[.-][0-9]+)*(?:-codex|-sol|-luna)?|claude-(?:opus|sonnet|haiku|fable)-[0-9]+(?:[.-][0-9]+)*|claude-[0-9]+(?:[.-][0-9]+)*-(?:opus|sonnet|haiku)|gemini-[0-9]+(?:[.-][0-9]+)*(?:-(?:pro|flash|flash-lite))?|grok-[0-9]+(?:[.-][0-9]+)*(?:-code)?|composer-[0-9]+(?:[.-][0-9]+)*)$`)
+var cursorVariantLabel = regexp.MustCompile(`(?i)(?: (?:extra high|none|minimal|low|medium|high|xhigh|max|fast|thinking))+( (?:\(NO ZDR\)))?$`)
+
 func parseCursorModels(output []byte) ([]ports.AgentModelInfo, error) {
-	return parseSectionModels(string(output), "Available models", "Tip:")
+	models, err := parseSectionModels(string(output), "Available models", "Tip:", true)
+	if err != nil {
+		return nil, err
+	}
+	families := make(map[string][]int)
+	for i, model := range models {
+		stem := cursorVariantSuffix.ReplaceAllString(model.ID, "")
+		if cursorFamilyStem.MatchString(stem) {
+			families[stem] = append(families[stem], i)
+		}
+	}
+	for stem, indexes := range families {
+		if len(indexes) < 2 {
+			continue
+		}
+		label := cursorVariantLabel.ReplaceAllString(models[indexes[0]].Label, "$1")
+		for _, i := range indexes {
+			if models[i].ID == stem {
+				label = models[i].Label
+				break
+			}
+		}
+		for _, i := range indexes {
+			models[i].FamilyID = stem
+			models[i].FamilyLabel = label
+		}
+	}
+	return models, nil
 }
 
 func parseCopilotConfigModels(output []byte) ([]ports.AgentModelInfo, error) {
@@ -1035,7 +1070,7 @@ func parseDroidHelpModels(output []byte) ([]ports.AgentModelInfo, error) {
 	return normalize(models), nil
 }
 
-func parseSectionModels(output, startMarker, stopMarker string) ([]ports.AgentModelInfo, error) {
+func parseSectionModels(output, startMarker, stopMarker string, preserveAnnotations bool) ([]ports.AgentModelInfo, error) {
 	output = ansiPattern.ReplaceAllString(output, "")
 	inModels := false
 	var models []ports.AgentModelInfo
@@ -1059,14 +1094,16 @@ func parseSectionModels(output, startMarker, stopMarker string) ([]ports.AgentMo
 		label := id
 		if before, after, ok := strings.Cut(line, " - "); ok && strings.TrimSpace(before) == id {
 			label = strings.TrimSpace(after)
-			if suffix, _, found := strings.Cut(label, " ("); found {
+			if preserveAnnotations {
+				label = cursorSelectionAnnotation.ReplaceAllString(label, "")
+			} else if suffix, _, found := strings.Cut(label, " ("); found {
 				label = strings.TrimSpace(suffix)
 			}
 		}
 		models = append(models, ports.AgentModelInfo{
 			ID:        id,
 			Label:     label,
-			IsDefault: strings.Contains(strings.ToLower(line), "(default)"),
+			IsDefault: strings.Contains(strings.ToLower(line), "(default)") || (preserveAnnotations && cursorDefaultAnnotation.MatchString(line)),
 		})
 	}
 	return normalize(models), nil

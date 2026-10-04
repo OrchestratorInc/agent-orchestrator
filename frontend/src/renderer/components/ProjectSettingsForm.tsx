@@ -12,7 +12,7 @@ import type { TFunction } from "i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Info, Pencil } from "lucide-react";
 import type { components } from "../../api/schema";
-import { agentModelsQueryKey, agentModelsQueryOptions, refreshAgentModels, agentModelsRevalidationQueryOptions, type AgentModelCatalog } from "../hooks/useAgentModelsQuery";
+import { agentModelsQueryKey, agentModelsQueryOptions, refreshAgentModels, expandAgentModels, agentModelsRevalidationQueryOptions, type AgentModelCatalog } from "../hooks/useAgentModelsQuery";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { useRemoteProjectQuery, workspaceQueryKeyForHost, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
@@ -891,9 +891,14 @@ function AgentModelField({
 			<div className="min-w-0">
 				<div className="flex min-w-0 items-center gap-2">
 					<AgentModelCombobox
+						key={`${hostId ?? ""}:${agentId}:${projectId}`}
 						aria-label={label}
 						value={model}
 						models={displayModels}
+						additionalModelsAvailable={catalog?.additionalModelsAvailable}
+						additionalModelsLoaded={catalog?.additionalModelsLoaded}
+						catalogIdentity={catalog?.inputFingerprint}
+						onLoadAdditional={() => expandAgentModels(queryClient, agentId, projectId, hostId)}
 						allowCustom={catalog?.allowCustom}
 						customModelEntry={customModelEntry}
 						agentLabel={agentId}

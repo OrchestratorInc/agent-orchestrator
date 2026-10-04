@@ -13,6 +13,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 )
@@ -32,6 +33,7 @@ type fakeAgentCatalog struct {
 	modelProject    string
 	modelRefresh    bool
 	revalidateCalls int
+	expandCalls     int
 	readiness       agentsvc.Readiness
 	readinessCalls  int
 	ensureCalls     int
@@ -80,6 +82,13 @@ func (f *fakeAgentCatalog) Models(_ context.Context, agentID, projectID string, 
 
 func (f *fakeAgentCatalog) RevalidateModels(_ context.Context, agentID, projectID string) (ports.AgentModelCatalog, error) {
 	f.revalidateCalls++
+	f.modelAgent = agentID
+	f.modelProject = projectID
+	return f.models, f.err
+}
+
+func (f *fakeAgentCatalog) ExpandModels(ctx context.Context, agentID, projectID string) (ports.AgentModelCatalog, error) {
+	f.expandCalls++
 	f.modelAgent = agentID
 	f.modelProject = projectID
 	return f.models, f.err
@@ -261,7 +270,9 @@ func TestGetAndRefreshAgentModels(t *testing.T) {
 		path           string
 		wantRefresh    bool
 		wantRevalidate bool
+		wantExpand     bool
 	}{
+		{name: "expand", method: http.MethodPost, path: "/api/v1/agents/codex/models/expand?projectId=proj-1", wantExpand: true},
 		{name: "cached", method: http.MethodGet, path: "/api/v1/agents/codex/models?projectId=proj-1"},
 		{name: "refresh", method: http.MethodPost, path: "/api/v1/agents/codex/models/refresh?projectId=proj-1", wantRefresh: true},
 		{name: "revalidate", method: http.MethodPost, path: "/api/v1/agents/codex/models/refresh?projectId=proj-1&revalidate=true", wantRevalidate: true},
@@ -296,10 +307,10 @@ func TestGetAndRefreshAgentModels(t *testing.T) {
 				}
 			}
 			wantModelCalls := 1
-			if tc.wantRevalidate {
+			if tc.wantRevalidate || tc.wantExpand {
 				wantModelCalls = 0
 			}
-			if catalog.modelCalls != wantModelCalls || catalog.revalidateCalls != btoi(tc.wantRevalidate) || catalog.modelAgent != "codex" || catalog.modelProject != "proj-1" || catalog.modelRefresh != tc.wantRefresh {
+			if catalog.expandCalls != btoi(tc.wantExpand) || catalog.modelCalls != wantModelCalls || catalog.revalidateCalls != btoi(tc.wantRevalidate) || catalog.modelAgent != "codex" || catalog.modelProject != "proj-1" || catalog.modelRefresh != tc.wantRefresh {
 				t.Fatalf("model call = count:%d revalidate:%d agent:%q project:%q refresh:%v", catalog.modelCalls, catalog.revalidateCalls, catalog.modelAgent, catalog.modelProject, catalog.modelRefresh)
 			}
 		})
@@ -325,4 +336,28 @@ func btoi(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+func TestExpandAgentModelsPreservesErrorEnvelope(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	catalog := &fakeAgentCatalog{err: apierr.Internal("MODEL_EXPANSION_FAILED", "Native model check unsupported")}
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Agents: catalog}, httpd.ControlDeps{}))
+	defer srv.Close()
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/agents/claude-code/models/expand?projectId=project-account", "")
+	if status != http.StatusInternalServerError || !strings.Contains(string(body), `"code":"MODEL_EXPANSION_FAILED"`) || !strings.Contains(string(body), `"requestId"`) {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	if catalog.expandCalls != 1 || catalog.modelAgent != "claude-code" || catalog.modelProject != "project-account" {
+		t.Fatalf("catalog calls=%+v", catalog)
+	}
+}
+
+func TestExpandAgentModelsWithoutCatalogReturnsNotImplemented(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{}, httpd.ControlDeps{}))
+	defer srv.Close()
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/agents/claude-code/models/expand", "")
+	if status != http.StatusNotImplemented || !strings.Contains(string(body), `"error"`) {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
 }

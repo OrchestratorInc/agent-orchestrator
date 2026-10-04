@@ -73,6 +73,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/{agent}/models/expand": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Expand and cache the model picker for one agent */
+        post: operations["expandAgentModels"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/{agent}/models/refresh": {
         parameters: {
             query?: never;
@@ -3068,12 +3085,17 @@ export interface components {
         AgentModelInfo: {
             defaultEffort?: string;
             efforts?: string[];
+            familyId?: string;
+            familyLabel?: string;
             id: string;
+            isAdditional?: boolean;
             isDefault?: boolean;
             label: string;
             provider?: string;
         };
         AgentModelsResponse: {
+            additionalModelsAvailable?: boolean;
+            additionalModelsLoaded?: boolean;
             agentId: string;
             allowCustom: boolean;
             binaryVersion?: string;
@@ -5583,6 +5605,68 @@ export interface operations {
         };
     };
     getAgentModels: {
+        parameters: {
+            query?: {
+                /** @description Optional project identifier used as the model-catalog cache scope. */
+                projectId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentModelsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    expandAgentModels: {
         parameters: {
             query?: {
                 /** @description Optional project identifier used as the model-catalog cache scope. */

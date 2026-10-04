@@ -53,6 +53,9 @@ export type TaskComposerAgentControl = {
 };
 
 export type TaskComposerModelOption = {
+	isAdditional?: boolean;
+	familyId?: string;
+	familyLabel?: string;
 	// Efforts are the reasoning levels this specific model accepts, in the
 	// provider's order. Absent or empty means the model takes no effort
 	// setting, which is a real answer rather than a missing one.
@@ -65,6 +68,9 @@ export type TaskComposerModelOption = {
 };
 
 export type TaskComposerModelCatalog = {
+	additionalModelsAvailable?: boolean;
+	additionalModelsLoaded?: boolean;
+	inputFingerprint?: string;
 	allowCustom: boolean;
 	customModelEntry: "none" | "direct" | "configured";
 	models: TaskComposerModelOption[];

@@ -221,6 +221,7 @@ describe("NewTaskDialog", () => {
 
 		await user.type(screen.getByLabelText("Task"), brief);
 		await user.click(await screen.findByRole("button", { name: "Model" }));
+		await user.click(screen.getByRole("menuitem", { name: "Use model ID…" }));
 		await user.type(screen.getByRole("searchbox", { name: "Search model" }), "placeholder-model");
 		await user.click(screen.getByRole("menuitem", { name: "Use “placeholder-model” as a custom model" }));
 		await user.click(screen.getByRole("button", { name: "Start task" }));

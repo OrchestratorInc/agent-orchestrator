@@ -5,7 +5,7 @@ import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices"
 import {
 	agentModelsQueryKey,
 	agentModelsQueryOptions,
-	refreshAgentModels,
+	refreshAgentModels, expandAgentModels,
 	agentModelsRevalidationQueryOptions,
 	type AgentModelCatalog,
 } from "../hooks/useAgentModelsQuery";
@@ -107,10 +107,14 @@ export function AgentModelPicker({
 
 	return (
 		<AgentModelCombobox
-			key={hostId ? `${hostId}:${agentId}` : agentId}
+			key={`${hostId ?? ""}:${agentId}:${projectId}`}
 			aria-label={t("newTask.model")}
 			value={value}
 			models={displayModels}
+			additionalModelsAvailable={catalog?.additionalModelsAvailable}
+			additionalModelsLoaded={catalog?.additionalModelsLoaded}
+			catalogIdentity={catalog?.inputFingerprint}
+			onLoadAdditional={() => expandAgentModels(queryClient, agentId, projectId, hostId)}
 			allowCustom={catalog?.allowCustom}
 			customModelEntry={customModelEntry}
 			agentLabel={agentLabel}

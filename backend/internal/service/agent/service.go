@@ -58,6 +58,7 @@ const (
 	modelLoadRevalidate
 	modelLoadRefresh
 	modelLoadCheck
+	modelLoadExpand
 )
 
 type modelCatalogCall struct {
@@ -485,6 +486,19 @@ func (s *Service) RevalidateModels(ctx context.Context, agentID, projectID strin
 	return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadRevalidate)
 }
 
+// ExpandModels loads supplemental choices through the existing scoped coordinator.
+func (s *Service) ExpandModels(ctx context.Context, agentID, projectID string) (ports.AgentModelCatalog, error) {
+	if s.discoverer == nil {
+		return ports.AgentModelCatalog{}, apierr.Internal("MODEL_DISCOVERY_UNAVAILABLE", "Model discovery is unavailable")
+	}
+	var err error
+	projectID, err = s.modelCatalogScope(ctx, projectID)
+	if err != nil {
+		return ports.AgentModelCatalog{}, err
+	}
+	return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadExpand)
+}
+
 // InvalidateModelCatalogs marks existing scopes due and schedules cache-first
 // revalidation. The last successful choices remain visible throughout.
 func (s *Service) InvalidateModelCatalogs(agentID string) {
@@ -635,11 +649,76 @@ func (s *Service) coalesceModelLoad(
 	mode modelLoadMode,
 ) (ports.AgentModelCatalog, error) {
 	key := agentID + "\x00" + projectID
+	expansionFence := s.modelAuthenticationFence(agentID, projectID)
+	var expansionIdentity, expansionVersion string
+	if mode == modelLoadExpand {
+		cached, exists, err := s.cachedCatalog(ctx, agentID, projectID)
+		if err != nil {
+			return ports.AgentModelCatalog{}, err
+		}
+		if exists {
+			expansionIdentity = cached.Catalog.InputFingerprint
+		}
+		binary := ""
+		if exists {
+			binary = cached.Catalog.Metadata["binary"]
+		}
+		if binary == "" {
+			if item, ok := s.agent(agentID); ok {
+				if resolver, ok := item.Agent.(ports.AgentBinaryResolver); ok {
+					lock := s.resolverMu[agentID]
+					lock.Lock()
+					resolved, resolveErr := resolver.ResolveBinary(ctx)
+					lock.Unlock()
+					if resolveErr == nil {
+						binary = resolved
+					}
+				}
+			}
+		}
+		request, err := s.modelDiscoveryRequest(ctx, agentID, projectID, binary)
+		if err != nil {
+			return ports.AgentModelCatalog{}, err
+		}
+		if exists {
+			expansionVersion = s.discoverer.CatalogFingerprint(ctx, request)
+		}
+		if observer, ok := s.discoverer.(ports.AgentModelCatalogIdentityFingerprinter); ok {
+			if identity, conclusive := observer.CatalogIdentityFingerprint(ctx, request); conclusive {
+				expansionIdentity = identity
+			}
+		}
+	}
 	s.modelCallMu.Lock()
+	if mode == modelLoadExpand && expansionFence != s.modelGeneration[key].authFence {
+		mode = modelLoadRevalidate
+	}
 	if active := s.modelCalls[key]; active != nil {
 		s.modelCallMu.Unlock()
 		select {
 		case <-active.done:
+			if mode == modelLoadExpand {
+				catalog, err := s.validatedModelLoadResult(ctx, agentID, projectID, active)
+				if err != nil {
+					return catalog, err
+				}
+				request, requestErr := s.modelDiscoveryRequest(ctx, agentID, projectID, catalog.Metadata["binary"])
+				if requestErr != nil {
+					return ports.AgentModelCatalog{}, requestErr
+				}
+				currentIdentityChanged := false
+				if observer, ok := s.discoverer.(ports.AgentModelCatalogIdentityFingerprinter); ok {
+					identity, conclusive := observer.CatalogIdentityFingerprint(ctx, request)
+					currentIdentityChanged = conclusive && identity != catalog.InputFingerprint
+				}
+				if currentIdentityChanged || expansionFence != s.modelAuthenticationFence(agentID, projectID) || (expansionIdentity != "" && expansionIdentity != catalog.InputFingerprint) || active.catalog.InputFingerprint != catalog.InputFingerprint || (expansionVersion != "" && expansionVersion != catalog.BinaryVersion) {
+					return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadRevalidate)
+				}
+				if active.mode != modelLoadExpand && !catalog.AdditionalModelsLoaded {
+					return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadExpand)
+				}
+				return catalog, nil
+			}
 			if (active.mode == modelLoadCheck && mode != modelLoadCheck) || (mode == modelLoadRefresh && active.mode != modelLoadRefresh) {
 				return s.coalesceModelLoad(ctx, agentID, projectID, mode)
 			}
@@ -670,7 +749,7 @@ func (s *Service) coalesceModelLoad(
 		}
 		loadCtx, cancel := context.WithTimeout(baseCtx, s.modelLoadTimeout)
 		defer cancel()
-		call.catalog, call.err = s.loadModels(loadCtx, agentID, projectID, mode, call.generation)
+		call.catalog, call.err = s.loadModels(loadCtx, agentID, projectID, mode, call.generation, expansionIdentity)
 		s.modelCallMu.Lock()
 		delete(s.modelCalls, key)
 		close(call.done)
@@ -718,13 +797,21 @@ func (s *Service) validatedModelLoadResult(ctx context.Context, agentID, project
 	if err != nil {
 		return ports.AgentModelCatalog{}, err
 	}
+	if call.mode == modelLoadExpand || catalog.AdditionalModelsLoaded {
+		if observer, ok := s.discoverer.(ports.AgentModelCatalogIdentityFingerprinter); ok {
+			identity, conclusive := observer.CatalogIdentityFingerprint(ctx, request)
+			if conclusive && identity != catalog.InputFingerprint {
+				return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadRevalidate)
+			}
+		}
+	}
 	if s.discoverer.CatalogFingerprint(ctx, request) != catalog.BinaryVersion {
 		return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadRevalidate)
 	}
 	return catalog, nil
 }
 
-func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mode modelLoadMode, generation int64) (ports.AgentModelCatalog, error) {
+func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mode modelLoadMode, generation int64, expansionIdentity string) (ports.AgentModelCatalog, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentModelCatalog{}, err
 	}
@@ -790,18 +877,18 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		return cached.Catalog, nil
 	}
 
-	if mode != modelLoadRefresh && hasCached && !inputsChanged && !explicitlyInvalidated && modelCatalogRetriesExhausted(cached) {
+	if mode != modelLoadRefresh && mode != modelLoadExpand && hasCached && !inputsChanged && !explicitlyInvalidated && modelCatalogRetriesExhausted(cached) {
 		cached.Catalog.RefreshRecommended = false
 		return cached.Catalog, nil
 	}
-	if mode != modelLoadRefresh && hasCached && !inputsChanged && !explicitlyInvalidated && !cached.RetryAt.IsZero() && s.now().Before(cached.RetryAt) {
+	if mode != modelLoadRefresh && mode != modelLoadExpand && hasCached && !inputsChanged && !explicitlyInvalidated && !cached.RetryAt.IsZero() && s.now().Before(cached.RetryAt) {
 		cached.Catalog.RefreshState = "error"
 		cached.Catalog.RefreshError = cached.RefreshError
 		cached.Catalog.RetryAt = modelCatalogRetryAt(cached.RetryAt)
 		cached.Catalog.RefreshRecommended = true
 		return cached.Catalog, nil
 	}
-	if mode == modelLoadRefresh || inputsChanged || explicitlyInvalidated {
+	if mode == modelLoadRefresh || mode == modelLoadExpand || inputsChanged || explicitlyInvalidated {
 		cached.RetryCount = 0
 		cached.RetryAt = time.Time{}
 		cached.RefreshError = ""
@@ -813,7 +900,41 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 	if mode == modelLoadRefresh {
 		_ = s.persistCatalogState(ctx, cached, hasCached, "refreshing", "", time.Time{}, generation)
 	}
+	// Expanded intent belongs only to the same effective account and inputs.
+	if !inputsChanged && (mode == modelLoadExpand || (hasCached && cached.Catalog.AdditionalModelsLoaded)) {
+		expectedIdentity := cached.Catalog.InputFingerprint
+		if mode == modelLoadExpand && expansionIdentity != "" {
+			expectedIdentity = expansionIdentity
+		}
+		if observer, ok := s.discoverer.(ports.AgentModelCatalogIdentityFingerprinter); ok {
+			identity, conclusive := observer.CatalogIdentityFingerprint(ctx, request)
+			if conclusive && expectedIdentity != "" && identity != expectedIdentity {
+				inputsChanged = true
+			}
+		}
+	}
+	request.IncludeAdditional = !inputsChanged && (mode == modelLoadExpand || (hasCached && cached.Catalog.AdditionalModelsLoaded))
 	discovered, discoverErr := s.discoverer.Discover(ctx, request)
+	if request.IncludeAdditional {
+		identityChanged := errors.Is(discoverErr, ports.ErrAgentModelDiscoveryIdentityChanged) || s.discoverer.CatalogFingerprint(ctx, request) != version || (mode == modelLoadExpand && expansionIdentity != "" && discovered.InputFingerprint != "" && expansionIdentity != discovered.InputFingerprint)
+		if observer, ok := s.discoverer.(ports.AgentModelCatalogIdentityFingerprinter); ok {
+			identity, conclusive := observer.CatalogIdentityFingerprint(ctx, request)
+			identityChanged = identityChanged || (conclusive && identity != discovered.InputFingerprint)
+		}
+		identityChanged = identityChanged || (hasCached && cached.Catalog.InputFingerprint != "" && discovered.InputFingerprint != "" && discovered.InputFingerprint != cached.Catalog.InputFingerprint)
+		if identityChanged {
+			// A changed account receives a native-only result. The original expansion
+			// intent never crosses this boundary, including failures of the old probe.
+			request.IncludeAdditional = false
+			version = s.discoverer.CatalogFingerprint(ctx, request)
+			inputsChanged = true
+			discovered, discoverErr = s.discoverer.Discover(ctx, request)
+		}
+	}
+	if request.IncludeAdditional && discoverErr == nil && !discovered.AdditionalModelsLoaded {
+		discoverErr = errors.New("additional model discovery is unsupported or incomplete")
+	}
+
 	discovered = applyCustomModelEntryPolicy(discovered, policy)
 	discovered.BinaryVersion = version
 	discovered.Metadata = catalogMetadata(request)
@@ -828,6 +949,10 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		policy.InputFingerprint = discovered.InputFingerprint
 		policy.Metadata = catalogMetadata(request)
 		return s.keepCatalogUntilSignIn(persistCtx, item.Manifest.Name, cached, hasCached && !inputsChanged, policy, version, generation), nil
+	}
+	if discoverErr != nil && request.IncludeAdditional && (!hasCached || !cached.Catalog.AdditionalModelsLoaded) {
+		// First expansion never stamps a base cache as refreshed or failed.
+		return cached.Catalog, apierr.Internal("MODEL_EXPANSION_FAILED", discoverErr.Error())
 	}
 	if discoverErr != nil {
 		// Provider model IDs are credential-scoped. Reuse a cached catalog only

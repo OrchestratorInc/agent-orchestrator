@@ -135,6 +135,7 @@ async function chooseOption(trigger: HTMLElement, optionName: string) {
 
 async function chooseCustomModel(label: string, model: string) {
 	await userEvent.click(screen.getByRole("button", { name: label }));
+	await userEvent.click(screen.getByRole("menuitem", { name: "Use model ID…" }));
 	await userEvent.type(screen.getByRole("searchbox", { name: `Search ${label.toLowerCase()}` }), model);
 	await userEvent.click(screen.getByRole("menuitem", { name: `Use “${model}” as a custom model` }));
 }
@@ -824,7 +825,7 @@ describe("ProjectSettingsForm", () => {
 
 		const workerModel = await screen.findByRole("button", { name: "Worker model" });
 		await userEvent.click(workerModel);
-		expect(screen.getByRole("searchbox", { name: "Search worker model" })).toBeInTheDocument();
+		expect(screen.queryByRole("searchbox", { name: "Search worker model" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Enter model ID…" })).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: /GPT-5\.4/ }));
 		expect(workerModel).toHaveTextContent("GPT-5.4");
@@ -833,7 +834,7 @@ describe("ProjectSettingsForm", () => {
 		expect(await screen.findByRole("menuitem", { name: /^GPT-5\.6 Sol/ })).toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: /GPT-5\.5/ })).toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: /GPT-5\.4/ })).toBeInTheDocument();
-		expect(screen.getByRole("searchbox", { name: "Search worker model" })).toBeInTheDocument();
+		expect(screen.queryByRole("searchbox", { name: "Search worker model" })).not.toBeInTheDocument();
 	});
 
 	it("does not allow arbitrary model text for configured-only agents", async () => {

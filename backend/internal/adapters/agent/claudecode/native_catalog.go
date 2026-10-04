@@ -34,6 +34,16 @@ type nativeModel struct {
 // NativeCatalog reads the installed Claude Code picker through its initialize
 // response without submitting a prompt or running an inference turn.
 func NativeCatalog(ctx context.Context, binary, workingDir string, env map[string]string) (ports.AgentModelCatalog, error) {
+	return nativeCatalog(ctx, binary, workingDir, env, false)
+}
+
+// ExpandedNativeCatalog checks each supplemental provider ID in one initialized
+// native process without submitting a prompt.
+func ExpandedNativeCatalog(ctx context.Context, binary, workingDir string, env map[string]string) (ports.AgentModelCatalog, error) {
+	return nativeCatalog(ctx, binary, workingDir, env, true)
+}
+
+func nativeCatalog(ctx context.Context, binary, workingDir string, env map[string]string, expand bool) (ports.AgentModelCatalog, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, nativeCatalogTimeout)
 	defer cancel()
 	catalog := ports.AgentModelCatalog{AgentID: "claude-code", Source: "native", FetchedAt: time.Now().UTC()}
@@ -42,15 +52,68 @@ func NativeCatalog(ctx context.Context, binary, workingDir string, env map[strin
 	if err := probeCtx.Err(); err != nil {
 		return catalog, err
 	}
-	models, err := nativePickerModels(probeCtx, binary, workingDir, env)
+	catalog.AdditionalModelsAvailable = resolved.providerOK && (resolved.provider == agentcreds.ProviderFirstParty || resolved.provider == agentcreds.ProviderGateway)
+	var supplement func([]ports.AgentModelInfo, map[string]bool, func(string) (bool, error)) ([]ports.AgentModelInfo, error)
+	if expand {
+		if !catalog.AdditionalModelsAvailable {
+			return catalog, errors.New("claude-code supplemental discovery is unsupported for this provider")
+		}
+		versionCmd := aoprocess.CommandContext(probeCtx, binary, "--version")
+		versionCmd.Dir = workingDir
+		versionCmd.Env = processenv.Merge(env)
+		versionCmd.WaitDelay = time.Second
+		output, err := versionCmd.Output()
+		if err != nil || !supportsNativeModelChecks(string(output)) {
+			return catalog, errors.New("claude-code supplemental discovery requires native model checks in version 2.1.268 or newer")
+		}
+		supplement = func(models []ports.AgentModelInfo, represented map[string]bool, check func(string) (bool, error)) ([]ports.AgentModelInfo, error) {
+			provider, err := ProviderCatalog(probeCtx, binary, workingDir, env)
+			if err != nil {
+				return nil, err
+			}
+			if catalog.InputFingerprint == "" || provider.InputFingerprint != catalog.InputFingerprint {
+				catalog.InputFingerprint = provider.InputFingerprint
+				return nil, ports.ErrAgentModelDiscoveryIdentityChanged
+			}
+			for _, model := range provider.Models {
+				id := strings.TrimSpace(model.ID)
+				if id == "" || represented[id] {
+					continue
+				}
+				allowed, err := check(id)
+				if err != nil {
+					return nil, err
+				}
+				represented[id] = true
+				if allowed {
+					model.ID = id
+					model.IsAdditional = true
+					model.IsDefault = false
+					models = append(models, model)
+				}
+			}
+			identity, conclusive := ProviderCatalogIdentityFingerprint(probeCtx, binary, workingDir, env)
+			if !conclusive || identity != catalog.InputFingerprint {
+				catalog.InputFingerprint = identity
+				return nil, ports.ErrAgentModelDiscoveryIdentityChanged
+			}
+			return models, nil
+		}
+	}
+	models, err := nativePickerModelsWithSupplement(probeCtx, binary, workingDir, env, supplement)
 	if err != nil {
 		return catalog, err
 	}
 	catalog.Models = models
+	catalog.AdditionalModelsLoaded = expand
 	return catalog, nil
 }
 
 func nativePickerModels(ctx context.Context, binary, workingDir string, env map[string]string) ([]ports.AgentModelInfo, error) {
+	return nativePickerModelsWithSupplement(ctx, binary, workingDir, env, nil)
+}
+
+func nativePickerModelsWithSupplement(ctx context.Context, binary, workingDir string, env map[string]string, supplement func([]ports.AgentModelInfo, map[string]bool, func(string) (bool, error)) ([]ports.AgentModelInfo, error)) ([]ports.AgentModelInfo, error) {
 	cmd := aoprocess.CommandContext(ctx, binary, "--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--settings", `{"disableAllHooks":true}`, "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`)
 	cmd.Dir = workingDir
 	cmd.Env = processenv.Merge(env)
@@ -105,7 +168,68 @@ func nativePickerModels(ctx context.Context, binary, workingDir string, env map[
 			return nil, errors.New("claude-code native picker returned no models")
 		}
 		settings := agentcreds.ResolveClaudeSettings(ctx, workingDir, env, agentcreds.ResolveOptions{})
-		return appendNativeConfiguredModels(models, frame.Response.Response.Models, settings, env), nil
+		models = appendNativeConfiguredModels(models, frame.Response.Response.Models, settings, env)
+		if supplement == nil {
+			return models, nil
+		}
+		represented := map[string]bool{}
+		for _, row := range frame.Response.Response.Models {
+			represented[strings.TrimSpace(row.Value)] = true
+			represented[strings.TrimSpace(row.ResolvedModel)] = true
+		}
+		for _, row := range models {
+			represented[row.ID] = true
+		}
+		sequence := 0
+		return supplement(models, represented, func(id string) (bool, error) {
+			sequence++
+			requestID := fmt.Sprintf("ao-model-check-%d", sequence)
+			checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			stop := context.AfterFunc(checkCtx, func() { _ = stdout.Close() })
+			defer stop()
+			request := map[string]any{"type": "control_request", "request_id": requestID, "request": map[string]string{"subtype": "set_model", "model": id}}
+			if err := json.NewEncoder(stdin).Encode(request); err != nil {
+				return false, fmt.Errorf("claude-code model check: %w", err)
+			}
+			for scanner.Scan() {
+				var reply struct {
+					Type     string `json:"type"`
+					Response struct {
+						Subtype   string `json:"subtype"`
+						RequestID string `json:"request_id"`
+						Error     string `json:"error"`
+					} `json:"response"`
+				}
+				if json.Unmarshal(scanner.Bytes(), &reply) != nil {
+					return false, errors.New("claude-code model check returned malformed JSON")
+				}
+				if reply.Type == "control_request" {
+					return false, errors.New("claude-code model check requires interaction")
+				}
+				if reply.Type != "control_response" || reply.Response.RequestID != requestID {
+					continue
+				}
+				if checkCtx.Err() != nil {
+					return false, checkCtx.Err()
+				}
+				if reply.Response.Subtype == "success" {
+					return true, nil
+				}
+				message := strings.ToLower(reply.Response.Error)
+				if reply.Response.Subtype == "error" && (strings.Contains(message, "not in your organization's allowed models") || strings.Contains(message, "organization restriction")) {
+					return false, nil
+				}
+				return false, errors.New("claude-code native model check unsupported or failed")
+			}
+			if ctx.Err() != nil {
+				return false, ctx.Err()
+			}
+			if checkCtx.Err() != nil {
+				return false, checkCtx.Err()
+			}
+			return false, errors.New("claude-code exited before completing model checks")
+		})
 	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -243,4 +367,17 @@ func nativeLaunchEnv(env map[string]string, key string) string {
 		return strings.TrimSpace(value)
 	}
 	return strings.TrimSpace(os.Getenv(key))
+}
+
+// Earlier builds may acknowledge unknown controls without enforcing model restrictions.
+func supportsNativeModelChecks(version string) bool {
+	match := regexp.MustCompile(`(?:^|\s)(\d+)\.(\d+)\.(\d+)(?:\s|$)`).FindStringSubmatch(strings.TrimSpace(version))
+	if match == nil {
+		return false
+	}
+	var major, minor, patch int
+	if _, err := fmt.Sscanf(strings.Join(match[1:], "."), "%d.%d.%d", &major, &minor, &patch); err != nil {
+		return false
+	}
+	return major > 2 || (major == 2 && (minor > 1 || (minor == 1 && patch >= 268)))
 }
