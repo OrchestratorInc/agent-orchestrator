@@ -188,7 +188,7 @@ func Run() error {
 	}
 	ignoreBrokenPipeSignal()
 
-	log := newLogger()
+	log := newLogger(cfg.DataDir)
 	var browserRuntimeToken string
 	if os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1" {
 		browserRuntimeToken, err = browserruntime.ReadRuntimeToken(os.Stdin)
@@ -1144,9 +1144,17 @@ func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
 }
 
 // newLogger returns the daemon's slog logger. It writes to stderr so supervisors
-// can capture it separately from any structured stdout protocol added later.
-func newLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+// can capture it separately from any structured stdout protocol added later,
+// and to $AO_DATA_DIR/daemon.log so the log outlives the process that read it.
+func newLogger(dataDir string) *slog.Logger {
+	options := &slog.HandlerOptions{Level: slog.LevelDebug}
+	file, err := openRotatingLogFile(filepath.Join(dataDir, daemonLogName), maxDaemonLogBytes)
+	if err != nil {
+		log := slog.New(slog.NewTextHandler(os.Stderr, options))
+		log.Warn("daemon log file unavailable; logging to stderr only", "error", err)
+		return log
+	}
+	return slog.New(slog.NewTextHandler(teeLogWriter{stderr: os.Stderr, file: file}, options))
 }
 
 func stabilizeWorkingDirectory(dataDir string) error {
