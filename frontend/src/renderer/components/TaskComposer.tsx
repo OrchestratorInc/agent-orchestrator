@@ -40,7 +40,7 @@ import { cloudSessionsQueryKey, useCloudProjectsQuery } from "../hooks/useWorksp
 import {
 	agentModelsQueryKey,
 	agentModelsQueryOptions,
-	refreshAgentModels,
+	refreshAgentModels, expandAgentModels,
 	agentModelsRevalidationQueryOptions,
 } from "../hooks/useAgentModelsQuery";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
@@ -429,6 +429,9 @@ export function TaskComposer({
 			: undefined);
 	const modelCatalog: TaskComposerModelCatalog | undefined = modelCatalogQuery.data
 		? {
+				additionalModelsAvailable: modelCatalogQuery.data.additionalModelsAvailable,
+				additionalModelsLoaded: modelCatalogQuery.data.additionalModelsLoaded,
+				inputFingerprint: modelCatalogQuery.data.inputFingerprint,
 				allowCustom: modelCatalogQuery.data.allowCustom,
 				customModelEntry: modelCatalogQuery.data.customModelEntry,
 				models: modelCatalogQuery.data.models,
@@ -506,6 +509,7 @@ export function TaskComposer({
 	const remoteLoadError = !hostId ? undefined : !hostConnected ? t("remote.hostOffline") :
 		[projectQuery.error, agentsQuery.error].find((cause): cause is Error => cause instanceof Error)?.message ?? settingsError ??
 			(agentsQuery.isSuccess && !agentCatalog?.agents.some(isLaunchableAgent) ? t("remote.noReadyAgent") : undefined);
+	const expandSelectedModels = useCallback(() => expandAgentModels(queryClient, selectedAgent, modelsProjectId, hostId), [hostId, modelsProjectId, queryClient, selectedAgent]);
 	const refreshSelectedModels = useCallback(async () => {
 		const refreshed = await refreshAgentModels(selectedAgent, modelsProjectId, hostId);
 		queryClient.setQueryData(agentModelsQueryKey(selectedAgent, modelsProjectId, hostId), refreshed);
@@ -715,7 +719,7 @@ export function TaskComposer({
 			}}
 			renderAgentControl={(control) => <DesktopAgentControl {...control} hostId={hostId} manageView={isCloudProject ? "cloud" : "local"} />}
 			renderEffortControl={(control) => <TaskEffortPicker {...control} defaultEffort={effortModel?.defaultEffort} availability={isCloudProject || !supportsModelEffortAtLaunch(selectedAgent, settings?.defaultSessionMode, settings?.chatHarnesses ?? []) ? "launch-unavailable" : !effortModel || effortModel.efforts === undefined ? "unknown" : effortOptions.length ? "supported" : "unsupported"} />}
-			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
+			renderModelControl={(control) => <TaskModelPicker key={`${hostId ?? ""}:${selectedAgent}:${modelsProjectId}`} {...control} onRefresh={refreshSelectedModels} onLoadAdditional={expandSelectedModels}
 				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
 			showEffort={true}
 		/>
@@ -753,8 +757,9 @@ function TaskModelPicker({
 	onModelChange,
 	onModeChange,
 	onRefresh,
+	onLoadAdditional,
 	showFollowAgentAction,
-}: TaskComposerModelControl & { onRefresh: () => Promise<void>; showFollowAgentAction: boolean }) {
+}: TaskComposerModelControl & { onRefresh: () => Promise<void>; onLoadAdditional: () => Promise<void>; showFollowAgentAction: boolean }) {
 	const { t } = useTranslation();
 
 	// No agent selected: there is nothing loading and no model to choose yet, so
@@ -821,8 +826,13 @@ function TaskModelPicker({
 			aria-label={t("newTask.model")}
 			value={value}
 			models={displayModels}
+			additionalModelsAvailable={catalog?.additionalModelsAvailable}
+			additionalModelsLoaded={catalog?.additionalModelsLoaded}
+			catalogIdentity={catalog?.inputFingerprint}
+			onLoadAdditional={onLoadAdditional}
 			allowCustom={catalog?.allowCustom}
 			customModelEntry={customModelEntry}
+			selectionMode={catalog?.selectionMode}
 			agentLabel={agentLabel}
 			onRefresh={onRefresh}
 			refreshing={loading || catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}

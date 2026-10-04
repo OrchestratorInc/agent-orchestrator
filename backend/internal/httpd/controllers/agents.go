@@ -23,6 +23,7 @@ type AgentCatalog interface {
 	Probe(ctx context.Context, agentID string) (agentsvc.ProbeResult, error)
 	Models(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error)
 	RevalidateModels(ctx context.Context, agentID, projectID string) (ports.AgentModelCatalog, error)
+	ExpandModels(ctx context.Context, agentID, projectID string) (ports.AgentModelCatalog, error)
 }
 
 // AgentsController owns the /agents routes.
@@ -39,6 +40,7 @@ func (c *AgentsController) Register(r chi.Router) {
 	r.Post("/agents/{agent}/probe", c.probe)
 	r.Get("/agents/{agent}/models", c.models)
 	r.Post("/agents/{agent}/models/refresh", c.refreshModels)
+	r.Post("/agents/{agent}/models/expand", c.expandModels)
 }
 
 func (c *AgentsController) readiness(w http.ResponseWriter, r *http.Request) {
@@ -73,17 +75,23 @@ func (c *AgentsController) ensureReadiness(w http.ResponseWriter, r *http.Reques
 }
 
 func (c *AgentsController) models(w http.ResponseWriter, r *http.Request) {
-	c.writeModels(w, r, false, false)
+	c.writeModels(w, r, false, false, false)
 }
 
 func (c *AgentsController) refreshModels(w http.ResponseWriter, r *http.Request) {
-	c.writeModels(w, r, true, r.URL.Query().Get("revalidate") == "true")
+	c.writeModels(w, r, true, r.URL.Query().Get("revalidate") == "true", false)
 }
 
-func (c *AgentsController) writeModels(w http.ResponseWriter, r *http.Request, refresh, revalidate bool) {
+func (c *AgentsController) expandModels(w http.ResponseWriter, r *http.Request) {
+	c.writeModels(w, r, false, false, true)
+}
+
+func (c *AgentsController) writeModels(w http.ResponseWriter, r *http.Request, refresh, revalidate, expand bool) {
 	if c.Catalog == nil {
 		route := "/api/v1/agents/{agent}/models"
-		if refresh {
+		if expand {
+			route += "/expand"
+		} else if refresh {
 			route += "/refresh"
 		}
 		apispec.NotImplemented(w, r, r.Method, route)
@@ -97,7 +105,9 @@ func (c *AgentsController) writeModels(w http.ResponseWriter, r *http.Request, r
 	projectID := strings.TrimSpace(r.URL.Query().Get("projectId"))
 	var catalog ports.AgentModelCatalog
 	var err error
-	if revalidate {
+	if expand {
+		catalog, err = c.Catalog.ExpandModels(r.Context(), agentID, projectID)
+	} else if revalidate {
 		catalog, err = c.Catalog.RevalidateModels(r.Context(), agentID, projectID)
 	} else {
 		catalog, err = c.Catalog.Models(r.Context(), agentID, projectID, refresh)

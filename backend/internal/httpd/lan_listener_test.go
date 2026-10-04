@@ -488,3 +488,7 @@ func TestLANListenerServesCodexModelRoutesFromRealRouter(t *testing.T) {
 		}
 	}
 }
+
+func (c *lanFakeAgentCatalog) ExpandModels(ctx context.Context, agentID, projectID string) (ports.AgentModelCatalog, error) {
+	return c.Models(ctx, agentID, projectID, false)
+}

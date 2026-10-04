@@ -3,10 +3,23 @@ import { QueryClient } from "@tanstack/react-query";
 const { get, post, remotePost } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), remotePost: vi.fn() }));
 vi.mock("../lib/api-client", () => ({ apiClient: { GET: get, POST: post }, apiErrorMessage: String }));
 vi.mock("../lib/host-clients", () => ({ clientForHost: () => ({ POST: remotePost }) }));
-import { agentModelsQueryOptions, agentModelsRevalidationQueryOptions, type AgentModelCatalog } from "./useAgentModelsQuery";
+import { agentModelsQueryOptions, agentModelsRevalidationQueryOptions, expandAgentModels, type AgentModelCatalog } from "./useAgentModelsQuery";
 const catalog = { models: [{ id: "model-a" }], validatedAt: "2026-10-04", refreshRecommended: true } as AgentModelCatalog;
 afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
 describe("shared model queries", () => {
+	it("discards an expansion payload and invalidates only its canonical scope", async () => {
+		const client = new QueryClient();
+		const options = agentModelsQueryOptions("claude-code", "project-a");
+		client.setQueryData(options.queryKey, catalog);
+		client.setQueryData(agentModelsQueryOptions("claude-code", "project-b").queryKey, catalog);
+		post.mockResolvedValue({ data: { ...catalog, models: [{ id: "prior-account-extra", isAdditional: true }], additionalModelsLoaded: true } });
+		await expandAgentModels(client, "claude-code", "project-a");
+		expect(post).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/expand", { params: { path: { agent: "claude-code" }, query: { projectId: "project-a" } } });
+		expect(client.getQueryData(options.queryKey)).toEqual(catalog);
+		expect(client.getQueryState(options.queryKey)?.isInvalidated).toBe(true);
+		expect(client.getQueryState(agentModelsQueryOptions("claude-code", "project-b").queryKey)?.isInvalidated).toBe(false);
+		client.clear();
+	});
 	it.each(["codex", "opencode", "cursor"])("retains %s catalogs across switches without fetching again", async (agentId) => {
 		vi.useFakeTimers();
 		get.mockResolvedValue({ data: catalog });

@@ -1552,6 +1552,18 @@ func agentOperations() []operation {
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
+		{
+			method: http.MethodPost, path: "/api/v1/agents/{agent}/models/expand", id: "expandAgentModels", tag: "agents",
+			summary:    "Expand and cache the model picker for one agent",
+			pathParams: []any{controllers.AgentIDParam{}, controllers.AgentModelsQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.AgentModelsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
 	}
 }
 

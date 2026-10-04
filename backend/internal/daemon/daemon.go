@@ -496,6 +496,9 @@ func Run() error {
 	modelDiscoverer := modelcatalog.Discoverer{
 		NativeCatalogs: map[string]func(context.Context, ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error){
 			"claude-code": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
+				if request.IncludeAdditional {
+					return claudecodeagent.ExpandedNativeCatalog(listCtx, request.Binary, request.WorkingDir, request.Env)
+				}
 				return claudecodeagent.NativeCatalog(listCtx, request.Binary, request.WorkingDir, request.Env)
 			},
 			"droid": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {

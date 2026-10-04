@@ -267,6 +267,87 @@ describe("AgentModelCombobox", () => {
 		expect(onCustom).toHaveBeenCalledWith("private/model-id");
 	});
 
+	it("keeps short catalogs free of custom model actions and search", async () => {
+		const { onCustom } = renderCombobox([{ id: "native", label: "Native" }], { compact: true });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Use model ID…" })).not.toBeInTheDocument();
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Default", "Native"]);
+		expect(onCustom).not.toHaveBeenCalled();
+	});
+
+	it("preserves direct entry for manual text-mode catalogs", async () => {
+		const { onCustom } = renderCombobox([], { selectionMode: "text" });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		await userEvent.type(screen.getByRole("searchbox"), "private/model-id");
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use “private/model-id” as a custom model" }));
+		expect(onCustom).toHaveBeenCalledWith("private/model-id");
+		expect(screen.queryByRole("menuitem", { name: "Use model ID…" })).not.toBeInTheDocument();
+	});
+
+	it("groups variants before the row limit and retains exact labels and IDs", async () => {
+		const variants = Array.from({ length: 60 }, (_, index) => ({ id: `variant-${index}`, label: `Variant ${index} 1M (NO ZDR)`, familyId: "family", familyLabel: "Family" }));
+		const { onChange } = renderCombobox(variants, { value: "variant-59", compact: true });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		const family = screen.getByRole("menuitem", { name: "Family" });
+		act(() => family.focus());
+		await userEvent.keyboard("{ArrowRight}");
+		expect(screen.getByRole("menuitem", { name: "Variant 59 1M (NO ZDR)" })).toHaveAttribute("aria-current", "true");
+		await userEvent.click(screen.getByRole("menuitem", { name: "Variant 59 1M (NO ZDR)" }));
+		expect(onChange).toHaveBeenCalledWith("variant-59");
+	});
+
+	it("keeps selected additional rows visible while expanding and collapsing locally", async () => {
+		const onLoadAdditional = vi.fn(async () => {});
+		renderCombobox([{ id: "native", label: "Native" }, { id: "saved", label: "Saved older model", isAdditional: true }, { id: "other", label: "Other model", isAdditional: true }], { value: "saved", additionalModelsAvailable: true, additionalModelsLoaded: true, onLoadAdditional });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.getByRole("menuitem", { name: "Saved older model" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Other model" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: "More models" }));
+		expect(screen.getByRole("menuitem", { name: "Other model" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: "Hide additional models" }));
+		expect(screen.getByRole("menuitem", { name: "Saved older model" })).toBeInTheDocument();
+		expect(onLoadAdditional).not.toHaveBeenCalled();
+	});
+
+	it("retains every member of a selected family beyond the top-level cap", async () => {
+		const { onChange } = renderCombobox([
+			...Array.from({ length: 60 }, (_, index) => ({ id: `flat-${index}`, label: `Flat ${index}` })),
+			{ id: "saved-low", label: "Saved Low", familyId: "saved", familyLabel: "Saved" },
+			{ id: "saved-high-fast", label: "Saved High Fast", familyId: "saved", familyLabel: "Saved" },
+		], { value: "saved-low", compact: true, showFollowAgentAction: false });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		const family = screen.getByRole("menuitem", { name: "Saved" });
+		await userEvent.click(family);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Saved High Fast" }));
+		expect(onChange).toHaveBeenCalledWith("saved-high-fast");
+	});
+
+	it("does not reveal additional rows when a pending expansion changes identity", async () => {
+		let finish!: () => void;
+		const onLoadAdditional = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+		const props = { value: "", models: [{ id: "native", label: "Native" }], additionalModelsAvailable: true, catalogIdentity: "account-a", onLoadAdditional, onChange: vi.fn(), onCustom: vi.fn(), "aria-label": "Worker model" };
+		const view = render(<AgentModelCombobox {...props} />);
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "More models" }));
+		view.rerender(<AgentModelCombobox {...props} catalogIdentity="account-b" additionalModelsLoaded models={[...props.models, { id: "other", label: "Other account model", isAdditional: true }]} />);
+		await act(async () => finish());
+		expect(screen.queryByRole("menuitem", { name: "Other account model" })).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "More models" })).toBeInTheDocument();
+	});
+
+	it("leaves base choices usable after expansion fails and offers retry", async () => {
+		const onLoadAdditional = vi.fn(async () => { throw new Error("Unavailable"); });
+		renderCombobox([{ id: "native", label: "Native" }], { additionalModelsAvailable: true, onLoadAdditional });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "More models" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Could not load additional models.");
+		expect(screen.getByRole("menuitem", { name: "Native" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: "Retry more models" }));
+		expect(onLoadAdditional).toHaveBeenCalledTimes(2);
+	});
+
 	it("adds simple model search at eight models", async () => {
 		renderCombobox(
 			Array.from({ length: 8 }, (_, index) => ({
@@ -397,12 +478,13 @@ describe("AgentModelCombobox", () => {
 		expect(onRefresh).toHaveBeenCalledOnce();
 	});
 
-	it.each(["none", "configured"] as const)("does not append an off-catalog selection for %s custom entry", async (customModelEntry) => {
+	it.each(["none", "configured"] as const)("retains an off-catalog selection without enabling %s custom entry", async (customModelEntry) => {
 		renderCombobox([{ id: "official", label: "Official model" }], {
 			value: "saved-model", customModelEntry, showFollowAgentAction: false,
 		});
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Official model"]);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Official model", "saved-model"]);
+		expect(screen.queryByRole("menuitem", { name: "Use model ID…" })).not.toBeInTheDocument();
 	});
 
 	it("does not duplicate a current custom model already in the catalog", async () => {

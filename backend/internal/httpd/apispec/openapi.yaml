@@ -207,6 +207,58 @@ paths:
         use
       tags:
       - agents
+  /api/v1/agents/{agent}/models/expand:
+    post:
+      operationId: expandAgentModels
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - description: Optional project identifier used as the model-catalog cache scope.
+        in: query
+        name: projectId
+        schema:
+          description: Optional project identifier used as the model-catalog cache
+            scope.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentModelsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Expand and cache the model picker for one agent
+      tags:
+      - agents
   /api/v1/agents/{agent}/models/refresh:
     post:
       operationId: refreshAgentModels
@@ -9274,8 +9326,14 @@ components:
           items:
             type: string
           type: array
+        familyId:
+          type: string
+        familyLabel:
+          type: string
         id:
           type: string
+        isAdditional:
+          type: boolean
         isDefault:
           type: boolean
         label:
@@ -9288,6 +9346,10 @@ components:
       type: object
     AgentModelsResponse:
       properties:
+        additionalModelsAvailable:
+          type: boolean
+        additionalModelsLoaded:
+          type: boolean
         agentId:
           type: string
         allowCustom:

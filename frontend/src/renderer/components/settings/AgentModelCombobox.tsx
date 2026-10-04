@@ -1,5 +1,5 @@
 import { EffortMenuItems, effortDisplayLabel } from "./EffortPicker";
-import { Check, ChevronDown, Loader2, RefreshCw, Search } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Loader2, RefreshCw, Search } from "lucide-react";
 import { type ReactNode, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
@@ -58,8 +58,13 @@ export function AgentModelCombobox({
 	models,
 	allowCustom,
 	customModelEntry,
+	selectionMode,
 	agentLabel,
 	onRefresh,
+	onLoadAdditional,
+	additionalModelsAvailable = false,
+	additionalModelsLoaded = false,
+	catalogIdentity,
 	refreshing = false,
 	refreshError,
 	retryAt,
@@ -81,8 +86,13 @@ export function AgentModelCombobox({
 	models: AgentModel[];
 	allowCustom?: boolean;
 	customModelEntry?: AgentModelCatalog["customModelEntry"];
+	selectionMode?: AgentModelCatalog["selectionMode"];
 	agentLabel?: string;
 	onRefresh?: () => void | Promise<void>;
+	onLoadAdditional?: () => Promise<void>;
+	additionalModelsAvailable?: boolean;
+	additionalModelsLoaded?: boolean;
+	catalogIdentity?: string;
 	refreshing?: boolean;
 	refreshError?: string;
 	retryAt?: string | null;
@@ -112,13 +122,24 @@ export function AgentModelCombobox({
 	const explicitModel = isConcreteModelID(value) ? value : "";
 	const entryMode = customModelEntry ?? (allowCustom ? "direct" : "none");
 	const allowDirectCustom = entryMode === "direct";
+	const [additionalOpen, setAdditionalOpen] = useState(false);
+	const [loadingAdditional, setLoadingAdditional] = useState(false);
+	const [additionalFailed, setAdditionalFailed] = useState(false);
+	const additionalGeneration = useRef(0);
+	useLayoutEffect(() => {
+		additionalGeneration.current += 1;
+		setAdditionalOpen(false);
+		setAdditionalFailed(false);
+		setLoadingAdditional(false);
+	}, [catalogIdentity]);
+	useLayoutEffect(() => { if (!additionalModelsLoaded) setAdditionalOpen(false); }, [additionalModelsLoaded]);
 	const concreteModels = useMemo(() => {
-		const catalogModels = models.filter((model) => isConcreteModelID(model.id));
-		if (allowDirectCustom && explicitModel && !catalogModels.some((model) => model.id === explicitModel)) {
+		const catalogModels = models.filter((model) => isConcreteModelID(model.id) && (!model.isAdditional || (additionalOpen && additionalModelsLoaded) || model.id === explicitModel || model.isDefault));
+		if (explicitModel && !catalogModels.some((model) => model.id === explicitModel)) {
 			return [...catalogModels, { id: explicitModel, label: explicitModel }];
 		}
 		return catalogModels;
-	}, [allowDirectCustom, explicitModel, models]);
+	}, [additionalModelsLoaded, additionalOpen, allowDirectCustom, explicitModel, models]);
 	const { selected: effortModel, invalidEffort } = useModelTuning({
 		models: concreteModels,
 		model: explicitModel,
@@ -143,7 +164,7 @@ export function AgentModelCombobox({
 	const defaultModel = concreteModels.find((model) => model.isDefault)?.id || "";
 	const effectiveModel = explicitModel || defaultModel;
 	const selected = searchIndex.byID.get(normalizeSearch(effectiveModel));
-	const showSearch = allowDirectCustom || concreteModels.length >= MODEL_SEARCH_THRESHOLD;
+	const showSearch = (selectionMode === "text" && allowDirectCustom) || modelRows(searchIndex.models).length >= MODEL_SEARCH_THRESHOLD;
 	const hasMultipleProviders = useMemo(
 		() =>
 			new Set(
@@ -159,8 +180,12 @@ export function AgentModelCombobox({
 		return searchModelIndex(searchIndex, normalizedSearch).models;
 	}, [normalizedSearch, searchIndex]);
 
-	const mergeDefaultWithFirstModel = normalizedSearch === "" && showFollowAgentAction && defaultModel !== "" && rankedModels[0]?.id === defaultModel;
-	const visibleModels = rankedModels.slice(mergeDefaultWithFirstModel ? 1 : 0, MAX_VISIBLE_MODELS);
+	const mergeDefaultWithFirstModel = normalizedSearch === "" && showFollowAgentAction && defaultModel !== "" && rankedModels[0]?.id === defaultModel && !rankedModels[0]?.model.familyId;
+	const rankedRows = normalizedSearch ? rankedModels.map((item) => [item]) : modelRows(rankedModels.slice(mergeDefaultWithFirstModel ? 1 : 0));
+	const visibleRows = rankedRows.slice(0, MAX_VISIBLE_MODELS - (mergeDefaultWithFirstModel ? 1 : 0));
+	const selectedRow = !normalizedSearch ? rankedRows.find((row) => row.some((item) => item.id === explicitModel)) : undefined;
+	if (selectedRow && !visibleRows.includes(selectedRow)) visibleRows[visibleRows.length - 1] = selectedRow;
+	const visibleModels = visibleRows.flat();
 	const groups = useMemo(
 		() => compact
 			? [{ key: "all", label: "", kind: "provider" as const, models: visibleModels }]
@@ -216,6 +241,23 @@ export function AgentModelCombobox({
 		void Promise.resolve(onRefresh()).catch(() => setRefreshFailed(true)).finally(() => setRefreshingLocal(false));
 	};
 
+	const loadAdditional = async () => {
+		if (loadingAdditional) return;
+		if (additionalModelsLoaded) { setAdditionalOpen((open) => !open); return; }
+		if (!onLoadAdditional) return;
+		const generation = additionalGeneration.current;
+		setLoadingAdditional(true);
+		setAdditionalFailed(false);
+		try {
+			await onLoadAdditional();
+			if (generation === additionalGeneration.current) setAdditionalOpen(true);
+		} catch {
+			if (generation === additionalGeneration.current) setAdditionalFailed(true);
+		} finally {
+			if (generation === additionalGeneration.current) setLoadingAdditional(false);
+		}
+	};
+
 	return (
 		<DropdownMenu
 			open={menuOpen}
@@ -223,6 +265,7 @@ export function AgentModelCombobox({
 				setMenuOpen(open);
 				if (open) {
 					setSearch("");
+					setAdditionalOpen(false);
 				} else {
 					setRefreshFailed(false);
 					setEffortMenuOpen(false);
@@ -365,8 +408,22 @@ export function AgentModelCombobox({
 							<div key={group.key}>
 								{!compact && groupIndex > 0 && <DropdownMenuSeparator />}
 								{!compact && <DropdownMenuLabel className="normal-case tracking-normal">{group.label}</DropdownMenuLabel>}
-								{group.models.map((item) =>
-									compact ? (
+								{(normalizedSearch ? group.models.map((item) => [item]) : modelRows(group.models)).map((members) => {
+									const item = members[0];
+									if (members.length > 1) return <OptionMenuSub key={item.model.familyId}>
+										<OptionMenuSubTrigger className={cn(modelItemClass(members.some((member) => member.id === effectiveModel)), "text-[length:var(--font-size-base)]")}>
+											<span className="min-w-0 flex-1 truncate">{item.model.familyLabel || item.label}</span>
+											{members.some((member) => member.id === effectiveModel) && <Check className="size-icon-sm shrink-0" aria-hidden="true" />}
+											<ChevronRight className="size-icon-sm shrink-0" aria-hidden="true" />
+										</OptionMenuSubTrigger>
+										<OptionMenuSubContent className={cn(PICKER_MENU_WIDTH, "max-h-select-menu-max! overflow-y-auto!")}>
+											{members.map((member) => <DropdownMenuItem key={member.id} onSelect={(event) => selectCatalogModel(event, member)} className={modelItemClass(member.id === effectiveModel)} aria-current={member.id === effectiveModel ? true : undefined}>
+												<span className="min-w-0 flex-1 whitespace-normal">{member.label}</span>
+												{member.id === effectiveModel && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
+											</DropdownMenuItem>)}
+										</OptionMenuSubContent>
+									</OptionMenuSub>;
+									return compact ? (
 										<DropdownMenuItem
 											key={item.id}
 											onSelect={(event) => selectCatalogModel(event, item)}
@@ -394,11 +451,17 @@ export function AgentModelCombobox({
 												)}
 											</div>
 										</DropdownMenuItem>
-									),
-								)}
+									);
+								})}
 							</div>
 						))}
 
+						{additionalModelsAvailable && onLoadAdditional && (
+							<DropdownMenuItem disabled={loadingAdditional} onSelect={(event) => { event.preventDefault(); void loadAdditional(); }} className={modelItemClass(false)}>
+								{loadingAdditional ? t("settings.models.loadingMore", { defaultValue: "Loading more models…" }) : additionalFailed ? t("settings.models.retryMore", { defaultValue: "Retry more models" }) : additionalOpen && additionalModelsLoaded ? t("settings.models.hideMore", { defaultValue: "Hide additional models" }) : t("settings.models.moreModels", { defaultValue: "More models" })}
+							</DropdownMenuItem>
+						)}
+						{additionalFailed && <p role="alert" className="px-2 py-1.5 text-xs text-warning">{t("settings.models.moreFailed", { defaultValue: "Could not load additional models." })}</p>}
 						{showCustomSearchAction && (
 							<DropdownMenuItem onSelect={() => onCustom(customSearchValue)} className={modelItemClass(false)}>
 								{t("settings.models.useCustom", { model: customSearchValue })}
@@ -480,6 +543,19 @@ export function AgentModelCombobox({
 			</p>}
 		</DropdownMenu>
 	);
+}
+
+function modelRows(models: IndexedModel[]): IndexedModel[][] {
+	const families = new Map<string, IndexedModel[]>();
+	const rows: IndexedModel[][] = [];
+	for (const item of models) {
+		const family = item.model.familyId;
+		if (!family) { rows.push([item]); continue; }
+		const existing = families.get(family);
+		if (existing) existing.push(item);
+		else { const members = [item]; families.set(family, members); rows.push(members); }
+	}
+	return rows;
 }
 
 function normalizeSearch(value: string): string {

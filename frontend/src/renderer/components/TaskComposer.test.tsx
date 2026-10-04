@@ -959,7 +959,7 @@ describe("TaskComposer", () => {
 			catalog: {
 				agent: "codex",
 				selectionMode: "catalog",
-				models: [{ id: "gpt-5", label: "GPT-5", isDefault: true }],
+				models: [{ id: "gpt-5", label: "GPT-5", isDefault: true }, ...Array.from({ length: 7 }, (_, index) => ({ id: `model-${index}`, label: `Model ${index}` }))],
 				customModelEntry: "direct",
 				allowCustom: true,
 			},
@@ -1727,6 +1727,23 @@ describe("TaskComposer", () => {
 		expect(screen.queryByRole("textbox", { name: "Model" })).not.toBeInTheDocument();
 		await userEvent.click(picker);
 		expect(screen.getByText("Configure the model in opencode, then refresh.")).toBeInTheDocument();
+	});
+
+	it("loads additional models through the scoped task catalog", async () => {
+		let expanded = false;
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agentId: "codex", selectionMode: "catalog", models: [{ id: "native", label: "Native" }, ...(expanded ? [{ id: "additional", label: "Additional model", isAdditional: true }] : [])], customModelEntry: "direct", allowCustom: true, additionalModelsAvailable: true, additionalModelsLoaded: expanded, inputFingerprint: "account-a" } }
+			: { data: { status: "ok", project: { agent: "codex", config: {} } } });
+		h.post.mockImplementation(async (path: string) => {
+			if (path.endsWith("/models/expand")) expanded = true;
+			return { data: { models: [{ id: "obsolete-payload", label: "Obsolete payload" }], additionalModelsLoaded: true } };
+		});
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await userEvent.click(await readyModelPicker());
+		await userEvent.click(screen.getByRole("menuitem", { name: "More models" }));
+		expect(await screen.findByRole("menuitem", { name: "Additional model" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Obsolete payload" })).not.toBeInTheDocument();
+		expect(h.post).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/expand", { params: { path: { agent: "codex" }, query: { projectId: "proj-1" } } });
 	});
 
 	it("uses the project worker model as the new task model default", async () => {

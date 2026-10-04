@@ -200,7 +200,7 @@ describe("SwitchAgentDialog", () => {
 			allowCustom: true,
 			customModelEntry: "direct",
 			fetchedAt: "2026-06-10T00:00:00Z",
-			models: [{ id: "gpt-5.4", label: "GPT-5.4", isDefault: true }],
+			models: [{ id: "gpt-5.4", label: "GPT-5.4", isDefault: true }, ...Array.from({ length: 7 }, (_, index) => ({ id: `model-${index}`, label: `Model ${index}` }))],
 			selectionMode: "catalog",
 			source: "test",
 			stale: false,

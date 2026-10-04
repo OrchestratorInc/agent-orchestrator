@@ -16,7 +16,7 @@ export const agentModelsQueryKey = (agentId: string, projectId: string, hostId?:
 async function requestAgentModels(
 	agentId: string,
 	projectId: string,
-	mode: "cached" | "refresh" | "revalidate",
+	mode: "cached" | "refresh" | "revalidate" | "expand",
 	hostId?: string,
 ): Promise<AgentModelCatalog> {
 	const client = hostId ? clientForHost(hostId) : apiClient;
@@ -26,7 +26,9 @@ async function requestAgentModels(
 			? await client.GET("/api/v1/agents/{agent}/models", {
 					params: { path, query: { projectId: projectId || undefined } },
 				})
-			: await client.POST("/api/v1/agents/{agent}/models/refresh", {
+			: mode === "expand"
+				? await client.POST("/api/v1/agents/{agent}/models/expand", { params: { path, query: { projectId: projectId || undefined } } })
+				: await client.POST("/api/v1/agents/{agent}/models/refresh", {
 					params: {
 						path,
 						query: { projectId: projectId || undefined, revalidate: mode === "revalidate" || undefined },
@@ -77,4 +79,9 @@ export async function resetAgentModels(queryClient: QueryClient, agentId: string
 		}),
 		queryClient.resetQueries({ queryKey: ["agent-model-revalidation", hostId ?? "", agentId] }),
 	]);
+}
+
+export async function expandAgentModels(queryClient: QueryClient, agentId: string, projectId: string, hostId?: string) {
+	await requestAgentModels(agentId, projectId, "expand", hostId);
+	await queryClient.invalidateQueries({ queryKey: agentModelsQueryKey(agentId, projectId, hostId), exact: true });
 }
