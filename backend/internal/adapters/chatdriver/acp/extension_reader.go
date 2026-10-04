@@ -60,9 +60,14 @@ func (r *extensionMethodReader) readFrame() ([]byte, error) {
 	if maxFrame <= 0 {
 		maxFrame = maxACPFrameSize
 	}
-	frame := make([]byte, 0, min(maxFrame, r.reader.Size()))
+	return readACPFrame(r.reader, maxFrame)
+}
+
+// readACPFrame reads one newline-delimited JSON-RPC frame of at most maxFrame bytes.
+func readACPFrame(reader *bufio.Reader, maxFrame int) ([]byte, error) {
+	frame := make([]byte, 0, min(maxFrame, reader.Size()))
 	for {
-		fragment, err := r.reader.ReadSlice('\n')
+		fragment, err := reader.ReadSlice('\n')
 		if len(frame)+len(fragment) > maxFrame {
 			return nil, errACPFrameTooLarge
 		}

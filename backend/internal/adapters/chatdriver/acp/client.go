@@ -543,6 +543,7 @@ func (c *conversation) discardPermission(requestID string) {
 }
 
 func (c *conversation) SessionUpdate(_ context.Context, params acpsdk.SessionNotification) error {
+	defer c.updateFlow.release()
 	// Keep replay normalization off the SDK's bounded notification queue.
 	if c.captureReplayUpdate(params) {
 		return nil

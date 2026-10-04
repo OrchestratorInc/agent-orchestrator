@@ -137,6 +137,10 @@ type conversation struct {
 	compactionSummary string
 	compactedTurn     string
 
+	// updateFlow keeps a burst of session/update notifications, such as a
+	// persistent host's reconnect replay, from overflowing the SDK's queue.
+	updateFlow *sessionUpdateFlow
+
 	eventMu      sync.RWMutex
 	events       chan ports.ChatEvent
 	eventsClosed bool
@@ -197,11 +201,13 @@ func newConversation(
 		events:           make(chan ports.ChatEvent, eventBuffer),
 		extensionFor:     extensionFor,
 		extensionMethods: reverseAliases,
+		updateFlow:       newSessionUpdateFlow(maxPendingSessionUpdates),
 	}
 	legacyWire, sdkWriter, sdkReader := newLegacyACPTransport(proc.stdin, proc.stdout)
 	c.legacyWire = legacyWire
 	c.conn = acpsdk.NewClientSideConnection(
-		c, sdkWriter, newExtensionMethodReader(sdkReader, extensionAliases),
+		c, sdkWriter,
+		newSessionUpdateFlowReader(newExtensionMethodReader(sdkReader, extensionAliases), c.updateFlow),
 	)
 	c.conn.SetLogger(log)
 	go c.watchConnection()
@@ -995,6 +1001,13 @@ func (c *conversation) AcknowledgeProviderEvent(ctx context.Context, providerEve
 
 func (c *conversation) watchConnection() {
 	<-c.conn.Done()
+	c.updateFlow.close()
+	// Once the SDK stops reading, a persistent host keeps writing into a socket
+	// nobody drains and blocks every later attach. Detach without consuming
+	// closeOnce, so a later Terminate can still shut the host down.
+	if c.proc != nil && c.proc.terminate != nil && c.proc.stop != nil {
+		_ = c.proc.stop()
+	}
 	c.mu.Lock()
 	detaching := c.detaching
 	c.mu.Unlock()
