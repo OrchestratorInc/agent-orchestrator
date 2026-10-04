@@ -75,6 +75,31 @@ function useMemoryEnabled(): boolean {
 	return useUiStore((state) => state.developerMode);
 }
 
+/*
+ * The selectors live at module scope on purpose. TanStack Query re-runs
+ * `select` whenever its identity changes, and a Map is never structurally
+ * shared, so an inline arrow handed every render a new Map. SessionsTable's
+ * onRows effect depends on it and sets state in its parent, which rendered
+ * the table again: "Maximum update depth exceeded" on the Diagnostics page.
+ */
+function selectSessionReadings(data: SessionMemoryResponse) {
+	return new Map(data.sessions.map((item) => [item.sessionId, item] as const));
+}
+
+function selectSystemReading(data: SessionMemoryResponse) {
+	return data.system;
+}
+
+function selectAppReading(data: SessionMemoryResponse) {
+	return {
+		app: data.app,
+		system: data.system,
+		fetchedAt: data.fetchedAt,
+		// Sessions with a live runtime; one without a process tree is not counted.
+		liveCount: data.sessions.length,
+	};
+}
+
 /** `local` is false on another machine's board: these readings are this
  * machine's, so they must not colour that board's sessions. */
 export function useSessionMemory(projectId?: string, local = true) {
@@ -82,8 +107,7 @@ export function useSessionMemory(projectId?: string, local = true) {
 	return useQuery({
 		enabled,
 		...sessionMemoryQueryOptions(projectId),
-		select: (data: SessionMemoryResponse) =>
-			new Map(data.sessions.map((item) => [item.sessionId, item] as const)),
+		select: selectSessionReadings,
 	});
 }
 
@@ -94,7 +118,7 @@ export function useSystemMemory(projectId?: string) {
 	return useQuery({
 		enabled,
 		...sessionMemoryQueryOptions(projectId),
-		select: (data: SessionMemoryResponse) => data.system,
+		select: selectSystemReading,
 	});
 }
 
@@ -105,13 +129,7 @@ export function useAppMemory(local = true) {
 	return useQuery({
 		enabled,
 		...sessionMemoryQueryOptions(),
-		select: (data: SessionMemoryResponse) => ({
-			app: data.app,
-			system: data.system,
-			fetchedAt: data.fetchedAt,
-			// Sessions with a live runtime; one without a process tree is not counted.
-			liveCount: data.sessions.length,
-		}),
+		select: selectAppReading,
 	});
 }
 
