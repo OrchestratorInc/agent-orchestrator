@@ -705,6 +705,13 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		}
 	}
 
+	// Reconcile legacy demands before replacing the owning generation, while
+	// durable successful turns can still prove recovery for that epoch.
+	if _, err := s.store.ReconcileConversationAuthentication(ctx, conversation.ID, "", "", s.now()); err != nil {
+		_ = cleanupUnpublishedConversation(conv, false)
+		return nil, fmt.Errorf("reconcile conversation authentication: %w", err)
+	}
+
 	// Claim the durable fence before the controller starts consuming events. A
 	// pending provider boundary claims it in ControllerReady's atomic ownership
 	// commit instead, so a failed provider connect or callback cannot split the
@@ -726,6 +733,19 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		} else if err := s.store.ClaimChatControllerGeneration(ctx, cfg.SessionID, generation); err != nil {
 			_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
 			return nil, fmt.Errorf("claim chat controller: %w", err)
+		}
+	}
+	if liveReconnect {
+		// A provider may have accepted a prompt before its ID could be bound.
+		// Its replayed events will be adopted separately; leave bound live work
+		// and queued intake intact while closing the unbound visible spinner.
+		for _, turn := range liveRows.Turns {
+			if turn.State != domain.TurnStateRunning || turn.ProviderTurnID != "" || turn.RolledBackAt != nil {
+				continue
+			}
+			if err := s.store.SettleUnboundRunningTurn(ctx, conversation.ID, cfg.SessionID, turn.ID, s.now()); err != nil {
+				s.log.Error("chat start: settle unbound running turn", "session", cfg.SessionID, "turn", turn.ID, "error", err)
+			}
 		}
 	}
 	providerBoundary := (*domain.ConversationBranch)(nil)
@@ -1048,6 +1068,10 @@ func (s *Service) Send(
 	msg ports.ChatUserMessage,
 ) (domain.ConversationTurn, error) {
 	record, err := s.requireChatSession(ctx, id)
+	if err != nil {
+		return domain.ConversationTurn{}, err
+	}
+	msg.ClientPayloadHash, err = clientPayloadHash(msg)
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}

@@ -30,6 +30,8 @@ import type {
 	CloudCpNotificationEventsResponse,
 	CloudCpNotificationListQuery,
 	CloudCpNotificationListResponse,
+	CloudCpOrgCoderConfigResponse,
+	CloudCpPutOrgCoderConfigRequest,
 	CloudCpProjectDeletedResponse,
 	CloudCpProjectListResponse,
 	CloudCpProjectResponse,
@@ -193,6 +195,16 @@ export interface CloudCpClient {
 	setSessionMergePolicy(orgId: string, sessionId: string, terminateOnPrMerge: boolean, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
 	/** Lists the Coder templates the picker offers (empty when coder is unavailable/unentitled). */
 	listCoderTemplates(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpCoderTemplatesResponse>;
+	/** Reads the org's bring-your-own-Coder connection (non-secret fields only; the API token is never returned). */
+	getOrgCoderConfig(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpOrgCoderConfigResponse>;
+	/** Saves the org's bring-your-own-Coder connection. Omit the token to keep the stored one. */
+	putOrgCoderConfig(
+		orgId: string,
+		body: CloudCpPutOrgCoderConfigRequest,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpOrgCoderConfigResponse>;
+	/** Removes the org's bring-your-own-Coder connection. */
+	deleteOrgCoderConfig(orgId: string, options?: CloudCpRequestOptions): Promise<void>;
 	/** Lists the sessions an orchestrator spawned, with each child's pull requests. */
 	listSessionChildren(
 		orgId: string,
@@ -574,6 +586,12 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("PATCH", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/merge-policy`, { body: { terminateOnPrMerge }, signal: o?.signal }),
 		listCoderTemplates: (orgId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sandbox/coder/templates`, { signal: o?.signal }),
+		getOrgCoderConfig: (orgId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/coder-config`, { signal: o?.signal }),
+		putOrgCoderConfig: (orgId, body, o) =>
+			requestJson("PUT", `/orgs/${seg(orgId)}/coder-config`, { body, signal: o?.signal }),
+		deleteOrgCoderConfig: (orgId, o) =>
+			requestVoid("DELETE", `/orgs/${seg(orgId)}/coder-config`, { signal: o?.signal }),
 		listSessionChildren: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/children`, {
 				query: { limit: query?.limit, cursor: query?.cursor },

@@ -36,15 +36,43 @@ const DEFAULT_WORKOS_CLIENT_ID = "client_01KZ3VRKC374HS91XGRDPT3671";
 const CLIENT_ID =
   import.meta.env.VITE_WORKOS_CLIENT_ID?.trim() ||
   (process.env.VITEST ? "client_test" : DEFAULT_WORKOS_CLIENT_ID);
-// The packaged app receives the WorkOS callback through the ao-app:// deep link.
-// A development build cannot: macOS routes ao-app:// to the installed app, not
-// the unpackaged Electron binary. Dev builds therefore default to a loopback
-// callback server (the standard desktop OAuth pattern) so sign-in works with
-// zero setup; AO_CLOUD_AUTH_REDIRECT overrides either default.
+// A loopback redirect is one we service with a local HTTP server: a dev build's
+// http://127.0.0.1 default, or an explicit 127.0.0.1/localhost override. An
+// HTTPS bounce page is NOT a loopback — it returns to the app via the ao-app://
+// deep link, so no local server is armed for it.
+function isLoopbackRedirect(redirectUri: string): boolean {
+  try {
+    const url = new URL(redirectUri);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      (url.hostname === "127.0.0.1" || url.hostname === "localhost")
+    );
+  } catch {
+    return false;
+  }
+}
+
+// The packaged app returns from WorkOS via an HTTPS bounce page on our own domain
+// (served by the control plane at /app/auth/return), which re-emits the result to
+// the ao-app:// deep link the installed app handles. Routing through that page —
+// rather than setting ao-app:// as the WorkOS redirect_uri directly — matters for
+// two reasons: the browser lands on a real HTTPS page instead of hanging forever
+// on an unloadable custom-scheme navigation (no stuck "loading" tab), and the OS
+// "open Agent Orchestrator?" prompt is attributed to our own domain (aoagents.dev)
+// instead of the opaque WorkOS AuthKit subdomain.
+//
+// A development build can't use the ao-app:// deep link (macOS routes it to the
+// installed app, not the unpackaged Electron binary), so it falls back to a
+// loopback callback server — the standard desktop-OAuth pattern — for zero-setup
+// sign-in. AO_CLOUD_AUTH_REDIRECT overrides either default (e.g. to point a
+// packaged build at a staging bounce page).
+const DEFAULT_PACKAGED_REDIRECT_URI = "https://api.aoagents.dev/app/auth/return";
 const REDIRECT_URI =
   process.env.AO_CLOUD_AUTH_REDIRECT?.trim() ||
-  (app.isPackaged ? "ao-app://callback" : "http://127.0.0.1:3000/callback");
-const useLoopbackRedirect = /^https?:\/\//i.test(REDIRECT_URI);
+  (app.isPackaged
+    ? DEFAULT_PACKAGED_REDIRECT_URI
+    : "http://127.0.0.1:3000/callback");
+const useLoopbackRedirect = isLoopbackRedirect(REDIRECT_URI);
 const AUTH_STORE_FILE = "cloud-auth.bin";
 const LEGACY_SESSION_FILE = "cloud-session.json";
 const PKCE_TTL_MS = 10 * 60 * 1000;
