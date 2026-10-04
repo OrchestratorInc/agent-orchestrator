@@ -6,12 +6,16 @@ import type { AgentSwitch } from "./useAgentSwitches";
 let fallbackToken = 0;
 
 export function useAgentSwitchRouteVisibility(
-	localRouteKey: string,
+	/** Undefined for a surface that shows no agent switch, so it registers no route. */
+	localRouteKey: string | undefined,
 	operation: AgentSwitchVisibilityOperation,
 	coordinator: RendererAgentSwitchVisibility = agentSwitchVisibility,
 	trackWindow = true,
 ): void {
-	useEffect(() => coordinator.registerRoute(localRouteKey, operation), [coordinator, localRouteKey, operation]);
+	useEffect(
+		() => (localRouteKey ? coordinator.registerRoute(localRouteKey, operation) : undefined),
+		[coordinator, localRouteKey, operation],
+	);
 	useEffect(() => {
 		if (!trackWindow) return undefined;
 		const focus = () => coordinator.setFocused(true);

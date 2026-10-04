@@ -84,6 +84,7 @@ export function TurnSettingsBar({
 	harness,
 	showApprovalMode = true,
 	approvalModes,
+	approvalLockedReason,
 	reroute,
 	onChange,
 	onRememberPermissions,
@@ -104,6 +105,12 @@ export function TurnSettingsBar({
 	/** Cloud permissions are fixed for the session, not a per-turn setting. */
 	showApprovalMode?: boolean;
 	approvalModes?: ApprovalMode[];
+	/**
+	 * Set when the daemon fixes this conversation's permissions (a Chat reviewer
+	 * always runs read-only). The control stays visible but disabled, and this
+	 * explains why.
+	 */
+	approvalLockedReason?: string;
 	/**
 	 * The provider answered with a different model than the one chosen. Separate from
 	 * `settings` all the way down: settings are what the user asked for, this is what
@@ -187,7 +194,9 @@ export function TurnSettingsBar({
 			Remember for this project
 		</OptionMenuItem>
 	) : null;
-	const showRightDropdown = Boolean(children || (!planning && ((showApprovalMode && onChange) || modeOption)));
+	const showRightDropdown = Boolean(
+		children || (!planning && ((showApprovalMode && (onChange || approvalLockedReason)) || modeOption)),
+	);
 
 	return (
 		<div role="group" aria-label="Turn settings" className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -240,7 +249,11 @@ export function TurnSettingsBar({
 				{showRightDropdown || children ? (
 					<div className="flex h-7 shrink-0 items-center gap-1">
 						{children}
-						{!planning && modeOption && onChangeConfigOption ? (
+						{approvalLockedReason && showApprovalMode ? (
+							<Picker label="Read-only" title={approvalLockedReason} disabled>
+								{null}
+							</Picker>
+						) : !planning && modeOption && onChangeConfigOption ? (
 							<ConfigOptionPicker
 								option={modeOption}
 								disabled={optionDisabled}

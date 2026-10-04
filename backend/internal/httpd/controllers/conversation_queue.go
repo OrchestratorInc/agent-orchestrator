@@ -6,7 +6,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
@@ -27,9 +26,9 @@ func (c *ConversationsController) cancelQueuedTurn(w http.ResponseWriter, r *htt
 		apispec.NotImplemented(w, r, "POST", cancelQueuedTurnPath)
 		return
 	}
-	err := c.Svc.CancelQueuedTurn(
+	err := c.Svc.CancelQueuedTurnForOwner(
 		r.Context(),
-		domain.SessionID(chi.URLParam(r, "sessionId")),
+		conversationOwner(r),
 		chi.URLParam(r, "turnId"),
 	)
 	if err != nil {
@@ -54,9 +53,9 @@ func (c *ConversationsController) editQueuedTurn(w http.ResponseWriter, r *http.
 			attachmentErr.code, attachmentErr.message, nil)
 		return
 	}
-	err := c.Svc.EditQueuedTurn(
+	err := c.Svc.EditQueuedTurnForOwner(
 		r.Context(),
-		domain.SessionID(chi.URLParam(r, "sessionId")),
+		conversationOwner(r),
 		chi.URLParam(r, "turnId"),
 		chatsvc.QueuedMessageEdit{Text: req.Text, Content: content, ClientMessageID: req.ClientMessageID,
 			RetainedContent: req.RetainedContent, ExpectedRevision: req.ExpectedRevision},
@@ -82,9 +81,9 @@ func (c *ConversationsController) reorderQueuedTurns(w http.ResponseWriter, r *h
 			"CHAT_QUEUE_REORDER_INVALID", "queued turn order is invalid", nil)
 		return
 	}
-	err := c.Svc.ReorderQueuedTurns(
+	err := c.Svc.ReorderQueuedTurnsForOwner(
 		r.Context(),
-		domain.SessionID(chi.URLParam(r, "sessionId")),
+		conversationOwner(r),
 		req.TurnIDs,
 	)
 	if err != nil {

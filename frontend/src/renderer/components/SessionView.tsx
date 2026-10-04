@@ -26,7 +26,6 @@ import {
 	type ConversationWorkState,
 } from "./chat/SessionChatSurface";
 import { CloudSessionChatSurface } from "./chat/CloudSessionChatSurface";
-import { ReviewerChatSurface } from "./chat/ReviewerChatSurface";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { NotificationCenter } from "./NotificationCenter";
 import { ResizeHandle } from "./ResizeHandle";
@@ -2336,7 +2335,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 								/>
 								{reviewerChatId ? (
 									<div className="absolute inset-0">
-										<ReviewerChatSurface hideHeader reviewId={reviewerChatId} />
+										<SessionChatSurface
+											key={reviewerChatId}
+											session={session}
+											reviewId={reviewerChatId}
+											hideHeader
+											daemonReady={daemonStatus.state === "ready"}
+											theme={theme}
+											onOpenFiles={browserOnly ? undefined : handleOpenFiles}
+											onOpenFile={handleOpenFile}
+											onOpenLinkInBrowser={browserView.openLink}
+										/>
 									</div>
 								) : null}
 								</>
@@ -2356,7 +2365,19 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 									reviewerTerminal={reviewerTerminal}
 									reviewerChat={reviewerChat}
 									reviewerChatSelected={Boolean(reviewerChatId)}
-									reviewerChatContent={reviewerChatId ? <ReviewerChatSurface hideHeader reviewId={reviewerChatId} /> : undefined}
+									reviewerChatContent={reviewerChatId && session ? (
+										<SessionChatSurface
+											key={reviewerChatId}
+											session={session}
+											reviewId={reviewerChatId}
+											hideHeader
+											daemonReady={daemonStatus.state === "ready"}
+											theme={theme}
+											onOpenFiles={browserOnly ? undefined : handleOpenFiles}
+											onOpenFile={handleOpenFile}
+											onOpenLinkInBrowser={browserView.openLink}
+										/>
+									) : undefined}
 									session={session}
 									shellTerminals={shellTerminals}
 									terminalTarget={routedTerminalTarget}

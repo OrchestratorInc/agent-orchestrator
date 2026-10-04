@@ -1545,6 +1545,7 @@
 	"terminal.renameHintDoubleClick": "{{workingDir}}（ダブルクリックで名前を変更）",
 	"terminal.renameHintRightClick": "{{workingDir}}（右クリックで名前を変更）",
 	"terminal.reviewer": "レビュアー",
+	"chat.reviewerReadOnly": "レビュアーは常に読み取り専用で実行されるため、権限は変更できません。",
 	"terminal.scrollTabsLeft": "タブを左にスクロール",
 	"terminal.scrollTabsRight": "タブを右にスクロール",
 	"terminal.search": "ターミナル内を検索",

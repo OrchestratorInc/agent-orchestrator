@@ -74,6 +74,8 @@ const configState = vi.hoisted(() => ({
 	options: [] as ChatConfigOption[], loaded: false, error: undefined as string | undefined,
 }));
 
+const workspaceProps = vi.hoisted(() => ({ last: undefined as Record<string, unknown> | undefined }));
+
 const visibilityMocks = vi.hoisted(() => ({
 	presentation: vi.fn(),
 	route: vi.fn(),
@@ -88,11 +90,13 @@ vi.mock("../../lib/api-client", () => ({
 vi.mock("../../hooks/useConversation", () => ({
 	clearConversationProviderCatalogs: clearCatalogsMock,
 	conversationQueryKey: (sessionId: string) => ["conversation", sessionId],
+	conversationKey: (target: { sessionId: string; reviewId?: string }) =>
+		target.reviewId ? `review:${target.reviewId}` : target.sessionId,
 	invalidateConversationProviderCatalogs: invalidateCatalogsMock,
-	useConversation: (sessionId: string) => ({
+	useConversation: (target: string | { sessionId: string }) => ({
 		...conversationState,
 		snapshot: conversationState.snapshot
-			? { ...snapshotFor(sessionId), ...conversationState.snapshot }
+			? { ...snapshotFor(typeof target === "string" ? target : target.sessionId), ...conversationState.snapshot }
 			: undefined,
 	}),
 	useConversationCommands: () => conversationCommandState,
@@ -124,6 +128,7 @@ vi.mock("./ChatWorkspace", async () => {
 			onChooseSettings,
 			snapshot,
 			shellTarget,
+			...rest
 		}: {
 			agentInputDisabled?: boolean;
 			headerActions?: ReactNode;
@@ -134,7 +139,9 @@ vi.mock("./ChatWorkspace", async () => {
 			onChooseSettings?: unknown;
 			snapshot: { sessionId?: string };
 			shellTarget?: { handleId: string };
+			[prop: string]: unknown;
 		}) => {
+			workspaceProps.last = { onRememberPermissions, onChooseSettings, snapshot, ...rest };
 			const [mountedSessionId] = useState(snapshot.sessionId);
 			return (
 				<div>
@@ -1132,5 +1139,58 @@ describe("project remembering waits for provider permissions", () => {
 		// session identity to model that notification through the memo boundary.
 		rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
 		expect(screen.getByTestId("remember-available")).toHaveTextContent("true");
+	});
+});
+
+describe("SessionChatSurface for a Chat reviewer", () => {
+	const reviewerSnapshot = { capabilities: [], harness: "codex", controller: { state: "ready" as const } };
+
+	function renderReviewer(onConversationWorkChange = vi.fn()) {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+		});
+		render(
+			<Wrapper client={queryClient}>
+				<SessionChatSurface
+					session={{ ...session, provider: "claude-code" }}
+					reviewId="review-1"
+					hideHeader
+					onConversationWorkChange={onConversationWorkChange}
+				/>
+			</Wrapper>,
+		);
+		return onConversationWorkChange;
+	}
+
+	it("addresses the reviewer conversation through the same conversation hooks", () => {
+		conversationState.snapshot = reviewerSnapshot;
+		renderReviewer();
+		const target = { sessionId: session.id, reviewId: "review-1" };
+		// The reviewer's own harness owns its catalogs even though the worker runs another agent.
+		for (const hook of [useConversationModels, useConversationSkills]) {
+			expect(hook).toHaveBeenLastCalledWith(target, true);
+		}
+		// Config options follow the advertised capability, as they do for a worker.
+		expect(useConversationConfigOptions).toHaveBeenLastCalledWith(target, false);
+	});
+
+	it("gives the reviewer the worker Chat's model and settings controls, with approvals locked", () => {
+		conversationState.snapshot = reviewerSnapshot;
+		renderReviewer();
+		const props = workspaceProps.last ?? {};
+		expect(screen.getByTestId("turn-settings-available")).toHaveTextContent("true");
+		expect(props.approvalLockedReason).toBeTruthy();
+		expect(props.hideHeader).toBe(true);
+		expect(props.draftOwner).toEqual({ sessionId: "review:review-1", incarnation: "review-1" });
+		// Project permission memory and the worker's own session controls stay with the worker.
+		expect(screen.getByTestId("remember-available")).toHaveTextContent("false");
+		expect(props.session).toBeUndefined();
+	});
+
+	it("keeps reviewer work out of the worker's interface-switch decisions", () => {
+		conversationState.snapshot = { ...reviewerSnapshot, turns: [{ id: "turn-1", state: "running" }] } as never;
+		const onWork = renderReviewer();
+		expect(onWork).not.toHaveBeenCalled();
+		expect(visibilityMocks.route).toHaveBeenLastCalledWith(undefined, "history", undefined, false);
 	});
 });

@@ -109,10 +109,13 @@ const maxTitleRunes = 80
 // not. The controller holds its dispatch lock across the check and the call, so
 // within AO the answer cannot change underneath.
 func (s *Service) Rollback(ctx context.Context, id domain.SessionID, turnID string) (int, error) {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return 0, err
-	}
-	controller, err := s.Controller(id)
+	return s.RollbackForOwner(ctx, domain.SessionConversationOwner(id), turnID)
+}
+
+// RollbackForOwner discards a turn and everything after it in an owner's
+// conversation.
+func (s *Service) RollbackForOwner(ctx context.Context, owner domain.ConversationOwner, turnID string) (int, error) {
+	controller, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return 0, err
 	}
@@ -165,7 +168,18 @@ func (s *Service) EditMessage(
 	turnID string,
 	msg ports.ChatUserMessage,
 ) (EditMessageResult, error) {
-	gate := s.controllerGate(domain.SessionConversationOwner(id))
+	return s.EditMessageForOwner(ctx, domain.SessionConversationOwner(id), turnID, msg)
+}
+
+// EditMessageForOwner branches an owner's conversation before one durable human
+// prompt and sends the edited text on the new branch.
+func (s *Service) EditMessageForOwner(
+	ctx context.Context,
+	owner domain.ConversationOwner,
+	turnID string,
+	msg ports.ChatUserMessage,
+) (EditMessageResult, error) {
+	gate := s.controllerGate(owner)
 	if err := gate.lock(ctx); err != nil {
 		return EditMessageResult{}, err
 	}
@@ -176,7 +190,7 @@ func (s *Service) EditMessage(
 		return EditMessageResult{}, err
 	}
 	if msg.ClientMessageID != "" {
-		conversation, loadErr := s.store.ConversationForSession(ctx, id)
+		conversation, loadErr := s.conversationForOwner(ctx, owner)
 		if loadErr != nil {
 			return EditMessageResult{}, fmt.Errorf("%w: load conversation: %w", ErrEditDeliveryUncertain, loadErr)
 		}
@@ -197,13 +211,13 @@ func (s *Service) EditMessage(
 			return replayEditDelivery(delivery, requestJSON)
 		}
 	}
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return EditMessageResult{}, err
-	}
-	source, err := s.Controller(id)
+	source, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return EditMessageResult{}, err
 	}
+	// The worker session a reviewer shares is still the session every row of
+	// this conversation is handled by.
+	id := source.sessionID
 	if msg.ClientMessageID != "" {
 		delivery, created, reserveErr := s.store.ReserveEditDelivery(
 			ctx, source.conversation.ID, msg.ClientMessageID, requestJSON, s.now())
@@ -319,10 +333,10 @@ func (s *Service) EditMessage(
 					err = prepareErr
 				} else {
 					provider, err = driver.Resume(operationCtx, ports.ChatResumeConfig{
-						SessionID: cfg.SessionID, ProviderConversationID: providerConversationID,
+						SessionID: providerHostID(cfg), ProviderConversationID: providerConversationID,
 						DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
 						Model: cfg.Model, Effort: cfg.Effort,
-						Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
+						Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly, SystemPrompt: cfg.SystemPrompt,
 						ProviderScopeID:       sourceBranch.ProviderScopeID,
 						ProviderIDsScoped:     sourceBranch.ProviderIDsScoped,
 						AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers,
@@ -359,9 +373,9 @@ func (s *Service) EditMessage(
 				err = prepareErr
 			} else {
 				provider, err = driver.Start(operationCtx, ports.ChatStartConfig{
-					SessionID: cfg.SessionID, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
+					SessionID: providerHostID(cfg), DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
 					Env: launchEnv, Model: cfg.Model, Effort: cfg.Effort,
-					Permissions:  cfg.Permissions,
+					Permissions:  cfg.Permissions, ReadOnly: cfg.ReadOnly,
 					SystemPrompt: cfg.SystemPrompt, AdditionalDirectories: cfg.AdditionalDirectories,
 					MCPServers: cfg.MCPServers, ProviderScopeID: providerScopeID, ProviderIDsScoped: true,
 				})
@@ -431,8 +445,8 @@ func (s *Service) EditMessage(
 	conversation := source.conversation
 	conversation.ActiveBranchID = branchID
 	replacement := newController(id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
-	if err := s.store.CreateAndActivateConversationBranch(
-		operationCtx, id, branch, generation, s.now(),
+	if err := s.createAndActivateConversationBranch(
+		operationCtx, source.owner(), id, branch, generation, s.now(),
 	); err != nil {
 		_ = provider.Close()
 		activateErr := fmt.Errorf("activate edited conversation: %w", err)
@@ -456,7 +470,7 @@ func (s *Service) EditMessage(
 	result, sendErr := s.sendEditedMessage(
 		operationCtx, anchor.SourceBranchID, branchID, replacement, msg, false)
 	if result.Turn.ID == "" || errors.Is(sendErr, ErrProviderRefused) {
-		if err := s.store.ActivateConversationBranch(operationCtx, id, source.conversation.ID,
+		if err := s.activateConversationBranch(operationCtx, source.owner(), id, source.conversation.ID,
 			anchor.SourceBranchID, source.ProviderConversationID(), source.generation, s.now()); err != nil {
 			sendErr = errors.Join(sendErr, fmt.Errorf("restore source after rejected edit: %w", err))
 			// The durable head still belongs to the child. Publish its controller
@@ -624,7 +638,7 @@ func (s *Service) sendEditedMessage(
 			sendErr = errors.New("edited message was not dispatched")
 		}
 		if restoreConclusiveFailure {
-			if _, err := s.activateBranchLocked(ctx, controller.sessionID, sourceBranchID); err != nil {
+			if _, err := s.activateBranchLocked(ctx, controller.owner(), sourceBranchID); err != nil {
 				sendErr = errors.Join(sendErr, fmt.Errorf("restore source after undispatched edit: %w", err))
 			}
 		}
@@ -637,7 +651,7 @@ func (s *Service) sendEditedMessage(
 		}
 		var refusal providerRefusal
 		if restoreConclusiveFailure && errors.As(sendErr, &refusal) && refusal.ChatRefusal() {
-			if _, err := s.activateBranchLocked(ctx, controller.sessionID, sourceBranchID); err != nil {
+			if _, err := s.activateBranchLocked(ctx, controller.owner(), sourceBranchID); err != nil {
 				sendErr = errors.Join(sendErr, fmt.Errorf("restore source after refused edit: %w", err))
 			}
 		}
@@ -828,22 +842,25 @@ func (s *Service) persistRejectedEditDelivery(
 // ActivateBranch resumes a durable provider branch in the same worktree and
 // swaps controllers without sending a new prompt.
 func (s *Service) ActivateBranch(ctx context.Context, id domain.SessionID, branchID string) (string, error) {
-	gate := s.controllerGate(domain.SessionConversationOwner(id))
+	return s.ActivateBranchForOwner(ctx, domain.SessionConversationOwner(id), branchID)
+}
+
+// ActivateBranchForOwner switches an owner's conversation to another stored branch.
+func (s *Service) ActivateBranchForOwner(ctx context.Context, owner domain.ConversationOwner, branchID string) (string, error) {
+	gate := s.controllerGate(owner)
 	if err := gate.lock(ctx); err != nil {
 		return "", err
 	}
 	defer gate.unlock()
-	return s.activateBranchLocked(ctx, id, branchID)
+	return s.activateBranchLocked(ctx, owner, branchID)
 }
 
-func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID, branchID string) (string, error) {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return "", err
-	}
-	source, err := s.Controller(id)
+func (s *Service) activateBranchLocked(ctx context.Context, owner domain.ConversationOwner, branchID string) (string, error) {
+	source, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return "", err
 	}
+	id := source.sessionID
 	branch, err := s.store.ConversationBranch(ctx, source.conversation.ID, branchID)
 	if err != nil {
 		return "", err
@@ -900,10 +917,10 @@ func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID,
 		return "", err
 	}
 	provider, err := driver.Resume(operationCtx, ports.ChatResumeConfig{
-		SessionID: cfg.SessionID, ProviderConversationID: branch.ProviderConversationID,
+		SessionID: providerHostID(cfg), ProviderConversationID: branch.ProviderConversationID,
 		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
 		Model: cfg.Model, Effort: cfg.Effort,
-		Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
+		Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly, SystemPrompt: cfg.SystemPrompt,
 		ProviderScopeID:       branch.ProviderScopeID,
 		ProviderIDsScoped:     branch.ProviderIDsScoped,
 		AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers,
@@ -922,7 +939,7 @@ func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID,
 	conversation := source.conversation
 	conversation.ActiveBranchID = branch.ID
 	replacement := newController(id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
-	if err := s.store.ActivateConversationBranch(operationCtx, id, conversation.ID, branch.ID,
+	if err := s.activateConversationBranch(operationCtx, source.owner(), id, conversation.ID, branch.ID,
 		branch.ProviderConversationID, generation, s.now()); err != nil {
 		_ = cleanupUnpublishedConversation(provider, true)
 		activateErr := err
@@ -939,6 +956,38 @@ func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID,
 	}
 	abortSource = false
 	return branch.ID, nil
+}
+
+// activateConversationBranch moves a conversation head together with its owner's
+// controller fence. A reviewer's fence lives on its review, never on the worker
+// session it shares, so a reviewer branch cannot take over the worker controller.
+func (s *Service) activateConversationBranch(
+	ctx context.Context,
+	owner domain.ConversationOwner,
+	session domain.SessionID,
+	conversationID, branchID, providerConversationID, generation string,
+	now time.Time,
+) error {
+	if owner.Kind == domain.ConversationOwnerReview {
+		return s.store.ActivateReviewConversationBranch(ctx, owner.ID, conversationID, branchID, providerConversationID, generation, now)
+	}
+	return s.store.ActivateConversationBranch(ctx, session, conversationID, branchID, providerConversationID, generation, now)
+}
+
+// createAndActivateConversationBranch publishes a new branch under its owner's
+// controller fence, as activateConversationBranch does for an existing one.
+func (s *Service) createAndActivateConversationBranch(
+	ctx context.Context,
+	owner domain.ConversationOwner,
+	session domain.SessionID,
+	branch domain.ConversationBranch,
+	generation string,
+	now time.Time,
+) error {
+	if owner.Kind == domain.ConversationOwnerReview {
+		return s.store.CreateAndActivateReviewConversationBranch(ctx, owner.ID, branch, generation, now)
+	}
+	return s.store.CreateAndActivateConversationBranch(ctx, session, branch, generation, now)
 }
 
 func (s *Service) branchLaunchConfig(
@@ -1005,10 +1054,10 @@ func (s *Service) restoreClosedSourceController(
 		return fmt.Errorf("rotate source browser capability after failed native edit: %w", err)
 	}
 	provider, err := driver.Resume(recoveryCtx, ports.ChatResumeConfig{
-		SessionID: cfg.SessionID, ProviderConversationID: providerConversationID,
+		SessionID: providerHostID(cfg), ProviderConversationID: providerConversationID,
 		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
 		Model: cfg.Model, Effort: cfg.Effort,
-		Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
+		Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly, SystemPrompt: cfg.SystemPrompt,
 		ProviderScopeID:       branch.ProviderScopeID,
 		ProviderIDsScoped:     branch.ProviderIDsScoped,
 		AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers,
@@ -1021,7 +1070,7 @@ func (s *Service) restoreClosedSourceController(
 	conversation.ActiveBranchID = branch.ID
 	replacement := newController(
 		id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
-	if err := s.store.ActivateConversationBranch(recoveryCtx, id, conversation.ID, branch.ID,
+	if err := s.activateConversationBranch(recoveryCtx, source.owner(), id, conversation.ID, branch.ID,
 		providerConversationID, generation, s.now()); err != nil {
 		_ = provider.Close()
 		return fmt.Errorf("reactivate source after failed native edit: %w", err)
@@ -1057,7 +1106,7 @@ func (s *Service) installStartedBranchController(
 	if s.ownerControllers[owner] != source {
 		s.mu.Unlock()
 		_ = replacement.Terminate(ctx)
-		if err := s.store.ActivateConversationBranch(ctx, id, source.conversation.ID,
+		if err := s.activateConversationBranch(ctx, owner, id, source.conversation.ID,
 			sourceBranchID, source.ProviderConversationID(), source.generation, s.now()); err != nil {
 			return fmt.Errorf("restore source branch after controller swap conflict: %w", err)
 		}
@@ -1108,14 +1157,19 @@ func (s *Service) installStartedBranchController(
 // always one the provider confirmed. Writing it optimistically as well would give
 // one fact two authors and no way to tell which lost.
 func (s *Service) SetTitle(ctx context.Context, id domain.SessionID, title string) (string, error) {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
+	return s.SetTitleForOwner(ctx, domain.SessionConversationOwner(id), title)
+}
+
+// SetTitleForOwner names the provider thread behind an owner's conversation.
+func (s *Service) SetTitleForOwner(ctx context.Context, owner domain.ConversationOwner, title string) (string, error) {
+	if _, err := s.requireChatOwner(ctx, owner); err != nil {
 		return "", err
 	}
 	normalized := NormalizeTitle(title)
 	if normalized == "" {
 		return "", ErrTitleRequired
 	}
-	controller, err := s.Controller(id)
+	controller, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return "", err
 	}
@@ -1124,7 +1178,7 @@ func (s *Service) SetTitle(ctx context.Context, id domain.SessionID, title strin
 		return "", ErrRenameUnsupported
 	}
 	if err := renamer.SetTitle(ctx, normalized); err != nil {
-		return "", classify(fmt.Errorf("set title for %s: %w", id, err))
+		return "", classify(fmt.Errorf("set title for %s: %w", owner.ID, err))
 	}
 	return normalized, nil
 }

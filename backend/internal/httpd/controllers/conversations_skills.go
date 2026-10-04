@@ -4,9 +4,6 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -24,8 +21,7 @@ func (c *ConversationsController) skills(w http.ResponseWriter, r *http.Request)
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/conversation/skills")
 		return
 	}
-	session := domain.SessionID(chi.URLParam(r, "sessionId"))
-	skills, err := c.Svc.Skills(r.Context(), session)
+	skills, err := c.Svc.SkillsForOwner(r.Context(), conversationOwner(r))
 	if err != nil {
 		if errors.Is(err, chatsvc.ErrSkillsUnsupported) {
 			envelope.WriteJSON(w, http.StatusOK, ConversationSkillsResponse{

@@ -1545,6 +1545,7 @@
 	"terminal.renameHintDoubleClick": "{{workingDir}} (Doppelklick zum Umbenennen)",
 	"terminal.renameHintRightClick": "{{workingDir}} (Rechtsklick zum Umbenennen)",
 	"terminal.reviewer": "Reviewer",
+	"chat.reviewerReadOnly": "Reviewer laufen immer schreibgeschützt, daher lassen sich ihre Berechtigungen nicht ändern.",
 	"terminal.scrollTabsLeft": "Tabs nach links scrollen",
 	"terminal.scrollTabsRight": "Tabs nach rechts scrollen",
 	"terminal.search": "Terminal durchsuchen",

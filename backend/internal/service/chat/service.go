@@ -27,6 +27,11 @@ var ErrNoController = errors.New("no live chat controller for session")
 // fact later, but callers must route from the persisted mode they read now.
 var ErrNotChatMode = errors.New("session is not in chat mode")
 
+// ErrReviewerReadOnly refuses an approval change for a reviewer. The daemon runs
+// every reviewer read-only whatever the conversation records, so accepting the
+// change would show a permission the agent does not have.
+var ErrReviewerReadOnly = errors.New("reviewers always run read-only")
+
 // SessionReader is the session-fact surface the service needs. It reads the
 // persisted mode rather than trusting the caller, so a client cannot talk its way
 // into the wrong dispatch path.
@@ -1060,6 +1065,63 @@ func (s *Service) requireChatSession(ctx context.Context, id domain.SessionID) (
 	return record, nil
 }
 
+// requireChatOwner is requireChatSession for any conversation owner. A reviewer
+// conversation is addressed by its review, which must still be in Chat mode; the
+// harness returned is the one that owns that conversation, never the worker's.
+func (s *Service) requireChatOwner(ctx context.Context, owner domain.ConversationOwner) (domain.AgentHarness, error) {
+	if owner.Kind != domain.ConversationOwnerReview {
+		record, err := s.requireChatSession(ctx, domain.SessionID(owner.ID))
+		return record.Harness, err
+	}
+	store, ok := s.store.(reviewerConversationStore)
+	if !ok {
+		return "", errors.New("reviewer conversation store is unavailable")
+	}
+	review, found, err := store.GetReviewByID(ctx, owner.ID)
+	if err != nil {
+		return "", fmt.Errorf("read review %s: %w", owner.ID, err)
+	}
+	if !found {
+		return "", ports.ErrSessionNotFound
+	}
+	if review.InterfaceMode != domain.ReviewerInterfaceChat {
+		return "", ErrNotChatMode
+	}
+	return domain.AgentHarness(review.Harness), nil
+}
+
+// controllerForOwner resolves the live controller behind a Chat command after
+// checking that its owner still has a Chat conversation.
+func (s *Service) controllerForOwner(ctx context.Context, owner domain.ConversationOwner) (*Controller, domain.AgentHarness, error) {
+	harness, err := s.requireChatOwner(ctx, owner)
+	if err != nil {
+		return nil, "", err
+	}
+	var controller *Controller
+	if owner.Kind == domain.ConversationOwnerReview {
+		controller, err = s.ControllerForOwner(owner)
+	} else {
+		controller, err = s.Controller(domain.SessionID(owner.ID))
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	return controller, harness, nil
+}
+
+// conversationForOwner reads an owner's durable conversation without requiring a
+// live controller, for recovery paths that only consult receipts.
+func (s *Service) conversationForOwner(ctx context.Context, owner domain.ConversationOwner) (domain.ConversationRecord, error) {
+	if owner.Kind != domain.ConversationOwnerReview {
+		return s.store.ConversationForSession(ctx, domain.SessionID(owner.ID))
+	}
+	store, ok := s.store.(reviewerConversationStore)
+	if !ok {
+		return domain.ConversationRecord{}, errors.New("reviewer conversation store is unavailable")
+	}
+	return store.ConversationForReview(ctx, owner.ID)
+}
+
 // Send delivers a message to a session's agent.
 func (s *Service) Send(
 	ctx context.Context,
@@ -1120,9 +1182,13 @@ func (s *Service) Send(
 	return turn, nil
 }
 
-// SendForOwner sends a user message to an owner-specific chat controller.
+// SendForOwner sends a user message to an owner's Chat controller. A session
+// keeps Send's provisioning queue and report piggyback; a reviewer has neither.
 func (s *Service) SendForOwner(ctx context.Context, owner domain.ConversationOwner, msg ports.ChatUserMessage) (domain.ConversationTurn, error) {
-	controller, err := s.ControllerForOwner(owner)
+	if owner.Kind != domain.ConversationOwnerReview {
+		return s.Send(ctx, domain.SessionID(owner.ID), msg)
+	}
+	controller, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
@@ -1136,19 +1202,12 @@ func (s *Service) Resolve(
 	requestID string,
 	decision ports.ChatDecision,
 ) error {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return err
-	}
-	controller, err := s.Controller(id)
-	if err != nil {
-		return err
-	}
-	return controller.Resolve(ctx, requestID, decision)
+	return s.ResolveForOwner(ctx, domain.SessionConversationOwner(id), requestID, decision)
 }
 
-// ResolveForOwner resolves a pending approval for an owner-specific controller.
+// ResolveForOwner answers a pending approval in an owner's conversation.
 func (s *Service) ResolveForOwner(ctx context.Context, owner domain.ConversationOwner, requestID string, decision ports.ChatDecision) error {
-	controller, err := s.ControllerForOwner(owner)
+	controller, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return err
 	}
@@ -1164,19 +1223,12 @@ func (s *Service) ResolveInput(
 	requestID string,
 	response ports.ChatInputResponse,
 ) error {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return err
-	}
-	controller, err := s.Controller(id)
-	if err != nil {
-		return err
-	}
-	return controller.ResolveInput(ctx, requestID, response)
+	return s.ResolveInputForOwner(ctx, domain.SessionConversationOwner(id), requestID, response)
 }
 
-// ResolveInputForOwner answers structured input for an owner-specific controller.
+// ResolveInputForOwner answers structured input in an owner's conversation.
 func (s *Service) ResolveInputForOwner(ctx context.Context, owner domain.ConversationOwner, requestID string, response ports.ChatInputResponse) error {
-	controller, err := s.ControllerForOwner(owner)
+	controller, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return err
 	}
@@ -1185,19 +1237,12 @@ func (s *Service) ResolveInputForOwner(ctx context.Context, owner domain.Convers
 
 // Interrupt cancels a session's in-flight turn.
 func (s *Service) Interrupt(ctx context.Context, id domain.SessionID) error {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return err
-	}
-	controller, err := s.Controller(id)
-	if err != nil {
-		return err
-	}
-	return controller.Interrupt(ctx)
+	return s.InterruptForOwner(ctx, domain.SessionConversationOwner(id))
 }
 
-// InterruptForOwner cancels the in-flight turn for an owner-specific controller.
+// InterruptForOwner cancels the in-flight turn in an owner's conversation.
 func (s *Service) InterruptForOwner(ctx context.Context, owner domain.ConversationOwner) error {
-	controller, err := s.ControllerForOwner(owner)
+	controller, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return err
 	}
@@ -1622,6 +1667,22 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 	}, nil
 }
 
+// SnapshotForOwner reads an owner's whole durable conversation.
+func (s *Service) SnapshotForOwner(ctx context.Context, owner domain.ConversationOwner) (Snapshot, error) {
+	if owner.Kind == domain.ConversationOwnerReview {
+		return s.SnapshotForReview(ctx, owner.ID)
+	}
+	return s.Snapshot(ctx, domain.SessionID(owner.ID))
+}
+
+// SnapshotPageForOwner reads one bounded timeline page of an owner's conversation.
+func (s *Service) SnapshotPageForOwner(ctx context.Context, owner domain.ConversationOwner, beforeSequence, limit int64) (Snapshot, error) {
+	if owner.Kind == domain.ConversationOwnerReview {
+		return s.SnapshotPageForReview(ctx, owner.ID, beforeSequence, limit)
+	}
+	return s.SnapshotPage(ctx, domain.SessionID(owner.ID), beforeSequence, limit)
+}
+
 // SnapshotPageForReview returns a paginated snapshot of a reviewer-owned chat.
 func (s *Service) SnapshotPageForReview(ctx context.Context, reviewID string, beforeSequence, limit int64) (Snapshot, error) {
 	if s.pageReader == nil {
@@ -1811,10 +1872,12 @@ var ErrConfigOptionsUnsupported = errors.New("chat driver has no session config 
 // Read from the live conversation rather than a table in AO: models are added,
 // renamed, hidden per account and gated by entitlement the provider knows about.
 func (s *Service) Models(ctx context.Context, id domain.SessionID) ([]ports.ChatModel, domain.ConversationSettings, error) {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return nil, domain.ConversationSettings{}, err
-	}
-	controller, err := s.Controller(id)
+	return s.ModelsForOwner(ctx, domain.SessionConversationOwner(id))
+}
+
+// ModelsForOwner lists the models an owner's live conversation can switch to.
+func (s *Service) ModelsForOwner(ctx context.Context, owner domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, error) {
+	controller, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return nil, domain.ConversationSettings{}, err
 	}
@@ -1834,11 +1897,12 @@ func (s *Service) Models(ctx context.Context, id domain.SessionID) ([]ports.Chat
 // the connected conversation so model entitlements and model-dependent choices
 // cannot go stale in an AO table.
 func (s *Service) ConfigOptions(ctx context.Context, id domain.SessionID) ([]ports.ChatConfigOption, error) {
-	record, err := s.requireChatSession(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	controller, err := s.Controller(id)
+	return s.ConfigOptionsForOwner(ctx, domain.SessionConversationOwner(id))
+}
+
+// ConfigOptionsForOwner reports the live provider controls for an owner's conversation.
+func (s *Service) ConfigOptionsForOwner(ctx context.Context, owner domain.ConversationOwner) ([]ports.ChatConfigOption, error) {
+	controller, harness, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -1847,7 +1911,7 @@ func (s *Service) ConfigOptions(ctx context.Context, id domain.SessionID) ([]por
 		return nil, ErrConfigOptionsUnsupported
 	}
 	options, err := configurer.ListConfigOptions(ctx)
-	return permissionConfigOptions(record.Harness, options), err
+	return permissionConfigOptions(harness, options), err
 }
 
 // SetConfigOption applies one provider-advertised value and returns the complete
@@ -1859,13 +1923,24 @@ func (s *Service) SetConfigOption(
 	configID string,
 	value ports.ChatConfigOptionValue,
 ) ([]ports.ChatConfigOption, error) {
-	record, err := s.requireChatSession(ctx, id)
+	return s.SetConfigOptionForOwner(ctx, domain.SessionConversationOwner(id), configID, value)
+}
+
+// SetConfigOptionForOwner applies one provider-advertised value in an owner's
+// conversation and returns the complete post-change catalog.
+func (s *Service) SetConfigOptionForOwner(
+	ctx context.Context,
+	owner domain.ConversationOwner,
+	configID string,
+	value ports.ChatConfigOptionValue,
+) ([]ports.ChatConfigOption, error) {
+	controller, harness, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return nil, err
 	}
-	controller, err := s.Controller(id)
-	if err != nil {
-		return nil, err
+	if owner.Kind == domain.ConversationOwnerReview && configID == "mode" {
+		// "mode" is the provider's permission posture; a reviewer's is fixed.
+		return nil, ErrReviewerReadOnly
 	}
 	configurer, ok := controller.conv.(ports.ChatConfigOptionController)
 	if !ok {
@@ -1878,9 +1953,9 @@ func (s *Service) SetConfigOption(
 	if err != nil {
 		return nil, err
 	}
-	options = permissionConfigOptions(record.Harness, options)
+	options = permissionConfigOptions(harness, options)
 	settings, _ := settingsFromConfigOptions(previous, options)
-	if record.Harness == domain.HarnessClaudeCode {
+	if harness == domain.HarnessClaudeCode {
 		// Provider-owned defaults stay implicit so future Claude defaults still apply.
 		if settings.Model == "default" {
 			settings.Model = ""
@@ -1889,7 +1964,7 @@ func (s *Service) SetConfigOption(
 			settings.ReasoningEffort = ""
 		}
 	}
-	if isOpenCodeHarness(record.Harness) && configID == "mode" {
+	if isOpenCodeHarness(harness) && configID == "mode" {
 		for _, option := range options {
 			if option.ID == "mode" {
 				settings.OpenCodeMode = option.Current.Select
@@ -1903,7 +1978,7 @@ func (s *Service) SetConfigOption(
 		// The config-options route is how provider-owned pickers (e.g. Claude
 		// Code's model menu) change the model; it must persist the pick the same
 		// way the turn-settings route does.
-		s.persistPickedModel(id, previous, settings)
+		s.persistPickedModel(owner, previous, settings)
 	}
 	return options, nil
 }
@@ -1971,10 +2046,12 @@ func settingsFromConfigOptions(
 // ten seconds or so; the settled figures arrive on the timeline as a compaction
 // entry.
 func (s *Service) Compact(ctx context.Context, id domain.SessionID) (ports.ChatCompactionResult, error) {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return ports.ChatCompactionResult{}, err
-	}
-	controller, err := s.Controller(id)
+	return s.CompactForOwner(ctx, domain.SessionConversationOwner(id))
+}
+
+// CompactForOwner asks the provider behind an owner's conversation to compact it.
+func (s *Service) CompactForOwner(ctx context.Context, owner domain.ConversationOwner) (ports.ChatCompactionResult, error) {
+	controller, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return ports.ChatCompactionResult{}, err
 	}
@@ -1996,10 +2073,12 @@ func (s *Service) ReloadMCPServers(
 	ctx context.Context,
 	id domain.SessionID,
 ) ([]domain.ConversationMCPServer, error) {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return nil, err
-	}
-	controller, err := s.Controller(id)
+	return s.ReloadMCPServersForOwner(ctx, domain.SessionConversationOwner(id))
+}
+
+// ReloadMCPServersForOwner restarts the tool servers behind an owner's conversation.
+func (s *Service) ReloadMCPServersForOwner(ctx context.Context, owner domain.ConversationOwner) ([]domain.ConversationMCPServer, error) {
+	controller, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -2014,10 +2093,12 @@ func (s *Service) RetryTurn(
 	id domain.SessionID,
 	turnID string,
 ) (domain.ConversationTurn, error) {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return domain.ConversationTurn{}, err
-	}
-	controller, err := s.Controller(id)
+	return s.RetryTurnForOwner(ctx, domain.SessionConversationOwner(id), turnID)
+}
+
+// RetryTurnForOwner re-dispatches a failed turn in an owner's conversation.
+func (s *Service) RetryTurnForOwner(ctx context.Context, owner domain.ConversationOwner, turnID string) (domain.ConversationTurn, error) {
+	controller, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
@@ -2037,10 +2118,17 @@ func (s *Service) SetTurnSettings(
 	id domain.SessionID,
 	settings domain.ConversationSettings,
 ) (domain.ConversationSettings, error) {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return domain.ConversationSettings{}, err
-	}
-	controller, err := s.Controller(id)
+	return s.SetTurnSettingsForOwner(ctx, domain.SessionConversationOwner(id), settings)
+}
+
+// SetTurnSettingsForOwner records the next-turn provider choices for an owner's
+// conversation.
+func (s *Service) SetTurnSettingsForOwner(
+	ctx context.Context,
+	owner domain.ConversationOwner,
+	settings domain.ConversationSettings,
+) (domain.ConversationSettings, error) {
+	controller, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return domain.ConversationSettings{}, err
 	}
@@ -2049,21 +2137,31 @@ func (s *Service) SetTurnSettings(
 	// The turn-settings endpoint does not own provider session mode choices.
 	previous := controller.Settings()
 	settings.OpenCodeMode = previous.OpenCodeMode
+	if owner.Kind == domain.ConversationOwnerReview && settings.ApprovalMode != previous.ApprovalMode {
+		return domain.ConversationSettings{}, ErrReviewerReadOnly
+	}
 	if err := controller.SetSettings(ctx, settings); err != nil {
 		return domain.ConversationSettings{}, err
 	}
-	s.persistPickedModel(id, previous, settings)
+	s.persistPickedModel(owner, previous, settings)
 	return controller.Settings(), nil
 }
 
 // persistPickedModel keeps session metadata in sync with the Chat model choice,
 // including clearing an override before a later TUI rebuild.
-func (s *Service) persistPickedModel(id domain.SessionID, previous, next domain.ConversationSettings) {
+//
+// Only a session's own conversation owns its model. A reviewer shares the worker's
+// session id, so its pick stays on the reviewer conversation and never rewrites the
+// worker's model.
+func (s *Service) persistPickedModel(owner domain.ConversationOwner, previous, next domain.ConversationSettings) {
+	if owner.Kind == domain.ConversationOwnerReview {
+		return
+	}
 	model := strings.TrimSpace(next.Model)
 	if model == strings.TrimSpace(previous.Model) || s.onModelChanged == nil {
 		return
 	}
-	s.onModelChanged(id, model)
+	s.onModelChanged(domain.SessionID(owner.ID), model)
 }
 
 // RelayChatTurn delivers a message AO is carrying for someone else.

@@ -1568,6 +1568,7 @@
 	"terminal.renameHintDoubleClick": "{{workingDir}} (clique duas vezes para renomear)",
 	"terminal.renameHintRightClick": "{{workingDir}} (clique com o botão direito para renomear)",
 	"terminal.reviewer": "Revisor",
+	"chat.reviewerReadOnly": "Os revisores sempre são executados no modo somente leitura, então suas permissões não podem ser alteradas.",
 	"terminal.scrollTabsLeft": "Rolar abas para a esquerda",
 	"terminal.scrollTabsRight": "Rolar abas para a direita",
 	"terminal.search": "Buscar no terminal",

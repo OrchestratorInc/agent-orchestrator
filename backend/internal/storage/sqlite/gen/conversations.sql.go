@@ -397,11 +397,20 @@ SET provider_work_started = 1
 WHERE conversation_id = ?1
   AND client_message_id = ?2
   AND state = 'reserved' AND provider_work_started = 0
-  AND EXISTS (
-    SELECT 1 FROM conversations c JOIN sessions s ON s.id = c.current_session_id
-    WHERE c.id = conversation_edit_deliveries.conversation_id
-      AND s.controller_generation = ?3
-      AND s.session_mode = 'chat' AND s.is_terminated = 0
+  AND (
+    EXISTS (
+      SELECT 1 FROM conversations c JOIN sessions s ON s.id = c.current_session_id
+      WHERE c.id = conversation_edit_deliveries.conversation_id
+        AND s.controller_generation = ?3
+        AND s.session_mode = 'chat' AND s.is_terminated = 0
+    )
+    -- A reviewer conversation is fenced by its review, not the worker session.
+    OR EXISTS (
+      SELECT 1 FROM conversations c JOIN review r ON r.id = c.current_review_id
+      WHERE c.id = conversation_edit_deliveries.conversation_id
+        AND r.controller_generation = ?3
+        AND r.interface_mode = 'chat'
+    )
   )
 `
 

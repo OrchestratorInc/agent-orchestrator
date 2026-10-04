@@ -26,13 +26,13 @@ type editQueuedStub struct {
 	err     error
 }
 
-func (s *editQueuedStub) EditQueuedTurn(
+func (s *editQueuedStub) EditQueuedTurnForOwner(
 	_ context.Context,
-	session domain.SessionID,
+	session domain.ConversationOwner,
 	turnID string,
 	edit chatsvc.QueuedMessageEdit,
 ) error {
-	s.session, s.turnID, s.text = session, turnID, edit.Text
+	s.session, s.turnID, s.text = domain.SessionID(session.ID), turnID, edit.Text
 	s.edit = edit
 	return s.err
 }
@@ -131,12 +131,12 @@ type cancelQueuedStub struct {
 	err     error
 }
 
-func (s *cancelQueuedStub) CancelQueuedTurn(
+func (s *cancelQueuedStub) CancelQueuedTurnForOwner(
 	_ context.Context,
-	session domain.SessionID,
+	session domain.ConversationOwner,
 	turnID string,
 ) error {
-	s.session, s.turnID = session, turnID
+	s.session, s.turnID = domain.SessionID(session.ID), turnID
 	return s.err
 }
 
@@ -178,12 +178,12 @@ type reorderQueuedStub struct {
 	err     error
 }
 
-func (s *reorderQueuedStub) ReorderQueuedTurns(
+func (s *reorderQueuedStub) ReorderQueuedTurnsForOwner(
 	_ context.Context,
-	session domain.SessionID,
+	session domain.ConversationOwner,
 	turnIDs []string,
 ) error {
-	s.session, s.turnIDs = session, append([]string(nil), turnIDs...)
+	s.session, s.turnIDs = domain.SessionID(session.ID), append([]string(nil), turnIDs...)
 	return s.err
 }
 

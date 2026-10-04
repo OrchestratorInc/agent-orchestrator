@@ -1568,6 +1568,7 @@
 	"terminal.renameHintDoubleClick": "{{workingDir}} (double-clic pour renommer)",
 	"terminal.renameHintRightClick": "{{workingDir}} (clic droit pour renommer)",
 	"terminal.reviewer": "Relecteur",
+	"chat.reviewerReadOnly": "Les relecteurs fonctionnent toujours en lecture seule ; leurs autorisations ne peuvent donc pas être modifiées.",
 	"terminal.scrollTabsLeft": "Faire défiler les onglets vers la gauche",
 	"terminal.scrollTabsRight": "Faire défiler les onglets vers la droite",
 	"terminal.search": "Rechercher dans le terminal",

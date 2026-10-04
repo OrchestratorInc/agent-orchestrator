@@ -1546,6 +1546,7 @@
 	"terminal.renameHintDoubleClick": "{{workingDir}}（双击可重命名）",
 	"terminal.renameHintRightClick": "{{workingDir}}（右键单击可重命名）",
 	"terminal.reviewer": "评审者",
+	"chat.reviewerReadOnly": "评审者始终以只读方式运行，因此无法更改其权限。",
 	"terminal.scrollTabsLeft": "向左滚动标签页",
 	"terminal.scrollTabsRight": "向右滚动标签页",
 	"terminal.search": "搜索终端",

@@ -29,43 +29,37 @@ const (
 	maxConversationBody        = maxConversationImagesBytes*4/3 + (2 << 20)
 )
 
-// ConversationService is the controller-facing Chat contract.
+// ConversationService is the controller-facing Chat contract. Every command is
+// addressed to a conversation owner: a worker session, or a Chat reviewer that
+// shares its worker's session. Both are served by the same handlers.
 type ConversationService interface {
-	Snapshot(ctx context.Context, session domain.SessionID) (chatsvc.Snapshot, error)
-	Send(ctx context.Context, session domain.SessionID, msg ports.ChatUserMessage) (domain.ConversationTurn, error)
-	EditMessage(ctx context.Context, session domain.SessionID, turnID string, msg ports.ChatUserMessage) (chatsvc.EditMessageResult, error)
-	ActivateBranch(ctx context.Context, session domain.SessionID, branchID string) (string, error)
-	Resolve(ctx context.Context, session domain.SessionID, requestID string, decision ports.ChatDecision) error
-	ResolveInput(ctx context.Context, session domain.SessionID, requestID string, response ports.ChatInputResponse) error
-	Interrupt(ctx context.Context, session domain.SessionID) error
-	Steer(ctx context.Context, session domain.SessionID, msg ports.ChatUserMessage) (chatsvc.SteerResult, error)
-	RecoverSteer(ctx context.Context, session domain.SessionID, clientMessageID string) (chatsvc.SteerResult, error)
-	PromoteQueuedTurn(ctx context.Context, session domain.SessionID, turnID string) (chatsvc.PromoteQueuedTurnResult, error)
-	CancelQueuedTurn(ctx context.Context, session domain.SessionID, turnID string) error
-	EditQueuedTurn(ctx context.Context, session domain.SessionID, turnID string, edit chatsvc.QueuedMessageEdit) error
-	ReorderQueuedTurns(ctx context.Context, session domain.SessionID, turnIDs []string) error
-	Models(ctx context.Context, session domain.SessionID) ([]ports.ChatModel, domain.ConversationSettings, error)
-	ConfigOptions(ctx context.Context, session domain.SessionID) ([]ports.ChatConfigOption, error)
-	SetConfigOption(ctx context.Context, session domain.SessionID, configID string, value ports.ChatConfigOptionValue) ([]ports.ChatConfigOption, error)
-	Skills(ctx context.Context, session domain.SessionID) ([]ports.ChatSkill, error)
-	SetTurnSettings(ctx context.Context, session domain.SessionID, settings domain.ConversationSettings) (domain.ConversationSettings, error)
-	Compact(ctx context.Context, session domain.SessionID) (ports.ChatCompactionResult, error)
-	Rollback(ctx context.Context, session domain.SessionID, turnID string) (int, error)
-	RetryTurn(ctx context.Context, session domain.SessionID, turnID string) (domain.ConversationTurn, error)
-	SetTitle(ctx context.Context, session domain.SessionID, title string) (string, error)
-	ReloadMCPServers(ctx context.Context, session domain.SessionID) ([]domain.ConversationMCPServer, error)
-}
-
-type pagedConversationService interface {
-	SnapshotPage(ctx context.Context, session domain.SessionID, beforeSequence, limit int64) (chatsvc.Snapshot, error)
-}
-
-type reviewerConversationService interface {
-	SnapshotPageForReview(ctx context.Context, reviewID string, beforeSequence, limit int64) (chatsvc.Snapshot, error)
+	SnapshotForOwner(ctx context.Context, owner domain.ConversationOwner) (chatsvc.Snapshot, error)
 	SendForOwner(ctx context.Context, owner domain.ConversationOwner, msg ports.ChatUserMessage) (domain.ConversationTurn, error)
+	EditMessageForOwner(ctx context.Context, owner domain.ConversationOwner, turnID string, msg ports.ChatUserMessage) (chatsvc.EditMessageResult, error)
+	ActivateBranchForOwner(ctx context.Context, owner domain.ConversationOwner, branchID string) (string, error)
 	ResolveForOwner(ctx context.Context, owner domain.ConversationOwner, requestID string, decision ports.ChatDecision) error
 	ResolveInputForOwner(ctx context.Context, owner domain.ConversationOwner, requestID string, response ports.ChatInputResponse) error
 	InterruptForOwner(ctx context.Context, owner domain.ConversationOwner) error
+	SteerForOwner(ctx context.Context, owner domain.ConversationOwner, msg ports.ChatUserMessage) (chatsvc.SteerResult, error)
+	RecoverSteerForOwner(ctx context.Context, owner domain.ConversationOwner, clientMessageID string) (chatsvc.SteerResult, error)
+	PromoteQueuedTurnForOwner(ctx context.Context, owner domain.ConversationOwner, turnID string) (chatsvc.PromoteQueuedTurnResult, error)
+	CancelQueuedTurnForOwner(ctx context.Context, owner domain.ConversationOwner, turnID string) error
+	EditQueuedTurnForOwner(ctx context.Context, owner domain.ConversationOwner, turnID string, edit chatsvc.QueuedMessageEdit) error
+	ReorderQueuedTurnsForOwner(ctx context.Context, owner domain.ConversationOwner, turnIDs []string) error
+	ModelsForOwner(ctx context.Context, owner domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, error)
+	ConfigOptionsForOwner(ctx context.Context, owner domain.ConversationOwner) ([]ports.ChatConfigOption, error)
+	SetConfigOptionForOwner(ctx context.Context, owner domain.ConversationOwner, configID string, value ports.ChatConfigOptionValue) ([]ports.ChatConfigOption, error)
+	SkillsForOwner(ctx context.Context, owner domain.ConversationOwner) ([]ports.ChatSkill, error)
+	SetTurnSettingsForOwner(ctx context.Context, owner domain.ConversationOwner, settings domain.ConversationSettings) (domain.ConversationSettings, error)
+	CompactForOwner(ctx context.Context, owner domain.ConversationOwner) (ports.ChatCompactionResult, error)
+	RollbackForOwner(ctx context.Context, owner domain.ConversationOwner, turnID string) (int, error)
+	RetryTurnForOwner(ctx context.Context, owner domain.ConversationOwner, turnID string) (domain.ConversationTurn, error)
+	SetTitleForOwner(ctx context.Context, owner domain.ConversationOwner, title string) (string, error)
+	ReloadMCPServersForOwner(ctx context.Context, owner domain.ConversationOwner) ([]domain.ConversationMCPServer, error)
+}
+
+type pagedConversationService interface {
+	SnapshotPageForOwner(ctx context.Context, owner domain.ConversationOwner, beforeSequence, limit int64) (chatsvc.Snapshot, error)
 }
 
 // ConversationsController owns the Chat routes for a session.
@@ -77,165 +71,43 @@ type ConversationsController struct {
 	Svc ConversationService
 }
 
-// Register mounts the conversation routes under a session.
+// Register mounts the conversation routes under a session and, identically,
+// under a Chat reviewer. A reviewer conversation is the same Chat surface as a
+// worker's, so it gets the same routes and handlers rather than a subset.
 func (c *ConversationsController) Register(r chi.Router) {
-	r.Get("/sessions/{sessionId}/conversation", c.snapshot)
-	r.Post("/sessions/{sessionId}/conversation/messages", c.send)
-	r.Post("/sessions/{sessionId}/conversation/approvals/{requestId}/resolve", c.resolve)
-	r.Post("/sessions/{sessionId}/conversation/inputs/{requestId}/resolve", c.resolveInput)
-	r.Post("/sessions/{sessionId}/conversation/interrupt", c.interrupt)
-	r.Post("/sessions/{sessionId}/conversation/steer", c.steer)
-	r.Post("/sessions/{sessionId}/conversation/steer-or-send", c.steerOrSend)
-	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/steer", c.promoteQueuedTurn)
-	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/cancel", c.cancelQueuedTurn)
-	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/queue/edit", c.editQueuedTurn)
-	r.Post("/sessions/{sessionId}/conversation/queue/reorder", c.reorderQueuedTurns)
-	r.Post("/sessions/{sessionId}/conversation/compact", c.compact)
-	r.Get("/sessions/{sessionId}/conversation/models", c.models)
-	r.Get("/sessions/{sessionId}/conversation/config-options", c.configOptions)
-	r.Patch("/sessions/{sessionId}/conversation/config-options/{configId}", c.setConfigOption)
-	r.Get("/sessions/{sessionId}/conversation/skills", c.skills)
-	r.Patch("/sessions/{sessionId}/conversation/settings", c.setSettings)
-	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/rollback", c.rollback)
-	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/edit", c.editMessage)
-	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/retry", c.retryTurn)
-	r.Post("/sessions/{sessionId}/conversation/branches/{branchId}/activate", c.activateBranch)
-	r.Put("/sessions/{sessionId}/conversation/title", c.setTitle)
-	r.Post("/sessions/{sessionId}/conversation/mcp/reload", c.reloadMCPServers)
-	r.Get("/reviews/{reviewId}/conversation", c.reviewSnapshot)
-	r.Post("/reviews/{reviewId}/conversation/messages", c.reviewSend)
-	r.Post("/reviews/{reviewId}/conversation/approvals/{requestId}/resolve", c.reviewResolve)
-	r.Post("/reviews/{reviewId}/conversation/inputs/{requestId}/resolve", c.reviewResolveInput)
-	r.Post("/reviews/{reviewId}/conversation/interrupt", c.reviewInterrupt)
+	for _, prefix := range []string{"/sessions/{sessionId}/conversation", "/reviews/{reviewId}/conversation"} {
+		r.Get(prefix, c.snapshot)
+		r.Post(prefix+"/messages", c.send)
+		r.Post(prefix+"/approvals/{requestId}/resolve", c.resolve)
+		r.Post(prefix+"/inputs/{requestId}/resolve", c.resolveInput)
+		r.Post(prefix+"/interrupt", c.interrupt)
+		r.Post(prefix+"/steer", c.steer)
+		r.Post(prefix+"/steer-or-send", c.steerOrSend)
+		r.Post(prefix+"/turns/{turnId}/steer", c.promoteQueuedTurn)
+		r.Post(prefix+"/turns/{turnId}/cancel", c.cancelQueuedTurn)
+		r.Post(prefix+"/turns/{turnId}/queue/edit", c.editQueuedTurn)
+		r.Post(prefix+"/queue/reorder", c.reorderQueuedTurns)
+		r.Post(prefix+"/compact", c.compact)
+		r.Get(prefix+"/models", c.models)
+		r.Get(prefix+"/config-options", c.configOptions)
+		r.Patch(prefix+"/config-options/{configId}", c.setConfigOption)
+		r.Get(prefix+"/skills", c.skills)
+		r.Patch(prefix+"/settings", c.setSettings)
+		r.Post(prefix+"/turns/{turnId}/rollback", c.rollback)
+		r.Post(prefix+"/turns/{turnId}/edit", c.editMessage)
+		r.Post(prefix+"/turns/{turnId}/retry", c.retryTurn)
+		r.Post(prefix+"/branches/{branchId}/activate", c.activateBranch)
+		r.Put(prefix+"/title", c.setTitle)
+		r.Post(prefix+"/mcp/reload", c.reloadMCPServers)
+	}
 }
 
-func (c *ConversationsController) reviewService(w http.ResponseWriter, r *http.Request) (reviewerConversationService, bool) {
-	svc, ok := c.Svc.(reviewerConversationService)
-	if !ok {
-		apispec.NotImplemented(w, r, r.Method, r.URL.Path)
+// conversationOwner names the conversation a routed request addresses.
+func conversationOwner(r *http.Request) domain.ConversationOwner {
+	if reviewID := chi.URLParam(r, "reviewId"); reviewID != "" {
+		return domain.ReviewConversationOwner(reviewID)
 	}
-	return svc, ok
-}
-
-func (c *ConversationsController) reviewSnapshot(w http.ResponseWriter, r *http.Request) {
-	svc, ok := c.reviewService(w, r)
-	if !ok {
-		return
-	}
-	before, err := optionalPositiveInt64(r.URL.Query().Get("beforeSequence"))
-	if err != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CONVERSATION_CURSOR_INVALID", err.Error(), nil)
-		return
-	}
-	limit := int64(200)
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		limit, err = strconv.ParseInt(raw, 10, 64)
-		if err != nil || limit < 1 || limit > 500 {
-			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CONVERSATION_LIMIT_INVALID", "limit must be between 1 and 500", nil)
-			return
-		}
-	}
-	snapshot, err := svc.SnapshotPageForReview(r.Context(), chi.URLParam(r, "reviewId"), before, limit)
-	if err != nil {
-		writeConversationError(w, r, err)
-		return
-	}
-	envelope.WriteJSON(w, http.StatusOK, conversationSnapshotResponse(snapshot))
-}
-
-func (c *ConversationsController) reviewSend(w http.ResponseWriter, r *http.Request) {
-	svc, ok := c.reviewService(w, r)
-	if !ok {
-		return
-	}
-	var req SendConversationMessageRequest
-	if !decodeConversationBody(w, r, &req) {
-		return
-	}
-	if req.Text == "" && len(req.Attachments) == 0 && len(req.Resources) == 0 {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_MESSAGE_EMPTY", "message text is required", nil)
-		return
-	}
-	content, attachmentErr := conversationContent(req)
-	if attachmentErr != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", attachmentErr.code, attachmentErr.message, nil)
-		return
-	}
-	text := req.Text
-	if text == "" {
-		text = fmt.Sprintf("Attached %d item(s) for context", len(content))
-	}
-	turn, err := svc.SendForOwner(r.Context(), domain.ReviewConversationOwner(chi.URLParam(r, "reviewId")), ports.ChatUserMessage{Text: text, Content: content, ClientMessageID: req.ClientMessageID, Origin: domain.MessageOriginHuman})
-	if err != nil {
-		writeConversationError(w, r, err)
-		return
-	}
-	envelope.WriteJSON(w, http.StatusAccepted, SendConversationMessageResponse{TurnID: turn.ID, ProviderTurnID: turn.ProviderTurnID, State: turn.State, Duplicate: turn.ID == ""})
-}
-
-func (c *ConversationsController) reviewResolve(w http.ResponseWriter, r *http.Request) {
-	svc, ok := c.reviewService(w, r)
-	if !ok {
-		return
-	}
-	var req ResolveConversationApprovalRequest
-	if !decodeConversationBody(w, r, &req) {
-		return
-	}
-	if req.DecisionID == "" {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_DECISION_REQUIRED", "decisionId is required", nil)
-		return
-	}
-	requestID, ok := conversationRequestID(w, r)
-	if !ok {
-		return
-	}
-	if err := svc.ResolveForOwner(r.Context(), domain.ReviewConversationOwner(chi.URLParam(r, "reviewId")), requestID, ports.ChatDecision{ID: req.DecisionID}); err != nil {
-		writeConversationError(w, r, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (c *ConversationsController) reviewResolveInput(w http.ResponseWriter, r *http.Request) {
-	svc, ok := c.reviewService(w, r)
-	if !ok {
-		return
-	}
-	var req ResolveConversationInputRequest
-	if !decodeConversationBody(w, r, &req) {
-		return
-	}
-	action := ports.ChatInputAction(req.Action)
-	if !action.Valid() {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_INPUT_ACTION_INVALID", "action must be accept, decline, or cancel", nil)
-		return
-	}
-	if action != ports.ChatInputActionAccept && len(req.Content) > 0 {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_INPUT_CONTENT_INVALID", "content is only allowed with accept", nil)
-		return
-	}
-	requestID, ok := conversationRequestID(w, r)
-	if !ok {
-		return
-	}
-	if err := svc.ResolveInputForOwner(r.Context(), domain.ReviewConversationOwner(chi.URLParam(r, "reviewId")), requestID, ports.ChatInputResponse{Action: action, Content: req.Content}); err != nil {
-		writeConversationError(w, r, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (c *ConversationsController) reviewInterrupt(w http.ResponseWriter, r *http.Request) {
-	svc, ok := c.reviewService(w, r)
-	if !ok {
-		return
-	}
-	if err := svc.InterruptForOwner(r.Context(), domain.ReviewConversationOwner(chi.URLParam(r, "reviewId"))); err != nil {
-		writeConversationError(w, r, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	return domain.SessionConversationOwner(domain.SessionID(chi.URLParam(r, "sessionId")))
 }
 
 func (c *ConversationsController) editMessage(w http.ResponseWriter, r *http.Request) {
@@ -253,7 +125,7 @@ func (c *ConversationsController) editMessage(w http.ResponseWriter, r *http.Req
 			"CHAT_EDIT_TURN_INVALID", "edited message text is required", nil)
 		return
 	}
-	result, err := c.Svc.EditMessage(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")),
+	result, err := c.Svc.EditMessageForOwner(r.Context(), conversationOwner(r),
 		chi.URLParam(r, "turnId"), ports.ChatUserMessage{
 			Text: req.Text, ClientMessageID: req.ClientMessageID, Origin: domain.MessageOriginHuman,
 		})
@@ -279,8 +151,8 @@ func (c *ConversationsController) retryTurn(w http.ResponseWriter, r *http.Reque
 			"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/retry")
 		return
 	}
-	turn, err := c.Svc.RetryTurn(r.Context(),
-		domain.SessionID(chi.URLParam(r, "sessionId")), chi.URLParam(r, "turnId"))
+	turn, err := c.Svc.RetryTurnForOwner(r.Context(),
+		conversationOwner(r), chi.URLParam(r, "turnId"))
 	if err != nil {
 		writeConversationRetryError(w, r, err)
 		return
@@ -336,7 +208,7 @@ func (c *ConversationsController) activateBranch(w http.ResponseWriter, r *http.
 			"CHAT_BRANCH_INVALID", "conversation branch identifier is invalid", nil)
 		return
 	}
-	active, err := c.Svc.ActivateBranch(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")),
+	active, err := c.Svc.ActivateBranchForOwner(r.Context(), conversationOwner(r),
 		branchID)
 	if errors.Is(err, domain.ErrNoConversationBranch) {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found",
@@ -400,7 +272,7 @@ func (c *ConversationsController) configOptions(w http.ResponseWriter, r *http.R
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/conversation/config-options")
 		return
 	}
-	options, err := c.Svc.ConfigOptions(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")))
+	options, err := c.Svc.ConfigOptionsForOwner(r.Context(), conversationOwner(r))
 	if err != nil {
 		if errors.Is(err, chatsvc.ErrConfigOptionsUnsupported) {
 			envelope.WriteJSON(w, http.StatusOK, ConversationConfigOptionsResponse{
@@ -432,9 +304,9 @@ func (c *ConversationsController) setConfigOption(w http.ResponseWriter, r *http
 			"provide exactly one of value or enabled", nil)
 		return
 	}
-	options, err := c.Svc.SetConfigOption(
+	options, err := c.Svc.SetConfigOptionForOwner(
 		r.Context(),
-		domain.SessionID(chi.URLParam(r, "sessionId")),
+		conversationOwner(r),
 		chi.URLParam(r, "configId"),
 		ports.ChatConfigOptionValue{Select: req.Value, Boolean: req.Enabled},
 	)
@@ -456,8 +328,7 @@ func (c *ConversationsController) reloadMCPServers(w http.ResponseWriter, r *htt
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/conversation/mcp/reload")
 		return
 	}
-	session := domain.SessionID(chi.URLParam(r, "sessionId"))
-	servers, err := c.Svc.ReloadMCPServers(r.Context(), session)
+	servers, err := c.Svc.ReloadMCPServersForOwner(r.Context(), conversationOwner(r))
 	if errors.Is(err, chatsvc.ErrTurnRunning) {
 		// Answered here rather than in writeConversationError, whose CHAT_TURN_RUNNING
 		// message names rolling back. Same code and same retryable meaning; a reader
@@ -484,8 +355,8 @@ func (c *ConversationsController) rollback(w http.ResponseWriter, r *http.Reques
 			"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback")
 		return
 	}
-	discarded, err := c.Svc.Rollback(r.Context(),
-		domain.SessionID(chi.URLParam(r, "sessionId")), chi.URLParam(r, "turnId"))
+	discarded, err := c.Svc.RollbackForOwner(r.Context(),
+		conversationOwner(r), chi.URLParam(r, "turnId"))
 	if err != nil {
 		writeConversationError(w, r, err)
 		return
@@ -507,8 +378,8 @@ func (c *ConversationsController) setTitle(w http.ResponseWriter, r *http.Reques
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
-	title, err := c.Svc.SetTitle(r.Context(),
-		domain.SessionID(chi.URLParam(r, "sessionId")), req.Title)
+	title, err := c.Svc.SetTitleForOwner(r.Context(),
+		conversationOwner(r), req.Title)
 	if err != nil {
 		writeConversationError(w, r, err)
 		return
@@ -526,7 +397,7 @@ func (c *ConversationsController) compact(w http.ResponseWriter, r *http.Request
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/conversation/compact")
 		return
 	}
-	result, err := c.Svc.Compact(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")))
+	result, err := c.Svc.CompactForOwner(r.Context(), conversationOwner(r))
 	if err != nil {
 		writeConversationError(w, r, err)
 		return
@@ -543,8 +414,7 @@ func (c *ConversationsController) models(w http.ResponseWriter, r *http.Request)
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/conversation/models")
 		return
 	}
-	session := domain.SessionID(chi.URLParam(r, "sessionId"))
-	models, selected, err := c.Svc.Models(r.Context(), session)
+	models, selected, err := c.Svc.ModelsForOwner(r.Context(), conversationOwner(r))
 	if err != nil {
 		if errors.Is(err, chatsvc.ErrModelsUnsupported) {
 			// Not a failure: this agent simply offers no choice. An empty list with
@@ -583,8 +453,8 @@ func (c *ConversationsController) setSettings(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	settings, err := c.Svc.SetTurnSettings(r.Context(),
-		domain.SessionID(chi.URLParam(r, "sessionId")), domain.ConversationSettings{
+	settings, err := c.Svc.SetTurnSettingsForOwner(r.Context(),
+		conversationOwner(r), domain.ConversationSettings{
 			Model:           req.Model,
 			ReasoningEffort: req.ReasoningEffort,
 			ApprovalMode:    approval,
@@ -660,7 +530,7 @@ func (c *ConversationsController) snapshot(w http.ResponseWriter, r *http.Reques
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/conversation")
 		return
 	}
-	session := domain.SessionID(chi.URLParam(r, "sessionId"))
+	owner := conversationOwner(r)
 	before, err := optionalPositiveInt64(r.URL.Query().Get("beforeSequence"))
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CONVERSATION_CURSOR_INVALID", err.Error(), nil)
@@ -676,9 +546,9 @@ func (c *ConversationsController) snapshot(w http.ResponseWriter, r *http.Reques
 	}
 	var snapshot chatsvc.Snapshot
 	if paged, ok := c.Svc.(pagedConversationService); ok {
-		snapshot, err = paged.SnapshotPage(r.Context(), session, before, limit)
+		snapshot, err = paged.SnapshotPageForOwner(r.Context(), owner, before, limit)
 	} else {
-		snapshot, err = c.Svc.Snapshot(r.Context(), session)
+		snapshot, err = c.Svc.SnapshotForOwner(r.Context(), owner)
 	}
 	if err != nil {
 		writeConversationError(w, r, err)
@@ -725,7 +595,7 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 	if text == "" {
 		text = fmt.Sprintf("Attached %d item(s) for context", len(content))
 	}
-	turn, err := c.Svc.Send(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), ports.ChatUserMessage{
+	turn, err := c.Svc.SendForOwner(r.Context(), conversationOwner(r), ports.ChatUserMessage{
 		Text:            text,
 		Content:         content,
 		ClientMessageID: req.ClientMessageID,
@@ -805,7 +675,7 @@ func (c *ConversationsController) resolve(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	err := c.Svc.Resolve(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")),
+	err := c.Svc.ResolveForOwner(r.Context(), conversationOwner(r),
 		requestID, ports.ChatDecision{ID: req.DecisionID})
 	if err != nil {
 		writeConversationError(w, r, err)
@@ -839,8 +709,8 @@ func (c *ConversationsController) resolveInput(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return
 	}
-	if err := c.Svc.ResolveInput(
-		r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")),
+	if err := c.Svc.ResolveInputForOwner(
+		r.Context(), conversationOwner(r),
 		requestID,
 		ports.ChatInputResponse{Action: action, Content: req.Content},
 	); err != nil {
@@ -855,7 +725,7 @@ func (c *ConversationsController) interrupt(w http.ResponseWriter, r *http.Reque
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/conversation/interrupt")
 		return
 	}
-	err := c.Svc.Interrupt(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")))
+	err := c.Svc.InterruptForOwner(r.Context(), conversationOwner(r))
 	if err != nil {
 		writeConversationError(w, r, err)
 		return
@@ -973,6 +843,12 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, chatsvc.ErrMCPReloadUnsupported):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_MCP_RELOAD_UNSUPPORTED", "this agent cannot reload its tool servers", nil)
+
+	case errors.Is(err, chatsvc.ErrReviewerReadOnly):
+		// Permanent: the daemon runs every reviewer read-only, so the client should
+		// not offer the change rather than retry it.
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_REVIEWER_READ_ONLY", "reviewers always run read-only", nil)
 
 	case errors.Is(err, chatsvc.ErrTitleRequired):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",

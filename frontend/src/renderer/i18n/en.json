@@ -1702,6 +1702,7 @@
 	"terminal.renameHintDoubleClick": "{{workingDir}} (double-click to rename)",
 	"terminal.renameHintRightClick": "{{workingDir}} (right-click to rename)",
 	"terminal.reviewer": "Reviewer",
+	"chat.reviewerReadOnly": "Reviewers always run read-only, so their permissions can't be changed.",
 	"terminal.scrollTabsLeft": "Scroll tabs left",
 	"terminal.scrollTabsRight": "Scroll tabs right",
 	"terminal.search": "Search terminal",

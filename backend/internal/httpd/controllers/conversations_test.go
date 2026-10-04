@@ -59,106 +59,109 @@ type fakeConversationService struct {
 	reviewInterrupted bool
 }
 
-func (f *fakeConversationService) EditMessage(context.Context, domain.SessionID, string, ports.ChatUserMessage) (chatsvc.EditMessageResult, error) {
+func (f *fakeConversationService) EditMessageForOwner(context.Context, domain.ConversationOwner, string, ports.ChatUserMessage) (chatsvc.EditMessageResult, error) {
 	return chatsvc.EditMessageResult{}, nil
 }
 
-func (f *fakeConversationService) ActivateBranch(context.Context, domain.SessionID, string) (string, error) {
+func (f *fakeConversationService) ActivateBranchForOwner(context.Context, domain.ConversationOwner, string) (string, error) {
 	return "", nil
 }
 
-func (f *fakeConversationService) Snapshot(context.Context, domain.SessionID) (chatsvc.Snapshot, error) {
+func (f *fakeConversationService) SnapshotForOwner(context.Context, domain.ConversationOwner) (chatsvc.Snapshot, error) {
 	return f.snapshot, nil
 }
 
-func (f *fakeConversationService) Send(_ context.Context, _ domain.SessionID, message ports.ChatUserMessage) (domain.ConversationTurn, error) {
-	f.sent = message
-	return domain.ConversationTurn{ID: "turn-1", State: domain.TurnStateRunning}, nil
-}
-
-func (f *fakeConversationService) Resolve(_ context.Context, _ domain.SessionID, requestID string, decision ports.ChatDecision) error {
-	f.approvalRequestID = requestID
-	f.approvalDecision = decision
-	return nil
-}
-
-func (f *fakeConversationService) ResolveInput(_ context.Context, _ domain.SessionID, requestID string, response ports.ChatInputResponse) error {
-	f.inputRequestID = requestID
-	f.inputResponse = response
-	return nil
-}
-
-func (f *fakeConversationService) Interrupt(context.Context, domain.SessionID) error { return nil }
-
-func (f *fakeConversationService) SnapshotPageForReview(_ context.Context, reviewID string, before, limit int64) (chatsvc.Snapshot, error) {
-	f.reviewID, f.reviewBefore, f.reviewLimit = reviewID, before, limit
+// SnapshotPageForOwner records the reviewer page request so reviewer route tests
+// can see the cursor; a session owner reads the plain snapshot.
+func (f *fakeConversationService) SnapshotPageForOwner(_ context.Context, owner domain.ConversationOwner, before, limit int64) (chatsvc.Snapshot, error) {
+	if owner.Kind != domain.ConversationOwnerReview {
+		return f.snapshot, nil
+	}
+	f.reviewID, f.reviewBefore, f.reviewLimit = owner.ID, before, limit
 	return f.reviewSnapshot, f.reviewErr
 }
 
 func (f *fakeConversationService) SendForOwner(_ context.Context, owner domain.ConversationOwner, message ports.ChatUserMessage) (domain.ConversationTurn, error) {
-	f.reviewOwner, f.sent = owner, message
-	return domain.ConversationTurn{ID: "review-turn", State: domain.TurnStateRunning}, f.reviewErr
+	f.sent = message
+	if owner.Kind == domain.ConversationOwnerReview {
+		f.reviewOwner = owner
+		return domain.ConversationTurn{ID: "review-turn", State: domain.TurnStateRunning}, f.reviewErr
+	}
+	return domain.ConversationTurn{ID: "turn-1", State: domain.TurnStateRunning}, nil
 }
 
 func (f *fakeConversationService) ResolveForOwner(_ context.Context, owner domain.ConversationOwner, requestID string, decision ports.ChatDecision) error {
-	f.reviewOwner, f.reviewRequestID, f.approvalDecision = owner, requestID, decision
-	return f.reviewErr
+	f.approvalDecision = decision
+	if owner.Kind == domain.ConversationOwnerReview {
+		f.reviewOwner, f.reviewRequestID = owner, requestID
+		return f.reviewErr
+	}
+	f.approvalRequestID = requestID
+	return nil
 }
 
 func (f *fakeConversationService) ResolveInputForOwner(_ context.Context, owner domain.ConversationOwner, requestID string, response ports.ChatInputResponse) error {
-	f.reviewOwner, f.reviewRequestID, f.inputResponse = owner, requestID, response
-	return f.reviewErr
+	f.inputResponse = response
+	if owner.Kind == domain.ConversationOwnerReview {
+		f.reviewOwner, f.reviewRequestID = owner, requestID
+		return f.reviewErr
+	}
+	f.inputRequestID = requestID
+	return nil
 }
 
 func (f *fakeConversationService) InterruptForOwner(_ context.Context, owner domain.ConversationOwner) error {
-	f.reviewOwner, f.reviewInterrupted = owner, true
-	return f.reviewErr
+	if owner.Kind == domain.ConversationOwnerReview {
+		f.reviewOwner, f.reviewInterrupted = owner, true
+		return f.reviewErr
+	}
+	return nil
 }
 
-func (f *fakeConversationService) Models(context.Context, domain.SessionID) ([]ports.ChatModel, domain.ConversationSettings, error) {
+func (f *fakeConversationService) ModelsForOwner(context.Context, domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, error) {
 	return nil, domain.ConversationSettings{}, nil
 }
 
-func (f *fakeConversationService) ConfigOptions(context.Context, domain.SessionID) ([]ports.ChatConfigOption, error) {
+func (f *fakeConversationService) ConfigOptionsForOwner(context.Context, domain.ConversationOwner) ([]ports.ChatConfigOption, error) {
 	return f.configOptions, f.configErr
 }
 
-func (f *fakeConversationService) SetConfigOption(_ context.Context, _ domain.SessionID, id string, value ports.ChatConfigOptionValue) ([]ports.ChatConfigOption, error) {
+func (f *fakeConversationService) SetConfigOptionForOwner(_ context.Context, _ domain.ConversationOwner, id string, value ports.ChatConfigOptionValue) ([]ports.ChatConfigOption, error) {
 	f.setConfigID = id
 	f.setConfigValue = value
 	return f.configOptions, f.configErr
 }
 
-func (f *fakeConversationService) SetTurnSettings(context.Context, domain.SessionID, domain.ConversationSettings) (domain.ConversationSettings, error) {
+func (f *fakeConversationService) SetTurnSettingsForOwner(context.Context, domain.ConversationOwner, domain.ConversationSettings) (domain.ConversationSettings, error) {
 	return domain.ConversationSettings{}, nil
 }
 
-func (f *fakeConversationService) Compact(context.Context, domain.SessionID) (ports.ChatCompactionResult, error) {
+func (f *fakeConversationService) CompactForOwner(context.Context, domain.ConversationOwner) (ports.ChatCompactionResult, error) {
 	return ports.ChatCompactionResult{}, nil
 }
 
 // History operations belong to a sibling slice; stubbed so this fake satisfies the
 // controller's interface without pretending to implement them.
-func (f *fakeConversationService) Rollback(context.Context, domain.SessionID, string) (int, error) {
+func (f *fakeConversationService) RollbackForOwner(context.Context, domain.ConversationOwner, string) (int, error) {
 	return 0, nil
 }
 
-func (f *fakeConversationService) RetryTurn(context.Context, domain.SessionID, string) (domain.ConversationTurn, error) {
+func (f *fakeConversationService) RetryTurnForOwner(context.Context, domain.ConversationOwner, string) (domain.ConversationTurn, error) {
 	return domain.ConversationTurn{}, nil
 }
 
-func (f *fakeConversationService) SetTitle(context.Context, domain.SessionID, string) (string, error) {
+func (f *fakeConversationService) SetTitleForOwner(context.Context, domain.ConversationOwner, string) (string, error) {
 	return "", nil
 }
 
-func (f *fakeConversationService) ReloadMCPServers(
+func (f *fakeConversationService) ReloadMCPServersForOwner(
 	context.Context,
-	domain.SessionID,
+	domain.ConversationOwner,
 ) ([]domain.ConversationMCPServer, error) {
 	return f.mcpServers, f.reloadErr
 }
 
-func (f *fakeConversationService) Skills(context.Context, domain.SessionID) ([]ports.ChatSkill, error) {
+func (f *fakeConversationService) SkillsForOwner(context.Context, domain.ConversationOwner) ([]ports.ChatSkill, error) {
 	return f.skills, f.skillErr
 }
 

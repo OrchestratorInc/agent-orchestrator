@@ -30,67 +30,67 @@ import (
 // this package construct directly, so adding the route did not have to reach into
 // their files. Both default to a plain acceptance; the scenarios below state their
 // own outcome.
-func (f *fakeConversationService) Steer(
+func (f *fakeConversationService) SteerForOwner(
 	context.Context,
-	domain.SessionID,
+	domain.ConversationOwner,
 	ports.ChatUserMessage,
 ) (chatsvc.SteerResult, error) {
 	return chatsvc.SteerResult{}, nil
 }
 
-func (f *fakeChatService) Steer(
+func (f *fakeChatService) SteerForOwner(
 	context.Context,
-	domain.SessionID,
+	domain.ConversationOwner,
 	ports.ChatUserMessage,
 ) (chatsvc.SteerResult, error) {
 	return chatsvc.SteerResult{}, nil
 }
 
-func (f *fakeConversationService) RecoverSteer(context.Context, domain.SessionID, string) (chatsvc.SteerResult, error) {
+func (f *fakeConversationService) RecoverSteerForOwner(context.Context, domain.ConversationOwner, string) (chatsvc.SteerResult, error) {
 	return chatsvc.SteerResult{}, nil
 }
 
-func (f *fakeChatService) RecoverSteer(context.Context, domain.SessionID, string) (chatsvc.SteerResult, error) {
+func (f *fakeChatService) RecoverSteerForOwner(context.Context, domain.ConversationOwner, string) (chatsvc.SteerResult, error) {
 	return chatsvc.SteerResult{}, nil
 }
 
-func (f *fakeConversationService) PromoteQueuedTurn(
+func (f *fakeConversationService) PromoteQueuedTurnForOwner(
 	context.Context,
-	domain.SessionID,
+	domain.ConversationOwner,
 	string,
 ) (chatsvc.PromoteQueuedTurnResult, error) {
 	return chatsvc.PromoteQueuedTurnResult{}, nil
 }
 
-func (f *fakeConversationService) CancelQueuedTurn(context.Context, domain.SessionID, string) error {
+func (f *fakeConversationService) CancelQueuedTurnForOwner(context.Context, domain.ConversationOwner, string) error {
 	return nil
 }
 
-func (f *fakeConversationService) EditQueuedTurn(context.Context, domain.SessionID, string, chatsvc.QueuedMessageEdit) error {
+func (f *fakeConversationService) EditQueuedTurnForOwner(context.Context, domain.ConversationOwner, string, chatsvc.QueuedMessageEdit) error {
 	return nil
 }
 
-func (f *fakeConversationService) ReorderQueuedTurns(context.Context, domain.SessionID, []string) error {
+func (f *fakeConversationService) ReorderQueuedTurnsForOwner(context.Context, domain.ConversationOwner, []string) error {
 	return nil
 }
 
-func (f *fakeChatService) PromoteQueuedTurn(
+func (f *fakeChatService) PromoteQueuedTurnForOwner(
 	context.Context,
-	domain.SessionID,
+	domain.ConversationOwner,
 	string,
 ) (chatsvc.PromoteQueuedTurnResult, error) {
 	return chatsvc.PromoteQueuedTurnResult{}, nil
 }
 
-func (f *fakeChatService) CancelQueuedTurn(context.Context, domain.SessionID, string) error {
+func (f *fakeChatService) CancelQueuedTurnForOwner(context.Context, domain.ConversationOwner, string) error {
 	return nil
 }
 
-func (f *fakeChatService) EditQueuedTurn(context.Context, domain.SessionID, string, chatsvc.QueuedMessageEdit) error {
+func (f *fakeChatService) EditQueuedTurnForOwner(context.Context, domain.ConversationOwner, string, chatsvc.QueuedMessageEdit) error {
 	return nil
 }
 
-func (f *fakeChatService) ReorderQueuedTurns(context.Context, domain.SessionID, []string) error {
+func (f *fakeChatService) ReorderQueuedTurnsForOwner(context.Context, domain.ConversationOwner, []string) error {
 	return nil
 }
 
@@ -102,12 +102,12 @@ type promoteQueuedStub struct {
 	turnID  string
 }
 
-func (s *promoteQueuedStub) PromoteQueuedTurn(
+func (s *promoteQueuedStub) PromoteQueuedTurnForOwner(
 	_ context.Context,
-	session domain.SessionID,
+	session domain.ConversationOwner,
 	turnID string,
 ) (chatsvc.PromoteQueuedTurnResult, error) {
-	s.session, s.turnID = session, turnID
+	s.session, s.turnID = domain.SessionID(session.ID), turnID
 	return s.result, s.err
 }
 
@@ -126,23 +126,23 @@ type steerStub struct {
 	recoverOnly  []bool
 }
 
-func (s *steerStub) Steer(
+func (s *steerStub) SteerForOwner(
 	_ context.Context,
-	_ domain.SessionID,
+	_ domain.ConversationOwner,
 	msg ports.ChatUserMessage,
 ) (chatsvc.SteerResult, error) {
 	s.seen = append(s.seen, msg)
 	return s.result, s.err
 }
 
-func (s *steerStub) RecoverSteer(_ context.Context, _ domain.SessionID, id string) (chatsvc.SteerResult, error) {
+func (s *steerStub) RecoverSteerForOwner(_ context.Context, _ domain.ConversationOwner, id string) (chatsvc.SteerResult, error) {
 	s.recovered = append(s.recovered, id)
 	return s.result, s.err
 }
 
-func (s *steerStub) SteerOrSend(
+func (s *steerStub) SteerOrSendForOwner(
 	_ context.Context,
-	_ domain.SessionID,
+	_ domain.ConversationOwner,
 	msg ports.ChatUserMessage,
 	recoverOnly bool,
 ) (chatsvc.SteerOrSendResult, error) {

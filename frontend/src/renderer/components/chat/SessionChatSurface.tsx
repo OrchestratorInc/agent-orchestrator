@@ -5,10 +5,16 @@
  * conversation query and command wiring so ChatWorkspace stays a pure view of a
  * snapshot — which is what lets the same component render fixtures in the dev
  * preview and live data here.
+ *
+ * The same surface renders a session's Chat reviewer when given `reviewId`: the
+ * reviewer's conversation is served by the same daemon handlers, so it gets the
+ * same composer, model picker, settings, and history controls. Only what belongs
+ * to the worker session itself (its agent switches, its interface handoff, its
+ * project permissions) stays with the worker.
  */
 
 import { AlertTriangle, CheckCircle2, Loader2, X } from "lucide-react";
-import { memo, useEffect, useRef, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
 	findActiveAgentSwitch,
@@ -20,6 +26,7 @@ import { useObservedAgentSwitchLifecycle } from "../../hooks/useObservedAgentSwi
 import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } from "../../hooks/useAgentSwitchVisibility";
 import { useSwitchAgentState } from "../../hooks/useSwitchAgent";
 import {
+	conversationKey,
 	useConversation,
 	useConversationCommands,
 	useConversationConfigOptions,
@@ -88,6 +95,8 @@ function firstBrowserLink(text: string, workspacePaths: string[]): string | unde
 
 export const SessionChatSurface = memo(function SessionChatSurface({
 	session,
+	reviewId,
+	hideHeader,
 	reviewerTerminal,
 	onOpenReviewerTerminal,
 	reviewerChat,
@@ -125,6 +134,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onConversationWorkChange,
 }: {
 	session: WorkspaceSession;
+	/** Render this session's Chat reviewer conversation instead of the worker's. */
+	reviewId?: string;
+	hideHeader?: boolean;
 	reviewerTerminal?: { handleId: string; harness: string };
 	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
 	reviewerChat?: { reviewId: string; harness: string };
@@ -171,6 +183,18 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	/** Reports accepted Chat work that must inform an interface-switch policy choice. */
 	onConversationWorkChange?: (state: ConversationWorkState) => void;
 }) {
+	const { t } = useTranslation();
+	const reviewer = Boolean(reviewId);
+	// A worker's conversation is addressed by its session id, exactly as before.
+	const target = useMemo(
+		() => (reviewId ? { sessionId: session.id, reviewId } : session.id),
+		[reviewId, session.id],
+	);
+	const targetKey = typeof target === "string" ? target : conversationKey(target);
+	const draftOwner = useMemo(
+		() => (reviewId ? { sessionId: targetKey, incarnation: reviewId } : undefined),
+		[reviewId, targetKey],
+	);
 	const {
 		snapshot: queriedSnapshot,
 		isLoading,
@@ -179,12 +203,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		hasOlder,
 		isLoadingOlder,
 		loadOlder,
-	} = useConversation(session.id);
+	} = useConversation(target);
 	// Route props can move to the destination before the old query observer drops
 	// its data. Treat that snapshot as unknown everywhere, especially at the work
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
-	const commands = useConversationCommands(session.id);
+	const commands = useConversationCommands(target);
 	const projectPermissions = useRememberProjectPermissions(session.workspaceId, snapshot?.harness);
 	const {
 		acknowledgeAcceptedTurn,
@@ -220,25 +244,31 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		}
 	}, [acknowledgeLocalEcho, localEchos, snapshot]);
 	useEffect(() => {
-		if (!conversationWorkKnown) return;
+		// Reviewer work never decides the worker's interface-switch policy.
+		if (!conversationWorkKnown || reviewer) return;
 		onConversationWorkChange?.({ controllerBusy, hasRunningTurn, queuedTurnCount });
-	}, [controllerBusy, conversationWorkKnown, hasRunningTurn, onConversationWorkChange, queuedTurnCount]);
+	}, [controllerBusy, conversationWorkKnown, hasRunningTurn, onConversationWorkChange, queuedTurnCount, reviewer]);
+	// A reviewer's harness is its own, not the worker's.
 	const targetChatControllerReady =
-		snapshot?.harness === session.provider &&
-		(snapshot.controller?.state === "ready" || snapshot.controller?.state === "busy");
+		(reviewer || snapshot?.harness === session.provider) &&
+		(snapshot?.controller?.state === "ready" || snapshot?.controller?.state === "busy");
 	// Mode commits before the target controller starts. A cached ready snapshot
 	// can also outlive the source, so wait for the handoff's final snapshot refresh.
 	const controllerCatalogsEnabled = targetChatControllerReady && !controllerTransitioning && !newWorkDisabled;
 	// Agent-switch presentation for the chat surface progress track and input locks.
 	const switchMutation = useSwitchAgentState(session.id);
-	const agentSwitches = useAgentSwitches(session.id).data ?? [];
-	const activeHistorySwitch = findActiveAgentSwitch(agentSwitches);
-	const selectedDurableAgentSwitch = selectDurableAgentSwitch(
-		session.activeAgentSwitch,
-		agentSwitches,
+	const workerAgentSwitches = useAgentSwitches(session.id).data;
+	// Agent switches belong to the worker session; a reviewer shows none of them.
+	const agentSwitches = useMemo(
+		() => (reviewer ? [] : workerAgentSwitches ?? []),
+		[reviewer, workerAgentSwitches],
 	);
+	const activeHistorySwitch = findActiveAgentSwitch(agentSwitches);
+	const selectedDurableAgentSwitch = reviewer
+		? undefined
+		: selectDurableAgentSwitch(session.activeAgentSwitch, agentSwitches);
 	const admissionAgentSwitch: AgentSwitchSummary | undefined =
-		switchMutation.isPending && switchMutation.input
+		!reviewer && switchMutation.isPending && switchMutation.input
 			? {
 				agentHandoffStatus: "not_attempted",
 				fromHarness: switchMutation.input.session.provider,
@@ -259,19 +289,21 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	} = useObservedAgentSwitchLifecycle({
 		sessionId: session.id,
 		agentSwitches,
-		nonterminalCandidates: [
-			session.activeAgentSwitch,
-			activeHistorySwitch,
-			selectedDurableAgentSwitch,
-			admissionAgentSwitch,
-		],
+		nonterminalCandidates: reviewer
+			? []
+			: [
+				session.activeAgentSwitch,
+				activeHistorySwitch,
+				selectedDurableAgentSwitch,
+				admissionAgentSwitch,
+			],
 	});
 	const durableAgentSwitch =
 		selectedDurableAgentSwitch && !isAgentSwitchRetired(selectedDurableAgentSwitch.id)
 			? selectedDurableAgentSwitch
 			: undefined;
 	const agentSwitch = durableAgentSwitch ?? admissionAgentSwitch ?? observedTerminalSwitch;
-	useAgentSwitchRouteVisibility(`session/${session.id}`, agentSwitch && agentSwitch.state !== "completed" && agentSwitch.state !== "failed" ? "active" : "history", undefined, false);
+	useAgentSwitchRouteVisibility(reviewer ? undefined : `session/${session.id}`, agentSwitch && agentSwitch.state !== "completed" && agentSwitch.state !== "failed" ? "active" : "history", undefined, false);
 	const switchPresentation = agentSwitch
 		? deriveAgentSwitchPresentation({
 				agentSwitch,
@@ -285,7 +317,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			})
 		: undefined;
 	const agentSwitching = Boolean(
-		switchMutation.isPending ||
+		(!reviewer && switchMutation.isPending) ||
 			(switchPresentation?.outcome === "in_progress" ||
 				switchPresentation?.outcome === "recovery"),
 	);
@@ -316,7 +348,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		settledSwitchId: providerCatalogSettledSwitchId,
 	});
 	const configOptions = useConversationConfigOptions(
-		session.id,
+		target,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot && can(snapshot, "config_options")),
 	);
 	// A provider config catalog may cover only model, only mode, or both.
@@ -330,11 +362,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// Only asked for once the conversation is actually readable: the catalog comes
 	// from the live controller, so there is nothing to fetch before then.
 	const { models } = useConversationModels(
-		session.id,
+		target,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot) && !hasProviderModel,
 	);
 	const { skills } = useConversationSkills(
-		session.id,
+		target,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot),
 	);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot));
@@ -344,7 +376,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const conversationLinkBaselines = useRef(new Map<string, ConversationLinkBaseline>());
 	useEffect(() => {
 		if (!snapshot || isLoading) return;
-		const previous = conversationLinkBaselines.current.get(session.id);
+		const previous = conversationLinkBaselines.current.get(targetKey);
 		const isInitialSnapshot = !previous;
 		const latestUserMessage = snapshot.items
 			.filter((item) => item.kind === "message" && item.role === "user")
@@ -375,8 +407,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			if (newlyCompleted) pendingCompleted.set(item.id, item.revision);
 			else if (pendingCompleted.get(item.id) !== item.revision) pendingCompleted.delete(item.id);
 		}
-		conversationLinkBaselines.current.set(session.id, { latestSequence, messages, pendingCompleted });
-		if (autoOpenedLinkSessions.has(session.id)) return;
+		conversationLinkBaselines.current.set(targetKey, { latestSequence, messages, pendingCompleted });
+		if (autoOpenedLinkSessions.has(targetKey)) return;
 		// Do not surprise users by opening links from history when a session is first
 		// mounted. The exception is the current turn: a fast agent can finish before
 		// the first conversation request resolves, so its response is already present
@@ -390,13 +422,13 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			) continue;
 			const url = firstBrowserLink(item.text, paths);
 			if (url) {
-				autoOpenedLinkSessions.add(session.id);
+				autoOpenedLinkSessions.add(targetKey);
 				pendingCompleted.delete(item.id);
 				openLinkInBrowser(url);
 				break;
 			}
 		}
-	}, [isLoading, openLinkInBrowser, paths, snapshot]);
+	}, [isLoading, openLinkInBrowser, paths, snapshot, targetKey]);
 	const observedSuccessfulSwitch = Boolean(
 		agentSwitch &&
 			observedSettledSwitchId === agentSwitch.id &&
@@ -425,7 +457,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			: undefined);
 	const visibilityPresentationKind = agentSwitchVisibilityPresentationKind(shownSwitchPresentation);
 	useAgentSwitchPresentationVisibility({
-		localRouteKey: `session/${session.id}`,
+		localRouteKey: reviewer ? `review/${reviewId}` : `session/${session.id}`,
 		agentSwitch,
 		presentationKind: visibilityPresentationKind,
 		visible: Boolean(
@@ -480,15 +512,18 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	return (
 		<div className="relative h-full min-h-0">
 			<ChatWorkspace
-				key={session.id}
+				key={targetKey}
 				snapshot={renderSnapshot}
+				draftOwner={draftOwner}
+				hideHeader={hideHeader}
 				agentInputDisabled={switchLocksChat || handoffDialogOpen}
 				newWorkDisabled={newWorkDisabled}
 				onLinkOpen={openLinkInBrowser}
 				onSessionLinkOpen={openSessionLink}
-				sessionTitle={session.title}
+				sessionTitle={reviewer ? t("terminal.reviewer") : session.title}
 				sessionRole={session.kind}
-				session={session}
+				// The worker session's own controls (rename, usage) are not the reviewer's.
+				session={reviewer ? undefined : session}
 				onSessionRenamed={onSessionRenamed}
 				reviewerTerminal={reviewerTerminal}
 				onOpenReviewerTerminal={onOpenReviewerTerminal}
@@ -534,8 +569,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				shellError={shellError}
 				models={models}
 				onChooseSettings={hasProviderMode ? undefined : commands.chooseSettings}
-				onRememberPermissions={can(renderSnapshot, "config_options") && !configOptions.loaded
+				onRememberPermissions={reviewer || (can(renderSnapshot, "config_options") && !configOptions.loaded)
 					? undefined : projectPermissions.remember}
+				approvalLockedReason={reviewer ? t("chat.reviewerReadOnly") : undefined}
 				rememberPermissionsPending={projectPermissions.pending}
 				rememberPermissionsError={projectPermissions.error}
 				rememberedPermissionMode={projectPermissions.savedMode}

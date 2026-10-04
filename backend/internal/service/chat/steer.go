@@ -101,13 +101,15 @@ func (s *Service) Steer(
 	id domain.SessionID,
 	msg ports.ChatUserMessage,
 ) (SteerResult, error) {
+	return s.SteerForOwner(ctx, domain.SessionConversationOwner(id), msg)
+}
+
+// SteerForOwner sends guidance into the running turn of an owner's conversation.
+func (s *Service) SteerForOwner(ctx context.Context, owner domain.ConversationOwner, msg ports.ChatUserMessage) (SteerResult, error) {
 	if strings.TrimSpace(msg.Text) == "" {
 		return SteerResult{}, ErrSteerTextRequired
 	}
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return SteerResult{}, err
-	}
-	controller, err := s.Controller(id)
+	controller, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return SteerResult{}, err
 	}
@@ -117,10 +119,15 @@ func (s *Service) Steer(
 // RecoverSteer reads only the durable receipt. A missing controller or a changed
 // interface cannot turn an earlier accepted/uncertain delivery into a rejection.
 func (s *Service) RecoverSteer(ctx context.Context, id domain.SessionID, clientMessageID string) (SteerResult, error) {
+	return s.RecoverSteerForOwner(ctx, domain.SessionConversationOwner(id), clientMessageID)
+}
+
+// RecoverSteerForOwner reads the durable steer receipt in an owner's conversation.
+func (s *Service) RecoverSteerForOwner(ctx context.Context, owner domain.ConversationOwner, clientMessageID string) (SteerResult, error) {
 	if clientMessageID == "" {
 		return SteerResult{}, ErrSteerDeliveryUncertain
 	}
-	conversation, err := s.store.ConversationForSession(ctx, id)
+	conversation, err := s.conversationForOwner(ctx, owner)
 	if err != nil {
 		return SteerResult{}, fmt.Errorf("%w: load conversation: %w", ErrSteerDeliveryUncertain, err)
 	}
@@ -142,16 +149,24 @@ func (s *Service) SteerOrSend(
 	msg ports.ChatUserMessage,
 	recoverOnly bool,
 ) (SteerOrSendResult, error) {
+	return s.SteerOrSendForOwner(ctx, domain.SessionConversationOwner(id), msg, recoverOnly)
+}
+
+// SteerOrSendForOwner routes one idempotent request through an owner's live
+// Chat controller.
+func (s *Service) SteerOrSendForOwner(
+	ctx context.Context,
+	owner domain.ConversationOwner,
+	msg ports.ChatUserMessage,
+	recoverOnly bool,
+) (SteerOrSendResult, error) {
 	if strings.TrimSpace(msg.Text) == "" && !recoverOnly {
 		return SteerOrSendResult{}, ErrSteerTextRequired
 	}
 	if msg.ClientMessageID == "" {
 		return SteerOrSendResult{}, ErrSteerDeliveryUncertain
 	}
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return SteerOrSendResult{}, err
-	}
-	controller, err := s.Controller(id)
+	controller, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return SteerOrSendResult{}, err
 	}
@@ -165,10 +180,13 @@ func (s *Service) PromoteQueuedTurn(
 	id domain.SessionID,
 	turnID string,
 ) (PromoteQueuedTurnResult, error) {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return PromoteQueuedTurnResult{}, err
-	}
-	controller, err := s.Controller(id)
+	return s.PromoteQueuedTurnForOwner(ctx, domain.SessionConversationOwner(id), turnID)
+}
+
+// PromoteQueuedTurnForOwner delivers one queued turn into the running turn of an
+// owner's conversation.
+func (s *Service) PromoteQueuedTurnForOwner(ctx context.Context, owner domain.ConversationOwner, turnID string) (PromoteQueuedTurnResult, error) {
+	controller, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return PromoteQueuedTurnResult{}, err
 	}

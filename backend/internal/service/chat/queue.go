@@ -44,10 +44,13 @@ func (s *Service) CancelQueuedTurn(
 	id domain.SessionID,
 	turnID string,
 ) error {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return err
-	}
-	controller, err := s.Controller(id)
+	return s.CancelQueuedTurnForOwner(ctx, domain.SessionConversationOwner(id), turnID)
+}
+
+// CancelQueuedTurnForOwner removes one undispatched queue item from an owner's
+// conversation.
+func (s *Service) CancelQueuedTurnForOwner(ctx context.Context, owner domain.ConversationOwner, turnID string) error {
+	controller, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return err
 	}
@@ -62,12 +65,23 @@ func (s *Service) EditQueuedTurn(
 	turnID string,
 	edit QueuedMessageEdit,
 ) error {
+	return s.EditQueuedTurnForOwner(ctx, domain.SessionConversationOwner(id), turnID, edit)
+}
+
+// EditQueuedTurnForOwner rewrites an undispatched prompt in an owner's
+// conversation.
+func (s *Service) EditQueuedTurnForOwner(
+	ctx context.Context,
+	owner domain.ConversationOwner,
+	turnID string,
+	edit QueuedMessageEdit,
+) error {
 	delivery, err := queuedEditDelivery(turnID, edit)
 	if err != nil {
 		return err
 	}
 	if delivery.ClientMessageID != "" {
-		conversation, err := s.store.ConversationForSession(ctx, id)
+		conversation, err := s.conversationForOwner(ctx, owner)
 		if err != nil {
 			return err
 		}
@@ -82,10 +96,7 @@ func (s *Service) EditQueuedTurn(
 			return nil
 		}
 	}
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return err
-	}
-	controller, err := s.Controller(id)
+	controller, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return err
 	}
@@ -98,10 +109,13 @@ func (s *Service) ReorderQueuedTurns(
 	id domain.SessionID,
 	turnIDs []string,
 ) error {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return err
-	}
-	controller, err := s.Controller(id)
+	return s.ReorderQueuedTurnsForOwner(ctx, domain.SessionConversationOwner(id), turnIDs)
+}
+
+// ReorderQueuedTurnsForOwner rewrites the undispatched queue order in an owner's
+// conversation.
+func (s *Service) ReorderQueuedTurnsForOwner(ctx context.Context, owner domain.ConversationOwner, turnIDs []string) error {
+	controller, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return err
 	}

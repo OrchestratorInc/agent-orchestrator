@@ -21,7 +21,7 @@ const steerOrSendPath = "/api/v1/sessions/{sessionId}/conversation/steer-or-send
 const queuedTurnSteerPath = "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/steer"
 
 type steerOrSendService interface {
-	SteerOrSend(context.Context, domain.SessionID, ports.ChatUserMessage, bool) (chatsvc.SteerOrSendResult, error)
+	SteerOrSendForOwner(context.Context, domain.ConversationOwner, ports.ChatUserMessage, bool) (chatsvc.SteerOrSendResult, error)
 }
 
 // PromoteQueuedTurnResponse reports where one durable queued turn landed.
@@ -49,9 +49,9 @@ func (c *ConversationsController) steerOrSend(w http.ResponseWriter, r *http.Req
 			attachmentErr.code, attachmentErr.message, nil)
 		return
 	}
-	result, err := svc.SteerOrSend(
+	result, err := svc.SteerOrSendForOwner(
 		r.Context(),
-		domain.SessionID(chi.URLParam(r, "sessionId")),
+		conversationOwner(r),
 		ports.ChatUserMessage{
 			Text: req.Text, Content: content, ClientMessageID: req.ClientMessageID,
 			Origin: domain.MessageOriginHuman,
@@ -97,7 +97,7 @@ func (c *ConversationsController) steer(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if req.RecoverOnly {
-		result, err := c.Svc.RecoverSteer(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), req.ClientMessageID)
+		result, err := c.Svc.RecoverSteerForOwner(r.Context(), conversationOwner(r), req.ClientMessageID)
 		if err != nil {
 			writeSteerError(w, r, err)
 			return
@@ -116,7 +116,7 @@ func (c *ConversationsController) steer(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	result, err := c.Svc.Steer(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")),
+	result, err := c.Svc.SteerForOwner(r.Context(), conversationOwner(r),
 		ports.ChatUserMessage{
 			Text:            req.Text,
 			Content:         content,
@@ -138,9 +138,9 @@ func (c *ConversationsController) promoteQueuedTurn(w http.ResponseWriter, r *ht
 		apispec.NotImplemented(w, r, "POST", queuedTurnSteerPath)
 		return
 	}
-	result, err := c.Svc.PromoteQueuedTurn(
+	result, err := c.Svc.PromoteQueuedTurnForOwner(
 		r.Context(),
-		domain.SessionID(chi.URLParam(r, "sessionId")),
+		conversationOwner(r),
 		chi.URLParam(r, "turnId"),
 	)
 	if err != nil {

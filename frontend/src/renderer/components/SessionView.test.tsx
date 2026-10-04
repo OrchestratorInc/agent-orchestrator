@@ -240,6 +240,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 	const { memo } = await vi.importActual<typeof import("react")>("react");
 	return { SessionChatSurface: memo(({
 		session,
+		reviewId,
 		onOpenShell,
 		onOpenFile,
 		headerActions,
@@ -262,6 +263,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		onAuxiliaryTabOrderChange,
 	}: {
 		session: WorkspaceSession;
+		reviewId?: string;
 		onOpenShell?: () => void;
 		onOpenFile?: (path: string) => void;
 		headerActions?: ReactNode;
@@ -283,6 +285,8 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		auxiliaryTabOrder?: string[];
 		onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	}) => {
+		// Reviewer Chat renders through this same surface.
+		if (reviewId) return <div data-testid="reviewer-chat-surface">{reviewId}</div>;
 		chatSurfaceRenders.push(session.id);
 		return (
 		<div
@@ -372,11 +376,6 @@ vi.mock("./chat/SessionChatSurface", async () => {
 vi.mock("./chat/CloudSessionChatSurface", () => ({
 	CloudSessionChatSurface: ({ sessionTabAction, controllerTransitioning, newWorkDisabled }: { sessionTabAction?: ReactNode; controllerTransitioning?: boolean; newWorkDisabled?: boolean }) => (
 		<div data-testid="cloud-chat-surface" data-transitioning={controllerTransitioning ? "true" : "false"} data-new-work-disabled={newWorkDisabled ? "true" : "false"}>{sessionTabAction}</div>
-	),
-}));
-vi.mock("./chat/ReviewerChatSurface", () => ({
-	ReviewerChatSurface: ({ reviewId }: { reviewId: string }) => (
-		<div data-testid="reviewer-chat-surface">{reviewId}</div>
 	),
 }));
 vi.mock("./CenterPane", () => ({

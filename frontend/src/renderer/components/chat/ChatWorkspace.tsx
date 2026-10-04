@@ -366,6 +366,8 @@ export interface ChatWorkspaceProps {
 	onChooseSettings?: (settings: TurnSettings) => void;
 	onRememberPermissions?: (mode: ApprovalMode) => Promise<unknown> | void;
 	showApprovalMode?: boolean;
+	/** Shown on a disabled approval control whose permissions the daemon fixes. */
+	approvalLockedReason?: string;
 	approvalModes?: ApprovalMode[];
 	rememberPermissionsPending?: boolean;
 	rememberPermissionsError?: string;
@@ -593,6 +595,7 @@ function ChatWorkspaceContent({
 	onRememberPermissions,
 	showApprovalMode,
 	approvalModes,
+	approvalLockedReason,
 	rememberPermissionsPending,
 	rememberPermissionsError,
 	rememberedPermissionMode,
@@ -1163,6 +1166,7 @@ function ChatWorkspaceContent({
 					harness={snapshot.harness}
 					showApprovalMode={showApprovalMode ?? !session?.cloud}
 					approvalModes={approvalModes}
+					approvalLockedReason={approvalLockedReason}
 					reroute={stableModelReroute}
 					onChange={newWorkDisabled ? undefined : onChooseSettings}
 					configOptions={configOptions ?? []}
@@ -1189,6 +1193,7 @@ function ChatWorkspaceContent({
 			rememberedPermissionMode,
 			showApprovalMode,
 			approvalModes,
+			approvalLockedReason,
 			session?.cloud,
 			snapshot.controller.state,
 			stableModelReroute,

@@ -21,10 +21,13 @@ var ErrSkillsUnsupported = errors.New("chat driver cannot list skills")
 // without AO being told. A list AO cached at build time would offer commands that
 // no longer exist and hide ones the user just wrote.
 func (s *Service) Skills(ctx context.Context, id domain.SessionID) ([]ports.ChatSkill, error) {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return nil, err
-	}
-	controller, err := s.Controller(id)
+	return s.SkillsForOwner(ctx, domain.SessionConversationOwner(id))
+}
+
+// SkillsForOwner reports the skills the provider behind an owner's conversation
+// will let it invoke.
+func (s *Service) SkillsForOwner(ctx context.Context, owner domain.ConversationOwner) ([]ports.ChatSkill, error) {
+	controller, _, err := s.controllerForOwner(ctx, owner)
 	if err != nil {
 		return nil, err
 	}

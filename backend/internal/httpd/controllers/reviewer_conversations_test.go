@@ -2,13 +2,20 @@ package controllers_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
 func reviewConversationRequest(t *testing.T, client *http.Client, method, url, body string) (int, []byte) {
@@ -116,5 +123,87 @@ func TestReviewerConversationRoutesPreserveServiceErrorEnvelope(t *testing.T) {
 		if status != http.StatusInternalServerError || !bytes.Contains(body, []byte(`"code":"INTERNAL_ERROR"`)) || !bytes.Contains(body, []byte(`"requestId":"`)) {
 			t.Fatalf("%s %s = status %d body %s", tc.method, tc.path, status, body)
 		}
+	}
+}
+
+// ownerRecorder notes which conversation owner each command reached, so the
+// reviewer routes can be shown to share the session handlers rather than a subset.
+type ownerRecorder struct {
+	*fakeConversationService
+	owners map[string]domain.ConversationOwner
+}
+
+func (o *ownerRecorder) note(op string, owner domain.ConversationOwner) { o.owners[op] = owner }
+
+func (o *ownerRecorder) ModelsForOwner(_ context.Context, owner domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, error) {
+	o.note("models", owner)
+	return nil, domain.ConversationSettings{}, nil
+}
+
+func (o *ownerRecorder) SetTurnSettingsForOwner(_ context.Context, owner domain.ConversationOwner, settings domain.ConversationSettings) (domain.ConversationSettings, error) {
+	o.note("settings", owner)
+	return settings, nil
+}
+
+func (o *ownerRecorder) SkillsForOwner(_ context.Context, owner domain.ConversationOwner) ([]ports.ChatSkill, error) {
+	o.note("skills", owner)
+	return nil, nil
+}
+
+func (o *ownerRecorder) CompactForOwner(_ context.Context, owner domain.ConversationOwner) (ports.ChatCompactionResult, error) {
+	o.note("compact", owner)
+	return ports.ChatCompactionResult{}, nil
+}
+
+func (o *ownerRecorder) EditMessageForOwner(_ context.Context, owner domain.ConversationOwner, _ string, _ ports.ChatUserMessage) (chatsvc.EditMessageResult, error) {
+	o.note("edit", owner)
+	return chatsvc.EditMessageResult{Turn: domain.ConversationTurn{ID: "edited"}}, nil
+}
+
+func (o *ownerRecorder) RollbackForOwner(_ context.Context, owner domain.ConversationOwner, _ string) (int, error) {
+	o.note("rollback", owner)
+	return 1, nil
+}
+
+func (o *ownerRecorder) SteerForOwner(_ context.Context, owner domain.ConversationOwner, _ ports.ChatUserMessage) (chatsvc.SteerResult, error) {
+	o.note("steer", owner)
+	return chatsvc.SteerResult{}, nil
+}
+
+func TestReviewerConversationServesEverySessionChatCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		base  string
+		owner domain.ConversationOwner
+	}{
+		{"session", "/api/v1/sessions/p1-1/conversation", domain.SessionConversationOwner("p1-1")},
+		{"reviewer", "/api/v1/reviews/review-1/conversation", domain.ReviewConversationOwner("review-1")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := &ownerRecorder{fakeConversationService: &fakeConversationService{}, owners: map[string]domain.ConversationOwner{}}
+			log := slog.New(slog.NewTextHandler(io.Discard, nil))
+			server := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
+				Sessions: newFakeSessionService(), Conversations: service,
+			}, httpd.ControlDeps{}))
+			t.Cleanup(server.Close)
+			base := server.URL + tc.base
+			for _, call := range []struct{ op, method, path, body string }{
+				{"models", http.MethodGet, "/models", ""},
+				{"settings", http.MethodPatch, "/settings", `{"model":"gpt-reviewer"}`},
+				{"skills", http.MethodGet, "/skills", ""},
+				{"compact", http.MethodPost, "/compact", ""},
+				{"edit", http.MethodPost, "/turns/turn-2/edit", `{"text":"edited","clientMessageId":"edit-1"}`},
+				{"rollback", http.MethodPost, "/turns/turn-2/rollback", ""},
+				{"steer", http.MethodPost, "/steer", `{"text":"also check tests","clientMessageId":"steer-1"}`},
+			} {
+				status, body := reviewConversationRequest(t, server.Client(), call.method, base+call.path, call.body)
+				if status >= 300 {
+					t.Fatalf("%s %s = %d %s", call.method, call.path, status, body)
+				}
+				if got := service.owners[call.op]; got != tc.owner {
+					t.Fatalf("%s reached owner %#v, want %#v", call.op, got, tc.owner)
+				}
+			}
+		})
 	}
 }

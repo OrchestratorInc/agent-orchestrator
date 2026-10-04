@@ -5,11 +5,7 @@ import { setEventsConnectionState } from "./events-connection";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
-import { conversationQueryKey, conversationQueryRoot } from "../hooks/useConversation";
-import {
-	reviewerConversationQueryKey,
-	reviewerConversationQueryRoot,
-} from "../hooks/useReviewerConversation";
+import { conversationQueryKey, conversationQueryRoot, reviewConversationKey } from "../hooks/useConversation";
 import { agentSwitchesQueryRoot } from "../hooks/useAgentSwitches";
 import { sessionUsageQueryRoot } from "../hooks/useSessionUsageSummaries";
 import { agentSwitchVisibility } from "./agent-switch-visibility";
@@ -113,7 +109,6 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			const flushPending = () => {
 				if (allConversationsInvalidationPending) {
 					invalidate(conversationQueryRoot);
-					invalidate(reviewerConversationQueryRoot);
 					allConversationsInvalidationPending = false;
 				}
 				if (workspaceInvalidationPending) {
@@ -138,7 +133,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 				pendingConversationSessions.clear();
 				for (const reviewId of pendingReviewerConversations) {
-					invalidate(reviewerConversationQueryKey(reviewId));
+					invalidate(conversationQueryKey(reviewConversationKey(reviewId)));
 				}
 				pendingReviewerConversations.clear();
 				for (const sessionId of pendingInterfaceTransitionSessions) {

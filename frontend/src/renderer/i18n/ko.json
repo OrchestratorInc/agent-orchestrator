@@ -1545,6 +1545,7 @@
 	"terminal.renameHintDoubleClick": "{{workingDir}} (더블클릭하여 이름 바꾸기)",
 	"terminal.renameHintRightClick": "{{workingDir}} (우클릭하여 이름 바꾸기)",
 	"terminal.reviewer": "리뷰어",
+	"chat.reviewerReadOnly": "리뷰어는 항상 읽기 전용으로 실행되므로 권한을 변경할 수 없습니다.",
 	"terminal.scrollTabsLeft": "탭 왼쪽으로 스크롤",
 	"terminal.scrollTabsRight": "탭 오른쪽으로 스크롤",
 	"terminal.search": "터미널 검색",

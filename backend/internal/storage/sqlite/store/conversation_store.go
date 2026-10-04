@@ -872,6 +872,69 @@ func (s *Store) ActivateConversationBranch(
 	})
 }
 
+// ActivateReviewConversationBranch is ActivateConversationBranch for a reviewer
+// conversation. The controller fence it moves is the review's, so a reviewer's
+// branch switch can never claim the worker session it shares.
+func (s *Store) ActivateReviewConversationBranch(
+	ctx context.Context,
+	reviewID, conversationID, branchID, providerConversationID, generation string,
+	now time.Time,
+) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	return s.inTx(ctx, "activate reviewer conversation branch", func(q *gen.Queries) error {
+		conversation, err := q.SelectConversationByID(ctx, conversationID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: conversation %s", domain.ErrNoConversationBranch, conversationID)
+		}
+		if err != nil {
+			return fmt.Errorf("select conversation %s: %w", conversationID, err)
+		}
+		if !conversation.CurrentReviewID.Valid || conversation.CurrentReviewID.String != reviewID {
+			return fmt.Errorf("conversation %s is not controlled by review %s", conversationID, reviewID)
+		}
+		branch, err := q.SelectConversationBranch(ctx, gen.SelectConversationBranchParams{
+			ConversationID: conversationID,
+			BranchID:       branchID,
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: %s", domain.ErrNoConversationBranch, branchID)
+		}
+		if err != nil {
+			return fmt.Errorf("select conversation branch %s: %w", branchID, err)
+		}
+		if branch.ProviderConversationID != providerConversationID {
+			return fmt.Errorf("activate conversation branch %s: provider conversation %q does not match stored %q",
+				branchID, providerConversationID, branch.ProviderConversationID)
+		}
+		conversationRows, err := q.ActivateConversationBranch(ctx, gen.ActivateConversationBranchParams{
+			ActiveBranchID: branchID,
+			UpdatedAt:      now,
+			ID:             conversationID,
+		})
+		if err != nil {
+			return fmt.Errorf("move conversation head: %w", err)
+		}
+		if conversationRows != 1 {
+			return fmt.Errorf("move conversation head: conversation %s not found", conversationID)
+		}
+		reviewRows, err := q.ClaimReviewChatController(ctx, gen.ClaimReviewChatControllerParams{
+			ProviderConversationID: providerConversationID,
+			ControllerGeneration:   generation,
+			UpdatedAt:              now,
+			ID:                     reviewID,
+		})
+		if err != nil {
+			return fmt.Errorf("move reviewer controller: %w", err)
+		}
+		if reviewRows != 1 {
+			return fmt.Errorf("move reviewer controller: chat review %s not found", reviewID)
+		}
+		return nil
+	})
+}
+
 // ProjectConversation is a read-only lookup; unlike CreateConversation it does
 // not transfer ownership before a replacement provider has connected.
 func (s *Store) ProjectConversation(ctx context.Context, project domain.ProjectID) (domain.ConversationRecord, error) {

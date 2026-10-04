@@ -620,7 +620,36 @@ func operations() []operation {
 	ops = append(ops, identityOperations()...)
 	ops = append(ops, endpointsOperations()...)
 	ops = append(ops, linkPreviewOperations()...)
+	ops = append(ops, reviewerConversationOperations(ops)...)
 	return ops
+}
+
+// reviewerConversationOperations mirrors every session conversation operation
+// under /reviews/{reviewId}/conversation. A Chat reviewer is served by the same
+// handlers as a worker's Chat, so its contract is derived from the session one
+// rather than restated, and the two cannot drift.
+func reviewerConversationOperations(ops []operation) []operation {
+	const sessionPrefix = "/api/v1/sessions/{sessionId}/conversation"
+	const reviewPrefix = "/api/v1/reviews/{reviewId}/conversation"
+	var mirrored []operation
+	for _, op := range ops {
+		if op.path != sessionPrefix && !strings.HasPrefix(op.path, sessionPrefix+"/") {
+			continue
+		}
+		mirror := op
+		mirror.path = reviewPrefix + strings.TrimPrefix(op.path, sessionPrefix)
+		mirror.id = strings.Replace(op.id, "Session", "Reviewer", 1)
+		mirror.summary = op.summary + " (Chat reviewer)"
+		mirror.pathParams = make([]any, 0, len(op.pathParams))
+		for _, param := range op.pathParams {
+			if _, ok := param.(controllers.SessionIDParam); ok {
+				param = controllers.ReviewIDParam{}
+			}
+			mirror.pathParams = append(mirror.pathParams, param)
+		}
+		mirrored = append(mirrored, mirror)
+	}
+	return mirrored
 }
 
 func automationOperations() []operation {
@@ -1056,31 +1085,6 @@ func shellTerminalOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
-		},
-		{
-			method: http.MethodGet, path: "/api/v1/reviews/{reviewId}/conversation", id: "getReviewerConversation", tag: "conversations",
-			summary: "Read a reviewer's durable Chat conversation", pathParams: []any{controllers.ReviewIDParam{}, conversationSnapshotQuery{}},
-			resps: []respUnit{{http.StatusOK, controllers.ConversationSnapshotResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
-		},
-		{
-			method: http.MethodPost, path: "/api/v1/reviews/{reviewId}/conversation/messages", id: "sendReviewerConversationMessage", tag: "conversations",
-			summary: "Send a message to a Chat reviewer", pathParams: []any{controllers.ReviewIDParam{}}, reqBody: controllers.SendConversationMessageRequest{},
-			resps: []respUnit{{http.StatusAccepted, controllers.SendConversationMessageResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
-		},
-		{
-			method: http.MethodPost, path: "/api/v1/reviews/{reviewId}/conversation/approvals/{requestId}/resolve", id: "resolveReviewerConversationApproval", tag: "conversations",
-			summary: "Answer a pending approval in a reviewer conversation", pathParams: []any{controllers.ReviewIDParam{}, controllers.ConversationRequestIDParam{}}, reqBody: controllers.ResolveConversationApprovalRequest{},
-			resps: []respUnit{{http.StatusNoContent, nil}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
-		},
-		{
-			method: http.MethodPost, path: "/api/v1/reviews/{reviewId}/conversation/inputs/{requestId}/resolve", id: "resolveReviewerConversationInput", tag: "conversations",
-			summary: "Answer a structured reviewer input request", pathParams: []any{controllers.ReviewIDParam{}, controllers.ConversationRequestIDParam{}}, reqBody: controllers.ResolveConversationInputRequest{},
-			resps: []respUnit{{http.StatusNoContent, nil}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
-		},
-		{
-			method: http.MethodPost, path: "/api/v1/reviews/{reviewId}/conversation/interrupt", id: "interruptReviewerConversationTurn", tag: "conversations",
-			summary: "Cancel the in-flight reviewer turn", pathParams: []any{controllers.ReviewIDParam{}},
-			resps: []respUnit{{http.StatusNoContent, nil}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/steer", id: "steerSessionConversationTurn", tag: "conversations",
