@@ -260,13 +260,13 @@ describe("useOpenShellTerminal", () => {
 		queryClient.setQueryData(shellTerminalsQueryKey, []);
 		const open = renderHook(() => useOpenShellTerminal(), { wrapper: wrapper(queryClient) });
 
-		const shell = await act(async () =>
+		const shell = (await act(async () =>
 			open.result.current.mutateAsync({
 				projectId: "cloud-project",
 				sessionId: "cloud-session",
 				cloud: { orgId: "cloud-org" },
 			}),
-		);
+		))!;
 
 		expect(postMock).not.toHaveBeenCalled();
 		expect(cloudResumeMock).toHaveBeenCalledWith("cloud-org", "cloud-session");
@@ -349,5 +349,84 @@ describe("useCloseShellTerminal", () => {
 
 		await expect(result.current.mutateAsync(shells[0].handleId)).resolves.toBeUndefined();
 		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([shells[1]]);
+	});
+});
+
+describe("tabs opened while their shell is being created", () => {
+	const created = { ...shells[1], handleId: "ptyhost-v1:shellterm-new", title: "Terminal 3" };
+
+	function deferredPost() {
+		let finishPost!: (result: { data: { shellTerminal: ShellTerminal } }) => void;
+		postMock.mockReturnValue(new Promise((resolve) => (finishPost = resolve)));
+		return (shell: ShellTerminal) => finishPost({ data: { shellTerminal: shell } });
+	}
+
+	it("keeps a pending tab when a list refetch lands before its create request returns", async () => {
+		const finishPost = deferredPost();
+		getMock.mockResolvedValue({ data: { shellTerminals: shells } });
+		const queryClient = queryClientWithShells();
+		renderHook(() => useShellTerminals(), { wrapper: wrapper(queryClient) });
+		const { result } = renderHook(() => useOpenShellTerminal(), { wrapper: wrapper(queryClient) });
+
+		let pending!: ShellTerminal;
+		act(() => { pending = result.current.open({}); });
+		await act(async () => queryClient.refetchQueries({ queryKey: shellTerminalsQueryKey }));
+		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([...shells, pending]);
+
+		getMock.mockResolvedValue({ data: { shellTerminals: [...shells, created] } });
+		act(() => finishPost(created));
+		await waitFor(() => expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([...shells, created]));
+	});
+
+	it("does not leave a duplicate tab when a refetch already lists the created shell", async () => {
+		const finishPost = deferredPost();
+		getMock.mockResolvedValue({ data: { shellTerminals: [...shells, created] } });
+		const queryClient = queryClientWithShells();
+		renderHook(() => useShellTerminals(), { wrapper: wrapper(queryClient) });
+		const { result } = renderHook(() => useOpenShellTerminal(), { wrapper: wrapper(queryClient) });
+
+		let pending!: ShellTerminal;
+		act(() => { pending = result.current.open({}); });
+		await act(async () => queryClient.refetchQueries({ queryKey: shellTerminalsQueryKey }));
+		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([...shells, created, pending]);
+
+		// The pending tab goes as soon as the response arrives, not on the next refetch.
+		getMock.mockReturnValue(new Promise(() => {}));
+		await act(async () => finishPost(created));
+		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([...shells, created]);
+	});
+
+	it("destroys the shell of a tab closed before its create request returned", async () => {
+		const finishPost = deferredPost();
+		let finishDelete!: (result: { error?: unknown }) => void;
+		deleteMock.mockReturnValue(new Promise((resolve) => (finishDelete = resolve)));
+		getMock.mockResolvedValue({ data: { shellTerminals: shells } });
+		const queryClient = queryClientWithShells();
+		renderHook(() => useShellTerminals(), { wrapper: wrapper(queryClient) });
+		const open = renderHook(() => useOpenShellTerminal(), { wrapper: wrapper(queryClient) });
+		const close = renderHook(() => useCloseShellTerminal(), { wrapper: wrapper(queryClient) });
+		const onOpened = vi.fn();
+
+		let pending!: ShellTerminal;
+		act(() => { pending = open.result.current.open({}, { onSuccess: onOpened }); });
+		await act(async () => close.result.current.mutateAsync(pending.handleId));
+		// Nothing to close yet: the daemon has not returned the shell.
+		expect(deleteMock).not.toHaveBeenCalled();
+		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual(shells);
+
+		getMock.mockResolvedValue({ data: { shellTerminals: [...shells, created] } });
+		act(() => finishPost(created));
+		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
+			params: { path: { handleId: created.handleId } },
+		}));
+		// A refetch while the shell is being destroyed does not show it.
+		await act(async () => queryClient.refetchQueries({ queryKey: shellTerminalsQueryKey }));
+		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual(shells);
+
+		getMock.mockResolvedValue({ data: { shellTerminals: shells } });
+		act(() => finishDelete({}));
+		await waitFor(() => expect(open.result.current.isPending).toBe(false));
+		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual(shells);
+		expect(onOpened).not.toHaveBeenCalled();
 	});
 });
