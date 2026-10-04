@@ -148,7 +148,7 @@ describe("CreateProjectAgentSheet", () => {
 		expect(await screen.findByRole("listbox")).toHaveClass("max-h-select-menu-max!");
 	});
 
-	it.each(["chip", "settings-row"] as const)("uses the fixed compact width for the %s agent menu", async (variant) => {
+	it.each(["chip", "settings-row"] as const)("uses the shared responsive width for the %s agent menu", async (variant) => {
 		render(
 			<RequiredAgentField
 				id="agent"
@@ -163,9 +163,9 @@ describe("CreateProjectAgentSheet", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Agent" }));
 
 		expect(screen.getByRole("menu")).toHaveClass(
-			"w-56!",
-			"min-w-56!",
-			"max-w-56!",
+			"w-[min(16rem,calc(100vw-2rem))]!",
+			"min-w-0!",
+			"max-w-[calc(100vw-2rem)]!",
 		);
 	});
 

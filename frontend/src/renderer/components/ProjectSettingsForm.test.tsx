@@ -524,7 +524,7 @@ describe("ProjectSettingsForm", () => {
 		expect(picker).toHaveTextContent("Opus · Default");
 		expect(picker).not.toHaveTextContent("Claude");
 		await userEvent.click(picker);
-		expect(screen.getByRole("menuitem", { name: "Opus" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Opus (default)" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: /Reasoning effort/ }));
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 		submitSettings();
