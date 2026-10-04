@@ -70,6 +70,11 @@ let previewShellSeq = 0;
 // their tab metadata for this Electron renderer lifetime; the terminal itself
 // is created when its ticketed control-plane WebSocket connects.
 let cloudShellTerminals: ShellTerminal[] = [];
+// Shells whose close is still in flight, per host. Closing several tabs in a
+// row refetches the list as each close settles, and the daemon can answer one
+// refetch before it has processed the other pending deletes; without this, a
+// tab the user already closed would reappear until its own close settles.
+const closingShellHandles = new Map<string, Set<string>>();
 
 const PENDING_SHELL_PREFIX = "pending-shell:";
 // Tabs shown while their create request runs. A list refetch that lands in
@@ -123,7 +128,13 @@ async function fetchListedShellTerminals(hostId?: HostId): Promise<ShellTerminal
 	}
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/shell-terminals");
 	if (error) throw error;
-	return [...(data?.shellTerminals ?? []).map((terminal) => toShellTerminal(terminal, hostId)), ...(remote ? [] : cloudShellTerminals)];
+	const closing = closingShellHandles.get(hostKey(hostId));
+	return [
+		...(data?.shellTerminals ?? [])
+			.filter((terminal) => !closing?.has(terminal.handleId))
+			.map((terminal) => toShellTerminal(terminal, hostId)),
+		...(remote ? [] : cloudShellTerminals),
+	];
 }
 
 // No refetchInterval: shell terminals only change when this client opens or
@@ -389,6 +400,10 @@ export function useCloseShellTerminal(hostId?: HostId) {
 			for (const [pending, adopted] of adoptedShellHandles) {
 				if (adopted === handleId) adoptedShellHandles.delete(pending);
 			}
+			const key = hostKey(hostId);
+			let closing = closingShellHandles.get(key);
+			if (!closing) closingShellHandles.set(key, (closing = new Set()));
+			closing.add(handleId);
 			const previous = queryClient.getQueryData<ShellTerminal[]>(queryKey);
 			const isCloud = Boolean(previous?.find((shell) => shell.handleId === handleId)?.cloud);
 			const removeClosedShell = () => {
@@ -416,6 +431,10 @@ export function useCloseShellTerminal(hostId?: HostId) {
 		// Settled, not success: a close that 404s means the daemon already lost
 		// the shell, and the stale tab still needs to disappear.
 		onSettled: (_data, _error, handleId, context) => {
+			const key = hostKey(hostId);
+			const closing = closingShellHandles.get(key);
+			closing?.delete(handleId);
+			if (closing?.size === 0) closingShellHandles.delete(key);
 			// A pending tab closed nothing on the daemon; its create request settles
 			// the list once the shell it created is destroyed.
 			if (!context?.isCloud && !isPendingShellHandle(handleId)) void queryClient.invalidateQueries({ queryKey });
