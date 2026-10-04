@@ -688,6 +688,24 @@ func TestOpenShellTerminalStillStartsResolvedLoginShellInProjectRoot(t *testing.
 	}
 }
 
+func TestOpenShellTerminalOrdersByWhenItWasOpenedNotWhenItsRuntimeSpawned(t *testing.T) {
+	rt := newFakeShellRuntime()
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	svc := newTestService(rt, &fakeShellTerminalStore{}, projects)
+	opened := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	clock := opened
+	svc.now = func() time.Time { return clock }
+	rt.onCreate = func(ports.RuntimeConfig) { clock = clock.Add(30 * time.Millisecond) }
+
+	shell, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{ProjectID: "portfolio"})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if !shell.CreatedAt.Equal(opened) {
+		t.Fatalf("CreatedAt = %v, want the open time %v, not when the runtime finished spawning", shell.CreatedAt, opened)
+	}
+}
+
 func TestOpenShellTerminalDefersStartWhenTheClientWillSizeIt(t *testing.T) {
 	rt := newFakeShellRuntime()
 	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}

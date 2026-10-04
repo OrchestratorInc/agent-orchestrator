@@ -552,6 +552,10 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		}
 	}
 
+	// Stamped before the runtime spawns: concurrent opens finish spawning in
+	// any order, and the list is ordered by creation, so tabs opened in quick
+	// succession must keep the order they were opened in.
+	createdAt := s.now().UTC()
 	// SessionID is the runtime adapters' name for "what to call this PTY"; it
 	// is not a session row and no sessions record is ever created. The
 	// shellterm- prefix keeps the two namespaces disjoint.
@@ -583,7 +587,7 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		Title:                     cfg.title,
 		AppRunID:                  s.appRunID,
 		Transient:                 cfg.transient,
-		CreatedAt:                 s.now().UTC(),
+		CreatedAt:                 createdAt,
 		PreviewCapabilityVerifier: cfg.previewVerifier,
 	}
 	if err := s.store.InsertShellTerminal(ctx, rec); err != nil {

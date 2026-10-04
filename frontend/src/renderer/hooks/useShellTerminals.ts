@@ -331,11 +331,15 @@ export function useOpenShellTerminal(hostId?: HostId) {
 		);
 		trackPendingShell(optimisticShell);
 		addOptimisticShell(queryClient, queryKey, optimisticShell);
-		const onSuccess = callbacks?.onSuccess;
-		mutation.mutate(
-			{ ...input, optimisticShell },
-			// A tab closed while it was being created resolves without a shell.
-			onSuccess ? { onSuccess: (shell) => { if (shell) onSuccess(shell); } } : undefined,
+		// Not mutate()'s per-call callbacks: those fire only for the latest call,
+		// so a tab opened just before another would never learn its shell.
+		// Failures are handled by onError. A tab closed while it was being
+		// created resolves without a shell.
+		mutation.mutateAsync({ ...input, optimisticShell }).then(
+			(shell) => {
+				if (shell) callbacks?.onSuccess?.(shell);
+			},
+			() => undefined,
 		);
 		return optimisticShell;
 	};

@@ -396,6 +396,25 @@ describe("tabs opened while their shell is being created", () => {
 		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([...shells, created]);
 	});
 
+	it("tells every tab opened in quick succession which shell it got", async () => {
+		const first = { ...created, handleId: "ptyhost-v1:shellterm-a", title: "Terminal 3" };
+		const second = { ...created, handleId: "ptyhost-v1:shellterm-b", title: "Terminal 4" };
+		postMock.mockResolvedValueOnce({ data: { shellTerminal: first } }).mockResolvedValueOnce({ data: { shellTerminal: second } });
+		getMock.mockResolvedValue({ data: { shellTerminals: [...shells, first, second] } });
+		const queryClient = queryClientWithShells();
+		const { result } = renderHook(() => useOpenShellTerminal(), { wrapper: wrapper(queryClient) });
+		const onFirst = vi.fn();
+		const onSecond = vi.fn();
+
+		act(() => {
+			result.current.open({}, { onSuccess: onFirst });
+			result.current.open({}, { onSuccess: onSecond });
+		});
+
+		await waitFor(() => expect(onSecond).toHaveBeenCalledWith(second));
+		expect(onFirst).toHaveBeenCalledWith(first);
+	});
+
 	it("destroys the shell of a tab closed before its create request returned", async () => {
 		const finishPost = deferredPost();
 		let finishDelete!: (result: { error?: unknown }) => void;
