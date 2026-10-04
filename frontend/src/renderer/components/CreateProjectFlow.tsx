@@ -1662,6 +1662,44 @@ function CloudProjectCard({
 			await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
 			onCreated(project.id);
 		} catch (err) {
+			// A repository backs at most one active project per workspace; the
+			// control plane rejects a duplicate with `project_repository_exists`.
+			// That is not a failure the user needs to act on (the project they
+			// asked for already exists), so open that project instead of showing
+			// a conflict error. If it cannot be located, close quietly rather
+			// than surface a message the user cannot act on.
+			if (
+				err instanceof CloudCpError &&
+				err.code === "project_repository_exists" &&
+				org !== undefined &&
+				selectedRepo !== undefined
+			) {
+				const repoId = selectedRepo.githubRepositoryId;
+				const repoFullName = selectedRepo.fullName.toLowerCase();
+				try {
+					let cursor: string | undefined;
+					let existingId: string | undefined;
+					for (let page = 0; page < 20 && existingId === undefined; page += 1) {
+						const { items, page: info } = await client.listProjects(org.id, { limit: 100, cursor });
+						const match =
+							items.find((candidate) => candidate.githubRepositoryId === repoId) ??
+							items.find((candidate) => candidate.repositoryUrl.toLowerCase().includes(repoFullName));
+						existingId = match?.id;
+						if (!info.hasMore || info.nextCursor === undefined || info.nextCursor === cursor) break;
+						cursor = info.nextCursor;
+					}
+					await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
+					if (existingId !== undefined) {
+						onCreated(existingId);
+						return;
+					}
+				} catch {
+					// Lookup failed: fall through to the quiet close below.
+				}
+				setIsCreating(false);
+				(onClose ?? onBack)();
+				return;
+			}
 			setSubmitError(err instanceof Error ? err.message : t("createProject.couldNotAdd"));
 			setIsCreating(false);
 		}
