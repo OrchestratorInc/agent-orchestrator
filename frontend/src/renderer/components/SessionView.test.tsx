@@ -56,6 +56,7 @@ const settingsState = vi.hoisted(() => ({
 const reviewGetMock = vi.hoisted(() => vi.fn());
 const inspectorVisibilityRenders = vi.hoisted(() => [] as boolean[]);
 const chatSurfaceRenders = vi.hoisted(() => [] as string[]);
+const chatSurfaceTransitionRenders = vi.hoisted(() => [] as boolean[]);
 const chatSurfaceWorkState = vi.hoisted(() => ({
 	controllerBusy: false,
 	hasRunningTurn: false,
@@ -294,6 +295,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	}) => {
 		chatSurfaceRenders.push(session.id);
+		chatSurfaceTransitionRenders.push(Boolean(controllerTransitioning));
 		return (
 		<div
 			data-testid="chat-surface"
@@ -845,6 +847,7 @@ describe("SessionView", () => {
 		routeBlockerState.options = undefined;
 		inspectorVisibilityRenders.length = 0;
 		chatSurfaceRenders.length = 0;
+		chatSurfaceTransitionRenders.length = 0;
 		nativeFullScreenMock.mockReturnValue(false);
 		window.localStorage.clear();
 		for (const session of workspaces.flatMap((workspace) => workspace.sessions)) {
@@ -961,6 +964,25 @@ describe("SessionView", () => {
 		expect(resumeAgentPostMock).toHaveBeenCalledTimes(1);
 	});
 
+	it("hides the stopped Chat banner from the first render until automatic resume settles", async () => {
+		const session = workerSession("sess-1");
+		session.mode = "chat";
+		session.status = "exited";
+		session.activity = { state: "exited", lastActivityAt: "" };
+		let finishResume!: (value: { data: object; error: undefined }) => void;
+		resumeAgentPostMock.mockImplementation(() => new Promise((resolve) => { finishResume = resolve; }));
+		render(<SessionView sessionId="sess-1" />);
+		expect(chatSurfaceTransitionRenders[0]).toBe(true);
+		await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(1));
+		expect(chatSurfaceTransitionRenders.every(Boolean)).toBe(true);
+		await act(async () => {
+			session.activity = { state: "idle", lastActivityAt: "" };
+			session.status = "working";
+			finishResume({ data: {}, error: undefined });
+		});
+		await waitFor(() => expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "false"));
+	});
+
 	it("does not restart an agent that exits while its session is already open", async () => {
 		const session = workerSession("sess-1");
 		session.activity = { state: "idle", lastActivityAt: "" };
@@ -984,12 +1006,15 @@ describe("SessionView", () => {
 
 	it("leaves a failed automatic resume stopped for manual retry", async () => {
 		const session = workerSession("sess-1");
+		session.mode = "chat";
 		session.status = "exited";
 		session.activity = { state: "exited", lastActivityAt: "" };
 		resumeAgentPostMock.mockRejectedValue(new Error("provider unavailable"));
 		const view = render(<SessionView sessionId="sess-1" />);
 		await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(1));
 		await waitFor(() => expect(view.client.isMutating()).toBe(0));
+		expect(chatSurfaceTransitionRenders[0]).toBe(true);
+		expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "false");
 		view.rerender(<SessionView sessionId="sess-1" />);
 		await act(async () => {});
 		expect(resumeAgentPostMock).toHaveBeenCalledTimes(1);

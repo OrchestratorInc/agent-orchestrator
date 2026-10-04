@@ -49,7 +49,8 @@ import {
 	useShellTerminals,
 } from "../hooks/useShellTerminals";
 import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
-import { useCanResumeAgent } from "../hooks/useCanResumeAgent";
+import { canResumeAgent } from "../hooks/useCanResumeAgent";
+import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { conversationQueryKey } from "../hooks/useConversation";
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
 import { useAgentSwitchRouteVisibility } from "../hooks/useAgentSwitchVisibility";
@@ -447,7 +448,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const setBrowserContentRevealed = useUiStore((state) => state.setBrowserContentRevealed);
 	const setBrowserUnseen = useUiStore((state) => state.setBrowserUnseen);
 	const { daemonStatus } = useShell();
-	const canResume = useCanResumeAgent(session, hostId);
+	const resumeStatus = useSessionInterfaceTransitionStatus(canResumeAgent(session) ? session?.id : undefined, hostId);
+	const canResume = canResumeAgent(session, resumeStatus.transition) && !resumeStatus.isLoading && !resumeStatus.statusError;
 	const openedSession = useRef({ key: uiSessionId, checked: false });
 	const autoResume = useMutation({
 		mutationKey: ["resume-agent", "local", sessionId],
@@ -457,11 +459,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			});
 			if (error) throw new Error(apiErrorMessage(error, `Failed to resume agent (${response.status})`));
 		},
-		onSettled: (_data, _error, id) => {
-			void refreshWorkspaces();
-			void queryClient.invalidateQueries({ queryKey: conversationQueryKey(id) });
+		onSettled: async (_data, _error, id) => {
+			await Promise.all([
+				refreshWorkspaces(),
+				queryClient.invalidateQueries({ queryKey: conversationQueryKey(id) }),
+			]);
 		},
 	});
+	const quietResume = !usesPreviewWorkspaceData && !hostId && canResumeAgent(session, resumeStatus.transition) &&
+		!resumeStatus.statusError && (openedSession.current.key !== uiSessionId || !openedSession.current.checked ||
+			(autoResume.variables === sessionId && autoResume.isPending));
 	const resumeOnOpen = autoResume.mutate;
 	useEffect(() => {
 		if (openedSession.current.key !== uiSessionId) openedSession.current = { key: uiSessionId, checked: false };
@@ -1665,8 +1672,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
 									controllerResumeError={!hostId && autoResume.variables === sessionId && autoResume.isError
 										? apiErrorMessage(autoResume.error) : undefined}
-									controllerTransitioning={interfaceUi.controllerTransitioning ||
-										(!hostId && autoResume.variables === sessionId && autoResume.isPending)}
+									controllerTransitioning={interfaceUi.controllerTransitioning || quietResume}
 									newWorkDisabled={interfaceUi.newWorkDisabled}
 									onConversationWorkChange={interfaceUi.onConversationWorkChange}
 									onOpenShell={addShellTerminal}
