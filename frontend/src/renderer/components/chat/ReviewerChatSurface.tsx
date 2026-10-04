@@ -13,7 +13,7 @@ export function ReviewerChatSurface({ reviewId, hostId, hideHeader = false }: { 
 	const commands = useReviewerConversationCommands(reviewId, hostId);
 	const openSessionLink = useSessionLinkNavigation(hostId);
 	const { baseUrl: remoteBase } = useHostConnection(hostId);
-	const draftOwner = useMemo(() => ({ sessionId: `review:${reviewId}`, incarnation: reviewId }), [reviewId]);
+	const draftOwner = useMemo(() => ({ sessionId: sessionUiKey(`review:${reviewId}`, hostId), incarnation: reviewId }), [hostId, reviewId]);
 	if (isLoading)
 		return (
 			<Centered>
