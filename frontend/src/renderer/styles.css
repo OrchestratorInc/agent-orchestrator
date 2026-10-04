@@ -2086,6 +2086,37 @@ textarea,
 	animation: ao-startup-status-in 220ms ease-out both;
 }
 
+/* Mobile device "Removed · Undo" row: a hairline at the row's bottom edge that
+ * drains over the undo window (duration set inline from REMOVE_UNDO_MS). */
+@keyframes mobile-device-undo-countdown {
+	from {
+		transform: scaleX(1);
+	}
+	to {
+		transform: scaleX(0);
+	}
+}
+
+.mobile-device-undo-countdown {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: -1px;
+	height: 2px;
+	transform-origin: left;
+	background: var(--color-accent);
+	animation-name: mobile-device-undo-countdown;
+	animation-timing-function: linear;
+	animation-fill-mode: forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.mobile-device-undo-countdown {
+		animation: none;
+		opacity: 0.4;
+	}
+}
+
 @keyframes ao-install-progress-sweep {
 	0% {
 		transform: translateX(-60%);
