@@ -1014,18 +1014,11 @@ function ShellLayout() {
 		if (handledShellNonceRef.current === newShellTerminalNonce) return;
 		handledShellNonceRef.current = newShellTerminalNonce;
 		if (routeParams.hostId) return;
-		const shell = openShellTerminal.open(
-			{ projectId: scopedProjectId, sessionId: routeParams.sessionId, cloud: scopedSession?.cloud },
-			{
-				// Only while the pending tab is still the active one: the user may
-				// have opened or selected another tab in the meantime.
-				onSuccess: (openedShell) => {
-					if (useUiStore.getState().activeShellTerminalHandleId === shell.handleId) {
-						setActiveShellTerminal(openedShell.handleId);
-					}
-				},
-			},
-		);
+		const shell = openShellTerminal.open({
+			projectId: scopedProjectId,
+			sessionId: routeParams.sessionId,
+			cloud: scopedSession?.cloud,
+		});
 		if (!shell) return;
 		setActiveShellTerminal(shell.handleId);
 		if (!routeParams.sessionId) {

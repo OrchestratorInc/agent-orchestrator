@@ -84,7 +84,9 @@ const cancelledPendingShells = new Set<string>();
 const discardingShells = new Set<string>();
 
 // The shell each pending tab became, so UI that recorded a pending tab (its
-// place in a reordered strip) can carry that over to the shell.
+// selection, its place in a reordered strip) carries that over to the shell.
+// UI must follow this rather than a one-off callback: a selection can still be
+// made on the pending tab from a render that has not seen its shell arrive.
 const adoptedShellHandles = new Map<string, string>();
 
 /** The shell handle a pending tab's handle became, once its create returned. */
@@ -154,7 +156,6 @@ function nextCloudShellTitle(terminals: ShellTerminal[], sessionId: string): str
 }
 
 type OpenShellTerminalMutationInput = OpenShellTerminalInput & { optimisticShell?: ShellTerminal };
-type OpenShellTerminalCallbacks = { onSuccess?: (shell: ShellTerminal) => void };
 
 /** Destroys a shell this renderer owns: daemon, cloud, or preview. */
 async function destroyShellTerminal(handleId: string, hostId?: HostId): Promise<void> {
@@ -335,8 +336,9 @@ export function useOpenShellTerminal(hostId?: HostId) {
 
 	// Session topbars need the pending shell synchronously so they can select
 	// it in the same click event. Other callers can keep using mutation.mutate;
-	// onMutate supplies an optimistic entry for them too.
-	const open = (input: OpenShellTerminalInput = {}, callbacks?: OpenShellTerminalCallbacks) => {
+	// onMutate supplies an optimistic entry for them too. A selection made on
+	// the pending tab follows it to its shell through adoptedShellHandle.
+	const open = (input: OpenShellTerminalInput = {}) => {
 		const optimisticShell = createOptimisticShellTerminal(
 			input,
 			queryClient.getQueryData<ShellTerminal[]>(queryKey) ?? [],
@@ -344,16 +346,7 @@ export function useOpenShellTerminal(hostId?: HostId) {
 		);
 		trackPendingShell(optimisticShell);
 		addOptimisticShell(queryClient, queryKey, optimisticShell);
-		// Not mutate()'s per-call callbacks: those fire only for the latest call,
-		// so a tab opened just before another would never learn its shell.
-		// Failures are handled by onError. A tab closed while it was being
-		// created resolves without a shell.
-		mutation.mutateAsync({ ...input, optimisticShell }).then(
-			(shell) => {
-				if (shell) callbacks?.onSuccess?.(shell);
-			},
-			() => undefined,
-		);
+		mutation.mutate({ ...input, optimisticShell });
 		return optimisticShell;
 	};
 

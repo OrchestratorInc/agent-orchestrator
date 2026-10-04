@@ -711,29 +711,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// session's worktree (the project id is only the fallback when the session's
 	// workspace can no longer be resolved).
 	const addShellTerminal = useCallback(() => {
-		const shell = openShellTerminal.open(
-			{ projectId: session?.workspaceId, sessionId, cloud: session?.cloud },
-			{
-				// Only what still points at the pending tab moves to its shell: the
-				// user may have opened or selected another tab in the meantime.
-				onSuccess: (openedShell) => {
-					if (useUiStore.getState().activeShellTerminalHandleId === shell.handleId) {
-						setActiveShellTerminal(openedShell.handleId);
-					}
-					setTerminalTarget((current) =>
-						current.kind === "shell" && current.handleId === shell.handleId
-							? {
-									generation: openedShell.createdAt,
-									kind: "shell",
-									handleId: openedShell.handleId,
-									sessionId,
-									title: openedShell.title,
-								}
-							: current,
-					);
-				},
-			},
-		);
+		const shell = openShellTerminal.open({ projectId: session?.workspaceId, sessionId, cloud: session?.cloud });
 		if (!shell) return;
 		setFileTabsBySession((current) => ({
 			...current,
@@ -972,6 +950,21 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			!fileTabs.activePath && !reviewerChatId) return;
 		selectShellTerminal(shell.handleId);
 	}, [activeShellTerminalHandleId, fileTabs.activePath, reviewerChatId, selectShellTerminal, shellTerminals, terminalTarget]);
+	// A tab selected while it was pending follows it to the shell it became.
+	// Only what still points at the pending tab moves: the user may have
+	// selected another tab in the meantime.
+	useEffect(() => {
+		const adoptedActive = activeShellTerminalHandleId ? adoptedShellHandle(activeShellTerminalHandleId) : undefined;
+		if (adoptedActive) {
+			setActiveShellTerminal(adoptedActive);
+			return;
+		}
+		if (terminalTarget.kind !== "shell") return;
+		const adoptedTarget = adoptedShellHandle(terminalTarget.handleId);
+		if (adoptedTarget && shellTerminals.some((shell) => shell.handleId === adoptedTarget)) {
+			selectShellTerminal(adoptedTarget);
+		}
+	}, [activeShellTerminalHandleId, selectShellTerminal, setActiveShellTerminal, shellTerminals, terminalTarget]);
 
 	// If the pane is pointed at a shell that is not in THIS session's strip — e.g.
 	// after navigating to a different session whose globally-active shell belongs

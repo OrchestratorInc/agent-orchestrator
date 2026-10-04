@@ -397,25 +397,22 @@ describe("tabs opened while their shell is being created", () => {
 		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([...shells, created]);
 	});
 
-	it("tells every tab opened in quick succession which shell it got", async () => {
+	it("records which shell every tab opened in quick succession became", async () => {
 		const first = { ...created, handleId: "ptyhost-v1:shellterm-a", title: "Terminal 3" };
 		const second = { ...created, handleId: "ptyhost-v1:shellterm-b", title: "Terminal 4" };
 		postMock.mockResolvedValueOnce({ data: { shellTerminal: first } }).mockResolvedValueOnce({ data: { shellTerminal: second } });
 		getMock.mockResolvedValue({ data: { shellTerminals: [...shells, first, second] } });
 		const queryClient = queryClientWithShells();
 		const { result } = renderHook(() => useOpenShellTerminal(), { wrapper: wrapper(queryClient) });
-		const onFirst = vi.fn();
-		const onSecond = vi.fn();
-
 		let pendingFirst!: ShellTerminal;
+		let pendingSecond!: ShellTerminal;
 		act(() => {
-			pendingFirst = result.current.open({}, { onSuccess: onFirst });
-			result.current.open({}, { onSuccess: onSecond });
+			pendingFirst = result.current.open({});
+			pendingSecond = result.current.open({});
 		});
 
-		await waitFor(() => expect(onSecond).toHaveBeenCalledWith(second));
-		expect(onFirst).toHaveBeenCalledWith(first);
-		// UI that recorded the pending tab can find the shell it became.
+		// UI that recorded either pending tab can find the shell it became.
+		await waitFor(() => expect(adoptedShellHandle(pendingSecond.handleId)).toBe(second.handleId));
 		expect(adoptedShellHandle(pendingFirst.handleId)).toBe(first.handleId);
 	});
 
@@ -428,10 +425,8 @@ describe("tabs opened while their shell is being created", () => {
 		renderHook(() => useShellTerminals(), { wrapper: wrapper(queryClient) });
 		const open = renderHook(() => useOpenShellTerminal(), { wrapper: wrapper(queryClient) });
 		const close = renderHook(() => useCloseShellTerminal(), { wrapper: wrapper(queryClient) });
-		const onOpened = vi.fn();
-
 		let pending!: ShellTerminal;
-		act(() => { pending = open.result.current.open({}, { onSuccess: onOpened }); });
+		act(() => { pending = open.result.current.open({}); });
 		await act(async () => close.result.current.mutateAsync(pending.handleId));
 		// Nothing to close yet: the daemon has not returned the shell.
 		expect(deleteMock).not.toHaveBeenCalled();
@@ -450,6 +445,6 @@ describe("tabs opened while their shell is being created", () => {
 		act(() => finishDelete({}));
 		await waitFor(() => expect(open.result.current.isPending).toBe(false));
 		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual(shells);
-		expect(onOpened).not.toHaveBeenCalled();
+		expect(adoptedShellHandle(pending.handleId)).toBeUndefined();
 	});
 });
