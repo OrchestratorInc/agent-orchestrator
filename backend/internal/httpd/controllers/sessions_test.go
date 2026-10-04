@@ -3297,9 +3297,17 @@ func TestSessionsAPI_GetWorkspaceFileBlobRequiresPath(t *testing.T) {
 func TestSessionsAPI_StreamWorkspaceChanges(t *testing.T) {
 	workspace := t.TempDir()
 	svc := newFakeSessionService()
-	// A slow Git scan must not delay the invalidation edge. The old stream
-	// handler waited here before announcing the edit.
-	svc.workspaceListHook = func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
+	// Permit the startup reconciliation, then block refresh work to verify
+	// that the invalidation edge is sent before scanning the changed workspace.
+	scans := 0
+	svc.workspaceListHook = func(ctx context.Context) error {
+		scans++
+		if scans == 1 {
+			return nil
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
 
 	session := svc.sessions["ao-1"]
 	session.Metadata.WorkspacePath = workspace
