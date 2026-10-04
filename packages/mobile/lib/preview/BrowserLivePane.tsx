@@ -132,7 +132,7 @@ function BrowserState({ status, error, retry }: { status: BrowserStatus; error?:
 	return <View accessibilityRole="alert" style={styles.stateOverlay}>
 		<View style={[styles.stateIcon, styles.stateIconError]}><Feather name="alert-triangle" size={iconSize.lg} color={t.red} /></View>
 		<Text style={styles.stateTitle}>Couldn't connect to the browser</Text>
-		<Text style={styles.stateCopy}>{error || "On the desktop, turn on browser sharing in Connect Mobile, then try again."}</Text>
+		<Text style={styles.stateCopy}>{error || "Couldn't reach the desktop browser. Make sure browser sharing is on in Connect Mobile, the session is still running, and another phone isn't already controlling it."}</Text>
 		<Pressable accessibilityRole="button" onPress={retry} style={styles.retry}><Feather name="refresh-cw" size={iconSize.sm} color={t.onAccent} /><Text style={styles.retryText}>Check again</Text></Pressable>
 	</View>;
 }

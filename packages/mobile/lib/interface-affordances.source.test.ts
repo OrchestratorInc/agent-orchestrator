@@ -71,9 +71,9 @@ describe("Interface affordances", () => {
 			expect(browser).not.toContain('placeholder="Enter a URL"');
 		});
 
-		it("shows desktop sharing guidance when the browser handshake fails", () => {
+		it("covers the common causes when the browser handshake fails", () => {
 			expect(source("./browserLive.ts")).toContain('this.handlers.onStatus("error");');
-			expect(browser).toContain('error || "On the desktop, turn on browser sharing in Connect Mobile, then try again."');
+			expect(browser).toContain('error || "Couldn\'t reach the desktop browser. Make sure browser sharing is on in Connect Mobile, the session is still running, and another phone isn\'t already controlling it."');
 		});
 
 		it("uses a navigation route instead of a second terminal overlay", () => {
